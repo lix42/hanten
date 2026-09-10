@@ -534,15 +534,17 @@ See the "Architecture" section of `CLAUDE.md` for the current-vs-target framing.
 Stage 1's semantic resolution is **implemented** (`pipeline::input_semantics`,
 task `input-data-semantics`; see §4 and §9). The replacement stage 3 adopts a
 tagged reconstruction schema: `simple`, or `density` containing density
-parameters and a tagged `sigmoid` (default) or `exponential` curve. It preserves
-the current exponential pixels and exact sigmoid equation. Dmax belongs to the
-curve stage—scalar placement for exponential, curve shaping for sigmoid. Every
+parameters and a tagged `sigmoid` (default), `exponential`, or `characteristic`
+curve. It preserves the current exponential pixels and exact sigmoid equation.
+Dmax belongs to the curve stage—scalar placement for exponential, curve shaping
+for sigmoid; `characteristic` resolves no reference at all, reading both its
+slope and its mid-grey placement off the stock's published response. Every
 path returns private-field `FilmRgbImage`.
 
 Stage 4 defines **NC film RGB v1** as the existing intentional interpretation of
 that film rendering as linear Rec.709/D65, followed by the pinned standard
 transform/adaptation into linear ACEScg/D60. It returns private-field
-`AcesCgImage`. This one mapping is shared by simple and both density curves,
+`AcesCgImage`. This one mapping is shared by simple and all three density curves,
 preserves film/lens/development/scanner differences, and makes no claim of
 physical scene recovery. Named color outputs cannot merely tag `FilmRgbImage`.
 Optional measured correction profiles may be explicitly selected later, but

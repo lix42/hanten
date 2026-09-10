@@ -94,7 +94,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// the `density.scale` default above — so "left at 3" records the *IR decision*, not the
 /// current label. That decision stands on its own ground and is unaffected: the IR
 /// detector still has no demonstrated pixel change, and v4's row carries hashes that
-/// differ from v3's, which is what v4-for-IR would have lacked. The live question below
+/// differ from v3's, which is what v4-for-IR would have lacked. The live question above
 /// is still live.
 /// | 2 | three render defaults moved together (2026-08-08, `algo/negative-reconstruction-density-curves`): the nominal `Fixed` anchor `Dmax = 2.0` → **1.3**, the default density curve exponential → **sigmoid** (mid-grey anchored), and `ExponentialParams::gamma` 1.0 → **2.0** for anyone still selecting that curve explicitly. Measured in `docs/reports/render-defaults-v2.md`. Film-base estimation is untouched, which is why the row's `base` fingerprint is unchanged. |
 ///

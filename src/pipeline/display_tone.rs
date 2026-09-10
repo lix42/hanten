@@ -365,30 +365,40 @@ impl DisplayTone {
     }
 }
 
-/// Extended Reinhard plus a smooth highlight lift, for a branch with headroom above
-/// reference white.
+/// An **asymptotic** Reinhard base plus a smooth highlight lift, for a branch with
+/// headroom above reference white.
 ///
-/// `g(v) = f(v) · (1 + (ceiling − 1)·s(v))`, where `f` is [`extended_reinhard`] at the
-/// **same** `white_point` the SDR branch uses and `s` ramps from `0` at `crossover` to
-/// `1` at `white_point`.
+/// `g(v) = b(v) · (1 + (ceiling − 1)·s(v))`, where `s` ramps from `0` at `crossover` to
+/// `1` at `white_point`, and `b` is [`extended_reinhard`]'s shape with **no white point**
+/// carrying the input gain of the SDR branch it is paired with —
+/// `extended_reinhard_raw(v, ∞, mid_grey_preserving_gain(white_point))`. The base is
+/// asymptotic rather than the SDR curve so the multiplicative lift cannot leave the
+/// ceiling; the body's opening comment holds the measurement that settled that, and the
+/// shared gain is `extended_reinhard_raw`'s reason for existing.
 ///
 /// **Why this shape and not a ceiling-parameterized Reinhard.** A gain map is only
 /// meaningful when the two renditions agree below diffuse white and differ above it — the
-/// ratio must be exactly `1` in the midtones. Both obvious generalizations fail that:
-/// `v(1 + vC/W²)/(1 + v/C)` and `C·f(v/C)` each lift mid-grey ≈14% and diffuse white ≈66%,
-/// because their denominators compress less *everywhere* rather than only in highlights.
-/// This form is `1 · f(v)` below `crossover` **by construction**, so the agreement is
-/// exact rather than approximate.
+/// ratio must be `1` in the midtones. Both obvious generalizations fail that:
+/// `v(1 + vC/W²)/(1 + v/C)` and `C·f(v/C)` each lift mid-grey ≈14% and diffuse white ≈66%
+/// (`f` being the SDR branch's [`extended_reinhard`] at `white_point`), because their
+/// denominators compress less *everywhere* rather than only in highlights. Here the lift
+/// is identically zero below `crossover`, so what renders there is the bare base — and
+/// that agreement with `f` is **near-exact, not exact**: `b` drops `f`'s `v/W²` tail. What
+/// makes the difference immaterial is that it stays a fraction of one 8-bit gain-map code
+/// step, so the *encoded* gain is still exactly 1.
+/// `the_hdr_base_agrees_with_sdr_within_a_fraction_of_a_gain_code_step` pins the bound,
+/// the figure, and its algebra.
 ///
-/// That also means **the operator is the gain map**: `g/f` is exactly
-/// `1 + (ceiling − 1)·s(v)`, so the HDR rendition is defined as the SDR rendition plus
-/// recovered highlight headroom — which is what the container encodes.
+/// **The operator is the gain map**, to that same tolerance: `g/b` is exactly
+/// `1 + (ceiling − 1)·s(v)`, so the HDR rendition is the SDR rendition plus recovered
+/// highlight headroom — which is what the container encodes.
 ///
-/// Monotonic wherever `f` is, being a product of two non-decreasing factors, and
-/// **unbounded above `white_point`** for the same reason `f` is, so a branch using it
-/// reports `bounds_sdr_output() == false` and its overshoot is counted at the encode
-/// boundary. Note the HDR branch reports `bounds_hdr_output() == true` for the same tone —
-/// the lifted form is bounded there — which is why the two predicates are separate.
+/// Monotonic wherever `b` is, being a product of two non-decreasing factors, and
+/// **bounded**: `b < 1` at every finite input, so the composite stays strictly under
+/// `ceiling` and never attains it. That is what [`DisplayTone::bounds_hdr_output`] reports
+/// `true` on. The *SDR* branch of the same selector runs `f` instead, which is unbounded,
+/// so [`DisplayTone::bounds_sdr_output`] reports `false` — one operator per branch, which
+/// is why those are two predicates rather than one.
 ///
 /// `ceiling` is a parameter, never a literal: the 1000/203 headroom is binding policy
 /// owned by `hdr::LINEAR_HEADROOM` and `docs/hdr-output-spike.md`. `crossover` is stated

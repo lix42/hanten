@@ -2778,7 +2778,8 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
     // the new variant's defaults for every knob except the roll-fixed `dmax`, which is
     // carried over between the two *parametric* variants (it is curve-independent there,
     // exactly as it was algorithm-independent before). `characteristic` resolves no
-    // reference at all, so switching to it drops `dmax` rather than carrying it.
+    // reference at all, so a switch either way is outside that carry: to it, `dmax` is
+    // dropped; out of it, the target takes its own default.
     // `anchor` is reset per variant, and only the parametric variants carry one —
     // `curve_switch_dropped_anchor` explains why placement is not curve-independent and
     // warns when the reset discards a stated rule, including the switch *to*
@@ -2795,7 +2796,19 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
             }
             Reconstruction::Density { curve, density } => {
                 if curve.curve_type() != c {
-                    let dmax = curve.dmax();
+                    // Carried only when **both** sides take a reference. `characteristic`
+                    // reports `DmaxSource::None` from `dmax()` to mean "this curve reads no
+                    // reference", which is a different claim from the parametric `None`
+                    // (`--no-d-max`, scene-referred output): carrying it out installed a
+                    // scene-referred anchor nobody asked for — `sigmoid` then refused the
+                    // switch with "needs a display-white anchor", and `exponential`
+                    // rendered a 100 %-clipped frame at exit 0. Gating on the *source* too
+                    // hands the target its own default instead.
+                    let dmax = if curve.curve_type().takes_dmax() {
+                        curve.dmax()
+                    } else {
+                        DmaxSource::default()
+                    };
                     // The per-channel gain is per-curve for the same reason `anchor` is:
                     // `DensityParams::default_scale_for` documents that the parametric
                     // curves need a gain covering the film's channel structure while the
@@ -5344,8 +5357,8 @@ fn convert_frame(
             warnings,
             log,
             format!(
-                "up to {:.2}% of samples fall outside the film stock's published \
-                 characteristic curve in one channel (below: {:.2}/{:.2}/{:.2}%, above: \
+                "{:.2}% of samples fall outside the film stock's published characteristic \
+                 curve in the worst channel (below: {:.2}/{:.2}/{:.2}%, above: \
                  {:.2}/{:.2}/{:.2}% for R/G/B) and were extrapolated along its end \
                  slope rather than read off it. A few per cent is the scan's own \
                  border — the holder and rebate are denser than any exposed frame — \
@@ -9199,6 +9212,51 @@ mod tests {
             curve_switch_dropped_density_scale(&Reconstruction::Simple, &with(identity, stock))
                 .is_none()
         );
+    }
+
+    /// A switch **out of** `characteristic` gives the target curve its **own default**
+    /// `dmax`, not the `DmaxSource::None` that curve reports.
+    ///
+    /// `DensityCurve::dmax()` answers `None` for `characteristic` to mean "this curve reads
+    /// no reference"; under a parametric curve the same variant means `--no-d-max`,
+    /// scene-referred output. Carrying it across made one direction spuriously fail
+    /// (`sigmoid`'s guard refuses an anchorless curve) and the other render a fully clipped
+    /// frame at exit 0 — measured at 100 % clipped from a recipe pinning
+    /// `{"type":"characteristic","stock":"portra-400"}`. The parametric-to-parametric carry
+    /// this gate does *not* touch is pinned by
+    /// `merge_switches_reconstruction_and_curve_variants`.
+    #[test]
+    fn a_switch_out_of_the_characteristic_curve_takes_the_target_default_dmax() {
+        let stock = merge(
+            base_cfg(),
+            &parse_convert(&["--density-curve", "characteristic"]),
+        )
+        .unwrap();
+        // The accessor really does report the ambiguous value, which is what made the
+        // carry silent rather than a type error.
+        assert_eq!(curve_of(&stock).dmax(), DmaxSource::None);
+
+        let to_sigmoid = merge(
+            stock.clone(),
+            &parse_convert(&["--density-curve", "sigmoid"]),
+        )
+        .unwrap();
+        assert_eq!(sigmoid_of(&to_sigmoid), SigmoidParams::default());
+        assert_eq!(sigmoid_of(&to_sigmoid).dmax, DmaxSource::Fixed);
+        // Previously "the sigmoid curve needs a display-white anchor" — a rejection the
+        // user's recipe had not earned.
+        validate(&to_sigmoid).expect("a switched-to sigmoid resolves its own anchor");
+
+        let to_exponential =
+            merge(stock, &parse_convert(&["--density-curve", "exponential"])).unwrap();
+        assert_eq!(
+            *curve_of(&to_exponential),
+            DensityCurve::Exponential(ExponentialParams::default())
+        );
+        // The one that mattered: `None` here is scene-referred, and the resulting render
+        // clipped the whole frame at exit 0.
+        assert_eq!(ExponentialParams::default().dmax, DmaxSource::Fixed);
+        validate(&to_exponential).expect("a switched-to exponential resolves its own anchor");
     }
 
     /// A curve-type switch **resets** the anchor placement to the target curve's default
@@ -13179,6 +13237,37 @@ mod tests {
         assert_eq!(
             resolved.reconstruction.curve_type(),
             Some(DensityCurveType::Characteristic)
+        );
+
+        // **And the reverse switch is safe for the mirror-image reason**, which is worth
+        // pinning because this function gates the carry on the *target* only. Switching
+        // away from `characteristic` cannot install the ambiguous `DmaxSource::None` the
+        // CLI merge had to guard against, because the base here is a serialized
+        // `ResolvedConfig` and `CharacteristicParams` has no `dmax` field to serialize —
+        // so there is no key to carry and the target takes its own default. (The CLI merge
+        // reaches the value through `DensityCurve::dmax()`, which *synthesizes* `None`;
+        // `a_switch_out_of_the_characteristic_curve_takes_the_target_default_dmax` covers
+        // that half.)
+        let mut base = serde_json::to_value(
+            merge(
+                base_cfg(),
+                &parse_convert(&["--density-curve", "characteristic"]),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let overlay = serde_json::json!({"reconstruction": {"curve": {"type": "sigmoid"}}});
+        merge_json(&mut base, &overlay);
+        assert_eq!(
+            base["reconstruction"]["curve"].get("dmax"),
+            None,
+            "nothing to carry out of a curve that stores no reference"
+        );
+        let resolved: ResolvedConfig = serde_json::from_value(base).unwrap();
+        assert_eq!(
+            curve_of(&resolved).dmax(),
+            DmaxSource::Fixed,
+            "the target curve resolves its own default anchor"
         );
 
         // An overlay that sets its own `dmax` wins over the carried one.

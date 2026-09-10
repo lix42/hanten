@@ -122,12 +122,19 @@ pub struct OutOfTable {
 }
 
 impl OutOfTable {
-    /// The largest single-channel excursion, in either direction.
+    /// The worst channel's **total** extrapolated fraction: `below[c] + above[c]`,
+    /// maximized over the three channels.
+    ///
+    /// **The two directions are summed, and that is what makes the threshold reachable.**
+    /// Taking the largest of the six directional figures let a channel that was 15 % below
+    /// *and* 15 % above report 15 %, so a frame 30 % extrapolated in one channel never
+    /// crossed the 20 % warning (`cli::OUT_OF_TABLE_WARN_FRACTION`) — silently on `roll`,
+    /// whose frame entries carry no `reconstruction_result` for the raw figures to be read
+    /// from. Below and above are disjoint sample sets, so their sum is still a fraction of
+    /// the frame rather than a double count.
     pub fn worst(&self) -> f32 {
-        self.below
-            .iter()
-            .chain(&self.above)
-            .copied()
+        (0..3)
+            .map(|c| self.below[c] + self.above[c])
             .fold(0.0, f32::max)
     }
 }
@@ -553,6 +560,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `worst()` sums a channel's two directions, so a frame extrapolated equally at both
+    /// ends can still cross the warning threshold.
+    ///
+    /// The regression: as a max over all six directional figures, 15 % below and 15 % above
+    /// in one channel reported 15 % and stayed under `cli::OUT_OF_TABLE_WARN_FRACTION`,
+    /// though 30 % of that channel was extrapolated. Nothing else surfaces it on `roll`.
+    #[test]
+    fn worst_is_a_channels_total_not_its_larger_direction() {
+        let split = OutOfTable {
+            below: [0.15, 0.0, 0.0],
+            above: [0.15, 0.0, 0.0],
+        };
+        assert!(
+            (split.worst() - 0.30).abs() < 1e-6,
+            "expected the channel total, got {}",
+            split.worst()
+        );
+        // 0.20 is `cli::OUT_OF_TABLE_WARN_FRACTION`, restated rather than imported: this
+        // module owns the statistic, the CLI owns the threshold.
+        assert!(split.worst() > 0.20, "the warning must now be reachable");
+
+        // Still the *worst channel*, not a sum across channels: three channels at 8 %
+        // each is an 8 % frame, not a 24 % one.
+        let spread = OutOfTable {
+            below: [0.08, 0.08, 0.08],
+            above: [0.0; 3],
+        };
+        assert!((spread.worst() - 0.08).abs() < 1e-6);
+        assert_eq!(OutOfTable::default().worst(), 0.0);
     }
 
     /// Out-of-table samples extrapolate along the end slope and say so, rather than
