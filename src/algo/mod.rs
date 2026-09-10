@@ -25,8 +25,15 @@
 //! golden`).
 
 pub mod density;
+pub mod film_stock;
 pub mod sigmoid;
 pub mod simple;
+
+/// The probe that measured whether inverting the published curves removes the per-channel
+/// cast a single scalar contrast leaves. Test-only, asset-gated, prints derived numbers
+/// only — see its header for the method and `docs/progress/algo.md` for the result.
+#[cfg(test)]
+mod curve_probe;
 
 use crate::types::{FilmBase, LinearImage, PrintParams, Reconstruction, Result, WbSource};
 
@@ -144,6 +151,14 @@ pub struct ReconstructionReport {
     /// density), when a shadow/highlight balance was applied. `None` for
     /// `simple` or when both balances are the neutral `[0, 0, 0]`.
     pub balance_range: Option<[f32; 2]>,
+    /// How far the frame's densities fell outside the stock's published curve, per channel
+    /// — `Some` only for the characteristic curve, `None` for every other path.
+    ///
+    /// Reported rather than clamped. Out-of-table samples extrapolate along the end slope,
+    /// which keeps them ordered and finite, but they are **extrapolated**, not measured:
+    /// a frame with a large fraction of them is being rendered off the published data, and
+    /// the report has to say so instead of leaving it to be inferred from the picture.
+    pub out_of_table: Option<film_stock::OutOfTable>,
 }
 
 /// Stage 3 — reconstruct the negative into the typed film positive

@@ -326,6 +326,22 @@ Run records include build identity, pipeline version, input digest, parameter
 hash, output depth, means, clipping counts, and telemetry timings. Timing changes
 are informational and never decide the deterministic-statistics verdict.
 
+## Datasheet digitization — `digitize_datasheets.py`
+
+Not part of `nctool`, and not stdlib-only: it reads the vector characteristic curves in
+`docs/datasheets/` and writes `src/algo/film_stock/curves.json`, the intermediate that
+`algo::film_stock::curves`'s pinned Rust literals are audited against.
+
+```sh
+python3 scripts/analysis/digitize_datasheets.py            # rewrite curves.json
+python3 scripts/analysis/digitize_datasheets.py --check    # verify, change nothing
+```
+
+It needs poppler (`brew install poppler`) and is run **by hand**, never in CI — the same
+split as `pipeline/colorimetry/`: extraction needs a toolchain, while "the literals match
+the extraction" is a plain `cargo test`. The file's own module docstring carries the
+extraction traps; read it before editing.
+
 ## Tests
 
 The CI command is:

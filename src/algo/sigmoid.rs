@@ -911,11 +911,19 @@ mod tests {
             shoulder: 0.0,
             ..SigmoidParams::default()
         };
+        // Identity per-channel gain, for the same reason the knees are off: white balance
+        // is one gain per channel, so it equalizes a *constant* cast. The default gain
+        // `[1, 0.90, 0.86]` scales density, i.e. adds a tone-dependent channel difference
+        // that no single gain can remove — a different property, and not this test's.
+        let identity_gain = DensityParams {
+            scale: [1.0, 1.0, 1.0],
+            ..DensityParams::default()
+        };
         for mode in [WbSource::GrayWorld, WbSource::Percentile] {
             let converted = run(
                 &img,
                 &base,
-                DensityParams::default(),
+                identity_gain.clone(),
                 DensityCurve::Sigmoid(straight),
                 PrintParams {
                     white_balance: mode,

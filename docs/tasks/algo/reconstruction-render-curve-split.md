@@ -107,8 +107,10 @@ wide latitude. The print rendering decides whether output exceeds diffuse white.
   supplied at the display stage* is exactly the split, and it now has a reviewed rendition
   rather than only an argument. Two things it does **not** settle — which reconstruction
   curve (`algo/exponential-anchor-placement` closed the exponential negatively, so that is
-  still open), and the operator's 1.000-stop cost at diffuse white, which is a
-  rendering-intent question inherited along with it. Note `GainMapMax` is the wrong
+  still open), and the operator's cost at diffuse white, which is a
+  rendering-intent question inherited along with it. (That cost was 1.000 stop when this
+  was written and is **0.86 stop** since 2026-09-09, when the operator absorbed its own
+  midtone cost — the midtone half of the question is closed, the highlight half is not.) Note `GainMapMax` is the wrong
   instrument for judging any of this: it reads 4.87x vs 4.79x for the two, identical on
   every frame.
 - **The display-stage black point is real but its measured value is not.** `0.019` crushes

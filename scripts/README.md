@@ -12,6 +12,8 @@ otherwise.
 | [`render-defaults-v2/`](render-defaults-v2/) | Reproduce the historical v1-to-v2 default-render measurements. |
 | [`render-defaults-v3/`](render-defaults-v3/) | Render and measure the legacy-TIFF-to-gain-map-JPEG default transition. |
 | [`sigmoid-baseline/`](sigmoid-baseline/) | Generate local visual-review pages used by the sigmoid calibration study. |
+| [`hdr-tone-review/`](hdr-tone-review/) | Render the gain-map JPEG review set for the display-tone study (macOS-only). |
+| [`preset-review/`](preset-review/) | Render the review set for the five proposed conversion presets, through the flags each will expand to. |
 | `check-vendored-native.py` | Verify the checked-in libultrahdr and libjpeg-turbo source snapshots. |
 
 ## Vendored native-source check

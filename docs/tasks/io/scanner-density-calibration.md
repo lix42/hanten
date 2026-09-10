@@ -1,5 +1,6 @@
 # Scanner Density Calibration
 
+
 ## Goal
 
 Establish what a scanner's numbers mean in **absolute** density, so that densities
@@ -8,6 +9,93 @@ published by film manufacturers can be used by reconstruction. Today
 *absolute normalisation*, which leaves a real gap: a datasheet-derived parameter is
 only usable if our density scale can be related to the densitometry the datasheet
 used.
+
+## Input from `algo/film-stock-profiles` (2026-09-08, that task's close-out)
+
+This task is now **unblocked and load-bearing**: it owns the largest known colour gap in the
+renderer, with measurements to aim at.
+
+- **The gap, quantified.** Inverting each stock's published curve removes blue's
+  exposure-dependent cast (drift +1.26 → +0.09 stops per unit corrected density, against
+  +1.29 predicted) but leaves **green at +0.40 mean, +1.00 on the Ektar roll** across 21
+  frames. Blue transfers; green does not.
+- **Added 2026-09-09: a per-channel gain now ships as a default, and it is a placeholder
+  this task should replace.** `density.scale` defaults to `[1, 0.90, 0.86]` under the
+  parametric curves (`pipeline_version` 4). Two measurements make it this task's business
+  rather than the curve's:
+  - **The scan's green and blue slopes against red are nearly equal** (1.115 and 1.183),
+    where the datasheets say they are far apart (green barely steeper, blue 16%). An excess
+    landing on *both* channels against red is not film chemistry — it is the signature of
+    something in the scan/decode/base path, i.e. exactly this task's subject.
+  - **The gain nulls the corpus mean, not any roll.** Per-roll residuals still span ±0.5
+    stop per density on the green–magenta axis (`curve_probe::sigmoid_scale`), and no single
+    scale improves it — even the scan-derived corpus mean only moves \|green–magenta\| from
+    0.60 to 0.56. A scale-shaped correction has no generic setting worth shipping, which is
+    the negative result arguing for the 3×3 below.
+  - The `characteristic` curve deliberately keeps the **identity** gain so this residual
+    stays visible rather than half-absorbed: its own solved gain (`[1, 0.938, 0.985]`)
+    measured *worse* than identity on real frames (0.047 against 0.039).
+- **The form to fit is a 3×3 + offset, not per-channel gains.** ACES applies exactly that
+  (`CDD → CID`) *before* its per-channel curves, and nc is the same chain minus that stage.
+  SMPTE ST 2065-2 NOTE 3 says the conversion between scanner density and a standard density
+  metric is "3 × 3 matrix transformations followed by an offset", is **product specific**,
+  and is "likely imperfect". A per-channel gain cannot be the whole answer: it cancels in
+  nc's base division.
+- **No datasheet correction substitutes for a measurement.** Ektar 100's sheet is the corpus
+  outlier (it draws R and G nearly parallel, ratio 1.002 against everyone else's 1.02–1.05,
+  and disagrees with its own aim table by 11%) — yet replacing its channel relationship with
+  the corpus consensus would move its residual only +1.00 → **+0.87**. The dominant term is
+  in the scan, not the sheet.
+- **What a calibration frame has to contain** (see that task's close-out discussion): a
+  *neutral series*, not a single patch — the residual is a **slope**, so one grey card at one
+  exposure fits an offset and cannot separate offset from slope. Neutrals alone constrain
+  only the matrix diagonal and the offsets; the **off-diagonal terms need coloured patches**,
+  because cross-channel contamination is a property of the dye spectra. A transmissive step
+  wedge isolates the scanner but is blind to dye cross-talk for the same reason.
+- **Sample size matters more than it looks.** Per-frame residuals scatter at sd 0.3–1.6, and
+  one fixture roll spans −1.88…+2.03. Resolving a 0.3 stops/density difference needs ~11
+  frames of the same condition. Two per-roll/per-stock conclusions were retracted during
+  that task for reading n=3–4 too confidently.
+- Diagnostic already in-tree: `algo::curve_probe::channel_drift` (asset-gated, `#[ignore]`d)
+  reports scan / predicted / residual drift per channel, per stock and per roll, with
+  scatter. Re-run it to score a candidate matrix.
+
+### Shooting the calibration frames
+
+Agreed with the user 2026-09-08, ahead of them exposing a set.
+
+- **Target**: an X-Rite ColorChecker Classic is the complete answer — its six-patch neutral
+  row fits the matrix diagonal and the offsets, and only its coloured patches can constrain
+  the **off-diagonal** terms, since cross-channel contamination is a property of the dye
+  spectra. A plain grey card is a genuine first step for the diagonal.
+- **Bracket, always: −2, −1, 0, +1, +2 stops** off a metered reading of the grey patch. This
+  is what makes a single grey patch usable at all — the residual is a *slope*, and one patch
+  at one exposure fits an offset without separating it from the slope.
+- **The bracket also makes the fit illuminant-independent where it matters.** A one-stop
+  change multiplies exposure by 2 in *every* channel whatever the light, so relative log
+  exposures are known exactly and each channel's response shape is recovered absolutely,
+  leaving one unknown constant per channel — which the "+ offset" term absorbs and white
+  balance handles downstream. Only channel *balance*, not channel *shape*, depends on the
+  illuminant.
+- **Light, in preference order**: bright overcast (most even, repeatable); direct sun from
+  behind the camera with the card tilted 10–15° against sheen (best channel balance,
+  ≈5500 K); clear-sky open shade last — it is 7000–12000 K, which starves red into its noisy
+  toe, and its colour shifts with any lit surface bouncing in. Record which was used.
+- **Geometry**: card flat and square, filling the central ~60% of the frame (vignetting is
+  an additive field in density and would corrupt neutrality across the card), f/5.6–f/8, no
+  filters or polariser. One extra frame with the card rotated 180° detects uneven light
+  rather than leaving it to be assumed.
+- **Place the set at the head of a roll that is then shot and scanned normally**, with that
+  roll's unexposed frame and leader. It must share development batch *and* scanning session
+  with real frames, and SilverFast's per-frame automatic adjustments must be off or locked —
+  if the scanner adjusts per frame, a calibration from one frame does not transfer to the
+  others, which would void the exercise.
+- **One set is a start, not a conclusion.** Per-frame residuals scatter at sd 0.3–1.6, so a
+  bracket on **two different rolls** is what separates "the film and scanner" from "that
+  roll", the fork this task's whole diagnosis currently sits on.
+- A transmissive step wedge would isolate the scanner from the film — useful if that
+  distinction ever matters, but blind to dye cross-talk for the same spectral reason a
+  neutral target cannot constrain the off-diagonal terms.
 
 ## Design
 

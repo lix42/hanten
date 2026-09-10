@@ -5,7 +5,7 @@
 //! ```
 //!
 //! This is the one deterministic mapping shared by `simple` reconstruction and
-//! both density curves (exponential / sigmoid). It expresses NC's
+//! every density curve (exponential / sigmoid / characteristic). It expresses NC's
 //! **film-rendering intent** — it does *not* claim to recover physically neutral
 //! scene color, and it deliberately preserves the differences caused by film
 //! stock, lens, development, scanner, and the selected density curve. It adds no
@@ -153,8 +153,8 @@ impl std::fmt::Debug for AcesCgImage {
 }
 
 /// Map a reconstructed [`FilmRgbImage`] through NC film RGB v1 into linear
-/// ACEScg/D60 (design-spec §7, stage 4). The **same** mapper for `simple`,
-/// density/exponential, and density/sigmoid — it consumes the typed film-RGB
+/// ACEScg/D60 (design-spec §7, stage 4). The **same** mapper for `simple` and for
+/// every density curve — it consumes the typed film-RGB
 /// boundary and returns the typed ACEScg boundary, so the reconstruction path
 /// makes no difference to how the mapping is applied.
 ///

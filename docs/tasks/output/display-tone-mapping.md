@@ -40,7 +40,9 @@ Not predetermined. Extended Reinhard is the candidate that measured well, not a 
 What the probe established about the shape:
 
 - **`W` is a white point** — the input that maps exactly to display white
-  (`reinhard(W, W) = 1.0`). State it as a **density** rather than a linear multiple
+  (`reinhard(W, W) = 1.0`). *(No longer true of the shipped operator — see the
+  "Superseded 2026-09-09" bullet below.)* State it as a **density** rather than a
+  linear multiple
   (`W = 10^(contrast·(D − A))`), so it is contrast-independent and roll-measurable, and so
   it reuses the vocabulary `AnchorPlacement` already established. It is effectively a
   second anchor, for the white end.
@@ -66,6 +68,15 @@ What the probe established about the shape:
   stop at diffuse white is acceptable is a **rendering-intent** decision and the main thing
   the HDR review should answer; renormalizing so diffuse white returns to 1.0 would undo
   the compression that buys the headroom, so the two cannot both be had from this operator.
+- **Superseded 2026-09-09, under `algo/film-stock-profiles`: the operator absorbs the
+  midtone cost itself, and `W` is no longer its unity point.** The two bullets above are
+  kept as the reasoning that led here, but the shipped operator is
+  `extended-reinhard-mid-preserving-v2`: an input gain solved so `f(0.18) = 0.18` at every
+  white point. The trade the last bullet identified is real and was taken the other way —
+  the curve's white-to-mid ratio cannot fall below 6.17 while pinning both ends needs 5.56,
+  so mid-grey is now exact and the unity point moved to `W / gain`. The remaining
+  compression is ≈0.86 stop at diffuse white, not 1.00, and the anchor no longer has a cost
+  to absorb.
 
 ## Open questions
 

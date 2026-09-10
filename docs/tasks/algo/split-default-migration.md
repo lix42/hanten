@@ -7,6 +7,29 @@ operator carries the character. That is a `pipeline_version` bump with a
 before/after report — the part `algo/reconstruction-render-curve-split`
 deliberately left out of its own scope.
 
+## Input from `algo/film-stock-profiles` (2026-09-08)
+
+- **This task's stated blocker is resolved for named stocks.** The shoulder this migration
+  removes was hiding a per-channel error; inverting a stock's published curve removes
+  blue's part of it by construction (residual +0.09 against +1.26). `film-base/dmax-per-
+  channel-reduction` still owns the no-stock path.
+- **There is now a third candidate default**, not just a shoulder-less sigmoid: the
+  `characteristic` curve, which carries no slope or anchor at all because it reads both off
+  the film. If the migration's goal is "the reconstruction sheds both knees and the display
+  operator carries the character", this is the form that does it completely.
+- **It changes what the display stage must do.** The characteristic curve hands the display
+  scene-referred exposure, so `--display-tone none` is *refused* on both SDR and HDR (the
+  reconstruction no longer bounds itself at the render's ceiling). Measured picture content
+  reaches p99.99 **+3.64 stops** over diffuse white and never exceeds 4 stops on 21 frames,
+  so `reinhard` with `--display-tone-headroom 4` covers it — the shipped default of 6 wastes
+  two stops. Whether that headroom default should move is arguably `output/presets`.
+- **It un-inerts the HDR path.** Same frame, same tone: MaxCLL 101 nits under the shipped
+  sigmoid (half of diffuse white — the known inert-gain-map defect) against 999 under both
+  a shoulder-less sigmoid and the characteristic curve.
+- **Do not migrate before the green residual is understood** (`io/scanner-density-
+  calibration`): +0.40 mean, +1.00 on one roll, and on the worst-affected stocks
+  `generic-c41` currently looks better than the matching profile.
+
 ## Why
 
 The split is decided, not speculative. `algo/reconstruction-render-curve-split`
@@ -19,6 +42,20 @@ It is a separate task because activation inherits a problem the split itself doe
 not own — see the blocker below — and because a default migration is its own kind
 of work: a version bump, a drift-gate row, a measured report, and a guide update.
 
+## Input from `algo/conversion-presets` (2026-09-09)
+
+The default migration this task owns is now the **last step** of that task, not a separate
+piece of work, and two of its obstacles have measured answers:
+
+- **How the default moves without breaking `film-master`.** A preset must not set
+  `output.preset`; the non-display presets (`legacy`/`custom`/`film-master`) resolve their
+  own tone and exposure. Verified that they refuse `reinhard` outright, and that
+  `film-master` refuses any non-default `print_exposure` — so a global default move would
+  have made a bare `nc convert --output-preset film-master` fail.
+- **Which reconstruction.** `characteristic-generic` is the proposed default, which lands on
+  the half of this task's blocker that is still open: `film-base/dmax-per-channel-reduction`
+  owns the no-stock path. Read that note above before migrating.
+
 ## Open questions
 
 - **How much of the shape moves?** The measured answer is "both knees off", but the
@@ -28,10 +65,13 @@ of work: a version bump, a drift-gate row, a measured report, and a guide update
   `print.print_exposure` corrects, so plausibly fine, and it avoids shipping the
   uncalibrated 0.626 offset as a constant.
 - **Is the default display tone the same one?** `--display-tone reinhard` at the
-  6-stop default is what was reviewed. Its **1.000-stop cost at diffuse white** is a
-  rendering-intent call that was accepted for one rendition and explicitly not
-  endorsed as a general default. A migration has to make that call, and no
-  measurement can decide it.
+  6-stop default is what was reviewed. **Half of that concern is now gone**: since
+  2026-09-09 the operator preserves mid-grey by construction
+  (`extended-reinhard-mid-preserving-v2`), so it no longer darkens the midtones and
+  the review's renditions were re-rendered brighter. What remains is **0.86 stop at
+  diffuse white** — still a rendering-intent call the migration has to make, and still
+  one no measurement can decide, but it is now a highlight-contrast question rather
+  than an overall-brightness one.
 - **What does the report have to say?** The split changes what a stage *does*, which
   is CLAUDE.md's "fifth spot" — check the prose claims, not just the values.
 - **Does anything downstream assume the old bound?** Reconstruction currently holds
@@ -73,3 +113,6 @@ before it lands means shipping a visible cast on Gold and Portra.
 
 - [Reconstruction / render curve split](reconstruction-render-curve-split.md)
 - [Per-channel Dmax and the gray-mean reduction](../film-base/dmax-per-channel-reduction.md)
+- [Named conversion presets](conversion-presets.md)
+- [Pin the characteristic curve against regression](characteristic-curve-coverage.md) — the
+  default this task moves to lands on a curve nothing currently fingerprints

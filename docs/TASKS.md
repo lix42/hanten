@@ -197,10 +197,12 @@ graph TD
     algo/regional-color-balance
     algo/bw-support
     algo/film-stock-profiles
+    algo/characteristic-curve-coverage
     algo/auto-anchor-interior-measurement
     algo/curve-endpoint-validation
     algo/sigmoid-parameter-calibration
     algo/reconstruction-render-curve-split
+    algo/conversion-presets
     algo/split-default-migration
   end
   subgraph color
@@ -329,6 +331,10 @@ graph TD
   algo/reconstruction-render-curve-split --> algo/split-default-migration
   film-base/dmax-per-channel-reduction --> algo/split-default-migration
   algo/reference-anchored-sigmoid --> algo/sigmoid-parameter-calibration
+  algo/film-stock-profiles --> algo/conversion-presets
+  algo/film-stock-profiles --> algo/characteristic-curve-coverage
+  algo/characteristic-curve-coverage --> algo/split-default-migration
+  algo/conversion-presets --> algo/split-default-migration
   algo/film-stock-profiles --> algo/sigmoid-parameter-calibration
   io/scanner-density-calibration --> algo/sigmoid-parameter-calibration
   film-base/dmax-reference --> film-base/dmax-anchor-reliability
@@ -548,6 +554,13 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   form, and `DmaxSource::Auto` has no pre-decode value. Warning tier, not a hard error —
   `--sigmoid-white-at-d-max` is a retained diagnostic. Ships no pixel change
 - `algo/film-stock-profiles` (post-MVP): `algo/reference-anchored-sigmoid`
+- `algo/characteristic-curve-coverage` (post-MVP): `algo/film-stock-profiles`
+  — filed 2026-09-10. The curve's *tables* are well covered and its **wiring**
+  (`to_density → check_tables → apply_curve_per_channel → FilmRgbImage`) is not covered at
+  all: no golden vector and no `PIPELINE_FINGERPRINTS` row, because the inversion's
+  `10f32.powf` would not survive x86_64 CI. Edged into `algo/split-default-migration`
+  rather than `algo/conversion-presets`, because that is where the default actually moves —
+  a default on an unpinned curve is what makes this blocking rather than optional
 - `algo/auto-anchor-interior-measurement` (post-MVP): `algo/reference-anchored-sigmoid`, `film-base/auto-base-redesign`
   — `DmaxSource::Auto` measures the whole frame, so the opaque holder owns the 99.5th
   percentile (resolves 2.23–2.37 against a roll Dmax of 1.28–1.38). Blocks every
@@ -573,8 +586,18 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   **shoulder** alone, which runs during reconstruction and strips above-white values before
   either display branch sees them. `film-master` looked like the sharpest constraint and was
   not one: its contract is the configured reconstruction, not a curve shape
+- `algo/conversion-presets` (post-MVP): `algo/film-stock-profiles`
+  — filed 2026-09-09. `--preset` names five reconstruction + display bundles, because every
+  configuration worth shipping is a *bundle* whose numbers are meaningless separately: the
+  `print_exposure` that matches one brightness runs 0.31–0.70 across reconstructions, and
+  `sigmoid-knees` cannot use that knob at all (`--display-tone none` is bounded by the
+  render ceiling, so a scalar gain after the curve is refused — its brightness comes from
+  the anchor instead). Also the reason the default can move without breaking `film-master`:
+  a preset does not set `output.preset`, and the non-display presets keep resolving their
+  own tone and exposure.
 - `algo/split-default-migration` (post-MVP): `algo/reconstruction-render-curve-split`,
-  `film-base/dmax-per-channel-reduction`
+  `film-base/dmax-per-channel-reduction`, `algo/conversion-presets`,
+  `algo/characteristic-curve-coverage`
   — filed 2026-09-02 out of `algo/reconstruction-render-curve-split`, which reached a positive
   verdict but deliberately excluded the default migration. The per-channel dependency is not
   bookkeeping: the shipped sigmoid's shoulder **hides** a 17-83% off-neutral channel error on
@@ -879,12 +902,32 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   of scope; ships no pixel change
 - [x] [Auto neutral white balance](tasks/algo/auto-neutral-wb.md)
 - [x] [Regional (shadow/highlight) color balance](tasks/algo/regional-color-balance.md)
-- [ ] [Film-stock profiles](tasks/algo/film-stock-profiles.md) — a selectable registry of
+- [x] [Film-stock profiles](tasks/algo/film-stock-profiles.md) — a selectable registry of
   known stocks carrying the per-stock reference densities that reconstruction needs
-  (the manufacturer-tabulated mid-grey and diffuse-white aims and their difference),
-  sourced from datasheets with provenance, with a generic C-41 fallback so stock
-  selection stays a refinement rather than a requirement. Measured roll `film_base`
-  stays authoritative — a published `D-min` is a nominal diagnostic, never a substitute
+  (the mid-grey and diffuse-white aims, their difference, the mid-above-base offset and
+  the per-channel structure), sourced from datasheets with provenance, with a generic
+  C-41 fallback so stock selection stays a refinement rather than a requirement. Measured
+  roll `film_base` stays authoritative — a published `D-min` is a nominal diagnostic,
+  never a substitute. **2026-09-04: corpus collected and 8 colour stocks digitized**
+  (see `progress/algo.md`) — the aims' Status M `D-min` now comes from the characteristic
+  curve, which resolves the old chart-read blocker. **The reconstruction half has shipped**
+  as the opt-in `characteristic` density curve (`--film-stock`, ten stocks, no default
+  moved), with the publications in `docs/datasheets/`, a committed digitizer and a
+  `cargo test` audit tying the pinned literals to them. **Closed 2026-09-08** after a
+  ten-frame visual review: the blue cast is fixed, a smaller green residual remains and is
+  routed to `io/scanner-density-calibration` (it needs one known-neutral frame, which no
+  datasheet correction substitutes for). The generic per-channel fallback for the
+  parametric path moves to `film-base/dmax-per-channel-reduction`, B&W to `algo/bw-support`,
+  and making it the default to `algo/split-default-migration`
+- [ ] [Pin the characteristic curve against regression](tasks/algo/characteristic-curve-coverage.md) —
+  the curve's tables are well covered (literals vs the extraction, invertibility, a neutral
+  ramp on every stock) but its **wiring** is not covered at all: no golden vector and no
+  `PIPELINE_FINGERPRINTS` row, so a refactor between `to_density` and `FilmRgbImage` moves
+  every characteristic pixel with all four gates green. A bit-exact capture is *not*
+  available — the inversion's `10f32.powf` differs ~1 ULP across libm, so it would be green
+  locally and red on x86_64 CI — so the open question is what shape of pin works without
+  one. Blocking once `characteristic-generic` becomes the default
+  (`algo/split-default-migration`)
 - [ ] [Auto anchor: measure the interior, not the holder](tasks/algo/auto-anchor-interior-measurement.md) — `DmaxSource::Auto`
   takes the 99.5th percentile over the *whole* scan, so the nearly-opaque film holder owns it
   (resolves 2.23–2.37 against roll Dmax 1.28–1.38) and every frame renders black. Restrict the
@@ -899,6 +942,11 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   rescoping `algo/exponential-anchor-placement`'s negative verdict, which measured that curve
   under the *old knee*. `film-master` needs no change: its contract is the configured
   reconstruction, not a curve shape. Default activation is `algo/split-default-migration`
+- [ ] [Named conversion presets](tasks/algo/conversion-presets.md) — `--preset` selecting
+  one of five reconstruction + display bundles by name, folding the coupled magic numbers
+  (a per-reconstruction `print_exposure` from 0.31 to 0.70, the per-stock aim-matched red
+  scale) into one stated brightness target. `characteristic-generic` becomes the default,
+  which is the `algo/split-default-migration` step
 - [ ] [Activate the split as the default](tasks/algo/split-default-migration.md) — the
   `pipeline_version` bump the split left out: reconstruction stops shaping tone, the display
   operator carries the character. Blocked on `film-base/dmax-per-channel-reduction`, because

@@ -17,15 +17,47 @@ What other epics need to know about `algo`:
   ReconstructionReport)` plus `finish_print`** — the old `Converter` trait and
   `AlgoParams` are gone. The recipe is one **tagged `reconstruction` object**
   (`schema_version: 1`) selecting `simple` or `density`, with density carrying a
-  tagged `sigmoid` (the default since `pipeline_version` 2, 2026-08-08) or
-  `exponential` curve. The legacy `algorithm` +
+  tagged `sigmoid` (the default since `pipeline_version` 2, 2026-08-08),
+  `exponential`, or — since 2026-09-08 — **`characteristic`**, which inverts a named film
+  stock's *published* curve per channel instead of modelling it (`--film-stock`, ten
+  digitized stocks, `algo/film-stock-profiles`). That third variant resolves **no reference
+  density and no anchor placement**: `DensityCurve::anchor()` returns `Option` for that
+  reason, `dmax()` reports `None`, and the report emits `null` rather than naming a rule the
+  render never read. **The curve is opt-in, but a default did move**: `density.scale` went
+  `[1, 1, 1]` → `[1, 0.90, 0.86]` on 2026-09-09 (`pipeline_version` **4**), and its default
+  is **per-curve** — `DensityParams::default_scale_for` is the single definition, giving the
+  parametric curves that calibration and `characteristic` the identity, because that curve
+  already carries each stock's per-channel structure and the same gain would correct it
+  twice (measured: channel means move from 0.039 to 0.185 off neutral). Resolved when a
+  recipe omits the key, re-resolved on a `--density-curve` switch, and an explicit value
+  always wins. Also **`--display-tone none` in practice refuses a render of ordinary
+  picture content under this curve** — it hands the display scene-referred exposure
+  (p99.99 = +3.64 stops over diffuse white) and the renderer's range check rejects the
+  frame, so it needs `shoulder` or `reinhard`. There is no `validate` rule for the pair:
+  dark enough content still renders at exit 0. The legacy `algorithm` +
   top-level `density`/`sigmoid`/`simple` keys are **rejected with migration
   errors** — never re-add them as aliases.
+- **Named conversion presets are filed, not built** (`algo/conversion-presets`, 2026-09-09).
+  `--preset` will select one of five reconstruction + display bundles, because every
+  configuration worth shipping is a bundle whose numbers are meaningless separately — the
+  `print_exposure` matching one brightness runs 0.31–0.70 across reconstructions. Two facts
+  a caller needs before then: **a preset will not set `output.preset`** (so the non-display
+  presets keep resolving their own tone and exposure, which is what lets a default move
+  without breaking `film-master`), and **`sigmoid-knees` takes its brightness from the
+  anchor rather than `print_exposure`**, because `--display-tone none` refuses any scalar
+  gain applied after a bounded curve. `characteristic-generic` becoming the default is the
+  `algo/split-default-migration` step, whose no-stock blocker is still open.
 - **`FilmRgbImage` is the typed boundary out of this epic.** Private fields,
   constructible only inside `algo`, so nothing can mint one that skipped
   reconstruction. `working_space::map_nc_film_rgb_v1` is its only intended
   consumer; its legacy alternative is `finish_print`, the stage-4 bridge that
   presets will displace.
+- **A residual green cast is a known, measured gap** (mean +0.40 stops per unit corrected
+  density; +1.00 on one roll). Blue's equivalent is fixed. The leading cause is the
+  cross-channel term ACES applies before its curves and nc does not, and closing it needs
+  one known-neutral frame on film — `io/scanner-density-calibration`. Anything judging
+  colour fidelity out of this epic should expect it, and should not read the per-stock
+  breakdown as established (frame-to-frame scatter swamps it at n=3–4).
 - **Polarity: a *denser* negative renders *brighter*.** Stage 3 is
   `10^(+γ·(D′ − Dmax))`, not the `10^(−…)` in early spec sketches. A regression
   test pins this.
@@ -1156,8 +1188,8 @@ What other epics need to know about `algo`:
 
 ## film-stock-profiles
 
-**Status:** not started
-**Updated:** 2026-08-02
+**Status:** done
+**Updated:** 2026-09-10
 
 - Goal: A selectable registry of known film stocks carrying the per-stock reference
   densities reconstruction needs, sourced from manufacturer datasheets with
@@ -1204,6 +1236,46 @@ What other epics need to know about `algo`:
   ship candidate 8 (mid anchored at `Dmin + offset`) on top of this registry is blocked
   on spectral integration or a tabulated Status M measurement, not on the registry
   itself. Full derivation in the `exponential-anchor-placement` section.
+- **2026-09-10 — done.** Shipped as a third density curve rather than as a table of
+  per-stock constants, which is the decision the rest follows from: `characteristic`
+  inverts each dye layer's *published* density-to-log-exposure relation per channel
+  (`--film-stock`, ten stocks in `src/algo/film_stock/`, sheets committed under
+  `docs/datasheets/`), so it resolves **no reference density and no anchor** — both come
+  off the film. Mid-grey lands at 0.18 by construction. The registry the task was filed
+  for exists, but as the curve's own data, not as a knob feeding the parametric curves.
+
+  **Verified.** `PDF → curves.json` reproduces (`digitize_datasheets.py --check`, needs
+  poppler, manual) and `curves.json → curves.rs` is audited on every `cargo test`; that
+  covers extraction *reproducibility*, never fidelity to the printed artwork, which
+  nothing mechanical can check. All four gates plus the `nctool` suite green; 725 unit +
+  185 integration + **21 asset-gated probes**. `cargo doc` holds the 16-link baseline.
+
+  **Three defaults moved with it** — `pipeline_version` 3 → 4, one new fingerprint row,
+  `golden_new_default` recaptured (red bit-identical; only green and blue move, which is
+  the shape a per-channel gain should produce): `density.scale` `[1,1,1]` →
+  `[1, 0.90, 0.86]` with a **per-curve** default (`DensityParams::default_scale_for` —
+  identity under `characteristic`, which already carries each stock's structure and would
+  otherwise be corrected twice), and `extended_reinhard` became
+  `extended-reinhard-mid-preserving-v2`, preserving scene mid-grey instead of mapping the
+  white point to 1.0.
+
+  **For dependent tasks.** `io/scanner-density-calibration` owns the residual: green and
+  blue come out ~11–18% steeper than red *in the scan* where the sheets say green is
+  barely steeper, so the shipped gain is a scanner calibration wearing a film default's
+  clothes, and it nulls the corpus mean rather than any roll (±0.5 stop per density
+  remains on the green–magenta axis). `algo/conversion-presets` and
+  `algo/characteristic-curve-coverage` were filed out of this work; the latter records
+  that **no golden vector or fingerprint covers this curve**, deliberately — its
+  inversion runs `10f32.powf`, which would be green on aarch64 and red on x86_64 CI — so
+  the open question is what shape of pin works without one. `algo/split-default-migration`
+  inherits the default move and its no-stock blocker is still open.
+
+  **One trap worth carrying forward.** Moving `DensityParams::default()` off identity
+  silently broke three `#[ignore]`d probes that used it as a stand-in for identity,
+  including the one cited as evidence for the new default. Every gate stayed green because
+  `cargo test` never runs them. `identity_gain()` in `curve_probe.rs` now names the trap;
+  the general lesson is that a probe measuring a shipped default must state the identity
+  explicitly, and that changing a default means re-running the ignored set by hand.
 ## reference-anchored-sigmoid (Phase 0)
 
 **Status:** in progress
@@ -2873,3 +2945,751 @@ not a reason to make a filing mistake permanent before it has ever been publishe
   first: the shoulder this migration removes is what currently *hides* a 17-83% off-neutral
   channel error on the grey leader, so a shoulder-less default ships a visible cast on Gold
   and Portra.
+
+## film-stock-profiles (continued — datasheet corpus and curve digitization)
+
+**Status:** done
+**Updated:** 2026-09-08
+
+- 2026-09-04 (**corpus collected; every number below is digitized from the published
+  curves, not read by eye**).
+  - **Colour C-41 (7 sheets, all usable):** Ektar 100 `E-4046`, Portra 160 `E-4051`,
+    Portra 400 `E-4050`, Portra 800 `E-4040`, Gold 200 `E-7022`, UltraMax 400 `E-7023`,
+    UltraMax 800 `E-7024`, plus the legacy five-stock Portra sheet
+    (160NC / 160VC / 400NC / 400VC / 800).
+  - **B&W (16 sheets):** Kodak TMax 100/400, Tri-X 320/400; Ilford Delta 100/400/3200,
+    FP4+, HP5+, Pan F+, SFX 200, Ortho Plus, XP2 Super; Kentmere Pan 100/200/400.
+  - **No data exists for Harman Phoenix** — its sheet carries no characteristic curve and
+    no densities at all, only ISO, a wedge spectrogram, reciprocity and lab scanner
+    settings. Phoenix is a fixture roll, so "unnamed stock resolves to generic" is a
+    first-class path, not an edge case. No Fuji in the corpus (Fuji publishes curves but
+    only sometimes a grey-card aim, and never the diffuse-white row, so no tabulated Δ).
+  - Aim values are **identical** between the Feb-2016 and Jan-2025 revisions of all five
+    current sheets. Revision drift is not a live risk; still record the revision.
+
+- **Method — the Kodak still sheets are vector art with no raster layer**, so the curves
+  digitize exactly rather than approximately. Calibrate `y` off the **plot frame** (frame
+  bottom is `D = 0.0`, top `4.0`) and `x` off the axis tick spacing. Two independent
+  extraction paths — raw PDF content stream and `pdftocairo -svg` — agree to **±0.002
+  density** where both run, and the legacy sheet's Portra 800 reproduces current `E-4040`
+  to the same tolerance from a completely different page layout. **Calibrating off the
+  axis *label baselines* instead of the frame biases every density by ~0.05** — the
+  baseline sits ~2.4 pt below the tick centre. Ilford / Harman / Kentmere sheets are
+  **raster** and Fuji's PDFs are **encrypted**; both need a different route.
+
+- **Constraint 2 is liftable for Kodak still stocks, and that unblocks the anchor
+  offset.** The 2026-08-02 values came off the *Spectral-Dye-Density* chart, which is
+  per-wavelength diffuse density — genuinely the wrong quantity. The **characteristic
+  curve is plotted in Status M** (stated on the plot; the same densitometry as the aim
+  table) and its left end is flat (rise over the first 0.3 dec ≤ 0.016; Gold 200's blue
+  instead *dips* 0.03 there, so a table built on `min(D)` would sit above the real floor —
+  enforce monotonicity from the leftmost point and take `D-min` from that), so its `D-min`
+  *is* a Status M density. That
+  makes `mid aim − D-min` — the `MidAtBaseOffset` `algo/reference-anchored-sigmoid` wanted
+  and could not ship — available at ~±0.01 rather than blocked. Provenance needs a **third
+  kind, `curve-digitized`**: folding it into `chart-read` would forbid the exact use that
+  motivates this task.
+
+  | Stock | mid aim | white aim | Δ tab | D-min R/G/B | mid−D-min | Δ curve | γ R/G/B |
+  |---|---|---|---|---|---|---|---|
+  | Ektar 100 | 0.82 ±.05 | 1.18 ±.05 | 0.36 | 0.209/0.634/0.844 | 0.611 | 0.401 | 0.608/0.589/0.656 |
+  | Portra 160 | 0.84 ±.05 | 1.20 ±.05 | 0.36 | 0.200/0.616/0.835 | 0.640 | 0.370 | 0.524/0.536/0.587 |
+  | Portra 400 | 0.82 ±.05 | 1.18 ±.05 | 0.36 | 0.220/0.647/0.867 | 0.600 | 0.376 | 0.531/0.555/0.633 |
+  | Portra 160VC | 0.87 ±.06 | 1.28 ±.06 | 0.41 | 0.219/0.645/0.860 | 0.651 | 0.391 | 0.552/0.572/0.656 |
+  | Portra 400VC | 0.87 ±.06 | 1.28 ±.06 | 0.41 | 0.219/0.646/0.867 | 0.651 | 0.392 | 0.553/0.573/0.655 |
+  | Portra 800 (EI 800) | 0.85 ±.10 | 1.10 ±.10 | 0.25 | 0.308/0.706/1.021 | 0.542 | 0.362 | 0.512/0.532/0.594 |
+  | Gold 200 | 0.95 ±.10 | 1.35 ±.10 | 0.40 | 0.251/0.657/0.991 | 0.699 | 0.383 | 0.543/0.565/0.611 |
+  | UltraMax 400 | 0.90 ±.10 | 1.30 ±.10 | 0.40 | 0.285/0.694/0.980 | 0.615 | 0.355 | 0.503/0.524/0.583 |
+
+  Red channel; `Δ curve` is the density rise over the 0.694 decades separating an 18 %
+  grey card from a ~89 % paper white, taken at the mid aim's own exposure. Supersedes the
+  provisional 0.62 / 0.67 / 0.73 offsets in `shadow_metrics::datasheet_mid_above_base`
+  (Ektar 0.611, Portra 160 0.640, Gold 200 0.699).
+
+- **Correction to this task's stated premise: Δ *is* stock-dependent, and the tabulated Δ
+  is not always trustworthy.** Three findings, in order of how much they change the plan:
+  - The legacy sheet's **NC/VC pair settles it**: 160NC/400NC give 0.82/1.18 (Δ 0.36) while
+    160VC/400VC give 0.87/1.28 (Δ 0.41) — same speed, same maker, different contrast grade
+    — and their own curves agree (γ_R 0.52–0.53 vs 0.55). Δ tracks a real design property,
+    so it is legitimate registry content. It looks constant across *today's* line only
+    because today's C-41 stocks are all similar-contrast.
+  - **Both 800-speed sheets tabulate Δ 0.25 while both their curves say ~0.36.** Their aim
+    ranges are ±0.10, so the tabulated difference carries ±0.14 — *consistent* with the
+    curve but uninformative at that width. Prefer the curve; keep the table as a check.
+  - The internal-consistency test for any new sheet: `Δ_tab / γ` must equal
+    `log10(white/mid reflectance) ≈ 0.69`. It does, to ±0.05 density, on every stock
+    **except** the two 800s (0.49).
+
+- **Aim-table tolerance bounds what any registry can buy.** ±0.05 (professional) is
+  **±0.34 EV** of exposure placement at contrast 2.07; ±0.10 (consumer) is ±0.68 EV. Store
+  the range, not just the midpoint, and don't chase precision below it.
+
+- **The per-channel structure is the one genuinely per-channel datum the sheets carry, and
+  it says `density.scale = [1,1,1]` is wrong on all eight stocks.** Blue runs 12–19 %
+  steeper than red, green 2–5 %. The plotted curves are the response to a **neutral**
+  wedge, so this is what a grey ramp looks like in nc's own `D′` (Portra 400):
+
+  | stops vs mid | −4 | −3 | −2 | −1 | 0 | +1 | +2 | +3 | +4 |
+  |---|---|---|---|---|---|---|---|---|---|
+  | D′_R | 0.035 | 0.133 | 0.287 | 0.442 | 0.600 | 0.762 | 0.926 | 1.093 | 1.262 |
+  | D′_G | 0.038 | 0.145 | 0.311 | 0.479 | 0.646 | 0.813 | 0.979 | 1.144 | 1.311 |
+  | D′_B | 0.085 | 0.247 | 0.435 | 0.624 | 0.814 | 1.005 | 1.197 | 1.390 | 1.582 |
+  | blue error after WB at mid | −0.164 | −0.100 | −0.066 | −0.032 | 0 | +0.029 | +0.057 | +0.083 | +0.106 |
+
+  White balance is a single gain, i.e. a constant density shift, so it can only zero one
+  row: anchored at mid it still leaves 0.46× blue at −4 stops and 1.66× at +4 — **1.9 EV of
+  blue swing** at contrast 2.07, warm below, blue above.
+
+- **`scale` alone cannot fix it — the channels' toes sit at different exposures**, so `D′_B`
+  is not a constant multiple of `D′_R` (the ratio drifts 1.25–2.43). The correction needs
+  the **(scale, offset) pair nc already has**. Fitted over −2…+4 stops:
+
+  | stock | scale G | offset G | scale B | offset B |
+  |---|---|---|---|---|
+  | Ektar 100 | 0.996 | −0.023 | 0.857 | −0.090 |
+  | Portra 160 | 0.975 | −0.039 | 0.863 | −0.067 |
+  | Portra 400 | 0.976 | −0.025 | 0.850 | −0.088 |
+  | Portra 160VC | 0.986 | −0.031 | 0.852 | −0.101 |
+  | Portra 400VC | 0.988 | −0.031 | 0.856 | −0.096 |
+  | Portra 800 | 0.967 | −0.058 | 0.857 | −0.004 |
+  | Gold 200 | 0.971 | −0.035 | 0.887 | −0.002 |
+  | UltraMax 400 | 0.956 | −0.045 | 0.862 | −0.012 |
+  | **generic** | **0.977** | −0.036 | **0.860** | −0.057 |
+
+  On Portra 400 that takes the blue neutral error from ±0.16 density to **≤0.011 over
+  −3…+5 stops** (−0.051 remains at −4, in the toe). **The gain is nearly stock-independent
+  (blue 0.860, range 0.850–0.887 — a 4.3 % spread on a 14 % correction); the offset is
+  not** (−0.101…−0.002, and it splits by tier: professional ≈ −0.09, consumer/800 ≈ 0). So
+  a generic `scale` is defensible for the no-stock path; a generic `offset` is not, and
+  should stay 0 unless a stock or a measurement supplies it. Where the per-channel term
+  belongs is `film-base/dmax-per-channel-reduction`; deriving it from **roll statistics** is
+  not an option — that is content-derived, and forbidden for a default for the same reason
+  the content-driven anchor was rejected.
+
+- **The leader cannot validate any of this, and there is now data saying so.** Evaluating
+  each datasheet at the exposure where its red `D′` equals the measured leader's red `D′`
+  (leader values from `reports/sigmoid-reference-baseline.md`):
+
+  | stock | leader D′_R | meas G−R | pred G−R | meas B−R | pred B−R |
+  |---|---|---|---|---|---|
+  | Gold 200 | 1.224 | +0.010 | +0.079 | +0.139 | +0.139 |
+  | Ektar 100 | 1.272 | +0.014 | +0.026 | +0.048 | **+0.322** |
+  | Portra 160 | 1.440 | −0.110 | +0.116 | −0.059 | **+0.372** |
+
+  The published divergence does not reproduce, and Portra 160's leader has **red** densest,
+  which no C-41 stock's neutral response gives. Two explanations this data cannot separate:
+  the leader's exposing light is not neutral (and it sits near the shoulder), or our
+  channel slopes are not Status M's. Either way **the leader is not a usable neutral
+  reference** — an earlier suggestion in this work to measure per-channel gamma on it was
+  wrong. More leader scans still have one specific use: with ~4–5 per stock, clustering
+  per stock would indicate something systematic while scatter would indicate the leader's
+  own exposure varying. Collect the unexposed frame alongside each.
+
+- **Curve shape — the film has a toe and essentially no shoulder in the range we scan.**
+  Local γ as a fraction of mid-scale γ, red channel:
+
+  | stops vs mid | −4 | −3 | −2 | 0 | +2 | +3 | +4 | +6 |
+  |---|---|---|---|---|---|---|---|---|
+  | Portra 400 | 0.35 | 0.87 | 0.97 | 1.00 | 1.04 | 1.05 | 1.07 | 1.09 |
+  | Portra 160 | 0.52 | 0.91 | 0.94 | 1.00 | 1.04 | 1.01 | 0.86 | 0.69 |
+  | Ektar 100 | 0.27 | 0.66 | 0.91 | 1.07 | 0.96 | 0.92 | 0.84 | 0.76 |
+
+  Real rolls measure ~1.3 density above base ≈ **+4 stops over mid**, so a scan lives
+  almost entirely on the straight line, with the film's toe active in the bottom ~1–1.5
+  stops. Two consequences: the sigmoid's default shoulder (bending from `D′ ≈ 0.70`, i.e.
+  at mid-grey) is **nowhere in the film** — it is print character, which is
+  `algo/reconstruction-render-curve-split`'s verdict with measurements behind it; and nc's
+  **toe has the wrong sign** — the film compresses shadows, so reconstruction should
+  *expand* them, while the sigmoid compresses the same region a second time.
+
+- **User decisions, 2026-09-04.**
+  - The blue highlight cast is diagnosed as **gamma, not base offset**. The signature is
+    growth with density (a base error would be a constant shift, since `D′ = scale·D +
+    offset` acts on an already base-relative `D`), and the observed cast is strong in
+    highlights and absent as a matching warm shadow. The weak shadow half is *predicted*:
+    −0.066 density at −2 stops against +0.106 at +4, and the display toe compresses
+    shadows further.
+  - The datasheet's per-channel structure is to be **tried on our scans** rather than gated
+    on a calibration.
+  - The **scanner-to-Status-M slope is postponed** (`io/scanner-density-calibration`).
+  - A ColorChecker / grey-card calibration frame is **not available**, so the per-channel
+    numbers ship as a hypothesis judged on rendered results, not as a verified transfer.
+    The one frame that would settle it — a ColorChecker whose neutral row gives six points
+    of the ramp in a single exposure — remains the cheapest unblock when it becomes
+    possible.
+
+- **Open.** Whether reconstruction should keep a parametric curve at all or invert the
+  digitized characteristic curve per channel (which would subsume `scale`/`offset`
+  entirely) — under research, and it decides whether this registry stores a handful of
+  scalars or a curve per channel, so it should settle first. The digitizer is **not
+  committed**, so today's numbers are reproducible only from the recorded publication ids
+  and revision dates. B&W is a different shape and stays with `algo/bw-support`: contrast
+  index is set by developer, time and temperature, not by the film (Tri-X's recommended
+  times target CI 0.56), so a B&W profile cannot resolve a contrast the way a C-41 profile
+  can.
+
+- 2026-09-04 (**the datasheet's per-channel structure transfers to our scans — measured,
+  21 frames**). `algo::curve_probe` (test-only, asset-gated) bins interior pixels by red
+  corrected density and measures how the blue-minus-red log exposure ratio **drifts across
+  the bins** after normalising at the middle bin — which is what a white balance does, so
+  a scene-colour bias shifts every bin together and cancels, leaving only the drift. Both
+  paths run on identical pixels of identical frames: `scalar` is one contrast for all three
+  channels (what nc does today), `curve` is each channel through its own published inverse.
+
+  | | scalar | curve | datasheet predicts |
+  |---|---|---|---|
+  | blue drift slope, stops per unit density | **+1.26** | **+0.09** | **+1.29** |
+  | ektar-100 (n=3) | +1.22 | +0.13 | +1.23 |
+  | portra-160 (n=8) | +1.18 | +0.15 | +1.11 |
+  | portra-400 (n=7) | +1.24 | −0.07 | +1.62 |
+  | gold-200 (n=3) | +1.54 | +0.29 | +1.07 |
+
+  The scans carry **90 %** of the divergence the datasheets claim (81–117 % per stock), and
+  inverting the published curves removes it: the residual slope is ~0 on every stock. This
+  is the measurement the missing ColorChecker frame was going to provide, obtained from
+  ordinary picture content instead — and it retires the objection that the leader raised,
+  since the leader failed only because it is not a neutral exposure.
+- **Read the slope, not the swing.** The raw max−min swing improves only 26 % (1.76 → 1.30
+  stops) and two frames of 21 get worse, because the swing is dominated by real scene colour
+  that varies with luminance and no probe can subtract it. Per-frame slopes scatter from
+  −3.7 to +4.8 for the same reason. Only the **mean slope** is the film's signature, and it
+  is what the datasheet predicts to within 2 %.
+- Consequence for the design: the blue highlight cast is quantified — **+1.26 stops per unit
+  corrected density** — and it is a *film property nc was not modelling*, not a scanner
+  artefact. `density.scale`/`offset` could approximate it; inverting the curve removes it by
+  construction, and also fixes the toe, which no scale/offset pair can.
+
+- 2026-09-04 (**shipped: the `characteristic` curve — reconstruction by inverting the
+  published response, opt-in, no default moved**). `--density-curve characteristic`
+  (recipe `reconstruction.curve = {"type": "characteristic", "stock": …}`) selects
+  `algo::film_stock`, which inverts each dye layer's digitized curve per channel. Nine
+  stocks ship in `algo/film_stock/curves.rs` — the eight measured plus `generic-c41`, the
+  average of them (red mid-scale γ 0.541, mid-grey 0.624 above base; the per-stock spreads
+  are 0.50–0.61 and 0.54–0.70, and ACES's own generic model sits at 0.55 / 0.70).
+- **It is the ACES film-scan transform with per-stock data.** Reading the actual
+  `ADX10 → ACES` source settled the shape question: per-channel density → cross-channel
+  matrix → per-channel curve inverse (a toe LUT below a threshold, a straight line above)
+  → `10^` → matrix, with **no tone curve anywhere**. Its two free numbers — an implied film
+  gamma of `100/55 = 0.55`, and mid-grey pinned at printing density **0.70 above the film
+  base** (the constant `(7120−1520)/8000` in `REF_PT`) — are a *generic* film model that our
+  per-stock measurements bracket. So the design is not novel; what nc adds is the stock's
+  own data in place of the generic. The cross-channel matrix is the one element **not**
+  implemented: it is the scanner-to-Status-M correction, deferred with
+  `io/scanner-density-calibration`, and ST 2065-2's NOTE 3 says its form is a "3 × 3 matrix
+  transformation followed by an offset", product-specific and "likely imperfect".
+- **The curve is self-anchoring, and that is what removes the knobs.** Each table's
+  log-exposure axis is shifted so the stock's own mid-grey aim sits at `log10(0.18)`, so
+  `10^(curve⁻¹(D′))` is relative scene exposure with mid-grey at 0.18 by construction. There
+  is therefore no `dmax` to resolve and no `AnchorPlacement` to apply — `DensityCurve::anchor()`
+  returns `Option` for exactly this reason, and the report emits `null` rather than naming a
+  rule the render never read.
+- **Every parametric knob is refused, not ignored**, each naming a remedy that branch
+  accepts: `--d-max`/`--auto-d-max` (by **flag presence**, in `validate_convert` — `merge`
+  has nowhere to write them and a resolved value cannot tell "asked for fixed" from "left at
+  the default"), `--sigmoid-*`, `--anchor-*`, `--density-gamma`, and `stock` under either
+  parametric curve. `--density-gamma`'s remedy is `--density-curve exponential`, not
+  `sigmoid` — the curve that actually has a gamma. A test asserts each message offers a
+  route the curve does not itself refuse.
+- **Roll-fixed like the base and the reference.** `sets_curve_stock` is the fifth
+  roll-consistency probe: a per-frame `curve.stock` override converts, but warns loudly and
+  `--strict` promotes it. It is the most literally roll-fixed key in the recipe — it names
+  the film that was in the camera.
+- **Out-of-table samples extrapolate along the end slope and are counted**, never clamped:
+  clamping would fold them onto one exposure and invent a flat patch. The per-channel
+  fractions ride in the report; the warning threshold was set from measurement (see the
+  next entry, which corrects a first pass at 1%).
+- **No default moved and no fingerprint bumped.** `nc params` still resolves the sigmoid;
+  the drift gate is untouched. Adding a variant to the tagged enum is additive, so
+  `reconstruction.schema_version` stays 1 and every archived recipe still loads.
+- Verification: 894 tests green (fmt / clippy `-D warnings` / build / test, plus the
+  `nctool` suite and `cargo doc` at its 16-link baseline). The load-bearing tests are
+  property-based rather than golden bit vectors — **a neutral exposure ramp run forward
+  through each stock's own curves and reconstructed must return to the exposure it started
+  from, on every stock and every channel.** Curated per-pixel goldens were deliberately not
+  added: CLAUDE.md records that only the *existing* vectors are known to agree across libm,
+  and a new bit-exact vector would be a coin flip on the Linux CI runner. Same-machine
+  bit-identity is covered instead by the recipe round-trip test.
+- **Two traps worth recording.** Serde's `kebab-case` renames `Portra400` to `portra400`
+  (it splits on case boundaries, and there is none before a digit), which gave the recipe a
+  *different* spelling from the CLI flag — the emitted recipe would not have loaded back.
+  `FilmStock` now implements `Serialize`/`Deserialize` by hand against one `as_str`/`parse`
+  pair. And clippy's `approx_constant` fires on the digitized coordinate `0.78539` because
+  it is near π/4; the module allows the lint with a comment, since "use the constant
+  directly" would replace a measurement with an unrelated number.
+
+- 2026-09-04 (**the out-of-table warning was a false alarm on every real scan; corrected,
+  and one proposed fix measured and abandoned**). Shipped at a 1% threshold, it fired on
+  every full-frame fixture (5.2–7.2%). Three measurements settled what it is and is not:
+  - **It is the scan's border.** `curve_probe::out_of_table_provenance` splits the frame:
+    on twelve frames across four rolls, **100% of out-of-table samples lie in the outer 12%
+    and 0.00% inside the picture**. The holder and rebate are denser than any exposed image.
+  - **The fix I proposed first does not work.** The plan was to exclude samples sitting on
+    the decoder's `SCAN_EPSILON` transmission clamp, on the assumption (recorded in
+    CLAUDE.md) that the holder lands there. Measured: **0.00% of the frame is at the floor**.
+    The holder is merely very dense, not clamped. Implementing it would have shipped a
+    no-op — the reason to measure a premise before building on it.
+  - **The statistic cannot diagnose what the message claimed.** Rendering one Ektar frame
+    under all seven distinct stock profiles moved it only 5.75%→6.55%, because every C-41
+    table ends within ~0.2 density of the others; a **30% wrong film base** moved it
+    6.00%→6.44%. So "usually means the declared stock or the film base is wrong" was a
+    promise the number cannot keep.
+  - Corrected: threshold **0.20** (a floor above the measured border cost, not a tuned
+    value), the message states the fact instead of diagnosing, and the per-channel fractions
+    are reported **unconditionally** in `reconstruction_result.curve.out_of_table` so the
+    data is available without the noise. The statistic that *would* diagnose a wrong stock
+    or base is the **interior** fraction — 0.00% on every fixture — which needs a resolved
+    picture region and belongs to `algo/auto-anchor-interior-measurement` (or IR-based
+    border detection). Once that lands, this whole-frame figure can be dropped.
+
+- 2026-09-06 (**registry made re-derivable; a tenth stock; one provenance error found and
+  fixed**). The datasheets are now **in-repo** (`docs/datasheets/`, 7.7 MB, 24 files) with a
+  committed digitizer (`scripts/analysis/digitize_datasheets.py`). The chain is
+  `PDF → curves.json → curves.rs`, split the way `pipeline/colorimetry/` splits its own:
+  extraction needs poppler and is run by hand, while **the audit
+  (`curves_match_the_digitized_json`) needs neither poppler nor network and runs in CI**, so
+  the pinned literals cannot drift from the extraction. Verified falsifiable by perturbing
+  one point: the test names the stock, channel and index.
+- **A publication id was wrong in the shipped data.** `portra-160vc` / `portra-400vc` were
+  recorded as `E-4022`, which I had invented — the legacy five-stock Portra sheet is
+  **E-4040 (2009-02)**. Kodak later reused that number for the current Portra 800 sheet, so
+  **`publication` alone is not an identifier**; the `(publication, revision)` pair is, which
+  is why both ride in the report. Exactly the class of error committing the sources exists
+  to catch.
+- **`ultramax-800` now digitizes**, taking the registry to ten. Three extractor faults had
+  to be fixed, each silent:
+  - the SVG parser dropped paths with fewer than three points, so a plot frame drawn as
+    four straight lines was invisible — that is Portra 400's layout, which had been read
+    through a second (content-stream) path until now;
+  - subpaths were concatenated, so one `<path>` holding two dye curves became a single
+    doubling-back polyline whose green channel reduced to two usable points;
+  - the 2007 sheet draws each curve as dozens of short subpaths, so after splitting they
+    must be **stitched** back by endpoint matching.
+  Every other stock's tables are byte-identical across all three fixes, which is the
+  evidence that they were extractor bugs rather than a change of method.
+- **UltraMax 800 and Portra 800 digitize to the same curve** — D-min 0.308/0.706/1.021
+  against 0.308/0.706/1.021, per-channel gamma within 0.003, curve Δ 0.360 against 0.362 —
+  from different publications, years and pages, extracted independently. Either the two
+  films share a response or Kodak reused the artwork; as evidence it is an independent
+  check on the extraction. It also explains why *both* 800-speed sheets carry the anomalous
+  tabulated Δ 0.25 against their own curves' ~0.36.
+- Coverage closed: **every** stock now round-trips through an emitted recipe byte-for-byte
+  (a single-stock test would have passed while nine spellings were unloadable), and the
+  characteristic curve joined `film_master_render_works_for_every_reconstruction_path`.
+- One verification bullet in the task file was **retired rather than ticked**: "omitting the
+  stock renders identically to the pre-task default" died with the shape change, since
+  `generic-c41` is a different curve and is meant to differ. The invariant that matters —
+  a bare `nc convert` is unchanged — is pinned by the unmoved drift-gate row.
+
+- 2026-09-06 (**user review: the blue cast is gone, a green one is left — and the
+  re-derivation it seemed to call for was unnecessary**). Ten frames × six configs
+  reviewed. Verdict: the characteristic curve keeps detail and fixes the blue cast; the
+  shoulder display tone loses highlight detail on it (config 6 rejected). The remaining
+  fault is a **green cast**, and the user's per-frame notes ranked the stocks — Ektar worst
+  ("obvious"), Portra 160 and 400 slight, **Gold 200 clean** — with `generic-c41` looking
+  *better* than the per-stock profile on the bad stocks and *worse* on Gold.
+- **The measurement reproduces that ranking exactly.** `channel_drift`'s slope metric,
+  extended from blue to green:
+
+  | stock | green: scan | datasheet predicts | **residual** | blue residual |
+  |---|---|---|---|---|
+  | ektar-100 | +1.26 | +0.22 | **+1.00** | +0.13 |
+  | portra-160 | +0.88 | +0.40 | **+0.48** | +0.15 |
+  | portra-400 | +0.65 | +0.46 | **+0.18** | −0.07 |
+  | gold-200 | +0.41 | +0.36 | **+0.08** | +0.29 |
+
+  Stops per unit density. **This corrects the 2026-09-04 claim that the cast is removed**:
+  that measured *blue*, the channel where the effect was largest, and blue does transfer
+  (residual ≈0.1). Green does not, and a green/magenta error has no warm/cool reading the
+  eye forgives, so it reads as a cast where an equal blue residual would not. Measure the
+  channel that matters perceptually, not the one with the biggest number.
+- **The datasheets get green *ranked wrong*, so this is not a transcription fault.** Ektar's
+  sheet predicts the *smallest* green divergence of the four (+0.22) while its scans show
+  the *largest* (+1.26). Before concluding that, the extraction was checked by running
+  Ektar through **two independent paths** — the raw PDF content stream and `pdftocairo`'s
+  SVG — which agreed to **0.004** on all three channels' gamma and to three decimals on
+  every `D-min`. The digitization is right; re-deriving would have changed nothing. The
+  first hypothesis (a sparse-bézier reading error, since Ektar's red curve has 18 control
+  points against Portra 160's 241) was wrong, and the x-axis calibration was checked too:
+  37.16 pt/decade against Portra 400's 37.29, a 0.3% difference, not the 15% needed.
+- **Two sheets disagree with themselves, and there is now a test for it.**
+  `aim_table_agrees_with_the_curve` checks each sheet's two independent halves against each
+  other, comparing the curve's own density rise across **exactly the interval the two aims
+  span** with the tabulated difference. Measured: Portra 160 +3%, Portra 400 +6%, Gold 200
+  −5%, the VC pair −4/−5% — and **Ektar 100 +11%**, **UltraMax 400 −11%** (the 800s, whose
+  tabulated Δ is separately known bad, come out +44/+45% and are exempt). The two failures
+  are named in the test with their measured figures at ±1 rather than hidden behind a loose
+  tolerance.
+- **The first version of that metric was window-sensitive, and it produced two figures I
+  had already reported.** Measuring gamma over ±0.35 decade around mid-grey and dividing
+  the tabulated Δ by 0.694 gave Ektar −15% and a `γ_G/γ_R` of **0.970** — "the only
+  sub-unity value in the corpus". Widening the window to ±0.5 decade moves Ektar to
+  **1.002** and leaves every other stock unchanged to three decimals, which is what exposed
+  it: Ektar's curve has local structure right where that narrow window sat. Interval-matched
+  quantities have no such freedom, so the test now compares Δ against Δ. Ektar's sheet is
+  still the outlier — it draws red and green nearly parallel (1.002 against everyone else's
+  1.02–1.05), which is why it predicts the *least* green divergence of the four stocks where
+  the scans show the *most* — but the anomaly is "unusually parallel", not "inverted", and
+  the self-inconsistency is 11%, not 15%. Its aim table being digit-for-digit Portra 400's
+  stands.
+  The test is **not** a predictor of rendered colour — Portra 160 passes at −1% and still
+  casts +0.48 — and its doc comment says so, so nobody reads a pass as a promise.
+- **What the green residual most likely is.** It varies per stock (+0.08…+1.00) and in an
+  order the datasheets do not predict, so it is not a fixed scanner-gamma error. The
+  leading hypothesis is the **cross-channel term** — the one stage of the ACES film chain
+  deliberately not implemented: `CDD → CID`, a 3×3 that removes each dye's unwanted
+  absorption *before* the per-channel curves. Its magnitude depends on the dye set and mask,
+  which is exactly the stock-dependence seen; blue happens to survive per-channel treatment
+  and green does not. ST 2065-2 NOTE 3 independently says the scanner↔standard-density
+  transform is a "3 × 3 matrix followed by an offset", **product specific** and "likely
+  imperfect". That routes to `io/scanner-density-calibration`, and it still needs one
+  known-neutral frame to fit.
+- Interim consequence for anyone using this today: on the reviewed rolls `generic-c41`
+  renders *better* than the matching per-stock profile on Ektar and Portra, not because the
+  generic is better data but because averaging nine curves dilutes any single sheet's error
+  ninefold — and correspondingly *worse* on Gold 200, whose own sheet is the cleanest. That
+  is a reason to fix the cross-channel term, not to prefer the generic.
+- The published aims now ride in `curves.json`, the pinned table and the report
+  (`stock.aims`), since they are the most directly checkable numbers on a sheet.
+
+### 2026-09-08 — close-out
+
+**What landed.** Reconstruction can now invert a film stock's *published* response instead
+of modelling it: `--density-curve characteristic` + `--film-stock` (recipe
+`reconstruction.curve = {"type":"characteristic","stock":…}`), ten stocks digitized from
+the publications now kept in `docs/datasheets/`, provenance and out-of-table fractions in
+the report, roll-fixed with a `--strict`-promotable per-frame warning, and every parametric
+knob refused rather than ignored. **Opt-in throughout — no default moved and no fingerprint
+bumped**, so a bare `nc convert` is byte-identical to before.
+
+**Verified.** Blue's exposure-dependent cast, the defect that motivated the shape, is
+removed: the drift falls from +1.26 to +0.09 stops per unit density against +1.29 predicted
+by the datasheets (21 frames, 6 rolls, 4 stocks). A neutral exposure ramp run forward
+through each stock's own curves reconstructs back to the exposure it started from on every
+stock and channel. All ten stocks round-trip through an emitted recipe byte-for-byte. The
+user's ten-frame visual review confirmed the blue fix and that detail is kept.
+
+**The approach that worked, and why.** Reading the ACES `ADX10 → ACES` source first, before
+writing anything, is what made this cheap: the shape (per-channel density → cross-channel
+matrix → per-channel curve inverse → `10^` → matrix, no tone curve) was already standard,
+and its two free constants — film gamma 0.55, mid-grey 0.70 density above base — sit inside
+what our per-stock measurements bracket. nc's version is that transform with the stock's own
+data substituted for ACES's generic model, minus the cross-channel matrix.
+
+**What a dependent task must know.**
+
+- **The cross-channel matrix is the one stage deliberately not implemented**, and it is
+  where the remaining green residual (+0.40 mean, +1.00 on the Ektar roll) most likely
+  lives. `io/scanner-density-calibration` owns it. Fitting it needs a **known-neutral
+  target on film**; no datasheet correction substitutes — arithmetic on the Ektar case
+  shows replacing its anomalous channel relationship with the corpus consensus would move
+  its residual only +1.00 → +0.87.
+- **Do not read the per-stock or per-roll residual breakdown as established.** Frame-to-
+  frame scatter is sd 0.3–1.6 at n=3–4, and one roll spans −1.88…+2.03. Only the 21-frame
+  aggregate and Ektar's roll (sem 0.17, all three frames ≥ +0.83) are solid. Two claims in
+  this log were retracted for exactly this reason; resolving a 0.3 difference needs ~11
+  frames per roll.
+- **`generic-c41` currently renders better than the matching profile on some stocks**,
+  because averaging nine curves dilutes any one sheet's error. That is a reason to fit the
+  matrix, not to prefer the generic.
+- **Two sheets disagree with themselves** (Ektar 100 +11%, UltraMax 400 −11% between aim
+  table and curve), pinned by `aim_table_agrees_with_the_curve`. It is a sheet-quality
+  check, **not** a predictor of rendered colour — Portra 160 passes at +3% and still casts.
+- **The registry stores curves, not scalars.** Anything wanting per-stock *parameters*
+  (`film-base/dmax-per-channel-reduction`'s generic `density.scale`/`offset`) should read
+  the measured values from the 2026-09-04 entries rather than re-derive them.
+- Measurement discipline this task paid for twice: **measure the channel that matters
+  perceptually, not the one with the biggest number** (blue was fixed while green was not,
+  and green is where the eye is unforgiving), and **match intervals when comparing two
+  published quantities** (a ±0.35-decade gamma window manufactured a 15% error and a
+  spurious sub-unity `γ_G/γ_R`).
+
+### 2026-09-09 — the sigmoid's `density.scale` default: the datasheet value is the wrong one, but `[1,1,1]` is not the answer either
+
+Measured on the scalar (sigmoid) render path over 21 real frames from six rolls:
+`algo::curve_probe::sigmoid_scale`. Drift is the least-squares slope of each channel's log2
+exposure ratio against red density, normalised at the middle bin — a pure tilt in stops per
+unit density, 0 neutral, and an offset cannot move it.
+
+The scalar path leaves `contrast · (D'_c − D'_R)`, so with `D'_c = s_c · D_c` each channel's
+drift is **exactly linear in that channel's own scale**:
+`drift_c(s) = (contrast / log10 2) · (s_c · r_c − 1)` with `r_c = dD_c/dD_R` the scan's own
+slope ratio. One measurement per frame therefore determines every candidate; the probe
+verifies the closed form against real re-renders at two scales on every frame (worst
+disagreement 0.017 stops/density).
+
+Measured `r`: **green 1.115, blue 1.183** — so the corpus nulls at green 0.897, blue 0.845.
+
+| scale | green | blue | **green–magenta** | \|g–m\| | rolls within ¼ |
+|---|---|---|---|---|---|
+| `[1, 1, 1]` (shipped) | +0.79 | +1.26 | +0.16 | 0.60 | 1/6 |
+| `[1, 0.977, 0.860]` (datasheet generic) | +0.61 | +0.12 | +0.55 | 0.73 | 2/6 |
+| `[1, 0.90, 0.86]` | **+0.02** | **+0.12** | **−0.04** | 0.53 | 2/6 |
+| `[1, 0.897, 0.845]` (corpus null) | −0.00 | +0.00 | −0.00 | 0.52 | 1/6 |
+| `[1, 0.905, 0.905]` (equal slopes) | +0.06 | +0.49 | −0.18 | 0.57 | 2/6 |
+
+**The figure of merit is not each channel's drift magnitude.** `G−R` and `B−R` are not
+perceptually independent: when both tilt together the result reads as a colour-temperature
+drift (warm shadows, cool highlights), which the eye attributes to the light. The
+unforgiving axis is green–magenta, `(G−R) − (B−R)/2`. A scale can shrink both per-channel
+drifts while making *that* worse — which is exactly what the datasheet-derived scale does
+(+0.16 → +0.55, worse on 4 of 6 rolls), because the sheets correct blue well and green
+badly, so nulling blue un-masks a green tilt that was riding inside a larger, more forgiving
+temperature tilt.
+
+**Why the datasheets split that way, quantitatively.** Predicted blue drift +1.29 against a
+measured +1.26 (98%); predicted green +0.39 against a measured +0.79 (49%). The blue term of
+the published fit does real work; the green term corrects about half of what is there. Same
+split `channel_drift` found, and the same reason the characteristic curve leaves a green
+residual.
+
+**Recommended default: `[1, 0.90, 0.86]`.** It is the only candidate that nulls *both*
+per-channel drifts, and its two halves have the right provenance each:
+
+- **blue 0.860 from the datasheets**, where the published structure reproduces at 98% and is
+  therefore independently corroborated rather than fitted to our corpus;
+- **green 0.900 from the scans**, because the published green structure demonstrably does not
+  transfer, so the sheet's 0.977 is the one number in the fit known to be wrong here.
+
+Preferred over the raw corpus null `[1, 0.897, 0.845]` for that reason: the two differ by
+0.01 stop/density on every aggregate, and 0.860 is the better-evidenced blue.
+
+**What it does not fix, and this is the load-bearing caveat.** The green–magenta *mean* goes
+to zero but the magnitude barely moves (0.60 → 0.53) and only 2 of 6 rolls land within a
+quarter stop per density of neutral, because the residual is dominated by **per-roll
+scatter** no single constant can remove:
+
+| roll | shipped | `[1, 0.90, 0.86]` |
+|---|---|---|
+| Ektar | +0.65 | +0.41 |
+| Portra160-2026-07-22 | +0.08 | −0.09 |
+| Portra160 | +0.49 | +0.24 |
+| Portra400 | +0.50 | +0.26 |
+| Portra400-leica-flaw | −0.32 | −0.47 |
+| 2026-07-24-Gold200 | −0.36 | −0.50 |
+
+Four rolls improve, two get worse — the two already on the magenta side, which the
+correction over-shoots. So this is a better default, not a fix.
+
+**And it is a scanner calibration wearing a film default's clothes.** The two nulling scales
+came out close (0.897, 0.845) against datasheet values that are far apart (0.977, 0.860): in
+our scans green and blue are *both* ~11–18% steeper than red, where the sheets say green is
+barely steeper at all. An excess that lands on both channels against red is the signature of
+something in the scan/decode/base path, not of film chemistry. `io/scanner-density-
+calibration` is the real fix; this constant is the honest interim, and it should be labelled
+as calibrated on one scanner and one six-roll corpus rather than as a property of C-41.
+
+Note the prohibition recorded on 2026-09-05 — "deriving it from roll statistics is not an
+option, that is content-derived" — does **not** bar this. It bars deriving a value *per run*
+from the frame being converted, which is what made the content-driven anchor unacceptable. A
+constant calibrated once from a corpus and pinned in the source is a calibration like any
+other; what limits it is generality, not determinism.
+
+**Two corrections to the first version of this entry, both mine:**
+
+- It recommended leaving the scale at `[1, 1, 1]`. That treated the choice as binary —
+  shipped versus the datasheet value — when the green scale is a free parameter. Reducing it
+  further nulls both drifts, which neither candidate did.
+- It reported the scan-nulling scales as 0.912 (green) and 0.904 (blue), averaged from the
+  per-frame nulls. The corpus null is `1 / mean(r)`, not `mean(1 / r)`; by Jensen those were
+  biased high, and applying 0.904 left blue drifting +0.48 — which is visible in the
+  superseded run as a number that should have nulled and did not.
+
+**Correction — the flat level is NOT a non-issue, and an earlier version of this entry said
+it was.** The claim rested on whole-image means from `nc convert --output-preset display-p3`
+across three rolls, which moved ≤0.010 stop in green and ≤0.060 in blue. That measurement
+was bad: two of the three frames sat near clipping, where a mean cannot move. Measured
+properly on a mid-grey patch
+(`pipeline::stages::midtone_placement::the_default_gain_shifts_per_channel_level_on_both_curves`)
+the gain moves per-channel **level** by:
+
+| curve | R | G | B |
+|---|---|---|---|
+| characteristic | −0.061 | −0.371 | −0.565 |
+| sigmoid | −0.080 | −0.413 | −0.672 |
+
+i.e. green lands ~0.31 and blue ~0.50 stop below red — a strong yellow shift, not a
+rounding error. The reason the drift probes could not see it is structural: they normalise
+at the middle bin, which *defines away* the level. A per-channel **scale** is a tilt about
+`D = 0`, so at any non-zero density it moves the level too. This is exactly what the
+2026-09-05 entry above already said — "`scale` alone cannot fix it … the correction needs
+the (scale, offset) pair nc already has" — and dismissing the offset as "the loose half"
+was the error.
+
+### 2026-09-09 — `density.scale` default changed to `[1, 0.90, 0.86]` (`pipeline_version` 4), and it splits the two curves
+
+Implemented as asked, and then measured end-to-end, which surfaced a fork the drift analysis
+above could not see.
+
+**On a patch that is neutral in the scene** — the datasheet mid-grey for Portra 400, whose
+three densities are the published ones at the grey aim's exposure — the delivered spread
+(max per-channel deviation from the mean) is:
+
+| curve | identity gain | `[1, 0.90, 0.86]` |
+|---|---|---|
+| sigmoid | 0.545 | **0.327** |
+| characteristic | **0.000** | 0.194 |
+
+**So the same constant is a 40% improvement on one curve and a pure regression on the
+other**, and the reason is structural rather than a tuning accident:
+
+- the sigmoid applies one scalar contrast to every channel, so it has no per-channel film
+  model at all — the gain has to cover both the film's channel structure *and* the scanner
+  residual;
+- the characteristic curve already removes the film half through each stock's published
+  tables, and on a datasheet neutral it is **exactly** neutral (spread 0.0000). The same
+  gain then corrects a second time.
+
+The decomposition is clean and worth keeping: the sigmoid path drifts green +0.79 / blue
++1.26 stops per unit density, the characteristic path +0.40 / +0.09. The difference
+(+0.39, +1.17) is almost exactly what the sheets predict (+0.39, +1.29) — so the curve does
+remove the published structure, and what is left is a scanner residual no datasheet
+contains. **That also corrects the "the sheets fail on green" reading above**: the sheets
+predict green structure correctly; what they do not contain is an *additional* scanner
+residual that happens to be about the same size in green, which on the sigmoid path makes
+the published value look like it under-predicts by half.
+
+The characteristic path's own nulling gain is therefore about `[1, 0.938, 0.985]`, not the
+shipped default.
+
+**Open: how the two curves should get different defaults.** `density.scale` is a
+`DensityParams` field, a sibling of the curve, so there is no per-curve slot for it today —
+unlike `anchor`, where each curve struct carries its own default. The candidate mechanism is
+to make the field resolve from the curve when unstated (the `film_base.source` precedent),
+emitting the resolved value into the recipe so determinism is unaffected. Held pending the
+visual review, because if the eye finds the over-corrected characteristic render acceptable
+the mechanism is not needed.
+
+**What landed:** `PIPELINE_VERSION` 3 → 4 with a new fingerprint row (`render`
+`323499bad6c71237`, `recipe` `72e424ee6a15d53b`; `base` unchanged, since the gain is applied
+downstream of film-base estimation). `golden_new_default_is_bit_identical` recaptured — red
+is bit-identical on all five vectors and only green and blue move, which is the shape a
+per-channel gain should produce. Every frozen/reference-derived golden now states
+`frozen_density()` (an explicit identity gain) so a future default cannot silently rewrite
+what those captures verify, and the tests that assert the `D = −log10(scan / base)`
+definition or auto-WB's robustness likewise state the identity — a per-channel gain is a
+calibration, not part of either property.
+
+### 2026-09-09 — `density.scale` becomes a **per-curve** default, and two seam bugs fell out
+
+The user's intent was to fix the sigmoid, not to change the characteristic path; the global
+default did both. Split as asked, following the `anchor` precedent — that knob is also
+schema-shared by two curves and also per-curve in *meaning*.
+
+**The rule.** `DensityParams::default_scale_for(DensityCurveType)` is the single definition:
+`[1, 0.90, 0.86]` for `sigmoid`/`exponential`, `[1, 1, 1]` for `characteristic`. It is
+resolved at three places, and each needed its own mechanism:
+
+1. **A recipe that omits `density.scale`** — resolved in `Reconstruction`'s `Deserialize`.
+   Presence has to be read off the raw JSON object: the field is a concrete `[f32; 3]`, so
+   once serde has built a `DensityParams` an absent key and an explicit `[1, 1, 1]` are the
+   same value. Both halves are pinned, because losing either is a silent colour change.
+2. **`--density-curve`** — the merge arm resets the gain to the target curve's default.
+   Load-bearing ordering: the curve arm runs *before* the `--density-scale` arm, so an
+   explicit gain still wins on the same command line. Reversed, a stated gain would be
+   silently overwritten.
+3. **A per-frame `roll` overlay** — reset by hand in the planner, because the overlay is
+   JSON-merged onto the *serialized* shared config, where `density.scale` is always present
+   and the deserialize-time resolution cannot fire. `sets_density_scale` is the key probe
+   that keeps the reset from overriding an overlay that states one.
+
+`curve_switch_dropped_density_scale` warns when a reset discards a value that was **not**
+its own curve's default, and stays quiet when it swaps one documented default for another —
+the same false-positive discipline as the anchor warning, which exists so the warning stays
+worth reading.
+
+**Two defects the seam was hiding, both found by testing the roll path rather than reasoning
+about it:**
+
+- **Switching a frame to `characteristic` was impossible from a roll manifest.**
+  `internally_tagged_switch` carries the roll's `dmax` across a curve switch (correct: it is
+  a roll calibration, not a curve knob) but did so unconditionally, and `characteristic` has
+  no `dmax` key — so the merged object was rejected with "`dmax` is a parametric-curve key",
+  blaming the user for a key the merge itself had inserted. There was no override text that
+  worked. Now gated on `DensityCurveType::takes_dmax`. The function's own doc still listed
+  the curve variants as `exponential`/`sigmoid`, which is how the third one slipped past.
+- **The roll overlay carried the sigmoid's gain onto the switched curve**, for the
+  serialization reason above. `roll_per_frame_curve_switch_resolves_that_curves_own_density_gain`
+  covers both end-to-end, and was verified falsifiable by disabling the reset (it fails with
+  `[1, 0.9, 0.86]` against the expected `[1, 1, 1]`).
+
+**Evidence for identity on the characteristic curve**, all measured rather than argued:
+
+| what | identity | `[1, 0.90, 0.86]` | its own solved gain |
+|---|---|---|---|
+| datasheet-neutral patch, delivered spread | **0.0000** | 0.194 | — |
+| ten reference frames, \|G/R−1\|+\|B/R−1\| | **0.039** | 0.185 | 0.047 |
+
+Note the third column: the characteristic path's own nulling gain (`[1, 0.938, 0.985]`,
+solved from its measured +0.40 / +0.09 drift) is *also* worse than identity on real frames.
+So the residual is not worth chasing with a scale at all, and it stays visible for
+`io/scanner-density-calibration` to own rather than being half-absorbed by a curve default.
+
+**Not done, deliberately:** nothing prevents code from constructing
+`Reconstruction::Density { density: DensityParams::default(), curve: Characteristic }`
+directly — the resolution lives in the recipe and CLI paths, not in the type. The two
+call sites that build a characteristic reconstruction in-crate state their gain explicitly
+and say why (`pipeline::stages::midtone_placement`). A constructor that resolved it would be
+the tighter design if a third call site ever appears.
+
+### 2026-09-09 — five conversion presets scoped, and two calibration traps found while scoping them
+
+`--preset` is filed as `algo/conversion-presets` (task file + `docs/TASKS.md` entry, graph
+node and canonical dependency). What follows is the evidence gathered while defining the
+five, because each item removed a candidate design.
+
+**All five are calibrated to one target, not five tastes.** The target is scene mid-grey
+(0.18) delivered at 0.223 — the brightness approved this round — and each preset's
+`print_exposure` is whatever lands it there. Measured on a datasheet mid-grey patch
+(`midtone_placement::each_candidate_look_needs_its_own_print_exposure`, which fails if the
+spread ever collapses to where one shared default would serve):
+
+| preset | reconstruction | tone | delivers | needs |
+|---|---|---|---|---|
+| `characteristic-stock` | characteristic, the stock | reinhard | 0.1800 | +0.31 |
+| `characteristic-generic` | characteristic, `generic-c41` | reinhard | 0.1702 | +0.39 |
+| `sigmoid-flat` | sigmoid, no knees | reinhard | 0.1461 | +0.61 |
+| `sigmoid-knees` | sigmoid, toe/shoulder | none | 0.1372 | +0.70 → **impossible** |
+
+**Trap 1: `sigmoid-knees` cannot use `print_exposure` at all, and the reason is
+structural.** `--display-tone none` is self-policing on the render's ceiling, while
+`print_exposure` is a scalar gain applied *after* the curve — so any positive value pushes
+the shoulder's bounded output past reference white and the frame is refused. Measured on a
+real Ektar scan at the +0.70 the table calls for: *"pixel 0 sits above reference white
+(luminance 1.6236235)"*, which is exactly `2^0.70`. The knobs are incompatible by
+construction, not by tuning. The anchor is the knob that works, because it moves mid-grey
+*within* the bounded range instead of scaling the range: swept in
+`midtone_placement::the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor`,
+`mid-fraction 0.42` lands the target to 0.027 stop and renders clean on the real frames
+(the shipped default is 0.50). So a preset cannot assume brightness always lives in one
+knob.
+
+**Trap 2: the aim-matched red scale is a reciprocal, and getting it backwards doubles the
+error.** `curve_probe::stock_table_variants` prints the factor that scales the **table's**
+red density (Ektar 0.898); `--density-scale` multiplies the **scan's** density before the
+table is inverted, so the flag takes `1/k = 1.114`. Both directions measured on 21 frames
+(`curve_probe::scale_against_the_characteristic_curve`), because the number alone does not
+say which it is:
+
+| red scale | green | blue | green–magenta |
+|---|---|---|---|
+| identity | +0.40 | +0.09 | +0.35 |
+| 0.898 (table-side) | +1.10 | +0.77 | **+0.72** |
+| 1.114 (as the flag) | −0.25 | −0.52 | **+0.01** |
+
+The reciprocal is not just correct but the flattest green–magenta of anything measured on
+this path. Once `--preset` derives it from the shipped aim tables the four per-stock
+constants disappear rather than moving into the preset table — `portra-800` and
+`ultramax-800` must then be refused, having no usable aim delta.
+
+**Also fixed while measuring: the survey harness was double-correcting.** `midtone_placement`
+built its characteristic cases with `DensityParams::default()`, i.e. the parametric curves'
+gain on top of a curve that already carries per-channel structure — worth ~0.06 stop, and it
+made the characteristic rows read dark for a reason unconnected to what the table measures.
+It now resolves the gain from the curve, as the recipe and CLI paths do.
+
+**The review set is the acceptance test for the mechanism, and it exists first.**
+`scripts/preset-review/generate.py` (renamed from `density-scale-review`) renders all five
+from their expanded flags, so regenerating through `--preset` must produce byte-identical
+files. Ten frames × five presets, and on whole-image channel means four of the five sit
+within 0.005 of each other (`|G/R − 1| + |B/R − 1|`: 0.033–0.038, `sigmoid-flat` 0.063) —
+so the metric is a tie and the visual verdict is the whole decision.
