@@ -1,5 +1,6 @@
 import * as stylex from "@stylexjs/stylex";
 import { For, Show, createMemo, createResource, createSignal, onCleanup, onMount } from "solid-js";
+import { isServer } from "solid-js/web";
 import { cls } from "./cls";
 import { ControlBar } from "./ControlBar";
 import { ImageSection } from "./ImageSection";
@@ -36,7 +37,14 @@ const styles = stylex.create({
 });
 
 export function App() {
-  const [review] = createResource<Review>(() => loadReview(window.location.href));
+  // Chunk 1 keeps the browser-side data layer as it was; the server half
+  // replaces it. `window` does not exist during SSR, so the source returns
+  // `undefined` there and the fetcher never runs — the server renders the
+  // unresolved state and the client loads on hydration.
+  const [review] = createResource<Review, string>(
+    () => (isServer ? undefined : window.location.href),
+    (href) => loadReview(href),
+  );
   const [activeIndex, setActiveIndex] = createSignal(0);
   const [zoom, setZoom] = createSignal<ZoomMode>("fit");
 
