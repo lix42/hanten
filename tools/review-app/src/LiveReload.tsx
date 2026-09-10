@@ -70,8 +70,8 @@ export function LiveReload() {
     // Independent of the stream, and of the router: if the server is a different
     // one than the page was rendered against, only a reload is trustworthy.
     let boot: string | undefined;
-    const poll = setInterval(() => {
-      void fetch("/alive", { cache: "no-store" })
+    const checkBoot = () =>
+      fetch("/alive", { cache: "no-store" })
         .then((response) => (response.ok ? (response.json() as Promise<{ boot?: string }>) : null))
         .then((body) => {
           if (!body?.boot) return;
@@ -79,7 +79,12 @@ export function LiveReload() {
           boot = body.boot;
         })
         .catch(() => undefined); // server down; the next tick tries again
-    }, POLL_MS);
+
+    // Immediately, not one interval later: a server replaced inside that first
+    // window would otherwise have its id accepted as the baseline, and the
+    // replacement would never be recognised as a different server at all.
+    void checkBoot();
+    const poll = setInterval(() => void checkBoot(), POLL_MS);
 
     connect();
     onCleanup(() => {

@@ -12,7 +12,16 @@
 
 import { watch, type FSWatcher } from "node:fs";
 import { statSync } from "node:fs";
-import { diffStamps, hasChange, stampsOf, watchTargets, type Stamps } from "./stamps";
+import {
+  diffStamps,
+  hasChange,
+  loadedStamps,
+  stampsOf,
+  watchTargets,
+  watchTargetsKey,
+  type Stamps,
+} from "./stamps";
+import type { ReviewSet } from "./reviewSet";
 import { currentReviewSet, invalidateReviewSet } from "./state";
 
 /** Coalesces the burst of events one save produces. */
@@ -26,6 +35,8 @@ interface WatchState {
   stamps: Stamps;
   timer: NodeJS.Timeout | undefined;
   key: string;
+  /** Identity of the directories currently watched, so a move is noticed. */
+  targets: string;
 }
 
 const GLOBAL_KEY = "__ncReviewWatch";
@@ -60,33 +71,33 @@ export async function onReviewSetChange(listener: Listener): Promise<() => void>
 
 let starting: Promise<WatchState> | undefined;
 
-async function ensureWatching(): Promise<WatchState> {
-  const set = await currentReviewSet();
-  const existing = store[GLOBAL_KEY];
-  if (existing && existing.key === set.path) return existing;
+function scheduleSettle(state: WatchState): void {
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => void settle(state), SETTLE_MS);
+}
 
-  // The set moved (a restart with a different REVIEW_SET behind the same
-  // process): drop the old watchers before installing new ones.
-  if (existing) stopWatching(existing);
-
-  const state: WatchState = {
-    watchers: [],
-    listeners: existing?.listeners ?? new Set(),
-    stamps: stampsOf(set, mtime),
-    timer: undefined,
-    key: set.path,
-  };
-  store[GLOBAL_KEY] = state;
-
+/**
+ * Point the watchers at the directories this set actually occupies.
+ *
+ * Re-run whenever the set is re-read: editing `review.json` can move a rendition
+ * into a directory nothing was watching, and watchers derived from the previous
+ * asset map would report nothing that happened there.
+ */
+function installWatchers(state: WatchState, set: ReviewSet): void {
   const targets = watchTargets(
     set.dir,
     set.assets.entries().map((asset) => asset.path),
   );
-  const onEvent = () => {
-    clearTimeout(state.timer);
-    state.timer = setTimeout(() => void settle(state), SETTLE_MS);
-  };
+  const key = watchTargetsKey(targets);
+  if (state.watchers.length > 0 && key === state.targets) return;
 
+  for (const watcher of state.watchers) watcher.close();
+  state.watchers = [];
+  state.targets = key;
+
+  const onEvent = () => {
+    scheduleSettle(state);
+  };
   for (const [dir, recursive] of [
     [targets.recursive, true] as const,
     ...targets.others.map((dir) => [dir, false] as const),
@@ -101,6 +112,33 @@ async function ensureWatching(): Promise<WatchState> {
       // Unwatchable directory — same reasoning.
     }
   }
+}
+
+async function ensureWatching(): Promise<WatchState> {
+  const set = await currentReviewSet();
+  const existing = store[GLOBAL_KEY];
+  if (existing && existing.key === set.path) return existing;
+
+  // The set moved (a restart with a different REVIEW_SET behind the same
+  // process): drop the old watchers before installing new ones.
+  if (existing) stopWatching(existing);
+
+  const state: WatchState = {
+    watchers: [],
+    listeners: existing?.listeners ?? new Set(),
+    // Baseline is what the *loaded set* carries, not what is on disk now: a
+    // rendition rewritten between the page's first read and this moment would
+    // otherwise be recorded as already-seen and never reported.
+    stamps: loadedStamps(set, mtime),
+    timer: undefined,
+    key: set.path,
+    targets: "",
+  };
+  store[GLOBAL_KEY] = state;
+  installWatchers(state, set);
+  // Settle once immediately, so any drift against that baseline is caught now
+  // rather than waiting for the next unrelated filesystem event.
+  scheduleSettle(state);
 
   return state;
 }
@@ -133,6 +171,8 @@ async function settle(state: WatchState): Promise<void> {
     return;
   }
 
+  // The re-read set may occupy different directories than the watch covers.
+  installWatchers(state, set);
   state.stamps = stampsOf(set, mtime);
   for (const listener of state.listeners) listener();
 }

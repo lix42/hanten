@@ -51,6 +51,11 @@ export interface WatchTargets {
   readonly others: readonly string[];
 }
 
+/** Stable identity of a target set, for noticing when the watch must move. */
+export function watchTargetsKey(targets: WatchTargets): string {
+  return [targets.recursive, ...targets.others].join("\u0000");
+}
+
 export function watchTargets(setDir: string, assetPaths: readonly string[]): WatchTargets {
   const others = new Set<string>();
   for (const path of assetPaths) {
@@ -62,6 +67,23 @@ export function watchTargets(setDir: string, assetPaths: readonly string[]): Wat
 
 function isUnder(path: string, ancestor: string): boolean {
   return path === ancestor || path.startsWith(ancestor.endsWith(sep) ? ancestor : ancestor + sep);
+}
+
+/**
+ * Stamps as the **loaded set** sees them — the mtimes its `/img/` URLs actually
+ * carry, not what is on disk now.
+ *
+ * This is the right baseline when the watch starts, because a rendition
+ * rewritten between the page's first read and the watcher's first breath would
+ * otherwise be recorded as already-seen: the model would keep serving the old
+ * URL, no later diff would ever mention it, and the page would sit silently
+ * stale. `review.json` itself is read from disk because the held set is always
+ * re-read when that file moves.
+ */
+export function loadedStamps(set: ReviewSet, stat: StatMtime): Stamps {
+  const assets: Record<string, number> = {};
+  for (const asset of set.assets.entries()) assets[asset.path] = asset.mtimeMs;
+  return { set: stat(set.path) ?? 0, assets };
 }
 
 export function stampsOf(set: ReviewSet, stat: StatMtime): Stamps {

@@ -23,8 +23,25 @@ const styles = stylex.create({
 
 export function App(props: { set: ReviewSetPayload }) {
   const review = createMemo(() => props.set.review);
-  const [activeIndex, setActiveIndex] = createSignal(0);
   const [zoom, setZoom] = createSignal<ZoomMode>("fit");
+
+  // The selection is held as a config **id**, not an index. A live edit to
+  // `review.json` can insert, remove or reorder configs, and a retained index
+  // then points at a different one — or at nothing, leaving the page with no
+  // selection. Holding the id keeps "the same config stays selected" true, which
+  // is the whole promise of reloading in place.
+  const [activeId, setActiveId] = createSignal<string | undefined>(undefined);
+  const activeIndex = createMemo(() => {
+    const configs = review().configs;
+    const id = activeId();
+    const found = id === undefined ? -1 : configs.findIndex((config) => config.id === id);
+    // The selected config was removed, or nothing is chosen yet: fall back to
+    // the first, which is always present (`configs` is never empty).
+    return found === -1 ? 0 : found;
+  });
+  const setActiveIndex = (index: number) => {
+    setActiveId(review().configs[index]?.id);
+  };
 
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {

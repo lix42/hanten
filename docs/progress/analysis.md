@@ -779,6 +779,16 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   config id named `toString` read as a *present* rendition and rendered a broken image where the
   gap belongs; it is built with a null prototype now, which SSR serialization was verified to
   survive.
+- **A second reviewer (Codex, on the PR) found four more, three of them the same shape.** The
+  watch targets were derived once, so a `review.json` edit moving a rendition into a new
+  directory left it unwatched; the starting baseline was taken from disk rather than from the
+  *loaded* set, so a render landing between the page's first read and the watcher's first breath
+  was recorded as already-seen; and the boot-id baseline was established one poll interval late,
+  so a server replaced inside that window was never recognised as different. Each ends in the
+  page silently showing the previous render, which is why all three were fixed rather than
+  noted. The fourth: the selected config was held as an **index**, so a live edit that removed or
+  reordered configs silently moved the selection — it is held by **id** now, verified by removing
+  a config from a live set and watching the selection stay put.
 - **Not done, and unchanged by this:** the generator is still the reason this task is open, and
   HDR review and build-vs-build are still untouched. The server could now measure `width`/`height`
   itself and retire those schema fields — it does not, and the schema is unchanged.
