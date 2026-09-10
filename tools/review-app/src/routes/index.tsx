@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/solid-router";
 import { App } from "../App";
+import { LiveReload } from "../LiveReload";
 import { getReviewSet } from "../server/getReviewSet";
 import { SetError } from "../SetError";
 import { StyleXDevRuntime } from "../StyleXDevRuntime";
@@ -15,6 +16,7 @@ function IndexRoute() {
   return (
     <>
       <StyleXDevRuntime />
+      <LiveReload />
       <App set={set()} />
     </>
   );

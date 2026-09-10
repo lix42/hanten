@@ -10,11 +10,23 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AliveRouteImport } from './routes/alive'
+import { Route as EventsRouteImport } from './routes/events'
 import { Route as ImgIdRouteImport } from './routes/img.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AliveRoute = AliveRouteImport.update({
+  id: '/alive',
+  path: '/alive',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EventsRoute = EventsRouteImport.update({
+  id: '/events',
+  path: '/events',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ImgIdRoute = ImgIdRouteImport.update({
@@ -25,27 +37,35 @@ const ImgIdRoute = ImgIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/alive': typeof AliveRoute
+  '/events': typeof EventsRoute
   '/img/$id': typeof ImgIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/alive': typeof AliveRoute
+  '/events': typeof EventsRoute
   '/img/$id': typeof ImgIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/alive': typeof AliveRoute
+  '/events': typeof EventsRoute
   '/img/$id': typeof ImgIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/img/$id'
+  fullPaths: '/' | '/alive' | '/events' | '/img/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/img/$id'
-  id: '__root__' | '/' | '/img/$id'
+  to: '/' | '/alive' | '/events' | '/img/$id'
+  id: '__root__' | '/' | '/alive' | '/events' | '/img/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AliveRoute: typeof AliveRoute
+  EventsRoute: typeof EventsRoute
   ImgIdRoute: typeof ImgIdRoute
 }
 
@@ -56,6 +76,20 @@ declare module '@tanstack/solid-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/alive': {
+      id: '/alive'
+      path: '/alive'
+      fullPath: '/alive'
+      preLoaderRoute: typeof AliveRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/events': {
+      id: '/events'
+      path: '/events'
+      fullPath: '/events'
+      preLoaderRoute: typeof EventsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/img/$id': {
@@ -70,6 +104,8 @@ declare module '@tanstack/solid-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AliveRoute: AliveRoute,
+  EventsRoute: EventsRoute,
   ImgIdRoute: ImgIdRoute,
 }
 export const routeTree = rootRouteImport

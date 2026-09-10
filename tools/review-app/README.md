@@ -70,6 +70,9 @@ if you ever need the npm _script_ of the same name.
 
 ## Known limits
 
+- **A dev-server restart reloads the page**, losing the selected config and
+  scroll position. Ordinary edits to a set never do this — they update in place.
+
 - **Every rendition of every image is fetched eagerly.** The stacking that makes
   switching instant requires the inactive renditions to be laid out, and
   `loading="lazy"` on them would collapse a section to zero height whenever a set
@@ -80,6 +83,17 @@ if you ever need the npm _script_ of the same name.
 
 ## Notes for the next person
 
+- **Live refresh must not lean on `EventSource` reconnecting.** The stream from
+  `/events` is the fast path — a re-render changes a file's mtime, which changes
+  its `/img/` URL, which is what makes the browser fetch the new picture. But
+  when the dev server is replaced, the stream does not reliably come back:
+  measured, neither its built-in retry nor a hand-rolled replacement recovered,
+  the `changed` event stopped arriving, and `router.invalidate()` then issued no
+  request at all. The page just went on showing the previous render with no
+  error anywhere — indistinguishable from a re-render that changed nothing,
+  which is the one wrong answer this tool must never give. Recovery therefore
+  rests on a plain `fetch` poll of `/alive`: a different boot id means a
+  different server, and the page reloads. Do not "simplify" that away.
 - **`vp migrate --full` writes to `CLAUDE.md`/`AGENTS.md`.** Its `--agent` step
   rewrites coding-agent instructions, which in this repo would clobber the
   project's own. Configure lint in `vite.config.ts` by hand instead.
