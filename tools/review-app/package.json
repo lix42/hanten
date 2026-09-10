@@ -8,7 +8,7 @@
   "author": "",
   "type": "module",
   "scripts": {
-    "dev": "vp dev",
+    "dev": "node scripts/dev.mjs",
     "build": "vp build",
     "preview": "vp preview",
     "test": "vp test run",

@@ -12,24 +12,30 @@ Built with [Vite+](https://viteplus.dev) (`vp`), Solid, and StyleX.
 ```sh
 corepack enable pnpm   # once per machine
 pnpm install
-pnpm dev
+pnpm dev ~/sets/display-tone/review.json
 ```
 
-Then open the committed example:
-
-<http://localhost:5173/?data=examples/synthetic/review.json>
-
-To review a real set, serve the directory holding it and point `?data=` at the
-`review.json`; image paths inside resolve next to that file:
+Then open <http://localhost:5173>. The server reads the set from disk, so the
+path may be anywhere — it does not have to sit beside the app, and there is no
+URL to construct. A directory works too, meaning the `review.json` inside it:
 
 ```sh
-pnpm build                          # → dist/
-cp -R dist /path/to/review-app      # beside your review sets
-cd /path/to && npx serve .
-# http://localhost:3000/review-app/?data=../my-set/review.json
+pnpm dev ~/sets/display-tone
 ```
 
-A `file://` page cannot fetch the JSON or its images — serve the directory.
+`pnpm dev <path>` is sugar over the real contract, the `REVIEW_SET` environment
+variable, which the server reads once at startup:
+
+```sh
+REVIEW_SET=~/sets/display-tone/review.json pnpm dev
+```
+
+With neither, a bare `pnpm dev` renders the committed example under
+`public/examples/synthetic/`, so the app runs out of the box.
+
+Images are served from `/img/<id>`, addressed through a map built while the set
+was parsed — only files the set actually named are reachable, and the id carries
+the file's mtime so a re-render is a new URL rather than a cache problem.
 
 The format is documented in [SCHEMA.md](SCHEMA.md).
 

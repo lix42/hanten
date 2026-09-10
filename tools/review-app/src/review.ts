@@ -23,9 +23,9 @@ export interface ReviewConfig {
 }
 
 export interface Rendition {
-  /** Absolute URL of the full image, resolved against the review file. */
+  /** URL the page loads the full image from, produced by the resolver. */
   readonly src: string;
-  /** Absolute URL of the thumbnail; falls back to `src` when unstated. */
+  /** URL of the thumbnail; falls back to `src` when unstated. */
   readonly preview: string;
   readonly width?: number;
   readonly height?: number;
@@ -35,8 +35,14 @@ export interface ReviewImage {
   readonly id: string;
   readonly label: string;
   readonly note?: string;
-  /** Keyed by config id. A config absent here has no rendition for this image. */
-  readonly renditions: ReadonlyMap<string, Rendition>;
+  /**
+   * Keyed by config id. A config absent here has no rendition for this image.
+   *
+   * A plain object rather than a `Map` so the model is exactly what crosses the
+   * wire — Start's serializable check refuses a `ReadonlyMap`, and the JSON this
+   * came from is an object anyway.
+   */
+  readonly renditions: Readonly<Record<string, Rendition | undefined>>;
 }
 
 export interface Review {
@@ -93,14 +99,15 @@ function describe(value: unknown): string {
   return typeof value;
 }
 
-/** Resolve a path from the review file against the file's own location. */
-function resolveSrc(src: string, baseUrl: string, at: string): string {
-  try {
-    return new URL(src, baseUrl).href;
-  } catch {
-    return fail(`${at} is not a usable URL or path: ${src}`);
-  }
-}
+/**
+ * Turns a path written in a review file into the URL the page loads it from.
+ *
+ * Injected rather than fixed because the two sides resolve differently: the
+ * server maps a path to a file on disk and hands back a `/img/` URL keyed to
+ * it, while a test only needs something deterministic to assert on. `at` is the
+ * document path of the offending field, for error messages.
+ */
+export type ResolveRendition = (path: string, at: string) => string;
 
 /**
  * `width`/`height` are optional, but only *together*.
@@ -125,18 +132,18 @@ function dimensions(
   return { width, height };
 }
 
-function parseRendition(raw: unknown, baseUrl: string, at: string): Rendition {
+function parseRendition(raw: unknown, resolve: ResolveRendition, at: string): Rendition {
   // Shorthand: a bare string is the src, which is all a generator usually has.
   if (typeof raw === "string") {
-    const src = resolveSrc(asString(raw, at), baseUrl, at);
+    const src = resolve(asString(raw, at), at);
     return { src, preview: src };
   }
   const record = asRecord(raw, at);
-  const src = resolveSrc(asString(record["src"], `${at}.src`), baseUrl, `${at}.src`);
+  const src = resolve(asString(record["src"], `${at}.src`), `${at}.src`);
   const previewRaw = optionalString(record["preview"], `${at}.preview`);
   return {
     src,
-    preview: previewRaw ? resolveSrc(previewRaw, baseUrl, `${at}.preview`) : src,
+    preview: previewRaw ? resolve(previewRaw, `${at}.preview`) : src,
     ...dimensions(record, at),
   };
 }
@@ -144,15 +151,14 @@ function parseRendition(raw: unknown, baseUrl: string, at: string): Rendition {
 /**
  * Parse and validate a review document.
  *
- * `baseUrl` is the absolute URL the document was loaded from; every `src` in it
- * is resolved against that, so a review file and its images travel together as
- * one directory.
+ * Every rendition path goes through `resolve`, so a review file and its images
+ * travel together as one directory whatever the caller turns those paths into.
  *
  * Throws with a message naming the offending path (`images[2].renditions.none`)
  * rather than returning a partial model — a half-loaded comparison is worse than
  * a refusal, because the missing half is invisible.
  */
-export function parseReview(raw: unknown, baseUrl: string): Review {
+export function parseReview(raw: unknown, resolve: ResolveRendition): Review {
   const doc = asRecord(raw, "the review document");
 
   const version = doc["schema_version"];
@@ -186,16 +192,19 @@ export function parseReview(raw: unknown, baseUrl: string): Review {
     const record = asRecord(raw, at);
     const id = asString(record["id"], `${at}.id`);
     const renditionsRaw = asRecord(record["renditions"], `${at}.renditions`);
-    const renditions = new Map<string, Rendition>();
-    for (const [configId, value] of Object.entries(renditionsRaw)) {
-      if (!seen.has(configId)) {
-        fail(
-          `${at}.renditions names ${JSON.stringify(configId)}, which is not one of ` +
-            `the declared configs (${configs.map((c) => c.id).join(", ")})`,
-        );
-      }
-      renditions.set(configId, parseRendition(value, baseUrl, `${at}.renditions.${configId}`));
-    }
+    // `fromEntries` defines own properties, so a config id spelled `__proto__`
+    // lands as data rather than silently setting the prototype.
+    const renditions = Object.fromEntries(
+      Object.entries(renditionsRaw).map(([configId, value]) => {
+        if (!seen.has(configId)) {
+          fail(
+            `${at}.renditions names ${JSON.stringify(configId)}, which is not one of ` +
+              `the declared configs (${configs.map((c) => c.id).join(", ")})`,
+          );
+        }
+        return [configId, parseRendition(value, resolve, `${at}.renditions.${configId}`)] as const;
+      }),
+    );
     return {
       id,
       label: optionalString(record["label"], `${at}.label`) ?? id,
@@ -210,46 +219,4 @@ export function parseReview(raw: unknown, baseUrl: string): Review {
     configs,
     images,
   };
-}
-
-/** Whether the page was pointed at a review set explicitly. */
-export function hasDataParam(pageUrl: string): boolean {
-  return new URL(pageUrl).searchParams.get("data") !== null;
-}
-
-/** Where the review document lives, given the page's own URL. */
-export function reviewUrl(pageUrl: string): string {
-  const url = new URL(pageUrl);
-  const data = url.searchParams.get("data");
-  return new URL(data ?? "./review.json", url.href).href;
-}
-
-/** Fetch and parse the review document named by the page URL. */
-export async function loadReview(pageUrl: string): Promise<Review> {
-  const url = reviewUrl(pageUrl);
-  let response: Response;
-  try {
-    response = await fetch(url);
-  } catch (cause) {
-    throw new ReviewError(
-      `could not fetch ${url}: ${cause instanceof Error ? cause.message : String(cause)}. ` +
-        `Images and review.json must be served over http(s) — a file:// page cannot read them.`,
-    );
-  }
-  if (!response.ok) {
-    throw new ReviewError(`could not fetch ${url}: HTTP ${response.status} ${response.statusText}`);
-  }
-  let json: unknown;
-  try {
-    json = await response.json();
-  } catch (cause) {
-    throw new ReviewError(
-      `${url} is not valid JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
-    );
-  }
-  // Resolve against the URL the document actually came from, not the one asked
-  // for: `fetch` follows redirects, and a static host or CDN that redirects
-  // (a directory to its `index`, http to https, a rewritten path) would otherwise
-  // have every image resolved beside the pre-redirect location.
-  return parseReview(json, response.url || url);
 }
