@@ -16,7 +16,7 @@ function IndexRoute() {
   return (
     <>
       <StyleXDevRuntime />
-      <LiveReload />
+      <LiveReload boot={set().boot} />
       <App set={set()} />
     </>
   );

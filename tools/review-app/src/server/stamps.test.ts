@@ -3,6 +3,7 @@ import {
   diffStamps,
   hasChange,
   loadedStamps,
+  stampsOf,
   watchTargets,
   watchTargetsKey,
   type Stamps,
@@ -10,7 +11,10 @@ import {
 import type { ReviewSet } from "./reviewSet";
 
 function stamps(set: number, assets: Record<string, number>): Stamps {
-  return { set, assets };
+  // Tests speak in mtimes; the stamp is `mtime:size` and size is constant here.
+  const composed: Record<string, string> = {};
+  for (const [path, mtime] of Object.entries(assets)) composed[path] = `${String(mtime)}:10`;
+  return { set: `${String(set)}:10`, assets: composed };
 }
 
 describe("diffStamps", () => {
@@ -31,6 +35,15 @@ describe("diffStamps", () => {
   it("reports the review document separately from its renditions", () => {
     const diff = diffStamps(stamps(10, { "/s/a.jpg": 1 }), stamps(11, { "/s/a.jpg": 1 }));
     expect(diff).toEqual({ setChanged: true, changedAssets: [] });
+  });
+
+  it("sees a rewrite that kept the same mtime", () => {
+    // `cp -p`, `rsync -t` and a coarse filesystem clock all leave the mtime
+    // alone, and an unnoticed rewrite is the page serving the previous render
+    // from an `immutable` cache entry.
+    const before: Stamps = { set: "10:1", assets: { "/s/a.jpg": "500:1200" } };
+    const after: Stamps = { set: "10:1", assets: { "/s/a.jpg": "500:1600" } };
+    expect(diffStamps(before, after).changedAssets).toEqual(["/s/a.jpg"]);
   });
 
   it("counts a rendition appearing or vanishing as a change", () => {
@@ -78,15 +91,14 @@ describe("loadedStamps", () => {
     // model would keep serving its old URL and no later diff would mention it.
     const set = {
       path: "/s/review.json",
-      assets: { entries: () => [{ path: "/s/a.jpg", mtimeMs: 100 }] },
+      assets: { entries: () => [{ path: "/s/a.jpg", mtimeMs: 100, size: 10 }] },
     } as unknown as ReviewSet;
 
-    const onDiskNow = 999;
-    const baseline = loadedStamps(set, () => onDiskNow);
-    expect(baseline.assets["/s/a.jpg"]).toBe(100);
+    const baseline = loadedStamps(set, () => ({ mtimeMs: 999, size: 99 }));
+    expect(baseline.assets["/s/a.jpg"]).toBe("100:10");
 
     // So the drift is visible rather than swallowed.
-    const now: Stamps = { set: onDiskNow, assets: { "/s/a.jpg": onDiskNow } };
+    const now = stampsOf(set, () => ({ mtimeMs: 999, size: 99 }));
     expect(hasChange(diffStamps(baseline, now))).toBe(true);
   });
 });

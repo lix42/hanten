@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { parseReview, type Review } from "../review";
-import { createAssetMap, type AssetMap, type StatMtime } from "./assets";
+import { createAssetMap, type AssetMap, type StatFile } from "./assets";
 
 /** Env var naming the review set. */
 export const SET_ENV_VAR = "REVIEW_SET";
@@ -72,9 +72,10 @@ export interface ReviewSet {
   readonly source: SetPath["source"];
 }
 
-const mtime: StatMtime = (path) => {
+const statFile: StatFile = (path) => {
   try {
-    return statSync(path).mtimeMs;
+    const stats = statSync(path);
+    return { mtimeMs: stats.mtimeMs, size: stats.size };
   } catch {
     return undefined;
   }
@@ -88,7 +89,10 @@ const mtime: StatMtime = (path) => {
  * comparisons that did work. It registers with an mtime of 0 and its request
  * 404s, which the page already renders as a visible gap.
  */
-export async function loadReviewSet(setPath: SetPath, stat: StatMtime = mtime): Promise<ReviewSet> {
+export async function loadReviewSet(
+  setPath: SetPath,
+  stat: StatFile = statFile,
+): Promise<ReviewSet> {
   const path = resolveSetFile(setPath);
   const dir = dirname(path);
   const assets = createAssetMap(stat);

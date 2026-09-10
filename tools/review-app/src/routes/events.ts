@@ -36,6 +36,14 @@ export const Route = createFileRoute("/events")({
           unsubscribe();
         };
 
+        // Already gone. `addEventListener` on a signal that has *already*
+        // aborted never fires, so without this the listener would sit in the
+        // watcher's set for the life of the process.
+        if (request.signal.aborted) {
+          release();
+          return new Response(null, { status: 499 });
+        }
+
         const stream = new ReadableStream<Uint8Array>({
           start(c) {
             controller = c;

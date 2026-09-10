@@ -25,7 +25,7 @@ const POLL_MS = 3000;
  * boot id gets a reload. Reloading costs the selected config and the scroll
  * position, in a case where the dev server was restarted anyway.
  */
-export function LiveReload() {
+export function LiveReload(props: { boot: string }) {
   const router = useRouter();
 
   onMount(() => {
@@ -69,7 +69,11 @@ export function LiveReload() {
 
     // Independent of the stream, and of the router: if the server is a different
     // one than the page was rendered against, only a reload is trustworthy.
-    let boot: string | undefined;
+    // Seeded from the render, not learned from the first poll: if the original
+    // server is already gone when this mounts, the first *successful* poll
+    // reaches the replacement, and taking its id as the baseline would leave a
+    // stale page running an old bundle against a new server forever.
+    let boot: string | undefined = props.boot;
     const checkBoot = () =>
       fetch("/alive", { cache: "no-store" })
         .then((response) => (response.ok ? (response.json() as Promise<{ boot?: string }>) : null))

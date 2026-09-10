@@ -6,26 +6,18 @@
  * previous render with no error reads exactly like a render that changed
  * nothing — the one wrong answer this tool must never give. Recovery therefore
  * rides on a plain `fetch` of this route, which cannot be affected by whatever
- * the stream is doing: a different `boot` means the server was replaced and the
- * page reloads.
+ * the stream is doing: an id different from the one baked into the page means
+ * the server was replaced, and the page reloads.
  */
 
 import { createFileRoute } from "@tanstack/solid-router";
-
-/**
- * New on every server start. On `globalThis` because the dev server re-executes
- * module graphs, and a value that changed on an edit would reload the page for
- * no reason.
- */
-const BOOT_KEY = "__ncReviewBoot";
-const store = globalThis as typeof globalThis & { [BOOT_KEY]?: string };
-store[BOOT_KEY] ??= `${String(Date.now())}-${Math.random().toString(36).slice(2, 10)}`;
+import { bootId } from "../server/boot";
 
 export const Route = createFileRoute("/alive")({
   server: {
     handlers: {
       GET: () =>
-        new Response(JSON.stringify({ boot: store[BOOT_KEY] }), {
+        new Response(JSON.stringify({ boot: bootId() }), {
           headers: { "content-type": "application/json", "cache-control": "no-store" },
         }),
     },

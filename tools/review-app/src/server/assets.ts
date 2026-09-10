@@ -15,13 +15,20 @@
 
 import { createHash } from "node:crypto";
 
-/** Modification time in milliseconds, or `undefined` when the file is absent. */
-export type StatMtime = (absolutePath: string) => number | undefined;
+/** What the map needs off disk, or `undefined` when the file is absent. */
+export type StatFile = (absolutePath: string) => { mtimeMs: number; size: number } | undefined;
 
 export interface Asset {
   readonly path: string;
   /** 0 when the file did not exist at load time; the request will 404. */
   readonly mtimeMs: number;
+  /**
+   * Carried beside the mtime because a rewrite does not always move one. A
+   * timestamp-preserving copy (`cp -p`, `rsync -t`) and a coarse filesystem
+   * clock both leave it untouched, and an unnoticed rewrite means the page goes
+   * on serving the previous render from an `immutable` cache entry.
+   */
+  readonly size: number;
 }
 
 export interface AssetMap {
@@ -41,7 +48,7 @@ export function assetUrl(id: string, mtimeMs: number): string {
   return `/img/${id}?v=${String(mtimeMs)}`;
 }
 
-export function createAssetMap(stat: StatMtime): AssetMap {
+export function createAssetMap(stat: StatFile): AssetMap {
   const assets = new Map<string, Asset>();
   return {
     register(absolutePath) {
@@ -50,7 +57,8 @@ export function createAssetMap(stat: StatMtime): AssetMap {
       // own preview, or one image shared by two configs. Stat it once.
       let asset = assets.get(id);
       if (!asset) {
-        asset = { path: absolutePath, mtimeMs: stat(absolutePath) ?? 0 };
+        const stats = stat(absolutePath);
+        asset = { path: absolutePath, mtimeMs: stats?.mtimeMs ?? 0, size: stats?.size ?? 0 };
         assets.set(id, asset);
       }
       return assetUrl(id, asset.mtimeMs);

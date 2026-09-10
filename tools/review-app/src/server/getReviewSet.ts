@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/solid-start";
 import type { Review } from "../review";
+import { bootId } from "./boot";
 import { currentReviewSet } from "./state";
 
 export interface ReviewSetPayload {
@@ -7,6 +8,12 @@ export interface ReviewSetPayload {
   /** Absolute path of the review.json, shown in the header and on failure. */
   readonly path: string;
   readonly source: "env" | "bundled-example";
+  /**
+   * Identity of the server that rendered this. The page compares `/alive`
+   * against it, so a replacement is recognised even when the original was
+   * already gone before the first poll.
+   */
+  readonly boot: string;
 }
 
 /**
@@ -19,6 +26,6 @@ export interface ReviewSetPayload {
 export const getReviewSet = createServerFn({ method: "GET" }).handler(
   async (): Promise<ReviewSetPayload> => {
     const set = await currentReviewSet();
-    return { review: set.review, path: set.path, source: set.source };
+    return { review: set.review, path: set.path, source: set.source, boot: bootId() };
   },
 );

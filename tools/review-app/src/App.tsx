@@ -39,6 +39,12 @@ export function App(props: { set: ReviewSetPayload }) {
     // the first, which is always present (`configs` is never empty).
     return found === -1 ? 0 : found;
   });
+  // A stable list, so `For` only adds and removes sections when the set's images
+  // actually change rather than on every refresh.
+  const imageIds = createMemo(() => review().images.map((image) => image.id), undefined, {
+    equals: (a, b) => a.length === b.length && a.every((id, i) => id === b[i]),
+  });
+
   const setActiveIndex = (index: number) => {
     setActiveId(review().configs[index]?.id);
   };
@@ -82,16 +88,32 @@ export function App(props: { set: ReviewSetPayload }) {
           </Show>
         </p>
       </header>
-      <For each={review().images}>
-        {(image) => (
-          <ImageSection
-            image={image}
-            configs={review().configs}
-            activeIndex={activeIndex()}
-            onActivate={setActiveIndex}
-            zoom={zoom()}
-          />
-        )}
+      {/*
+        Keyed by image id, not by the image objects themselves. A refresh
+        reparses the set into fresh objects, and `For` reconciles by reference —
+        so every `ImageSection` would be disposed and rebuilt, resetting the pan
+        position inside each one. Since re-running `nc` while panned into a
+        frame is exactly the workflow this exists for, the sections have to
+        survive their data changing. Reading the image through a memo keeps the
+        component alive and lets its renditions update underneath it.
+      */}
+      <For each={imageIds()}>
+        {(id) => {
+          const image = createMemo(() => review().images.find((i) => i.id === id));
+          return (
+            <Show when={image()}>
+              {(present) => (
+                <ImageSection
+                  image={present()}
+                  configs={review().configs}
+                  activeIndex={activeIndex()}
+                  onActivate={setActiveIndex}
+                  zoom={zoom()}
+                />
+              )}
+            </Show>
+          );
+        }}
       </For>
       <Show when={review().images.length === 0}>
         <p class={cls(styles.panel)}>This review set lists no images.</p>

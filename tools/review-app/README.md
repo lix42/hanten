@@ -85,6 +85,14 @@ if you ever need the npm _script_ of the same name.
 
 ## Known limits
 
+- **A rendition outside the set directory is only watched if its directory
+  exists when the watch starts.** Renditions inside the set are covered by a
+  recursive watch, so a file appearing later starts working; an _outside_
+  directory that does not exist yet cannot be watched, and the alternative —
+  watching the nearest existing ancestor — could mean recursively watching a
+  home directory. Such a rendition shows its gap until the page is reloaded.
+  Declined deliberately: the page shows a visible gap, not a wrong picture.
+
 - **A dev-server restart reloads the page**, losing the selected config and
   scroll position. Ordinary edits to a set never do this — they update in place.
 

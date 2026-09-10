@@ -10,14 +10,27 @@
  */
 
 import { dirname, sep } from "node:path";
-import type { StatMtime } from "./assets";
+import type { StatFile } from "./assets";
 import type { ReviewSet } from "./reviewSet";
 
+/**
+ * `mtime:size`, not an mtime alone.
+ *
+ * A rewrite does not always move the mtime — a timestamp-preserving copy
+ * (`cp -p`, `rsync -t`) and a coarse filesystem clock both leave it be — and an
+ * unnoticed rewrite is the page serving the previous render from an `immutable`
+ * cache entry. Size is not a checksum, but it is free here and catches the
+ * cases mtime misses.
+ */
+function stamp(mtimeMs: number, size: number): string {
+  return `${String(mtimeMs)}:${String(size)}`;
+}
+
 export interface Stamps {
-  /** mtime of the `review.json` itself; 0 when it has gone missing. */
-  readonly set: number;
-  /** mtime per absolute rendition path. 0 for one whose file is not there. */
-  readonly assets: Readonly<Record<string, number>>;
+  /** The `review.json` itself; `0:0` when it has gone missing. */
+  readonly set: string;
+  /** Per absolute rendition path. `0:0` for one whose file is not there. */
+  readonly assets: Readonly<Record<string, string>>;
 }
 
 export interface StampDiff {
@@ -80,14 +93,19 @@ function isUnder(path: string, ancestor: string): boolean {
  * stale. `review.json` itself is read from disk because the held set is always
  * re-read when that file moves.
  */
-export function loadedStamps(set: ReviewSet, stat: StatMtime): Stamps {
-  const assets: Record<string, number> = {};
-  for (const asset of set.assets.entries()) assets[asset.path] = asset.mtimeMs;
-  return { set: stat(set.path) ?? 0, assets };
+export function loadedStamps(set: ReviewSet, stat: StatFile): Stamps {
+  const assets: Record<string, string> = {};
+  for (const asset of set.assets.entries()) assets[asset.path] = stamp(asset.mtimeMs, asset.size);
+  return { set: stampOnDisk(set.path, stat), assets };
 }
 
-export function stampsOf(set: ReviewSet, stat: StatMtime): Stamps {
-  const assets: Record<string, number> = {};
-  for (const asset of set.assets.entries()) assets[asset.path] = stat(asset.path) ?? 0;
-  return { set: stat(set.path) ?? 0, assets };
+function stampOnDisk(path: string, stat: StatFile): string {
+  const stats = stat(path);
+  return stamp(stats?.mtimeMs ?? 0, stats?.size ?? 0);
+}
+
+export function stampsOf(set: ReviewSet, stat: StatFile): Stamps {
+  const assets: Record<string, string> = {};
+  for (const asset of set.assets.entries()) assets[asset.path] = stampOnDisk(asset.path, stat);
+  return { set: stampOnDisk(set.path, stat), assets };
 }

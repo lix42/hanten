@@ -42,9 +42,10 @@ interface WatchState {
 const GLOBAL_KEY = "__ncReviewWatch";
 const store = globalThis as typeof globalThis & { [GLOBAL_KEY]?: WatchState };
 
-const mtime = (path: string): number | undefined => {
+const statFile = (path: string): { mtimeMs: number; size: number } | undefined => {
   try {
-    return statSync(path).mtimeMs;
+    const stats = statSync(path);
+    return { mtimeMs: stats.mtimeMs, size: stats.size };
   } catch {
     return undefined;
   }
@@ -129,7 +130,7 @@ async function ensureWatching(): Promise<WatchState> {
     // Baseline is what the *loaded set* carries, not what is on disk now: a
     // rendition rewritten between the page's first read and this moment would
     // otherwise be recorded as already-seen and never reported.
-    stamps: loadedStamps(set, mtime),
+    stamps: loadedStamps(set, statFile),
     timer: undefined,
     key: set.path,
     targets: "",
@@ -157,7 +158,7 @@ async function settle(state: WatchState): Promise<void> {
 
   // Stamps are taken from disk, so they see a re-rendered file even while the
   // held set still carries its old mtime.
-  if (!hasChange(diffStamps(before, stampsOf(set, mtime)))) return;
+  if (!hasChange(diffStamps(before, stampsOf(set, statFile)))) return;
 
   // Something moved, so the held set is stale — its asset map froze every mtime
   // at parse time, and those mtimes *are* the `/img/` URLs. Dropping it only
@@ -173,7 +174,7 @@ async function settle(state: WatchState): Promise<void> {
 
   // The re-read set may occupy different directories than the watch covers.
   installWatchers(state, set);
-  state.stamps = stampsOf(set, mtime);
+  state.stamps = stampsOf(set, statFile);
   for (const listener of state.listeners) listener();
 }
 

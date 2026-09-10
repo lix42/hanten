@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import { assetId, contentTypeFor, createAssetMap, type StatMtime } from "./assets";
+import { assetId, contentTypeFor, createAssetMap, type StatFile } from "./assets";
 
 const AT = "/sets/tone/E1-shoulder.jpg";
-const stat: StatMtime = (path) => (path === AT ? 1700 : undefined);
+const stat: StatFile = (path) => (path === AT ? { mtimeMs: 1700, size: 42 } : undefined);
 
 describe("createAssetMap", () => {
   it("only serves files that were registered", () => {
@@ -16,8 +16,8 @@ describe("createAssetMap", () => {
   });
 
   it("versions the URL by mtime so a re-render is a different URL", () => {
-    const early = createAssetMap(() => 1000).register(AT);
-    const later = createAssetMap(() => 2000).register(AT);
+    const early = createAssetMap(() => ({ mtimeMs: 1000, size: 42 })).register(AT);
+    const later = createAssetMap(() => ({ mtimeMs: 2000, size: 42 })).register(AT);
     expect(early).not.toBe(later);
     expect(later).toBe(`/img/${assetId(AT)}?v=2000`);
   });
@@ -26,7 +26,7 @@ describe("createAssetMap", () => {
     let stats = 0;
     const assets = createAssetMap((path) => {
       stats += 1;
-      return path === AT ? 1700 : undefined;
+      return path === AT ? { mtimeMs: 1700, size: 42 } : undefined;
     });
     // The common case: a rendition reused as its own preview.
     expect(assets.register(AT)).toBe(assets.register(AT));
