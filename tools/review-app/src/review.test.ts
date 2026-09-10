@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { loadReview, parseReview, reviewUrl } from "./review";
+import { describe, expect, it } from "vite-plus/test";
+import { parseReview, type ResolveRendition } from "./review";
 
-const BASE = "http://example.test/sets/display-tone/review.json";
+/**
+ * Stands in for the server's resolver, which maps a rendition path to a file and
+ * hands back a `/img/` URL. These tests are about parsing and validation, so it
+ * only has to be deterministic and to report the path it was given.
+ */
+const RESOLVE: ResolveRendition = (path) => `resolved:${path}`;
 
 function doc(overrides: Record<string, unknown> = {}) {
   return {
@@ -22,16 +27,15 @@ function doc(overrides: Record<string, unknown> = {}) {
 }
 
 describe("parseReview", () => {
-  it("resolves image paths against the review file, not the page", () => {
-    const review = parseReview(doc(), BASE);
+  it("puts every rendition path through the resolver", () => {
+    const review = parseReview(doc(), RESOLVE);
     const image = review.images[0]!;
-    expect(image.renditions.get("shoulder")!.src).toBe(
-      "http://example.test/sets/display-tone/E1-shoulder.jpg",
-    );
+    expect(image.renditions["shoulder"]!.src).toBe("resolved:E1-shoulder.jpg");
+    expect(image.renditions["none"]!.src).toBe("resolved:E1-none.jpg");
   });
 
   it("accepts a bare string as the rendition shorthand and mirrors it to preview", () => {
-    const rendition = parseReview(doc(), BASE).images[0]!.renditions.get("shoulder")!;
+    const rendition = parseReview(doc(), RESOLVE).images[0]!.renditions["shoulder"]!;
     expect(rendition.preview).toBe(rendition.src);
   });
 
@@ -45,17 +49,17 @@ describe("parseReview", () => {
           },
         ],
       }),
-      BASE,
+      RESOLVE,
     );
-    const rendition = review.images[0]!.renditions.get("shoulder")!;
-    expect(rendition.src).toMatch(/big\.jpg$/);
-    expect(rendition.preview).toMatch(/thumb\.jpg$/);
+    const rendition = review.images[0]!.renditions["shoulder"]!;
+    expect(rendition.src).toBe("resolved:big.jpg");
+    expect(rendition.preview).toBe("resolved:thumb.jpg");
   });
 
   it("falls back to the id when an image states no label", () => {
     const review = parseReview(
       doc({ images: [{ id: "P4", renditions: { none: "p4.jpg" } }] }),
-      BASE,
+      RESOLVE,
     );
     expect(review.images[0]!.label).toBe("P4");
   });
@@ -63,15 +67,15 @@ describe("parseReview", () => {
   it("allows an image to be missing a rendition", () => {
     const review = parseReview(
       doc({ images: [{ id: "E1", renditions: { shoulder: "a.jpg" } }] }),
-      BASE,
+      RESOLVE,
     );
     // The comparison is still worth showing; the gap is rendered, not fatal.
-    expect(review.images[0]!.renditions.has("none")).toBe(false);
+    expect(review.images[0]!.renditions["none"]).toBeUndefined();
   });
 
   it("rejects a rendition keyed by an undeclared config, naming the typo", () => {
     expect(() =>
-      parseReview(doc({ images: [{ id: "E1", renditions: { shouldre: "a.jpg" } }] }), BASE),
+      parseReview(doc({ images: [{ id: "E1", renditions: { shouldre: "a.jpg" } }] }), RESOLVE),
     ).toThrow(/shouldre.*not one of the declared configs \(shoulder, none\)/s);
   });
 
@@ -84,7 +88,7 @@ describe("parseReview", () => {
           doc({
             images: [{ id: "E1", renditions: { none: { src: "a.jpg", ...partial } } }],
           }),
-          BASE,
+          RESOLVE,
         ),
       ).toThrow(/without the other; give both or neither/);
     }
@@ -99,13 +103,15 @@ describe("parseReview", () => {
             },
           ],
         }),
-        BASE,
+        RESOLVE,
       ),
     ).not.toThrow();
   });
 
   it("rejects a schema version it cannot read", () => {
-    expect(() => parseReview(doc({ schema_version: 2 }), BASE)).toThrow(/schema_version must be 1/);
+    expect(() => parseReview(doc({ schema_version: 2 }), RESOLVE)).toThrow(
+      /schema_version must be 1/,
+    );
   });
 
   it("rejects duplicate config ids", () => {
@@ -117,66 +123,40 @@ describe("parseReview", () => {
             { id: "a", label: "A again" },
           ],
         }),
-        BASE,
+        RESOLVE,
       ),
     ).toThrow(/two entries with id "a"/);
   });
 
   it("rejects an empty config list", () => {
-    expect(() => parseReview(doc({ configs: [] }), BASE)).toThrow(/at least one/);
+    expect(() => parseReview(doc({ configs: [] }), RESOLVE)).toThrow(/at least one/);
+  });
+
+  it("does not let an inherited Object member pass as a rendition", () => {
+    // The record replaced a `Map`, and a plain object answers `toString`,
+    // `constructor` and friends from its prototype. A config id spelling one of
+    // those, with no rendition for an image, would read as *present* and render
+    // a broken image where the missing-rendition gap belongs.
+    const review = parseReview(
+      doc({
+        configs: [
+          { id: "toString", label: "toString" },
+          { id: "real", label: "real" },
+        ],
+        images: [{ id: "E1", renditions: { real: "a.jpg" } }],
+      }),
+      RESOLVE,
+    );
+    const renditions = review.images[0]!.renditions;
+    expect(renditions["real"]?.src).toBe("resolved:a.jpg");
+    expect(renditions["toString"]).toBeUndefined();
+    expect(renditions["constructor"]).toBeUndefined();
+    expect(renditions["hasOwnProperty"]).toBeUndefined();
   });
 
   it("names the failing path when a field has the wrong type", () => {
     expect(() =>
-      parseReview(doc({ images: [{ id: "E1", renditions: { none: 42 } }] }), BASE),
+      parseReview(doc({ images: [{ id: "E1", renditions: { none: 42 } }] }), RESOLVE),
     ).toThrow(/images\[0\]\.renditions\.none must be an object, got number/);
-  });
-});
-
-describe("reviewUrl", () => {
-  it("defaults to review.json beside the page", () => {
-    expect(reviewUrl("http://example.test/review-app/index.html")).toBe(
-      "http://example.test/review-app/review.json",
-    );
-  });
-
-  it("resolves ?data= relative to the page", () => {
-    expect(reviewUrl("http://example.test/review-app/?data=../sets/tone/review.json")).toBe(
-      "http://example.test/sets/tone/review.json",
-    );
-  });
-
-  it("accepts an absolute ?data= URL", () => {
-    expect(reviewUrl("http://example.test/app/?data=http://other.test/r.json")).toBe(
-      "http://other.test/r.json",
-    );
-  });
-});
-
-describe("loadReview", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("resolves images beside the document the server actually returned", async () => {
-    // A host that redirects `/sets/tone/` to `/sets/tone/review.json`, or http to
-    // https: images must resolve beside the final document, not the request.
-    vi.stubGlobal(
-      "fetch",
-      async () =>
-        new Response(JSON.stringify(doc()), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    const response = new Response("{}");
-    Object.defineProperty(response, "url", { value: "" });
-
-    const review = await loadReview("http://example.test/app/?data=../sets/tone/review.json");
-    // `Response` built in-process reports an empty `url`, so this exercises the
-    // documented fallback to the requested URL.
-    expect(review.images[0]!.renditions.get("shoulder")!.src).toBe(
-      "http://example.test/sets/tone/E1-shoulder.jpg",
-    );
   });
 });

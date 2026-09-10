@@ -267,7 +267,7 @@ export function ImageSection(props: Props) {
   const activeId = () => props.configs[props.activeIndex]?.id;
   const activeRendition = () => {
     const id = activeId();
-    return id === undefined ? undefined : props.image.renditions.get(id);
+    return id === undefined ? undefined : props.image.renditions[id];
   };
 
   /**
@@ -292,7 +292,7 @@ export function ImageSection(props: Props) {
   };
   const hasActive = () => {
     const id = activeId();
-    return id !== undefined && props.image.renditions.has(id);
+    return id !== undefined && props.image.renditions[id] !== undefined;
   };
 
   return (
@@ -307,7 +307,7 @@ export function ImageSection(props: Props) {
       <div class={cls(styles.strip)}>
         <For each={props.configs}>
           {(config, index) => {
-            const rendition = () => props.image.renditions.get(config.id);
+            const rendition = () => props.image.renditions[config.id];
             return (
               <button
                 type="button"
@@ -363,7 +363,7 @@ export function ImageSection(props: Props) {
           <div class={cls(styles.stage)} style={reservation()}>
             <For each={props.configs}>
               {(config) => (
-                <Show when={props.image.renditions.get(config.id)}>
+                <Show when={props.image.renditions[config.id]}>
                   {(rendition) => (
                     <img
                       class={cls(

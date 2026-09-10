@@ -725,6 +725,74 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   "render through the path being measured" is now the *generator's* obligation, and the
   `sips`-destroys-a-gain-map constraint still blocks HDR review. Whoever builds the generator
   should read that bullet before starting.
+
+### 2026-09-10 — the viewer became fullstack: set loaded by path, watched for changes
+
+- **The friction was setup, not viewing** (user request). `?data=` made a review set something
+  that had to be reachable from the served root, so reviewing one cost either a `dist/` copied
+  next to it or a hand-built relative URL. The app now runs **TanStack Start** and the server
+  reads the set off disk: `pnpm dev <path to review.json>` (a directory works, meaning the
+  `review.json` in it), or `REVIEW_SET`. The path may be anywhere. A bare `pnpm dev` still
+  renders the committed synthetic example, which is why that example is in the repo.
+- **It is dev-server-only by decision** (user). `vp build` stays in CI as a compile check;
+  nothing is served from `.output/` and there is no `pnpm start`.
+- **Images are served from an allowlist, not a confined root.** Every rendition registers its
+  absolute path while the set is parsed and is addressed afterwards by an opaque id, so a path
+  is never taken from a URL and `..` in one means nothing — which is also what lets a set
+  legitimately name files outside its own directory, as a root-prefix check could not. The id
+  carries the file's mtime, so a re-render is a different URL: that is the whole refresh
+  mechanism, and it lets responses be cached `immutable`.
+- **`renditions` became a plain record.** Start's serializable check is `T extends Map<any,any>`,
+  which `ReadonlyMap` fails. `strict: false` would have silenced it; the record is simply the
+  better model, being exactly what crosses the wire and what the JSON already is.
+- **Live refresh cost four attempts and the failure mode is the lesson.** Restarting the dev
+  server under an open page left it showing the previous render with **no error anywhere** —
+  indistinguishable from a re-render that changed nothing, which is the one wrong answer this
+  tool must never give. Trusting `EventSource`'s retry, replacing the retry, and reloading on
+  reopen all failed. Measured cause: after a restart the `changed` event still arrives but
+  `router.invalidate()` issues *no request at all*, the router being stale once the module graph
+  is replaced — so no repair to the stream could have worked. Recovery now rests on a plain
+  `fetch` poll of `/alive`, whose boot id changes with the server; the stream is the fast path
+  only. Cost: a restart reloads the page, losing selected config and scroll. Ordinary set edits
+  do not.
+- **Two Start behaviours that fail silently**, both in the app's `README.md`: `shellComponent`
+  renders **server-side only**, so a stylesheet linked there names an asset the client build
+  never emits and a browser-side import from there is tree-shaken away entirely (stylesheets go
+  through the root route's `head.links`); and a route's `server.handlers` *is* stripped from the
+  client bundle, which is what makes importing `node:fs` in a route file legitimate. StyleX
+  needed its dev CSS wired by hand for the same root cause — its unplugin auto-injects only when
+  Vite's entry is an HTML file.
+- **Deliberately dropped:** `loadReview` / `reviewUrl` / `hasDataParam` and their three test
+  blocks, the browser no longer fetching anything. The twelve `parseReview` tests survive through
+  an injected resolver; the server modules add eighteen, including one that reads the committed
+  example off disk so the file-touching path is covered at all. 42 tests, all four gates green.
+- **Review caught the headline feature not working, and the reason is a lesson about
+  verification.** The held set was dropped only when `review.json`'s own mtime moved, but a
+  rendition's mtime is frozen into the asset map at parse time and *is* its `/img/` URL — so a
+  re-rendered frame kept its old URL and the browser served it from the `immutable` cache entry.
+  Every manual check had missed it because they all used `pnpm dev <directory>`, and the cache
+  key compared the *stated* path against the loaded set's *resolved* one; the directory form
+  therefore never hit the cache and accidentally looked correct, while the file form — the one
+  every doc tells people to use — went stale. Two bugs hiding each other. Both fixed, both now
+  covered by tests that were checked to fail against the old code. Test live refresh with the
+  **file** form. A third finding: the `renditions` record inherits `Object.prototype`, so a
+  config id named `toString` read as a *present* rendition and rendered a broken image where the
+  gap belongs; it is built with a null prototype now, which SSR serialization was verified to
+  survive.
+- **A second reviewer (Codex, on the PR) found four more, three of them the same shape.** The
+  watch targets were derived once, so a `review.json` edit moving a rendition into a new
+  directory left it unwatched; the starting baseline was taken from disk rather than from the
+  *loaded* set, so a render landing between the page's first read and the watcher's first breath
+  was recorded as already-seen; and the boot-id baseline was established one poll interval late,
+  so a server replaced inside that window was never recognised as different. Each ends in the
+  page silently showing the previous render, which is why all three were fixed rather than
+  noted. The fourth: the selected config was held as an **index**, so a live edit that removed or
+  reordered configs silently moved the selection — it is held by **id** now, verified by removing
+  a config from a live set and watching the selection stay put.
+- **Not done, and unchanged by this:** the generator is still the reason this task is open, and
+  HDR review and build-vs-build are still untouched. The server could now measure `width`/`height`
+  itself and retire those schema fields — it does not, and the schema is unchanged.
+
 ## metrics-visualization
 
 **Status:** not started

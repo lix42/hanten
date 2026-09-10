@@ -1108,10 +1108,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   ad-hoc review pages from `algo/reference-anchored-sigmoid` into a maintained tool for
   comparing rendering configurations by eye: one entry point, the matrix as data rather than
   code, HDR review for the frames whose range exceeds SDR, and build-vs-build comparison.
-  **Viewer half shipped 2026-09-02** (`tools/review-app/`, Vite+ / Solid / StyleX): the
-  `review.json` format settles "matrix as data", and switching config cannot move the picture
-  because every rendition shares one grid cell. Still open: the **generator** that renders a
-  matrix and emits the JSON, HDR review, and build-vs-build.
+  **Viewer half shipped 2026-09-02**, fullstack since 2026-09-10 (`tools/review-app/`,
+  TanStack Start on Vite+ / Solid / StyleX): the `review.json` format settles "matrix as
+  data", switching config cannot move the picture because every rendition shares one grid
+  cell, and the server takes the set by path and watches it, so re-running `nc` updates the
+  page. Still open: the **generator** that renders a matrix and emits the JSON, HDR review,
+  and build-vs-build.
 - [ ] [Metrics visualization](tasks/analysis/metrics-visualization.md) — plot the `nctool
   metrics` output inside `tools/review-app`, so numeric review sits beside visual review:
   percentile curves that overlay two configs, the cast-by-tone-band path that shows crossover,

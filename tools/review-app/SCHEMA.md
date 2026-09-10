@@ -1,9 +1,10 @@
 # The review-set format
 
-A **review set** is one `review.json` plus the images it names. The app loads it
-from `?data=<path to review.json>` and resolves every image path **relative to
-that file**, so a set is a self-contained directory you can move, copy or serve
-from anywhere.
+A **review set** is one `review.json` plus the images it names. The server is
+pointed at the `review.json` (`pnpm dev <path>`, or `REVIEW_SET`) and resolves
+every image path **relative to that file**, so a set is a self-contained
+directory you can move or copy anywhere. It does not have to sit beside the app,
+and nothing about it needs to be reachable from a served root.
 
 Keys are `snake_case`, matching nc's own reports and recipes — the producers are
 nc-adjacent scripts, not JavaScript.
@@ -72,3 +73,9 @@ rendition for one image is ordinary (it failed to render, or the frame was added
 later), so that slot renders as a visible gap and the rest of the set still
 loads. A comparison silently missing half of itself is the worst outcome of the
 three.
+
+**A rendition may name a file that is not there yet**, and that is not an error
+either — a render that failed, or one still to come. Its slot renders as a gap
+and the request for it returns 404 naming the missing file. It starts working the
+moment the file appears: the server watches the set, so a re-render updates the
+page in place without a reload.
