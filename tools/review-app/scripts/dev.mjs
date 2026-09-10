@@ -19,7 +19,14 @@ const passthrough = stated === undefined ? argv : argv.slice(1);
 const env = { ...process.env };
 if (stated !== undefined) env["REVIEW_SET"] = resolve(stated);
 
-const child = spawn("vp", ["dev", ...passthrough], { stdio: "inherit", env, shell: false });
+// On Windows the local `vp` is a `vp.cmd` shim, which `spawn` cannot execute
+// directly without a shell. The set path travels in the environment rather than
+// in argv, so nothing user-supplied is handed to that shell.
+const child = spawn("vp", ["dev", ...passthrough], {
+  stdio: "inherit",
+  env,
+  shell: process.platform === "win32",
+});
 child.on("error", (cause) => {
   console.error(`could not start \`vp dev\`: ${cause.message}`);
   process.exit(1);
