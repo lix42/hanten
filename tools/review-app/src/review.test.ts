@@ -132,6 +132,28 @@ describe("parseReview", () => {
     expect(() => parseReview(doc({ configs: [] }), RESOLVE)).toThrow(/at least one/);
   });
 
+  it("does not let an inherited Object member pass as a rendition", () => {
+    // The record replaced a `Map`, and a plain object answers `toString`,
+    // `constructor` and friends from its prototype. A config id spelling one of
+    // those, with no rendition for an image, would read as *present* and render
+    // a broken image where the missing-rendition gap belongs.
+    const review = parseReview(
+      doc({
+        configs: [
+          { id: "toString", label: "toString" },
+          { id: "real", label: "real" },
+        ],
+        images: [{ id: "E1", renditions: { real: "a.jpg" } }],
+      }),
+      RESOLVE,
+    );
+    const renditions = review.images[0]!.renditions;
+    expect(renditions["real"]?.src).toBe("resolved:a.jpg");
+    expect(renditions["toString"]).toBeUndefined();
+    expect(renditions["constructor"]).toBeUndefined();
+    expect(renditions["hasOwnProperty"]).toBeUndefined();
+  });
+
   it("names the failing path when a field has the wrong type", () => {
     expect(() =>
       parseReview(doc({ images: [{ id: "E1", renditions: { none: 42 } }] }), RESOLVE),

@@ -63,9 +63,11 @@ export function createAssetMap(stat: StatMtime): AssetMap {
 /**
  * Content type for an image path, by extension.
  *
- * Deliberately a closed list: anything else is served as a download rather than
- * guessed at, which keeps a stray `.json` or `.html` in a set directory from
- * being served as active content.
+ * Deliberately a closed list: anything else is served as `application/octet-stream`
+ * rather than guessed at, so a stray `.json` or `.html` beside a set is not served
+ * as something a browser will execute. Note `.svg` is on the list and *is* active
+ * content when opened directly — acceptable only because this serves the user's
+ * own files to their own machine.
  */
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".avif": "image/avif",

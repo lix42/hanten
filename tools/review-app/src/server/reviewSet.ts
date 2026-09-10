@@ -49,6 +49,19 @@ export function setFilePath(path: string, isDirectory: boolean): string {
   return isDirectory ? resolvePath(path, "review.json") : path;
 }
 
+/**
+ * The `review.json` a stated path names, following the directory form.
+ *
+ * Exported because the cache key must be computed the same way the loader
+ * computes it: keying on the *stated* path while storing the *resolved* one
+ * meant a directory-form set never matched its own cache entry, so it was
+ * re-read and re-parsed on every request — and, worse, made the two documented
+ * ways of naming a set behave differently.
+ */
+export function resolveSetFile(setPath: SetPath): string {
+  return setFilePath(setPath.path, isDirectory(setPath.path));
+}
+
 export interface ReviewSet {
   readonly review: Review;
   readonly assets: AssetMap;
@@ -76,7 +89,7 @@ const mtime: StatMtime = (path) => {
  * 404s, which the page already renders as a visible gap.
  */
 export async function loadReviewSet(setPath: SetPath, stat: StatMtime = mtime): Promise<ReviewSet> {
-  const path = setFilePath(setPath.path, isDirectory(setPath.path));
+  const path = resolveSetFile(setPath);
   const dir = dirname(path);
   const assets = createAssetMap(stat);
 

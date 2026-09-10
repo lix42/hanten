@@ -928,15 +928,25 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   every configuration of a frame into **one grid cell**, so switching between them
   cannot move the picture by a pixel; toggling in place is what makes highlight
   differences visible at all, and side-by-side hides them. Feed it a `review.json`
-  (`tools/review-app/SCHEMA.md`) naming the configs and the images, and open the app
-  with `?data=<path to it>`; image paths resolve next to that file, so a review set
-  is a movable directory. It has its own toolchain — **Vite+ (`vp`), Solid, StyleX,
-  pnpm** — and its own CI job; run `pnpm check && pnpm test && pnpm build` in
-  `tools/review-app`, never the Rust gates, and read its `README.md` first: every
-  trap recorded there (StyleX silently dropping CSS shorthands, `stylex.props()`
-  spreads not being reactive in Solid, a scroll handler that writes a signal wedging
-  the renderer, and `requestAnimationFrame` never firing in a hidden tab) failed
-  *silently* and cost a debugging round each.
+  (`tools/review-app/SCHEMA.md`) naming the configs and the images, and start it with
+  `pnpm dev <path to review.json>` (a directory works too, meaning the `review.json`
+  inside it); image paths resolve next to that file, so a review set is a movable
+  directory that can live **anywhere** — the server reads it from disk, so nothing
+  is copied beside the app and there is no URL to build. A bare `pnpm dev` renders
+  the committed example. It **watches the set**, so re-running `nc` updates the page
+  in place, keeping the selected config and scroll position. It is now a
+  **fullstack** app — **TanStack Start on Vite+ (`vp`), Solid, StyleX, pnpm** — with
+  its own CI job; run `pnpm check && pnpm test && pnpm build` in `tools/review-app`,
+  never the Rust gates, and read its `README.md` first: every trap recorded there
+  (StyleX silently dropping CSS shorthands, `stylex.props()` spreads not being
+  reactive in Solid, a scroll handler that writes a signal wedging the renderer,
+  `requestAnimationFrame` never firing in a hidden tab, and live refresh going
+  *silently* stale if it is left to `EventSource` reconnecting) failed silently and
+  cost a debugging round each. Two that bite when editing it: `shellComponent`
+  renders **server-side only**, so a stylesheet or a browser-side import placed
+  there is dropped from the client build without a word — stylesheets go through the
+  root route's `head.links` — and a route file's `server.handlers` is stripped from
+  the client bundle, which is what lets `node:fs` be imported there at all.
   **Never commit or publish a review set**: the images are the user's own
   photographs, so they go to a throwaway directory outside the repo, never into
   `../nc-assets` or git. The one exception is the app's own

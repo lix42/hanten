@@ -192,18 +192,30 @@ export function parseReview(raw: unknown, resolve: ResolveRendition): Review {
     const record = asRecord(raw, at);
     const id = asString(record["id"], `${at}.id`);
     const renditionsRaw = asRecord(record["renditions"], `${at}.renditions`);
-    // `fromEntries` defines own properties, so a config id spelled `__proto__`
-    // lands as data rather than silently setting the prototype.
-    const renditions = Object.fromEntries(
-      Object.entries(renditionsRaw).map(([configId, value]) => {
-        if (!seen.has(configId)) {
-          fail(
-            `${at}.renditions names ${JSON.stringify(configId)}, which is not one of ` +
-              `the declared configs (${configs.map((c) => c.id).join(", ")})`,
-          );
-        }
-        return [configId, parseRendition(value, resolve, `${at}.renditions.${configId}`)] as const;
-      }),
+    // Two hazards, one on each side of the lookup. `fromEntries` defines own
+    // properties, so a config id spelled `__proto__` lands as data rather than
+    // silently setting the prototype; and the result gets a **null prototype**,
+    // so reading a config id that happens to name an `Object.prototype` member
+    // (`toString`, `constructor`) yields `undefined` rather than an inherited
+    // function — which would read as a present rendition and render a broken
+    // image where the missing-rendition gap belongs. The `Map` this replaced
+    // had neither hazard.
+    const renditions: Record<string, Rendition> = Object.assign(
+      Object.create(null) as Record<string, Rendition>,
+      Object.fromEntries(
+        Object.entries(renditionsRaw).map(([configId, value]) => {
+          if (!seen.has(configId)) {
+            fail(
+              `${at}.renditions names ${JSON.stringify(configId)}, which is not one of ` +
+                `the declared configs (${configs.map((c) => c.id).join(", ")})`,
+            );
+          }
+          return [
+            configId,
+            parseRendition(value, resolve, `${at}.renditions.${configId}`),
+          ] as const;
+        }),
+      ),
     );
     return {
       id,

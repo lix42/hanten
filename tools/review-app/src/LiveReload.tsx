@@ -31,6 +31,7 @@ export function LiveReload() {
   onMount(() => {
     let source: EventSource | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    let everOpened = false;
     let stopped = false;
 
     const reread = () => void router.invalidate();
@@ -40,6 +41,13 @@ export function LiveReload() {
       const stream = new EventSource("/events");
       source = stream;
       stream.addEventListener("changed", reread);
+      stream.addEventListener("open", () => {
+        // A reconnect to the *same* server: the boot poll sees nothing to do, but
+        // anything that changed while the stream was down was never announced and
+        // is not replayed. Not on the first open — the page just rendered this set.
+        if (everOpened) reread();
+        everOpened = true;
+      });
       stream.addEventListener("error", () => {
         // Every error is treated as the connection being gone, rather than
         // leaving `EventSource` to retry: measured against a dev server that

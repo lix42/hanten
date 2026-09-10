@@ -14,11 +14,17 @@ changed" well and "what does that look like" not at all.
   colour in CIELAB — and a per-roll rollup with a spread table. That is the data
   source; this task does not add measurements.
 - **`tools/review-app`** (`analysis/comparison-review-tooling`, viewer half
-  shipped on `main` 2026-09-02; Vite+ / Solid / StyleX) compares configs by
-  toggling renditions **in place**: every rendition of an image shares one grid
-  cell, so switching config cannot move the picture. Its `review.json` is
-  `configs × images → renditions`, and `SCHEMA.md` already calls `images[].note`
-  "the natural home for measured numbers" — a hook nobody has used yet.
+  shipped on `main` 2026-09-02, fullstack since 2026-09-10; TanStack Start on
+  Vite+ / Solid / StyleX) compares configs by toggling renditions **in place**:
+  every rendition of an image shares one grid cell, so switching config cannot
+  move the picture. Its `review.json` is `configs × images → renditions`, and
+  `SCHEMA.md` already calls `images[].note` "the natural home for measured
+  numbers" — a hook nobody has used yet.
+  Note it now has a **server**: it reads the set from disk by path and watches
+  it, so metrics JSON could be read server-side beside the review file rather
+  than fetched, and would re-read on change for free. Whether metrics belong in
+  `review.json`, in a sibling file, or are read from `nctool` output directly is
+  still open — but the choice is now wider than it was when this was written.
 
 Those two shapes line up: a metrics record is per (image, config), which is
 exactly what `renditions` is keyed by.

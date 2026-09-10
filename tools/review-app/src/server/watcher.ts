@@ -47,10 +47,18 @@ const mtime = (path: string): number | undefined => {
  * watchers down and back up each time buys nothing in a dev server.
  */
 export async function onReviewSetChange(listener: Listener): Promise<() => void> {
-  const state = await ensureWatching();
+  // `ensureWatching` reads and writes the global across an `await`, so two
+  // connections arriving together could each install a `WatchState` and orphan
+  // the first one's watchers. One start at a time.
+  starting ??= ensureWatching().finally(() => {
+    starting = undefined;
+  });
+  const state = await starting;
   state.listeners.add(listener);
   return () => state.listeners.delete(listener);
 }
+
+let starting: Promise<WatchState> | undefined;
 
 async function ensureWatching(): Promise<WatchState> {
   const set = await currentReviewSet();
@@ -98,11 +106,7 @@ async function ensureWatching(): Promise<WatchState> {
 }
 
 async function settle(state: WatchState): Promise<void> {
-  // Re-read only after the model may have moved: a changed `review.json` can
-  // rename or add renditions, so the stamps must be taken from the new set.
   const before = state.stamps;
-  const setChangedOnDisk = mtime(state.key) !== before.set;
-  if (setChangedOnDisk) invalidateReviewSet();
 
   let set;
   try {
@@ -113,9 +117,23 @@ async function settle(state: WatchState): Promise<void> {
     return;
   }
 
-  const after = stampsOf(set, mtime);
-  state.stamps = after;
-  if (!hasChange(diffStamps(before, after))) return;
+  // Stamps are taken from disk, so they see a re-rendered file even while the
+  // held set still carries its old mtime.
+  if (!hasChange(diffStamps(before, stampsOf(set, mtime)))) return;
+
+  // Something moved, so the held set is stale — its asset map froze every mtime
+  // at parse time, and those mtimes *are* the `/img/` URLs. Dropping it only
+  // when `review.json` itself changed left a re-rendered frame addressed by its
+  // old URL, which the browser then served from an `immutable` cache entry: the
+  // page showed the previous render with nothing reporting a problem.
+  invalidateReviewSet();
+  try {
+    set = await currentReviewSet();
+  } catch {
+    return;
+  }
+
+  state.stamps = stampsOf(set, mtime);
   for (const listener of state.listeners) listener();
 }
 
