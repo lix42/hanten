@@ -93,6 +93,11 @@ pub struct ConvertReport {
     /// freeze one frame's estimate into a recipe / `--white-balance` (measure
     /// once, reuse). `None` for `simple` (no print stage).
     pub white_balance: Option<[f32; 3]>,
+    /// How far the frame fell outside the stock's published curve, per channel — `Some`
+    /// only for the characteristic curve. Carried out so the orchestrator can warn: an
+    /// out-of-table sample is extrapolated, not measured, and a frame with many of them is
+    /// being rendered off the published data.
+    pub out_of_table: Option<crate::algo::film_stock::OutOfTable>,
     /// The resolved regional-balance tone-ramp range `[lo, hi]` (corrected
     /// density), when the density reconstruction applied a shadow/highlight
     /// balance. `None` for `simple` or when both balances are the neutral
@@ -123,6 +128,7 @@ pub(crate) fn reconstruct_and_print(
             curve_anchor: recon.curve_anchor,
             white_balance,
             balance_range: recon.balance_range,
+            out_of_table: recon.out_of_table,
         },
     ))
 }
@@ -236,6 +242,7 @@ pub fn render_display_source(
             curve_anchor: recon.curve_anchor,
             white_balance: Some(shared.controls.white_balance()),
             balance_range: recon.balance_range,
+            out_of_table: recon.out_of_table,
         },
         shared,
         timings: StageTimings {
@@ -318,6 +325,7 @@ fn render_film_master(
             curve_anchor: recon.curve_anchor,
             white_balance: None,
             balance_range: recon.balance_range,
+            out_of_table: recon.out_of_table,
         },
         timings: StageTimings {
             algorithm_ms,
@@ -417,6 +425,15 @@ mod tests {
         }
     }
 
+    /// The characteristic curve on the generic profile — the fourth producer that has to
+    /// reach the master through the same mapper.
+    fn characteristic_default() -> Reconstruction {
+        Reconstruction::Density {
+            density: DensityParams::default(),
+            curve: DensityCurve::Characteristic(crate::types::CharacteristicParams::default()),
+        }
+    }
+
     /// Resolve the film base the way the orchestrator does (stage 2), so the
     /// render tests exercise the same estimate → render sequence as `cli`.
     fn resolve(img: &LinearImage, source: FilmBaseSource) -> FilmBase {
@@ -502,7 +519,12 @@ mod tests {
             black_point: 0.01,
             ..PrintParams::default()
         };
-        for reconstruction in [Reconstruction::Simple, density_default(), sigmoid_default()] {
+        for reconstruction in [
+            Reconstruction::Simple,
+            density_default(),
+            sigmoid_default(),
+            characteristic_default(),
+        ] {
             for output in [
                 legacy_output(),
                 OutputParams {
@@ -752,6 +774,571 @@ mod tests {
     }
 }
 
+/// Where a *known* tone lands in the delivered image, per display tone.
+///
+/// The question this answers: when a render looks dark, is the reconstruction placing
+/// midtones low, or is the display operator costing brightness? Those have different fixes
+/// — one belongs to the curve, the other to the render — and reasoning about it from the
+/// picture cannot separate them.
+///
+/// Synthetic and self-contained, so it runs in CI with no assets: a uniform frame is built
+/// at exactly the density the stock's datasheet calls mid-grey, pushed through the real
+/// reconstruction and display stages, and the delivered value read back.
+#[cfg(test)]
+mod midtone_placement {
+    use super::*;
+    use crate::algo::film_stock;
+    use crate::pipeline::display_tone::{DisplayTone, Headroom, KneeWidth};
+    use crate::pipeline::sdr::{self, SdrGamut};
+    use crate::types::{
+        CharacteristicParams, DensityParams, FilmBase, FilmStock, PrintParams, Reconstruction,
+    };
+
+    /// A uniform frame whose corrected density is exactly `d_prime` on every channel's own
+    /// scale — i.e. the film's own record of a neutral tone at that density above base.
+    fn uniform_at(d_prime_of: impl Fn(usize) -> f32) -> (LinearImage, FilmBase) {
+        let base = FilmBase::from([0.5, 0.25, 0.15]);
+        let b = [base.r, base.g, base.b];
+        // D' = -log10(scan / base)  =>  scan = base * 10^(-D')
+        let px: Vec<f32> = (0..3).map(|c| b[c] * 10f32.powf(-d_prime_of(c))).collect();
+        let mut rgb = Vec::new();
+        for _ in 0..16 {
+            rgb.extend_from_slice(&px);
+        }
+        (LinearImage::new(4, 4, rgb, None).unwrap(), base)
+    }
+
+    /// The datasheet mid-grey patch, per channel, for one stock.
+    fn mid_grey_patch(stock: FilmStock) -> (LinearImage, FilmBase) {
+        let sc = film_stock::curves_for(stock);
+        let [grey, _] = sc.aims.expect("a stock with a published aim table");
+        let d_min = sc.d_min.expect("a measured stock");
+        uniform_at(|c| {
+            let log_e = {
+                let t = sc.channels[0];
+                let target = grey - d_min[0];
+                let mut x = t[0].0;
+                for w in t.windows(2) {
+                    if (w[0].1 - target) * (w[1].1 - target) <= 0.0 && w[0].1 != w[1].1 {
+                        x = w[0].0 + (target - w[0].1) / (w[1].1 - w[0].1) * (w[1].0 - w[0].0);
+                        break;
+                    }
+                }
+                x
+            };
+            let t = sc.channels[c];
+            let i = t.partition_point(|p| p.0 <= log_e).clamp(1, t.len() - 1);
+            let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
+            d0 + (log_e - x0) * (d1 - d0) / (x1 - x0)
+        })
+    }
+
+    /// Where that patch is delivered under an arbitrary reconstruction and tone. `None`
+    /// when the renderer *refuses* the combination, which is itself a result worth seeing.
+    fn delivered_by(
+        reconstruction: &Reconstruction,
+        stock: FilmStock,
+        tone: DisplayTone,
+        print: &PrintParams,
+    ) -> Option<[f32; 3]> {
+        let (image, base) = mid_grey_patch(stock);
+        let shared = render_display_source(&image, &base, reconstruction, print).ok()?;
+        let out = sdr::render(&shared.shared, SdrGamut::DisplayP3, tone).ok()?;
+        let rgb = &out.image().rgb;
+        Some([rgb[0], rgb[1], rgb[2]])
+    }
+
+    /// **Extended Reinhard is now free at 0.18 and only at 0.18.** The operator absorbs
+    /// its own midtone cost by construction, so a reconstruction that lands mid-grey
+    /// *where the operator is anchored* pays nothing — but the cost was always a property
+    /// of the value received (`f(u)/v` shrinks as `v` rises), and it still is either side
+    /// of the anchor: a brighter midtone pays, a darker one is lifted. This is what makes
+    /// the fix belong in the operator rather than in a `--print-exposure` default, and
+    /// also what limits it: it corrects the placement the reconstructions actually target,
+    /// not every placement.
+    ///
+    /// Printed as a table rather than asserted per row: the sigmoid's placement depends on
+    /// its anchor and the resolved reference, so pinning its exact value here would pin
+    /// another task's defaults.
+    #[test]
+    fn reinhard_is_free_at_mid_grey_and_priced_either_side_of_it() {
+        let stock = FilmStock::Portra400;
+        let print = PrintParams::default();
+        let reinhard = DisplayTone::ExtendedReinhard(Headroom::new(4.0).unwrap());
+        // Resolve the per-channel gain from the curve, exactly as the recipe and CLI paths
+        // do. Constructing `DensityParams::default()` beside a characteristic curve would
+        // apply the parametric curves' calibration on top of one that already carries each
+        // stock's per-channel response — the double-correction `default_scale_for`
+        // documents, and the reason a table built that way reads ~0.06 stop dark on those
+        // rows for no reason connected to what it is measuring.
+        let density = |curve: crate::types::DensityCurve| Reconstruction::Density {
+            density: DensityParams {
+                scale: DensityParams::default_scale_for(curve.curve_type()),
+                ..DensityParams::default()
+            },
+            curve,
+        };
+        let sigmoid = crate::types::SigmoidParams::default();
+        let cases: [(&str, Reconstruction); 6] = [
+            (
+                "characteristic (portra-400)",
+                density(crate::types::DensityCurve::Characteristic(
+                    CharacteristicParams { stock },
+                )),
+            ),
+            (
+                "sigmoid, shipped defaults",
+                density(crate::types::DensityCurve::Sigmoid(sigmoid)),
+            ),
+            (
+                "sigmoid, shoulder 0",
+                density(crate::types::DensityCurve::Sigmoid(
+                    crate::types::SigmoidParams {
+                        shoulder: 0.0,
+                        ..sigmoid
+                    },
+                )),
+            ),
+            (
+                "sigmoid, shoulder 0 + toe 0",
+                density(crate::types::DensityCurve::Sigmoid(
+                    crate::types::SigmoidParams {
+                        shoulder: 0.0,
+                        toe: 0.0,
+                        ..sigmoid
+                    },
+                )),
+            ),
+            (
+                "characteristic (generic-c41)",
+                density(crate::types::DensityCurve::Characteristic(
+                    CharacteristicParams {
+                        stock: FilmStock::GenericC41,
+                    },
+                )),
+            ),
+            (
+                "exponential, defaults",
+                density(crate::types::DensityCurve::Exponential(
+                    crate::types::ExponentialParams::default(),
+                )),
+            ),
+        ];
+        println!(
+            "\n{:30}{:>10}{:>12}{:>12}{:>10}",
+            "reconstruction", "no tone", "shoulder", "reinhard", "cost"
+        );
+        for (name, reconstruction) in cases {
+            let none = delivered_by(&reconstruction, stock, DisplayTone::None, &print);
+            let shoulder = delivered_by(
+                &reconstruction,
+                stock,
+                DisplayTone::HermiteShoulder(KneeWidth::new(0.0).unwrap()),
+                &print,
+            );
+            let rein = delivered_by(&reconstruction, stock, reinhard, &print);
+            // Red: the tone channel, unaffected by `density.scale`'s per-channel gain.
+            let cost = match (none, rein) {
+                (Some(n), Some(r)) if r[0] > 0.0 => format!("{:.3}", (n[0] / r[0]).log2()),
+                _ => "—".to_string(),
+            };
+            let fmt = |v: Option<[f32; 3]>| match v {
+                Some(x) => format!("{:.4}", x[0]),
+                None => "refused".to_string(),
+            };
+            println!(
+                "{name:30}{:>10}{:>12}{:>12}{cost:>10}",
+                fmt(none),
+                fmt(shoulder),
+                fmt(rein)
+            );
+        }
+        // The invariant worth pinning: free at the anchor, and monotone in the value it
+        // is handed — so the sign of the cost tells you which side of 0.18 a
+        // reconstruction landed on.
+        let cost_at =
+            |v: f32| -(crate::pipeline::display_tone::extended_reinhard(v, 16.0) / v).log2();
+        assert!(
+            cost_at(0.18).abs() < 1e-4,
+            "not free at 0.18: {:.5}",
+            cost_at(0.18)
+        );
+        assert!(
+            cost_at(0.30) > cost_at(0.18) && cost_at(0.10) < cost_at(0.18),
+            "cost should rise through the anchor: {:.3}, {:.3}, {:.3}",
+            cost_at(0.10),
+            cost_at(0.18),
+            cost_at(0.30)
+        );
+    }
+
+    fn delivered(stock: FilmStock, tone: DisplayTone, print: &PrintParams) -> [f32; 3] {
+        let sc = film_stock::curves_for(stock);
+        let [grey, _] = sc.aims.expect("a stock with a published aim table");
+        let d_min = sc.d_min.expect("a measured stock");
+        // The datasheet's own mid-grey, per channel: the grey aim is red-only, so the other
+        // layers are read at the exposure that puts red there — which is what a neutral is.
+        let (image, base) = uniform_at(|c| {
+            let log_e = {
+                let t = sc.channels[0];
+                let target = grey - d_min[0];
+                let mut x = t[0].0;
+                for w in t.windows(2) {
+                    if (w[0].1 - target) * (w[1].1 - target) <= 0.0 && w[0].1 != w[1].1 {
+                        x = w[0].0 + (target - w[0].1) / (w[1].1 - w[0].1) * (w[1].0 - w[0].0);
+                        break;
+                    }
+                }
+                x
+            };
+            let t = sc.channels[c];
+            let i = t.partition_point(|p| p.0 <= log_e).clamp(1, t.len() - 1);
+            let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
+            d0 + (log_e - x0) * (d1 - d0) / (x1 - x0)
+        });
+        // **Identity per-channel gain, deliberately.** These are tests of the *display
+        // operator*, and they need a reconstruction that puts mid-grey exactly at 0.18 —
+        // extended Reinhard is free at 0.18 and only there, so measuring its cost anywhere
+        // else measures the offset instead. The default gain `[1, 0.90, 0.86]` moves this
+        // patch off 0.18 (it is calibrated for the sigmoid, which has no per-channel film
+        // model; the characteristic curve already has one). That effect is the subject of
+        // `the_default_gain_shifts_per_channel_level_on_both_curves`, not of these.
+        let reconstruction = Reconstruction::Density {
+            density: DensityParams {
+                scale: [1.0, 1.0, 1.0],
+                ..DensityParams::default()
+            },
+            curve: crate::types::DensityCurve::Characteristic(CharacteristicParams { stock }),
+        };
+        let shared = render_display_source(&image, &base, &reconstruction, print).unwrap();
+        let out = sdr::render(&shared.shared, SdrGamut::DisplayP3, tone).unwrap();
+        // **Red, not green.** The patch is uniform, so any channel reads the same *tone* —
+        // but only red's `density.scale` gain is 1, so only red measures the tone question
+        // this module is about without the per-channel calibration folded in. The colour
+        // consequence of that calibration on this path is a separate assertion below.
+        let rgb = &out.image().rgb;
+        [rgb[0], rgb[1], rgb[2]]
+    }
+
+    /// **Mid-grey survives the whole pipeline, and this is the test that located the
+    /// problem it now guards.** A datasheet mid-grey comes out of the curve at 0.18 by
+    /// construction, so the ≈0.24 stop the render used to lose was never the
+    /// reconstruction's — it was extended Reinhard's, on *every* curve. That is why the
+    /// fix went into the operator's own definition rather than into a default
+    /// `--print-exposure`, and this asserts the end-to-end result: 0.18 in, 0.18
+    /// delivered, under every tone and at every headroom.
+    #[test]
+    fn mid_grey_lands_at_eighteen_percent_through_every_display_tone() {
+        let stock = FilmStock::Portra400;
+        let print = PrintParams::default();
+        // Red only: see `delivered`. Tone is the question here.
+        let tone_of = |t, p: &PrintParams| delivered(stock, t, p)[0];
+
+        // No tone: gamut mapping and the range check still run, but nothing reshapes tone.
+        let none = tone_of(DisplayTone::None, &print);
+        assert!(
+            (none - 0.18).abs() < 0.01,
+            "reconstruction placed the datasheet's mid-grey at {none:.4}, not 0.18 — the \
+             darkness would then be the curve's, not the operator's"
+        );
+
+        // Extended Reinhard: free at mid-grey, at every headroom. Swept rather than
+        // spot-checked because the gain is a function of the white point, so "independent
+        // of the headroom" is the actual claim.
+        let reinhard = tone_of(
+            DisplayTone::ExtendedReinhard(Headroom::new(4.0).unwrap()),
+            &print,
+        );
+        let stops = (none / reinhard).log2();
+        assert!(
+            stops.abs() < 0.02,
+            "extended Reinhard cost {stops:.3} stop at mid-grey, expected none"
+        );
+        for headroom in [0.0f32, 1.0, 4.0, 6.0, 10.0] {
+            let at = tone_of(
+                DisplayTone::ExtendedReinhard(Headroom::new(headroom).unwrap()),
+                &print,
+            );
+            assert!(
+                (at - 0.18).abs() < 0.005,
+                "{headroom} stops of headroom delivered {at:.4}, not 0.18"
+            );
+        }
+
+        // The shipped shoulder tone: a knee placed well above mid-grey, so it never touched
+        // this in the first place — which is what made the loss diagnosable as the
+        // operator's rather than the pipeline's.
+        let shoulder = tone_of(
+            DisplayTone::HermiteShoulder(KneeWidth::new(0.0).unwrap()),
+            &print,
+        );
+        assert!(
+            (shoulder - 0.18).abs() < 0.01,
+            "the shoulder delivered {shoulder:.4}, not 0.18"
+        );
+        println!(
+            "mid-grey delivered (red) — none {none:.4}, shoulder {shoulder:.4}, \
+             reinhard {reinhard:.4} ({stops:.3} stop)"
+        );
+    }
+
+    /// **The `print_exposure` each candidate look needs to deliver one common mid-grey.**
+    ///
+    /// The looks pair a reconstruction with a display tone, and each pairing lands a true
+    /// mid-grey somewhere different — the sigmoid's anchor places it by its own rule while
+    /// the characteristic curve reads it off the film, and the two tones then treat it
+    /// differently again. Matching them is what makes the looks comparable by eye instead
+    /// of "one is brighter".
+    ///
+    /// Printed rather than asserted per row: the target is a **taste** (the user's approved
+    /// `+0.31` over scene mid-grey), so pinning each value here would pin a preference in a
+    /// test. What *is* asserted is that the spread between looks is real — if it were
+    /// noise, one number would serve them all and the looks would not need their own.
+    #[test]
+    fn each_candidate_look_needs_its_own_print_exposure() {
+        let print = PrintParams::default();
+        let sigmoid = crate::types::SigmoidParams::default();
+        let reinhard = DisplayTone::ExtendedReinhard(Headroom::new(6.0).unwrap());
+        let density = |curve: crate::types::DensityCurve| Reconstruction::Density {
+            density: DensityParams {
+                scale: DensityParams::default_scale_for(curve.curve_type()),
+                ..DensityParams::default()
+            },
+            curve,
+        };
+        let stock = FilmStock::Portra400;
+        // The approved look: scene mid-grey rendered 0.31 stop up.
+        let target = 0.18 * 2f32.powf(0.31);
+
+        let looks: [(&str, Reconstruction, DisplayTone); 4] = [
+            (
+                "characteristic-stock + reinhard",
+                density(crate::types::DensityCurve::Characteristic(
+                    CharacteristicParams { stock },
+                )),
+                reinhard,
+            ),
+            (
+                "characteristic-generic + reinhard",
+                density(crate::types::DensityCurve::Characteristic(
+                    CharacteristicParams {
+                        stock: FilmStock::GenericC41,
+                    },
+                )),
+                reinhard,
+            ),
+            (
+                "sigmoid knees + linear (none)",
+                density(crate::types::DensityCurve::Sigmoid(sigmoid)),
+                DisplayTone::None,
+            ),
+            (
+                "sigmoid flat + reinhard",
+                density(crate::types::DensityCurve::Sigmoid(
+                    crate::types::SigmoidParams {
+                        toe: 0.0,
+                        shoulder: 0.0,
+                        ..sigmoid
+                    },
+                )),
+                reinhard,
+            ),
+        ];
+        println!(
+            "\n  target: scene mid-grey 0.18 rendered at {target:.4} (+0.31 stop)\n\n  \
+             {:34}{:>11}{:>16}",
+            "look", "delivered", "needs exposure"
+        );
+        let mut needed = vec![];
+        for (name, reconstruction, tone) in looks {
+            let Some(rgb) = delivered_by(&reconstruction, stock, tone, &print) else {
+                println!("  {name:34}    refused");
+                continue;
+            };
+            let stops = (target / rgb[0]).log2();
+            needed.push(stops);
+            println!("  {name:34}{:>11.4}{:>+16.3}", rgb[0], stops);
+        }
+        let (lo, hi) = (
+            needed.iter().cloned().fold(f32::MAX, f32::min),
+            needed.iter().cloned().fold(f32::MIN, f32::max),
+        );
+        assert!(
+            hi - lo > 0.25,
+            "the looks needed exposures within {:.3} stop of each other — if that is real, \
+             one default would serve them all and a per-look value is unjustified",
+            hi - lo
+        );
+    }
+
+    /// **`sigmoid-knees` + no display tone cannot be brightened with `--print-exposure`,
+    /// so its brightness has to come from the anchor.**
+    ///
+    /// `--display-tone none` relies on the reconstruction being bounded at the render's own
+    /// ceiling — that is what makes the mode self-policing. `--print-exposure` is a scalar
+    /// gain applied after the curve, so *any* positive value pushes the shoulder's output
+    /// past reference white and the range check refuses the frame (measured on a real
+    /// Ektar scan at `+0.70`: "pixel 0 sits above reference white (luminance 1.6236)",
+    /// which is exactly `2^0.70`). The two knobs are incompatible by construction, not by
+    /// accident.
+    ///
+    /// The anchor is the knob that works: it moves mid-grey *within* the curve's bounded
+    /// range instead of scaling the range. This sweeps it to find the placement that lands
+    /// the shared target, and asserts the result stays renderable under `none`.
+    #[test]
+    fn the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor() {
+        let print = PrintParams::default();
+        let sigmoid = crate::types::SigmoidParams::default();
+        let target = 0.18 * 2f32.powf(0.31);
+        let at_fraction = |f: f32| {
+            let curve = crate::types::DensityCurve::Sigmoid(crate::types::SigmoidParams {
+                anchor: crate::types::AnchorPlacement::MidAtDmaxFraction(f),
+                ..sigmoid
+            });
+            delivered_by(
+                &Reconstruction::Density {
+                    density: DensityParams {
+                        scale: DensityParams::default_scale_for(curve.curve_type()),
+                        ..DensityParams::default()
+                    },
+                    curve,
+                },
+                FilmStock::Portra400,
+                DisplayTone::None,
+                &print,
+            )
+            .map(|rgb| rgb[0])
+        };
+        println!(
+            "\n  target {target:.4} — mid-grey delivered by the shouldered sigmoid under \
+             `none`,\n  as the anchor fraction moves (default is 0.5):\n"
+        );
+        let mut best = (f32::MAX, 0.0f32, 0.0f32);
+        for step in 0..=14 {
+            let f = 0.20 + 0.02 * step as f32;
+            let Some(v) = at_fraction(f) else {
+                println!("    fraction {f:.2}  refused");
+                continue;
+            };
+            let err = (v / target).log2().abs();
+            if err < best.0 {
+                best = (err, f, v);
+            }
+            println!(
+                "    fraction {f:.2}  delivers {v:.4}  ({:+.3} stop)",
+                (v / target).log2()
+            );
+        }
+        let (err, f, v) = best;
+        println!("\n  closest: fraction {f:.2} delivers {v:.4} ({err:.3} stop off target)");
+        assert!(
+            err < 0.05,
+            "no anchor fraction in 0.20..=0.48 lands the shared target; closest was \
+             {f:.2} at {v:.4}, {err:.3} stop off"
+        );
+        // ...and lowering the fraction is what brightens, which is the direction a preset
+        // has to encode. Asserted so a sign flip in `AnchorPlacement` is caught here.
+        let (lo, hi) = (at_fraction(0.30).unwrap(), at_fraction(0.50).unwrap());
+        assert!(
+            lo > hi,
+            "a lower anchor fraction should deliver a brighter mid-grey: {lo:.4} vs {hi:.4}"
+        );
+    }
+
+    /// How much per-channel *level* does the default gain move, on each curve?
+    ///
+    /// Checked because an earlier write-up claimed "≤0.06 stop, the anchoring absorbs it",
+    /// measured from whole-image means through `nc convert`. That measurement was bad: two
+    /// of the three frames sat near clipping, where the mean cannot move. On a mid-grey
+    /// patch the shift is an order of magnitude larger, and it is a **level**, not the
+    /// tilt the drift probes measure — so it is what actually decides whether the render
+    /// reads magenta.
+    #[test]
+    fn the_default_gain_shifts_per_channel_level_on_both_curves() {
+        let stock = FilmStock::Portra400;
+        let print = PrintParams::default();
+        let sigmoid = crate::types::SigmoidParams::default();
+        let identity = DensityParams {
+            scale: [1.0, 1.0, 1.0],
+            ..DensityParams::default()
+        };
+        let cases: [(&str, crate::types::DensityCurve); 2] = [
+            (
+                "characteristic",
+                crate::types::DensityCurve::Characteristic(CharacteristicParams { stock }),
+            ),
+            ("sigmoid", crate::types::DensityCurve::Sigmoid(sigmoid)),
+        ];
+        println!(
+            "\n  {:16}{:>10}{:>10}{:>10}   per-channel stops vs identity",
+            "curve", "R", "G", "B"
+        );
+        let mut worst = 0.0f32;
+        for (name, curve) in cases {
+            let at = |density: DensityParams| {
+                let reconstruction = Reconstruction::Density { density, curve };
+                delivered_by(&reconstruction, stock, DisplayTone::None, &print)
+            };
+            let (Some(base), Some(now)) = (at(identity.clone()), at(DensityParams::default()))
+            else {
+                continue;
+            };
+            let stops: Vec<f32> = (0..3).map(|c| (now[c] / base[c]).log2()).collect();
+            worst = worst.max(stops.iter().fold(0.0f32, |a, b| a.max(b.abs())));
+            println!(
+                "  {:16}{:>+10.3}{:>+10.3}{:>+10.3}",
+                name, stops[0], stops[1], stops[2]
+            );
+        }
+        assert!(
+            worst > 0.1,
+            "the gain moved per-channel level by at most {worst:.3} stop — if that is \
+             really so, the claim it is absorbed needs re-examining, not this assertion"
+        );
+
+        // The question that decides the default: on a patch that is neutral *in the
+        // scene*, does the gain make the delivered pixel more neutral or less? The
+        // datasheet mid-grey patch is exactly that patch — its three densities are the
+        // published ones at the grey aim's exposure.
+        println!(
+            "\n  {:16}{:>12}{:>12}   delivered spread (max |dev| from the mean)",
+            "curve", "identity", "default"
+        );
+        for (name, curve) in [
+            (
+                "characteristic",
+                crate::types::DensityCurve::Characteristic(CharacteristicParams { stock }),
+            ),
+            ("sigmoid", crate::types::DensityCurve::Sigmoid(sigmoid)),
+        ] {
+            let at = |density: DensityParams| {
+                delivered_by(
+                    &Reconstruction::Density { density, curve },
+                    stock,
+                    DisplayTone::None,
+                    &print,
+                )
+            };
+            let spread = |rgb: [f32; 3]| {
+                let m = (rgb[0] + rgb[1] + rgb[2]) / 3.0;
+                (0..3)
+                    .map(|c| (rgb[c] - m) / m)
+                    .fold(0.0f32, |a, b| a.max(b.abs()))
+            };
+            if let (Some(id), Some(def)) = (at(identity.clone()), at(DensityParams::default())) {
+                println!(
+                    "  {:16}{:>12.4}{:>12.4}   {:?} -> {:?}",
+                    name,
+                    spread(id),
+                    spread(def),
+                    id,
+                    def
+                );
+            }
+        }
+    }
+}
+
 /// Golden fixtures pinning the reconstruction split bit-for-bit against the
 /// **pre-split monolithic converters** (`Algorithm::{Simple,Density,Sigmoid}`).
 /// Most expected values below were captured by running the pre-refactor code on
@@ -762,8 +1349,8 @@ mod tests {
 /// contract.
 ///
 /// **Two of the twelve are not reference captures**, and the claim has to be scoped
-/// or it stops being true. `golden_sigmoid_default_is_numerically_exact` was
-/// recaptured on 2026-08-03 when the sigmoid's own defaults deliberately moved, and
+/// or it stops being true. `golden_sigmoid_at_the_reference_anchor_is_numerically_exact`
+/// was recaptured on 2026-08-03 when the sigmoid's own defaults deliberately moved, and
 /// `golden_new_default_is_bit_identical` was captured fresh from this build on
 /// 2026-08-08 for the new default render. Both honestly pin "this has not drifted
 /// since it was set", which is strictly weaker than "matches the reference
@@ -833,7 +1420,7 @@ pub(crate) mod golden {
             shadow_balance: [0.05, 0.0, -0.02],
             highlight_balance: [-0.05, 0.01, 0.0],
             balance_range: BalanceRange::Explicit([0.2, 1.6]),
-            ..DensityParams::default()
+            ..frozen_density()
         }
     }
 
@@ -879,6 +1466,22 @@ pub(crate) mod golden {
 
     const UNIT_WB: [u32; 3] = [0x3f800000; 3]; // [1.0, 1.0, 1.0]
 
+    /// The identity per-channel gain, for every capture that is **frozen** against a
+    /// reference implementation or a past build rather than tracking the live default.
+    ///
+    /// `DensityParams::default()`'s gain became `[1, 0.90, 0.86]` in `pipeline_version` 4
+    /// — a scanner calibration. A capture whose meaning is "this still agrees with the
+    /// reference implementation's arithmetic" must not absorb that: recapturing it under a
+    /// new default would keep the test green while silently deleting the agreement it
+    /// exists to prove. Only `golden_new_default_is_bit_identical` tracks the default, and
+    /// it was recaptured.
+    fn frozen_density() -> DensityParams {
+        DensityParams {
+            scale: [1.0, 1.0, 1.0],
+            ..DensityParams::default()
+        }
+    }
+
     /// The configuration the vectors below were captured under: the exponential
     /// straight line at gamma **1.0** with the anchor pinned at the old
     /// `NOMINAL_DMAX` of **2.0**.
@@ -904,7 +1507,7 @@ pub(crate) mod golden {
     /// `Reconstruction::default()`'s density knobs with [`frozen_reference_curve`].
     fn frozen_reference_config() -> Reconstruction {
         Reconstruction::Density {
-            density: DensityParams::default(),
+            density: frozen_density(),
             curve: frozen_reference_curve(),
         }
     }
@@ -999,13 +1602,22 @@ pub(crate) mod golden {
         // pins "the default has not drifted since it was set", which is what a
         // default golden can honestly claim after the default deliberately moved.
         // The reference-derived captures live in the `frozen_reference_*` goldens
-        // above and are untouched.
+        // above and are untouched — they now say `frozen_density()` explicitly, so a
+        // future default gain cannot silently rewrite what they verify.
+        //
+        // RECAPTURED 2026-09-09 (`pipeline_version` 4): `density.scale` `[1, 1, 1]` →
+        // `[1, 0.90, 0.86]`. **Red is bit-identical on all five vectors** — its gain is
+        // still 1 — and only green and blue move, which is the shape a per-channel gain
+        // should produce and a useful check that nothing else drifted with it. The
+        // mid-tone vector moves most (green ×0.796, blue ×0.700) because the sigmoid's
+        // slope is steepest there; the near-white vector barely moves (×0.991, ×0.983)
+        // since it sits on the shoulder, and the two clamped/base vectors not at all.
         assert_golden(
             Reconstruction::default(),
             PrintParams::default(),
             &[
-                0x3c23e35f, 0x3c2d03d9, 0x3c2e457f, 0x3da066cb, 0x3da68379, 0x3ddb53b4, 0x3f7f12f0,
-                0x3f7f2169, 0x3f7f2ec2, 0x3c05798b, 0x3f800000, 0x3f800000, 0x3c1928cc, 0x3c1928cc,
+                0x3c23e35f, 0x3c2a9542, 0x3c2aa7fc, 0x3da066cb, 0x3d848c78, 0x3d9999d1, 0x3f7f12f0,
+                0x3f7cc9ee, 0x3f7ae485, 0x3c05798b, 0x3f800000, 0x3f800000, 0x3c1928cc, 0x3c1928cc,
                 0x3c1928cc,
             ],
             Some(0x3fa66666), // NOMINAL_DMAX = 1.3
@@ -1065,7 +1677,7 @@ pub(crate) mod golden {
         // `dmax = none` — the scene-referred unity placement (base → 1.0).
         assert_golden(
             Reconstruction::Density {
-                density: DensityParams::default(),
+                density: frozen_density(),
                 curve: DensityCurve::Exponential(ExponentialParams {
                     gamma: 1.0,
                     dmax: DmaxSource::None,
@@ -1089,7 +1701,7 @@ pub(crate) mod golden {
         // `dmax = auto` — the demoted per-frame percentile measurement.
         assert_golden(
             Reconstruction::Density {
-                density: DensityParams::default(),
+                density: frozen_density(),
                 curve: DensityCurve::Exponential(ExponentialParams {
                     gamma: 1.0,
                     dmax: DmaxSource::Auto,
@@ -1113,7 +1725,7 @@ pub(crate) mod golden {
     /// bits rather than silently following `NOMINAL_DMAX` to 1.3.
     fn sigmoid_at_reference_anchor_2_0() -> Reconstruction {
         Reconstruction::Density {
-            density: DensityParams::default(),
+            density: frozen_density(),
             curve: DensityCurve::Sigmoid(SigmoidParams {
                 dmax: DmaxSource::Explicit(2.0),
                 ..SigmoidParams::default()

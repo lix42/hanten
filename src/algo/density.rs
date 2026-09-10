@@ -158,6 +158,7 @@ pub(super) fn reconstruct(
     // balance).
     let balance_range = regional_balance(&mut density, params)?;
 
+    let mut characteristic_out_of_table = None;
     let (film, dmax, curve_anchor) = match curve {
         DensityCurve::Exponential(exp) => {
             // Resolve the anchor once, from the (post-balance) corrected
@@ -208,6 +209,15 @@ pub(super) fn reconstruct(
             (film, dmax, curve_anchor)
         }
         DensityCurve::Sigmoid(sig) => sigmoid::apply_curve(density, sig)?,
+        DensityCurve::Characteristic(ch) => {
+            // No reference and no anchor to resolve: the published curve carries both, so
+            // the report's `dmax` / `curve_anchor` are `None` rather than a derived number
+            // that nothing consulted.
+            crate::algo::film_stock::check_tables(ch.stock)?;
+            let (film, out_of_table) = crate::algo::film_stock::apply_curve(density, ch.stock)?;
+            characteristic_out_of_table = Some(out_of_table);
+            (film, None, None)
+        }
     };
     Ok((
         film,
@@ -215,6 +225,7 @@ pub(super) fn reconstruct(
             dmax,
             curve_anchor,
             balance_range,
+            out_of_table: characteristic_out_of_table,
         },
     ))
 }
@@ -462,11 +473,39 @@ pub(crate) fn consults_balance_range(params: &DensityParams) -> bool {
     params.shadow_balance != params.highlight_balance
 }
 
+/// [`apply_curve`] with a **per-channel** tone function, for a curve whose response
+/// differs by dye layer.
+///
+/// The parametric curves share one function across all three channels; the characteristic
+/// curve does not, because the film does not — every C-41 stock measured has a blue layer
+/// 12-19% steeper than its red one. Same buffer discipline as [`apply_curve`]: in place,
+/// then through the validated constructor.
+pub(crate) fn apply_curve_per_channel(
+    density: DensityImage,
+    tone: impl Fn(usize, f32) -> f32 + Sync,
+) -> FilmRgbImage {
+    let mut rgb = density.density;
+    rgb.par_chunks_exact_mut(3).for_each(|px| {
+        for (c, v) in px.iter_mut().enumerate() {
+            *v = tone(c, *v);
+        }
+    });
+    FilmRgbImage::from_linear(
+        LinearImage::new(density.width, density.height, rgb, density.ir)
+            .expect("the curve preserves the validated buffer-length invariants"),
+    )
+}
+
 /// Stage 3 — apply a density curve `tone` (corrected density → positive
-/// linear) to every sample, minting the typed [`FilmRgbImage`] boundary. The
-/// only `FilmRgbImage` producer path — both curves and their callers route
-/// through here. Pure and unclamped; a non-finite density (or a curve output
-/// that overflows) rides through so `io::encode`'s counters surface it.
+/// linear) to every sample, minting the typed [`FilmRgbImage`] boundary.
+///
+/// The producer path for the two **parametric** curves, which apply one function to
+/// every channel. It is not the only one: the characteristic curve mints its image
+/// through [`apply_curve_per_channel`], and `simple` reconstruction
+/// (`algo::simple::convert`) builds one directly, having no density stage at all.
+///
+/// Pure and unclamped; a non-finite density (or a curve output that overflows) rides
+/// through so `io::encode`'s counters surface it.
 ///
 /// Consumes the `DensityImage` (a use-once intermediate): the density buffer is
 /// transformed in place and the IR plane is moved, so no image-sized buffer is
@@ -625,7 +664,9 @@ pub(crate) struct ReferenceDmax {
 /// (a robust central measure — the median — over the region's interior, sampled by
 /// the caller). Each channel is converted to **base-relative density**
 /// `D_c = -log10(t_c / base_c)` (raw `D` per design-spec §4; this equals the
-/// corrected density only under the default `scale = 1` / `offset = 0`), then the
+/// corrected density only under an *identity* `scale = 1` / `offset = 0`, which the
+/// parametric curves' default scale is not — `cli::explicit_dmax_domain_warning`
+/// warns when a measured value is reused across that mismatch), then the
 /// three are averaged to one **scalar** (a gray/luma reduction). Keeping `Dmax`
 /// scalar is deliberate: a per-channel anchor would apply three different gains in
 /// `10^(γ·(D′−Dmax))`, i.e. a white balance, which is the print-render stage's
@@ -1029,12 +1070,26 @@ mod tests {
 
     // --- stage 1–2: to_density -------------------------------------------------
 
+    /// `DensityParams` with an **identity** per-channel gain, for tests about the
+    /// density transform itself rather than about the shipped default.
+    ///
+    /// The default gain is `[1, 0.90, 0.86]` — a scanner calibration, not part of the
+    /// `D = −log10(scan / base)` definition — so a test asserting that definition, or
+    /// asserting that equal base fractions give equal densities, has to state the
+    /// identity or it is asserting the calibration instead.
+    fn identity_gain() -> DensityParams {
+        DensityParams {
+            scale: [1.0, 1.0, 1.0],
+            ..DensityParams::default()
+        }
+    }
+
     #[test]
     fn to_density_computes_neg_log10_ratio() {
         // base = 1 makes D = -log10(scan): 0.1 → 1, 0.01 → 2, 1.0 → 0.
         let img = pixel([0.1, 0.01, 1.0], None);
         let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let d = to_density(&img, &base, &DensityParams::default());
+        let d = to_density(&img, &base, &identity_gain());
         assert!(approx(d.density[0], 1.0, 1e-5));
         assert!(approx(d.density[1], 2.0, 1e-5));
         assert!(approx(d.density[2], 0.0, 1e-5));
@@ -1047,7 +1102,7 @@ mod tests {
         // orange (r>g>b); scan is 1/2 of base per channel.
         let base = FilmBase::from([0.5, 0.25, 0.15]);
         let img = pixel([0.25, 0.125, 0.075], None);
-        let d = to_density(&img, &base, &DensityParams::default());
+        let d = to_density(&img, &base, &identity_gain());
         let expected = -(0.5f32).log10(); // ≈ 0.30103
         for c in 0..3 {
             assert!(approx(d.density[c], expected, 1e-5), "channel {c}");
@@ -1076,7 +1131,7 @@ mod tests {
         // -inf / NaN — the epsilon floor yields a high but finite density.
         let img = pixel([0.0, -5.0, f32::MIN_POSITIVE], None);
         let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let d = to_density(&img, &base, &DensityParams::default());
+        let d = to_density(&img, &base, &identity_gain());
         for c in 0..3 {
             assert!(d.density[c].is_finite(), "channel {c} not finite");
         }
@@ -1252,21 +1307,68 @@ mod tests {
 
     #[test]
     fn convert_neutral_patch_stays_neutral() {
-        // Same fraction of each (orange) base channel → equal output channels,
-        // with default params (orange-mask removal is structural in to_density).
+        // **What "neutral in" means is the whole content of this test, and the default
+        // gain changed it.** Equal fractions of each base channel are neutral only if a
+        // neutral *scene* produces equal densities — which it does not: each layer has
+        // its own slope, so a real neutral exposes them apart. Both halves are asserted
+        // because a regression in either is a colour bug that no other test sees.
         let base = FilmBase::from([0.5, 0.25, 0.15]);
-        let img = pixel([0.2, 0.1, 0.06], None); // 0.4 × base per channel
-        let out = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            DensityCurve::default(),
-            PrintParams::default(),
-        )
-        .unwrap()
-        .out;
+        let neutral_out = |img, params| {
+            run(
+                &img,
+                &base,
+                params,
+                DensityCurve::default(),
+                PrintParams::default(),
+            )
+            .unwrap()
+            .out
+        };
+
+        // (a) Under the identity gain, equal base fractions still reconstruct neutral —
+        // the structural orange-mask removal in `to_density`, unchanged.
+        let out = neutral_out(pixel([0.2, 0.1, 0.06], None), identity_gain()); // 0.4 × base
         assert!(approx(out.rgb[0], out.rgb[1], 1e-4));
         assert!(approx(out.rgb[1], out.rgb[2], 1e-4));
+
+        // (b) Under the shipped gain, a patch carrying the **measured** channel slope
+        // ratios reconstructs neutral instead. `algo::curve_probe::sigmoid_scale`
+        // measures those ratios at green 1.115, blue 1.183 against red, and the default
+        // `[1, 0.90, 0.86]` is what cancels them — so build the patch from the ratios and
+        // assert the render neutralises it. Tolerance is 2%: the gain nulls the corpus
+        // *mean*, and the small residual (green 0.35%, blue 1.7%) is the documented
+        // "better default, not a fix".
+        let (d_r, r_g, r_b) = (0.4f32, 1.115f32, 1.183f32);
+        let transmission = |d: f32, b: f32| b * 10f32.powf(-d);
+        let img = pixel(
+            [
+                transmission(d_r, 0.5),
+                transmission(d_r * r_g, 0.25),
+                transmission(d_r * r_b, 0.15),
+            ],
+            None,
+        );
+        // Asserted as an improvement *ratio* rather than an absolute tolerance: the
+        // sigmoid's toe and shoulder are non-linear, so they amplify whatever density
+        // residual survives by a local slope that is not the nominal contrast. The claim
+        // the default makes is comparative — this patch is what it is calibrated for —
+        // so compare it against the same patch under the identity gain.
+        let spread = |out: &crate::types::LinearImage| {
+            let m = (out.rgb[0] + out.rgb[1] + out.rgb[2]) / 3.0;
+            (0..3)
+                .map(|c| (out.rgb[c] - m).abs() / m)
+                .fold(0.0f32, f32::max)
+        };
+        let corrected = spread(&neutral_out(img.clone(), DensityParams::default()));
+        let uncorrected = spread(&neutral_out(img, identity_gain()));
+        assert!(
+            corrected < uncorrected / 4.0,
+            "the default gain left {corrected:.4} spread on a scene-neutral patch              against {uncorrected:.4} uncorrected — it should cancel most of it"
+        );
+        assert!(
+            corrected < 0.05,
+            "residual spread {corrected:.4} is larger than the measurement predicts"
+        );
     }
 
     #[test]
@@ -2001,6 +2103,9 @@ mod tests {
 
     #[test]
     fn auto_anchor_maps_measured_scene_white_to_display_white() {
+        // Identity gain: this asserts *every* channel lands on 1.0, which is a statement
+        // about the anchor. The default per-channel gain makes the three densities differ,
+        // so only one channel could — a different property, pinned elsewhere.
         // End-to-end: a uniform-density image has one density value, so the auto
         // percentile equals it and the curve maps it to display white ≈ 1.0. Ties
         // the measured percentile to the curve gain (catches an anchor sign error
@@ -2008,7 +2113,7 @@ mod tests {
         let gamma = 1.8f32;
         let base = FilmBase::from([0.8, 0.8, 0.8]);
         let img = LinearImage::new(4, 1, vec![0.2f32; 12], None).unwrap(); // scan < base ⇒ D > 0
-        let dimg = to_density(&img, &base, &DensityParams::default());
+        let dimg = to_density(&img, &base, &identity_gain());
         let resolved = resolve_dmax(&dimg.density, DmaxSource::Auto);
         let out = render(dimg, gamma, resolved, [1.0; 3], &PrintParams::default());
         let dmax = resolved.unwrap();
@@ -2364,6 +2469,7 @@ mod tests {
 
     #[test]
     fn auto_wb_convert_neutralizes_a_cast_end_to_end() {
+        // Identity gain, for the reason given in `auto_wb_survives_scene_referred_no_dmax_render`.
         // A wrong (neutral) base under an orange-mask scan leaves a constant
         // per-channel cast in the positive; both auto modes must estimate gains
         // that equalize the channels of this two-tone frame.
@@ -2379,7 +2485,7 @@ mod tests {
             let converted = run(
                 &img,
                 &base,
-                DensityParams::default(),
+                identity_gain(),
                 // The **exponential** curve, named explicitly rather than taken
                 // from the default (which is now the sigmoid). This is not
                 // bookkeeping: the property under test only holds for a power law.
@@ -2487,6 +2593,9 @@ mod tests {
 
     #[test]
     fn auto_wb_survives_scene_referred_no_dmax_render() {
+        // Identity gain: white balance is a single gain per channel, so it can equalize a
+        // flat cast but not the tone-dependent one a per-channel density gain introduces.
+        // Stating the identity keeps this a test of the estimator's robustness.
         // Pins the AUTO_WB_TRIM / percentile robustness claim for scene-referred
         // output: with `DmaxSource::None` the curve is unanchored (base → 1.0,
         // detail far above — a wide dynamic range), so the analysis positive spans
@@ -2507,7 +2616,7 @@ mod tests {
             let converted = run(
                 &img,
                 &base,
-                DensityParams::default(),
+                identity_gain(),
                 exponential(1.0, DmaxSource::None),
                 PrintParams {
                     white_balance: mode,

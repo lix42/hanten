@@ -244,6 +244,11 @@ What other epics need to know about `output`:
   that failure mode rather than treat it as a bug. The selector is also the extension
   point a future tone-mapping operator plugs into: a payload variant is a pure recipe
   addition, only the CLI wiring changes (`output/display-tone-mapping`).
+  **`reinhard`'s pixels moved on 2026-09-09** (`extended-reinhard-mid-preserving-v2`):
+  it now preserves scene mid-grey at every headroom rather than mapping `W` to reference
+  white, so anything holding a rendition made under `reinhard` before that date must
+  re-render, and `headroom_stops` is the curve's scale rather than its unity point. No
+  default moved and `pipeline_version` is still 3.
 
 
 ## display-p3-output
@@ -3907,3 +3912,56 @@ Finding 20 is **pre-existing and deliberately not fixed**: `cli.rs`'s rule-3 doc
 the 9 display presets, omitting `gain-map-hdr`. Verified byte-identical at `HEAD` and outside
 this diff; the code keys on the *branch* and is correct, so only the prose is short. Left for
 its own change rather than mixed into this one.
+
+### 2026-09-09 — extended Reinhard absorbs its own midtone cost (v2)
+
+Landed under `algo/film-stock-profiles`, but it changes *this* task's operator, so it is
+recorded here. `docs/tasks/output/display-tone-mapping.md` carries a matching
+**Superseded** bullet.
+
+**What moved.** `extended_reinhard` now applies an input gain solved so `f(0.18) = 0.18` at
+every white point: `2m / ((1−m) + √((1−m)² + 4m/W²))` with `m = 0.18`. The identifier moved
+with it — `extended-reinhard-white-point-v1` → `extended-reinhard-mid-preserving-v2` — since
+the same name would otherwise cover two sets of pixels.
+
+**Why the operator and not a default `--print-exposure`.** Measured across four
+reconstructions on a datasheet mid-grey patch (`stages::midtone_placement`, Portra 400):
+the raw curve cost 0.235 stop under the sigmoid at its shipped defaults, 0.238 under the
+characteristic curve, 0.245 under a shoulder-less sigmoid, and 0.072 under the exponential
+(which places mid-grey at 0.049, far off the anchor, so it pays less). Every reconstruction
+that lands mid-grey *where it belongs* paid the same ≈0.24 stop. A cost no reconstruction
+escapes and no user asked for is the operator's, not a magic number every recipe has to
+carry.
+
+**What it cost, and why that was acceptable.** Proved that no member of this family can
+both preserve mid-grey and map `W → 1.0`: the curve's white-to-mid ratio bottoms out at
+6.17 while pinning both ends needs `1/0.18 = 5.56`. So the unity point moved to `W / gain`
+(52.48 at `W = 64`) and `f(W)` overshoots by 0.6%. That lands on the one selector
+`bounds_sdr_output()` already reports `false` for, with the loss counted at `io::encode` —
+the design accepts overshoot here by construction. Diffuse white now costs 0.86 stop rather
+than 1.00; below mid-grey the curve lifts slightly (0.09 → 0.099).
+
+**Three things the change surfaced that were not about it.**
+
+- **The gain map's encoded gain was never monotonic to the white point.** The smoothstep
+  saturates *at* `W` (zero slope, by construction) while the SDR branch's `u/W²` tail keeps
+  climbing, so the ratio turns over shortly before `W`. At gain 1 the turning point sat
+  between the test sweep's last two samples (62.07 and the exit at 64), so the grid stepped
+  straight over it and the test read as a monotonicity proof. It was measuring its own
+  sample spacing. Re-asserted as what the container actually needs: unimodal, with the
+  whole peak-to-`W` roll-off finer than one 8-bit gain-map code step (measured 9.6% of one,
+  bounded at 25%).
+- **`the_hdr_base_agrees_with_sdr_within_a_fraction_of_a_gain_code_step` was passing by
+  luck.** Its bound was `worst < 3e-4` against a measured 2.44e-4; the shared gain scales
+  the dropped tail by the same 1.219, taking it to 2.98e-4 — 1% from failing. Replaced with
+  the algebra it should always have asserted: `1 − 1/(1 + gain/W²)`.
+- **The textbook quadratic root is unusable at the top of the headroom range.** The gain's
+  rationalized form was written to avoid cancellation; the test's independent cross-check
+  used the textbook root and disagreed at `W = 2²⁴` (1.2153 against 1.2195). That is the
+  measured justification for the shipped form, so the cross-check is now scoped to
+  `W ≤ 2¹²` and says why.
+
+**Gates.** `fmt`/`clippy -D warnings`/`build`/`test` green (899 tests); `cargo doc` adds no
+unresolved link to the 16-link baseline. `PIPELINE_FINGERPRINTS` does **not** move — the
+default tone is `shoulder`, so no default render changed. The `nctool` suite's only failure
+is its own `NCTOOL_REQUIRE_DEPS` guard firing on a shell with no venv.

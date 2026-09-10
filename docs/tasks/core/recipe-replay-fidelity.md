@@ -18,7 +18,8 @@ leaves a real hole one level down.
 `algo/reference-anchored-sigmoid` (2026-08-03) is the first instance and made the hole
 concrete. It changed three sigmoid defaults — `contrast` 1.0 → ≈2.0687, `shoulder` 0.2 →
 0.6, and a new `curve.anchor` defaulting to mid-grey placement where the previous behavior
-pinned display white. The default curve is `exponential`, so:
+pinned display white. The default curve was `exponential` at the time (it became the
+sigmoid five days later, on 2026-08-08), so:
 
 - `PIPELINE_VERSION` correctly did **not** move, by its own documented contract;
 - the drift gate correctly did **not** fail, because it stops at the default recipe;
@@ -30,6 +31,25 @@ That task shipped a hand-written, `--strict`-promotable warning
 `pipeline_version_warning`. It closes that one instance and does not generalize: it names
 one knob and one date in prose, and it says nothing about the `contrast` and `shoulder`
 moves that have the identical property.
+
+**Second instance — `reconstruction.density.scale`, 2026-09-09 (`pipeline_version` 4).**
+`algo/film-stock-profiles` moved the parametric curves' per-channel density gain from
+`[1, 1, 1]` to `[1, 0.90, 0.86]`. This one *did* bump `PIPELINE_VERSION` — it moved the
+default render — and the hole survived anyway: the label rides in `meta.pipeline_version`,
+which a bare `--params` recipe does not carry, so a recipe pinning every curve knob and
+silent on the gain replayed in a different **colour** with no warning at all. The stopgap
+was widened rather than generalized: `cli::unpinned_curve` (the first instance's warning,
+since renamed from `sigmoid_anchor_default_warning` and extended to the whole curve object)
+now also reports an unstated gain, as `UnpinnedCurve::DensityScale`.
+
+Two things this instance adds to the decision below:
+
+- The two classes differ **in kind** — 2026-08-03 moved tone, this moved colour — and
+  nothing in a recipe distinguishes them, so a policy scoped to "behavior-selecting" keys
+  has to answer for both.
+- The gap was found by review, not by a failing test. That is the concrete argument for
+  option 3's *declared, tested* table over further hand-written predicates: today a new
+  default move warns only if whoever moves it remembers this function exists.
 
 **Two remedies were considered and rejected there, for reasons that should not be
 re-derived:**
@@ -76,10 +96,12 @@ Whatever is chosen must state its answer to the questions the sigmoid instance r
   `io::{decode,encode}` and hashes only the default recipe; a policy that promises more
   than the gate enforces is a promise no CI failure will keep.
 
-**Retrofit the known instance.** Whatever the policy, the three sigmoid defaults that moved
-on 2026-08-03 are its first rows / labels, and `sigmoid_anchor_default_warning` either
-becomes an instance of the general mechanism or is deleted in favour of it. Leaving a
-bespoke warning beside a general mechanism is the outcome to avoid.
+**Retrofit the known instances.** Whatever the policy, the three sigmoid defaults that
+moved on 2026-08-03 are its first rows / labels and `density.scale`'s 2026-09-09 move is
+the next, and the hand-written warning (`cli::unpinned_curve` / `curve_default_warning`,
+which is what `sigmoid_anchor_default_warning` became) either becomes an instance of the
+general mechanism or is deleted in favour of it. Leaving a bespoke warning beside a
+general mechanism is the outcome to avoid.
 
 **Boundaries.** This is about *behavior* drift under a stable recipe, not schema evolution
 (`reconstruction.schema_version` keeps versioning shape) and not the comparison metric set

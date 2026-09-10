@@ -212,8 +212,12 @@ pub struct ConversionInfo {
     pub preset: OutputPreset,
     /// Reconstruction type (`"simple"` / `"density"`).
     pub reconstruction: ReconstructionType,
-    /// The resolved density curve (`"exponential"` / `"sigmoid"`); skipped for
-    /// `simple` (no curve stage).
+    /// The resolved density curve (`"exponential"` / `"sigmoid"` /
+    /// `"characteristic"`); skipped for `simple` (no curve stage).
+    ///
+    /// The value set follows `DensityCurveType`'s serde form, so a curve added there
+    /// widens this field without a schema bump — but the doc above is hand-written and
+    /// went stale once, listing two of the three the record was already emitting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub curve: Option<DensityCurveType>,
     /// Stable 64-bit hash (hex) of the effective recipe JSON — the same bytes

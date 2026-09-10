@@ -1969,9 +1969,15 @@ fn tone_map_stage_probe() {
 /// controls are linear at their defaults and constant-luminance gamut mapping preserves
 /// luma, the rendered mid patch is `operator(gain · L_mid)` with `L_mid` measured once,
 /// so the gain that lands the mid on the benchmark's is solved on a scalar instead of
-/// re-rendering. It is also the *intended* division of labour: the task's premise is that
-/// the anchor absorbs the operator's fixed midtone cost while `W` stays a pure highlight
-/// control, so this measures exactly the configuration that premise describes.
+/// re-rendering.
+///
+/// **The premise this was built on is gone, and the probe outlived it.** It was written
+/// when the anchor was expected to absorb the operator's fixed midtone cost; the operator
+/// now absorbs it itself (`extended-reinhard-mid-preserving-v2`), so a shoulder-less
+/// reconstruction placing mid-grey at 0.18 needs no matching at all. What the probe still
+/// buys is a comparison against reconstructions that place it *elsewhere* — the sigmoid at
+/// its shipped anchor, or any exposure the user chose — where a brightness difference would
+/// otherwise be read as an operator difference.
 ///
 /// The solved gain is verified against a real render every time (`mid err`); a model this
 /// probe cannot confirm is reported as a failure rather than quietly compared.
@@ -2748,7 +2754,10 @@ fn reconstruction_shape_probe() {
 #[ignore = "requires ../nc-assets; run with --ignored --nocapture"]
 fn hdr_gain_probe() {
     use crate::pipeline::colorimetry::pinned::{ACESCG_TO_BT2020, BT2020_LUMA};
-    use crate::pipeline::display_tone::{extended_reinhard, highlight_lifted_reinhard};
+    use crate::pipeline::display_tone::{
+        extended_reinhard, extended_reinhard_raw, highlight_lifted_reinhard,
+        mid_grey_preserving_gain,
+    };
 
     const CEILING: f32 = crate::pipeline::hdr::LINEAR_HEADROOM;
 
@@ -2853,6 +2862,13 @@ fn hdr_gain_probe() {
                     let anchor = x3_reference_anchor() - gain.log10() / X3_CONTRAST;
                     let shared = x3_shared(&density, anchor);
 
+                    // The input gain the SDR branch resolves at *this* white point. The
+                    // `soft` base below must apply the same one: the curve's mid-grey
+                    // preservation is a property of `W`, not of the base's own (infinite)
+                    // white point, and taking `gain(∞)` instead is exactly how this mirror
+                    // desynchronised from the shipped operator once before.
+                    let sdr_gain = mid_grey_preserving_gain(w);
+
                     // The HDR branch's own luminance: ACEScg → BT.2020, then its luma vector.
                     let rgb = shared.source.rgb();
                     let mut hdr: Vec<f32> = Vec::with_capacity(rgb.len() / 3);
@@ -2895,13 +2911,19 @@ fn hdr_gain_probe() {
                         // `raw`: the base as written, `f(v, W)` — unbounded, because `f` is.
                         // `clamped`: that base held at reference white, which only bites
                         // above `W` (6+ stops over diffuse white, where SDR already clips).
-                        // `soft`: the asymptotic base `extended_reinhard(v, inf) = v/(1+v)`,
-                        // so the composite approaches the ceiling without attaining it. This
-                        // last one is the shipped design, reconstructed here from its parts
-                        // rather than by calling the shipped function — which is what makes
-                        // the assertion below a drift detector instead of a tautology.
+                        // `soft`: the asymptotic base — the curve's shape with no white
+                        // point, `u/(1+u)` over `u = sdr_gain · v` — so the composite
+                        // approaches the ceiling without attaining it. This last one is the
+                        // shipped design, reconstructed here from its parts rather than by
+                        // calling the shipped function, which is what makes the assertion
+                        // below a drift detector instead of a tautology. Both parts matter:
+                        // spelling it `extended_reinhard(v, inf)` supplies `gain(∞)` where
+                        // the shipped operator supplies `gain(W)`, which broke the mirror by
+                        // up to 33x the tolerance at `W = 16`.
                         let hdr_v = match base_mode {
-                            "soft" => extended_reinhard(luma, f32::INFINITY) * lift(luma),
+                            "soft" => {
+                                extended_reinhard_raw(luma, f32::INFINITY, sdr_gain) * lift(luma)
+                            }
                             "clamped" => sdr_v.min(1.0) * lift(luma),
                             _ => sdr_v * lift(luma),
                         };

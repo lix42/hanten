@@ -2205,6 +2205,80 @@ fn bad_params_are_usage_errors() {
     assert!(!out.exists(), "no output on a usage error");
 }
 
+/// An array-shaped `reconstruction.density` in a recipe is a usage error, and the object
+/// spelling's stated gain reaches the report.
+///
+/// Through the binary because that is where the defect was reproduced: `DensityParams` is
+/// a plain derive, so serde accepted the positional-array form, which deserialized
+/// successfully while `Reconstruction`'s raw-object `scale` probe read "not stated" — the
+/// stated `[1.2, 1.0, 0.8]` was overwritten by the per-curve default and the frame
+/// rendered a colour the recipe never asked for, at **exit 0** with no warning. The object
+/// half is the control: it keeps the guard from over-correcting into "ignore a stated
+/// scale".
+#[test]
+fn an_array_shaped_density_section_is_a_usage_error() {
+    let tmp = TempDir::new("density-array");
+    let recipe = |name: &str, density: &str| {
+        write_file(
+            &tmp.path(name),
+            &format!(
+                r#"{{"reconstruction":{{"type":"density","density":{density},
+                     "curve":{{"type":"characteristic"}}}},
+                   "film_base":{{"source":{{"explicit":[0.9,0.55,0.42]}}}},
+                   "output":{{"preset":"legacy"}}}}"#
+            ),
+        )
+    };
+    let array = recipe(
+        "array.json",
+        r#"[[1.2,1.0,0.8],[0,0,0],[0,0,0],[0,0,0],"auto"]"#,
+    );
+    let out = tmp.path("array.tiff");
+    let (code, _stdout, err) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--params",
+        array.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "an array-shaped `density` must exit 2: {err}");
+    assert!(
+        err.contains("reconstruction.density"),
+        "the error must name the section: {err}"
+    );
+    assert!(!out.exists(), "no output on a usage error");
+
+    // Control: the object spelling of the same gain converts and keeps it.
+    let object = recipe("object.json", r#"{"scale":[1.2,1.0,0.8]}"#);
+    let out = tmp.path("object.tiff");
+    let (code, stdout, err) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--params",
+        object.to_str().unwrap(),
+        "--report",
+        "json",
+    ]);
+    assert_eq!(
+        code, 0,
+        "the object spelling must convert:\n{stdout}\n{err}"
+    );
+    let scale = json(&stdout)["recipe"]["reconstruction"]["density"]["scale"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no resolved density.scale in the report:\n{stdout}"))
+        .iter()
+        .map(|v| (v.as_f64().unwrap() * 1000.0).round() / 1000.0)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        scale,
+        vec![1.2, 1.0, 0.8],
+        "a stated gain must survive resolution:\n{stdout}"
+    );
+}
+
 #[test]
 fn convert_is_deterministic() {
     // The project's defining contract: same inputs + params ⇒ byte-identical
@@ -4665,6 +4739,92 @@ fn roll_strict_promotes_a_warning_while_still_emitting_the_report() {
         "the promoted warning is still in the report: {report}"
     );
     assert!(err.contains("strict"), "stderr should explain: {err}");
+}
+
+/// A per-frame override that switches to the `characteristic` curve resolves that curve's
+/// **own** per-channel density gain, and the frame actually converts.
+///
+/// Two defects this pins, both of which passed every unit gate:
+///
+/// 1. The roll overlay is JSON-merged onto the *serialized* shared config, so
+///    `density.scale` is always present and `Reconstruction`'s deserialize-time resolution
+///    cannot fire. Without the explicit reset in the roll planner, a frame switched to
+///    `characteristic` kept the parametric curves' calibration `[1, 0.90, 0.86]` — applied
+///    on top of a curve that already carries each stock's per-channel response, which
+///    measured `|G/R − 1| + |B/R − 1|` rising from 0.039 to 0.185 on real frames.
+/// 2. The variant switch carried the roll's `dmax` into the new curve object, and
+///    `characteristic` has no `dmax` key — so the frame failed with "`dmax` is a
+///    parametric-curve key", naming a key the *merge* had inserted. There was no override
+///    text that worked, which made the curve unreachable from a roll manifest entirely.
+///
+/// End-to-end rather than as a unit test because both bugs live in the seam between the
+/// JSON overlay and the typed config, which is exactly what a unit test on either side
+/// misses.
+#[test]
+fn roll_per_frame_curve_switch_resolves_that_curves_own_density_gain() {
+    let tmp = TempDir::new("roll-curve-scale");
+    let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
+    let hdr = fixture("hdr-48bit.tif");
+    // Two frames: one on the roll's curve, one switched. Same input file, so any
+    // difference in the resolved recipe is the override's doing and nothing else.
+    let manifest_txt = format!(
+        r#"{{ "frames": [
+             {{ "input": {hdr:?}, "output": {shared:?} }},
+             {{ "input": {hdr:?}, "output": {switched:?},
+                "params": {{ "reconstruction": {{ "curve":
+                  {{ "type": "characteristic", "stock": "portra-400" }} }} }} }}
+           ] }}"#,
+        hdr = hdr.to_str().unwrap(),
+        shared = tmp.path("shared.tiff").to_str().unwrap(),
+        switched = tmp.path("switched.tiff").to_str().unwrap(),
+    );
+    let manifest = write_file(&tmp.path("frames.json"), &manifest_txt);
+    let (code, stdout, err) = run(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("out").to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code, 0,
+        "both frames should convert:
+{stdout}
+{err}"
+    );
+    let report = json(&stdout);
+    assert_eq!(report["summary"]["succeeded"], 2, "{stdout}");
+
+    // The resolved recipe rides in each frame's sidecar.
+    let scale_of = |path: &std::path::Path| -> Vec<f64> {
+        let txt = std::fs::read_to_string(path.with_extension("tiff.json"))
+            .unwrap_or_else(|e| panic!("no sidecar beside {}: {e}", path.display()));
+        let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+        let params = v.get("params").unwrap_or(&v);
+        params["reconstruction"]["density"]["scale"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_f64().unwrap())
+            .collect()
+    };
+    let round = |v: Vec<f64>| -> Vec<f64> {
+        v.into_iter()
+            .map(|x| (x * 1000.0).round() / 1000.0)
+            .collect()
+    };
+    assert_eq!(
+        round(scale_of(&tmp.path("shared.tiff"))),
+        vec![1.0, 0.9, 0.86],
+        "the unswitched frame keeps the parametric calibration"
+    );
+    assert_eq!(
+        round(scale_of(&tmp.path("switched.tiff"))),
+        vec![1.0, 1.0, 1.0],
+        "the switched frame must take the characteristic curve's own identity gain"
+    );
 }
 
 #[test]
@@ -8609,7 +8769,7 @@ fn the_default_output_is_the_dual_dialect_gain_map_jpeg() {
         report["output_render"]["encoding"],
         "dual-dialect-gain-map-jpeg"
     );
-    assert_eq!(report["identity"]["pipeline_version"], 3);
+    assert_eq!(report["identity"]["pipeline_version"], 4);
     let bytes = std::fs::read(&out).unwrap();
     assert_eq!(&bytes[..2], &[0xff, 0xd8], "the default writes a JPEG");
     assert!(
@@ -9036,7 +9196,7 @@ fn the_avif_report_states_which_display_tone_rendered_it() {
     );
     assert_eq!(
         rendering[1]["tone_curve"],
-        "extended-reinhard-white-point-v1"
+        "extended-reinhard-mid-preserving-v2"
     );
     // The knee is reported only where one exists — its absence is not a proxy for
     // "no tone ran", which is why `tone_curve` is the field that says so.
@@ -9576,5 +9736,427 @@ fn an_all_holder_border_falls_back_instead_of_emptying_the_search() {
             .iter()
             .any(|w| w.as_str().unwrap().contains("preserved but not used")),
         "a plane that produced no mask is unconsumed and must say so: {report}"
+    );
+}
+
+/// The characteristic curve is reachable, self-anchoring, and reports its provenance.
+///
+/// `algo/film-stock-profiles`: naming a stock selects the *measured* film response instead
+/// of a parametric model, so the report must carry which publication the numbers came from
+/// — a datasheet value is only checkable if the reader can find the sheet.
+#[test]
+fn the_characteristic_curve_renders_and_reports_its_stock_provenance() {
+    let dir = TempDir::new("characteristic-curve");
+    let out = dir.path("out.tif");
+    let (code, stdout, err) = run(&[
+        "convert",
+        "tests/fixtures/hdr-48bit.tif",
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.5,0.25,0.15",
+        "--density-curve",
+        "characteristic",
+        "--film-stock",
+        "portra-400",
+        "--report",
+        "json",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let curve = &report["reconstruction_result"]["curve"];
+    assert_eq!(curve["type"], "characteristic");
+    assert_eq!(curve["stock"]["name"], "portra-400");
+    assert_eq!(curve["stock"]["publication"], "E-4050");
+    assert!(curve["stock"]["revision"].is_string());
+    // No reference and no placement rule — and the report says so rather than naming a
+    // number the render never consulted.
+    assert!(curve["anchor"].is_null(), "{curve}");
+    assert!(curve["anchor_value"].is_null(), "{curve}");
+    assert_eq!(curve["dmax"]["policy"], "none");
+    assert!(curve["dmax"]["value"].is_null());
+    // The recipe spelling must match the flag spelling, or the emitted recipe cannot be
+    // fed back — serde's kebab-case would have written `portra400`.
+    assert_eq!(
+        report["recipe"]["reconstruction"]["curve"]["stock"],
+        "portra-400"
+    );
+    assert!(out.exists());
+}
+
+/// The emitted recipe replays the render bit-for-bit — the determinism contract, and the
+/// only thing that proves the wire spelling of a new knob actually round-trips.
+#[test]
+fn a_characteristic_curve_recipe_round_trips_byte_identically() {
+    let dir = TempDir::new("characteristic-round-trip");
+    let (first, second) = (dir.path("a.tif"), dir.path("b.tif"));
+    let (code, stdout, err) = run(&[
+        "convert",
+        "tests/fixtures/hdr-48bit.tif",
+        "-o",
+        first.to_str().unwrap(),
+        "--film-base",
+        "0.5,0.25,0.15",
+        "--density-curve",
+        "characteristic",
+        "--film-stock",
+        "gold-200",
+        "--report",
+        "json",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let recipe = dir.path("recipe.json");
+    std::fs::write(&recipe, json(&stdout)["recipe"].to_string()).unwrap();
+
+    let (code, _, err) = run_exact(&[
+        "convert",
+        "tests/fixtures/hdr-48bit.tif",
+        "-o",
+        second.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&first).unwrap(),
+        std::fs::read(&second).unwrap(),
+        "the emitted recipe did not reproduce the render"
+    );
+}
+
+/// **Every** registry stock round-trips: a recipe emitted for it reloads and reproduces
+/// the render byte-for-byte. One stock is not enough — the wire spelling is per-variant
+/// (serde's kebab-case would have written `portra400`), so a single-stock test would have
+/// passed while nine others were unloadable.
+#[test]
+fn every_film_stock_round_trips_and_renders() {
+    let dir = TempDir::new("stock-matrix");
+    let stocks = [
+        "generic-c41",
+        "ektar-100",
+        "portra-160",
+        "portra-160vc",
+        "portra-400",
+        "portra-400vc",
+        "portra-800",
+        "gold-200",
+        "ultramax-400",
+        "ultramax-800",
+    ];
+    for stock in stocks {
+        let first = dir.path(&format!("{stock}-a.tif"));
+        let (code, stdout, err) = run(&[
+            "convert",
+            "tests/fixtures/hdr-48bit.tif",
+            "-o",
+            first.to_str().unwrap(),
+            "--film-base",
+            "0.5,0.25,0.15",
+            "--density-curve",
+            "characteristic",
+            "--film-stock",
+            stock,
+            "--report",
+            "json",
+        ]);
+        assert_eq!(code, 0, "{stock}: {err}");
+        let report = json(&stdout);
+        assert_eq!(
+            report["recipe"]["reconstruction"]["curve"]["stock"], stock,
+            "{stock}: recipe spelling differs from the flag"
+        );
+        assert_eq!(
+            report["reconstruction_result"]["curve"]["stock"]["name"],
+            stock
+        );
+
+        let recipe = dir.path(&format!("{stock}.json"));
+        std::fs::write(&recipe, report["recipe"].to_string()).unwrap();
+        let second = dir.path(&format!("{stock}-b.tif"));
+        let (code, _, err) = run_exact(&[
+            "convert",
+            "tests/fixtures/hdr-48bit.tif",
+            "-o",
+            second.to_str().unwrap(),
+            "--params",
+            recipe.to_str().unwrap(),
+            "--report",
+            "none",
+        ]);
+        assert_eq!(code, 0, "{stock} replay: {err}");
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            std::fs::read(&second).unwrap(),
+            "{stock}: the emitted recipe did not reproduce the render"
+        );
+    }
+}
+
+/// Naming no stock is legal and resolves the generic C-41 profile — stock selection is a
+/// refinement, never a precondition, because most users will not know what they shot.
+#[test]
+fn the_characteristic_curve_defaults_to_the_generic_profile() {
+    let dir = TempDir::new("characteristic-generic");
+    let out = dir.path("out.tif");
+    let (code, stdout, err) = run(&[
+        "convert",
+        "tests/fixtures/hdr-48bit.tif",
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.5,0.25,0.15",
+        "--density-curve",
+        "characteristic",
+        "--report",
+        "json",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let stock = &json(&stdout)["reconstruction_result"]["curve"]["stock"];
+    assert_eq!(stock["name"], "generic-c41");
+    assert_eq!(stock["publication"], "derived");
+    // The generic is an average, not a measurement, so it carries no published D-min.
+    assert!(stock["d_min"].is_null(), "{stock}");
+}
+
+/// Every way of asking this curve to be a parametric one is a loud usage error naming a
+/// remedy that actually works — not a silently ignored flag.
+#[test]
+fn the_characteristic_curve_refuses_parametric_knobs() {
+    let dir = TempDir::new("characteristic-refusals");
+    let out = dir.path("out.tif");
+    let base = ["--film-base", "0.5,0.25,0.15"];
+    for (extra, expect) in [
+        (
+            vec!["--d-max", "1.3"],
+            "there is no reference for this flag",
+        ),
+        (vec!["--auto-d-max"], "there is no reference for this flag"),
+        (
+            vec!["--sigmoid-contrast", "2.0"],
+            "its shape is the film's own",
+        ),
+        (
+            vec!["--anchor-mid-fraction", "0.5"],
+            "it pins mid-grey where the stock's published response puts it",
+        ),
+        (
+            vec!["--density-gamma", "2.0"],
+            "its slope is the film's own",
+        ),
+    ] {
+        let mut args = vec![
+            "convert",
+            "tests/fixtures/hdr-48bit.tif",
+            "-o",
+            out.to_str().unwrap(),
+            "--density-curve",
+            "characteristic",
+        ];
+        args.extend_from_slice(&base);
+        args.extend_from_slice(&extra);
+        let (code, _, err) = run(&args);
+        assert_eq!(code, 2, "{extra:?} should be a usage error: {err}");
+        assert!(err.contains(expect), "{extra:?} said: {err}");
+        // The remedy must be a route this curve does not itself refuse — a parametric
+        // curve that *has* the knob (gamma belongs to exponential, not sigmoid), or the
+        // display stage that owns tone. Advice a branch refuses is a defect this project
+        // has shipped three times.
+        assert!(
+            err.contains("--density-curve sigmoid")
+                || err.contains("--density-curve exponential")
+                || err.contains("--display-tone"),
+            "{extra:?} gave no usable remedy: {err}"
+        );
+    }
+}
+
+/// A named-but-unknown stock fails loudly and lists what is accepted. Falling back to the
+/// generic would hide a typo behind a plausible render.
+#[test]
+fn an_unknown_film_stock_lists_the_accepted_names() {
+    let dir = TempDir::new("unknown-stock");
+    let out = dir.path("out.tif");
+    let (code, _, err) = run(&[
+        "convert",
+        "tests/fixtures/hdr-48bit.tif",
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.5,0.25,0.15",
+        "--density-curve",
+        "characteristic",
+        "--film-stock",
+        "portra-1600",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("unknown film stock `portra-1600`"), "{err}");
+    assert!(err.contains("generic-c41"), "{err}");
+    assert!(err.contains("ektar-100"), "{err}");
+}
+
+/// `--film-stock` against a parametric curve is a contradiction, not a no-op — the failure
+/// mode the tagged schema exists to prevent.
+#[test]
+fn a_film_stock_without_the_characteristic_curve_is_rejected() {
+    let dir = TempDir::new("stock-wrong-curve");
+    let out = dir.path("out.tif");
+    let (code, _, err) = run(&[
+        "convert",
+        "tests/fixtures/hdr-48bit.tif",
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.5,0.25,0.15",
+        "--film-stock",
+        "ektar-100",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("the resolved curve is sigmoid"), "{err}");
+    assert!(err.contains("--density-curve characteristic"), "{err}");
+}
+
+/// Two stocks must render differently, or the registry is decorative. Ektar and Gold 200
+/// differ by 0.09 density in where they place mid-grey above the base (0.61 vs 0.70),
+/// which is ~0.3 stop — plainly visible in the pixels.
+#[test]
+fn different_stocks_render_differently() {
+    let dir = TempDir::new("stock-differs");
+    let mut bytes = Vec::new();
+    for stock in ["ektar-100", "gold-200"] {
+        let out = dir.path(&format!("{stock}.tif"));
+        let (code, _, err) = run(&[
+            "convert",
+            "tests/fixtures/hdr-48bit.tif",
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.5,0.25,0.15",
+            "--density-curve",
+            "characteristic",
+            "--film-stock",
+            stock,
+            "--report",
+            "none",
+        ]);
+        assert_eq!(code, 0, "{stock}: {err}");
+        bytes.push(std::fs::read(&out).unwrap());
+    }
+    assert_ne!(bytes[0], bytes[1], "the stock selection changed nothing");
+}
+
+#[test]
+fn roll_warns_on_a_per_frame_film_stock_override() {
+    // The stock is the most literally roll-fixed choice in the recipe: it names the film
+    // that was in the camera. A per-frame override is applied — the frame converts — but
+    // it swaps the whole measured response for that frame (per-channel contrast *and*
+    // mid-grey placement), so it warns loudly and `--strict` promotes it. Same contract as
+    // the film-base and Dmax overrides. `hdr-48bit.tif` is IR-free, so the `--strict` half
+    // is about *this* warning and not the IR one.
+    let tmp = TempDir::new("roll-stock-override");
+    // `print_exposure: -4` is what makes the `--strict` half falsifiable, not a
+    // rendering choice. At the default exposure this frame clips ~27% of its samples
+    // through the legacy path, and that loss is a promotable warning of its own — so
+    // `--strict` exited 1 whether or not the stock override warned at all, and the
+    // control below would fail too. At -4 nothing clips and the *only* warning left is
+    // the one under test.
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{
+  "reconstruction": {
+    "type": "density",
+    "curve": { "type": "characteristic", "stock": "gold-200" }
+  },
+  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+  "print": { "print_exposure": -4 },
+  "output": { "preset": "legacy" }
+}"#,
+    );
+    let hdr = fixture("hdr-48bit.tif");
+    let manifest_txt = format!(
+        r#"{{ "frames": [
+             {{ "input": {hdr:?},
+                "params": {{ "reconstruction": {{ "curve": {{ "stock": "ektar-100" }} }} }} }}
+           ] }}"#,
+        hdr = hdr.to_str().unwrap(),
+    );
+    let manifest = write_file(&tmp.path("frames.json"), &manifest_txt);
+    // The control: the same frame and the same shared recipe, with no per-frame
+    // `params` at all.
+    let control = write_file(
+        &tmp.path("frames-control.json"),
+        &format!(
+            r#"{{ "frames": [ {{ "input": {hdr:?} }} ] }}"#,
+            hdr = hdr.to_str().unwrap(),
+        ),
+    );
+    let roll_args = |frames: &Path, out: &str, strict: bool| -> Vec<String> {
+        let mut a = vec![
+            "roll".to_string(),
+            "--frames".to_string(),
+            frames.to_str().unwrap().to_string(),
+            "--out-dir".to_string(),
+            tmp.path(out).to_str().unwrap().to_string(),
+            "--params".to_string(),
+            recipe.to_str().unwrap().to_string(),
+        ];
+        if strict {
+            a.push("--strict".to_string());
+        }
+        a
+    };
+
+    let args = roll_args(&manifest, "out", false);
+    let (code, stdout, err) = run(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(
+        code, 0,
+        "an override warns, it does not fail:\n{stdout}\n{err}"
+    );
+    let report = json(&stdout);
+    assert_eq!(
+        report["summary"]["succeeded"], 1,
+        "the frame still converts"
+    );
+    let w = report["warnings"].as_array().expect("roll-level warnings");
+    assert!(
+        w.iter().any(|m| m
+            .as_str()
+            .unwrap()
+            .contains("overriding the roll's film stock")),
+        "the per-frame stock override warns loudly: {report}"
+    );
+    assert!(
+        err.contains("overriding the roll's film stock"),
+        "warning echoed to stderr: {err}"
+    );
+
+    let args = roll_args(&manifest, "out-strict", true);
+    let (code, stdout, err) = run(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(code, 1, "--strict promotes the override warning");
+    let report = json(&stdout);
+    assert_eq!(report["summary"]["failed"], 0, "the frame converted");
+    assert!(err.contains("strict"), "stderr should explain: {err}");
+    // The promoted warning must be *this* one. Without this the assertions above pass
+    // on any promotable warning the frame happens to emit.
+    assert!(
+        err.contains("overriding the roll's film stock"),
+        "the promoted warning must be the stock override: {err}"
+    );
+
+    // Control: identical run with no per-frame override must exit 0 under `--strict`.
+    // This is what makes the two assertions above falsifiable — with the stock warning
+    // deleted entirely, they both still passed while this fails.
+    let args = roll_args(&control, "out-control", true);
+    let (code, stdout, err) = run(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(
+        code, 0,
+        "no override must leave nothing for --strict to promote:\n{stdout}\n{err}"
+    );
+    assert!(
+        json(&stdout)["warnings"]
+            .as_array()
+            .is_none_or(|w| w.is_empty()),
+        "the control run must emit no roll-level warnings: {stdout}"
     );
 }

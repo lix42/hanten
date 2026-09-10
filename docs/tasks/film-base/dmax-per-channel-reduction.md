@@ -9,6 +9,32 @@ verdict** — "the scalar is justified, close it" is a valid and useful outcome.
 behaviour change is presumed, and none ships from this task without a separate
 decision.
 
+## Input from `algo/film-stock-profiles` (2026-09-08)
+
+The per-channel question this task investigates now has published numbers behind it, and a
+second answer for named stocks.
+
+- **The datasheets say a single scalar contrast is wrong on every C-41 stock measured**:
+  blue's layer is 12–19% steeper than red's, green's 2–5%. On real scans that shows as a
+  cast growing with density — measured at **+1.26 stops per unit corrected density** for
+  blue, against +1.29 predicted.
+- **For a named stock this is already solved**, by inverting each channel's own published
+  curve (`--density-curve characteristic`): blue's residual falls to +0.09. What is left for
+  this task is the **parametric path** — users on `sigmoid`/`exponential`, who get no
+  per-channel treatment at all.
+- **The measured generic pair**, fitted over −2…+4 stops on nine stocks:
+  `density.scale = [1.000, 0.977, 0.860]`, `density.offset = [0, −0.036, −0.057]`. The
+  **gain is nearly stock-independent** (blue 0.860, range 0.850–0.887 — a 4% spread on a 14%
+  correction) and is a real improvement on `[1,1,1]`; the **offset is not** (−0.101…−0.002,
+  splitting by tier), so it should stay 0 unless a stock or a measurement supplies it.
+- **`scale` alone cannot do it**: the channels' toes sit at different exposures, so `D'_B` is
+  not a constant multiple of `D'_R` (the ratio drifts 1.25–2.43). The pair together takes
+  Portra 400's blue neutral error from ±0.16 density to ≤0.011 over −3…+5 stops.
+- **Do not derive it from roll statistics.** That is content-derived and forbidden for a
+  default, for the same reason the content-driven anchor was rejected.
+- A green residual remains on *both* paths and is not a per-channel-gain problem — see
+  `io/scanner-density-calibration`.
+
 ## Design
 
 ### What happens today

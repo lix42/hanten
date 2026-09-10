@@ -72,7 +72,11 @@ impl Headroom {
         Ok(Self(stops))
     }
 
-    /// The white point the operator maps to the branch's reference white: `2^stops`.
+    /// The curve's white-point **parameter**: `2^stops`.
+    ///
+    /// Not the input that maps to reference white — [`extended_reinhard`] preserves
+    /// mid-grey instead of pinning this value to `1.0`, so the unity point sits at
+    /// `W / gain`. It is the scale that sizes the curve, which is what the knob names.
     pub fn white_point(self) -> f32 {
         crate::types::headroom_white_point(self.0)
     }
@@ -115,33 +119,113 @@ impl KneeWidth {
 pub const NO_TONE_CURVE: &str = "no-tone-curve-v1";
 
 /// Pinned identifier for a rendition tone-mapped by extended Reinhard.
-pub const EXTENDED_REINHARD: &str = "extended-reinhard-white-point-v1";
-
-/// Extended Reinhard: `v · (1 + v/W²) / (1 + v)`.
 ///
-/// `white_point` is the input mapping **exactly** to `1.0`. Two properties shape every
-/// caller: it is **not bounded** (the value tends to `v/W²`, so `f(200)` at `W = 64` is
-/// `1.04`), and it is **global rather than a knee** — `f(0.18) = 0.153` and
-/// `f(1.0) = 0.500` at `W = 64`, so it moves the whole curve. That fixed ≈0.24-stop
-/// midtone cost belongs to the operator, essentially independent of the white point
-/// (0.238 stop at `W = 16`, 0.239 at `W = 64`), which is why comparing it against
-/// another operator requires matching brightness first.
+/// **v2 since the operator absorbed its own midtone cost** — v1 delivered mid-grey 0.24
+/// stop dark, v2 delivers it at 0.18. Same shape, different pixels, so the identifier
+/// moves: a consumer comparing two renders needs to know which operator produced them,
+/// and `extended-reinhard` alone no longer says.
+pub const EXTENDED_REINHARD: &str = "extended-reinhard-mid-preserving-v2";
+
+/// Extended Reinhard: `u · (1 + u/W²) / (1 + u)` over `u = gain · v`.
+///
+/// **Mid-grey is preserved: `f(0.18) = 0.18` at every white point**, which is what
+/// [`mid_grey_preserving_gain`] buys and why the input gain exists at all. `white_point`
+/// therefore sizes the curve without being its unity point — the value mapping to `1.0`
+/// is `W / gain` (52.48 at `W = 64`, 13.13 at `W = 16`), and `f(W)` overshoots slightly
+/// (1.0062 at `W = 64`, 1.0236 at `W = 16`). Two further properties shape every caller:
+/// it is **not bounded** (the value tends to `gain · v/W²`, so `f(200)` at `W = 64` is
+/// `1.06`), and it is **global rather than a knee** — `f(1.0) = 0.550` at `W = 64`, so it
+/// moves the whole curve between mid-grey and white rather than only the top.
 ///
 /// Monotonic for every `W > 0` over `v >= 0`: the derivative is
-/// `[1 + (2v + v²)/W²] / (1 + v)²`, positive throughout. Monotonic is not the same as
+/// `gain · [1 + (2u + u²)/W²] / (1 + u)²`, positive throughout. Monotonic is not the same as
 /// representable — the f64 result tends to `v/W²`, so a tiny white point overflows f32
 /// on bright input. [`Headroom`] bounds `W` from below at `2^0 = 1`, which keeps it in
 /// range; the renderers' non-finite checks are the backstop.
 pub fn extended_reinhard(value: f32, white_point: f32) -> f32 {
+    extended_reinhard_raw(value, white_point, mid_grey_preserving_gain(white_point))
+}
+
+/// The curve itself, with the input gain supplied by the caller.
+///
+/// Split out for one reason: the HDR branch's base uses this curve's *shape* with no white
+/// point ([`highlight_lifted_reinhard`]) but must apply the **same** gain as the SDR branch
+/// it is paired with — a gain-map's two renditions are ratioed against each other, so a
+/// difference between them shows up as encoded gain. Computing the gain once, from the real
+/// white point, and handing it to both keeps their only disagreement the documented
+/// `v/W²` tail.
+///
+/// `pub(crate)` for its second, test-only caller: `pipeline::shadow_metrics::hdr_gain_probe`
+/// hand-builds the shipped HDR operator from these two parts and asserts it equals
+/// [`highlight_lifted_reinhard`], which is a drift detector only as long as the probe does
+/// *not* call that function. Building the mirror out of `extended_reinhard` instead gives it
+/// `gain(∞)` where the shipped operator uses `gain(W)`, and the two disagree by up to 33x
+/// the assertion's tolerance.
+pub(crate) fn extended_reinhard_raw(value: f32, white_point: f32, gain: f64) -> f32 {
     if value <= 0.0 {
         return 0.0;
     }
     // Binary64 so a large `v` cannot lose the `v/W²` term to rounding before the
     // division. Multiply and divide are IEEE-exact, so this is bit-reproducible across
     // targets — unlike a transcendental, which is why no `powf` appears here.
-    let v = f64::from(value);
+    let v = f64::from(value) * gain;
     let w = f64::from(white_point);
     (v * (1.0 + v / (w * w)) / (1.0 + v)) as f32
+}
+
+/// Scene mid-grey: an 18 % reflector on a correctly exposed frame.
+///
+/// The reconstruction places it here by construction (`algo::film_stock` builds each
+/// stock's exposure axis so its published grey aim inverts to this), so it is the tone
+/// operator's obligation to leave it alone.
+const MID_GREY: f64 = 0.18;
+
+/// The input gain that makes [`extended_reinhard`] deliver [`MID_GREY`] *at* mid-grey.
+///
+/// **Why the operator carries this rather than the user.** The raw curve costs a fixed
+/// ≈0.24 stop at mid-grey — 0.238 at `W = 16`, 0.239 at `W = 64` — so every render through
+/// it came out that much dark, on *every* reconstruction: measured 0.235 (sigmoid at its
+/// shipped defaults), 0.238 (characteristic), 0.245 (shoulder-less sigmoid). A fixed cost
+/// that no reconstruction escapes and no user asked for is the operator's to absorb; left
+/// outside, it becomes a magic `--print-exposure 0.28` that every user and every recipe has
+/// to know. `pipeline::stages::midtone_placement` pins the measurement.
+///
+/// Solving `f(x) = MID_GREY` for the raw curve gives `x² + (1−m)W²x − mW² = 0`, hence the
+/// closed form below; the gain is `x / m`. Two properties matter:
+///
+/// - **`W = 1` returns exactly 1**, so `--display-tone-headroom 0` stays the exact identity
+///   it is documented to be (the raw curve is already the identity there, and the algebra
+///   agrees: `x = m`). Computed in binary64, the residual is ~1e-16 and vanishes in the
+///   `f32` round-trip, so the identity holds bit-for-bit.
+/// - **It moves the unity point.** The value now mapping to `1.0` is `W / gain`, not `W`.
+///   That trade is forced: the curve's white-to-mid ratio cannot go below 6.17 for any
+///   `W`, while preserving both endpoints would need 1/0.18 = 5.56, so no member of this
+///   family fixes mid-grey *and* pins `W` to 1.0. Overshoot is already this tone's
+///   documented behaviour — it is the one curve [`DisplayTone::bounds_sdr_output`] reports
+///   `false` for, with the loss counted at `io::encode` — so the cost lands where the
+///   design already accepts it.
+///
+/// `pub(crate)` for the same reason as [`extended_reinhard_raw`] — see the note there.
+pub(crate) fn mid_grey_preserving_gain(white_point: f32) -> f64 {
+    // Written in the rationalized form `2m / ((1−m) + √((1−m)² + 4m/W²))` rather than the
+    // textbook quadratic root, and the reason is cancellation, measured: the textbook form
+    // is `(−b + √(b² + …))/2` with `b = (1−m)W²`, which at `W = 16` subtracts 209.92 from
+    // 210.36 and throws away three digits. The loss grows with `W` and bites *inside* the
+    // admissible range — past `W ≈ 2¹²` the `4mW²` term stops surviving beside `b²`, so at
+    // `MAX_HEADROOM_STOPS` (`W = 2²⁴`) the textbook root returns 1.2153 against the correct
+    // 1.2195. `mod tests`' `reference_gain` spells that form out and is checked against this
+    // one only over `stops <= 12`, for exactly that reason.
+    //
+    // This form has no subtraction at all, and it stays finite in the limit besides: at
+    // `W = ∞` the textbook root is `∞ − ∞`, i.e. **NaN**, while this one tends to
+    // `1/(1−m)`, the pure-Reinhard answer. No caller reaches that limit today — `Headroom`
+    // bounds `W` at `2²⁴`, and the HDR base's `f32::INFINITY` goes to
+    // `extended_reinhard_raw`'s *white point* while its gain comes from the finite paired
+    // one (see `highlight_lifted_reinhard`) — so it is a property of the form rather than
+    // a case in the render path.
+    let inv_w2 = 1.0 / (f64::from(white_point) * f64::from(white_point));
+    let k = 1.0 - MID_GREY;
+    2.0 / (k + (k * k + 4.0 * MID_GREY * inv_w2).sqrt())
 }
 
 impl DisplayTone {
@@ -281,30 +365,40 @@ impl DisplayTone {
     }
 }
 
-/// Extended Reinhard plus a smooth highlight lift, for a branch with headroom above
-/// reference white.
+/// An **asymptotic** Reinhard base plus a smooth highlight lift, for a branch with
+/// headroom above reference white.
 ///
-/// `g(v) = f(v) · (1 + (ceiling − 1)·s(v))`, where `f` is [`extended_reinhard`] at the
-/// **same** `white_point` the SDR branch uses and `s` ramps from `0` at `crossover` to
-/// `1` at `white_point`.
+/// `g(v) = b(v) · (1 + (ceiling − 1)·s(v))`, where `s` ramps from `0` at `crossover` to
+/// `1` at `white_point`, and `b` is [`extended_reinhard`]'s shape with **no white point**
+/// carrying the input gain of the SDR branch it is paired with —
+/// `extended_reinhard_raw(v, ∞, mid_grey_preserving_gain(white_point))`. The base is
+/// asymptotic rather than the SDR curve so the multiplicative lift cannot leave the
+/// ceiling; the body's opening comment holds the measurement that settled that, and the
+/// shared gain is `extended_reinhard_raw`'s reason for existing.
 ///
 /// **Why this shape and not a ceiling-parameterized Reinhard.** A gain map is only
 /// meaningful when the two renditions agree below diffuse white and differ above it — the
-/// ratio must be exactly `1` in the midtones. Both obvious generalizations fail that:
-/// `v(1 + vC/W²)/(1 + v/C)` and `C·f(v/C)` each lift mid-grey ≈14% and diffuse white ≈66%,
-/// because their denominators compress less *everywhere* rather than only in highlights.
-/// This form is `1 · f(v)` below `crossover` **by construction**, so the agreement is
-/// exact rather than approximate.
+/// ratio must be `1` in the midtones. Both obvious generalizations fail that:
+/// `v(1 + vC/W²)/(1 + v/C)` and `C·f(v/C)` each lift mid-grey ≈14% and diffuse white ≈66%
+/// (`f` being the SDR branch's [`extended_reinhard`] at `white_point`), because their
+/// denominators compress less *everywhere* rather than only in highlights. Here the lift
+/// is identically zero below `crossover`, so what renders there is the bare base — and
+/// that agreement with `f` is **near-exact, not exact**: `b` drops `f`'s `v/W²` tail. What
+/// makes the difference immaterial is that it stays a fraction of one 8-bit gain-map code
+/// step, so the *encoded* gain is still exactly 1.
+/// `the_hdr_base_agrees_with_sdr_within_a_fraction_of_a_gain_code_step` pins the bound,
+/// the figure, and its algebra.
 ///
-/// That also means **the operator is the gain map**: `g/f` is exactly
-/// `1 + (ceiling − 1)·s(v)`, so the HDR rendition is defined as the SDR rendition plus
-/// recovered highlight headroom — which is what the container encodes.
+/// **The operator is the gain map**, to that same tolerance: `g/b` is exactly
+/// `1 + (ceiling − 1)·s(v)`, so the HDR rendition is the SDR rendition plus recovered
+/// highlight headroom — which is what the container encodes.
 ///
-/// Monotonic wherever `f` is, being a product of two non-decreasing factors, and
-/// **unbounded above `white_point`** for the same reason `f` is, so a branch using it
-/// reports `bounds_sdr_output() == false` and its overshoot is counted at the encode
-/// boundary. Note the HDR branch reports `bounds_hdr_output() == true` for the same tone —
-/// the lifted form is bounded there — which is why the two predicates are separate.
+/// Monotonic wherever `b` is, being a product of two non-decreasing factors, and
+/// **bounded**: `b < 1` at every finite input, so the composite stays strictly under
+/// `ceiling` and never attains it. That is what [`DisplayTone::bounds_hdr_output`] reports
+/// `true` on. The *SDR* branch of the same selector runs `f` instead, which is unbounded,
+/// so [`DisplayTone::bounds_sdr_output`] reports `false` — one operator per branch, which
+/// is why those are two predicates rather than one.
 ///
 /// `ceiling` is a parameter, never a literal: the 1000/203 headroom is binding policy
 /// owned by `hdr::LINEAR_HEADROOM` and `docs/hdr-output-spike.md`. `crossover` is stated
@@ -333,9 +427,9 @@ pub fn highlight_lifted_reinhard(
     // neither failure: peak 4.912–4.919, strictly *below* the ceiling and never attaining
     // it, with separation preserved everywhere.
     //
-    // Its cost is dropping `f`'s `v/W²` tail, so the base disagrees with the SDR branch's
-    // below the crossover — by at most **0.0244%**, at the crossover itself. One 8-bit
-    // gain-map code step over `[1, ceiling]` is a factor of 1.00627, **25.7x larger**, so
+    // Its cost is dropping `f`'s `u/W²` tail, so the base disagrees with the SDR branch's
+    // below the crossover — by at most **0.0298%**, at the crossover itself. One 8-bit
+    // gain-map code step over `[1, ceiling]` is a factor of 1.00627, **21.1x larger**, so
     // the *encoded* gain is still exactly 1 and the two renditions agree as far as the
     // container can express. Stated as a ratio rather than as "negligible" so the next
     // person can re-check it.
@@ -355,7 +449,7 @@ pub fn highlight_lifted_reinhard(
     if white_point <= crossover {
         return value;
     }
-    let base = extended_reinhard(value, f32::INFINITY);
+    let base = extended_reinhard_raw(value, f32::INFINITY, mid_grey_preserving_gain(white_point));
     // Below the crossover the lift is identically zero, so this returns the base
     // unchanged. Also the guard that keeps `log2` off non-positive input.
     if value <= crossover || ceiling <= 1.0 {
@@ -406,10 +500,14 @@ mod tests {
             );
         }
         // Pinned so a regression that widens the gap shows up as a number, not a pass:
-        // the worst case is at the crossover and measured 0.0244%.
+        // the worst case is at the crossover, where the deficit is exactly
+        // `1 − 1/(1 + gain/W²)`, and measures 0.0298%. (It was 0.0244% before the shared
+        // input gain scaled the dropped tail by the same 1.219 — a bound of `< 3e-4` was
+        // then 1% from failing, which is why this one states the algebra.)
+        let expected = 1.0 - 1.0 / (1.0 + mid_grey_preserving_gain(w) / f64::from(w * w));
         assert!(
-            worst > 1e-5 && worst < 3e-4,
-            "worst disagreement {worst:.6} is not the documented ≈2.44e-4"
+            (f64::from(worst) - expected).abs() < 1e-6,
+            "worst disagreement {worst:.6} is not the predicted {expected:.6}"
         );
         // Non-positive input stays black rather than reaching `log2`.
         assert_eq!(highlight_lifted_reinhard(-1.0, w, xo, c), 0.0);
@@ -422,7 +520,11 @@ mod tests {
     #[test]
     fn the_lift_saturates_at_the_white_point_while_the_composite_stays_below_the_ceiling() {
         let (w, xo, c) = (64.0f32, 1.0f32, 4.926_108f32);
-        let base = extended_reinhard(w, f32::INFINITY);
+        // The base carries the *paired SDR branch's* gain, not its own — that sharing is
+        // what keeps the encoded gain at 1 below the crossover, so spell it the same way
+        // the operator does rather than through `extended_reinhard(_, INFINITY)`.
+        let base_at = |v: f32| extended_reinhard_raw(v, f32::INFINITY, mid_grey_preserving_gain(w));
+        let base = base_at(w);
         let got = highlight_lifted_reinhard(w, w, xo, c);
         assert!(
             (got - base * c).abs() < 1e-4,
@@ -433,19 +535,30 @@ mod tests {
         // A ceiling of 1 is no headroom at all, so the operator degenerates to its base.
         assert_eq!(
             highlight_lifted_reinhard(8.0, w, xo, 1.0).to_bits(),
-            extended_reinhard(8.0, f32::INFINITY).to_bits()
+            base_at(8.0).to_bits()
         );
     }
 
     /// The gain itself — `hdr/sdr`, which is what the container stores — is 1 to within a
-    /// code step below the crossover, rises monotonically above it, and never exceeds the
-    /// ceiling.
+    /// code step below the crossover, rises above it, and never exceeds the ceiling.
+    ///
+    /// **"Rises" is bounded by the container, not by strict monotonicity**, and that is a
+    /// property of the operator rather than a relaxation. The smoothstep saturates *at*
+    /// the white point (zero slope there, by construction), while the SDR branch's
+    /// `u/W²` tail keeps climbing — so the ratio turns over shortly before `W` and eases
+    /// back. It always has: at gain 1 the turning point sat between this sweep's last two
+    /// samples, so the old grid stepped straight over it. What the gain map needs is not
+    /// a monotonic ratio but one whose dip is unresolvable in 8 bits, so that is what is
+    /// asserted — measured at 9.6% of a code step over the whole roll-off.
     #[test]
-    fn the_encoded_gain_rises_monotonically_and_only_above_the_crossover() {
+    fn the_encoded_gain_rises_and_never_falls_by_a_resolvable_step() {
         let (w, xo, c) = (64.0f32, 1.0f32, 4.926_108f32);
-        let budget = (c.powf(1.0 / 255.0) - 1.0) / 10.0;
+        let step = c.powf(1.0 / 255.0) - 1.0;
+        let budget = step / 10.0;
         let gain = |v: f32| highlight_lifted_reinhard(v, w, xo, c) / extended_reinhard(v, w);
         let mut previous = 0.0f32;
+        let mut peak = 0.0f32;
+        let mut falling = false;
         let mut v = 0.01f32;
         while v <= w {
             let g = gain(v);
@@ -462,14 +575,30 @@ mod tests {
                     "gain must encode as 1 below the crossover (v = {v}, got {g})"
                 );
             } else {
-                assert!(
-                    g >= previous - 1e-6,
-                    "gain fell at {v}: {g} after {previous}"
-                );
+                // Unimodal, asserted as such: rising until the turning point, easing
+                // back after it, never wobbling. A dip that later recovered would mean
+                // the lift and the tail are fighting somewhere in the middle of the
+                // ramp, which is a different defect from the roll-off at the top.
+                if falling {
+                    assert!(g <= previous + 1e-6, "gain rose again at {v} after falling");
+                } else if g < previous - 1e-6 {
+                    falling = true;
+                }
+                peak = peak.max(g);
                 previous = g;
             }
             v *= 1.05;
         }
+        // The whole roll-off, peak to white point, must be finer than the container can
+        // resolve — that is the real requirement the old monotonicity assertion stood in
+        // for. A fine sweep puts the peak at v = 60.0 and the drop at 9.6% of a code
+        // step; bounded at a quarter of one, so a regression that grew it 2.6x fails.
+        let drop = (peak - gain(w)) / peak;
+        assert!(
+            drop > 0.0 && drop < step / 4.0,
+            "the gain rolled off by {drop:.2e}, against a quarter code step of {:.2e}",
+            step / 4.0
+        );
         assert!(gain(w) > c - 0.1, "the gain never approached the ceiling");
     }
 
@@ -589,18 +718,34 @@ mod tests {
         }
     }
 
-    /// `f(v) = v(1 + v/W²)/(1 + v)` in binary64, for cross-checking the shipped f32
-    /// entry point against the algebra its docs state.
+    /// `f(u) = u(1 + u/W²)/(1 + u)` over `u = gain · v`, in binary64 — the curve's
+    /// algebra as its docs state it, for cross-checking the shipped f32 entry point.
+    /// Takes the shipped gain on purpose: this checks the *curve*, and
+    /// [`reference_gain`] separately checks the gain.
     fn reference(v: f64, w: f64) -> f64 {
-        v * (1.0 + v / (w * w)) / (1.0 + v)
+        let u = v * mid_grey_preserving_gain(w as f32);
+        u * (1.0 + u / (w * w)) / (1.0 + u)
+    }
+
+    /// `x/m` where `x` solves `x² + (1−m)W²x − mW² = 0`, spelled the textbook way —
+    /// an independent derivation of [`mid_grey_preserving_gain`], usable only over
+    /// moderate white points. Above `W ≈ 2¹²` the `4mW²` term stops surviving beside
+    /// `b²` and this returns a visibly wrong gain (1.2153 against 1.2195 at
+    /// `W = 2²⁴`), which is the measured reason the shipped form is rationalized.
+    fn reference_gain(w: f64) -> f64 {
+        let b = (1.0 - MID_GREY) * w * w;
+        ((-b + (b * b + 4.0 * MID_GREY * w * w).sqrt()) / 2.0) / MID_GREY
     }
 
     #[test]
-    fn the_white_point_maps_exactly_to_reference_white() {
-        // The operator's defining property, and the reason the parameter is spelled as
-        // a white point at all: input `W` lands on `1.0`, so "how many stops of specular
-        // headroom" is a promise about where diffuse-white-plus-N-stops ends up.
-        // Exactly, not approximately — `W·(1 + W/W²) = W + 1` cancels the denominator.
+    fn mid_grey_is_preserved_and_the_unity_point_moves_by_the_gain() {
+        // The operator's defining property since v2, and it replaced the older one: the
+        // parameter is still spelled as a white point, but what is now exact is
+        // **mid-grey**, not `f(W) = 1`. No member of this family can do both — the curve's
+        // white-to-mid ratio bottoms out at 6.17 while pinning both ends needs
+        // `1/0.18 = 5.56` — so the unity point moves to `W / gain` and `f(W)` overshoots
+        // slightly. Both halves are asserted, because a future change must move them
+        // together.
         for stops in [
             0.0f32,
             1.0,
@@ -610,12 +755,40 @@ mod tests {
             crate::types::MAX_HEADROOM_STOPS,
         ] {
             let w = Headroom::new(stops).unwrap().white_point();
+            let gain = mid_grey_preserving_gain(w) as f32;
+            let moderate = stops <= 12.0;
             assert_eq!(
-                extended_reinhard(w, w),
-                1.0,
-                "{stops} stops (W = {w}) did not map its white point to 1.0"
+                extended_reinhard(0.18, w),
+                0.18,
+                "{stops} stops (W = {w}) did not preserve mid-grey"
+            );
+            // Independently derived, so the closed form is checked and not just echoed
+            // — over the range where the textbook root is still accurate. See
+            // `reference_gain`: past `W ≈ 2¹²` it is the one that is wrong.
+            assert!(
+                !moderate
+                    || (mid_grey_preserving_gain(w) - reference_gain(f64::from(w))).abs() < 1e-9,
+                "W = {w}: {} vs textbook {}",
+                mid_grey_preserving_gain(w),
+                reference_gain(f64::from(w))
+            );
+            // `W = 1` is the exact identity, so its unity point is still `W` itself.
+            let unity = w / gain;
+            assert!(
+                (extended_reinhard(unity, w) - 1.0).abs() < 1e-6,
+                "{stops} stops: {unity} should map to 1.0, got {}",
+                extended_reinhard(unity, w)
+            );
+            assert!(
+                extended_reinhard(w, w) >= 1.0,
+                "{stops} stops: `f(W)` fell below reference white"
             );
         }
+        // The overshoot at `W` itself, pinned as numbers so "slightly" is checkable.
+        let near = |a: f32, b: f32| assert!((a - b).abs() < 5e-4, "{a} != {b}");
+        near(extended_reinhard(64.0, 64.0), 1.0062);
+        near(extended_reinhard(16.0, 16.0), 1.0236);
+        near(64.0 / mid_grey_preserving_gain(64.0) as f32, 52.483);
     }
 
     #[test]
@@ -647,20 +820,25 @@ mod tests {
         let w = Headroom::new(6.0).unwrap().white_point();
         assert_eq!(w, 64.0);
         let near = |a: f32, b: f32| assert!((a - b).abs() < 5e-4, "{a} != {b}");
-        near(extended_reinhard(0.18, w), 0.153);
-        near(extended_reinhard(1.0, w), 0.500);
-        // The midtone cost is a property of the operator, not of the white point: ≈0.238
-        // stop at `W = 16` and at `W = 64` alike (they differ by 0.001 stop), which is
-        // why raising the headroom does not buy the midtones back. The claim is that the
-        // two barely move, so assert their *difference*, not just each value.
-        let cost = |w: f32| -(extended_reinhard(0.18, w) / 0.18).log2();
-        assert!((cost(16.0) - 0.238).abs() < 5e-3, "{}", cost(16.0));
-        assert!((cost(64.0) - 0.238).abs() < 5e-3, "{}", cost(64.0));
+        near(extended_reinhard(1.0, w), 0.5496);
+        near(extended_reinhard(0.5, w), 0.3788);
+        // What v2 changed and what it did not. Mid-grey is now free — the cost that used
+        // to be ≈0.238 stop at every white point is zero at every white point — but the
+        // tone above it is still compressed, and that is what "global rather than a
+        // knee" means: diffuse white pays 0.86 stop with no knee anywhere near it. A
+        // Hermite shoulder at the default knee leaves `f(1.0)` untouched.
+        let cost = |v: f32, w: f32| -(extended_reinhard(v, w) / v).log2();
+        for w in [16.0f32, 64.0] {
+            assert!(cost(0.18, w).abs() < 1e-5, "W = {w}: {}", cost(0.18, w));
+        }
+        assert!((cost(1.0, w) - 0.864).abs() < 5e-3, "{}", cost(1.0, w));
+        // Below mid-grey it *lifts* rather than compressing — the gain is a plain input
+        // multiplier and the `1/(1 + u)` denominator has barely engaged — so the
+        // shadows are not simply "less compressed", they move the other way.
         assert!(
-            (cost(16.0) - cost(64.0)).abs() < 2e-3,
-            "the midtone cost tracked the white point: {} vs {}",
-            cost(16.0),
-            cost(64.0)
+            cost(0.09, w) < 0.0,
+            "shadows should lift: {}",
+            cost(0.09, w)
         );
     }
 
@@ -671,7 +849,7 @@ mod tests {
         let w = 64.0;
         assert!(extended_reinhard(200.0, w) > 1.0);
         let near = |a: f32, b: f32| assert!((a - b).abs() < 5e-3, "{a} != {b}");
-        near(extended_reinhard(200.0, w), 1.04);
+        near(extended_reinhard(200.0, w), 1.0552);
         // ...and the shipped resolution reports exactly that, so the renderers can key
         // their range policy off it rather than off the variant name.
         let reinhard = DisplayTone::ExtendedReinhard(Headroom::new(6.0).unwrap());

@@ -113,11 +113,34 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   color-fidelity rule. Don't collapse them.
 - Algorithms are pluggable behind the tagged `reconstruction` recipe object:
   `algo::reconstruct` resolves it into `simple` or `density` reconstruction
-  (density selecting a `sigmoid` (default since `pipeline_version` 2) or
-  `exponential` curve);
+  (density selecting a `sigmoid` (default since `pipeline_version` 2), an
+  `exponential`, or a `characteristic` curve — the last inverts a named film stock's
+  *published* per-channel curve instead of modelling it (`--film-stock`, ten digitized
+  stocks in `algo/film_stock`, sheets in `docs/datasheets/`) and therefore resolves
+  **no reference density and no anchor**, so `dmax()` reports `None` and `anchor()`
+  returns `Option`);
   `algo::finish_print` is the stage-4 print bridge. The old `Converter` trait and
   `AlgoParams` are gone.
-  **`AnchorPlacement` (`reconstruction.curve.anchor`) is carried by both curves**,
+  **`density.scale`'s default is per-curve, and constructing one by hand is a trap.**
+  `DensityParams::default_scale_for` is the single definition: `[1, 0.90, 0.86]` for the
+  parametric curves (a scanner calibration — green and blue density rise ~11-18% faster
+  than red in a scan) and `[1, 1, 1]` for `characteristic`, which already carries each
+  stock's per-channel structure and would otherwise be corrected twice (measured: channel
+  means move 0.039 → 0.185 off neutral). It is resolved in **three** places — the recipe's
+  `Deserialize` (reading key *presence* off the raw JSON, since the field is a concrete
+  `[f32; 3]`), the `--density-curve` merge arm (which must stay *before* the
+  `--density-scale` arm so an explicit gain still wins), and the `roll` planner by hand
+  (the overlay is merged onto the **serialized** shared config, so the key is always
+  present and deserialize-time resolution cannot fire). A `Reconstruction::Density`
+  built in code gets none of that: pair a characteristic curve with
+  `default_scale_for(curve.curve_type())`, not `DensityParams::default()`.
+  Also `--display-tone none` **in practice refuses a `characteristic` render of ordinary
+  picture content** — the curve hands the display scene-referred exposure (p99.99 = +3.64
+  stops over diffuse white) and `pipeline::sdr`'s per-pixel range check rejects the frame.
+  It is a *content* refusal, not a `validate` rule: there is no combination rule at all,
+  and dark enough content (`--print-exposure=-3` on the test fixture) renders at exit 0.
+  **`AnchorPlacement` (`reconstruction.curve.anchor`) is carried by both *parametric*
+  curves** (`characteristic` reads its placement off the film and carries none),
   reached by one curve-neutral `--anchor-*` family (`--sigmoid-mid-fraction` /
   `--sigmoid-white-at-d-max` remain as aliases). Two of its four rules —
   `black-at-base`, `mid-at-base-offset` — are **reference-free**: they never read the
@@ -238,7 +261,16 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `reinhard` is the one selector `bounds_sdr_output()` reports **false** for: it exists
   to overshoot, so its loss is counted at the u16 encode boundary instead of
   refused, and the SDR gamut ceiling follows the pixel above display white rather
-  than being pinned at `1.0`. Its `headroom_stops` is display-referred (`W = 2^stops`),
+  than being pinned at `1.0`. **Since `extended-reinhard-mid-preserving-v2` it preserves
+  scene mid-grey rather than mapping `W` to `1.0`** — an input gain solved so
+  `f(0.18) = 0.18` at every white point, which is why `headroom_stops` is the curve's
+  *scale* and the unity point sits at `W / gain`. No member of the family can do both
+  (white-to-mid ratio floors at 6.17; pinning both ends needs 5.56), and the gain is
+  exactly 1 at `W = 1` so `--display-tone-headroom 0` stays byte-identical to `none`.
+  A corollary worth knowing before adding a knob: `print_exposure` is a scalar gain
+  *after* the curve, so it is incompatible with `--display-tone none` on any bounded
+  reconstruction — any positive value pushes the output past reference white and the
+  range check refuses the frame. Brightness there comes from the anchor. Its `headroom_stops` is display-referred (`W = 2^stops`),
   and the stops→white-point conversion, the `[0, 24]` bound and its check live **once**
   in `types.rs` (`headroom_white_point` / `MAX_HEADROOM_STOPS` /
   `check_headroom_stops`) precisely so `cli::validate` and the renderer cannot bound
@@ -264,7 +296,18 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   each variant as `shipped(v)/f(v)`, so when the shipped base became asymptotic all three
   collapsed onto it and the evidence *this file* cites stopped reproducing — silently, since
   a probe only prints. Build each variant from its parts, and assert the one mirroring the
-  shipped design equals the shipped function. **A matched-exposure probe may solve the
+  shipped design equals the shipped function. **Its sibling: a probe that uses a shipped
+  *default* as a stand-in for identity breaks the moment that default moves.** Taking
+  `DensityParams::default()` off `[1, 1, 1]` desynchronised five `#[ignore]`d probes that
+  had used it to mean "no correction" — including `curve_probe::sigmoid_scale`, which
+  inverts `drift(1) = k·(r − 1)` and so needs a true `s = 1`, and which the default's own
+  fingerprint row cites as its evidence. State the identity, never inherit it:
+  `curve_probe::identity_gain`, `algo::density::tests::identity_gain` and
+  `pipeline::stages::golden::frozen_density` all exist for this. **All four gates stay
+  green through it**, because `cargo test` never runs an `#[ignore]`d probe — so moving a
+  default means re-running the whole ignored set by hand (`cargo test --release -- --ignored`,
+  ~5 min with assets), and one of these printed plausible numbers at exit 0 rather than
+  failing, which is how a figure this file quotes stops reproducing unnoticed. **A matched-exposure probe may solve the
   anchor as a scalar gain only when `shoulder = 0`** — `t − floor` is `contrast·d`, so the
   anchor factors out of the toe but *not* the shoulder's fixed-ceiling soft-min (69-81% off
   at the default 0.6); `algo::sigmoid`'s `anchor_is_a_pure_gain_only_without_the_shoulder`

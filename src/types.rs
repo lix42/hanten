@@ -141,6 +141,14 @@ pub enum DensityCurveType {
     /// **the default**, in step with [`DensityCurve::default`].
     #[default]
     Sigmoid,
+    /// Invert the named film stock's published characteristic curve, per channel. Reads
+    /// the film's measured response instead of modelling it, so there is no slope or
+    /// anchor to set — both come from the curve. Select the stock with `--film-stock`.
+    //
+    // Kept free of rustdoc intra-doc links on purpose: clap renders this doc comment
+    // verbatim as the value's `--help` text, where a `[`Type`]` link is noise the user
+    // cannot follow. See [`CharacteristicParams`] for the knobs.
+    Characteristic,
 }
 
 /// Output bit depth for the TIFF paths — **and now the user-facing knob**
@@ -524,6 +532,24 @@ pub enum BalanceRange {
 #[serde(default, deny_unknown_fields)]
 pub struct DensityParams {
     /// Per-channel density gain `[r, g, b]`.
+    ///
+    /// **Default `[1, 0.90, 0.86]` under the parametric curves, `[1, 1, 1]` under
+    /// `characteristic`** — see [`DensityParams::default_scale_for`], which owns the split.
+    /// Both non-unity values are calibrations rather than film constants. The scalar path leaves `contrast · (D'_c − D'_R)`, so a
+    /// channel whose density rises faster than red drifts against it across the tone
+    /// scale; this gain is what cancels that. Blue's `0.860` is the manufacturers' own
+    /// per-channel structure (fitted over nine C-41 sheets), which reproduces in real
+    /// scans at 98% of its predicted drift. Green's `0.900` is **not** the published
+    /// value — the sheets say `0.977`, which measured only 49% of the real green drift,
+    /// so this one is calibrated from scans instead. `algo::curve_probe::sigmoid_scale`
+    /// carries the measurement and `docs/progress/algo.md` (2026-09-09) the reasoning.
+    ///
+    /// Two caveats a caller should know. It nulls the corpus *mean* drift, not each
+    /// roll's: per-roll residuals still span ±0.5 stop per density on the green–magenta
+    /// axis, so this is a better default and not a fix. And it is calibrated on one
+    /// scanner — that green and blue both come out ~11–18% steeper than red, where the
+    /// sheets say green is barely steeper at all, points at the scan/decode path rather
+    /// than at film chemistry (`io/scanner-density-calibration`).
     pub scale: [f32; 3],
     /// Per-channel density offset `[r, g, b]` (orange-mask compensation).
     pub offset: [f32; 3],
@@ -542,10 +568,52 @@ pub struct DensityParams {
     pub balance_range: BalanceRange,
 }
 
+impl DensityParams {
+    /// The per-channel gain a curve defaults to, and the **one** definition of that split.
+    ///
+    /// The gain corrects channels whose density rises faster than red, so the right value
+    /// depends on how much of that a curve already handles itself:
+    ///
+    /// - `sigmoid` / `exponential` apply one scalar contrast to every channel, so they
+    ///   carry no per-channel film model at all. The gain must cover both the film's own
+    ///   channel structure *and* the scanner residual: measured `[1, 0.90, 0.86]`.
+    /// - `characteristic` inverts each channel through its stock's published curve, so the
+    ///   film half is already removed. On a datasheet neutral it is *exactly* neutral, and
+    ///   the parametric gain then corrects a second time — measured on ten reference
+    ///   frames, `|G/R − 1| + |B/R − 1|` rises from **0.039 to 0.185**. Its own solved
+    ///   residual gain (`[1, 0.938, 0.985]`) measured 0.047, also worse than identity, so
+    ///   this curve defaults to **`[1, 1, 1]`** and the scanner residual stays visible for
+    ///   `io/scanner-density-calibration` to own rather than being half-absorbed here.
+    ///
+    /// The decomposition behind those numbers: the sigmoid path drifts green +0.79 / blue
+    /// +1.26 stops per unit density and the characteristic path +0.40 / +0.09, so the curve
+    /// removes (+0.39, +1.17) — almost exactly the sheets' predicted (+0.39, +1.29).
+    ///
+    /// Resolved in **three** places, all of which must stay in step with this function:
+    /// `Reconstruction`'s `Deserialize` (a recipe that omits `density.scale`),
+    /// `cli::merge`'s `--density-curve` arm (a switch resets it, and an explicit
+    /// `--density-scale` merged afterwards still wins), and `cli::resolve_frames`'
+    /// per-frame overlay in `roll`.
+    ///
+    /// The third is the one to remember, because its *mechanism* differs: the overlay is
+    /// merged onto an already-serialized config, where `scale` is present whether or not
+    /// the overlay mentioned it, so the `Deserialize` resolution cannot fire and the
+    /// default is re-applied by hand instead.
+    pub fn default_scale_for(curve: DensityCurveType) -> [f32; 3] {
+        match curve {
+            // Both parametric curves are scalar-contrast, so they share the calibration.
+            DensityCurveType::Sigmoid | DensityCurveType::Exponential => [1.0, 0.90, 0.86],
+            DensityCurveType::Characteristic => [1.0, 1.0, 1.0],
+        }
+    }
+}
+
 impl Default for DensityParams {
     fn default() -> Self {
         Self {
-            scale: [1.0, 1.0, 1.0],
+            // Derived from the default curve rather than restated, so `Self::default()`
+            // and a recipe that omits the key cannot drift apart.
+            scale: Self::default_scale_for(DensityCurveType::Sigmoid),
             offset: [0.0, 0.0, 0.0],
             shadow_balance: [0.0, 0.0, 0.0],
             highlight_balance: [0.0, 0.0, 0.0],
@@ -892,8 +960,11 @@ impl DisplayToneCurve {
         }
     }
 
-    /// The operator's white point as the linear multiple of reference white the
-    /// renderer consumes. `None` for the two curves that have no white point.
+    /// The operator's white-point **parameter**: the linear multiple of reference
+    /// white that sizes the curve, not the input mapping to display white — the
+    /// unity point sits at `W / gain` (see
+    /// `pipeline::display_tone::Headroom::white_point`). `None` for the two curves
+    /// that have no white point.
     pub fn white_point(self) -> Option<f32> {
         match self {
             Self::Shoulder | Self::None => Option::None,
@@ -1341,21 +1412,145 @@ impl Default for SigmoidParams {
     }
 }
 
+/// A film stock with a digitized characteristic curve
+/// (`reconstruction.curve.stock`, `--film-stock`).
+///
+/// One enum field rather than parallel options, per the project rule for mutually
+/// exclusive knobs. **Naming a stock is a refinement, never a precondition**: an unnamed
+/// stock resolves to [`Self::GenericC41`], which is the average of the nine measured
+/// stocks and renders correctly on any of them. A stock that is *named but unknown* is a
+/// loud usage error listing the accepted spellings — silently falling back would hide a
+/// typo behind a plausible render.
+///
+/// The variants are exactly the entries in `algo::film_stock::curves::STOCKS`; a test
+/// pins that correspondence, because a variant with no table would panic at render time.
+///
+/// `Serialize`/`Deserialize` are written by hand against [`FilmStock::as_str`] and
+/// [`FilmStock::parse`] rather than derived: serde's `kebab-case` renames `Portra400` to
+/// `portra400` (it splits on case boundaries, and there is none before a digit), which
+/// would give the recipe a *different* spelling from the CLI flag and the curve-table key.
+/// An emitted recipe would then fail to load back — the round-trip nc's determinism
+/// contract rests on. One spelling, one function.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FilmStock {
+    /// The average of the nine measured stocks (ten ship; this one is derived) — red
+    /// mid-scale gamma 0.541 with mid-grey
+    /// 0.624 density above base. For scale: the per-stock spread is 0.50–0.61 and
+    /// 0.54–0.70, and ACES's own generic film model sits at 0.55 / 0.70.
+    #[default]
+    GenericC41,
+    Ektar100,
+    Portra160,
+    /// The discontinued vivid-colour Portra. Kept because its aim table is the evidence
+    /// that `Δ` is genuinely stock-dependent (0.41 against the NC pair's 0.36 at the same
+    /// speed), which a registry of only current stocks would not show.
+    Portra160vc,
+    Portra400,
+    Portra400vc,
+    /// Box speed (EI 800). The published push curves are a separate response and are not
+    /// in the registry — a pushed roll is a different development, not a different stock.
+    Portra800,
+    Gold200,
+    Ultramax400,
+    /// Box speed (EI 800). Digitizes to the **same curve as [`Self::Portra800`]** — D-min
+    /// and per-channel gamma agree to 0.003 — from a different publication, year and page,
+    /// which is an independent check on the extraction as much as a fact about the film.
+    Ultramax800,
+}
+
+impl FilmStock {
+    /// Every variant, in the order `--film-stock` and the parse diagnostics list them.
+    pub const ALL: &'static [FilmStock] = &[
+        FilmStock::GenericC41,
+        FilmStock::Ektar100,
+        FilmStock::Portra160,
+        FilmStock::Portra160vc,
+        FilmStock::Portra400,
+        FilmStock::Portra400vc,
+        FilmStock::Portra800,
+        FilmStock::Gold200,
+        FilmStock::Ultramax400,
+        FilmStock::Ultramax800,
+    ];
+
+    /// The wire spelling — the recipe value, the CLI value, and the key into the pinned
+    /// curve table, which is why it is one function rather than three.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FilmStock::GenericC41 => "generic-c41",
+            FilmStock::Ektar100 => "ektar-100",
+            FilmStock::Portra160 => "portra-160",
+            FilmStock::Portra160vc => "portra-160vc",
+            FilmStock::Portra400 => "portra-400",
+            FilmStock::Portra400vc => "portra-400vc",
+            FilmStock::Portra800 => "portra-800",
+            FilmStock::Gold200 => "gold-200",
+            FilmStock::Ultramax400 => "ultramax-400",
+            FilmStock::Ultramax800 => "ultramax-800",
+        }
+    }
+
+    /// Parse a CLI/recipe spelling, listing the accepted names on failure.
+    pub fn parse(name: &str) -> std::result::Result<Self, String> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|s| s.as_str() == name)
+            .ok_or_else(|| {
+                format!(
+                    "unknown film stock `{name}` (accepted: {})",
+                    Self::ALL
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+    }
+}
+
+impl Serialize for FilmStock {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for FilmStock {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        FilmStock::parse(&name).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Knobs for [`DensityCurve::Characteristic`] — deliberately just the stock.
+///
+/// There is no contrast and no anchor here, and that absence is the design: both are
+/// *read off* the published curve rather than chosen, which is what makes this stage
+/// honest to the film. Anything that shapes tone belongs to `print.display_tone`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CharacteristicParams {
+    /// Which stock's published response to invert.
+    pub stock: FilmStock,
+}
+
 /// The tagged density→positive curve (design-spec §8/§9,
-/// `reconstruction.curve`): exactly one of the two curve variants, each carrying
-/// its own knobs plus the `Dmax` placement it owns. Serializes internally tagged
+/// `reconstruction.curve`): exactly one of the three curve variants, each carrying
+/// its own knobs — the two parametric ones plus the `Dmax` placement they own, and
+/// `characteristic`, which owns neither because it reads both off the published curve. Serializes internally tagged
 /// (`{"type":"exponential","gamma":…,"dmax":…}`); the custom `Deserialize`
 /// mirrors that while rejecting cross-variant keys **by name** (e.g. `contrast`
 /// under `exponential`) with a loud usage message instead of serde's generic
 /// unknown-field error, and fills each variant's defaults for omitted fields.
 /// The `type` tag is required whenever a `curve` object is present; only a fully
-/// *omitted* `reconstruction.curve` defaults (to this enum's default —
-/// exponential with its defaults).
+/// *omitted* `reconstruction.curve` defaults, to this enum's [`Default`] — the
+/// **sigmoid**, with its defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum DensityCurve {
     Exponential(ExponentialParams),
     Sigmoid(SigmoidParams),
+    Characteristic(CharacteristicParams),
 }
 
 impl Default for DensityCurve {
@@ -1383,6 +1578,7 @@ impl DensityCurve {
         match self {
             DensityCurve::Exponential(_) => DensityCurveType::Exponential,
             DensityCurve::Sigmoid(_) => DensityCurveType::Sigmoid,
+            DensityCurve::Characteristic(_) => DensityCurveType::Characteristic,
         }
     }
 
@@ -1393,25 +1589,75 @@ impl DensityCurve {
         match self {
             DensityCurve::Exponential(e) => e.dmax,
             DensityCurve::Sigmoid(s) => s.dmax,
+            // The characteristic curve resolves no reference density: its slope and its
+            // mid-grey placement both come from the published curve. [`DmaxSource::None`]
+            // is the variant that means "reads no reference", which is what every consumer
+            // of this accessor asks — roll consistency, the master-anchor classification,
+            // the auto-reference warnings. Its doc describes what *the parametric curves*
+            // render under that source; this curve simply never reaches that arithmetic.
+            DensityCurve::Characteristic(_) => DmaxSource::None,
         }
     }
 
     /// The anchor-placement rule this curve carries. Shared by both variants since
     /// `algo/exponential-anchor-placement`, so placement-aware code (reports,
     /// provenance) stays variant-agnostic like [`Self::dmax`].
-    pub fn anchor(&self) -> AnchorPlacement {
+    /// `None` for [`Self::Characteristic`], which has no placement *rule* to state: it
+    /// pins mid-grey wherever the stock's published curve puts it, so reporting one of the
+    /// four rules here would name a knob the render never consulted. Deliberately an
+    /// `Option` rather than a plausible-looking default — a report that names a number the
+    /// render did not use is the exact defect PR #70 fixed.
+    pub fn anchor(&self) -> Option<AnchorPlacement> {
         match self {
-            DensityCurve::Exponential(e) => e.anchor,
-            DensityCurve::Sigmoid(s) => s.anchor,
+            DensityCurve::Exponential(e) => Some(e.anchor),
+            DensityCurve::Sigmoid(s) => Some(s.anchor),
+            DensityCurve::Characteristic(_) => None,
         }
     }
 
     /// Mutable access to the anchor source — the single write point the merge
     /// uses for the four `--*d-max` flags, whichever variant is resolved.
-    pub fn dmax_mut(&mut self) -> &mut DmaxSource {
+    /// `None` for [`Self::Characteristic`]: there is no reference field to write, so a
+    /// `--*d-max` flag against it is a contradiction the merge must surface rather than
+    /// absorb. `validate` turns that into a usage error naming the flag.
+    pub fn dmax_mut(&mut self) -> Option<&mut DmaxSource> {
         match self {
-            DensityCurve::Exponential(e) => &mut e.dmax,
-            DensityCurve::Sigmoid(s) => &mut s.dmax,
+            DensityCurve::Exponential(e) => Some(&mut e.dmax),
+            DensityCurve::Sigmoid(s) => Some(&mut s.dmax),
+            DensityCurve::Characteristic(_) => None,
+        }
+    }
+}
+
+impl DensityCurveType {
+    /// Every variant, so a hand-written enumeration can be checked against one list
+    /// instead of growing its own. Added because two *migration* messages listed only
+    /// `exponential` and `sigmoid` after the third curve shipped: the `--density-curve`
+    /// parse diagnostic is generated by clap and stayed correct, but prose is not.
+    ///
+    /// **Test-only.** The runtime enumerates curves by exhaustive `match`, which is the
+    /// stronger guarantee; a list is only useful for asserting that hand-written *prose*
+    /// covers the set. `all_density_curve_types_are_listed` keeps the list itself honest.
+    #[cfg(test)]
+    pub const ALL: [DensityCurveType; 3] = [
+        DensityCurveType::Exponential,
+        DensityCurveType::Sigmoid,
+        DensityCurveType::Characteristic,
+    ];
+
+    /// Whether a curve of this type has a `dmax` key at all.
+    ///
+    /// The type-level twin of [`DensityCurve::dmax_mut`], for code that only has the
+    /// discriminator — the roll overlay's variant switch, which rewrites raw JSON before
+    /// any `DensityCurve` exists. It carries the roll's `dmax` across a curve switch
+    /// because the reference density is a roll calibration rather than a curve knob, and
+    /// it must not do that into a curve that rejects the key: inserting `dmax` into a
+    /// `characteristic` object produced a usage error blaming the user for a key the
+    /// *merge* had added.
+    pub fn takes_dmax(self) -> bool {
+        match self {
+            Self::Exponential | Self::Sigmoid => true,
+            Self::Characteristic => false,
         }
     }
 }
@@ -1454,8 +1700,8 @@ impl<'de> Deserialize<'de> for DensityCurve {
             .as_object()
             .ok_or_else(|| D::Error::custom("reconstruction.curve must be a JSON object"))?;
 
-        const KNOWN: [&str; 7] = [
-            "type", "gamma", "contrast", "toe", "shoulder", "dmax", "anchor",
+        const KNOWN: [&str; 8] = [
+            "type", "gamma", "contrast", "toe", "shoulder", "dmax", "anchor", "stock",
         ];
         if let Some(k) = obj.keys().find(|k| !KNOWN.contains(&k.as_str())) {
             return Err(D::Error::custom(format!(
@@ -1467,7 +1713,8 @@ impl<'de> Deserialize<'de> for DensityCurve {
             .map_err(D::Error::custom)?
             .ok_or_else(|| {
                 D::Error::custom(
-                    "reconstruction.curve is missing `type` (\"exponential\" or \"sigmoid\")",
+                    "reconstruction.curve is missing `type` (\"exponential\", \"sigmoid\" \
+                     or \"characteristic\")",
                 )
             })?;
         let dmax: Option<DmaxSource> = take_recipe_field(obj, "dmax").map_err(D::Error::custom)?;
@@ -1475,8 +1722,9 @@ impl<'de> Deserialize<'de> for DensityCurve {
         match curve_type {
             DensityCurveType::Exponential => {
                 // `anchor` is deliberately absent from this list: since
-                // `algo/exponential-anchor-placement` the placement rule is shared by
-                // both curves, so it is a cross-curve key rather than a sigmoid one.
+                // `algo/exponential-anchor-placement` the placement rule is shared by both
+                // *parametric* curves, so it is a cross-curve key rather than a sigmoid
+                // one. (`characteristic` accepts neither, and rejects `anchor` by name.)
                 if let Some(key) = ["contrast", "toe", "shoulder"]
                     .into_iter()
                     .find(|k| obj.contains_key(*k))
@@ -1485,6 +1733,13 @@ impl<'de> Deserialize<'de> for DensityCurve {
                         "`{key}` is a sigmoid-curve key, but the curve type is \
                          \"exponential\" (its knobs are `gamma`, `dmax` and `anchor`)"
                     )));
+                }
+                if obj.contains_key("stock") {
+                    return Err(D::Error::custom(
+                        "`stock` is a characteristic-curve key, but the curve type is \
+                         \"exponential\" — a film stock selects a *measured* response, so \
+                         it cannot refine a parametric one",
+                    ));
                 }
                 let d = ExponentialParams::default();
                 Ok(DensityCurve::Exponential(ExponentialParams {
@@ -1504,6 +1759,13 @@ impl<'de> Deserialize<'de> for DensityCurve {
                          \"sigmoid\" (the mid-density slope analogue is `contrast`)",
                     ));
                 }
+                if obj.contains_key("stock") {
+                    return Err(D::Error::custom(
+                        "`stock` is a characteristic-curve key, but the curve type is \
+                         \"sigmoid\" — a film stock selects a *measured* response, so it \
+                         cannot refine a parametric one",
+                    ));
+                }
                 let d = SigmoidParams::default();
                 Ok(DensityCurve::Sigmoid(SigmoidParams {
                     contrast: take_recipe_field(obj, "contrast")
@@ -1519,6 +1781,29 @@ impl<'de> Deserialize<'de> for DensityCurve {
                     anchor: take_recipe_field(obj, "anchor")
                         .map_err(D::Error::custom)?
                         .unwrap_or(d.anchor),
+                }))
+            }
+            DensityCurveType::Characteristic => {
+                // Every parametric key is rejected here rather than ignored, and the
+                // message says why: this curve has no slope or anchor to set because it
+                // reads both off the published response. Accepting them silently would
+                // let a recipe look like it were tuning a render it cannot touch.
+                if let Some(key) = ["gamma", "contrast", "toe", "shoulder", "dmax", "anchor"]
+                    .into_iter()
+                    .find(|k| obj.contains_key(*k))
+                {
+                    return Err(D::Error::custom(format!(
+                        "`{key}` is a parametric-curve key, but the curve type is \
+                         \"characteristic\", which reads its slope and its mid-grey \
+                         placement off the stock's published curve. Its only key is \
+                         `stock`; tone shaping belongs to `print.display_tone`"
+                    )));
+                }
+                let d = CharacteristicParams::default();
+                Ok(DensityCurve::Characteristic(CharacteristicParams {
+                    stock: take_recipe_field(obj, "stock")
+                        .map_err(D::Error::custom)?
+                        .unwrap_or(d.stock),
                 }))
             }
         }
@@ -1543,8 +1828,9 @@ pub const RECONSTRUCTION_SCHEMA_VERSION: u32 = 1;
 /// algorithm selection itself. The custom serde keeps the documented wire shape
 /// exactly: `schema_version` + `type` always emitted; `density`/`curve` emitted
 /// for (and accepted only with) `type = "density"`; omitted sections fill their
-/// defaults (an omitted `curve` normalizes to tagged exponential defaults, so
-/// omission never survives into a resolved recipe or report).
+/// defaults (an omitted `curve` normalizes to the tagged **sigmoid** defaults —
+/// [`DensityCurve::default`] — so omission never survives into a resolved recipe or
+/// report).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reconstruction {
     /// Channel-inversion baseline: the direct unclamped positive
@@ -1668,16 +1954,43 @@ impl<'de> Deserialize<'de> for Reconstruction {
                 }
                 Ok(Reconstruction::Simple)
             }
-            ReconstructionType::Density => Ok(Reconstruction::Density {
-                density: take_recipe_field(obj, "density")
+            ReconstructionType::Density => {
+                // `density` must be a JSON object, for the same reason `curve` must be
+                // (see `DensityCurve`'s deserializer): the `scale` probe below reads the
+                // raw value. `DensityParams` is a plain derive, so serde would also
+                // accept a positional array — which deserializes *successfully* while
+                // `as_object()` returns `None`, so the probe would read "not stated" and
+                // overwrite the array's stated gain with the per-curve default. Reject
+                // the shape here rather than guessing at it.
+                if let Some(v) = obj.get("density")
+                    && !v.is_object()
+                {
+                    return Err(D::Error::custom(
+                        "reconstruction.density must be a JSON object",
+                    ));
+                }
+                // Whether `scale` was *stated* has to be read off the raw object: it is a
+                // concrete `[f32; 3]` in `DensityParams`, so by the time serde has built
+                // one, an omitted key and an explicit `[1, 1, 1]` are the same value. The
+                // difference matters — the default is per-curve, and an explicit gain must
+                // survive under any curve.
+                let stated_scale = obj
+                    .get("density")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|d| d.contains_key("scale"));
+                let mut density: DensityParams = take_recipe_field(obj, "density")
                     .map_err(D::Error::custom)?
-                    .unwrap_or_default(),
-                // An omitted curve normalizes to tagged exponential defaults —
+                    .unwrap_or_default();
+                // An omitted curve normalizes to tagged sigmoid defaults —
                 // omission never survives into a resolved recipe.
-                curve: take_recipe_field(obj, "curve")
+                let curve: DensityCurve = take_recipe_field(obj, "curve")
                     .map_err(D::Error::custom)?
-                    .unwrap_or_default(),
-            }),
+                    .unwrap_or_default();
+                if !stated_scale {
+                    density.scale = DensityParams::default_scale_for(curve.curve_type());
+                }
+                Ok(Reconstruction::Density { density, curve })
+            }
         }
     }
 }
@@ -2608,6 +2921,22 @@ mod tests {
     }
 
     #[test]
+    fn all_density_curve_types_are_listed() {
+        // `DensityCurveType::ALL` is what the migration messages' coverage assertions
+        // iterate, so a stale list would silently re-permit the two-of-three prose it
+        // exists to catch. The match is **exhaustive**: adding a variant fails to
+        // compile here until it is added to `ALL` too.
+        assert_eq!(DensityCurveType::ALL.len(), 3);
+        for curve in DensityCurveType::ALL {
+            match curve {
+                DensityCurveType::Exponential
+                | DensityCurveType::Sigmoid
+                | DensityCurveType::Characteristic => {}
+            }
+        }
+    }
+
+    #[test]
     fn curve_json_round_trips_both_tagged_variants() {
         let exponential = DensityCurve::Exponential(ExponentialParams {
             gamma: 1.4,
@@ -2737,8 +3066,161 @@ mod tests {
         let json = serde_json::to_value(Reconstruction::default()).unwrap();
         assert_eq!(json["schema_version"], 1);
         assert_eq!(json["type"], "density");
-        assert_eq!(json["density"]["scale"], serde_json::json!([1.0, 1.0, 1.0]));
+        // The default gain is `[1, 0.90, 0.86]` (a scanner calibration; see
+        // `DensityParams::scale`). Compared against the `f32` values rather than a JSON
+        // literal, because `0.90f32` widens to `0.8999999761581421` as an `f64` — the
+        // emitted *text* is still the round-trip-shortest `0.9`, which is what a user's
+        // recipe carries.
+        assert_eq!(
+            json["density"]["scale"],
+            serde_json::json!([1.0f32, 0.90f32, 0.86f32])
+        );
         assert_eq!(json["curve"]["type"], "sigmoid");
+    }
+
+    /// An **omitted** `density.scale` resolves from the curve; a **stated** one is kept
+    /// under every curve.
+    ///
+    /// The distinction cannot be read off `DensityParams` after serde has built one — the
+    /// field is a concrete `[f32; 3]`, so an absent key and an explicit `[1, 1, 1]` are
+    /// the same value — which is why `Reconstruction`'s `Deserialize` inspects the raw
+    /// object. This pins both halves, because losing either is a silent colour change:
+    /// resolve-always would ignore a gain the user wrote down, and keep-always would put
+    /// the parametric curves' calibration onto the characteristic curve, which already
+    /// carries each stock's per-channel response (see `DensityParams::default_scale_for`).
+    #[test]
+    fn an_omitted_density_scale_resolves_from_the_curve() {
+        let scale = |json: &str| {
+            let r: Reconstruction = serde_json::from_str(json).unwrap();
+            match r {
+                Reconstruction::Density { density, .. } => density.scale,
+                Reconstruction::Simple => unreachable!("density expected"),
+            }
+        };
+        let parametric = DensityParams::default_scale_for(DensityCurveType::Sigmoid);
+        let identity = DensityParams::default_scale_for(DensityCurveType::Characteristic);
+
+        // Omitted: per-curve.
+        assert_eq!(
+            scale(r#"{"type":"density","curve":{"type":"sigmoid"}}"#),
+            parametric
+        );
+        assert_eq!(
+            scale(r#"{"type":"density","curve":{"type":"exponential"}}"#),
+            parametric
+        );
+        assert_eq!(
+            scale(r#"{"type":"density","curve":{"type":"characteristic"}}"#),
+            identity
+        );
+        // An omitted *curve* normalizes to sigmoid, so it takes sigmoid's gain.
+        assert_eq!(scale(r#"{"type":"density"}"#), parametric);
+        // A `density` block that states other keys but not `scale` still resolves.
+        assert_eq!(
+            scale(
+                r#"{"type":"density","density":{"offset":[0.0,0.0,0.1]},
+                    "curve":{"type":"characteristic"}}"#
+            ),
+            identity
+        );
+
+        // Stated: kept, including a value equal to another curve's default — the whole
+        // reason presence is checked rather than inferred from the value.
+        assert_eq!(
+            scale(
+                r#"{"type":"density","density":{"scale":[1.0,1.0,1.0]},
+                    "curve":{"type":"sigmoid"}}"#
+            ),
+            [1.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            scale(
+                r#"{"type":"density","density":{"scale":[1.0,0.9,0.86]},
+                    "curve":{"type":"characteristic"}}"#
+            ),
+            [1.0, 0.90, 0.86]
+        );
+        assert_eq!(
+            scale(
+                r#"{"type":"density","density":{"scale":[1.2,1.0,0.8]},
+                    "curve":{"type":"characteristic"}}"#
+            ),
+            [1.2, 1.0, 0.8]
+        );
+        assert_eq!(
+            scale(
+                r#"{"type":"density","density":{"scale":[1.2,1.0,0.8]},
+                    "curve":{"type":"exponential"}}"#
+            ),
+            [1.2, 1.0, 0.8]
+        );
+        assert_eq!(
+            scale(
+                r#"{"type":"density","density":{"scale":[1.2,1.0,0.8]},
+                    "curve":{"type":"sigmoid"}}"#
+            ),
+            [1.2, 1.0, 0.8]
+        );
+
+        // And the resolved form round-trips: re-reading an emitted recipe cannot
+        // re-resolve, because serialization always writes the key.
+        for json in [
+            r#"{"type":"density","curve":{"type":"characteristic"}}"#,
+            r#"{"type":"density","curve":{"type":"sigmoid"}}"#,
+        ] {
+            let once: Reconstruction = serde_json::from_str(json).unwrap();
+            let emitted = serde_json::to_string(&once).unwrap();
+            let twice: Reconstruction = serde_json::from_str(&emitted).unwrap();
+            assert_eq!(once, twice, "resolution is not idempotent for {json}");
+        }
+    }
+
+    /// A non-object `reconstruction.density` is refused, naming the section.
+    ///
+    /// `DensityParams` is a plain derive, so serde also accepts it in **positional-array**
+    /// form — and that form used to deserialize *successfully* while the `scale` probe
+    /// above (which needs `as_object()`) read "not stated", so the array's stated gain was
+    /// silently replaced by the per-curve default. Rejecting the shape is the fix; reading
+    /// a non-object as "assume stated" would leave the ambiguity in place. Same guard, and
+    /// the same message shape, as `DensityCurve`'s `reconstruction.curve` check.
+    #[test]
+    fn a_non_object_density_section_is_refused() {
+        // The exact array a `DensityParams` derive accepts, field for field.
+        let array = r#"{"type":"density",
+            "density":[[1.2,1.0,0.8],[0,0,0],[0,0,0],[0,0,0],"auto"],
+            "curve":{"type":"characteristic"}}"#;
+        let err = serde_json::from_str::<Reconstruction>(array)
+            .expect_err("an array-shaped `density` must be refused, not half-read")
+            .to_string();
+        assert!(
+            err.contains("reconstruction.density"),
+            "the message must name the section: {err}"
+        );
+        // Falsifiability: the same recipe with the object spelling parses *and* keeps the
+        // gain, so the guard rejects the shape rather than the value.
+        let object = r#"{"type":"density",
+            "density":{"scale":[1.2,1.0,0.8]},
+            "curve":{"type":"characteristic"}}"#;
+        let Reconstruction::Density { density, .. } = serde_json::from_str(object).unwrap() else {
+            unreachable!("density expected");
+        };
+        assert_eq!(density.scale, [1.2, 1.0, 0.8]);
+
+        // Every other non-object spelling is refused the same way, including a present
+        // explicit `null` (which must never read as an absent key).
+        for bad in [
+            r#"{"type":"density","density":null}"#,
+            r#"{"type":"density","density":1.0}"#,
+            r#"{"type":"density","density":"scale"}"#,
+        ] {
+            let err = serde_json::from_str::<Reconstruction>(bad)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("reconstruction.density"),
+                "the message must name the section for {bad}: {err}"
+            );
+        }
     }
 
     #[test]
