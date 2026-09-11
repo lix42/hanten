@@ -414,9 +414,13 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   2026-09-02** — the default reconstruction should shed both knees, leaving the
   display operator to carry the character — but **no default has moved**, so the
   paragraph above still describes what nc ships. Activation is
-  `algo/split-default-migration`, blocked on `film-base/dmax-per-channel-reduction`
-  because the shoulder it removes is what currently hides a 17-83% off-neutral
-  channel error on the grey leader. Do not "fix" this by widening the
+  `algo/split-default-migration`, which **stopped depending on
+  `film-base/dmax-per-channel-reduction` on 2026-09-10**: the per-channel term turned
+  out to be a *slope*, carried by `density.scale` on the parametric curves and by each
+  stock's own tables on `characteristic` (the proposed default) — not the anchor that
+  task investigates — and the grey leader those 17-83% ratios were read off is
+  disqualified as a per-channel source. What gates the migration now is the green
+  residual (`io/scanner-density-calibration`). Do not "fix" this by widening the
   container or by re-deriving headroom in the gain-map stage.
 - **nc writes the AVIF container itself; libaom only makes the codestream.**
   `io/avif.rs` is the `hdr-pq`/`hdr-hlg` encoder. There is **no libavif

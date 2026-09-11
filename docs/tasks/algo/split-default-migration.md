@@ -52,9 +52,9 @@ piece of work, and two of its obstacles have measured answers:
   own tone and exposure. Verified that they refuse `reinhard` outright, and that
   `film-master` refuses any non-default `print_exposure` — so a global default move would
   have made a bare `nc convert --output-preset film-master` fail.
-- **Which reconstruction.** `characteristic-generic` is the proposed default, which lands on
-  the half of this task's blocker that is still open: `film-base/dmax-per-channel-reduction`
-  owns the no-stock path. Read that note above before migrating.
+- **Which reconstruction.** `characteristic-generic` is the proposed default. It carries each
+  channel's own published curve, so it needs neither a scalar `Dmax` nor a per-channel gain —
+  which is why the per-channel blocker below was lifted.
 
 ## Open questions
 
@@ -89,17 +89,24 @@ and a historical row must never be edited in place.
 what this assumes, and whether the diffuse-white cost survives review as a default
 rather than as an option.
 
-## The blocker, and why it is a real one
+## The blocker — lifted 2026-09-10, and what replaced it
 
-**`film-base/dmax-per-channel-reduction` must land first.** The sigmoid's shoulder
-was *hiding* a model error: measured on the uniformly-exposed leader — a target with
-no scene content, so every deviation is model error — Gold reads B/G **1.826**, Portra
-R/G **1.676**, Ektar B/G 1.170, i.e. 17–83% off neutral on a grey target. The shoulder
-washes highlights toward white and drains the cast along with the detail; shoulder-less,
-it survives into the highlights. That task's own analysis calls the per-channel term
-"redundant under the exponential, not under the sigmoid, **which is the intended
-default**" — a premise this migration overturns. Shipping the split as the default
-before it lands means shipping a visible cast on Gold and Portra.
+**Was:** `film-base/dmax-per-channel-reduction` must land first, because the sigmoid's
+shoulder was hiding a per-channel model error read off the uniformly-exposed leader (Gold
+B/G **1.826**, Portra R/G **1.676**, Ektar B/G 1.170 — 17–83% off neutral), and a
+shoulder-less default would let it survive into the highlights.
+
+**Why it no longer holds.** Both halves of that reasoning died in `algo/film-stock-profiles`.
+The leader is disqualified as a measurement of per-channel structure — measured leaders do
+not reproduce the published divergence at all, and the comparison cannot separate a
+non-neutral leader exposure from a scanner-slope error, so those ratios are not a clean
+model-error reading. And the per-channel term turned out to be a **slope**, not an anchor:
+it is carried by `density.scale` on the parametric curves and by each channel's own table on
+`characteristic`, which is the proposed default here.
+
+**What actually gates the migration now** is the green residual — `+0.40` mean and `+1.00`
+on the Ektar roll, which no per-channel scale removes. That is `io/scanner-density-
+calibration`, and the note above already says not to migrate before it is understood.
 
 ## How to Verify
 
@@ -112,7 +119,6 @@ before it lands means shipping a visible cast on Gold and Portra.
 ## Dependencies
 
 - [Reconstruction / render curve split](reconstruction-render-curve-split.md)
-- [Per-channel Dmax and the gray-mean reduction](../film-base/dmax-per-channel-reduction.md)
 - [Named conversion presets](conversion-presets.md)
 - [Pin the characteristic curve against regression](characteristic-curve-coverage.md) — the
   default this task moves to lands on a curve nothing currently fingerprints
