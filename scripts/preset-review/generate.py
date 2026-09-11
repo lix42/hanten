@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the visual-review set for the five conversion presets (algo/film-stock-profiles).
-
-`--preset` does not exist yet. This renders each preset's **expansion** with plain flags,
-so the pixels are what the preset will produce once the mechanism ships — which makes this
-set the acceptance test for it: regenerating through `--preset` must give identical files.
+"""Generate the visual-review set for the five conversion presets (`nc convert --preset`).
 
   characteristic-generic   characteristic curve, no stock (the averaged generic C-41)
   characteristic-stock     characteristic curve, the roll's own published response
@@ -13,26 +9,28 @@ set the acceptance test for it: regenerating through `--preset` must give identi
 
 **Every preset is calibrated to one target, not to its own taste.** The target is scene
 mid-grey (0.18) rendered 0.31 stop up — the brightness the 2026-09-09 round approved — and
-each preset's `--print-exposure` is whatever lands it there. The four values that use it
-differ (0.31 to 0.61) because the reconstructions place mid-grey differently: the
-characteristic curve reads it off the film, while the sigmoid's anchor puts it ~0.33 stop
-lower. The fifth, `sigmoid-knees`, has to take its brightness from the anchor instead and so
-states 0.0 — see the note on its row below. Measured by
-`pipeline::stages::midtone_placement::each_candidate_look_needs_its_own_print_exposure`,
-which fails if the spread ever collapses to the point one shared default would do.
+each preset carries whatever `print_exposure` lands it there. `nc` owns those numbers now;
+this script names only the five presets, so a recalibration cannot leave the review set
+rendering the previous constants.
 
-Two conventions that are easy to get backwards, both measured rather than derived:
+It used to state the expansion by hand — a `--print-exposure` per preset (0.31 to 0.61)
+and a per-stock red density scale — because `--preset` did not exist yet, which made this
+script the **acceptance test** for the mechanism: rendering through the preset had to
+produce byte-identical files. It did, on three frames across three rolls (2026-09-10), and
+the constants were deleted in the same change. The two facts they encoded are now pinned
+in code, where they are checked on every run:
 
-*The aim-matched scale is a reciprocal.* `curve_probe::stock_table_variants` prints the
-factor scaling the **table's** red density (Ektar 0.898); `--density-scale` multiplies the
-**scan's** density before the table is inverted, so the flag takes `1/k`. On 21 frames the
-reciprocal takes the green-magenta drift to +0.01 stop/density; the table-side number takes
-it to +0.72, worse than doing nothing (+0.35). Once `--preset` ships this is derived from
-the shipped aim tables and the constants below disappear.
+  * the brightness calibration, by
+    `pipeline::stages::midtone_placement::every_preset_lands_the_shared_brightness_target`;
+  * the aim-matched scale — a **reciprocal**, since `--density-scale` multiplies the
+    *scan's* density where the aim factor scales the *table's* — by
+    `algo::film_stock::aim_red_scale` and its tests.
 
-*`--print-exposure` is not comparable across tone operators.* These numbers are for
-`extended-reinhard-mid-preserving-v2`, which absorbs its own 0.237-stop midtone cost; under
-the v1 operator the same look was spelled 0.55.
+A roll is no longer skipped up front when its stock has no usable aim delta (the old
+`AIM_RED` table was the gate). `nc` now refuses only the `chr-aim` rendition, so such a
+roll yields four good cells and one reported failure rather than vanishing from the page
+entirely — more useful, but it does mean a missing column is worth reading as "that stock's
+sheet states no usable delta", not as a bug.
 
 Writes to a throwaway directory OUTSIDE the repo — the frames are the user's own
 photographs and are never committed. Only this script is.
@@ -52,30 +50,26 @@ STOCK = {
     "Ektar": "ektar-100",
     "Portra160-2026-07-22": "portra-160",
 }
-# The aim-matched red scale as `--density-scale` takes it (the reciprocal; see above).
-AIM_RED = {"ektar-100": 1.114, "portra-160": 1.029, "gold-200": 0.955}
 
-# (id, button label, flags beyond the shared ones, print-exposure, tooltip)
+# (id, button label, `--preset` name, needs --film-stock, tooltip).
+#
+# The stock column is **stated per preset, never derived from the name.** `nc` refuses
+# `--film-stock` beside a preset with no stock to configure and requires it for the two
+# that have one, so guessing from the spelling ("stock" or "aim" in the name) would be a
+# second copy of `ConversionPreset::needs_film_stock` — which the Rust side made an
+# exhaustive match precisely so a new preset states its answer. A future name that broke
+# the guess would fail here as an exit-2 rendition, reported and skipped, so the page
+# would quietly lose a column rather than say anything.
 PRESETS = [
-    ("chr-generic", "chr generic", ["--density-curve", "characteristic"], 0.39,
+    ("chr-generic", "chr generic", "characteristic-generic", False,
      "characteristic curve, no --film-stock: the average of nine published sheets"),
-    ("chr-stock", "chr stock", ["--density-curve", "characteristic", "STOCK"], 0.31,
+    ("chr-stock", "chr stock", "characteristic-stock", True,
      "characteristic curve, the roll's own published response"),
-    ("chr-aim", "chr aim", ["--density-curve", "characteristic", "STOCK", "AIM"], 0.31,
+    ("chr-aim", "chr aim", "characteristic-aim", True,
      "characteristic-stock plus the aim-matched red density scale"),
-    # **This one's brightness is in the anchor, not `--print-exposure`, and that is
-    # forced.** `--display-tone none` relies on the reconstruction being bounded at the
-    # render's ceiling; `--print-exposure` is a scalar gain applied after the curve, so any
-    # positive value pushes the shoulder past reference white and the range check refuses
-    # the frame (measured: +0.70 gave "luminance 1.6236" = exactly 2^0.70). Moving the
-    # anchor instead places mid-grey *within* the bounded range. Fraction 0.42 lands the
-    # shared target to 0.027 stop —
-    # `midtone_placement::the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor`
-    # sweeps it and fails if the calibration drifts.
-    ("sig-knees", "sig knees + linear",
-     ["--display-tone", "none", "--anchor-mid-fraction", "0.42"], 0.0,
+    ("sig-knees", "sig knees + linear", "sigmoid-knees", False,
      "sigmoid with its toe/shoulder, no display tone curve; brightness from the anchor"),
-    ("sig-flat", "sig flat + reinhard", ["--sigmoid-toe", "0", "--sigmoid-shoulder", "0"], 0.61,
+    ("sig-flat", "sig flat + reinhard", "sigmoid-flat", False,
      "sigmoid with neither knee, character carried by extended Reinhard"),
 ]
 
@@ -108,32 +102,18 @@ def main():
         if stock is None:
             print(f"{key}: no --film-stock mapping for roll {roll}, skipped")
             continue
-        if stock not in AIM_RED:
-            print(f"{key}: no aim-matched red scale for {stock}, skipped")
-            continue
         renditions, casts = {}, {}
-        for pid, _, extra, exposure, _ in PRESETS:
+        for pid, _, preset, needs_stock, _ in PRESETS:
             dest = OUT / f"{key}-{pid}.jpg"
-            flags = []
-            for token in extra:
-                if token == "STOCK":
-                    flags += ["--film-stock", stock]
-                elif token == "AIM":
-                    flags += ["--density-scale", f"{AIM_RED[stock]},1,1"]
-                else:
-                    flags.append(token)
-            # `reinhard` unless the preset names its own tone, and no `--d-max`: the
-            # sigmoid presets take the shipped fixed reference, which is what a bare
-            # `--preset` will resolve. Stating the roll's measured one here would review a
-            # config the preset cannot reproduce.
-            if "--display-tone" not in flags:
-                flags += ["--display-tone", "reinhard"]
+            # No `--d-max`: the sigmoid presets take the shipped fixed reference, which is
+            # what a bare `--preset` resolves. Stating the roll's measured one here would
+            # review a config the preset cannot reproduce.
             cmd = [
                 str(NC), "convert", str(src),
                 "--output-preset", "gain-map-hdr",
                 "--film-base", dmin,
-                "--print-exposure", str(exposure),
-                *flags,
+                "--preset", preset,
+                *(["--film-stock", stock] if needs_stock else []),
                 "-o", str(dest), "--report", "json",
             ]
             r = subprocess.run(cmd, capture_output=True, text=True)
@@ -165,18 +145,19 @@ def main():
         "schema_version": 1,
         "title": "The five conversion presets",
         "description": (
-            "Each button is one proposed `--preset`, rendered through the flags it will "
-            "expand to. All five are calibrated to the same target — scene mid-grey 0.18 "
+            "Each button is one `--preset`. All five are calibrated to the same target "
+            "— scene mid-grey 0.18 "
             "delivered at 0.223, the brightness approved on 2026-09-09 — so brightness is "
             "held constant and what differs is the reconstruction and the display tone. "
             "chr-generic is the proposed default. Two of them change the display stage as "
             "well as the curve: sig-knees applies no display tone at all (the sigmoid's own "
             "shoulder does that work), while the other four use extended Reinhard at 6 "
-            "stops."
+            "stops. Each button is `nc convert --preset <name>` and nothing else — the "
+            "exposure and the density scale come from the preset."
         ),
         "configs": [
-            {"id": pid, "label": label, "note": f"{note} — --print-exposure {exposure}"}
-            for pid, label, _, exposure, note in PRESETS
+            {"id": pid, "label": label, "note": f"{note} — --preset {preset}"}
+            for pid, label, preset, _, note in PRESETS
         ],
         "images": images,
     }
@@ -184,7 +165,7 @@ def main():
     print(f"\n{len(images)} frames x {len(PRESETS)} presets -> {OUT}/review.json")
     if failures:
         print(f"FAILED renditions ({len(failures)}): {', '.join(failures)}")
-    print(f"\n  http://localhost:8080/review-app/?data=../{OUT.name}/review.json")
+    print(f"\n  cd tools/review-app && pnpm dev {OUT}/review.json")
 
 
 if __name__ == "__main__":

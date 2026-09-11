@@ -1082,6 +1082,70 @@ mod midtone_placement {
         );
     }
 
+    /// **Every `--preset` lands the one shared brightness target.**
+    ///
+    /// The claim the five presets exist to make: a user picks a look by name and the
+    /// brightness does not move, so what they are comparing is the reconstruction and
+    /// the display tone rather than "one is brighter". Its neighbour
+    /// [`each_candidate_look_needs_its_own_print_exposure`] measures the exposure each
+    /// look *needs*; this one checks the shipped bundles actually carry it — the two
+    /// halves of the same calibration, and the second is what a wrong constant in
+    /// `ConversionPreset::expand` breaks.
+    ///
+    /// Synthetic and asset-free, on the same datasheet mid-grey patch as the rest of
+    /// this module.
+    ///
+    /// The tolerance is 0.15 stop and every row is inside it. The exposures are stated
+    /// to two decimals, which is ±0.005 stop of quantization on its own; the residuals
+    /// below run to 0.11 because a solved exposure was rounded, not because a bundle
+    /// drifted. `characteristic-aim` is the largest and the only one that is not
+    /// rounding: its red density scale is a *slope* correction, measured to take the
+    /// green–magenta drift from +0.35 to +0.01 stop per unit density on 21 real frames,
+    /// and on a neutral patch that shows up as a red level shift of about +0.10 stop.
+    /// It shares `characteristic-stock`'s exposure deliberately — re-solving one for it
+    /// would trade a known colour correction for an unmeasured brightness constant.
+    #[test]
+    fn every_preset_lands_the_shared_brightness_target() {
+        use crate::cli::ConversionPreset;
+        // Scene mid-grey 0.18 rendered 0.31 stop up — the brightness approved
+        // 2026-09-09, and the same target the exposure table above solves against.
+        let target = 0.18 * 2f32.powf(0.31);
+        let stock = FilmStock::Portra400;
+        println!(
+            "\n  target {target:.4}\n\n  {:24}{:>11}{:>12}",
+            "preset", "delivered", "stop"
+        );
+        for preset in ConversionPreset::ALL {
+            let e = preset.expand(Some(stock)).unwrap();
+            let print = PrintParams {
+                print_exposure: e.print_exposure,
+                display_tone: e.display_tone,
+                ..PrintParams::default()
+            };
+            let tone = DisplayTone::resolve(&print).expect("a preset resolves its own tone");
+            let reconstruction = Reconstruction::Density {
+                density: DensityParams {
+                    scale: e.density_scale,
+                    ..DensityParams::default()
+                },
+                curve: e.curve,
+            };
+            // `None` means the renderer *refused* the bundle — which for `sigmoid-knees`
+            // is exactly the failure `--print-exposure` would cause, so it must not be
+            // silently skipped.
+            let rgb = delivered_by(&reconstruction, stock, tone, &print)
+                .unwrap_or_else(|| panic!("{} was refused by the renderer", preset.name()));
+            let stops = (rgb[0] / target).log2();
+            println!("  {:24}{:>11.4}{:>+12.3}", preset.name(), rgb[0], stops);
+            assert!(
+                stops.abs() < 0.15,
+                "{} delivered {:.4}, {stops:+.3} stop from the shared target {target:.4}",
+                preset.name(),
+                rgb[0]
+            );
+        }
+    }
+
     /// **The `print_exposure` each candidate look needs to deliver one common mid-grey.**
     ///
     /// The looks pair a reconstruction with a display tone, and each pairing lands a true

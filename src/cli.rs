@@ -31,10 +31,11 @@ use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
 use crate::pipeline::{color, film_base, gain_map, hdr, sdr, stages, working_space};
 use crate::telemetry;
 use crate::types::{
-    AnchorPlacement, BalanceRange, BigTiff, DensityCurve, DensityCurveType, DensityParams,
-    DisplayToneCurve, DmaxSource, EncodeReport, FilmBase, FilmBaseParams, FilmBaseSource, FilmType,
-    InputParams, MeaningAssertion, NcError, OutDepth, OutputParams, OutputPreset, OutputStats,
-    PrintParams, Reconstruction, ReconstructionType, Result, TransferAssertion, WbSource,
+    AnchorPlacement, BalanceRange, BigTiff, CharacteristicParams, DensityCurve, DensityCurveType,
+    DensityParams, DisplayToneCurve, DmaxSource, EncodeReport, FilmBase, FilmBaseParams,
+    FilmBaseSource, FilmStock, FilmType, InputParams, MeaningAssertion, NcError, OutDepth,
+    OutputParams, OutputPreset, OutputStats, PrintParams, Reconstruction, ReconstructionType,
+    Result, SigmoidParams, TransferAssertion, WbSource,
 };
 use crate::version::{self, Identity};
 
@@ -229,6 +230,17 @@ pub struct ConvertArgs {
     /// `sigmoid`).
     #[arg(long = "density-curve", value_enum)]
     pub density_curve: Option<DensityCurveType>,
+    /// Named reconstruction + display bundle: `characteristic-generic`,
+    /// `characteristic-stock`, `characteristic-aim`, `sigmoid-knees`, `sigmoid-flat`.
+    /// Sets the density curve, its per-channel gain, `--print-exposure` and
+    /// `--display-tone` together, all calibrated to one brightness; individual flags
+    /// still win over it. `characteristic-stock` / `-aim` need `--film-stock`.
+    /// A CLI-only expansion — the recipe records the expanded values, not the name.
+    // A plain `String` rather than a `value_enum`: the parse error then lists the
+    // accepted spellings from one place (`ConversionPreset::parse`), the same reason
+    // `--film-stock` and `--output-preset` are strings.
+    #[arg(long = "preset", value_name = "NAME")]
+    pub preset: Option<String>,
     /// Removed: the pre-reconstruction algorithm selector. Kept hidden only to
     /// emit a migration error pointing at `--reconstruction`/`--density-curve`
     /// (nc is unreleased — no aliases).
@@ -430,6 +442,8 @@ pub struct DensityOverrides {
     pub density_gamma: Option<f32>,
     /// Film stock whose published characteristic curve to invert (with
     /// `--density-curve characteristic`). Omit for the generic C-41 profile.
+    /// Beside `--preset`, this is required by `characteristic-stock` /
+    /// `characteristic-aim` and refused by the other three.
     // A plain `String` rather than a `value_enum`: the parse error then lists the accepted
     // spellings from one place (`FilmStock::parse`) that the recipe path shares, instead of
     // clap and the deserializer each growing their own list to keep in step.
@@ -767,6 +781,511 @@ pub struct OutputOverrides {
     /// BigTIFF promotion policy (default `auto`).
     #[arg(long, value_enum)]
     pub bigtiff: Option<BigTiff>,
+}
+
+// ---------------------------------------------------------------------------
+// Named conversion presets (`--preset`)
+// ---------------------------------------------------------------------------
+
+/// A named reconstruction + display bundle (`--preset`, `algo/conversion-presets`).
+///
+/// # Why a name rather than four flags
+///
+/// Every configuration worth shipping is a *bundle* whose numbers are meaningless
+/// separately. The `print_exposure` that lands one brightness runs **0.31 to 0.61**
+/// across the reconstructions — because they place mid-grey differently, not because
+/// anyone preferred a different look — and [`SigmoidKnees`](Self::SigmoidKnees) cannot
+/// use that knob at all. Handing a user four coupled numbers is handing them four ways
+/// to get one look wrong.
+///
+/// All five are calibrated to **one** target, not five tastes: scene mid-grey (0.18)
+/// delivered at 0.223, the brightness approved on 2026-09-09. Each preset's exposure is
+/// whatever lands it there.
+/// `pipeline::stages::midtone_placement::each_candidate_look_needs_its_own_print_exposure`
+/// prints the calibration and fails if the spread ever collapses to where one shared
+/// default would serve.
+///
+/// # It is a CLI-only expansion, not a recipe key
+///
+/// The **documented exception** to "every conversion knob is a CLI flag *and* a recipe
+/// key": a preset is not itself a knob, it only sets knobs, and every one of those
+/// (`reconstruction.curve`, `reconstruction.density.scale`, `print.print_exposure`,
+/// `print.display_tone`) is already both. So `--dump-params` writes the **expanded
+/// values** and a recipe naming a preset is rejected as an unknown field.
+///
+/// That is deliberate, and the alternative was rejected on evidence: a recipe key that
+/// re-expanded on load would render an archived recipe differently on a build whose
+/// preset definition had moved — exactly the silent drift `version::PIPELINE_FINGERPRINTS`
+/// exists to prevent. The name survives as **provenance** in the report
+/// ([`ConversionPresetResult`]), never as an input.
+///
+/// # Precedence
+///
+/// `defaults < --params recipe < --preset < flags`. The preset sits **above** the recipe,
+/// not below it: `nc params` / `--dump-params` write *every* key explicitly, so a preset
+/// layered underneath would be inert against any recipe nc itself produced. Individual
+/// flags still win over the preset, which is what lets one be used as a starting point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConversionPreset {
+    /// The characteristic curve on the derived generic C-41 profile — no
+    /// `--film-stock` needed, and the proposed future default
+    /// (`algo/split-default-migration` owns that move; nothing here changes a default).
+    CharacteristicGeneric,
+    /// The characteristic curve on the roll's own published response. Requires
+    /// `--film-stock`.
+    CharacteristicStock,
+    /// [`CharacteristicStock`](Self::CharacteristicStock) plus the aim-matched red
+    /// density scale, which reconciles the stock's curve with its own published aim
+    /// table (`film_stock::aim_red_scale`). Requires `--film-stock`, and refuses a stock
+    /// whose sheet states no usable `Δ`.
+    ///
+    /// Measured best on the corpus mean and **least consistent per frame** (0.020–0.333
+    /// against `characteristic-stock`'s 0.066–0.193, with the three Ektar frames
+    /// disagreeing with each other), which is why it is a named option rather than a
+    /// candidate default.
+    CharacteristicAim,
+    /// The shipped sigmoid with its toe and shoulder, rendered with **no display tone**
+    /// — the reconstruction's own knees carry the character.
+    ///
+    /// **Its brightness lives in the anchor, and that is forced.** `--display-tone none`
+    /// relies on the reconstruction being bounded at the render's ceiling, while
+    /// `print_exposure` is a scalar gain applied *after* the curve, so any positive value
+    /// pushes the shoulder past reference white and the range check refuses the frame
+    /// (measured on a real Ektar scan at `+0.70`: luminance 1.6236, exactly `2^0.70`).
+    /// Moving the anchor instead places mid-grey *within* the bounded range;
+    /// [`ANCHOR_MID_FRACTION`](Self::ANCHOR_MID_FRACTION) lands the shared target to
+    /// 0.027 stop.
+    SigmoidKnees,
+    /// The sigmoid with **neither** knee, the character carried by extended Reinhard —
+    /// the reconstruction/render split as `algo/reconstruction-render-curve-split`
+    /// measured it, on the parametric curve.
+    SigmoidFlat,
+}
+
+/// What a [`ConversionPreset`] resolves to. Only the four knobs a preset owns: the
+/// recipe's other fields (regional balance, film base, white balance, output preset)
+/// are untouched, which is what lets a preset be layered onto a roll calibration.
+///
+/// **`curve` is one path but six knobs, and one of them is not a look.**
+/// `reconstruction.curve.dmax` is the reference `nc estimate --d-max-region` measures
+/// once for a roll, so [`preset_curve`] carries it across rather than letting the
+/// replacement take it — without that, `--params roll.json --preset sigmoid-flat` reset a
+/// measured reference to `fixed` and rendered the roll off its own calibration at exit 0.
+///
+/// **A preset must never set `output.preset`.** `legacy` / `custom` / `film-master`
+/// refuse `reinhard` outright and `film-master` refuses any non-default
+/// `print_exposure`, so a preset that pinned an output branch would make a bare
+/// `nc convert --output-preset film-master` fail. Keeping the two axes separate is what
+/// lets the conversion default move later without touching the master path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PresetExpansion {
+    pub curve: DensityCurve,
+    pub density_scale: [f32; 3],
+    pub print_exposure: f32,
+    pub display_tone: DisplayToneCurve,
+}
+
+impl ConversionPreset {
+    /// Every preset this build accepts, in help order.
+    ///
+    /// Diagnostics are generated from this list rather than restating it — the
+    /// [`OutputPreset::ALL`] precedent, where two hand-written "accepted: …" lists both
+    /// went stale the moment a preset shipped, hiding exactly the name the user reached
+    /// for.
+    pub const ALL: [ConversionPreset; 5] = [
+        ConversionPreset::CharacteristicGeneric,
+        ConversionPreset::CharacteristicStock,
+        ConversionPreset::CharacteristicAim,
+        ConversionPreset::SigmoidKnees,
+        ConversionPreset::SigmoidFlat,
+    ];
+
+    /// The anchor placement [`SigmoidKnees`](Self::SigmoidKnees) takes its brightness
+    /// from, against the shipped default of 0.50 — swept and pinned by
+    /// `pipeline::stages::midtone_placement::the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor`.
+    /// A *lower* fraction renders brighter.
+    pub const ANCHOR_MID_FRACTION: f32 = 0.42;
+
+    /// The wire name, matching the `--preset` spelling.
+    pub fn name(self) -> &'static str {
+        match self {
+            ConversionPreset::CharacteristicGeneric => "characteristic-generic",
+            ConversionPreset::CharacteristicStock => "characteristic-stock",
+            ConversionPreset::CharacteristicAim => "characteristic-aim",
+            ConversionPreset::SigmoidKnees => "sigmoid-knees",
+            ConversionPreset::SigmoidFlat => "sigmoid-flat",
+        }
+    }
+
+    /// Parse a `--preset` value. Case-insensitive: these are keywords, not paths
+    /// (the [`OutputPreset::parse`] precedent).
+    pub fn parse(s: &str) -> Result<Self> {
+        let name = s.trim().to_ascii_lowercase();
+        Self::ALL
+            .into_iter()
+            .find(|p| p.name() == name)
+            .ok_or_else(|| {
+                NcError::Usage(format!(
+                    "unknown conversion preset `{}` — accepted: {}",
+                    s.trim(),
+                    Self::accepted_list()
+                ))
+            })
+    }
+
+    /// The accepted names as a comma-separated backticked list, for diagnostics.
+    fn accepted_list() -> String {
+        Self::ALL
+            .iter()
+            .map(|p| format!("`{}`", p.name()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Whether this preset reconstructs through a named film stock, and therefore needs
+    /// `--film-stock` to mean anything.
+    ///
+    /// Exhaustive on purpose — a new preset states its answer rather than inheriting one
+    /// from "is it characteristic", which `characteristic-generic` would answer wrongly.
+    pub fn needs_film_stock(self) -> bool {
+        match self {
+            ConversionPreset::CharacteristicStock | ConversionPreset::CharacteristicAim => true,
+            ConversionPreset::CharacteristicGeneric
+            | ConversionPreset::SigmoidKnees
+            | ConversionPreset::SigmoidFlat => false,
+        }
+    }
+
+    /// Whether this preset's brightness comes from the anchor rather than
+    /// `print_exposure` — see [`SigmoidKnees`](Self::SigmoidKnees) for why the two knobs
+    /// are incompatible by construction on that bundle.
+    pub fn brightness_is_in_the_anchor(self) -> bool {
+        matches!(self, ConversionPreset::SigmoidKnees)
+    }
+
+    /// Resolve the preset against the `--film-stock` the command line named (`None` when
+    /// it named none).
+    ///
+    /// The stock is resolved *here* rather than left to the later `--film-stock` merge
+    /// arm because [`CharacteristicAim`](Self::CharacteristicAim) derives its density
+    /// scale from the stock's own published aim table: the value has to exist before the
+    /// arm that would set the stock runs. The arm still runs afterwards and writes the
+    /// same value, which is a no-op.
+    pub fn expand(self, stock: Option<FilmStock>) -> Result<PresetExpansion> {
+        let reinhard = DisplayToneCurve::Reinhard {
+            headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
+        };
+        let characteristic =
+            |stock: FilmStock| DensityCurve::Characteristic(CharacteristicParams { stock });
+        // The characteristic curve's own per-channel default: it already carries each
+        // stock's channel structure, so the parametric curves' `[1, 0.90, 0.86]`
+        // calibration would correct it twice. Resolved through the shared definition
+        // rather than spelled here — `DensityParams::default_scale_for` is the single
+        // one, and a literal would be a second that could drift from it.
+        let characteristic_scale =
+            DensityParams::default_scale_for(DensityCurveType::Characteristic);
+        let sigmoid_scale = DensityParams::default_scale_for(DensityCurveType::Sigmoid);
+
+        Ok(match self {
+            ConversionPreset::CharacteristicGeneric => PresetExpansion {
+                curve: characteristic(FilmStock::GenericC41),
+                density_scale: characteristic_scale,
+                print_exposure: 0.39,
+                display_tone: reinhard,
+            },
+            ConversionPreset::CharacteristicStock => PresetExpansion {
+                curve: characteristic(self.require_stock(stock)?),
+                density_scale: characteristic_scale,
+                print_exposure: 0.31,
+                display_tone: reinhard,
+            },
+            ConversionPreset::CharacteristicAim => {
+                let stock = self.require_stock(stock)?;
+                // The reciprocal — `--density-scale` multiplies the *scan's* density
+                // before the table is inverted, while the factor that matches the aim
+                // table scales the *table's*. `film_stock::aim_red_scale` returns the
+                // flag-side value and its rustdoc carries the measurement; getting the
+                // direction backwards takes the green-magenta drift from +0.01 to +0.72
+                // stop per unit density, worse than applying nothing.
+                let red = crate::algo::film_stock::aim_red_scale(stock).ok_or_else(|| {
+                    NcError::Usage(format!(
+                        "`--preset characteristic-aim` derives a red density scale from \
+                         the stock's published aim table, but `{}` states none that can \
+                         be used — the two 800-speed sheets tabulate a Δ their own curves \
+                         contradict by +44%. Use `--preset characteristic-stock` for this \
+                         stock, or name one whose sheet is self-consistent: {}",
+                        stock.as_str(),
+                        self.accepted_stock_list()
+                    ))
+                })?;
+                PresetExpansion {
+                    curve: characteristic(stock),
+                    density_scale: [red, characteristic_scale[1], characteristic_scale[2]],
+                    print_exposure: 0.31,
+                    display_tone: reinhard,
+                }
+            }
+            ConversionPreset::SigmoidKnees => PresetExpansion {
+                curve: DensityCurve::Sigmoid(SigmoidParams {
+                    anchor: AnchorPlacement::MidAtDmaxFraction(Self::ANCHOR_MID_FRACTION),
+                    ..SigmoidParams::default()
+                }),
+                density_scale: sigmoid_scale,
+                // Not a taste and not a rounding of 0.70: this bundle *cannot* take a
+                // scalar gain after the curve at all. Its brightness is the anchor above.
+                print_exposure: 0.0,
+                display_tone: DisplayToneCurve::None,
+            },
+            ConversionPreset::SigmoidFlat => PresetExpansion {
+                curve: DensityCurve::Sigmoid(SigmoidParams {
+                    toe: 0.0,
+                    shoulder: 0.0,
+                    ..SigmoidParams::default()
+                }),
+                density_scale: sigmoid_scale,
+                print_exposure: 0.61,
+                display_tone: reinhard,
+            },
+        })
+    }
+
+    /// The stock this preset needs, or the usage error naming what to pass.
+    ///
+    /// The accepted list is **this preset's**, not `FilmStock`'s: `characteristic-aim`
+    /// cannot use a stock whose sheet states no usable `Δ`, so offering the full list
+    /// would hand out three names that fail on the next run — the remedy-must-work rule.
+    fn require_stock(self, stock: Option<FilmStock>) -> Result<FilmStock> {
+        let named = stock.ok_or_else(|| {
+            NcError::Usage(format!(
+                "`--preset {}` reconstructs through a named film stock's published \
+                 response, so it needs `--film-stock <name>`. For the averaged generic \
+                 C-41 profile, use `--preset characteristic-generic` instead. Accepted \
+                 stocks: {}",
+                self.name(),
+                self.accepted_stock_list()
+            ))
+        })?;
+        // The generic profile is a stock *name* but not a published response — it is the
+        // average of nine sheets. Accepting it here would render the generic curve at
+        // this bundle's own exposure (0.31 against `characteristic-generic`'s 0.39),
+        // i.e. the generic look, miscalibrated, under a name promising the roll's own.
+        if named == FilmStock::GenericC41 {
+            return Err(NcError::Usage(format!(
+                "`--film-stock generic-c41` names the derived average of nine published \
+                 sheets, not one film's own response, so `--preset {}` has nothing \
+                 stock-specific to reconstruct through — and its brightness is \
+                 calibrated for a real sheet. Use `--preset characteristic-generic`, \
+                 which is that profile with its own exposure",
+                self.name()
+            )));
+        }
+        Ok(named)
+    }
+
+    /// The stocks this preset can actually reconstruct through, for diagnostics.
+    fn accepted_stock_list(self) -> String {
+        FilmStock::ALL
+            .iter()
+            .filter(|s| **s != FilmStock::GenericC41)
+            .filter(|s| {
+                self != ConversionPreset::CharacteristicAim
+                    || crate::algo::film_stock::aim_red_scale(**s).is_some()
+            })
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// The report's `conversion_preset` block: which `--preset` ran, and which of the knobs
+/// it owns a flag moved afterwards.
+///
+/// **Provenance, not a re-runnable input.** A preset is a CLI-only expansion, so the
+/// recipe carries the expanded values and this block carries the name that produced
+/// them. Replay goes through the recipe; this exists so a reader can tell
+/// "`characteristic-generic`" from "someone typed those four values".
+///
+/// `overridden` is what keeps the name honest. Flags win over a preset, so
+/// `--preset characteristic-aim --density-curve sigmoid` renders a sigmoid — and a block
+/// that named the preset and stopped there would be a report contradicting its own
+/// recipe. Listing the recipe paths the flags moved is the alternative to either
+/// refusing the combination or lying about it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ConversionPresetResult {
+    /// The `--preset` name, as spelled on the command line's accepted list.
+    pub name: &'static str,
+    /// Recipe paths this preset set whose resolved value a later flag changed. Empty
+    /// when the render is the bundle exactly as the preset defines it.
+    pub overridden: Vec<&'static str>,
+    /// Preset-owned recipe paths where the render differs from the loaded `--params`
+    /// recipe — i.e. what naming the preset changed. Empty when no recipe was loaded, and
+    /// when the recipe already agreed with the bundle.
+    ///
+    /// The roll-fixed `reconstruction.curve.dmax` is *carried* across a preset rather than
+    /// replaced, so a recipe differing only in its calibration correctly reports nothing
+    /// here.
+    ///
+    /// Separate from [`Self::overridden`] because they answer opposite questions, and one
+    /// cannot stand in for the other: `overridden` diffs the resolved config against the
+    /// preset's own expansion, so by construction it is *empty* exactly when the preset
+    /// won — which is the moment a reader most needs to be told something was replaced.
+    /// Claiming otherwise is how the suppressed curve-switch warnings were justified.
+    pub replaced: Vec<&'static str>,
+}
+
+/// Build the report's `conversion_preset` block by re-expanding the named preset and
+/// comparing it against what actually resolved.
+///
+/// A **diff against the resolved config**, not a record of which flags were passed:
+/// those are different questions, and only this one answers "did the render end up
+/// being the bundle". `--preset sigmoid-flat --sigmoid-shoulder 0` passes a flag and
+/// changes nothing, so it is correctly not an override.
+fn conversion_preset_result(
+    args: &ConvertArgs,
+    recipe: Option<&ResolvedConfig>,
+    cfg: &ResolvedConfig,
+) -> Result<Option<ConversionPresetResult>> {
+    let Some(name) = args.preset.as_deref() else {
+        return Ok(None);
+    };
+    let preset = ConversionPreset::parse(name)?;
+    let stock = args
+        .density
+        .film_stock
+        .as_deref()
+        .map(|n| FilmStock::parse(n).map_err(NcError::Usage))
+        .transpose()?;
+    let expansion = preset.expand(stock)?;
+    let (curve, scale) = match &cfg.reconstruction {
+        Reconstruction::Density { curve, density } => (Some(*curve), Some(density.scale)),
+        // Unreachable through `merge`, which refuses a preset over `simple`. Reported
+        // as "everything moved" rather than panicking: a report is diagnostics, and a
+        // future caller that reaches this state should see it, not crash.
+        Reconstruction::Simple => (None, None),
+    };
+    let expected_curve = match recipe.map(|r| &r.reconstruction) {
+        Some(Reconstruction::Density { curve, .. }) => preset_curve(expansion.curve, curve),
+        _ => expansion.curve,
+    };
+    let overridden = [
+        ("reconstruction.curve", curve != Some(expected_curve)),
+        (
+            "reconstruction.density.scale",
+            scale != Some(expansion.density_scale),
+        ),
+        (
+            "print.print_exposure",
+            cfg.print.print_exposure != expansion.print_exposure,
+        ),
+        (
+            "print.display_tone",
+            cfg.print.display_tone != expansion.display_tone,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(path, moved)| moved.then_some(path))
+    .collect();
+    Ok(Some(ConversionPresetResult {
+        name: preset.name(),
+        overridden,
+        replaced: recipe.map_or_else(Vec::new, |r| preset_replaced_paths(r, cfg)),
+    }))
+}
+
+/// The recipe's reconstruction with only the `--preset` step applied — the baseline the
+/// curve-switch warnings measure against.
+///
+/// Without a preset this is the recipe unchanged, so the warnings behave exactly as they
+/// did. With one, it isolates what a *flag* went on to change from what the preset itself
+/// replaced, which the warnings cannot describe correctly (they phrase every switch as a
+/// `--density-curve` one) and `conversion_preset.replaced` reports instead.
+///
+/// Applies the same two writes as [`merge`]'s preset arm and shares [`preset_curve`] with
+/// it, so the baseline cannot drift from what actually resolved.
+fn reconstruction_after_preset(
+    recipe: &Reconstruction,
+    args: &ConvertArgs,
+) -> Result<Reconstruction> {
+    let Some(name) = args.preset.as_deref() else {
+        return Ok(recipe.clone());
+    };
+    let Reconstruction::Density { density, curve } = recipe else {
+        // `merge` refuses this pairing outright; nothing to baseline.
+        return Ok(recipe.clone());
+    };
+    let preset = ConversionPreset::parse(name)?;
+    let stock = args
+        .density
+        .film_stock
+        .as_deref()
+        .map(|n| FilmStock::parse(n).map_err(NcError::Usage))
+        .transpose()?;
+    let expansion = preset.expand(stock)?;
+    Ok(Reconstruction::Density {
+        density: DensityParams {
+            scale: expansion.density_scale,
+            ..*density
+        },
+        curve: preset_curve(expansion.curve, curve),
+    })
+}
+
+/// A preset's curve with the recipe's roll-fixed reference carried into it.
+///
+/// Shared by [`merge`]'s preset arm and [`conversion_preset_result`] so the two cannot
+/// disagree about what the bundle resolves to. They did once: with the carry applied only
+/// in `merge`, the report's `overridden` diff saw the resolved curve differ from the raw
+/// expansion and reported `reconstruction.curve` as flag-overridden on a run with no such
+/// flag.
+///
+/// Carried on exactly the condition the `--density-curve` arm uses — both sides take a
+/// reference — because `characteristic` reports `DmaxSource::None` to mean "reads no
+/// reference", which is a different claim from the parametric `None`.
+fn preset_curve(expansion: DensityCurve, recipe: &DensityCurve) -> DensityCurve {
+    let mut curve = expansion;
+    if recipe.curve_type().takes_dmax()
+        && expansion.curve_type().takes_dmax()
+        && let Some(slot) = curve.dmax_mut()
+    {
+        *slot = recipe.dmax();
+    }
+    curve
+}
+
+/// The preset-owned recipe paths whose value the preset replaced.
+///
+/// A plain recipe-versus-resolved diff over the four paths a preset writes. `curve` is
+/// compared as a whole because that is the granularity a preset replaces it at — and the
+/// roll-fixed `dmax` inside it is carried across rather than replaced, so a recipe that
+/// differs only in its calibration correctly reports nothing.
+fn preset_replaced_paths(recipe: &ResolvedConfig, cfg: &ResolvedConfig) -> Vec<&'static str> {
+    let curve_of = |c: &ResolvedConfig| match &c.reconstruction {
+        Reconstruction::Density { curve, density } => Some((*curve, density.scale)),
+        Reconstruction::Simple => None,
+    };
+    let (before, after) = (curve_of(recipe), curve_of(cfg));
+    [
+        (
+            "reconstruction.curve",
+            before.map(|b| b.0) != after.map(|a| a.0),
+        ),
+        (
+            "reconstruction.density.scale",
+            before.map(|b| b.1) != after.map(|a| a.1),
+        ),
+        (
+            "print.print_exposure",
+            recipe.print.print_exposure != cfg.print.print_exposure,
+        ),
+        (
+            "print.display_tone",
+            recipe.print.display_tone != cfg.print.display_tone,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(path, moved)| moved.then_some(path))
+    .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1610,6 +2129,11 @@ pub struct Report {
     /// type and its `dmax = {policy, value, provenance}` (design-spec §8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reconstruction_result: Option<ReconstructionResult>,
+    /// Which `--preset` produced this conversion, and which of its knobs a flag moved
+    /// afterwards (`convert` only, absent when no preset was named). Provenance — the
+    /// values themselves are in `recipe`; see [`ConversionPresetResult`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversion_preset: Option<ConversionPresetResult>,
     /// The pinned working-space mapping this conversion interprets the
     /// reconstructed film RGB under (`convert`): always `"nc-film-rgb-v1"`
     /// (linear Rec.709/D65 → linear ACEScg/D60; see
@@ -2773,6 +3297,77 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
         };
     }
 
+    // --preset: a named bundle, applied before every *value* flag below so each of them
+    // wins over it (`defaults < params < preset < flags`). It sits above the recipe
+    // rather than under it because `nc params` / `--dump-params` write every key
+    // explicitly — a preset layered underneath would be inert against any recipe nc
+    // produced.
+    //
+    // **After the `--reconstruction` arm above, deliberately.** A preset names a density
+    // curve, so it has to see the reconstruction type the command line actually resolved:
+    // placed before it, `--preset X --reconstruction simple` passed the guard below and
+    // then rendered a `simple` frame carrying the preset's exposure and tone.
+    //
+    // It writes only the four knobs it owns and never `output.preset`; see
+    // `ConversionPreset` for why that separation is what lets a conversion default move
+    // without breaking `film-master`.
+    if let Some(name) = args.preset.as_deref() {
+        let preset = ConversionPreset::parse(name)?;
+        // Before anything is written, and before the generic flag arms below get a chance
+        // to refuse the same command line for a less specific reason — see the function's
+        // own note on why this one rule cannot live in `validate_convert`.
+        reject_conversion_preset_conflicts(preset, args)?;
+        // Resolved here rather than left to the `--film-stock` arm below, because
+        // `characteristic-aim` derives its density scale from the stock's own aim table
+        // and so needs the stock before that arm runs. The arm then writes the same
+        // value again, which is a no-op.
+        let stock = args
+            .density
+            .film_stock
+            .as_deref()
+            .map(|n| FilmStock::parse(n).map_err(usage))
+            .transpose()?;
+        let expansion = preset.expand(stock)?;
+        match &mut cfg.reconstruction {
+            Reconstruction::Density { density, curve } => {
+                // **The roll-fixed reference survives the replacement.** A preset names a
+                // *look*; `curve.dmax` is a roll calibration measured by
+                // `nc estimate --d-max-region`, and the two are independent. Carried on
+                // exactly the condition the `--density-curve` arm below uses — both sides
+                // take a reference — so a same-type preset cannot discard what a
+                // curve-*type* switch preserves. Without this, `--params roll.json
+                // --preset sigmoid-flat` silently reset a measured `{explicit: 2.1}` to
+                // `fixed` and rendered the whole roll off its own calibration at exit 0,
+                // with no warning and `overridden: []` asserting the opposite.
+                *curve = preset_curve(expansion.curve, curve);
+                density.scale = expansion.density_scale;
+            }
+            // A preset names a density curve, which `simple` has no stage for. Refused
+            // rather than silently switched: the two answers ("give me the bundle" and
+            // "give me the direct inversion") contradict each other, and quietly picking
+            // one would render a `simple` frame reported as a preset it never ran.
+            Reconstruction::Simple => {
+                // The remedy has to name something the user can actually change, and that
+                // differs by where the `simple` came from: telling a recipe-driven run to
+                // "drop `--reconstruction simple`" names a flag it never passed.
+                let remedy = if args.reconstruction == Some(ReconstructionType::Simple) {
+                    "Drop `--reconstruction simple`, or drop the preset"
+                } else {
+                    "The recipe's `reconstruction.type` is `simple`; pass \
+                     `--reconstruction density` to switch it, or drop the preset"
+                };
+                return Err(usage(format!(
+                    "`--preset {}` selects a density curve and its display rendering, \
+                     but the resolved reconstruction is `simple` (the direct inversion \
+                     has no curve stage). {remedy}",
+                    preset.name()
+                )));
+            }
+        }
+        cfg.print.print_exposure = expansion.print_exposure;
+        cfg.print.display_tone = expansion.display_tone;
+    }
+
     // --density-curve: switch between the three curve variants inside a density
     // reconstruction. Same-type is a no-op (keeps the recipe's curve knobs); a switch takes
     // the new variant's defaults for every knob except the roll-fixed `dmax`, which is
@@ -3218,6 +3813,11 @@ pub fn validate_convert(
 ) -> Result<()> {
     // Flag-shape first: "these two requests contradict each other" is a clearer
     // diagnosis than whatever value rule the same config might also trip.
+    //
+    // The conversion-preset rule goes first among them: it names *two* things the user
+    // typed and explains the whole contradiction, where every rule below would otherwise
+    // report one disassembled piece of the bundle at a time.
+    reject_conversion_preset_with_non_display_output(cfg, args)?;
     reject_out_depth_with_atomic_preset(cfg, args)?;
     reject_dmax_flag_with_characteristic_curve(cfg, args)?;
     // A headroom given while the resolved tone has no white point is silently dropped by
@@ -3275,6 +3875,112 @@ pub fn validate_convert(
     // only then mentions the suffix, making the user fix two things in series.
     reject_output_suffix_mismatch(cfg, args, recipe_preset)?;
     validate(cfg)?;
+    Ok(())
+}
+
+/// A `--preset` beside an output branch with no display stage.
+///
+/// Every conversion preset is a reconstruction **and display** bundle: all five set
+/// `print.display_tone` and four set `print.print_exposure`, which is precisely what
+/// `legacy` / `custom` / `film-master` refuse. Without this rule all fifteen pairings were
+/// already refused — but by the *generic* value rules, so every message blamed a flag the
+/// user never typed (`--display-tone`, `--print-exposure`) and none named `--preset`.
+/// `film-master` was worse: its rule reports one offender at a time, so the bundle came
+/// apart over three runs (`--print-exposure 0`, then `--display-tone shoulder`) and the
+/// fourth succeeded with the report still claiming the preset's name over a render that
+/// had none of it left.
+///
+/// Ordered before every other rule in [`validate_convert`] because it is the only one that
+/// can state the actual contradiction rather than a symptom of it.
+fn reject_conversion_preset_with_non_display_output(
+    cfg: &ResolvedConfig,
+    args: &ConvertArgs,
+) -> Result<()> {
+    let Some(name) = args.preset.as_deref() else {
+        return Ok(());
+    };
+    if cfg.output.preset.applies_display_tone() {
+        return Ok(());
+    }
+    let preset = ConversionPreset::parse(name)?;
+    // Generated, never written out: a hand-kept list here would be the fourth copy of an
+    // accepted-preset list in this file, and the previous three all went stale.
+    let display_presets = OutputPreset::ALL
+        .into_iter()
+        .filter(|p| p.applies_display_tone())
+        .map(|p| format!("`{}`", p.name()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(NcError::Usage(format!(
+        "`--preset {}` is a reconstruction **and display** bundle — it sets the display \
+         tone (and its print exposure) that make the look — but `--output-preset {}` runs \
+         no display stage, so there is nothing for that half of the bundle to configure. \
+         Either convert with an output preset that renders a display image ({}), or drop \
+         `--preset` and set the reconstruction knobs directly (`--density-curve`, \
+         `--film-stock`, `--density-scale`) — that is the combination `{}` is for.",
+        preset.name(),
+        cfg.output.preset.name(),
+        display_presets,
+        cfg.output.preset.name(),
+    )))
+}
+
+/// The `--preset` rules that need **flag presence**, not the resolved value.
+///
+/// **Called from [`merge`]'s preset arm, not from [`validate_convert`]** — the one
+/// flag-presence rule that cannot live in the gate. `validate_convert` runs *after*
+/// `merge`, and merge's own `--film-stock` arm already refuses a stock beside a resolved
+/// parametric curve, so from there this rule was unreachable for the two sigmoid presets:
+/// `--preset sigmoid-flat --film-stock ektar-100` got "pass `--density-curve
+/// characteristic`", and following that remedy landed on *this* rule saying the preset has
+/// no stock — a two-step contradictory diagnosis. Running it beside the preset expansion
+/// makes the ordering structural rather than a property of where the call sits.
+///
+/// Deliberately **not** a value rule, and deliberately **not** general. The
+/// `sigmoid-knees` case looks like "`--display-tone none` plus a positive
+/// `print_exposure`", but that pair has no general rule and must not gain one: dark
+/// enough content renders under it at exit 0, so refusing the combination outright would
+/// reject valid frames. What is refused is stating a knob the *named bundle* does not
+/// use — a contradiction visible in the request itself.
+fn reject_conversion_preset_conflicts(preset: ConversionPreset, args: &ConvertArgs) -> Result<()> {
+    // `--film-stock` next to a preset that reconstructs through the generic profile is
+    // accepted-and-ignored otherwise: the merge arm writes the stock onto a
+    // `characteristic-generic` curve and the render silently becomes
+    // `characteristic-stock` under the wrong name and the wrong exposure (0.39 against
+    // that bundle's 0.31).
+    if args.density.film_stock.is_some() && !preset.needs_film_stock() {
+        return Err(NcError::Usage(format!(
+            "--film-stock names a published response, but `--preset {}` does not \
+             reconstruct through one{}. Use `--preset characteristic-stock` to \
+             reconstruct through that stock's own curve, or drop `--film-stock`",
+            preset.name(),
+            match preset {
+                ConversionPreset::CharacteristicGeneric =>
+                    " (it uses the derived generic C-41 profile, the average of nine \
+                     published sheets)",
+                _ => " (it reconstructs with a parametric curve, which has no stock)",
+            }
+        )));
+    }
+
+    // The one bundle whose brightness is structurally not in `print_exposure`.
+    // `0` is allowed: it is the value the preset itself resolves, so it forces nothing
+    // — the identity-value half of the presence-rule tiebreaker.
+    if preset.brightness_is_in_the_anchor()
+        && let Some(v) = args.print.print_exposure
+        && v != 0.0
+    {
+        return Err(NcError::Usage(format!(
+            "--print-exposure {v} cannot brighten `--preset {}`. That bundle renders \
+             with `--display-tone none`, which relies on the reconstruction staying \
+             inside the render's ceiling, and `print_exposure` is a scalar gain applied \
+             *after* the curve — any positive value pushes the shoulder past reference \
+             white and the frame is refused. Move mid-grey with `--anchor-mid-fraction` \
+             instead (the preset resolves {}; lower renders brighter)",
+            preset.name(),
+            ConversionPreset::ANCHOR_MID_FRACTION
+        )));
+    }
     Ok(())
 }
 
@@ -4909,6 +5615,7 @@ fn convert_frame(
     cfg: &ResolvedConfig,
     input_from_cli: InputFromCli,
     dmax_setting: DmaxSetting,
+    conversion_preset: Option<ConversionPresetResult>,
     budget: memory::Budget,
     memory_out: &mut Option<MemoryReport>,
     log: &Log,
@@ -4940,6 +5647,7 @@ fn convert_frame(
         // The effective recipe (the sidecar's exact object), so
         // `recipe.reconstruction` is the tagged reconstruction schema.
         recipe: Some(cfg.clone()),
+        conversion_preset,
         film_base_source: Some(base_source.clone()),
         ..Report::default()
     };
@@ -5855,6 +6563,9 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // `--density-curve` switch that discards a stated anchor placement.
     let recipe_reconstruction = loaded.cfg.reconstruction.clone();
     let recipe_display_tone = loaded.cfg.print.display_tone;
+    // The whole loaded recipe, so the report can say which of its values a `--preset`
+    // replaced. `merge` consumes it, and the resolved config alone cannot answer that.
+    let recipe_cfg = loaded.cfg.clone();
     let cfg = merge(loaded.cfg, &args)?;
     // The *complete* convert gate: `validate`'s resolved-config rules plus the two
     // provenance-sensitive rules that cannot live there (see `validate_convert`).
@@ -5928,8 +6639,24 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // recipe that pinned a non-default one loses it. Suppressed when an `--anchor-*`
     // flag restated a placement — the resolved rule is then the user's own choice,
     // not a silent drop.
+    // **The baseline for both curve-switch warnings is the post-preset state, not the
+    // recipe.** They exist to catch a *silent* reset and they phrase it as a
+    // `--density-curve` switch, so measuring from the recipe made them three ways wrong on
+    // a preset run: they named a flag the user never passed, stated the target curve's
+    // *default* gain where a preset resolves something else (`characteristic-aim` renders
+    // `[1.1133202, 1, 1]`), and offered a remedy — "restate `--density-scale <the recipe's
+    // value>`" — that would have defeated the preset's own aim correction. What the preset
+    // replaced is reported by `conversion_preset.replaced` instead; **not** by
+    // `overridden`, which diffs against the preset's expansion and so is empty in exactly
+    // this case.
+    //
+    // Measuring from *after* the preset rather than simply suppressing on
+    // `args.preset.is_some()` keeps the warnings live for the case they still cover: a
+    // switch the user's own `--density-curve` caused, on a command line that also names a
+    // preset.
+    let warn_baseline = reconstruction_after_preset(&recipe_reconstruction, &args)?;
     if anchor_flag_placement(&args.anchor).is_none()
-        && let Some(msg) = curve_switch_dropped_anchor(&recipe_reconstruction, &cfg.reconstruction)
+        && let Some(msg) = curve_switch_dropped_anchor(&warn_baseline, &cfg.reconstruction)
     {
         push_warning_buf(&mut warnings, &log, msg);
     }
@@ -5937,8 +6664,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // per-channel gain. Suppressed when `--density-scale` restated one — the resolved gain
     // is then the user's own choice rather than a silent reset.
     if args.density.density_scale.is_none()
-        && let Some(msg) =
-            curve_switch_dropped_density_scale(&recipe_reconstruction, &cfg.reconstruction)
+        && let Some(msg) = curve_switch_dropped_density_scale(&warn_baseline, &cfg.reconstruction)
     {
         push_warning_buf(&mut warnings, &log, msg);
     }
@@ -5959,6 +6685,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
             meaning: args.input_opts.input_meaning.is_some(),
         },
         dmax_setting,
+        conversion_preset_result(&args, args.recipe_in.is_some().then_some(&recipe_cfg), &cfg)?,
         args.memory.budget(),
         // `convert` reads the preflight decision off the returned report; the
         // out-param exists for `roll`'s failed frames.
@@ -7132,6 +7859,9 @@ fn run_roll(args: RollArgs) -> Result<()> {
             &pf.cfg,
             InputFromCli::none(),
             pf.dmax_setting,
+            // `roll` has no `--preset` flag — its shared recipe already carries the
+            // expanded values, which is the whole point of the expansion being CLI-only.
+            None,
             args.memory.budget(),
             &mut memory,
             &log,
@@ -7889,6 +8619,528 @@ mod tests {
             Command::Convert(a) => a,
             _ => unreachable!("expected convert"),
         }
+    }
+
+    // --- named conversion presets (`--preset`) --------------------------------
+
+    /// Resolve a `--preset` invocation through the real parser and merge.
+    fn merged(extra: &[&str]) -> Result<ResolvedConfig> {
+        merge(base_cfg(), &parse_convert(extra))
+    }
+
+    /// The resolved (curve, density gain, exposure, tone) a merge produced.
+    fn bundle_of(cfg: &ResolvedConfig) -> (DensityCurve, [f32; 3], f32, DisplayToneCurve) {
+        let Reconstruction::Density { curve, density } = &cfg.reconstruction else {
+            panic!("expected a density reconstruction");
+        };
+        (
+            *curve,
+            density.scale,
+            cfg.print.print_exposure,
+            cfg.print.display_tone,
+        )
+    }
+
+    /// Every preset resolves the four knobs it owns, and **only** those four.
+    ///
+    /// The values themselves are calibrated and pinned by
+    /// `pipeline::stages::midtone_placement::every_preset_lands_the_shared_brightness_target`;
+    /// what this pins is that the expansion reaches the resolved config through the real
+    /// parser and merge — a preset whose `expand` is right but whose merge arm lands in
+    /// the wrong place would still pass the calibration test.
+    #[test]
+    fn each_preset_expands_into_the_resolved_config() {
+        for preset in ConversionPreset::ALL {
+            let stock = ["--film-stock", "portra-400"];
+            let mut argv = vec!["--preset", preset.name()];
+            if preset.needs_film_stock() {
+                argv.extend_from_slice(&stock);
+            }
+            let cfg = merged(&argv).unwrap_or_else(|e| panic!("{}: {e}", preset.name()));
+            let expansion = preset
+                .expand(preset.needs_film_stock().then_some(FilmStock::Portra400))
+                .unwrap();
+            let (curve, scale, exposure, tone) = bundle_of(&cfg);
+            assert_eq!(curve, expansion.curve, "{}", preset.name());
+            assert_eq!(scale, expansion.density_scale, "{}", preset.name());
+            assert_eq!(exposure, expansion.print_exposure, "{}", preset.name());
+            assert_eq!(tone, expansion.display_tone, "{}", preset.name());
+            // The knobs a preset must leave alone. `output.preset` is the load-bearing
+            // one: pinning an output branch here would make a bare
+            // `nc convert --output-preset film-master` fail, which is exactly what a
+            // later default migration must not do.
+            assert_eq!(cfg.output, base_cfg().output, "{}", preset.name());
+            assert_eq!(cfg.film_base, base_cfg().film_base, "{}", preset.name());
+            assert_eq!(
+                cfg.print.white_balance,
+                base_cfg().print.white_balance,
+                "{}",
+                preset.name()
+            );
+            assert_eq!(
+                cfg.print.black_point,
+                base_cfg().print.black_point,
+                "{}",
+                preset.name()
+            );
+        }
+    }
+
+    /// Flags win over the preset, knob by knob — the `preset < flags` half of the
+    /// precedence chain.
+    #[test]
+    fn a_flag_overrides_the_preset_it_sits_beside() {
+        let cfg = merged(&[
+            "--preset",
+            "sigmoid-flat",
+            "--print-exposure",
+            "0.2",
+            "--display-tone",
+            "shoulder",
+            "--density-scale",
+            "1,1,1",
+            "--sigmoid-toe",
+            "0.3",
+        ])
+        .unwrap();
+        let (curve, scale, exposure, tone) = bundle_of(&cfg);
+        assert_eq!(exposure, 0.2);
+        assert_eq!(tone, DisplayToneCurve::Shoulder);
+        assert_eq!(scale, [1.0, 1.0, 1.0]);
+        let DensityCurve::Sigmoid(s) = curve else {
+            panic!("expected a sigmoid");
+        };
+        assert_eq!(s.toe, 0.3);
+        // Untouched by any flag, so still the preset's.
+        assert_eq!(s.shoulder, 0.0);
+    }
+
+    /// The preset wins over the recipe — the `params < preset` half.
+    ///
+    /// It has to: `nc params` / `--dump-params` write **every** key explicitly, so a
+    /// preset layered underneath a recipe would be inert against any recipe nc itself
+    /// produced, which is the whole workflow this flag exists for.
+    #[test]
+    fn the_preset_overrides_a_recipe_that_stated_every_key() {
+        let recipe = ResolvedConfig {
+            reconstruction: Reconstruction::Density {
+                density: DensityParams {
+                    scale: [0.5, 0.5, 0.5],
+                    ..DensityParams::default()
+                },
+                curve: DensityCurve::Exponential(ExponentialParams::default()),
+            },
+            print: PrintParams {
+                print_exposure: -2.0,
+                display_tone: DisplayToneCurve::Shoulder,
+                ..base_cfg().print
+            },
+            ..base_cfg()
+        };
+        let cfg = merge(recipe, &parse_convert(&["--preset", "sigmoid-flat"])).unwrap();
+        let (curve, scale, exposure, tone) = bundle_of(&cfg);
+        assert!(matches!(curve, DensityCurve::Sigmoid(_)));
+        assert_eq!(
+            scale,
+            DensityParams::default_scale_for(DensityCurveType::Sigmoid)
+        );
+        assert_eq!(exposure, 0.61);
+        assert!(matches!(tone, DisplayToneCurve::Reinhard { .. }));
+    }
+
+    /// `characteristic-aim` derives its red scale from the stock, not from a table of
+    /// constants — so it differs per stock and is the reciprocal `--density-scale` takes.
+    #[test]
+    fn the_aim_preset_derives_a_per_stock_red_scale() {
+        let scale_for = |stock: &str| {
+            let cfg = merged(&["--preset", "characteristic-aim", "--film-stock", stock]).unwrap();
+            bundle_of(&cfg).1
+        };
+        let ektar = scale_for("ektar-100");
+        let gold = scale_for("gold-200");
+        assert_ne!(ektar, gold, "the scale must be the stock's own");
+        // Green and blue stay at the characteristic curve's identity: the correction is
+        // red-only, and applying the parametric curves' gain here would correct the
+        // per-channel structure the published tables already carry.
+        for s in [ektar, gold] {
+            assert_eq!([s[1], s[2]], [1.0, 1.0]);
+        }
+        // Straddles unity across the corpus — the direction is a property of each sheet.
+        assert!(ektar[0] > 1.0 && gold[0] < 1.0, "{ektar:?} {gold:?}");
+        assert_eq!(
+            ektar[0],
+            crate::algo::film_stock::aim_red_scale(FilmStock::Ektar100).unwrap()
+        );
+    }
+
+    /// A preset over `simple` is refused, whichever side resolved the `simple`.
+    #[test]
+    fn a_preset_over_simple_reconstruction_is_refused() {
+        // Named on the same command line — the case that needs `--preset` to be merged
+        // *after* the `--reconstruction` arm. Merged before it, this silently rendered a
+        // `simple` frame carrying the preset's exposure and tone.
+        let e = merged(&["--preset", "sigmoid-flat", "--reconstruction", "simple"])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("no curve stage"), "{e}");
+        assert!(e.contains("Drop `--reconstruction simple`"), "{e}");
+
+        // Inherited from the recipe, where that remedy would name a flag never passed.
+        // Asserting only the shared diagnosis cannot see that, which is how the wrong
+        // remedy survived the first round.
+        let recipe = ResolvedConfig {
+            reconstruction: Reconstruction::Simple,
+            ..base_cfg()
+        };
+        let args = parse_convert(&["--preset", "sigmoid-flat"]);
+        let e = merge(recipe.clone(), &args).unwrap_err().to_string();
+        assert!(e.contains("no curve stage"), "{e}");
+        assert!(
+            !e.contains("Drop `--reconstruction simple`"),
+            "names a flag the user never passed: {e}"
+        );
+        assert!(e.contains("--reconstruction density"), "{e}");
+        // And that remedy works.
+        assert!(
+            merge(
+                recipe,
+                &parse_convert(&["--preset", "sigmoid-flat", "--reconstruction", "density"])
+            )
+            .is_ok()
+        );
+    }
+
+    /// The two presets that reconstruct through a named stock say so, and name a remedy
+    /// that works.
+    #[test]
+    fn a_stock_preset_without_a_stock_is_refused() {
+        for name in ["characteristic-stock", "characteristic-aim"] {
+            let e = merged(&["--preset", name]).unwrap_err().to_string();
+            assert!(e.contains("--film-stock"), "{e}");
+            // **This preset's** remedy must run — naming a stock. Asserting
+            // `characteristic-generic` here instead was loop-invariant: identical on both
+            // iterations, so it read as "each preset's remedy works" while checking a
+            // third preset twice.
+            assert!(
+                merged(&["--preset", name, "--film-stock", "portra-400"]).is_ok(),
+                "{name}: the remedy it names does not run"
+            );
+        }
+    }
+
+    /// `generic-c41` is a profile, not a published response, so the stock presets refuse
+    /// it rather than rendering the generic curve at a real sheet's exposure.
+    #[test]
+    fn the_stock_presets_refuse_the_derived_generic_profile() {
+        let e = merged(&[
+            "--preset",
+            "characteristic-stock",
+            "--film-stock",
+            "generic-c41",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("characteristic-generic"), "{e}");
+    }
+
+    /// `characteristic-aim` refuses a stock whose sheet states no usable `Δ`, and offers
+    /// only stocks it can actually use.
+    #[test]
+    fn the_aim_preset_refuses_a_stock_with_no_usable_aim_table() {
+        for stock in ["portra-800", "ultramax-800"] {
+            let e = merged(&["--preset", "characteristic-aim", "--film-stock", stock])
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("characteristic-stock"), "{e}");
+            // The remedy runs...
+            assert!(merged(&["--preset", "characteristic-stock", "--film-stock", stock]).is_ok());
+            // ...and the list it offers holds no name that would fail the same way.
+            // Checked on the list itself, not the whole message: the message names the
+            // rejected stock too, which is the part that makes it a diagnosis.
+            let offered = e
+                .rsplit_once("self-consistent: ")
+                .expect("a list of stocks")
+                .1;
+            for refused in ["portra-800", "ultramax-800", "generic-c41"] {
+                assert!(!offered.contains(refused), "offers `{refused}`: {offered}");
+            }
+        }
+    }
+
+    /// `--film-stock` beside a preset that has no stock to configure is refused rather
+    /// than accepted-and-ignored — otherwise `characteristic-generic --film-stock ektar`
+    /// silently renders `characteristic-stock` at the wrong exposure.
+    #[test]
+    fn a_stock_beside_a_stockless_preset_is_refused() {
+        for name in ["characteristic-generic", "sigmoid-flat", "sigmoid-knees"] {
+            // Through `merge`, **not** by calling the rule directly. Called directly this
+            // passed while the real CLI path never reached the rule at all: merge's own
+            // `--film-stock` arm refuses a stock beside a resolved parametric curve, so
+            // the two sigmoid presets got that message instead and its remedy
+            // (`--density-curve characteristic`) led straight into this rule saying the
+            // opposite. A test that skips the path cannot see an ordering defect.
+            let e = merged(&["--preset", name, "--film-stock", "ektar-100"])
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(name), "{name} diagnosed by another rule: {e}");
+            // And specifically *not* the generic arm's message, whose remedy contradicts
+            // this one.
+            assert!(
+                !e.contains("Pass --density-curve characteristic"),
+                "{name} got the curve arm's contradictory remedy: {e}"
+            );
+            // The remedy this rule offers must itself run.
+            assert!(
+                merged(&[
+                    "--preset",
+                    "characteristic-stock",
+                    "--film-stock",
+                    "ektar-100"
+                ])
+                .is_ok()
+            );
+        }
+    }
+
+    /// `sigmoid-knees` takes its brightness from the anchor, so a non-zero
+    /// `--print-exposure` beside it is a usage error naming the knob that works.
+    ///
+    /// Scoped to the preset on purpose. The underlying pair (`--display-tone none` plus
+    /// a positive exposure) has **no** general rule and must not gain one: dark enough
+    /// content renders under it at exit 0, so a general refusal would reject valid
+    /// frames. What is refused is contradicting the bundle the user named.
+    #[test]
+    fn print_exposure_beside_the_anchor_brightened_preset_is_refused() {
+        let e = merged(&["--preset", "sigmoid-knees", "--print-exposure", "0.7"])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("--anchor-mid-fraction"), "{e}");
+        // The identity value asks for nothing — it is what the preset resolves anyway —
+        // so it is accepted, per the presence-rule tiebreaker.
+        assert!(merged(&["--preset", "sigmoid-knees", "--print-exposure", "0"]).is_ok());
+        // And the rule is preset-scoped: the same pair without the preset still merges.
+        assert!(merged(&["--display-tone", "none", "--print-exposure", "0.7"]).is_ok());
+    }
+
+    /// The parse diagnostic lists every accepted name, generated from `ALL`.
+    #[test]
+    fn an_unknown_preset_names_every_accepted_one() {
+        let e = ConversionPreset::parse("charactersitic-generic")
+            .unwrap_err()
+            .to_string();
+        for preset in ConversionPreset::ALL {
+            assert!(
+                e.contains(preset.name()),
+                "{} missing from: {e}",
+                preset.name()
+            );
+        }
+        // Keywords, not paths.
+        assert_eq!(
+            ConversionPreset::parse("  Sigmoid-Flat ").unwrap(),
+            ConversionPreset::SigmoidFlat
+        );
+    }
+
+    /// The report's provenance block names the preset and lists exactly the knobs a flag
+    /// moved afterwards — so a report can never name a bundle it did not render.
+    #[test]
+    fn the_report_records_which_preset_knobs_a_flag_moved() {
+        let args = parse_convert(&["--preset", "characteristic-generic"]);
+        let cfg = merge(base_cfg(), &args).unwrap();
+        let result = conversion_preset_result(&args, None, &cfg)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.name, "characteristic-generic");
+        assert!(result.overridden.is_empty(), "{:?}", result.overridden);
+
+        let args = parse_convert(&[
+            "--preset",
+            "characteristic-generic",
+            "--print-exposure",
+            "0.1",
+            "--density-curve",
+            "sigmoid",
+        ]);
+        let cfg = merge(base_cfg(), &args).unwrap();
+        let result = conversion_preset_result(&args, None, &cfg)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.overridden,
+            vec![
+                "reconstruction.curve",
+                "reconstruction.density.scale",
+                "print.print_exposure",
+            ]
+        );
+
+        // A flag that restates what the preset already resolved is not an override: the
+        // block is a diff against the resolved config, not a record of which flags were
+        // typed.
+        let args = parse_convert(&["--preset", "sigmoid-flat", "--sigmoid-shoulder", "0"]);
+        let cfg = merge(base_cfg(), &args).unwrap();
+        let result = conversion_preset_result(&args, None, &cfg)
+            .unwrap()
+            .unwrap();
+        assert!(result.overridden.is_empty(), "{:?}", result.overridden);
+
+        // No preset named, no block.
+        let args = parse_convert(&[]);
+        let cfg = merge(base_cfg(), &args).unwrap();
+        assert!(
+            conversion_preset_result(&args, None, &cfg)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// **A preset replaces the look, never the roll calibration.**
+    ///
+    /// `reconstruction.curve` is one recipe path but six knobs, and `dmax` is not a look:
+    /// it is the reference `nc estimate --d-max-region` measures once for a roll. The
+    /// `--density-curve` arm carries it across a curve-*type* switch; a preset replacing
+    /// the whole curve object must not discard it on a same-type one. It did: a recipe's
+    /// measured `{explicit: 2.1}` silently became `fixed`, so every frame of the roll
+    /// rendered off its own calibration at exit 0, with no warning and `overridden: []`
+    /// asserting the render *was* the bundle.
+    #[test]
+    fn a_preset_carries_the_recipes_roll_fixed_dmax() {
+        let calibrated = |curve: DensityCurve| ResolvedConfig {
+            reconstruction: Reconstruction::Density {
+                density: DensityParams::default(),
+                curve,
+            },
+            ..base_cfg()
+        };
+        let recipe = calibrated(DensityCurve::Sigmoid(SigmoidParams {
+            dmax: DmaxSource::Explicit(2.1),
+            contrast: 1.4,
+            ..SigmoidParams::default()
+        }));
+        let cfg = merge(
+            recipe.clone(),
+            &parse_convert(&["--preset", "sigmoid-flat"]),
+        )
+        .unwrap();
+        let (curve, ..) = bundle_of(&cfg);
+        assert_eq!(
+            curve.dmax(),
+            DmaxSource::Explicit(2.1),
+            "the preset discarded the roll's measured reference"
+        );
+        // The look *is* replaced — otherwise this test would pass on a preset that did
+        // nothing at all.
+        let DensityCurve::Sigmoid(s) = curve else {
+            panic!("expected a sigmoid")
+        };
+        assert_eq!(
+            (s.contrast, s.shoulder),
+            (SigmoidParams::default().contrast, 0.0)
+        );
+
+        // An explicit flag still wins over the carried value.
+        let cfg = merge(
+            recipe,
+            &parse_convert(&["--preset", "sigmoid-flat", "--d-max", "1.5"]),
+        )
+        .unwrap();
+        assert_eq!(bundle_of(&cfg).0.dmax(), DmaxSource::Explicit(1.5));
+
+        // Not carried where the target reads no reference: `characteristic` reports
+        // `DmaxSource::None` to mean "this curve resolves none", which is a different
+        // claim from the parametric `none`, and installing it would be meaningless.
+        let cfg = merge(
+            calibrated(DensityCurve::Sigmoid(SigmoidParams {
+                dmax: DmaxSource::Explicit(2.1),
+                ..SigmoidParams::default()
+            })),
+            &parse_convert(&["--preset", "characteristic-generic"]),
+        )
+        .unwrap();
+        assert!(matches!(bundle_of(&cfg).0, DensityCurve::Characteristic(_)));
+    }
+
+    /// **`overridden` and `replaced` answer opposite questions, and neither can stand in
+    /// for the other.**
+    ///
+    /// `overridden` diffs the resolved config against the preset's own expansion, so it is
+    /// empty *exactly* when the preset won — which is the moment a reader most needs to be
+    /// told the recipe's value was replaced. Justifying the suppressed curve-switch
+    /// warnings with "`conversion_preset` reports it" was false until `replaced` existed.
+    #[test]
+    fn the_report_separates_what_the_preset_replaced_from_what_a_flag_overrode() {
+        let recipe = ResolvedConfig {
+            reconstruction: Reconstruction::Density {
+                density: DensityParams::default(),
+                curve: DensityCurve::Characteristic(CharacteristicParams {
+                    stock: FilmStock::Ektar100,
+                }),
+            },
+            print: PrintParams {
+                print_exposure: -2.0,
+                ..base_cfg().print
+            },
+            ..base_cfg()
+        };
+        let args = parse_convert(&["--preset", "characteristic-generic"]);
+        let cfg = merge(recipe.clone(), &args).unwrap();
+        let r = conversion_preset_result(&args, Some(&recipe), &cfg)
+            .unwrap()
+            .unwrap();
+        // No flag moved anything...
+        assert!(r.overridden.is_empty(), "{:?}", r.overridden);
+        // ...but the preset silently swapped a pinned stock for the generic average and
+        // replaced a stated exposure. Both must be visible somewhere.
+        assert!(r.replaced.contains(&"reconstruction.curve"), "{r:?}");
+        assert!(r.replaced.contains(&"print.print_exposure"), "{r:?}");
+
+        // With no recipe loaded there is nothing to have replaced.
+        let cfg = merge(base_cfg(), &args).unwrap();
+        let r = conversion_preset_result(&args, None, &cfg)
+            .unwrap()
+            .unwrap();
+        assert!(r.replaced.is_empty(), "{:?}", r.replaced);
+
+        // A carried `dmax` is not a replacement, and must not read as a flag override
+        // either — the two diffs share `preset_curve` so they cannot disagree.
+        let recipe = ResolvedConfig {
+            reconstruction: Reconstruction::Density {
+                density: DensityParams {
+                    scale: DensityParams::default_scale_for(DensityCurveType::Sigmoid),
+                    ..DensityParams::default()
+                },
+                curve: DensityCurve::Sigmoid(SigmoidParams {
+                    dmax: DmaxSource::Explicit(2.1),
+                    ..SigmoidParams::default()
+                }),
+            },
+            ..base_cfg()
+        };
+        let args = parse_convert(&["--preset", "sigmoid-knees"]);
+        let cfg = merge(recipe.clone(), &args).unwrap();
+        let r = conversion_preset_result(&args, Some(&recipe), &cfg)
+            .unwrap()
+            .unwrap();
+        assert!(
+            r.overridden.is_empty(),
+            "the carried reference read as a flag override: {:?}",
+            r.overridden
+        );
+    }
+
+    /// A preset is a CLI expansion, never a recipe key: a recipe naming one is rejected
+    /// by `deny_unknown_fields` rather than quietly re-expanded on a build whose
+    /// definition has moved.
+    #[test]
+    fn a_recipe_cannot_name_a_conversion_preset() {
+        let e = serde_json::from_str::<ResolvedConfig>(r#"{"preset":"sigmoid-flat"}"#).unwrap_err();
+        assert!(e.to_string().contains("unknown field"), "{e}");
+        let e = serde_json::from_str::<ResolvedConfig>(
+            r#"{"reconstruction":{"preset":"sigmoid-flat"}}"#,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("unknown field"), "{e}");
     }
 
     /// A density-reconstruction config from its two blocks (the common test

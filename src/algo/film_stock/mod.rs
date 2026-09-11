@@ -206,6 +206,91 @@ pub fn apply_curve(density: DensityImage, stock: FilmStock) -> Result<(FilmRgbIm
     ))
 }
 
+/// Decades between an 18 % grey card and a ~89 % paper white — `log10(0.89 / 0.18)`.
+///
+/// The interval the *Judging Negative Exposures* aim pair spans, and therefore the
+/// interval any comparison against the curve has to use. Shared by
+/// [`aim_red_scale`] and the sheet-consistency test rather than restated: they are the
+/// same measurement read two ways, and a divergence between them would be invisible.
+pub(crate) const AIM_SEPARATION_DECADES: f32 = 0.694;
+
+/// The sheets whose two published halves disagree by too much for the aim table to
+/// correct anything, with the measured reason.
+///
+/// **Not derived from a threshold.** The corpus contains sheets that disagree by 11 %
+/// and are still usable (Ektar 100, Ultramax 400), so any cut-off separating those from
+/// these two would be a number invented to fit the answer. These are named because the
+/// inconsistency was established per sheet: both tabulate `Δ = 0.25` against their own
+/// curves' ~0.36 rise (+44 %), which is a different kind of disagreement from a curve
+/// read slightly steep.
+const NO_USABLE_AIM_DELTA: &[&str] = &["portra-800", "ultramax-800"];
+
+impl StockCurves {
+    /// Density on one channel's published curve at relative log exposure `x`, linearly
+    /// interpolated between table points and extrapolated from the end segment outside
+    /// them — the forward direction of [`invert`].
+    pub(crate) fn density_at(&self, channel: usize, x: f32) -> f32 {
+        let t = self.channels[channel];
+        let i = t.partition_point(|p| p.0 <= x).clamp(1, t.len() - 1);
+        let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
+        d0 + (x - x0) * (d1 - d0) / (x1 - x0)
+    }
+
+    /// The published `Δ` (paper white − grey card, Status M red), or `None` when this
+    /// sheet states none that can be used — the derived generic, which has no aim table
+    /// at all, and the two 800-speed sheets in [`NO_USABLE_AIM_DELTA`].
+    pub(crate) fn usable_aim_delta(&self) -> Option<f32> {
+        if NO_USABLE_AIM_DELTA.contains(&self.name) {
+            return None;
+        }
+        self.aims.map(|[grey, white]| white - grey)
+    }
+}
+
+/// The red-channel `--density-scale` factor that reconciles a stock's published
+/// characteristic curve with its own published aim table, or `None` when the sheet
+/// states no usable `Δ` (see [`StockCurves::usable_aim_delta`]).
+///
+/// # What it corrects
+///
+/// A datasheet reports the film twice: the *Judging Negative Exposures* table gives the
+/// grey-card and paper-white aim densities, and the characteristic curve gives density
+/// against exposure. They are independent measurements, and on several sheets they
+/// disagree — Ektar 100's curve rises 11 % more across the aims' own interval than its
+/// aim table says. Scaling red brings the curve to what the aim table reports.
+///
+/// # The direction is a reciprocal, and getting it backwards doubles the error
+///
+/// The factor that scales the **table's** red density is `Δ / rise` (Ektar 0.898).
+/// `--density-scale` multiplies the **scan's** density *before* the table is inverted,
+/// so the flag takes its reciprocal, `rise / Δ` (Ektar 1.114) — which is what this
+/// returns. The **direction** is measured, not argued:
+/// `algo::curve_probe::scale_against_the_characteristic_curve` applies Ektar's two
+/// candidate factors across 21 frames and finds the reciprocal takes the green–magenta
+/// drift to +0.01 stop per unit density where the table-side number takes it to +0.72,
+/// against +0.35 for applying nothing.
+///
+/// Read that probe for what it is: it hard-codes **Ektar's** pair, so it establishes the
+/// direction and that the correction helps, not that a per-stock factor generalises —
+/// which is why `--preset characteristic-aim` ships as a named option rather than a
+/// candidate default. What pins *this* function against the recorded constants is
+/// `aim_red_scale_reproduces_the_measured_constants`, which runs in CI without assets.
+///
+/// Equivalently this is `1 + error/100` for the disagreement
+/// `aim_table_agrees_with_the_curve` reports, which is why the two share
+/// [`AIM_SEPARATION_DECADES`] and [`StockCurves::usable_aim_delta`].
+pub fn aim_red_scale(stock: FilmStock) -> Option<f32> {
+    let sc = curves_for(stock);
+    let tabulated = sc.usable_aim_delta()?;
+    // The axis is built to put this stock's own mid-grey aim at `log10(0.18)`, so the
+    // curve's rise is read from there across exactly the separation the aims span.
+    // Interval-matched, not a local slope: a narrow window around mid-grey lands on a
+    // local wiggle and reports an artefact (see `aim_table_agrees_with_the_curve`).
+    let log18 = 0.18f32.log10();
+    let from_curve = sc.density_at(0, log18 + AIM_SEPARATION_DECADES) - sc.density_at(0, log18);
+    (tabulated > 0.0 && from_curve > 0.0).then_some(from_curve / tabulated)
+}
+
 /// Guard for a programmatic caller: the tables must be invertible.
 ///
 /// The shipped tables are generated and asserted in tests, so this only fires if someone
@@ -270,11 +355,14 @@ mod tests {
     ///
     /// The synthetic film model every test below builds its negatives with. Stating the
     /// round-trip property needs a forward model that is *not* the inverse under test.
+    ///
+    /// Delegates to [`StockCurves::density_at`], which `aim_red_scale` made runtime code,
+    /// rather than carrying a second copy of the interpolation — two identical
+    /// interpolators in one file is a second source of truth by construction. The
+    /// round-trip property is unaffected: what is under test is `invert` / `apply_curve`,
+    /// and this is still not that.
     fn forward(sc: &StockCurves, ch: usize, log_e: f32) -> f32 {
-        let t = sc.channels[ch];
-        let i = t.partition_point(|p| p.0 <= log_e).clamp(1, t.len() - 1);
-        let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
-        d0 + (log_e - x0) * (d1 - d0) / (x1 - x0)
+        sc.density_at(ch, log_e)
     }
 
     /// Every sheet's **own aim table** must agree with its **own curve**.
@@ -296,8 +384,6 @@ mod tests {
     /// entries in `docs/progress/algo.md` for what that points at.
     #[test]
     fn aim_table_agrees_with_the_curve() {
-        // Decades between an 18% grey card and a ~89% paper white.
-        const AIM_SEPARATION_DECADES: f32 = 0.694;
         // Sheets whose two halves disagree by more than 10%, with the measured error. Named
         // rather than skipped: an unexplained failure must not look like a tolerance choice.
         const KNOWN_INCONSISTENT: &[(&str, i32)] = &[
@@ -312,18 +398,13 @@ mod tests {
             // The opposite direction, and untested by eye — no roll of it in the fixtures.
             ("ultramax-400", -11),
         ];
-        // The 800-speed sheets tabulate Δ = 0.25 against their own curves' ~0.36; that
-        // inconsistency is established separately, so they state no usable Δ at all.
-        const NO_USABLE_DELTA: &[&str] = &["portra-800", "ultramax-800"];
-
         for sc in STOCKS {
-            let Some([grey, white]) = sc.aims else {
-                continue; // the derived generic has no aim table
-            };
-            if NO_USABLE_DELTA.contains(&sc.name) {
+            // Skips the derived generic (no aim table) and the two 800-speed sheets,
+            // whose Δ is unusable — the same predicate `aim_red_scale` refuses on, so a
+            // sheet can never be correctable by one and unchecked by the other.
+            let Some(tabulated) = sc.usable_aim_delta() else {
                 continue;
-            }
-            let at = |x: f32| forward(sc, 0, x);
+            };
             // Compare the two published quantities **over the same interval**: the curve's
             // own density rise across exactly the separation the aims span, starting at the
             // grey aim (which the axis is built to put at `log10(0.18)`).
@@ -335,8 +416,8 @@ mod tests {
             // to 1.002 and leaves every other stock unchanged, which is how the artefact
             // was found. Interval-matched quantities have no such freedom.
             let log18 = 0.18f32.log10();
-            let tabulated = white - grey;
-            let from_curve = at(log18 + AIM_SEPARATION_DECADES) - at(log18);
+            let from_curve =
+                sc.density_at(0, log18 + AIM_SEPARATION_DECADES) - sc.density_at(0, log18);
             let error_pct = (100.0 * (from_curve / tabulated - 1.0)).round() as i32;
 
             match KNOWN_INCONSISTENT.iter().find(|(n, _)| *n == sc.name) {
@@ -354,6 +435,96 @@ mod tests {
                      figure — or the extraction is wrong.",
                     sc.name
                 ),
+            }
+        }
+    }
+
+    /// The aim-matched red scale reproduces the constants the review set was rendered
+    /// with, and refuses the sheets that state no usable `Δ`.
+    ///
+    /// Those three numbers were hand-carried in `scripts/preset-review/generate.py` while
+    /// the derivation lived only in an `#[ignore]`d probe; this is what let them be
+    /// deleted. They are the *flag* values (the reciprocal), so a direction flip fails
+    /// here rather than shipping a correction that doubles the error it was meant to fix.
+    #[test]
+    fn aim_red_scale_reproduces_the_measured_constants() {
+        for (stock, expected) in [
+            (FilmStock::Ektar100, 1.114),
+            (FilmStock::Portra160, 1.029),
+            (FilmStock::Gold200, 0.955),
+        ] {
+            let got = aim_red_scale(stock).expect("a sheet with a usable aim table");
+            assert!(
+                (got - expected).abs() < 0.002,
+                "{}: aim-matched red scale {got:.4}, recorded {expected:.3}",
+                stock.as_str()
+            );
+        }
+        // The derived generic has no aim table, and the two 800-speed sheets tabulate a
+        // Δ their own curves contradict by +44 %. `characteristic-aim` refuses all three
+        // rather than applying a confidently wrong correction.
+        for stock in [
+            FilmStock::GenericC41,
+            FilmStock::Portra800,
+            FilmStock::Ultramax800,
+        ] {
+            assert!(
+                aim_red_scale(stock).is_none(),
+                "{} states no usable aim delta but produced a scale",
+                stock.as_str()
+            );
+        }
+    }
+
+    /// Which side of 1.0 the scale falls on is a fact about each sheet, not a constant —
+    /// and it is the half a "just scale red down a bit" shortcut would get wrong.
+    ///
+    /// Gold 200's curve rises *less* than its aim table says, so its factor is below 1
+    /// where Ektar's and Portra 160's are above. Pinned because the flag multiplies the
+    /// scan's density: a sign convention that happened to work on the two stocks above 1
+    /// would invert Gold's correction silently.
+    #[test]
+    fn the_scale_straddles_unity_across_the_corpus() {
+        assert!(aim_red_scale(FilmStock::Gold200).unwrap() < 1.0);
+        assert!(aim_red_scale(FilmStock::Ektar100).unwrap() > 1.0);
+        // Every usable sheet stays within a correction plausible for a digitized curve;
+        // a factor outside this means the extraction moved, not that the film did.
+        for stock in FilmStock::ALL {
+            if let Some(k) = aim_red_scale(*stock) {
+                assert!(
+                    (0.85..=1.20).contains(&k),
+                    "{}: {k:.3} is too large a correction to be a sheet disagreement",
+                    stock.as_str()
+                );
+            }
+        }
+    }
+
+    /// `density_at` is the forward direction of [`invert`], so the two must round-trip.
+    ///
+    /// Guards the shared helper the aim derivation and the sheet-consistency test both
+    /// read through: an off-by-one in its segment search would move every aim scale by a
+    /// plausible-looking amount and nothing else would notice.
+    #[test]
+    fn density_at_is_the_inverse_of_invert() {
+        for stock in FilmStock::ALL {
+            let sc = curves_for(*stock);
+            for channel in 0..3 {
+                for step in 0..=10 {
+                    let x = 0.18f32.log10() + (step as f32 - 5.0) * 0.18;
+                    let d = sc.density_at(channel, x);
+                    let (back, in_table) = invert(sc.channels[channel], d);
+                    assert!(
+                        in_table,
+                        "{} ch{channel}: {x} left the table",
+                        stock.as_str()
+                    );
+                    assert!(
+                        (back - x).abs() < 1e-4,
+                        "{} ch{channel}: {x:.4} -> density {d:.4} -> {back:.4}",
+                        stock.as_str()
+                    );
+                }
             }
         }
     }

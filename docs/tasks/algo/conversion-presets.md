@@ -53,6 +53,16 @@ These are measured, and each one killed a simpler design:
 
 ## Open questions
 
+> **Answered while building (2026-09-10)** — the reasoning and the measurements are in
+> `docs/progress/algo.md`. In short: the argument is the existing `--film-stock` flag;
+> a preset is a **CLI-only expansion** with no recipe key, so the question of
+> re-expansion does not arise; precedence is `defaults < params < preset < flags`, with
+> the preset **above** the recipe because the proposed ordering would have been inert
+> against any recipe nc writes; and the headroom default did not move. Whether the
+> aim-matched scale generalises is still open and is why it is a named option rather
+> than a candidate default.
+
+
 - **How a preset's argument is supplied.** Reusing the existing flags
   (`--preset characteristic-stock --film-stock portra-400`) needs no new parser and keeps
   "every knob is a flag" true; a compact `name:arg` form would need quoting rules. Start

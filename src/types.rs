@@ -2298,6 +2298,34 @@ impl OutputPreset {
         }
     }
 
+    /// Whether this preset's render applies `print.display_tone` at all.
+    ///
+    /// Distinct from [`Self::accepts_reinhard_tone`], which asks whether *one* operator is
+    /// carryable: this asks whether the display stage runs. They happen to partition the
+    /// same way today, and deriving one from the other is exactly the trap
+    /// `cli::required_extensions` fell into when "pins a suffix" was read as
+    /// "convert-only" — so this is its own exhaustive match and a new preset states its
+    /// answer rather than inheriting one.
+    ///
+    /// `cli`'s conversion-preset rule reads it: every `--preset` bundle sets a display
+    /// tone, so pairing one with a branch that answers `false` is a contradiction to
+    /// diagnose once, not three refusals to disassemble in sequence.
+    pub fn applies_display_tone(self) -> bool {
+        match self {
+            OutputPreset::DisplayP3
+            | OutputPreset::Compatibility
+            | OutputPreset::HdrPq
+            | OutputPreset::HdrHlg
+            | OutputPreset::HdrLinearTiff
+            | OutputPreset::HdrPqTiff
+            | OutputPreset::HdrHlgTiff
+            | OutputPreset::GainMapHdr
+            | OutputPreset::UltraHdrV1 => true,
+            // The legacy print path and the master bypass: neither has a display stage.
+            OutputPreset::Legacy | OutputPreset::Custom | OutputPreset::FilmMaster => false,
+        }
+    }
+
     /// Every preset this build accepts, in help order.
     ///
     /// Diagnostics are generated from this list rather than restating it, because

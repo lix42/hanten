@@ -1729,6 +1729,12 @@ Every conversion flag has a recipe key (for example, `--out-depth` ⇒
 object (§8). Names are binding and unknown keys are rejected
 (`deny_unknown_fields`).
 
+**One conversion flag has no recipe key: `--preset`** (see below). It is not a knob
+— it only *sets* knobs, and all four of those are flags and recipe keys already — so
+a recipe carries the expanded values rather than the name. This is narrower than the
+**operational** exception (`--report`, `--telemetry*`, `--max-memory`), which covers
+flags that touch no parameter at all.
+
 ### Input / decode
 - `--export-ir <path>` — write the IR plane to a separate TIFF (HDRi only).
   Recipe key `input.export_ir`. The **IR TIFF** follows the resolved output depth
@@ -1948,6 +1954,44 @@ geometry is forgiving: because `D = -log10(scan/base)`, a base error is a
 *constant per-channel density offset* — a global cast/exposure error correctable
 downstream (`density_offset`, white balance) — never a shadow/highlight
 crossover.
+
+### Named conversion presets
+- `--preset characteristic-generic|characteristic-stock|characteristic-aim|sigmoid-knees|sigmoid-flat`
+  — a named bundle setting `reconstruction.curve`, `reconstruction.density.scale`,
+  `print.print_exposure` and `print.display_tone` together. All five are calibrated to
+  one brightness (scene mid-grey 0.18 delivered at 0.223), so what differs between them
+  is the reconstruction and the display tone.
+- **No recipe key.** `--dump-params` writes the expanded values, so a recipe replays
+  identically on a build whose preset definitions have moved; a recipe naming a preset
+  is rejected as an unknown field. The name rides in the report as
+  `conversion_preset = {name, replaced, overridden}` — `replaced` lists the preset-owned
+  paths where the render differs from the loaded recipe (what the preset won), and
+  `overridden` the paths a flag moved after the preset set them (what a flag won). The
+  two answer opposite questions and neither substitutes for the other: `overridden` is
+  empty exactly when the preset won.
+- **The roll-fixed `reconstruction.curve.dmax` is carried, not replaced.** A preset names
+  a look; that key is the reference `estimate --d-max-region` measures for a roll. Carried
+  on the same condition the `--density-curve` switch uses (both curve types take a
+  reference), so a preset cannot discard what a curve-*type* switch preserves. An explicit
+  `--d-max` still wins.
+- **Precedence: `defaults < --params recipe < --preset < flags`.** The preset sits
+  *above* the recipe because nc writes every key explicitly, so one layered beneath a
+  recipe nc produced would have nothing left to set.
+- **A preset never sets `output.preset`.** The two are independent axes; pinning an
+  output branch here would make a bare `nc convert --output-preset film-master` fail,
+  since that branch refuses `reinhard` and any non-default `print_exposure`.
+- Refused combinations (usage errors, exit 2): `--film-stock` beside a preset with no
+  stock; `--film-stock generic-c41` under `characteristic-stock` / `-aim`;
+  `characteristic-aim` on a stock whose sheet states no usable aim delta (`portra-800`,
+  `ultramax-800`); a non-zero `--print-exposure` beside `sigmoid-knees`, whose
+  brightness is the anchor (`--anchor-mid-fraction`, lower is brighter); any preset
+  over a resolved `simple` reconstruction; and any preset beside an output preset that
+  runs no display stage (`legacy`, `custom`, `film-master` — `OutputPreset::
+  applies_display_tone`), since every bundle sets a display tone those branches refuse.
+  That last one is diagnosed **before** the generic value rules: they refuse the same
+  fifteen pairings by blaming `--display-tone` / `--print-exposure`, flags the user never
+  typed, and `film-master`'s reports one offender at a time, so the bundle came apart over
+  three runs and the fourth rendered with the preset's name still in the report.
 
 ### Reconstruction and density-curve select
 - CLI: `--reconstruction simple|density` (default `density`).
