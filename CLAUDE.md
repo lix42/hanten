@@ -790,6 +790,17 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   … have all run" for a whole preset, so `--display-tone none` made one report
   contradict itself. Prose that names an operation is a claim about the run; either
   derive it from the resolved config or say the fact in a field instead.
+  **`--preset` is the one conversion flag with no recipe key** — it is not a knob, it
+  only *sets* knobs (curve, `density.scale`, `print_exposure`, `display_tone`), all of
+  which are both already, so `--dump-params` writes the **expanded** values and a recipe
+  naming a preset is rejected. Two traps it left, both general: **`reconstruction.curve`
+  is one recipe path but six knobs**, and `curve.dmax` is a *roll calibration* rather
+  than a look — so anything replacing that object wholesale must carry `dmax` across
+  (`cli::preset_curve`, on the same `takes_dmax()` condition the `--density-curve` arm
+  uses); replacing it silently reset a measured reference on every frame of a roll at
+  exit 0. And a report field computed as a **diff against an expansion is empty exactly
+  when the expansion won**, so `conversion_preset.overridden` (resolved vs the preset)
+  could never report what the *preset* replaced — that needs its own `replaced` field.
   **`film_base.source` is the first knob with no default at all** (`Option`, no
   `Default` on `FilmBaseSource`): `convert`/`roll` refuse an unstated one rather
   than choosing. A defaultless knob adds two obligations — every `ResolvedConfig`
@@ -815,12 +826,19 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     Diagnose the more specific fault first: a rule that also matches branches it did
     not mean to will blame the wrong knob and hand out advice those branches
     themselves refuse — `--display-tone reinhard` on `film-master` was told to "use
-    `--display-tone none`", which `film-master` also rejects. This has shipped three
-    times (the anchor guard's message, `validate_output_preset`'s rule 4, then the
-    same defect via `validate_convert`, which runs *earlier*). Two habits that catch
-    it: when adding a rule, run it against **every** preset/branch it can match, not
-    just the one you wrote it for; and `assert!(err.contains(<knob>))` cannot tell two
-    rules apart when both name the knob — assert the losing rule's wording is *absent*.
+    `--display-tone none`", which `film-master` also rejects. This has shipped four
+    times (the anchor guard's message, `validate_output_preset`'s rule 4, the same
+    defect via `validate_convert`, which runs *earlier* — and then **ordering across
+    gates**: a flag-presence rule in `validate_convert` is unreachable whenever `merge`
+    refuses the same command line first, so `--preset sigmoid-flat --film-stock X` got
+    merge's "pass `--density-curve characteristic`", whose remedy landed on the preset
+    rule saying the opposite. A rule must run before anything *coarser* can refuse, not
+    merely early within its own gate). Three habits that catch it: when adding a rule,
+    run it against **every** preset/branch it can match, not just the one you wrote it
+    for; `assert!(err.contains(<knob>))` cannot tell two rules apart when both name the
+    knob — assert the losing rule's wording is *absent*; and drive the test through the
+    real path (`merge`/the binary), since a test calling the rule **directly** exercises
+    it and never the ordering, which is how the fourth instance passed CI.
   - *Validate the resolved value, never a stand-in for it.* The anchor guard once
     tested a proxy (`MID_GREY_OUTPUT_DECADES / slope`), correct for the placements
     that existed then; `black-at-base` divides the unbounded `−log10(floor)`, so a

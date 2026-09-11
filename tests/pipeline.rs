@@ -10252,3 +10252,65 @@ fn roll_warns_on_a_per_frame_film_stock_override() {
         "the control run must emit no roll-level warnings: {stdout}"
     );
 }
+
+/// **A `--preset` over a recipe must not warn about a curve switch nobody asked for.**
+///
+/// The two curve-switch warnings exist to catch a *silent* reset, and they format their
+/// message from the target curve's **default** gain. Under a preset all three of their
+/// claims were wrong: they named `--density-curve` (never passed), stated `[1, 1, 1]`
+/// where `characteristic-aim` resolves `[1.1133202, 1, 1]`, and offered a remedy —
+/// "restate `--density-scale <the recipe's value>`" — that would have silently defeated
+/// the preset's aim correction. The preset's replacement is the user's own request, so it
+/// is reported by `conversion_preset` beside the resolved recipe instead.
+///
+/// Runs the real binary, because the defect was in `run_convert`'s warning composition
+/// rather than in either warning function — a unit test of the functions reproduces
+/// neither the suppression nor the misattribution.
+#[test]
+fn a_preset_does_not_warn_about_the_curve_switch_it_was_asked_to_make() {
+    let tmp = TempDir::new("preset-curve-switch");
+    let recipe = tmp.path("recipe.json");
+    std::fs::write(
+        &recipe,
+        r#"{"reconstruction":{"schema_version":1,"type":"density",
+            "density":{"scale":[1.0,0.8,0.7]},"curve":{"type":"sigmoid"}},
+            "film_base":{"source":{"explicit":[0.9,0.55,0.42]}}}"#,
+    )
+    .unwrap();
+    let out = tmp.path("out.jpg");
+    let (code, stdout, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--preset",
+        "characteristic-aim",
+        "--film-stock",
+        "ektar-100",
+        "--report",
+        "json",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        !err.contains("density.scale") && !err.contains("--density-curve"),
+        "the preset's own curve switch was reported as an unasked-for reset:\n{err}"
+    );
+
+    // Falsifiable: the switch really did replace the recipe's gain, so the suppression is
+    // load-bearing rather than a condition that never matches. The resolved gain is the
+    // preset's derived one — the very value the suppressed warning would have misstated.
+    let report = json(&stdout);
+    let scale = &report["recipe"]["reconstruction"]["density"]["scale"];
+    assert_eq!(scale[1].as_f64().unwrap(), 1.0, "recipe gain not replaced");
+    let red = scale[0].as_f64().unwrap();
+    assert!(
+        (red - 1.113_320_2).abs() < 1e-6,
+        "expected the derived aim scale, got {red}"
+    );
+    assert_eq!(
+        report["conversion_preset"]["name"], "characteristic-aim",
+        "the replacement must still be attributed somewhere"
+    );
+}

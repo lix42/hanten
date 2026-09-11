@@ -955,7 +955,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   rescoping `algo/exponential-anchor-placement`'s negative verdict, which measured that curve
   under the *old knee*. `film-master` needs no change: its contract is the configured
   reconstruction, not a curve shape. Default activation is `algo/split-default-migration`
-- [ ] [Named conversion presets](tasks/algo/conversion-presets.md) — `--preset` selecting
+- [x] [Named conversion presets](tasks/algo/conversion-presets.md) — `--preset` selecting
   one of five reconstruction + display bundles by name, folding the coupled magic numbers
   (a per-reconstruction `print_exposure` from 0.31 to 0.70, the per-stock aim-matched red
   scale) into one stated brightness target. `characteristic-generic` becomes the default,

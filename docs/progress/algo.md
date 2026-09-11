@@ -37,17 +37,29 @@ What other epics need to know about `algo`:
   dark enough content still renders at exit 0. The legacy `algorithm` +
   top-level `density`/`sigmoid`/`simple` keys are **rejected with migration
   errors** — never re-add them as aliases.
-- **Named conversion presets are filed, not built** (`algo/conversion-presets`, 2026-09-09).
-  `--preset` will select one of five reconstruction + display bundles, because every
-  configuration worth shipping is a bundle whose numbers are meaningless separately — the
-  `print_exposure` matching one brightness runs 0.31–0.70 across reconstructions. Two facts
-  a caller needs before then: **a preset will not set `output.preset`** (so the non-display
-  presets keep resolving their own tone and exposure, which is what lets a default move
-  without breaking `film-master`), and **`sigmoid-knees` takes its brightness from the
-  anchor rather than `print_exposure`**, because `--display-tone none` refuses any scalar
-  gain applied after a bounded curve. `characteristic-generic` becoming the default is the
-  `algo/split-default-migration` step. Its no-stock blocker was **lifted 2026-09-10**; what
-  gates it now is the green residual (`io/scanner-density-calibration`).
+- **`--preset` ships five named reconstruction + display bundles** (`algo/conversion-presets`,
+  2026-09-10), because every configuration worth shipping is a bundle whose numbers are
+  meaningless separately — the `print_exposure` matching one brightness runs 0.31–0.61
+  across reconstructions. Four things other epics must key on. **It is a CLI-only
+  expansion, not a recipe key**: `--dump-params` writes the expanded values, a recipe
+  naming a preset is rejected as an unknown field, and the name survives only as the
+  report's `conversion_preset` provenance (with an `overridden` list, since flags still win
+  over a preset). **Precedence is `defaults < params < preset < flags`** — a preset sits
+  *above* the recipe, because nc writes every key explicitly and one layered underneath
+  would be inert against any recipe nc produced. **A preset never sets `output.preset`**,
+  so the non-display presets keep resolving their own tone and exposure, which is what lets
+  a conversion default move without breaking `film-master`. And **`sigmoid-knees` takes its
+  brightness from the anchor rather than `print_exposure`** (refused beside that preset),
+  because `--display-tone none` cannot carry a scalar gain applied after a bounded curve.
+  **No default moved**: `PIPELINE_VERSION` stays 4 and all three fingerprints are
+  unchanged; `characteristic-generic` becoming the default is still the
+  `algo/split-default-migration` step — whose no-stock blocker was **lifted 2026-09-10**,
+  leaving the green residual (`io/scanner-density-calibration`) as what gates it.
+- **The aim-matched red scale is derived at runtime**, not tabulated:
+  `algo::film_stock::aim_red_scale(stock)` returns the factor `--density-scale` takes (the
+  **reciprocal** of the one that scales the table), and `None` for the derived generic and
+  the two 800-speed sheets whose Δ their own curves contradict by +44%. Anything needing it
+  reads it there — the three constants that lived in the review script are gone.
 - **The characteristic curve's wiring is pinned, and a fingerprint row over it is a
   harder bar than that pin** (`algo/characteristic-curve-coverage`, 2026-09-10). Four
   property tests run the real `algo::reconstruct` over a synthesized scan, plus a golden
@@ -3884,3 +3896,247 @@ about. When `algo/split-default-migration` moves the default here it bumps
 the tool for deciding whether that row's `render` hash is portable: the drift gate hashes
 raw f32 bits, so it has no 1-ULP window, and px4's 0.006 ULP margin says the answer is
 not automatically yes.
+## conversion-presets
+
+**Status:** done
+**Updated:** 2026-09-10
+
+- Goal: name the five reconstruction + display bundles so a user selects a conversion by
+  name instead of assembling four coupled flags. See
+  [the task file](../tasks/algo/conversion-presets.md). The scoping evidence is the
+  2026-09-09 entry above; this section is the build.
+
+### 2026-09-10 — `--preset` ships as a CLI-only expansion
+
+**The precedence the task proposed cannot work, and the reason decides the design.**
+`preset → --params → flags` (a preset as a set of *defaults*, under the recipe) is inert:
+`nc params` / `--dump-params` write **every** key explicitly, so a preset layered beneath
+any recipe nc itself produced has nothing left to set — and the dump→`roll` workflow is
+exactly what the flag exists to feed. The shipped chain is
+`defaults < params < preset < flags`: a preset is a named bundle of flag values, and
+individual flags still win over it.
+
+**A preset is not a recipe key at all.** The task left "provenance or re-expanding?" open;
+the answer is neither. `--dump-params` writes the **expanded** values, a recipe naming a
+preset is rejected by `deny_unknown_fields`, and the name survives only as report
+provenance (`conversion_preset`). Three reasons, in order: a re-expanding key would render
+an archived recipe differently on a build whose definitions had moved — the drift
+`PIPELINE_FINGERPRINTS` exists to prevent; a bundle spans `reconstruction` *and* `print`,
+so design-spec §9's stage sections have no home for it; and `roll` needs no new surface,
+since the dumped recipe already replays exactly (verified: exit 0 on a dumped
+`characteristic-stock`). This is a **documented exception** to "every knob is a flag and a
+recipe key" — narrower than the operational exceptions, because a preset is not a knob: it
+only sets knobs, and all four of those are already both.
+
+**The report carries an override diff, which is what keeps the name honest.** Flags win
+over a preset, so `--preset characteristic-aim --density-curve sigmoid` renders a sigmoid;
+a block naming the preset and stopping there would be a report contradicting its own
+recipe. `conversion_preset.overridden` lists the recipe paths whose resolved value moved
+— a diff against the resolved config, not a record of which flags were typed, so
+`--preset sigmoid-flat --sigmoid-shoulder 0` correctly lists nothing.
+
+**The aim-matched red scale is now derived, and the three constants are gone.**
+`algo::film_stock::aim_red_scale` computes `rise / Δ` — the reciprocal, since
+`--density-scale` multiplies the *scan's* density where the aim factor scales the
+*table's*. It shares `AIM_SEPARATION_DECADES` and `usable_aim_delta` with
+`aim_table_agrees_with_the_curve`, so a sheet can never be correctable by one and
+unchecked by the other; equivalently the flag value is `1 + error/100` for the
+disagreement that test reports.
+
+**Acceptance test: the review set, rendered both ways.** Three frames across three rolls,
+five presets each. **12 of 15 renditions are byte-identical**; the three that differ are
+all `chr-aim`, because the script's hand-written constants were rounded to three decimals
+where the derivation is exact:
+
+| stock | derived | script constant | Δ | red channel mean moves |
+|---|---|---|---|---|
+| ektar-100 | 1.1133202 | 1.114 | −0.00068 | −2.25e−4 |
+| portra-160 | 1.0282816 | 1.029 | −0.00072 | −2.35e−4 |
+| gold-200 | 0.9547126 | 0.955 | −0.00029 | −6.23e−5 |
+
+So the mechanism reproduces the reviewed pixels exactly everywhere the old script stated an
+exact value, and the only divergence is the rounding the task predicted would disappear.
+`scripts/preset-review/generate.py` now drives `--preset` and states no constants.
+
+**Four refusals, each with a remedy that was run.** `--film-stock` beside a stockless
+preset (otherwise `characteristic-generic --film-stock ektar` silently becomes
+`characteristic-stock` at the wrong exposure — 0.39 against 0.31); `--film-stock
+generic-c41` under the stock presets (an average of nine sheets is not one film's
+response, and that bundle's brightness is calibrated for a real sheet);
+`characteristic-aim` on `portra-800`/`ultramax-800`; and `--print-exposure` on
+`sigmoid-knees`. The accepted-stock list each message prints is **that preset's**, not
+`FilmStock::ALL` — offering a name the next run refuses is the remedy-must-work defect,
+and the aim preset's list is the one that would have had three.
+
+**`--print-exposure` on `sigmoid-knees` is refused by *preset*, not by combination.** The
+underlying pair (`--display-tone none` plus a positive exposure) has no general rule and
+must not gain one — dark enough content renders under it at exit 0, so a general refusal
+would reject valid frames. What is refused is stating a knob the named bundle does not
+use, which is a contradiction visible in the request itself.
+
+**One ordering bug found by testing rather than reasoning.** The preset arm first ran
+before `--reconstruction`, so `--preset X --reconstruction simple` passed its own
+`simple` guard (the recipe still resolved density) and then rendered a `simple` frame
+carrying the preset's exposure and tone, reported under the preset's name. It now runs
+*after* that arm, so it sees the type the command line actually resolved.
+
+**No default moved.** `PIPELINE_VERSION` stays 4 and all three fingerprints are unchanged
+— `--preset` adds no default and changes no pixel of a render that does not name it.
+Making `characteristic-generic` the default remains `algo/split-default-migration`, still
+blocked on `film-base/dmax-per-channel-reduction`.
+
+**Not done, deliberately:** `nc roll` gains no `--preset` flag. It has no override flags at
+all, and adding one is `core/recipe-composition`'s scope; the dumped recipe covers the
+workflow today. The headroom question (`reinhard` at 4 stops rather than the shipped 6)
+is untouched and stays with `output/sdr-preset-followups` or the default migration.
+
+### 2026-09-10 — review round: two ordering defects, both invisible to the tests that guarded them
+
+`/code-review` on the worktree. Six findings, all real; the two that mattered were the same
+shape — a rule that was *written* correctly and *reached* wrongly.
+
+**The `--film-stock`-beside-a-stockless-preset rule never fired for the two sigmoid
+presets.** It lived in `validate_convert`, which runs *after* `merge`, and merge's own
+`--film-stock` arm already refuses a stock beside a resolved parametric curve. So
+`--preset sigmoid-flat --film-stock ektar-100` got "pass `--density-curve
+characteristic`" — and following that remedy landed on the preset rule saying the preset
+has no stock. A two-step contradictory diagnosis, the defect CLAUDE.md records as having
+shipped three times already. The rule now runs inside merge's preset arm, where the
+ordering is structural rather than a property of where the call sits.
+
+**Its test could not have caught it**: it called `reject_conversion_preset_conflicts`
+directly, so it exercised the rule and never the path. Now it goes through `merge` and
+additionally asserts the *losing* rule's wording is **absent** — the discipline CLAUDE.md
+prescribes for exactly this, since `err.contains("--film-stock")` cannot tell two rules
+apart when both name the flag.
+
+**The curve-switch warnings were three ways wrong under a preset.** With
+`--params <sigmoid recipe> --preset characteristic-aim` the run warned that "the switch to
+`--density-curve characteristic` reset the recipe's `density.scale` (1,0.8,0.7) to that
+curve's default (1,1,1) … Restate `--density-scale 1,0.8,0.7` to keep it" — naming a flag
+never passed, stating a gain the render did not use (it used the derived `[1.1133202, 1,
+1]`), and offering a remedy that would have silently defeated the preset's aim correction.
+Both warnings are now suppressed when a preset is named, on the same principle that
+already suppresses them when a flag restates the value: the replacement is the user's own
+request, not a silent reset, and `conversion_preset` reports it. Guarded by
+`tests/pipeline.rs::a_preset_does_not_warn_about_the_curve_switch_it_was_asked_to_make`,
+which runs the binary (the defect was in `run_convert`'s composition, not in either
+warning function) and asserts the gain really was replaced, so the suppression is
+load-bearing rather than a condition that never matches.
+
+**Three doc/prose fixes, all the same class — prose no gate reads.** A rustdoc on
+`FilmStock::accepted_list` claimed sharing with `--preset`'s missing-stock message that
+never happened (the extraction had one caller and is reverted); `aim_red_scale` cited
+`curve_probe::scale_against_the_characteristic_curve` as evidence for a *per-stock*
+derivation when that probe hard-codes Ektar's pair across all three rolls — it establishes
+the **direction**, and the citation now says so; and the review page's own `description`
+still opened "rendered through the flags it will expand to" beside an appended sentence
+saying the opposite. `docs/using-nc.md` also said "Four combinations are refused" where
+design-spec listed five (the `simple` one was missing).
+
+### 2026-09-10 — ship review: a preset was discarding the roll's measured `Dmax`
+
+`ship:diff-reviewer` on the same worktree, after the earlier round. Two findings, and the
+first is the most serious defect this task produced.
+
+**`reconstruction.curve` is one recipe path but six knobs, and one of them is not a look.**
+The preset arm did `*curve = expansion.curve`, replacing the whole object — including
+`dmax`, the reference `nc estimate --d-max-region` measures **once for a roll**. Measured:
+
+| invocation | resolved `dmax` | warnings |
+|---|---|---|
+| `--params roll.json` | `{explicit: 2.1}` | — |
+| `--params roll.json --preset sigmoid-flat` | **`fixed`** | **0**, `overridden: []`, exit 0 |
+| `--params roll.json --density-curve exponential` | `{explicit: 2.1}` carried | 2 |
+
+So the calibration that survives a curve-**type** switch was thrown away by a same-type
+preset, silently, on every frame of a roll — with the report asserting `overridden: []`,
+i.e. "the render is the bundle exactly". It also contradicted the `PresetExpansion`
+rustdoc, which said the recipe's other fields stay untouched "which is what lets a preset
+be layered onto a roll calibration". Fixed by `preset_curve`, which carries `dmax` on
+exactly the condition the `--density-curve` arm uses (both sides `takes_dmax()`, so the
+`characteristic` "reads no reference" spelling cannot leak across). An explicit `--d-max`
+still wins.
+
+**The previous entry's claim that `conversion_preset` reported the replacement was false,
+and so was the comment justifying the warning suppression.** `overridden` diffs the
+resolved config against the **preset's own expansion**, so when the *preset* is what
+replaced a recipe value it is empty **by construction** — empty exactly when a reader most
+needs telling. The block now carries a second list, `replaced`: preset-owned paths where
+the render differs from the loaded recipe. That is what makes the suppression honest, and
+it is what surfaces the second instance the reviewer found — a recipe pinned to
+`ektar-100` silently rendered on `generic-c41`, where the *flag* spelling of the same
+request is a loud exit-2 error.
+
+Both diffs share `preset_curve`, which is load-bearing: with the carry applied only in
+`merge`, `overridden` saw the resolved curve differ from the raw expansion and reported
+`reconstruction.curve` as flag-overridden on a run with no such flag. `replaced` is also
+computed only when `--params` was actually given, since without a recipe there is nothing
+to have replaced.
+
+Both are pinned by falsifiable tests (`a_preset_carries_the_recipes_roll_fixed_dmax`,
+`the_report_separates_what_the_preset_replaced_from_what_a_flag_overrode`), each verified
+to fail when its fix is reverted. **No warning was added**: the existing curve-switch
+warnings' own false-positive discipline is to stay quiet when a value did not really
+change, and the report is this project's primary machine-readable channel — a warning on
+every preset-over-recipe run would be noise.
+
+### 2026-09-10 — the acceptance test, re-run on the full review set
+
+Ten frames x five presets, rendered through `--preset` and through the flag expansion the
+script used to state by hand. **40 of 50 renditions byte-identical.** All ten that differ
+are `chr-aim` — one per frame, every frame — and no other preset differs anywhere, which
+is the shape the change predicts: `characteristic-aim` is the only bundle whose value is
+now *derived* (`aim_red_scale`) rather than copied from a constant the script rounded to
+three decimals.
+
+The size of that difference, isolated from JPEG block re-quantization by re-rendering one
+Ektar frame to a lossless 16-bit `display-p3` TIFF with each value:
+
+| | max Δ | mean Δ |
+|---|---|---|
+| lossless TIFF | 2081/65535 (8.1 code values in 8-bit) | 5.92/65535 (**0.023** code values) |
+| the JPEG set | 19/255 | 0.12–0.50/255 |
+
+So the true signal difference averages **under 1/40th of an 8-bit code value**, and the
+JPEG figures are that shift amplified by DCT re-quantization at block boundaries. The
+isolated 8-code-value maxima sit where the inverted curve is steepest. The reviewed look is
+reproduced; what moved is a rounded constant becoming exact, in the direction of the
+derivation.
+
+Regenerate with `NC_PRESET_OUT=../temp/preset-review python3
+scripts/preset-review/generate.py`, then `cd tools/review-app && pnpm dev
+<that path>/review.json`.
+
+### 2026-09-10 — closed out
+
+`--preset` ships with five bundles, as a **CLI-only expansion**: `--dump-params` writes the
+expanded values, a recipe naming a preset is rejected, and the name survives as the
+report's `conversion_preset` provenance. Precedence is `defaults < params < preset < flags`
+— above the recipe, because nc writes every key explicitly and a preset underneath one
+would be inert. **No default moved**: `PIPELINE_VERSION` stays 4 with all three
+fingerprints unchanged.
+
+Verified: the review set rendered through `--preset` is **byte-identical to the flag
+expansion on 40 of 50 renditions**, the ten exceptions all `chr-aim`, where the script's
+3-decimal constant became the exact derivation (red moves ~0.06 of an 8-bit code value,
+systematically, with isolated clipped highlights up to 8). Four Rust gates plus the
+`nctool` suite green; `cargo doc` adds no unresolved links over the 16-link baseline.
+
+**Two review rounds found seven findings, three of them the same defect class** — a rule
+written correctly and *reached* wrongly. The HIGH one was a silent wrong image: replacing
+`reconstruction.curve` wholesale discarded the roll's measured `dmax`. For dependent tasks:
+
+- **`algo/split-default-migration` is now down to one blocker.** Rebased onto `main`, its
+  other three are all `[x]`: `reconstruction-render-curve-split`, this task, and
+  `characteristic-curve-coverage` (#107, landed the same day). `film-base/dmax-per-channel-
+  reduction` was lifted as an edge by #109. What remains is **`io/scanner-density-
+  calibration`** — the green residual. `characteristic-generic` is the default it should
+  activate, and the preset machinery including its brightness calibration is in place, so
+  the migration is a `pipeline_version` bump plus a golden recapture, not new CLI surface.
+  Note #107's warning that the fingerprint row gets **no** per-sample window: the gate
+  hashes raw f32 bits, so budget for choosing a new vector rather than reusing that pin's.
+- Anything replacing a tagged recipe sub-object wholesale must carry the roll calibration
+  inside it; `cli::preset_curve` is the shared helper and CLAUDE.md records the trap.
+- `core/recipe-composition` owns giving `roll` the override flags; until then a preset
+  reaches a roll only through `--dump-params`, which is exact.

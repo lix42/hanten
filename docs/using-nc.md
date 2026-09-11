@@ -403,7 +403,8 @@ replacement. They are not accepted as aliases.
 
 **Flags always win over the recipe.** Precedence is by *source*, not value — an
 explicit `--white-balance 1,1,1` over a recipe's `auto` mode means neutral gains,
-not re-estimation.
+not re-estimation. With a [`--preset`](#-preset--pick-a-look-by-name) the full chain is
+`defaults < --params recipe < --preset < flags`.
 
 ```sh
 nc convert scan.tif -o out.jpg --params roll-recipe.json --d-max 0.5
@@ -474,6 +475,91 @@ to keep it.
 ---
 
 ## 6. Reconstruction and curves
+
+### `--preset` — pick a look by name
+
+The five settings below (curve, per-channel gain, print exposure, display tone) only
+mean anything **together**: the exposure that lands one brightness runs from 0.31 to
+0.61 depending on the reconstruction, because the curves place mid-grey differently.
+`--preset` names a bundle so you don't have to carry four coupled numbers.
+
+| `--preset` | Reconstruction | Display tone | Needs |
+|---|---|---|---|
+| `characteristic-generic` | `characteristic`, the averaged generic C-41 profile | `reinhard` | — |
+| `characteristic-stock` | `characteristic`, the roll's own published response | `reinhard` | `--film-stock` |
+| `characteristic-aim` | `characteristic-stock` + the aim-matched red density scale | `reinhard` | `--film-stock` |
+| `sigmoid-knees` | `sigmoid` with its toe and shoulder | `none` | — |
+| `sigmoid-flat` | `sigmoid` with neither knee | `reinhard` | — |
+
+```sh
+nc convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --preset characteristic-generic
+nc convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --preset characteristic-stock --film-stock portra-400
+```
+
+All five render scene mid-grey at the same brightness, so what you are comparing
+between them is the reconstruction and the tone, not "one is brighter".
+
+**A preset is a set of starting values, and individual flags still win over it.** The
+precedence chain is `defaults < --params recipe < --preset < flags` — the preset sits
+*above* the recipe, because `nc params` writes every key explicitly and a preset
+underneath one would have nothing left to set. The report separates the two directions:
+
+```json
+"conversion_preset": {
+  "name": "characteristic-generic",
+  "replaced":   ["reconstruction.curve"],      // the preset won over the recipe
+  "overridden": ["print.print_exposure"]       // a flag won over the preset
+}
+```
+
+**One thing a preset never replaces: the roll's measured `Dmax`.** A preset names a
+*look*; `reconstruction.curve.dmax` is the reference `nc estimate --d-max-region`
+measures once for a roll, so it is carried across and does not appear in `replaced`. An
+explicit `--d-max` still wins. Everything else in `curve` — contrast, knees, anchor,
+stock — is the look, and the preset does replace it.
+
+**It is a command-line shorthand, not a recipe key.** `--dump-params` writes the
+*expanded* values, so a recipe replays identically on any build — including one whose
+preset definitions have since moved. A recipe that names a preset is rejected as an
+unknown field, and `nc roll` takes the dumped recipe rather than a preset name:
+
+```sh
+nc convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 \
+   --preset characteristic-stock --film-stock ektar-100 --dump-params roll.json
+nc roll frames/ --out-dir out/ --params roll.json
+```
+
+Six combinations are refused rather than quietly doing something else:
+
+- **`--film-stock` beside a preset that has no stock** (`characteristic-generic`,
+  either sigmoid) — otherwise it would silently render a different bundle at the wrong
+  exposure. Use `characteristic-stock`.
+- **`characteristic-stock` / `-aim` with `--film-stock generic-c41`** — that profile is
+  an average of nine sheets, not one film's response. Use `characteristic-generic`.
+- **`characteristic-aim` with `portra-800` or `ultramax-800`** — their datasheets
+  tabulate an aim delta their own curves contradict, so there is no correction to
+  derive. Use `characteristic-stock` for those.
+- **`--print-exposure` with `sigmoid-knees`** — that bundle renders with
+  `--display-tone none`, which relies on the reconstruction staying inside the render's
+  ceiling, and `--print-exposure` is a gain applied *after* the curve, so any positive
+  value pushes it past reference white and the frame is refused. Brighten it with
+  `--anchor-mid-fraction` instead (the preset resolves `0.42`; **lower is brighter**).
+- **A preset with `--reconstruction simple`** (or a recipe resolving `simple`) — the
+  direct inversion has no curve stage, so there is nothing for a bundle to configure.
+- **A preset with `--output-preset legacy` / `custom` / `film-master`** — see below.
+
+A preset never *sets* `--output-preset`, but the two are not freely combinable: a
+conversion preset is a reconstruction **and display** bundle, so it needs an output preset
+that renders a display image. `display-p3`, `compatibility`, `gain-map-hdr`,
+`ultra-hdr-v1`, `hdr-pq`, `hdr-hlg`, `hdr-linear-tiff`, `hdr-pq-tiff` and `hdr-hlg-tiff`
+all work. The three that run no display stage — `legacy`, `custom`, `film-master` — refuse
+any `--preset` with a single message. For a film master, set the reconstruction knobs
+directly instead:
+
+```sh
+nc convert scan.tif -o master.tif --film-base 0.9,0.55,0.42 \
+   --output-preset film-master --density-curve characteristic --film-stock ektar-100
+```
 
 Two reconstruction types, selected with `--reconstruction`:
 
