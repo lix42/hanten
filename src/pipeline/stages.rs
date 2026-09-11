@@ -1833,26 +1833,122 @@ pub(crate) mod golden {
         0x3b356c75, 0x3b356c75, 0x3b356c75, // exactly the base
     ];
 
-    /// The characteristic curve's **wiring**, pinned to within 1 ULP.
+    /// ULPs between two finite f32s of the same sign, as a bit-pattern distance.
+    fn ulps_between(a: f32, b: f32) -> i64 {
+        debug_assert!(
+            a.is_finite() && b.is_finite() && a.is_sign_positive() == b.is_sign_positive(),
+            "ULP distance is a bit-pattern distance, so it needs finite same-signed inputs"
+        );
+        (i64::from(a.to_bits()) - i64::from(b.to_bits())).abs()
+    }
+
+    /// The accuracy premise every measurement below rests on: a libm worth shipping is
+    /// within 1 ULP on these functions.
     ///
-    /// Every other golden here is bit-for-bit. This one is not, and the reason is
-    /// measured rather than assumed: `characteristic_golden_values_carry_their_libm_headroom`
-    /// shows that four of these fifteen values sit within 0.012 ULP of an f32 rounding
-    /// boundary, where two libms may legitimately round `10f32.powf` in opposite
-    /// directions. A bit-exact capture would be green on the host that took it and red on
-    /// the other target — CLAUDE.md's cross-platform rule.
+    /// Deliberately the **weak** bound. Both shipped targets are far better, and an
+    /// earlier version of this harness tried to exploit that — classifying a sample
+    /// "safe" when its true value sat further from an f32 rounding boundary than glibc's
+    /// documented `powf` excess (~0.02 ULP). Observation killed it. On x86_64 glibc's
+    /// `log10f` returns a different `f32` from Apple's for **sample 9**, whose margin is
+    /// 0.456 ULP — twenty times the threshold that had called it safe — and for sample 1
+    /// at 0.0153. A published bound for one function does not transfer to another, and
+    /// neither target documents `log10f` at all.
     ///
-    /// The window is **uniform, not per-sample**, and that is deliberate: eleven of the
-    /// fifteen are measured as safe, but only against the premise that both libms round a
-    /// double result (documented for the `powf` glibc uses, unverified for Apple's).
-    /// Tightening those eleven to bit-exact would make them hostage to that premise for
-    /// no gain in detection.
+    /// So nothing here infers agreement from a margin. The window is derived by
+    /// enumerating what a conforming libm can actually return.
+    const LIBM_MAX_ERROR_ULPS: i64 = 1;
+
+    /// Sanity ceiling on a derived window. Not a tuning knob — it exists so that a future
+    /// vector landing on a near-vertical stretch of a published curve (`PORTRA_160_B` has
+    /// a segment with `1/γ = 767`) is reported rather than silently granted an enormous
+    /// tolerance.
+    const MAX_REASONABLE_WINDOW_ULPS: i64 = 200;
+
+    /// Every pixel value a conforming libm can produce for one sample, as a window in
+    /// ULPs around the captured value.
+    ///
+    /// **Sound by enumeration, not by argument.** `to_density`'s `log10` may return any
+    /// f32 within [`LIBM_MAX_ERROR_ULPS`] of the correctly-rounded density, so each is
+    /// rendered and the widest excursion taken; the curve's own `10^` may then be off by
+    /// the same again, which is the final term. Any target meeting the premise lands
+    /// inside this, whatever its individual error bounds are and whether or not anyone
+    /// publishes them.
+    ///
+    /// The window is wide where the curve is steep: a 1-ULP density difference is
+    /// amplified by `ln(10)·d·(1/γ_local)`, reaching 62 ULPs on the out-of-range pixel.
+    /// That costs nothing in detection — a real fault moves these pixels by ~10^5 ULPs
+    /// (measured: a `1e-6` nudge to one table literal moves them 115,523).
+    ///
+    /// **It measures the reachable set's own spread, and deliberately never looks at the
+    /// captured value.** A first version measured each render's distance *from the
+    /// capture*, which let a table edit inflate the window by exactly as much as it
+    /// inflated the drift — the golden then passed on a frame whose every pixel had
+    /// moved 115,523 ULPs. A window that depends on the value under test is not a window.
+    /// The falsifiability run is what caught it; nothing else would have.
+    fn reachable_window(table: &[(f32, f32)], rounded_d: f32) -> i64 {
+        let render = |d: f32| {
+            let (log_e, _) = invert(table, d);
+            10f32.powf(log_e)
+        };
+        let centre = render(rounded_d);
+        let widest = [rounded_d.next_down(), rounded_d.next_up()]
+            .into_iter()
+            .map(|d| ulps_between(render(d), centre))
+            .max()
+            .expect("two neighbouring densities");
+        widest + LIBM_MAX_ERROR_ULPS
+    }
+
+    /// The **correctly rounded** corrected density of each sample, computed in f64.
+    ///
+    /// The centre of each sample's window, and target-independent by construction —
+    /// which is the point: the host's own `to_density` output is one of the values a
+    /// conforming libm may return, not the reference.
+    ///
+    /// Stage 1 is written out as the code writes it, and two rounding details bite anyone
+    /// who shortens it. **The ratio is divided in f32 first**: `to_density` takes `log10`
+    /// of the *rounded* f32 quotient, and dividing in f64 instead puts the reference 5
+    /// ULPs out. **And the gain/offset cannot be dropped even at identity** — the
+    /// film-base pixel's ratio is exactly 1, so the negated log is `-0.0`, and it is the
+    /// `+ offset` that normalises the sign to the `+0.0` actually stored.
+    fn correctly_rounded_densities(density: &DensityParams) -> Vec<f32> {
+        let scan = pixels();
+        let film_base = <[f32; 3]>::from(base());
+        scan.rgb
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| {
+                let c = i % 3;
+                let ratio = s.max(crate::algo::density::SCAN_EPSILON) / film_base[c];
+                let exact = f64::from(density.scale[c]) * -f64::from(ratio).log10()
+                    + f64::from(density.offset[c]);
+                exact as f32
+            })
+            .collect()
+    }
+
+    /// The characteristic curve's **wiring**, pinned within a derived per-sample window.
+    ///
+    /// Every other golden here is bit-for-bit. This one cannot be, and the reason is
+    /// measured rather than assumed: the chain evaluates two libm functions per sample —
+    /// `log10` in `to_density` and `10^` in the curve — and the two shipped targets
+    /// **observably disagree** on the first. x86_64's `log10f` returns a different `f32`
+    /// from Apple's on two of these fifteen samples. A bit-exact capture would be green
+    /// on the host that took it and red on the other, which is CLAUDE.md's cross-platform
+    /// rule.
+    ///
+    /// The window is not a chosen tolerance. [`reachable_window`] enumerates every pixel
+    /// a libm meeting [`LIBM_MAX_ERROR_ULPS`] can produce for each sample and takes the
+    /// widest, so this passes on any conforming target by construction rather than by the
+    /// luck of which way a rounding fell. (It was luck, once: the x86_64 disagreement on
+    /// sample 9 happens to fall in the direction the curve flattens, so an earlier
+    /// 1-ULP window passed CI while resting on nothing.)
     ///
     /// Nothing is lost as a regression pin. An edited table literal, a permuted channel
     /// and one table applied across all three each move these values by percent — the
     /// falsifiability matrix in `docs/progress/algo.md` (2026-09-10) records what each
-    /// perturbation moved. The only difference a 1-ULP window hides is the one that is
-    /// not portable anyway.
+    /// perturbation moved, the smallest being ~10^5 ULPs against a worst-case window of
+    /// 63.
     ///
     /// One wiring fault it **cannot** see, because this config cannot: stages 1–2 are
     /// `scale·d + offset`, and at the identity gain and zero offset that this curve
@@ -1861,7 +1957,16 @@ pub(crate) mod golden {
     /// which states it with an explicit non-neutral pair. The two halves of this task's
     /// coverage are complementary by design, not redundant.
     #[test]
-    fn golden_characteristic_is_correct_within_one_ulp() {
+    fn golden_characteristic_is_correct_within_its_libm_window() {
+        let Reconstruction::Density { density, curve } = characteristic_config() else {
+            unreachable!("the characteristic config is a density reconstruction")
+        };
+        let DensityCurve::Characteristic(params) = curve else {
+            unreachable!("the characteristic config selects the characteristic curve")
+        };
+        let stock = curves_for(params.stock);
+        let rounded = correctly_rounded_densities(&density);
+
         let (out, report) = reconstruct_and_print(
             &pixels(),
             &base(),
@@ -1871,18 +1976,23 @@ pub(crate) mod golden {
         .unwrap();
         // `zip` below truncates, so the length is asserted rather than assumed.
         assert_eq!(out.rgb.len(), CHARACTERISTIC_EXPECTED.len());
+
         for (i, (&want, &got)) in CHARACTERISTIC_EXPECTED
             .iter()
             .zip(out.rgb.iter())
             .enumerate()
         {
-            let drift = ulps_between(got, f32::from_bits(want));
+            let captured = f32::from_bits(want);
+            let window = reachable_window(stock.channels[i % 3], rounded[i]);
+            let drift = ulps_between(got, captured);
             assert!(
-                drift <= 1,
-                "sample {i}: {:08x} is {drift} ULP from the captured {want:08x}",
+                drift <= window,
+                "sample {i}: {:08x} is {drift} ULP from the captured {want:08x}, outside \
+                 the {window} ULP any conforming libm can reach",
                 got.to_bits()
             );
         }
+
         // This curve reads its reference and its placement off the film, so both are
         // absent — the property that makes it self-anchoring, asserted where a curve that
         // quietly acquired one would be caught.
@@ -1903,260 +2013,67 @@ pub(crate) mod golden {
         assert_eq!(out.ir.as_deref(), Some(&[0.1f32, 0.2, 0.3, 0.4, 0.5][..]));
     }
 
-    /// Rounding headroom, in f32 ULPs, below which two libms may legitimately disagree.
+    /// The capture is intact and the host is conforming — the two things the golden's
+    /// derived window assumes but cannot check for itself.
     ///
-    /// **An empirical per-implementation bound, not a derived one** — and the derivation
-    /// that looked like it justified this number was wrong, which is worth recording
-    /// because it was convincing. It argued that computing in `f64` and rounding bounds
-    /// the disagreement at `2^-5` of an f32 ULP. Work it through: one f64 ULP *is* about
-    /// `2^-29` of an f32 ULP, so a few of them is `~2^-27 ≈ 7.5e-9` — seven orders
-    /// tighter, and under *that* bound not one sample here is thin. The old figure came
-    /// of converting the same quantity to a relative error twice.
-    ///
-    /// What `0.03` actually is: an implementation whose worst-case error is `E` ULPs
-    /// returns the correctly-rounded result whenever the true value is more than
-    /// `E − 0.5` ULPs from a boundary. glibc documents `powf` at **0.52 ULP**, giving
-    /// `0.02`; this rounds up for margin. Apple's libm publishes no bound at all, and
-    /// that — not the arithmetic — is the real uncertainty.
-    ///
-    /// So read the thin sets below as a **worst case**: the samples that could disagree
-    /// if a libm is as bad as the worst one documents. At least one of them does — see
-    /// [`THIN_LOG_SAMPLES`] — so the set is not merely theoretical padding either.
-    const LIBM_SAFE_MARGIN_ULPS: f64 = 0.03;
-
-    /// Distance from an f32 rounding boundary, in ULPs: `0.5` when `value` sits dead
-    /// centre of its interval, `0` when it sits exactly on the boundary with its
-    /// neighbour. `exact` is the true real result, `value` its correctly-rounded f32.
-    ///
-    /// The ULP is taken on the side `exact` lies, because at a binade boundary the step
-    /// below a value is **half** the step above — measuring against the wrong side would
-    /// overstate the margin, which is the unsafe direction. No sample here is a power of
-    /// two, so today that is latent; it is written correctly anyway because the next
-    /// recapture is not obliged to keep it that way.
-    ///
-    /// Precondition: `value` is finite and non-negative. An exact result (`value` equal
-    /// to `exact`, as at the film-base pixel where `log10(1) = 0`) reports the full `0.5`,
-    /// which is right: there is nothing for a libm to disagree about.
-    fn boundary_margin(exact: f64, value: f32) -> f64 {
-        let bits = value.to_bits();
-        let toward = if exact >= f64::from(value) {
-            bits + 1
-        } else {
-            bits - 1
-        };
-        let ulp = (f64::from(f32::from_bits(toward)) - f64::from(value)).abs();
-        0.5 - ((exact - f64::from(value)) / ulp).abs()
-    }
-
-    /// ULPs between two finite f32s of the same sign, as a bit-pattern distance.
-    fn ulps_between(a: f32, b: f32) -> i64 {
-        debug_assert!(
-            a.is_finite() && b.is_finite() && a.is_sign_positive() == b.is_sign_positive(),
-            "ULP distance is a bit-pattern distance, so it needs finite same-signed inputs"
-        );
-        (i64::from(a.to_bits()) - i64::from(b.to_bits())).abs()
-    }
-
-    /// How far the **rendered** value moves when the corrected density `d` is perturbed by
-    /// one ULP either way — i.e. how much a stage-1 `log10` disagreement is amplified by
-    /// the time it reaches the pixel.
-    ///
-    /// Measured, never modelled. The closed form
-    /// `ln(10) · d · (1/γ_local) · (ulp(d)/ulp(out))` under-predicts by up to 1.9x,
-    /// because `log_e` is itself an f32 and the realized step quantizes to 0, 1 or 2 of
-    /// its ULPs. A bound that under-predicts by 2x is the wrong sign for a safety
-    /// threshold.
-    fn stage_one_amplification(table: &[(f32, f32)], d: f32, rendered: f32) -> i64 {
-        let render = |d: f32| {
-            let (log_e, _) = invert(table, d);
-            i64::from(10f32.powf(log_e).to_bits())
-        };
-        let at = i64::from(rendered.to_bits());
-        [d.next_up(), d.next_down()]
-            .into_iter()
-            .map(|p| (render(p) - at).abs())
-            .max()
-            .expect("two perturbations")
-    }
-
-    /// The `10^` samples that sit inside [`LIBM_SAFE_MARGIN_ULPS`], with the margin
-    /// measured at capture — the reason the golden above states 1 ULP.
-    ///
-    /// Samples 12-14 are the film-base pixel, whose corrected density is exactly `0.0`, so
-    /// its value is `10^(table[0].0)`: a property of the shipped table literal rather than
-    /// of this vector, and one that will reach *every* base-density pixel of every frame
-    /// if `algo/split-default-migration` makes this curve the default.
-    const THIN_POW_SAMPLES: &[(usize, f64)] =
-        &[(10, 0.0120), (12, 0.0059), (13, 0.0059), (14, 0.0059)];
-
-    /// The `log10` samples that sit inside [`LIBM_SAFE_MARGIN_ULPS`].
-    ///
-    /// Only one — and it is **confirmed to actually disagree**, not merely close: glibc's
-    /// `log10f` on x86_64 returns a `d` one ULP off the correctly-rounded value here,
-    /// while Apple's does not. CI found it on the first push, on precisely the sample
-    /// this measurement had flagged, which is as direct a validation of the method as the
-    /// repo is going to get.
-    ///
-    /// It is also the sample whose amplification is **zero**, so that disagreement does
-    /// not reach the pixel and the golden passes on both targets. That coincidence is the
-    /// whole reason the 1-ULP window is enough, and the conjunction assertion below is
-    /// what stops it being relied on silently.
-    const THIN_LOG_SAMPLES: &[(usize, f64)] = &[(1, 0.0153)];
-
-    /// **The portability argument, machine-checked across the whole chain.**
-    ///
-    /// The task this closes recorded that a bit-exact capture "is not available" because
-    /// `10f32.powf` differs ~1 ULP across libm implementations. That is true of the
-    /// *values*, not of the mechanism, and which values is decidable in advance. `f64`
-    /// resolves an f32 ULP to about 4e-9 of one, so every margin below is measured with
-    /// seven orders of headroom over the threshold it is compared against.
-    ///
-    /// The chain makes **two** libm calls per sample, and both are measured here — an
-    /// earlier version measured only the second and read as if it covered the chain:
-    ///
-    /// 1. `log10` in `algo::density::to_density`, producing the corrected density `d`;
-    /// 2. `10f32.powf` in `algo::film_stock::apply_curve`, producing the pixel.
-    ///
-    /// A thin margin at (2) moves the pixel by 1 ULP, which the golden's window absorbs.
-    /// A thin margin at (1) moves it by however much the curve **amplifies** it — up to
-    /// 62 ULPs on this vector — which the window does not. So the golden is portable
-    /// only while no single sample is thin at (1) *and* amplifying, and that conjunction
-    /// is what this asserts. It is empty today by coincidence, not by construction:
-    /// sample 1 is the one thin `log10` and the one sample the curve does not amplify.
-    ///
-    /// **That is not hypothetical.** x86_64 CI disagrees with this host on exactly
-    /// sample 1's `log10`, and the golden passes there anyway because the curve flattens
-    /// it. The conjunction is doing real work, not describing a risk that never fires.
-    ///
-    /// **The binding constraint on the whole change is sample 8** — `log10` margin
-    /// 0.0353 against an amplification of 6 pixel ULPs. It clears glibc's documented
-    /// `powf` bound (0.02) by 1.8x and this constant's padded 0.03 by only 1.1x. If
-    /// Apple's `log10` turns out worse than either, this test stays green and
-    /// `golden_characteristic_is_correct_within_one_ulp` reds on x86_64 by six times its
-    /// window. That is the failure to expect, and its remedy is a different vector, not a
-    /// wider tolerance.
+    /// It fails if a table literal moves, if the vector changes, if a captured constant
+    /// is edited to something no correctly-rounded evaluation produces, or if a host's
+    /// libm is worse than [`LIBM_MAX_ERROR_ULPS`] — which would invalidate every window
+    /// the golden derives.
     #[test]
-    fn characteristic_golden_values_carry_their_libm_headroom() {
+    fn the_characteristic_capture_is_correctly_rounded_and_the_host_conforms() {
         let Reconstruction::Density { density, curve } = characteristic_config() else {
             unreachable!("the characteristic config is a density reconstruction")
         };
         let DensityCurve::Characteristic(params) = curve else {
             unreachable!("the characteristic config selects the characteristic curve")
         };
-        // Read off the config rather than restated, so the two cannot name different stocks.
         let stock = curves_for(params.stock);
-        let scan = pixels();
-        let film_base = <[f32; 3]>::from(base());
-        let densities = crate::algo::density::to_density(&scan, &base(), &density);
-        assert_eq!(densities.density.len(), CHARACTERISTIC_EXPECTED.len());
+        let rounded = correctly_rounded_densities(&density);
+        let host = crate::algo::density::to_density(&pixels(), &base(), &density);
+        assert_eq!(host.density.len(), CHARACTERISTIC_EXPECTED.len());
 
-        let mut thin_pow: Vec<(usize, f64)> = Vec::new();
-        let mut thin_log: Vec<(usize, f64)> = Vec::new();
-        let mut amplification = [0i64; 15];
-
-        for (i, &d) in densities.density.iter().enumerate() {
-            let c = i % 3;
-            let table = stock.channels[c];
-            let captured = f32::from_bits(CHARACTERISTIC_EXPECTED[i]);
-            // `boundary_margin` and the golden's `i64` bit subtraction both assume a
-            // positive finite f32; asserted rather than left to the prose, since a
-            // recapture is what would break it.
+        let mut widest = 0;
+        for (i, (&want, &host_d)) in CHARACTERISTIC_EXPECTED
+            .iter()
+            .zip(host.density.iter())
+            .enumerate()
+        {
+            let captured = f32::from_bits(want);
             assert!(
                 captured.is_finite() && captured > 0.0,
-                "sample {i}: {captured} is outside what these measurements assume"
+                "sample {i}: {captured} is outside what `ulps_between` assumes"
             );
 
-            // --- stage 1: the `log10` that produced `d` ----------------------------
-            // Stage 1 written out as the code writes it, not as a simplification —
-            // two rounding details bite anyone who shortens it.
-            //
-            // **The ratio is divided in f32 first, and the reference has to be too.**
-            // `to_density` takes `log10` of the *rounded* f32 quotient; dividing in f64
-            // instead puts the reference 5 ULPs out and the margin becomes meaningless.
-            // The division is plain IEEE and identical on both targets — only the
-            // `log10` is libm.
-            //
-            // **And the gain/offset cannot be dropped even at identity.** The film-base
-            // pixel's ratio is exactly 1, so the negated log is `-0.0`; it is the
-            // `+ offset` that normalises the sign to `+0.0`, which is what `to_density`
-            // stores.
-            let ratio = scan.rgb[i].max(crate::algo::density::SCAN_EPSILON) / film_base[c];
-            let exact_d = f64::from(density.scale[c]) * -f64::from(ratio).log10()
-                + f64::from(density.offset[c]);
-            let rounded_d = exact_d as f32;
-
-            // **Conformance, not equality.** Demanding `d == rounded_d` would assert the
-            // host libm is correctly rounding, which is precisely the thing that varies —
-            // and it failed on x86_64 for sample 1, the very sample measured as thin. A
-            // conforming libm lands within 1 ULP; that is the claim worth making.
+            // **Conformance, not equality.** Requiring the host's `log10` to equal the
+            // correctly-rounded value asserts the host rounds correctly, which is exactly
+            // what varies — it red x86_64 on sample 1.
+            let off = ulps_between(host_d, rounded[i]);
             assert!(
-                ulps_between(d, rounded_d) <= 1,
-                "sample {i}: to_density's {d:e} is more than 1 ULP from the correctly                  rounded {rounded_d:e}"
+                off <= LIBM_MAX_ERROR_ULPS,
+                "sample {i}: this host's `log10` is {off} ULP from the correctly rounded \
+                 {:e}, beyond the accuracy every derived window assumes",
+                rounded[i]
             );
-            let log_margin = boundary_margin(exact_d, rounded_d);
-            if log_margin < LIBM_SAFE_MARGIN_ULPS {
-                thin_log.push((i, log_margin));
-            }
 
-            // --- stage 3: the `10^` this vector was captured through ---------------
-            // Fed the **correctly rounded** density, not the host's, so every number
-            // below is a property of the values rather than of the machine measuring
-            // them. Whether the host's own `d` reaches the same pixel is the golden's
-            // question, and the conjunction at the end is what guarantees it.
-            let (log_e, _) = invert(table, rounded_d);
-            let exact_pow = 10f64.powf(f64::from(log_e));
+            // Capture integrity: the constant is what a correctly-rounded chain produces.
+            // `f64` resolves an f32 ULP to ~4e-9 of one, so this is not a close call.
+            let (log_e, _) = invert(stock.channels[i % 3], rounded[i]);
             assert_eq!(
-                (exact_pow as f32).to_bits(),
-                CHARACTERISTIC_EXPECTED[i],
+                (10f64.powf(f64::from(log_e)) as f32).to_bits(),
+                want,
                 "sample {i}: the captured value is not the correctly-rounded 10^{log_e}"
             );
-            let pow_margin = boundary_margin(exact_pow, captured);
-            if pow_margin < LIBM_SAFE_MARGIN_ULPS {
-                thin_pow.push((i, pow_margin));
-            }
 
-            amplification[i] = stage_one_amplification(table, rounded_d, captured);
+            widest = widest.max(reachable_window(stock.channels[i % 3], rounded[i]));
         }
 
-        let recorded = |set: &[(usize, f64)]| set.iter().map(|(i, _)| *i).collect::<Vec<_>>();
-        let measured = |set: &[(usize, f64)]| set.iter().map(|(i, _)| *i).collect::<Vec<_>>();
-        assert_eq!(
-            measured(&thin_pow),
-            recorded(THIN_POW_SAMPLES),
-            "the set of samples without `10^` headroom moved: measured {thin_pow:?}"
+        assert!(
+            widest <= MAX_REASONABLE_WINDOW_ULPS,
+            "the widest derived window is now {widest} ULP — a sample has landed somewhere \
+             the curve amplifies steeply, and the golden's tolerance should be understood \
+             before it is accepted"
         );
-        assert_eq!(
-            measured(&thin_log),
-            recorded(THIN_LOG_SAMPLES),
-            "the set of samples without `log10` headroom moved: measured {thin_log:?}"
-        );
-        for (measured, recorded) in thin_pow
-            .iter()
-            .zip(THIN_POW_SAMPLES)
-            .chain(thin_log.iter().zip(THIN_LOG_SAMPLES))
-        {
-            assert!(
-                (measured.1 - recorded.1).abs() < 5e-4,
-                "sample {}: margin moved from the recorded {} to {}",
-                measured.0,
-                recorded.1,
-                measured.1
-            );
-        }
-
-        // **The conjunction, and the reason the golden's window is 1 ULP.** A sample that
-        // is both thin at stage 1 and amplified past the window would red on the other
-        // target with nothing here to explain why.
-        for &(i, margin) in &thin_log {
-            assert!(
-                amplification[i] <= 1,
-                "sample {i} has a thin `log10` margin ({margin}) AND amplifies a stage-1 \
-                 ULP to {} pixel ULPs. The golden's 1-ULP window can no longer carry this \
-                 vector: pick sample values that clear the threshold, or widen the window \
-                 deliberately and say why",
-                amplification[i]
-            );
-        }
     }
 
     #[test]

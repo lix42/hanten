@@ -85,31 +85,26 @@ reinhard`); `film-master` accepts it at exit 0 and needs no change; the gain map
 live and its plateau share improves 10–25x; `PIPELINE_FINGERPRINTS` needs a new row
 and a historical row must never be edited in place.
 
-**The new row's `render` hash may not be portable, and that is now measurable rather
-than a surprise from CI.** `algo/characteristic-curve-coverage` (closed 2026-09-10)
-found that a libm can only disagree on `10f32.powf` when the true value sits within
-~`2^-5` of an f32 ULP from a rounding boundary, and that **four** of the fifteen
-`stages::golden::pixels()` samples do under this curve — one of them the film-base
-pixel, whose value is the constant `10^(table[0].0)` and therefore reaches every
-base-density pixel of every frame. The golden there absorbs that with a 1-ULP window;
-the drift gate cannot, because it hashes raw f32 bits. So before recording a row,
-run `characteristic_golden_values_carry_their_libm_headroom`'s measurement over
-whatever the new default renders, and if a hashed sample is thin, change the *vector*
-— which means moving `golden::pixels()`, and that moves every historical row's
-meaning. Worth costing early rather than at the bump.
+**The new row's `render` hash may not be portable, and this is the single most
+important thing to read before writing one.** `algo/characteristic-curve-coverage`
+(closed 2026-09-10) established by observation — not by argument — that **x86_64 and
+macOS return different `f32` results from `log10f`** on two of the fifteen
+`stages::golden::pixels()` samples under this curve. The chain has two libm calls
+(`log10` in `to_density`, `10^` in the curve), and a 1-ULP difference in the first is
+amplified by `ln(10)·d·(1/γ_local)` — up to 62 pixel ULPs on that vector.
 
-**Two further things that measurement taught, both of which apply to the row:** the
-chain has *two* libm calls, not one (`log10` in `to_density` as well as the curve's
-`10^`), and a thin margin on the first is amplified by `ln(10)·d·(1/γ_local)` — up to
-62 pixel ULPs on the current vector. And the whole argument's binding constraint is
-already only **1.13x** the threshold (sample 8: margin 0.0353, amplification 6). A
-fingerprint row has no tolerance at all, so it is a strictly harder bar than the
-golden's — budget for picking a new vector rather than assuming the existing one
-carries over.
+The golden there survives it with a **derived per-sample window**
+(`stages::golden::reachable_window`, which renders every density a 1-ULP-accurate libm
+can return). **A fingerprint row has no window at all** — it hashes raw f32 bits — so it
+is a strictly harder bar, and the current vector is known to fail it on at least those
+two samples. Do not assume `golden::pixels()` carries over: budget for choosing sample
+values whose *rendered* pixels are identical on both targets, and verify by running CI
+on both rather than by any margin argument. Two threshold-based arguments were tried
+during that task and both were unsound; the progress log records why.
 
-**Unknown:** whether the per-channel neutrality fix lands close enough in shape to
-what this assumes, and whether the diffuse-white cost survives review as a default
-rather than as an option.
+Note also that moving `golden::pixels()` itself is not free — it is shared with every
+historical row, whose meaning would shift with it. Adding a separate vector for the new
+default's fingerprint is likely the cheaper answer.
 
 ## The blocker, and why it is a real one
 

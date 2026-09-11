@@ -325,13 +325,14 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   that CI's Linux runner validates**, not prior agreement being restated. If
 ///   that runner ever reds on `golden_new_default_is_bit_identical`, the failure is
 ///   the vector's — pick sample values that do agree, per CLAUDE.md's rule — not
-///   the gate's, and not a real behavior change. **That prediction is now testable
-///   without pushing:**
-///   `stages::golden::characteristic_golden_values_carry_their_libm_headroom`
-///   measures how far a value sits from an f32 rounding boundary, which is the only
-///   thing a libm can disagree about. It has not been run over the sigmoid's
-///   intermediates (there are several per sample, against the characteristic curve's
-///   one), so the v2/v4 watch item stands — but the method to settle it exists.
+///   the gate's, and not a real behavior change. **And that is not a remote
+///   possibility:** `algo/characteristic-curve-coverage` established that x86_64 and
+///   macOS return different `f32` results from `log10f` on two samples of this very
+///   vector under the characteristic curve. Whether the sigmoid's own intermediates
+///   land anywhere similar is untested, so the v2/v4 watch item stands.
+///   `stages::golden::reachable_window` is the tool for settling it — it enumerates
+///   what a conforming libm can return — but note a fingerprint has no tolerance
+///   window to absorb the answer the way a golden does.
 /// - It stops at `reconstruct_and_print`, i.e. **before** the lcms2 output color
 ///   transform. No post-lcms2 pixel and no embedded ICC byte — both of which differ
 ///   by target — enters any of the hashes.

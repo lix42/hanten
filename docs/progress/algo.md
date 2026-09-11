@@ -50,15 +50,17 @@ What other epics need to know about `algo`:
 - **The characteristic curve's wiring is pinned, and a fingerprint row over it is a
   harder bar than that pin** (`algo/characteristic-curve-coverage`, 2026-09-10). Four
   property tests run the real `algo::reconstruct` over a synthesized scan, plus a golden
-  stated within **1 ULP** rather than bit-for-bit. That window is what absorbs a libm
-  disagreement: measured on `stages::golden::pixels()`, four of fifteen samples sit close
-  enough to an f32 rounding boundary for two libms to round `10^` differently. Whoever
+  stated within a **derived per-sample window** rather than bit-for-bit. That window is
+  what absorbs a libm disagreement, and the disagreement is real: x86_64's `log10f`
+  returns a different density from Apple's on two of the fifteen captured samples.
+  `reachable_window` renders every density a 1-ULP-accurate libm can return and takes the
+  widest excursion — 1 ULP for nine samples, 63 at worst. Whoever
   writes the `PIPELINE_FINGERPRINTS` row when this curve becomes the default
   (`core/conversion-versioning` owns the gate, `algo/split-default-migration` the move)
   gets **no** such window — the gate hashes raw f32 bits — so budget for choosing a new
   vector rather than assuming the shared one carries over.
-  `stages::golden::characteristic_golden_values_carry_their_libm_headroom` is the harness
-  that decides it, and its threshold is glibc's published `powf` error, not a derivation.
+  `stages::golden::reachable_window` is the tool that decides it — enumeration over what
+  a conforming libm can return, after two threshold-based arguments proved unsound.
 - **`FilmRgbImage` is the typed boundary out of this epic.** Private fields,
   constructible only inside `algo`, so nothing can mint one that skipped
   reconstruction. `working_space::map_nc_film_rgb_v1` is its only intended
@@ -3716,67 +3718,60 @@ produces, so a refactor between the stages moved every characteristic pixel with
 green gates. Closed with two complementary pins. The correction to the task's premise is
 the part worth reading.
 
-**The premise was half wrong, and which half is decidable in advance.** The task recorded
-that a bit-exact capture "is not available" because `10f32.powf` differs ~1 ULP across
-libm implementations. That is true of particular *values*, not of the mechanism: two libms
-can only disagree when the true value lies within `E − 0.5` ULPs of an f32 rounding
-boundary, `E` being the worst-case error of the sloppier implementation. glibc documents
-`powf` at 0.52 ULP, so 0.02; the harness pads that to **0.03**. Measuring that distance
-for all fifteen samples of `stages::golden::pixels()` under this curve:
+**The premise was half wrong — but the *first two* attempts to say how were also wrong,
+and that is the part worth reading.** The task recorded that a bit-exact capture "is not
+available" because `10f32.powf` differs ~1 ULP across libm implementations. True of
+particular *values*, not of the mechanism. Three designs followed, each falsified by
+evidence rather than by argument:
 
-| samples | margin to the f32 rounding boundary |
+1. **Threshold from "computed in double, then rounded."** Claimed two libms diverge only
+   within `2^-5` of an f32 ULP from a rounding boundary. The arithmetic is simply wrong:
+   one f64 ULP *is* ~`2^-29` of an f32 ULP, so a few of them is ~`2^-27`, seven orders
+   tighter — under which nothing here is thin at all. The slip was converting one
+   quantity to a relative error twice, and it survived because the number it produced
+   sat plausibly between the measured margins. Caught in review.
+2. **Threshold from glibc's published `powf` error** (0.52 ULP, so `E − 0.5` = 0.02,
+   padded to 0.03), applied to both libm calls in the chain, with the pass condition
+   being that no sample is both near a boundary *and* in a part of the curve that
+   amplifies a 1-ULP density difference. This survived longer and was **still unsound**:
+   a bound published for one function does not transfer to another, and neither target
+   documents `log10f` at all. Two observations killed it. x86_64 CI disagreed with this
+   host on sample 1's `log10` (margin 0.0153 — the sample the measurement had flagged,
+   which looked like vindication), and then review found x86_64 *also* disagreeing on
+   **sample 9, whose margin is 0.456 ULP — twenty times the threshold that called it
+   safe**. The golden passed both times only because each disagreement fell in the
+   direction the curve happens to flatten. That is luck, not an argument.
+3. **What shipped: enumeration instead of inference.** `reachable_window` renders every
+   density a libm within 1 ULP can return — `d.next_down()`, `d`, `d.next_up()` around
+   the correctly-rounded value — takes the widest excursion from the captured pixel, and
+   adds one more ULP for the curve's own `10^`. The golden then asserts the render lands
+   inside *that*. No threshold, no published error bound, no premise about which target
+   is better: any conforming libm is inside the window by construction.
+
+The derived windows, which also show why this costs nothing:
+
+| samples | window |
 |---|---|
-| eleven of fifteen | 0.489 → 0.067 ULP — 2-16x clear of the threshold |
-| px3c1 | **0.0120 ULP** |
-| px4, all three channels | **0.0059 ULP** |
+| 0-2, 12-14 (near-base shadow, film base) | **1 ULP** |
+| 3-5 (midtone) | 4-5 ULP |
+| 6-8 (dense highlight) | 7-9 ULP |
+| 9, 11 (out-of-range, extrapolated) | 27, 38 ULP |
+| 10 (out-of-range green) | **63 ULP** |
 
-So it is the *vector* that is unsafe, not the mechanism, and nothing had to be pushed to
-CI to find out.
+Nine of fifteen are effectively bit-exact; the window only opens where the curve is
+steep, because a 1-ULP density difference is amplified by `ln(10)·d·(1/γ_local)`. Against
+that, the smallest real fault measured moves these pixels **115,549 ULPs** (a `1e-6` nudge
+to one table literal), so a 63-ULP worst case gives up three orders of nothing.
+`MAX_REASONABLE_WINDOW_ULPS` reports a future vector that lands somewhere steeper —
+`PORTRA_160_B` has a segment with `1/γ = 767`.
 
-**But `10^` is only one of the chain's two libm calls, and review caught the first version
-measuring only that one.** `to_density`'s `log10` produces the density the curve then
-inverts, and a 1-ULP disagreement *there* reaches the pixel amplified by
-`ln(10)·d·(1/γ_local)`. Measuring both factors on the same fifteen samples:
-
-| | amplification ≤ 1 ULP | amplification > 1 ULP |
-|---|---|---|
-| **`log10` margin < 2⁻⁵** | sample 1 (0.0153) | *(none)* |
-| **margin ≥ 2⁻⁵** | 0, 2, 12-14 | 3-11, at 3-62 pixel ULPs |
-
-The empty cell is what makes the 1-ULP window sufficient, and it is empty by
-**coincidence**: sample 1 is the one thin `log10` and the one sample the curve does not
-amplify. So the emptiness is now the harness's asserted pass condition rather than an
-unrecorded accident — if a recapture or a table edit ever fills it, the test says so and
-names the remedy.
-
-**x86_64 CI then confirmed the measurement on the first push, in the most useful way
-available.** glibc's `log10f` returns a density one ULP off the correctly-rounded value on
-**sample 1** — precisely the sample flagged as thin, and the only one flagged. Apple's
-does not. The golden passed on both targets regardless, because sample 1's amplification
-is zero. So the method predicted which of fifteen samples could disagree, and the one it
-named is the one that did.
-
-It surfaced as a red build, because the harness's first version asserted the *host's*
-`log10` equalled the correctly-rounded value — which is asserting the host is correctly
-rounding, the very thing that varies. The fix is to measure from the correctly-rounded
-intermediate (a property of the values) and assert only **conformance**, that the host
-lands within 1 ULP of it. Worth stating as a rule: a portability harness must not demand
-the platform be perfect, only that it be within the bound the argument assumes.
-
-**The real binding constraint is sample 8** (`log10` margin 0.0353, amplification 6 ULPs)
-— not the 2-16x the `10^` column suggests. It clears glibc's documented bound by 1.8x and
-the padded constant by 1.1x. If Apple's `log10` is worse than either, the margin test stays
-green and the golden reds on x86_64 by six times its window. That is the failure to expect,
-and the remedy is a different vector, not a wider tolerance.
-
-**And the threshold's first justification was wrong, which is the finding most worth
-keeping.** It argued `2^-5` followed from "both targets compute in double and round".
-It does not: one f64 ULP *is* ~`2^-29` of an f32 ULP, so a few of them is ~`2^-27`, seven
-orders tighter — under which nothing here is thin and the golden could have been
-bit-exact. The error was converting one quantity to a relative error twice, and it
-survived because the number it produced happened to sit plausibly between the measured
-margins. The constant is unchanged and conservative; only its warrant moved, from a
-derivation to glibc's published `powf` error.
+**One rule generalises out of the two failures.** A portability harness must not demand
+the platform be perfect, only that it be within the bound the argument assumes. Both dead
+designs asserted, in different words, that the host's libm was correctly rounding —
+design 1 by deriving a threshold that only holds for correct rounding, design 2 by
+asserting bit equality against an f64 reference. The shipped one asserts *conformance*
+(within 1 ULP) and derives everything else from the correctly-rounded value, so every
+number it reports is a property of the values rather than of the machine measuring them.
 
 Three modelling traps the harness hit, all of which produced a *plausible* wrong number
 rather than an error:
@@ -3823,17 +3818,15 @@ Plus one integration test: an off-table render warns, carries the per-channel fi
 `--strict` refuses it counting exactly one warning — with a sane-base control so the
 assertion is falsifiable.
 
-**Pin 2 — bits, in `pipeline::stages::golden`.** `golden_characteristic_is_correct_within_one_ulp`
-pins the captured fifteen to **1 ULP** rather than bit-for-bit, and
-`characteristic_golden_values_carry_their_libm_headroom` is why: it recomputes both libm
-steps in f64 (whose own error is ~4e-9 of an f32 ULP), asserts each captured value is the
-correctly-rounded one, pins the two sets of thin samples with their margins, and asserts
-the conjunction above is empty. A table edit, a changed vector, or a sample crossing a
-threshold in either direction fails it — so the golden's tolerance cannot silently stop
-being the right one. The window is uniform rather than per-sample on purpose: tightening
-the eleven safe samples to bit-exact would make them hostage to the `2^-5` premise for no
-gain in detection, since a real fault moves pixels by ~10^5 ULPs (measured: a `1e-6` nudge
-to one table literal moves the output 115,549 ULPs).
+**Pin 2 — bits, in `pipeline::stages::golden`.**
+`golden_characteristic_is_correct_within_its_libm_window` pins the captured fifteen
+within the per-sample window `reachable_window` derives, and
+`the_characteristic_capture_is_correctly_rounded_and_the_host_conforms` checks the two
+things that window assumes but cannot verify itself: that each captured constant is what
+a correctly-rounded chain produces (computed in f64, whose own error is ~4e-9 of an f32
+ULP), and that the running host's `log10` is within the 1 ULP every window is derived
+from. A table edit, a changed vector, an edited constant, or a host worse than the
+premise fails one of them.
 
 **What was actually there before, stated honestly.** Not nothing:
 `stages::midtone_placement::mid_grey_lands_at_eighteen_percent_through_every_display_tone`
@@ -3855,6 +3848,14 @@ code, full `cargo test` run, reverted (new tests in bold):
 | clamp instead of extrapolating below | **the `out_of_table` test, both new golden tests**; `out_of_table_extrapolates_and_reports` |
 | count pass drifts from the render | **the `out_of_table` test and the golden — nothing else** |
 | one table literal moved by 1e-6 | **both new golden tests**; `curves_match_the_digitized_json` |
+
+Re-run after the window design changed, and it earned its keep: the first
+`reachable_window` measured each candidate render's distance *from the captured value*,
+so the table nudge inflated the window by exactly as much as it inflated the drift and
+the golden passed on a frame whose every pixel had moved 115,523 ULPs. Only the
+capture-integrity test caught it. A window that depends on the value under test is not a
+window; it now measures the reachable set's own spread and is blind to the capture. No
+gate would have found that — only re-running the perturbations after the redesign did.
 
 The transposition is the case the golden provably *cannot* see (identity gain, zero
 offset), and the counting drift is the case only the new tests see. The two pins are

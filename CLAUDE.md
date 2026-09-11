@@ -593,45 +593,42 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   vectors in `pipeline::stages::golden` (captured from the reference code) — those
   specific values happen to agree across libm; never checksum a full frame, an
   encoded file, or post-lcms2 (color-transformed) pixels in a cross-platform gate.
-  **Whether a given value agrees is measurable rather than luck, and measuring it
-  beats pushing to find out.** Recompute the same expression in f64 (its own error
-  is ~4e-9 of an f32 ULP) and read off the distance to the f32 rounding boundary.
-  The threshold is `E − 0.5` ULPs, where `E` is the worst-case error of the sloppiest
-  libm involved: an implementation accurate to `E` returns the correctly-rounded
-  result whenever the true value is further than that from a boundary. glibc
-  documents `powf` at 0.52 ULP, so 0.02; Apple's libm publishes nothing, which is the
-  real uncertainty. **Do not try to derive the threshold from "computed in double
-  then rounded"** — that gives `~2^-27` ULP, seven orders tighter, and an attempt to
-  do so shipped `2^-5` here by converting one quantity to a relative error twice.
-  `stages::golden::characteristic_golden_values_carry_their_libm_headroom` is the
-  worked harness. Four things it had to learn the hard way:
-  - **Measure *every* libm call in the chain, not the last one.** That curve makes
+  **When a value cannot be pinned bit-exactly, bound it by enumeration, never by
+  inferring agreement from a rounding margin.** Two designs tried the inference here
+  and both were unsound. Sizing a "safe" threshold as `E − 0.5` from a published
+  error bound fails because a bound published for one function does not transfer to
+  another — glibc documents `powf` at 0.52 ULP, documents nothing useful for
+  `log10f`, and Apple documents neither; x86_64 and macOS were then observed
+  returning **different** `log10f` results at a margin twenty times the threshold
+  that called the sample safe. And do not try to derive such a threshold from
+  "computed in double then rounded": that gives `~2^-27` ULP, seven orders tighter
+  than the `2^-5` an attempt here produced by converting one quantity to a relative
+  error twice.
+  What works is `stages::golden::reachable_window`: render every intermediate a
+  1-ULP-accurate libm can return (`x.next_down()`, `x`, `x.next_up()` around the
+  correctly-rounded value), take the widest excursion, and add one ULP for the final
+  call. Any conforming target is inside it by construction, and the cost is nil —
+  9 of 15 samples still come out at 1 ULP, the worst at 63, against ~10^5 ULPs for
+  the smallest real fault. Four supporting rules:
+  - **Cover *every* libm call in the chain, not the last one.** That curve makes
     two (`log10` in `to_density`, `10^` in the curve), and a first version measured
     only the second while reading as if it covered the chain.
-  - **Measure from the correctly-rounded intermediate, and assert only conformance.**
-    Asserting the host's libm *equals* the correctly-rounded value asserts the host is
-    correctly rounding — the exact thing that varies. It red x86_64 on the one sample
-    the harness had flagged as thin (glibc's `log10f`, 1 ULP); Apple's agrees. Assert
-    the host is within 1 ULP and derive every margin from the rounded value, so the
-    numbers are a property of the values rather than of the machine measuring them.
-  - **A thin margin upstream is amplified.** A 1-ULP `log10` disagreement reaches
-    the pixel multiplied by `ln(10)·d·(1/γ_local)` — up to 62 ULPs on that vector —
-    so the pass condition is the *conjunction*: no sample may be both thin and
-    amplifying. Measure the amplification by perturbing the input ±1 ULP and
-    re-rendering; the closed form under-predicts by up to 2x because the
-    intermediate is itself an f32 and the step quantizes.
-  - **Model the stage exactly as written.** Its f32 division must be done in f32
+  - **Assert conformance, never correct rounding.** Requiring the host's libm to
+    equal the f64-rounded value asserts the host rounds correctly — the exact thing
+    that varies, and it red x86_64. Assert it is within 1 ULP, and derive everything
+    else from the rounded value so the numbers describe the values rather than the
+    machine measuring them.
+  - **Expect upstream error to be amplified.** A 1-ULP density difference reaches
+    the pixel multiplied by `ln(10)·d·(1/γ_local)` — 62 ULPs on that vector. Measure
+    it by perturbing and re-rendering; the closed form under-predicts by up to 2x,
+    because the intermediate is itself an f32 and the step quantizes.
+  - **Model the stage exactly as written.** Its f32 division must happen in f32
     before the f64 `log10` (dividing in f64 put the reference 5 ULPs out), and an
     identity gain/offset still cannot be dropped — `+ offset` is what turns the
     film-base pixel's `-0.0` into the `+0.0` actually stored.
-  - **Take the ULP on the side the true value lies.** At a binade boundary the step
-    below a value is half the step above, so measuring against `bits + 1` alone
-    overstates the margin by up to 2x — the unsafe direction.
-  A thin sample has two remedies — move the vector, or state the golden within
-  1 ULP (the characteristic golden does the latter; it loses nothing, since a real
-  fault moves pixels by ~10^5 ULPs). The **drift gate has only the first**: it
-  hashes raw f32 bits, so a thin sample entering `PIPELINE_FINGERPRINTS` must be
-  designed out of the vector.
+  The **drift gate cannot use any of this**: it hashes raw f32 bits, so it has no
+  window at all and a sample whose render differs across targets must be designed
+  out of the vector before it enters `PIPELINE_FINGERPRINTS`.
   Note what `golden` therefore does **not** cover: `assert_golden` pins
   `reconstruct_and_print`, i.e. **pre**-color-transform pixels. Nothing committed
   guards `color::to_output`'s output across targets, so a change there is verified

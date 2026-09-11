@@ -13,11 +13,12 @@ The detail is in `docs/progress/algo.md`; the answers to the open questions are:
   `algo::reconstruct` over a synthesized scan (neutral ramp on all ten stocks, published
   mid-grey, the `scale·d + offset` ordering, `out_of_table` against a recount), plus a
   golden in `pipeline::stages::golden` pinned to **1 ULP** rather than bit-for-bit.
-- **A bit-exact capture turned out to be *mostly* available.** Two libms can only disagree
-  on `10f32.powf` when the true value lies within ~`2^-5` of an f32 ULP from a rounding
-  boundary; eleven of the fifteen `golden::pixels()` samples clear that by 2-16x. So which
-  values are unsafe is decidable in advance, and `characteristic_golden_values_carry_their_libm_headroom`
-  records the four that are not — including the film-base pixel, at 0.0059 ULP.
+- **A bit-exact capture is genuinely unavailable, and the reason is observed rather than
+  argued.** x86_64 and macOS return different `f32` results from `log10f` on two of the
+  fifteen samples. Two attempts to bound the risk by a rounding-margin *threshold* were
+  both unsound — see the progress log — and what shipped instead is enumeration:
+  `reachable_window` renders every density a 1-ULP-accurate libm can return and takes the
+  widest excursion, giving 1 ULP for nine samples and 63 at worst.
 - **Is it falsifiable?** Measured, not argued: seven deliberate perturbations, each run
   against the full suite. The transposition is the one case the golden provably cannot see
   and the property test can; the counting-pass drift is the one only the new tests see.
