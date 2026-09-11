@@ -74,10 +74,10 @@ implementing — against real converted rolls, not on paper. The families:
   conversion; per-hue-sector chroma and hue placement; neutral share.
 
 Both shipped (tone 2026-09-02, color 2026-09-02), plus an L\*-binned per-channel
-histogram (2026-09-11) — the record's only list-valued field, and the one thing in
+histogram (2026-09-10) — the record's only list-valued field, and the one thing in
 it a review tool can draw rather than read.
 
-The tone-band question below was settled on 2026-09-11 and the answer moved the
+The tone-band question below was settled on 2026-09-10 and the answer moved the
 record to `schema_version` 2: the bands are cut in **equal steps of CIELAB
 lightness** (every 15 L\* to 75, then diffuse white, then an overflow band), not in
 equal steps of stops. Equal steps of exposure are unequal steps of anything a
@@ -115,7 +115,7 @@ exists it can feed the region automatically; this task does not wait for it.
 - Which common space, and which perceptual representation, keep results
   meaningful across SDR, HDR, integer and float outputs?
 - ~~What should shadow, highlight, near-black and near-white mean here, and which
-  definitions stay comparable across configurations?~~ Settled 2026-09-11: equal
+  definitions stay comparable across configurations?~~ Settled 2026-09-10: equal
   steps of CIELAB lightness, shared between the tone and colour stages, stated
   inside each record so an artifact carries its own definition.
 - Full-resolution percentiles, or a deterministic decimation recorded in the

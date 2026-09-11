@@ -13,7 +13,7 @@ changed" well and "what does that look like" not at all.
   2026-09-03) writes a per-image record — endpoint occupancy, tone in log2 stops,
   colour in CIELAB — and a per-roll rollup with a spread table. That is the data
   source; this task does not add measurements.
-  **Two things changed under it on 2026-09-11 (`schema_version` 2) and both matter
+  **Two things changed under it on 2026-09-10 (`schema_version` 2) and both matter
   here.** `tone.histogram` arrived: four series (luminance, R, G, B) of 200 counts
   each, one per L\* unit, running to twice diffuse white so an HDR render's
   headroom is drawable and an SDR render's shortfall below white is visible; the
@@ -54,7 +54,7 @@ Ranked by value, with the reasoning, because the ordering is the useful part:
 2. **`cast_by_tone_band` as a path on the a\*/b\* plane**, one point per band
    joined in tone order. The shape of that path is crossover: a tight cluster is
    clean, a long diagonal sweep is not. As a bar chart the same data is nearly
-   unreadable. Seven bands since 2026-09-11, and a band holding under 0.1% of
+   unreadable. Seven bands since 2026-09-10, and a band holding under 0.1% of
    the region is flagged `sparse`: its point must not be drawn with the same
    weight as one from a band holding half the frame.
 3. **`bands` as a stacked bar** — redundant with (1) for a single image, but the

@@ -34,11 +34,11 @@ What other epics need to know about `analysis`:
   a negative conversion turns on; and a roll's spread is **not attributable** to
   the calibration, because scene content is mixed into it.
 - **The tone bands are cut in CIELAB lightness, and the record is `schema_version`
-  2 (2026-09-11).** Edges every 15 L\* to 75, then diffuse white (L\* 100), then an
+  2 (2026-09-10).** Edges every 15 L\* to 75, then diffuse white (L\* 100), then an
   overflow band above it — `deep_shadow, shadow, low_mid, mid, high_mid,
   highlight, above_diffuse_white`. They were even in *stops* through schema 1
   (-4 / -2 / +2 / diffuse white), which put a median 83% of a real frame in `mid`
-  alone. **Anyone quoting a band share from before 2026-09-11 is quoting the old
+  alone. **Anyone quoting a band share from before 2026-09-10 is quoting the old
   definition**; `metrics table` refuses a schema-1 record rather than rendering it
   under the new labels. The cut is stated inside every record (`record.bands`), so
   an artifact carries its own definition. `cast_by_tone_band` entries now carry
@@ -366,7 +366,7 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
 ## conversion-metrics
 
 **Status:** done (2026-09-03)
-**Updated:** 2026-09-03
+**Updated:** 2026-09-10
 
 - Goal: Formalize the ad-hoc image-library analysis from real-scan verification into the reusable Python toolkit that is the toolkit's single documented entry point.
 - 2026-08-12: Folded the briefly separate `photographic-result-analysis` follow-up into this
@@ -646,7 +646,7 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   build, Rust suite (702 + 174). Codex review was unavailable (workspace spend cap),
   so `ship:diff-reviewer` was the sole reviewer.
 
-- 2026-09-11: **Re-cut the tone bands in CIELAB lightness, and added the per-channel
+- 2026-09-10: **Re-cut the tone bands in CIELAB lightness, and added the per-channel
   histogram.** `schema_version` 1 -> 2.
   The old cut was even in stops — `-inf / -4 / -2 / +2 / diffuse white`, after Zones
   III and VII — and even steps of exposure are uneven steps of anything a viewer
@@ -757,7 +757,7 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   No Rust was touched, and the Rust gates were run anyway and are green: fmt,
   clippy `-D warnings`, build, 755 + 191 tests.
 
-- 2026-09-11 (follow-up): **Histogram range extended past diffuse white; survey of
+- 2026-09-10 (follow-up): **Histogram range extended past diffuse white; survey of
   how other tools bin tonal regions.** Supersedes the histogram range described in
   the entry above.
   **The range now runs L\* 0..200 in 200 bins**, not 0..100 in 100. Two reasons,
@@ -835,7 +835,7 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
 ## nlp-comparison
 
 **Status:** not started
-**Updated:** 2026-09-02
+**Updated:** 2026-09-10
 
 - Goal: Ingest Negative Lab Pro (NLP) conversion outputs (the user adds them to `nc-assets`) and compare them against nc's outputs: global per-image metrics side by side, plus side-by-side downscaled thumbnails.
 - 2026-09-02: Task rewritten and widened from "NLP vs nc" to reference comparison,
@@ -853,7 +853,7 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   ICC profile, so it is unpaired until both are declared by hand. Noted that nc's default
   gain-map JPEG is unreadable by the planned metric reader, so comparison runs go through
   a TIFF preset.
-- 2026-09-11: **First measured nc-versus-NLP numbers, recorded as a starting point
+- 2026-09-10: **First measured nc-versus-NLP numbers, recorded as a starting point
   rather than acted on.** They fell out of the `analysis/conversion-metrics` band
   re-cut, which needed a non-nc producer to score candidate cuts against. Nothing
   here changed a render: the preset brightness target was approved by the user on
