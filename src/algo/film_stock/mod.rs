@@ -244,6 +244,10 @@ pub fn check_tables(stock: FilmStock) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{
+        CharacteristicParams, DensityCurve, DensityCurveType, DensityParams, FilmBase, LinearImage,
+        Reconstruction,
+    };
 
     /// `mid aim − D-min` per stock, from the datasheets (progress log, 2026-09-04). These
     /// are *not* read by the render — the curve carries the placement — so this table
@@ -260,6 +264,18 @@ mod tests {
         ("ultramax-400", 0.615),
         ("ultramax-800", 0.542),
     ];
+
+    /// The stock's published curve read **forward** — log exposure → density — by the
+    /// same linear interpolation [`invert`] runs backwards.
+    ///
+    /// The synthetic film model every test below builds its negatives with. Stating the
+    /// round-trip property needs a forward model that is *not* the inverse under test.
+    fn forward(sc: &StockCurves, ch: usize, log_e: f32) -> f32 {
+        let t = sc.channels[ch];
+        let i = t.partition_point(|p| p.0 <= log_e).clamp(1, t.len() - 1);
+        let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
+        d0 + (log_e - x0) * (d1 - d0) / (x1 - x0)
+    }
 
     /// Every sheet's **own aim table** must agree with its **own curve**.
     ///
@@ -307,14 +323,7 @@ mod tests {
             if NO_USABLE_DELTA.contains(&sc.name) {
                 continue;
             }
-            let table = sc.channels[0];
-            let at = |x: f32| {
-                let i = table
-                    .partition_point(|p| p.0 <= x)
-                    .clamp(1, table.len() - 1);
-                let ((x0, d0), (x1, d1)) = (table[i - 1], table[i]);
-                d0 + (x - x0) * (d1 - d0) / (x1 - x0)
-            };
+            let at = |x: f32| forward(sc, 0, x);
             // Compare the two published quantities **over the same interval**: the curve's
             // own density rise across exactly the separation the aims span, starting at the
             // grey aim (which the axis is built to put at `log10(0.18)`).
@@ -463,12 +472,7 @@ mod tests {
             "the generic's own mid-above-base must invert to 0.18"
         );
         // Mid-scale gamma, red: the per-stock measurements run 0.50–0.61.
-        let d = |x: f32| -> f32 {
-            let t = generic.channels[0];
-            let i = t.partition_point(|p| p.0 <= x).clamp(1, t.len() - 1);
-            let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
-            d0 + (x - x0) * (d1 - d0) / (x1 - x0)
-        };
+        let d = |x: f32| forward(generic, 0, x);
         let log18 = 0.18f32.log10();
         let gamma = (d(log18 + 0.35) - d(log18 - 0.35)) / 0.7;
         assert!(
@@ -490,17 +494,11 @@ mod tests {
     fn a_neutral_ramp_reconstructs_neutral_on_every_stock() {
         for stock in FilmStock::ALL {
             let sc = curves_for(*stock);
-            let forward = |ch: usize, log_e: f32| -> f32 {
-                let t = sc.channels[ch];
-                let i = t.partition_point(|p| p.0 <= log_e).clamp(1, t.len() - 1);
-                let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
-                d0 + (log_e - x0) * (d1 - d0) / (x1 - x0)
-            };
             // Six stops around mid-grey, inside every stock's plotted range.
             for step in 0..=10 {
                 let log_e = 0.18f32.log10() + (step as f32 - 5.0) * 0.18;
                 for ch in 0..3 {
-                    let density = forward(ch, log_e);
+                    let density = forward(sc, ch, log_e);
                     let (back, in_table) = invert(sc.channels[ch], density);
                     assert!(
                         in_table,
@@ -525,13 +523,7 @@ mod tests {
     fn channels_reconverge_although_their_densities_differ() {
         let sc = curves_for(FilmStock::Portra400);
         let log_e = 0.18f32.log10() + 0.6; // two stops over mid
-        let forward = |ch: usize| -> f32 {
-            let t = sc.channels[ch];
-            let i = t.partition_point(|p| p.0 <= log_e).clamp(1, t.len() - 1);
-            let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
-            d0 + (log_e - x0) * (d1 - d0) / (x1 - x0)
-        };
-        let (dr, db) = (forward(0), forward(2));
+        let (dr, db) = (forward(sc, 0, log_e), forward(sc, 2, log_e));
         assert!(
             db - dr > 0.2,
             "the premise of this stage: blue records {db:.3} where red records {dr:.3}"
@@ -614,12 +606,7 @@ mod tests {
             let sc = curves_for(*stock);
             let log18 = 0.18f32.log10();
             let gamma = |ch: usize| {
-                let t = sc.channels[ch];
-                let at = |x: f32| {
-                    let i = t.partition_point(|p| p.0 <= x).clamp(1, t.len() - 1);
-                    let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
-                    d0 + (x - x0) * (d1 - d0) / (x1 - x0)
-                };
+                let at = |x: f32| forward(sc, ch, x);
                 (at(log18 + 0.35) - at(log18 - 0.35)) / 0.7
             };
             let (r, b) = (gamma(0), gamma(2));
@@ -627,6 +614,334 @@ mod tests {
                 b > r * 1.05,
                 "{}: blue gamma {b:.3} is not meaningfully steeper than red {r:.3}",
                 stock.as_str()
+            );
+        }
+    }
+
+    // --- the wiring, end to end -----------------------------------------------
+    //
+    // Everything above pins the *tables* and [`invert`]. The tests below run the shipped
+    // `algo::reconstruct` — `to_density` → `check_tables` → [`apply_curve`] →
+    // `FilmRgbImage` — because nothing else did: `algo/characteristic-curve-coverage` was
+    // opened for exactly that gap.
+    //
+    // They assert properties, not captured bits, so they survive the ~1-ULP libm spread
+    // across targets. The bit-exact half lives in `pipeline::stages::golden`.
+
+    /// The per-channel film base these tests reconstruct against.
+    ///
+    /// Deliberately **not** neutral: stage 1 divides by the base per channel, and a
+    /// shared scalar there is invisible against a grey base. (A channel permuted between
+    /// the stages is caught by the three tables differing, not by this.)
+    fn test_base() -> FilmBase {
+        FilmBase::from([0.9, 0.55, 0.42])
+    }
+
+    /// The scan a film would hand the decoder for a given set of **corrected** densities,
+    /// so each pixel arrives at the curve carrying exactly `want`.
+    ///
+    /// Synthesizing the *scan* rather than handing densities straight to the curve is what
+    /// puts `to_density` inside the assertion, which is the whole point of this section.
+    ///
+    /// It inverts stage 1 and stage 2's **per-channel** half only
+    /// (`D′ = scale·(−log10(s/base)) + offset`). Two preconditions follow, neither of
+    /// which any caller here violates and both of which a new one easily could:
+    ///
+    /// - `regional_balance` is stage 2's other half and is **not** inverted, so every
+    ///   caller must leave `shadow_balance` / `highlight_balance` neutral. A non-neutral
+    ///   pair is a per-tone per-channel offset the synthesis does not undo.
+    /// - `want` must stay under `−log10(SCAN_EPSILON/base_c)` — about 5.95 / 5.74 / 5.62
+    ///   for R/G/B at [`test_base`] — above which `to_density`'s dead-pixel floor clamps
+    ///   and the round trip stops being one.
+    fn scan_for(params: &DensityParams, want: &[[f32; 3]]) -> LinearImage {
+        let base = test_base();
+        let base = [base.r, base.g, base.b];
+        let mut rgb = Vec::with_capacity(want.len() * 3);
+        for px in want {
+            for c in 0..3 {
+                rgb.push(base[c] * 10f32.powf(-(px[c] - params.offset[c]) / params.scale[c]));
+            }
+        }
+        LinearImage::new(want.len() as u32, 1, rgb, None).expect("a one-row synthetic scan")
+    }
+
+    /// Reconstruct the scan carrying `want` through the characteristic curve, as
+    /// `(per-pixel exposures, report)`.
+    fn reconstruct_densities(
+        stock: FilmStock,
+        density: &DensityParams,
+        want: &[[f32; 3]],
+    ) -> (Vec<[f32; 3]>, crate::algo::ReconstructionReport) {
+        let image = scan_for(density, want);
+        let config = Reconstruction::Density {
+            density: density.clone(),
+            curve: DensityCurve::Characteristic(CharacteristicParams { stock }),
+        };
+        let (film, report) = crate::algo::reconstruct(&image, &test_base(), &config)
+            .expect("the characteristic reconstruction must succeed");
+        let (pixels, rest) = film.rgb().as_chunks::<3>();
+        debug_assert!(rest.is_empty(), "an RGB buffer is a whole number of pixels");
+        (pixels.to_vec(), report)
+    }
+
+    /// The gain this curve resolves for itself (`[1, 1, 1]`), taken from its single
+    /// definition rather than restated — the parametric calibration would correct the
+    /// stock's own per-channel structure a second time.
+    fn characteristic_density() -> DensityParams {
+        DensityParams {
+            scale: DensityParams::default_scale_for(DensityCurveType::Characteristic),
+            ..DensityParams::default()
+        }
+    }
+
+    /// Relative tolerance for a full-chain round trip.
+    ///
+    /// The synthesis and the reconstruction are algebraic inverses, so what is left is f32
+    /// rounding through `10^` / `log10` and the two interpolations — **measured at
+    /// 4.8e-7** (8 ULPs) across all ten stocks. The bound keeps 20x of that, which no
+    /// cross-target libm difference can consume (~1 ULP each), and stays three orders
+    /// tighter than any real wiring fault, which moves values by percent.
+    const ROUND_TRIP_TOL: f32 = 1e-5;
+
+    /// Every channel of every reconstructed pixel came back to the exposure the ramp
+    /// started from, within [`ROUND_TRIP_TOL`].
+    fn assert_round_trip(label: &str, exposures: &[f32], out: &[[f32; 3]]) {
+        // `zip` truncates, so a short render would silently assert nothing.
+        assert_eq!(out.len(), exposures.len(), "{label}: pixel count");
+        for (&log_e, got) in exposures.iter().zip(out) {
+            let want = 10f32.powf(log_e);
+            for (c, &got) in got.iter().enumerate() {
+                let err = (got / want - 1.0).abs();
+                assert!(
+                    err < ROUND_TRIP_TOL,
+                    "{label} ch{c}: exposure {want:.5} reconstructed as {got:.5} \
+                     ({err:.2e} relative)"
+                );
+            }
+        }
+    }
+
+    /// **The load-bearing property, through the shipped wiring.** Run a neutral exposure
+    /// ramp forward through the stock's own published curves into the densities film
+    /// would record, synthesize the scan carrying them, and reconstruct. Every channel
+    /// must come back to the exposure it started from.
+    ///
+    /// `a_neutral_ramp_reconstructs_neutral_on_every_stock` asserts this of [`invert`]
+    /// alone; this asserts it of the chain. It fails if stage 1's base division is shared
+    /// instead of per-channel, if one table is applied across all three channels, if the
+    /// channels are permuted between stages, or if the dispatch reaches another curve.
+    ///
+    /// What it deliberately does **not** cover: where the regional balance sits. The
+    /// balances are neutral here (their default), so that pass is a no-op and reordering
+    /// it is invisible — a non-neutral balance is a per-tone per-channel offset and would
+    /// destroy the neutrality being asserted. It is shared with the parametric curves and
+    /// pinned by their goldens.
+    #[test]
+    fn a_neutral_ramp_reconstructs_neutral_through_the_whole_chain() {
+        for stock in FilmStock::ALL {
+            let sc = curves_for(*stock);
+            // Six stops around mid-grey — the same span as the table-only test, and
+            // inside every stock's plotted range.
+            let exposures: Vec<f32> = (0..=10)
+                .map(|step| 0.18f32.log10() + (step as f32 - 5.0) * 0.18)
+                .collect();
+            let want: Vec<[f32; 3]> = exposures
+                .iter()
+                .map(|&log_e| std::array::from_fn(|c| forward(sc, c, log_e)))
+                .collect();
+            let (out, report) = reconstruct_densities(*stock, &characteristic_density(), &want);
+
+            // Nothing here is extrapolated, so the round trip below measures the published
+            // curve rather than its end slope.
+            assert_eq!(
+                report.out_of_table,
+                Some(OutOfTable::default()),
+                "{}: the ramp left the published table",
+                stock.as_str()
+            );
+
+            assert_round_trip(stock.as_str(), &exposures, &out);
+
+            // "A grey ramp stays grey", stated directly: the three channels recorded
+            // measurably different densities and must land on one exposure.
+            for got in &out {
+                let lo = got.iter().copied().fold(f32::INFINITY, f32::min);
+                let hi = got.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                // `hi / lo` is only a spread when `lo` is positive — a negative or zero
+                // channel would make the ratio pass while the pixel is nonsense. Checked
+                // here rather than relying on `assert_round_trip` having run first, which
+                // is an ordering a later edit can undo in silence.
+                assert!(
+                    lo > 0.0 && hi / lo - 1.0 < ROUND_TRIP_TOL,
+                    "{}: a neutral exposure reconstructed as {got:?}",
+                    stock.as_str()
+                );
+            }
+        }
+    }
+
+    /// The axis convention, through the wiring: a stock's **published** mid-grey aim
+    /// density reconstructs to 0.18.
+    ///
+    /// This is what makes the curve self-anchoring, which is why the report resolves no
+    /// reference and no anchor — asserted here beside it, since a curve that silently
+    /// acquired one would still round-trip a ramp.
+    #[test]
+    fn the_published_mid_grey_reconstructs_to_eighteen_percent_through_the_whole_chain() {
+        let log18 = 0.18f32.log10();
+        for (name, mid_above_base) in MID_ABOVE_BASE {
+            let stock = FilmStock::parse(name).expect("MID_ABOVE_BASE names shipped stocks");
+            let sc = curves_for(stock);
+            // Red carries the published aim; green and blue take the curve's own neutral
+            // densities at mid-grey, so the pixel is a plausible grey card rather than a
+            // red-only probe.
+            let want = [[
+                *mid_above_base,
+                forward(sc, 1, log18),
+                forward(sc, 2, log18),
+            ]];
+            let (out, report) = reconstruct_densities(stock, &characteristic_density(), &want);
+            assert_eq!(
+                report.dmax, None,
+                "{name}: this curve resolves no reference"
+            );
+            assert_eq!(
+                report.curve_anchor, None,
+                "{name}: this curve places no anchor"
+            );
+            for (c, &got) in out[0].iter().enumerate() {
+                assert!(
+                    (got - 0.18).abs() < 0.006,
+                    "{name} ch{c}: mid-grey reconstructed as {got}"
+                );
+            }
+        }
+    }
+
+    /// Stages 1–2 are `scale·d + offset`, not `scale·(d + offset)`, and the chain must
+    /// apply them in that order.
+    ///
+    /// The ramp test cannot see this: `characteristic` resolves the identity gain, and at
+    /// `scale = 1` the two spellings agree. An explicit non-neutral pair separates them —
+    /// the synthesis inverts the documented definition, so a correct chain still lands on
+    /// neutral while a transposed one lands `offset·(scale − 1)` away in density.
+    ///
+    /// It doubles as the only assertion that this curve honours `density.scale` /
+    /// `density.offset` at all: they are resolved per curve, and a dropped one would
+    /// otherwise show up as nothing.
+    #[test]
+    fn the_chain_applies_the_density_gain_before_the_offset() {
+        let stock = FilmStock::Portra400;
+        let sc = curves_for(stock);
+        let density = DensityParams {
+            scale: [1.15, 0.9, 0.85],
+            offset: [0.08, -0.06, -0.05],
+            ..DensityParams::default()
+        };
+        // Falsifiability, machine-checked rather than asserted in prose: the transposed
+        // spelling really does land far outside ROUND_TRIP_TOL at these values, so a green
+        // run means the order is right and not that the two spellings coincide. At a
+        // mid-scale gamma near 0.55 this much density is 2-5% of exposure.
+        for c in 0..3 {
+            let transposed_shift = density.offset[c] * (density.scale[c] - 1.0);
+            assert!(
+                transposed_shift.abs() > 0.005,
+                "channel {c}: the two spellings differ by only {transposed_shift} density"
+            );
+        }
+
+        let exposures: Vec<f32> = (0..=6)
+            .map(|step| 0.18f32.log10() + (step as f32 - 3.0) * 0.25)
+            .collect();
+        let want: Vec<[f32; 3]> = exposures
+            .iter()
+            .map(|&log_e| std::array::from_fn(|c| forward(sc, c, log_e)))
+            .collect();
+        let (out, _) = reconstruct_densities(stock, &density, &want);
+        assert_round_trip("explicit gain/offset", &exposures, &out);
+    }
+
+    /// The reported extrapolation fractions must describe the samples that were actually
+    /// extrapolated.
+    ///
+    /// [`apply_curve`] counts in a **separate parallel reduction** from the transform that
+    /// renders them, so the two can drift apart with every gate green — and nothing
+    /// asserted these numbers, though they reach the JSON report and a
+    /// `--strict`-promotable warning. Recounted here from [`invert`]'s own per-sample flag
+    /// over the densities `to_density` produced, so the two passes are compared rather
+    /// than one being restated.
+    #[test]
+    fn the_reported_out_of_table_fractions_match_the_rendered_samples() {
+        let stock = FilmStock::Portra400;
+        let sc = curves_for(stock);
+        let density = characteristic_density();
+        // Below the film base, three in-table tones, and past the densest published point
+        // in every channel — the shape a full-frame scan has, where the holder sits above
+        // every table.
+        let want: Vec<[f32; 3]> = vec![
+            [-0.30, -0.30, -0.30],
+            [0.20, 0.25, 0.30],
+            [0.62, 0.70, 0.78],
+            [1.05, 1.20, 1.35],
+            std::array::from_fn(|c| sc.channels[c][sc.channels[c].len() - 1].1 + 0.5),
+        ];
+        let (out, report) = reconstruct_densities(stock, &density, &want);
+        let oot = report
+            .out_of_table
+            .expect("the characteristic curve reports its extrapolation");
+
+        // Recount from the densities the render itself saw, not from `want`: a target
+        // sitting a rounding step from a table endpoint would otherwise be counted on the
+        // other side here than there.
+        let densities =
+            crate::algo::density::to_density(&scan_for(&density, &want), &test_base(), &density);
+        let mut below = [0u32; 3];
+        let mut above = [0u32; 3];
+        for px in densities.density.as_chunks::<3>().0 {
+            for c in 0..3 {
+                if invert(sc.channels[c], px[c]).1 {
+                    continue;
+                }
+                if px[c] < sc.channels[c][0].1 {
+                    below[c] += 1;
+                } else {
+                    above[c] += 1;
+                }
+            }
+        }
+        // The vector's own shape, so a recount that matched two zeros would fail here.
+        assert_eq!(
+            below,
+            [1, 1, 1],
+            "the probe must extrapolate below every table"
+        );
+        assert_eq!(
+            above,
+            [1, 1, 1],
+            "the probe must extrapolate above every table"
+        );
+
+        let samples = want.len() as f32;
+        for c in 0..3 {
+            assert_eq!(oot.below[c], below[c] as f32 / samples, "channel {c} below");
+            assert_eq!(oot.above[c], above[c] as f32 / samples, "channel {c} above");
+        }
+
+        // Extrapolated, not clamped: the out-of-table samples must render outside the
+        // exposures the table's own endpoints carry. A clamp would flatten them onto the
+        // endpoint while these fractions still reported detail there.
+        for (c, t) in sc.channels.iter().enumerate() {
+            assert!(
+                out[0][c] < 10f32.powf(t[0].0),
+                "channel {c}: a below-table sample rendered at {}, not below {}",
+                out[0][c],
+                10f32.powf(t[0].0)
+            );
+            assert!(
+                out[4][c] > 10f32.powf(t[t.len() - 1].0),
+                "channel {c}: an above-table sample rendered at {}, not above {}",
+                out[4][c],
+                10f32.powf(t[t.len() - 1].0)
             );
         }
     }

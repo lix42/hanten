@@ -6,7 +6,27 @@ Give the `characteristic` density curve a regression pin. Its *tables* are well 
 its *wiring* not at all — so a refactor between the stages moves every characteristic pixel
 with all four gates green.
 
-## Known (verified 2026-09-10)
+**Closed 2026-09-10.** Two complementary pins, and one correction to the premise below.
+The detail is in `docs/progress/algo.md`; the answers to the open questions are:
+
+- **Which shape?** Both. Four *property* tests in `algo::film_stock::tests` run the real
+  `algo::reconstruct` over a synthesized scan (neutral ramp on all ten stocks, published
+  mid-grey, the `scale·d + offset` ordering, `out_of_table` against a recount), plus a
+  golden in `pipeline::stages::golden` pinned to **1 ULP** rather than bit-for-bit.
+- **A bit-exact capture is genuinely unavailable, and the reason is observed rather than
+  argued.** x86_64 and macOS return different `f32` results from `log10f` on two of the
+  fifteen samples. Two attempts to bound the risk by a rounding-margin *threshold* were
+  both unsound — see the progress log — and what shipped instead is enumeration:
+  `reachable_window` renders every density a 1-ULP-accurate libm can return and takes the
+  widest excursion, giving 1 ULP for nine samples and 63 at worst.
+- **Is it falsifiable?** Measured, not argued: seven deliberate perturbations, each run
+  against the full suite. The transposition is the one case the golden provably cannot see
+  and the property test can; the counting-pass drift is the one only the new tests see.
+- **The drift gate is deliberately untouched** — it covers the *default* render, so the
+  row belongs to `algo/split-default-migration`, whose task file now carries the
+  portability warning.
+
+## Known at filing (verified 2026-09-10)
 
 **The table layer is covered, synthetically — no assets, libm-safe.**
 `algo::film_stock::tests` pins the Rust literals against the extraction, that no variant

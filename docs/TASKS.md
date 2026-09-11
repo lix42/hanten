@@ -556,12 +556,13 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   `--sigmoid-white-at-d-max` is a retained diagnostic. Ships no pixel change
 - `algo/film-stock-profiles` (post-MVP): `algo/reference-anchored-sigmoid`
 - `algo/characteristic-curve-coverage` (post-MVP): `algo/film-stock-profiles`
-  — filed 2026-09-10. The curve's *tables* are well covered and its **wiring**
-  (`to_density → check_tables → apply_curve_per_channel → FilmRgbImage`) is not covered at
-  all: no golden vector and no `PIPELINE_FINGERPRINTS` row, because the inversion's
-  `10f32.powf` would not survive x86_64 CI. Edged into `algo/split-default-migration`
-  rather than `algo/conversion-presets`, because that is where the default actually moves —
-  a default on an unpinned curve is what makes this blocking rather than optional
+  — filed 2026-09-10, closed the same day. The wiring
+  (`to_density → check_tables → apply_curve_per_channel → FilmRgbImage`) now carries four
+  property tests over the real `algo::reconstruct` plus a 1-ULP golden. Edged into
+  `algo/split-default-migration` rather than `algo/conversion-presets`, because that is
+  where the default actually moves — and it is still the one that owns the
+  `PIPELINE_FINGERPRINTS` row, which stays unwritten here on purpose: the gate covers the
+  *default* render, and it hashes raw f32 bits with no 1-ULP window
 - `algo/auto-anchor-interior-measurement` (post-MVP): `algo/reference-anchored-sigmoid`, `film-base/auto-base-redesign`
   — `DmaxSource::Auto` measures the whole frame, so the opaque holder owns the 99.5th
   percentile (resolves 2.23–2.37 against a roll Dmax of 1.28–1.38). Blocks every
@@ -923,15 +924,19 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   datasheet correction substitutes for). The generic per-channel fallback for the
   parametric path moves to `film-base/dmax-per-channel-reduction`, B&W to `algo/bw-support`,
   and making it the default to `algo/split-default-migration`
-- [ ] [Pin the characteristic curve against regression](tasks/algo/characteristic-curve-coverage.md) —
-  the curve's tables are well covered (literals vs the extraction, invertibility, a neutral
-  ramp on every stock) but its **wiring** is not covered at all: no golden vector and no
-  `PIPELINE_FINGERPRINTS` row, so a refactor between `to_density` and `FilmRgbImage` moves
-  every characteristic pixel with all four gates green. A bit-exact capture is *not*
-  available — the inversion's `10f32.powf` differs ~1 ULP across libm, so it would be green
-  locally and red on x86_64 CI — so the open question is what shape of pin works without
-  one. Blocking once `characteristic-generic` becomes the default
-  (`algo/split-default-migration`)
+- [x] [Pin the characteristic curve against regression](tasks/algo/characteristic-curve-coverage.md) —
+  the curve's tables were well covered and its **wiring** barely: a refactor between
+  `to_density` and `FilmRgbImage` moved every characteristic pixel with all four gates
+  green. **Closed 2026-09-10** with two complementary pins — four property tests that run
+  the real `algo::reconstruct` over a synthesized scan (neutral ramp, published mid-grey,
+  `scale·d + offset` ordering, `out_of_table` against a recount), and a golden pinned to
+  1 ULP. The "no bit-exact capture is available" premise was **half wrong**: divergence
+  needs the true value within ~`2^-5` ULP of an f32 rounding boundary, and eleven of the
+  fifteen samples clear that by 2-16x, so which values are unsafe is decidable before CI.
+  A committed margin test records the four that are not. `PIPELINE_FINGERPRINTS` is
+  deliberately untouched — the gate covers the *default* render, so the row belongs to
+  `algo/split-default-migration`, which now has the margin harness to decide whether its
+  `render` hash is portable
 - [ ] [Auto anchor: measure the interior, not the holder](tasks/algo/auto-anchor-interior-measurement.md) — `DmaxSource::Auto`
   takes the 99.5th percentile over the *whole* scan, so the nearly-opaque film holder owns it
   (resolves 2.23–2.37 against roll Dmax 1.28–1.38) and every frame renders black. Restrict the
