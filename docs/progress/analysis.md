@@ -1176,6 +1176,55 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   reads prose, so a number quoted from a one-off script survives every green run — re-derive
   it, or say how it was counted.
 
+## metrics-chart-design
+
+**Status:** in progress
+**Updated:** 2026-09-10
+
+- Goal: settle the chart encodings, the rendering technology and the component split,
+  independently of the review app.
+- 2026-09-10: Split out of `metrics-visualization` at the user's request — "how to
+  visualize the metrics" and "integrate the visuals into the app" are two jobs, and the
+  first is the harder one. The 2026-09-03 chart ranking and its reasoning stay recorded
+  under `metrics-visualization` below; this task is where they get tested against real
+  records rather than reasoned about. Executable now: its only dependency
+  (`analysis/conversion-metrics`) is done, whereas `analysis/comparison-review-tooling`
+  is still `[~]`.
+
+- 2026-09-10: Design canvas drafted against **real** records — frame G2 through the five
+  `--preset` bundles, measured with `nctool metrics`. Three findings the 2026-09-03 reasoning
+  did not have:
+  - **A colour vertex must carry its band's population.** The `highlight` point is the largest
+    excursion in every encoding of `cast_by_tone_band` and rests on **under 1 px in 18.7 M** on
+    some presets (56 px for `chr-generic`). At equal weight it manufactures a crossover out of
+    rounding. Independent of any re-cut.
+  - **The presets are brightness-matched, so the curves fan rather than shift**: 0.02 st apart
+    at p50, 0.27 at the toe, 0.34 at the shoulder. That fan is contrast, and no scalar in the
+    record locates it — the strongest argument for ranking the percentile curve first.
+  - **Colour alone stops separating past three overlaid configs** — the `dataviz` reference dark
+    steps pass all-pairs CVD at 2 and 3 series and fail at 5. Compare mode must become small
+    multiples beyond three.
+- 2026-09-10: **Two modes, separated at the user's request.** Compare (n variants) and inspect
+  (one variant) are different designs, not one with a parameter. The rule: a chart takes n
+  variants only if it still has a free series dimension — per-channel histograms spend it on
+  RGB, the hue polar on angle. They also want opposite things from the config toggle, which
+  settles the integration half's open question: compare-mode charts draw every config and the
+  toggle *emphasises* one (nothing moves); inspect-mode charts bind to the active config and
+  swap in place like the picture. An n-variant chart at n=1 is its own design — the legend
+  goes, a difference strip has nothing to compare — not merely fewer lines.
+- 2026-09-10: Rebased onto the `bands` measurement change (`schema_version` 2) **by
+  re-applying this task's split onto that branch's content, not by resolving a conflict
+  line-by-line**. The branch edited `metrics-visualization.md` against its pre-split
+  version, so a mechanical rebase would have stranded its additions in the wrong half or
+  dropped them: the histogram description and the band/bin alignment belong with the
+  encodings, the record-size point belongs with transport. Recorded here because the
+  dropped half of such a merge is what nothing references and no gate catches.
+  Three facts from it that change the encodings: the histogram is the first drawable
+  field and its luminance series is the primary single-frame view; bands and histogram
+  are both cut in L\* so every band edge lands on a bin edge and a band overlay needs no
+  interpolation; and `sparse` is now a field, so the population weighting these artboards
+  argued for is read rather than derived.
+
 ## metrics-visualization
 
 **Status:** not started

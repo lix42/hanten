@@ -251,6 +251,7 @@ graph TD
     analysis/nlp-comparison
     analysis/drive-asset-migration
     analysis/comparison-review-tooling
+    analysis/metrics-chart-design
     analysis/metrics-visualization
     analysis/harness-regression-tests
   end
@@ -412,7 +413,8 @@ graph TD
   analysis/conversion-analysis-tooling --> analysis/asset-manifest
   analysis/asset-manifest --> analysis/conversion-metrics
   analysis/conversion-metrics --> analysis/nlp-comparison
-  analysis/conversion-metrics --> analysis/metrics-visualization
+  analysis/conversion-metrics --> analysis/metrics-chart-design
+  analysis/metrics-chart-design --> analysis/metrics-visualization
   analysis/comparison-review-tooling --> analysis/metrics-visualization
   analysis/asset-manifest --> analysis/drive-asset-migration
   core/roll-conversion --> core/base-acquisition-planner
@@ -722,7 +724,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `analysis/comparison-review-tooling` (post-MVP): `algo/reference-anchored-sigmoid`
   — promote the ad-hoc review pages into a maintained config-comparison tool; the user asked
   for it as a separate task rather than continued inline patching
-- `analysis/metrics-visualization` (post-MVP): `analysis/conversion-metrics`,
+- `analysis/metrics-chart-design` (post-MVP): `analysis/conversion-metrics`
+  — split out of `analysis/metrics-visualization` on 2026-09-10 at the user's request, as
+  the harder and app-independent half: which encoding each measurement gets, how many
+  visuals they collapse into, the rendering technology, and the component split. It needs
+  the metrics *shape*, not the app, so it is executable while the app half is not
+- `analysis/metrics-visualization` (post-MVP): `analysis/metrics-chart-design`,
   `analysis/comparison-review-tooling`
   — filed 2026-09-03. The measurements exist and read well as JSON and as a Markdown table;
   neither shows what a difference *looks* like. The review app already compares configs by
@@ -1128,7 +1135,14 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   cell, and the server takes the set by path and watches it, so re-running `nc` updates the
   page. Still open: the **generator** that renders a matrix and emits the JSON, HDR review,
   and build-vs-build.
-- [ ] [Metrics visualization](tasks/analysis/metrics-visualization.md) — plot the `nctool
-  metrics` output inside `tools/review-app`, so numeric review sits beside visual review:
-  percentile curves that overlay two configs, the cast-by-tone-band path that shows crossover,
-  band occupancy across a roll, and per-channel endpoint bars.
+- [~] [Metrics chart design](tasks/analysis/metrics-chart-design.md) — settle *what the
+  charts are*, independently of the app: the encoding each measurement gets (is
+  `cast_by_tone_band` one a\*/b\* path or two curves against tone?), how many visuals they
+  collapse into, the rendering technology, and the component split. Every chart must be
+  designed to overlay two configs from the start — the app's premise. Executable now; the
+  app half is not.
+- [ ] [Metrics visualization](tasks/analysis/metrics-visualization.md) — wire the charts
+  from `analysis/metrics-chart-design` into `tools/review-app`, so numeric review sits
+  beside visual review: how a metrics record reaches the app, whether charts toggle in place
+  with the picture or sit beside it, what an unmeasured config renders as, and whether a
+  roll view appears.
