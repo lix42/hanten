@@ -679,12 +679,9 @@ mod tests {
         };
         let (film, report) = crate::algo::reconstruct(&image, &test_base(), &config)
             .expect("the characteristic reconstruction must succeed");
-        let out = film
-            .rgb()
-            .chunks_exact(3)
-            .map(|px| [px[0], px[1], px[2]])
-            .collect();
-        (out, report)
+        let (pixels, rest) = film.rgb().as_chunks::<3>();
+        debug_assert!(rest.is_empty(), "an RGB buffer is a whole number of pixels");
+        (pixels.to_vec(), report)
     }
 
     /// The gain this curve resolves for itself (`[1, 1, 1]`), taken from its single
@@ -900,7 +897,7 @@ mod tests {
             crate::algo::density::to_density(&scan_for(&density, &want), &test_base(), &density);
         let mut below = [0u32; 3];
         let mut above = [0u32; 3];
-        for px in densities.density.chunks_exact(3) {
+        for px in densities.density.as_chunks::<3>().0 {
             for c in 0..3 {
                 if invert(sc.channels[c], px[c]).1 {
                     continue;

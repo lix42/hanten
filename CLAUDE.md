@@ -541,6 +541,12 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings` →
   `cargo build` → the `scripts/analysis` unittest command below → `cargo test`.
   The gate is strict — warnings fail the build.
+- **Match CI's *toolchain*, not just its commands.** CI resolves
+  `dtolnay/rust-toolchain@stable` fresh on every run, so it can be several releases
+  ahead of the local one and a green local clippy then proves nothing. This has
+  already cost a red PR: local 1.94 against CI 1.98, where `chunks_exact_to_as_chunks`
+  — a lint that did not exist locally — failed both jobs on new code. `rustup check`
+  before pushing; `rustup update stable` when it is behind.
 - **The gate sequence does not include `cargo doc`, so broken intra-doc links are
   invisible to all of it.** A rename that splits a documented item (`bounds_output` →
   `bounds_sdr_output`/`bounds_hdr_output`) leaves every `[\`Self::bounds_output\`]` link
