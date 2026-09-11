@@ -3,8 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 /**
  * The project depends on `vite` aliased to Vite+'s core
- * (`"vite": "npm:@voidzero-dev/vite-plus-core"`), so that `vite-plugin-solid`
- * and the StyleX unplugin — which both import `vite` — get the same build Vite+
+ * (`"vite": "npm:@voidzero-dev/vite-plus-core"`), so that the plugins which
+ * import `vite` — `vite-plugin-solid`, TanStack Start — get the same build Vite+
  * runs. A second, real Vite in the tree would load plugins into a different
  * instance and fail in ways that look like plugin bugs.
  *

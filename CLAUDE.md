@@ -986,14 +986,31 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   is copied beside the app and there is no URL to build. A bare `pnpm dev` renders
   the committed example. It **watches the set**, so re-running `nc` updates the page
   in place, keeping the selected config and scroll position. It is now a
-  **fullstack** app — **TanStack Start on Vite+ (`vp`), Solid, StyleX, pnpm** — with
-  its own CI job; run `pnpm check && pnpm test && pnpm build` in `tools/review-app`,
-  never the Rust gates, and read its `README.md` first: every trap recorded there
-  (StyleX silently dropping CSS shorthands, `stylex.props()` spreads not being
-  reactive in Solid, a scroll handler that writes a signal wedging the renderer,
+  **fullstack** app — **TanStack Start on Vite+ (`vp`), Solid, Panda CSS, pnpm** —
+  with its own CI job; run `pnpm check && pnpm test && pnpm build` in
+  `tools/review-app`, never the Rust gates, and read its `README.md` first: every
+  trap recorded there (a scroll handler that writes a signal wedging the renderer,
   `requestAnimationFrame` never firing in a hidden tab, and live refresh going
-  *silently* stale if it is left to `EventSource` reconnecting) failed silently and
-  cost a debugging round each. Two that bite when editing it: `shellComponent`
+  *silently* stale if it is left to `EventSource` reconnecting) failed silently
+  and cost a debugging round each. **Panda runs with `strictTokens` +
+  `strictPropertyValues`, so `panda.config.ts`'s theme is the app's design
+  system** — for the properties Panda checks, a measurement that is not a token
+  there is a type error, and adding one is a deliberate edit to that file. The
+  coverage is Panda's, not the project's: a property is checked only if its
+  utility declares a token category, which is why `borderWidth`, `zIndex` and
+  `opacity` still take raw values. `presets` is
+  `['@pandacss/preset-base']` alone (the utilities and conditions; no token
+  ladders), which is what keeps the vocabulary the app's own, and no
+  `[escape-hatch]` values are used. That strictness exists because a bare number
+  in a Panda style object is a *token* lookup rather than pixels — `gap: 16`
+  compiled to `4rem`, silently — which is now a compile error. `styled-system/` is
+  generated and gitignored, so every npm script that needs it runs `panda codegen`
+  first. **`src/index.css`'s `@layer reset, base, tokens, recipes, utilities;` is
+  Panda's injection point, not an ordering preference** — the plugin writes into a
+  file only when an `@layer` rule names *all five*, and otherwise emits nothing at
+  all: trimming it to the three layers actually in use builds at **exit 0, no
+  warning**, with a 0.03 kB stylesheet instead of 6.9 kB and an unstyled page.
+  Two more that bite when editing it: `shellComponent`
   renders **server-side only**, so a stylesheet or a browser-side import placed
   there is dropped from the client build without a word — stylesheets go through the
   root route's `head.links` — and a route file's `server.handlers` is stripped from

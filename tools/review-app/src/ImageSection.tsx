@@ -1,141 +1,156 @@
-import * as stylex from "@stylexjs/stylex";
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
-import { cls } from "./cls";
+import { css } from "../styled-system/css";
 import type { Rendition, ReviewConfig, ReviewImage, ZoomMode } from "./review";
 
-const styles = stylex.create({
-  section: { paddingBlock: 20, paddingInline: 16 },
-  head: { display: "flex", gap: 12, alignItems: "baseline", marginBottom: 8 },
-  label: { fontWeight: 600 },
-  note: { color: "var(--accent)", fontVariantNumeric: "tabular-nums" },
+// Border longhands rather than the `border` shorthand: `previewActive`
+// overrides only the colour, and `css()` merges by property — a base that
+// spelled the whole border as one shorthand would leave the override as a
+// second, competing declaration. The grid-placement longhands below are not
+// that: nothing overrides them, and `gridArea: "1 / 1"` would work fine now.
+// They are inherited spelling from StyleX, which dropped `gridArea` silently.
+const styles = {
+  section: css.raw({ paddingBlock: "20px", paddingInline: "16px" }),
+  head: css.raw({ display: "flex", gap: "12px", alignItems: "baseline", marginBottom: "8px" }),
+  label: css.raw({ fontWeight: "semibold" }),
+  note: css.raw({ color: "accent", fontVariantNumeric: "tabular-nums" }),
 
-  strip: {
+  strip: css.raw({
     display: "flex",
     flexWrap: "wrap",
-    gap: 8,
+    gap: "8px",
     alignItems: "center",
-    marginBottom: 10,
-  },
-  preview: {
-    padding: 0,
-    borderRadius: 6,
-    borderWidth: 2,
+    marginBottom: "10px",
+  }),
+  preview: css.raw({
+    padding: "0",
+    borderRadius: "md",
+    borderWidth: "2px",
     borderStyle: "solid",
     borderColor: "transparent",
     backgroundColor: "transparent",
     cursor: "pointer",
-    lineHeight: 0,
-  },
-  previewActive: { borderColor: "var(--accent)" },
-  previewImage: {
-    width: 104,
-    height: 70,
+    lineHeight: "flush",
+  }),
+  previewActive: css.raw({ borderColor: "accent" }),
+  previewImage: css.raw({
+    width: "thumbWidth",
+    height: "thumbHeight",
     objectFit: "cover",
-    borderRadius: 4,
+    borderRadius: "sm",
     display: "block",
-  },
-  previewMissing: {
-    width: 104,
-    height: 70,
-    borderRadius: 4,
-    backgroundColor: "var(--missing)",
-    color: "var(--fg-dim)",
-    fontSize: 11,
+  }),
+  previewMissing: css.raw({
+    width: "thumbWidth",
+    height: "thumbHeight",
+    borderRadius: "sm",
+    backgroundColor: "missing",
+    color: "fg.dim",
+    fontSize: "key",
     display: "grid",
     alignItems: "center",
     justifyItems: "center",
-    lineHeight: 1.4,
-  },
+    lineHeight: "snug",
+  }),
 
   // The mini-map: where the fullsize viewport currently sits inside the image.
-  mapOuter: {
+  mapOuter: css.raw({
     marginInlineStart: "auto",
-    width: 104,
-    height: 70,
-    borderRadius: 4,
-    borderWidth: 1,
+    width: "thumbWidth",
+    height: "thumbHeight",
+    borderRadius: "sm",
+    borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "var(--edge)",
-    backgroundColor: "var(--panel)",
+    borderColor: "edge",
+    backgroundColor: "panel",
     position: "relative",
     overflow: "hidden",
-  },
-  mapWindow: {
+  }),
+  mapWindow: css.raw({
     position: "absolute",
-    borderWidth: 1,
+    borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "var(--accent)",
-    backgroundColor: "var(--accent-wash)",
-  },
+    borderColor: "accent",
+    backgroundColor: "accent.wash",
+  }),
 
-  frame: { position: "relative" },
-  viewport: {
-    borderWidth: 1,
+  frame: css.raw({ position: "relative" }),
+  viewport: css.raw({
+    borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "var(--edge)",
-    borderRadius: 8,
-    backgroundColor: "var(--panel)",
+    borderColor: "edge",
+    borderRadius: "lg",
+    backgroundColor: "panel",
     overflow: "auto",
-    maxHeight: "82vh",
-    minHeight: 120,
-  },
+    maxHeight: "stageCap",
+    minHeight: "stageFloor",
+  }),
   // Every rendition occupies the *same* grid cell, so switching config cannot
   // move the picture by a pixel — the whole point of comparing this way.
   // Inactive ones stay laid out (hidden, not removed) so nothing reflows.
-  // `gridArea` is a shorthand StyleX drops; the start longhands are what stack.
-  stage: { display: "grid", alignItems: "start", justifyItems: "start" },
-  rendition: { gridRowStart: "1", gridColumnStart: "1", display: "block" },
-  hidden: { visibility: "hidden" },
-  fit: { maxWidth: "100%", maxHeight: "82vh", height: "auto", width: "auto" },
-  // `width`/`height` **auto**, not just the max-* releases. The `width=`/`height=`
+  stage: css.raw({ display: "grid", alignItems: "start", justifyItems: "start" }),
+  rendition: css.raw({ gridRowStart: "1", gridColumnStart: "1", display: "block" }),
+  hidden: css.raw({ visibility: "hidden" }),
+  fit: css.raw({
+    maxWidth: "full",
+    maxHeight: "stageCap",
+    height: "natural",
+    width: "natural",
+  }),
+  // `width`/`height` set to `natural` (i.e. `auto`), not just the max-* releases
+  // set to `unconstrained` (i.e. `none`). The `width=`/`height=`
   // attributes are presentational, so with nothing overriding them they *become*
   // the rendered size — a stale or copied dimension in `review.json` would then
   // silently scale the picture in the one mode whose purpose is 1:1 inspection,
   // and two renditions declaring different dimensions would render at different
   // sizes in the same grid cell, moving the picture on toggle. `fullsize` means
   // natural size; say so.
-  fullsize: { maxWidth: "none", maxHeight: "none", width: "auto", height: "auto" },
+  fullsize: css.raw({
+    maxWidth: "unconstrained",
+    maxHeight: "unconstrained",
+    width: "natural",
+    height: "natural",
+  }),
 
-  pan: {
+  pan: css.raw({
     position: "absolute",
     display: "grid",
     alignItems: "center",
     justifyItems: "center",
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    borderWidth: 1,
+    width: "panControl",
+    height: "panControl",
+    borderRadius: "lg",
+    borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "var(--edge)",
-    backgroundColor: "var(--scrim)",
-    color: "var(--fg)",
-    fontSize: 15,
+    borderColor: "edge",
+    backgroundColor: "scrim",
+    color: "fg",
+    fontSize: "glyph",
     cursor: "pointer",
-    padding: 0,
-  },
-  panUp: { top: 8, insetInlineStart: "50%" },
-  panDown: { bottom: 8, insetInlineStart: "50%" },
-  panLeft: { insetInlineStart: 8, top: "50%" },
-  panRight: { insetInlineEnd: 8, top: "50%" },
+    padding: "0",
+  }),
+  panUp: css.raw({ top: "8px", insetInlineStart: "half" }),
+  panDown: css.raw({ bottom: "8px", insetInlineStart: "half" }),
+  panLeft: css.raw({ insetInlineStart: "8px", top: "half" }),
+  panRight: css.raw({ insetInlineEnd: "8px", top: "half" }),
   // An overlay, not a replacement. Swapping the scroller out for a message
   // unmounts it, and the scroll position goes with it: park somewhere in
   // fullsize, toggle through a config that has no rendition, and you come back
   // to the top-left. Keeping the stage mounted (every rendition hidden) holds
   // both the box and the position.
-  missing: {
+  missing: css.raw({
     position: "absolute",
-    top: 12,
-    insetInlineStart: "50%",
-    paddingBlock: 8,
-    paddingInline: 14,
-    borderRadius: 8,
-    borderWidth: 1,
+    top: "12px",
+    insetInlineStart: "half",
+    paddingBlock: "8px",
+    paddingInline: "14px",
+    borderRadius: "lg",
+    borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "var(--edge)",
-    backgroundColor: "var(--scrim)",
-    color: "var(--fg-dim)",
-  },
-});
+    borderColor: "edge",
+    backgroundColor: "scrim",
+    color: "fg.dim",
+  }),
+};
 
 /**
  * Declared dimensions are a promise about the file; check it once per load.
@@ -207,7 +222,7 @@ export function ImageSection(props: Props) {
 
   // Painted straight from the scroll handler. The browser already coalesces
   // scroll events to about one per frame, and this only reads scroll offsets and
-  // writes four inline styles on a 104x70 box — cheap enough not to need
+  // writes four inline styles on the thumbnail-sized box — cheap enough not to need
   // throttling, and unlike `requestAnimationFrame` it still runs in a hidden or
   // backgrounded tab.
   /** Recheck whether the viewport scrolls. Cheap, and rare. */
@@ -275,7 +290,7 @@ export function ImageSection(props: Props) {
    *
    * A **floor**, not a size: the image still renders at its natural dimensions, so
    * a stale declared value cannot scale the picture (which is why `fullsize` sets
-   * `width`/`height: auto` in the first place). Without this the stage is 0x0 until
+   * `width`/`height` to `natural` in the first place). Without this the stage is 0x0 until
    * the first decode and the whole section jumps when it lands. Not applied in
    * `fit`, where a 2400px floor would force horizontal overflow on a column that
    * is meant to shrink the image to fit.
@@ -296,22 +311,22 @@ export function ImageSection(props: Props) {
   };
 
   return (
-    <section class={cls(styles.section)}>
-      <div class={cls(styles.head)}>
-        <span class={cls(styles.label)}>{props.image.label}</span>
+    <section class={css(styles.section)}>
+      <div class={css(styles.head)}>
+        <span class={css(styles.label)}>{props.image.label}</span>
         <Show when={props.image.note}>
-          {(note) => <span class={cls(styles.note)}>{note()}</span>}
+          {(note) => <span class={css(styles.note)}>{note()}</span>}
         </Show>
       </div>
 
-      <div class={cls(styles.strip)}>
+      <div class={css(styles.strip)}>
         <For each={props.configs}>
           {(config, index) => {
             const rendition = () => props.image.renditions[config.id];
             return (
               <button
                 type="button"
-                class={cls(styles.preview, index() === props.activeIndex && styles.previewActive)}
+                class={css(styles.preview, index() === props.activeIndex && styles.previewActive)}
                 aria-pressed={index() === props.activeIndex}
                 title={`${config.label}${rendition() ? "" : " — no rendition for this image"}`}
                 onClick={() => props.onActivate(index())}
@@ -319,7 +334,7 @@ export function ImageSection(props: Props) {
                 <Show
                   when={rendition()}
                   fallback={
-                    <span class={cls(styles.previewMissing)}>
+                    <span class={css(styles.previewMissing)}>
                       {config.label}
                       <br />
                       missing
@@ -328,7 +343,7 @@ export function ImageSection(props: Props) {
                 >
                   {(present) => (
                     <img
-                      class={cls(styles.previewImage)}
+                      class={css(styles.previewImage)}
                       src={present().preview}
                       alt={`${props.image.label} — ${config.label}`}
                       loading="lazy"
@@ -342,11 +357,11 @@ export function ImageSection(props: Props) {
 
         <Show when={canPan()}>
           <div
-            class={cls(styles.mapOuter)}
+            class={css(styles.mapOuter)}
             title="Where the viewport sits inside the full-size image"
           >
             <div
-              class={cls(styles.mapWindow)}
+              class={css(styles.mapWindow)}
               ref={(element) => {
                 // Paint on attach: the map mounts *because* overflow appeared, so
                 // the measurement that revealed it ran before this element existed.
@@ -358,15 +373,15 @@ export function ImageSection(props: Props) {
         </Show>
       </div>
 
-      <div class={cls(styles.frame)}>
-        <div class={cls(styles.viewport)} ref={setViewport} onScroll={paintMap}>
-          <div class={cls(styles.stage)} style={reservation()}>
+      <div class={css(styles.frame)}>
+        <div class={css(styles.viewport)} ref={setViewport} onScroll={paintMap}>
+          <div class={css(styles.stage)} style={reservation()}>
             <For each={props.configs}>
               {(config) => (
                 <Show when={props.image.renditions[config.id]}>
                   {(rendition) => (
                     <img
-                      class={cls(
+                      class={css(
                         styles.rendition,
                         props.zoom === "fit" ? styles.fit : styles.fullsize,
                         config.id !== activeId() && styles.hidden,
@@ -393,7 +408,7 @@ export function ImageSection(props: Props) {
         </div>
 
         <Show when={!hasActive()}>
-          <div class={cls(styles.missing)}>
+          <div class={css(styles.missing)}>
             No rendition of {props.image.label} for config{" "}
             {props.configs[props.activeIndex]?.label ?? "?"}.
           </div>
@@ -403,7 +418,7 @@ export function ImageSection(props: Props) {
           <Show when={overflow().y}>
             <button
               type="button"
-              class={cls(styles.pan, styles.panUp)}
+              class={css(styles.pan, styles.panUp)}
               aria-label="Pan up"
               onClick={() => pan(0, -1)}
             >
@@ -411,7 +426,7 @@ export function ImageSection(props: Props) {
             </button>
             <button
               type="button"
-              class={cls(styles.pan, styles.panDown)}
+              class={css(styles.pan, styles.panDown)}
               aria-label="Pan down"
               onClick={() => pan(0, 1)}
             >
@@ -421,7 +436,7 @@ export function ImageSection(props: Props) {
           <Show when={overflow().x}>
             <button
               type="button"
-              class={cls(styles.pan, styles.panLeft)}
+              class={css(styles.pan, styles.panLeft)}
               aria-label="Pan left"
               onClick={() => pan(-1, 0)}
             >
@@ -429,7 +444,7 @@ export function ImageSection(props: Props) {
             </button>
             <button
               type="button"
-              class={cls(styles.pan, styles.panRight)}
+              class={css(styles.pan, styles.panRight)}
               aria-label="Pan right"
               onClick={() => pan(1, 0)}
             >

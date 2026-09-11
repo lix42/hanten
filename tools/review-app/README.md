@@ -6,7 +6,7 @@ a pixel. That is the whole point — toggling in place shows differences that
 side-by-side hides, especially in highlights.
 
 Built with [TanStack Start](https://tanstack.com/start) on
-[Vite+](https://viteplus.dev) (`vp`), Solid, and StyleX. It is a **local** tool:
+[Vite+](https://viteplus.dev) (`vp`), Solid, and Panda CSS. It is a **local** tool:
 the server exists to read your review set off disk and watch it, and there is no
 deployment story — `pnpm dev` is how you run it.
 
@@ -62,11 +62,11 @@ scroll position stay put, so you can keep toggling while renders land. Editing
 ## Gates
 
 ```sh
-pnpm check         # vp check — format, lint, type-check (~1s)
+pnpm check         # panda codegen, then vp check — format, lint, type-check (~3s)
 pnpm test          # vp test run
-pnpm build         # vp build
+pnpm build         # panda codegen, then vp build
 pnpm verify        # all three, in order
-pnpm fix           # vp check --fix
+pnpm fix           # panda codegen, then vp check --fix
 ```
 
 CI runs the same three, on Linux only. `pnpm fix` applies oxfmt formatting and
@@ -119,12 +119,13 @@ if you ever need the npm _script_ of the same name.
   entirely — measured: zero occurrences, no hydration markers, and a page that
   404s its own stylesheet. Stylesheets go through the root route's `head.links`;
   anything that must run in the browser lives inside the routed tree, which is
-  why `StyleXDevRuntime` and `LiveReload` render from the index route.
-- **StyleX needs its dev CSS wired by hand here.** The unplugin injects it by
-  itself only when Vite's entry is an HTML file, and Start's entry is the route
-  shell instead. So dev links the plugin's `/virtual:stylex.css` and starts its
-  HMR runtime from a client shim; a build appends the compiled rules to
-  `index.css` as before. Delete either half and styles vanish in one mode only.
+  why `LiveReload` renders from the index route.
+- **Styles need no plugin wiring.** Panda runs as a PostCSS plugin
+  (`postcss.config.cjs`), and Vite pipes every stylesheet through PostCSS in dev
+  and in a build alike — so `src/index.css` is the whole stylesheet in both
+  modes, linked once from `head.links`, with no dev-only virtual half to keep in
+  step. Verified in dev: `curl -H 'Accept: text/css' localhost:5173/src/index.css`
+  returns the generated rules, and editing a `css()` call updates it in place.
 - **A route file's `server.handlers` is stripped from the client bundle**, which
   is what lets `src/routes/img.$id.ts` import `node:fs` at all. `createServerFn`
   does the same for its handler body. Worth re-checking after a dependency bump:
@@ -158,32 +159,86 @@ if you ever need the npm _script_ of the same name.
 - **`vp migrate --full` writes to `CLAUDE.md`/`AGENTS.md`.** Its `--agent` step
   rewrites coding-agent instructions, which in this repo would clobber the
   project's own. Configure lint in `vite.config.ts` by hand instead.
-- **The StyleX plugin is excluded under test, deliberately.** It holds a handle
-  that keeps Vitest from exiting: 10.9s with it, 0.9s without, measured. The unit
-  tests cover pure modules that import no styles, so the compiler has nothing to
-  do there. Putting it back means budgeting for the hang.
-- **`vp build` warns `Unknown at rule: @stylex` on every build.** That is
-  lightningcss meeting StyleX's CSS entrypoint directive, which StyleX leaves in
-  place after appending the compiled rules. Browsers ignore an unknown at-rule,
-  so it is cosmetic. Switching to esbuild's CSS minifier silences it but requires
-  adding `esbuild` as a dependency, since Vite 8 ships rolldown instead — not
-  worth a dependency for a cosmetic warning.
+- **`styled-system/` is generated and gitignored**, so every script that needs it
+  runs `panda codegen` first (0.6s). `prepare` alone is not enough: pnpm skips
+  lifecycle scripts when the lockfile is already satisfied, so deleting the
+  directory and re-installing leaves it missing and the build fails on an import
+  that no source change explains. `src/routeTree.gen.ts` is committed instead —
+  Panda's output is 1.6 MB across 70 files, which is not.
+- **pnpm 11 must be told about esbuild's install script.** Panda bundles
+  `panda.config.ts` with esbuild; left undecided, pnpm writes an `allowBuilds`
+  placeholder into `pnpm-workspace.yaml` and **exits 1** — including on the
+  `pnpm install` that `vp check` runs for itself, so the gate fails before it
+  starts. `allowBuilds: {esbuild: true}` is the decision.
+- **`presets` is `['@pandacss/preset-base']` only, and that is load-bearing for
+  `strictTokens`.** Panda's default is two presets doing unrelated jobs:
+  `preset-base` is the machinery (357 utilities, 107 conditions including
+  `_osLight`, the patterns) and carries **no tokens**; `preset-panda` is _only_
+  token ladders — 246 colours and rem-valued spacing/size/font scales, 422 tokens
+  in all. With `strictTokens` on, leaving `preset-panda` in would put 422
+  valid-but-meaningless entries behind every autocomplete and emit them all as
+  `:root` custom properties, which is the opposite of what the flag is for.
+  Dropping it also took the stylesheet from 16.6 kB to 6.9 kB (5.2 → 2.1 kB
+  gzipped) and the token block to **52** custom properties — the app's actual
+  vocabulary, and exactly what the theme declares.
 - **Only one Vite may exist in the tree.** `vite` is aliased to Vite+'s core, so
   the plugins that import `vite` get the build Vite+ actually runs. The
   `overrides` block says so, but npm reads that field and **pnpm does not** (and
   pnpm 11 dropped the `pnpm` field too — settings moved to
   `pnpm-workspace.yaml`). Since this project runs on pnpm, the guarantee is a
   test instead: `src/toolchain.test.ts`.
-- **`stylex.props()` returns React's `className`, and spreading it is not
-  reactive.** Solid's JSX ignores `className`, so styles vanish silently; and
-  `{...stylex.props(a, cond && b)}` is evaluated once, freezing a conditional
-  style at first render. Everything goes through `cls()` in `src/cls.ts` and is
-  applied as `class={cls(...)}`, which Solid tracks like any attribute.
-- **StyleX silently drops shorthands it does not model.** `background` and
-  `border` never reached the stylesheet — measured in the browser, where the
-  selected button was white text on the browser's default button face. Use
-  longhands (`backgroundColor`, `borderWidth`/`Style`/`Color`,
-  `gridRowStart`/`gridColumnStart`). Nothing warns you.
+- **`strictTokens` and `strictPropertyValues` are both on, so the theme in
+  `panda.config.ts` is exhaustive.** A measurement that is not a token there is a
+  type error at the call site; adding one is a deliberate edit to that file. Note
+  the coverage is Panda's, not ours — a property is checked only if its utility
+  declares a token category, which is why `borderWidth`, `zIndex` and `opacity`
+  still take raw values. `strictPropertyValues` was free: it found nothing,
+  every enum-valued property already naming a real CSS keyword.
+- **What `strictTokens` is protecting you from, measured before it was on:** a
+  bare number is a _token lookup_, not pixels. `gap: 16` compiled to
+  `var(--spacing-16)` — `4rem`, four times too big — because the old preset had a
+  spacing token named `16`, while `padding: 18` compiled to `18px` because it had
+  no token named `18`. Same syntax, opposite meanings, decided by the preset and
+  silent either way. That class of bug is now a compile error.
+- **Token naming follows one rule.** A value that denotes a _specific thing_ gets
+  a role name — `sizes.thumbWidth`, `sizes.stageCap`, `fontSizes.key` — and that
+  is what retired the literals this app used to repeat across files (104x70 in
+  three places, 82vh in two). `spacing` gets no such names because it has no such
+  structure: the same 8px is a gap here, an inset there and a padding elsewhere,
+  so a semantic name would be fiction. It is named by its measurement
+  (`spacing["8px"]`), which keeps call sites reading like CSS while `strictTokens`
+  still gates the set.
+- **A token name must not mean two things across categories.** `panel` was both a
+  colour and a size, so `backgroundColor: "panel"` was a surface and
+  `maxWidth: "panel"` a column width — precisely the confusion naming tokens is
+  meant to remove. It is `panelMeasure` now. The one name deliberately shared is
+  `body` (a font, a font size and a line height): there, all three do mean "the
+  body's".
+- **No `[escape hatch]` values are used, and it is worth keeping that true.** The
+  two that tempted were `width: auto` / `maxWidth: none` on `fullsize`, and
+  `fontFamily`/`fontSize: inherit` on the buttons. The first pair became
+  `sizes.natural` / `sizes.unconstrained` — "render at the size the file is" is a
+  real decision this app makes, so it earns a name. The second became the `body`
+  font and size tokens outright: stating what a control matches is better than
+  inheriting it, and it is the same value today.
+- **Styles are `css.raw()` objects merged at the call site.** `class={css(a, cond
+&& b)}` — the call sits in a JSX attribute expression, so Solid tracks it, and
+  `css()` accepts `false`/`undefined` for the inactive branch. Because the merge
+  happens on the _objects_ and not on class strings, an override replaces the
+  base's declaration outright rather than competing with it in the cascade.
+- **Keep the border longhands.** Not a Panda limitation — it models shorthands
+  fine — but a consequence of the merge above: `previewActive` and `active`
+  override only `borderColor`, and a base that spelled the whole border as one
+  `border` shorthand would leave the override as a second declaration whose winner
+  is decided by emission order. The `gridRowStart`/`gridColumnStart` longhands in
+  `ImageSection` are _not_ that: nothing overrides them and `gridArea: "1 / 1"`
+  would work now. They are inherited spelling from StyleX, which dropped
+  `gridArea` silently.
+- **Colours live in `panda.config.ts`, not in the stylesheet.** Every one is a
+  semantic token whose `base` value is the dark palette and whose `_osLight`
+  override is the light one — the same shape the hand-written custom properties
+  had (dark by default, light under `prefers-color-scheme: light`), except that
+  `color: "fg.dim"` is now type-checked and a typo fails `vp check`.
 - **A scroll handler must never write a signal here.** Scroll → signal → re-render
   → layout change → measure → scroll geometry is a cycle, and it wedged the
   renderer so hard that Chrome could not inject a script into the page. The

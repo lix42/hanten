@@ -15,7 +15,7 @@ changed" well and "what does that look like" not at all.
   source; this task does not add measurements.
 - **`tools/review-app`** (`analysis/comparison-review-tooling`, viewer half
   shipped on `main` 2026-09-02, fullstack since 2026-09-10; TanStack Start on
-  Vite+ / Solid / StyleX) compares configs by toggling renditions **in place**:
+  Vite+ / Solid / Panda CSS) compares configs by toggling renditions **in place**:
   every rendition of an image shares one grid cell, so switching config cannot
   move the picture. Its `review.json` is `configs × images → renditions`, and
   `SCHEMA.md` already calls `images[].note` "the natural home for measured
