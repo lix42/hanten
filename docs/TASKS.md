@@ -118,6 +118,7 @@ graph TD
   core --> analysis
   core --> telemetry
   algo --> analysis
+  analysis --> algo
   film-base --> analysis
   algo --> film-base
   algo --> io
@@ -203,6 +204,7 @@ graph TD
     algo/sigmoid-parameter-calibration
     algo/reconstruction-render-curve-split
     algo/conversion-presets
+    algo/contrast-latitude-spike
     algo/split-default-migration
   end
   subgraph color
@@ -251,6 +253,7 @@ graph TD
     analysis/nlp-comparison
     analysis/drive-asset-migration
     analysis/comparison-review-tooling
+    analysis/metrics-chart-design
     analysis/metrics-visualization
     analysis/harness-regression-tests
   end
@@ -412,7 +415,10 @@ graph TD
   analysis/conversion-analysis-tooling --> analysis/asset-manifest
   analysis/asset-manifest --> analysis/conversion-metrics
   analysis/conversion-metrics --> analysis/nlp-comparison
-  analysis/conversion-metrics --> analysis/metrics-visualization
+  analysis/conversion-metrics --> algo/contrast-latitude-spike
+  algo/conversion-presets --> algo/contrast-latitude-spike
+  analysis/conversion-metrics --> analysis/metrics-chart-design
+  analysis/metrics-chart-design --> analysis/metrics-visualization
   analysis/comparison-review-tooling --> analysis/metrics-visualization
   analysis/asset-manifest --> analysis/drive-asset-migration
   core/roll-conversion --> core/base-acquisition-planner
@@ -598,6 +604,13 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   the anchor instead). Also the reason the default can move without breaking `film-master`:
   a preset does not set `output.preset`, and the non-display presets keep resolving their
   own tone and exposure.
+- `algo/contrast-latitude-spike` (post-MVP): `analysis/conversion-metrics`,
+  `algo/conversion-presets`
+  — filed 2026-09-11 out of the first measured nc-versus-NLP numbers. nc's `p95 − p5` is
+  3.55-4.51 stops where NLP's is 3.83-8.14 on the same three frames, and nc's figure moves
+  0.96 stops across them where NLP's moves 4.31. A **spike**: the scene range was never
+  measured, so "nc is narrower" and "nc faithfully carries a narrower scene" are not yet
+  distinguishable, and "change nothing" is an acceptable outcome
 - `algo/split-default-migration` (post-MVP): `algo/reconstruction-render-curve-split`,
   `algo/conversion-presets`, `algo/characteristic-curve-coverage`,
   `io/scanner-density-calibration`
@@ -722,7 +735,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `analysis/comparison-review-tooling` (post-MVP): `algo/reference-anchored-sigmoid`
   — promote the ad-hoc review pages into a maintained config-comparison tool; the user asked
   for it as a separate task rather than continued inline patching
-- `analysis/metrics-visualization` (post-MVP): `analysis/conversion-metrics`,
+- `analysis/metrics-chart-design` (post-MVP): `analysis/conversion-metrics`
+  — split out of `analysis/metrics-visualization` on 2026-09-10 at the user's request, as
+  the harder and app-independent half: which encoding each measurement gets, how many
+  visuals they collapse into, the rendering technology, and the component split. It needs
+  the metrics *shape*, not the app, so it is executable while the app half is not
+- `analysis/metrics-visualization` (post-MVP): `analysis/metrics-chart-design`,
   `analysis/comparison-review-tooling`
   — filed 2026-09-03. The measurements exist and read well as JSON and as a Markdown table;
   neither shows what a difference *looks* like. The review app already compares configs by
@@ -960,6 +978,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   (a per-reconstruction `print_exposure` from 0.31 to 0.70, the per-stock aim-matched red
   scale) into one stated brightness target. `characteristic-generic` becomes the default,
   which is the `algo/split-default-migration` step
+- [ ] [Contrast / latitude spike](tasks/algo/contrast-latitude-spike.md) — decide whether
+  nc's tonal latitude should change, at which end, and by which mechanism. nc's `p95 − p5`
+  is narrower than NLP's on two of three frames and far more *stable* across them (0.96
+  stops against 4.31) — the signature of design-spec §3.8's per-roll recipe. The scene
+  range is unmeasured, so the cause is open; HDR and a new `--preset` axis are both
+  candidates, and "no change" is an acceptable outcome.
 - [ ] [Activate the split as the default](tasks/algo/split-default-migration.md) — the
   `pipeline_version` bump the split left out: reconstruction stops shaping tone, the display
   operator carries the character. The `film-base/dmax-per-channel-reduction` block was
@@ -1128,7 +1152,14 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   cell, and the server takes the set by path and watches it, so re-running `nc` updates the
   page. Still open: the **generator** that renders a matrix and emits the JSON, HDR review,
   and build-vs-build.
-- [ ] [Metrics visualization](tasks/analysis/metrics-visualization.md) — plot the `nctool
-  metrics` output inside `tools/review-app`, so numeric review sits beside visual review:
-  percentile curves that overlay two configs, the cast-by-tone-band path that shows crossover,
-  band occupancy across a roll, and per-channel endpoint bars.
+- [~] [Metrics chart design](tasks/analysis/metrics-chart-design.md) — settle *what the
+  charts are*, independently of the app: the encoding each measurement gets (is
+  `cast_by_tone_band` one a\*/b\* path or two curves against tone?), how many visuals they
+  collapse into, the rendering technology, and the component split. Every chart must be
+  designed to overlay two configs from the start — the app's premise. Executable now; the
+  app half is not.
+- [ ] [Metrics visualization](tasks/analysis/metrics-visualization.md) — wire the charts
+  from `analysis/metrics-chart-design` into `tools/review-app`, so numeric review sits
+  beside visual review: how a metrics record reaches the app, whether charts toggle in place
+  with the picture or sit beside it, what an unmeasured config renders as, and whether a
+  roll view appears.

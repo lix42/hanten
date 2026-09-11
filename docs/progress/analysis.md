@@ -835,7 +835,7 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
 ## nlp-comparison
 
 **Status:** not started
-**Updated:** 2026-09-10
+**Updated:** 2026-09-11
 
 - Goal: Ingest Negative Lab Pro (NLP) conversion outputs (the user adds them to `nc-assets`) and compare them against nc's outputs: global per-image metrics side by side, plus side-by-side downscaled thumbnails.
 - 2026-09-02: Task rewritten and widened from "NLP vs nc" to reference comparison,
@@ -920,7 +920,49 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   All of these are single-frame measurements of differently cropped images with an
   unresolved reference colour space. They are a starting point for this task, not a
   finding about either tool.
+- 2026-09-11: **The colour space is resolved: the NLP files are linear, sRGB/709 primaries,
+  32-bit float — so the "gamma reading" used above is the wrong one and every number
+  derived from it should be read as superseded.** Resolved from the files themselves, not
+  from the user: the embedded ICC profile (520 bytes, all 11 files in
+  `converted/nlp/*/`) carries `rTRC`/`gTRC`/`bTRC` of type `curv` with `count=1,
+  gamma=1.00000`, and `rXYZ = (0.436035, 0.222488, 0.013916)`, which is sRGB/Rec.709
+  adapted to D50 (AdobeRGB's red colorant would be ~0.6098). **The lesson is where the
+  authority lies:** `exiftool`'s `ProfileDescription` says
+  `sRGB IEC61966-2.1 (Linear RGB Profile)` — self-contradictory, which is what made this
+  look unresolvable — while the TRC and colorant tags are the actual definition and are
+  unambiguous. Parse the profile, never the description. (The user recalled the export as
+  16-bit AdobeRGB; the files disagree, so that recollection is of a different export.)
+  Consequences for the entry above, all of which used the gamma reading:
+  **`--space linear-srgb` is correct.** NLP's median is above nc's on **all three** frames
+  (+1.22 / +1.70 / −0.71 against nc's −0.71..−1.11), so there is **no G3 reversal** — that
+  was a decode artefact, and "nc renders darker than NLP" holds on this roll after all.
+  Contrast: NLP 8.14 / 3.83 / 7.35 against nc 3.55–4.51 — wider on G1 and G3, **tied on
+  G2**. The G2 gap splits 43% shadow / 57% highlight, so it is not shadow-led. The one
+  finding that never depended on the reading stands: nc's `p95 − p5` moves **0.96** stops
+  across the three frames where NLP's moves **4.31**.
+  Unchanged caveats on those three frames: one roll, and NLP cropped to a different
+  aspect ratio with no registration.
+- 2026-09-11: **The NLP reference set is two export regimes, and the larger one is far
+  better evidence than the frames measured above.** Surveyed every file by parsing its
+  embedded profile (43 TIFFs; `**/*.tif` — a `*/*.tif` glob misses `2026-09-09`, which
+  nests a subdirectory):
 
+  | files | depth | primaries | TRC | directories |
+  |---|---|---|---|---|
+  | 11 | 32-bit float | sRGB/709 | linear (gamma 1.0) | `2026-07-23`, `2026-07-24`, `2026-08-04` |
+  | 32 | 16-bit | Adobe RGB (1998) | gamma 2.1992 | `2026-09-09/2026-09-09-Ektar` |
+
+  So **a declared space is per directory, never per set** — measuring the whole reference
+  folder with one `--space` would be wrong for one regime or the other. The 16-bit batch is
+  also unambiguous, its `desc`, colorant primaries and TRC all agreeing, where the
+  float batch's description contradicts itself.
+  **And the 32-frame batch is pixel-aligned with its sources** — every sampled pair has
+  identical dimensions (e.g. 4945x3350, 4936x3352), sources present under
+  `rolls/2026-09-09-Ektar/` and named in the manifest. That is the condition this task's
+  design reserved the opt-in pixel-wise section for, so it now genuinely engages: 32 frames
+  of one stock, one calibration, no registration problem and no colour-space ambiguity.
+  Prefer it over the three Gold200 frames for any number that has to hold up.
+  Follow-up is `algo/contrast-latitude-spike`.
 
 ## display-output-acceptance (continued)
 
@@ -1175,6 +1217,55 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   spend cap), so this was a single-reviewer pass. The lesson is the project's own: no gate
   reads prose, so a number quoted from a one-off script survives every green run — re-derive
   it, or say how it was counted.
+
+## metrics-chart-design
+
+**Status:** in progress
+**Updated:** 2026-09-10
+
+- Goal: settle the chart encodings, the rendering technology and the component split,
+  independently of the review app.
+- 2026-09-10: Split out of `metrics-visualization` at the user's request — "how to
+  visualize the metrics" and "integrate the visuals into the app" are two jobs, and the
+  first is the harder one. The 2026-09-03 chart ranking and its reasoning stay recorded
+  under `metrics-visualization` below; this task is where they get tested against real
+  records rather than reasoned about. Executable now: its only dependency
+  (`analysis/conversion-metrics`) is done, whereas `analysis/comparison-review-tooling`
+  is still `[~]`.
+
+- 2026-09-10: Design canvas drafted against **real** records — frame G2 through the five
+  `--preset` bundles, measured with `nctool metrics`. Three findings the 2026-09-03 reasoning
+  did not have:
+  - **A colour vertex must carry its band's population.** The `highlight` point is the largest
+    excursion in every encoding of `cast_by_tone_band` and rests on **under 1 px in 18.7 M** on
+    some presets (56 px for `chr-generic`). At equal weight it manufactures a crossover out of
+    rounding. Independent of any re-cut.
+  - **The presets are brightness-matched, so the curves fan rather than shift**: 0.02 st apart
+    at p50, 0.27 at the toe, 0.34 at the shoulder. That fan is contrast, and no scalar in the
+    record locates it — the strongest argument for ranking the percentile curve first.
+  - **Colour alone stops separating past three overlaid configs** — the `dataviz` reference dark
+    steps pass all-pairs CVD at 2 and 3 series and fail at 5. Compare mode must become small
+    multiples beyond three.
+- 2026-09-10: **Two modes, separated at the user's request.** Compare (n variants) and inspect
+  (one variant) are different designs, not one with a parameter. The rule: a chart takes n
+  variants only if it still has a free series dimension — per-channel histograms spend it on
+  RGB, the hue polar on angle. They also want opposite things from the config toggle, which
+  settles the integration half's open question: compare-mode charts draw every config and the
+  toggle *emphasises* one (nothing moves); inspect-mode charts bind to the active config and
+  swap in place like the picture. An n-variant chart at n=1 is its own design — the legend
+  goes, a difference strip has nothing to compare — not merely fewer lines.
+- 2026-09-10: Rebased onto the `bands` measurement change (`schema_version` 2) **by
+  re-applying this task's split onto that branch's content, not by resolving a conflict
+  line-by-line**. The branch edited `metrics-visualization.md` against its pre-split
+  version, so a mechanical rebase would have stranded its additions in the wrong half or
+  dropped them: the histogram description and the band/bin alignment belong with the
+  encodings, the record-size point belongs with transport. Recorded here because the
+  dropped half of such a merge is what nothing references and no gate catches.
+  Three facts from it that change the encodings: the histogram is the first drawable
+  field and its luminance series is the primary single-frame view; bands and histogram
+  are both cut in L\* so every band edge lands on a bin edge and a band overlay needs no
+  interpolation; and `sparse` is now a field, so the population weighting these artboards
+  argued for is read rather than derived.
 
 ## metrics-visualization
 

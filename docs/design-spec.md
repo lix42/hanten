@@ -90,6 +90,18 @@ The deterministic core owns the image science. Any future ML assistance (see
 7. **Fail loudly, never silently.** Bad input, clipped data, or impossible
    parameters produce explicit errors/warnings with non-zero exit codes — never
    a quietly wrong image.
+8. **One recipe per roll, not per frame.** Calibration (`Dmin`, `Dmax`, the
+   stock's response) is measured per roll and then *frozen*: nc does not
+   auto-optimize each frame to its own content. Frames from one roll stay
+   comparable, and a difference between two of them is a difference in the
+   scene rather than in the tool's reaction to it. This is deliberate and it is
+   the largest behavioural difference from per-frame converters — measured
+   against Negative Lab Pro on three frames of one roll, nc's `p95 − p5` moves
+   **0.96 stops** where NLP's moves **4.3–4.5** (see
+   `docs/progress/analysis.md`, `analysis/nlp-comparison`). Per-frame adaptation
+   is a possible **opt-in** later, never the default, and at low priority. The
+   consequence for contrast is an open question, not a settled trade —
+   `algo/contrast-latitude-spike`.
 
 ## 4. Input formats
 
