@@ -74,6 +74,13 @@ def stops_of_lstar(lstar: float) -> float:
     return math.log2(luminance_of_lstar(lstar) / MID_GREY)
 
 
+def _lstar_scalar(luminance: float) -> float:
+    """CIELAB lightness of one relative luminance. The inverse of the above."""
+    if luminance > LSTAR_KNEE_LUMINANCE:
+        return 116.0 * luminance ** (1.0 / 3.0) - 16.0
+    return luminance * LSTAR_LINEAR_SLOPE
+
+
 #: Tone bands, cut in **CIELAB lightness** — the same perceptual space the colour
 #: stage measures cast in — every 15 L* up to 75, then diffuse white (L* = 100),
 #: then an overflow band above it. In stops the widths narrow going up (1.71 /
@@ -109,12 +116,22 @@ BAND_EDGES = (-math.inf, *(stops_of_lstar(L) for L in BAND_LSTAR_EDGES), math.in
 #: frame, with nothing to tell the two apart.
 BAND_SPARSE_FRACTION = 0.001
 
-#: The level histogram: one bin per L* unit, black to diffuse white. Bins are L*
-#: so that every band edge falls exactly on a bin edge and one chart can draw
-#: both, and because the alternatives are wrong for drawing — stops give black an
-#: unbounded tail, and the stored code values describe the file's encoding as
-#: much as the picture, which is what decoding to linear light exists to avoid.
-HISTOGRAM_BINS = 100
+#: The level histogram: one bin per L* unit. Bins are L* so that every band edge
+#: falls exactly on a bin edge and one chart can draw both, and because the
+#: alternatives are wrong for drawing — stops give black an unbounded tail, and
+#: the stored code values describe the file's encoding as much as the picture,
+#: which is what decoding to linear light exists to avoid.
+#:
+#: The range runs to **twice** diffuse white in lightness, not to diffuse white,
+#: for two reasons. A float or HDR rendition genuinely carries samples above
+#: display white, and a scalar overflow counter cannot be drawn — L* 200 is 6.46x
+#: diffuse white (+5.17 stops), which covers nc's own 1000/203 HDR ceiling
+#: (L* 181.4) with margin. And on an SDR render the interesting fact is *how far
+#: short of* diffuse white the highlights stop, which needs white inside the axis
+#: rather than at its edge. Diffuse white therefore sits on the bin-100 boundary,
+#: exactly halfway along. Anything beyond the range lands in `above_range`.
+HISTOGRAM_MAX_LSTAR = 200.0
+HISTOGRAM_BINS = 200
 
 #: Chroma below this counts as neutral. A near-neutral pixel has a hue angle, but
 #: it is noise — a*, b* of (0.01, -0.01) is a 135 degree hue that means nothing —
@@ -806,24 +823,24 @@ def _lstar(values):
 def _series_histogram(values, excluded: "list[int]"):
     """One block of luminance-like values as bin counts, excluded ones tallied.
 
-    `excluded` is `[non_positive, non_finite, above_diffuse_white]`, accumulated
-    in place. Those three plus the bins partition the block. A sample with no
-    lightness is counted rather than folded to zero, for the same reason
-    `tone_stats` counts one: folding would invent black pixels the file does not
-    contain. Above diffuse white is counted rather than clipped into the top bin,
-    which would invent display-white pixels instead.
+    `excluded` is `[non_positive, non_finite, above_range]`, accumulated in place.
+    Those three plus the bins partition the block. A sample with no lightness is
+    counted rather than folded to zero, for the same reason `tone_stats` counts
+    one: folding would invent black pixels the file does not contain. One past
+    the top of the range is counted rather than clipped into the last bin, which
+    would invent a highlight pile-up instead.
     """
     import numpy as np
 
     finite = np.isfinite(values)
     positive = finite & (values > 0)
     lstar = _lstar(values[positive])
-    inside = lstar < DIFFUSE_WHITE_LSTAR
+    inside = lstar < HISTOGRAM_MAX_LSTAR
     excluded[0] += int(np.count_nonzero(finite) - np.count_nonzero(positive))
     excluded[1] += int(values.size - np.count_nonzero(finite))
     excluded[2] += int(lstar.size - np.count_nonzero(inside))
     return np.histogram(lstar[inside], bins=HISTOGRAM_BINS,
-                        range=(0.0, DIFFUSE_WHITE_LSTAR))[0]
+                        range=(0.0, HISTOGRAM_MAX_LSTAR))[0]
 
 
 def histogram_stats(linear, weights: tuple[float, float, float]) -> dict:
@@ -864,20 +881,27 @@ def histogram_stats(linear, weights: tuple[float, float, float]) -> dict:
         non_positive, non_finite, above = extra[name]
         return dict(counts=[int(v) for v in hist[name]],
                     non_positive=non_positive, non_finite=non_finite,
-                    above_diffuse_white=above)
+                    above_range=above)
 
     return dict(
         # Says what the bins are, in the record, so a consumer never has to infer
         # it from the shape of the data.
         domain="cielab_lstar",
         domain_note=("bin i covers L* [i, i+1); L* 0 is black, ~49.5 is scene "
-                     "mid grey, 100 is diffuse white. Samples above diffuse "
-                     "white are counted in `above_diffuse_white`, not binned. "
-                     "The channel series apply the same L* curve to one channel, "
-                     "which is a level, not a colorimetric lightness"),
+                     "mid grey, 100 is diffuse white, 200 is 6.46x diffuse white "
+                     "(+5.17 stops). Samples above the range are counted in "
+                     "`above_range`, not binned. The channel series apply the "
+                     "same L* curve to one channel, which is a level, not a "
+                     "colorimetric lightness"),
         bins=HISTOGRAM_BINS,
-        lstar_range=[0.0, DIFFUSE_WHITE_LSTAR],
-        bin_width_lstar=_round(DIFFUSE_WHITE_LSTAR / HISTOGRAM_BINS),
+        lstar_range=[0.0, HISTOGRAM_MAX_LSTAR],
+        bin_width_lstar=_round(HISTOGRAM_MAX_LSTAR / HISTOGRAM_BINS),
+        # The two reference lines a chart wants to draw, as bin indices, so they
+        # do not have to be re-derived from the L* formula by every consumer.
+        mid_grey_bin=int(_lstar_scalar(MID_GREY) // (HISTOGRAM_MAX_LSTAR
+                                                     / HISTOGRAM_BINS)),
+        diffuse_white_bin=int(DIFFUSE_WHITE_LSTAR // (HISTOGRAM_MAX_LSTAR
+                                                      / HISTOGRAM_BINS)),
         pixels=total,
         series={name: series(name) for name in names},
     )

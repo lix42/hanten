@@ -46,10 +46,16 @@ What other epics need to know about `analysis`:
   `crossover_*` when either contributing band is sparse.
 - **`tone.histogram` is the only list-valued field in any of this toolkit's
   records.** Four series — luminance and each of R/G/B — binned one count per L\*
-  unit from black to diffuse white, with separate counters above diffuse white and
-  for samples with no lightness. It is there for `analysis/metrics-visualization`
-  to draw; the band edges fall exactly on bin edges, so bands and bars share one
-  axis. It streams, so it costs ~0.5 s at 18.7 MP and no measurable memory.
+  unit over **L\* 0..200**, i.e. to twice diffuse white, with `above_range` past
+  that and separate counters for samples with no lightness. Diffuse white sits on
+  the bin-100 boundary and the record names `mid_grey_bin` / `diffuse_white_bin`.
+  The `luminance` series uses the **declared space's own luma weighting**, the same
+  one `tone.percentiles_stops` is built from, so the two cannot disagree — and it
+  is emitted rather than derived at draw time because luma is a weighted sum of
+  linear channel values and is not recoverable from three per-channel histograms.
+  It is there for `analysis/metrics-visualization` to draw; the band edges fall
+  exactly on bin edges, so bands and bars share one axis. It streams, so it costs
+  ~0.6 s at 18.7 MP and no measurable memory; a record is ~8 KB.
 - **For anyone consuming nc's ProPhoto output:** `color::build_profile` writes a
   **pure 1.8** power law, omitting the ROMM linear toe the standard specifies. A
   decoder applying the toe disagrees with nc's own pixels below encoded 0.03125 —
@@ -751,6 +757,72 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   No Rust was touched, and the Rust gates were run anyway and are green: fmt,
   clippy `-D warnings`, build, 755 + 191 tests.
 
+- 2026-09-11 (follow-up): **Histogram range extended past diffuse white; survey of
+  how other tools bin tonal regions.** Supersedes the histogram range described in
+  the entry above.
+  **The range now runs L\* 0..200 in 200 bins**, not 0..100 in 100. Two reasons,
+  both of which the first version got wrong. A float or HDR rendition genuinely
+  carries samples above display white and a scalar overflow counter **cannot be
+  drawn** — L\* 200 is 6.46x diffuse white (+5.17 stops), covering nc's own
+  1000/203 HDR ceiling (L\* 181.4) with margin. And putting white at the *edge* of
+  the axis hid the commoner SDR question: how far short of diffuse white the
+  highlights stop. Measured on the five preset renders of G2, the last non-empty
+  luminance bin sits at L\* **88 / 92 / 88 / 92 / 98** — 12, 8, 12, 8 and 2 L\*
+  short of white, with `sig-knees` the only one that nearly reaches it. Diffuse
+  white is now the bin-100 boundary, exactly halfway along, and the per-series
+  overflow counter is renamed `above_range` (it no longer means "above diffuse
+  white", which the bins themselves now resolve). Cost is unchanged: +0.60 s at
+  18.7 MP, no measurable memory, a record 6.8 -> 8.2 KB with ~107 empty bins on an
+  SDR frame — the price of one axis that serves both SDR and HDR.
+  The record now also names `mid_grey_bin` (49) and `diffuse_white_bin` (100), so
+  a chart does not re-derive the L\* formula to place its two reference lines.
+  **A test pins that the `luminance` series and `tone.percentiles_stops` describe
+  the same quantity**: both take the declared space's own luma weighting, and the
+  test brackets every one of the eleven percentiles into the bin its cumulative
+  count lands in. Worth recording *how* it was falsified, because the obvious break
+  does not work — monkeypatching `luminance_weights` moves the tone stage and the
+  histogram *together*, so consistency survives and the test passes. Breaking only
+  the histogram's weighting is the real check: an equal-weight luma fails it, and
+  so does a Rec.709 luma on a Display P3 file and a 1% error in the green
+  coefficient — but only after the fixture was made strongly channel-separated and
+  the assertion widened from the median to all eleven percentiles. At the first
+  attempt (median only, mild cast) the Rec.709 swap passed.
+  Luminance is **emitted, not left to be derived at draw time**: luma is a weighted
+  sum of linear channel values and is not recoverable from three independent
+  per-channel histograms.
+  **Survey of how other tools bin tonal regions, since nc's cut should not rest on
+  one vendor's reverse-engineered defaults.** Adobe's parametric-curve splits
+  default to 25/50/75 of the **encoded** axis; the conversion to stops re mid grey
+  was recomputed here rather than taken on trust and it checks out — -1.823 /
+  +0.250 / +1.538, with diffuse white at +2.474. The wider finding is the useful
+  one: **no surveyed tool defines disjoint bins for *measurement*.** Every tonal
+  region that could be checked is an *editing* construct, and they are overlapping
+  weighting regions, not bins — Adobe's parametric curve by its own description,
+  darktable's `color balance rgb` by alpha masks with a luminance fulcrum set where
+  all three masks reach 50% opacity, RawTherapee's shadows/highlights by a "tonal
+  width" measured in from each end.
+  The one disjoint binning found is **darktable's tone equalizer: nine zones, 1 EV
+  apart, spanning -8 to 0 EV** ("this tab splits the brightness of the guided mask
+  into nine zones (from -8 to 0 EV)"; the manual does not state the anchor
+  unambiguously and it was not pinned). That is a shipping, principled,
+  stops-even, Zone-like cut — i.e. candidate **C**, which this task rejected. The
+  reason the same cut suits darktable and not this record is **what an empty bin
+  costs**: in an editing tool an empty zone is a slider that does nothing, which is
+  harmless; in a measurement record it is a reported number with nothing behind it.
+  Measured, C had the best largest-band share of all seven candidates (37.4%
+  median) and the worst sparsity — 96 of 330 band shares under 0.1%, three whole
+  bands whose *median* is under 0.1%. So the survey does not overturn the choice,
+  but it does mean the stops-even family has a real advocate and the rejection
+  rests on the sparsity measurement, not on principle.
+  On the histogram's domain the survey is supportive rather than mixed:
+  **RawTherapee draws its L curve histogram in CIELAB L\*** ("the histogram on the
+  L curve reflects lightness after the Lab adjustments"), which is the same domain
+  chosen here. Sources: Adobe Camera Raw / Lightroom tone-control docs, darktable's
+  tone-equalizer and color-balance-rgb manual pages, RawPedia's Lab Adjustments and
+  Shadows/Highlights pages.
+  Verified: 229 analysis tests (226 before), venv interpreter; the new range tests
+  were each confirmed to fail when broken (range cut back to diffuse white, and the
+  three luma-weighting breaks above). No Rust touched.
 
 ## drive-asset-migration
 

@@ -14,11 +14,14 @@ changed" well and "what does that look like" not at all.
   colour in CIELAB — and a per-roll rollup with a spread table. That is the data
   source; this task does not add measurements.
   **Two things changed under it on 2026-09-11 (`schema_version` 2) and both matter
-  here.** `tone.histogram` arrived: four series (luminance, R, G, B) of 100 counts
-  each, one per L\* unit from black to diffuse white — the first drawable field in
-  any of these records, and it was added for this task. And the tone bands were
-  re-cut in the same L\* domain, so **every band edge falls exactly on a histogram
-  bin edge**: bands and bars share one axis and can be drawn together without
+  here.** `tone.histogram` arrived: four series (luminance, R, G, B) of 200 counts
+  each, one per L\* unit, running to twice diffuse white so an HDR render's
+  headroom is drawable and an SDR render's shortfall below white is visible; the
+  record names the `mid_grey_bin` and `diffuse_white_bin` reference lines. It is
+  the first drawable field in any of these records, and it was added for this
+  task — the **luminance** series is the primary single-frame view. And the bands
+  were re-cut in the same L\* domain, so **every band edge falls exactly on a
+  histogram bin edge**: bands and bars share one axis and can be drawn without
   interpolating. The re-cut is also what makes item 3 below worth drawing at all —
   on the old stops-even edges one band held a median 83% of a frame, so a stacked
   bar was one block.

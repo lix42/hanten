@@ -1502,7 +1502,7 @@ class Histogram(unittest.TestCase):
         array[1, :, :] = 0.0
         histogram, _ = self._histogram(array, "account.tif")
         for name, series in histogram["series"].items():
-            total = (sum(series["counts"]) + series["above_diffuse_white"]
+            total = (sum(series["counts"]) + series["above_range"]
                      + series["non_positive"] + series["non_finite"])
             self.assertEqual(total, histogram["pixels"], name)
             self.assertEqual(series["non_finite"], 10, name)
@@ -1524,22 +1524,51 @@ class Histogram(unittest.TestCase):
         array = rng.random((64, 64, 3), dtype=np.float32)
         histogram, record = self._histogram(array, "align.tif")
         counts = histogram["series"]["luminance"]["counts"]
-        edges = [0] + [int(edge) for edge in metrics.BAND_LSTAR_EDGES]
-        for index, name in enumerate(metrics.BAND_NAMES[:-1]):
+        edges = ([0] + [int(edge) for edge in metrics.BAND_LSTAR_EDGES]
+                 + [metrics.HISTOGRAM_BINS])
+        for index, name in enumerate(metrics.BAND_NAMES):
             low, high = edges[index], edges[index + 1]
-            share = sum(counts[low:high]) / histogram["pixels"]
+            share = (sum(counts[low:high])
+                     + (histogram["series"]["luminance"]["above_range"]
+                        if name == metrics.BAND_NAMES[-1] else 0)
+                     ) / histogram["pixels"]
             self.assertAlmostEqual(share, record["tone"]["bands"][name],
                                    places=4, msg=name)
 
-    def test_above_diffuse_white_is_counted_not_binned(self):
-        """A float file's headroom has nowhere to go in a 0..100 axis, and
-        clamping it into the top bin would invent display-white pixels."""
-        array = np.full((8, 8, 3), 2.0, dtype=np.float32)
+    def test_headroom_above_diffuse_white_is_binned_not_just_counted(self):
+        """The range runs to twice diffuse white so a float or HDR rendition's
+        headroom can be *drawn*. A scalar overflow counter cannot be, and an axis
+        that stopped at display white would also hide the more common question:
+        how far short of white an SDR render's highlights stop."""
+        array = np.full((8, 8, 3), 2.0, dtype=np.float32)   # L* 130.2
         histogram, record = self._histogram(array, "over.tif")
         series = histogram["series"]["luminance"]
-        self.assertEqual(sum(series["counts"]), 0)
-        self.assertEqual(series["above_diffuse_white"], 64)
+        self.assertEqual(series["counts"][130], 64)
+        self.assertEqual(series["above_range"], 0)
+        self.assertGreater(histogram["lstar_range"][1],
+                           metrics.DIFFUSE_WHITE_LSTAR)
+        # The tone band still calls it above diffuse white; only the histogram
+        # resolves it further.
         self.assertEqual(record["tone"]["bands"]["above_diffuse_white"], 1.0)
+
+    def test_past_the_top_of_the_range_is_counted_not_clipped(self):
+        """Clipping it into the last bin would invent a highlight pile-up."""
+        array = np.full((8, 8, 3), 10.0, dtype=np.float32)  # L* 233.9
+        histogram, _ = self._histogram(array, "way-over.tif")
+        series = histogram["series"]["luminance"]
+        self.assertEqual(sum(series["counts"]), 0)
+        self.assertEqual(series["above_range"], 64)
+
+    def test_the_reference_bins_are_where_the_record_says(self):
+        """A chart draws mid grey and diffuse white as lines; it must not have to
+        re-derive the L* formula to place them."""
+        histogram, _ = self._histogram(
+            np.full((4, 4, 3), metrics.MID_GREY, dtype=np.float32), "refs.tif")
+        counts = histogram["series"]["luminance"]["counts"]
+        self.assertEqual(counts[histogram["mid_grey_bin"]], 16)
+        self.assertEqual(histogram["diffuse_white_bin"], 100)
+        self.assertEqual(metrics.stops_of_lstar(metrics.DIFFUSE_WHITE_LSTAR),
+                         metrics.DIFFUSE_WHITE_STOPS)
 
     def test_the_channel_series_separate_a_cast(self):
         """What the per-channel split is for: a cast is a shape here, where
@@ -1553,13 +1582,44 @@ class Histogram(unittest.TestCase):
                  for name in ("r", "g", "b")}
         self.assertEqual(peaks, {"r": 40, "g": 50, "b": 70})
 
+    def test_the_luminance_series_is_the_same_quantity_as_the_percentiles(self):
+        """The histogram's luminance and `tone.percentiles_stops` must describe
+        one quantity, or an overlaid histogram and a percentile curve of the same
+        frame disagree with each other. Both take the declared space's own luma
+        weighting, so the median read off the bins has to land in the bin the
+        50th percentile falls in — a per-channel mean or a different luma vector
+        would drift, and on a cast frame it would drift visibly.
+        """
+        rng = np.random.default_rng(11)
+        array = rng.random((128, 128, 3), dtype=np.float32)
+        # Strongly separated channels: the weighting is what is under test, so
+        # the fixture has to be one where a wrong luma vector moves the answer.
+        array[..., 0] *= 0.25
+        array[..., 2] *= 0.6
+        record = metrics.measure(write_tiff(self.dir, "sameq.tif", array),
+                                 "display-p3", digest=False)
+        histogram = record["tone"]["histogram"]
+        counts = histogram["series"]["luminance"]["counts"]
+        width = histogram["bin_width_lstar"]
+        cumulative = np.cumsum(counts)
+        # Every percentile in the vector, not just the median: a small error in
+        # the weighting moves some part of the distribution across a bin edge
+        # even when it leaves the middle where it was.
+        for name, stops in record["tone"]["percentiles_stops"].items():
+            target = float(name[1:]) / 100.0 * histogram["pixels"]
+            index = int(np.searchsorted(cumulative, target))
+            self.assertGreaterEqual(
+                stops, metrics.stops_of_lstar(index * width), name)
+            self.assertLessEqual(
+                stops, metrics.stops_of_lstar((index + 1) * width), name)
+
     def test_the_record_states_its_own_bin_definition(self):
         histogram, _ = self._histogram(
             np.full((4, 4, 3), 0.18, dtype=np.float32), "states.tif")
         self.assertEqual(histogram["domain"], "cielab_lstar")
         self.assertEqual(histogram["bins"], metrics.HISTOGRAM_BINS)
         self.assertEqual(histogram["lstar_range"],
-                         [0.0, metrics.DIFFUSE_WHITE_LSTAR])
+                         [0.0, metrics.HISTOGRAM_MAX_LSTAR])
         self.assertEqual(len(histogram["series"]["luminance"]["counts"]),
                          metrics.HISTOGRAM_BINS)
 

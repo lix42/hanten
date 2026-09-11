@@ -269,10 +269,30 @@ contributing band is sparse.
 
 `tone.histogram` is the record's only list-valued field, and the one thing in it
 a review tool can draw rather than read. Four series — `luminance`, `r`, `g`, `b`
-— each 100 counts, one per L\* unit from black to diffuse white, plus separate
-counters for samples above diffuse white and for those with no lightness at all
-(non-positive, non-finite). It states its own domain in the record, so a consumer
-never has to infer the bins from the shape of the data.
+— each 200 counts, one per L\* unit, plus `above_range` for anything past the top
+and separate counters for samples with no lightness at all (non-positive,
+non-finite). Those four numbers partition the region. It states its own domain in
+the record — `domain`, `lstar_range`, `bins`, `bin_width_lstar`, and the
+`mid_grey_bin` / `diffuse_white_bin` reference lines a chart wants — so a
+consumer never has to infer the bins from the shape of the data, and never has to
+re-derive the L\* formula to place white.
+
+`luminance` uses the **declared space's own luma weighting**, the same one
+`tone.percentiles_stops` is built from, so the histogram and the percentile curve
+describe one quantity and cannot disagree. That is also why luminance is emitted
+rather than left to be derived at draw time: luma is a weighted sum of linear
+channel values and is **not** recoverable from three independent per-channel
+histograms.
+
+The axis runs to **twice diffuse white in lightness**, not to diffuse white.
+L\* 200 is 6.46x diffuse white (+5.17 stops), which covers nc's own 1000/203 HDR
+ceiling (L\* 181.4) with margin, so a `film-master` or `hdr-linear-tiff` render's
+headroom can be *drawn* rather than reduced to one overflow number. It also keeps
+white inside the axis rather than at its edge, which is what makes the commoner
+SDR question readable: how far short of diffuse white the highlights stop. On the
+five preset renders of one frame the last non-empty luminance bin sits at L\* 88 /
+92 / 88 / 92 / 98 — 12, 8, 12, 8 and 2 L\* short of white — against a
+`diffuse_white_bin` of 100.
 
 L\* and not the stored code values: those describe the file's encoding as much as
 the picture, which is the whole reason this command decodes to linear light
@@ -285,8 +305,8 @@ a colorimetric lightness — only `luminance` is that — but it is the one mono
 mapping that puts all four series on one axis, which is what makes a cast read as
 a shape rather than as `color.balance_stops`' one number per channel.
 
-It costs ~0.5 s at 18.7 MP and no measurable memory: it streams in row blocks, so
-only the 100 accumulators per series survive a block.
+It costs ~0.6 s at 18.7 MP and no measurable memory: it streams in row blocks, so
+only the 200 accumulators per series survive a block. A record grows to ~8 KB.
 
 ### Reading the record
 
