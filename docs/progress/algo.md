@@ -3749,6 +3749,20 @@ amplify. So the emptiness is now the harness's asserted pass condition rather th
 unrecorded accident — if a recapture or a table edit ever fills it, the test says so and
 names the remedy.
 
+**x86_64 CI then confirmed the measurement on the first push, in the most useful way
+available.** glibc's `log10f` returns a density one ULP off the correctly-rounded value on
+**sample 1** — precisely the sample flagged as thin, and the only one flagged. Apple's
+does not. The golden passed on both targets regardless, because sample 1's amplification
+is zero. So the method predicted which of fifteen samples could disagree, and the one it
+named is the one that did.
+
+It surfaced as a red build, because the harness's first version asserted the *host's*
+`log10` equalled the correctly-rounded value — which is asserting the host is correctly
+rounding, the very thing that varies. The fix is to measure from the correctly-rounded
+intermediate (a property of the values) and assert only **conformance**, that the host
+lands within 1 ULP of it. Worth stating as a rule: a portability harness must not demand
+the platform be perfect, only that it be within the bound the argument assumes.
+
 **The real binding constraint is sample 8** (`log10` margin 0.0353, amplification 6 ULPs)
 — not the 2-16x the `10^` column suggests. It clears glibc's documented bound by 1.8x and
 the padded constant by 1.1x. If Apple's `log10` is worse than either, the margin test stays

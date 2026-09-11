@@ -608,6 +608,12 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   - **Measure *every* libm call in the chain, not the last one.** That curve makes
     two (`log10` in `to_density`, `10^` in the curve), and a first version measured
     only the second while reading as if it covered the chain.
+  - **Measure from the correctly-rounded intermediate, and assert only conformance.**
+    Asserting the host's libm *equals* the correctly-rounded value asserts the host is
+    correctly rounding — the exact thing that varies. It red x86_64 on the one sample
+    the harness had flagged as thin (glibc's `log10f`, 1 ULP); Apple's agrees. Assert
+    the host is within 1 ULP and derive every margin from the rounded value, so the
+    numbers are a property of the values rather than of the machine measuring them.
   - **A thin margin upstream is amplified.** A 1-ULP `log10` disagreement reaches
     the pixel multiplied by `ln(10)·d·(1/γ_local)` — up to 62 ULPs on that vector —
     so the pass condition is the *conjunction*: no sample may be both thin and
