@@ -888,22 +888,35 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   | G2 | -0.05 | -0.10 | +0.77 | +1.70 |
   | G3 | -0.99 | -1.11 | -3.86 | -0.71 |
 
-  **The "nc is darker" reading holds on two of three frames and reverses on the
-  third.** On G2 NLP's median sits 0.82-0.87 stops above nc's and its `highlight`
-  band holds 19.4% of the frame against nc's 1.4-1.8%; on G1, 0.52-0.59 stops and
-  8.2% against 0.25-0.42%. On G3 NLP's median sits **2.75-2.87 stops below** nc's
-  and 56.2% of that frame lands in `deep_shadow` against nc's 0.20-0.29%. Three
-  frames cannot settle a direction, and G3 is the frame `sigmoid-baseline`'s
-  fixtures already flag as exceeding SDR range (sky best at +0 EV, trees at +2), so
-  it is exactly where a per-frame auto-adjustment and a frozen recipe should
-  disagree most.
+  **The "nc is darker" reading is not established, and which way it goes on one
+  frame depends on the unresolved colour space.** Under the conservative gamma
+  reading it holds on two frames and **reverses on the third**: NLP's median sits
+  0.52-0.59 stops above nc's on G1 and 0.82-0.87 above on G2, but **2.75-2.87
+  stops below** on G3, where 56.2% of the frame lands in `deep_shadow` against nc's
+  0.20-0.29%. Under the linear reading NLP is brighter on all three (+1.93-2.00,
+  +1.75-1.80, +0.28-0.40). So the reversal is a property of the *gamma* reading,
+  not a fact about the two tools, and the direction cannot be stated at all until
+  the colour space is resolved. Three frames could not settle it in any case, and
+  G3 is the frame `sigmoid-baseline`'s fixtures already flag as exceeding SDR range
+  (sky best at +0 EV, trees at +2) — exactly where a per-frame auto-adjustment and
+  a frozen recipe should disagree most.
   **The difference that is consistent across all three frames is contrast, not
   brightness.** nc's `contrast.p95_minus_p5` is 3.55-4.51 stops on every frame and
-  both presets; NLP's is 6.98 / 10.92 / 11.52 under the gamma reading and 3.83 /
-  7.35 / 8.14 under the linear one. Under either reading NLP renders a wider tonal
-  range on two of three frames, and nc's figure barely moves between frames where
-  NLP's varies by 4.5 stops — the signature of one frozen recipe against a per-frame
-  adjustment. That, not the median, looks like the thing worth investigating first.
+  both presets; NLP's is **6.98 (G2) / 10.92 (G3) / 11.52 (G1)** under the gamma
+  reading and **3.83 / 7.35 / 8.14** under the linear one. Under gamma NLP is wider
+  on all three, by +3.28 to +7.60 stops. Under linear it is wider on G1 (+4.09 to
+  +4.22) and G3 (+2.84 to +3.03) but **essentially tied on G2** (+0.13 to +0.28),
+  so the gap survives both readings on two frames and collapses on one — still a
+  stronger signal than the median, which survives neither cleanly. What holds
+  unconditionally is the *stability*: nc's figure moves 0.96 stops across the three
+  frames where NLP's moves 4.54 (gamma) or 4.31 (linear), the signature of one
+  frozen recipe against a per-frame adjustment. That, not the median, looks like
+  the thing worth investigating first.
+  **Highlight occupancy on G2 is the one comparison that survives everything so
+  far**: NLP 19.4% of the frame in `highlight` against nc's 1.4-1.8% under the
+  gamma reading, 68.0% under the linear one — same direction, larger under the
+  reading that is not being used. It does not generalize, though: on G3 nc holds
+  **more** (15.9% against NLP's 14.0%).
   All of these are single-frame measurements of differently cropped images with an
   unresolved reference colour space. They are a starting point for this task, not a
   finding about either tool.
