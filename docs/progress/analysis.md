@@ -793,6 +793,122 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   HDR review and build-vs-build are still untouched. The server could now measure `width`/`height`
   itself and retire those schema fields — it does not, and the schema is unchanged.
 
+### 2026-09-10 — styling moved from StyleX to Panda CSS
+
+- **User request, exploratory** ("I want to try to switch to panda-css"). Pure swap of the
+  styling mechanism: no visual change intended, and none observed — every declaration in the
+  emitted stylesheet was compared against the pre-change one (106 rules each), and the computed
+  values were read back out of the browser and compared to the palette. Measure the *emitted
+  CSS*, not the source style objects: a first pass quoted a count of the latter that a second
+  pass could not reproduce (165 vs 190 vs 207, depending on how the regex treated nested keys
+  and multi-line values), while the emitted rules are exact and reproducible.
+- **The dev/build asymmetry is gone.** Panda runs as a PostCSS plugin, and Vite pipes every
+  stylesheet through PostCSS in dev and in a build alike — so `src/index.css` is the whole
+  stylesheet in both modes. That retires `StyleXDevRuntime.tsx` (the hand-wired dev runtime
+  the entry above describes), the dev-only `/virtual:stylex.css` link, the `virtual:stylex:runtime`
+  module declaration, and the plugin's exclusion from the Vite config's test mode.
+- **The `@layer` line in `src/index.css` is the injection point, and losing it fails silently.**
+  Panda's PostCSS plugin only treats a file as its output target when an `@layer` at-rule names
+  **all five** layers (`isValidLayerParams`: `names.size >= 5 && every(...)`); with no such
+  rule it returns early and emits nothing — no tokens, no utilities, no `globalCss`. Because
+  that file now holds no literal CSS of its own, the page then renders completely unstyled.
+  Measured: trimming the list to the three layers the app actually uses builds at **exit 0,
+  no error, no warning**, writing a 0.03 kB stylesheet in place of 6.9 kB. Found in review,
+  where the comment above the line had described it as a stylistic ordering choice.
+- **`cls.ts` is gone too.** Panda's `css()` returns a plain class string and accepts
+  `false`/`undefined` arguments, so `class={css(a, cond && b)}` needs no adapter — the two
+  traps `cls()` existed to close (React's `className` spelling, and a spread evaluated once)
+  are both absent by construction. Styles are `css.raw()` objects merged by `css()` at the call
+  site, so an override *replaces* the base's declaration rather than competing with it in the
+  cascade. That is not an improvement: `stylex.props()` merged by property and emitted only the
+  winning class too. The two are equivalent here, and a future reader weighing a move back
+  should not be told otherwise.
+- **The palette moved into `panda.config.ts`** as semantic tokens: `base` is the dark value,
+  `_osLight` the light one. Emitted shape is the same as the hand-written custom properties
+  (dark on `:root`, light under `prefers-color-scheme: light`), but `color: "fg.dim"` is now
+  type-checked and a typo fails `vp check`.
+- **The one real trap, measured: a bare number is a *token lookup*, not pixels.** `gap: 16`
+  compiles to `var(--spacing-16)` — `4rem`, four times too big — because the default preset has
+  a spacing token named `16`; `padding: 18` compiles to `18px` because it has no token named
+  `18`. Same syntax, opposite meanings, decided by the preset. Every length in the app now
+  states its unit; bare numbers survive only where the property is genuinely unitless.
+- **pnpm 11 blocks esbuild's install script** (Panda bundles its config with esbuild), and an
+  undecided script makes `pnpm install` **exit 1** — including the install `vp check` runs for
+  itself, so the gate fails before it starts. `allowBuilds: {esbuild: true}` in
+  `pnpm-workspace.yaml` is the decision; note the field is `allowBuilds`, not the
+  `onlyBuiltDependencies` the older docs name.
+- **Accepted cost:** Panda's default preset emits its whole token set — ~300 preset colours and
+  every spacing/radius/font-size scale as `:root` custom properties, used or not. 16.6 kB of
+  CSS, 5.2 kB gzipped, for a 12-colour app. Irrelevant for a dev-server-only tool, so it is left
+  alone; the README records the lever (`presets: ['@pandacss/preset-base']`) and its cost.
+- **Verified**: all three gates green (`pnpm check`, `pnpm test` — 49 tests, `pnpm build`); the
+  dev server serves the generated rules at `/src/index.css` and updates them in place on edit;
+  and in the browser, the config buttons, the active fill, the preview borders, the mini-map,
+  the pan controls and the scrim all read the right palette values, with the renditions'
+  bounding boxes byte-identical across a config switch (the in-place promise) and a clean
+  console.
+
+### 2026-09-10 — `strictTokens` on, and the theme became the design system
+
+- **User request**, with the constraint that the `[value]` escape hatch was not to be used
+  without a strong reason. None was needed: `strictTokens` + `strictPropertyValues` are on, all
+  77 resulting type errors are fixed, and no escape hatch appears in `src/`.
+  `strictPropertyValues` was free — it flagged nothing, every enum-valued property already
+  naming a real CSS keyword. All 77 were `strictTokens`.
+- **`presets` dropped to `['@pandacss/preset-base']`, and that is the substantive decision.**
+  Panda's default is two presets doing unrelated jobs, which is easy to miss: `preset-base` is
+  the machinery (357 utilities, 107 conditions including `_osLight`, the patterns) and carries
+  **no tokens at all**; `preset-panda` is *only* token ladders — 246 colours and rem-valued
+  spacing/size/font scales, 422 tokens in all. With `strictTokens` on, keeping `preset-panda`
+  would put 422 valid-but-meaningless entries behind every autocomplete, which is the opposite
+  of the point. Side effects: the stylesheet went 16.6 kB → 6.9 kB (5.2 → 2.1 kB gzipped) and
+  the emitted token block down to 52 custom properties — exactly what the theme declares.
+- **Naming rule, applied deliberately.** A value denoting a *specific thing* gets a role name
+  (`sizes.thumbWidth`/`thumbHeight`, `sizes.stageCap`, `sizes.panControl`, `fontSizes.key`),
+  which retired literals the app repeated across files — 104x70 in three places, 82vh in two.
+  `spacing` gets no role names because it has no such structure (the same 8px is a gap, an
+  inset and a padding), so it is named by measurement (`spacing["8px"]`): call sites still read
+  like CSS, and the gate still holds. Values kept in **px, not the preset's rem**, on purpose —
+  this is a pixel-inspection tool, and its chrome should not rescale with the reader's font
+  size while the images do not.
+- **A token name must not mean two things across categories.** `panel` was both a colour and a
+  size, so `backgroundColor: "panel"` was a surface and `maxWidth: "panel"` a column width. Now
+  `panelMeasure`. Found by auditing names across categories, not by any gate — nothing warns.
+  The one deliberately shared name is `body` (font, font size, line height), where all three
+  genuinely mean "the body's".
+- **The two escape-hatch temptations, and what they became.** `width: auto` / `maxWidth: none`
+  on `fullsize` → `sizes.natural` / `sizes.unconstrained`: "render at the size the file is" is a
+  real decision this app makes, so it earns a name rather than `[auto]`. And
+  `fontFamily`/`fontSize: inherit` on the buttons → the `body` font and size tokens outright,
+  which is the same value today and states what a control matches instead of inheriting it.
+- **Verified as a pure value substitution, which is the right check for this shape of change.**
+  Every declaration in the emitted utilities layer was resolved back through its token and
+  compared with the pre-strict stylesheet: 106 rules before, 106 after, **104 identical** — the
+  only two differences being the deliberate `inherit` → explicit body font/size. Also checked:
+  every class the SSR'd page emits resolves to a rule in the stylesheet (75 Panda atoms, all
+  matched; the 76th class is TanStack Router's own `$tsr`), and the dev-served CSS is
+  declaration-identical to the built one. All three gates green.
+- **Re-verified in the browser too.** Every computed value read back matches what was recorded
+  before the flags went on — palette, 104x70 thumbnails, 82vh cap, 120px floor, 34px controls,
+  6px/4px/8px radii, 11px `<kbd>`, 78ch measure, 600 weight — and the buttons' font now
+  resolves to the same `-apple-system` / 14px they used to inherit. Switching config still moves
+  the picture by zero pixels. The one token worth a live test rather than a CSS diff was
+  `sizes.natural`, which exists to beat the presentational `width=`/`height=` attributes: lying
+  to an image's `width` attribute (600 against a 2400px file) leaves it rendered at 2400px, so
+  the token does the job `auto` did. Console clean.
+- **Surfaced, not fixed:** the app has two reading measures, 78ch under the title and 80ch in
+  the standalone panels, which looks like drift rather than intent. Both are kept as separate
+  tokens because unifying them would move the layout; someone should decide which.
+- **Review found no code defect and five prose defects, which is the expected shape here.**
+  Both the `@layer` trap above and the corrections in this entry came from it: a
+  "theme is exhaustive" claim the same file contradicted 30 lines later (and CLAUDE.md
+  repeated without the caveat), five measured figures that did not reproduce, a longhand
+  rationale that was true of borders but not of the grid placement it also named, and a
+  "strictly better than StyleX" claim that was simply wrong. Codex was unavailable (workspace
+  spend cap), so this was a single-reviewer pass. The lesson is the project's own: no gate
+  reads prose, so a number quoted from a one-off script survives every green run — re-derive
+  it, or say how it was counted.
+
 ## metrics-visualization
 
 **Status:** not started

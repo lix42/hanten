@@ -1,25 +1,24 @@
-import * as stylex from "@stylexjs/stylex";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { cls } from "./cls";
+import { css } from "../styled-system/css";
 import { ControlBar } from "./ControlBar";
 import { ImageSection } from "./ImageSection";
 import { actionForKey, isTextEntry } from "./keys";
 import type { ReviewSetPayload } from "./server/getReviewSet";
 import { type ZoomMode } from "./review";
 
-const styles = stylex.create({
-  header: { paddingBlock: 18, paddingInline: 16 },
-  title: { marginBlock: 0, fontSize: 18 },
-  description: { marginBlockStart: 4, color: "var(--fg-dim)", maxWidth: "78ch" },
-  panel: { padding: 24, maxWidth: "80ch" },
-  source: {
-    marginBlockStart: 6,
-    color: "var(--fg-dim)",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: 12,
+const styles = {
+  header: css.raw({ paddingBlock: "18px", paddingInline: "16px" }),
+  title: css.raw({ marginBlock: "0", fontSize: "heading" }),
+  description: css.raw({ marginBlockStart: "4px", color: "fg.dim", maxWidth: "proseMeasure" }),
+  panel: css.raw({ padding: "24px", maxWidth: "panelMeasure" }),
+  source: css.raw({
+    marginBlockStart: "6px",
+    color: "fg.dim",
+    fontFamily: "mono",
+    fontSize: "meta",
     wordBreak: "break-all",
-  },
-});
+  }),
+};
 
 export function App(props: { set: ReviewSetPayload }) {
   const review = createMemo(() => props.set.review);
@@ -75,13 +74,13 @@ export function App(props: { set: ReviewSetPayload }) {
         zoom={zoom()}
         onZoom={setZoom}
       />
-      <header class={cls(styles.header)}>
-        <Show when={review().title}>{(title) => <h1 class={cls(styles.title)}>{title()}</h1>}</Show>
+      <header class={css(styles.header)}>
+        <Show when={review().title}>{(title) => <h1 class={css(styles.title)}>{title()}</h1>}</Show>
         <Show when={review().description}>
-          {(description) => <p class={cls(styles.description)}>{description()}</p>}
+          {(description) => <p class={css(styles.description)}>{description()}</p>}
         </Show>
         {/* There is no longer a URL saying which set this is, so the page does. */}
-        <p class={cls(styles.source)}>
+        <p class={css(styles.source)}>
           <Show when={props.set.source === "bundled-example"} fallback={props.set.path}>
             bundled example — set REVIEW_SET, or run `pnpm dev {"<path to review.json>"}`, to review
             your own
@@ -116,7 +115,7 @@ export function App(props: { set: ReviewSetPayload }) {
         }}
       </For>
       <Show when={review().images.length === 0}>
-        <p class={cls(styles.panel)}>This review set lists no images.</p>
+        <p class={css(styles.panel)}>This review set lists no images.</p>
       </Show>
     </main>
   );

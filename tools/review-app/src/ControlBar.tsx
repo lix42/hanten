@@ -1,68 +1,66 @@
-import * as stylex from "@stylexjs/stylex";
 import { For, Show } from "solid-js";
-import { cls } from "./cls";
+import { css } from "../styled-system/css";
 import { keyForConfigIndex } from "./keys";
 import type { ReviewConfig, ZoomMode } from "./review";
 
-// Longhands only. StyleX drops shorthands it does not model — `background` and
-// `border` were silently absent from the output, leaving white text on the
-// browser's default button face. Measured in the browser, not assumed.
-const styles = stylex.create({
-  bar: {
+// Border longhands rather than the `border` shorthand: `active` overrides only
+// the colour, and `css()` merges by property — a base that spelled the whole
+// border as one shorthand would leave the override as a second, competing
+// declaration.
+const styles = {
+  bar: css.raw({
     position: "sticky",
-    top: 0,
+    top: "0",
     zIndex: 10,
     display: "flex",
     flexWrap: "wrap",
-    gap: 16,
+    gap: "16px",
     alignItems: "center",
-    paddingBlock: 10,
-    paddingInline: 16,
-    backgroundColor: "var(--panel)",
-    borderBottomWidth: 1,
+    paddingBlock: "10px",
+    paddingInline: "16px",
+    backgroundColor: "panel",
+    borderBottomWidth: "1px",
     borderBottomStyle: "solid",
-    borderBottomColor: "var(--edge)",
-  },
-  group: { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" },
-  spacer: { marginInlineStart: "auto" },
-  button: {
+    borderBottomColor: "edge",
+  }),
+  group: css.raw({ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }),
+  spacer: css.raw({ marginInlineStart: "auto" }),
+  button: css.raw({
     display: "inline-flex",
     alignItems: "baseline",
-    gap: 6,
-    paddingBlock: 5,
-    paddingInline: 12,
-    borderRadius: 6,
-    borderWidth: 1,
+    gap: "6px",
+    paddingBlock: "5px",
+    paddingInline: "12px",
+    borderRadius: "md",
+    borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "var(--edge)",
-    backgroundColor: "var(--button)",
-    color: "var(--fg)",
-    fontFamily: "inherit",
-    fontSize: "inherit",
+    borderColor: "edge",
+    backgroundColor: "button",
+    color: "fg",
+    // Stated rather than inherited: these are the page's own body font and size,
+    // which is what a control should match, and `inherit` is not a token.
+    fontFamily: "body",
+    fontSize: "body",
     cursor: "pointer",
-  },
-  active: {
-    backgroundColor: "var(--accent)",
-    borderColor: "var(--accent)",
-    color: "var(--accent-ink)",
-    fontWeight: 600,
-  },
+  }),
+  active: css.raw({
+    backgroundColor: "accent",
+    borderColor: "accent",
+    color: "accent.ink",
+    fontWeight: "semibold",
+  }),
   // `<kbd>` defaults to the UA's monospace font, which differs per platform and
   // per element; state it so the key sits on the label's baseline predictably.
   // Colour is inherited so one rule reads correctly on both the plain and the
   // filled (active) button.
-  key: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: 11,
+  key: css.raw({
+    fontFamily: "mono",
+    fontSize: "key",
     opacity: 0.7,
     fontVariantNumeric: "tabular-nums",
-  },
-  hint: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    color: "var(--fg-dim)",
-    fontSize: 12,
-  },
-});
+  }),
+  hint: css.raw({ fontFamily: "mono", color: "fg.dim", fontSize: "meta" }),
+};
 
 interface Props {
   configs: readonly ReviewConfig[];
@@ -74,15 +72,15 @@ interface Props {
 
 export function ControlBar(props: Props) {
   return (
-    <div class={cls(styles.bar)}>
-      <div class={cls(styles.group)}>
+    <div class={css(styles.bar)}>
+      <div class={css(styles.group)}>
         <For each={props.configs}>
           {(config, index) => {
             const shortcut = () => keyForConfigIndex(index());
             return (
               <button
                 type="button"
-                class={cls(styles.button, index() === props.activeIndex && styles.active)}
+                class={css(styles.button, index() === props.activeIndex && styles.active)}
                 aria-pressed={index() === props.activeIndex}
                 // The real ARIA spelling of what the `<kbd>` shows, so the shortcut
                 // is announced as a shortcut rather than read as part of the name.
@@ -95,7 +93,7 @@ export function ControlBar(props: Props) {
                     a keystroke that does not exist — so render none. */}
                 <Show when={shortcut()}>
                   {(key) => (
-                    <kbd class={cls(styles.key)} aria-hidden="true">
+                    <kbd class={css(styles.key)} aria-hidden="true">
                       {key()}
                     </kbd>
                   )}
@@ -106,12 +104,12 @@ export function ControlBar(props: Props) {
         </For>
       </div>
 
-      <div class={cls(styles.group, styles.spacer)}>
+      <div class={css(styles.group, styles.spacer)}>
         <For each={["fullsize", "fit"] as const}>
           {(mode) => (
             <button
               type="button"
-              class={cls(styles.button, props.zoom === mode && styles.active)}
+              class={css(styles.button, props.zoom === mode && styles.active)}
               aria-pressed={props.zoom === mode}
               aria-keyshortcuts="f"
               title={`Show images at ${mode === "fit" ? "fit" : "natural"} size (f toggles)`}
@@ -121,7 +119,7 @@ export function ControlBar(props: Props) {
             </button>
           )}
         </For>
-        <kbd class={cls(styles.hint)} aria-hidden="true">
+        <kbd class={css(styles.hint)} aria-hidden="true">
           f
         </kbd>
       </div>

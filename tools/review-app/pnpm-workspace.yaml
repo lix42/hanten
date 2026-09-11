@@ -1,3 +1,9 @@
+# Panda bundles `panda.config.ts` with esbuild, whose install script pnpm 11
+# will not run until it is decided here. Left undecided, pnpm writes a
+# placeholder into this file and exits 1 — including on the `pnpm install` that
+# `vp check` runs for itself, so the gate fails before it starts.
+allowBuilds:
+  esbuild: true
 minimumReleaseAgeExclude:
   - "@tanstack/history@1.162.3"
   - "@tanstack/router-core@1.171.29"

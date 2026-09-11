@@ -11,13 +11,10 @@ export const Route = createRootRoute({
     ],
     // Stylesheets go through `head` rather than a `<link>` in the shell below:
     // the shell renders server-side only, so an asset referenced from it is
-    // never emitted into the client build. A build appends StyleX's compiled
-    // rules to `index.css`; in dev they come from the plugin's virtual
-    // stylesheet instead, which `StyleXDevRuntime` keeps up to date.
-    links: [
-      { rel: "stylesheet", href: indexCss },
-      ...(import.meta.env.DEV ? [{ rel: "stylesheet", href: "/virtual:stylex.css" }] : []),
-    ],
+    // never emitted into the client build. `index.css` is the whole stylesheet
+    // in both modes — Panda's PostCSS plugin substitutes the generated rules
+    // into it as Vite processes it, so there is no dev-only half to link.
+    links: [{ rel: "stylesheet", href: indexCss }],
   }),
   shellComponent: RootComponent,
 });
