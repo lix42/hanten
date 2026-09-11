@@ -40,7 +40,7 @@ same way.
 ## What has shipped
 
 The **viewer** half landed 2026-09-02 as `tools/review-app/` and became fullstack on
-2026-09-10 (TanStack Start on Vite+ / Solid / StyleX, its own CI job, dev-server only). It
+2026-09-10 (TanStack Start on Vite+ / Solid / Panda CSS, its own CI job, dev-server only). It
 reads a `review.json` — the format is `tools/review-app/SCHEMA.md` — and renders every
 configuration of a frame into one grid cell, so switching between them cannot move the
 picture; `fullsize` has pan controls and a mini-map. The server is pointed at the set by path

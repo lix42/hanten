@@ -8,23 +8,24 @@
   "author": "",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/dev.mjs",
-    "build": "vp build",
+    "prepare": "panda codegen",
+    "dev": "panda codegen && node scripts/dev.mjs",
+    "build": "panda codegen && vp build",
     "preview": "vp preview",
     "test": "vp test run",
-    "check": "vp check",
-    "fix": "vp check --fix",
-    "verify": "vp check && vp test run && vp build"
+    "check": "panda codegen && vp check",
+    "fix": "panda codegen && vp check --fix",
+    "verify": "pnpm check && pnpm test && pnpm build"
   },
   "dependencies": {
-    "@stylexjs/stylex": "^0.19.0",
     "@tanstack/solid-router": "1.170.32",
     "@tanstack/solid-start": "1.168.49",
     "solid-js": "^1.9.15"
   },
   "devDependencies": {
-    "@stylexjs/unplugin": "^0.19.0",
+    "@pandacss/dev": "^1.12.1",
     "@types/node": "^26.4.1",
+    "postcss": "^8.5.28",
     "typescript": "^7.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
     "vite-plugin-solid": "^2.11.14",

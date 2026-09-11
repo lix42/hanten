@@ -1114,7 +1114,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   comparing rendering configurations by eye: one entry point, the matrix as data rather than
   code, HDR review for the frames whose range exceeds SDR, and build-vs-build comparison.
   **Viewer half shipped 2026-09-02**, fullstack since 2026-09-10 (`tools/review-app/`,
-  TanStack Start on Vite+ / Solid / StyleX): the `review.json` format settles "matrix as
+  TanStack Start on Vite+ / Solid / Panda CSS): the `review.json` format settles "matrix as
   data", switching config cannot move the picture because every rendition shares one grid
   cell, and the server takes the set by path and watches it, so re-running `nc` updates the
   page. Still open: the **generator** that renders a matrix and emits the JSON, HDR review,
