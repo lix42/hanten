@@ -13,6 +13,15 @@ changed" well and "what does that look like" not at all.
   2026-09-03) writes a per-image record — endpoint occupancy, tone in log2 stops,
   colour in CIELAB — and a per-roll rollup with a spread table. That is the data
   source; this task does not add measurements.
+  **Two things changed under it on 2026-09-11 (`schema_version` 2) and both matter
+  here.** `tone.histogram` arrived: four series (luminance, R, G, B) of 100 counts
+  each, one per L\* unit from black to diffuse white — the first drawable field in
+  any of these records, and it was added for this task. And the tone bands were
+  re-cut in the same L\* domain, so **every band edge falls exactly on a histogram
+  bin edge**: bands and bars share one axis and can be drawn together without
+  interpolating. The re-cut is also what makes item 3 below worth drawing at all —
+  on the old stops-even edges one band held a median 83% of a frame, so a stacked
+  bar was one block.
 - **`tools/review-app`** (`analysis/comparison-review-tooling`, viewer half
   shipped on `main` 2026-09-02, fullstack since 2026-09-10; TanStack Start on
   Vite+ / Solid / Panda CSS) compares configs by toggling renditions **in place**:
@@ -42,7 +51,9 @@ Ranked by value, with the reasoning, because the ordering is the useful part:
 2. **`cast_by_tone_band` as a path on the a\*/b\* plane**, one point per band
    joined in tone order. The shape of that path is crossover: a tight cluster is
    clean, a long diagonal sweep is not. As a bar chart the same data is nearly
-   unreadable.
+   unreadable. Seven bands since 2026-09-11, and a band holding under 0.1% of
+   the region is flagged `sparse`: its point must not be drawn with the same
+   weight as one from a band holding half the frame.
 3. **`bands` as a stacked bar** — redundant with (1) for a single image, but the
    right way to show a whole roll at once, one bar per frame.
 4. **`endpoints` as a small per-channel bar.** Unglamorous, but it is the closest

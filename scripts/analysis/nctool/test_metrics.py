@@ -1372,5 +1372,249 @@ class Rollup(unittest.TestCase):
         self.assertEqual(pair["cast"]["median"], 2.0)
 
 
+class BandCut(unittest.TestCase):
+    """The tone-band edges, which moved in schema 2 from stops to lightness."""
+
+    def test_edges_are_equal_steps_of_lightness(self):
+        """The cut's defining property, and why it replaced the old one.
+
+        Edges even in *stops* are uneven in anything a viewer sees: the previous
+        cut ran 2.00 / 4.00 / 0.47 stops wide and its `mid` band held 83% of the
+        median real frame. Equal steps of L* narrow going up.
+        """
+        self.assertEqual(metrics.BAND_LSTAR_EDGES,
+                         (15.0, 30.0, 45.0, 60.0, 75.0, 100.0))
+        interior = list(metrics.BAND_EDGES)[1:-1]
+        self.assertEqual(len(interior), len(metrics.BAND_NAMES) - 1)
+        widths = [b - a for a, b in zip(interior, interior[1:])]
+        # Only the four bands between equal lightness steps must narrow; the top
+        # one is bounded by diffuse white, not by a step, so it is wider again.
+        self.assertEqual(widths[:4], sorted(widths[:4], reverse=True))
+        self.assertGreater(widths[4], widths[3])
+
+    def test_edges_are_derived_from_lightness_not_transcribed(self):
+        """A transcribed copy would drift from `BAND_LSTAR_EDGES` silently."""
+        for lstar, stops in zip(metrics.BAND_LSTAR_EDGES,
+                                list(metrics.BAND_EDGES)[1:-1]):
+            self.assertAlmostEqual(metrics.stops_of_lstar(lstar), stops, places=12)
+
+    def test_the_top_edge_is_diffuse_white(self):
+        """L* 100 is diffuse white by definition, so the overflow band's edge and
+        `DIFFUSE_WHITE_STOPS` must be the same number, not merely close."""
+        self.assertAlmostEqual(metrics.stops_of_lstar(metrics.DIFFUSE_WHITE_LSTAR),
+                               metrics.DIFFUSE_WHITE_STOPS, places=12)
+
+    def test_the_lstar_arms_meet_at_the_knee(self):
+        """A mismatched knee puts a step in the middle of the deep-shadow band."""
+        self.assertAlmostEqual(metrics.luminance_of_lstar(metrics.LSTAR_KNEE),
+                               metrics.LSTAR_KNEE_LUMINANCE, places=15)
+        self.assertAlmostEqual(((metrics.LSTAR_KNEE + 16.0) / 116.0) ** 3,
+                               metrics.LSTAR_KNEE / metrics.LSTAR_LINEAR_SLOPE,
+                               places=15)
+
+    def test_mid_grey_lands_in_the_mid_band(self):
+        """The anchor everything else is stated against has to be inside the band
+        named for it, or `mid` means something other than midtones."""
+        edges = list(metrics.BAND_EDGES)
+        index = metrics.BAND_NAMES.index("mid")
+        self.assertLess(edges[index], 0.0)
+        self.assertGreater(edges[index + 1], 0.0)
+
+    def test_described_in_the_record_it_applies_to(self):
+        described = metrics.describe_bands()
+        self.assertEqual(described["names"], list(metrics.BAND_NAMES))
+        self.assertEqual(described["lstar_edges"], list(metrics.BAND_LSTAR_EDGES))
+        self.assertEqual(described["domain"], "cielab_lstar")
+
+
+@needs_deps
+class Sparsity(unittest.TestCase):
+    """A band's cast has to carry its own denominator.
+
+    On the old cut the largest colour excursion in one measured record was the
+    colour of a single pixel out of 15.1 million, with nothing beside it to say so.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _frame(self, name: str, highlight_pixels: int):
+        """A mid-grey frame with a measured number of pixels in `highlight`."""
+        mid = metrics.luminance_of_lstar(50.0)
+        high = metrics.luminance_of_lstar(85.0)
+        array = np.full((100, 100, 3), mid, dtype=np.float32)
+        flat = array.reshape(-1, 3)
+        flat[:highlight_pixels, 0] = high
+        flat[:highlight_pixels, 1] = high * 0.8      # a cast, so mean_a/b are not 0
+        flat[:highlight_pixels, 2] = high
+        return metrics.measure(write_tiff(self.dir, name, array),
+                               "linear-srgb", digest=False)
+
+    def test_a_band_below_the_threshold_is_marked_sparse(self):
+        bands = self._frame("sparse.tif", 5)["color"]["cast_by_tone_band"]
+        self.assertEqual(bands["highlight"]["pixels"], 5)
+        self.assertTrue(bands["highlight"]["sparse"])
+        self.assertFalse(bands["mid"]["sparse"])
+
+    def test_a_band_above_the_threshold_is_not(self):
+        """The falsifiable half: without it the flag could be hardcoded true."""
+        bands = self._frame("dense.tif", 500)["color"]["cast_by_tone_band"]
+        self.assertEqual(bands["highlight"]["pixels"], 500)
+        self.assertFalse(bands["highlight"]["sparse"])
+
+    def test_a_sparse_band_keeps_its_entry(self):
+        """Dropped entries would make the band set vary frame to frame, and a
+        record whose keys move cannot be diffed against another frame's."""
+        bands = self._frame("kept.tif", 5)["color"]["cast_by_tone_band"]
+        self.assertIn("highlight", bands)
+        self.assertNotEqual(bands["highlight"]["mean_b"], 0.0)
+
+    def test_crossover_is_withheld_when_a_contributing_band_is_sparse(self):
+        record = dict(color=dict(cast_by_tone_band=dict(
+            shadow=dict(mean_a=1.0, mean_b=-8.0, sparse=True, fraction=0.0001),
+            mid=dict(mean_a=2.5, mean_b=4.0, sparse=False, fraction=0.5))))
+        self.assertNotIn("crossover_a", metrics.frame_axes(record))
+        record["color"]["cast_by_tone_band"]["shadow"]["sparse"] = False
+        self.assertIn("crossover_a", metrics.frame_axes(record))
+
+
+@needs_deps
+class Histogram(unittest.TestCase):
+    """The record's one list-valued field: level distributions binned in L*."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _histogram(self, array, name="hist.tif", space="linear-srgb"):
+        record = metrics.measure(write_tiff(self.dir, name, array), space,
+                                 digest=False)
+        return record["tone"]["histogram"], record
+
+    def test_every_pixel_is_accounted_for_in_every_series(self):
+        """The partition claim, and the reason the three counters exist: a sample
+        with no lightness must be counted, not folded onto black."""
+        array = np.full((10, 10, 3), 0.18, dtype=np.float32)
+        array[0, :, :] = np.nan
+        array[1, :, :] = 0.0
+        histogram, _ = self._histogram(array, "account.tif")
+        for name, series in histogram["series"].items():
+            total = (sum(series["counts"]) + series["above_diffuse_white"]
+                     + series["non_positive"] + series["non_finite"])
+            self.assertEqual(total, histogram["pixels"], name)
+            self.assertEqual(series["non_finite"], 10, name)
+            self.assertEqual(series["non_positive"], 10, name)
+
+    def test_a_known_lightness_lands_in_its_own_bin(self):
+        value = metrics.luminance_of_lstar(50.5)
+        array = np.full((8, 8, 3), value, dtype=np.float32)
+        histogram, _ = self._histogram(array, "known.tif")
+        counts = histogram["series"]["luminance"]["counts"]
+        self.assertEqual(counts[50], 64)
+        self.assertEqual(sum(counts), 64)
+
+    def test_bins_align_with_the_band_edges(self):
+        """The reason the bins are L* and not stops: a band is a whole number of
+        bins, so a chart can shade the bands over the bars without interpolating.
+        """
+        rng = np.random.default_rng(20260911)
+        array = rng.random((64, 64, 3), dtype=np.float32)
+        histogram, record = self._histogram(array, "align.tif")
+        counts = histogram["series"]["luminance"]["counts"]
+        edges = [0] + [int(edge) for edge in metrics.BAND_LSTAR_EDGES]
+        for index, name in enumerate(metrics.BAND_NAMES[:-1]):
+            low, high = edges[index], edges[index + 1]
+            share = sum(counts[low:high]) / histogram["pixels"]
+            self.assertAlmostEqual(share, record["tone"]["bands"][name],
+                                   places=4, msg=name)
+
+    def test_above_diffuse_white_is_counted_not_binned(self):
+        """A float file's headroom has nowhere to go in a 0..100 axis, and
+        clamping it into the top bin would invent display-white pixels."""
+        array = np.full((8, 8, 3), 2.0, dtype=np.float32)
+        histogram, record = self._histogram(array, "over.tif")
+        series = histogram["series"]["luminance"]
+        self.assertEqual(sum(series["counts"]), 0)
+        self.assertEqual(series["above_diffuse_white"], 64)
+        self.assertEqual(record["tone"]["bands"]["above_diffuse_white"], 1.0)
+
+    def test_the_channel_series_separate_a_cast(self):
+        """What the per-channel split is for: a cast is a shape here, where
+        `color.balance_stops` reduces it to one number per channel."""
+        array = np.zeros((16, 16, 3), dtype=np.float32)
+        array[..., 0] = metrics.luminance_of_lstar(40.5)
+        array[..., 1] = metrics.luminance_of_lstar(50.5)
+        array[..., 2] = metrics.luminance_of_lstar(70.5)
+        histogram, _ = self._histogram(array, "cast.tif")
+        peaks = {name: histogram["series"][name]["counts"].index(256)
+                 for name in ("r", "g", "b")}
+        self.assertEqual(peaks, {"r": 40, "g": 50, "b": 70})
+
+    def test_the_record_states_its_own_bin_definition(self):
+        histogram, _ = self._histogram(
+            np.full((4, 4, 3), 0.18, dtype=np.float32), "states.tif")
+        self.assertEqual(histogram["domain"], "cielab_lstar")
+        self.assertEqual(histogram["bins"], metrics.HISTOGRAM_BINS)
+        self.assertEqual(histogram["lstar_range"],
+                         [0.0, metrics.DIFFUSE_WHITE_LSTAR])
+        self.assertEqual(len(histogram["series"]["luminance"]["counts"]),
+                         metrics.HISTOGRAM_BINS)
+
+    def test_the_block_size_cannot_change_the_answer(self):
+        """The histogram streams in row blocks; a block-boundary bug would show
+        up only as slightly wrong counts, which nothing else would catch."""
+        rng = np.random.default_rng(4)
+        array = rng.random((70, 12, 3), dtype=np.float32)
+        path = write_tiff(self.dir, "blocks.tif", array)
+        original = metrics.BLOCK_ROWS
+        try:
+            metrics.BLOCK_ROWS = 7
+            small = metrics.measure(path, "linear-srgb", digest=False)
+            metrics.BLOCK_ROWS = 4096
+            large = metrics.measure(path, "linear-srgb", digest=False)
+        finally:
+            metrics.BLOCK_ROWS = original
+        self.assertEqual(small["tone"]["histogram"], large["tone"]["histogram"])
+
+
+class SchemaVersion(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_table_refuses_a_record_from_an_older_schema(self):
+        """Schema 1 cut the bands on stops-even edges, so its `deep_shadow` means
+        "below -4 stops" where this build's means "below L* 15". Every column
+        label still fits, which is exactly why this has to be refused rather
+        than rendered.
+        """
+        path = self.dir / "old.json"
+        path.write_text(json.dumps(dict(
+            schema_version=1, kind="nctool-roll-metrics", roll="R",
+            frames=[], spread={})), encoding="utf-8")
+        error = io.StringIO()
+        with redirect_stderr(error):
+            code = metrics.cmd_table(
+                type("A", (), dict(record=str(path), out=None))())
+        self.assertEqual(code, 2)
+        self.assertIn("schema 1", error.getvalue())
+
+    def test_table_renders_a_current_record(self):
+        """The falsifiable half: the refusal above must be about the version."""
+        path = self.dir / "new.json"
+        path.write_text(json.dumps(dict(
+            schema_version=metrics.SCHEMA, kind="nctool-roll-metrics", roll="R",
+            frames=[], spread={})), encoding="utf-8")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = metrics.cmd_table(
+                type("A", (), dict(record=str(path), out=None))())
+        self.assertEqual(code, 0)
+        self.assertIn("# R", out.getvalue())
+
 if __name__ == "__main__":
     unittest.main()
