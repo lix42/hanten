@@ -88,4 +88,5 @@ These are measured, and each one killed a simpler design:
   registry and the aim tables the derived scale reads.
 - [Activate the reconstruction / render split as the default](split-default-migration.md) —
   owns the default migration this task's last step performs; read its blocker note first
-  (the no-stock path is still owned by `film-base/dmax-per-channel-reduction`).
+  (since 2026-09-10 the gate is the green residual, `io/scanner-density-calibration`, not
+  `film-base/dmax-per-channel-reduction`).

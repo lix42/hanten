@@ -46,7 +46,8 @@ What other epics need to know about `algo`:
   without breaking `film-master`), and **`sigmoid-knees` takes its brightness from the
   anchor rather than `print_exposure`**, because `--display-tone none` refuses any scalar
   gain applied after a bounded curve. `characteristic-generic` becoming the default is the
-  `algo/split-default-migration` step, whose no-stock blocker is still open.
+  `algo/split-default-migration` step. Its no-stock blocker was **lifted 2026-09-10**; what
+  gates it now is the green residual (`io/scanner-density-calibration`).
 - **The characteristic curve's wiring is pinned, and a fingerprint row over it is a
   harder bar than that pin** (`algo/characteristic-curve-coverage`, 2026-09-10). Four
   property tests run the real `algo::reconstruct` over a synthesized scan, plus a golden
@@ -117,9 +118,10 @@ What other epics need to know about `algo`:
   keep the density conversion, contrast and anchor and shed **both knees**, with the character
   supplied by the display operator. Consequences other epics must key on: the shipped default
   is **unchanged** and still the shouldered sigmoid, so anything describing what nc renders
-  today is still correct; activation is `algo/split-default-migration`, which is blocked on
-  `film-base/dmax-per-channel-reduction` because the shoulder hides a 17-83% off-neutral
-  channel error on the grey leader. `film-master` needs no work — its contract is the
+  today is still correct; activation is `algo/split-default-migration`, which since **2026-09-10** is gated on the
+  green residual (`io/scanner-density-calibration`) rather than on
+  `film-base/dmax-per-channel-reduction` — the grey leader those 17-83% channel ratios were
+  read off is disqualified as a per-channel source. `film-master` needs no work — its contract is the
   configured reconstruction, not a curve shape. And the **anchor is a pure gain exactly when
   the shoulder is off** (`anchor_is_a_pure_gain_only_without_the_shoulder`), which is what
   lets a matched-exposure probe solve a scalar instead of re-rendering; under the shipped

@@ -129,8 +129,10 @@ calibration`, and the note above already says not to migrate before it is unders
 
 - A `pipeline_version` bump with its own `PIPELINE_FINGERPRINTS` row, and a
   before/after report under `docs/reports/`.
-- Neutrality checked on the leader for each stock, since that is the thing the old
-  default was hiding.
+- Neutrality checked against a **known-neutral reference, not the leader** — a leader
+  cannot separate a non-neutral exposure from a scanner-slope error (see the blocker note),
+  so it can neither accept nor reject this migration. The reference is the calibration frame
+  `io/scanner-density-calibration` needs.
 - `docs/using-nc.md` updated by running the binary, not by reading the diff.
 
 ## Dependencies
@@ -142,3 +144,7 @@ calibration`, and the note above already says not to migrate before it is unders
   `algo::reconstruct` plus a 1-ULP golden, so the default can move onto pinned wiring.
   The `PIPELINE_FINGERPRINTS` row was deliberately left to this task; see the
   portability note under *Known vs unknown* before writing one
+- [Scanner density calibration](../io/scanner-density-calibration.md) — the green residual
+  that replaced the per-channel blocker. Encoded as an edge on 2026-09-10: the "do not
+  migrate before it is understood" note had been prose only, so the graph said this task was
+  executable without it

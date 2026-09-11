@@ -329,6 +329,7 @@ graph TD
   algo/reference-anchored-sigmoid --> algo/reconstruction-render-curve-split
   color/film-master-render-pipeline --> algo/reconstruction-render-curve-split
   algo/reconstruction-render-curve-split --> algo/split-default-migration
+  io/scanner-density-calibration --> algo/split-default-migration
   algo/reference-anchored-sigmoid --> algo/sigmoid-parameter-calibration
   algo/film-stock-profiles --> algo/conversion-presets
   algo/film-stock-profiles --> algo/characteristic-curve-coverage
@@ -598,7 +599,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   a preset does not set `output.preset`, and the non-display presets keep resolving their
   own tone and exposure.
 - `algo/split-default-migration` (post-MVP): `algo/reconstruction-render-curve-split`,
-  `algo/conversion-presets`, `algo/characteristic-curve-coverage`
+  `algo/conversion-presets`, `algo/characteristic-curve-coverage`,
+  `io/scanner-density-calibration`
   — filed 2026-09-02 out of `algo/reconstruction-render-curve-split`, which reached a positive
   verdict but deliberately excluded the default migration. It depended on
   `film-base/dmax-per-channel-reduction` until **2026-09-10**: the edge existed because the

@@ -247,6 +247,11 @@ The user's objection recorded below is unaffected and still the crux of whether 
 What gates that migration now is the green residual, which no per-channel scale removes:
 `io/scanner-density-calibration`.
 
+**The `Design` questions and `How to Verify` above are superseded by this entry.** Both are
+built on leader measurements — per-channel leader anchors, same-stock leader ratios — and are
+no longer a valid route to a verdict. They are left in place as the record of why the leader
+was tried; do not work them as written.
+
 This does **not** close this task. What remains is the per-channel pair for the *parametric*
 path (`sigmoid`/`exponential` with no stock named) — where the `scale` half ships and the
 `offset` half does not — and whether a roll-scoped measurement can source either. That work
