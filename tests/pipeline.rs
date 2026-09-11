@@ -9784,6 +9784,98 @@ fn the_characteristic_curve_renders_and_reports_its_stock_provenance() {
     assert!(out.exists());
 }
 
+/// A frame rendered mostly off the published table says so, and `--strict` refuses it.
+///
+/// The characteristic curve extrapolates along the end slope rather than clamping, which
+/// keeps out-of-range samples ordered and finite — but extrapolated is not measured, so a
+/// frame leaning on it has to announce that. `algo/characteristic-curve-coverage`: the
+/// fractions and this warning were the one part of the curve's output that nothing
+/// asserted, though they reach the report, the console and `--strict`.
+///
+/// The fixture is the IR-free one on purpose: `hdri-64bit.tif` emits "IR preserved but not
+/// used" on every frame, so a `--strict` run there exits non-zero whatever this warning
+/// does. The off-table base below also avoids clipping, so the strict failure counts
+/// exactly one warning — this one.
+#[test]
+fn an_off_table_characteristic_render_warns_and_is_strict_promotable() {
+    let dir = TempDir::new("characteristic-out-of-table");
+    let convert = |base: &str, out: &str, extra: &[&str]| {
+        let mut args = vec![
+            "convert",
+            "tests/fixtures/hdr-48bit.tif",
+            "-o",
+            out,
+            "--film-base",
+            base,
+            "--density-curve",
+            "characteristic",
+            "--film-stock",
+            "portra-400",
+            "--report",
+            "json",
+        ];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+    // A film base far below the scan's own drives every red sample under the table.
+    const OFF_TABLE: &str = "0.05,0.05,0.05";
+
+    let warned = dir.path("warned.tif");
+    let (code, stdout, err) = convert(OFF_TABLE, warned.to_str().unwrap(), &[]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let warnings = report["warnings"].as_array().expect("a warnings array");
+    let warning = warnings
+        .iter()
+        .find(|w| {
+            w.as_str()
+                .unwrap()
+                .contains("published characteristic curve")
+        })
+        .unwrap_or_else(|| panic!("no out-of-table warning in {warnings:?}"));
+    let warning = warning.as_str().unwrap();
+    assert!(warning.contains("100.00%"), "{warning}");
+    assert!(warning.contains("extrapolated"), "{warning}");
+    // The per-channel figures the diagnosis needs, not just the worst one.
+    assert!(warning.contains("below: 100.00/63.30/10.97%"), "{warning}");
+    // The raw fraction rides through beside the rendered percentage (0.99998707 here —
+    // a handful of red samples do land on the table), so a reader can act on the number
+    // rather than re-parsing the sentence.
+    assert!(
+        report["reconstruction_result"]["curve"]["out_of_table"]["below"][0]
+            .as_f64()
+            .unwrap()
+            > 0.999
+    );
+
+    // Strict promotes it, and this frame raises nothing else — so the count proves it is
+    // *this* warning being promoted rather than a coincident one.
+    let strict = dir.path("strict.tif");
+    let (code, _, err) = convert(OFF_TABLE, strict.to_str().unwrap(), &["--strict"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("--strict: 1 warning(s) present"), "{err}");
+    assert!(err.contains("published characteristic curve"), "{err}");
+
+    // The control, so the assertions above are falsifiable: a sane base on the same frame
+    // reads entirely inside the table and raises no such warning.
+    let control = dir.path("control.tif");
+    let (code, stdout, err) = convert("0.5,0.25,0.15", control.to_str().unwrap(), &[]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert_eq!(
+        report["reconstruction_result"]["curve"]["out_of_table"],
+        serde_json::json!({"below": [0.0, 0.0, 0.0], "above": [0.0, 0.0, 0.0]})
+    );
+    for w in report["warnings"].as_array().into_iter().flatten() {
+        assert!(
+            !w.as_str()
+                .unwrap()
+                .contains("published characteristic curve"),
+            "{w}"
+        );
+    }
+}
+
 /// The emitted recipe replays the render bit-for-bit — the determinism contract, and the
 /// only thing that proves the wire spelling of a new knob actually round-trips.
 #[test]

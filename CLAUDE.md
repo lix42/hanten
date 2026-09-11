@@ -533,11 +533,20 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   **count**, not the word: `0 passed` is how you learn an inserted test never landed, or
   that you filtered on a name that does not exist. Twice in one session an edit silently
   failed to apply and the filtered run reported `ok`.
+- **`cargo test --lib` fails here** — `nc` is a binary crate with no `[lib]` target, so it
+  errors with "no library targets found". Use `cargo test --bin nc <filter>` to run only
+  the in-`src` unit tests; a bare `cargo test <filter>` also runs `tests/pipeline.rs`.
 - `cargo clippy --all-targets` — lint (keep clean)
 - **Before pushing, match CI** (`.github/workflows/ci.yml`, runs on every PR):
   `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings` →
   `cargo build` → the `scripts/analysis` unittest command below → `cargo test`.
   The gate is strict — warnings fail the build.
+- **Match CI's *toolchain*, not just its commands.** CI resolves
+  `dtolnay/rust-toolchain@stable` fresh on every run, so it can be several releases
+  ahead of the local one and a green local clippy then proves nothing. This has
+  already cost a red PR: local 1.94 against CI 1.98, where `chunks_exact_to_as_chunks`
+  — a lint that did not exist locally — failed both jobs on new code. `rustup check`
+  before pushing; `rustup update stable` when it is behind.
 - **The gate sequence does not include `cargo doc`, so broken intra-doc links are
   invisible to all of it.** A rename that splits a documented item (`bounds_output` →
   `bounds_sdr_output`/`bounds_hdr_output`) leaves every `[\`Self::bounds_output\`]` link
@@ -563,7 +572,10 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   installs them; locally, a `.venv`). The import is lazy, so every other command still runs
   without them — which is exactly why its tests `skipUnless` the packages are
   importable, and why `NCTOOL_REQUIRE_DEPS=1` exists to turn a forgotten install
-  into a failure instead of ~29 silent skips under a green `ok`.
+  into a failure instead of ~29 silent skips under a green `ok`. A fresh worktree has no
+  `.venv` (it is gitignored, so it does not come with the checkout):
+  `python3 -m venv .venv && .venv/bin/pip install -r scripts/analysis/requirements.txt`,
+  then run the gate with `.venv/bin/python` in place of `python3`.
 - **`tests/pipeline.rs`'s `run()` injects `--output-preset legacy`** into a
   `convert` that names no preset, loads no `--params`, and writes `.tif`/`.tiff` —
   ~87 tests predate the gain-map default and assert TIFF-path behaviour. A test
@@ -581,6 +593,42 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   vectors in `pipeline::stages::golden` (captured from the reference code) — those
   specific values happen to agree across libm; never checksum a full frame, an
   encoded file, or post-lcms2 (color-transformed) pixels in a cross-platform gate.
+  **When a value cannot be pinned bit-exactly, bound it by enumeration, never by
+  inferring agreement from a rounding margin.** Two designs tried the inference here
+  and both were unsound. Sizing a "safe" threshold as `E − 0.5` from a published
+  error bound fails because a bound published for one function does not transfer to
+  another — glibc documents `powf` at 0.52 ULP, documents nothing useful for
+  `log10f`, and Apple documents neither; x86_64 and macOS were then observed
+  returning **different** `log10f` results at a margin twenty times the threshold
+  that called the sample safe. And do not try to derive such a threshold from
+  "computed in double then rounded": that gives `~2^-27` ULP, seven orders tighter
+  than the `2^-5` an attempt here produced by converting one quantity to a relative
+  error twice.
+  What works is `stages::golden::reachable_window`: render every intermediate a
+  1-ULP-accurate libm can return (`x.next_down()`, `x`, `x.next_up()` around the
+  correctly-rounded value), take the widest excursion, and add one ULP for the final
+  call. Any conforming target is inside it by construction, and the cost is nil —
+  9 of 15 samples still come out at 1 ULP, the worst at 63, against ~10^5 ULPs for
+  the smallest real fault. Four supporting rules:
+  - **Cover *every* libm call in the chain, not the last one.** That curve makes
+    two (`log10` in `to_density`, `10^` in the curve), and a first version measured
+    only the second while reading as if it covered the chain.
+  - **Assert conformance, never correct rounding.** Requiring the host's libm to
+    equal the f64-rounded value asserts the host rounds correctly — the exact thing
+    that varies, and it red x86_64. Assert it is within 1 ULP, and derive everything
+    else from the rounded value so the numbers describe the values rather than the
+    machine measuring them.
+  - **Expect upstream error to be amplified.** A 1-ULP density difference reaches
+    the pixel multiplied by `ln(10)·d·(1/γ_local)` — 62 ULPs on that vector. Measure
+    it by perturbing and re-rendering; the closed form under-predicts by up to 2x,
+    because the intermediate is itself an f32 and the step quantizes.
+  - **Model the stage exactly as written.** Its f32 division must happen in f32
+    before the f64 `log10` (dividing in f64 put the reference 5 ULPs out), and an
+    identity gain/offset still cannot be dropped — `+ offset` is what turns the
+    film-base pixel's `-0.0` into the `+0.0` actually stored.
+  The **drift gate cannot use any of this**: it hashes raw f32 bits, so it has no
+  window at all and a sample whose render differs across targets must be designed
+  out of the vector before it enters `PIPELINE_FINGERPRINTS`.
   Note what `golden` therefore does **not** cover: `assert_golden` pins
   `reconstruct_and_print`, i.e. **pre**-color-transform pixels. Nothing committed
   guards `color::to_output`'s output across targets, so a change there is verified
@@ -640,7 +688,10 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   verifies install + auth but **not** reviewer-model support — if a review 400s
   with "model ... requires a newer version of Codex," upgrade the Codex CLI or
   switch its default model (the reviewer picks the model, and a review routed
-  through `/codex:rescue` is *not* tracked by `/codex:status`).
+  through `/codex:rescue` is *not* tracked by `/codex:status`). **A failed review still
+  exits 0** — a spend-cap or auth failure prints `Codex error: …` and `Reviewer failed to
+  output a response`, then returns success, so judge it by the output and never by the
+  exit status.
 
 ## Conventions
 

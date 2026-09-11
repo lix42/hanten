@@ -1365,9 +1365,10 @@ mod midtone_placement {
 #[cfg(test)]
 pub(crate) mod golden {
     use super::*;
+    use crate::algo::film_stock::{OutOfTable, curves_for, invert};
     use crate::types::{
-        AnchorPlacement, BalanceRange, DensityCurve, DensityParams, DmaxSource, ExponentialParams,
-        SigmoidParams, WbSource,
+        AnchorPlacement, BalanceRange, CharacteristicParams, DensityCurve, DensityCurveType,
+        DensityParams, DmaxSource, ExponentialParams, SigmoidParams, WbSource,
     };
 
     /// Five pixels spanning the tonal range plus out-of-range finite values,
@@ -1794,6 +1795,284 @@ pub(crate) mod golden {
             Some(0x3fc00000), // 1.5
             Some([0x3f800000, 0x3f866666, 0x3f8ccccd]),
             Some([0x3e4ccccd, 0x3fcccccd]),
+        );
+    }
+
+    // --- the characteristic curve -------------------------------------------
+    //
+    // `algo/characteristic-curve-coverage`. Its tables are well covered in
+    // `algo::film_stock::tests`, and the full chain's *properties* are pinned there too.
+    // What follows is the bit-level half: captured numbers the code is measured against,
+    // plus the argument for why they are portable.
+
+    /// The reconstruction the two tests below measure: the default stock's published
+    /// curve, with the identity gain this curve resolves for itself.
+    ///
+    /// The gain comes from its single definition rather than being restated — pairing
+    /// `characteristic` with `DensityParams::default()`'s parametric calibration would
+    /// correct the stock's own per-channel structure a second time, which is the trap
+    /// `default_scale_for` exists to close.
+    fn characteristic_config() -> Reconstruction {
+        Reconstruction::Density {
+            density: DensityParams {
+                scale: DensityParams::default_scale_for(DensityCurveType::Characteristic),
+                ..DensityParams::default()
+            },
+            curve: DensityCurve::Characteristic(CharacteristicParams::default()),
+        }
+    }
+
+    /// The captured `reconstruct_and_print` result for [`characteristic_config`] over
+    /// [`pixels`] / [`base`], as raw `f32` bits. All positive, which is what lets the
+    /// golden below subtract bit patterns to measure a drift in ULPs.
+    const CHARACTERISTIC_EXPECTED: [u32; 15] = [
+        0x3c093270, 0x3c1d2b05, 0x3c120c73, // near-base shadow
+        0x3dcb7eb3, 0x3da81c63, 0x3d9e0a6f, // midtone
+        0x418c4e03, 0x4154240c, 0x409ddd62, // dense highlight (red is past the table)
+        0x2cb14e9f, 0x4fd667b8, 0x4b7e2778, // out-of-range finite, extrapolated hard
+        0x3b356c75, 0x3b356c75, 0x3b356c75, // exactly the base
+    ];
+
+    /// ULPs between two finite f32s of the same sign, as a bit-pattern distance.
+    fn ulps_between(a: f32, b: f32) -> i64 {
+        debug_assert!(
+            a.is_finite() && b.is_finite() && a.is_sign_positive() == b.is_sign_positive(),
+            "ULP distance is a bit-pattern distance, so it needs finite same-signed inputs"
+        );
+        (i64::from(a.to_bits()) - i64::from(b.to_bits())).abs()
+    }
+
+    /// The accuracy premise every measurement below rests on: a libm worth shipping is
+    /// within 1 ULP on these functions.
+    ///
+    /// Deliberately the **weak** bound. Both shipped targets are far better, and an
+    /// earlier version of this harness tried to exploit that — classifying a sample
+    /// "safe" when its true value sat further from an f32 rounding boundary than glibc's
+    /// documented `powf` excess (~0.02 ULP). Observation killed it. On x86_64 glibc's
+    /// `log10f` returns a different `f32` from Apple's for **sample 9**, whose margin is
+    /// 0.456 ULP — twenty times the threshold that had called it safe — and for sample 1
+    /// at 0.0153. A published bound for one function does not transfer to another, and
+    /// neither target documents `log10f` at all.
+    ///
+    /// So nothing here infers agreement from a margin. The window is derived by
+    /// enumerating what a conforming libm can actually return.
+    const LIBM_MAX_ERROR_ULPS: i64 = 1;
+
+    /// Sanity ceiling on a derived window. Not a tuning knob — it exists so that a future
+    /// vector landing on a near-vertical stretch of a published curve (`PORTRA_160_B` has
+    /// a segment with `1/γ = 767`) is reported rather than silently granted an enormous
+    /// tolerance.
+    const MAX_REASONABLE_WINDOW_ULPS: i64 = 200;
+
+    /// Every pixel value a conforming libm can produce for one sample, as a window in
+    /// ULPs around the captured value.
+    ///
+    /// **Sound by enumeration, not by argument.** `to_density`'s `log10` may return any
+    /// f32 within [`LIBM_MAX_ERROR_ULPS`] of the correctly-rounded density, so each is
+    /// rendered and the widest excursion taken; the curve's own `10^` may then be off by
+    /// the same again, which is the final term. Any target meeting the premise lands
+    /// inside this, whatever its individual error bounds are and whether or not anyone
+    /// publishes them.
+    ///
+    /// The window is wide where the curve is steep: a 1-ULP density difference is
+    /// amplified by `ln(10)·d·(1/γ_local)`, reaching 62 ULPs on the out-of-range pixel.
+    /// That costs nothing in detection — a real fault moves these pixels by ~10^5 ULPs
+    /// (measured: a `1e-6` nudge to one table literal moves them 115,523).
+    ///
+    /// **It measures the reachable set's own spread, and deliberately never looks at the
+    /// captured value.** A first version measured each render's distance *from the
+    /// capture*, which let a table edit inflate the window by exactly as much as it
+    /// inflated the drift — the golden then passed on a frame whose every pixel had
+    /// moved 115,523 ULPs. A window that depends on the value under test is not a window.
+    /// The falsifiability run is what caught it; nothing else would have.
+    fn reachable_window(table: &[(f32, f32)], rounded_d: f32) -> i64 {
+        let render = |d: f32| {
+            let (log_e, _) = invert(table, d);
+            10f32.powf(log_e)
+        };
+        let centre = render(rounded_d);
+        let widest = [rounded_d.next_down(), rounded_d.next_up()]
+            .into_iter()
+            .map(|d| ulps_between(render(d), centre))
+            .max()
+            .expect("two neighbouring densities");
+        widest + LIBM_MAX_ERROR_ULPS
+    }
+
+    /// The **correctly rounded** corrected density of each sample, computed in f64.
+    ///
+    /// The centre of each sample's window, and target-independent by construction —
+    /// which is the point: the host's own `to_density` output is one of the values a
+    /// conforming libm may return, not the reference.
+    ///
+    /// Stage 1 is written out as the code writes it, and two rounding details bite anyone
+    /// who shortens it. **The ratio is divided in f32 first**: `to_density` takes `log10`
+    /// of the *rounded* f32 quotient, and dividing in f64 instead puts the reference 5
+    /// ULPs out. **And the gain/offset cannot be dropped even at identity** — the
+    /// film-base pixel's ratio is exactly 1, so the negated log is `-0.0`, and it is the
+    /// `+ offset` that normalises the sign to the `+0.0` actually stored.
+    fn correctly_rounded_densities(density: &DensityParams) -> Vec<f32> {
+        let scan = pixels();
+        let film_base = <[f32; 3]>::from(base());
+        scan.rgb
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| {
+                let c = i % 3;
+                let ratio = s.max(crate::algo::density::SCAN_EPSILON) / film_base[c];
+                let exact = f64::from(density.scale[c]) * -f64::from(ratio).log10()
+                    + f64::from(density.offset[c]);
+                exact as f32
+            })
+            .collect()
+    }
+
+    /// The characteristic curve's **wiring**, pinned within a derived per-sample window.
+    ///
+    /// Every other golden here is bit-for-bit. This one cannot be, and the reason is
+    /// measured rather than assumed: the chain evaluates two libm functions per sample —
+    /// `log10` in `to_density` and `10^` in the curve — and the two shipped targets
+    /// **observably disagree** on the first. x86_64's `log10f` returns a different `f32`
+    /// from Apple's on two of these fifteen samples. A bit-exact capture would be green
+    /// on the host that took it and red on the other, which is CLAUDE.md's cross-platform
+    /// rule.
+    ///
+    /// The window is not a chosen tolerance. [`reachable_window`] enumerates every pixel
+    /// a libm meeting [`LIBM_MAX_ERROR_ULPS`] can produce for each sample and takes the
+    /// widest, so this passes on any conforming target by construction rather than by the
+    /// luck of which way a rounding fell. (It was luck, once: the x86_64 disagreement on
+    /// sample 9 happens to fall in the direction the curve flattens, so an earlier
+    /// 1-ULP window passed CI while resting on nothing.)
+    ///
+    /// Nothing is lost as a regression pin. An edited table literal, a permuted channel
+    /// and one table applied across all three each move these values by percent — the
+    /// falsifiability matrix in `docs/progress/algo.md` (2026-09-10) records what each
+    /// perturbation moved, the smallest being ~10^5 ULPs against a worst-case window of
+    /// 63.
+    ///
+    /// One wiring fault it **cannot** see, because this config cannot: stages 1–2 are
+    /// `scale·d + offset`, and at the identity gain and zero offset that this curve
+    /// resolves for itself the transposed spelling is arithmetically the same. That one
+    /// belongs to `algo::film_stock::tests::the_chain_applies_the_density_gain_before_the_offset`,
+    /// which states it with an explicit non-neutral pair. The two halves of this task's
+    /// coverage are complementary by design, not redundant.
+    #[test]
+    fn golden_characteristic_is_correct_within_its_libm_window() {
+        let Reconstruction::Density { density, curve } = characteristic_config() else {
+            unreachable!("the characteristic config is a density reconstruction")
+        };
+        let DensityCurve::Characteristic(params) = curve else {
+            unreachable!("the characteristic config selects the characteristic curve")
+        };
+        let stock = curves_for(params.stock);
+        let rounded = correctly_rounded_densities(&density);
+
+        let (out, report) = reconstruct_and_print(
+            &pixels(),
+            &base(),
+            &characteristic_config(),
+            &PrintParams::default(),
+        )
+        .unwrap();
+        // `zip` below truncates, so the length is asserted rather than assumed.
+        assert_eq!(out.rgb.len(), CHARACTERISTIC_EXPECTED.len());
+
+        for (i, (&want, &got)) in CHARACTERISTIC_EXPECTED
+            .iter()
+            .zip(out.rgb.iter())
+            .enumerate()
+        {
+            let captured = f32::from_bits(want);
+            let window = reachable_window(stock.channels[i % 3], rounded[i]);
+            let drift = ulps_between(got, captured);
+            assert!(
+                drift <= window,
+                "sample {i}: {:08x} is {drift} ULP from the captured {want:08x}, outside \
+                 the {window} ULP any conforming libm can reach",
+                got.to_bits()
+            );
+        }
+
+        // This curve reads its reference and its placement off the film, so both are
+        // absent — the property that makes it self-anchoring, asserted where a curve that
+        // quietly acquired one would be caught.
+        assert_eq!(report.dmax, None);
+        assert_eq!(report.curve_anchor, None);
+        assert_eq!(report.white_balance, Some([1.0, 1.0, 1.0]));
+        assert_eq!(report.balance_range, None);
+        // The extrapolation statistic is part of this render's output, and no other
+        // golden carries one: the dense-highlight red and all three of the out-of-range
+        // pixel's channels fall outside the published table.
+        assert_eq!(
+            report.out_of_table,
+            Some(OutOfTable {
+                below: [0.2, 0.0, 0.0],
+                above: [0.2, 0.2, 0.2],
+            })
+        );
+        assert_eq!(out.ir.as_deref(), Some(&[0.1f32, 0.2, 0.3, 0.4, 0.5][..]));
+    }
+
+    /// The capture is intact and the host is conforming — the two things the golden's
+    /// derived window assumes but cannot check for itself.
+    ///
+    /// It fails if a table literal moves, if the vector changes, if a captured constant
+    /// is edited to something no correctly-rounded evaluation produces, or if a host's
+    /// libm is worse than [`LIBM_MAX_ERROR_ULPS`] — which would invalidate every window
+    /// the golden derives.
+    #[test]
+    fn the_characteristic_capture_is_correctly_rounded_and_the_host_conforms() {
+        let Reconstruction::Density { density, curve } = characteristic_config() else {
+            unreachable!("the characteristic config is a density reconstruction")
+        };
+        let DensityCurve::Characteristic(params) = curve else {
+            unreachable!("the characteristic config selects the characteristic curve")
+        };
+        let stock = curves_for(params.stock);
+        let rounded = correctly_rounded_densities(&density);
+        let host = crate::algo::density::to_density(&pixels(), &base(), &density);
+        assert_eq!(host.density.len(), CHARACTERISTIC_EXPECTED.len());
+
+        let mut widest = 0;
+        for (i, (&want, &host_d)) in CHARACTERISTIC_EXPECTED
+            .iter()
+            .zip(host.density.iter())
+            .enumerate()
+        {
+            let captured = f32::from_bits(want);
+            assert!(
+                captured.is_finite() && captured > 0.0,
+                "sample {i}: {captured} is outside what `ulps_between` assumes"
+            );
+
+            // **Conformance, not equality.** Requiring the host's `log10` to equal the
+            // correctly-rounded value asserts the host rounds correctly, which is exactly
+            // what varies — it red x86_64 on sample 1.
+            let off = ulps_between(host_d, rounded[i]);
+            assert!(
+                off <= LIBM_MAX_ERROR_ULPS,
+                "sample {i}: this host's `log10` is {off} ULP from the correctly rounded \
+                 {:e}, beyond the accuracy every derived window assumes",
+                rounded[i]
+            );
+
+            // Capture integrity: the constant is what a correctly-rounded chain produces.
+            // `f64` resolves an f32 ULP to ~4e-9 of one, so this is not a close call.
+            let (log_e, _) = invert(stock.channels[i % 3], rounded[i]);
+            assert_eq!(
+                (10f64.powf(f64::from(log_e)) as f32).to_bits(),
+                want,
+                "sample {i}: the captured value is not the correctly-rounded 10^{log_e}"
+            );
+
+            widest = widest.max(reachable_window(stock.channels[i % 3], rounded[i]));
+        }
+
+        assert!(
+            widest <= MAX_REASONABLE_WINDOW_ULPS,
+            "the widest derived window is now {widest} ULP — a sample has landed somewhere \
+             the curve amplifies steeply, and the golden's tolerance should be understood \
+             before it is accepted"
         );
     }
 
