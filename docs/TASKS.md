@@ -118,6 +118,7 @@ graph TD
   core --> analysis
   core --> telemetry
   algo --> analysis
+  analysis --> algo
   film-base --> analysis
   algo --> film-base
   algo --> io
@@ -203,6 +204,7 @@ graph TD
     algo/sigmoid-parameter-calibration
     algo/reconstruction-render-curve-split
     algo/conversion-presets
+    algo/contrast-latitude-spike
     algo/split-default-migration
   end
   subgraph color
@@ -413,6 +415,8 @@ graph TD
   analysis/conversion-analysis-tooling --> analysis/asset-manifest
   analysis/asset-manifest --> analysis/conversion-metrics
   analysis/conversion-metrics --> analysis/nlp-comparison
+  analysis/conversion-metrics --> algo/contrast-latitude-spike
+  algo/conversion-presets --> algo/contrast-latitude-spike
   analysis/conversion-metrics --> analysis/metrics-chart-design
   analysis/metrics-chart-design --> analysis/metrics-visualization
   analysis/comparison-review-tooling --> analysis/metrics-visualization
@@ -600,6 +604,13 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   the anchor instead). Also the reason the default can move without breaking `film-master`:
   a preset does not set `output.preset`, and the non-display presets keep resolving their
   own tone and exposure.
+- `algo/contrast-latitude-spike` (post-MVP): `analysis/conversion-metrics`,
+  `algo/conversion-presets`
+  — filed 2026-09-11 out of the first measured nc-versus-NLP numbers. nc's `p95 − p5` is
+  3.55-4.51 stops where NLP's is 3.83-8.14 on the same three frames, and nc's figure moves
+  0.96 stops across them where NLP's moves 4.31. A **spike**: the scene range was never
+  measured, so "nc is narrower" and "nc faithfully carries a narrower scene" are not yet
+  distinguishable, and "change nothing" is an acceptable outcome
 - `algo/split-default-migration` (post-MVP): `algo/reconstruction-render-curve-split`,
   `algo/conversion-presets`, `algo/characteristic-curve-coverage`,
   `io/scanner-density-calibration`
@@ -967,6 +978,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   (a per-reconstruction `print_exposure` from 0.31 to 0.70, the per-stock aim-matched red
   scale) into one stated brightness target. `characteristic-generic` becomes the default,
   which is the `algo/split-default-migration` step
+- [ ] [Contrast / latitude spike](tasks/algo/contrast-latitude-spike.md) — decide whether
+  nc's tonal latitude should change, at which end, and by which mechanism. nc's `p95 − p5`
+  is narrower than NLP's on two of three frames and far more *stable* across them (0.96
+  stops against 4.31) — the signature of design-spec §3.8's per-roll recipe. The scene
+  range is unmeasured, so the cause is open; HDR and a new `--preset` axis are both
+  candidates, and "no change" is an acceptable outcome.
 - [ ] [Activate the split as the default](tasks/algo/split-default-migration.md) — the
   `pipeline_version` bump the split left out: reconstruction stops shaping tone, the display
   operator carries the character. The `film-base/dmax-per-channel-reduction` block was

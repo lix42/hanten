@@ -2954,6 +2954,21 @@ had **zero commits** and every one of those lines was a `+` in the uncommitted d
 was no committed history to preserve. Append-only protects what others may have read; it is
 not a reason to make a filing mistake permanent before it has ever been published. Moved.
 
+## contrast-latitude-spike
+
+**Status:** not started
+**Updated:** 2026-09-11
+
+- Goal: decide whether nc's tonal latitude should change — which end, which mechanism,
+  or not at all.
+- 2026-09-11: Filed out of the first measured nc-versus-NLP numbers, which live in
+  `docs/progress/analysis.md` under `analysis/nlp-comparison` (including the correction
+  that resolved the reference colour space — the NLP files are **linear** sRGB, and every
+  figure derived from the earlier "gamma reading" is superseded). A spike rather than a
+  task because the scene range was never measured, so the cause of the gap is open.
+  Read the §3.8 principle before starting: the per-roll recipe is deliberate, so a
+  narrower range may be the design working rather than failing.
+
 ## split-default-migration
 
 **Status:** not started

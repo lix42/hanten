@@ -835,7 +835,7 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
 ## nlp-comparison
 
 **Status:** not started
-**Updated:** 2026-09-10
+**Updated:** 2026-09-11
 
 - Goal: Ingest Negative Lab Pro (NLP) conversion outputs (the user adds them to `nc-assets`) and compare them against nc's outputs: global per-image metrics side by side, plus side-by-side downscaled thumbnails.
 - 2026-09-02: Task rewritten and widened from "NLP vs nc" to reference comparison,
@@ -920,7 +920,49 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   All of these are single-frame measurements of differently cropped images with an
   unresolved reference colour space. They are a starting point for this task, not a
   finding about either tool.
+- 2026-09-11: **The colour space is resolved: the NLP files are linear, sRGB/709 primaries,
+  32-bit float — so the "gamma reading" used above is the wrong one and every number
+  derived from it should be read as superseded.** Resolved from the files themselves, not
+  from the user: the embedded ICC profile (520 bytes, all 11 files in
+  `converted/nlp/*/`) carries `rTRC`/`gTRC`/`bTRC` of type `curv` with `count=1,
+  gamma=1.00000`, and `rXYZ = (0.436035, 0.222488, 0.013916)`, which is sRGB/Rec.709
+  adapted to D50 (AdobeRGB's red colorant would be ~0.6098). **The lesson is where the
+  authority lies:** `exiftool`'s `ProfileDescription` says
+  `sRGB IEC61966-2.1 (Linear RGB Profile)` — self-contradictory, which is what made this
+  look unresolvable — while the TRC and colorant tags are the actual definition and are
+  unambiguous. Parse the profile, never the description. (The user recalled the export as
+  16-bit AdobeRGB; the files disagree, so that recollection is of a different export.)
+  Consequences for the entry above, all of which used the gamma reading:
+  **`--space linear-srgb` is correct.** NLP's median is above nc's on **all three** frames
+  (+1.22 / +1.70 / −0.71 against nc's −0.71..−1.11), so there is **no G3 reversal** — that
+  was a decode artefact, and "nc renders darker than NLP" holds on this roll after all.
+  Contrast: NLP 8.14 / 3.83 / 7.35 against nc 3.55–4.51 — wider on G1 and G3, **tied on
+  G2**. The G2 gap splits 43% shadow / 57% highlight, so it is not shadow-led. The one
+  finding that never depended on the reading stands: nc's `p95 − p5` moves **0.96** stops
+  across the three frames where NLP's moves **4.31**.
+  Unchanged caveats on those three frames: one roll, and NLP cropped to a different
+  aspect ratio with no registration.
+- 2026-09-11: **The NLP reference set is two export regimes, and the larger one is far
+  better evidence than the frames measured above.** Surveyed every file by parsing its
+  embedded profile (43 TIFFs; `**/*.tif` — a `*/*.tif` glob misses `2026-09-09`, which
+  nests a subdirectory):
 
+  | files | depth | primaries | TRC | directories |
+  |---|---|---|---|---|
+  | 11 | 32-bit float | sRGB/709 | linear (gamma 1.0) | `2026-07-23`, `2026-07-24`, `2026-08-04` |
+  | 32 | 16-bit | Adobe RGB (1998) | gamma 2.1992 | `2026-09-09/2026-09-09-Ektar` |
+
+  So **a declared space is per directory, never per set** — measuring the whole reference
+  folder with one `--space` would be wrong for one regime or the other. The 16-bit batch is
+  also unambiguous, its `desc`, colorant primaries and TRC all agreeing, where the
+  float batch's description contradicts itself.
+  **And the 32-frame batch is pixel-aligned with its sources** — every sampled pair has
+  identical dimensions (e.g. 4945x3350, 4936x3352), sources present under
+  `rolls/2026-09-09-Ektar/` and named in the manifest. That is the condition this task's
+  design reserved the opt-in pixel-wise section for, so it now genuinely engages: 32 frames
+  of one stock, one calibration, no registration problem and no colour-space ambiguity.
+  Prefer it over the three Gold200 frames for any number that has to hold up.
+  Follow-up is `algo/contrast-latitude-spike`.
 
 ## display-output-acceptance (continued)
 
