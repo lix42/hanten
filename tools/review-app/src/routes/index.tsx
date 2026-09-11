@@ -3,7 +3,6 @@ import { App } from "../App";
 import { LiveReload } from "../LiveReload";
 import { getReviewSet } from "../server/getReviewSet";
 import { SetError } from "../SetError";
-import { StyleXDevRuntime } from "../StyleXDevRuntime";
 
 export const Route = createFileRoute("/")({
   loader: () => getReviewSet(),
@@ -15,7 +14,6 @@ function IndexRoute() {
   const set = Route.useLoaderData();
   return (
     <>
-      <StyleXDevRuntime />
       <LiveReload boot={set().boot} />
       <App set={set()} />
     </>

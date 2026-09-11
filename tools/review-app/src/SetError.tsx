@@ -1,46 +1,45 @@
-import * as stylex from "@stylexjs/stylex";
-import { cls } from "./cls";
+import { css } from "../styled-system/css";
 
-const styles = stylex.create({
-  panel: { padding: 24, maxWidth: "80ch" },
-  heading: { marginBlockStart: 0, fontSize: 18 },
-  error: { color: "var(--bad)", whiteSpace: "pre-wrap" },
-  code: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: 13,
-    backgroundColor: "var(--panel)",
-    paddingBlock: 2,
-    paddingInline: 6,
-    borderRadius: 4,
-  },
-  block: {
+const styles = {
+  panel: css.raw({ padding: "24px", maxWidth: "panelMeasure" }),
+  heading: css.raw({ marginBlockStart: "0", fontSize: "heading" }),
+  error: css.raw({ color: "bad", whiteSpace: "pre-wrap" }),
+  code: css.raw({
+    fontFamily: "mono",
+    fontSize: "code",
+    backgroundColor: "panel",
+    paddingBlock: "2px",
+    paddingInline: "6px",
+    borderRadius: "sm",
+  }),
+  block: css.raw({
     display: "block",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: 13,
-    backgroundColor: "var(--panel)",
-    padding: 12,
-    borderRadius: 6,
-    marginBlock: 12,
+    fontFamily: "mono",
+    fontSize: "code",
+    backgroundColor: "panel",
+    padding: "12px",
+    borderRadius: "md",
+    marginBlock: "12px",
     whiteSpace: "pre-wrap",
     wordBreak: "break-all",
-  },
-  dim: { color: "var(--fg-dim)" },
-});
+  }),
+  dim: css.raw({ color: "fg.dim" }),
+};
 
 /** Shown when the server could not read or parse the set it was pointed at. */
 export function SetError(props: { error: unknown }) {
   return (
-    <section class={cls(styles.panel)}>
-      <h1 class={cls(styles.heading)}>That review set did not load</h1>
-      <p class={cls(styles.error)}>{String(props.error)}</p>
-      <p class={cls(styles.dim)}>
+    <section class={css(styles.panel)}>
+      <h1 class={css(styles.heading)}>That review set did not load</h1>
+      <p class={css(styles.error)}>{String(props.error)}</p>
+      <p class={css(styles.dim)}>
         The server reads the set from disk, so the path may be anywhere — it does not have to sit
         beside the app. Name one when starting the server:
       </p>
-      <span class={cls(styles.block)}>pnpm dev ~/sets/display-tone/review.json</span>
-      <p class={cls(styles.dim)}>
-        or set <span class={cls(styles.code)}>REVIEW_SET</span> yourself. With neither, the bundled
-        example is rendered. <span class={cls(styles.code)}>SCHEMA.md</span> documents the format.
+      <span class={css(styles.block)}>pnpm dev ~/sets/display-tone/review.json</span>
+      <p class={css(styles.dim)}>
+        or set <span class={css(styles.code)}>REVIEW_SET</span> yourself. With neither, the bundled
+        example is rendered. <span class={css(styles.code)}>SCHEMA.md</span> documents the format.
       </p>
     </section>
   );
