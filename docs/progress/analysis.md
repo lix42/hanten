@@ -33,6 +33,29 @@ What other epics need to know about `analysis`:
   stops); `cast_by_tone_band` is the **crossover** detector, the one colour number
   a negative conversion turns on; and a roll's spread is **not attributable** to
   the calibration, because scene content is mixed into it.
+- **The tone bands are cut in CIELAB lightness, and the record is `schema_version`
+  2 (2026-09-10).** Edges every 15 L\* to 75, then diffuse white (L\* 100), then an
+  overflow band above it — `deep_shadow, shadow, low_mid, mid, high_mid,
+  highlight, above_diffuse_white`. They were even in *stops* through schema 1
+  (-4 / -2 / +2 / diffuse white), which put a median 83% of a real frame in `mid`
+  alone. **Anyone quoting a band share from before 2026-09-10 is quoting the old
+  definition**; `metrics table` refuses a schema-1 record rather than rendering it
+  under the new labels. The cut is stated inside every record (`record.bands`), so
+  an artifact carries its own definition. `cast_by_tone_band` entries now carry
+  `pixels` and a `sparse` flag (under 0.1% of the region), and the rollup withholds
+  `crossover_*` when either contributing band is sparse.
+- **`tone.histogram` is the only list-valued field in any of this toolkit's
+  records.** Four series — luminance and each of R/G/B — binned one count per L\*
+  unit over **L\* 0..200**, i.e. to twice diffuse white, with `above_range` past
+  that and separate counters for samples with no lightness. Diffuse white sits on
+  the bin-100 boundary and the record names `mid_grey_bin` / `diffuse_white_bin`.
+  The `luminance` series uses the **declared space's own luma weighting**, the same
+  one `tone.percentiles_stops` is built from, so the two cannot disagree — and it
+  is emitted rather than derived at draw time because luma is a weighted sum of
+  linear channel values and is not recoverable from three per-channel histograms.
+  It is there for `analysis/metrics-visualization` to draw; the band edges fall
+  exactly on bin edges, so bands and bars share one axis. It streams, so it costs
+  ~0.6 s at 18.7 MP and no measurable memory; a record is ~8 KB.
 - **For anyone consuming nc's ProPhoto output:** `color::build_profile` writes a
   **pure 1.8** power law, omitting the ROMM linear toe the standard specifies. A
   decoder applying the toe disagrees with nc's own pixels below encoded 0.03125 —
@@ -343,7 +366,7 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
 ## conversion-metrics
 
 **Status:** done (2026-09-03)
-**Updated:** 2026-09-03
+**Updated:** 2026-09-10
 
 - Goal: Formalize the ad-hoc image-library analysis from real-scan verification into the reusable Python toolkit that is the toolkit's single documented entry point.
 - 2026-08-12: Folded the briefly separate `photographic-result-analysis` follow-up into this
@@ -623,6 +646,183 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   build, Rust suite (702 + 174). Codex review was unavailable (workspace spend cap),
   so `ship:diff-reviewer` was the sole reviewer.
 
+- 2026-09-10: **Re-cut the tone bands in CIELAB lightness, and added the per-channel
+  histogram.** `schema_version` 1 -> 2.
+  The old cut was even in stops — `-inf / -4 / -2 / +2 / diffuse white`, after Zones
+  III and VII — and even steps of exposure are uneven steps of anything a viewer
+  sees: `shadow` 2.00 stops wide, `mid` 4.00, `highlight` 0.47, an 8.5:1
+  discontinuity. Measured through the shipped code path on 33 real renders (frames
+  G1/G2/G3/E1/E2/P4 through all five `nc convert --preset` bundles, plus the three
+  Negative Lab Pro references for the Gold200 roll, `display-p3` / `srgb`, 5% inset):
+  `mid` held a **median 82.6% of the frame and 95.0% at worst**, `highlight` read
+  under 0.1% on 15 of 33, and `above_diffuse_white` on all 33. Worse than
+  uninformative: `cast_by_tone_band` still emitted a `highlight` entry off whatever
+  pixels happened to be there, and nothing in the entry said how many. On
+  `G2-chr-aim` that band's cast — `a* = -19.5`, the largest colour excursion in the
+  record — was the colour of **one pixel** out of 15.1 million, printed beside a
+  `mid` cast resting on 91.7% of the frame.
+  **Seven cuts were scored on the same 33 renders before choosing**, every one
+  digitized off the same `stops` array `tone_stats` uses, so the comparison is
+  exact rather than re-binned. Largest band as a share of the frame (median over
+  the 33, then the worst single render), and how many of the `33 x bands` band
+  shares came out under 0.1%:
+
+  | cut | bands | median | worst | <0.1% |
+  |---|---|---|---|---|
+  | A old: stops -4 / -2 / +2 / white | 5 | 82.6% | 95.0% | 68/165 |
+  | B Adobe: quartiles of the encoded axis | 5 | 64.5% | 79.3% | 43/165 |
+  | C Zone: 1-stop bins | 10 | 37.4% | 53.9% | 96/330 |
+  | D Zone framing, `mid` subdivided | 6 | 58.7% | 72.4% | 68/198 |
+  | E L\* 20 / 40 / 60 / 80 | 6 | 53.2% | 66.2% | 45/198 |
+  | **F L\* 15 / 30 / 45 / 60 / 75 (chosen)** | 7 | **46.3%** | **56.2%** | 44/231 |
+  | G L\* every 12.5 | 9 | 39.7% | 52.7% | 72/297 |
+
+  (Every cut's `above_diffuse_white` band accounts for 33 of its own `<0.1%`
+  count: all 33 renders are SDR. Net of it, A is 35/132 and F is 11/198.)
+  **B**, Adobe's parametric-curve splits converted to stops (-1.82 / +0.25 /
+  +1.54, widths 2.07 / 1.29 / 0.94), is the reference that named the *shape* of
+  the answer — narrowing smoothly, because equal steps in an encoded domain
+  compress in stops — but it is not a spec to copy: Adobe's regions are
+  overlapping weighting regions for editing, not disjoint measurement bins, and
+  at four regions one still takes a median 64.5%. **C**, the literal Zone system,
+  is eleven equal 1-stop bins; on a display-referred render that is the wrong
+  shape at both ends — 96 of its 330 entries under 0.1%, three whole bands whose
+  *median* is under 0.1%. **D**, the cheapest diff, keeps the Zone framing and
+  splits `mid`; at 58.7% median it shows the framing was the problem, not the
+  band count.
+  **Chosen: equal steps of CIELAB L\***, every 15 to L\* 75, then diffuse white
+  (L\* 100), then an overflow band. Seven names: `deep_shadow, shadow, low_mid,
+  mid, high_mid, highlight, above_diffuse_white`. Why L\* rather than the encoded
+  axis Adobe splits: it is the **same perceptual space the colour stage already
+  measures cast in**, so the two stages now share a domain and not merely a list of
+  edges — and splitting sRGB's curve would have made nc's own output encoding the
+  authority for measuring everyone else's. The two agree closely anyway (an equal
+  five-way split of the sRGB axis lands at -2.44 / -0.44 / +0.82 / +1.75 against
+  L\* 20/40/60/80's -2.59 / -0.68 / +0.64 / +1.65), which is itself the argument
+  that the family is right and the choice within it is not delicate.
+  **Measured before -> after, same code path, both cuts:** largest band as a share
+  of the frame, median **82.6% -> 46.3%**, worst **95.0% -> 56.2%**; `highlight`
+  median **0.85% -> 3.84%** and frames under 0.1% **15/33 -> 6/33**; `deep_shadow`
+  frames under 0.1% **20/33 -> 5/33**; cast entries resting on under 0.1% of the
+  region **18 of 120 -> 12 of 200**. The headline is discrimination: across the
+  five presets of frame G2 the old band vector spread **2.1 percentage points**
+  (`mid` 91.70 / 93.78 / 91.81 / 93.26 / 92.84 — five presets, one reading), the
+  new one spreads **24.0** (`low_mid` 51.34 / 27.32 / 49.71 / 30.02 / 28.97).
+  **Why 15 and not 20, and why stop there.** L\* 20/40/60/80 (**E**) gives six
+  bands and the same round story, and was rejected on measurement: its largest
+  band still takes 66.2% of one real frame against 56.2%. Going finer stops
+  paying — L\* every 12.5 (**G**) buys 3.5 points of worst case for two more
+  bands, one of which reads under 0.1% on most frames, and takes the sparse-entry
+  rate from 5.6% to 14.8% (net of the SDR-empty overflow band).
+  **`above_diffuse_white` stays, and is a deliberate exception to "no band empty on
+  a normal frame".** It is an overflow bin: an SDR rendition cannot populate it,
+  but on `film-master` or `hdr-linear-tiff` it is the only place in the tone stage
+  where headroom above display white appears, and `endpoints` cannot stand in for
+  it on a float file. Documented as such rather than quietly dropped.
+  **The population rule is a caveat, not a filter.** Every `cast_by_tone_band`
+  entry now carries `pixels` and `sparse` (under `BAND_SPARSE_FRACTION`, 0.1% of
+  the region). Sparse entries are **kept** — a band set that varies frame to frame
+  cannot be diffed — but the rollup's `crossover_a`/`crossover_b` are withheld when
+  either contributing band is sparse, because a difference of two means is only as
+  good as the thinner of them and a roll spread cannot say which frame was thin.
+  `highlight` is now a tracked rollup axis; on the old cut an axis built on it said
+  nothing about a roll.
+  **`tone.histogram`**: the record's first list-valued field. Four series
+  (`luminance`, `r`, `g`, `b`), 100 counts each, one per L\* unit from black to
+  diffuse white, plus per-series counters for samples above diffuse white and for
+  those with no lightness (non-positive, non-finite) — they partition the region,
+  and a test pins that. L\* and not the stored code values, which describe the
+  file's encoding as much as the picture; L\* and not stops, which give black an
+  unbounded tail no chart can draw; and because the bands are cut on the same axis
+  **every band edge falls exactly on a bin edge**, so one chart can shade bands
+  over bars without interpolating (a test breaks if either the edges leave integer
+  L\* or the bins leave L\*). The channel series apply the same L\* curve to one
+  channel, which is a level and not a colorimetric lightness — stated in the record
+  rather than left to be inferred. It streams in row blocks like `color_stats`:
+  measured **+0.55 s** (2.42 -> 2.97 s) at 18.7 MP and **no measurable memory**
+  (1.40 GB both ways); a record grows to ~6.8 KB.
+  **The record states its own band cut** (`record.bands`: domain, names, L\* edges,
+  stops edges, sparse threshold), because the edges have now moved once and would
+  read plausibly against the wrong definition if they move again. `metrics table`
+  **refuses** a record whose `schema_version` is not the current one: every column
+  label still fits a schema-1 record, so rendering it would silently compare two
+  definitions of shadow. Checked the other consumers — `nctool roll` and `nctool
+  compare` carry their own schema constants and never read a metrics record, and
+  `scripts/real-scan-verify/` does not use `metrics` at all.
+  Verified: 226 analysis tests (207 before) on the venv interpreter, and the four
+  new invariants were each confirmed to fail when deliberately broken — the
+  sparse flag in both directions, the schema refusal, and bin/band alignment
+  broken two ways (a fractional L\* edge, and a histogram binned in something
+  other than L\*). The stdlib interpreter still skips cleanly (87 skips, 226 run).
+  No Rust was touched, and the Rust gates were run anyway and are green: fmt,
+  clippy `-D warnings`, build, 755 + 191 tests.
+
+- 2026-09-10 (follow-up): **Histogram range extended past diffuse white; survey of
+  how other tools bin tonal regions.** Supersedes the histogram range described in
+  the entry above.
+  **The range now runs L\* 0..200 in 200 bins**, not 0..100 in 100. Two reasons,
+  both of which the first version got wrong. A float or HDR rendition genuinely
+  carries samples above display white and a scalar overflow counter **cannot be
+  drawn** — L\* 200 is 6.46x diffuse white (+5.17 stops), covering nc's own
+  1000/203 HDR ceiling (L\* 181.4) with margin. And putting white at the *edge* of
+  the axis hid the commoner SDR question: how far short of diffuse white the
+  highlights stop. Measured on the five preset renders of G2, the last non-empty
+  luminance bin sits at L\* **88 / 92 / 88 / 92 / 98** — 12, 8, 12, 8 and 2 L\*
+  short of white, with `sig-knees` the only one that nearly reaches it. Diffuse
+  white is now the bin-100 boundary, exactly halfway along, and the per-series
+  overflow counter is renamed `above_range` (it no longer means "above diffuse
+  white", which the bins themselves now resolve). Cost is unchanged: +0.60 s at
+  18.7 MP, no measurable memory, a record 6.8 -> 8.2 KB with ~107 empty bins on an
+  SDR frame — the price of one axis that serves both SDR and HDR.
+  The record now also names `mid_grey_bin` (49) and `diffuse_white_bin` (100), so
+  a chart does not re-derive the L\* formula to place its two reference lines.
+  **A test pins that the `luminance` series and `tone.percentiles_stops` describe
+  the same quantity**: both take the declared space's own luma weighting, and the
+  test brackets every one of the eleven percentiles into the bin its cumulative
+  count lands in. Worth recording *how* it was falsified, because the obvious break
+  does not work — monkeypatching `luminance_weights` moves the tone stage and the
+  histogram *together*, so consistency survives and the test passes. Breaking only
+  the histogram's weighting is the real check: an equal-weight luma fails it, and
+  so does a Rec.709 luma on a Display P3 file and a 1% error in the green
+  coefficient — but only after the fixture was made strongly channel-separated and
+  the assertion widened from the median to all eleven percentiles. At the first
+  attempt (median only, mild cast) the Rec.709 swap passed.
+  Luminance is **emitted, not left to be derived at draw time**: luma is a weighted
+  sum of linear channel values and is not recoverable from three independent
+  per-channel histograms.
+  **Survey of how other tools bin tonal regions, since nc's cut should not rest on
+  one vendor's reverse-engineered defaults.** Adobe's parametric-curve splits
+  default to 25/50/75 of the **encoded** axis; the conversion to stops re mid grey
+  was recomputed here rather than taken on trust and it checks out — -1.823 /
+  +0.250 / +1.538, with diffuse white at +2.474. The wider finding is the useful
+  one: **no surveyed tool defines disjoint bins for *measurement*.** Every tonal
+  region that could be checked is an *editing* construct, and they are overlapping
+  weighting regions, not bins — Adobe's parametric curve by its own description,
+  darktable's `color balance rgb` by alpha masks with a luminance fulcrum set where
+  all three masks reach 50% opacity, RawTherapee's shadows/highlights by a "tonal
+  width" measured in from each end.
+  The one disjoint binning found is **darktable's tone equalizer: nine zones, 1 EV
+  apart, spanning -8 to 0 EV** ("this tab splits the brightness of the guided mask
+  into nine zones (from -8 to 0 EV)"; the manual does not state the anchor
+  unambiguously and it was not pinned). That is a shipping, principled,
+  stops-even, Zone-like cut — i.e. candidate **C**, which this task rejected. The
+  reason the same cut suits darktable and not this record is **what an empty bin
+  costs**: in an editing tool an empty zone is a slider that does nothing, which is
+  harmless; in a measurement record it is a reported number with nothing behind it.
+  Measured, C had the best largest-band share of all seven candidates (37.4%
+  median) and the worst sparsity — 96 of 330 band shares under 0.1%, three whole
+  bands whose *median* is under 0.1%. So the survey does not overturn the choice,
+  but it does mean the stops-even family has a real advocate and the rejection
+  rests on the sparsity measurement, not on principle.
+  On the histogram's domain the survey is supportive rather than mixed:
+  **RawTherapee draws its L curve histogram in CIELAB L\*** ("the histogram on the
+  L curve reflects lightness after the Lab adjustments"), which is the same domain
+  chosen here. Sources: Adobe Camera Raw / Lightroom tone-control docs, darktable's
+  tone-equalizer and color-balance-rgb manual pages, RawPedia's Lab Adjustments and
+  Shadows/Highlights pages.
+  Verified: 229 analysis tests (226 before), venv interpreter; the new range tests
+  were each confirmed to fail when broken (range cut back to diffuse white, and the
+  three luma-weighting breaks above). No Rust touched.
 
 ## drive-asset-migration
 
@@ -635,7 +835,7 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
 ## nlp-comparison
 
 **Status:** not started
-**Updated:** 2026-09-02
+**Updated:** 2026-09-10
 
 - Goal: Ingest Negative Lab Pro (NLP) conversion outputs (the user adds them to `nc-assets`) and compare them against nc's outputs: global per-image metrics side by side, plus side-by-side downscaled thumbnails.
 - 2026-09-02: Task rewritten and widened from "NLP vs nc" to reference comparison,
@@ -653,6 +853,73 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   ICC profile, so it is unpaired until both are declared by hand. Noted that nc's default
   gain-map JPEG is unreadable by the planned metric reader, so comparison runs go through
   a TIFF preset.
+- 2026-09-10: **First measured nc-versus-NLP numbers, recorded as a starting point
+  rather than acted on.** They fell out of the `analysis/conversion-metrics` band
+  re-cut, which needed a non-nc producer to score candidate cuts against. Nothing
+  here changed a render: the preset brightness target was approved by the user on
+  2026-09-09 (see `docs/progress/algo.md`) and re-calibrating it is not this
+  evidence's call.
+  Three Gold200 frames have an NLP reference for the same source
+  (`converted/nlp/2026-07-24/` 1137 / 1144 / 1151 = G1 / G2 / G3). Measured with
+  `nctool metrics image --inset 0.05`, nc through `--preset chr-generic` and
+  `sig-flat` at `--output-preset gain-map-hdr` (`display-p3`), NLP read as `srgb`.
+  **`metrics` was not built to compare across producers at this precision**: the
+  NLP files are cropped to 4897x3265 against a 5184x3600 source, so a 5% inset of
+  each is not the same picture content, and there is no registration.
+  **The colour space of the NLP file is unresolved, and the choice moves every
+  number.** Its ICC description is `sRGB IEC61966-2.1 (Linear RGB Profile)`, which
+  is self-contradictory, and `exiftool` reports `ColorSpace: Uncalibrated`. Samples
+  are 32-bit float and **not** bounded to [0, 1]: full-frame min -0.022096, max
+  1.284324, with 0.008% of samples below 0 and 0.096% above 1 — an unclamped
+  export, which is consistent with either reading. The distribution argues for the
+  gamma reading without proving it: full-frame median 0.5646 decodes to +0.63 stops
+  over mid grey if sRGB-encoded and to +1.65 if linear, and a normal photograph's
+  median does not sit 1.65 stops over mid grey. **That is plausibility, not evidence
+  from the file**, so both readings are reported below and the conservative (gamma)
+  one is used for the comparison. Resolving it needs either the NLP/Lightroom export
+  setting from the user, or a known-value target pushed through the same NLP path —
+  do that before any acceptance number is derived from these files.
+  Median luminance, in stops over mid grey — nc `chr-generic` / `sig-flat`, then NLP
+  read both ways:
+
+  | frame | nc chr-generic | nc sig-flat | NLP (gamma) | NLP (linear) |
+  |---|---|---|---|---|
+  | G1 | -0.71 | -0.78 | -0.19 | +1.22 |
+  | G2 | -0.05 | -0.10 | +0.77 | +1.70 |
+  | G3 | -0.99 | -1.11 | -3.86 | -0.71 |
+
+  **The "nc is darker" reading is not established, and which way it goes on one
+  frame depends on the unresolved colour space.** Under the conservative gamma
+  reading it holds on two frames and **reverses on the third**: NLP's median sits
+  0.52-0.59 stops above nc's on G1 and 0.82-0.87 above on G2, but **2.75-2.87
+  stops below** on G3, where 56.2% of the frame lands in `deep_shadow` against nc's
+  0.20-0.29%. Under the linear reading NLP is brighter on all three (+1.93-2.00,
+  +1.75-1.80, +0.28-0.40). So the reversal is a property of the *gamma* reading,
+  not a fact about the two tools, and the direction cannot be stated at all until
+  the colour space is resolved. Three frames could not settle it in any case, and
+  G3 is the frame `sigmoid-baseline`'s fixtures already flag as exceeding SDR range
+  (sky best at +0 EV, trees at +2) — exactly where a per-frame auto-adjustment and
+  a frozen recipe should disagree most.
+  **The difference that is consistent across all three frames is contrast, not
+  brightness.** nc's `contrast.p95_minus_p5` is 3.55-4.51 stops on every frame and
+  both presets; NLP's is **6.98 (G2) / 10.92 (G3) / 11.52 (G1)** under the gamma
+  reading and **3.83 / 7.35 / 8.14** under the linear one. Under gamma NLP is wider
+  on all three, by +3.28 to +7.60 stops. Under linear it is wider on G1 (+4.09 to
+  +4.22) and G3 (+2.84 to +3.03) but **essentially tied on G2** (+0.13 to +0.28),
+  so the gap survives both readings on two frames and collapses on one — still a
+  stronger signal than the median, which survives neither cleanly. What holds
+  unconditionally is the *stability*: nc's figure moves 0.96 stops across the three
+  frames where NLP's moves 4.54 (gamma) or 4.31 (linear), the signature of one
+  frozen recipe against a per-frame adjustment. That, not the median, looks like
+  the thing worth investigating first.
+  **Highlight occupancy on G2 is the one comparison that survives everything so
+  far**: NLP 19.4% of the frame in `highlight` against nc's 1.4-1.8% under the
+  gamma reading, 68.0% under the linear one — same direction, larger under the
+  reading that is not being used. It does not generalize, though: on G3 nc holds
+  **more** (15.9% against NLP's 14.0%).
+  All of these are single-frame measurements of differently cropped images with an
+  unresolved reference colour space. They are a starting point for this task, not a
+  finding about either tool.
 
 
 ## display-output-acceptance (continued)

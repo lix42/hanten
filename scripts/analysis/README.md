@@ -209,16 +209,38 @@ the inset actually clears the holder, which can occupy 10-15% of an edge.
 
 It reads every sample in the region rather than subsampling, so peak memory
 scales with the frame: ~1.4 GB at 18.7 MP, ~5.7 GB extrapolated to a 10368x7200
-scan. Runtime is ~2.9 s at 18.7 MP.
+scan. Runtime is ~3.0 s at 18.7 MP.
 
 The record reports endpoint occupancy on the stored (encoded) samples, then,
 after decoding to linear light:
 
 - **tone**, in log2 stops relative to 0.18 — the key (geometric mean), a
-  percentile vector, contrast spreads, toe and shoulder spans, band occupancy;
+  percentile vector, contrast spreads, toe and shoulder spans, band occupancy,
+  and an L\*-binned histogram for luminance and each channel;
 - **colour**, in CIELAB — per-channel balance in stops, mean cast and chroma,
   neutral share, chroma percentiles, six hue sectors, and the cast of each tone
   band separately.
+
+### Tone bands
+
+The bands are cut in **CIELAB lightness** — every 15 L\* up to 75, then diffuse
+white (L\* 100), then an overflow band above it. `record.bands` states the cut,
+in both L\* and stops, inside every record it applies to.
+
+Lightness rather than stops because equal steps of lightness are unequal steps of
+exposure, and a cut even in stops is even in nothing a viewer sees. Until schema
+2 the edges were -4 / -2 / +2 stops and diffuse white, after Zones III and VII;
+across 33 real renders (six frames x five `nc convert --preset` bundles plus
+three Negative Lab Pro references) that put a median 83% of the frame — 95% at
+worst — in `mid` alone, while `highlight` spanned 0.47 stops and read 0.00 on
+four of the five renders of one frame. The lightness cut's largest band holds a
+median 46% and 56% at worst. On the five renders of one frame the old band vector
+spread 2.1 percentage points from preset to preset, so the five presets were
+effectively one reading; the new one spreads 24.0.
+
+`above_diffuse_white` is an **overflow bin, not a seventh of the range**. An SDR
+rendition essentially cannot populate it, and on a float or HDR output it is the
+only place in the tone stage where headroom above display white appears.
 
 `color.cast_by_tone_band` is the one to read first on a negative conversion. The
 characteristic fault is **crossover** — the cast drifting one way in the shadows
@@ -228,10 +250,65 @@ that out to nothing. On one measured nc-versus-NLP pair the nc render went from
 `-3.8`; the whole-frame means alone would have understated it.
 
 The rollup's `crossover_a` / `crossover_b` axes difference the **`shadow` and
-`mid`** bands specifically — not shadow and highlight. The `highlight` band is
-only 0.47 stops wide and is empty on plenty of frames, which would make the axis
-vanish exactly where a render is darkest; `mid` is present on essentially every
-frame, so the axis stays comparable across a roll.
+`mid`** bands specifically — not shadow and highlight. Across those 33 renders
+the smallest `shadow` was 4.2% of the region and the smallest `mid` 5.7%, while
+`highlight` legitimately empties on a dark frame, which would make the axis
+vanish exactly where a render is darkest.
+
+Each `cast_by_tone_band` entry carries its own denominator — `pixels`, and
+`sparse` when the band holds under 0.1% of the region. Sparse entries are kept
+rather than dropped, because a band set that varies frame to frame cannot be
+diffed, but **a sparse band's cast is not a measurement**: on the old cut the
+largest colour excursion in one measured record, a\* = -19.5 in `highlight`, was
+the colour of a **single pixel** out of 15.1 million, printed beside a `mid` cast
+resting on 91.7% of the frame with nothing to tell the two apart. The
+rollup's `crossover_a` / `crossover_b` are withheld outright when either
+contributing band is sparse.
+
+### The histogram
+
+`tone.histogram` is the record's only list-valued field, and the one thing in it
+a review tool can draw rather than read. Four series — `luminance`, `r`, `g`, `b`
+— each 200 counts, one per L\* unit, plus `above_range` for anything past the top
+and separate counters for samples with no lightness at all (non-positive,
+non-finite). Those four numbers partition the region. It states its own domain in
+the record — `domain`, `lstar_range`, `bins`, `bin_width_lstar`, and the
+`mid_grey_bin` / `diffuse_white_bin` reference lines a chart wants — so a
+consumer never has to infer the bins from the shape of the data, and never has to
+re-derive the L\* formula to place white.
+
+`luminance` uses the **declared space's own luma weighting**, the same one
+`tone.percentiles_stops` is built from, so the histogram and the percentile curve
+describe one quantity and cannot disagree. That is also why luminance is emitted
+rather than left to be derived at draw time: luma is a weighted sum of linear
+channel values and is **not** recoverable from three independent per-channel
+histograms.
+
+The axis runs to **twice diffuse white in lightness**, not to diffuse white.
+L\* 200 is 6.46x diffuse white (+5.17 stops), which covers nc's own 1000/203 HDR
+ceiling (L\* 181.4) with margin, so a `film-master` or `hdr-linear-tiff` render's
+headroom can be *drawn* rather than reduced to one overflow number. It also keeps
+white inside the axis rather than at its edge, which is what makes the commoner
+SDR question readable: how far short of diffuse white the highlights stop. On the
+five preset renders of one frame the last non-empty luminance bin sits at L\* 88 /
+92 / 88 / 92 / 98 — 12, 8, 12, 8 and 2 L\* short of white — against a
+`diffuse_white_bin` of 100.
+
+L\* and not the stored code values: those describe the file's encoding as much as
+the picture, which is the whole reason this command decodes to linear light
+first. L\* and not stops: stops give black an unbounded tail no chart can draw.
+And because the bands are cut on the same axis, every band edge falls exactly on
+a bin edge — one chart can shade the bands over the bars without interpolating.
+
+The channel series apply the same L\* curve to one channel. That is a level, not
+a colorimetric lightness — only `luminance` is that — but it is the one monotone
+mapping that puts all four series on one axis, which is what makes a cast read as
+a shape rather than as `color.balance_stops`' one number per channel.
+
+It costs ~0.6 s at 18.7 MP and no measurable memory: it streams in row blocks, so
+only the 200 accumulators per series survive a block. A record grows to ~8 KB.
+
+### Reading the record
 
 `color.balance_support` states what fraction of the region each channel's
 geometric mean rests on. When they disagree — a channel crushed to black over

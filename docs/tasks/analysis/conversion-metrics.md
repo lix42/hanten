@@ -73,9 +73,20 @@ implementing — against real converted rolls, not on paper. The families:
   crossover detector and the most diagnostic color number for a negative
   conversion; per-hue-sector chroma and hue placement; neutral share.
 
-Both shipped (tone 2026-09-02, color 2026-09-02). CIELAB's reference white is
-derived from this module's own D65 rather than the tabulated `(0.95047, 1,
-1.08883)`, so an RGB-neutral frame measures `a* = b* = 0` exactly — a cast metric
+Both shipped (tone 2026-09-02, color 2026-09-02), plus an L\*-binned per-channel
+histogram (2026-09-10) — the record's only list-valued field, and the one thing in
+it a review tool can draw rather than read.
+
+The tone-band question below was settled on 2026-09-10 and the answer moved the
+record to `schema_version` 2: the bands are cut in **equal steps of CIELAB
+lightness** (every 15 L\* to 75, then diffuse white, then an overflow band), not in
+equal steps of stops. Equal steps of exposure are unequal steps of anything a
+viewer sees, and the original stops-even cut put a median 83% of a real frame in
+one band. The measurement and the candidates considered are in
+`docs/progress/analysis.md`.
+
+CIELAB's reference white is derived from this module's own D65 rather than the
+tabulated `(0.95047, 1, 1.08883)`, so an RGB-neutral frame measures `a* = b* = 0` exactly — a cast metric
 whose zero is not zero reports a fault the render does not have. That is a
 different choice from the one `display-output-acceptance` pins for its
 cross-encoding oracle, which compares absolute colorimetry rather than relative
@@ -103,8 +114,10 @@ exists it can feed the region automatically; this task does not wait for it.
 
 - Which common space, and which perceptual representation, keep results
   meaningful across SDR, HDR, integer and float outputs?
-- What should shadow, highlight, near-black and near-white mean here, and which
-  definitions stay comparable across configurations?
+- ~~What should shadow, highlight, near-black and near-white mean here, and which
+  definitions stay comparable across configurations?~~ Settled 2026-09-10: equal
+  steps of CIELAB lightness, shared between the tone and colour stages, stated
+  inside each record so an artifact carries its own definition.
 - Full-resolution percentiles, or a deterministic decimation recorded in the
   artifact? (The earlier draft of this task insisted on full-res; with `numpy`
   that is affordable, so the burden is on decimation to justify itself.)

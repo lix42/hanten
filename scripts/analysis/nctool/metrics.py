@@ -25,6 +25,12 @@ for a negative conversion — **per tone band**, because the characteristic fail
 is crossover: the cast drifting one way in the shadows and the other as the frame
 brightens. A single whole-frame cast averages that out to nothing.
 
+The tone bands themselves are cut in **CIELAB lightness**, not in stops: equal
+steps of lightness are unequal steps of exposure, and a cut even in stops puts
+most of a normal frame in one band. `tone.histogram` bins the same L* axis one
+unit at a time, for luminance and for each channel, so a band is a whole number
+of bins and one chart can draw both.
+
 Only derived statistics leave this module. Sample pixels never reach a report,
 a committed artifact, or an agent context (CLAUDE.md).
 """
@@ -36,7 +42,7 @@ import math
 import sys
 from pathlib import Path
 
-SCHEMA = 1
+SCHEMA = 2
 
 #: Mid grey. The anchor for every value reported in stops.
 MID_GREY = 0.18
@@ -44,13 +50,88 @@ MID_GREY = 0.18
 #: Diffuse white, in stops above mid grey: log2(1 / 0.18).
 DIFFUSE_WHITE_STOPS = math.log2(1.0 / MID_GREY)
 
-#: Tone bands, in stops relative to mid grey. Deliberately photographic: the
-#: interior edges are two stops either side of mid grey (roughly Zone III and
-#: Zone VII) and diffuse white. Shared with the colour stage, which reports the
-#: cast of each band — the same edges, or "the shadows are cooler than the
-#: highlights" would be measured against a different definition of shadow.
-BAND_EDGES = (-math.inf, -4.0, -2.0, 2.0, DIFFUSE_WHITE_STOPS, math.inf)
-BAND_NAMES = ("deep_shadow", "shadow", "mid", "highlight", "above_diffuse_white")
+#: CIE 1976 L*: the knee between its cube-root and linear arms, and that arm's
+#: slope 24389/27. Luminance is relative to diffuse white = 1, so L* = 100 is
+#: diffuse white and L* ~ 49.5 is mid grey.
+LSTAR_KNEE = 8.0
+LSTAR_LINEAR_SLOPE = 24389.0 / 27.0
+#: Y at the knee, (6/29)^3 — the point where both arms agree exactly.
+LSTAR_KNEE_LUMINANCE = (6.0 / 29.0) ** 3
+#: Diffuse white. The top band edge and the top of the histogram, named once so
+#: the two cannot drift apart.
+DIFFUSE_WHITE_LSTAR = 100.0
+
+
+def luminance_of_lstar(lstar: float) -> float:
+    """Relative luminance of a CIELAB lightness, diffuse white = 1."""
+    if lstar > LSTAR_KNEE:
+        return ((lstar + 16.0) / 116.0) ** 3
+    return lstar / LSTAR_LINEAR_SLOPE
+
+
+def stops_of_lstar(lstar: float) -> float:
+    """A CIELAB lightness as stops relative to mid grey."""
+    return math.log2(luminance_of_lstar(lstar) / MID_GREY)
+
+
+def _lstar_scalar(luminance: float) -> float:
+    """CIELAB lightness of one relative luminance. The inverse of the above."""
+    if luminance > LSTAR_KNEE_LUMINANCE:
+        return 116.0 * luminance ** (1.0 / 3.0) - 16.0
+    return luminance * LSTAR_LINEAR_SLOPE
+
+
+#: Tone bands, cut in **CIELAB lightness** — the same perceptual space the colour
+#: stage measures cast in — every 15 L* up to 75, then diffuse white (L* = 100),
+#: then an overflow band above it. In stops the widths narrow going up (1.71 /
+#: 1.22 / 0.95 / 0.78 / 1.05), and that is the point: equal steps of lightness
+#: are unequal steps of exposure, so a cut even in *stops* is even in nothing a
+#: viewer sees. The previous cut was even in stops — -4 / -2 / +2 / diffuse
+#: white, after Zones III and VII — and its `mid` band held 83% of the median
+#: frame (95% at worst) while `highlight` spanned 0.47 stops and was empty on
+#: four of five renders of one frame. Measured over 33 renders (six frames x five
+#: `--preset` bundles, plus three Negative Lab Pro references), this cut's
+#: largest band holds 47% of the median frame and 56% at worst.
+#:
+#: `above_diffuse_white` is an overflow bin, not a seventh of the range: an SDR
+#: rendition cannot populate it at all, and on a float or HDR output it is the
+#: only place in the tone stage that headroom above display white shows up.
+#:
+#: Shared with the colour stage, which reports the cast of each band — the same
+#: edges, or "the shadows are cooler than the highlights" would be measured
+#: against a different definition of shadow.
+BAND_LSTAR_EDGES = (15.0, 30.0, 45.0, 60.0, 75.0, DIFFUSE_WHITE_LSTAR)
+BAND_NAMES = ("deep_shadow", "shadow", "low_mid", "mid", "high_mid",
+              "highlight", "above_diffuse_white")
+BAND_EDGES = (-math.inf, *(stops_of_lstar(L) for L in BAND_LSTAR_EDGES), math.inf)
+
+#: Below this share of the region a band's cast describes essentially none of the
+#: picture, and `cast_by_tone_band` marks the entry `sparse`. A share and not a
+#: pixel count: a few hundred pixels are plenty to average, so what is wrong with
+#: such an entry is not noise but that it reads as a statement about the frame.
+#: It is a caveat, not a filter — the entry stays, because a band set that varies
+#: frame to frame cannot be diffed. It exists because the old cut let `highlight`
+#: report the largest colour excursion in a measured record (a* = -19.5) off a
+#: single pixel out of 15.1 million, beside a `mid` cast resting on 91.7% of the
+#: frame, with nothing to tell the two apart.
+BAND_SPARSE_FRACTION = 0.001
+
+#: The level histogram: one bin per L* unit. Bins are L* so that every band edge
+#: falls exactly on a bin edge and one chart can draw both, and because the
+#: alternatives are wrong for drawing — stops give black an unbounded tail, and
+#: the stored code values describe the file's encoding as much as the picture,
+#: which is what decoding to linear light exists to avoid.
+#:
+#: The range runs to **twice** diffuse white in lightness, not to diffuse white,
+#: for two reasons. A float or HDR rendition genuinely carries samples above
+#: display white, and a scalar overflow counter cannot be drawn — L* 200 is 6.46x
+#: diffuse white (+5.17 stops), which covers nc's own 1000/203 HDR ceiling
+#: (L* 181.4) with margin. And on an SDR render the interesting fact is *how far
+#: short of* diffuse white the highlights stop, which needs white inside the axis
+#: rather than at its edge. Diffuse white therefore sits on the bin-100 boundary,
+#: exactly halfway along. Anything beyond the range lands in `above_range`.
+HISTOGRAM_MAX_LSTAR = 200.0
+HISTOGRAM_BINS = 200
 
 #: Chroma below this counts as neutral. A near-neutral pixel has a hue angle, but
 #: it is noise — a*, b* of (0.01, -0.01) is a 135 degree hue that means nothing —
@@ -727,6 +808,105 @@ def tone_stats(linear, weights: tuple[float, float, float]) -> dict:
     return result
 
 
+def _lstar(values):
+    """CIE 1976 L* of relative luminance. Expects positive, finite values."""
+    import numpy as np
+
+    low = values <= np.float32(LSTAR_KNEE_LUMINANCE)
+    out = np.cbrt(values.astype(np.float64))
+    out *= 116.0
+    out -= 16.0
+    out[low] = values[low].astype(np.float64) * LSTAR_LINEAR_SLOPE
+    return out
+
+
+def _series_histogram(values, excluded: "list[int]"):
+    """One block of luminance-like values as bin counts, excluded ones tallied.
+
+    `excluded` is `[non_positive, non_finite, above_range]`, accumulated in place.
+    Those three plus the bins partition the block. A sample with no lightness is
+    counted rather than folded to zero, for the same reason `tone_stats` counts
+    one: folding would invent black pixels the file does not contain. One past
+    the top of the range is counted rather than clipped into the last bin, which
+    would invent a highlight pile-up instead.
+    """
+    import numpy as np
+
+    finite = np.isfinite(values)
+    positive = finite & (values > 0)
+    lstar = _lstar(values[positive])
+    inside = lstar < HISTOGRAM_MAX_LSTAR
+    excluded[0] += int(np.count_nonzero(finite) - np.count_nonzero(positive))
+    excluded[1] += int(values.size - np.count_nonzero(finite))
+    excluded[2] += int(lstar.size - np.count_nonzero(inside))
+    return np.histogram(lstar[inside], bins=HISTOGRAM_BINS,
+                        range=(0.0, HISTOGRAM_MAX_LSTAR))[0]
+
+
+def histogram_stats(linear, weights: tuple[float, float, float]) -> dict:
+    """Level distributions for luminance and each channel, binned in L*.
+
+    The one list-valued field in the record, and the only one a review tool can
+    draw as a histogram rather than read as a number.
+
+    The same L* curve is applied to each channel as to luminance. On a channel
+    that is not a colorimetric lightness — only the luminance series is — but it
+    is the one monotone mapping that puts all four series on a single axis, and
+    it is the axis the tone bands are cut on, so a chart can shade the bands over
+    the bars. Comparing the three channel series is how a cast reads as a shape
+    rather than as `color.balance_stops`' single number per channel.
+
+    Streamed in row blocks like `color_stats`: only the 100 accumulators survive
+    a block, so this adds counters rather than another full-frame temporary.
+    """
+    import numpy as np
+
+    height = linear.shape[0]
+    total = int(height * linear.shape[1])
+    names = ("luminance", "r", "g", "b")
+    hist = {name: np.zeros(HISTOGRAM_BINS, dtype=np.int64) for name in names}
+    # [non_positive, non_finite, above_diffuse_white] per series.
+    extra = {name: [0, 0, 0] for name in names}
+
+    for start in range(0, height, BLOCK_ROWS):
+        block = linear[start:start + BLOCK_ROWS]
+        y = (block[..., 0] * np.float32(weights[0])
+             + block[..., 1] * np.float32(weights[1])
+             + block[..., 2] * np.float32(weights[2]))
+        for name, values in (("luminance", y), ("r", block[..., 0]),
+                             ("g", block[..., 1]), ("b", block[..., 2])):
+            hist[name] += _series_histogram(values, extra[name])
+
+    def series(name: str) -> dict:
+        non_positive, non_finite, above = extra[name]
+        return dict(counts=[int(v) for v in hist[name]],
+                    non_positive=non_positive, non_finite=non_finite,
+                    above_range=above)
+
+    return dict(
+        # Says what the bins are, in the record, so a consumer never has to infer
+        # it from the shape of the data.
+        domain="cielab_lstar",
+        domain_note=("bin i covers L* [i, i+1); L* 0 is black, ~49.5 is scene "
+                     "mid grey, 100 is diffuse white, 200 is 6.46x diffuse white "
+                     "(+5.17 stops). Samples above the range are counted in "
+                     "`above_range`, not binned. The channel series apply the "
+                     "same L* curve to one channel, which is a level, not a "
+                     "colorimetric lightness"),
+        bins=HISTOGRAM_BINS,
+        lstar_range=[0.0, HISTOGRAM_MAX_LSTAR],
+        bin_width_lstar=_round(HISTOGRAM_MAX_LSTAR / HISTOGRAM_BINS),
+        # The two reference lines a chart wants to draw, as bin indices, so they
+        # do not have to be re-derived from the L* formula by every consumer.
+        mid_grey_bin=int(_lstar_scalar(MID_GREY) // (HISTOGRAM_MAX_LSTAR
+                                                     / HISTOGRAM_BINS)),
+        diffuse_white_bin=int(DIFFUSE_WHITE_LSTAR // (HISTOGRAM_MAX_LSTAR
+                                                      / HISTOGRAM_BINS)),
+        pixels=total,
+        series={name: series(name) for name in names},
+    )
+
+
 # -- colour -------------------------------------------------------------------
 
 
@@ -930,8 +1110,16 @@ def color_stats(linear, space: Space, weights: tuple[float, float, float]) -> di
         # fields with one name and two bases, which reads as a bug in a stage.
         measured_fraction=_round(kept / total),
         neutral_fraction=_round(neutral / total),
+        # `pixels` and `sparse` ride beside every cast so the number carries its
+        # own denominator. Without them a band resting on a few hundred pixels
+        # reads with exactly the authority of one resting on half the frame, and
+        # that is how the largest colour excursion in a measured record came to be
+        # the colour of a single pixel. Sparse entries are kept, not dropped: a
+        # band set that varies frame to frame cannot be diffed.
         cast_by_tone_band={
             name: dict(fraction=_round(band_count[i] / total),
+                       pixels=band_count[i],
+                       sparse=band_count[i] / total < BAND_SPARSE_FRACTION,
                        mean_a=_round(band_a[i] / band_count[i]),
                        mean_b=_round(band_b[i] / band_count[i]))
             for i, name in enumerate(BAND_NAMES) if band_count[i]
@@ -954,6 +1142,23 @@ def color_stats(linear, space: Space, weights: tuple[float, float, float]) -> di
         },
     )
     return result
+
+
+def describe_bands() -> dict:
+    """The band cut, stated in the record it applies to.
+
+    Two things make this worth carrying rather than documenting elsewhere: the
+    edges moved once (schema 1 -> 2) and will read plausibly against the wrong
+    definition if they move again, and a consumer drawing `tone.histogram` needs
+    the edges in the histogram's own domain to shade the bands onto it.
+    """
+    return dict(
+        domain="cielab_lstar",
+        names=list(BAND_NAMES),
+        lstar_edges=list(BAND_LSTAR_EDGES),
+        stops_edges=[_round(edge) for edge in BAND_EDGES[1:-1]],
+        sparse_below_fraction=BAND_SPARSE_FRACTION,
+    )
 
 
 def measure(path: Path, space_name: str,
@@ -996,6 +1201,9 @@ def measure(path: Path, space_name: str,
     linear = _decode_transfer(view, space.transfer)
     weights = luminance_weights(space)
     tone = tone_stats(linear, weights)
+    # Composed here rather than inside `tone_stats`, which is not streamed: the
+    # histogram walks row blocks so it never holds a second full-frame temporary.
+    tone["histogram"] = histogram_stats(linear, weights)
     color = color_stats(linear, space, weights)
 
     record = dict(
@@ -1010,6 +1218,7 @@ def measure(path: Path, space_name: str,
                       if key in meta}),
         space=space.describe(),
         region=region,
+        bands=describe_bands(),
         endpoints=endpoints,
         tone=tone,
         color=color,
@@ -1124,6 +1333,10 @@ AXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("shoulder_span", ("tone", "shoulder_span_stops")),
     ("toe_span", ("tone", "toe_span_stops")),
     ("deep_shadow", ("tone", "bands", "deep_shadow")),
+    # Trackable only since the schema 2 band cut: on the stops-even edges this
+    # band was 0.47 stops wide and read 0.00 on four of five renders of a frame,
+    # so an axis built on it said nothing about a roll.
+    ("highlight", ("tone", "bands", "highlight")),
     ("above_diffuse_white", ("tone", "bands", "above_diffuse_white")),
     ("at_top_code", ("endpoints", "at_or_above_white", "any")),
     ("cast", ("color", "mean_cast")),
@@ -1151,12 +1364,17 @@ def frame_axes(record: dict) -> dict:
     the *difference* between two of its bands, so it is derived here rather than
     stored twice.
 
-    The two bands are **`shadow` and `mid`**, not shadow and highlight. The
-    `highlight` band spans only 2.0 to 2.474 stops — 0.47 stops wide — and is
-    empty on plenty of frames, which would make the axis vanish exactly where a
-    render is darkest. `mid` is present on essentially every frame, so the axis
-    is comparable across a roll. Read it as shadow-to-midtone drift; the full
-    per-band casts are in `color.cast_by_tone_band` for anything finer.
+    The two bands are **`shadow` and `mid`**, not shadow and highlight. Those two
+    carry the frame on essentially every render — measured across 33 of them, the
+    smallest `shadow` was 4.2% of the region and the smallest `mid` 5.7% — while
+    `highlight` legitimately empties on a dark frame, which would make the axis
+    vanish exactly where a render is darkest. Read it as shadow-to-midtone drift;
+    the full per-band casts are in `color.cast_by_tone_band` for anything finer.
+
+    Either band being `sparse` withholds the axis rather than reporting it. A
+    difference of two means is only as good as the thinner of them, and a roll
+    spread is worse than useless if one frame's entry rests on a few hundred
+    pixels — the reader cannot tell which one did.
     """
     axes = {}
     for name, path in AXES:
@@ -1165,7 +1383,8 @@ def frame_axes(record: dict) -> dict:
             axes[name] = value
     bands = record.get("color", {}).get("cast_by_tone_band", {})
     dark, light = bands.get("shadow"), bands.get("mid")
-    if isinstance(dark, dict) and isinstance(light, dict):
+    if (isinstance(dark, dict) and isinstance(light, dict)
+            and not dark.get("sparse") and not light.get("sparse")):
         axes["crossover_a"] = _round(light.get("mean_a", 0) - dark.get("mean_a", 0))
         axes["crossover_b"] = _round(light.get("mean_b", 0) - dark.get("mean_b", 0))
     return axes
@@ -1218,6 +1437,7 @@ AXIS_FORMAT: dict[str, tuple[str, int]] = {
     "shoulder_span": ("stops", 2),
     "toe_span": ("stops", 2),
     "deep_shadow": ("%", 2),
+    "highlight": ("%", 2),
     "above_diffuse_white": ("%", 2),
     "at_top_code": ("%", 2),
     "neutral": ("%", 2),
@@ -1238,6 +1458,7 @@ TABLE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("contrast_p95_p5", "p95-p5"),
     ("shoulder_span", "shldr"),
     ("deep_shadow", "deep %"),
+    ("highlight", "high %"),
     ("at_top_code", "top %"),
     ("cast", "cast"),
     ("b_over_g", "B/G"),
@@ -1326,7 +1547,7 @@ def markdown_table(record: dict) -> str:
             lines.append("| " + " | ".join(cells) + " |")
         lines.append("")
         lines.append("Units: `key`, `p50`, `p95-p5`, `shldr` and `B/G` in stops; "
-                     "`deep` and `top` as a share of the region; `cast` and "
+                     "`deep`, `high` and `top` as a share of the region; `cast` and "
                      "`xover b` in CIELAB units.")
         lines.append("")
 
@@ -1517,6 +1738,7 @@ def cmd_roll(args) -> int:
         config=tag.get("config"),
         identity=tag.get("identity"),
         space=dict(source=space_source, **SPACES[space_name].describe()),
+        bands=describe_bands(),
         region_fraction=list(fraction),
         frames=frames,
         skipped=skipped,
@@ -1555,6 +1777,17 @@ def cmd_table(args) -> int:
         return 2
     if not isinstance(record, dict) or record.get("kind") != "nctool-roll-metrics":
         print(f"error: {path} is not an nctool roll metrics record", file=sys.stderr)
+        return 2
+    # Refused rather than rendered, because the renderer's columns would still
+    # fit: schema 1 cut the tone bands on stops-even edges, so its `deep_shadow`
+    # means "below -4 stops" where this build's means "below L* 15" (-3.24
+    # stops). The table would look right and compare two definitions of shadow.
+    version = record.get("schema_version")
+    if version != SCHEMA:
+        print(f"error: {path} is a schema {version} metrics record and this build "
+              f"renders schema {SCHEMA}; the tone bands were re-cut between them, "
+              "so re-measure the roll rather than re-rendering this record",
+              file=sys.stderr)
         return 2
     text = markdown_table(record)
     if args.out:
