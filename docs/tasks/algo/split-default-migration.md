@@ -52,9 +52,9 @@ piece of work, and two of its obstacles have measured answers:
   own tone and exposure. Verified that they refuse `reinhard` outright, and that
   `film-master` refuses any non-default `print_exposure` — so a global default move would
   have made a bare `nc convert --output-preset film-master` fail.
-- **Which reconstruction.** `characteristic-generic` is the proposed default, which lands on
-  the half of this task's blocker that is still open: `film-base/dmax-per-channel-reduction`
-  owns the no-stock path. Read that note above before migrating.
+- **Which reconstruction.** `characteristic-generic` is the proposed default. It carries each
+  channel's own published curve, so it needs neither a scalar `Dmax` nor a per-channel gain —
+  which is why the per-channel blocker below was lifted.
 
 ## Open questions
 
@@ -106,33 +106,55 @@ Note also that moving `golden::pixels()` itself is not free — it is shared wit
 historical row, whose meaning would shift with it. Adding a separate vector for the new
 default's fingerprint is likely the cheaper answer.
 
-## The blocker, and why it is a real one
+## The blocker — lifted 2026-09-10, and what replaced it
 
-**`film-base/dmax-per-channel-reduction` must land first.** The sigmoid's shoulder
-was *hiding* a model error: measured on the uniformly-exposed leader — a target with
-no scene content, so every deviation is model error — Gold reads B/G **1.826**, Portra
-R/G **1.676**, Ektar B/G 1.170, i.e. 17–83% off neutral on a grey target. The shoulder
-washes highlights toward white and drains the cast along with the detail; shoulder-less,
-it survives into the highlights. That task's own analysis calls the per-channel term
-"redundant under the exponential, not under the sigmoid, **which is the intended
-default**" — a premise this migration overturns. Shipping the split as the default
-before it lands means shipping a visible cast on Gold and Portra.
+**Was:** `film-base/dmax-per-channel-reduction` must land first, because the sigmoid's
+shoulder was hiding a per-channel model error read off the uniformly-exposed leader (Gold
+B/G **1.826**, Portra R/G **1.676**, Ektar B/G 1.170 — 17–83% off neutral), and a
+shoulder-less default would let it survive into the highlights.
+
+**Why it no longer holds.** Both halves of that reasoning died in `algo/film-stock-profiles`.
+The leader is disqualified as a measurement of per-channel structure — measured leaders do
+not reproduce the published divergence at all, and the comparison cannot separate a
+non-neutral leader exposure from a scanner-slope error, so those ratios are not a clean
+model-error reading. And the per-channel term turned out to be a **slope**, not an anchor:
+it is carried by `density.scale` on the parametric curves and by each channel's own table on
+`characteristic`, which is the proposed default here.
+
+**What actually gates the migration now** is the green residual — `+0.40` mean and `+1.00`
+on the Ektar roll, which no per-channel scale removes. That is `io/scanner-density-
+calibration`, and the note above already says not to migrate before it is understood.
 
 ## How to Verify
 
 - A `pipeline_version` bump with its own `PIPELINE_FINGERPRINTS` row, and a
   before/after report under `docs/reports/`.
-- Neutrality checked on the leader for each stock, since that is the thing the old
-  default was hiding.
+- **Release gate:** neutrality checked against a **known-neutral reference, not the
+  leader** — a leader cannot separate a non-neutral exposure from a scanner-slope error (see
+  the blocker note), so it can neither accept nor reject this migration. The reference is the
+  calibration frame `io/scanner-density-calibration` needs. This is the criterion that
+  actually holds the migration: the dependency edge on that task is necessary but does not
+  guarantee the measurement was taken, so do not read a green checkbox there as this gate
+  being met.
 - `docs/using-nc.md` updated by running the binary, not by reading the diff.
 
 ## Dependencies
 
 - [Reconstruction / render curve split](reconstruction-render-curve-split.md)
-- [Per-channel Dmax and the gray-mean reduction](../film-base/dmax-per-channel-reduction.md)
 - [Named conversion presets](conversion-presets.md)
 - [Pin the characteristic curve against regression](characteristic-curve-coverage.md) —
   **done 2026-09-10.** The curve now carries four property tests over the real
   `algo::reconstruct` plus a 1-ULP golden, so the default can move onto pinned wiring.
   The `PIPELINE_FINGERPRINTS` row was deliberately left to this task; see the
   portability note under *Known vs unknown* before writing one
+- [Scanner density calibration](../io/scanner-density-calibration.md) — the green residual
+  that replaced the per-channel blocker. Encoded as an edge on 2026-09-10: the "do not
+  migrate before it is understood" note had been prose only, so the graph said this task was
+  executable without it. **Necessary, not sufficient** — that task's tier 2 (the known-neutral
+  target that actually measures the residual) is *deliberately* optional there, since it
+  refuses to make a calibration target a precondition for converting at all. So its checkbox
+  can go green on the tier-1 diagnostic alone. The condition that actually gates this
+  migration is the neutrality check under *How to Verify*, which names the evidence rather
+  than a task. Closing that gap properly means either rescoping the scanner task's completion
+  criteria or filing a dedicated one; both are plan decisions this task should not make
+  unilaterally

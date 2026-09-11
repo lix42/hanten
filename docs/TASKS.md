@@ -329,7 +329,7 @@ graph TD
   algo/reference-anchored-sigmoid --> algo/reconstruction-render-curve-split
   color/film-master-render-pipeline --> algo/reconstruction-render-curve-split
   algo/reconstruction-render-curve-split --> algo/split-default-migration
-  film-base/dmax-per-channel-reduction --> algo/split-default-migration
+  io/scanner-density-calibration --> algo/split-default-migration
   algo/reference-anchored-sigmoid --> algo/sigmoid-parameter-calibration
   algo/film-stock-profiles --> algo/conversion-presets
   algo/film-stock-profiles --> algo/characteristic-curve-coverage
@@ -485,8 +485,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   under the **exponential** curve (a per-channel anchor is exactly a per-channel gain) but
   **not** under the shipped sigmoid. That exemption is closing: `algo/reconstruction-render-curve-split`
   settled (2026-09-02) that the default reconstruction sheds both knees, which *is* the
-  exponential — so this became a **blocker** for `algo/split-default-migration` rather than an
-  open investigation, because the shoulder being removed is what hides the error. Changes no pixels
+  exponential. That briefly made it a **blocker** for `algo/split-default-migration`; the edge
+  was **removed 2026-09-10** — `algo/film-stock-profiles` disqualified the leader as a
+  per-channel source and showed the term is a *slope* (`density.scale`, and `characteristic`'s
+  own tables), not the anchor this task weighs. Changes no pixels
 - `film-base/ir-usability-detection` (post-MVP): `film-base/ir-holder-detection`
   — decide IR usability from the **plane itself**, not from `--film-type`, which becomes a hint.
   Measured 2026-08-11: IR separability tracks the frame's *density*, not the stock's chemistry —
@@ -597,12 +599,18 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   a preset does not set `output.preset`, and the non-display presets keep resolving their
   own tone and exposure.
 - `algo/split-default-migration` (post-MVP): `algo/reconstruction-render-curve-split`,
-  `film-base/dmax-per-channel-reduction`, `algo/conversion-presets`,
-  `algo/characteristic-curve-coverage`
+  `algo/conversion-presets`, `algo/characteristic-curve-coverage`,
+  `io/scanner-density-calibration`
   — filed 2026-09-02 out of `algo/reconstruction-render-curve-split`, which reached a positive
-  verdict but deliberately excluded the default migration. The per-channel dependency is not
-  bookkeeping: the shipped sigmoid's shoulder **hides** a 17-83% off-neutral channel error on
-  the grey leader, and a shoulder-less default lets it survive into the highlights
+  verdict but deliberately excluded the default migration. It depended on
+  `film-base/dmax-per-channel-reduction` until **2026-09-10**: the edge existed because the
+  shipped sigmoid's shoulder hid a per-channel error read off the grey leader. Both halves of
+  that reasoning are gone — `algo/film-stock-profiles` disqualified the leader as a source, and
+  the proposed default (`characteristic-generic`) carries each channel's own curve, so it has
+  neither a scalar `Dmax` nor a per-channel gain to get wrong. What the migration still waits
+  on is the green residual, which is `io/scanner-density-calibration` — an edge that is
+  necessary but **not sufficient**, since that task's known-neutral tier is optional there;
+  the binding condition is the neutrality check in the task's own `How to Verify`
 - `algo/dmax-white-anchor` (post-MVP): `algo/density`
 - `algo/density-safety-bounds` (post-MVP): `algo/density`, `core/pipeline-orchestration`
 - `algo/auto-neutral-wb` (post-MVP): `algo/density`, `core/pipeline-orchestration`
@@ -954,9 +962,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   which is the `algo/split-default-migration` step
 - [ ] [Activate the split as the default](tasks/algo/split-default-migration.md) — the
   `pipeline_version` bump the split left out: reconstruction stops shaping tone, the display
-  operator carries the character. Blocked on `film-base/dmax-per-channel-reduction`, because
-  the shoulder being removed is what currently **hides** a 17-83% off-neutral channel error
-  on the grey leader
+  operator carries the character. The `film-base/dmax-per-channel-reduction` block was
+  **lifted 2026-09-10** (the leader is disqualified as a source and the proposed default
+  carries per-channel curves); what remains to understand first is the green residual in
+  `io/scanner-density-calibration`
 - [ ] [Sigmoid parameter calibration](tasks/algo/sigmoid-parameter-calibration.md) — turn the
   provisional contrast (≈2.07), shoulder (≈0.6) and per-stock anchor offsets into calibrated
   values. Needs a **bracketed roll** (so exposure labels are true by construction) and a **grey

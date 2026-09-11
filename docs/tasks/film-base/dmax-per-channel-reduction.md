@@ -228,3 +228,31 @@ Two consequences, and they point the same way:
   this lands ships a visible cast on Gold and Portra.
 
 The user's objection recorded below is unaffected and still the crux of whether this can work.
+
+---
+
+**2026-09-10 — the critical-path claim above is withdrawn; the dependency is removed.**
+`algo/split-default-migration` no longer depends on this task. Both halves of the
+2026-09-02 reasoning died in `algo/film-stock-profiles`:
+
+- **The leader is disqualified as a per-channel source.** Measured leaders do not reproduce
+  the published per-channel divergence at all (one fixture roll reads red densest, which no
+  C-41 neutral response gives), and the comparison cannot separate a non-neutral leader
+  exposure from a scanner-slope error. The 17–83% off-neutral ratios are therefore not a
+  clean model-error reading, so "the shoulder hides them" no longer argues anything.
+- **The term is a slope, not an anchor.** It is carried by `density.scale` on the parametric
+  curves and by each stock's own tables on `characteristic` — and `characteristic-generic`,
+  the proposed default, has neither a scalar `Dmax` nor a per-channel gain to get wrong.
+
+What gates that migration now is the green residual, which no per-channel scale removes:
+`io/scanner-density-calibration`.
+
+**The `Design` questions and `How to Verify` above are superseded by this entry.** Both are
+built on leader measurements — per-channel leader anchors, same-stock leader ratios — and are
+no longer a valid route to a verdict. They are left in place as the record of why the leader
+was tried; do not work them as written.
+
+This does **not** close this task. What remains is the per-channel pair for the *parametric*
+path (`sigmoid`/`exponential` with no stock named) — where the `scale` half ships and the
+`offset` half does not — and whether a roll-scoped measurement can source either. That work
+is off the default path, which is precisely why it no longer blocks the migration.
