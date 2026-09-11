@@ -109,7 +109,11 @@ use crate::types::{
 /// a quietly wrong image" — a dead pixel becomes a very high but finite density
 /// rather than poisoning the channel). `1e-6` ≈ −20 stops below unity: darker than
 /// any real detail, yet leaves ample headroom before `10^(γ·D)` can overflow `f32`.
-pub(super) const SCAN_EPSILON: f32 = 1e-6;
+///
+/// `pub(crate)` rather than `pub(super)` only so `pipeline::stages::golden` can recompute
+/// stage 1 in `f64` when it measures how close the shipped `log10` lands to an f32
+/// rounding boundary; nothing outside `algo` consumes it at runtime.
+pub(crate) const SCAN_EPSILON: f32 = 1e-6;
 
 /// Corrected per-pixel film density `D'` (interleaved RGB), the boundary between
 /// the reconstruction sub-stages: the output of [`to_density`] +

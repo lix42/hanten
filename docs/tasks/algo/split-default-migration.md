@@ -85,6 +85,28 @@ reinhard`); `film-master` accepts it at exit 0 and needs no change; the gain map
 live and its plateau share improves 10–25x; `PIPELINE_FINGERPRINTS` needs a new row
 and a historical row must never be edited in place.
 
+**The new row's `render` hash may not be portable, and that is now measurable rather
+than a surprise from CI.** `algo/characteristic-curve-coverage` (closed 2026-09-10)
+found that a libm can only disagree on `10f32.powf` when the true value sits within
+~`2^-5` of an f32 ULP from a rounding boundary, and that **four** of the fifteen
+`stages::golden::pixels()` samples do under this curve — one of them the film-base
+pixel, whose value is the constant `10^(table[0].0)` and therefore reaches every
+base-density pixel of every frame. The golden there absorbs that with a 1-ULP window;
+the drift gate cannot, because it hashes raw f32 bits. So before recording a row,
+run `characteristic_golden_values_carry_their_libm_headroom`'s measurement over
+whatever the new default renders, and if a hashed sample is thin, change the *vector*
+— which means moving `golden::pixels()`, and that moves every historical row's
+meaning. Worth costing early rather than at the bump.
+
+**Two further things that measurement taught, both of which apply to the row:** the
+chain has *two* libm calls, not one (`log10` in `to_density` as well as the curve's
+`10^`), and a thin margin on the first is amplified by `ln(10)·d·(1/γ_local)` — up to
+62 pixel ULPs on the current vector. And the whole argument's binding constraint is
+already only **1.13x** the threshold (sample 8: margin 0.0353, amplification 6). A
+fingerprint row has no tolerance at all, so it is a strictly harder bar than the
+golden's — budget for picking a new vector rather than assuming the existing one
+carries over.
+
 **Unknown:** whether the per-channel neutrality fix lands close enough in shape to
 what this assumes, and whether the diffuse-white cost survives review as a default
 rather than as an option.
@@ -114,5 +136,8 @@ before it lands means shipping a visible cast on Gold and Portra.
 - [Reconstruction / render curve split](reconstruction-render-curve-split.md)
 - [Per-channel Dmax and the gray-mean reduction](../film-base/dmax-per-channel-reduction.md)
 - [Named conversion presets](conversion-presets.md)
-- [Pin the characteristic curve against regression](characteristic-curve-coverage.md) — the
-  default this task moves to lands on a curve nothing currently fingerprints
+- [Pin the characteristic curve against regression](characteristic-curve-coverage.md) —
+  **done 2026-09-10.** The curve now carries four property tests over the real
+  `algo::reconstruct` plus a 1-ULP golden, so the default can move onto pinned wiring.
+  The `PIPELINE_FINGERPRINTS` row was deliberately left to this task; see the
+  portability note under *Known vs unknown* before writing one

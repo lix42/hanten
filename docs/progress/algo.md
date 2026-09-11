@@ -47,6 +47,18 @@ What other epics need to know about `algo`:
   anchor rather than `print_exposure`**, because `--display-tone none` refuses any scalar
   gain applied after a bounded curve. `characteristic-generic` becoming the default is the
   `algo/split-default-migration` step, whose no-stock blocker is still open.
+- **The characteristic curve's wiring is pinned, and a fingerprint row over it is a
+  harder bar than that pin** (`algo/characteristic-curve-coverage`, 2026-09-10). Four
+  property tests run the real `algo::reconstruct` over a synthesized scan, plus a golden
+  stated within **1 ULP** rather than bit-for-bit. That window is what absorbs a libm
+  disagreement: measured on `stages::golden::pixels()`, four of fifteen samples sit close
+  enough to an f32 rounding boundary for two libms to round `10^` differently. Whoever
+  writes the `PIPELINE_FINGERPRINTS` row when this curve becomes the default
+  (`core/conversion-versioning` owns the gate, `algo/split-default-migration` the move)
+  gets **no** such window — the gate hashes raw f32 bits — so budget for choosing a new
+  vector rather than assuming the shared one carries over.
+  `stages::golden::characteristic_golden_values_carry_their_libm_headroom` is the harness
+  that decides it, and its threshold is glibc's published `powf` error, not a derivation.
 - **`FilmRgbImage` is the typed boundary out of this epic.** Private fields,
   constructible only inside `algo`, so nothing can mint one that skipped
   reconstruction. `working_space::map_nc_film_rgb_v1` is its only intended
@@ -3693,3 +3705,154 @@ from their expanded flags, so regenerating through `--preset` must produce byte-
 files. Ten frames × five presets, and on whole-image channel means four of the five sit
 within 0.005 of each other (`|G/R − 1| + |B/R − 1|`: 0.033–0.038, `sigmoid-flat` 0.063) —
 so the metric is a tie and the visual verdict is the whole decision.
+
+## characteristic-curve-coverage
+
+### 2026-09-10 — the wiring pinned two ways, and the libm premise corrected
+
+The curve shipped with its *tables* well covered and its wiring barely covered: nothing
+asserted what `to_density → check_tables → apply_curve_per_channel → FilmRgbImage`
+produces, so a refactor between the stages moved every characteristic pixel with four
+green gates. Closed with two complementary pins. The correction to the task's premise is
+the part worth reading.
+
+**The premise was half wrong, and which half is decidable in advance.** The task recorded
+that a bit-exact capture "is not available" because `10f32.powf` differs ~1 ULP across
+libm implementations. That is true of particular *values*, not of the mechanism: two libms
+can only disagree when the true value lies within `E − 0.5` ULPs of an f32 rounding
+boundary, `E` being the worst-case error of the sloppier implementation. glibc documents
+`powf` at 0.52 ULP, so 0.02; the harness pads that to **0.03**. Measuring that distance
+for all fifteen samples of `stages::golden::pixels()` under this curve:
+
+| samples | margin to the f32 rounding boundary |
+|---|---|
+| eleven of fifteen | 0.489 → 0.067 ULP — 2-16x clear of the threshold |
+| px3c1 | **0.0120 ULP** |
+| px4, all three channels | **0.0059 ULP** |
+
+So it is the *vector* that is unsafe, not the mechanism, and nothing had to be pushed to
+CI to find out.
+
+**But `10^` is only one of the chain's two libm calls, and review caught the first version
+measuring only that one.** `to_density`'s `log10` produces the density the curve then
+inverts, and a 1-ULP disagreement *there* reaches the pixel amplified by
+`ln(10)·d·(1/γ_local)`. Measuring both factors on the same fifteen samples:
+
+| | amplification ≤ 1 ULP | amplification > 1 ULP |
+|---|---|---|
+| **`log10` margin < 2⁻⁵** | sample 1 (0.0153) | *(none)* |
+| **margin ≥ 2⁻⁵** | 0, 2, 12-14 | 3-11, at 3-62 pixel ULPs |
+
+The empty cell is what makes the 1-ULP window sufficient, and it is empty by
+**coincidence**: sample 1 is the one thin `log10` and the one sample the curve does not
+amplify. So the emptiness is now the harness's asserted pass condition rather than an
+unrecorded accident — if a recapture or a table edit ever fills it, the test says so and
+names the remedy.
+
+**The real binding constraint is sample 8** (`log10` margin 0.0353, amplification 6 ULPs)
+— not the 2-16x the `10^` column suggests. It clears glibc's documented bound by 1.8x and
+the padded constant by 1.1x. If Apple's `log10` is worse than either, the margin test stays
+green and the golden reds on x86_64 by six times its window. That is the failure to expect,
+and the remedy is a different vector, not a wider tolerance.
+
+**And the threshold's first justification was wrong, which is the finding most worth
+keeping.** It argued `2^-5` followed from "both targets compute in double and round".
+It does not: one f64 ULP *is* ~`2^-29` of an f32 ULP, so a few of them is ~`2^-27`, seven
+orders tighter — under which nothing here is thin and the golden could have been
+bit-exact. The error was converting one quantity to a relative error twice, and it
+survived because the number it produced happened to sit plausibly between the measured
+margins. The constant is unchanged and conservative; only its warrant moved, from a
+derivation to glibc's published `powf` error.
+
+Three modelling traps the harness hit, all of which produced a *plausible* wrong number
+rather than an error:
+- dividing the scan by the base in f64 when `to_density` divides in f32 before the
+  `log10` — reference 5 ULPs out;
+- dropping the identity gain and zero offset as a no-op — `+ offset` is what normalises
+  the film-base pixel's `-0.0` to the `+0.0` actually stored;
+- taking the ULP width from `bits + 1` alone — at a binade boundary the step below is half
+  the step above, so a power-of-two sample would have its margin *overstated*. Latent
+  today (no sample has a zero mantissa), fixed anyway.
+
+Also noted while measuring, and deliberately not acted on: `check_tables` bounds slope by
+nothing, and `PORTRA_160_B[14]` spans 0.184 decades across 0.00024 density — 1/γ = 767,
+which would amplify a stage-1 ULP enormously. It cannot reach this golden (generic-c41
+tops out at 8.4), the segment is one 8-bit code wide and six stops below mid-grey, and the
+global ceiling is set by `SCAN_EPSILON` (~46 ULPs) rather than by the tables. Not worth a
+new invariant today; worth knowing before anyone trusts an analytic bound.
+
+**px4 is the one to carry forward.** Its corrected density is exactly `0.0` — it *is* the
+film base — so `invert` returns `table[0].0` verbatim and the rendered value is the
+constant `10^(table[0].0)`: a property of the shipped table literal, not of this vector.
+If `algo/split-default-migration` makes this curve the default, that 0.006 ULP margin
+reaches every base-density pixel of every frame.
+
+**Pin 1 — properties, in `algo::film_stock::tests`.** Four tests that run the real
+`algo::reconstruct` instead of `invert` alone, by synthesizing the *scan* a film would
+hand the decoder (stages 1-2 inverted) so `to_density` sits inside the assertion:
+
+- a neutral exposure ramp round-trips on all ten stocks, and the three channels reconverge
+  (relative error measured at **4.8e-7**, 8 ULPs; the bound is 1e-5);
+- the published mid-grey aim reconstructs to 0.18 through the chain, with `dmax` and
+  `curve_anchor` both absent — the self-anchoring property stated where a curve that
+  quietly acquired an anchor would be caught;
+- stages 1-2 are `scale·d + offset` and not `scale·(d + offset)`, which needs an explicit
+  non-neutral pair to state at all: this curve resolves the identity gain, where the two
+  spellings are arithmetically the same;
+- the reported `out_of_table` fractions match a recount from `invert`'s own per-sample
+  flag, and the out-of-range samples render *outside* the table's endpoint exposures
+  rather than clamped onto them. Nothing asserted those fractions before, though they
+  reach the JSON report and a `--strict`-promotable warning; the count is a separate
+  parallel reduction from the transform that renders them, so the two can drift apart.
+
+Plus one integration test: an off-table render warns, carries the per-channel figures, and
+`--strict` refuses it counting exactly one warning — with a sane-base control so the
+assertion is falsifiable.
+
+**Pin 2 — bits, in `pipeline::stages::golden`.** `golden_characteristic_is_correct_within_one_ulp`
+pins the captured fifteen to **1 ULP** rather than bit-for-bit, and
+`characteristic_golden_values_carry_their_libm_headroom` is why: it recomputes both libm
+steps in f64 (whose own error is ~4e-9 of an f32 ULP), asserts each captured value is the
+correctly-rounded one, pins the two sets of thin samples with their margins, and asserts
+the conjunction above is empty. A table edit, a changed vector, or a sample crossing a
+threshold in either direction fails it — so the golden's tolerance cannot silently stop
+being the right one. The window is uniform rather than per-sample on purpose: tightening
+the eleven safe samples to bit-exact would make them hostage to the `2^-5` premise for no
+gain in detection, since a real fault moves pixels by ~10^5 ULPs (measured: a `1e-6` nudge
+to one table literal moves the output 115,549 ULPs).
+
+**What was actually there before, stated honestly.** Not nothing:
+`stages::midtone_placement::mid_grey_lands_at_eighteen_percent_through_every_display_tone`
+runs the characteristic curve end to end. But it is one point (mid-grey) on one stock,
+red channel only, at ±0.01 absolute — a side effect of a test about the *display
+operator*. It catches a permuted channel because that moves mid-grey; it cannot see the
+extrapolation direction, the counting pass, green or blue, or anything that preserves
+red's mid-grey placement.
+
+**Falsifiability, measured rather than argued.** Each perturbation applied to the shipped
+code, full `cargo test` run, reverted (new tests in bold):
+
+| perturbation | caught by |
+|---|---|
+| `scale·(d + offset)` transposed | **the ordering test**; also `to_density_applies_scale_then_offset` + two parametric goldens |
+| red's table on all three channels | **ramp, mid-grey, ordering, the golden**; `midtone_placement` |
+| shared (red) film base | 24 tests — **all four properties, both new golden tests**, and every parametric golden |
+| channels permuted at stage 3 | **ramp, mid-grey, ordering, the golden**; `midtone_placement` |
+| clamp instead of extrapolating below | **the `out_of_table` test, both new golden tests**; `out_of_table_extrapolates_and_reports` |
+| count pass drifts from the render | **the `out_of_table` test and the golden — nothing else** |
+| one table literal moved by 1e-6 | **both new golden tests**; `curves_match_the_digitized_json` |
+
+The transposition is the case the golden provably *cannot* see (identity gain, zero
+offset), and the counting drift is the case only the new tests see. The two pins are
+complementary by construction, not redundant.
+
+**`version::PIPELINE_FINGERPRINTS` is deliberately untouched, and this is the handoff.**
+The gate fingerprints the *default* render; this curve is not a default. The precedent is
+`golden_sigmoid_at_the_reference_anchor_is_numerically_exact`, pinned by a golden and
+explicitly never hashed. Adding a fourth column would force values into historical rows
+for behaviour those builds never emitted — the defect the v2 row's `recipe` note warns
+about. When `algo/split-default-migration` moves the default here it bumps
+`PIPELINE_VERSION` and records a new row in the ordinary way, and the margin harness is
+the tool for deciding whether that row's `render` hash is portable: the drift gate hashes
+raw f32 bits, so it has no 1-ULP window, and px4's 0.006 ULP margin says the answer is
+not automatically yes.
