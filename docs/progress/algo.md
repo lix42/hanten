@@ -2945,7 +2945,7 @@ not a reason to make a filing mistake permanent before it has ever been publishe
 ## split-default-migration
 
 **Status:** not started
-**Updated:** 2026-09-02
+**Updated:** 2026-09-10
 
 - Goal: make the reconstruction/render split the shipped default — a
   `pipeline_version` bump with a before/after report. See
@@ -2961,6 +2961,17 @@ not a reason to make a filing mistake permanent before it has ever been publishe
   first: the shoulder this migration removes is what currently *hides* a 17-83% off-neutral
   channel error on the grey leader, so a shoulder-less default ships a visible cast on Gold
   and Portra.
+- **2026-09-10 — that blocker is withdrawn; the dependency is removed.** Both halves of the
+  bullet above died in `algo/film-stock-profiles`. The grey leader is disqualified as a
+  per-channel source (measured leaders do not reproduce the published divergence, and the
+  comparison cannot separate a non-neutral leader exposure from a scanner-slope error), and
+  the per-channel term turned out to be a **slope** carried by `density.scale` and by
+  `characteristic`'s own tables — not the anchor that task weighs. `characteristic-generic`,
+  the proposed default, has neither a scalar `Dmax` nor a per-channel gain. What gates this
+  migration now is the **green residual** (+0.40 mean, +1.00 on the Ektar roll), which no
+  per-channel scale removes. `io/scanner-density-calibration` is the new edge, but it is
+  necessary rather than sufficient — its known-neutral tier is optional there — so the
+  binding condition is the neutrality release gate in the task file's `How to Verify`.
 
 ## film-stock-profiles (continued — datasheet corpus and curve digitization)
 

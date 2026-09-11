@@ -608,7 +608,9 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   that reasoning are gone — `algo/film-stock-profiles` disqualified the leader as a source, and
   the proposed default (`characteristic-generic`) carries each channel's own curve, so it has
   neither a scalar `Dmax` nor a per-channel gain to get wrong. What the migration still waits
-  on is the green residual, which is `io/scanner-density-calibration`
+  on is the green residual, which is `io/scanner-density-calibration` — an edge that is
+  necessary but **not sufficient**, since that task's known-neutral tier is optional there;
+  the binding condition is the neutrality check in the task's own `How to Verify`
 - `algo/dmax-white-anchor` (post-MVP): `algo/density`
 - `algo/density-safety-bounds` (post-MVP): `algo/density`, `core/pipeline-orchestration`
 - `algo/auto-neutral-wb` (post-MVP): `algo/density`, `core/pipeline-orchestration`

@@ -129,10 +129,13 @@ calibration`, and the note above already says not to migrate before it is unders
 
 - A `pipeline_version` bump with its own `PIPELINE_FINGERPRINTS` row, and a
   before/after report under `docs/reports/`.
-- Neutrality checked against a **known-neutral reference, not the leader** — a leader
-  cannot separate a non-neutral exposure from a scanner-slope error (see the blocker note),
-  so it can neither accept nor reject this migration. The reference is the calibration frame
-  `io/scanner-density-calibration` needs.
+- **Release gate:** neutrality checked against a **known-neutral reference, not the
+  leader** — a leader cannot separate a non-neutral exposure from a scanner-slope error (see
+  the blocker note), so it can neither accept nor reject this migration. The reference is the
+  calibration frame `io/scanner-density-calibration` needs. This is the criterion that
+  actually holds the migration: the dependency edge on that task is necessary but does not
+  guarantee the measurement was taken, so do not read a green checkbox there as this gate
+  being met.
 - `docs/using-nc.md` updated by running the binary, not by reading the diff.
 
 ## Dependencies
@@ -147,4 +150,11 @@ calibration`, and the note above already says not to migrate before it is unders
 - [Scanner density calibration](../io/scanner-density-calibration.md) — the green residual
   that replaced the per-channel blocker. Encoded as an edge on 2026-09-10: the "do not
   migrate before it is understood" note had been prose only, so the graph said this task was
-  executable without it
+  executable without it. **Necessary, not sufficient** — that task's tier 2 (the known-neutral
+  target that actually measures the residual) is *deliberately* optional there, since it
+  refuses to make a calibration target a precondition for converting at all. So its checkbox
+  can go green on the tier-1 diagnostic alone. The condition that actually gates this
+  migration is the neutrality check under *How to Verify*, which names the evidence rather
+  than a task. Closing that gap properly means either rescoping the scanner task's completion
+  criteria or filing a dedicated one; both are plan decisions this task should not make
+  unilaterally
