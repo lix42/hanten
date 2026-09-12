@@ -1266,6 +1266,50 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   are both cut in L\* so every band edge lands on a bin edge and a band overlay needs no
   interpolation; and `sparse` is now a field, so the population weighting these artboards
   argued for is read rather than derived.
+- 2026-09-11: **v1 component set locked with the user: three charts.** Luminance histogram,
+  per-channel histogram, and cast-over-tone as two axis-coloured curves. The task file
+  carries the decision and the reasons for every deferral; what is worth repeating here is
+  how the cast chart was arrived at, because three encodings were drawn before one worked.
+  The **a\*/b\* path was rejected by the user as unreadable** — "this is a path goes through
+  a 2d points, it's too hard for me to read" — which no amount of annotating the plane
+  fixed. What replaced it was the user's own design: two lines over the bands, y in CIELAB
+  with 0 as neutral, **each line coloured by its own value** (a\* green-to-red, b\*
+  blue-to-yellow). That inverts the usual relationship — the colour is there to teach the
+  axis, not to carry data — and it made the crossover on `sig-flat` (b\* to -20, a\* to +8
+  in the top two bands) legible at a glance where the path never was.
+  Three implementation facts that cost a round each: the ramp must be **fixed, not scaled to
+  the data**, or a mild cast and a severe one look alike; its ends belong at the **measured
+  sRGB gamut limit per direction** (at L\* 65 green clips at 42.8 and blue at 54.3, so the
+  a\* ramp caps at ±41 and b\* at ±52 — one number for both under-saturates one of them);
+  and a **mark and the line beneath it must share one mapping**, or the marker reads more
+  muted than its own stroke.
+  The governing constraint fell out of the same work: **once colour carries hue it cannot
+  also carry config identity**, so this chart is inspect-mode by construction and compare
+  mode needs a different cast encoding. That is the two-mode split earning its keep rather
+  than an inconvenience.
+- 2026-09-11: **The v1 components are built** — `tools/review-app/src/charts/`, with a
+  `/charts` demo route rendering them from a committed synthetic record. Geometry is in
+  pure `.ts` with tests (90 in the app, up from 49) because **no `.tsx` in that app can be
+  tested at all**: `vp test` collects only `.test.ts` under `src/` and gives it no DOM.
+  That boundary is not bookkeeping. Two review rounds found four defects that a green
+  type-check and 83 tests had passed, every one of them inside a component: a mid-grey
+  reference line whose condition (`midGreyBin + 0.5` against ticks at multiples of ten)
+  could never be true, so it never drew; a required `bands` prop nothing read; `bounds()`
+  destructured inside a `<For>` over a module constant, which freezes at the first record;
+  and the x axis equating bin index with L\*, true only because the record currently uses
+  one bin per unit.
+  **The ramp was the serious one.** `ramp.ts` claimed as its headline property that colour
+  is "fixed, never scaled to the data — scale it and a mild cast on one frame looks like a
+  severe one on another", and the code normalised by the plotted range, so a frame whose
+  worst band was `b* = +2` painted *identically* to one whose worst was `+20`. It was also
+  asymmetric: with bounds `[-10, +18]`, `b* = -5` came out at chroma 26 against `+5` at 14.
+  Fixed in the code rather than the prose — a fixed `RAMP_REFERENCE` of 20 CIELAB units,
+  widened only when a frame exceeds it, symmetric and clamped. A mild cast now renders
+  mild, which is visible on the demo: `a*` sits near neutral and reads near-grey.
+  Also corrected: a fixture whose channels were independently shaped and so did not
+  partition `pixels` (blue summed to 101.2% of the frame) while the test that should have
+  caught it checked only luminance; `sparse` read as `=== true` where every neighbouring
+  field threw; and a figure cited without its scope.
 
 ## metrics-visualization
 

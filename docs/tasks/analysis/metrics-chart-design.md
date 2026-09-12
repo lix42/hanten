@@ -74,36 +74,98 @@ Beyond three overlaid configs, colour alone stops separating them — measured:
 the `dataviz` reference dark steps pass all-pairs CVD at two and three series and
 fail at five. Past three, compare mode has to become small multiples.
 
-## Open questions
+## Settled — the v1 component set
 
-- **Encoding per measurement.** `cast_by_tone_band` is the sharpest case: one
-  path on the a\*/b\* plane (tone implicit in path order — shows crossover shape,
-  hides which band), two curves against a tone axis (tone explicit, 4 lines at
-  two configs), or three with chroma. The 2026-09-03 ranking argues for the
-  path; all three are now drawn on real data in the design canvas.
-- **Whatever the encoding, the mark has to carry the band's population.** Measured
-  2026-09-10: the `highlight` vertex was the largest excursion in every colour
-  encoding and rested on **one pixel of 15.1 million**. At equal visual weight it
-  invents a crossover out of rounding. The re-cut reduced but did not remove this
-  — hence the `sparse` field, which a chart must read rather than ignore.
-- **The re-cut is what makes a stacked band bar worth drawing at all.** On the old
-  stops-even edges one band held a median 83% of a frame, so the bar was one
-  block; that was the evidence for demoting it, and it no longer applies.
-- **How many visuals.** Five groups need not mean five charts. `percentiles_stops`
-  and `bands` describe the same axis and might share it; `hue_sectors` and
-  `cast_by_tone_band` are both colour-over-tone. What genuinely needs its own frame?
-- **Rendering technology.** Inline SVG, canvas, or something else. The lean is
-  SVG: the datasets are tiny (11 / 5 / 6 points), labels must stay crisp,
-  hit-testing matters for "which band is this", the app server-renders, and since
-  PR #108 every colour and size must come from a Panda token under `strictTokens`
-  — which a charting library's own CSS would sit outside of.
-- **Component decomposition.** What is shared: a plot frame, a stops axis, a
-  legend, the two-config overlay pair.
-- **Units.** The JSON keeps fractions deliberately; the Markdown report converts.
-  A chart needs that decided once.
-- **Degenerate cases**, which are where an encoding quietly fails: two configs
-  whose curves nearly coincide, a band with no pixels, a measurement absent
-  entirely.
+Decided 2026-09-11 with the user, against real records on the design canvas.
+**Three charts ship.** Everything else is deferred with a reason, so a later
+reader can tell a rejection from an omission.
+
+| # | Chart | Mode | Source |
+| --- | --- | --- | --- |
+| 1 | **Luminance histogram** | both | `tone.histogram.series.luminance` |
+| 2 | **Per-channel histogram** (R/G/B + luminance) | inspect | `tone.histogram.series.*` |
+| 3 | **Cast over tone — two axis-coloured curves** | inspect | `color.cast_by_tone_band` |
+
+**Chart 3's shape, because it took several attempts.** x is the tone band, dark
+to light; y is CIELAB with **0 drawn as neutral**; two lines, `a*` and `b*`. Each
+line is **coloured by its own value** — `a*` runs green below zero to red above,
+`b*` blue below to yellow above — so the line teaches its own axis and nothing
+has to be memorised. Implemented as a vertical SVG gradient in user space, so
+stroke colour is a function of y position, which *is* the value.
+
+Three things that are easy to get wrong here:
+
+- **Colour is redundant with position.** The ramp is fixed, not scaled to the
+  data, or a mild cast on one frame and a severe one on another would look alike.
+  Read the value off the axis, never off the hue.
+- **Ramp ends sit at the sRGB gamut limit for their direction, measured.** At
+  L\* 65 green clips at 42.8 and blue at 54.3, and green is what caps the `a*`
+  ramp — hence ±41 for `a*` and ±52 for `b*`, not one number for both. Push past
+  those and the hue skews instead of saturating.
+- **A mark and the line under it must use one mapping.** Painting marks with the
+  *true* value's colour while the line gradient spans the axis range makes a
+  marker look more muted than its own stroke, worst at the extremes.
+
+**Rendering: inline SVG, hand-rolled.** Confirmed rather than assumed — every
+artboard on the canvas is hand-written SVG and none of it wanted a library. The
+datasets are small (200 bins, 7 bands), labels must stay crisp, and since PR #108
+every colour and size has to come from a Panda token under `strictTokens`, which a
+charting library's own CSS would sit outside of.
+
+**Units: L\* and fractions, never stops.** The histogram is stored one bin per
+L\* unit and the bands are cut in the same domain, so the two compose exactly.
+No shipping v1 chart uses the stops domain.
+
+**Component decomposition**, as the canvas actually factored: a plot frame
+(margins, recessive grid, axis labels); a band axis; reference lines the record
+names rather than the chart deriving (`mid_grey_bin`, `diffuse_white_bin`); a
+legend; and **two separate colour systems** — see the constraint below.
+
+**The constraint that splits the modes.** Once colour carries hue it cannot also
+carry config identity. Chart 3 is therefore inspect-mode *by construction*: at
+n ≥ 2 it would need dash or shape to separate conversions and the colour
+advantage would go. Compare mode spends colour on the config and reads cast from
+position alone.
+
+**A band's population must reach the mark.** `cast_by_tone_band` carries `pixels`
+and `sparse`; a sparse band is drawn hollow, never at the weight of one holding
+half the frame. On the old cut the largest excursion rested on **one pixel of
+15.1 million**.
+
+## Deferred, with reasons
+
+- **Percentile curve** — not shipping. It was ranked first before a histogram
+  existed in the record; on one frame it is hard to read, because density only
+  shows as the curve going flat. Its one surviving claim is that it turns a
+  difference into a *number*, which v1 does not need. The canvas keeps it as the
+  record of why.
+- **The a\*/b\* path** — rejected. Crossover as the shape of a 2-D trajectory is
+  real but too hard to read; tone is only implied by vertex order.
+- **Chroma as a third curve** — rejected. It is `hypot(a*, b*)`, derivable from
+  the two lines that ship, and it crowded the panel.
+- **`hue_sectors`** — deferred. Six sectors is coarse, and polar charts compare
+  poorly, which matters in a comparison tool.
+- **`endpoints`** — deferred as a *conditional* strip: all-zero is the healthy
+  case, and a permanent panel of empty bars trains the eye to skip it. Worth
+  building when something is non-zero, as with the blue-only top-code population
+  it once caught.
+- **`tone.bands` stacked bar** — deferred, but its rejection no longer holds. The
+  L\* re-cut took frame G2's largest band, across its five presets, from 93.8% to
+  51.7%, and it now separates the preset families by eye. (Across all 33 renders
+  the recorded figures are a median of 82.6% → 46.3% and a worst of 95.0% →
+  56.2%; see `analysis/conversion-metrics` in the progress log.) A strong v2 candidate, and the natural roll view.
+
+## Still open
+
+- Whether chart 3's x axis stays evenly-spaced band slots or moves to true L\*
+  centres, which is what would let bands, histogram and cast share one axis.
+- What a compare-mode cast chart looks like, given colour is spent on config
+  identity there.
+- Degenerate cases beyond `sparse`: two configs whose curves nearly coincide, and
+  a measurement absent entirely.
+- How far `sparse` should demote the **curve**, not just the mark. Today the
+  hollow marker is the whole encoding and the polyline still runs through that
+  band at full weight, so a one-pixel outlier can still read as a crossover.
 
 ## Non-goals
 

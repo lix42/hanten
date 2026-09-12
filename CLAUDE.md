@@ -1027,7 +1027,11 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   in a Panda style object is a *token* lookup rather than pixels — `gap: 16`
   compiled to `4rem`, silently — which is now a compile error. `styled-system/` is
   generated and gitignored, so every npm script that needs it runs `panda codegen`
-  first. **`src/index.css`'s `@layer reset, base, tokens, recipes, utilities;` is
+  first. **No component in this app can be tested** — `vp test` collects only
+  `.test.ts` under `src/`, with no DOM — so anything worth testing (chart geometry,
+  parsing, scales) goes in a pure `.ts` beside it and the `.tsx` stays
+  arithmetic-free; a reference line that never drew and a required prop nothing
+  read both shipped past a green type-check because they sat in a component. **`src/index.css`'s `@layer reset, base, tokens, recipes, utilities;` is
   Panda's injection point, not an ordering preference** — the plugin writes into a
   file only when an `@layer` rule names *all five*, and otherwise emits nothing at
   all: trimming it to the three layers actually in use builds at **exit 0, no

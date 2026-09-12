@@ -191,7 +191,8 @@ if you ever need the npm _script_ of the same name.
   `panda.config.ts` is exhaustive.** A measurement that is not a token there is a
   type error at the call site; adding one is a deliberate edit to that file. Note
   the coverage is Panda's, not ours — a property is checked only if its utility
-  declares a token category, which is why `borderWidth`, `zIndex` and `opacity`
+  declares a token category, which is why `borderWidth`, `zIndex`, `opacity` and the
+  SVG geometry properties (`strokeWidth`, `strokeDasharray`, `fillOpacity`)
   still take raw values. `strictPropertyValues` was free: it found nothing,
   every enum-valued property already naming a real CSS keyword.
 - **What `strictTokens` is protecting you from, measured before it was on:** a
@@ -239,6 +240,23 @@ if you ever need the npm _script_ of the same name.
   override is the light one — the same shape the hand-written custom properties
   had (dark by default, light under `prefers-color-scheme: light`), except that
   `color: "fg.dim"` is now type-checked and a typo fails `vp check`.
+- **Nothing in a `.tsx` file is tested, and that is a structural fact, not an
+  omission.** `vite.config.ts` collects only `.test.ts` under `src/` and runs it
+  with `environment: "node"` — `.tsx` is not matched, and there is no DOM to mount
+  a component in. So every number a chart draws lives in a pure `.ts`
+  (`src/charts/scale.ts`, `ramp.ts`, `metrics.ts`) with a sibling test, and the
+  components map props to markup. `src/keys.ts` states the same rule; the mini-map's
+  scale math in `ImageSection.tsx` is the counter-example, and is untested. Two chart
+  bugs — a reference line whose condition could never be true, and a required prop
+  nothing read — passed a green type-check and 90 tests because they were in a
+  component.
+- **In SVG, Panda gates `fill` and `stroke` but not the geometry.** Through `css()`
+  those two are token-typed (`fill: Tokens["colors"]`), so chart chrome goes through
+  `css()` and tracks the light/dark semantic tokens. SVG _presentation attributes_
+  (`fill="…"`, `stroke="…"`) bypass Panda entirely — no `strictTokens`, and no theme
+  switching — which is right for a computed data colour like a CIELAB ramp and wrong
+  for anything the theme should own. `strokeWidth`, `strokeDasharray` and
+  `fillOpacity` declare no token category and take raw values either way.
 - **A scroll handler must never write a signal here.** Scroll → signal → re-render
   → layout change → measure → scroll geometry is a cycle, and it wedged the
   renderer so hard that Chrome could not inject a script into the page. The

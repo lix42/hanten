@@ -1153,9 +1153,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   page. Still open: the **generator** that renders a matrix and emits the JSON, HDR review,
   and build-vs-build.
 - [~] [Metrics chart design](tasks/analysis/metrics-chart-design.md) — settle *what the
-  charts are*, independently of the app: the encoding each measurement gets (is
-  `cast_by_tone_band` one a\*/b\* path or two curves against tone?), how many visuals they
-  collapse into, the rendering technology, and the component split. Every chart must be
+  charts are*, independently of the app. **Settled and built**: a luminance histogram, a
+  per-channel histogram, and cast-over-tone as two axis-coloured curves, in hand-rolled
+  SVG, with the a\*/b\* path rejected as unreadable. Still open: whether the cast chart's
+  x axis moves to true L\* centres, and what a compare-mode cast chart looks like. Every chart must be
   designed to overlay two configs from the start — the app's premise. Executable now; the
   app half is not.
 - [ ] [Metrics visualization](tasks/analysis/metrics-visualization.md) — wire the charts

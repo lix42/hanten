@@ -42,7 +42,8 @@ export default defineConfig({
   // Every token-backed value must name a token, and every enum-valued property
   // must be a real CSS keyword. Note the coverage is Panda's, not ours: a
   // property is only checked if its utility declares a token category, which is
-  // why `borderWidth`, `zIndex` and `opacity` still take raw values below.
+  // why `borderWidth`, `zIndex`, `opacity` and the SVG geometry properties
+  // (`strokeWidth`, `strokeDasharray`, `fillOpacity`) still take raw values below.
   strictTokens: true,
   strictPropertyValues: true,
 
@@ -72,6 +73,9 @@ export default defineConfig({
       // Named by role. `body` is what the page sets and what the buttons take,
       // so a control always matches surrounding text.
       fontSizes: {
+        // Chart gridline labels. Smaller than any UI text on purpose: a tick
+        // label is read only when the eye is already on the number beside it.
+        tick: { value: "10px" },
         key: { value: "11px" }, // the <kbd> shortcut glyph
         meta: { value: "12px" }, // the source line, the fit/fullsize hint
         code: { value: "13px" }, // inline code and code blocks in SetError
@@ -178,6 +182,22 @@ export default defineConfig({
         missing: { value: { base: "#40211f", _osLight: "#f6dcda" } },
         bad: { value: { base: "#ff8b7d", _osLight: "#b3261e" } },
         button: { value: { base: "#262626", _osLight: "#ffffff" } },
+        // Chart series identity. The three channel colours must *look* like red,
+        // green and blue — that is what a per-channel histogram is for — so hue
+        // is not free to move for contrast. Red and green are consequently
+        // indistinguishable under deuteranopia (measured ΔE 1.3–3.8), which no
+        // palette can fix; the charts carry **dash patterns and direct labels**
+        // as the secondary encoding instead. Lightness and contrast-vs-surface
+        // are validated on both themes.
+        series: {
+          luminance: { value: { base: "#dddddd", _osLight: "#1b1b1b" } },
+          r: { value: { base: "#e0685f", _osLight: "#c43b31" } },
+          g: { value: { base: "#3f9e66", _osLight: "#1f7a45" } },
+          b: { value: { base: "#4a8fd8", _osLight: "#1f5fb0" } },
+        },
+        // A gridline that has to be read against, not through: the neutral line
+        // on a cast chart and mid-grey on a histogram.
+        gridStrong: { value: { base: "#5a5a5a", _osLight: "#9a9a9a" } },
         // Behind the pan controls and the "no rendition" note, both of which
         // sit over the image.
         scrim: {

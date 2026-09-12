@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AliveRouteImport } from './routes/alive'
+import { Route as ChartsRouteImport } from './routes/charts'
 import { Route as EventsRouteImport } from './routes/events'
 import { Route as ImgIdRouteImport } from './routes/img.$id'
 
@@ -22,6 +23,11 @@ const IndexRoute = IndexRouteImport.update({
 const AliveRoute = AliveRouteImport.update({
   id: '/alive',
   path: '/alive',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChartsRoute = ChartsRouteImport.update({
+  id: '/charts',
+  path: '/charts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EventsRoute = EventsRouteImport.update({
@@ -38,12 +44,14 @@ const ImgIdRoute = ImgIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/alive': typeof AliveRoute
+  '/charts': typeof ChartsRoute
   '/events': typeof EventsRoute
   '/img/$id': typeof ImgIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/alive': typeof AliveRoute
+  '/charts': typeof ChartsRoute
   '/events': typeof EventsRoute
   '/img/$id': typeof ImgIdRoute
 }
@@ -51,20 +59,22 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/alive': typeof AliveRoute
+  '/charts': typeof ChartsRoute
   '/events': typeof EventsRoute
   '/img/$id': typeof ImgIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/alive' | '/events' | '/img/$id'
+  fullPaths: '/' | '/alive' | '/charts' | '/events' | '/img/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/alive' | '/events' | '/img/$id'
-  id: '__root__' | '/' | '/alive' | '/events' | '/img/$id'
+  to: '/' | '/alive' | '/charts' | '/events' | '/img/$id'
+  id: '__root__' | '/' | '/alive' | '/charts' | '/events' | '/img/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AliveRoute: typeof AliveRoute
+  ChartsRoute: typeof ChartsRoute
   EventsRoute: typeof EventsRoute
   ImgIdRoute: typeof ImgIdRoute
 }
@@ -83,6 +93,13 @@ declare module '@tanstack/solid-router' {
       path: '/alive'
       fullPath: '/alive'
       preLoaderRoute: typeof AliveRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/charts': {
+      id: '/charts'
+      path: '/charts'
+      fullPath: '/charts'
+      preLoaderRoute: typeof ChartsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/events': {
@@ -105,6 +122,7 @@ declare module '@tanstack/solid-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AliveRoute: AliveRoute,
+  ChartsRoute: ChartsRoute,
   EventsRoute: EventsRoute,
   ImgIdRoute: ImgIdRoute,
 }
