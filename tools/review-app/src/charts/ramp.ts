@@ -105,3 +105,27 @@ export function rampAt(axis: CastAxis, value: number, span: number): string {
   const unit = Math.max(-1, Math.min(1, value / span));
   return rampColour(axis, unit * RAMP_CHROMA[axis]);
 }
+
+/**
+ * The stops of the vertical gradient that paints one curve, top of the axis
+ * first.
+ *
+ * Colour has to be the value's colour at every y, and `rampAt` is linear only
+ * inside `±span`. So an axis padded past the reference gets an extra stop *at*
+ * the reference: without it the interpolation stretches the whole ramp over the
+ * padding and paints a measured value short of the chroma it earned.
+ */
+export function rampGradientStops(
+  axis: CastAxis,
+  lo: number,
+  hi: number,
+  span: number,
+): { offset: string; color: string }[] {
+  const inside = [hi, span, 0, -span, lo].filter((v) => v >= lo && v <= hi);
+  return [...new Set(inside)]
+    .sort((x, y) => y - x)
+    .map((v) => ({
+      offset: hi === lo ? "0.5" : ((hi - v) / (hi - lo)).toFixed(4),
+      color: rampAt(axis, v, span),
+    }));
+}

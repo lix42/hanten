@@ -2,8 +2,18 @@ import { For, Show } from "solid-js";
 import { css } from "../../styled-system/css";
 import { AxisLine, AxisTitle, Grid } from "./Frame";
 import type { CastBand } from "./metrics";
-import { type CastAxis, rampAt, rampSpan } from "./ramp";
-import { linearScale, plotArea, polyline, populationRadius, slotCentres, ticks } from "./scale";
+import { type CastAxis, rampAt, rampGradientStops, rampSpan } from "./ramp";
+import {
+  extent,
+  linearScale,
+  niceStep,
+  paddedBounds,
+  plotArea,
+  polyline,
+  populationRadius,
+  slotCentres,
+  ticks,
+} from "./scale";
 
 /**
  * Colour cast across the tone bands: `a*` and `b*`, each line coloured by its
@@ -66,15 +76,17 @@ export function CastOverTone(props: Props) {
   const height = () => props.height ?? 330;
   const plot = () => plotArea(width(), height(), MARGINS);
 
+  const values = () => props.cast.flatMap((c) => [c.meanA, c.meanB]);
   // The axis covers every value on both curves, padded to a round number, and
   // always includes zero — the whole chart is read against neutral.
-  const bounds = (): [number, number] => {
-    const values = props.cast.flatMap((c) => [c.meanA, c.meanB]);
-    const lo = Math.min(0, ...values);
-    const hi = Math.max(0, ...values);
-    const pad = Math.max((hi - lo) * 0.12, 2);
-    return [Math.floor((lo - pad) / 2) * 2, Math.ceil((hi + pad) / 2) * 2];
-  };
+  const bounds = () => paddedBounds(values());
+  // **The ramp is normalised by what was measured, never by the padded axis.**
+  // Padding can push a frame whose worst band is 19 past the 20-unit reference,
+  // and normalising by that would paint the same cast weaker on one frame than
+  // another for no reason but axis geometry — the opposite of what the fixed
+  // ramp exists to guarantee.
+  const span = () => rampSpan(...extent(values()));
+  const step = () => niceStep(bounds()[1] - bounds()[0]);
 
   // Bands the record omits carry no pixels, so they get no slot: the curve spans
   // the bands that exist rather than dipping to zero through a band that does not.
@@ -106,37 +118,30 @@ export function CastOverTone(props: Props) {
     >
       <defs>
         <For each={AXES}>
-          {({ axis }) => {
+          {({ axis }) => (
             // Every read stays inside a function: `AXES` never changes identity,
             // so this row body runs once, and anything destructured here would
             // freeze at the first record while the scale kept moving.
-            const span = () => rampSpan(bounds()[0], bounds()[1]);
-            const neutralOffset = () => {
-              const [lo, hi] = bounds();
-              return hi === lo ? "0.5" : (hi / (hi - lo)).toFixed(4);
-            };
-            return (
-              <linearGradient
-                id={`${props.id}-${axis}`}
-                gradientUnits="userSpaceOnUse"
-                x1="0"
-                y1={y()(bounds()[1])}
-                x2="0"
-                y2={y()(bounds()[0])}
-              >
-                <stop offset="0" stop-color={rampAt(axis, bounds()[1], span())} />
-                <stop offset={neutralOffset()} stop-color={rampAt(axis, 0, span())} />
-                <stop offset="1" stop-color={rampAt(axis, bounds()[0], span())} />
-              </linearGradient>
-            );
-          }}
+            <linearGradient
+              id={`${props.id}-${axis}`}
+              gradientUnits="userSpaceOnUse"
+              x1="0"
+              y1={y()(bounds()[1])}
+              x2="0"
+              y2={y()(bounds()[0])}
+            >
+              <For each={rampGradientStops(axis, bounds()[0], bounds()[1], span())}>
+                {(at) => <stop offset={at.offset} stop-color={at.color} />}
+              </For>
+            </linearGradient>
+          )}
         </For>
       </defs>
 
       <Grid
         plot={plot()}
         orientation="horizontal"
-        lines={ticks(bounds()[0], bounds()[1], 10).map((v) => ({
+        lines={ticks(bounds()[0], bounds()[1], step()).map((v) => ({
           value: v,
           at: y()(v),
           strong: v === 0,
@@ -157,7 +162,7 @@ export function CastOverTone(props: Props) {
             <For each={props.cast}>
               {(band, i) => {
                 const value = () => valueOf(band, axis);
-                const colour = () => rampAt(axis, value(), rampSpan(bounds()[0], bounds()[1]));
+                const colour = () => rampAt(axis, value(), span());
                 return (
                   <Show
                     when={!band.sparse}

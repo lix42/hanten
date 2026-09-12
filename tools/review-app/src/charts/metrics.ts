@@ -21,6 +21,14 @@
  * than read `undefined`.
  */
 
+/**
+ * The channels a histogram carries. Naming them is what makes a misspelled
+ * request a type error rather than a chart quietly missing a curve.
+ */
+export const SERIES_NAMES = ["luminance", "r", "g", "b"] as const;
+
+export type SeriesName = (typeof SERIES_NAMES)[number];
+
 /** One channel of the histogram: bin counts, plus what fell outside them. */
 export interface HistogramSeries {
   readonly counts: readonly number[];

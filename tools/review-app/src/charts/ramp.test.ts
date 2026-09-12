@@ -6,6 +6,7 @@ import {
   inSrgbGamut,
   rampAt,
   rampColour,
+  rampGradientStops,
   rampSpan,
 } from "./ramp";
 
@@ -95,5 +96,43 @@ describe("cast ramp", () => {
     expect(rampSpan(-3, 8)).toBe(RAMP_REFERENCE);
     expect(rampSpan(-30, 8)).toBe(30);
     expect(rampSpan(-3, 44)).toBe(44);
+  });
+});
+
+describe("rampGradientStops", () => {
+  it("runs from the top of the axis to the bottom, through neutral", () => {
+    const stops = rampGradientStops("b", -10, 18, 20);
+    expect(stops).toHaveLength(3);
+    expect(stops[0]?.offset).toBe("0.0000");
+    expect(stops[2]?.offset).toBe("1.0000");
+    expect(stops[1]?.color).toBe(rampColour("b", 0));
+    // Neutral sits where zero sits on the axis, not at the middle of it.
+    expect(stops[1]?.offset).toBe((18 / 28).toFixed(4));
+  });
+
+  // The invariant the chart rests on: a stop's colour is its own value's colour
+  // under the fixed span, so widening the axis moves stops without re-scaling
+  // the ramp.
+  it("gives every stop the colour of the value it sits at", () => {
+    const [lo, hi] = [-10, 18];
+    for (const stop of rampGradientStops("a", lo, hi, RAMP_REFERENCE)) {
+      const value = hi - Number(stop.offset) * (hi - lo);
+      expect(stop.color).toBe(rampAt("a", value, RAMP_REFERENCE));
+    }
+  });
+
+  // Beyond the reference `rampAt` clamps, so a two-stop gradient would
+  // interpolate over the clamped part and under-paint everything inside it.
+  it("pins the reference itself when the axis runs past it", () => {
+    const stops = rampGradientStops("b", -30, 40, 20);
+    expect(stops.map((s) => s.color)).toContain(rampColour("b", RAMP_CHROMA.b));
+    expect(stops.map((s) => s.color)).toContain(rampColour("b", -RAMP_CHROMA.b));
+    expect(stops.length).toBeGreaterThan(3);
+  });
+
+  it("draws a single flat stop rather than dividing by zero", () => {
+    expect(rampGradientStops("a", 0, 0, RAMP_REFERENCE)).toEqual([
+      { offset: "0.5", color: rampColour("a", 0) },
+    ]);
   });
 });

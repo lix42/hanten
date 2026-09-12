@@ -126,3 +126,25 @@ export function niceStep(hi: number, target = 6): number {
   const magnitude = 10 ** Math.floor(Math.log10(rough));
   return ([1, 2, 5, 10].find((m) => m * magnitude >= rough) ?? 10) * magnitude;
 }
+
+/** The smallest and largest of `values`, or `[0, 0]` when there are none. */
+export function extent(values: readonly number[]): [number, number] {
+  if (values.length === 0) return [0, 0];
+  return [Math.min(...values), Math.max(...values)];
+}
+
+/**
+ * A plot range covering every value, padded and rounded out to a multiple of
+ * `step`, and always including zero — the cast chart is read against neutral.
+ *
+ * The padding is geometry only. Anything that maps a *value* to something else —
+ * the cast ramp above all — must use `extent`, or a frame whose largest cast sits
+ * just under the ramp reference would be scaled down by its own axis padding.
+ */
+export function paddedBounds(values: readonly number[], step = 2): [number, number] {
+  const [min, max] = extent(values);
+  const lo = Math.min(0, min);
+  const hi = Math.max(0, max);
+  const pad = Math.max((hi - lo) * 0.12, step);
+  return [Math.floor((lo - pad) / step) * step, Math.ceil((hi + pad) / step) * step];
+}

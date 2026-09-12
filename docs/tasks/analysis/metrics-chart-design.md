@@ -163,6 +163,9 @@ half the frame. On the old cut the largest excursion rested on **one pixel of
   identity there.
 - Degenerate cases beyond `sparse`: two configs whose curves nearly coincide, and
   a measurement absent entirely.
+- How far `sparse` should demote the **curve**, not just the mark. Today the
+  hollow marker is the whole encoding and the polyline still runs through that
+  band at full weight, so a one-pixel outlier can still read as a crossover.
 
 ## Non-goals
 

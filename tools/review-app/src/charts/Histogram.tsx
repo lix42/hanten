@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { css } from "../../styled-system/css";
 import { AxisLine, AxisTitle, Grid } from "./Frame";
-import type { Histogram as HistogramData } from "./metrics";
+import type { Histogram as HistogramData, SeriesName } from "./metrics";
 import { histogramOutline, linearScale, niceStep, plotArea, ticks } from "./scale";
 
 /**
@@ -19,7 +19,7 @@ import { histogramOutline, linearScale, niceStep, plotArea, ticks } from "./scal
 const MARGINS = { left: 52, right: 16, top: 24, bottom: 46 };
 
 /** Dash patterns, the secondary encoding that carries identity when hue cannot. */
-const DASH: Readonly<Record<string, string | undefined>> = {
+const DASH: Readonly<Record<SeriesName, string | undefined>> = {
   luminance: undefined,
   r: "6 3",
   g: "2 3",
@@ -46,8 +46,8 @@ const styles = {
   inkB: css.raw({ fill: "series.b" }),
 };
 
-/** Token-backed colour per channel. A name with no entry falls back to luminance. */
-function seriesStyle(name: string) {
+/** Token-backed colour per channel. */
+function seriesStyle(name: SeriesName) {
   if (name === "r") return styles.seriesR;
   if (name === "g") return styles.seriesG;
   if (name === "b") return styles.seriesB;
@@ -55,7 +55,7 @@ function seriesStyle(name: string) {
 }
 
 /** The same colour as a fill only, for text. */
-function seriesInk(name: string) {
+function seriesInk(name: SeriesName) {
   if (name === "r") return styles.inkR;
   if (name === "g") return styles.inkG;
   if (name === "b") return styles.inkB;
@@ -65,7 +65,7 @@ function seriesInk(name: string) {
 interface Props {
   histogram: HistogramData;
   /** Which channels to draw, in order. */
-  series: readonly string[];
+  series: readonly SeriesName[];
   /** How far up the L* axis to show. The record stores 200; a render rarely passes 110. */
   visibleLstar?: number;
   width?: number;
@@ -78,10 +78,17 @@ export function Histogram(props: Props) {
   const visible = () => props.visibleLstar ?? 110;
   const plot = () => plotArea(width(), height(), MARGINS);
 
+  // A requested channel the record does not carry is refused, not dropped: the
+  // same rule `parseMetrics` holds to, because a chart silently missing one curve
+  // looks exactly like a frame whose channel is flat.
   const drawn = () =>
-    props.series.flatMap((name) => {
+    props.series.map((name) => {
       const series = props.histogram.series[name];
-      return series ? [{ name, series }] : [];
+      if (!series) {
+        const have = Object.keys(props.histogram.series).join(", ") || "no series at all";
+        throw new Error(`tone.histogram.series has no ${JSON.stringify(name)}; it carries ${have}`);
+      }
+      return { name, series };
     });
 
   /** The tallest bin in view, so one frame's peak fills the plot. */

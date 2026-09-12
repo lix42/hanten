@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  extent,
   histogramOutline,
   niceStep,
+  paddedBounds,
   linearScale,
   plotArea,
   polyline,
@@ -171,5 +173,57 @@ describe("niceStep", () => {
     expect(niceStep(0)).toBe(1);
     expect(niceStep(-1)).toBe(1);
     expect(niceStep(1, 0)).toBe(1);
+  });
+});
+
+describe("extent", () => {
+  it("reports the smallest and largest value", () => {
+    expect(extent([3, -7, 0, 12])).toEqual([-7, 12]);
+  });
+
+  it("has no extent to report for no values", () => {
+    expect(extent([])).toEqual([0, 0]);
+  });
+});
+
+describe("paddedBounds", () => {
+  it("covers every value, rounded out to a multiple of the step", () => {
+    const [lo, hi] = paddedBounds([-6.8, 14.2, 0.4]);
+    expect(lo).toBeLessThanOrEqual(-6.8);
+    expect(hi).toBeGreaterThanOrEqual(14.2);
+    expect(Math.abs(lo % 2)).toBe(0);
+    expect(Math.abs(hi % 2)).toBe(0);
+  });
+
+  it("always includes zero, so the chart is read against neutral", () => {
+    const [lo, hi] = paddedBounds([4, 9, 11]);
+    expect(lo).toBeLessThanOrEqual(0);
+    expect(hi).toBeGreaterThan(11);
+  });
+
+  it("pads a nearly flat set rather than collapsing the axis", () => {
+    expect(paddedBounds([0, 0, 0])).toEqual([-2, 2]);
+  });
+
+  // The padding is what makes a chart readable and what must never reach the
+  // colour ramp: 19 is inside the ramp reference, and the axis it is drawn on is
+  // not.
+  it("can pad past a value that is itself inside the ramp reference", () => {
+    expect(paddedBounds([19])[1]).toBeGreaterThan(19);
+  });
+});
+
+describe("niceStep as a cast axis step", () => {
+  // A fixed step of 10 left a mild frame — everything between -4 and +6 — with
+  // no label but zero, on a chart whose whole rule is to read the value off the
+  // axis rather than off the hue.
+  it("labels a mild cast range more than once", () => {
+    const [lo, hi] = paddedBounds([-4, 6]);
+    expect(ticks(lo, hi, niceStep(hi - lo)).filter((t) => t !== 0).length).toBeGreaterThan(1);
+  });
+
+  it("still keeps a wide range to a handful of lines", () => {
+    const [lo, hi] = paddedBounds([-40, 55]);
+    expect(ticks(lo, hi, niceStep(hi - lo)).length).toBeLessThanOrEqual(9);
   });
 });
