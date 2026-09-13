@@ -84,7 +84,11 @@ def check_id(value: str, what: str, at: str) -> str:
 #: `nc` takes the **last** occurrence of a `Set` argument, so a config restating one
 #: would be silently overridden — and `--output-preset` decides the file suffix and
 #: the colour space besides, so the override would not even be consistently ignored.
-OWNED_FLAGS = ("--output-preset", "-o", "--output", "--report")
+#: `--report-file` belongs here too: it sends the report to a file *instead of*
+#: stdout, which is where the generator reads each cell's resolved recipe from —
+#: so a matrix passing it would lose the measurement on every cell that rendered
+#: perfectly well, and every cell would overwrite the same report path.
+OWNED_FLAGS = ("--output-preset", "-o", "--output", "--report", "--report-file")
 
 #: Placeholders a config's `args` may use, resolved per frame.
 #:
@@ -382,10 +386,14 @@ def colliding_stems(frames: list[str], config_ids: list[str]) -> list[str]:
         for config_id in config_ids:
             stem = rendition_stem(frame, config_id)
             cell = f"{frame}/{config_id}"
-            if stem in seen:
-                clashes.append(f"{seen[stem]} and {cell} would both write {stem}")
+            # Compared **case-folded**: the default macOS volume — and Windows —
+            # treat `A-c.jpg` and `a-c.jpg` as one file, so an exact-string check
+            # would pass while the second render silently replaced the first.
+            key = stem.casefold()
+            if key in seen:
+                clashes.append(f"{seen[key]} and {cell} would both write {stem}")
             else:
-                seen[stem] = cell
+                seen[key] = cell
     return clashes
 
 

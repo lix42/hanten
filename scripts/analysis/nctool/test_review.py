@@ -194,7 +194,10 @@ class TestOwnedFlags(unittest.TestCase):
             load(configs=[{"id": "a", "args": ["--output-preset", "film-master"]}])
 
     def test_refuses_the_flags_the_generator_supplies(self):
-        for flag in ("-o", "--output", "--report"):
+        # `--report-file` sends the report to a file *instead of* stdout, which is
+        # where each cell's resolved recipe is read from — so a matrix passing it
+        # would lose the measurement on every cell that rendered perfectly.
+        for flag in ("-o", "--output", "--report", "--report-file"):
             with self.assertRaisesRegex(review.ReviewError, "set by the generator"):
                 load(common_args=[flag, "x"])
 
@@ -229,6 +232,12 @@ class TestCollisions(unittest.TestCase):
         clashes = review.colliding_stems(["a-b", "a"], ["c", "b-c"])
         self.assertEqual(len(clashes), 1)
         self.assertIn("a-b-c", clashes[0])
+
+    # The default macOS volume and Windows treat `A-c.jpg` and `a-c.jpg` as one
+    # file, so an exact-string check passes while the second render replaces the
+    # first — and this repo's primary machine is macOS.
+    def test_reports_a_collision_that_only_a_case_insensitive_disk_sees(self):
+        self.assertEqual(len(review.colliding_stems(["G2"], ["A", "a"])), 1)
 
     def test_says_nothing_about_the_shipped_shape(self):
         # Config ids routinely carry hyphens; frame ids do not, which is what

@@ -1270,16 +1270,19 @@ The remaining half, and what closes the task. `python -m nctool review generate
   blessed entry point. Argument checks run **before** environment checks, so `--out .` is
   told about `--out .` rather than about an unbuilt binary — CI caught the original order,
   because it builds only the debug binary.
-- **Reuse is keyed to the declared space as well as the checksum**, and colliding cell
-  names are refused up front: `<frame>-<config>` is not injective when either id may carry
-  a hyphen, and config ids routinely do.
+- **Reuse is keyed to the declared space and the JPEG decoder as well as the checksum**,
+  and colliding cell names are refused up front — case-folded, because the default macOS
+  volume treats `A-c.jpg` and `a-c.jpg` as one file. `<frame>-<config>` is not injective
+  when either id may carry a hyphen, and config ids routinely do. Ids are checked
+  filename-safe for the same reason the output directory is: both sources are inputs, and
+  one holding `../` writes outside the directory that was just validated.
 - Verified end to end on P3, G2 and E1 — one frame from each of the three rolls — across all
   five presets: 15 renditions + 15 records, exit 0. The matrix's `metrics.inset` of 0.18 does
   clear the film holder on all three (0.000% of pixels below L\* 5; a holder in the region
   reads as a hard spike at the bottom of the histogram, which is the check, and the app draws
   that histogram). A second run re-rendered every cell byte-identically and **re-measured
   none** of the five it already had — the checksum reuse path, on real data.
-- 47 hermetic tests (`test_review.py`); the analysis suite is 276, up from 229. The matrix
+- 52 hermetic tests (`test_review.py`); the analysis suite is 281, up from 229. The matrix
   is read with `deny_unknown_fields` discipline, which is not fussiness: `"arg"` for
   `"args"` loads as *no* arguments, so that cell renders the default conversion under a
   label promising something else — five buttons, five labels, identical pixels, exit 0 —
@@ -1455,7 +1458,7 @@ three v1 charts below the picture, bound to the active config.
   synthetic fixture, so the two cannot drift — and it keeps the degenerate cases a real record
   rarely carries at once (a sparse band, a band with no pixels, a channel past the top of the
   range).
-- App suite 124 tests, up from 102; `pnpm check`, `pnpm test`, `pnpm build` green. Verified
+- App suite 128 tests, up from 102; `pnpm check`, `pnpm test`, `pnpm build` green. Verified
   against the real generated set: three SVGs server-rendered per section, the histogram
   spanning the full plot height, the axis labelled 0 to 110.
 

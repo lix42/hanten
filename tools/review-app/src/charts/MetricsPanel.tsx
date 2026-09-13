@@ -52,9 +52,12 @@ const CHART_WIDTH = 460;
 
 interface Props {
   /**
-   * Unique per (image, config). The cast chart's gradients are addressed by id,
-   * and every section of the page is in one document — two charts sharing an id
-   * would paint one curve with the other's ramp.
+   * Unique per (image, config), and **DOM-safe** — build it with `domId`.
+   *
+   * The cast chart's gradients are addressed by this id, and every section of
+   * the page is in one document, so two charts sharing one would paint a curve
+   * with the other's ramp. A review set's own ids cannot be used raw: the schema
+   * permits any non-empty string, and one holding `)` closes the paint URL.
    */
   id: string;
   rendition: Rendition | undefined;

@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { css } from "../styled-system/css";
+import { domId } from "./charts/domId";
 import { MetricsPanel } from "./charts/MetricsPanel";
 import type { Rendition, ReviewConfig, ReviewImage, ZoomMode } from "./review";
 
@@ -459,7 +460,7 @@ export function ImageSection(props: Props) {
           on the page and the charts must not narrow it. They swap with the
           config exactly as the picture does. */}
       <MetricsPanel
-        id={`${props.image.id}-${activeId() ?? "none"}`}
+        id={domId(props.image.id, activeId() ?? "none")}
         rendition={activeRendition()}
         configLabel={props.configs[props.activeIndex]?.label ?? "?"}
       />
