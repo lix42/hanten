@@ -875,6 +875,12 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     recipe. `estimate` resolves an unstated source to `Auto` and `inspect` always
     runs the detector — that `estimate` fallback is now the crate's only default
     film-base choice, and **no fingerprint watches it**.
+    A **wrong** base is a per-channel *constant* in density, so it cancels out of
+    any measurement that normalises across bins (`curve_probe::measure_decoded`
+    subtracts the middle bin): a **slope** is base-immune — verified, identical to
+    four decimals across a base differing up to 0.041 density per channel — while a
+    **level/offset** is exactly what a base error corrupts. Don't demand a measured
+    base for the first, or trust a borrowed one for the second.
   - *Clamping boundary:* range-clamp to the output gamut **only** at the u16
     encode step; color/algo stages pass values through unclamped (float output
     preserves the current rendered working values). `io::encode` counts every
@@ -988,7 +994,14 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   (roles, dims, `ir_present`, checksums, NLP↔source links) — regenerate/validate
   it with `python -m nctool manifest generate` / `validate` (or the
   `asset-manifest` skill; `scripts/analysis/generate_manifest.py` is now a thin
-  shim into `nctool`). Decoder
+  shim into `nctool`).
+  **A frame's `role` is the only way to keep a non-picture frame out of a
+  measurement — a conditioning filter cannot do it.** A half-leader/half-base frame
+  has the *largest* density span on its roll (base-to-leader spans everything);
+  what it lacks is *scene* content, which no threshold sees. `real_frames`-style
+  consumers filter on `role == "real"`, so give such a frame any other role;
+  `nctool manifest roles` warns and treats an unrecognized role as `real`, which is
+  cosmetic for the harness. Decoder
   unit-test fixtures are committed separately under `tests/fixtures/`.
   **Never read them into context**; inspect IFD
   structure with `exiftool` (`tiffinfo` is not installed here) or `nc inspect`, and

@@ -1241,3 +1241,619 @@ fn scale_against_the_characteristic_curve() {
         );
     }
 }
+
+/// The whole-roll sets: one roll each of two stocks, every frame of each, all on the same
+/// scanner and SilverFast build. Deliberately **not** [`FIXTURES`] — that list is the
+/// calibration corpus behind the shipped default, and these carry 32 frames apiece, which
+/// would swamp it.
+const WHOLE_ROLLS: &[(&str, &str)] = &[
+    ("2026-09-09-Ektar", "ektar-100"),
+    ("2026-09-11-Portra400", "portra-400"),
+];
+
+/// Minimum red-density span for a frame's slope fit to be conditioned. A frame that spans
+/// no density cannot carry either measurement below: the slope fit is ill-posed, and
+/// "near-white" is meaningless on a uniform field. Chosen from the measured distribution,
+/// not from theory.
+///
+/// **It does not, and cannot, exclude a calibration frame.** `2026-09-11-Portra400`'s frame
+/// `1639` is half leader and half base and measured the *largest* span on that roll (1.40) —
+/// base-to-leader spans the whole density range. What it lacks is **scene** content, which no
+/// span threshold can see. Such frames are excluded by carrying a role other than `real` in
+/// the manifest, which is what [`real_frames`] filters on; a span filter is not a substitute
+/// and assuming it was let that frame into a first run of these statistics.
+const MIN_SPAN: f32 = 0.35;
+
+/// One frame's reading on a whole-roll set.
+struct RollRow {
+    stem: String,
+    /// The scan's own slope ratio against red, per channel.
+    r_g: f32,
+    r_b: f32,
+    /// Residual drift left by the **characteristic** path — each channel's own published
+    /// curve inverted — in stops per unit density, 0 neutral. The scalar path's equivalent
+    /// is `k·(r − 1)`; the difference between them is what the stock's tables removed.
+    curve_g: f32,
+    curve_b: f32,
+    /// Per-channel density relative to red at the near-white percentile, and the
+    /// grey-world control.
+    w_r: f32,
+    w_g: f32,
+    w_b: f32,
+    g_g: f32,
+    g_b: f32,
+    span: f32,
+    oor: f32,
+}
+
+/// Near-white percentile. `WbSource::Percentile` equalises the channels at a matched high
+/// percentile; this reads the same statistic without the print-stage round trip.
+const NEAR_WHITE: f32 = 0.995;
+
+/// Measure every `real` frame of one roll, at the identity gain.
+///
+/// The film base is the roll's own frozen calibration, so both a slope and a *level* can be
+/// read off it. That matters: the slope is immune to a base error (the per-channel constant
+/// cancels in `measure_decoded`'s middle-bin normalisation) but the level is exactly what a
+/// base error corrupts.
+/// What a roll offered and what survived. Printed, because three independent `continue`s
+/// below can silently shrink the set and a partially-measured roll would otherwise print the
+/// same confident summary as a complete one.
+struct RollMeasurement {
+    rows: Vec<RollRow>,
+    offered: usize,
+    dropped: Vec<(String, &'static str)>,
+}
+
+impl RollMeasurement {
+    /// One line naming every frame that did not make it, or saying none did not.
+    fn report_drops(&self) {
+        if self.dropped.is_empty() {
+            println!("  all {} manifest `real` frames measured", self.offered);
+            return;
+        }
+        println!(
+            "  measured {} of {} manifest `real` frames; dropped:",
+            self.rows.len(),
+            self.offered
+        );
+        for (stem, why) in &self.dropped {
+            println!("    {stem:28}{why}");
+        }
+    }
+}
+
+fn measure_roll(assets: &Path, roll: &str, stock_key: &str) -> RollMeasurement {
+    let recipes = repo_root().join("scripts/real-scan-verify/recipes");
+    let base = frozen_base(&recipes.join(format!("{roll}.json")));
+    let sc = stock(stock_key);
+    let log2 = std::f32::consts::LN_2 / std::f32::consts::LN_10;
+    let k = REFERENCE_CONTRAST / log2;
+
+    let frames = real_frames(assets, roll);
+    let offered = frames.len();
+    let mut rows = vec![];
+    let mut dropped: Vec<(String, &'static str)> = vec![];
+    for frame in frames {
+        let stem = frame
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let Ok((image, _)) = crate::io::decode::decode_within(&frame, DECODE_BUDGET_BYTES) else {
+            dropped.push((stem, "decode failed"));
+            continue;
+        };
+        // **Identity gain, not `DensityParams::default()`** — the inversion below is
+        // `drift(1) = k·(r − 1)`, so any other scale recovers a wrong `r`.
+        let Some(at_one) = measure_decoded(&image, &base, sc, &identity_gain()) else {
+            // `measure_decoded` declines on too-few samples, a degenerate red range, or any
+            // empty bin — the last overlaps the span filter, so both rules must be visible.
+            dropped.push((stem, "measure_decoded declined (sparse or degenerate)"));
+            continue;
+        };
+        let ratio = |drift: f32| drift / k + 1.0;
+
+        let d = to_density(&image, &base, &identity_gain());
+        let (w, h) = (d.width as usize, d.height as usize);
+        let (ix, iy) = (
+            (w as f32 * INTERIOR_INSET) as usize,
+            (h as f32 * INTERIOR_INSET) as usize,
+        );
+        let interior: Vec<[f32; 3]> = (iy..h - iy)
+            .flat_map(|y| (ix..w - ix).map(move |x| (y * w + x) * 3))
+            .filter_map(|i| {
+                let px = [d.density[i], d.density[i + 1], d.density[i + 2]];
+                px.iter().all(|v| v.is_finite()).then_some(px)
+            })
+            .collect();
+        let stride = (interior.len() / MAX_SAMPLES).max(1);
+        let sample: Vec<[f32; 3]> = interior.into_iter().step_by(stride).collect();
+        if sample.len() < 4096 {
+            dropped.push((stem, "too few finite interior samples"));
+            continue;
+        }
+        let n = sample.len() as f32;
+        let chan = |c: usize| -> (f32, f32) {
+            let mut v: Vec<f32> = sample.iter().map(|p| p[c]).collect();
+            v.sort_by(f32::total_cmp);
+            (percentile(&v, NEAR_WHITE), v.iter().sum::<f32>() / n)
+        };
+        let (wr, mr) = chan(0);
+        let (wg, mg) = chan(1);
+        let (wb, mb) = chan(2);
+
+        rows.push(RollRow {
+            stem,
+            r_g: ratio(at_one.slope_scalar_g),
+            r_b: ratio(at_one.slope_scalar_b),
+            curve_g: at_one.slope_curve_g,
+            curve_b: at_one.slope_curve_b,
+            w_r: wr,
+            w_g: wg - wr,
+            w_b: wb - wr,
+            g_g: mg - mr,
+            g_b: mb - mr,
+            span: at_one.d_r[BINS - 1] - at_one.d_r[0],
+            oor: at_one.out_of_range,
+        });
+    }
+    RollMeasurement {
+        rows,
+        offered,
+        dropped,
+    }
+}
+
+/// Frames whose slope ratio is **physically impossible** are refused, not averaged.
+///
+/// `r = dD_c/dD_r` is how fast one channel's density rises against red's. Density rises with
+/// exposure in every channel of every film, so `r <= 0` cannot be a property of the stock —
+/// it is a frame whose scene defeated the fit. Ektar's `1626` returns `r_b = -0.91` and it is
+/// not a rounding effect: including it moves that roll's blue nulling scale from 0.790 to
+/// 0.849, which is *larger* than the whole Ektar-vs-Portra blue gap the cross-roll block is
+/// asked to adjudicate, and it inflates the `se` that the same block divides by.
+fn physically_possible(r: &RollRow) -> bool {
+    r.r_g > 0.0 && r.r_b > 0.0
+}
+
+/// The headline estimator: mean over frames that are physically possible and within `±2 sd`
+/// of that subset's own mean.
+///
+/// **This is the value `scripts/scale-review/` renders and the progress log quotes**, so it
+/// lives here rather than being recomputed by hand — an earlier round derived it out-of-band,
+/// the probe was then rewritten without it, and the review set was left citing a gain no
+/// committed code produced. Returns the kept rows so callers can report what it dropped.
+fn trimmed<'a>(rows: &[&'a RollRow], f: &dyn Fn(&RollRow) -> f32) -> Vec<&'a RollRow> {
+    let possible: Vec<&RollRow> = rows
+        .iter()
+        .copied()
+        .filter(|r| physically_possible(r))
+        .collect();
+    if possible.len() < 4 {
+        return possible;
+    }
+    let n = possible.len() as f32;
+    let m = possible.iter().map(|r| f(r)).sum::<f32>() / n;
+    let sd = (possible.iter().map(|r| (f(r) - m).powi(2)).sum::<f32>() / (n - 1.0)).sqrt();
+    possible
+        .into_iter()
+        .filter(|r| (f(r) - m).abs() <= 2.0 * sd)
+        .collect()
+}
+
+/// `(mean, median, sd, se)` of one field over a set of rows — in that order. Two of the
+/// four are a factor of sqrt(n) apart, so a caller that binds them wrongly publishes a
+/// plausible number rather than failing.
+fn stats(rows: &[&RollRow], f: &dyn Fn(&RollRow) -> f32) -> (f32, f32, f32, f32) {
+    let n = rows.len() as f32;
+    let m = rows.iter().map(|r| f(r)).sum::<f32>() / n;
+    let sd = (rows.iter().map(|r| (f(r) - m).powi(2)).sum::<f32>() / (n - 1.0)).sqrt();
+    let mut v: Vec<f32> = rows.iter().map(|r| f(r)).collect();
+    v.sort_by(f32::total_cmp);
+    let med = if v.len().is_multiple_of(2) {
+        (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
+    } else {
+        v[v.len() / 2]
+    };
+    (m, med, sd, sd / n.sqrt())
+}
+
+/// Whole-roll per-channel scale: can **one roll** resolve its own `density.scale`, and is
+/// what it resolves a property of the *roll* or of the *scanner*?
+///
+/// [`sigmoid_scale`]'s constant nulls the corpus *mean*, not any roll — per-roll residuals
+/// span ±0.5 stop per density, and `io/scanner-density-calibration` records that resolving a
+/// 0.3 stops/density difference needs ~11 frames of one condition, with two earlier per-roll
+/// conclusions retracted for reading n = 3–4 too confidently. Every roll in [`FIXTURES`] has
+/// 3–5 frames, so a per-roll statement was never supportable. [`WHOLE_ROLLS`] carries two
+/// rolls of ~32 frames, one stock each.
+///
+/// **Two rolls is what separates the two hypotheses.** One roll can show that a fitted gain
+/// beats the shipped constant, but not *why*. If the second roll — different stock, same
+/// scanner — lands on the same gain, the quantity is a scanner property and a per-roll knob
+/// is the wrong shape for it; if it lands elsewhere, it is per-roll. The cross-roll block at
+/// the end is that comparison.
+///
+/// Each roll uses its **own** frozen base (leader + unexposed frame, frozen by the harness
+/// with explicit regions because a cropped holder defeats the auto rebate search). The slope
+/// does not actually need it — a base error is a per-channel constant and
+/// [`measure_decoded`] normalises every bin against the middle one, which was verified by
+/// re-running an earlier borrowed-base measurement and getting identical slopes to four
+/// decimals — but the level in [`whole_roll_white_point`] does.
+///
+/// ```text
+/// cargo test --release curve_probe::whole_roll_scale -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "requires ../nc-assets; run with --ignored --nocapture"]
+fn whole_roll_scale() {
+    let Some(assets) = assets_root() else {
+        eprintln!("SKIP: no ../nc-assets/manifest.json (set NC_ASSETS to override)");
+        return;
+    };
+    let log2 = std::f32::consts::LN_2 / std::f32::consts::LN_10;
+    let k = REFERENCE_CONTRAST / log2;
+    let drift = |s: f32, r: f32| k * (s * r - 1.0);
+    let gm = |sg: f32, sb: f32, r: &RollRow| drift(sg, r.r_g) - drift(sb, r.r_b) / 2.0;
+
+    let mut summary: Vec<(&str, usize, f32, f32, f32, f32)> = vec![];
+    for (roll, stock_key) in WHOLE_ROLLS {
+        let m = measure_roll(&assets, roll, stock_key);
+        let rows = &m.rows;
+        if rows.len() < 4 {
+            println!("\n=== {roll}: only {} frames measured, skipped", rows.len());
+            continue;
+        }
+        println!("\n=== {roll} ({stock_key}) ===");
+        m.report_drops();
+        println!(
+            "  {:28}{:>9}{:>9}{:>8}{:>8}  used",
+            "frame", "r_green", "r_blue", "span", "oor"
+        );
+        for r in rows {
+            let mark = if !physically_possible(r) {
+                "refused: r <= 0"
+            } else if r.span >= MIN_SPAN {
+                "y"
+            } else {
+                "-"
+            };
+            println!(
+                "  {:28}{:>9.4}{:>9.4}{:>8.2}{:>8.3}  {mark}",
+                r.stem, r.r_g, r.r_b, r.span, r.oor
+            );
+        }
+        let kept: Vec<&RollRow> = rows.iter().filter(|r| r.span >= MIN_SPAN).collect();
+        if kept.len() < 4 {
+            println!(
+                "  only {} frames clear the span filter, skipped",
+                kept.len()
+            );
+            continue;
+        }
+        let (mg, medg, sdg, seg) = stats(&kept, &|r: &RollRow| r.r_g);
+        let (mb, medb, sdb, seb) = stats(&kept, &|r: &RollRow| r.r_b);
+        println!("\n  span >= {MIN_SPAN} (n = {}):", kept.len());
+        println!("    {:16}{:>10}{:>10}", "", "green", "blue");
+        println!("    {:16}{mg:>10.4}{mb:>10.4}", "mean r");
+        println!("    {:16}{medg:>10.4}{medb:>10.4}", "median r");
+        println!("    {:16}{sdg:>10.4}{sdb:>10.4}", "sd");
+        println!("    {:16}{seg:>10.4}{seb:>10.4}", "se");
+        println!(
+            "    {:16}{:>10.3}{:>10.3}   (1/mean, ±1 se: green ±{:.3}, blue ±{:.3})",
+            "  from mean",
+            1.0 / mg,
+            1.0 / mb,
+            seg / (mg * mg),
+            seb / (mb * mb)
+        );
+        println!(
+            "    {:16}{:>10.3}{:>10.3}   (1/median)",
+            "  from median",
+            1.0 / medg,
+            1.0 / medb
+        );
+
+        // The headline. Everything downstream — the cross-roll comparison and the review
+        // set's `sig-roll` gain — uses this, not the plain mean: one physically impossible
+        // frame moves the plain mean further than the between-roll gap it is asked to judge.
+        let tg = trimmed(&kept, &|r: &RollRow| r.r_g);
+        let tb = trimmed(&kept, &|r: &RollRow| r.r_b);
+        let (tmg, _, _, tseg) = stats(&tg, &|r: &RollRow| r.r_g);
+        let (tmb, _, _, tseb) = stats(&tb, &|r: &RollRow| r.r_b);
+        println!(
+            "    {:16}{:>10.3}{:>10.3}   <- HEADLINE: physically possible, +/-2 sd\n    \
+             {:16}{:>10}{:>10}   (+/-1 se: green +/-{:.3}, blue +/-{:.3})",
+            "  trimmed",
+            1.0 / tmg,
+            1.0 / tmb,
+            "",
+            format!("n={}", tg.len()),
+            format!("n={}", tb.len()),
+            tseg / (tmg * tmg),
+            tseb / (tmb * tmb)
+        );
+
+        // Correlated channels are one observation, not two — and a near-equal green and blue
+        // against red is the scan-path signature the datasheets do not predict.
+        let c = kept.len() as f32;
+        let (cg, cb) = (mg, mb);
+        let num: f32 = kept.iter().map(|r| (r.r_g - cg) * (r.r_b - cb)).sum();
+        let den = (kept.iter().map(|r| (r.r_g - cg).powi(2)).sum::<f32>()
+            * kept.iter().map(|r| (r.r_b - cb).powi(2)).sum::<f32>())
+        .sqrt();
+        println!("    r_green vs r_blue correlation: {:+.3}", num / den);
+
+        // The characteristic path on the same frames: what each stock's own published
+        // tables leave behind, against what the scalar path leaves. This is the comparison
+        // that says whether the curve fixes a channel, and it is per stock.
+        let (cg, _, csg, ceg) = stats(&kept, &|r: &RollRow| r.curve_g);
+        let (cb, _, csb, ceb) = stats(&kept, &|r: &RollRow| r.curve_b);
+        let scalar_g = k * (mg - 1.0);
+        let scalar_b = k * (mb - 1.0);
+        println!("\n    residual drift, stops per unit density (0 = neutral):");
+        println!("      {:22}{:>10}{:>10}", "path", "green", "blue");
+        println!(
+            "      {:22}{scalar_g:>+10.2}{scalar_b:>+10.2}",
+            "scalar (identity gain)"
+        );
+        println!(
+            "      {:22}{cg:>+10.2}{cb:>+10.2}   (sd {csg:.2}/{csb:.2}, se {ceg:.2}/{ceb:.2})",
+            "characteristic"
+        );
+        // A "% removed" against a baseline that is already neutral is meaningless — and
+        // worse, a curve that pushes a neutral channel off neutral prints a large negative
+        // percentage that reads like a rounding artefact rather than the over-correction it
+        // is. Say which it is instead.
+        let removed = |scalar: f32, resid: f32| -> String {
+            if scalar.abs() < 0.25 {
+                format!("n/a (was {scalar:+.2})")
+            } else if resid.abs() > scalar.abs() {
+                format!("WORSE {:+.2}", resid - scalar)
+            } else {
+                format!("{:.0}%", 100.0 * (1.0 - resid.abs() / scalar.abs()))
+            }
+        };
+        println!(
+            "      {:22}{:>10}{:>18}",
+            "removed by the curve",
+            removed(scalar_g, cg),
+            removed(scalar_b, cb)
+        );
+
+        // Split-half: the roll's own null is fitted on the frames it is scored against, so
+        // its in-sample number is circular. Fit on one half, score on the other.
+        let a: Vec<&RollRow> = kept.iter().step_by(2).copied().collect();
+        let b: Vec<&RollRow> = kept.iter().skip(1).step_by(2).copied().collect();
+        let score = |sg: f32, sb: f32, set: &[&RollRow]| {
+            set.iter().map(|r| gm(sg, sb, r).abs()).sum::<f32>() / set.len() as f32
+        };
+        let (mut fit_sum, mut def_sum) = (0.0, 0.0);
+        for (fit_on, held) in [(&a, &b), (&b, &a)] {
+            // Fit on the same estimator the headline uses, or the fold containing the
+            // impossible frame fits to it and the held-out score reports that, not the roll.
+            let fg = trimmed(fit_on, &|r: &RollRow| r.r_g);
+            let fb = trimmed(fit_on, &|r: &RollRow| r.r_b);
+            if fg.is_empty() || fb.is_empty() {
+                continue;
+            }
+            let sg = fg.len() as f32 / fg.iter().map(|r| r.r_g).sum::<f32>();
+            let sb = fb.len() as f32 / fb.iter().map(|r| r.r_b).sum::<f32>();
+            fit_sum += score(sg, sb, held);
+            def_sum += score(0.90, 0.86, held);
+        }
+        println!(
+            "    split-half |green-magenta|, held out: fitted {:.2} vs current default {:.2}",
+            fit_sum / 2.0,
+            def_sum / 2.0
+        );
+        println!(
+            "    green-magenta at the current default [1, 0.90, 0.86]: {:+.2}",
+            kept.iter().map(|r| gm(0.90, 0.86, r)).sum::<f32>() / c
+        );
+        summary.push((
+            roll,
+            tg.len(),
+            tmg,
+            tmb,
+            tseg / (tmg * tmg),
+            tseb / (tmb * tmb),
+        ));
+    }
+
+    println!("\n=== cross-roll: is the fitted gain a roll property or a scanner property? ===");
+    println!(
+        "  {:24}{:>6}{:>10}{:>10}{:>12}{:>12}",
+        "roll", "n", "mean r_g", "mean r_b", "scale green", "scale blue"
+    );
+    for (roll, n, mg, mb, eg, eb) in &summary {
+        println!(
+            "  {roll:24}{n:>6}{mg:>10.4}{mb:>10.4}{:>9.3}±{eg:.3}{:>9.3}±{eb:.3}",
+            1.0 / mg,
+            1.0 / mb
+        );
+    }
+    println!(
+        "  {:24}{:>6}{:>10.4}{:>10.4}{:>12.3}{:>12.3}",
+        "shipped default",
+        "",
+        1.0 / 0.90,
+        1.0 / 0.86,
+        0.900,
+        0.860
+    );
+    // Every pair, named. This block is the probe's only cross-roll statement and both the
+    // task file and the progress log tell the next person to "add a roll to `WHOLE_ROLLS` and
+    // re-run" — hard-indexing `summary[0]`/`[1]` would leave a third roll out of the verdict
+    // silently, at exit 0, while the sentence still said "the two rolls".
+    if summary.len() >= 2 {
+        println!("\n  separation between rolls, in combined se:");
+        for i in 0..summary.len() {
+            for j in (i + 1)..summary.len() {
+                let (ri, _, gi, bi, egi, ebi) = summary[i];
+                let (rj, _, gj, bj, egj, ebj) = summary[j];
+                let sg = (1.0 / gi - 1.0 / gj).abs() / (egi * egi + egj * egj).sqrt();
+                let sb = (1.0 / bi - 1.0 / bj).abs() / (ebi * ebi + ebj * ebj).sqrt();
+                println!("    {ri} vs {rj}: green {sg:.1} se, blue {sb:.1} se");
+            }
+        }
+        println!(
+            "  Near zero on every pair => the rolls want one gain, so it is a property of the\n  \
+             scan path and a per-ROLL knob is the wrong shape. Large => per-roll is real.\n  \
+             {} roll(s) contributed; a pair is only as good as the variety behind it — rolls\n  \
+             sharing a photographer and a palette agree for that reason alone.",
+            summary.len()
+        );
+    }
+}
+
+/// Is a roll-wide **white point** a usable source for the per-channel *offset*?
+///
+/// The premise under test (user, 2026-09-10): however badly a roll was exposed, its brightest
+/// content is probably white, so a roll-aggregated near-white could supply the per-channel
+/// level correction that [`whole_roll_scale`]'s gain structurally cannot. Three things bound
+/// what this can show:
+///
+/// - **A white point is an offset, never a slope.** One point fixes a level; separating level
+///   from slope needs two at a known separation. So this measures the half `density.scale`
+///   leaves untouched — and, unlike the scale, it is *not* immune to a wrong film base.
+/// - **Without a known neutral it cannot be validated, only checked for self-consistency.**
+///   "The brightest thing was white" and "the blue layer runs hot" are indistinguishable from
+///   scene content alone — the gap `io/scanner-density-calibration` wants a ColorChecker for.
+///   What *is* decidable is whether a roll has a consistent white point at all: if per-frame
+///   estimates scatter widely, a roll aggregate is averaging scene colour rather than
+///   measuring the film, and the idea fails on its own terms.
+/// - **Most of the difference may already be carried by the slope.** At red density `w_r`, a
+///   channel running `r` times steeper sits `(r − 1)·w_r` above red for that reason alone.
+///   Only the residual is new information, and correcting the whole difference with an offset
+///   would double-correct the half `density.scale` already handles. That split is the last
+///   block; for the figures it currently produces see the 2026-09-12 entry in
+///   `docs/progress/film-base.md` — quoting them here is how this doc came to cite a
+///   pre-span-filter 85%/34% that the shipped probe had stopped producing.
+///
+/// Grey-world is measured on the same frames as a control: the two estimators lean on
+/// opposite assumptions, so agreement is weak evidence the signal is the film and
+/// disagreement proves at least one is reading the scene.
+///
+/// ```text
+/// cargo test --release curve_probe::whole_roll_white_point -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "requires ../nc-assets; run with --ignored --nocapture"]
+fn whole_roll_white_point() {
+    let Some(assets) = assets_root() else {
+        eprintln!("SKIP: no ../nc-assets/manifest.json (set NC_ASSETS to override)");
+        return;
+    };
+    let log2 = std::f32::consts::LN_2 / std::f32::consts::LN_10;
+    let stops = REFERENCE_CONTRAST / log2;
+
+    for (roll, stock_key) in WHOLE_ROLLS {
+        let m = measure_roll(&assets, roll, stock_key);
+        let rows = &m.rows;
+        // The span filter matters here too, and not only for conditioning: a uniform field
+        // has no "near-white" to speak of, and a calibration frame carried as `real` would
+        // otherwise enter the level statistics.
+        let kept: Vec<&RollRow> = rows.iter().filter(|r| r.span >= MIN_SPAN).collect();
+        if kept.len() < 4 {
+            println!("\n=== {roll}: only {} usable frames, skipped", kept.len());
+            continue;
+        }
+        println!("\n=== {roll} ({stock_key}): white point ===");
+        m.report_drops();
+        println!(
+            "  {} of {} measured frames clear the span filter",
+            kept.len(),
+            rows.len()
+        );
+        println!(
+            "  Per-channel density relative to red. near-white = p{NEAR_WHITE}, grey = frame mean.\n"
+        );
+        println!(
+            "  {:16}{:>10}{:>10}{:>10}{:>12}",
+            "", "mean", "sd", "se", "mean stops"
+        );
+        // Computed here, not recovered from the print loop by matching a display label: a
+        // renamed or re-spaced label would otherwise leave these at an initialiser, and the
+        // slope/offset block below divides by `measured`, so the probe would print `inf` and
+        // `NaN` at exit 0 instead of failing.
+        let wg = stats(&kept, &|r: &RollRow| r.w_g);
+        let wb = stats(&kept, &|r: &RollRow| r.w_b);
+        for (label, (m, _med, sd, se)) in [
+            ("white  g-r", wg),
+            ("white  b-r", wb),
+            ("grey   g-r", stats(&kept, &|r: &RollRow| r.g_g)),
+            ("grey   b-r", stats(&kept, &|r: &RollRow| r.g_b)),
+        ] {
+            println!(
+                "  {label:16}{m:>10.4}{sd:>10.4}{se:>10.4}{:>12.2}",
+                m * stops
+            );
+        }
+
+        // Does one roll-level white point predict a frame it was not fitted on? Scored as RMS
+        // distance to each held-out frame's own estimate, against the "no offset" baseline.
+        let a: Vec<&RollRow> = kept.iter().step_by(2).copied().collect();
+        let b: Vec<&RollRow> = kept.iter().skip(1).step_by(2).copied().collect();
+        let rms = |set: &[&RollRow], f: &dyn Fn(&RollRow) -> f32, c: f32| {
+            (set.iter().map(|r| (f(r) - c).powi(2)).sum::<f32>() / set.len() as f32).sqrt()
+        };
+        println!("\n  split-half: does a roll-level white point predict a held-out frame?");
+        println!(
+            "    {:14}{:>16}{:>16}",
+            "channel", "held-out RMS", "no-offset RMS"
+        );
+        for (label, f) in [
+            (
+                "white  g-r",
+                &(|r: &RollRow| r.w_g) as &dyn Fn(&RollRow) -> f32,
+            ),
+            ("white  b-r", &(|r: &RollRow| r.w_b)),
+        ] {
+            let (mut fit, mut zero) = (0.0, 0.0);
+            for (fit_on, held) in [(&a, &b), (&b, &a)] {
+                let c = fit_on.iter().map(|r| f(r)).sum::<f32>() / fit_on.len() as f32;
+                fit += rms(held, f, c);
+                zero += rms(held, f, 0.0);
+            }
+            println!("    {label:14}{:>16.4}{:>16.4}", fit / 2.0, zero / 2.0);
+        }
+
+        // Slope or offset? Only the residual is information a gain does not already carry.
+        let n = kept.len() as f32;
+        let mean_w_r = kept.iter().map(|r| r.w_r).sum::<f32>() / n;
+        // Same trimmed estimator the scale half reports: a plain mean here would carry the
+        // physically impossible frame straight into the slope/offset split, which is the
+        // load-bearing number of this probe.
+        let tg = trimmed(&kept, &|r: &RollRow| r.r_g);
+        let tb = trimmed(&kept, &|r: &RollRow| r.r_b);
+        let r_g = tg.iter().map(|r| r.r_g).sum::<f32>() / tg.len() as f32;
+        let r_b = tb.iter().map(|r| r.r_b).sum::<f32>() / tb.len() as f32;
+        println!(
+            "  (slope from the trimmed estimator: green n={}, blue n={})",
+            tg.len(),
+            tb.len()
+        );
+        println!("\n  is it slope or offset? mean red density at near-white = {mean_w_r:.4}");
+        println!(
+            "    {:12}{:>12}{:>14}{:>12}{:>10}{:>10}",
+            "channel", "measured", "slope part", "residual", "stops", "% slope"
+        );
+        for (label, measured, r) in [("green g-r", wg.0, r_g), ("blue  b-r", wb.0, r_b)] {
+            let slope_part = (r - 1.0) * mean_w_r;
+            let resid = measured - slope_part;
+            println!(
+                "    {label:12}{measured:>12.4}{slope_part:>14.4}{resid:>12.4}{:>10.2}{:>9.0}%",
+                resid * stops,
+                100.0 * slope_part / measured
+            );
+        }
+    }
+    println!(
+        "\n  Read sd against mean. A roll white point is a film property only if the per-frame\n  \
+         estimates cluster; if sd is the size of the mean, the aggregate is scene colour\n  \
+         averaged, and no roll-scoping rescues it. And read `% slope` before acting on any\n  \
+         residual: that share is already carried by `density.scale`."
+    );
+}

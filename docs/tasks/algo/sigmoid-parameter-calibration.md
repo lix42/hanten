@@ -70,3 +70,13 @@ measurement machinery, only better inputs.
 - [Reference-anchored sigmoid calibration and redesign](reference-anchored-sigmoid.md)
 - [Film-stock profiles](film-stock-profiles.md)
 - [Scanner density calibration](../io/scanner-density-calibration.md)
+
+---
+
+**2026-09-13 — coordinate the shoot with two other tasks.** The bracketed roll plus grey card
+this task needs is close to, but not the same as, what
+[`io/scanner-density-calibration`](../io/scanner-density-calibration.md) needs (a ColorChecker
+Classic — the neutral series fits the matrix diagonal, and only the coloured patches constrain
+its off-diagonal terms). [`film-base/dmax-per-channel-reduction`](../film-base/dmax-per-channel-reduction.md)
+parked on 2026-09-13 waiting on the same class of asset. One roll carrying a bracket, a grey
+card **and** a ColorChecker serves all three; plan it together rather than shooting twice.

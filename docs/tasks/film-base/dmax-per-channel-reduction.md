@@ -256,3 +256,49 @@ This does **not** close this task. What remains is the per-channel pair for the 
 path (`sigmoid`/`exponential` with no stock named) — where the `scale` half ships and the
 `offset` half does not — and whether a roll-scoped measurement can source either. That work
 is off the default path, which is precisely why it no longer blocks the migration.
+
+---
+
+**2026-09-13 — parked pending a usable sample (user decision).** The shipped
+`density.scale = [1, 0.90, 0.86]` stands. Do not resume this on the assets available today.
+
+The live question after the 2026-09-10 re-scope was: can the per-channel gain for the
+**parametric** path (no stock named) be measured rather than taken from datasheets? The
+candidate is a per-density-bin tilt measured over a whole roll — it needs no reference patch,
+because it reads how the channel balance *drifts* between shadows and highlights and discards
+the absolute balance. It was run on two whole rolls, 32 frames each.
+
+**It cannot be answered with the current asset set, for a reason that is about the sample and
+not the arithmetic.** The method assumes scene colour is uncorrelated with density across
+frames. Both whole rolls are from one Hawaii vacation — blue-dominant, some green, little red,
+with the bright subjects (sky, water) carrying the colour. Worse, the cross-roll comparison
+that was supposed to separate "scanner property" from "roll property" is confounded: two rolls
+sharing a photographer and a palette agree for that reason alone. And the datasheets cannot
+referee it, since the sheet in question is the one already doubted on green.
+
+Three routes forward, and this task should wait for one of the last two:
+
+1. **Manual review and tweak** — the status quo. `[1, 0.90, 0.86]` reads as good enough by
+   eye; nothing to do.
+2. **More rolls with *different subject matter*.** Variety is the requirement, not count —
+   more of the same trip adds n without removing the confound.
+3. **A bracketed ColorChecker or grey target.** The only route that removes the scene from the
+   measurement rather than averaging over it. Shared need with
+   [scanner density calibration](../io/scanner-density-calibration.md) and
+   [sigmoid parameter calibration](../algo/sigmoid-parameter-calibration.md) — one shoot could
+   serve all three.
+
+**The visual review set is not shipped, and needs one thing first.** A local generator was
+written and used to sanity-check the Ektar numbers, but `analysis/comparison-review-tooling`
+(#114) has since replaced bespoke per-study generators with a **matrix** rendered by
+`python -m nctool review generate`. A scale review cannot be expressed as one today: every
+cell of that matrix is an `nc convert`, and this study's whole point is comparing nc against
+an **outside reference** — Negative Lab Pro's own conversions, which are existing TIFFs, not
+renders. It also needs those cells brought to a common SDR sRGB JPEG so the comparison is not
+confounded by nc decoding as HDR beside NLP's SDR. Adding a reference-cell kind to
+`nctool review` is the right home for both; do that rather than re-adding a bespoke script.
+
+Everything else needed to resume is in place: `algo::curve_probe::whole_roll_scale` and
+`whole_roll_white_point` iterate `WHOLE_ROLLS`; add a roll and re-run. The measurements taken
+so far are in `docs/progress/film-base.md` (2026-09-12 for the numbers, 2026-09-13 for why
+they do not support a verdict).

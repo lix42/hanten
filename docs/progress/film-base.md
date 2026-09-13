@@ -1055,8 +1055,8 @@ Four real findings on PR #56, plus one document-only deferral.
 
 ## dmax-per-channel-reduction
 
-**Status:** not started
-**Updated:** 2026-08-06
+**Status:** parked (see 2026-09-13)
+**Updated:** 2026-09-13
 
 - Goal: decide whether the gray-mean reduction in `reference_dmax` discards a
   per-channel term that matters, and if so where that term belongs. An
@@ -1098,6 +1098,348 @@ Four real findings on PR #56, plus one document-only deferral.
   different level.
 - Coordinate with `dmax-anchor-reliability` — same leader measurements, different
   axis; neither blocks the other.
+
+### 2026-09-10 — re-scoped after `algo/film-stock-profiles`; whole-roll Ektar measured
+
+The task's original question closed from outside. `algo/film-stock-profiles` (#105) settled
+that the per-channel term is a **slope**, not an anchor — shipped as `density.scale`
+`[1, 0.90, 0.86]` on the parametric curves (`pipeline_version` 4) and as each stock's own
+inverted curve on `characteristic`. It also disqualified the leader as a source: measured
+leaders do not reproduce the published per-channel divergence, and that comparison cannot
+separate a non-neutral leader exposure from a scanner-slope error. So questions 1–3 as written
+are answered, the verdict on the original taxonomy is *absorbed*, and the
+`→ algo/split-default-migration` edge was removed the same day (the proposed default,
+`characteristic-generic`, has neither a scalar `Dmax` nor a per-channel gain to get wrong).
+
+What the user kept: **is there another way to compute the per-channel scaling**, since the
+shipped constant is corpus-calibrated on one scanner and six rolls and no datasheet exists for
+every stock. Candidates: the leader (dead) and a whole-roll measurement.
+
+**Stage 0 — the asset.** `rolls/2026-09-09-Ektar`: 34 frames, Kodak Ektar 100, same scanner and
+SilverFast build as the entire corpus (Plustek OpticFilm 8300i, 9.2.9), so it is directly
+comparable. Its 32 NLP positives moved to `converted/nlp/2026-09-09/2026-09-09-Ektar/` — the
+**roll subdirectory is load-bearing**: without it `walk_converted` yields `roll = None`,
+`src_roll` falls back to the hardcoded `Portra160-2026-07-22`, and every `source_frame`
+resolves `null`. All 32 link correctly.
+
+Frame `1603` is the roll's **leader** and `1604` its **unexposed** base frame (user, and their
+readings confirm it: spans of 0.07 and 0.10 density, i.e. uniform fields). The cropped film
+holder defeats the *auto* rebate-band detector on every frame, but that is a detector-geometry
+limitation, not a missing reference — the pair freezes normally with explicit regions. The
+harness `freeze` stage produced `2026-09-09-Ektar.json` and **reproduced the other six
+recipes byte-identically**, which is a free reproducibility check on the whole freeze path:
+
+- `Dmin` `[0.3916228, 0.20027466, 0.13084611]` · `Dmax` `1.2826737`
+
+*Worth recording as a trap:* the first pass read `1603`/`1604` as ill-conditioned picture
+frames and concluded the roll had no base. A leader and an unexposed frame are exactly what a
+"narrow density span" filter flags, so a conditioning filter cannot be trusted to tell a
+useless frame from a calibration frame — check the roles first.
+
+**Stage 1 — `curve_probe::whole_roll_scale`** (new, asset-gated, `#[ignore]`d; deliberately
+outside `FIXTURES`, which is the calibration corpus behind the shipped default). Roles now
+exclude `1603`/`1604`, leaving 32 real frames; 7 more span < 0.35 density and return
+ill-conditioned slopes, leaving **25**. One frame clears the span filter and is still an
+outlier — `1626`, `r_blue` **−0.91**, which no film produces — so the median is reported beside
+the mean. `out_of_range` is 0.000 everywhere.
+
+| n = 25 | green | blue |
+|---|---|---|
+| mean `r` | 1.2569 | 1.1781 |
+| sd | 0.2410 | 0.5210 |
+| se | 0.0482 | 0.1042 |
+| nulling scale | **0.796** ± 0.031 | **0.849** ± 0.075 |
+| corpus (21 frames, 6 rolls) | 1.115 → 0.900 | 1.183 → 0.860 |
+
+**Blue reproduces the corpus (1.178 vs 1.183); green does not (1.257 vs 1.115, ≈3 se.)** The
+datasheet-corroborated half transfers across rolls; the scanner-residual half does not. This
+roll wants green ≈ 0.80, not the shipped 0.900 — the first per-roll green statement the asset
+set can support (`io/scanner-density-calibration` records ~11 frames of one condition as the
+threshold, and two earlier per-roll conclusions retracted at n = 3–4).
+
+**Split-half cross-validation**, because the roll's own null scored on its own frames is
+circular: fitted **0.20** mean held-out `|green−magenta|` against the current default's
+**0.86** — a 4.3× improvement out of sample, with the two folds fitting nearly the same value
+(green 0.806 / 0.784, blue 0.868 / 0.829). So ~12 frames already resolve a roll's scale
+reproducibly, corroborating the ~11-frame estimate empirically.
+
+**The slope measurement is base-independent, now shown rather than argued.** An earlier run
+used the sibling `Ektar` roll's base, which differs from this roll's per-channel and
+non-uniformly (ratios 0.758 / 0.723 / 0.690, up to 0.041 density). Every `span >= 0.35`
+statistic is **identical to four decimals** across that change. The mechanism: a base error is
+a per-channel constant in density, `measure_decoded` subtracts the middle bin from every bin
+per channel, and the residual x-shift is a uniform translation that cannot move a
+least-squares slope. The immunity is specific to slope — a level measurement is exactly what a
+base error corrupts, which is why Stage 2 needed the real base.
+
+**Stage 2 — `curve_probe::whole_roll_white_point`.** Per-channel density relative to red at
+p99.5 (the statistic `WbSource::Percentile` already equalises, per frame), with grey-world on
+the same frames as a control, 32 frames:
+
+| | mean | sd | se | stops |
+|---|---|---|---|---|
+| white `g−r` | 0.2461 | 0.0658 | 0.0116 | 1.69 |
+| white `b−r` | 0.4262 | 0.0908 | 0.0161 | 2.93 |
+| grey `g−r` | 0.2362 | 0.0807 | 0.0143 | 1.62 |
+| grey `b−r` | 0.4492 | 0.1267 | 0.0224 | 3.09 |
+
+The roll **does** have a consistent white point: sd is 21–27 % of the mean, a roll-level
+constant predicts a held-out frame at RMS 0.065 / 0.089 against 0.255 / 0.436 for no offset,
+and the two estimators — which lean on opposite assumptions — agree to 0.010 / 0.023.
+
+**The result that matters is the decomposition.** At the roll's mean near-white red density
+0.8184, a channel running `r` times steeper sits `(r − 1)·0.8184` above red for that reason
+alone:
+
+| channel | measured | slope part | residual offset |
+|---|---|---|---|
+| green `g−r` | 0.2461 | 0.2102 | **0.0359** (0.25 stops) |
+| blue `b−r` | 0.4262 | 0.1458 | **0.2804** (1.93 stops) |
+
+**Green's white-point difference is 85 % the slope `density.scale` already carries; blue's is
+only 34 %.** So a white point adds essentially nothing on green and a large genuine offset on
+blue — which is `density.offset`'s documented purpose (orange-mask compensation), still
+shipping `[0, 0, 0]`. Independent cross-check: `film-stock-profiles`' datasheet-fitted generic
+offset is `[0, −0.036, −0.057]`, and green's residual here is **−0.036 to three decimals**.
+Blue's is ~5× larger, which is the direction the same task flagged when it noted `D'_B` is not
+a constant multiple of `D'_R` (ratio drifting 1.25–2.43). Treat the green agreement as a
+cross-check worth pursuing, not as confirmation: the two fits use different parameterisations.
+
+**What none of this establishes.** One roll, one stock — and Ektar is the corpus outlier on
+green (worst residual, +1.00; its sheet disagrees with its own aim table by 11 %), so this is
+the most favourable case for a per-roll correction, not a typical one. A second full roll of a
+different stock is needed before anything ships. And the white point cannot be *validated*
+here at all: "the brightest thing was white" and "the blue layer runs hot" are
+indistinguishable without a known neutral, which is precisely the ColorChecker frame
+`io/scanner-density-calibration` is waiting on. Self-consistency is all that was measured.
+
+Finally, scope: a per-roll scale or offset is **content-derived**. The recorded line permits a
+corpus-calibrated constant pinned in source and forbids a value derived per run from the frame
+being converted; per-roll sits between, so it is an opt-in knob at most until the user rules
+otherwise. Note also that per-*frame* `--white-balance percentile` already removes the whole
+white-point difference by construction — the roll-level version is strictly worse at
+neutralising any single frame (held-out RMS 0.065–0.089) and is only preferable because it
+does not optimise per frame.
+
+Gates: `fmt` clean, `clippy --all-targets -D warnings` clean, `build` OK, `cargo test` 730
+unit + 189 integration, 0 failed (23 ignored, two of them the new probes), `cargo doc` at
+exactly the documented 16-link baseline, `nctool` suite OK (76 skipped, no local venv — the
+`NCTOOL_REQUIRE_DEPS=1` guard fails for that reason alone, as in #105).
+
+### 2026-09-12 — second whole roll (Portra 400): the Ektar result does not generalise
+
+`rolls/2026-09-11-Portra400` registered — 35 frames, Kodak Portra 400, same scanner and
+SilverFast build as the corpus; 32 NLP positives moved to
+`converted/nlp/2026-09-11/2026-09-11-Portra400/` (roll subdirectory again, or `source_frame`
+falls back to the hardcoded NLP roll and resolves `null`; all 32 link). Leader `1638`,
+unexposed `1672`, frozen by the harness: `Dmin [0.350927, 0.16437018, 0.09372091]`,
+`Dmax 1.2665207`. The Ektar recipe reproduced byte-identically in the same run.
+
+**A span filter cannot exclude a calibration frame, and assuming it could corrupted the first
+run.** Frame `1639` is half leader and half base. It was carried as `real` on the theory that
+the density-span filter would drop it — it measured the **largest span on the roll (1.40)**,
+because base-to-leader spans the entire density range. What it lacks is *scene* content,
+which no span threshold can see. It now carries role `calibration`, which `real_frames`
+filters on; `nctool manifest roles` does not know that role and warns while treating it as
+real, which is cosmetic for the harness. `MIN_SPAN`'s doc records the trap.
+
+`curve_probe`'s two whole-roll probes now take a roll + stock from `WHOLE_ROLLS` and run
+both sets, with a cross-roll block. The point of a second roll is not more n: one roll can
+show a fitted gain beats the shipped constant but not *why*. Same scanner, different stock —
+if both land on one gain it is a scan-path property and a per-roll knob is the wrong shape.
+
+| span >= 0.35 | n | mean `r_g` | mean `r_b` | scale green | scale blue |
+|---|---|---|---|---|---|
+| 2026-09-09-Ektar | 25 | 1.2569 | 1.1781 | 0.796 ± 0.031 | 0.849 ± 0.075 |
+| 2026-09-11-Portra400 | 27 | 1.1393 | 1.0147 | 0.878 ± 0.039 | 0.985 ± 0.079 |
+| shipped default | | 1.1111 | 1.1628 | 0.900 | 0.860 |
+
+**The two rolls do not separate: green 1.7 se, blue 1.3 se.** So there is no evidence for a
+per-roll gain — but the standard errors are wide enough (±0.03–0.08) that a real difference
+of ~0.1 would be missed, so this is "not detected", not "shown equal".
+
+**What did change is how well the shipped default fits, and the two channels disagree.**
+Ektar's green sits **3.4 se** from the shipped 0.900 while Portra's sits **0.6 se** — the
+default fits Portra's green well and Ektar's badly. Blue runs the other way: Ektar's 0.849 is
+near the shipped 0.860, Portra's is **0.985**, i.e. that roll wants almost no blue gain at all
+while the default applies 14%. A single constant cannot be right for both.
+
+**The per-roll case is much weaker on the second roll.** Split-half, held out:
+
+| roll | fitted | current default |
+|---|---|---|
+| Ektar | 0.20 | 0.86 |
+| Portra 400 | 0.53 | 0.81 |
+
+4.3x on Ektar, **1.5x** on Portra. The 2026-09-10 entry called Ektar the most favourable case
+— the corpus outlier on green, with a sheet disagreeing with its own aim table by 11% — and
+that is what it turned out to be.
+
+**White point (the offset half) — the green residual is gone on both rolls.** Decomposing the
+near-white per-channel difference into the part a channel's own slope already produces,
+`(r − 1)·w_r`, and the residual:
+
+| roll | channel | measured | slope part | residual | % slope |
+|---|---|---|---|---|---|
+| Ektar | green | 0.2396 | 0.2270 | 0.0127 | 95% |
+| Ektar | blue | 0.3950 | 0.1573 | 0.2377 | 40% |
+| Portra 400 | green | 0.1064 | 0.1069 | −0.0004 | 100% |
+| Portra 400 | blue | 0.1023 | 0.0113 | 0.0910 | 11% |
+
+Green is **95% and 100% slope** — a per-channel *offset* adds nothing in green on either
+roll, which retires the idea that a roll white point supplies the missing green term. Blue
+leaves a residual on both, but 0.238 against 0.091 is not one constant.
+
+**And on Portra the roll white point is not even self-consistent in blue**: sd 0.1619 against
+a mean of 0.1023 — the failure case the probe's own guidance names, where the aggregate is
+scene colour averaged. Held out, a roll-level blue offset scores RMS 0.1652 against 0.1885
+for no offset at all: a 1.14x improvement, against 6.4x on Ektar.
+
+**Reading.** Both halves of the roll-scoped idea worked on Ektar and largely failed on Portra
+400. That is the shape of a measurement that was fitting one roll's idiosyncrasy, and it lines
+up with what `io/scanner-density-calibration` already argues from the corpus: *a scale-shaped
+correction has no generic setting worth shipping*, and the form to fit is a 3x3 plus offset.
+Nothing here contradicts that; the whole-roll data now says the same thing from a second
+direction, and adds that the **green** term specifically is fully accounted for by slope.
+
+Not yet done: the visual review set covers Ektar only (`scripts/scale-review/`), and a
+verdict should not be written from the numbers alone given how much of this is the eye's call.
+Two rolls also remain a small n for a negative conclusion about a per-stock effect.
+
+Gates: `fmt` clean, `clippy --all-targets -D warnings` clean, `build` OK, `cargo test` 736
+unit + 190 integration 0 failed, `cargo doc` at the documented 16-link baseline, manifest
+validates clean.
+
+### 2026-09-13 — parked: the method is sound, the sample cannot carry it (user decision)
+
+The roll-scoped measurement is **suspended** until a better sample exists. Current default
+`density.scale = [1, 0.90, 0.86]` stands. Recorded here in full because the trap is subtle
+and the next person will otherwise re-run it on the same assets and get the same wrong
+confidence.
+
+**What the method does.** It never identifies a grey or white patch. Per frame it bins
+interior pixels by *red* density, takes the median green-vs-red and blue-vs-red balance per
+bin, **subtracts the middle bin** (which deletes the absolute balance, exactly as a white
+balance would), and fits the slope of what is left. The output is a *tilt* — does the balance
+drift between shadows and highlights — not a level. Over many frames that tilt should average
+to the systematic term, because a per-channel slope difference tilts every frame the same way
+while scene colour does not.
+
+**That last clause is the whole method, and these rolls break it.** The user's objection,
+2026-09-13:
+
+- Both whole rolls (`2026-09-09-Ektar`, `2026-09-11-Portra400`) are from **one Hawaii
+  vacation** — heavily blue, some green, little red. Scene colour is not uncorrelated with
+  density here; it is themed, and the theme correlates with luminance (sky and water are the
+  bright subjects).
+- The datasheets cannot referee it. Blue's 98% agreement with the published prediction was
+  the one scene-independent check, but Ektar's sheet is the corpus outlier we are *already*
+  doubting on green — internally inconsistent with its own aim table by 11%, R and G nearly
+  parallel at 1.002 against everyone else's 1.02–1.05. Using the sheets to validate a
+  measurement while disputing them elsewhere is circular.
+
+**The consequence is bigger than a caveat on the numbers: the cross-roll test is confounded.**
+The 2026-09-12 entry reads "the two rolls do not separate (green 1.7 se, blue 1.3 se)" as
+evidence there is no per-roll effect, and therefore that the quantity is a scan-path property.
+Two rolls that share a photographer, a trip and a palette produce **exactly that agreement**
+from shared scene statistics alone. The comparison cannot distinguish "same scanner" from
+"same subject matter", so it settles nothing — and the per-stock difference it did show
+(Ektar green 0.796 vs Portra 0.878) is equally unattributable. Treat every conclusion in that
+entry as provisional on the sample, not on the arithmetic.
+
+**What would actually answer it**, in the user's order of preference:
+
+1. **Manual review and tweak.** The user's own read is that `[1, 0.90, 0.86]` already looks
+   good enough by eye. This is the status quo and needs nothing.
+2. **More rolls — with different subject matter**, which is the part that matters. More
+   Hawaii rolls add n without removing the confound. What breaks it is variety: indoor,
+   overcast, red-dominant, no-sky.
+3. **A ColorChecker or grey target, bracketed.** The only option that removes the scene from
+   the measurement entirely rather than averaging over it. On the user's roadmap, not ready.
+   Shared need with `io/scanner-density-calibration` (which wants a known-neutral frame for
+   the 3x3) and `algo/sigmoid-parameter-calibration` (which wants a bracketed roll with a
+   grey card) — one shoot could serve all three, and whoever plans it should coordinate.
+
+**Kept, because it is ready to run the moment a better sample lands:**
+`curve_probe::whole_roll_scale` and `whole_roll_white_point` over `WHOLE_ROLLS`, both
+asset-gated and `#[ignore]`d, plus the two frozen recipes and the review-set generator
+`scripts/scale-review/`. Add a roll to `WHOLE_ROLLS` and re-run; nothing else is needed.
+
+**Two traps worth carrying forward regardless of sample:**
+
+- A **density-span filter cannot exclude a calibration frame.** `2026-09-11-Portra400`'s
+  `1639` is half leader and half base and has the *largest* span on the roll. Role, not span.
+- A **white point is an offset and cannot yield a slope**, and the slope measurement is
+  immune to a wrong film base while the offset measurement is not. Do not swap the bases or
+  the estimators between the two halves.
+
+### 2026-09-13 (later) — review correction: the headline estimator was the plain mean
+
+Review of the working tree found that every conclusion the two probes draw was built from the
+**arithmetic mean**, including frames the log itself called physically impossible. The probes
+printed a median and never used it. Corrected; the parked verdict is unchanged, but two
+intermediate findings moved and one **reversed**, so the numbers in the 2026-09-12 entry above
+are superseded by these.
+
+**What was wrong.** `r = dD_c/dD_r` cannot be negative — density rises with exposure in every
+channel of every film — yet Ektar's `1626` (`r_b = −0.91`) and Portra's `1659` (`r_b = −0.11`)
+were averaged in. They are now **refused** by `physically_possible`, and the headline is a
+`trimmed` estimator (physically possible, then ±2 sd). Both are named functions so the probe,
+the review set and this log cannot drift apart.
+
+**That drift had already happened.** `scripts/scale-review/` rendered a gain
+`[1, 0.773, 0.790]` described as a "±2 sd trim over 24 frames that `whole_roll_scale` prints".
+No trim existed in the probe: an earlier round computed the value out-of-band, and the
+rewrite that generalised the probes to two rolls dropped the trimmed block without anything
+referencing it — the exact "a re-port loses what nothing references" failure CLAUDE.md
+records. The generator now cites what the probe prints, `[1, 0.763, 0.773]`.
+
+| trimmed headline | n | scale green | scale blue |
+|---|---|---|---|
+| 2026-09-09-Ektar | 23 | **0.763** ± 0.018 | **0.773** ± 0.033 |
+| 2026-09-11-Portra400 | 24 / 25 | **0.825** ± 0.015 | **0.915** ± 0.055 |
+| shipped default | | 0.900 | 0.860 |
+
+**The reversal: the two rolls *do* separate.** 2026-09-12 reported green 1.7 se / blue 1.3 se
+and read that as no per-roll effect. On the trimmed estimator it is **green 2.7 se, blue
+2.2 se** — the outlier had been inflating the `se` the comparison divides by. This does *not*
+revive the per-roll hypothesis, because the 2026-09-13 entry's confound stands: two rolls from
+one trip separate for stock, roll or **scene** reasons indistinguishably. It does mean the
+earlier "no evidence of a per-roll difference" sentence was an artefact of the estimator, not
+a result.
+
+**The slope/offset split moved, and now over-attributes.** Green reads **114%** slope on Ektar
+and **153%** on Portra — above 100%, i.e. the slope term alone exceeds the measured near-white
+difference. That is a real limit of the decomposition rather than a finding: the slope is fit
+over p2–p98 red density and then **extrapolated** out to the p99.5 near-white point, where
+real film shoulders. Treat the split as indicative of direction only. The direction still
+holds and is what mattered — green's residual is ≤ 0 on both rolls, so a per-channel *offset*
+adds nothing in green; blue keeps a positive residual, now 0.136 (Ektar) and 0.031 (Portra),
+smaller than before but still not one constant.
+
+**Two caveats recorded rather than acted on:**
+
+- `2026-09-11-Portra400`'s frozen `Dmin` region was flagged by nc as *not uniform* (worst
+  per-channel relative spread 0.30 against a 0.15 threshold; Ektar's is 0.18). The slope half
+  is base-immune and that is verified, but the white-point half is base-**sensitive** by
+  construction, and the cross-roll blue residual compares two bases of unequal confidence. The
+  base is a high percentile rather than a mean, so the bias is likely small — but the Portra
+  offset numbers carry that asterisk.
+- **The visual-review generator is deliberately not shipped.** One was written and used to
+  sanity-check the Ektar numbers, but rebasing onto #114 found that it re-introduces exactly
+  the pattern that PR removed — it deleted `scripts/preset-review/generate.py` in favour of a
+  data matrix rendered by `nctool review generate`. A scale review cannot be a matrix yet:
+  every cell there is an `nc convert`, and this study compares nc against an **outside
+  reference** (NLP's existing TIFFs), and needs a common SDR sRGB JPEG so an HDR-decoding nc
+  rendition is not set beside NLP's SDR one. The requirement is recorded in the task file;
+  extending `nctool review` with a reference-cell kind is the right fix, not another script.
+
+Frame accounting is now printed — how many manifest `real` frames a roll offered, how many
+were measured, and the reason each was dropped — because three independent `continue`s could
+shrink a roll silently and a partially-measured roll printed the same summary as a complete
+one. Both rolls report all 32 measured. The cross-roll block iterates **every pair** and names
+the rolls, so the documented "add a roll and re-run" path cannot leave a third roll out of the
+verdict at exit 0.
 
 ## ir-usability-detection
 

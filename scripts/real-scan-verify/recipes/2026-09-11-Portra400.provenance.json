@@ -1,0 +1,20 @@
+{
+  "roll": "2026-09-11-Portra400",
+  "dmin": {
+    "frame": "20260911-film-1672.tif",
+    "region": "1469,989,1959,1318",
+    "base": {
+      "r": 0.350927,
+      "g": 0.16437018,
+      "b": 0.09372091
+    },
+    "warnings": "nc: warning: base-region [1469,989,1959,1318] is not uniform (worst per-channel relative spread 0.30 > 0.15); the rectangle may mix unexposed rebate with image content — verify it with `nc inspect` "
+  },
+  "dmax": {
+    "frame": "20260910-film-1638.tif",
+    "region": "1481,1001,1974,1335",
+    "scalar": 1.2665207,
+    "warnings": ""
+  },
+  "note": "center 40% region excludes film holder; scalars frozen for deterministic apply"
+}
