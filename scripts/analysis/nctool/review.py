@@ -430,13 +430,10 @@ def cmd_generate(args) -> int:
 
         # Resolved, because `Path("./fakenc")` normalises to a bare name that
         # `is_file()` accepts and `subprocess` then looks up on PATH instead.
-        nc = Path(args.nc).resolve()
-        if not nc.is_file():
-            raise ReviewError(f"no nc binary at {nc}; `cargo build --release` first")
-        assets = Path(args.asset_root).resolve()
-        if not (assets / "manifest.json").is_file():
-            raise ReviewError(f"no assets at {assets}")
-
+        # **What was asked is checked before what is installed.** An unbuildable
+        # environment is the less specific fault: telling someone to build the
+        # binary when their real problem is `--out .` costs them a round trip and
+        # then says something else.
         out = Path(args.out or matrix["output_dir"] or "../temp/review").resolve()
         # The frames are the user's own photographs and are never committed, so
         # the one destination this refuses is the repository itself (CLAUDE.md).
@@ -445,6 +442,16 @@ def cmd_generate(args) -> int:
             raise ReviewError(
                 f"{out} is inside the repository ({repo}); a review set is rendered "
                 "photographs and must go to a throwaway directory outside it")
+
+        # Resolved, because `Path("./fakenc")` normalises to a bare name that
+        # `is_file()` accepts and `subprocess` then looks up on PATH instead.
+        nc = Path(args.nc).resolve()
+        if not nc.is_file():
+            raise ReviewError(f"no nc binary at {nc}; `cargo build --release` first")
+        assets = Path(args.asset_root).resolve()
+        if not (assets / "manifest.json").is_file():
+            raise ReviewError(f"no assets at {assets}")
+
         out.mkdir(parents=True, exist_ok=True)
     except ReviewError as error:
         print(f"error: {error}", file=sys.stderr)

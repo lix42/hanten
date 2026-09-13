@@ -219,9 +219,13 @@ class TestOutputDirectory(unittest.TestCase):
         # The frames are the user's own photographs and are never committed.
         repo = Path(review.__file__).resolve().parents[3]
         for target in (repo, repo / "tools" / "review-app" / "public"):
+            # A binary path that cannot exist, deliberately: the refusal must
+            # come from *what was asked*, not depend on what happens to be built.
+            # CI builds only `target/debug/nc`, and an earlier version of this
+            # check reported "build the binary first" there instead.
             args = argparse.Namespace(
                 matrix=str(write(MATRIX)), fixtures="scripts/sigmoid-baseline/fixtures.json",
-                frames=None, nc="target/release/nc", asset_root="../nc-assets",
+                frames=None, nc="/nonexistent/nc", asset_root="../nc-assets",
                 out=str(target), no_metrics=True, force=False)
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
