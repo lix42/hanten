@@ -175,7 +175,8 @@ the measurement side holds to. Not the app wiring, which is the other half.
 ## How to Verify
 
 The charts are drawn from **real** records (two configs of the same frame, via
-`scripts/preset-review/generate.py` plus `nctool metrics`), not invented numbers,
+`nctool review generate`, which measures each rendition as it renders it), not
+invented numbers,
 and a reader can go from a visible feature back to the field that produced it.
 The encodings survive the degenerate cases above. The outcome is a decision
 recorded here and in the progress log, concrete enough for the integration half

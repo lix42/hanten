@@ -25,33 +25,45 @@ does not depend on the app. This task is the wiring.
   rendition of an image shares one grid cell, so switching config cannot move
   the picture. Its `review.json` is `configs × images → renditions`, and
   `SCHEMA.md` already calls `images[].note` "the natural home for measured
-  numbers" — a hook `scripts/preset-review/generate.py` now uses for G/R and B/R
-  means.
+  numbers" — a hook the generator uses for G/R and B/R means.
 
 Those two shapes line up: a metrics record is per (image, config), which is
 exactly what `renditions` is keyed by.
 
-## Open questions
+## Settled
 
-- **How does a record reach the app?** A new key on `renditions[config]`, a
-  sibling file, or read from `nctool` output directly. Inlining keeps a review
-  set self-contained (the schema's stated virtue) but duplicates data; a
-  reference keeps one copy but breaks "move the directory anywhere". The app now
-  has a **server** that reads the set from disk and watches it, so a sibling file
-  is cheaper than it was — but it has to join the watch targets, or it goes stale
-  exactly the way renditions did (mtime frozen at parse time, no error).
-  Note `parseReview` rejects an unknown *config id* but silently ignores unknown
-  top-level and image-level keys, so an inlined block would be accepted and
-  unvalidated.
-- **Do the charts toggle in place like the image, or sit beside it?** In place is
-  consistent with the app's core interaction; an overlay of both configs at once
-  is strictly more informative for a curve. Those pull in opposite directions and
-  the answer may differ per chart.
-- **What does a config with no measurement render as?** The schema says a missing
-  *rendition* is fine and an unknown config id is an error; charts need their own
-  answer.
-- **Per-frame and per-roll are different views.** Does the app grow a roll view,
-  or does the roll rollup stay in Markdown?
+All four, on 2026-09-12, while wiring it:
+
+- **A record reaches the app as a sibling file**, named by an optional `metrics` key on a
+  rendition (`tools/review-app/SCHEMA.md`). Not inlined: it is ~20 kB of histogram counts per
+  rendition, written by a different tool at a different time, and a separate file is what
+  lets a re-measurement update the page without rewriting the review document. It is read and
+  parsed **server-side**, so what crosses the wire is the charted subset rather than the whole
+  record. `schema_version` stays 1 — the key is additive and optional, so an older build
+  ignores it rather than refusing the set.
+  **It joins the watch targets**, stamped beside the renditions: the model holds the *parsed*
+  record, so without that a re-measurement would sit invisible behind the previous numbers,
+  exactly the way renditions once did.
+- **The charts swap in place with the config**, below the picture, not beside it and not
+  overlaid. All three v1 charts spend colour on what they encode, so none has a series
+  dimension left for a second configuration — comparing is switching config and watching the
+  shape change, the same gesture the picture already asks for. Below rather than beside
+  because the stage is the widest thing on the page and must not be narrowed.
+- **A config with no measurement renders its picture and says so.** A record that cannot be
+  read says why, where the charts would be. Neither refuses the set: the picture is what this
+  app exists to show, and one unreadable record must not take four good comparisons with it.
+- **Per-roll stays in Markdown.** The app is per frame; `nctool metrics roll` already rolls
+  the scalars up, and a roll view is a different question from this one.
+
+Two things worth knowing for whatever comes next:
+
+- The charts describe the **measured region**, not the frame — a set insets its measurement
+  so the film holder and rebate stay out of the statistics, so the panel states what share of
+  the frame it covers. A holder that the inset fails to clear shows up as a hard spike at the
+  bottom of the L\* axis.
+- Nothing checks that a record describes the rendition it is attached to. The generator
+  writes each one beside the image it measured and keys reuse to that image's checksum; a
+  hand-assembled set could pair them wrongly and nothing would notice.
 
 ## Non-goals
 

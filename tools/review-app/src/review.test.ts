@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
-import { parseReview, type ResolveRendition } from "./review";
+import { SYNTHETIC_METRICS } from "./charts/fixture";
+import { parseMetrics } from "./charts/metrics";
+import { parseReview, type LoadMetrics, type ResolveRendition } from "./review";
 
 /**
  * Stands in for the server's resolver, which maps a rendition path to a file and
@@ -158,5 +160,81 @@ describe("parseReview", () => {
     expect(() =>
       parseReview(doc({ images: [{ id: "E1", renditions: { none: 42 } }] }), RESOLVE),
     ).toThrow(/images\[0\]\.renditions\.none must be an object, got number/);
+  });
+});
+
+/**
+ * Stands in for the server's record reader, which resolves the path against the
+ * review file's directory and parses what it finds. Here it answers from one
+ * fixture, and reports what it was asked for.
+ */
+const LOAD_METRICS: LoadMetrics = (path) =>
+  path === "missing.json"
+    ? { metricsError: `cannot read ${path}` }
+    : { metrics: parseMetrics(SYNTHETIC_METRICS) };
+
+function withMetrics(metrics: unknown) {
+  return doc({
+    images: [
+      {
+        id: "E1",
+        renditions: { shoulder: { src: "E1-shoulder.jpg", metrics }, none: "E1-none.jpg" },
+      },
+    ],
+  });
+}
+
+describe("parseReview and duplicate image ids", () => {
+  // The charts address their SVG gradients by an id built from the image and the
+  // config, and two identical ids in one document both resolve to the first —
+  // so the second frame's cast curves would take the first frame's ramp.
+  it("refuses two images with the same id", () => {
+    const duplicated = doc({
+      images: [
+        { id: "E1", renditions: { shoulder: "a.jpg" } },
+        { id: "E1", renditions: { none: "b.jpg" } },
+      ],
+    });
+    expect(() => parseReview(duplicated, RESOLVE)).toThrow(/two entries with id "E1"/);
+  });
+});
+
+describe("parseReview and measurements", () => {
+  it("attaches the record a rendition names", () => {
+    const image = parseReview(withMetrics("E1-shoulder.metrics.json"), RESOLVE, LOAD_METRICS)
+      .images[0]!;
+    expect(image.renditions["shoulder"]!.metrics?.schemaVersion).toBe(2);
+    expect(image.renditions["shoulder"]!.metricsError).toBeUndefined();
+  });
+
+  // The app must not require the data it did not have yesterday: a set written
+  // before measurements existed, or rendered with --no-metrics, still loads.
+  it("leaves a rendition naming no record unmeasured", () => {
+    const image = parseReview(withMetrics(undefined), RESOLVE, LOAD_METRICS).images[0]!;
+    expect(image.renditions["shoulder"]!.metrics).toBeUndefined();
+    expect(image.renditions["none"]!.metrics).toBeUndefined();
+  });
+
+  // A record that cannot be read costs its own charts and nothing else. The
+  // picture is what this app exists to show, and the other four configs of the
+  // comparison are still good.
+  it("reports an unreadable record without refusing the set", () => {
+    const image = parseReview(withMetrics("missing.json"), RESOLVE, LOAD_METRICS).images[0]!;
+    expect(image.renditions["shoulder"]!.metricsError).toContain("cannot read missing.json");
+    expect(image.renditions["shoulder"]!.metrics).toBeUndefined();
+    expect(image.renditions["none"]!.src).toBe("resolved:E1-none.jpg");
+  });
+
+  it("still refuses a malformed metrics path, which is a typo in the document", () => {
+    expect(() => parseReview(withMetrics(7), RESOLVE, LOAD_METRICS)).toThrow(
+      /renditions\.shoulder\.metrics must be a non-empty string/,
+    );
+  });
+
+  // Every test that is not about measurements parses without a reader.
+  it("ignores a named record when nothing can read one", () => {
+    const image = parseReview(withMetrics("E1-shoulder.metrics.json"), RESOLVE).images[0]!;
+    expect(image.renditions["shoulder"]!.metrics).toBeUndefined();
+    expect(image.renditions["shoulder"]!.metricsError).toBeUndefined();
   });
 });

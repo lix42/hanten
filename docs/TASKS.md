@@ -1142,25 +1142,27 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   black-box coverage now exercises real-binary `freeze` → `convert`, pins the recipe and
   TIFF/sidecar contracts, and reproduces the successful-wrong-container failure; the full
   analysis suite runs in Linux and macOS CI
-- [~] [Comparison review tooling](tasks/analysis/comparison-review-tooling.md) — promote the
-  ad-hoc review pages from `algo/reference-anchored-sigmoid` into a maintained tool for
-  comparing rendering configurations by eye: one entry point, the matrix as data rather than
-  code, HDR review for the frames whose range exceeds SDR, and build-vs-build comparison.
-  **Viewer half shipped 2026-09-02**, fullstack since 2026-09-10 (`tools/review-app/`,
-  TanStack Start on Vite+ / Solid / Panda CSS): the `review.json` format settles "matrix as
-  data", switching config cannot move the picture because every rendition shares one grid
-  cell, and the server takes the set by path and watches it, so re-running `nc` updates the
-  page. Still open: the **generator** that renders a matrix and emits the JSON, HDR review,
-  and build-vs-build.
-- [~] [Metrics chart design](tasks/analysis/metrics-chart-design.md) — settle *what the
-  charts are*, independently of the app. **Settled and built**: a luminance histogram, a
-  per-channel histogram, and cast-over-tone as two axis-coloured curves, in hand-rolled
-  SVG, with the a\*/b\* path rejected as unreadable. Still open: whether the cast chart's
-  x axis moves to true L\* centres, and what a compare-mode cast chart looks like. Every chart must be
-  designed to overlay two configs from the start — the app's premise. Executable now; the
-  app half is not.
-- [ ] [Metrics visualization](tasks/analysis/metrics-visualization.md) — wire the charts
-  from `analysis/metrics-chart-design` into `tools/review-app`, so numeric review sits
-  beside visual review: how a metrics record reaches the app, whether charts toggle in place
-  with the picture or sit beside it, what an unmeasured config renders as, and whether a
-  roll view appears.
+- [x] [Comparison review tooling](tasks/analysis/comparison-review-tooling.md) — the ad-hoc
+  review pages from `algo/reference-anchored-sigmoid` are now a maintained tool. **Viewer**
+  shipped 2026-09-02, fullstack since 2026-09-10 (`tools/review-app/`, TanStack Start on
+  Vite+ / Solid / Panda CSS): every rendition of a frame shares one grid cell, so switching
+  config cannot move the picture, and the server takes the set by path and watches it.
+  **Generator** shipped 2026-09-12 as `nctool review generate <matrix.json>` — the matrix is
+  data, each cell is one `nc convert`, and each rendition gets its `nctool metrics` record
+  written beside it. HDR review and build-vs-build are deferred with reasons in the task
+  file: nothing downscales a gain map, and a build axis needs render provenance rather than a
+  typed label.
+- [x] [Metrics chart design](tasks/analysis/metrics-chart-design.md) — *what the charts are*,
+  settled independently of the app and accepted as v1 on 2026-09-12: a luminance histogram, a
+  per-channel histogram, and cast-over-tone as two axis-coloured curves, in hand-rolled SVG,
+  with the a\*/b\* path rejected as unreadable. Components built and now drawn under every
+  picture in the review app. The task file keeps a *Still open* list for v2 — the cast
+  chart's x axis, a compare-mode cast chart, and how far `sparse` should demote a curve —
+  none of which the v1 set needs.
+- [x] [Metrics visualization](tasks/analysis/metrics-visualization.md) — the charts from
+  `analysis/metrics-chart-design` are wired into `tools/review-app`, so numeric review sits
+  beside visual review. A record reaches the app as a **sibling file** named by an optional
+  `metrics` key on a rendition, read server-side and watched like an image, so re-measuring
+  updates the page in place; the charts sit below the picture and swap with the config. A
+  rendition with no measurement renders its picture and says so, and an unreadable record
+  costs only its own charts.

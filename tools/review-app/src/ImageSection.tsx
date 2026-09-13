@@ -1,5 +1,7 @@
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { css } from "../styled-system/css";
+import { domId } from "./charts/domId";
+import { MetricsPanel } from "./charts/MetricsPanel";
 import type { Rendition, ReviewConfig, ReviewImage, ZoomMode } from "./review";
 
 // Border longhands rather than the `border` shorthand: `previewActive`
@@ -453,6 +455,15 @@ export function ImageSection(props: Props) {
           </Show>
         </Show>
       </div>
+
+      {/* Below the picture rather than beside it: the stage is the widest thing
+          on the page and the charts must not narrow it. They swap with the
+          config exactly as the picture does. */}
+      <MetricsPanel
+        id={domId(props.image.id, activeId() ?? "none")}
+        rendition={activeRendition()}
+        configLabel={props.configs[props.activeIndex]?.label ?? "?"}
+      />
     </section>
   );
 }

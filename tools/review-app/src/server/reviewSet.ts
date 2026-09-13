@@ -12,7 +12,8 @@ import { readFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { parseReview, type Review } from "../review";
-import { createAssetMap, type AssetMap, type StatFile } from "./assets";
+import { createAssetMap, type Asset, type AssetMap, type StatFile } from "./assets";
+import { createMetricsFiles } from "./metricsFiles";
 
 /** Env var naming the review set. */
 export const SET_ENV_VAR = "REVIEW_SET";
@@ -65,6 +66,13 @@ export function resolveSetFile(setPath: SetPath): string {
 export interface ReviewSet {
   readonly review: Review;
   readonly assets: AssetMap;
+  /**
+   * The metric records the set named, for the watcher to stamp.
+   *
+   * Separate from `assets` on purpose: these are read into the model, never
+   * served, so they must not be addressable by an `/img/` URL.
+   */
+  readonly data: readonly Asset[];
   /** Absolute path of the `review.json` itself. */
   readonly path: string;
   /** Directory rendition paths resolve against, and the watcher watches. */
@@ -114,8 +122,9 @@ export async function loadReviewSet(
     throw new Error(`${path} is not valid JSON: ${describeCause(cause)}`);
   }
 
-  const review = parseReview(json, (path) => assets.register(resolvePath(dir, path)));
-  return { review, assets, path, dir, source: setPath.source };
+  const metrics = createMetricsFiles(dir, stat);
+  const review = parseReview(json, (path) => assets.register(resolvePath(dir, path)), metrics.load);
+  return { review, assets, data: metrics.files(), path, dir, source: setPath.source };
 }
 
 function isDirectory(path: string): boolean {

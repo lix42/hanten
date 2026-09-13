@@ -17,6 +17,7 @@ import {
   hasChange,
   loadedStamps,
   stampsOf,
+  watchedFiles,
   watchTargets,
   watchTargetsKey,
   type Stamps,
@@ -85,9 +86,11 @@ function scheduleSettle(state: WatchState): void {
  * asset map would report nothing that happened there.
  */
 function installWatchers(state: WatchState, set: ReviewSet): void {
+  // Records as well as renditions: a set may keep its measurements in a
+  // directory of their own, and one nothing watches never updates the page.
   const targets = watchTargets(
     set.dir,
-    set.assets.entries().map((asset) => asset.path),
+    watchedFiles(set).map((file) => file.path),
   );
   const key = watchTargetsKey(targets);
   if (state.watchers.length > 0 && key === state.targets) return;

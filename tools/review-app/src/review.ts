@@ -14,6 +14,8 @@
  * render, a frame added later), so it renders as a visible gap instead.
  */
 
+import type { Metrics } from "./charts/metrics";
+
 export type ZoomMode = "fit" | "fullsize";
 
 export interface ReviewConfig {
@@ -29,6 +31,16 @@ export interface Rendition {
   readonly preview: string;
   readonly width?: number;
   readonly height?: number;
+  /** The measurement of *these* pixels, when the set names a record for them. */
+  readonly metrics?: Metrics;
+  /**
+   * Why a named record could not be used, shown where the charts would be.
+   *
+   * A broken measurement must not cost the comparison: the picture is the thing
+   * this app exists to show, and refusing the whole set over one unreadable
+   * record would take every other config down with it. Loud, but local.
+   */
+  readonly metricsError?: string;
 }
 
 export interface ReviewImage {
@@ -110,6 +122,22 @@ function describe(value: unknown): string {
 export type ResolveRendition = (path: string, at: string) => string;
 
 /**
+ * Turns a metrics path written in a review file into that rendition's record.
+ *
+ * Injected for the same reason `ResolveRendition` is, and it *reads* as well as
+ * resolves: the server reaches the filesystem, a test hands back a stub. Optional
+ * so a caller with no filesystem — every test that is not about measurements —
+ * gets a document without them.
+ *
+ * It returns a failure rather than throwing, because a record that cannot be
+ * read is a missing chart, not a refused review set.
+ */
+export type LoadMetrics = (
+  path: string,
+  at: string,
+) => { metrics: Metrics } | { metricsError: string };
+
+/**
  * `width`/`height` are optional, but only *together*.
  *
  * They exist so the page can reserve the right box before the image arrives, and
@@ -132,7 +160,12 @@ function dimensions(
   return { width, height };
 }
 
-function parseRendition(raw: unknown, resolve: ResolveRendition, at: string): Rendition {
+function parseRendition(
+  raw: unknown,
+  resolve: ResolveRendition,
+  loadMetrics: LoadMetrics | undefined,
+  at: string,
+): Rendition {
   // Shorthand: a bare string is the src, which is all a generator usually has.
   if (typeof raw === "string") {
     const src = resolve(asString(raw, at), at);
@@ -141,10 +174,12 @@ function parseRendition(raw: unknown, resolve: ResolveRendition, at: string): Re
   const record = asRecord(raw, at);
   const src = resolve(asString(record["src"], `${at}.src`), `${at}.src`);
   const previewRaw = optionalString(record["preview"], `${at}.preview`);
+  const metricsRaw = optionalString(record["metrics"], `${at}.metrics`);
   return {
     src,
     preview: previewRaw ? resolve(previewRaw, `${at}.preview`) : src,
     ...dimensions(record, at),
+    ...(metricsRaw && loadMetrics ? loadMetrics(metricsRaw, `${at}.metrics`) : {}),
   };
 }
 
@@ -158,7 +193,11 @@ function parseRendition(raw: unknown, resolve: ResolveRendition, at: string): Re
  * rather than returning a partial model — a half-loaded comparison is worse than
  * a refusal, because the missing half is invisible.
  */
-export function parseReview(raw: unknown, resolve: ResolveRendition): Review {
+export function parseReview(
+  raw: unknown,
+  resolve: ResolveRendition,
+  loadMetrics?: LoadMetrics,
+): Review {
   const doc = asRecord(raw, "the review document");
 
   const version = doc["schema_version"];
@@ -187,10 +226,19 @@ export function parseReview(raw: unknown, resolve: ResolveRendition): Review {
     seen.add(config.id);
   }
 
+  // Image ids are unique for the same reason config ids are, plus one the
+  // charts add: a chart's SVG gradients are addressed by an id built from the
+  // image and the config, and two `<linearGradient id="E1-a">` in one document
+  // both resolve to the *first*. The second frame's cast curves would then be
+  // painted with the first frame's value-to-colour mapping — and on that chart
+  // colour is the encoding.
+  const imageIds = new Set<string>();
   const images = asArray(doc["images"], "images").map((raw, index) => {
     const at = `images[${index}]`;
     const record = asRecord(raw, at);
     const id = asString(record["id"], `${at}.id`);
+    if (imageIds.has(id)) fail(`images contains two entries with id ${JSON.stringify(id)}`);
+    imageIds.add(id);
     const renditionsRaw = asRecord(record["renditions"], `${at}.renditions`);
     // Two hazards, one on each side of the lookup. `fromEntries` defines own
     // properties, so a config id spelled `__proto__` lands as data rather than
@@ -212,7 +260,7 @@ export function parseReview(raw: unknown, resolve: ResolveRendition): Review {
           }
           return [
             configId,
-            parseRendition(value, resolve, `${at}.renditions.${configId}`),
+            parseRendition(value, resolve, loadMetrics, `${at}.renditions.${configId}`),
           ] as const;
         }),
       ),

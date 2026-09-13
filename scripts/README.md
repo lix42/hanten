@@ -13,7 +13,7 @@ otherwise.
 | [`render-defaults-v3/`](render-defaults-v3/) | Render and measure the legacy-TIFF-to-gain-map-JPEG default transition. |
 | [`sigmoid-baseline/`](sigmoid-baseline/) | Generate local visual-review pages used by the sigmoid calibration study. |
 | [`hdr-tone-review/`](hdr-tone-review/) | Render the gain-map JPEG review set for the display-tone study (macOS-only). |
-| [`preset-review/`](preset-review/) | Render the review set for the five proposed conversion presets, through the flags each will expand to. |
+| [`preset-review/`](preset-review/) | The review **matrix** for the five proposed conversion presets; rendered by `nctool review generate`. |
 | `check-vendored-native.py` | Verify the checked-in libultrahdr and libjpeg-turbo source snapshots. |
 
 ## Vendored native-source check

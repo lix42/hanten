@@ -29,7 +29,16 @@ function stamp(mtimeMs: number, size: number): string {
 export interface Stamps {
   /** The `review.json` itself; `0:0` when it has gone missing. */
   readonly set: string;
-  /** Per absolute rendition path. `0:0` for one whose file is not there. */
+  /**
+   * Per absolute path of a rendition **or a metric record**. `0:0` for one whose
+   * file is not there.
+   *
+   * Records are stamped beside the images because re-measuring has to reach the
+   * page for the same reason re-rendering does: the model holds the parsed
+   * record, so nothing re-reads it until the set is dropped. Watching the
+   * directory is not enough on its own — an event nothing stamps diffs to no
+   * change, and the page sits on the previous numbers.
+   */
   readonly assets: Readonly<Record<string, string>>;
 }
 
@@ -82,6 +91,13 @@ function isUnder(path: string, ancestor: string): boolean {
   return path === ancestor || path.startsWith(ancestor.endsWith(sep) ? ancestor : ancestor + sep);
 }
 
+/** Everything one set is made of: its renditions and its metric records. */
+export function watchedFiles(
+  set: ReviewSet,
+): readonly { path: string; mtimeMs: number; size: number }[] {
+  return [...set.assets.entries(), ...set.data];
+}
+
 /**
  * Stamps as the **loaded set** sees them — the mtimes its `/img/` URLs actually
  * carry, not what is on disk now.
@@ -95,7 +111,7 @@ function isUnder(path: string, ancestor: string): boolean {
  */
 export function loadedStamps(set: ReviewSet, stat: StatFile): Stamps {
   const assets: Record<string, string> = {};
-  for (const asset of set.assets.entries()) assets[asset.path] = stamp(asset.mtimeMs, asset.size);
+  for (const file of watchedFiles(set)) assets[file.path] = stamp(file.mtimeMs, file.size);
   return { set: stampOnDisk(set.path, stat), assets };
 }
 
@@ -106,6 +122,6 @@ function stampOnDisk(path: string, stat: StatFile): string {
 
 export function stampsOf(set: ReviewSet, stat: StatFile): Stamps {
   const assets: Record<string, string> = {};
-  for (const asset of set.assets.entries()) assets[asset.path] = stampOnDisk(asset.path, stat);
+  for (const file of watchedFiles(set)) assets[file.path] = stampOnDisk(file.path, stat);
   return { set: stampOnDisk(set.path, stat), assets };
 }

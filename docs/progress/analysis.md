@@ -33,6 +33,15 @@ What other epics need to know about `analysis`:
   stops); `cast_by_tone_band` is the **crossover** detector, the one colour number
   a negative conversion turns on; and a roll's spread is **not attributable** to
   the calibration, because scene content is mixed into it.
+- **Comparing renders by eye is one command (2026-09-12).** `nctool review generate
+  <matrix.json>` renders every (frame x config) cell a matrix names, writes each rendition's
+  `nctool metrics` record beside it, and emits the `review.json` that `tools/review-app`
+  reads; `scripts/preset-review/presets.matrix.json` is the worked example. Two things other
+  epics will care about: the matrix is **data**, so comparing a new configuration is an edit
+  to a JSON file rather than to any script, and a review set now carries its **measurements**,
+  which the app draws as tone and cast charts under each picture. It needs `../nc-assets` and
+  the metrics venv, so it is not in CI, and its output goes to a throwaway directory outside
+  the repo — the frames are the user's own photographs.
 - **The tone bands are cut in CIELAB lightness, and the record is `schema_version`
   2 (2026-09-10).** Edges every 15 L\* to 75, then diffuse white (L\* 100), then an
   overflow band above it — `deep_shadow, shadow, low_mid, mid, high_mid,
@@ -980,8 +989,8 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
 
 ## comparison-review-tooling
 
-**Status:** in progress
-**Updated:** 2026-09-02
+**Status:** done
+**Updated:** 2026-09-12
 
 - Goal: promote the ad-hoc review pages built during `algo/reference-anchored-sigmoid` into a
   maintained tool for comparing rendering configurations by eye. Requested explicitly by the
@@ -1218,10 +1227,74 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   reads prose, so a number quoted from a one-off script survives every green run — re-derive
   it, or say how it was counted.
 
+### 2026-09-12 — the generator half shipped: `nctool review generate`
+
+The remaining half, and what closes the task. `python -m nctool review generate
+<matrix.json>` renders every (frame x config) cell a matrix names and writes the
+`review.json` for it.
+
+- **The matrix is data.** `scripts/preset-review/presets.matrix.json` replaces the Python
+  list `generate.py` carried; the script is gone. A config states its own `args`, and the
+  per-roll values they need arrive through placeholders — `{dmin}` from
+  `scripts/sigmoid-baseline/fixtures.json` (the declaration the metrics already read, so the
+  two cannot drift) and `{film_stock}` from the matrix's own `rolls` block. Nothing is
+  derived from a name: the fixtures call a roll `2026-07-24-Gold200` where the registry calls
+  the stock `gold-200`. Which configs take a stock is therefore stated by their args, which
+  is the property the old script protected with a hand-maintained boolean column.
+- **Placeholders are validated when the matrix loads**, not when a frame renders: `--film-stock
+  {film_stok}` would otherwise reach `nc` as a literal stock name, 35 renders in.
+- **The file suffix comes from the matrix's preset** (mirroring `cli::derived_extension`;
+  `nc` refuses a mismatched `-o`, so a stale entry fails loudly), but **the colour space each
+  cell is measured in comes from the recipe `nc` reports it resolved**. The first version read
+  both off the preset name, which is wrong for `legacy` and `custom`: they accept
+  `--output-profile`, which a matrix is free to pass, so a ProPhoto render would have been
+  measured as sRGB — every tone and cast number wrong while every one of them still looked
+  reasonable, which is the plausible wrong answer `metrics` exists to refuse. `space_for_recipe`
+  also declines an `f32` output whose transfer is unverified, and that now costs one cell's
+  charts instead of being papered over. A matrix restating a flag the generator owns
+  (`--output-preset`, `-o`, `--report`) is refused rather than silently overridden — `nc` takes
+  the last occurrence of a `Set` argument, and `--output-preset` decides the suffix too.
+  A preset the metrics cannot read at all (`hdr-pq` writes AVIF) still renders a reviewable
+  page — without charts, and saying why, once up front.
+- **Each rendition gets its metric record written beside it**, which is what the app's charts
+  draw. Re-measuring is skipped when a stored record already carries that file's **checksum**
+  and the same region — not its mtime, which a re-render always moves. Measuring a 74 MP frame
+  is minutes of work.
+- **Failure is per cell.** A roll with no stock loses one column, not the frame; a failed
+  render is reported and its config simply has no rendition, which the page draws as a gap.
+- **Each measured rendition also gets its `width`/`height`**, so the page can reserve the
+  box before the image loads — the record is the only source, since `nc`'s report carries no
+  image size. A `--no-metrics` set therefore still omits them, which the schema allows.
+- **It refuses an output directory inside the repository.** The frames are the user's own
+  photographs; the old script relied on the operator remembering, and this is now the
+  blessed entry point. Argument checks run **before** environment checks, so `--out .` is
+  told about `--out .` rather than about an unbuilt binary — CI caught the original order,
+  because it builds only the debug binary.
+- **Reuse is keyed to the declared space and the JPEG decoder as well as the checksum**,
+  and colliding cell names are refused up front — case-folded, because the default macOS
+  volume treats `A-c.jpg` and `a-c.jpg` as one file. `<frame>-<config>` is not injective
+  when either id may carry a hyphen, and config ids routinely do. Ids are checked
+  filename-safe for the same reason the output directory is: both sources are inputs, and
+  one holding `../` writes outside the directory that was just validated.
+- Verified end to end on P3, G2 and E1 — one frame from each of the three rolls — across all
+  five presets: 15 renditions + 15 records, exit 0. The matrix's `metrics.inset` of 0.18 does
+  clear the film holder on all three (0.000% of pixels below L\* 5; a holder in the region
+  reads as a hard spike at the bottom of the histogram, which is the check, and the app draws
+  that histogram). A second run re-rendered every cell byte-identically and **re-measured
+  none** of the five it already had — the checksum reuse path, on real data.
+- 52 hermetic tests (`test_review.py`); the analysis suite is 281, up from 229. The matrix
+  is read with `deny_unknown_fields` discipline, which is not fussiness: `"arg"` for
+  `"args"` loads as *no* arguments, so that cell renders the default conversion under a
+  label promising something else — five buttons, five labels, identical pixels, exit 0 —
+  and `"insets"` for `"inset"` measures the whole frame, film holder included.
+- **Deferred with reasons rather than left open** (both in the task file): HDR review, because
+  nothing downscales a gain map — the blocker that motivated it — and build-vs-build, because
+  identifying two builds in a page is a provenance problem, not a flag.
+
 ## metrics-chart-design
 
-**Status:** in progress
-**Updated:** 2026-09-10
+**Status:** done
+**Updated:** 2026-09-12
 
 - Goal: settle the chart encodings, the rendering technology and the component split,
   independently of the review app.
@@ -1311,10 +1384,18 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   caught it checked only luminance; `sparse` read as `=== true` where every neighbouring
   field threw; and a figure cited without its scope.
 
+### 2026-09-12 — accepted as v1
+
+The user accepted the shipped component set ("I'm fine with the v1 components. They are
+enough for the current work"), which closes this task. The three items under *Still open* in
+the task file stay open as v2 questions — the cast chart's x axis, a compare-mode cast chart,
+and how far `sparse` should demote the curve rather than only its mark — and none of them
+blocks the v1 set, which is now drawn under every picture in the review app.
+
 ## metrics-visualization
 
-**Status:** not started
-**Updated:** 2026-09-03
+**Status:** done
+**Updated:** 2026-09-12
 
 - Goal: plot the `nctool metrics` output inside `tools/review-app`, so numeric review
   sits beside visual review rather than in a separate tool.
@@ -1338,6 +1419,48 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   and the schema already calls `images[].note` "the natural home for measured
   numbers".
 
+
+### 2026-09-12 — the charts landed under the picture
+
+The wiring half. A review set may now name a measurement per rendition, and the app draws the
+three v1 charts below the picture, bound to the active config.
+
+- **Transport: a sibling file, read server-side.** `renditions[config].metrics` names a
+  record relative to `review.json`. It is not inlined — ~20 kB of histogram counts per
+  rendition, written by a different tool at a different time, and a separate file is what lets
+  a re-measurement update the page without rewriting the review document. The server reads and
+  parses it, so what crosses the wire is the charted subset: measured at **27 kB of payload
+  for five records**, which is 5.4 kB each rather than 20.
+- `schema_version` stays **1**. The key is additive and optional, so a set written by the new
+  generator still loads in an older build, which a bump would have broken for no gain.
+- **It joins the watch targets**, stamped beside the renditions. The model holds the *parsed*
+  record, so nothing re-reads it until the held set is dropped — a record that nothing stamps
+  produces a filesystem event that diffs to no change, and the charts sit on the previous
+  numbers with no error anywhere. That is the same failure renditions had before their mtime
+  rode in the URL. Records are deliberately **not** in the asset map: that map is the set of
+  files the server may serve, and a record has no business behind an `/img/` URL.
+- **Placement settled by the encoding, not by taste.** All three v1 charts spend colour on
+  what they encode — channel identity, or the sign of `a*`/`b*` — so none has a series
+  dimension left for a second config. They swap with the config exactly as the picture does.
+  Below the picture rather than beside it, because the stage is the widest thing on the page.
+- **Two failure modes, both local.** A rendition with no record renders its picture and says
+  it has no measurement; one whose record will not parse says why, where the charts would be.
+  Refusing the set over an unreadable record would take four good comparisons down with it.
+- **The panel states what was measured** — "the central 41% of the frame, 7.6 Mpx" — because a
+  set insets its measurement to keep the film holder out of the statistics, and a reader told
+  nothing would take the histogram for the whole picture. That meant parsing `region` into the
+  charted subset, which had not needed it before.
+- **The panel says which rendition the numbers describe.** A gain-map JPEG is one file
+  carrying two, the page hands the browser the file (which an HDR display decodes as the
+  HDR rendition), and `nctool metrics` reads the SDR base — so picture and charts can
+  describe different renditions of one file unless the charts say which.
+- The `/charts` demo route now renders the same `MetricsPanel` the app mounts, from the
+  synthetic fixture, so the two cannot drift — and it keeps the degenerate cases a real record
+  rarely carries at once (a sparse band, a band with no pixels, a channel past the top of the
+  range).
+- App suite 128 tests, up from 102; `pnpm check`, `pnpm test`, `pnpm build` green. Verified
+  against the real generated set: three SVGs server-rendered per section, the histogram
+  spanning the full plot height, the axis labelled 0 to 110.
 
 ## harness-regression-tests
 

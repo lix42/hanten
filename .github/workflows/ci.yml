@@ -59,15 +59,26 @@ jobs:
       - name: Build
         run: cargo build --all-targets --all-features --verbose
 
+      # Pinned to an exact release: this action publishes floating major tags only
+      # through v7, so `@v10` would not resolve.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.1.0
+
       - name: Install analysis dependencies
         # `nctool metrics` reads output pixels and needs numpy/tifffile; the rest
         # of the toolkit is stdlib-only. A venv, not `pip install --user`: both
         # runner images ship an externally-managed interpreter (PEP 668), which
         # refuses a --user install outright, and a venv is also the workflow
         # scripts/analysis/README.md documents locally — one shape, not two.
+        #
+        # `--python 3.12` is stated rather than inherited. `uv venv` otherwise
+        # picks whatever interpreter it finds first, which differs between the two
+        # runner images and again on a contributor's machine; naming it is what
+        # makes the analysis suite run on one interpreter everywhere. uv fetches
+        # that version itself, so it does not depend on the image shipping it.
         run: |
-          python3 -m venv .venv
-          .venv/bin/python -m pip install --quiet -r scripts/analysis/requirements.txt
+          uv venv --python 3.12
+          uv pip install --quiet -r scripts/analysis/requirements.txt
 
       - name: Analysis and harness tests
         # NCTOOL_REQUIRE_DEPS turns a missing install into a failure rather than

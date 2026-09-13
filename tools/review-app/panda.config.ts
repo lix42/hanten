@@ -147,6 +147,10 @@ export default defineConfig({
         // unifying them would move the layout. Worth someone deciding.
         proseMeasure: { value: "78ch" },
         panelMeasure: { value: "80ch" },
+        // A chart caption's measure. Pinned to the chart it sits under
+        // (`MetricsPanel`'s `CHART_WIDTH`), so the text never runs wider than
+        // the thing it describes and the three cards keep one column width.
+        chartMeasure: { value: "460px" },
         // `fullsize` means natural size, and the two keywords that say so.
         // Tokens rather than `[auto]` / `[none]`: "render at the size the file
         // is" is a real decision this app makes, and naming it is what lets the

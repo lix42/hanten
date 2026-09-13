@@ -40,7 +40,9 @@ Images are served from `/img/<id>`, addressed through a map built while the set
 was parsed — only files the set actually named are reachable, and the id carries
 the file's mtime so a re-render is a new URL rather than a cache problem.
 
-The format is documented in [SCHEMA.md](SCHEMA.md).
+The format is documented in [SCHEMA.md](SCHEMA.md). The usual way to _produce_ a
+set is `python -m nctool review generate <matrix.json>` from the repo root, which
+renders the matrix and writes each rendition's measurement beside it.
 
 ## Using it
 
@@ -57,7 +59,32 @@ the viewport scrolls.
 The page follows the set while it is open. Re-run `nc` over the same directory
 and the renditions that changed swap in place — the selected config and the
 scroll position stay put, so you can keep toggling while renders land. Editing
-`review.json` works the same way: a config added to it simply appears.
+`review.json` works the same way: a config added to it simply appears. A
+re-measurement lands the same way, because the records are watched too.
+
+## Measurements
+
+When a rendition names a metric record (`metrics` in SCHEMA.md), the three charts
+appear under the picture and swap with the config exactly as the picture does: a
+tone histogram, the same histogram per channel, and colour cast across the tone
+bands. They describe the **measured region**, which a set usually insets so the
+film holder stays out of the statistics — the panel says what share of the frame
+that is.
+
+A rendition with no record shows its picture and says it has no measurement; a
+record that will not parse says why, in place of the charts. Neither refuses the
+set.
+
+**Nothing checks that a record describes the pixels beside it.** Re-run `nc` by
+hand over a set and the picture updates while the charts go on describing the
+previous render, silently. `nctool review generate` avoids it by re-measuring
+whenever the image's checksum changes, which is why it is the way to rebuild a
+set.
+
+`/charts` renders the same panel from the committed synthetic fixture, with the
+degenerate cases a real record rarely carries at once — a sparse band, a band
+with no pixels, a channel running past the top of the range. It needs no review
+set, no assets and no venv.
 
 ## Gates
 
@@ -96,13 +123,23 @@ if you ever need the npm _script_ of the same name.
 - **A dev-server restart reloads the page**, losing the selected config and
   scroll position. Ordinary edits to a set never do this — they update in place.
 
+- **The metrics panel's height depends on the active config** — three charts, one
+  line of "no measurement", or nothing at all when a config has no rendition.
+  Within a section nothing moves, because the panel sits below the picture; but
+  switching config changes the height of the sections _above_ the viewport, and a
+  browser without scroll anchoring moves the picture you were looking at. Accepted
+  rather than reserved: a fixed panel height would leave a hole under every
+  unmeasured set, which is the common case while a measurement is still running.
+
 - **Every rendition of every image is fetched eagerly.** The stacking that makes
   switching instant requires the inactive renditions to be laid out, and
   `loading="lazy"` on them would collapse a section to zero height whenever a set
   omits `width`/`height` — which the schema permits. So a large set (many frames x
-  many configs of full-size JPEGs) downloads everything up front. Fixing it
-  properly means making dimensions mandatory, which is the generator's job when
-  that half is built. Downsize the images meanwhile; the previews reuse them.
+  many configs of full-size JPEGs) downloads everything up front. `nctool review
+generate` states `width`/`height` for every rendition it **measures** (the size
+  comes from the metric record; `nc`'s report does not carry it), so a set built
+  with `--no-metrics` is the one that still omits them. Fixing it properly means
+  the server measuring the files itself — see below.
   Each image is fetched once and no more, though: `/img/` URLs carry the file's
   mtime and are served `immutable`, so switching configs and re-reading the set
   cost nothing.

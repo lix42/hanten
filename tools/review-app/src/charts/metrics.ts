@@ -51,6 +51,46 @@ export interface Histogram {
   readonly series: Readonly<Record<string, HistogramSeries>>;
 }
 
+/**
+ * What part of the frame the numbers describe.
+ *
+ * Drawn because it changes how every chart reads: a review set measures an inset
+ * rectangle so the film holder and the rebate stay out of the statistics, and a
+ * histogram of the central 64% of a frame is not a histogram of the frame.
+ */
+export interface Region {
+  /** The rectangle's width and height as shares of the frame's. */
+  readonly fractionWidth: number;
+  readonly fractionHeight: number;
+  /**
+   * Where it starts, as shares of the frame.
+   *
+   * Parsed so a chart can say *whether* the rectangle is centred rather than
+   * assuming it. A review set always insets evenly, but `nctool metrics image`
+   * takes `--region 0,0,0.5,0.5` too, and captioning a corner as "the central
+   * 25%" would misdescribe every chart under it.
+   */
+  readonly fractionX: number;
+  readonly fractionY: number;
+  readonly pixels: number;
+}
+
+/**
+ * What the numbers were read from, where that is not the whole story.
+ *
+ * A gain-map JPEG is one file carrying two renditions, and the measurement reads
+ * the **SDR base** — `nctool metrics` refuses to call the base HDR. The page
+ * meanwhile hands the browser the file itself, which an HDR-capable display
+ * decodes as the HDR rendition. Picture and charts can therefore describe
+ * different renditions of the same file, so the charts have to say which one
+ * they are.
+ */
+export interface Source {
+  readonly gainMapPresent: boolean;
+  /** `sdr` or `hdr`, when the file carries more than one rendition. */
+  readonly jpegImage?: string;
+}
+
 export interface Bands {
   /** Tone order, dark to light. **The only source of order** — see `parseMetrics`. */
   readonly names: readonly string[];
@@ -70,6 +110,8 @@ export interface CastBand {
 
 export interface Metrics {
   readonly schemaVersion: number;
+  readonly source: Source;
+  readonly region: Region;
   readonly bands: Bands;
   readonly histogram: Histogram;
   /** In tone order, and containing only the bands the record actually carries. */
@@ -161,6 +203,25 @@ export function parseMetrics(raw: unknown): Metrics {
     );
   }
 
+  // Present only for the containers that have more than one rendition, so both
+  // fields are optional — absent means "the file is what was measured".
+  const imageRaw = asRecord(doc["image"], "image");
+  const jpegImage = imageRaw["jpeg_image"];
+  const source: Source = {
+    gainMapPresent: imageRaw["gain_map_present"] === true,
+    ...(typeof jpegImage === "string" ? { jpegImage } : {}),
+  };
+
+  const regionRaw = asRecord(doc["region"], "region");
+  const fractionRaw = asRecord(regionRaw["fraction"], "region.fraction");
+  const region: Region = {
+    fractionWidth: asNumber(fractionRaw["width"], "region.fraction.width"),
+    fractionHeight: asNumber(fractionRaw["height"], "region.fraction.height"),
+    fractionX: asNumber(fractionRaw["x"], "region.fraction.x"),
+    fractionY: asNumber(fractionRaw["y"], "region.fraction.y"),
+    pixels: asNumber(regionRaw["pixels"], "region.pixels"),
+  };
+
   const bandsRaw = asRecord(doc["bands"], "bands");
   const bands: Bands = {
     names: asStringArray(bandsRaw["names"], "bands.names"),
@@ -176,7 +237,18 @@ export function parseMetrics(raw: unknown): Metrics {
   if (range.length !== 2) {
     fail(`tone.histogram.lstar_range must hold two numbers, got ${range.length}`);
   }
+  // **Every named series must be present.** A chart asks for channels by name, and
+  // a record missing one would throw inside the component — where the failure is a
+  // render error that replaces the whole page, rather than one rendition's charts.
+  // Refusing here keeps it local: the caller turns it into a `metricsError`.
   const seriesRaw = asRecord(histRaw["series"], "tone.histogram.series");
+  const absent = SERIES_NAMES.filter((name) => seriesRaw[name] === undefined);
+  if (absent.length > 0) {
+    fail(
+      `tone.histogram.series is missing ${absent.join(", ")} ` +
+        `(it carries ${Object.keys(seriesRaw).join(", ") || "nothing"})`,
+    );
+  }
   const histogram: Histogram = {
     bins,
     domain: asString(histRaw["domain"], "tone.histogram.domain"),
@@ -232,5 +304,5 @@ export function parseMetrics(raw: unknown): Metrics {
     ];
   });
 
-  return { schemaVersion, bands, histogram, cast };
+  return { schemaVersion, source, region, bands, histogram, cast };
 }

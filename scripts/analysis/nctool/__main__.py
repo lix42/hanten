@@ -1,9 +1,10 @@
 """`python -m nctool` entry point.
 
-Four command groups: `manifest` (generate / validate / roles), `compare`
+Five command groups: `manifest` (generate / validate / roles), `compare`
 (build-version run / diff), `roll` (manifest-driven calibrate / convert /
-deterministic analysis artifacts), and `metrics` (pixel-derived measurement of a
-converted image, whatever produced it).
+deterministic analysis artifacts), `metrics` (pixel-derived measurement of a
+converted image, whatever produced it), and `review` (render a described matrix
+of conversions into a review set for `tools/review-app`).
 
 `metrics` is the one group that needs third-party packages; see
 `scripts/analysis/requirements.txt`. Importing the module is still free — it
@@ -19,6 +20,7 @@ import sys
 from . import compare as _compare
 from . import manifest as _manifest
 from . import metrics as _metrics
+from . import review as _review
 from . import roll as _roll
 
 ASSET_ROOT_HELP = ("asset root (the folder containing manifest.json); defaults to "
@@ -213,6 +215,35 @@ def build_parser() -> argparse.ArgumentParser:
     mtable.add_argument("record", help="path to a metrics.json written by `roll`")
     mtable.add_argument("--out", help="write here (default: stdout)")
     mtable.set_defaults(func=_metrics.cmd_table)
+
+    # --- review: render a described matrix into a review set -----------------
+    rev = sub.add_parser(
+        "review",
+        help="render a matrix of conversions into a review set for tools/review-app")
+    rsub = rev.add_subparsers(dest="cmd", required=True)
+
+    rgen = rsub.add_parser(
+        "generate",
+        help="render every (frame x config) cell the matrix names, measure each "
+             "rendering, and write review.json")
+    rgen.add_argument("matrix", help="path to a review matrix JSON file")
+    _add_root(rgen)
+    rgen.add_argument("--out", help="output directory (default: the matrix's "
+                                    "output_dir). Keep it OUTSIDE the repo — the "
+                                    "frames are personal photographs")
+    rgen.add_argument("--nc", default="target/release/nc",
+                      help="path to the nc binary (default: target/release/nc)")
+    rgen.add_argument("--fixtures", default="scripts/sigmoid-baseline/fixtures.json",
+                      help="frame and per-roll Dmin declaration; the same file the "
+                           "metrics use, so the two cannot drift")
+    rgen.add_argument("--frames", help="comma-separated subset of the matrix's frames")
+    rgen.add_argument("--no-metrics", action="store_true",
+                      help="render only; write no metric records (the review app "
+                           "then shows pictures without charts)")
+    rgen.add_argument("--force", action="store_true",
+                      help="re-measure every rendition even when a stored record "
+                           "already describes those exact bytes")
+    rgen.set_defaults(func=_review.cmd_generate)
 
     return ap
 

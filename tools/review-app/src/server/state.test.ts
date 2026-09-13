@@ -2,6 +2,7 @@ import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { SYNTHETIC_METRICS } from "../charts/fixture";
 import { SET_ENV_VAR } from "./reviewSet";
 import { currentReviewSet, invalidateReviewSet } from "./state";
 
@@ -12,20 +13,29 @@ import { currentReviewSet, invalidateReviewSet } from "./state";
  * detection ever reaches a URL.
  */
 
-function makeSet(): { dir: string; file: string; image: string } {
+function makeSet(measured = false): { dir: string; file: string; image: string; record: string } {
   const dir = mkdtempSync(join(tmpdir(), "nc-review-set-"));
   const image = join(dir, "E1-a.svg");
   writeFileSync(image, "<svg xmlns='http://www.w3.org/2000/svg'/>");
+  const record = join(dir, "E1-a.metrics.json");
+  if (measured) writeFileSync(record, JSON.stringify(SYNTHETIC_METRICS));
   const file = join(dir, "review.json");
   writeFileSync(
     file,
     JSON.stringify({
       schema_version: 1,
       configs: [{ id: "a", label: "a" }],
-      images: [{ id: "E1", renditions: { a: "E1-a.svg" } }],
+      images: [
+        {
+          id: "E1",
+          renditions: {
+            a: measured ? { src: "E1-a.svg", metrics: "E1-a.metrics.json" } : "E1-a.svg",
+          },
+        },
+      ],
     }),
   );
-  return { dir, file, image };
+  return { dir, file, image, record };
 }
 
 const srcOf = (set: Awaited<ReturnType<typeof currentReviewSet>>) =>
@@ -66,5 +76,25 @@ describe("currentReviewSet", () => {
 
     invalidateReviewSet();
     expect(srcOf(await currentReviewSet(env, "/"))).not.toBe(before);
+  });
+});
+
+describe("a set that names measurements", () => {
+  it("reads each record into the model and lists it for the watcher", async () => {
+    const { file, record } = makeSet(true);
+    const set = await currentReviewSet({ [SET_ENV_VAR]: file }, "/");
+
+    expect(set.review.images[0]!.renditions["a"]!.metrics?.cast.length).toBeGreaterThan(0);
+    // Listed, or a re-measurement never reaches the page: the model holds the
+    // parsed record, so nothing re-reads it until the held set is dropped.
+    expect(set.data.map((file) => file.path)).toEqual([record]);
+    expect(set.data[0]!.mtimeMs).toBeGreaterThan(0);
+  });
+
+  it("leaves an unmeasured set alone", async () => {
+    const { file } = makeSet();
+    const set = await currentReviewSet({ [SET_ENV_VAR]: file }, "/");
+    expect(set.review.images[0]!.renditions["a"]!.metrics).toBeUndefined();
+    expect(set.data).toEqual([]);
   });
 });

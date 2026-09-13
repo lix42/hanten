@@ -132,4 +132,81 @@ describe("parseMetrics", () => {
       ),
     ).toThrow(/tone\.histogram\.mid_grey_bin must be a finite number, got string/);
   });
+
+  // The charts describe the region, not the frame. A set measures an inset
+  // rectangle so the film holder stays out of the statistics, and a reader
+  // told nothing would take the histogram for the whole picture.
+  it("carries what part of the frame was measured", () => {
+    expect(parsed.region.fractionWidth).toBeCloseTo(0.72);
+    expect(parsed.region.fractionHeight).toBeCloseTo(0.72);
+    expect(parsed.region.pixels).toBe(parsed.histogram.pixels);
+  });
+
+  it("refuses a record that does not say what it measured", () => {
+    expect(() => parseMetrics(withDoc((doc) => delete doc["region"]))).toThrow(
+      /region must be an object/,
+    );
+  });
+
+  // A chart asks for channels by name, so a record missing one must fail *here*:
+  // inside the component it would be a render error that replaces the whole page,
+  // not one rendition's charts.
+  it("refuses a record missing a series the charts draw", () => {
+    expect(() =>
+      parseMetrics(
+        withDoc((doc) => {
+          delete (doc as unknown as { tone: { histogram: { series: Record<string, unknown> } } })
+            .tone.histogram.series["g"];
+        }),
+      ),
+    ).toThrow(/tone\.histogram\.series is missing g/);
+  });
+
+  // The fixture stands in for a real record, so its region has to hold the one
+  // invariant `resolve_region` guarantees: the rectangle's own area *is* the
+  // pixel count. Asserted against the raw shape because the charted subset does
+  // not carry the rectangle.
+  it("has a fixture whose region is its own area", () => {
+    const region = (SYNTHETIC_METRICS as { region: Record<string, number> }).region;
+    expect(region["width"]! * region["height"]!).toBe(region["pixels"]);
+    expect(region["pixels"]).toBe(parsed.histogram.pixels);
+  });
+
+  // A corner is not the centre, and the panel says "central" only when the
+  // margins are equal — which it can only know if the offsets are parsed.
+  it("carries where the measured rectangle starts, not only how big it is", () => {
+    expect(parsed.region.fractionX).toBeCloseTo(0.14);
+    expect(parsed.region.fractionY).toBeCloseTo(0.14);
+    expect(parsed.region.fractionX * 2 + parsed.region.fractionWidth).toBeCloseTo(1);
+  });
+
+  // Every pixel of the measured rectangle falls in exactly one band, which is
+  // the only shape the producer can emit — the same invariant `series()` holds
+  // for the histogram, in the half no test used to cover.
+  it("has a fixture whose tone bands partition the region", () => {
+    const total = parsed.cast.reduce((sum, band) => sum + band.pixels, 0);
+    expect(total).toBe(parsed.region.pixels);
+    const fractions = parsed.cast.reduce((sum, band) => sum + band.fraction, 0);
+    expect(fractions).toBeCloseTo(1, 4);
+  });
+
+  // The page hands the browser the file itself, which an HDR display decodes as
+  // the HDR rendition, while `nctool metrics` reads the SDR base — so the record
+  // has to say which rendition its numbers describe.
+  it("carries which rendition of the file was measured", () => {
+    expect(parsed.source.gainMapPresent).toBe(true);
+    expect(parsed.source.jpegImage).toBe("sdr");
+  });
+
+  it("treats a plain file as being what was measured", () => {
+    const plain = parseMetrics(
+      withDoc((doc) => {
+        const image = (doc as unknown as { image: Record<string, unknown> }).image;
+        delete image["gain_map_present"];
+        delete image["jpeg_image"];
+      }),
+    );
+    expect(plain.source.gainMapPresent).toBe(false);
+    expect(plain.source.jpegImage).toBeUndefined();
+  });
 });
