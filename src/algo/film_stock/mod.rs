@@ -442,7 +442,7 @@ mod tests {
     /// The aim-matched red scale reproduces the constants the review set was rendered
     /// with, and refuses the sheets that state no usable `Δ`.
     ///
-    /// Those three numbers were hand-carried in `scripts/preset-review/generate.py` while
+    /// Those three numbers were hand-carried in the preset-review generator while
     /// the derivation lived only in an `#[ignore]`d probe; this is what let them be
     /// deleted. They are the *flag* values (the reciprocal), so a direction flip fails
     /// here rather than shipping a correction that doubles the error it was meant to fix.

@@ -83,9 +83,11 @@ These are measured, and each one killed a simpler design:
 
 ## How to verify
 
-- `scripts/preset-review/generate.py` already renders all five from their *expanded* flags.
-  Regenerating through `--preset` must produce **byte-identical** files — that is the
-  acceptance test for the expansion, and it exists before the mechanism does.
+- The preset-review generator already rendered all five from their *expanded* flags, so
+  regenerating through `--preset` had to produce **byte-identical** files — the acceptance
+  test for the expansion, which existed before the mechanism did. It passed on 2026-09-10 and
+  the expanded flags were then deleted; the matrix that replaced them is
+  `scripts/preset-review/presets.matrix.json`, rendered by `nctool review generate`.
 - `pipeline::stages::midtone_placement::each_candidate_look_needs_its_own_print_exposure`
   prints the calibration table and fails if the spread ever collapses to where one shared
   default would do.

@@ -401,8 +401,8 @@ def require_dependencies() -> None:
             f"{error.name} is required by `nctool metrics` and is not importable. "
             "The rest of the toolkit is stdlib-only; this command is not. Set it "
             "up with:\n"
-            "    python3 -m venv .venv\n"
-            "    .venv/bin/python -m pip install -r scripts/analysis/requirements.txt\n"
+            "    uv venv --python 3.12\n"
+            "    uv pip install -r scripts/analysis/requirements.txt\n"
             "and run the command with .venv/bin/python") from error
 
 

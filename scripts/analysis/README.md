@@ -16,10 +16,25 @@ that way. `metrics` reads output pixels, which needs `numpy`, `tifffile` and
 `Pillow` (the last for JPEG):
 
 ```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install -r scripts/analysis/requirements.txt
+uv venv --python 3.12
+uv pip install -r scripts/analysis/requirements.txt
 PYTHONPATH=scripts/analysis .venv/bin/python -m nctool metrics image --help
 ```
+
+**[uv](https://docs.astral.sh/uv/) is how the environment is made**, here and in
+CI — one shape, and about twenty times faster than `venv` + `pip` (3.8 s to 0.2 s
+warm, measured). What it produces is an ordinary virtual environment in `.venv/`,
+so everything downstream is unchanged and `python3 -m venv .venv && .venv/bin/pip
+install -r …` still works if you have no uv.
+
+**The Python version is stated, not inherited.** `uv venv` otherwise takes
+whichever interpreter it finds first — which is not the system one, and differs
+between machines and between the two CI runner images. uv fetches 3.12 itself, so
+nothing has to be installed first.
+
+`.venv/` is gitignored, as a virtual environment always should be: it holds
+compiled, platform-specific wheels and absolute paths, so it is build output
+rather than source. A fresh checkout therefore runs the two lines above once.
 
 The import is lazy, so a checkout without the venv still runs every other
 command. The metrics tests skip when the packages are absent; CI installs them
@@ -383,6 +398,43 @@ spread is **not** is attributable — one frozen recipe served every frame, so
 variation combines scene content with how well that calibration fits, and those
 cannot be separated from one roll's numbers. The extremes are named so you can
 look at those frames. There is deliberately no outlier rule and no verdict.
+
+## Render a review set — `review generate`
+
+Comparing conversions **by eye** goes through `tools/review-app`, and this is what
+produces what it reads:
+
+```sh
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
+  scripts/preset-review/presets.matrix.json --out ../temp/preset-review
+```
+
+The matrix is **data** (`scripts/preset-review/presets.matrix.json` is the worked
+example): it names the configurations, the flags each one passes, and the
+per-roll values those flags need. Every cell is one `nc convert`; beside each
+rendition the command writes that image's metric record, so the app can draw the
+tone and cast charts next to the picture. Frames and per-roll `Dmin` come from
+`scripts/sigmoid-baseline/fixtures.json` — the same declaration the metrics read,
+so the two cannot drift.
+
+Four rules it holds to, each of which has a reason rather than a preference:
+
+- **The matrix states the preset once**, as `output_preset`; a config may not
+  restate it or any other flag the generator supplies (`-o`, `--report`), because
+  `nc` takes the last occurrence of such a flag and the override would be silent.
+- **Each cell is measured in the space its own resolved recipe reports**, not in
+  whatever the preset's name usually implies — `legacy` and `custom` accept
+  `--output-profile`, and measuring ProPhoto pixels as sRGB yields a table where
+  every number is wrong and every number looks reasonable.
+- **A cell that fails costs only itself.** A roll that states no film stock loses
+  the one column that needs it; a failed render leaves its config without a
+  rendition, which the app draws as a visible gap.
+- **Re-measuring is keyed to the image's checksum**, not its mtime — a run
+  re-renders every cell, so an mtime always looks new while the bytes rarely are.
+
+It needs `../nc-assets` and the venv, so it is not in CI, and it refuses an output
+directory inside the repository: the frames are the user's own photographs and are
+never committed.
 
 ## Compare two builds
 

@@ -84,15 +84,22 @@ describe("watchTargets", () => {
   });
 });
 
+type Stamped = { path: string; mtimeMs: number; size: number };
+
+function setOf(assets: Stamped[], data: Stamped[] = []): ReviewSet {
+  return {
+    path: "/s/review.json",
+    assets: { entries: () => assets },
+    data,
+  } as unknown as ReviewSet;
+}
+
 describe("loadedStamps", () => {
   it("reports the mtimes the loaded set carries, not what is on disk now", () => {
     // The baseline for a starting watch. Taking it from disk would record a
     // rendition rewritten just before the watcher started as already-seen: the
     // model would keep serving its old URL and no later diff would mention it.
-    const set = {
-      path: "/s/review.json",
-      assets: { entries: () => [{ path: "/s/a.jpg", mtimeMs: 100, size: 10 }] },
-    } as unknown as ReviewSet;
+    const set = setOf([{ path: "/s/a.jpg", mtimeMs: 100, size: 10 }]);
 
     const baseline = loadedStamps(set, () => ({ mtimeMs: 999, size: 99 }));
     expect(baseline.assets["/s/a.jpg"]).toBe("100:10");
@@ -100,6 +107,31 @@ describe("loadedStamps", () => {
     // So the drift is visible rather than swallowed.
     const now = stampsOf(set, () => ({ mtimeMs: 999, size: 99 }));
     expect(hasChange(diffStamps(baseline, now))).toBe(true);
+  });
+
+  // A re-measurement has to reach the page for the same reason a re-render
+  // does: the model holds the *parsed* record, so nothing re-reads it until the
+  // held set is dropped. A record nothing stamps diffs to no change, and the
+  // charts sit on the previous numbers with no error anywhere.
+  it("stamps the metric records beside the renditions", () => {
+    const set = setOf(
+      [{ path: "/s/a.jpg", mtimeMs: 100, size: 10 }],
+      [{ path: "/s/a.metrics.json", mtimeMs: 200, size: 20 }],
+    );
+    const baseline = loadedStamps(set, () => undefined);
+    expect(baseline.assets["/s/a.metrics.json"]).toBe("200:20");
+
+    const remeasured = stampsOf(set, (path) =>
+      path === "/s/a.metrics.json" ? { mtimeMs: 300, size: 21 } : { mtimeMs: 100, size: 10 },
+    );
+    expect(diffStamps(baseline, remeasured).changedAssets).toEqual(["/s/a.metrics.json"]);
+  });
+
+  it("watches the directory a set keeps its records in", () => {
+    // Records may live apart from the images, and one nothing watches never
+    // updates the page.
+    const targets = watchTargets("/s", ["/s/a.jpg", "/measurements/a.metrics.json"]);
+    expect(targets.others).toEqual(["/measurements"]);
   });
 });
 

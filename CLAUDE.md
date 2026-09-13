@@ -536,7 +536,10 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
 - **A `cargo test <filter>` matching nothing still prints `test result: ok`.** Read the
   **count**, not the word: `0 passed` is how you learn an inserted test never landed, or
   that you filtered on a name that does not exist. Twice in one session an edit silently
-  failed to apply and the filtered run reported `ok`.
+  failed to apply and the filtered run reported `ok`. **And piping a gate into `tail` hides
+  its verdict twice over** — the exit status becomes the *pipe's*, so a red suite reports 0,
+  and the per-binary `test result` lines scroll past the window you kept. Redirect to a file
+  and check `$?`; this shipped a "green" gate run once.
 - **`cargo test --lib` fails here** — `nc` is a binary crate with no `[lib]` target, so it
   errors with "no library targets found". Use `cargo test --bin nc <filter>` to run only
   the in-`src` unit tests; a bare `cargo test <filter>` also runs `tests/pipeline.rs`.
@@ -577,9 +580,13 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   without them — which is exactly why its tests `skipUnless` the packages are
   importable, and why `NCTOOL_REQUIRE_DEPS=1` exists to turn a forgotten install
   into a failure instead of ~29 silent skips under a green `ok`. A fresh worktree has no
-  `.venv` (it is gitignored, so it does not come with the checkout):
-  `python3 -m venv .venv && .venv/bin/pip install -r scripts/analysis/requirements.txt`,
-  then run the gate with `.venv/bin/python` in place of `python3`.
+  `.venv` (it is gitignored, so it does not come with the checkout). **Make it with `uv`,
+  which is what CI uses**: `uv venv --python 3.12 && uv pip install -r
+  scripts/analysis/requirements.txt`, then run the gate with `.venv/bin/python` in
+  place of `python3`. The result is an ordinary venv, so `python3 -m venv` still
+  works — but **state the Python version**: `uv venv` picks whichever interpreter it
+  finds first, which is *not* the system one (it prefers its own managed build), and
+  an unstated version differs between machines and between the two CI runner images.
 - **`tests/pipeline.rs`'s `run()` injects `--output-preset legacy`** into a
   `convert` that names no preset, loads no `--params`, and writes `.tif`/`.tiff` —
   ~87 tests predate the gain-map default and assert TIFF-path behaviour. A test
@@ -997,7 +1004,13 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
 - **Comparing renders by eye? Use `tools/review-app/`, don't build another page.**
   Asked for a "visual review", a comparison page, or a before/after of two render
   configurations, reach for that app rather than emitting one-off HTML — the ad-hoc
-  pages under `scripts/sigmoid-baseline/` are what it exists to replace. It renders
+  pages under `scripts/sigmoid-baseline/` are what it exists to replace. **Produce
+  the set with `python -m nctool review generate <matrix.json>`**, don't render it
+  by hand: the matrix is data (`scripts/preset-review/presets.matrix.json` is the
+  worked example), so comparing a new configuration is a JSON edit, and each cell's
+  `nctool metrics` record is written beside its image, which is what makes the
+  app's charts appear. It needs the venv for that half and skips it loudly without
+  one. It renders
   every configuration of a frame into **one grid cell**, so switching between them
   cannot move the picture by a pixel; toggling in place is what makes highlight
   differences visible at all, and side-by-side hides them. Feed it a `review.json`
@@ -1006,7 +1019,11 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   inside it); image paths resolve next to that file, so a review set is a movable
   directory that can live **anywhere** — the server reads it from disk, so nothing
   is copied beside the app and there is no URL to build. A bare `pnpm dev` renders
-  the committed example. It **watches the set**, so re-running `nc` updates the page
+  the committed example. A rendition may name a **metric record** beside it
+  (`SCHEMA.md`), which the server reads, parses and **watches like an image** — a
+  record nothing stamps makes re-measuring invisible, since the model holds the
+  parsed value; records are deliberately kept out of the asset map, which is the
+  set of files the server may *serve*. It **watches the set**, so re-running `nc` updates the page
   in place, keeping the selected config and scroll position. It is now a
   **fullstack** app — **TanStack Start on Vite+ (`vp`), Solid, Panda CSS, pnpm** —
   with its own CI job; run `pnpm check && pnpm test && pnpm build` in

@@ -17,8 +17,16 @@
 
 const BINS = 200;
 
-/** The frame size every series partitions, as a real record's `pixels` does. */
-const PIXELS = 1_578_813;
+/**
+ * The measured rectangle, and the pixel count every series partitions.
+ *
+ * `pixels` is the region's own area in a real record — `tone.histogram.pixels`
+ * and `region.pixels` are the same number, both counted over the rectangle that
+ * was measured — so the three are derived from one place here rather than
+ * written out and left to disagree.
+ */
+const REGION = { x: 264, y: 184, width: 1359, height: 945 };
+const PIXELS = REGION.width * REGION.height;
 
 /** A lump of tone centred on `centre`, so the demo looks like a photograph. */
 function bump(centre: number, spread: number): number[] {
@@ -54,6 +62,16 @@ const BLUE = series(41, 16, 1200);
 export const SYNTHETIC_METRICS: unknown = {
   schema_version: 2,
   file: "synthetic.jpg",
+  // An inset rectangle, as a review set's records carry: the holder and the
+  // rebate are kept out of the statistics, so the charts describe this region
+  // and not the whole frame.
+  region: {
+    ...REGION,
+    pixels: PIXELS,
+    // The *requested* fractions, as `resolve_region` records them; the pixel
+    // rectangle above is those fractions of a 1888x1312 frame, rounded.
+    fraction: { x: 0.14, y: 0.14, width: 0.72, height: 0.72 },
+  },
   bands: {
     domain: "cielab_lstar",
     names: [
@@ -83,14 +101,20 @@ export const SYNTHETIC_METRICS: unknown = {
   color: {
     // Alphabetical, as JSON.parse yields. Tone order is deep_shadow, shadow,
     // low_mid, mid, high_mid, highlight — nothing like this.
+    // The six bands **partition the region exactly** — 1,284,255 pixels, the same
+    // number `tone.histogram.pixels` carries — because that is the only shape
+    // `metrics.py` can emit: every pixel of the measured rectangle falls in one
+    // band. A fraction list summing to 1.0004, as this once did, is a record no
+    // producer could write. `above_diffuse_white` is absent rather than zero,
+    // which is the one legitimate way a band goes missing.
     cast_by_tone_band: {
-      deep_shadow: { mean_a: 0.4, mean_b: 2.2, fraction: 0.021, pixels: 31_500, sparse: false },
-      high_mid: { mean_a: -2.4, mean_b: 3.9, fraction: 0.118, pixels: 177_000, sparse: false },
+      deep_shadow: { mean_a: 0.4, mean_b: 2.2, fraction: 0.021, pixels: 26_969, sparse: false },
+      high_mid: { mean_a: -2.4, mean_b: 3.9, fraction: 0.118, pixels: 151_542, sparse: false },
       // Under `sparse_below_fraction`: drawn hollow, never at full weight.
-      highlight: { mean_a: -3.1, mean_b: -6.8, fraction: 0.0004, pixels: 600, sparse: true },
-      low_mid: { mean_a: -0.9, mean_b: 11.4, fraction: 0.271, pixels: 406_500, sparse: false },
-      mid: { mean_a: -1.8, mean_b: 14.2, fraction: 0.512, pixels: 768_000, sparse: false },
-      shadow: { mean_a: 0.1, mean_b: 6.1, fraction: 0.078, pixels: 117_000, sparse: false },
+      highlight: { mean_a: -3.1, mean_b: -6.8, fraction: 0.0004, pixels: 514, sparse: true },
+      low_mid: { mean_a: -0.9, mean_b: 11.4, fraction: 0.271, pixels: 348_033, sparse: false },
+      mid: { mean_a: -1.8, mean_b: 14.2, fraction: 0.5116, pixels: 657_025, sparse: false },
+      shadow: { mean_a: 0.1, mean_b: 6.1, fraction: 0.078, pixels: 100_172, sparse: false },
       // `above_diffuse_white` is absent on purpose: a band with no pixels is
       // omitted by the producer, and the charts must simply not draw it.
     },

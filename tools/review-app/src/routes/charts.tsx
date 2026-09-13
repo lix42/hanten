@@ -1,89 +1,47 @@
 import { createFileRoute } from "@tanstack/solid-router";
 import { css } from "../../styled-system/css";
-import { CastOverTone } from "../charts/CastOverTone";
 import { SYNTHETIC_METRICS } from "../charts/fixture";
-import { Histogram } from "../charts/Histogram";
 import { parseMetrics } from "../charts/metrics";
+import { MetricsPanel } from "../charts/MetricsPanel";
 
 /**
- * The v1 metrics charts, rendered from a committed synthetic record.
+ * The metrics panel, drawn from the committed synthetic record.
  *
- * A place to look at the components while they have no data source — how a real
- * metrics record reaches the page belongs to `analysis/metrics-visualization`,
- * which is a separate task. Nothing here touches `review.json`, the server or the
- * watcher, and this route is expected to be retired or repurposed when that half
- * lands.
+ * It renders the same component the review page mounts under every picture, so
+ * the two cannot drift. What it adds is the **degenerate cases a real record
+ * rarely carries all at once**: a band under the sparse threshold, a band absent
+ * from the cast entirely, and a channel with samples past the top of the
+ * histogram's range. Those are the shapes worth looking at deliberately, and no
+ * real conversion can be relied on to produce them.
  *
- * The fixture is held in the raw `snake_case` shape and parsed here, so the demo
- * exercises `parseMetrics` rather than going around it.
+ * It needs no review set, no assets and no venv, so it is also how the charts
+ * are looked at on a machine that has none of those.
  */
 
 export const Route = createFileRoute("/charts")({ component: ChartsRoute });
 
 const styles = {
-  page: css.raw({ padding: "24px", display: "flex", flexDirection: "column", gap: "24px" }),
+  page: css.raw({ padding: "24px", display: "flex", flexDirection: "column", gap: "8px" }),
   heading: css.raw({ marginBlock: "0", fontSize: "heading" }),
-  note: css.raw({ color: "fg.dim", maxWidth: "proseMeasure", marginBlock: "0" }),
-  row: css.raw({ display: "flex", flexWrap: "wrap", gap: "20px", alignItems: "flex-start" }),
-  card: css.raw({
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    backgroundColor: "panel",
-    borderWidth: "1px",
-    borderStyle: "solid",
-    borderColor: "edge",
-    borderRadius: "lg",
-    padding: "12px",
-  }),
-  cardTitle: css.raw({ fontSize: "key", fontWeight: "semibold" }),
-  cardNote: css.raw({ fontSize: "tick", color: "fg.dim", maxWidth: "full" }),
+  note: css.raw({ marginBlock: "0", color: "fg.dim", maxWidth: "proseMeasure" }),
 };
 
 function ChartsRoute() {
   const metrics = parseMetrics(SYNTHETIC_METRICS);
   return (
     <main class={css(styles.page)}>
-      <div>
-        <h1 class={css(styles.heading)}>Metrics charts</h1>
-        <p class={css(styles.note)}>
-          The v1 component set, drawn from a synthetic record. Switch your system between light and
-          dark: the chrome follows the theme, while the cast ramps do not — they encode CIELAB
-          values, not theme decisions.
-        </p>
-      </div>
-
-      <div class={css(styles.row)}>
-        <div class={css(styles.card)}>
-          <span class={css(styles.cardTitle)}>Luminance histogram</span>
-          <Histogram histogram={metrics.histogram} series={["luminance"]} />
-          <span class={css(styles.cardNote)}>
-            One bin per L* unit, as the record stores it. Diffuse white is the reference the record
-            names, so how far short a render stops is read rather than inferred.
-          </span>
-        </div>
-
-        <div class={css(styles.card)}>
-          <span class={css(styles.cardTitle)}>Per-channel histogram</span>
-          <Histogram histogram={metrics.histogram} series={["luminance", "r", "g", "b"]} />
-          <span class={css(styles.cardNote)}>
-            Red and green cannot be told apart under deuteranopia, so identity rests on the dash
-            pattern and the direct label, with colour as the redundant cue.
-          </span>
-        </div>
-      </div>
-
-      <div class={css(styles.row)}>
-        <div class={css(styles.card)}>
-          <span class={css(styles.cardTitle)}>Cast over tone</span>
-          <CastOverTone cast={metrics.cast} id="demo" width={560} />
-          <span class={css(styles.cardNote)}>
-            Each line is coloured by its own value, so it teaches its own axis. Marker area is the
-            band&apos;s share of the measured region; the hollow marker is a band under{" "}
-            {metrics.bands.sparseBelowFraction * 100}% of the region, which is not a measurement.
-          </span>
-        </div>
-      </div>
+      <h1 class={css(styles.heading)}>Metrics charts</h1>
+      <p class={css(styles.note)}>
+        The v1 component set, drawn from a synthetic record carrying the degenerate cases: a sparse
+        band, a band with no pixels at all, and a channel running past the top of the range. Switch
+        your system between light and dark — the chrome follows the theme, while the cast ramps do
+        not, because they encode CIELAB values rather than theme decisions.
+      </p>
+      <MetricsPanel
+        id="demo"
+        configLabel="the synthetic record"
+        rendition={{ src: "", preview: "", metrics }}
+      />
     </main>
   );
 }

@@ -78,9 +78,12 @@ export function Histogram(props: Props) {
   const visible = () => props.visibleLstar ?? 110;
   const plot = () => plotArea(width(), height(), MARGINS);
 
-  // A requested channel the record does not carry is refused, not dropped: the
-  // same rule `parseMetrics` holds to, because a chart silently missing one curve
-  // looks exactly like a frame whose channel is flat.
+  // A requested channel the record does not carry is refused, not dropped: a chart
+  // silently missing one curve looks exactly like a frame whose channel is flat.
+  // `parseMetrics` already refuses such a record, which is where the failure
+  // belongs — a throw *here* is a render error that replaces the whole page
+  // instead of one rendition's charts. This stays as the guard for a model built
+  // by hand.
   const drawn = () =>
     props.series.map((name) => {
       const series = props.histogram.series[name];

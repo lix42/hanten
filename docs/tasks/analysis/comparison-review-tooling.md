@@ -45,14 +45,28 @@ reads a `review.json` — the format is `tools/review-app/SCHEMA.md` — and ren
 configuration of a frame into one grid cell, so switching between them cannot move the
 picture; `fullsize` has pan controls and a mini-map. The server is pointed at the set by path
 (`pnpm dev <path>`, or `REVIEW_SET`), so a set can live anywhere, and it **watches** the set:
-re-running `nc` updates the page in place. That settles "the matrix as data" from the viewing
-side and gives the rest of this task a contract to target.
+re-running `nc` updates the page in place.
 
-**Still open, and the reason this task is not done:** the **generator** that renders a described
-matrix and emits the JSON (today images and `review.json` are produced ad hoc), HDR review for
-frames whose range exceeds SDR, and build-vs-build comparison. The lessons in *Design* above still apply to
-the generator — especially *render through the path being measured*, which is now its
-obligation, and the `sips`-destroys-a-gain-map constraint that gates HDR review.
+The **generator** landed 2026-09-12 as `nctool review generate <matrix.json>`. The matrix is
+data — configurations, the flags each passes, and the roll-specific values they need — so
+changing what is compared is never a code edit; `scripts/preset-review/presets.matrix.json`
+is the first one, replacing the Python list that script used to carry. Each cell is one
+`nc convert`, and beside each rendition it writes that image's `nctool metrics` record, which
+is what lets the app draw the charts from `analysis/metrics-chart-design` next to the
+picture. Frames and per-roll `Dmin` come from `scripts/sigmoid-baseline/fixtures.json`, the
+same declaration the metrics use, so the two cannot drift.
+
+**Deferred, with reasons**, which is what closes this task rather than leaving it open:
+
+- **HDR review** — the stated blocker was that `sips` destroys a gain map while downscaling.
+  Nothing downscales: the generator renders full-size gain-map JPEGs and the app serves the
+  file as rendered, so an HDR-capable browser already shows the HDR rendition. If a
+  *deliberate* HDR review turns out to need more than that (a headroom readout, an SDR/HDR
+  toggle), it is a new task with a stated goal rather than a line on this one.
+- **Build-vs-build comparison** — the matrix has no axis for "which binary", and adding one
+  is not just a flag: two builds must be identified in the page (provenance, not a label a
+  human typed), which is what `nc`'s own report block exists for. Worth doing when a default
+  actually moves, against a real before/after.
 
 ## Implementation Suggestion
 
@@ -69,7 +83,8 @@ obligation, and the `sips`-destroys-a-gain-map constraint that gates HDR review.
   needed to change the matrix.
 - Regenerating twice from the same inputs produces the same page.
 - Works with assets absent (clear skip) and does not write outside its output directory.
-- HDR review is possible for at least the frames whose scene range exceeds SDR.
+- HDR review is possible for at least the frames whose scene range exceeds SDR — met by
+  rendering full-size gain-map JPEGs and never downscaling them; see the deferral above.
 
 ## Dependencies
 
