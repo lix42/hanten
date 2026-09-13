@@ -203,6 +203,20 @@ class TestOwnedFlags(unittest.TestCase):
             load(configs=[{"id": "a", "args": ["--output-preset=legacy"]}])
 
 
+class TestCollisions(unittest.TestCase):
+    """`<frame>-<config>` is not injective when either id may hold a hyphen."""
+
+    def test_reports_two_cells_that_would_write_one_file(self):
+        clashes = review.colliding_stems(["a-b", "a"], ["c", "b-c"])
+        self.assertEqual(len(clashes), 1)
+        self.assertIn("a-b-c", clashes[0])
+
+    def test_says_nothing_about_the_shipped_shape(self):
+        # Config ids routinely carry hyphens; frame ids do not, which is what
+        # keeps the real matrix clear.
+        self.assertEqual(review.colliding_stems(["G2", "E1"], ["chr-generic", "sig-flat"]), [])
+
+
 class TestDimensions(unittest.TestCase):
     """`nc`'s report carries no image size, so the record is the only source."""
 
@@ -235,28 +249,44 @@ class TestOutputDirectory(unittest.TestCase):
 
 class TestReuse(unittest.TestCase):
     RECORD = {"schema_version": _metrics.SCHEMA, "sha256": "abc",
+              "space": {"declared": "display-p3"},
               "region": {"x": 10, "y": 10, "width": 80, "height": 60}}
 
+    def reuse(self, record=None, digest="abc", region=None, space="display-p3"):
+        # `is None`, not truthiness: `{}` is a record — the one meaning "nothing
+        # was stored" — and `or` would quietly substitute the good one.
+        return review.is_measured(
+            self.RECORD if record is None else record,
+            digest,
+            self.RECORD["region"] if region is None else region,
+            space,
+        )
+
     def test_reuses_a_record_describing_these_exact_bytes(self):
-        self.assertTrue(review.is_measured(self.RECORD, "abc", self.RECORD["region"]))
+        self.assertTrue(self.reuse())
 
     def test_re_measures_when_the_render_changed(self):
-        self.assertFalse(review.is_measured(self.RECORD, "def", self.RECORD["region"]))
+        self.assertFalse(self.reuse(digest="def"))
+
+    # The same file measured as sRGB and as Display P3 gives different tone and
+    # cast numbers, and `nctool metrics image --space …` beside the same image is
+    # a documented way to leave one of each lying about.
+    def test_re_measures_when_the_record_was_read_in_another_space(self):
+        self.assertFalse(self.reuse(space="srgb"))
+        self.assertFalse(self.reuse(record={**self.RECORD, "space": {}}))
 
     # The region is part of the identity: the same file measured over a different
     # rectangle is a different measurement, and reusing one for the other would
     # silently chart the holder.
     def test_re_measures_when_the_region_moved(self):
-        moved = {**self.RECORD["region"], "x": 0}
-        self.assertFalse(review.is_measured(self.RECORD, "abc", moved))
+        self.assertFalse(self.reuse(region={**self.RECORD["region"], "x": 0}))
 
     def test_re_measures_a_record_from_an_older_schema(self):
         self.assertFalse(
-            review.is_measured({**self.RECORD, "schema_version": _metrics.SCHEMA - 1},
-                               "abc", self.RECORD["region"]))
+            self.reuse(record={**self.RECORD, "schema_version": _metrics.SCHEMA - 1}))
 
     def test_re_measures_when_there_is_no_record_at_all(self):
-        self.assertFalse(review.is_measured({}, "abc", self.RECORD["region"]))
+        self.assertFalse(self.reuse(record={}))
 
 
 class TestReviewDocument(unittest.TestCase):
@@ -293,6 +323,14 @@ class TestFrameSelection(unittest.TestCase):
     def test_the_command_line_wins_over_the_matrix(self):
         self.assertEqual(review._frames_to_render(load(frames=["G1"]), self.FIXTURES, "E1,E2"),
                          ["E1", "E2"])
+
+    # Two entries for one frame render every cell twice and write two images with
+    # the same id — which the app refuses, after the expensive part is done.
+    def test_refuses_a_frame_named_twice(self):
+        with self.assertRaisesRegex(review.ReviewError, "named more than once: E1"):
+            review._frames_to_render(load(), self.FIXTURES, "E1,E1")
+        with self.assertRaisesRegex(review.ReviewError, "named more than once: G1"):
+            review._frames_to_render(load(frames=["G1", "G1"]), self.FIXTURES, None)
 
     def test_refuses_a_frame_the_fixtures_do_not_declare(self):
         with self.assertRaisesRegex(review.ReviewError, "no such frame"):

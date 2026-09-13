@@ -189,4 +189,24 @@ describe("parseMetrics", () => {
     const fractions = parsed.cast.reduce((sum, band) => sum + band.fraction, 0);
     expect(fractions).toBeCloseTo(1, 4);
   });
+
+  // The page hands the browser the file itself, which an HDR display decodes as
+  // the HDR rendition, while `nctool metrics` reads the SDR base — so the record
+  // has to say which rendition its numbers describe.
+  it("carries which rendition of the file was measured", () => {
+    expect(parsed.source.gainMapPresent).toBe(true);
+    expect(parsed.source.jpegImage).toBe("sdr");
+  });
+
+  it("treats a plain file as being what was measured", () => {
+    const plain = parseMetrics(
+      withDoc((doc) => {
+        const image = (doc as unknown as { image: Record<string, unknown> }).image;
+        delete image["gain_map_present"];
+        delete image["jpeg_image"];
+      }),
+    );
+    expect(plain.source.gainMapPresent).toBe(false);
+    expect(plain.source.jpegImage).toBeUndefined();
+  });
 });

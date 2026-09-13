@@ -65,6 +65,16 @@ export const SYNTHETIC_METRICS: unknown = {
   // An inset rectangle, as a review set's records carry: the holder and the
   // rebate are kept out of the statistics, so the charts describe this region
   // and not the whole frame.
+  // As a gain-map JPEG's record carries it: the numbers are the SDR base, while
+  // the page hands the browser a file an HDR display decodes as the HDR
+  // rendition. The panel says so.
+  image: {
+    width: 1888,
+    height: 1312,
+    container: "jpeg",
+    gain_map_present: true,
+    jpeg_image: "sdr",
+  },
   region: {
     ...REGION,
     pixels: PIXELS,

@@ -29,6 +29,7 @@ const styles = {
   }),
   heading: css.raw({ fontSize: "key", fontWeight: "semibold" }),
   scope: css.raw({ color: "fg.dim", fontSize: "meta", fontVariantNumeric: "tabular-nums" }),
+  caveat: css.raw({ color: "accent", fontSize: "meta" }),
   row: css.raw({ display: "flex", flexWrap: "wrap", gap: "16px", alignItems: "flex-start" }),
   card: css.raw({
     display: "flex",
@@ -91,6 +92,16 @@ export function MetricsPanel(props: Props) {
                 {what()}, {((metrics()?.region.pixels ?? 0) / 1e6).toFixed(1)} Mpx
               </span>
             )}
+          </Show>
+          {/* The picture above is the file itself, which an HDR display decodes
+              as the HDR rendition; the numbers are the SDR base, because that is
+              what `nctool metrics` can read. Said out loud rather than left for
+              the reader to discover the two disagree. */}
+          <Show when={metrics()?.source.gainMapPresent}>
+            <span class={css(styles.caveat)}>
+              {metrics()?.source.jpegImage === "hdr" ? "HDR rendition" : "SDR base"} of a gain-map
+              file — the picture above may be shown in HDR
+            </span>
           </Show>
         </div>
 

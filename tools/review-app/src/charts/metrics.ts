@@ -75,6 +75,22 @@ export interface Region {
   readonly pixels: number;
 }
 
+/**
+ * What the numbers were read from, where that is not the whole story.
+ *
+ * A gain-map JPEG is one file carrying two renditions, and the measurement reads
+ * the **SDR base** — `nctool metrics` refuses to call the base HDR. The page
+ * meanwhile hands the browser the file itself, which an HDR-capable display
+ * decodes as the HDR rendition. Picture and charts can therefore describe
+ * different renditions of the same file, so the charts have to say which one
+ * they are.
+ */
+export interface Source {
+  readonly gainMapPresent: boolean;
+  /** `sdr` or `hdr`, when the file carries more than one rendition. */
+  readonly jpegImage?: string;
+}
+
 export interface Bands {
   /** Tone order, dark to light. **The only source of order** — see `parseMetrics`. */
   readonly names: readonly string[];
@@ -94,6 +110,7 @@ export interface CastBand {
 
 export interface Metrics {
   readonly schemaVersion: number;
+  readonly source: Source;
   readonly region: Region;
   readonly bands: Bands;
   readonly histogram: Histogram;
@@ -185,6 +202,15 @@ export function parseMetrics(raw: unknown): Metrics {
         `tone.histogram and the L* band cut), got ${schemaVersion}`,
     );
   }
+
+  // Present only for the containers that have more than one rendition, so both
+  // fields are optional — absent means "the file is what was measured".
+  const imageRaw = asRecord(doc["image"], "image");
+  const jpegImage = imageRaw["jpeg_image"];
+  const source: Source = {
+    gainMapPresent: imageRaw["gain_map_present"] === true,
+    ...(typeof jpegImage === "string" ? { jpegImage } : {}),
+  };
 
   const regionRaw = asRecord(doc["region"], "region");
   const fractionRaw = asRecord(regionRaw["fraction"], "region.fraction");
@@ -278,5 +304,5 @@ export function parseMetrics(raw: unknown): Metrics {
     ];
   });
 
-  return { schemaVersion, region, bands, histogram, cast };
+  return { schemaVersion, source, region, bands, histogram, cast };
 }

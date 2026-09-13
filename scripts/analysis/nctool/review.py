@@ -347,17 +347,48 @@ def rendition_stem(frame: str, config_id: str) -> str:
     return f"{frame}-{config_id}"
 
 
-def is_measured(record: dict, digest: str, region: dict) -> bool:
+def colliding_stems(frames: list[str], config_ids: list[str]) -> list[str]:
+    """Cells whose filenames would land on top of each other.
+
+    `<frame>-<config>` is not injective when either id may contain a hyphen —
+    and config ids here routinely do (`chr-generic`). Frame `a-b` with config `c`
+    and frame `a` with config `b-c` both write `a-b-c`, so the second render
+    overwrites the first while both `review.json` entries point at the surviving
+    bytes: a comparison of one rendition with itself, under two labels. Cheaper to
+    refuse than to encode around, since a set that trips it is misnamed anyway.
+    """
+    seen: dict[str, str] = {}
+    clashes = []
+    for frame in frames:
+        for config_id in config_ids:
+            stem = rendition_stem(frame, config_id)
+            cell = f"{frame}/{config_id}"
+            if stem in seen:
+                clashes.append(f"{seen[stem]} and {cell} would both write {stem}")
+            else:
+                seen[stem] = cell
+    return clashes
+
+
+def is_measured(record: dict, digest: str, region: dict, space: str) -> bool:
     """Whether a stored record already describes these exact bytes and region.
 
     Measuring a 74 MP frame is minutes of work, and a generator run re-renders
     every cell — so the check is against the rendered file's **checksum**, which
     the record already carries, rather than against an mtime a re-render always
     moves.
+
+    The **declared space** is part of that identity, not a detail: the same file
+    measured as sRGB and as Display P3 gives different tone and cast numbers, and
+    `nctool metrics image --space …` beside the same image is a documented way to
+    produce one. Reusing the wrong one charts a record this run did not mean.
     """
     if record.get("schema_version") != _metrics.SCHEMA:
         return False
     if record.get("sha256") != digest:
+        return False
+    declared = record.get("space") if isinstance(record.get("space"), dict) else {}
+    if declared.get("declared") != space:
         return False
     stored = record.get("region")
     if not isinstance(stored, dict):
@@ -389,6 +420,12 @@ def _frames_to_render(matrix: dict, fixtures: dict,
         names = list(matrix["frames"])
     else:
         names = known
+    seen: set[str] = set()
+    repeated = sorted({name for name in names if name in seen or seen.add(name)})
+    if repeated:
+        # Two entries for one frame render every cell twice and write two images
+        # with the same id, which the app refuses — after the expensive part.
+        raise ReviewError(f"frame named more than once: {', '.join(repeated)}")
     missing = [name for name in names if name not in known]
     if missing:
         raise ReviewError(
@@ -427,6 +464,9 @@ def cmd_generate(args) -> int:
         matrix = load_matrix(Path(args.matrix))
         fixtures = _load_object(Path(args.fixtures), "fixtures")
         frames = _frames_to_render(matrix, fixtures, args.frames)
+        clashes = colliding_stems(frames, [c["id"] for c in matrix["configs"]])
+        if clashes:
+            raise ReviewError("; ".join(clashes))
 
         # Resolved, because `Path("./fakenc")` normalises to a bare name that
         # `is_file()` accepts and `subprocess` then looks up on PATH instead.
@@ -592,7 +632,7 @@ def _measure(image: Path, record_path: Path, space: str,
         width, height = size.get("width"), size.get("height")
         if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
             region = _metrics.resolve_region(width, height, fraction)
-            if is_measured(stored, digest, region):
+            if is_measured(stored, digest, region, space):
                 return stored
 
     try:
