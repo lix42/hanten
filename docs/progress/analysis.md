@@ -1282,7 +1282,7 @@ The remaining half, and what closes the task. `python -m nctool review generate
   reads as a hard spike at the bottom of the histogram, which is the check, and the app draws
   that histogram). A second run re-rendered every cell byte-identically and **re-measured
   none** of the five it already had — the checksum reuse path, on real data.
-- 52 hermetic tests (`test_review.py`); the analysis suite is 281, up from 229. The matrix
+- 55 hermetic tests (`test_review.py`); the analysis suite is 284, up from 229. The matrix
   is read with `deny_unknown_fields` discipline, which is not fussiness: `"arg"` for
   `"args"` loads as *no* arguments, so that cell renders the default conversion under a
   label promising something else — five buttons, five labels, identical pixels, exit 0 —

@@ -1005,8 +1005,9 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   Asked for a "visual review", a comparison page, or a before/after of two render
   configurations, reach for that app rather than emitting one-off HTML — the ad-hoc
   pages under `scripts/sigmoid-baseline/` are what it exists to replace. **Produce
-  the set with `python -m nctool review generate <matrix.json>`**, don't render it
-  by hand: the matrix is data (`scripts/preset-review/presets.matrix.json` is the
+  the set with `PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review
+  generate <matrix.json>`** (the spelling matters — `nctool` is not installed,
+  and the measuring half wants the venv), don't render it by hand: the matrix is data (`scripts/preset-review/presets.matrix.json` is the
   worked example), so comparing a new configuration is a JSON edit, and each cell's
   `nctool metrics` record is written beside its image, which is what makes the
   app's charts appear. It needs the venv for that half and skips it loudly without

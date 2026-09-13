@@ -489,9 +489,17 @@ def _render(nc: Path, source: Path, dest: Path, args: list[str]) -> dict:
 
 
 def _cast_note(report: dict) -> str | None:
-    """The one-line G/R B/R summary the page shows beside the heading."""
+    """The one-line G/R B/R summary the page shows beside the heading.
+
+    Only for a **positive** red mean, which is not the same as a non-zero one:
+    the unclamped-float presets (`film-master`, `hdr-linear-tiff`) can report a
+    negative mean, and dividing by it prints sign-flipped ratios rather than no
+    ratio at all.
+    """
     mean = report.get("output_stats", {}).get("mean")
-    if not isinstance(mean, list) or len(mean) != 3 or not mean[0]:
+    if not isinstance(mean, list) or len(mean) != 3:
+        return None
+    if not isinstance(mean[0], (int, float)) or mean[0] <= 0:
         return None
     return f"G/R {mean[1] / mean[0]:.3f} B/R {mean[2] / mean[0]:.3f}"
 
@@ -506,8 +514,6 @@ def cmd_generate(args) -> int:
         if clashes:
             raise ReviewError("; ".join(clashes))
 
-        # Resolved, because `Path("./fakenc")` normalises to a bare name that
-        # `is_file()` accepts and `subprocess` then looks up on PATH instead.
         # **What was asked is checked before what is installed.** An unbuildable
         # environment is the less specific fault: telling someone to build the
         # binary when their real problem is `--out .` costs them a round trip and

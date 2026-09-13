@@ -245,6 +245,27 @@ class TestCollisions(unittest.TestCase):
         self.assertEqual(review.colliding_stems(["G2", "E1"], ["chr-generic", "sig-flat"]), [])
 
 
+class TestCastNote(unittest.TestCase):
+    """The per-frame line the page shows beside the heading."""
+
+    def note(self, mean):
+        return review._cast_note({"output_stats": {"mean": mean}})
+
+    def test_reports_the_ratios_against_red(self):
+        self.assertEqual(self.note([1.0, 1.02, 0.94]), "G/R 1.020 B/R 0.940")
+
+    # `> 0`, not "not zero": the unclamped-float presets can report a negative
+    # mean, and dividing by it prints sign-flipped ratios rather than nothing.
+    # The script this replaced had the guard; the first port lost it.
+    def test_says_nothing_when_the_red_mean_is_not_positive(self):
+        for mean in ([-0.2, 0.1, 0.1], [0.0, 1.0, 1.0]):
+            self.assertIsNone(self.note(mean), mean)
+
+    def test_says_nothing_about_a_report_it_cannot_read(self):
+        for mean in (None, "x", [1, 2], ["a", "b", "c"]):
+            self.assertIsNone(self.note(mean), mean)
+
+
 class TestDimensions(unittest.TestCase):
     """`nc`'s report carries no image size, so the record is the only source."""
 

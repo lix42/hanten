@@ -41,8 +41,14 @@ was parsed — only files the set actually named are reachable, and the id carri
 the file's mtime so a re-render is a new URL rather than a cache problem.
 
 The format is documented in [SCHEMA.md](SCHEMA.md). The usual way to _produce_ a
-set is `python -m nctool review generate <matrix.json>` from the repo root, which
-renders the matrix and writes each rendition's measurement beside it.
+set is `nctool review generate`, which renders a matrix and writes each
+rendition's measurement beside it — from the repo root, and with the spelling
+that works (`nctool` is not installed, and measuring wants the venv):
+
+```sh
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
+  scripts/preset-review/presets.matrix.json
+```
 
 ## Using it
 
