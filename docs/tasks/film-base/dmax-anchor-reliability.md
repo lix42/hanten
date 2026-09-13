@@ -70,14 +70,29 @@ Two things this does **not** settle, and which this task still owns:
   Whether a future calibrated constant should exclude stocks like it is still open — but it is a
   question to answer with evidence here, not a settled method inherited from 2026-08-03.
 
-**Directions to weigh, not a predetermined fix:**
+**Directions to weigh. Roll-wide content measurement is the one to try first**
+(user, 2026-09-12), with the others kept as alternatives rather than dropped:
 
+- **Roll-wide content measurement — the lead candidate.** Measure the anchor across the
+  roll's *picture* frames (excluding the leader and any near-fully-exposed frame), then
+  freeze it as an explicit `Dmax` for every frame. It keeps the roll-fixed, cross-frame
+  consistency that makes `Explicit` the right shape while replacing the part that is
+  uncontrolled — the leader. Finding 2 above is direct evidence for it: real content
+  already measures *above* the leader anchor. `core/base-acquisition-planner` owns the
+  cascade this would slot into.
+  **It inherits the holder defect.** A high percentile over whole frames is exactly what
+  `algo/auto-anchor-interior-measurement` found resolving to 2.23–2.37 against a roll Dmax
+  of 1.28–1.38, because the opaque holder owns the top percentile. Any roll-wide content
+  measurement needs the holder-excluded region from that task (or from
+  `film-base/holder-masked-measurement`) before its numbers mean anything. Evaluating the
+  *direction* does not need it; producing a number does.
+  Open on its own terms: which percentile, whether frames are pooled or measured
+  per-frame-then-reduced, how "near-fully-exposed" is detected, and what happens on a roll
+  with too few frames.
 - **Measure something else.** A diffuse-white-referenced anchor is what
   `algo/reference-anchored-sigmoid` found renders correctly, and it is Dmax-free.
 - **Measure the leader better** — require a *demonstrably* saturated reference, and fail
   loudly when the estimate is implausible rather than freezing it.
-- **Roll-wide content measurement** as the fallback, which
-  [base-acquisition planner](../core/base-acquisition-planner.md) already owns the cascade for.
 - **Retire the leader anchor from the default path** and keep it as an explicit override.
 
 Whatever is chosen, `algo` candidates 2 and 3 are *contingent* on this: candidate 3 halves a

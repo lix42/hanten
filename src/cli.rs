@@ -92,7 +92,7 @@ pub enum Command {
 /// `roll` frame entry carries no `reconstruction_result` at all, so there this warning is
 /// the only thing that surfaces. The
 /// statistic that would actually diagnose a wrong stock or base is the *interior* one, and
-/// it needs a resolved picture region — `algo/auto-anchor-interior-measurement`.
+/// it needs a holder-excluded measurement region — `algo/auto-anchor-interior-measurement`.
 const OUT_OF_TABLE_WARN_FRACTION: f32 = 0.20;
 
 /// Report format on stdout.

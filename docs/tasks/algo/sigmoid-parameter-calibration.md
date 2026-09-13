@@ -69,14 +69,21 @@ measurement machinery, only better inputs.
 
 - [Reference-anchored sigmoid calibration and redesign](reference-anchored-sigmoid.md)
 - [Film-stock profiles](film-stock-profiles.md)
-- [Scanner density calibration](../io/scanner-density-calibration.md)
+- [Scanner density calibration](../io/scanner-density-calibration.md) — the step wedge. This
+  task's Design lists it as "ideally", and the scanner task's own Design makes tier 2
+  "strictly optional and never a precondition for conversion" — so it is the softest of the
+  three edges here
+- [Capture the calibration frames](../analysis/calibration-frame-capture.md) — the bracketed
+  roll and grey card this task needs are the same shoot, and that task owns producing it
 
 ---
 
-**2026-09-13 — coordinate the shoot with two other tasks.** The bracketed roll plus grey card
+**2026-09-13 — coordinate the shoot with three other tasks.** The bracketed roll plus grey card
 this task needs is close to, but not the same as, what
 [`io/scanner-density-calibration`](../io/scanner-density-calibration.md) needs (a ColorChecker
 Classic — the neutral series fits the matrix diagonal, and only the coloured patches constrain
 its off-diagonal terms). [`film-base/dmax-per-channel-reduction`](../film-base/dmax-per-channel-reduction.md)
 parked on 2026-09-13 waiting on the same class of asset. One roll carrying a bracket, a grey
-card **and** a ColorChecker serves all three; plan it together rather than shooting twice.
+card **and** a ColorChecker serves all three; plan it together rather than shooting twice —
+which is what [`analysis/calibration-frame-capture`](../analysis/calibration-frame-capture.md)
+(filed 2026-09-12) exists to do. It is the dependency edge above; this note is the reasoning.

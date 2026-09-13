@@ -1052,6 +1052,18 @@ Four real findings on PR #56, plus one document-only deferral.
   n=7 is too small to fix a shipped constant, and Portra400's own 1.7383 is one of the suspects.
 - `algo` candidates 2 and 3 are contingent on this: candidate 3 halves a Dmax error
   (`dA/dDmax = 0.5`, so 0.046 → 0.15 stop but 0.295 → 0.98 stop); candidate 2 passes it in full.
+- 2026-09-12 (**a direction was picked**): roll-wide content measurement is the lead
+  candidate (user) — measure the anchor across the roll's picture frames, excluding the
+  leader and any near-fully-exposed frame, then freeze it as an explicit `Dmax`. It keeps
+  the roll-fixed shape that makes `Explicit` right while replacing the uncontrolled part,
+  and finding 2 already supports it: real content measures *above* the leader anchor. The
+  other three directions stay as alternatives.
+  **It inherits the holder defect** — a high percentile over whole frames is what
+  `algo/auto-anchor-interior-measurement` measured at 2.23–2.37 against a roll Dmax of
+  1.28–1.38. Evaluating the direction does not need the holder fix; producing a number does.
+  No dependency edge was added: the task's *establishing* half is genuinely unblocked, and a
+  hard edge would have blocked a ready task on a prerequisite only one of its four directions
+  needs.
 
 ## dmax-per-channel-reduction
 

@@ -4,7 +4,15 @@
 
 Give the reconstruction + display intent a **named** form, so a user selects a conversion
 by name instead of assembling four to six flags whose values only make sense together.
-Five presets ship; `characteristic-generic` becomes the default.
+
+**Five presets ship. The default did not move** — `--preset` is `Option<String>` with no
+default, so a bare `nc convert` still resolves the knee'd sigmoid into `gain-map-hdr`.
+Making `characteristic-generic` the no-flag state is `algo/split-default-migration`, which
+owns the `pipeline_version` bump it requires. An earlier draft of this line read
+"`characteristic-generic` becomes the default", which this task's own *How to verify*
+contradicts; corrected 2026-09-12 after it misled a reader. That mismatch also surfaced
+`algo/characteristic-default-audit` — the flag-surface work the default move needs, which
+nothing owned.
 
 ## Why
 
@@ -98,7 +106,8 @@ These are measured, and each one killed a simpler design:
 
 - [Film stock profiles](film-stock-profiles.md) — ships the characteristic curve, the
   registry and the aim tables the derived scale reads.
-- [Activate the reconstruction / render split as the default](split-default-migration.md) —
-  owns the default migration this task's last step performs; read its blocker note first
-  (since 2026-09-10 the gate is the green residual, `io/scanner-density-calibration`, not
-  `film-base/dmax-per-channel-reduction`).
+- [Make `characteristic-generic` what a bare `nc convert` resolves](split-default-migration.md) —
+  owns the default migration this task's last step performs; read its release gate first
+  (since 2026-09-12 it is the known-neutral reference from
+  `analysis/calibration-frame-capture`, which replaced the "necessary, not sufficient" edge
+  on `io/scanner-density-calibration`).

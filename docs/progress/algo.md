@@ -53,8 +53,10 @@ What other epics need to know about `algo`:
   because `--display-tone none` cannot carry a scalar gain applied after a bounded curve.
   **No default moved**: `PIPELINE_VERSION` stays 4 and all three fingerprints are
   unchanged; `characteristic-generic` becoming the default is still the
-  `algo/split-default-migration` step — whose no-stock blocker was **lifted 2026-09-10**,
-  leaving the green residual (`io/scanner-density-calibration`) as what gates it.
+  `algo/split-default-migration` step — whose no-stock blocker was **lifted 2026-09-10**.
+  Since **2026-09-12** its release gate is neutrality against a known-neutral reference,
+  which `analysis/calibration-frame-capture` produces; `io/scanner-density-calibration`
+  is the remedy if that measurement fails, not the gate itself.
 - **The aim-matched red scale is derived at runtime**, not tabulated:
   `algo::film_stock::aim_red_scale(stock)` returns the factor `--density-scale` takes (the
   **reciprocal** of the one that scales the table), and `None` for the derived generic and
@@ -130,10 +132,12 @@ What other epics need to know about `algo`:
   keep the density conversion, contrast and anchor and shed **both knees**, with the character
   supplied by the display operator. Consequences other epics must key on: the shipped default
   is **unchanged** and still the shouldered sigmoid, so anything describing what nc renders
-  today is still correct; activation is `algo/split-default-migration`, which since **2026-09-10** is gated on the
-  green residual (`io/scanner-density-calibration`) rather than on
-  `film-base/dmax-per-channel-reduction` — the grey leader those 17-83% channel ratios were
-  read off is disqualified as a per-channel source. `film-master` needs no work — its contract is the
+  today is still correct; activation is `algo/split-default-migration`. Its gate stopped being
+  `film-base/dmax-per-channel-reduction` on **2026-09-10** (the grey leader those 17-83%
+  channel ratios were read off is disqualified as a per-channel source) and, since
+  **2026-09-12**, is neutrality measured against a known-neutral reference from
+  `analysis/calibration-frame-capture` — not `io/scanner-density-calibration`, whose
+  checkbox can go green without that measurement ever being taken. `film-master` needs no work — its contract is the
   configured reconstruction, not a curve shape. And the **anchor is a pure gain exactly when
   the shoulder is off** (`anchor_is_a_pure_gain_only_without_the_shoulder`), which is what
   lets a matched-exposure probe solve a scalar instead of re-rendering; under the shipped
@@ -1801,7 +1805,60 @@ What other epics need to know about `algo`:
   frame rendered to 0/255. The fix is a sampling *region*, not a new statistic — `film_base`
   already locates the rebate by marching inward, so plumb a resolved interior in via the
   orchestrator (as the film base is). An implausible `Auto` result must fail loudly.
-
+- 2026-09-12 (**rescoped after review with the user**): the task is now *Exclude the holder
+  from content-driven measurement*.
+  - **Measurement only — the output image is never cropped** (user decision). Dimensions,
+    aspect ratio and pixel count stay as decoded. An IR-driven crop was considered and
+    declined for now: keeping the ratio/pixel count stable matters more than the convenience,
+    and it takes `--export-ir` plane alignment, the memory model and design-spec §2's
+    auto-crop line out of scope entirely.
+  - **The rebate is deliberately not detected.** `D = −log10(scan/base)` puts the rebate at
+    `D ≈ 0`, the *bottom* of the distribution, so it cannot disturb a high percentile. The
+    user made this point and it is correct; the old "picture area" framing was wider than the
+    measured defect required. Manual cropping of the rebate stays the user's.
+  - **Two exclusions, not one region rule.** IR-based (consuming the `ir_separability`
+    verdict `ir_holder_mask` already keys on, rather than re-deriving "is there an IR
+    plane?") plus a fractional-inset fallback for the no-IR path.
+  - **The silver-leader IR limitation does not gate this path** (user, and correct — my
+    first draft imported the caveat from `film-base/holder-masked-measurement` without
+    re-checking that it applied here). Every consumer in this task measures *picture*
+    frames: `auto_dmax` reads the frame being converted, and the roll-wide content `Dmax`
+    direction excludes the leader by definition. The uniformly-opaque silver leader that
+    IR genuinely cannot separate is never one of them, the leader is already judged
+    undependable by `film-base/dmax-anchor-reliability`, and a dense B&W frame that
+    declines just takes the fallback. Where the limitation *is* load-bearing is
+    `holder-masked-measurement`, which measures `Dmax` on a leader.
+  - **The existing IR mask has no depth**, which is the real work: `EdgeHolderMask` is
+    segments *along* each edge at `IR_HOLDER_PROBE_FRAC = 0.005`, and the code says so
+    explicitly. Excluding the holder from a statistic needs inward depth.
+  - **Two cuts in order, not two alternatives** (user, correcting my first draft): IR
+    removes the holder at whatever depth it measures, *then* a fixed inset removes the
+    rebate from what is left. I had modelled them as either/or, both aiming at the holder,
+    which made a 5% default look unsafe against a 10–15% holder. It is not: cut 1 already
+    took it. **Default 5%, revisit with evidence.**
+    **Correction (2026-09-13, review):** I then reconciled the two figures wrongly. I wrote
+    that `analysis/conversion-metrics`' 10–15% "describes a single blind inset"; it does
+    not — it is a **holder-occupancy measurement**, given as the reason a 5% inset fails.
+    So on the **IR path** the user's reasoning holds exactly (cut 1 took the holder, cut 2
+    only needs the rebate), but on the **no-IR path** the two figures genuinely conflict and
+    the repo has already measured 5% as often insufficient. Real holder depth spans ~2–15%.
+    Whether cut 2 takes a different default when cut 1 did not run is now an explicit open
+    decision rather than a settled 5%.
+  - **The genuinely open case is no IR at all**, where cut 2 runs alone and may under-cut a
+    deep holder. Accepted rather than guessed: no measurement exists to pick a better
+    number, and guessing large costs picture on every scan that does not need it. What
+    makes it safe is the loud-failure requirement — an out-of-range `Auto` must refuse, not
+    render black — so the two elements are load-bearing for each other.
+  - **Do not port the all-holder decline into the depth-aware detector.** `ir_holder_mask`
+    returns `None` when no film remains *along* an edge (22 of 25 real chromogenic frames),
+    which is right for an along-edge mask and wrong for a depth-aware one, where the same
+    reading just means the holder wraps the border — the normal case. Porting it would send
+    those 22 frames to cut 2 alone, leaving 5% doing the holder's job.
+  - Gained a dependency on `film-base/holder-masked-measurement` so the per-edge mask +
+    fixed-fraction fallback has one owner rather than two drifting copies.
+  - Recorded a naming trap: `Auto`'s "Dmax" is a *scene* statistic (this frame's brightest
+    content), `Explicit`'s is a *film* property (the leader), and the holder is neither. A
+    plausibility check must say which range it asserts instead of borrowing the leader's.
 
 ## sigmoid-parameter-calibration
 
@@ -2999,6 +3056,28 @@ not a reason to make a filing mistake permanent before it has ever been publishe
   per-channel scale removes. `io/scanner-density-calibration` is the new edge, but it is
   necessary rather than sufficient — its known-neutral tier is optional there — so the
   binding condition is the neutrality release gate in the task file's `How to Verify`.
+- 2026-09-12 (**rescoped after review with the user**): retitled *Make
+  `characteristic-generic` what a bare `nc convert` resolves*.
+  - **The goal did not change; what activation *means* did.** Since `algo/conversion-presets`
+    shipped, `--preset characteristic-generic` already expands to the target rendition, so
+    this task is making that the no-flag state — not rewiring. The user's observation that
+    the default has already moved per curve, per stock, per bundle and per output preset is
+    what surfaced this: the only thing left unmoved is the no-flag resolution, and `--preset`
+    is `Option<String>` with no default.
+  - **The four dependencies are not the same kind of thing.** Three are constructive —
+    `reconstruction-render-curve-split` (the verdict), `conversion-presets` (the mechanism),
+    `characteristic-curve-coverage` (pinned wiring). The fourth is a **gate on a different
+    axis**: the goal is where tone shaping happens, the gate is per-channel colour neutrality.
+    The split does not create the green residual — it exists today — it makes it more visible,
+    because the shoulder being removed compressed the highlights where the cast lives.
+  - **The gate edge now points at `analysis/calibration-frame-capture`.** It pointed at
+    `film-base/dmax-per-channel-reduction` until 2026-09-10 and at
+    `io/scanner-density-calibration` until today; both were "necessary, not sufficient",
+    because a green checkbox on either is reachable without the known-neutral reference ever
+    being measured. This closes the gap the task file had flagged and explicitly declined to
+    close unilaterally.
+  - Nothing about the fingerprint-portability hazard changed; it is still the single most
+    important thing to read before writing a `PIPELINE_FINGERPRINTS` row.
 
 ## film-stock-profiles (continued — datasheet corpus and curve digitization)
 
@@ -4155,3 +4234,43 @@ written correctly and *reached* wrongly. The HIGH one was a silent wrong image: 
   inside it; `cli::preset_curve` is the shared helper and CLAUDE.md records the trap.
 - `core/recipe-composition` owns giving `roll` the override flags; until then a preset
   reaches a roll only through `--dump-params`, which is exact.
+
+
+## characteristic-default-audit
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: find and fix what breaks when `characteristic-generic` becomes the no-flag default,
+  before the default moves. Executable now — it does not wait on the calibration frames.
+- 2026-09-13 (filed, from a user question): `algo/conversion-presets` is `[x]` but its Goal
+  claimed "`characteristic-generic` becomes the default", which never shipped — `--preset` is
+  `Option<String>` with no default. Verified by running the binary: a bare `nc convert`
+  resolves `curve.type: sigmoid` (toe 0.2 / shoulder 0.6), `density.scale [1, 0.90, 0.86]`,
+  `display_tone: shoulder`, `print_exposure: 0`, `output_render.preset: gain-map-hdr`,
+  `conversion_preset: null`. The Goal line and two copies of it were corrected.
+- **Chasing that turned up real work, not just stale prose.** Measured on the binary: three
+  validation rules key on the **resolved curve** rather than on flag presence, so a default
+  move flips them for users who typed only the flag —
+  `--d-max 1.3`, `--auto-d-max` and `--sigmoid-toe 0.2` each go exit 0 → exit 2, with a remedy
+  telling the user to "pass `--density-curve sigmoid`" for a default they never chose.
+  `--d-max` is the documented roll-calibration workflow (design-spec §8). The mirror case:
+  `--film-stock portra-400` alone currently errors with "the resolved curve is sigmoid — pass
+  `--density-curve characteristic`" — whose *no-flag* path flips to success, while the guard
+  itself stays reachable from any explicit parametric curve (`--density-curve sigmoid
+  --film-stock portra-400` is exit 2) and must not be deleted: `src/cli.rs:3603` exists to stop
+  the flag being a silent no-op.
+- **Decided against reopening `algo/conversion-presets`** (recommendation, user's call): its
+  scope was the five bundles plus the expansion, and that shipped and works. Reopening it
+  would put the default move under two owners, since `split-default-migration` already holds
+  the version bump and fingerprint row.
+- **Decided against folding this into `split-default-migration`**: that task is gated on the
+  calibration frames, and this half is executable today. Every break found now is cheaper than
+  one found during a version bump. Filed as its own task with an edge into the migration.
+- The organising distinction is **presence versus resolved value** — the same one CLAUDE.md
+  records for output-preset atomicity. A presence-keyed rule is unaffected by a default move;
+  a value-keyed rule changes meaning for everyone who typed nothing.
+- Likeliest regression to check first: bare `--output-preset film-master` is exit 0 today,
+  while `--preset characteristic-generic --output-preset film-master` is exit 2. The
+  "a preset must not set `output.preset`" escape has to survive the default move.
+

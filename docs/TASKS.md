@@ -115,6 +115,7 @@ graph TD
   film-base --> core
   algo --> core
   analysis --> io
+  analysis --> algo
   core --> analysis
   core --> telemetry
   algo --> analysis
@@ -200,6 +201,7 @@ graph TD
     algo/film-stock-profiles
     algo/characteristic-curve-coverage
     algo/auto-anchor-interior-measurement
+    algo/characteristic-default-audit
     algo/curve-endpoint-validation
     algo/sigmoid-parameter-calibration
     algo/reconstruction-render-curve-split
@@ -256,6 +258,7 @@ graph TD
     analysis/metrics-chart-design
     analysis/metrics-visualization
     analysis/harness-regression-tests
+    analysis/calibration-frame-capture
   end
   core/project-foundation --> io/silverfast-decode
   core/project-foundation --> io/tiff-encode
@@ -328,18 +331,23 @@ graph TD
   algo/reference-anchored-sigmoid --> algo/film-stock-profiles
   algo/reference-anchored-sigmoid --> algo/auto-anchor-interior-measurement
   film-base/auto-base-redesign --> algo/auto-anchor-interior-measurement
+  film-base/holder-masked-measurement --> algo/auto-anchor-interior-measurement
   algo/auto-anchor-interior-measurement --> algo/content-aware-sigmoid-toe
   algo/reference-anchored-sigmoid --> algo/reconstruction-render-curve-split
   color/film-master-render-pipeline --> algo/reconstruction-render-curve-split
   algo/reconstruction-render-curve-split --> algo/split-default-migration
-  io/scanner-density-calibration --> algo/split-default-migration
+  analysis/calibration-frame-capture --> algo/split-default-migration
   algo/reference-anchored-sigmoid --> algo/sigmoid-parameter-calibration
   algo/film-stock-profiles --> algo/conversion-presets
   algo/film-stock-profiles --> algo/characteristic-curve-coverage
   algo/characteristic-curve-coverage --> algo/split-default-migration
   algo/conversion-presets --> algo/split-default-migration
+  algo/conversion-presets --> algo/characteristic-default-audit
+  algo/characteristic-default-audit --> algo/split-default-migration
   algo/film-stock-profiles --> algo/sigmoid-parameter-calibration
   io/scanner-density-calibration --> algo/sigmoid-parameter-calibration
+  analysis/calibration-frame-capture --> algo/sigmoid-parameter-calibration
+  analysis/calibration-frame-capture --> io/scanner-density-calibration
   film-base/dmax-reference --> film-base/dmax-anchor-reliability
   algo/reference-anchored-sigmoid --> film-base/dmax-anchor-reliability
   film-base/dmax-reference --> film-base/dmax-per-channel-reduction
@@ -421,6 +429,7 @@ graph TD
   analysis/metrics-chart-design --> analysis/metrics-visualization
   analysis/comparison-review-tooling --> analysis/metrics-visualization
   analysis/asset-manifest --> analysis/drive-asset-migration
+  analysis/asset-manifest --> analysis/calibration-frame-capture
   core/roll-conversion --> core/base-acquisition-planner
   film-base/auto-base-redesign --> core/base-acquisition-planner
   film-base/ir-holder-detection --> core/base-acquisition-planner
@@ -452,7 +461,15 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   — accept a 16-bit **grayscale primary** (IR page unchanged). Neither existing task owns it:
   `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and
   `algo/bw-support` explicitly excludes input-format work. Blocks `algo/bw-support`
-- `io/scanner-density-calibration` (post-MVP): `io/input-data-semantics`, `algo/film-stock-profiles`
+- `io/scanner-density-calibration` (post-MVP): `io/input-data-semantics`, `algo/film-stock-profiles`, `analysis/calibration-frame-capture`
+  — postponed 2026-09-12 pending the frames. Tier 1 (the non-calibrating diagnostic) is
+  implementable without them, but tier 1 alone does not fulfil the task's goal — which is why
+  this is a **hard edge** while `film-base/dmax-anchor-reliability`'s holder prerequisite is
+  only prose. The rule: a hard edge when the task's *goal* is unreachable without the
+  dependency (absolute density needs the frames, and tier 1 is explicitly non-calibrating);
+  prose when only *one approach* needs it (roll-wide content is one of that task's four
+  directions, and its establishing half is genuinely unblocked). Splitting tier 1 into its own
+  task would buy back one diagnostic's worth of readiness and is not worth a task
   — `algo/reference-anchored-sigmoid` is now transitive via `algo/film-stock-profiles`.
   The registry is a real prerequisite: this task's verification needs the per-stock
   nominal `D-min` and its own spec forbids keeping a second copy. Note the sigmoid task
@@ -570,11 +587,18 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   where the default actually moves — and it is still the one that owns the
   `PIPELINE_FINGERPRINTS` row, which stays unwritten here on purpose: the gate covers the
   *default* render, and it hashes raw f32 bits with no 1-ULP window
-- `algo/auto-anchor-interior-measurement` (post-MVP): `algo/reference-anchored-sigmoid`, `film-base/auto-base-redesign`
+- `algo/auto-anchor-interior-measurement` (post-MVP): `algo/reference-anchored-sigmoid`, `film-base/auto-base-redesign`, `film-base/holder-masked-measurement`
+  — rescoped 2026-09-12: **measurement only, the output image is never cropped**. The holder
+  owns the top percentile of a whole-scan read; the rebate sits at `D ≈ 0` and is deliberately
+  not detected. Depends on `holder-masked-measurement` so the per-edge mask + fixed-fraction
+  fallback has one owner rather than two drifting copies
   — `DmaxSource::Auto` measures the whole frame, so the opaque holder owns the 99.5th
   percentile (resolves 2.23–2.37 against a roll Dmax of 1.28–1.38). Blocks every
   content-driven mode, hence the edge into `algo/content-aware-sigmoid-toe`
-- `algo/sigmoid-parameter-calibration` (post-MVP): `algo/reference-anchored-sigmoid`, `algo/film-stock-profiles`, `io/scanner-density-calibration`
+- `algo/sigmoid-parameter-calibration` (post-MVP): `algo/reference-anchored-sigmoid`, `algo/film-stock-profiles`, `io/scanner-density-calibration`, `analysis/calibration-frame-capture`
+  — the bracketed roll + grey card it needs are the same shoot. The step-wedge edge is the
+  softest of the three: this task's Design lists it as "ideally", and the scanner task makes
+  tier 2 "strictly optional and never a precondition for conversion"
   — turns the provisional contrast/shoulder/offset values into calibrated ones. Needs a
   bracketed roll and a grey card, not merely more frames: per-frame exposure preference is
   frame optimisation and cannot select a parameter
@@ -611,19 +635,27 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   0.96 stops across them where NLP's moves 4.31. A **spike**: the scene range was never
   measured, so "nc is narrower" and "nc faithfully carries a narrower scene" are not yet
   distinguishable, and "change nothing" is an acceptable outcome
+- `algo/characteristic-default-audit` (post-MVP, **executable now — no calibration gate**): `algo/conversion-presets`
+  — filed 2026-09-13. Three validation rules key on the **resolved curve**, not on flag
+  presence, so a characteristic default flips `--d-max`, `--auto-d-max` and `--sigmoid-*`
+  from exit 0 to exit 2 for users who typed only that flag — `--d-max` being the documented
+  roll-calibration workflow. Audit and fix the flag surface *before* the default moves, so
+  the migration is a version bump rather than a bump plus newly-wrong diagnostics
 - `algo/split-default-migration` (post-MVP): `algo/reconstruction-render-curve-split`,
   `algo/conversion-presets`, `algo/characteristic-curve-coverage`,
-  `io/scanner-density-calibration`
+  `algo/characteristic-default-audit`, `analysis/calibration-frame-capture`
   — filed 2026-09-02 out of `algo/reconstruction-render-curve-split`, which reached a positive
-  verdict but deliberately excluded the default migration. It depended on
-  `film-base/dmax-per-channel-reduction` until **2026-09-10**: the edge existed because the
-  shipped sigmoid's shoulder hid a per-channel error read off the grey leader. Both halves of
-  that reasoning are gone — `algo/film-stock-profiles` disqualified the leader as a source, and
-  the proposed default (`characteristic-generic`) carries each channel's own curve, so it has
-  neither a scalar `Dmax` nor a per-channel gain to get wrong. What the migration still waits
-  on is the green residual, which is `io/scanner-density-calibration` — an edge that is
-  necessary but **not sufficient**, since that task's known-neutral tier is optional there;
-  the binding condition is the neutrality check in the task's own `How to Verify`
+  verdict but deliberately excluded the default migration. **Rescoped 2026-09-12** to what it
+  now actually is: since `algo/conversion-presets` shipped, activation means making a bare
+  `nc convert` resolve what `--preset characteristic-generic` already expands to. Four deps are
+  *constructive* — verdict, mechanism, pinned wiring, and the flag-surface audit. The last,
+  `analysis/calibration-frame-capture`, is a **gate on a different axis**: the goal is where
+  tone shaping happens, the gate is per-channel colour neutrality (the green residual, which
+  the split makes more visible rather than creating).
+  That gate pointed at `film-base/dmax-per-channel-reduction` until 2026-09-10 and at
+  `io/scanner-density-calibration` until 2026-09-12 — the latter was "necessary, not
+  sufficient" because that task produces the **fit**, not the **reference frames** a neutrality
+  measurement is taken against. It now points at the task that produces those frames
 - `algo/dmax-white-anchor` (post-MVP): `algo/density`
 - `algo/density-safety-bounds` (post-MVP): `algo/density`, `core/pipeline-orchestration`
 - `algo/auto-neutral-wb` (post-MVP): `algo/density`, `core/pipeline-orchestration`
@@ -732,6 +764,11 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   places with all four gates green, one of them **silently** (`nc roll` succeeded, wrote
   `_positive.jpg`, and the `*_positive.tiff` rename glob stranded the outputs while the
   stage printed success). The harness has no automated coverage at all
+- `analysis/calibration-frame-capture` (post-MVP, **asset acquisition — mostly photographic**): `analysis/asset-manifest`
+  — filed 2026-09-12. Three tasks named these frames as a precondition in their own words and
+  none owned producing them, so the graph reported work executable when the thing blocking it
+  was a roll of film that did not exist. It gates `io/scanner-density-calibration`,
+  `algo/sigmoid-parameter-calibration`, and `algo/split-default-migration`'s release gate
 - `analysis/comparison-review-tooling` (post-MVP): `algo/reference-anchored-sigmoid`
   — promote the ad-hoc review pages into a maintained config-comparison tool; the user asked
   for it as a separate task rather than continued inline patching
@@ -963,11 +1000,14 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   deliberately untouched — the gate covers the *default* render, so the row belongs to
   `algo/split-default-migration`, which now has the margin harness to decide whether its
   `render` hash is portable
-- [ ] [Auto anchor: measure the interior, not the holder](tasks/algo/auto-anchor-interior-measurement.md) — `DmaxSource::Auto`
-  takes the 99.5th percentile over the *whole* scan, so the nearly-opaque film holder owns it
-  (resolves 2.23–2.37 against roll Dmax 1.28–1.38) and every frame renders black. Restrict the
-  measurement to the picture area; an implausible anchor must fail loudly, not render a black
-  image. Blocks every content-driven rendering mode.
+- [ ] [Exclude the holder from content-driven measurement](tasks/algo/auto-anchor-interior-measurement.md) —
+  `DmaxSource::Auto` takes the 99.5th percentile over the *whole* scan, so the nearly-opaque
+  film holder owns it (resolves 2.23–2.37 against roll Dmax 1.28–1.38) and every frame renders
+  black. **Rescoped 2026-09-12: measurement only — the output image is never cropped**, so
+  dimensions and aspect ratio are untouched. **Two cuts in order**: IR removes the holder at its
+  measured depth (the existing mask has no *depth*, which is the real work), then a fixed 5%
+  inset removes the rebate from what is left. The **rebate is never detected**, only inset past.
+  Blocks every content-driven rendering mode.
 - [x] [Reconstruction / render curve split](tasks/algo/reconstruction-render-curve-split.md) —
   move the sigmoid character to the render stage, restoring the separate-sub-stages rule.
   **Verdict 2026-09-02: the split holds** — measured on seven frames at matched lightness, the
@@ -980,20 +1020,29 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - [x] [Named conversion presets](tasks/algo/conversion-presets.md) — `--preset` selecting
   one of five reconstruction + display bundles by name, folding the coupled magic numbers
   (a per-reconstruction `print_exposure` from 0.31 to 0.70, the per-stock aim-matched red
-  scale) into one stated brightness target. `characteristic-generic` becomes the default,
-  which is the `algo/split-default-migration` step
+  scale) into one stated brightness target. **The default did not move with it** —
+  making `characteristic-generic` the no-flag state is `algo/split-default-migration`
 - [ ] [Contrast / latitude spike](tasks/algo/contrast-latitude-spike.md) — decide whether
   nc's tonal latitude should change, at which end, and by which mechanism. nc's `p95 − p5`
   is narrower than NLP's on two of three frames and far more *stable* across them (0.96
   stops against 4.31) — the signature of design-spec §3.8's per-roll recipe. The scene
   range is unmeasured, so the cause is open; HDR and a new `--preset` axis are both
   candidates, and "no change" is an acceptable outcome.
-- [ ] [Activate the split as the default](tasks/algo/split-default-migration.md) — the
-  `pipeline_version` bump the split left out: reconstruction stops shaping tone, the display
-  operator carries the character. The `film-base/dmax-per-channel-reduction` block was
-  **lifted 2026-09-10** (the leader is disqualified as a source and the proposed default
-  carries per-channel curves); what remains to understand first is the green residual in
-  `io/scanner-density-calibration`
+- [ ] [Make `characteristic-generic` what a bare `nc convert` resolves](tasks/algo/split-default-migration.md) —
+  the `pipeline_version` bump the split left out: reconstruction stops shaping tone, the display
+  operator carries the character. **Rescoped 2026-09-12** — since `--preset` shipped, activation
+  is making one already-expanded preset the no-flag state, not rewiring. The tone split is
+  decided; what gates the *release* is colour: neutrality against a known-neutral reference
+  (`analysis/calibration-frame-capture`), which replaced the "necessary, not sufficient" edge on
+  `io/scanner-density-calibration`. Read the fingerprint-portability note before writing a
+  `PIPELINE_FINGERPRINTS` row
+- [ ] [Audit the flag surface against a characteristic default](tasks/algo/characteristic-default-audit.md) —
+  **executable now, no calibration gate.** Three rules key on the *resolved curve* rather than
+  flag presence, so a characteristic default flips `--d-max`, `--auto-d-max` and `--sigmoid-*`
+  from exit 0 to exit 2 for users who typed only that flag, with a remedy naming a curve they
+  never chose. `--film-stock`'s no-flag path flips the other way (refusal → success) while its
+  guard stays live for explicit parametric curves, so it must **not** be deleted. Classify every
+  rule by all its inputs — flag, value, or both — and fix it before the default moves
 - [ ] [Sigmoid parameter calibration](tasks/algo/sigmoid-parameter-calibration.md) — turn the
   provisional contrast (≈2.07), shoulder (≈0.6) and per-stock anchor offsets into calibrated
   values. Needs a **bracketed roll** (so exposure labels are true by construction) and a **grey
@@ -1146,6 +1195,14 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   black-box coverage now exercises real-binary `freeze` → `convert`, pins the recipe and
   TIFF/sidecar contracts, and reproduces the successful-wrong-container failure; the full
   analysis suite runs in Linux and macOS CI
+- [ ] [Capture the calibration frames](tasks/analysis/calibration-frame-capture.md) —
+  **asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket on
+  two rolls to the protocol agreed 2026-09-08, register them in `manifest.json`, and take a
+  first neutrality measurement. **Four** tasks named these frames as a precondition and none
+  owned producing them, so the graph reported work executable when the blocker was film that
+  did not exist. Gates `io/scanner-density-calibration`, `algo/sigmoid-parameter-calibration`,
+  `film-base/dmax-per-channel-reduction` (parked 2026-09-13 for exactly this), and
+  `algo/split-default-migration`'s release gate
 - [x] [Comparison review tooling](tasks/analysis/comparison-review-tooling.md) — the ad-hoc
   review pages from `algo/reference-anchored-sigmoid` are now a maintained tool. **Viewer**
   shipped 2026-09-02, fullstack since 2026-09-10 (`tools/review-app/`, TanStack Start on
@@ -1170,3 +1227,4 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   updates the page in place; the charts sit below the picture and swap with the config. A
   rendition with no measurement renders its picture and says so, and an unreadable record
   costs only its own charts.
+

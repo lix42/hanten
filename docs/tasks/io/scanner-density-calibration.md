@@ -62,40 +62,29 @@ renderer, with measurements to aim at.
 
 ### Shooting the calibration frames
 
-Agreed with the user 2026-09-08, ahead of them exposing a set.
+The protocol agreed with the user 2026-09-08 now lives in
+[capture the calibration frames](../analysis/calibration-frame-capture.md), which owns
+producing them. Kept here only as the reason each requirement exists:
 
-- **Target**: an X-Rite ColorChecker Classic is the complete answer — its six-patch neutral
-  row fits the matrix diagonal and the offsets, and only its coloured patches can constrain
-  the **off-diagonal** terms, since cross-channel contamination is a property of the dye
-  spectra. A plain grey card is a genuine first step for the diagonal.
-- **Bracket, always: −2, −1, 0, +1, +2 stops** off a metered reading of the grey patch. This
-  is what makes a single grey patch usable at all — the residual is a *slope*, and one patch
-  at one exposure fits an offset without separating it from the slope.
-- **The bracket also makes the fit illuminant-independent where it matters.** A one-stop
+- a **neutral series**, not one patch — the residual is a *slope*, so one grey card at one
+  exposure fits an offset and cannot separate offset from slope;
+- **coloured patches** on top of it — neutrals constrain only the matrix diagonal and the
+  offsets, while the off-diagonal terms are dye cross-talk;
+- a **bracket**, which makes the fit illuminant-independent where it matters: a one-stop
   change multiplies exposure by 2 in *every* channel whatever the light, so relative log
   exposures are known exactly and each channel's response shape is recovered absolutely,
   leaving one unknown constant per channel — which the "+ offset" term absorbs and white
   balance handles downstream. Only channel *balance*, not channel *shape*, depends on the
-  illuminant.
-- **Light, in preference order**: bright overcast (most even, repeatable); direct sun from
-  behind the camera with the card tilted 10–15° against sheen (best channel balance,
-  ≈5500 K); clear-sky open shade last — it is 7000–12000 K, which starves red into its noisy
-  toe, and its colour shifts with any lit surface bouncing in. Record which was used.
-- **Geometry**: card flat and square, filling the central ~60% of the frame (vignetting is
-  an additive field in density and would corrupt neutrality across the card), f/5.6–f/8, no
-  filters or polariser. One extra frame with the card rotated 180° detects uneven light
-  rather than leaving it to be assumed.
-- **Place the set at the head of a roll that is then shot and scanned normally**, with that
-  roll's unexposed frame and leader. It must share development batch *and* scanning session
-  with real frames, and SilverFast's per-frame automatic adjustments must be off or locked —
-  if the scanner adjusts per frame, a calibration from one frame does not transfer to the
-  others, which would void the exercise.
-- **One set is a start, not a conclusion.** Per-frame residuals scatter at sd 0.3–1.6, so a
-  bracket on **two different rolls** is what separates "the film and scanner" from "that
-  roll", the fork this task's whole diagnosis currently sits on.
-- A transmissive step wedge would isolate the scanner from the film — useful if that
-  distinction ever matters, but blind to dye cross-talk for the same spectral reason a
-  neutral target cannot constrain the off-diagonal terms.
+  illuminant;
+- **two rolls**, because per-frame residuals scatter at sd 0.3–1.6 and one roll cannot
+  separate "the film and scanner" from "that roll" — the fork this diagnosis sits on;
+- a **shared development batch and scanning session** with real frames, SilverFast's
+  per-frame adjustments off or locked — a per-frame-adjusting scanner makes a calibration
+  from one frame untransferable to the others.
+
+A transmissive step wedge would isolate the scanner from the film — useful if that
+distinction ever matters, but blind to dye cross-talk for the same spectral reason a
+neutral target cannot constrain the off-diagonal terms.
 
 ## Design
 
@@ -217,13 +206,21 @@ concerns applying a *colour* transform before density conversion; this task conc
 - [Input data semantics and validation](input-data-semantics.md)
 - [Film-stock profiles](../algo/film-stock-profiles.md) — supplies the per-stock nominal
   reference densities this task must not duplicate
+- [Capture the calibration frames](../analysis/calibration-frame-capture.md) — produces the
+  ColorChecker bracket the calibrating tiers fit against. A **hard** edge, not prose, because
+  this task's goal is absolute density and tier 1 is explicitly non-calibrating: no amount of
+  tier-1 work reaches the goal. (Contrast `film-base/dmax-anchor-reliability`, where the holder
+  prerequisite is recorded in prose because it blocks one of four directions, not the goal.)
+  Tier 1 remains implementable early if a baseline diagnostic is wanted before the frames
 
 `algo/reference-anchored-sigmoid` is now **transitive** via `algo/film-stock-profiles`.
 
 ---
 
-**2026-09-13 — the calibration shoot is wanted by three tasks; plan it once.** The target this
-task specifies (a ColorChecker Classic: neutral series for the diagonal and offsets, coloured
+**2026-09-13 — the calibration shoot is wanted by four tasks; plan it once.**
+[`analysis/calibration-frame-capture`](../analysis/calibration-frame-capture.md) (filed
+2026-09-12) owns producing them and is the dependency edge above; this note is the reasoning
+that independently reached the same conclusion. The target this task specifies (a ColorChecker Classic: neutral series for the diagonal and offsets, coloured
 patches for the off-diagonal terms) overlaps two other open needs, and the user has it on
 their roadmap:
 
@@ -234,4 +231,5 @@ their roadmap:
   uncorrelated with density, which the available rolls (one trip, one palette) violate.
 
 A ColorChecker **plus** a bracket, on a roll that also carries a grey card, satisfies all
-three. Shooting for only one of them wastes the other two.
+three — four with `algo/split-default-migration`'s release gate. Shooting for only one of them
+wastes the others. The protocol lives in the capture task; do not restate it here.

@@ -1,160 +1,155 @@
-# Activate the reconstruction / render split as the default
+# Make `characteristic-generic` what a bare `nc convert` resolves
 
 ## Goal
 
-Make the split the shipped default: reconstruction stops shaping tone, the display
-operator carries the character. That is a `pipeline_version` bump with a
-before/after report — the part `algo/reconstruction-render-curve-split`
-deliberately left out of its own scope.
+Make the reconstruction / render split the shipped default: reconstruction stops
+shaping tone, the display operator carries the character.
 
-## Input from `algo/film-stock-profiles` (2026-09-08)
+Since `algo/conversion-presets` shipped, that is a narrow and concrete change —
+**what a bare `nc convert` with no flags resolves**. `--preset characteristic-generic`
+already expands to the target rendition (`cli::ConversionPreset::expand`); this task
+makes it the no-flag state, with the `pipeline_version` bump, drift-gate row,
+measured report and guide update that a default move owes.
 
-- **This task's stated blocker is resolved for named stocks.** The shoulder this migration
-  removes was hiding a per-channel error; inverting a stock's published curve removes
-  blue's part of it by construction (residual +0.09 against +1.26). `film-base/dmax-per-
-  channel-reduction` still owns the no-stock path.
-- **There is now a third candidate default**, not just a shoulder-less sigmoid: the
-  `characteristic` curve, which carries no slope or anchor at all because it reads both off
-  the film. If the migration's goal is "the reconstruction sheds both knees and the display
-  operator carries the character", this is the form that does it completely.
-- **It changes what the display stage must do.** The characteristic curve hands the display
-  scene-referred exposure, so `--display-tone none` is *refused* on both SDR and HDR (the
-  reconstruction no longer bounds itself at the render's ceiling). Measured picture content
-  reaches p99.99 **+3.64 stops** over diffuse white and never exceeds 4 stops on 21 frames,
-  so `reinhard` with `--display-tone-headroom 4` covers it — the shipped default of 6 wastes
-  two stops. Whether that headroom default should move is arguably `output/presets`.
-- **It un-inerts the HDR path.** Same frame, same tone: MaxCLL 101 nits under the shipped
-  sigmoid (half of diffuse white — the known inert-gain-map defect) against 999 under both
-  a shoulder-less sigmoid and the characteristic curve.
-- **Do not migrate before the green residual is understood** (`io/scanner-density-
-  calibration`): +0.40 mean, +1.00 on one roll, and on the worst-affected stocks
-  `generic-c41` currently looks better than the matching profile.
+## What "the default" means now, and what is left
 
-## Why
+The default has already moved along several axes, and none of them is this one:
 
-The split is decided, not speculative. `algo/reconstruction-render-curve-split`
-reached a positive verdict on seven real frames at matched lightness, over a user
-visual verdict from `output/display-tone-mapping`. Everything needed to render it
-already ships and is reachable from the CLI today; what has not happened is making
-it what `nc convert` does with no flags.
+- **per curve** — `DensityParams::default_scale_for` gives `[1, 0.90, 0.86]` for the
+  parametric curves and `[1, 1, 1]` for `characteristic`;
+- **per stock** — `--film-stock` selects a published curve; `characteristic-aim`
+  derives a per-stock red scale;
+- **per bundle** — five `--preset` bundles, all calibrated to one brightness target
+  (scene mid-grey +0.31 stop);
+- **per output preset** — `legacy` / `film-master` / the display presets each resolve
+  their own tone and exposure.
 
-It is a separate task because activation inherits a problem the split itself does
-not own — see the blocker below — and because a default migration is its own kind
-of work: a version bump, a drift-gate row, a measured report, and a guide update.
+What has *not* moved is the no-flag resolution: `--preset` is `Option<String>` with
+no default, so a bare `nc convert` still resolves the knee'd sigmoid into
+`gain-map-hdr` — the configuration that writes the structurally valid but inert
+1.0x gain map.
 
-## Input from `algo/conversion-presets` (2026-09-09)
+## Why the split is decided
 
-The default migration this task owns is now the **last step** of that task, not a separate
-piece of work, and two of its obstacles have measured answers:
+`algo/reconstruction-render-curve-split` reached a positive verdict on 2026-09-02:
+seven real frames at matched lightness, over a user visual verdict from
+`output/display-tone-mapping`. The reconstruction curve is the shipped sigmoid with
+**both knees off** (bit-exactly the exponential), and `algo/conversion-presets` then
+established `characteristic-generic` as the form that does it completely — it carries
+each channel's own published curve, so it needs neither a scalar `Dmax` nor a
+per-channel gain.
 
-- **How the default moves without breaking `film-master`.** A preset must not set
-  `output.preset`; the non-display presets (`legacy`/`custom`/`film-master`) resolve their
-  own tone and exposure. Verified that they refuse `reinhard` outright, and that
-  `film-master` refuses any non-default `print_exposure` — so a global default move would
-  have made a bare `nc convert --output-preset film-master` fail.
-- **Which reconstruction.** `characteristic-generic` is the proposed default. It carries each
-  channel's own published curve, so it needs neither a scalar `Dmax` nor a per-channel gain —
-  which is why the per-channel blocker below was lifted.
+It also un-inerts HDR: same frame, same tone, MaxCLL 101 nits under the shipped
+sigmoid against 999 under the characteristic curve.
+
+## The release gate — colour, not tone
+
+**This task must not ship until neutrality is checked against a known-neutral
+reference frame** (`analysis/calibration-frame-capture`).
+
+The gate is on a *different axis* from the goal. The goal is where tone shaping
+happens; the gate is per-channel colour neutrality — green residual +0.40 mean,
++1.00 on the Ektar roll, which no per-channel scale removes. The split does not
+create that residual; it exists today. It makes it **more visible**, because the
+shoulder this migration removes was compressing the highlights where the cast lives.
+
+A leader cannot settle it: a leader cannot separate a non-neutral exposure from a
+scanner-slope error, so it can neither accept nor reject this migration.
+
+**History worth keeping:** this gate was `film-base/dmax-per-channel-reduction` until
+2026-09-10, when `algo/film-stock-profiles` disqualified the leader as a per-channel
+source and showed the term is a *slope* (carried by `density.scale`, and by each
+stock's own tables on `characteristic`) rather than the anchor that task weighs. It
+was then an edge on `io/scanner-density-calibration` until 2026-09-12 — but that edge was
+"necessary, not sufficient" for a simpler reason than it first looked: that task produces a
+**3×3 + offset fit**, while this gate needs the **reference frames** a neutrality measurement
+is taken against. Those are different artifacts, and nothing owned producing the second. The
+edge now points at the task that does.
 
 ## Open questions
 
-- **How much of the shape moves?** The measured answer is "both knees off", but the
-  migration has to decide whether the default anchor placement moves with it. Keeping
+- **Does the default anchor placement move with the curve?** Keeping
   `MidAtDmaxFraction(0.5)` costs a measured **0.21–0.28 EV darker** than the
-  lightness-matched anchor (it anchors above the solved one) — inside what
-  `print.print_exposure` corrects, so plausibly fine, and it avoids shipping the
-  uncalibrated 0.626 offset as a constant.
-- **Is the default display tone the same one?** `--display-tone reinhard` at the
-  6-stop default is what was reviewed. **Half of that concern is now gone**: since
-  2026-09-09 the operator preserves mid-grey by construction
-  (`extended-reinhard-mid-preserving-v2`), so it no longer darkens the midtones and
-  the review's renditions were re-rendered brighter. What remains is **0.86 stop at
-  diffuse white** — still a rendering-intent call the migration has to make, and still
-  one no measurement can decide, but it is now a highlight-contrast question rather
-  than an overall-brightness one.
-- **What does the report have to say?** The split changes what a stage *does*, which
-  is CLAUDE.md's "fifth spot" — check the prose claims, not just the values.
+  lightness-matched anchor — inside what `print.print_exposure` corrects, and it avoids
+  shipping the uncalibrated 0.626 offset as a constant.
+- **Does the default headroom move 6 → 4?** Measured content reaches p99.99 **+3.64
+  stops**, so `reinhard` at 4 covers it where the shipped 6 wastes two. Arguably
+  `output/presets`.
+- **What is the display-tone default?** Since 2026-09-09 the operator preserves
+  mid-grey by construction, so the midtone half of this is closed. What remains is
+  **0.86 stop at diffuse white** — a rendering-intent call no measurement decides.
+- **What does the report have to say?** The split changes what a stage *does*, which is
+  CLAUDE.md's "fifth spot" — check the prose claims, not just the values.
+- **What survives the flag-surface audit?** `algo/characteristic-default-audit` decides which
+  rules change behaviour when the value they read arrives from a default rather than from the
+  user. Its answers are inputs here, not questions this task re-opens.
 - **Does anything downstream assume the old bound?** Reconstruction currently holds
-  `lin ≤ 1.0` under a positive shoulder; without it the master and both display
-  sources go over-range by design.
+  `lin ≤ 1.0` under a positive shoulder; without it the master and both display sources
+  go over-range by design.
 
 ## Known vs unknown
 
-**Known:** the rendition is reachable today (`--sigmoid-shoulder 0 --display-tone
-reinhard`); `film-master` accepts it at exit 0 and needs no change; the gain map goes
-live and its plateau share improves 10–25x; `PIPELINE_FINGERPRINTS` needs a new row
-and a historical row must never be edited in place.
+**Known:** the rendition is reachable today and ships as a named preset; `film-master`
+accepts it at exit 0 and needs no change; the gain map goes live and its plateau share
+improves 10–25x; a historical `PIPELINE_FINGERPRINTS` row must never be edited in place.
 
-**The new row's `render` hash may not be portable, and this is the single most
-important thing to read before writing one.** `algo/characteristic-curve-coverage`
-(closed 2026-09-10) established by observation — not by argument — that **x86_64 and
-macOS return different `f32` results from `log10f`** on two of the fifteen
-`stages::golden::pixels()` samples under this curve. The chain has two libm calls
-(`log10` in `to_density`, `10^` in the curve), and a 1-ULP difference in the first is
-amplified by `ln(10)·d·(1/γ_local)` — up to 62 pixel ULPs on that vector.
+**A preset must not set `output.preset`.** The non-display presets (`legacy` / `custom`
+/ `film-master`) resolve their own tone and exposure and refuse `reinhard`; `film-master`
+refuses any non-default `print_exposure`. A global default move that ignored this would
+break a bare `nc convert --output-preset film-master`.
 
-The golden there survives it with a **derived per-sample window**
-(`stages::golden::reachable_window`, which renders every density a 1-ULP-accurate libm
-can return). **A fingerprint row has no window at all** — it hashes raw f32 bits — so it
-is a strictly harder bar, and the current vector is known to fail it on at least those
-two samples. Do not assume `golden::pixels()` carries over: budget for choosing sample
-values whose *rendered* pixels are identical on both targets, and verify by running CI
-on both rather than by any margin argument. Two threshold-based arguments were tried
-during that task and both were unsound; the progress log records why.
+**The new fingerprint row may not be portable, and this is the single most important
+thing to read before writing one.** `algo/characteristic-curve-coverage` established by
+*observation* — not by argument — that **x86_64 and macOS return different `f32` results
+from `log10f`** on two of the fifteen `stages::golden::pixels()` samples under this curve.
+The chain has two libm calls (`log10` in `to_density`, `10^` in the curve), and a 1-ULP
+difference in the first is amplified by `ln(10)·d·(1/γ_local)` — up to 62 pixel ULPs.
 
-Note also that moving `golden::pixels()` itself is not free — it is shared with every
-historical row, whose meaning would shift with it. Adding a separate vector for the new
-default's fingerprint is likely the cheaper answer.
-
-## The blocker — lifted 2026-09-10, and what replaced it
-
-**Was:** `film-base/dmax-per-channel-reduction` must land first, because the sigmoid's
-shoulder was hiding a per-channel model error read off the uniformly-exposed leader (Gold
-B/G **1.826**, Portra R/G **1.676**, Ektar B/G 1.170 — 17–83% off neutral), and a
-shoulder-less default would let it survive into the highlights.
-
-**Why it no longer holds.** Both halves of that reasoning died in `algo/film-stock-profiles`.
-The leader is disqualified as a measurement of per-channel structure — measured leaders do
-not reproduce the published divergence at all, and the comparison cannot separate a
-non-neutral leader exposure from a scanner-slope error, so those ratios are not a clean
-model-error reading. And the per-channel term turned out to be a **slope**, not an anchor:
-it is carried by `density.scale` on the parametric curves and by each channel's own table on
-`characteristic`, which is the proposed default here.
-
-**What actually gates the migration now** is the green residual — `+0.40` mean and `+1.00`
-on the Ektar roll, which no per-channel scale removes. That is `io/scanner-density-
-calibration`, and the note above already says not to migrate before it is understood.
+The golden there survives with a derived per-sample window
+(`stages::golden::reachable_window`). **A fingerprint row has no window at all** — it
+hashes raw f32 bits — so it is a strictly harder bar, and the current vector is known to
+fail it on at least those two samples. Budget for choosing sample values whose *rendered*
+pixels are identical on both targets, and verify by running CI on both rather than by any
+margin argument; two threshold-based arguments were tried during that task and both were
+unsound. Note that moving `golden::pixels()` itself is not free — it is shared with every
+historical row, whose meaning would shift with it. A separate vector for the new
+fingerprint is likely cheaper.
 
 ## How to Verify
 
 - A `pipeline_version` bump with its own `PIPELINE_FINGERPRINTS` row, and a
   before/after report under `docs/reports/`.
-- **Release gate:** neutrality checked against a **known-neutral reference, not the
-  leader** — a leader cannot separate a non-neutral exposure from a scanner-slope error (see
-  the blocker note), so it can neither accept nor reject this migration. The reference is the
-  calibration frame `io/scanner-density-calibration` needs. This is the criterion that
-  actually holds the migration: the dependency edge on that task is necessary but does not
-  guarantee the measurement was taken, so do not read a green checkbox there as this gate
-  being met.
+- **Release gate:** neutrality measured against a **known-neutral reference, not the
+  leader**, from `analysis/calibration-frame-capture` — **and a pass criterion applied to
+  the number**, not merely the measurement taken.
+  A measurement alone cannot hold this gate: `calibration-frame-capture` correctly accepts
+  "we measured it and the residual is still there" as a complete outcome, because its job
+  is evidence rather than colour. So this task must state what residual it is willing to
+  ship under, decide against the measured value, and **record the decision either way**.
+  If the answer is "not acceptable", the remedy is `io/scanner-density-calibration`'s 3×3
+  + offset fit — named here as the path, deliberately **not** as a dependency edge, since
+  the measurement may well show the residual is tolerable under a curve that already
+  removes blue's part of it by construction (+1.26 → +0.09).
+  **The threshold is unset and this task owns setting it.** Today's numbers are the only
+  anchor: green +0.40 mean, +1.00 on the Ektar roll, per-roll spread ±0.5 stop/density.
+- A bare `nc convert --output-preset film-master` still succeeds, and every named
+  output preset still resolves.
+- Regenerating the preset review set through the new default produces byte-identical
+  files to `--preset characteristic-generic` — the expansion acceptance test.
 - `docs/using-nc.md` updated by running the binary, not by reading the diff.
 
 ## Dependencies
 
-- [Reconstruction / render curve split](reconstruction-render-curve-split.md)
-- [Named conversion presets](conversion-presets.md)
+- [Reconstruction / render curve split](reconstruction-render-curve-split.md) — the verdict
+- [Named conversion presets](conversion-presets.md) — the mechanism; this migration is the
+  last step of that task, not separate work
 - [Pin the characteristic curve against regression](characteristic-curve-coverage.md) —
-  **done 2026-09-10.** The curve now carries four property tests over the real
-  `algo::reconstruct` plus a 1-ULP golden, so the default can move onto pinned wiring.
-  The `PIPELINE_FINGERPRINTS` row was deliberately left to this task; see the
-  portability note under *Known vs unknown* before writing one
-- [Scanner density calibration](../io/scanner-density-calibration.md) — the green residual
-  that replaced the per-channel blocker. Encoded as an edge on 2026-09-10: the "do not
-  migrate before it is understood" note had been prose only, so the graph said this task was
-  executable without it. **Necessary, not sufficient** — that task's tier 2 (the known-neutral
-  target that actually measures the residual) is *deliberately* optional there, since it
-  refuses to make a calibration target a precondition for converting at all. So its checkbox
-  can go green on the tier-1 diagnostic alone. The condition that actually gates this
-  migration is the neutrality check under *How to Verify*, which names the evidence rather
-  than a task. Closing that gap properly means either rescoping the scanner task's completion
-  criteria or filing a dedicated one; both are plan decisions this task should not make
-  unilaterally
+  **done 2026-09-10.** Four property tests over the real `algo::reconstruct` plus a 1-ULP
+  golden, so the default moves onto pinned wiring. The fingerprint row was deliberately left
+  to this task; read the portability note above before writing one
+- [Audit the flag surface against a characteristic default](characteristic-default-audit.md) —
+  the CLI-surface half of this migration, split out because it is executable **now** while this
+  task waits on the frames. Three rules key on the resolved curve rather than flag presence, so
+  moving the default breaks commands that work today
+- [Capture the calibration frames](../analysis/calibration-frame-capture.md) — produces the
+  known-neutral reference the release gate names
