@@ -914,6 +914,14 @@ obvious until something breaks:
   `manifest.json` (roll + frame + `sha256`) and driven via `scripts/real-scan-verify/`;
   that half cannot run in CI and skips when assets are absent. Tier 1's *logic* is covered
   by a synthetic committed fixture so a clean checkout can still verify it.
+- 2026-09-12 (**postponed, and the protocol moved**): the calibrating tiers need a
+  ColorChecker bracket on two rolls that does not exist yet, so the task is parked by user
+  decision. Tier 1 (the non-calibrating diagnostic) is still implementable without it, but
+  tier 1 alone does not fulfil the goal, so the task now depends on
+  `analysis/calibration-frame-capture` rather than carrying the shoot implicitly. The
+  protocol agreed 2026-09-08 moved to that task; what stays here is *why* each requirement
+  exists (neutral series vs one patch, coloured patches for the off-diagonal terms, the
+  bracket's illuminant-independence, two rolls, one development batch and scan session).
 
 ## gray-primary-decode
 

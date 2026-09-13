@@ -286,7 +286,10 @@ Three routes forward, and this task should wait for one of the last two:
    measurement rather than averaging over it. Shared need with
    [scanner density calibration](../io/scanner-density-calibration.md) and
    [sigmoid parameter calibration](../algo/sigmoid-parameter-calibration.md) — one shoot could
-   serve all three.
+   serve all three. [`analysis/calibration-frame-capture`](../analysis/calibration-frame-capture.md)
+   owns that shoot and carries the protocol, including the **subject-variety** requirement this
+   task's route 2 identified. Deliberately **not** a dependency edge: routes 2 and 3 both unblock
+   this task, so the prerequisite belongs to one approach rather than to the goal.
 
 **The visual review set is not shipped, and needs one thing first.** A local generator was
 written and used to sanity-check the Ektar numbers, but `analysis/comparison-review-tooling`

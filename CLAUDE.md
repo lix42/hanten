@@ -419,9 +419,13 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   out to be a *slope*, carried by `density.scale` on the parametric curves and by each
   stock's own tables on `characteristic` (the proposed default) — not the anchor that
   task investigates — and the grey leader those 17-83% ratios were read off is
-  disqualified as a per-channel source. What gates the migration now is the green
-  residual (`io/scanner-density-calibration`). Do not "fix" this by widening the
-  container or by re-deriving headroom in the gain-map stage.
+  disqualified as a per-channel source. What gates the migration now is neutrality
+  measured against a **known-neutral reference** (`analysis/calibration-frame-capture`,
+  filed 2026-09-12); `io/scanner-density-calibration` is the remedy if that measurement
+  fails, not the gate — it produces the *fit*, not the reference frames the gate needs.
+  (`film-base/dmax-per-channel-reduction` was itself **parked 2026-09-13** wanting the same
+  frames, so that shoot now gates four tasks.) Do not "fix" this by widening the container
+  or by re-deriving headroom in the gain-map stage.
 - **nc writes the AVIF container itself; libaom only makes the codestream.**
   `io/avif.rs` is the `hdr-pq`/`hdr-hlg` encoder. There is **no libavif
   dependency** — no published crate ships libavif ≥ 1.4.2 (`libavif-sys` is
@@ -722,6 +726,9 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   every *later* edit when one anchor misses, which `rustfmt` guarantees by rewrapping lines.
   Apply edits independently, print applied/missed per edit, and confirm by grepping the
   result rather than trusting an exit status.
+  The same shape bites in prose: a `docs/TASKS.md` dependency entry's `—` rationale body
+  follows its header line, so anchoring a new entry on the *preceding* header orphans that
+  body and the new entry silently absorbs its reasoning.
 - **A task file tracks work; it does not specify it.** When creating a task,
   record the **goal**, the **open questions**, and what is **known vs unknown** —
   and leave room to investigate. Keep the door open on approach. Leave out the

@@ -1525,3 +1525,23 @@ three v1 charts below the picture, bound to the active config.
   binary's real envelope: object-valued `meta` and `params`. The negative harness
   case uses parseable `{}` to prove a wrong envelope is rejected before
   publication; successful fakes emit the minimal valid envelope.
+
+
+## calibration-frame-capture
+
+**Status:** not started
+**Updated:** 2026-09-12
+
+- Goal: shoot, develop, scan and register the ColorChecker bracket rolls three other tasks
+  name as a precondition, and take a first neutrality measurement against them.
+- 2026-09-12 (filed): three tasks each named these frames in their own words and none owned
+  producing them — `io/scanner-density-calibration` (the 3×3 + offset fit),
+  `algo/sigmoid-parameter-calibration` (bracketed roll + grey card), and
+  `algo/split-default-migration` (its release gate names a known-neutral reference, which is
+  evidence rather than a task and so was invisible to the graph). The effect was that the
+  graph reported work as executable when the thing blocking it was a roll of film that did
+  not exist. The protocol agreed with the user 2026-09-08 moved here from
+  `io/scanner-density-calibration`, which now points at it rather than restating it.
+- Mostly photographic work. The code half is the manifest role for a bracketed target frame
+  (exposure offset + lighting recorded alongside it) and whether one measurement command
+  serves all three consumers or each wants its own read.

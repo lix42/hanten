@@ -54,12 +54,17 @@ the required reference task to accumulate content-analysis code.
 
 ## Dependencies
 
-- [Auto anchor: measure the interior, not the holder](auto-anchor-interior-measurement.md) —
+- [Exclude the holder from content-driven measurement](auto-anchor-interior-measurement.md) —
   **hard prerequisite.** Content-driven anchoring is currently unusable: `DmaxSource::Auto`
   takes the 99.5th percentile over the whole scan, so the nearly-opaque film holder owns it
   (measured 2.23–2.37 against roll Dmax 1.28–1.38) and every frame renders black. Any
-  content-derived toe placement inherits that defect until the measurement is confined to the
-  picture area.
+  content-derived toe placement inherits that defect until the holder is excluded.
+  **What that task will and will not hand over** (rescoped 2026-09-12): it removes the
+  holder, and it deliberately does **not** detect the rebate — which sits at `D ≈ 0`,
+  harmless to a high percentile but squarely on the **low** end this task reads for a toe or
+  black point. Its second cut is a blind fixed inset (5% default) that happens to clear the
+  rebate; whether that is enough for a toe statistic is **this** task's question to measure,
+  not an assumption to inherit. It also crops nothing: output dimensions are unchanged.
 - [Reference-anchored sigmoid reconstruction](reference-anchored-sigmoid.md)
 - [Roll conversion](../core/roll-conversion.md)
 - [Output presets and guidance](../output/presets.md)

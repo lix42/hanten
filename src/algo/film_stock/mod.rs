@@ -110,9 +110,10 @@ pub(crate) fn invert(table: &[(f32, f32)], d: f32) -> (f32, bool) {
 /// stock profiles moved this figure only between 5.75 % and 6.55 %, because every C-41
 /// table ends within ~0.2 density of the others. A 30 % wrong film base moved it from
 /// 6.00 % to 6.44 %. Diagnosing either fault needs the *interior* fraction, which needs a
-/// resolved picture region — `film-base/auto-base-redesign` locates the rebate already,
-/// and `algo/auto-anchor-interior-measurement` owns plumbing it through. Once that exists,
-/// an interior figure above ~0 is meaningful, and this one can be dropped.
+/// holder-excluded measurement region — `algo/auto-anchor-interior-measurement` owns that
+/// (an IR-measured holder cut, then a blind fractional inset; it does **not** detect the
+/// rebate and crops nothing). Once that exists, an interior figure above ~0 is meaningful,
+/// and this one can be dropped.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
 pub struct OutOfTable {
     /// Fraction of samples below each channel's table, `[r, g, b]`.
