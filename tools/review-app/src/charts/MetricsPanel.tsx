@@ -85,7 +85,17 @@ export function MetricsPanel(props: Props) {
     <Show when={props.rendition}>
       <div class={css(styles.panel)}>
         <div class={css(styles.head)}>
-          <span class={css(styles.heading)}>Measured — {props.configLabel}</span>
+          {/* "Measured" only when something was: the heading sat above the
+              "no measurement" line and contradicted it, which is the common
+              state for a set rendered with `--no-metrics`. */}
+          <span class={css(styles.heading)}>
+            {metrics()
+              ? "Measured"
+              : props.rendition?.metricsError
+                ? "Measurement"
+                : "Not measured"}{" "}
+            — {props.configLabel}
+          </span>
           <Show when={scope()}>
             {(what) => (
               <span class={css(styles.scope)}>

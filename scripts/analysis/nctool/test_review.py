@@ -203,6 +203,25 @@ class TestOwnedFlags(unittest.TestCase):
             load(configs=[{"id": "a", "args": ["--output-preset=legacy"]}])
 
 
+class TestUnsafeIds(unittest.TestCase):
+    """Every cell writes `<frame>-<config>` into the output directory."""
+
+    def test_refuses_a_config_id_that_would_escape_the_output_directory(self):
+        for bad in ("../leak", "/tmp/leak", "a/b", ".."):
+            with self.assertRaisesRegex(review.ReviewError, "filename-safe"):
+                load(configs=[{"id": bad, "args": []}])
+
+    def test_refuses_a_frame_id_that_would_escape(self):
+        # Frame ids come from `--fixtures`, which is a flag: a custom fixture
+        # file is as much an input as the matrix.
+        fixtures = {"frames": {"../../negative-converter/leak": {}}}
+        with self.assertRaisesRegex(review.ReviewError, "filename-safe"):
+            review._frames_to_render(load(), fixtures, "../../negative-converter/leak")
+
+    def test_accepts_the_ids_the_shipped_matrix_uses(self):
+        self.assertEqual([c["id"] for c in load()["configs"]], ["generic", "stock"])
+
+
 class TestCollisions(unittest.TestCase):
     """`<frame>-<config>` is not injective when either id may hold a hyphen."""
 
@@ -252,7 +271,7 @@ class TestReuse(unittest.TestCase):
               "space": {"declared": "display-p3"},
               "region": {"x": 10, "y": 10, "width": 80, "height": 60}}
 
-    def reuse(self, record=None, digest="abc", region=None, space="display-p3"):
+    def reuse(self, record=None, digest="abc", region=None, space="display-p3", decoder=None):
         # `is None`, not truthiness: `{}` is a record — the one meaning "nothing
         # was stored" — and `or` would quietly substitute the good one.
         return review.is_measured(
@@ -260,6 +279,7 @@ class TestReuse(unittest.TestCase):
             digest,
             self.RECORD["region"] if region is None else region,
             space,
+            decoder,
         )
 
     def test_reuses_a_record_describing_these_exact_bytes(self):
@@ -278,6 +298,15 @@ class TestReuse(unittest.TestCase):
     # The region is part of the identity: the same file measured over a different
     # rectangle is a different measurement, and reusing one for the other would
     # silently chart the holder.
+    # A JPEG's samples are whatever its decoder says they are, which is why the
+    # record names it; reusing across an upgrade mixes two decoders in one set.
+    def test_re_measures_when_the_jpeg_decoder_changed(self):
+        record = {**self.RECORD, "image": {"decoder": "Pillow 11.0 / libjpeg 6.2"}}
+        self.assertFalse(self.reuse(record=record, decoder="Pillow 12.3 / libjpeg 6.2"))
+        self.assertTrue(self.reuse(record=record, decoder="Pillow 11.0 / libjpeg 6.2"))
+        # A TIFF record names no decoder and is reused regardless.
+        self.assertTrue(self.reuse(decoder="Pillow 12.3 / libjpeg 6.2"))
+
     def test_re_measures_when_the_region_moved(self):
         self.assertFalse(self.reuse(region={**self.RECORD["region"], "x": 0}))
 

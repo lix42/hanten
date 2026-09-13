@@ -26,6 +26,7 @@ Three properties worth keeping:
 from __future__ import annotations
 
 import json
+import re
 import os
 import subprocess
 import sys
@@ -59,6 +60,24 @@ PRESET_SUFFIX: dict[str, str] = {
     "hdr-pq-tiff": "tiff",
     "hdr-hlg-tiff": "tiff",
 }
+
+#: Ids that are safe to build a filename from, as `roll.py` spells it.
+#:
+#: Every cell writes `<frame>-<config>.<suffix>` into the output directory, so an
+#: id carrying a path separator would place it somewhere else entirely — `..` up
+#: into the repository the output check just refused, or an absolute path that
+#: discards the output directory altogether, while `review.json` goes on naming
+#: the bare filename.
+SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def check_id(value: str, what: str, at: str) -> str:
+    if not SAFE_ID.match(value) or ".." in value:
+        raise ReviewError(
+            f"{at}: {what} {value!r} is not filename-safe; every cell writes "
+            "<frame>-<config> into the output directory")
+    return value
+
 
 #: Flags the generator supplies itself, refused in a matrix.
 #:
@@ -230,7 +249,7 @@ def load_matrix(path: Path) -> dict:
         if not isinstance(entry, dict):
             raise ReviewError(f"{at} must be an object")
         _known_keys(entry, {"id", "label", "note", "args"}, at)
-        cid = _string(entry.get("id"), f"{at}.id")
+        cid = check_id(_string(entry.get("id"), f"{at}.id"), "config id", f"{at}.id")
         if cid in seen:
             raise ReviewError(f"configs contains two entries with id {cid!r}")
         seen.add(cid)
@@ -370,7 +389,8 @@ def colliding_stems(frames: list[str], config_ids: list[str]) -> list[str]:
     return clashes
 
 
-def is_measured(record: dict, digest: str, region: dict, space: str) -> bool:
+def is_measured(record: dict, digest: str, region: dict, space: str,
+                decoder: str | None = None) -> bool:
     """Whether a stored record already describes these exact bytes and region.
 
     Measuring a 74 MP frame is minutes of work, and a generator run re-renders
@@ -389,6 +409,14 @@ def is_measured(record: dict, digest: str, region: dict, space: str) -> bool:
         return False
     declared = record.get("space") if isinstance(record.get("space"), dict) else {}
     if declared.get("declared") != space:
+        return False
+    # A JPEG's samples are whatever its decoder says they are — which is why the
+    # record names the decoder at all. Reusing across a Pillow or libjpeg upgrade
+    # mixes measurements from two decoders inside one set, in whichever cells
+    # happened not to be re-rendered.
+    image = record.get("image") if isinstance(record.get("image"), dict) else {}
+    stored_decoder = image.get("decoder")
+    if stored_decoder is not None and decoder is not None and stored_decoder != decoder:
         return False
     stored = record.get("region")
     if not isinstance(stored, dict):
@@ -426,6 +454,8 @@ def _frames_to_render(matrix: dict, fixtures: dict,
         # Two entries for one frame render every cell twice and write two images
         # with the same id, which the app refuses — after the expensive part.
         raise ReviewError(f"frame named more than once: {', '.join(repeated)}")
+    for name in names:
+        check_id(name, "frame", "frames")
     missing = [name for name in names if name not in known]
     if missing:
         raise ReviewError(
@@ -513,6 +543,11 @@ def cmd_generate(args) -> int:
             print(f"note: no metrics — {error}", file=sys.stderr)
             measuring = False
 
+    if matrix["suffix"] not in ("jpg", "avif"):
+        print(f"note: {matrix['output_preset']} writes {matrix['suffix'].upper()}, which most "
+              "browsers do not display in an <img> (Safari does); the set will render but "
+              "most of it will show as broken images", file=sys.stderr)
+
     fraction = _metrics.inset_fraction(matrix["inset"]) if matrix["inset"] else (
         0.0, 0.0, 1.0, 1.0)
 
@@ -578,8 +613,9 @@ def cmd_generate(args) -> int:
                 notes.append(f"{config['id']} {note}")
             print(f"{key:4} {config['id']:12} -> {dest.name}", file=sys.stderr)
 
-        if not renditions:
-            continue
+        # Kept even when every cell failed. The set is the record of what was
+        # compared, and a frame that silently vanishes tells a later reader
+        # nothing; an empty rendition map draws the gaps the app already has.
         images.append({
             "id": key,
             "label": f"{key} — {roll} · {frame['file']}",
@@ -588,16 +624,20 @@ def cmd_generate(args) -> int:
         })
 
     if not images:
-        print("error: nothing rendered — no review set written", file=sys.stderr)
+        print("error: no frame could be read — no review set written", file=sys.stderr)
         return 1
 
     _write_json(out / "review.json", build_review(matrix, images))
+    rendered = sum(len(image["renditions"]) for image in images)
     print(f"\n{len(images)} frames x {len(matrix['configs'])} configs -> "
           f"{out}/review.json", file=sys.stderr)
     if failures:
         print(f"FAILED cells ({len(failures)}): {', '.join(failures)}", file=sys.stderr)
     print(f"\n  cd tools/review-app && pnpm dev {out}/review.json", file=sys.stderr)
-    return 0
+    # The set is written either way — it is the record of what was attempted —
+    # but a run that rendered nothing did not produce a comparison, and says so
+    # with its exit status rather than only in the lines above.
+    return 0 if rendered else 1
 
 
 def _stored_record(path: Path) -> dict:
@@ -625,6 +665,9 @@ def _measure(image: Path, record_path: Path, space: str,
     except _metrics.MetricsError as error:
         raise ReviewError(str(error)) from error
 
+    # Only JPEG records name a decoder, and `_jpeg_decoder_identity` imports
+    # Pillow, so it is asked for once per cell rather than at import time.
+    decoder = _metrics._jpeg_decoder_identity() if _metrics._is_jpeg(image) else None
     digest = _metrics.sha256(image)
     if not force and record_path.is_file():
         stored = _stored_record(record_path)
@@ -632,7 +675,7 @@ def _measure(image: Path, record_path: Path, space: str,
         width, height = size.get("width"), size.get("height")
         if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
             region = _metrics.resolve_region(width, height, fraction)
-            if is_measured(stored, digest, region, space):
+            if is_measured(stored, digest, region, space, decoder):
                 return stored
 
     try:
