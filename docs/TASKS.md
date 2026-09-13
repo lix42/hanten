@@ -863,13 +863,17 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   fallback also still wants calibrating against measured rolls (0.90–1.74, median ≈1.34); the
   shipped nominal moved 2.0 → 1.3 on 2026-08-08, a rounded median rather than a calibrated
   value, so this task still owns the number. `algo` candidates 2 and 3 are contingent on this.
-- [ ] [Per-channel Dmax and the gray-mean reduction](tasks/film-base/dmax-per-channel-reduction.md) —
+- [~] [Per-channel Dmax and the gray-mean reduction](tasks/film-base/dmax-per-channel-reduction.md) —
   `reference_dmax` measures `D_c` per channel then reduces by `(r+g+b)/3`, asserting the highlight
   end shares the base's colour cast. Committed leader data says otherwise: spread 0.05–0.14 density
   (0.16–0.46 stops), direction inconsistent across stocks. A per-channel anchor is *algebraically* a
   per-channel gain, so it is redundant with `print.white_balance` under the exponential curve — but
   **not** under the sigmoid default, where it shifts each channel's toe/shoulder position.
-  Investigation + impact verdict; ships no pixel change
+  Investigation + impact verdict; ships no pixel change. **Parked 2026-09-13**: the original
+  anchor question closed (*absorbed* — the term is a slope, and the leader is disqualified as
+  a source), and the re-scoped question — a measured per-channel gain for the parametric path
+  — cannot be settled on the current assets, whose two whole rolls share one trip's palette.
+  Waiting on rolls with different subject matter, or a bracketed grey/ColorChecker target
 
 - [x] [Decide IR usability by measurement](tasks/film-base/ir-usability-detection.md) — key IR holder
   detection on the **plane itself** rather than `--film-type`, which becomes a hint. Measured 2026-08-11 on

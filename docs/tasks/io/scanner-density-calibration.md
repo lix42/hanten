@@ -219,3 +219,19 @@ concerns applying a *colour* transform before density conversion; this task conc
   reference densities this task must not duplicate
 
 `algo/reference-anchored-sigmoid` is now **transitive** via `algo/film-stock-profiles`.
+
+---
+
+**2026-09-13 — the calibration shoot is wanted by three tasks; plan it once.** The target this
+task specifies (a ColorChecker Classic: neutral series for the diagonal and offsets, coloured
+patches for the off-diagonal terms) overlaps two other open needs, and the user has it on
+their roadmap:
+
+- [`algo/sigmoid-parameter-calibration`](../algo/sigmoid-parameter-calibration.md) wants a
+  **bracketed** roll (one subject at −2 … +2 EV) with a **grey card in frame**;
+- [`film-base/dmax-per-channel-reduction`](../film-base/dmax-per-channel-reduction.md) parked
+  on 2026-09-13 for want of exactly this — its roll-scoped measurement assumes scene colour is
+  uncorrelated with density, which the available rolls (one trip, one palette) violate.
+
+A ColorChecker **plus** a bracket, on a roll that also carries a grey card, satisfies all
+three. Shooting for only one of them wastes the other two.

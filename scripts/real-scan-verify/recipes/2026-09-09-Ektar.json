@@ -1,0 +1,23 @@
+{
+  "film_base": {
+    "source": {
+      "explicit": [
+        0.3916228,
+        0.20027466,
+        0.13084611
+      ]
+    }
+  },
+  "reconstruction": {
+    "type": "density",
+    "curve": {
+      "type": "exponential",
+      "dmax": {
+        "explicit": 1.2826737
+      }
+    }
+  },
+  "output": {
+    "preset": "legacy"
+  }
+}
