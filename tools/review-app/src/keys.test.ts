@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { actionForKey, keyForConfigIndex } from "./keys";
+import { actionForKey, keyForConfigIndex, stepConfigIndex } from "./keys";
 
 const NONE = {};
 
@@ -28,7 +28,9 @@ describe("actionForKey", () => {
   });
 
   it("ignores everything else", () => {
-    for (const key of ["a", "Enter", "ArrowLeft", " ", "Shift"]) {
+    // `a`/`c`/`n` used to sit in this list and are now the note shortcuts; `z`
+    // stands in for a key that really is unbound.
+    for (const key of ["z", "Enter", "ArrowLeft", " ", "Shift"]) {
       expect(actionForKey(key, NONE, 4)).toBeNull();
     }
   });
@@ -43,5 +45,45 @@ describe("keyForConfigIndex", () => {
 
   it("has no key past the number row", () => {
     expect(keyForConfigIndex(10)).toBeUndefined();
+  });
+});
+
+describe("stepConfigIndex", () => {
+  it("steps forward and back", () => {
+    expect(stepConfigIndex(1, 1, 4)).toBe(2);
+    expect(stepConfigIndex(1, -1, 4)).toBe(0);
+  });
+
+  // Wrapping is the point: the configs are a handful of renderings of one frame,
+  // cycled repeatedly, so running off one end and back on is the gesture.
+  it("wraps at both ends", () => {
+    expect(stepConfigIndex(3, 1, 4)).toBe(0);
+    expect(stepConfigIndex(0, -1, 4)).toBe(3);
+  });
+
+  it("stays put when there is only one config", () => {
+    expect(stepConfigIndex(0, 1, 1)).toBe(0);
+    expect(stepConfigIndex(0, -1, 1)).toBe(0);
+  });
+
+  it("answers 0 rather than NaN for an empty set", () => {
+    expect(stepConfigIndex(0, 1, 0)).toBe(0);
+  });
+});
+
+describe("actionForKey — frame and config steps", () => {
+  const step = (key: string) => actionForKey(key, {}, 6);
+
+  it("maps j/k to frames and h/l to configs, in both cases", () => {
+    expect(step("j")).toEqual({ kind: "frame", delta: 1 });
+    expect(step("K")).toEqual({ kind: "frame", delta: -1 });
+    expect(step("l")).toEqual({ kind: "configStep", delta: 1 });
+    expect(step("H")).toEqual({ kind: "configStep", delta: -1 });
+  });
+
+  // A modified press belongs to the browser or the window manager.
+  it("leaves modified presses alone", () => {
+    expect(actionForKey("j", { meta: true }, 6)).toBeNull();
+    expect(actionForKey("l", { ctrl: true }, 6)).toBeNull();
   });
 });

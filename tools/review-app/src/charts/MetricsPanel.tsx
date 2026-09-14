@@ -19,7 +19,18 @@ import { Histogram } from "./Histogram";
  */
 
 const styles = {
-  panel: css.raw({ marginBlockStart: "16px" }),
+  // Takes its height from whoever mounts it: inside a frame that is a capped
+  // band, on `/charts` it is normal flow and the charts draw at natural size.
+  // `minHeight: 0` is what lets the row below actually shrink inside a flex
+  // parent — without it a flex item floors at its content height and the cap is
+  // ignored.
+  panel: css.raw({
+    marginBlockStart: "16px",
+    display: "flex",
+    flexDirection: "column",
+    minHeight: "zero",
+    maxHeight: "full",
+  }),
   head: css.raw({
     display: "flex",
     gap: "10px",
@@ -30,11 +41,23 @@ const styles = {
   heading: css.raw({ fontSize: "key", fontWeight: "semibold" }),
   scope: css.raw({ color: "fg.dim", fontSize: "meta", fontVariantNumeric: "tabular-nums" }),
   caveat: css.raw({ color: "accent", fontSize: "meta" }),
-  row: css.raw({ display: "flex", flexWrap: "wrap", gap: "16px", alignItems: "flex-start" }),
+  // Three equal columns that never wrap. A grid rather than a wrapping flex row
+  // because the three charts are one instrument read together — wrapping put the
+  // cast chart on its own line at some widths, and comparing a shape against a
+  // shape below it is not the same gesture as comparing it against one beside it.
+  row: css.raw({
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: "16px",
+    alignItems: "stretch",
+    minHeight: "zero",
+    flexGrow: 1,
+  }),
   card: css.raw({
     display: "flex",
     flexDirection: "column",
     gap: "6px",
+    minHeight: "zero",
     backgroundColor: "panel",
     borderWidth: "1px",
     borderStyle: "solid",
@@ -42,13 +65,41 @@ const styles = {
     borderRadius: "lg",
     padding: "10px",
   }),
-  cardTitle: css.raw({ fontSize: "key", fontWeight: "semibold" }),
-  cardNote: css.raw({ fontSize: "tick", color: "fg.dim", maxWidth: "chartMeasure" }),
+  cardTitle: css.raw({ fontSize: "key", fontWeight: "semibold", flexShrink: 0 }),
+  // The caption's measure is the column it sits in, now that the three cards are
+  // equal grid tracks; it used to be pinned to a fixed chart width.
+  //
+  // **Dropped outright on a short viewport rather than shrunk.** Inside a frame
+  // the charts live in a capped band, and three captions cost more of it than
+  // the charts themselves: left in at 609px the caption held its full height and
+  // squeezed the chart to 7px — a caption explaining a drawing that was no longer
+  // there. A chart without its caption is still a chart. `/charts` keeps its
+  // captions at any height — not because it is uncapped, but because the rule
+  // below is scoped to the band; an unscoped one took them from that page too.
+  cardNote: css.raw({
+    fontSize: "tick",
+    color: "fg.dim",
+    flexShrink: 0,
+    // **Scoped to the band, not to the viewport.** An unscoped media query is a
+    // global rule, so it stripped the captions from `/charts` too — the one page
+    // that exists to read the charts, and which has no cap to be squeezed by.
+    "@media (max-height: 820px)": { "[data-charts-band] &": { display: "none" } },
+  }),
   absent: css.raw({ color: "fg.dim", fontSize: "meta" }),
   failed: css.raw({ color: "bad", fontSize: "meta", fontFamily: "mono", wordBreak: "break-word" }),
 };
 
-const CHART_WIDTH = 460;
+/**
+ * One box for all three charts, so they render at identical size.
+ *
+ * It is a **coordinate system, not a size**: each `<svg>` carries this as its
+ * `viewBox` and is laid out at whatever its grid column gives it, so the numbers
+ * below fix the shared aspect ratio and nothing else. They did not used to
+ * match — the cast chart was 460x330 against the histograms' 460x300 — which
+ * made it visibly taller at equal width, in a row whose whole point is that the
+ * three are comparable.
+ */
+const CHART_BOX = { width: 460, height: 300 } as const;
 
 interface Props {
   /**
@@ -139,11 +190,7 @@ export function MetricsPanel(props: Props) {
             <div class={css(styles.row)}>
               <div class={css(styles.card)}>
                 <span class={css(styles.cardTitle)}>Tone</span>
-                <Histogram
-                  histogram={record().histogram}
-                  series={["luminance"]}
-                  width={CHART_WIDTH}
-                />
+                <Histogram histogram={record().histogram} series={["luminance"]} {...CHART_BOX} />
                 <span class={css(styles.cardNote)}>
                   One bin per L* unit. Diffuse white is the reference the record names, so how far
                   short a render stops is read rather than inferred.
@@ -152,11 +199,11 @@ export function MetricsPanel(props: Props) {
 
               <div class={css(styles.card)}>
                 <span class={css(styles.cardTitle)}>Per channel</span>
-                <Histogram
-                  histogram={record().histogram}
-                  series={["luminance", "r", "g", "b"]}
-                  width={CHART_WIDTH}
-                />
+                {/* The three channels only: the luminance curve this used to
+                    carry is the Tone chart beside it, drawn twice. Dropping it
+                    also lets the y axis follow the channels, which previously
+                    shared a ceiling with a series that is not plotted here. */}
+                <Histogram histogram={record().histogram} series={["r", "g", "b"]} {...CHART_BOX} />
                 <span class={css(styles.cardNote)}>
                   Red and green cannot be told apart under deuteranopia, so identity rests on the
                   dash pattern and the direct label.
@@ -165,7 +212,7 @@ export function MetricsPanel(props: Props) {
 
               <div class={css(styles.card)}>
                 <span class={css(styles.cardTitle)}>Cast over tone</span>
-                <CastOverTone cast={record().cast} id={props.id} width={CHART_WIDTH} />
+                <CastOverTone cast={record().cast} id={props.id} {...CHART_BOX} />
                 <span class={css(styles.cardNote)}>
                   Each line is coloured by its own value, so it teaches its own axis. Marker area is
                   the band&apos;s share of the region; a hollow marker is a band too small to be a

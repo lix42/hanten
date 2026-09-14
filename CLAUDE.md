@@ -1064,7 +1064,14 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   there is a type error, and adding one is a deliberate edit to that file. The
   coverage is Panda's, not the project's: a property is checked only if its
   utility declares a token category, which is why `borderWidth`, `zIndex` and
-  `opacity` still take raw values. `presets` is
+  `opacity` still take raw values. **`globalCss` is outside the check
+  altogether**, and an unresolved token name there is emitted *verbatim* as
+  invalid CSS and dropped by the browser: `scrollPaddingTop: "barHeight"` — a
+  `sizes` token on a property that reads `spacing` — shipped as
+  `scroll-padding-top: barHeight` with every gate green. Spell cross-category
+  values as references (`"{sizes.barHeight}"`), and read one from JS with
+  `token()` from `styled-system/tokens` rather than measuring it, so a value CSS
+  and JS share has one source. `presets` is
   `['@pandacss/preset-base']` alone (the utilities and conditions; no token
   ladders), which is what keeps the vocabulary the app's own, and no
   `[escape-hatch]` values are used. That strictness exists because a bare number
