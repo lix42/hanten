@@ -5,172 +5,94 @@ review triage, write-ups for tasks that no longer exist, and execution records
 that were nested under another heading in the flat log (so they moved with their
 parent section rather than with their own task). This is a parking lot, not a
 category: when a section clearly belongs to an epic, move it into that epic's
-file.
+file. (Condensed 2026-09-13: sections whose every finding now has an owning task
+are reduced to an index; the pre-condensation text is in git history.)
 
 
 ## External review triage — 7 findings → 7 tasks (2026-07-18, docs-only, uncommitted)
 
-An external code review of the Step-1 codebase produced seven findings. Each was
-**verified against the actual code** before acting (several claims were checked
-with `tiffinfo`/`exiftool` on the real `../nc-assets` scans, `cargo build`, and
-direct source reads); all seven held up. Per the user's direction the pass stayed
-**docs-only** — every finding was turned into a tracked task rather than fixed in
-place, since the working tree already held documentation edits and code changes
-were to be scheduled, not mixed in. Result: `docs/TASKS.md` updated (Mermaid graph
-+ dependency list + phase checklists) and seven new `docs/tasks/*.md` files. No
-source, `Cargo.toml`, or `Cargo.lock` touched.
+An external code review of the Step-1 codebase produced seven findings, each
+**verified against the actual code** (`tiffinfo`/`exiftool` on the real
+`../nc-assets` scans, `cargo build`, source reads) before being turned into a
+tracked task rather than fixed in place (the working tree held only doc edits).
+Every finding now has an owner; where it stands on 2026-09-13:
 
-The tasks (all deps `[x]` ⇒ executable now, except where noted):
+| finding | task | status |
+|---|---|---|
+| input ICC → working space (`InputColor::Auto` ≡ `Linear`; all 26 real scans carry no embedded ICC or colorimetry tags — raw `Gamma=1` Plustek/SilverFast) | `input-color-management` → **deleted** (#42, 2026-07-21), superseded by `io/input-data-semantics` | done — the automatic input-ICC transform was replaced by explicit transfer/meaning resolution; see `progress/io.md` |
+| density param bounds + degenerate-output (finite all-black underflow) warning | `algo/density-safety-bounds` | open — the task file carries the full evidence, including a second underflow site found 2026-07-27 |
+| artifacts written straight to final paths; sidecar-fails-after-primary orphans a TIFF | `io/transactional-output-writes` | done |
+| 4 GiB decode limit guards only the u16 buffer while peak is a multiple | `io/memory-preflight` | done — see the corrections below |
+| strip/tile streaming, **evaluate-first** (STEP 0 gate) | `io/streaming-tiled-io` | open — still a conditional GO on the numbers below |
+| three unused crates (`image`, `kamadak-exif`, `palette` — verified `cargo build --all-targets` succeeds without them) + duplicate `Algorithm` enum | `core/dependency-hygiene` | open — all three crates are still in `Cargo.toml` |
+| doc-accuracy fixes + license / metadata / platforms / packaging | `core/release-readiness` | open — README status and the "two algorithms" line were fixed along the way; the research report's PUA-wrapped `citeturn` tokens (237 spans, invisible to plain grep) are still there; no `LICENSE`, no Cargo release fields |
 
-- `input-color-management` (Phase 6) — **input ICC → working space.** `InputColor::Auto`
-  promises embedded/default-profile decoding but `Auto` ≡ `Linear` today (decode
-  normalizes integers, every stage assumes linear Rec.709/D65; only `Profile` is
-  rejected). Investigated with `exiftool`/`tiffinfo`: **all 26 real scans carry no
-  embedded ICC profile and no colorimetry tags** (raw `Gamma=1` Plustek/SilverFast),
-  while our own `converted/` outputs embed "sRGB built-in" — so this is a
-  forward-looking fidelity feature (enabled once the user makes an IT8 scanner
-  profile), not a fix for current output. One profile per scanner (device
-  characterization), **not** per film roll; stock differences stay the density
-  stage's job. Task uses lcms2 to build a source→working transform applied after
-  decode; lifts the `--input-profile` rejection. Deliberately skipped the cheaper
-  "honest default / fail-loud on embedded profile" option (pre-release).
-- `density-safety-bounds` (Phase 6) — physical bounds on
-  `density_scale`/`offset`/`gamma` (the sigmoid-bounds analogue density lacks;
-  `validate` checks only finiteness/positivity) + a degenerate-output
-  (histogram/dynamic-range collapse) **warning** catching the finite-all-black
-  underflow the loss counters miss (`10^(γ·D')`: huge-negative density → finite
-  `+0.0`, uncounted — acknowledged at `algo/density.rs:221-226`). Offset stays
-  negative-capable (mask compensation) ⇒ magnitude cap. Warning needs a
-  false-positive guard validated on real (legitimately dark) scans.
-- `transactional-output-writes` (Phase 8) — artifacts written straight to final
-  paths via `File::create`, sequentially; reproduced sidecar-fails-after-primary
-  leaving an orphaned TIFF. Temp-write → fsync → rename. Framed as **honest
-  "no partial artifacts + minimized window," not literal multi-file atomicity**
-  (POSIX rename is per-file). Records the existing IR-before-primary mitigation.
-- `memory-preflight` (Phase 8, Phase A of the memory review) — the 4 GiB decode
-  limit guards only the u16 read buffer while derived peak is a multiple
-  (u16+f32 decode, full-image clone in `to_output` incl. the never-transformed IR,
-  quantize buffer; three full images can overlap — decoded `image` + algo
-  `positive` + `to_output` clone ⇒ ~24 GiB, ~6× the 4 GiB input ceiling, and still
-  ~16 GiB / two images after the in-place fix) unchecked. Adds a peak-memory preflight
-  (one shared sizing model, operational `--max-memory`-style knob, fail-loud) and
-  drops the `to_output` clone (transform in place, skip IR).
-- `streaming-tiled-io` (Phase 8, Phase B, **evaluate-first**, gated on
-  `memory-preflight` + `real-scan-verification`) — strip/tile decode + streaming
-  encode. Opens with a **STEP 0 gate**: evaluate from measured peak whether it's
-  needed at all; if data is insufficient, collect it first; proceed only if real
-  scans exceed the budget. Default expectation: not needed yet (~18 MP ⇒ ~600 MB).
-  Pushed back on committing to a full streaming architecture unmeasured.
-- `dependency-hygiene` (Phase 8) — drop three unused crates (`image`,
-  `kamadak-exif`, `palette`; **verified `cargo build --all-targets` succeeds
-  without them** — `image` pulls a large codec tree) and unify the two `Algorithm`
-  enums onto `types::Algorithm`, removing the dead `algo::mod::Algorithm` copy and
-  its `#[allow(dead_code)]`. Pure cleanup. (Noted: `cargo` doesn't warn on unused
-  *deps* by default, which is why CI missed them.)
-- `release-readiness` (Phase 8) — (1) **doc-accuracy corrections** (do-first,
-  independent): README still says "pre-implementation / coding hasn't started" +
-  "Planned usage" (false); `TASKS.md` says "two algorithms" omitting `sigmoid`
-  (three exist); obsolete `--out-depth f32` → `--output-hdr` in **two** task files
-  (`real-scan-verification.md:32`, `pipeline-orchestration.md:49`); the research
-  report's `citeturn…` tokens are **PUA-wrapped** (plain grep finds 0) and need
-  delimiter-aware cleanup. (2) **productization**: license (**user decision** —
-  none present), Cargo release metadata (all fields absent), supported platforms
-  (lcms2-sys C-FFI cross-compile constraint), binary packaging (sequence after
-  `real-scan-verification`).
+Deferred / not created: the cheaper honest-default option for input colour
+(folded into the input task, then superseded with it).
 
-**Deferred / not created:** the cheaper Option-1 honest-default for input color
-(pre-release makes it moot — folded into `input-color-management` lifting the
-rejection). **Open:** pick a first task — the doc-accuracy half of
-`release-readiness` is the quickest, most user-visible win.
-- 2026-07-27: Epic-migration redirect — the two task paths cited above have moved
-  to [analysis/real-scan-verification](../tasks/analysis/real-scan-verification.md)
-  and [core/pipeline-orchestration](../tasks/core/pipeline-orchestration.md).
-  The entry above is preserved verbatim.
+### Corrections to the parked memory-safety review framing — 2026-07-27
+
+`io/memory-preflight` shipped; its narrative is in `progress/io.md`
+`## memory-preflight`, with the peak re-measurement in
+`docs/reports/real-scan-verification.md`. Three corrections to the triage's
+framing, kept because `io/streaming-tiled-io`'s STEP 0 reads these numbers:
+
+- **The pre-fix "~24 GiB / three images" figure was scoped to a hypothetical 4
+  GiB-u16 input, not to anything real.** The largest real asset (`largest.tif`,
+  74.65 MP HDRi) measured **3.808 GB** pre-fix and **3.146 GB** after, and the
+  standard 18.66 MP frame **975 MB → 681 MB** (decimal, as `time -l` reports). The
+  honest headline is "unbounded", not "24 GiB".
+- **After the no-copy fix the peak moved from render to *encode*** (decoded image
+  held for `--export-ir` + rendered image + the u16 quantize buffer: 38 B/px vs 32
+  at render). `pipeline::memory` is the one place that model lives — any new
+  full-frame buffer in any stage must be added there or the preflight silently
+  under-approves.
+- **"Count IR + clone" was necessary but not sufficient:** film-base *sampling*
+  also allocates full-frame-scale buffers (`region_channels` materializes its
+  rectangle unstrided into three `Vec<f32>`), so a model counting only the images
+  under-estimates `inspect`/`estimate`.
 
 
 ## color-characterization-calibration
-**Status:** superseded
-**Updated:** 2026-07-23
+**Status:** superseded (2026-07-23)
 
-- 2026-07-23: Superseded by `optional-color-correction-profiles`. Measured
-  neutralization is now an explicitly selected, non-blocking correction feature;
-  it is not part of the default film-preserving pipeline and no display task
-  depends on it.
-
-- 2026-07-21: Added the offline calibration half split from the runtime task. It
-  fits matrix/curves against controlled target data, validates held-out Delta E,
-  justifies model complexity, and emits a reproducible versioned artifact with
-  scanner/film/development provenance.
-- 2026-07-21: Added explicit target reference coordinates/illuminant and declared
-  adaptation into ACEScg D60. Calibration normalization may not bake creative WB;
-  artifacts also carry the exact reconstruction-domain compatibility contract.
-- 2026-07-21: Calibration inputs now follow per-algorithm canonical domains:
-  density artifacts fit the Dmax-neutral positive and reuse across scalar Dmax
-  placement; sigmoid v1 fits one exact fixed Dmax; simple fits its pinned affine
-  inversion settings.
-- 2026-07-21: Superseded the prior simple affine wording. Simple calibration fits
-  raw unclamped `1 - scan/Dmin`; inversion WB and black/white placement are
-  excluded from calibration and artifact compatibility.
+Retired task id. Superseded by `color/optional-color-correction-profiles`
+(measured neutralization as an explicitly selected, non-blocking correction; no
+display task depends on it). The 2026-07-21 design decisions this section used to
+record — offline fitting against controlled target data with held-out Delta E and
+justified model complexity, explicit target reference coordinates/illuminant and
+declared adaptation into ACEScg D60, no creative WB baked into calibration,
+per-algorithm canonical input domains — live on in that task file's profile
+provenance requirements and in `color/post-reconstruction-color-characterization.md`
+(closed—superseded, kept as decision history).
 
 
 ## post-characterization-render-pipeline
-**Status:** superseded
-**Updated:** 2026-07-23
+**Status:** superseded (2026-07-23)
 
-- 2026-07-23: Superseded by `film-master-render-pipeline`. The replacement
-  consumes typed NC film RGB v1 mapped ACEScg, renames `scene-master` to
-  `film-master`, and explicitly preserves intentional film rendering rather than
-  claiming physical scene recovery.
-
-- 2026-07-21: Split pipeline/routing work from characterization runtime. This task
-  moves WB/exposure/black/highlight controls after characterization, provides the
-  common SDR/HDR source API, and defines a true scene master. The master rejects
-  frame-local auto Dmax, accepts supported `none` or fixed/roll Dmax, and preserves
-  exposure; current `--output-hdr` remains a rendered transitional float TIFF.
-- 2026-07-21: Made the master bypass fail-loud: any non-default downstream render
-  control remaining after CLI/recipe merge is a usage error, never ignored.
-  Added flags-win reset, conflict, and resolved-report provenance requirements.
-- 2026-07-21: Inserted algorithm-specific placement before the output split.
-  Density Dmax is now a scalar gain after characterization; sigmoid/simple arrive
-  already placed under their artifact contracts. Scene-master includes placement
-  but still bypasses every later print/display control.
-- 2026-07-21: Moved ownership of density artifact evaluation and Dmax placement
-  wholly into the characterization runtime. This task now accepts only ordinary
-  placed `f32` ACEScg, cannot observe the private extended-range intermediate,
-  and records the fixed/none placement already applied to a scene master.
-- 2026-07-21: Moved shipped simple inversion-WB and clip-low/high remapping after
-  characterization. Target presets use `print.white_balance` plus new
-  `print.linear_range`; old simple controls are warned conflicting aliases, while
-  legacy no-preset TIFF retains current ordering during migration. Scene master
-  rejects any non-default resolved adjustment.
+Retired task id. Superseded by `color/film-master-render-pipeline` (shipped),
+which consumes typed NC film RGB v1 mapped ACEScg, renamed `scene-master` to
+`film-master`, and preserves intentional film rendering rather than claiming
+physical scene recovery. What that task inherited from the 2026-07-21 sketches and
+still holds: the master bypass is fail-loud (any non-default downstream render
+control is a usage error, never ignored), flags-win reset and resolved-report
+provenance, and the shared WB → exposure → black/range display stage after the
+working-space mapping. The shipped shape is recorded in `progress/color.md`.
 
 
 ## color-management planning — main reconciliation
 **Status:** documentation reconciled
 **Updated:** 2026-07-21
 
-- Rebased onto `origin/main` after `roll-conversion` (`3b93ae5`) and
-  `dmax-reference` (`06b75fb`) merged. Preserved both append-only implementation
-  histories and marked both tasks complete in the canonical index.
-- Replaced the stale output-preset reconciliation note with the shipped `nc roll`
-  contract: `<stem>_positive.tiff` automatic names today, explicit manifest
-  outputs and per-frame partial recipes, path-derived per-image sidecars, one
-  stdout/`--report-file` roll report, and pre-write collision checks. The future
-  preset task extends those guarantees only where container-specific suffixes and
-  per-frame preset selection require it.
-- Reconciled shipped Dmax behavior with the planned characterized runtime. Today
-  `density.dmax` defaults to roll-fixed `fixed`, `--fixed-d-max` resets a recipe,
-  `nc estimate --d-max-region` emits the reusable explicit scalar, roll mode warns
-  on auto/per-frame Dmax, and the default-render change remains the deferred
-  `pipeline_version 1` boundary. Future characterization keeps the scalar's
-  roll-fixed acquisition but treats density Dmax as post-artifact exposure
-  placement rather than promising display white; sigmoid still scopes the exact
-  numeric Dmax.
-- Review correction: `sdr-display-rendering` returns rendered-linear destination
-  pixels and resolved metadata, never transfer-encoded pixels. Display P3 or the
-  corresponding destination-output stage applies transfer encoding afterward;
-  gain-map construction consumes the pre-transfer rendition for common-linear
-  ratio derivation. This removes the prior double-encoding ambiguity.
+Reconciliation notes from rebasing the colour-management plan onto `origin/main`
+after `roll-conversion` and `dmax-reference` merged. Everything they reconciled has
+since shipped and is recorded under its own task (`progress/core.md`
+`## roll-conversion`, `progress/film-base.md` `## dmax-reference`,
+`progress/output.md` `## sdr-display-rendering`). One correction worth keeping:
+`sdr-display-rendering` returns rendered-linear destination pixels plus resolved
+metadata, never transfer-encoded pixels; the transfer encode happens in the
+destination-output stage, and gain-map construction consumes the pre-transfer
+rendition — this removed a double-encoding ambiguity in the original plan.
 
 ### Real-scan core verification — executed 2026-07-22 (task: real-scan-verification)
 
@@ -199,33 +121,6 @@ rerunnable harness + frozen recipes under `scripts/real-scan-verify/` (see its `
   → candidate new task (per-stock/dense-base Dmax handling); (3) widen
   `memory-preflight` sizing model to count IR + clone. No hard defects.
 
-### Corrections to the parked memory-safety review framing — 2026-07-27
-
-The memory-review Phase A item parked above has since been implemented; its full
-narrative (measurements, the model, the accounting subtleties) lives in
-[`docs/progress/io.md`](io.md) `## memory-preflight`, with the peak re-measurement
-recorded as an addendum to
-[`docs/reports/real-scan-verification.md`](../reports/real-scan-verification.md).
-This entry stays here because it corrects the *parked review notes above*, which
-name no task.
-
-Three corrections to that framing, all worth carrying forward:
-
-- **The pre-fix "~24 GiB / three images" figure was scoped to a hypothetical 4
-  GiB-u16 input, not to anything real.** The largest real asset (`largest.tif`,
-  74.65 MP HDRi) measured **3.808 GB** pre-fix and **3.146 GB** after, and the
-  standard 18.66 MP frame **975 MB → 681 MB** (decimal GB/MB throughout, as
-  `time -l` reports). The gate was still the right call — the ceiling really was
-  unchecked — but the honest headline is "unbounded", not "24 GiB".
-- **After the no-copy fix the peak moved from the render to the *encode* phase.**
-  Two images still overlap (decoded, held for `--export-ir`, plus the rendered
-  one), and the u16 quantize buffer sits on top of both: 38 B/px at encode vs 32 at
-  render. The parked note's "~16 GiB / two images after the in-place fix" counted
-  the render only. `pipeline::memory` is now the one place that model lives — any
-  new full-frame buffer in any stage has to be added there, or the preflight
-  silently under-approves.
-- **Item (3) of the parked follow-ups above ("count IR + clone") was necessary but
-  not sufficient.** Film-base *sampling* also allocates full-frame-scale buffers —
-  `region_channels` materializes its rectangle unstrided into three `Vec<f32>` — so
-  a model counting only the images under-estimates `inspect`/`estimate`. Found in
-  the review pass on the implementation, not in this parked note.
+(Kept verbatim: `progress/analysis.md` points here by heading for
+`real-scan-verification`'s execution record. It belongs in that file; moving it is
+a rename with a link fix, deferred.)
