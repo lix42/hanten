@@ -40,7 +40,10 @@ each channel's own published curve, so it needs neither a scalar `Dmax` nor a
 per-channel gain.
 
 It also un-inerts HDR: same frame, same tone, MaxCLL 101 nits under the shipped
-sigmoid against 999 under the characteristic curve.
+sigmoid against 999 under the characteristic curve. **That payoff reaches the explicit
+gain-map presets, not the default path:** on 2026-09-13 the user decided the default
+output becomes SDR lossless (`output/display-p3-default`). Prefer landing the two
+default moves in one `pipeline_version` bump; the order is that task's open question.
 
 ## The release gate — colour, not tone
 
@@ -143,6 +146,8 @@ fingerprint is likely cheaper.
 - [Reconstruction / render curve split](reconstruction-render-curve-split.md) — the verdict
 - [Named conversion presets](conversion-presets.md) — the mechanism; this migration is the
   last step of that task, not separate work
+- [A portable fingerprint vector](characteristic-fingerprint-vector.md) — split out
+  2026-09-13: the `render` row's cross-target portability problem, solvable before the frames
 - [Pin the characteristic curve against regression](characteristic-curve-coverage.md) —
   **done 2026-09-10.** Four property tests over the real `algo::reconstruct` plus a 1-ULP
   golden, so the default moves onto pinned wiring. The fingerprint row was deliberately left

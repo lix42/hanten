@@ -12,8 +12,8 @@ Make the default `density` conversion fill the display range — scene white lan
 at ≈ 1.0 instead of everything sitting above it — so a default u16 encode is
 usable without hand-tuned `--print-exposure`. This closes the PR #12 review
 finding ("default u16 output clips the whole image") and is the single biggest
-default-quality gap versus Negative Lab Pro's per-channel auto-leveling (see the
-NLP comparison, `docs/progress/algo.md`).
+default-quality gap versus Negative Lab Pro's per-channel auto-leveling (the
+feature comparison behind the PR #12 follow-ups).
 
 ## Design
 

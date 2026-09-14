@@ -124,6 +124,7 @@ graph TD
   algo --> film-base
   algo --> io
   io --> color
+  color --> io
   io --> algo
   io --> output
   film-base --> algo
@@ -155,6 +156,7 @@ graph TD
     core/recipe-composition
     core/profile-authoring
     core/unfrozen-auto-mode-warning
+    core/calibration-recipe-section
   end
   subgraph io
     io/silverfast-decode
@@ -165,11 +167,13 @@ graph TD
     io/streaming-tiled-io
     io/scanner-density-calibration
     io/gray-primary-decode
+    io/positive-input-mode
   end
   subgraph film-base
     film-base/estimation
     film-base/auto-base-redesign
     film-base/auto-base-neutral-stock
+    film-base/auto-base-real-scan-refusal
     film-base/ir-holder-detection
     film-base/white-holder-support
     film-base/content-fallback
@@ -180,6 +184,7 @@ graph TD
     film-base/dmax-anchor-reliability
     film-base/dmax-per-channel-reduction
     film-base/ir-usability-detection
+    film-base/holder-depth-mask
     film-base/holder-masked-measurement
     film-base/tiling-uniformity-validator
     film-base/half-frame-calibration
@@ -208,6 +213,7 @@ graph TD
     algo/conversion-presets
     algo/contrast-latitude-spike
     algo/split-default-migration
+    algo/characteristic-fingerprint-vector
   end
   subgraph color
     color/management
@@ -229,6 +235,10 @@ graph TD
     output/mp-container-conformance
     output/gain-map-dialect-activation
     output/sdr-preset-followups
+    output/display-p3-default
+    output/adobe-rgb-gamut
+    output/sdr-report-block
+    output/sdr-jpeg-preset
     output/linear-render
     output/display-tone-mapping
     output/output-path-suffix
@@ -259,6 +269,8 @@ graph TD
     analysis/metrics-visualization
     analysis/harness-regression-tests
     analysis/calibration-frame-capture
+    analysis/review-reference-cells
+    analysis/review-build-axis
   end
   core/project-foundation --> io/silverfast-decode
   core/project-foundation --> io/tiff-encode
@@ -311,6 +323,7 @@ graph TD
   film-base/estimation --> film-base/content-fallback
   film-base/auto-base-redesign --> film-base/ir-holder-detection
   film-base/auto-base-redesign --> film-base/auto-base-neutral-stock
+  film-base/auto-base-redesign --> film-base/auto-base-real-scan-refusal
   algo/dmax-white-anchor --> film-base/dmax-reference
   film-base/dmax-reference --> film-base/clipped-dmax-reference
   film-base/dmax-reference --> film-base/dense-base-dmax-plausibility
@@ -331,7 +344,7 @@ graph TD
   algo/reference-anchored-sigmoid --> algo/film-stock-profiles
   algo/reference-anchored-sigmoid --> algo/auto-anchor-interior-measurement
   film-base/auto-base-redesign --> algo/auto-anchor-interior-measurement
-  film-base/holder-masked-measurement --> algo/auto-anchor-interior-measurement
+  film-base/holder-depth-mask --> algo/auto-anchor-interior-measurement
   algo/auto-anchor-interior-measurement --> algo/content-aware-sigmoid-toe
   algo/reference-anchored-sigmoid --> algo/reconstruction-render-curve-split
   color/film-master-render-pipeline --> algo/reconstruction-render-curve-split
@@ -341,11 +354,12 @@ graph TD
   algo/film-stock-profiles --> algo/conversion-presets
   algo/film-stock-profiles --> algo/characteristic-curve-coverage
   algo/characteristic-curve-coverage --> algo/split-default-migration
+  algo/characteristic-curve-coverage --> algo/characteristic-fingerprint-vector
+  algo/characteristic-fingerprint-vector --> algo/split-default-migration
   algo/conversion-presets --> algo/split-default-migration
   algo/conversion-presets --> algo/characteristic-default-audit
   algo/characteristic-default-audit --> algo/split-default-migration
   algo/film-stock-profiles --> algo/sigmoid-parameter-calibration
-  io/scanner-density-calibration --> algo/sigmoid-parameter-calibration
   analysis/calibration-frame-capture --> algo/sigmoid-parameter-calibration
   analysis/calibration-frame-capture --> io/scanner-density-calibration
   film-base/dmax-reference --> film-base/dmax-anchor-reliability
@@ -355,9 +369,16 @@ graph TD
   io/gray-primary-decode --> algo/bw-support
   film-base/ir-holder-detection --> film-base/ir-usability-detection
   film-base/ir-usability-detection --> film-base/holder-masked-measurement
+  film-base/ir-usability-detection --> film-base/holder-depth-mask
+  film-base/holder-depth-mask --> film-base/holder-masked-measurement
   core/conversion-versioning --> film-base/holder-masked-measurement
   film-base/dmax-reference --> film-base/holder-masked-measurement
   film-base/holder-masked-measurement --> film-base/tiling-uniformity-validator
+  core/roll-conversion --> core/calibration-recipe-section
+  core/conversion-versioning --> core/calibration-recipe-section
+  core/calibration-recipe-section --> core/recipe-composition
+  core/calibration-recipe-section --> core/profile-authoring
+  core/calibration-recipe-section --> core/base-acquisition-planner
   core/cli-framework --> core/recipe-composition
   core/roll-conversion --> core/recipe-composition
   core/recipe-composition --> core/profile-authoring
@@ -400,6 +421,15 @@ graph TD
   output/iso-gain-map-metadata --> output/mp-container-conformance
   output/iso-gain-map-metadata --> output/gain-map-dialect-activation
   output/presets --> output/sdr-preset-followups
+  output/presets --> output/display-p3-default
+  output/presets --> output/adobe-rgb-gamut
+  output/presets --> output/sdr-report-block
+  output/presets --> output/sdr-jpeg-preset
+  output/sdr-display-rendering --> output/sdr-jpeg-preset
+  io/input-data-semantics --> io/positive-input-mode
+  color/film-master-render-pipeline --> io/positive-input-mode
+  analysis/comparison-review-tooling --> analysis/review-reference-cells
+  analysis/comparison-review-tooling --> analysis/review-build-axis
   output/sdr-display-rendering --> output/linear-render
   output/sdr-display-rendering --> output/display-tone-mapping
   output/hdr-display-rendering --> output/display-tone-mapping
@@ -417,6 +447,7 @@ graph TD
   core/roll-conversion --> output/presets
   core/conversion-versioning --> output/presets
   output/presets --> analysis/display-output-acceptance
+  algo/split-default-migration --> analysis/display-output-acceptance
   analysis/real-scan-verification --> analysis/display-output-acceptance
   analysis/real-scan-verification --> analysis/conversion-analysis-tooling
   analysis/real-scan-verification --> analysis/harness-regression-tests
@@ -424,6 +455,7 @@ graph TD
   analysis/asset-manifest --> analysis/conversion-metrics
   analysis/conversion-metrics --> analysis/nlp-comparison
   analysis/conversion-metrics --> algo/contrast-latitude-spike
+  analysis/nlp-comparison --> algo/contrast-latitude-spike
   algo/conversion-presets --> algo/contrast-latitude-spike
   analysis/conversion-metrics --> analysis/metrics-chart-design
   analysis/metrics-chart-design --> analysis/metrics-visualization
@@ -433,7 +465,6 @@ graph TD
   core/roll-conversion --> core/base-acquisition-planner
   film-base/auto-base-redesign --> core/base-acquisition-planner
   film-base/ir-holder-detection --> core/base-acquisition-planner
-  film-base/content-fallback --> core/base-acquisition-planner
   film-base/dmax-reference --> core/base-acquisition-planner
 ```
 
@@ -450,7 +481,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `core/release-readiness` (post-MVP, productization): `core/pipeline-orchestration`
   — doc fixes now; packaging best sequenced after analysis/display-output-acceptance
 - `core/roll-conversion` (post-MVP): `core/pipeline-orchestration`, `algo/dmax-white-anchor`
-- `core/base-acquisition-planner` (post-MVP): `core/roll-conversion`, `film-base/auto-base-redesign`, `film-base/ir-holder-detection`, `film-base/content-fallback`, `film-base/dmax-reference`
+- `core/base-acquisition-planner` (post-MVP): `core/roll-conversion`, `core/calibration-recipe-section`, `film-base/auto-base-redesign`, `film-base/ir-holder-detection`, `film-base/dmax-reference`
 - `io/silverfast-decode`: `core/project-foundation`
 - `io/tiff-encode`: `core/project-foundation`
 - `io/input-data-semantics` (post-MVP): `core/pipeline-orchestration`
@@ -461,6 +492,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   — accept a 16-bit **grayscale primary** (IR page unchanged). Neither existing task owns it:
   `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and
   `algo/bw-support` explicitly excludes input-format work. Blocks `algo/bw-support`
+- `io/positive-input-mode` (post-MVP): `io/input-data-semantics`, `color/film-master-render-pipeline`
 - `io/scanner-density-calibration` (post-MVP): `io/input-data-semantics`, `algo/film-stock-profiles`, `analysis/calibration-frame-capture`
   — postponed 2026-09-12 pending the frames. Tier 1 (the non-calibrating diagnostic) is
   implementable without them, but tier 1 alone does not fulfil the task's goal — which is why
@@ -480,6 +512,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `film-base/estimation`: `core/project-foundation`
 - `film-base/auto-base-redesign` (post-MVP): `film-base/estimation`
 - `film-base/auto-base-neutral-stock` (post-MVP): `film-base/auto-base-redesign`
+- `film-base/auto-base-real-scan-refusal` (post-MVP): `film-base/auto-base-redesign`
 - `film-base/ir-holder-detection` (post-MVP): `film-base/auto-base-redesign`
 - `film-base/white-holder-support` (post-MVP, the RGB-only fallback for the no-IR path):
   `film-base/ir-holder-detection`
@@ -517,7 +550,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   Measured 2026-08-11: IR separability tracks the frame's *density*, not the stock's chemistry —
   an unexposed silver frame separates 20:1 (0.47 film vs 0.02 holder) while its leader is
   uniformly opaque. Today's gate is wrong for exactly the frame `Dmin` uses
-- `film-base/holder-masked-measurement` (post-MVP): `film-base/ir-usability-detection`, `core/conversion-versioning`, `film-base/dmax-reference`
+- `film-base/holder-depth-mask` (post-MVP): `film-base/ir-usability-detection`
+- `film-base/holder-masked-measurement` (post-MVP): `film-base/ir-usability-detection`, `film-base/holder-depth-mask`, `core/conversion-versioning`, `film-base/dmax-reference`
   — mask the holder **per edge** (measured 2–5% of the short edge, asymmetric), fixed-fraction
   fallback otherwise; then estimate the **centre** of what is now a single population instead of
   reaching for p97, which biases ~0.046 density (0.16 stops, the "pale" direction). **Pixel
@@ -529,12 +563,13 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   the baseline report's blue-gradient finding. Covers `Dmax`, which has no check today. **Retires
   `--grid`** (it no longer selects an estimator) and absorbs the removed
   `film-base/grid-verdict-enum`. Diagnostics only — no pixel change
-- `core/recipe-composition` (post-MVP): `core/cli-framework`, `core/roll-conversion`
+- `core/calibration-recipe-section` (post-MVP): `core/roll-conversion`, `core/conversion-versioning`
+- `core/recipe-composition` (post-MVP): `core/cli-framework`, `core/roll-conversion`, `core/calibration-recipe-section`
   — repeatable `--params` (file or `-`), `roll` gains convert's override flags, one precedence
   chain `defaults < params A < params B < … < flags`. **No schema change**: both halves are
   already valid partial recipes (verified 2026-08-11); only repeatability is missing.
   Implements the design-spec §8 target
-- `core/profile-authoring` (post-MVP): `core/recipe-composition`, `core/cli-framework`
+- `core/profile-authoring` (post-MVP): `core/recipe-composition`, `core/cli-framework`, `core/calibration-recipe-section`
   — `nc params` becomes `nc profile`: takes the override flags, validates config-only, writes an
   annotated JSONC look with `--out`, no image. **Deletes `--dump-params`**, which is
   byte-identical to the sidecar and carries nothing the image produced — the same flags over two
@@ -587,18 +622,16 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   where the default actually moves — and it is still the one that owns the
   `PIPELINE_FINGERPRINTS` row, which stays unwritten here on purpose: the gate covers the
   *default* render, and it hashes raw f32 bits with no 1-ULP window
-- `algo/auto-anchor-interior-measurement` (post-MVP): `algo/reference-anchored-sigmoid`, `film-base/auto-base-redesign`, `film-base/holder-masked-measurement`
+- `algo/auto-anchor-interior-measurement` (post-MVP): `algo/reference-anchored-sigmoid`, `film-base/auto-base-redesign`, `film-base/holder-depth-mask`
   — rescoped 2026-09-12: **measurement only, the output image is never cropped**. The holder
   owns the top percentile of a whole-scan read; the rebate sits at `D ≈ 0` and is deliberately
-  not detected. Depends on `holder-masked-measurement` so the per-edge mask + fixed-fraction
-  fallback has one owner rather than two drifting copies
+  not detected. Depends on `film-base/holder-depth-mask` so the holder region has one owner
   — `DmaxSource::Auto` measures the whole frame, so the opaque holder owns the 99.5th
   percentile (resolves 2.23–2.37 against a roll Dmax of 1.28–1.38). Blocks every
   content-driven mode, hence the edge into `algo/content-aware-sigmoid-toe`
-- `algo/sigmoid-parameter-calibration` (post-MVP): `algo/reference-anchored-sigmoid`, `algo/film-stock-profiles`, `io/scanner-density-calibration`, `analysis/calibration-frame-capture`
-  — the bracketed roll + grey card it needs are the same shoot. The step-wedge edge is the
-  softest of the three: this task's Design lists it as "ideally", and the scanner task makes
-  tier 2 "strictly optional and never a precondition for conversion"
+- `algo/sigmoid-parameter-calibration` (post-MVP): `algo/reference-anchored-sigmoid`, `algo/film-stock-profiles`, `analysis/calibration-frame-capture`
+  — the bracketed roll + grey card it needs are the same shoot. The
+  `io/scanner-density-calibration` edge was removed 2026-09-13 as soft ("ideally" a step wedge)
   — turns the provisional contrast/shoulder/offset values into calibrated ones. Needs a
   bracketed roll and a grey card, not merely more frames: per-frame exposure preference is
   frame optimisation and cannot select a parameter
@@ -629,7 +662,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   a preset does not set `output.preset`, and the non-display presets keep resolving their
   own tone and exposure.
 - `algo/contrast-latitude-spike` (post-MVP): `analysis/conversion-metrics`,
-  `algo/conversion-presets`
+  `algo/conversion-presets`, `analysis/nlp-comparison`
   — filed 2026-09-11 out of the first measured nc-versus-NLP numbers. nc's `p95 − p5` is
   3.55-4.51 stops where NLP's is 3.83-8.14 on the same three frames, and nc's figure moves
   0.96 stops across them where NLP's moves 4.31. A **spike**: the scene range was never
@@ -641,8 +674,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   from exit 0 to exit 2 for users who typed only that flag — `--d-max` being the documented
   roll-calibration workflow. Audit and fix the flag surface *before* the default moves, so
   the migration is a version bump rather than a bump plus newly-wrong diagnostics
+- `algo/characteristic-fingerprint-vector` (post-MVP): `algo/characteristic-curve-coverage`
 - `algo/split-default-migration` (post-MVP): `algo/reconstruction-render-curve-split`,
   `algo/conversion-presets`, `algo/characteristic-curve-coverage`,
+  `algo/characteristic-fingerprint-vector`,
   `algo/characteristic-default-audit`, `analysis/calibration-frame-capture`
   — filed 2026-09-02 out of `algo/reconstruction-render-curve-split`, which reached a positive
   verdict but deliberately excluded the default migration. **Rescoped 2026-09-12** to what it
@@ -667,7 +702,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `color/post-reconstruction-color-characterization` (post-MVP, **closed—superseded**; the deps below are decision history, not a live prerequisite set): `io/input-data-semantics`, `color/management`, `film-base/dmax-reference`
 - `color/optional-color-correction-profiles` (post-MVP, **optional / deferred**): `color/film-rgb-working-space`, `color/film-master-render-pipeline`; no downstream blockers
 - `color/scanner-profile-before-density-experiment` (post-MVP, **deferred experiment**): `io/input-data-semantics`, `color/management`
-- `color/colorimetry-source-of-truth` (post-MVP, **deferred refactor**): `output/gain-map-hdr-output`
+- `color/colorimetry-source-of-truth` (post-MVP): `output/gain-map-hdr-output`
 - `output/display-p3-output` (post-MVP): `color/management`
 - `output/hdr-output-spike` (post-MVP, spike): `color/management`
 - `output/sdr-display-rendering` (post-MVP): `color/film-master-render-pipeline`, `output/display-p3-output`, `output/hdr-output-spike`
@@ -694,22 +729,15 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   *not* a dependency of `output/presets`: it changes shipped `ultra-hdr-v1` container
   bytes and would otherwise hold the product default behind an unrelated change
 - `output/gain-map-dialect-activation` (post-MVP; no downstream blockers): `output/iso-gain-map-metadata`
-  — the two items `output/iso-gain-map-metadata` shipped without: Android 15+ decoder
-  verification (the only platform that reads *both* dialects, so the only place
-  coexistence is observable) and a CLI path for `Dialects::LegacyPlusIso`, which is
-  implemented and reachable only from an `#[ignore]` test. **Deliberately not a
-  dependency of `output/presets`** — presets owns the `gain-map-hdr` name and may
-  activate the dialect itself; per the `hdr-avif-output` boundary rule, whichever
-  ships the CLI surface owns the name
+  — Android 15+ is the only platform that reads *both* dialects, so the only place
+  coexistence is observable. Rescoped 2026-09-13: the CLI half shipped as `gain-map-hdr`
 - `output/sdr-preset-followups` (post-MVP; no downstream blockers): `output/presets`
-  — the three questions the `display-p3` / `compatibility` presets left open: which of
-  them becomes the default (a **pixel** change, so its own `pipeline_version` bump and
-  before/after report, and the thing that finally makes `legacy` deletable), Adobe RGB
-  as a first-class output gamut (needs a colorimetry definition with provenance plus
-  gamut-mapping coverage — the modern renderer maps into the destination rather than
-  tagging it), and a **machine-readable SDR contract** in the report (the
-  `hdr_coded_tiff` block is the shape to follow). `RunProfile::SdrTiff` is no longer
-  one of them: it was measured against peak on two frame sizes on 2026-08-09.
+- `output/display-p3-default` (post-MVP): `output/presets`
+  — direction decided 2026-09-13 (SDR lossless is the default); order against
+  `algo/split-default-migration` open, one bump preferred
+- `output/adobe-rgb-gamut` (post-MVP): `output/presets`
+- `output/sdr-report-block` (post-MVP): `output/presets`
+- `output/sdr-jpeg-preset` (post-MVP): `output/presets`, `output/sdr-display-rendering`
 - `output/linear-render` (**done** 2026-09-01; no downstream blockers):
   `output/sdr-display-rendering`
   — shipped `print.display_tone` / `--display-tone <shoulder|none>`, applied by both display
@@ -753,7 +781,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `telemetry/upload` (post-MVP): `telemetry/schema-v2`, `telemetry/ingestion-service`
 - `telemetry/panic-hook` (post-MVP): `telemetry/upload`
 - `analysis/real-scan-verification` (post-MVP): `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `film-base/dmax-reference`
-- `analysis/display-output-acceptance` (post-MVP): `output/presets`, `analysis/real-scan-verification`
+- `analysis/display-output-acceptance` (post-MVP): `output/presets`, `analysis/real-scan-verification`, `algo/split-default-migration`
+  — the default it accepts is the one the migration ships; added 2026-09-13
 - `analysis/conversion-analysis-tooling` (post-MVP, spike): `analysis/real-scan-verification`
 - `analysis/asset-manifest` (post-MVP): `analysis/conversion-analysis-tooling`
 - `analysis/conversion-metrics` (post-MVP): `analysis/asset-manifest`
@@ -769,6 +798,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   none owned producing them, so the graph reported work executable when the thing blocking it
   was a roll of film that did not exist. It gates `io/scanner-density-calibration`,
   `algo/sigmoid-parameter-calibration`, and `algo/split-default-migration`'s release gate
+- `analysis/review-reference-cells` (post-MVP): `analysis/comparison-review-tooling`
+- `analysis/review-build-axis` (post-MVP): `analysis/comparison-review-tooling`
 - `analysis/comparison-review-tooling` (post-MVP): `algo/reference-anchored-sigmoid`
   — promote the ad-hoc review pages into a maintained config-comparison tool; the user asked
   for it as a separate task rather than continued inline patching
@@ -808,6 +839,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - [x] [Pipeline orchestration](tasks/core/pipeline-orchestration.md)
 - [x] [Roll conversion (batch + frozen recipe)](tasks/core/roll-conversion.md)
 - [ ] [Base-acquisition planner (the cascade)](tasks/core/base-acquisition-planner.md) — the roll-level `Dmin`/`Dmax` acquisition cascade: frozen recipe with provenance + confidence, and the roll→single fallback decision
+- [ ] [The `calibration` recipe section](tasks/core/calibration-recipe-section.md) — `film_base` and `dmax` move into their own top-level section; no pixel change
 - [ ] [Layered recipe composition](tasks/core/recipe-composition.md) — repeatable `--params`
   (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain
   `defaults < params A < params B < … < flags`. Enables the pipeline-profile / roll-calibration
@@ -819,7 +851,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - [ ] [Warn when auto modes defeat a roll](tasks/core/unfrozen-auto-mode-warning.md) — a recipe
   carrying `dmax: "auto"` or an auto white balance re-derives per frame and silently breaks roll
   consistency; roll already warns on a non-explicit film base, this is the same hazard
-- [x] [Conversion versioning & baseline comparison](tasks/core/conversion-versioning.md) — report `identity`, `pipeline_version` **1** (not 0 — `film-base/dmax-reference` already moved the default render) + the golden drift gate, `{meta,params}` sidecar envelope with bare legacy recipes still loading, and `nctool compare run|diff`; `v0` history in [reports/v0-baseline.md](reports/v0-baseline.md). **Known gap: the Python half runs under no CI gate.**
+- [x] [Conversion versioning & baseline comparison](tasks/core/conversion-versioning.md) — report `identity`, `pipeline_version` **1** (not 0 — `film-base/dmax-reference` already moved the default render) + the golden drift gate, `{meta,params}` sidecar envelope with bare legacy recipes still loading, and `nctool compare run|diff`; `v0` history in [reports/v0-baseline.md](reports/v0-baseline.md).
 - [ ] [Recipe replay fidelity for non-default behavior changes](tasks/core/recipe-replay-fidelity.md) — `pipeline_version` covers the **default** path only, so a recipe opting into a non-default curve replays under a new build with the same label and different pixels (first instance: the 2026-08-03 sigmoid defaults). Decide the policy — widen the label, add a second one, generalize the drift warning, or keep historical defaults — then retrofit that instance and retire its bespoke warning.
 - [ ] [Stdout broken-pipe safety](tasks/core/stdout-broken-pipe-safety.md) — make every
   stdout JSON write (the report via `emit_report`, `nc params`) tolerate a closed
@@ -864,6 +896,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   at 18.66 MP (decimal GB/MB, a 30% cut), output byte-identical. Re-measurement
   feeds `io/streaming-tiled-io` STEP 0 (still a conditional GO).
 - [ ] [Decode a single-channel gray SilverFast scan](tasks/io/gray-primary-decode.md) — accept a 16-bit **grayscale primary** (IR page unchanged). nc refuses these outright today: seven real Ilford HP5 frames fail with `found Gray(16)`, each carrying a marker-verified IR page. Neither existing task owns it — `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and `algo/bw-support` explicitly excludes input-format work — so `algo/bw-support` is blocked behind this
+- [ ] [Positive-mode and ICC-embedded input](tasks/io/positive-input-mode.md) — convert an already-positive SilverFast scan through the display path; refused today with exit 4
 - [ ] [Scanner density calibration](tasks/io/scanner-density-calibration.md) — turn the
   density-scale question into a shipped, reusable scanner profile. Tier 1 (unexposed
   frame only, no new user action) is a **non-calibrating diagnostic**: a scan value is a
@@ -886,14 +919,15 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - [x] [Film-base / Dmin estimation](tasks/film-base/estimation.md)
 - [x] [Robust auto film-base detection](tasks/film-base/auto-base-redesign.md)
 - [ ] [Neutral-base robustness for auto film-base detection](tasks/film-base/auto-base-neutral-stock.md)
+- [ ] [Why `--auto-base` refuses every real scan](tasks/film-base/auto-base-real-scan-refusal.md)
 - [x] [IR-assisted film-holder detection](tasks/film-base/ir-holder-detection.md)
 - [ ] [Light film holder support](tasks/film-base/white-holder-support.md)
-- [ ] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — owns `--base-content`; supersedes the content-source sub-item in `film-base/auto-base-redesign` (tell that task's owner)
+- [ ] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — owns `--base-content`; supersedes the content-source sub-item in `film-base/auto-base-redesign`
 - [x] [Reuse-ready `nc estimate` output](tasks/film-base/estimate-reuse-output.md)
 - [x] [Roll-fixed Dmax from a fully-exposed reference frame](tasks/film-base/dmax-reference.md) — shipped roll-fixed acquisition/default policy; the replacement density-curve stage preserves scalar exponential placement and sigmoid curve shaping
-- [ ] [Clipped Dmax reference handoff](tasks/film-base/clipped-dmax-reference.md) — represent a valid leader beyond the scanner boundary in estimate output and carry it into conversion with an explicit, documented fallback rather than a fabricated measurement; provisional fallback 1.3
-- [ ] [Stock-aware Dmax plausibility (dense-base stocks)](tasks/film-base/dense-base-dmax-plausibility.md) — from real-scan verification (2026-07-23): the reference-Dmax `≳1.0` floor + base-uniformity check are C41-calibrated and false-alarm on Harman Phoenix's dense/non-orange base; make the floor stock-relative while keeping a loud failure on genuinely wrong regions
-- [ ] [Dmax anchor reliability](tasks/film-base/dmax-anchor-reliability.md) — follow-up on a
+- [ ] [Clipped Dmax reference handoff](tasks/film-base/clipped-dmax-reference.md) — *parametric curves only* — represent a valid leader beyond the scanner boundary in estimate output and carry it into conversion with an explicit, documented fallback rather than a fabricated measurement; provisional fallback 1.3
+- [ ] [Stock-aware Dmax plausibility (dense-base stocks)](tasks/film-base/dense-base-dmax-plausibility.md) — *parametric curves only* — from real-scan verification (2026-07-23): the reference-Dmax `≳1.0` floor + base-uniformity check are C41-calibrated and false-alarm on Harman Phoenix's dense/non-orange base; make the floor stock-relative while keeping a loud failure on genuinely wrong regions
+- [ ] [Dmax anchor reliability](tasks/film-base/dmax-anchor-reliability.md) — *parametric curves only* — follow-up on a
   **completed** contract: the leader-measured anchor is *uncontrolled* (two rolls of one stock
   0.295 density apart while their red base agrees to 0.0005), real content measures *above* it,
   and leaders are uniform so it is not a fogging gradient. The no-reference `NOMINAL_DMAX`
@@ -917,6 +951,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   real Ilford HP5: separability tracks the *frame's density*, not the stock's chemistry — an unexposed silver
   frame separates 20:1 while its own leader is uniformly opaque. So today's `silver → IR off` rule is wrong
   for precisely the frame `Dmin` is measured from
+- [ ] [A depth-aware holder mask](tasks/film-base/holder-depth-mask.md) — the per-edge holder depth three tasks consume; no pixel change
 - [ ] [Mask the holder, then estimate from a single population](tasks/film-base/holder-masked-measurement.md) —
   mask **per edge** (measured 2–5% of the short edge, and asymmetric), fixed-fraction fallback otherwise —
   which for silver leaders is the *normal* path, since IR can never separate there. Then estimate the centre
@@ -928,7 +963,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   0.0390 on Portra 160, independently reproducing the baseline report's blue-gradient finding on that roll.
   Extends the check to `Dmax`, which has none. **Retires `--grid`** and absorbs the removed
   `film-base/grid-verdict-enum`; diagnostics only, no pixel change
-- [ ] [Calibrate from a single part-exposed frame](tasks/film-base/half-frame-calibration.md) —
+- [ ] [Calibrate from a single part-exposed frame](tasks/film-base/half-frame-calibration.md) — *Dmax half: parametric curves only* —
   **deferred, blocks nothing**: one frame that is part unexposed and part leader serving as both
   references (HP5 frame 1330 is one). Convenience over the planner's one-reference-per-frame path
 
@@ -956,7 +991,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   midtone against black *and* highlights monotonically, a toe *raises* the black floor rather
   than pulling it down, and `GainMapMax` is controlled by the shoulder alone
 - [ ] [Content-aware sigmoid toe](tasks/algo/content-aware-sigmoid-toe.md) — **optional / deferred** explicit frame/roll convenience modes; the reference path remains the default and this blocks no output
-- [ ] [Curve endpoint validation](tasks/algo/curve-endpoint-validation.md) — warn **before decode**
+- [ ] [Curve endpoint validation](tasks/algo/curve-endpoint-validation.md) — *parametric curves only; needs re-evaluation* — warn **before decode**
   when a resolved curve places its tonal endpoints so badly the render cannot approach white or
   black. Read both endpoints off the renderer's own curve at the **reachable film base** — the
   same rule for both curves: `D'base` is `density.offset` plus any balance, per channel, not 0.
@@ -1028,6 +1063,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   stops against 4.31) — the signature of design-spec §3.8's per-roll recipe. The scene
   range is unmeasured, so the cause is open; HDR and a new `--preset` axis are both
   candidates, and "no change" is an acceptable outcome.
+- [ ] [A portable fingerprint vector for the characteristic curve](tasks/algo/characteristic-fingerprint-vector.md) — the `render` row the migration needs, bit-identical on both CI targets
 - [ ] [Make `characteristic-generic` what a bare `nc convert` resolves](tasks/algo/split-default-migration.md) —
   the `pipeline_version` bump the split left out: reconstruction stops shaping tone, the display
   operator carries the character. **Rescoped 2026-09-12** — since `--preset` shipped, activation
@@ -1064,11 +1100,11 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 
 - [x] [Color management](tasks/color/management.md)
 - [x] [NC Film RGB working-space mapping](tasks/color/film-rgb-working-space.md) — map every film rendering through versioned NC film RGB v1 into typed linear ACEScg/D60
-- [x] [Film-master and shared display pipeline](tasks/color/film-master-render-pipeline.md) — route intentional ACEScg film rendering to `film-master` or shared WB → exposure → black/range adjustments before SDR/HDR; `ultra-hdr-v1` is the first CLI consumer, while the convenient display aliases/default remain deferred to `output/presets`
+- [x] [Film-master and shared display pipeline](tasks/color/film-master-render-pipeline.md) — route intentional ACEScg film rendering to `film-master` or shared WB → exposure → black/range adjustments before SDR/HDR; every display preset consumes the shared stage since `output/presets` shipped (2026-08-09)
 - [x] [Post-reconstruction characterization runtime](tasks/color/post-reconstruction-color-characterization.md) — **closed—superseded**; retained as decision history and replaced by `algo/negative-reconstruction-density-curves`, `color/film-rgb-working-space`, `color/film-master-render-pipeline`, and `color/optional-color-correction-profiles`
 - [ ] [Optional color-correction profiles](tasks/color/optional-color-correction-profiles.md) — **optional / deferred** measured neutralization with explicit selection and provenance; blocks no output task
 - [ ] [Scanner ICC before-density experiment](tasks/color/scanner-profile-before-density-experiment.md) — **deferred / lower priority**: compare raw density ratios with applying the same scanner ICC to image and Dmin first; independent of the superseded characterization proposal and the normal NC film RGB mapping
-- [x] [Colorimetry source of truth and update workflow](tasks/color/colorimetry-source-of-truth.md) — **deferred refactor after gain-map**: centralize standards provenance and pinned derived coefficients, migrate existing transforms, and make future color-space updates reproducible before lossless HDR TIFF work
+- [x] [Colorimetry source of truth and update workflow](tasks/color/colorimetry-source-of-truth.md) — shipped 2026-07-31 (#67): `pipeline/colorimetry/` holds every standards-based coefficient with provenance; workflow in `docs/colorimetry-maintenance.md`
 
 ### output — [progress](progress/output.md)
 > The display renditions and encoders downstream of `color`: the color-accurate
@@ -1085,8 +1121,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - [ ] [Remove the Ultra HDR native dependency](tasks/output/ultrahdr-dependency-externalization.md) — **deferred maintenance**, **re-scoped 2026-08-05** (id kept): delete `vendor/ultrahdr-sys` and end the C/C++ dependency by writing the Ultra HDR v1 XMP and MPF container in Rust, so neither `cargo build` nor `cargo test` needs CMake/clang/nasm/libjpeg or a network fetch. Only 6 native calls are on the shipping path and they merely assemble XMP+MPF around two JPEGs nc already encodes itself. The decode oracle is **replaced by captured goldens**, not kept as a dev-dependency (that would leave the native toolchain in CI). The published-crate route is recorded but not pursued — it fetches libjpeg-turbo at a mutable tag or links a system library, and no version bump changes that. Blocks no output work
 - [x] [Final ISO gain-map metadata](tasks/output/iso-gain-map-metadata.md) — add verified ISO 21496-1:2025 metadata to the same JPEG and prove dual-dialect agreement. **Metadata and container halves implemented against the licensed text** (2026-08-04: `pipeline/gain_map/iso.rs` C.2.2 payload + normative validation; `io/ultra_hdr.rs` `Dialects::LegacyPlusIso` writing C.4.3/C.4.6 segments into both images, MPF-safe). **Code complete**; verified with exiftool (MPF index resolves, second image extracts, 2350+1186=3536 bytes) and `sips`. **Both blockers cleared 2026-08-06**: the CIPA DC-007 text was fetched and read (its two conformance gaps split into `output/mp-container-conformance`), and the external decoder oracle ran — Apple ImageIO, harness committed at `scripts/iso-decoder-oracle/`. The oracle found a real defect: the baseline segment sat *after* `SOF0`, where no reader scans, so ImageIO saw no gain map at all; fixed, and the metadata now reads back field-for-field as written (the decoder's 4.926 headroom is nc's own declared constant echoed back, not evidence — `GainMapMax` is). **Done 2026-08-07** on the strength of the Apple oracle plus libultrahdr; the Android 15+ half and CLI activation moved to `output/gain-map-dialect-activation` so they stop gating `output/presets`. **Note the `ts:` URN is the published first edition's, not a draft** — and libultrahdr's compact-denominator ISO layout is *non-conformant*, so nc owns its serializer.
 - [ ] [MP container conformance (CIPA DC-007)](tasks/output/mp-container-conformance.md) — **deferred conformance**, split out of `iso-gain-map-metadata` on 2026-08-06 after reading the free CIPA text. Three gaps, none functional: the gain map carries MP Type `000000` (Undefined) where DC-007 Table 4 assigns `050000` and marks `000000` "shall not be used" in a Baseline MP File — inherited from libultrahdr, whose own output does the same — the baseline is JFIF with no Exif APP1 where §4.2.1/§5.1 specify an Exif file (§7's *tag* requirements are only "should"), and in the gain-map image libultrahdr's prepended XMP puts `APP1` before `APP0 JFIF`, so JFIF is not first in the dependent image (found by review, not in the CIPA read). The type code is a masked 4-byte MPEntry patch but **changes shipped `ultra-hdr-v1` bytes**; the Exif half must be probed against `package()` and re-run through the ImageIO oracle, since a marker-layout change is exactly what silently disabled the ISO metadata once. Blocks nothing
-- [ ] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — the two items `iso-gain-map-metadata` shipped without: **Android 15+** decoder verification (the only platform reading *both* dialects, so the only place coexistence is observable — record whichever it prefers as *observed behaviour*, never a conformance property) and a **CLI path** for `Dialects::LegacyPlusIso`, which is implemented, Apple-verified, and reachable only from an `#[ignore]` test. Removing its `#[allow(dead_code)]` is the mechanical definition of done. Blocks nothing; **not** a dependency of `output/presets` — per the `hdr-avif-output` boundary rule, whichever task ships the CLI surface owns the `gain-map-hdr` name, so coordinate rather than race. `ultra-hdr-v1` must stay byte-identical
-- [ ] [SDR preset follow-ups](tasks/output/sdr-preset-followups.md) — the three questions the `display-p3` / `compatibility` presets deliberately left open: **making `display-p3` the default** (decided 2026-08-09; a pixel *and* container change against the incumbent `gain-map-hdr`, so it needs its own version bump + report, and it is what finally lets `legacy` be deleted), **Adobe RGB** as a first-class gamut (the one notable omission for a photography tool — usable today only via `--output-profile <icc>`, and a real addition because the modern renderer *gamut-maps* rather than tags), and a **machine-readable SDR contract** in the report (today the preset's tone/gamut/transfer contract is prose only, where `hdr-pq-tiff` emits an `hdr_coded_tiff` block). `RunProfile::SdrTiff` was one of the three and is now settled — measured against peak on two frame sizes on 2026-08-09. Blocks nothing
+- [ ] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **Android 15+** decoder verification, the half `iso-gain-map-metadata` shipped without; the CLI path landed as the `gain-map-hdr` default (`output/presets`, 2026-08-09)
+- [ ] [SDR preset follow-ups (carried-over findings)](tasks/output/sdr-preset-followups.md) — the bounded review findings the SDR preset PRs left out; its three design questions are now the tasks below
+- [ ] [Make `display-p3` the default output preset](tasks/output/display-p3-default.md) — SDR lossless is the default (decided 2026-08-09, reaffirmed 2026-09-13); order against `algo/split-default-migration` still open
+- [ ] [Adobe RGB (1998) as an output gamut](tasks/output/adobe-rgb-gamut.md) — the definition exists; the gamut-mapped render does not
+- [ ] [Machine-readable SDR contract in the report](tasks/output/sdr-report-block.md) — the `hdr_coded_tiff` shape for the SDR presets
+- [ ] [A plain SDR JPEG output](tasks/output/sdr-jpeg-preset.md) — the SDR rendition as an 8-bit JPEG with no gain map; nc has none today
 - [x] [Linear display render](tasks/output/linear-render.md) — `print.display_tone` /
   `--display-tone <shoulder|none>`, on **both** display branches. Measured on ten fixture
   frames against the shipped default reconstruction: `blown%` fell on every one (mean 6.5 →
@@ -1227,4 +1267,6 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   updates the page in place; the charts sit below the picture and swap with the config. A
   rendition with no measurement renders its picture and says so, and an unreadable record
   costs only its own charts.
+- [ ] [Reference cells in the review set](tasks/analysis/review-reference-cells.md) — an NLP export or hand-tweaked target as a grid cell beside nc's renders
+- [ ] [A build axis in the review set](tasks/analysis/review-build-axis.md) — the same frame and config across two builds, labelled from sidecar provenance
 

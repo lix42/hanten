@@ -47,7 +47,7 @@ optional.
    (almost certainly the existing mismatch error, not a silent stem).
 3. **Does this refine `output/presets`' "the output path … is never silently
    renamed"?** Completing an absent suffix is arguably not renaming, but that
-   sentence is the governing statement and lives in a task still in progress.
+   sentence is the governing statement and lives in that (now completed) task.
    Settle the wording with that task rather than around it.
 4. **Should `roll` use the same derivation?** It builds `<stem>_positive.tiff`
    today, and container-aware roll naming is explicitly `output/presets`' scope.
@@ -76,7 +76,7 @@ The shape of the evidence, not an exhaustive list:
 - [HDR AVIF output](hdr-avif-output.md) — introduced `cli::required_extensions`,
   the table this task changes.
 
-Coordinate with [Output presets and guidance](presets.md), which is in progress
+Coordinate with [Output presets and guidance](presets.md), which shipped 2026-08-09
 and owns both the "never silently renamed" statement (question 3) and
 container-aware `roll` naming (question 4). Not declared a dependency: the table
 this task needs has already shipped, and blocking on the full preset migration

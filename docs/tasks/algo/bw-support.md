@@ -1,5 +1,18 @@
 # Black & White Negative Support (Mono Color Model)
 
+> **Needs re-evaluation before pickup (2026-09-13).** This file predates the tagged
+> `reconstruction` schema, the display presets and measured IR usability. Stale in it:
+> `convert_reported` / `color::to_output` placement (presets route through
+> `render_display_source`, so decide where mono pooling sits relative to NC film RGB v1 →
+> ACEScg); a top-level `color_model` key "parallel to `algorithm`" (that key was removed);
+> `--density-gamma` as paper grade (exponential-only); "update design-spec.md **and** .html"
+> (the HTML is unmaintained); the IR dust-removal guard keyed on film type (`--film-type` gates
+> nothing since `film-base/ir-usability-detection`); and the spatial-outlier note, which is now
+> `algo/auto-anchor-interior-measurement`. Its stretch item overlaps
+> `algo/content-aware-sigmoid-toe`. The dependency on `io/gray-primary-decode` is open, so the
+> closing "all are complete" line is wrong.
+
+
 ## Goal
 
 Convert B&W negatives to clean mono positives through the existing `density`

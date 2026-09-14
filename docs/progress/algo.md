@@ -4274,3 +4274,12 @@ written correctly and *reached* wrongly. The HIGH one was a silent wrong image: 
   while `--preset characteristic-generic --output-preset film-master` is exit 2. The
   "a preset must not set `output.preset`" escape has to survive the default move.
 
+## characteristic-fingerprint-vector
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: a `PIPELINE_FINGERPRINTS` `render` vector that is bit-identical on both CI
+  targets under the `characteristic` curve. Split out of `split-default-migration`
+  because `characteristic-curve-coverage` observed x86_64 and macOS disagreeing in
+  `log10f` on two of the fifteen golden samples, and a fingerprint has no ULP window.

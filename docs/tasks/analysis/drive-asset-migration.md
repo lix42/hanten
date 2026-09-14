@@ -19,10 +19,10 @@ absolute root is baked into any data. The remaining work:
   The Drive path has spaces and is machine/account-specific, so it must not be
   hard-coded. Recommended bridge: a machine-local symlink
   `~/src/nc/nc-assets → <Drive>/temp/nc-assets` so `../nc-assets` keeps working
-  for every worktree unchanged; the tool also accepts an explicit
-  asset-root override (`NC_ASSET_ROOT` env or a positional arg today; a
-  `--asset-root` flag is planned once the generator folds into `nctool`). The
-  symlink is not committed (machine-local).
+  for every worktree unchanged; `nctool` also accepts an explicit
+  `--asset-root` override (default `$NC_ASSET_ROOT`, then `../nc-assets`; shipped
+  2026-07-24). The symlink is not committed (machine-local), and is the convention
+  CLAUDE.md records — so the "decide first" item is decided.
 - **Path portability** — resolve the asset root from the symlink/env/flag and
   confirm the manifest's relative paths hold under the Drive mount on each machine.
 - **Stream-on-demand vs materialized files** — Drive (File Stream) may present

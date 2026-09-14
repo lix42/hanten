@@ -69,12 +69,12 @@ measurement machinery, only better inputs.
 
 - [Reference-anchored sigmoid calibration and redesign](reference-anchored-sigmoid.md)
 - [Film-stock profiles](film-stock-profiles.md)
-- [Scanner density calibration](../io/scanner-density-calibration.md) — the step wedge. This
-  task's Design lists it as "ideally", and the scanner task's own Design makes tier 2
-  "strictly optional and never a precondition for conversion" — so it is the softest of the
-  three edges here
 - [Capture the calibration frames](../analysis/calibration-frame-capture.md) — the bracketed
   roll and grey card this task needs are the same shoot, and that task owns producing it
+
+Related, not a dependency (edge removed 2026-09-13 as soft): [scanner density
+calibration](../io/scanner-density-calibration.md), whose step wedge this task's Design
+lists only as "ideally".
 
 ---
 

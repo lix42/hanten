@@ -938,3 +938,13 @@ obvious until something breaks:
   the IR plane beside an RGB `IFD0`; `algo/bw-support` explicitly excludes input-format
   work ("16-bit RAW scan *input* is a separate concern"). So `bw-support` was blocked on
   a task that did not exist.
+
+## positive-input-mode
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: convert an already-positive SilverFast scan (`Negative=No`, embedded ICC)
+  through the display path with no reconstruction. `input-data-semantics` detects and
+  refuses it today (exit 4) and deferred this "to file formally"; a positive roll is in
+  the asset set.

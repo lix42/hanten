@@ -39,7 +39,7 @@ Telemetry is an operational concern like `--report`/`--verbose`, so its flags ar
 
 ### Record schema (Full), serialize-only JSON
 
-- `schema_version` (integer, `1`) — for server ingestion / forward-compat.
+- `schema_version` (integer; `1` at ship, **`4` today** — `src/telemetry.rs` records each bump) — for server ingestion / forward-compat.
 - `timestamp_ms` — UNIX epoch milliseconds (`std::time::SystemTime`; the name
   carries the unit so the server never guesses; no date crate).
 - run context: `nc_version` (`CARGO_PKG_VERSION`), `target` (compile triple, via a
@@ -52,7 +52,8 @@ Telemetry is an operational concern like `--report`/`--verbose`, so its flags ar
   `encode`, and `ir_export` (only when it ran; omitted otherwise).
 - `conversion`: `algorithm`, a stable `params_hash` (FNV-1a over the effective
   recipe JSON — the same bytes as the sidecar, so identical conversions share a
-  hash), `film_base_source`, `dmax` (resolved anchor, when applied), `output_hdr`.
+  hash), `film_base_source`, `dmax` (resolved anchor, when applied), `output_depth`
+  (`output_hdr` until v4).
 - `outcome`: `warnings` (count), `clipped` / `non_finite` sample counts (from
   `EncodeReport`). No `success` flag today — a record is emitted only after a
   conversion succeeds, so a constant `true` would carry no information (and could

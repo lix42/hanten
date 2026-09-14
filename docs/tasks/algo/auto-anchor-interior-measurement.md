@@ -199,6 +199,6 @@ film-density plausibility floor.
 
 - [Reference-anchored sigmoid calibration and redesign](reference-anchored-sigmoid.md)
 - [Robust auto film-base detection](../film-base/auto-base-redesign.md)
-- [Mask the holder, then estimate from a single population](../film-base/holder-masked-measurement.md)
-  — builds the per-edge holder mask and its fixed-fraction fallback for `Dmin`/`Dmax`.
-  This task consumes that primitive rather than inventing a second one
+- [A depth-aware holder mask](../film-base/holder-depth-mask.md) — builds the per-edge
+  holder depth and its fixed-fraction fallback (split out of `holder-masked-measurement`
+  on 2026-09-13). This task consumes that primitive rather than inventing a second one

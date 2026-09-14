@@ -1,5 +1,11 @@
 # Clipped Dmax Reference Handoff
 
+> **Parametric curves only (noted 2026-09-13).** The `characteristic` curve resolves no
+> `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`nc convert`
+> default. Once that lands, this task serves `sigmoid`/`exponential` users only. Re-rank
+> accordingly before picking it up.
+
+
 ## Background
 
 Portra 400 roll `portra400-2026-08-04`, frame `20260803-film-1229`, is a confirmed

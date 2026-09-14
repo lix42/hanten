@@ -34,10 +34,7 @@ that scope is **reassigned here**. The `film_base.source = "content"` enum
 variant, the `--base-content` flag, its report wiring, and its tests are owned
 **solely by this task** — so the two tasks do not both implement the same surface.
 The `auto-base-redesign` owner must treat content mode as **out of scope** there,
-and only *suggest* `--base-content` in the auto-refusal message. (That task file
-can't be edited from here — agents are active on it — so this note plus the
-`TASKS.md` checklist annotation are the authoritative redirect; its owner needs to
-be told directly.)
+and only *suggest* `--base-content` in the auto-refusal message. `auto-base-redesign` shipped without it and its task file now says so.
 
 ## Design
 

@@ -100,7 +100,12 @@ ordering, selection, cross-frame agreement, and provenance live here.
 ## Dependencies
 
 - [Roll conversion](roll-conversion.md)
+- [The `calibration` recipe section](calibration-recipe-section.md) — the
+  `calibration.film_base` / `calibration.dmax` object this command emits
 - [Robust auto film-base detection](../film-base/auto-base-redesign.md)
 - [IR-assisted film-holder detection](../film-base/ir-holder-detection.md)
-- [Content-based film-base fallback](../film-base/content-fallback.md)
 - [Roll-fixed Dmax from a fully-exposed reference frame](../film-base/dmax-reference.md)
+
+Related, not a dependency (edge removed 2026-09-13): [content-based film-base
+fallback](../film-base/content-fallback.md) is opt-in only and never enters the
+planner's automatic cascade, so the planner ships without it.

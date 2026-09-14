@@ -1823,3 +1823,27 @@ bump follows.
   sweep across Dmax 1.2–1.9 made 1.2–1.3 look best; 1.3 also matches the shipped
   nominal roll-fixed Dmax. Keep this provisional until the task evaluates more
   clipped leaders and output intents.
+
+## auto-base-real-scan-refusal
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: explain why the default-on auto film-base detector has never resolved a base
+  on a real full-size scan, and fix it if the cause is the detector.
+- Evidence so far lives under `## auto-base-redesign`, `## ir-usability-detection`
+  (11 of 11 real frames refused, with and without the IR mask, 2026-09-04) and
+  `docs/reports/real-scan-verification.md` row 2 (every frame refused, 2026-07-23).
+- First question is whether a rebate is visible inside the holder on these scans at
+  all; second is which gate refuses. The 10% scan cap against a 10–15% holder is the
+  leading hypothesis, not a finding.
+
+## holder-depth-mask
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: one per-edge holder-depth primitive (IR-measured where usable, fixed fraction
+  otherwise) for `holder-masked-measurement`, `algo/auto-anchor-interior-measurement`
+  and `tiling-uniformity-validator`. Split out of `holder-masked-measurement` so the
+  mask is not held behind that task's estimator change and version bump. No pixel change.

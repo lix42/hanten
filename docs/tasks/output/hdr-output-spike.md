@@ -34,7 +34,8 @@ specified separately.
 
 The provisional decision and prototype evidence are recorded in
 [the HDR still-output decision note](../../hdr-output-spike.md). The spike
-remains open only for the normative-text review listed there. Encoder
+closed 2026-07-24; the normative-text review was waived at spike level and re-homed to
+the encoder tasks as a pre-merge gate. Encoder
 conformance, physical-device interoperability, and final codec thresholds are
 pre-shipping gates owned by the downstream encoder and acceptance tasks, not
 prerequisites for completing this spike.

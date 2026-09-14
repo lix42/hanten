@@ -1545,3 +1545,21 @@ three v1 charts below the picture, bound to the active config.
 - Mostly photographic work. The code half is the manifest role for a bracketed target frame
   (exposure offset + lighting recorded alongside it) and whether one measurement command
   serves all three consumers or each wants its own read.
+
+## review-reference-cells
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: an outside producer's image (NLP export, SmartConvert, hand-tweaked target) as
+  a grid cell beside nc's renders of the same frame, brought to a common SDR sRGB JPEG,
+  paired by manifest `source_frame`. Asked for by three tasks; filed 2026-09-13.
+
+## review-build-axis
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: the same frame and config across two builds as toggling cells, labelled from
+  the sidecar's `identity` block. Deferred by `comparison-review-tooling` until a
+  default moves; two default moves are now filed.

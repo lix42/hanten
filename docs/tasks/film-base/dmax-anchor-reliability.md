@@ -1,5 +1,11 @@
 # Dmax Anchor Reliability
 
+> **Parametric curves only (noted 2026-09-13).** The `characteristic` curve resolves no
+> `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`nc convert`
+> default. Once that lands, this task serves `sigmoid`/`exponential` users only. Re-rank
+> accordingly before picking it up.
+
+
 ## Goal
 
 Establish whether the roll-fixed `Dmax` anchor measures the quantity it is supposed to, and

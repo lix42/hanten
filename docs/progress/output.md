@@ -3965,3 +3965,38 @@ than 1.00; below mid-grey the curve lifts slightly (0.09 → 0.099).
 unresolved link to the 16-link baseline. `PIPELINE_FINGERPRINTS` does **not** move — the
 default tone is `shoulder`, so no default render changed. The `nctool` suite's only failure
 is its own `NCTOOL_REQUIRE_DEPS` guard firing on a shell with no venv.
+
+## display-p3-default
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: execute the 2026-08-09 decision that `display-p3` becomes the default output
+  preset. Split out of `sdr-preset-followups`. Blocked in practice on deciding its order
+  against `algo/split-default-migration`, which also moves the default and owes a bump.
+
+## adobe-rgb-gamut
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: Adobe RGB (1998) as a first-class, gamut-mapped SDR output. Split out of
+  `sdr-preset-followups`; `definitions::ADOBE_RGB` already exists for the analysis tool.
+
+## sdr-report-block
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: a machine-readable SDR contract block in the report, the `hdr_coded_tiff`
+  shape. Split out of `sdr-preset-followups`; `RenderedSdr::metadata()`'s
+  `#[allow(dead_code)]` is the marker.
+
+## sdr-jpeg-preset
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: the SDR rendition as an 8-bit JPEG with no gain map. Filed 2026-09-13 when the
+  user set the product shape (SDR lossless default; HDR lossless, SDR JPEG supported;
+  HDR JPEG good to have) and this was the one of the four nc lacks.

@@ -29,16 +29,11 @@ scalar *density*. This has had to be re-explained repeatedly.
    Possibly introduce explicit named values/terms (e.g. `TransClear` /
    `TransBlocking` alongside `Dmin` / `Dmax`) — to be decided at execution.
 
-3. **`dmax` lives under its consumer, while its sibling measurement does not.**
-   `film_base` is a roll measurement consumed by reconstruction (it is the
-   divisor) and sits in its **own top-level section**. `dmax` is also a roll
-   measurement consumed by reconstruction (the curve's reference) and sits
-   **nested in `reconstruction.curve`** — history, not principle: it was a
-   parameter of the exponential equation before the anchor split reinterpreted
-   it. Decided 2026-08-11: move it out, next to the film base, so the
-   pipeline/roll split is structural (design-spec §8 target). `curve.anchor`
-   **stays** — the anchor is the *rule* for what the reference places, which is
-   part of the look; only the measurement leaves.
+3. **The `dmax` move is no longer here.** Moving `dmax` out of `reconstruction.curve`
+   into a top-level `calibration` section beside `film_base` (decided 2026-08-11) is a
+   schema change three workflow tasks depend on, so it is its own task:
+   [`core/calibration-recipe-section`](calibration-recipe-section.md). This task keeps
+   the documentation, skill and help-text work only, and changes no code path.
 4. **Keep the name `dmax`.** An earlier revision of this task proposed
    `--reference-density`; that was **overruled 2026-08-11**. `dmax` accurately
    names the maximum density, and "reference" does not connote the top end at

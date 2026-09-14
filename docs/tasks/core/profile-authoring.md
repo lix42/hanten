@@ -3,8 +3,9 @@
 ## Goal
 
 Rename `nc params` to **`nc profile`** and make it author a reusable look: accept
-the same override flags `convert` takes, validate them, and write an annotated,
-hand-editable file — with no scan involved.
+the same override flags `convert` takes — including `--preset` and `--film-stock`,
+since a preset's expansion is exactly what a profile records — validate them, and
+write an annotated, hand-editable file — with no scan involved.
 
 Delete `--dump-params`, which this replaces.
 
@@ -54,6 +55,9 @@ composing a real recipe means splicing `calibrate`'s fragments in by hand.
 
 - `nc profile <overrides> --out look.jsonc` writes a file with no scan present,
   and that file is accepted by `--params` unchanged.
+- `nc profile --preset characteristic-stock --film-stock ektar-100 --out look.jsonc`
+  writes the same expansion `convert --dump-params` writes today, so a roll can still
+  take a named bundle after `--dump-params` is gone.
 - The emitted comments survive a round trip *as comments in the file*, and the
   file still parses — the JSONC-is-a-superset claim, tested rather than assumed.
 - A contradictory override set (e.g. a sigmoid flag with an exponential curve) is
@@ -68,3 +72,5 @@ composing a real recipe means splicing `calibrate`'s fragments in by hand.
 - [Layered recipe composition](recipe-composition.md) — shares the merge semantics
   this command must reproduce exactly
 - [CLI framework](cli-framework.md)
+- [The `calibration` recipe section](calibration-recipe-section.md) — a profile is
+  "a recipe with no `calibration` section", which needs the section to exist

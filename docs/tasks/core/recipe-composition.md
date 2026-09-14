@@ -12,11 +12,13 @@ target subsection in design-spec §8, which this task implements.
 
 ## What is known
 
-- **No schema change is needed.** Both halves are already valid recipes today,
+- **Layering itself needs no schema change.** Both halves are already valid recipes today,
   verified 2026-08-11: a recipe carrying only `reconstruction`/`print`/`output`
   works when the base comes from a flag, and a recipe carrying only `film_base`
   and `dmax` works with everything else defaulted. The only missing mechanic is
-  that `--params` cannot be repeated.
+  that `--params` cannot be repeated. The *shape* of the calibration half is
+  `core/calibration-recipe-section`'s, which is why it is a dependency: this task's
+  verification composes a profile with a `calibration` object.
 - The precedence rule already exists in one direction — flags beat the recipe,
   **by source rather than value** (an explicit `--white-balance 1,1,1` over a
   recipe's auto mode means neutral gains, not re-estimation). Layering extends
@@ -24,6 +26,11 @@ target subsection in design-spec §8, which this task implements.
 - `roll` is currently recipe-only — `--frames`, `--out-dir`, `--params`,
   `--strict`, `--max-memory` and reporting. There is no `--film-base` on it,
   which is precisely what forces file authoring for a one-off.
+- **`--preset` (with `--film-stock`) is part of the override surface `roll` gains**,
+  even though a preset is not a knob: it is the only way to apply a named bundle to a
+  roll without writing its expansion to a file first, and today that file can only
+  come from `convert --dump-params`, which `core/profile-authoring` deletes. It sits
+  above every `--params` layer and below individual flags, as on `convert`.
 
 ## Open questions
 
@@ -59,3 +66,5 @@ target subsection in design-spec §8, which this task implements.
 
 - [CLI framework](cli-framework.md)
 - [Roll conversion](roll-conversion.md)
+- [The `calibration` recipe section](calibration-recipe-section.md) — the shape of
+  the calibration layer this task composes

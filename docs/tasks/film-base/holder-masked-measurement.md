@@ -78,6 +78,8 @@ mixtures (`--auto-base` rebate strips, an untrusted user rectangle).
 ## Dependencies
 
 - [Decide IR usability by measurement](ir-usability-detection.md)
+- [A depth-aware holder mask](holder-depth-mask.md) — the mask primitive, split out on
+  2026-09-13 so the other consumers need not wait for this task's estimator change
 - [Conversion versioning and baseline comparison](../core/conversion-versioning.md)
 - [Roll-fixed Dmax from a fully-exposed reference frame](dmax-reference.md) — this task
   changes `reference_dmax` sampling, which that task introduced

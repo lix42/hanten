@@ -1626,3 +1626,15 @@ records the task as shipped and stays verbatim.
   instead would have been actively harmful: `pipeline_version_warning` fires on any
   mismatch, so a user re-running an archived v3 sidecar would be told "the output
   will not match the original" when it matches exactly.
+
+## calibration-recipe-section
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: a top-level `calibration` recipe section holding `film_base` and `dmax`;
+  `dmax` leaves `reconstruction.curve`. Schema change with a migration error, no pixel
+  change, `recipe` fingerprint refreshed in place.
+- Filed 2026-09-13 because three workflow tasks (planner, profile authoring, layered
+  composition) assumed the section and none owned it; absorbs
+  `value-domain-terminology`'s item 3.
