@@ -7,9 +7,13 @@ this file is the narrative beside it.
 One `##` section per task in this epic, named by the bare task name (the part
 after the `/`). Read this whole file before starting a task in this epic, and
 read other epics' `Epic summary` sections when you depend on them. Append
-entries — don't rewrite earlier ones. (Condensed once, 2026-09-13: the two
-finished tasks keep only what the four open ones still build on; the full
-review-by-review record is in git history before that date.)
+entries — don't rewrite earlier ones.
+
+> **Consolidated 2026-09-13** (user-authorised; see CLAUDE.md's exception to the
+> append-only rule). Sections of *done* tasks were rewritten as summaries keeping the
+> decisions, gotchas and every measurement an open task cites; the full history is in
+> git before that date. Sections of open and parked tasks are unchanged except:
+> `perf-instrumentation` gained one line noting no bench numbers were ever recorded.
 
 ## Epic summary
 

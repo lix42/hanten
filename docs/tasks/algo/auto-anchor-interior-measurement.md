@@ -59,12 +59,10 @@ it is the better region source than any geometric rule.
   leader that IR genuinely cannot handle is never one of them. Where that case is
   load-bearing is `film-base/holder-masked-measurement`, which measures `Dmax` on a
   leader.
-- **The existing mask has no depth, and that is the work.** `EdgeHolderMask` is a list
-  of segments *along* each edge at `IR_HOLDER_PROBE_FRAC = 0.005`; the code comment is
-  explicit that it "restricts along the edge only, not in depth". Excluding the holder
-  from a statistic needs to know how far in it reaches. That is new machinery, not a
-  reuse — though the IR plane makes the depth test a simple threshold march, and
-  `film-base/auto-base-redesign` already marches inward for the rebate.
+- **The existing mask has no depth; the depth is `film-base/holder-depth-mask`'s work**
+  (split out 2026-09-13). `EdgeHolderMask` is a list of segments *along* each edge at
+  `IR_HOLDER_PROBE_FRAC = 0.005`, "along the edge only, not in depth". This task
+  consumes the per-edge depth that task returns; it does not march itself.
 - **Do not inherit the all-holder decline.** `ir_holder_mask` returns `None` when the
   mask leaves no film to search *along* any edge — measured on **22 of 25 real
   chromogenic frames**. In the along-edge design that is correct: no film along an edge
@@ -149,12 +147,10 @@ measurement. Do not fork that.
 
 ## Open questions
 
-- **Is cut 1 shared with `film-base/holder-masked-measurement`, or its own?** That task
-  builds the per-edge holder mask plus a fixed-fraction fallback for `Dmin`/`Dmax`
-  measurement. Two copies of "where is the holder" is the drift risk; it is a dependency
-  for that reason. Note its fallback and this task's cut 2 are **not** the same thing —
-  that one substitutes for a missing holder mask, this one removes the rebate — so
-  sharing the mask does not mean sharing the fraction.
+- **Cut 1 is `film-base/holder-depth-mask`** (settled 2026-09-13: one owner for "where
+  is the holder"). Its fixed-fraction fallback and this task's cut 2 are **not** the same
+  thing — that one substitutes for a missing holder mask, this one removes the rebate —
+  so sharing the mask does not mean sharing the fraction.
 - **What does a plausibility check compare against?** The task's original framing — "an
   `Auto` anchor above the plausible range must fail loudly" — compares a *scene* statistic
   against a *film-density* range. Those are different quantities (see below), so the check

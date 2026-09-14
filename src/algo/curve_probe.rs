@@ -1728,9 +1728,10 @@ fn whole_roll_scale() {
 ///   channel running `r` times steeper sits `(r − 1)·w_r` above red for that reason alone.
 ///   Only the residual is new information, and correcting the whole difference with an offset
 ///   would double-correct the half `density.scale` already handles. That split is the last
-///   block; for the figures it currently produces see the 2026-09-13 entry in
-///   `docs/progress/film-base.md` (it supersedes 2026-09-12's numbers) — quoting them here is how this doc came to cite a
-///   pre-span-filter 85%/34% that the shipped probe had stopped producing.
+///   block; for the figures it currently produces see the latest entry under
+///   `## dmax-per-channel-reduction` in `docs/progress/film-base.md` — quoting them here is
+///   how this doc came to cite a pre-span-filter 85%/34% that the shipped probe had stopped
+///   producing.
 ///
 /// Grey-world is measured on the same frames as a control: the two estimators lean on
 /// opposite assumptions, so agreement is weak evidence the signal is the film and

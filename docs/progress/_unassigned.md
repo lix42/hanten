@@ -24,7 +24,7 @@ Every finding now has an owner; where it stands on 2026-09-13:
 | artifacts written straight to final paths; sidecar-fails-after-primary orphans a TIFF | `io/transactional-output-writes` | done |
 | 4 GiB decode limit guards only the u16 buffer while peak is a multiple | `io/memory-preflight` | done — see the corrections below |
 | strip/tile streaming, **evaluate-first** (STEP 0 gate) | `io/streaming-tiled-io` | open — still a conditional GO on the numbers below |
-| three unused crates (`image`, `kamadak-exif`, `palette` — verified `cargo build --all-targets` succeeds without them) + duplicate `Algorithm` enum | `core/dependency-hygiene` | open — all three crates are still in `Cargo.toml` |
+| three unused crates (`image`, `kamadak-exif`, `palette`) + duplicate `Algorithm` enum | `core/dependency-hygiene` | open, re-scoped 2026-09-13 — the enum is gone; `kamadak-exif` and `palette` are still unused; `image` now has one `#[cfg(test)]` caller and moves to dev-dependencies rather than out |
 | doc-accuracy fixes + license / metadata / platforms / packaging | `core/release-readiness` | open — README status and the "two algorithms" line were fixed along the way; the research report's PUA-wrapped `citeturn` tokens (237 spans, invisible to plain grep) are still there; no `LICENSE`, no Cargo release fields |
 
 Deferred / not created: the cheaper honest-default option for input colour

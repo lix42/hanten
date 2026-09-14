@@ -89,8 +89,8 @@ Two things this does **not** settle, and which this task still owns:
   **It inherits the holder defect.** A high percentile over whole frames is exactly what
   `algo/auto-anchor-interior-measurement` found resolving to 2.23–2.37 against a roll Dmax
   of 1.28–1.38, because the opaque holder owns the top percentile. Any roll-wide content
-  measurement needs the holder-excluded region from that task (or from
-  `film-base/holder-masked-measurement`) before its numbers mean anything. Evaluating the
+  measurement needs the holder-excluded region from `film-base/holder-depth-mask`
+  before its numbers mean anything. Evaluating the
   *direction* does not need it; producing a number does.
   Open on its own terms: which percentile, whether frames are pooled or measured
   per-frame-then-reduced, how "near-fully-exposed" is detected, and what happens on a roll

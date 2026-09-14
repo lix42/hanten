@@ -9,11 +9,13 @@ after the `/`). Read this whole file before starting a task in this epic, and
 read other epics' `Epic summary` sections when you depend on them. Append
 entries — don't rewrite earlier ones.
 
-> **Consolidated 2026-09-13.** Completed tasks' sections were collapsed into one
-> section each: what shipped, the decisions and gotchas still true, and the
-> measurements open tasks cite. Open tasks' sections are verbatim. The full
-> execution history is in git (`git log -p -- docs/progress/algo.md` before this
-> date).
+> **Consolidated 2026-09-13** (user-authorised; see CLAUDE.md's exception to the
+> append-only rule). Sections of *done* tasks were rewritten as summaries keeping the
+> decisions, gotchas and every measurement an open task cites; the full history is in
+> git before that date. Sections of open and parked tasks are unchanged except: the PR
+> #70 entry moved verbatim from `sigmoid-parameter-calibration` to
+> `reference-anchored-sigmoid`, and `content-aware-sigmoid-toe`'s two sections were
+> merged.
 
 ## Epic summary
 
@@ -701,30 +703,51 @@ white and drags midtones down), so two coupled changes were needed:
 - `NOMINAL_DMAX` was deliberately left at 2.0 (user asked to wait for more rolls) —
   **superseded 2026-08-08**, see `negative-reconstruction-density-curves`.
 
-**PR #70 review (2026-08-03) — four findings, one remedy refused.** (Relocated here on
-2026-09-13; it had been filed under `sigmoid-parameter-calibration`.)
+### 2026-08-03 (later) — PR #70 review: four findings, and why one remedy was refused
 
-- The report named a number the render did not use: `dmax` carried the reference after
-  the split. Now both travel — `dmax` (what a recipe freezes back) and `curve_anchor`
-  (what rendered to 1.0, hence the floor `10^(−contrast·anchor)`); the report's
-  `reconstruction_result.curve` carries the placement rule plus `anchor_value`, and
-  the exponential reports both fields equal rather than a null.
-- A tiny contrast panicked (`MID_GREY_OUTPUT_DECADES / contrast` overflows below
-  ~2.2e-39, a `debug_assert` → exit 101 / `inf` in release). Now a `validate` usage
-  error plus a real error in `apply_curve`; `f32::MIN_POSITIVE` is accepted on purpose
-  (the render is a flat mid-grey, not broken). The bound applies only to the mid-grey
-  placement; `WhiteAtDmax` performs no division.
-- The roll consistency check had a fourth hole: a per-frame `curve.anchor` override
-  silently gave one frame a different placement *rule*. Added as a roll warning.
-- **Refused: bumping `reconstruction.schema_version`.** It versions the schema *shape*
-  and is checked for exact equality, so bumping rejects every archived recipe including
-  the exponential majority this change does not touch; a per-version default table
-  would have to cover `contrast` and `shoulder` too and is versioning policy. What
-  shipped is a loud `--strict`-promotable warning when a loaded recipe selects sigmoid
-  with no `anchor` (`sigmoid_anchor_default_warning`, since generalised to
-  `unpinned_curve`). The genuinely unowned policy gap — a non-default path's defaults
-  moved and archived recipes for it are reinterpreted — is now
-  `core/recipe-replay-fidelity`.
+(Relocated verbatim from `## sigmoid-parameter-calibration` on 2026-09-13; PR #70 was this
+task's PR.)
+
+- **The report named a number the render did not use.** `ReconstructionReport.dmax` was
+  documented as "the display-white anchor the curve used" and, after the placement split,
+  carried the *reference* instead. Now both travel: `dmax` (reference, what a recipe freezes
+  back) and `curve_anchor` (derived, what rendered to 1.0 and therefore sets the floor at
+  `10^(−contrast·anchor)`). The JSON `reconstruction_result.curve` gained the placement
+  *rule* plus `anchor_value`, so that block is self-contained — a consumer no longer has to
+  re-derive the anchor from the echoed recipe, which is the opposite of what diagnostics are
+  for. Exponential reports both fields equal rather than a null, so consumers need no special
+  case.
+- **A tiny contrast panicked instead of erroring.** `MID_GREY_OUTPUT_DECADES / contrast`
+  overflows below ~2.2e-39, and the `debug_assert` I had left there turned that into exit
+  101 in debug and `inf` fed into `s_curve` in release. Now a `validate` usage error naming
+  the flag, plus `apply_curve` returning a real error for the programmatic path (the
+  defense-in-depth pattern `algo/simple.rs` already uses). Two things worth recording: the
+  bound applies **only** to the mid-grey placement, since `WhiteAtDmax` performs no
+  division; and `f32::MIN_POSITIVE` is *accepted* on purpose — the quotient is finite there,
+  and because `contrast · anchor` is then exactly `MID_GREY_OUTPUT_DECADES` the render is a
+  flat mid-grey rather than a broken one. My first test asserted it should fail, which was
+  wrong about the arithmetic.
+- **The roll consistency check had a fourth hole.** `resolve_frames` probed `film_base`,
+  `curve.dmax` and `output.preset`, so a per-frame `curve.anchor` override silently gave one
+  frame a different placement *rule* — subtler than a different Dmax number and, by our own
+  documentation, a roll-level property. Added as warning (5) of six.
+- **Refused: bumping `reconstruction.schema_version`.** The reviewer was right that an
+  archived sigmoid recipe now renders differently — real, and it would have been silent. But
+  the proposed remedy is wrong for this codebase and the reasoning is worth keeping: that
+  constant versions the schema **shape** and the reader checks it for *exact* equality, so
+  bumping to 2 would reject every archived recipe outright, including the large majority that
+  select `exponential` and are wholly unaffected. The alternative — preserving v1 semantics
+  via a per-version default table — is a real design, but it would have to cover `contrast`
+  and `shoulder` too (both moved in the same commit with the identical property), and that is
+  `core/conversion-versioning` policy, not something to improvise inside an algo task.
+  **What is not acceptable is silence**, so it is now a loud, `--strict`-promotable warning
+  when a loaded recipe selects sigmoid with no `anchor` — modelled directly on the existing
+  `pipeline_version_warning`, which handles the same "parameters still apply, default moved
+  underneath them" situation one level up.
+- **A gap that is genuinely unowned, flagged rather than filed:** `core/conversion-versioning`
+  is scoped to *default* behaviour ("bumps only when default conversion behaviour changes"),
+  so nothing currently owns "a non-default path changed and archived recipes for it are
+  reinterpreted". The warning covers this instance; the policy question is open.
 
 **2026-08-13 — the shipped `MidAtDmaxFraction(0.5)` has a quantified error** (from
 `exponential-anchor-placement`): the mid patch sits at `D′ = 0.513` where `0.5·Dmax`

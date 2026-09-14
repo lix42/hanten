@@ -7,9 +7,13 @@ this file is the narrative beside it.
 One `##` section per task in this epic, named by the bare task name (the part
 after the `/`). Read this whole file before starting a task in this epic, and
 read other epics' `Epic summary` sections when you depend on them. Append
-entries — don't rewrite earlier ones. (Consolidated 2026-09-13: closed tasks'
-review-round narration was collapsed into summaries; every measured number an
-open task cites is kept. `git log` has the full history.)
+entries — don't rewrite earlier ones.
+
+> **Consolidated 2026-09-13** (user-authorised; see CLAUDE.md's exception to the
+> append-only rule). Sections of *done* tasks were rewritten as summaries keeping the
+> decisions, gotchas and every measurement an open task cites; the full history is in
+> git before that date. Sections of open and parked tasks are unchanged except: a
+> 2026-09-14 entry under `nlp-comparison` records a supersession.
 
 ## Epic summary
 
@@ -510,8 +514,7 @@ What other epics need to know about `analysis`:
   `converted/SmartConvert/TIFF` is present but carries neither a `source_frame` nor an
   ICC profile, so it is unpaired until both are declared by hand. Noted that nc's default
   gain-map JPEG is unreadable by the planned metric reader, so comparison runs go through
-  a TIFF preset. (Superseded 2026-09-03: `metrics --jpeg-image sdr` reads the base, so a
-  default roll is comparable as its SDR rendition — see `conversion-metrics`.)
+  a TIFF preset.
 - 2026-09-10: **First measured nc-versus-NLP numbers, recorded as a starting point
   rather than acted on.** They fell out of the `analysis/conversion-metrics` band
   re-cut, which needed a non-nc producer to score candidate cuts against. Nothing
@@ -625,6 +628,9 @@ What other epics need to know about `analysis`:
 - 2026-09-13 (note, no work): a further batch `converted/nlp/2026-09-11/2026-09-11-Portra400`
   (32 files) is registered in the manifest but was not part of the survey above; its
   declared space must be established the same way before it is measured.
+- 2026-09-14: the 2026-09-02 note above that the default gain-map JPEG is unreadable by
+  the metric reader was superseded on 2026-09-03 — `metrics --jpeg-image sdr` reads the
+  base, so a default roll is comparable as its SDR rendition (see `conversion-metrics`).
 
 ## display-output-acceptance (continued)
 

@@ -2430,8 +2430,8 @@ would cost a Unix-only code path for output that is reproducible by re-running.
     profile: `legacy` applies the print controls **before** a plain
     working→output ICC transform and never crosses the ACEScg boundary. Making
     `display-p3` the default in place of the incumbent `gain-map-hdr` is
-    `output/sdr-preset-followups` — decided, not yet executed, because it is both a
-    pixel change and a container change.
+    `output/display-p3-default` — decided 2026-08-09 and reaffirmed 2026-09-13, not
+    yet executed, because it is both a pixel change and a container change.
   - `hdr-pq` and `hdr-hlg` are explicit single-rendition display-HDR presets,
     each requiring an `.avif` output path. They write
     10-bit, full-range, 4:4:4 AVIF (AV1 High Profile, level capped at 6.0 for the

@@ -23,8 +23,10 @@ on the calibration frames.
 - The chain has two libm calls (`log10` in `to_density`, `10^` in the curve), and a
   1-ULP difference in the first is amplified by `ln(10)·d·(1/γ_local)`, up to 62 pixel
   ULPs. Two threshold-based arguments for "safe" samples were tried during
-  `characteristic-curve-coverage` and both were unsound; the margin test it committed
-  records which four samples are not safe.
+  `characteristic-curve-coverage` and both were unsound. Two counts matter and differ:
+  **two** samples were *observed* to differ between the targets, and the committed margin
+  test records **four** that are not provably safe (within ~2^-5 ULP of an f32 rounding
+  boundary); a vector must avoid all four.
 - `golden::pixels()` is shared with every historical row, so moving it shifts their
   meaning. A separate vector for the new fingerprint is likely cheaper.
 - Verification is by running CI on both targets, never by a margin argument.

@@ -59,7 +59,13 @@ to nothing); a task that merely gained an epic prefix still substring-matches.
 **Never bulk-rewrite ids** — `color-management` is also ordinary English for ICC
 work, and `asset-manifest` / `perf-telemetry` also name skills. Progress logs are
 **append-only**: add a cross-reference as a new dated entry, never as a mid-body
-insertion (that silently breaks the verbatim history).
+insertion (that silently breaks the verbatim history). The one exception is a
+**user-authorised consolidation pass** (first run 2026-09-13), which may compact and
+clean up the sections of *done* tasks into summaries — keeping the decisions, the
+gotchas and every measurement an open task cites — while the sections of open and
+parked tasks stay append-only, every heading or dated entry cited from `src/`,
+`scripts/` or a task file keeps resolving, and each file's header records the pass and
+its exceptions.
 
 ## Architecture
 

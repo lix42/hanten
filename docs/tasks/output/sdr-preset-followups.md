@@ -50,6 +50,11 @@ What remains here are the carried-over findings below.
 as the allowance requires; two frame sizes per the calibration rule. The table in
 `pipeline::memory`'s module doc carries the rows.
 
+## How to Verify
+
+Each finding above is either fixed, with a test, or handed to a named owner task, and
+this file says which. When the list is empty the task closes.
+
 ## Dependencies
 
 - [Output presets and guidance](presets.md)

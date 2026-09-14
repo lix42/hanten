@@ -15,7 +15,7 @@ of its stated payoffs is un-inerting the default gain map (MaxCLL 101 → 999 ni
 the characteristic curve), while this one changes the default *container* to one with
 no gain map at all.
 
-**Decided 2026-09-13 (user): SDR lossless is the default.** The product shape around
+**Decided 2026-08-09 and reaffirmed 2026-09-13 (user): SDR lossless is the default.** The product shape around
 it: HDR lossless stays supported (`hdr-linear-tiff`, `hdr-pq-tiff`, `hdr-hlg-tiff`);
 SDR JPEG is to be supported (`output/sdr-jpeg-preset`, filed the same day); HDR JPEG
 (`gain-map-hdr`) is good to have and stays opt-in. The migration's HDR payoff therefore

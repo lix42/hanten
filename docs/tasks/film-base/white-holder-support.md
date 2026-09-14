@@ -52,4 +52,4 @@ unaffected.
 
 - [IR-assisted film-holder detection](ir-holder-detection.md) — this is the RGB-only
   fallback for the no-IR path, so it builds on the holder-classification dispatch that
-  task establishes (which in turn builds on [auto-base-redesign](auto-base-redesign.md)).
+  task establishes (which in turn builds on `auto-base-redesign`, a transitive dependency).

@@ -50,7 +50,7 @@ nc convert in.tiff -o out.tiff --reconstruction density \
 # Full HDR float output with explicit controls. `--density-gamma` is the
 # exponential curve's knob, so that curve is selected explicitly — the default
 # is the sigmoid, whose slope is `--sigmoid-contrast`.
-nc convert in.tiff -o out.tiff --reconstruction density --output-hdr \
+nc convert in.tiff -o out.tiff --reconstruction density --out-depth f32 \
   --film-base 0.92,0.55,0.42 \
   --density-curve exponential --density-gamma 1.8 --print-exposure 0.0
 

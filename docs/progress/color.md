@@ -7,9 +7,12 @@ this file is the narrative beside it.
 One `##` section per task in this epic, named by the bare task name (the part
 after the `/`). Read this whole file before starting a task in this epic, and
 read other epics' `Epic summary` sections when you depend on them. Append
-entries — don't rewrite earlier ones. (Consolidated 2026-09-13: closed tasks'
-review-round narration was collapsed into one section each; the pre-consolidation
-history is in git.)
+entries — don't rewrite earlier ones.
+
+> **Consolidated 2026-09-13** (user-authorised; see CLAUDE.md's exception to the
+> append-only rule). Sections of *done* tasks were rewritten as summaries keeping the
+> decisions, gotchas and every measurement an open task cites; the full history is in
+> git before that date. Sections of open and parked tasks are unchanged except: none.
 
 ## Epic summary
 

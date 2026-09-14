@@ -4,7 +4,7 @@
 
 Give the pipeline one function that answers "how far in from each edge does the
 opaque film holder reach on this frame", using the IR plane where it measures usable
-and a stated fixed fraction where it does not. Three tasks need exactly this region
+and a stated fixed fraction where it does not. Four tasks need exactly this region
 and none should own a copy of it.
 
 ## Why it is its own task
@@ -22,7 +22,7 @@ a depth:
 - `dmax-anchor-reliability`'s roll-wide content direction needs the same region.
 
 Bundled with the estimator change, the primitive was held behind a pixel change and a
-version bump none of the other three needs. On its own it changes no pixels.
+version bump none of the other consumers needs. On its own it changes no pixels.
 
 ## What is known
 

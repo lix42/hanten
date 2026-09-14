@@ -9,10 +9,11 @@ after the `/`). Read this whole file before starting a task in this epic, and
 read other epics' `Epic summary` sections when you depend on them. Append
 entries — don't rewrite earlier ones.
 
-> **Consolidated 2026-09-13.** Sections of *done* tasks were condensed to what still
-> matters (decisions, measurements, gotchas, and the threads open tasks pick up);
-> the full review-round history is in git. Sections of open and parked tasks are
-> unchanged. From here on, append as before.
+> **Consolidated 2026-09-13** (user-authorised; see CLAUDE.md's exception to the
+> append-only rule). Sections of *done* tasks were rewritten as summaries keeping the
+> decisions, gotchas and every measurement an open task cites; the full history is in
+> git before that date. Sections of open and parked tasks are unchanged except: the
+> retired `grid-verdict-enum` section was folded into `tiling-uniformity-validator`.
 
 ## Epic summary
 
@@ -63,8 +64,8 @@ What other epics need to know about `film-base`:
   open. Known limitation, in the mask rather than the verdict: a thin holder margin
   that is IR-dark only in the shallow probe can hide a rebate behind it; the
   workaround is `--base-region`. The mask restricts **along** each edge only, not in
-  depth — depth is the work `algo/auto-anchor-interior-measurement` and
-  `holder-masked-measurement` add. A holder covering *every* edge (22 of 25 real
+  depth — depth is `holder-depth-mask`'s work, which `auto-anchor-interior-measurement`,
+  `holder-masked-measurement` and `tiling-uniformity-validator` consume. A holder covering *every* edge (22 of 25 real
   chromogenic frames at the 0.5% probe depth) **is** handled: `ir_holder_mask`
   returns no mask when no edge would yield a film range, so the search falls back
   to RGB-only instead of getting nothing to scan.

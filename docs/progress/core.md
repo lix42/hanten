@@ -7,9 +7,15 @@ this file is the narrative beside it.
 One `##` section per task in this epic, named by the bare task name (the part
 after the `/`). Read this whole file before starting a task in this epic, and
 read other epics' `Epic summary` sections when you depend on them. Append
-entries — don't rewrite earlier ones. (Consolidated 2026-09-13: the sections of
-completed tasks were rewritten as summaries; the verbatim review-round history
-is in git before that date.)
+entries — don't rewrite earlier ones.
+
+> **Consolidated 2026-09-13** (user-authorised; see CLAUDE.md's exception to the
+> append-only rule). Sections of *done* tasks were rewritten as summaries keeping the
+> decisions, gotchas and every measurement an open task cites; the full history is in
+> git before that date. Sections of open and parked tasks are unchanged except: two
+> cross-references appended under `value-domain-terminology` and
+> `unfrozen-auto-mode-warning` moved to `conversion-versioning` /
+> `recipe-replay-fidelity`, with dated pointers left.
 
 ## Epic summary
 
@@ -505,6 +511,11 @@ tables (a policy decision, which the new task owns).
 
 - Goal: Make nc's value-domain terminology — especially `Dmin`/`Dmax` — easy to understand, use, and maintain for **both people and agents**.
 
+### 2026-09-13 — relocated
+
+The 2026-08-04 `conversion-versioning` cross-reference that had been appended under this
+heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`).
+
 ## recipe-composition
 
 **Status:** not started
@@ -550,6 +561,11 @@ tables (a policy decision, which the new task owns).
   it to a roll re-derived all three per frame, with no warning beyond an incidental
   region-uniformity note.
 - Precedent exists: roll already warns when the film base is not `explicit`.
+
+### 2026-09-13 — relocated
+
+The 2026-09-01 `conversion-versioning` cross-reference that had been appended under this
+heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`).
 
 ## calibration-recipe-section
 

@@ -21,11 +21,12 @@ and new metrics recorded.
 
 For representative color and HDR frames, execute this matrix:
 
-1. **The default preset** — the HDR rendition uses declared headroom and the
-   SDR Display P3 base independently passes its decode-back oracle. Under the
-   shipped sigmoid the default gain map is inert (`GainMapMax` 1.0x), so this row
-   is meaningful only after `algo/split-default-migration`, which is why that task
-   is a dependency (added 2026-09-13).
+1. **The default preset, as shipped** — decided to become `display-p3`
+   (`output/display-p3-default`), so this row is the SDR TIFF's decode-back oracle;
+   `gain-map-hdr` is covered below as an explicit preset. Both default moves
+   (`output/display-p3-default` and `algo/split-default-migration`) are
+   dependencies so this row tests what users actually get. Rows 2–9 do not need
+   them and could be run earlier if acceptance is ever split.
 2. **Explicit presets** — `display-p3` and `compatibility` render correctly;
    `film-master` preserves unclamped linear ACEScg film rendering and cross-frame
    exposure under fixed/roll-calibrated Dmax; `hdr-pq` and `hdr-hlg` carry
@@ -180,6 +181,6 @@ every failure has a tracked follow-up (or the log explicitly records none).
 
 - [Output presets and guidance](../output/presets.md)
 - [Real-scan core verification](real-scan-verification.md)
-- [Make `characteristic-generic` the default](../algo/split-default-migration.md) —
-  the default this task accepts is the one the migration ships; until then the
-  default gain map is inert and row 1 cannot pass
+- [Make `characteristic-generic` the default](../algo/split-default-migration.md) and
+  [Make `display-p3` the default output preset](../output/display-p3-default.md) —
+  the default this task accepts is the one both moves ship

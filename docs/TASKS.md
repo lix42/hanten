@@ -448,6 +448,7 @@ graph TD
   core/conversion-versioning --> output/presets
   output/presets --> analysis/display-output-acceptance
   algo/split-default-migration --> analysis/display-output-acceptance
+  output/display-p3-default --> analysis/display-output-acceptance
   analysis/real-scan-verification --> analysis/display-output-acceptance
   analysis/real-scan-verification --> analysis/conversion-analysis-tooling
   analysis/real-scan-verification --> analysis/harness-regression-tests
@@ -552,11 +553,9 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   uniformly opaque. Today's gate is wrong for exactly the frame `Dmin` uses
 - `film-base/holder-depth-mask` (post-MVP): `film-base/ir-usability-detection`
 - `film-base/holder-masked-measurement` (post-MVP): `film-base/ir-usability-detection`, `film-base/holder-depth-mask`, `core/conversion-versioning`, `film-base/dmax-reference`
-  — mask the holder **per edge** (measured 2–5% of the short edge, asymmetric), fixed-fraction
-  fallback otherwise; then estimate the **centre** of what is now a single population instead of
-  reaching for p97, which biases ~0.046 density (0.16 stops, the "pale" direction). **Pixel
-  change**: one `pipeline_version` bump, which is why masking and the estimator ship together.
-  Provenance is per-run, not a persisted pre-processed input
+  — apply `holder-depth-mask`'s per-edge mask, then estimate the **centre** of what is now a
+  single population instead of reaching for p97, which biases ~0.046 density (0.16 stops, the
+  "pale" direction). **Pixel change**: one `pipeline_version` bump. Provenance is per-run
 - `film-base/tiling-uniformity-validator` (post-MVP): `film-base/holder-masked-measurement`, `film-base/estimate-reuse-output`
   — coarse tiling in the estimate's own pass, reporting within-tile (grain) separately from
   between-tile (gradient): measured 0.0081 on Gold 200 against 0.0390 on Portra 160, reproducing
@@ -733,7 +732,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   coexistence is observable. Rescoped 2026-09-13: the CLI half shipped as `gain-map-hdr`
 - `output/sdr-preset-followups` (post-MVP; no downstream blockers): `output/presets`
 - `output/display-p3-default` (post-MVP): `output/presets`
-  — direction decided 2026-09-13 (SDR lossless is the default); order against
+  — SDR lossless is the default (decided 2026-08-09, reaffirmed 2026-09-13); order against
   `algo/split-default-migration` open, one bump preferred
 - `output/adobe-rgb-gamut` (post-MVP): `output/presets`
 - `output/sdr-report-block` (post-MVP): `output/presets`
@@ -781,8 +780,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `telemetry/upload` (post-MVP): `telemetry/schema-v2`, `telemetry/ingestion-service`
 - `telemetry/panic-hook` (post-MVP): `telemetry/upload`
 - `analysis/real-scan-verification` (post-MVP): `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `film-base/dmax-reference`
-- `analysis/display-output-acceptance` (post-MVP): `output/presets`, `analysis/real-scan-verification`, `algo/split-default-migration`
-  — the default it accepts is the one the migration ships; added 2026-09-13
+- `analysis/display-output-acceptance` (post-MVP): `output/presets`, `analysis/real-scan-verification`, `algo/split-default-migration`, `output/display-p3-default`
+  — the default it accepts is the one both default moves ship
 - `analysis/conversion-analysis-tooling` (post-MVP, spike): `analysis/real-scan-verification`
 - `analysis/asset-manifest` (post-MVP): `analysis/conversion-analysis-tooling`
 - `analysis/conversion-metrics` (post-MVP): `analysis/asset-manifest`
@@ -925,9 +924,9 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - [ ] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — owns `--base-content`; supersedes the content-source sub-item in `film-base/auto-base-redesign`
 - [x] [Reuse-ready `nc estimate` output](tasks/film-base/estimate-reuse-output.md)
 - [x] [Roll-fixed Dmax from a fully-exposed reference frame](tasks/film-base/dmax-reference.md) — shipped roll-fixed acquisition/default policy; the replacement density-curve stage preserves scalar exponential placement and sigmoid curve shaping
-- [ ] [Clipped Dmax reference handoff](tasks/film-base/clipped-dmax-reference.md) — *parametric curves only* — represent a valid leader beyond the scanner boundary in estimate output and carry it into conversion with an explicit, documented fallback rather than a fabricated measurement; provisional fallback 1.3
-- [ ] [Stock-aware Dmax plausibility (dense-base stocks)](tasks/film-base/dense-base-dmax-plausibility.md) — *parametric curves only* — from real-scan verification (2026-07-23): the reference-Dmax `≳1.0` floor + base-uniformity check are C41-calibrated and false-alarm on Harman Phoenix's dense/non-orange base; make the floor stock-relative while keeping a loud failure on genuinely wrong regions
-- [ ] [Dmax anchor reliability](tasks/film-base/dmax-anchor-reliability.md) — *parametric curves only* — follow-up on a
+- [ ] [Clipped Dmax reference handoff](tasks/film-base/clipped-dmax-reference.md) — represent a valid leader beyond the scanner boundary in estimate output and carry it into conversion with an explicit, documented fallback rather than a fabricated measurement; provisional fallback 1.3
+- [ ] [Stock-aware Dmax plausibility (dense-base stocks)](tasks/film-base/dense-base-dmax-plausibility.md) — from real-scan verification (2026-07-23): the reference-Dmax `≳1.0` floor + base-uniformity check are C41-calibrated and false-alarm on Harman Phoenix's dense/non-orange base; make the floor stock-relative while keeping a loud failure on genuinely wrong regions
+- [ ] [Dmax anchor reliability](tasks/film-base/dmax-anchor-reliability.md) — follow-up on a
   **completed** contract: the leader-measured anchor is *uncontrolled* (two rolls of one stock
   0.295 density apart while their red base agrees to 0.0005), real content measures *above* it,
   and leaders are uniform so it is not a fogging gradient. The no-reference `NOMINAL_DMAX`
@@ -953,17 +952,15 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   for precisely the frame `Dmin` is measured from
 - [ ] [A depth-aware holder mask](tasks/film-base/holder-depth-mask.md) — the per-edge holder depth three tasks consume; no pixel change
 - [ ] [Mask the holder, then estimate from a single population](tasks/film-base/holder-masked-measurement.md) —
-  mask **per edge** (measured 2–5% of the short edge, and asymmetric), fixed-fraction fallback otherwise —
-  which for silver leaders is the *normal* path, since IR can never separate there. Then estimate the centre
-  of what is now one population rather than reaching for p97, whose ~0.046-density bias costs 0.16 stops in
-  the "pale" direction. **Pixel change, one `pipeline_version` bump**; masking and the estimator ship together
-  so it is one bump, not two
+  apply `holder-depth-mask`'s per-edge mask, then estimate the centre of what is now one population rather
+  than reaching for p97, whose ~0.046-density bias costs 0.16 stops in the "pale" direction. **Pixel change,
+  one `pipeline_version` bump**
 - [ ] [Validate reference frames by tiling](tasks/film-base/tiling-uniformity-validator.md) — coarse tiling in
   the estimate's own pass, separating within-tile grain from between-tile gradient: 0.0081 on Gold 200 against
   0.0390 on Portra 160, independently reproducing the baseline report's blue-gradient finding on that roll.
   Extends the check to `Dmax`, which has none. **Retires `--grid`** and absorbs the removed
   `film-base/grid-verdict-enum`; diagnostics only, no pixel change
-- [ ] [Calibrate from a single part-exposed frame](tasks/film-base/half-frame-calibration.md) — *Dmax half: parametric curves only* —
+- [ ] [Calibrate from a single part-exposed frame](tasks/film-base/half-frame-calibration.md) —
   **deferred, blocks nothing**: one frame that is part unexposed and part leader serving as both
   references (HP5 frame 1330 is one). Convenience over the planner's one-reference-per-frame path
 
@@ -991,7 +988,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   midtone against black *and* highlights monotonically, a toe *raises* the black floor rather
   than pulling it down, and `GainMapMax` is controlled by the shoulder alone
 - [ ] [Content-aware sigmoid toe](tasks/algo/content-aware-sigmoid-toe.md) — **optional / deferred** explicit frame/roll convenience modes; the reference path remains the default and this blocks no output
-- [ ] [Curve endpoint validation](tasks/algo/curve-endpoint-validation.md) — *parametric curves only; needs re-evaluation* — warn **before decode**
+- [ ] [Curve endpoint validation](tasks/algo/curve-endpoint-validation.md) — warn **before decode**
   when a resolved curve places its tonal endpoints so badly the render cannot approach white or
   black. Read both endpoints off the renderer's own curve at the **reachable film base** — the
   same rule for both curves: `D'base` is `density.offset` plus any balance, per channel, not 0.
@@ -1214,7 +1211,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 > it is not part of it.
 
 - [x] [Real-scan core verification](tasks/analysis/real-scan-verification.md) — exercise decoding, Dmin/Dmax, current TIFF conversion, IR, determinism, and resource use on full-size scans without waiting for the display-output roadmap. **Done 2026-07-23** (see [reports/real-scan-verification.md](reports/real-scan-verification.md)): all rows pass on 5 real rolls; measured peak ~930 MiB @ 18.7 MP feeds `io/streaming-tiled-io` STEP 0; frozen recipes + harness feed `analysis/display-output-acceptance`; follow-up `film-base/dense-base-dmax-plausibility` filed; default-SDR paleness routes to the display-output roadmap
-- [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — verify the final gain-map default, SDR fallback, explicit output presets, metadata, and cross-device behavior on the same real scans
+- [ ] [Display-output acceptance](tasks/analysis/display-output-acceptance.md) — verify the default preset as shipped, SDR fallback, explicit output presets, metadata, and cross-device behavior on the same real scans
 - [x] [Conversion-analysis tooling (spike)](tasks/analysis/conversion-analysis-tooling.md) — grow the real-scan-verify harness into a toolkit: asset manifest, image-library analysis of results, and NLP-vs-nc comparison. **Done 2026-07-23** (spike): scope decided (Python `nctool` toolkit, JSON manifest of rolls+converted, configurable-but-local asset root, NLP global-metrics comparison without registration); split into the four child tasks below; see the task file's "Spike outcome" section.
 - [x] [Asset manifest](tasks/analysis/asset-manifest.md) — tracked JSON manifest of `../nc-assets` (roll frames + roles + derived facts + converted outputs); `generate`/`validate`; retires the hard-coded `ROLLS` array
 - [x] [Conversion metrics & photographic analysis](tasks/analysis/conversion-metrics.md) —

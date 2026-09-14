@@ -9,11 +9,10 @@ after the `/`). Read this whole file before starting a task in this epic, and
 read other epics' `Epic summary` sections when you depend on them. Append
 entries — don't rewrite earlier ones.
 
-> **Consolidated 2026-09-13.** Sections of tasks that were done were collapsed into
-> one section each, keeping the decisions and measurements that still matter and
-> dropping review-round narration. The verbatim history is in git
-> (`git log -- docs/progress/output.md`, before this date). Sections of open tasks
-> are unchanged.
+> **Consolidated 2026-09-13** (user-authorised; see CLAUDE.md's exception to the
+> append-only rule). Sections of *done* tasks were rewritten as summaries keeping the
+> decisions, gotchas and every measurement an open task cites; the full history is in
+> git before that date. Sections of open and parked tasks are unchanged except: none.
 
 ## Epic summary
 

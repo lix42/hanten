@@ -22,9 +22,10 @@ built. Correct, at minimum:
 - **Flag names in docs.** The original item said to replace `--out-depth` with
   `--output-hdr`; that is now backwards. `output/presets` (2026-08-09) removed
   `--output-hdr`/`--output-sdr` and shipped `--out-depth u16|f32`, so
-  `pipeline-orchestration.md`'s `--out-depth f32` is correct again. Sweep the docs for
-  any remaining `--output-hdr` instead (one known: the record-shape examples in
-  design-spec §12 and the `perf-telemetry` skill were fixed 2026-09-13).
+  `pipeline-orchestration.md`'s `--out-depth f32` is correct again. Sweep the
+  user-facing docs and the open task files for `--output-hdr` shown as a *live* flag
+  (the README quick-start carried one until 2026-09-14); done tasks' files and
+  `docs/progress/` legitimately record the old name as history.
 - **Research-report citation tokens.** `docs/negative-convertor-research-report.md`
   contains unresolved `citeturn…` tokens throughout. They are **wrapped in
   invisible Unicode private-use characters** (plain `grep citeturn` finds nothing),
@@ -84,8 +85,9 @@ resource/pipeline evidence, and the doc fixes in Part 1 need not wait.
 
 - README no longer claims pre-implementation; usage heading isn't "Planned"; a
   fresh reader would understand the tool works.
-- No `--output-hdr` / `--output-sdr` remains in `docs/tasks/`, the design spec or the
-  skills (`docs/progress/` history excepted); flag names match `cli.rs`.
+- No user-facing doc (README, `docs/using-nc.md`, the design spec, the skills) or open
+  task file shows `--output-hdr` / `--output-sdr` as a live flag; done tasks and
+  `docs/progress/` history excepted. Flag names match `cli.rs`.
 - The research report contains no `citeturn` tokens or their invisible PUA
   delimiters (verify with a PUA-aware scan, not plain-text grep).
 - `LICENSE` file present and `Cargo.toml` carries the agreed license + metadata

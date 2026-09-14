@@ -2085,7 +2085,7 @@ pub enum OutputPreset {
     /// `pipeline_version` 3. It is still the no-preset *pipeline* in every other
     /// sense and still accepts the legacy selectors, but reaching it now takes an
     /// explicit `--output-preset legacy` (or `custom`). Deleting it is
-    /// `output/sdr-preset-followups`' call, together with the golden vectors.
+    /// `output/display-p3-default`'s call, together with the golden vectors.
     Legacy,
     /// **`film-master`** — an unclamped 32-bit float linear ACEScg TIFF taken
     /// **directly** from the NC film RGB v1 mapping. It preserves the intentional
@@ -2125,8 +2125,8 @@ pub enum OutputPreset {
     /// for a given selector combination — the difference is provenance, not pixels:
     /// the report records that the combination was *chosen*, not inherited from a
     /// default. Widening it to the modern display path needs an arbitrary-destination
-    /// gamut mapping that does not exist yet (`output/sdr-preset-followups` records
-    /// the same gap for Adobe RGB), so it deliberately does not claim one.
+    /// gamut mapping that does not exist yet (`output/adobe-rgb-gamut` owns that
+    /// gap for Adobe RGB), so it deliberately does not claim one.
     Custom,
     /// **`gain-map-hdr`** — the same gain-map JPEG carrying **both** metadata
     /// dialects: Google's legacy Ultra HDR v1 XMP/MPF *and* ISO 21496-1 segments in
