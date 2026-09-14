@@ -39,6 +39,46 @@ python3 scripts/check-vendored-native.py --write
 operation and should only follow review of the native-source diff and pinned
 revision.
 
+## `../nc-assets` roll/file rename (2026-09-13)
+
+`../nc-assets` rolls and `converted/nlp/*` folders were renamed to
+`yyyy-mm-dd-stock` (date = the roll's last frame), and frame files inside each
+roll/nlp folder were renamed to `<serial-number>.tif`, except each roll's
+leader/base/calibration frames, now `leader.tif`/`base.tif`/`calibration.tif`.
+`nctool manifest generate`/`validate` (see [`analysis/`](analysis/)) followed the
+renames automatically via checksum matching, so `manifest.json` is current.
+
+Old → new roll names:
+
+| Old | New |
+|---|---|
+| `Ektar` | `2026-07-15-Ektar100` |
+| `Portra160-2026-07-22` | `2026-07-23-Portra160` |
+| `2026-09-09-Ektar` | `2026-09-09-Ektar100` |
+| `2026-07-24-Gold200`, `2026-09-11-Portra400`, `2026-09-13-Portra400` | unchanged |
+
+**This broke every script/fixture below that hardcodes the old roll names or
+exact old frame filenames** (e.g. `20260713-nikon-971.tif`) — they were
+*deliberately not updated* as part of this rename; fix them the next time you
+touch that tool:
+
+- [`sigmoid-baseline/fixtures.json`](sigmoid-baseline/fixtures.json) — every
+  frame's `file`/`dmin_frame`/`dmax_frame`, plus the `Ektar`/`Portra160-2026-07-22`
+  roll keys
+- [`sigmoid-baseline/patch-review.sh`](sigmoid-baseline/patch-review.sh) — the
+  literal `mark|roll|roll|filename` table
+- [`sigmoid-baseline/build_candidate_review.py`](sigmoid-baseline/build_candidate_review.py)
+  — the `DS_MID` dict, keyed by old roll name
+- [`preset-review/presets.matrix.json`](preset-review/presets.matrix.json) — the
+  `rolls` block's `"2026-07-24-Gold200"`/`"Ektar"`/`"Portra160-2026-07-22"` keys
+  (Gold200's key is still valid; Ektar/Portra160 are not)
+- [`analysis/benchmark.json`](analysis/benchmark.json) and
+  [`analysis/README.md`](analysis/README.md) — usages of the roll name `Ektar`
+  as a live `nctool roll ...` argument
+- `real-scan-verify/recipes/{Ektar,Portra160-2026-07-22}.provenance.json` — the
+  `roll`/`frame` fields are now stale narration (the frozen `.json` recipes
+  themselves hold only numeric values and still work unmodified)
+
 ## Privacy boundary
 
 Most analysis commands consume only JSON metadata or stream files for hashing.
