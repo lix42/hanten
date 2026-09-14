@@ -2430,8 +2430,8 @@ would cost a Unix-only code path for output that is reproducible by re-running.
     profile: `legacy` applies the print controls **before** a plain
     working→output ICC transform and never crosses the ACEScg boundary. Making
     `display-p3` the default in place of the incumbent `gain-map-hdr` is
-    `output/sdr-preset-followups` — decided, not yet executed, because it is both a
-    pixel change and a container change.
+    `output/display-p3-default` — decided 2026-08-09 and reaffirmed 2026-09-13, not
+    yet executed, because it is both a pixel change and a container change.
   - `hdr-pq` and `hdr-hlg` are explicit single-rendition display-HDR presets,
     each requiring an `.avif` output path. They write
     10-bit, full-range, 4:4:4 AVIF (AV1 High Profile, level capped at 6.0 for the
@@ -2648,11 +2648,11 @@ affect the output bytes (telemetry on or off ⇒ byte-identical TIFF + sidecar).
   input/output/sidecar/report-file is still a loud usage error (a config mistake,
   caught up front — an odd log path must never silently append into the scan).
 
-**Telemetry record shape (`schema_version` 3, serialize-only JSON).** Designed for
+**Telemetry record shape (`schema_version` 4, serialize-only JSON).** Designed for
 a future background uploader (§12, `telemetry/upload`) to drain and ship:
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "timestamp_ms": 1752566400000,
   "nc_version": "0.1.0",
   "target": "aarch64-apple-darwin",
@@ -2671,7 +2671,7 @@ a future background uploader (§12, `telemetry/upload`) to drain and ship:
     "reconstruction": "density", "curve": "exponential",
     "params_hash": "92a827ffd2d0aebd",
     "film_base_source": { "explicit": [0.9, 0.55, 0.42] },
-    "dmax": 1.6195, "output_hdr": false
+    "dmax": 1.6195, "output_depth": "u16"
   },
   "outcome": { "warnings": 1, "clipped": 3419, "non_finite": 0 }
 }
@@ -2963,13 +2963,13 @@ the NLP feature comparison, Phase 6).
     (§6.1, `ir-usability-detection`) — not by a declared film type, not by color
     model, and not by IR-plane presence. Also sidesteps holder *color* (item 9),
     since opacity, not color, is the IR signal. Tracked: `ir-holder-detection`.
-16. **Conversion versioning & baseline comparison.** *(Built, not yet shipped —
+16. **Conversion versioning & baseline comparison.** *(Shipped 2026-07-28 —
     `conversion-versioning`.)* Every report carries an `identity` block (§9):
     build identity (crate semver + git commit + dirty flag + target), a behavioral
     `pipeline_version` (bumps *only* on default-behavior changes, gated by a golden
     drift test over the default render, the default film-base estimate, and the
     default recipe values — see §9 for what that gate does **not** cover; `0` = the
-    `v0` baseline, `1` = current), and a resolved-params hash.
+    `v0` baseline, `4` = current as of 2026-09-09), and a resolved-params hash.
     It is mirrored into the sidecar only via the backward-compatible
     `{ "meta", "params" }` envelope — never as bare recipe keys, which would break
     the `--params` `deny_unknown_fields` round-trip; `--params` still accepts a bare

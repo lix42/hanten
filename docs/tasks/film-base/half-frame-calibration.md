@@ -1,5 +1,9 @@
 # Calibrate from a single part-exposed frame
 
+> **Dmax half is parametric-curves only (noted 2026-09-13).** The `characteristic` curve resolves
+> no `Dmax`; only the unexposed half of such a frame serves every path.
+
+
 ## Goal
 
 Let one frame that is *partly* unexposed and *partly* fully exposed serve as both

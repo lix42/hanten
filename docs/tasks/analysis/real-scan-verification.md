@@ -33,7 +33,7 @@ plus a sample of `~/Pictures/scan/`):
    *which* frame is the unexposed / fully-exposed reference belongs to
    `base-acquisition-planner`, not here; supply the frames.
 3. **convert, current TIFF paths** (density, resolved Dmax) — default 16-bit TIFF
-   and explicit `--output-hdr` rendered float TIFF both exit 0; dimensions,
+   and explicit `--out-depth f32` (then `--output-hdr`) rendered float TIFF both exit 0; dimensions,
    profile, and report are internally consistent, grays are plausibly neutral,
    and the float path preserves unclamped values reported by the current
    pipeline. Do not call this transitional print-rendered output the future

@@ -66,8 +66,8 @@ impl RenderedSdr {
 
     /// Borrow the fully resolved rendering policy for reporting.
     // `output/presets` finished without wiring it — the SDR report block was never
-    // in that task's scope. `output/sdr-preset-followups` owns it (item 3).
-    #[allow(dead_code)] // consumed next by `output/sdr-preset-followups`'s report block.
+    // in that task's scope. `output/sdr-report-block` owns it.
+    #[allow(dead_code)] // consumed next by `output/sdr-report-block`.
     pub fn metadata(&self) -> &SdrRenderMetadata {
         &self.metadata
     }

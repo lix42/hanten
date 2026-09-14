@@ -95,7 +95,7 @@ N runs append N lines. `--telemetry-file <path>` overwrites (a single record).
 Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
 
 ```json
-{ "schema_version":3, "timestamp_ms":1752566400000,
+{ "schema_version":4, "timestamp_ms":1752566400000,
   "nc_version":"0.1.0", "target":"aarch64-apple-darwin", "cpu_count":14,
   "image":{"format":"hdri","width":502,"height":462,"megapixels":0.231924,
            "bit_depth":16,"channels":3,"ir_present":true,
@@ -105,7 +105,7 @@ Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
   "conversion":{"preset":"legacy","reconstruction":"density","curve":"exponential",
                 "params_hash":"92a827ffd2d0aebd",
                 "film_base_source":{"explicit":[0.9,0.55,0.42]},
-                "dmax":1.6195,"output_hdr":false},
+                "dmax":1.6195,"output_depth":"u16"},
   "outcome":{"warnings":1,"clipped":3419,"non_finite":0} }
 ```
 
@@ -115,10 +115,11 @@ applied an anchor. (Schema v2 replaced v1's `conversion.algorithm` with the
 `reconstruction` + `curve` pair, mirroring the tagged recipe schema.)
 `conversion.preset` is the resolved `output.preset` (`legacy` | `film-master`) —
 **v3** added it, because without it a `film-master` run is indistinguishable from a
-legacy one except by file size. `conversion.output_hdr` means "a 32-bit float TIFF was
-written" and is derived from the same `OutputParams::depth()` the encoder uses, *not*
-from the `output.hdr` switch: `film-master` pins that switch at its default while still
-resolving f32, so reading the switch reports `false` for an f32 master.
+legacy one except by file size. **v4** (2026-08-09) renamed `conversion.output_hdr` to
+`conversion.output_depth` (`u8`|`u10`|`u16`|`f32`), following the `output.hdr` →
+`output.depth` rename; it reports the **primary image's** depth
+(`OutputParams::primary_depth_label`), which for the JPEG and AVIF presets is the
+container's fixed 8/10-bit.
 `params_hash` is a stable FNV-1a of the canonical effective-recipe JSON — the exact
 bytes `--dump-params` writes — so identical conversions share a hash. It is **not**
 the sidecar's bytes: the sidecar is the

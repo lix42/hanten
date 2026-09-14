@@ -1,5 +1,15 @@
 # Curve endpoint validation (does this config place its endpoints usefully?)
 
+> **Needs re-evaluation before pickup (2026-09-13).** Written against exponential and
+> sigmoid only. Since then: the reference-free placements (`black-at-base`,
+> `mid-at-base-offset`) never read `R`, so the white check `s_curve(R)` has no meaning there;
+> the `characteristic` curve (proposed default) has no `dmax` or anchor, and its analogue is
+> `out_of_table`; `validate` already resolves `placement.anchor(reference, slope)` and rejects a
+> non-finite anchor and a `slope·anchor` overflow, so part of this infrastructure exists; and
+> the display renderers' range checks now refuse an over-range frame at render time. Decide what
+> is left to validate pre-decode, and for which curves.
+
+
 ## Goal
 
 Warn, **before decoding**, when a resolved density curve places its tonal

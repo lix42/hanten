@@ -9,6 +9,14 @@ after the `/`). Read this whole file before starting a task in this epic, and
 read other epics' `Epic summary` sections when you depend on them. Append
 entries — don't rewrite earlier ones.
 
+> **Consolidated 2026-09-13** (user-authorised; see CLAUDE.md's exception to the
+> append-only rule). Sections of *done* tasks were rewritten as summaries keeping the
+> decisions, gotchas and every measurement an open task cites; the full history is in
+> git before that date. Sections of open and parked tasks are unchanged except: the PR
+> #70 entry moved verbatim from `sigmoid-parameter-calibration` to
+> `reference-anchored-sigmoid`, and `content-aware-sigmoid-toe`'s two sections were
+> merged.
+
 ## Epic summary
 
 What other epics need to know about `algo`:
@@ -18,7 +26,8 @@ What other epics need to know about `algo`:
   `AlgoParams` are gone. The recipe is one **tagged `reconstruction` object**
   (`schema_version: 1`) selecting `simple` or `density`, with density carrying a
   tagged `sigmoid` (the default since `pipeline_version` 2, 2026-08-08),
-  `exponential`, or — since 2026-09-08 — **`characteristic`**, which inverts a named film
+  `exponential`, or — since #105 (built 2026-09-04, closed 2026-09-08, merged
+  2026-09-10) — **`characteristic`**, which inverts a named film
   stock's *published* curve per channel instead of modelling it (`--film-stock`, ten
   digitized stocks, `algo/film-stock-profiles`). That third variant resolves **no reference
   density and no anchor placement**: `DensityCurve::anchor()` returns `Option` for that
@@ -40,11 +49,13 @@ What other epics need to know about `algo`:
 - **`--preset` ships five named reconstruction + display bundles** (`algo/conversion-presets`,
   2026-09-10), because every configuration worth shipping is a bundle whose numbers are
   meaningless separately — the `print_exposure` matching one brightness runs 0.31–0.61
-  across reconstructions. Four things other epics must key on. **It is a CLI-only
+  across the shipped presets (0.70 for `sigmoid-knees`, which cannot use the knob at all).
+  Four things other epics must key on. **It is a CLI-only
   expansion, not a recipe key**: `--dump-params` writes the expanded values, a recipe
   naming a preset is rejected as an unknown field, and the name survives only as the
-  report's `conversion_preset` provenance (with an `overridden` list, since flags still win
-  over a preset). **Precedence is `defaults < params < preset < flags`** — a preset sits
+  report's `conversion_preset` provenance (with `overridden` and `replaced` lists, since
+  flags still win over a preset and a preset can replace a recipe value).
+  **Precedence is `defaults < params < preset < flags`** — a preset sits
   *above* the recipe, because nc writes every key explicitly and one layered underneath
   would be inert against any recipe nc produced. **A preset never sets `output.preset`**,
   so the non-display presets keep resolving their own tone and exposure, which is what lets
@@ -56,7 +67,8 @@ What other epics need to know about `algo`:
   `algo/split-default-migration` step — whose no-stock blocker was **lifted 2026-09-10**.
   Since **2026-09-12** its release gate is neutrality against a known-neutral reference,
   which `analysis/calibration-frame-capture` produces; `io/scanner-density-calibration`
-  is the remedy if that measurement fails, not the gate itself.
+  is the remedy if that measurement fails, not the gate itself. The CLI-surface half
+  of that move is `algo/characteristic-default-audit` (filed 2026-09-13, executable now).
 - **The aim-matched red scale is derived at runtime**, not tabulated:
   `algo::film_stock::aim_red_scale(stock)` returns the factor `--density-scale` takes (the
   **reciprocal** of the one that scales the table), and `None` for the derived generic and
@@ -170,966 +182,362 @@ What other epics need to know about `algo`:
 
 
 ## interface
-**Status:** done
-**Updated:** 2026-06-16
+**Status:** done (2026-06-16; superseded in shape 2026-07-23)
 
-- Goal: `Converter` trait + algorithm selection so converters are pluggable.
-- **Done.** Everything lives in `src/algo/mod.rs`:
-  - `Converter` trait kept **object-safe** — params live in the implementor, no
-    associated `Params` type, `convert(&self, image, base) -> Result<LinearImage>`.
-    The design-spec §7.2 sketch shows an associated-type variant; that can't form
-    `Box<dyn Converter>`, which `build()` and the verification both need, so this
-    task supersedes the sketch (noted in a doc comment on the trait).
-  - `Algorithm { Simple, Density }` — `Copy`, `serde(rename_all="lowercase")` so it
-    round-trips as `"simple"`/`"density"`, `#[default] Density` (the documented
-    default algorithm).
-  - `FromStr for Algorithm` with `type Err = NcError`; unknown names →
-    `NcError::Usage` (exit 2), failing loudly instead of defaulting. CLI parses
-    `--algorithm` through this.
-  - `AlgoParams` enum: `Simple(SimpleParams)` and
-    `Density { density: DensityParams, print: PrintParams }`. **Decision:** the
-    `Density` variant (and the `Density` converter struct) carries **both**
-    sub-stages' params now — density correction + the separate print render —
-    rather than deferring `PrintParams` to `algo-density`. They stay distinct
-    fields, preserving the density/print separation (core fidelity rule).
-    `AlgoParams::algorithm()` reports which algorithm a param set selects.
-  - `build(params: AlgoParams) -> Box<dyn Converter>` — **infallible**, takes the
-    param set by value and moves it into the converter (no clone). The task sketch
-    had `build(algo, params)` taking the algorithm separately, but the
-    `AlgoParams` variant already *is* the algorithm selector (`AlgoParams::algorithm()`
-    derives it totally), so a separate `Algorithm` argument carried zero info and
-    only created a mismatch error that one argument makes unrepresentable
-    ("make illegal states unrepresentable"). Any `--algorithm` vs flag
-    contradiction is resolved/rejected in `cli-framework` where the flag context
-    lives, and the CLI hands `build` one already-valid `AlgoParams`. (Decision from
-    the ship code review — type-design agent.) The match is exhaustive over
-    `AlgoParams`, so a future algorithm variant fails at compile time.
-  - `AlgoParams::algorithm() -> Algorithm` kept (CLI uses it to derive the
-    algorithm for the JSON report from the param set alone).
-- **Touched `algo/density.rs`:** `Density` struct now has `density: DensityParams`
-  + `print: PrintParams` (was `params: DensityParams`). `algo-density` fills the
-    `convert` body and consumes both fields.
-- **Notes for dependent tasks:**
-  - `algo-simple` / `algo-density`: just implement `Converter::convert` on the
-    existing `Simple` / `Density` structs; the field shapes are fixed (`Simple.params`,
-    `Density.density` + `Density.print`). Don't widen the trait — push new tone
-    controls into the param structs.
-  - `cli-framework`: parse `--algorithm` via `Algorithm::from_str` (maps unknown →
-    `Usage` for you); assemble an `AlgoParams` for the chosen algorithm and pass it
-    to `algo::build`. `Algorithm` serializes lowercase for the JSON report/recipe.
-- **Verify:** `cargo build`, `cargo clippy --all-targets -- -D warnings`, and
-  `cargo fmt --check` all clean; `cargo test` 13/13 (6 new: `from_str` ok + unknown
-  → exit 2, default = density, lowercase serialize, object-safe boxed call, `build`
-  for both algorithms, `build` mismatch → exit 2). Object-safety proven by a test
-  `Identity` converter exercised through `Box<dyn Converter>`.
+- Shipped the first pluggable surface in `src/algo/mod.rs`: an object-safe
+  `Converter` trait, `Algorithm { Simple, Density }` with `FromStr` mapping unknown
+  names to `NcError::Usage` (exit 2, never a silent default), and an infallible
+  `build(AlgoParams) -> Box<dyn Converter>` whose enum variant *was* the selector, so
+  an `--algorithm`-vs-params mismatch was unrepresentable rather than an error case.
+- **All of that shape is gone** — `algo/negative-reconstruction-density-curves`
+  (2026-07-23) replaced the trait and `AlgoParams` with the pure
+  `reconstruct(image, base, config)` and the tagged `reconstruction` recipe object.
+  Two decisions survived the replacement and still hold: an unknown selector name is
+  a loud usage error, and a selector must not be carried separately from the
+  parameter set that already implies it (the tagged enum is that rule, one level up).
 
 
 ## simple
-**Status:** done
-**Updated:** 2026-07-12
+**Status:** done (2026-07-12; scope narrowed 2026-07-23)
 
-- Goal: channel-inversion baseline converter (debug / B&W) with white balance and
-  black/white points.
-- **Done.** `src/algo/simple.rs` implements `Converter::convert` on `Simple`. It's
-  the only file changed — `SimpleParams`' knobs (`invert_white_balance`,
-  `clip_low`, `clip_high`) were already fully wired by `cli-framework` (recipe
-  struct in `types.rs`, `SimpleOverrides` + merge arm + `validate` checks in
-  `cli.rs`), so **no new knobs** were added and no four-spot wiring was needed.
-- **Algorithm (pure, per channel, linear working space):**
-  1. neutralize the film base — `normalized = value / base[c]` (removes the
-     orange-mask multiplicative cast; an unexposed base pixel → 1.0);
-  2. invert — `positive = 1 - normalized`;
-  3. white balance — `* invert_white_balance[c]`;
-  4. black/white points — linear remap `(x - clip_low) / (clip_high - clip_low)`.
-  A neutral base `[1,1,1]` makes step 1 inert, giving the pure `1 - v` reference.
-  No density-domain math (log/exp) — that's what distinguishes `density`.
-- **Decisions:**
-  - **Base neutralization is a divide, using the pipeline-provided `FilmBase`** —
-    the task spec's step 1 ("optional normalize against base") and design-spec
-    §7.1's "border neutralization". It reuses the existing film-base knobs
-    (`--film-base`/`--base-region`/`--auto-base`); "optional" is expressed by a
-    neutral base being inert, not by a new flag.
-  - **No clamping** anywhere in the stage — output f32 may fall outside `[0,1]`
-    (HDR/scene-referred); clamping is the u16 encoder's job (CLAUDE.md clamp
-    boundary). Locked by `does_not_clamp_out_of_range_values`.
-  - **rayon** `par_chunks_exact(3).flat_map_iter(..).collect()` — per-pixel
-    independent, and rayon's ordered collect keeps it deterministic. `rgb.len()`
-    is a multiple of 3 (a `LinearImage` invariant), so every chunk is one triple.
-  - **IR plane carried through untouched** (`image.ir.clone()`), per Step-1 rule.
-- **Review loop (pr-review-toolkit, 4 agents parallel + 1 confirmation round):**
-  All four (code / silent-failure / tests / comments) converged on **one**
-  important finding: the original `convert` doc claimed `cli::validate` guarantees
-  a positive/finite `base` so the divide can't hit zero — **true only for
-  `FilmBaseSource::Explicit`.** For `Region`/`Auto` the base is runtime-estimated
-  by `film_base::estimate`, which has no positivity guarantee (a `--base-region`
-  over the dark holder → `percentile` returns `0.0`), so `value / 0.0` would emit
-  silent `inf`/`NaN` — a "quietly wrong image", violating fail-loudly.
-  - **Fix (kept inside this task's file):** `convert` now guards the base up front
-    — any channel that isn't finite-and-positive → `NcError::Other` (exit 1) with
-    an actionable message (pass `--film-base` / point `--base-region` at the
-    rebate). This stage is the first to divide by the base, so the guard is a
-    *first* validation of a runtime-derived value, not a redundant re-check of a
-    CLI-validated one (consistent with `film_base.rs`'s own defense-in-depth).
-    Doc comment corrected to attribute each guarantee to the right layer.
-  - Also added, per the test reviewer: `applies_base_then_invert_then_wb_then_clip_in_order`
-    (all four ops active with distinct per-channel values — catches a step
-    reorder that the one-op-at-a-time tests miss) and
-    `parallel_path_preserves_sample_order` (large multi-chunk image, position-
-    dependent samples — pins the rayon-collect ordering).
-  - Confirmation re-review came back clean (no remaining/new important issues).
-- **Notes for dependent tasks:**
-  - **`pipeline-orchestration`:** `Simple::convert` can now return an error
-    (degenerate base) as well as `LinearImage::new` failures — propagate its
-    `Result`, don't `unwrap`. Exit 1 on a degenerate estimated base.
-  - **`algo-density` (follow-up, not fixed here):** `density` will also divide by /
-    take `log10` of the base (`D = -log10(scan/Dmin)`) and needs the **same base
-    guard**; its `convert` is still a `todo!()` stub, so there's no live gap today.
-  - **`film-base-estimation` (recommended follow-up, out of this task's scope):**
-    the deeper fix is for `film_base::estimate` to reject a non-positive/non-finite
-    estimated base loudly at the point it's born (beside its existing uniformity /
-    brighter-than-interior gates), which would make the base valid for *every*
-    consumer, not just `simple`. Left to that task rather than editing its
-    completed file from here.
-- **Verify:** `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo build`, `cargo test` all clean. Full suite **87/87** (11 new
-  `algo::simple` tests: inversion, base neutralization divides-before-invert, WB
-  scaling, clip endpoint remap, combined-ordering, no-clamp passthrough, IR
-  present/absent, dimension preservation, parallel order, degenerate-base error).
-- **2026-07-12 — closed out.** Manual review approved; shipped via `/ship`
-  (gates re-run green, CLAUDE.md gained the film-base guard gotcha, PR opened
-  from branch `algo-simple`). The notes above for `pipeline-orchestration` /
-  `algo-density` / `film-base-estimation` stand.
+- `src/algo/simple.rs`: per channel, `normalized = value / base[c]` (the film base
+  divides out, so an unexposed pixel → 1.0), then `positive = 1 − normalized`. No
+  density math, no clamping (clamping is the u16 encoder's job), rayon ordered
+  collect so the parallel path is deterministic, IR carried through untouched.
+- **Fail-loud base guard.** `simple` was the first stage to divide by a
+  *runtime-estimated* base (`Region`/`Auto`), which `cli::validate` never sees, so a
+  `--base-region` over the dark holder produced `value / 0.0` silently. `convert`
+  guards every channel finite-and-positive (`NcError::Other`, exit 1) with a message
+  naming `--film-base`/`--base-region`. The deeper fix — rejecting a bad base where
+  it is born — landed later in `film_base::estimate` (`film-base/auto-base-redesign`);
+  the per-algo guards stay as defense-in-depth.
+- 2026-07-23: white balance and the clip range were **removed from `simple`'s
+  reconstruction** — it now ends at the unclamped `1 − scan/Dmin` `FilmRgbImage`,
+  and `--invert-white-balance` / `--clip-low` / `--clip-high` are rejected with
+  migration errors pointing at `print.white_balance` / `print.linear_range` (see
+  `negative-reconstruction-density-curves`).
+- 2026-08-11 (#95): `simple` is **not** the B&W path; B&W is `algo/bw-support`. It
+  remains the debugging reference only.
 
 
 ## density
-**Status:** done
-**Updated:** 2026-07-12
+**Status:** done (2026-07-12, follow-ups 2026-07-13)
 
-- Goal: density-domain converter (Cineon/negadoctor style) with separate density
-  and print-render sub-stages; the default algorithm.
-- **Done.** `src/algo/density.rs` implements the `density` converter as two pure,
-  independently-testable sub-stage fns composed by `Converter::convert`:
-  - `to_density(image, base, &DensityParams) -> DensityImage` — stages 1–2.
-  - `render(&DensityImage, density_gamma, &PrintParams) -> LinearImage` — stages 3–4.
-  - `DensityImage` is the algo-internal intermediate (corrected density + carried
-    IR + dims), `pub(crate)`, no validated constructor (its length invariants hold
-    by construction from a validated `LinearImage`).
-- **Exact equations chosen (per channel `c`), for reproducibility:**
-  1. transmission → density: `D_c = -log10(max(scan_c, EPS) / base_c)`, `EPS = 1e-6`.
-  2. density correction: `D'_c = density_scale_c · D_c + density_offset_c`.
-  3. density → positive: `lin_c = 10^(density_gamma · D'_c)`.
-  4. print render: `lin_c = white_balance_c · 2^print_exposure · lin_c − black_point`,
-     then per-channel highlight soft-clip.
-  - **Highlight soft-clip:** identity for `x ≤ 1.0` (nominal display white) or
-    `amount ≤ 0`; above white, `out = 1 + amount·(1 − e^(−(x−1)/amount))`, an
-    exponential knee asymptoting to `1 + amount`. `amount = highlight_compress`.
-    The `1.0` threshold is a documented anchor (definition of "highlight"), not a
-    hidden knob — the exposed control is `highlight_compress`.
-  - **Orange-mask compensation is structural:** dividing by the *per-channel* base
-    lands an unexposed sample on `D = 0` in every channel, so a neutral patch stays
-    neutral with default params; `density_offset`/`density_scale` trim the residual
-    per-channel balance/contrast.
-- **Key decision — polarity sign fix (deliberate deviation from the task-file /
-  design-spec §7.2 sketch).** The sketch wrote stage 3 as `10^(−D'·gamma)`. With
-  `D = -log10(scan/base)` (which is `≥ 0` and *grows* with the film's optical
-  density: base = scene black at `D=0`, dense negative = scene highlight at large
-  `D`), that formula yields `scan/base` — i.e. the original **negative** — not a
-  positive. A true positive must brighten as `D` grows, so stage 3 uses
-  `10^(+gamma·D')`. **Verified against darktable `negadoctor`'s source** (via
-  WebFetch): its print output increases with film density (denser negative →
-  brighter print), confirming the `+` sign. Guarded by
-  `convert_is_positive_polarity_denser_is_brighter` so a regression to the `−` sign
-  fails the build.
-- **No new knobs.** All params consumed (`density_scale/offset/gamma`,
-  `print_exposure/black_point/white_balance/highlight_compress`) were already wired
-  across the four coupled spots by `algo-interface` + `cli-framework`, so no
-  `cli.rs`/`types.rs` param additions were needed — only a validation tightening
-  (below).
-- **`cli.rs` change (validation only):** `--highlight-compress` now must be `>= 0`
-  (was finite-only). A negative value is silently a no-op in the soft-clip, so it
-  now fails loudly at the CLI boundary (exit 2) per the "no silent no-op knob" rule.
-- **Fail-loudly hardening (from review):**
-  - `Density::convert` guards the film base via `check_base` (finite & `> 0` per
-    channel, else `NcError::Other`/exit 1). The CLI validates an *explicit* base,
-    but an **auto/region-estimated** base is never CLI-checked and could be `0`
-    (e.g. a `--base-region` over a black holder) → division by zero → a silently
-    black image. Guarded at the base's consumption point instead.
-  - Non-finite scan input (`NaN`/`±inf`) propagates as `NaN` density (not laundered
-    by the `EPS` floor), and the soft-clip passes non-finite through unchanged, so
-    `io::encode`'s non-finite counter still surfaces corrupt/overflowed values. The
-    `EPS` floor applies only to *finite* zero/negative/denormal transmission.
-  - `render` builds its output via `LinearImage::new(...).expect(...)` (O(1) length
-    checks) so a future invariant regression panics loudly instead of minting a
-    malformed image.
-- **Output is scene-referred / HDR.** With neutral defaults the base maps to `1.0`
-  and exposed detail sits above it; nothing is clamped here (per the project rule —
-  clamping is the u16 encode's job, which counts/report clips). Fit to a display
-  range with a negative `--print-exposure` and/or `--black-point`, or keep the HDR
-  range via `--out-depth f32`.
-- **Notes for `pipeline-orchestration`:** call `algo::build(AlgoParams::Density{..})`
-  and `Converter::convert` as usual; `convert` can now return `NcError::Other` when
-  the resolved/estimated film base is invalid — surface it as a normal pipeline
-  error. The density-domain default is intentionally exposure-hot (base → 1.0);
-  when wiring `inspect`/reports, remember output may exceed `[0,1]` (expected, HDR).
-- **Verify:** `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, build,
-  and `cargo test` all clean — full suite **95/95** (21 new density tests + a cli
-  validate case). Density tests cover: `-log10` ratio, per-channel/orange-mask base,
-  scale-then-offset order, epsilon floor on finite zero/negative, non-finite scan
-  propagation, IR carry-through (both sub-stages + convert), the `10^` curve, gamma
-  exponent, wb→exposure→black order, soft-clip (disabled/below-white/rolloff/bounded/
-  non-finite pass-through), soft-clip routed through `render`, composition
-  (`convert == render∘to_density`), positive polarity (denser → brighter), neutral
-  patch stays neutral, default output finite/no-blow-up, and the base guard
-  (zero/negative/NaN/inf → error).
-- **Review:** ran `pr-review-toolkit:review-pr` (code-reviewer, silent-failure-hunter,
-  type-design-analyzer, pr-test-analyzer) — 2 rounds.
-  - Round 1 findings fixed: negative `--highlight-compress` no-op → CLI reject;
-    NaN/inf scan laundering → propagate NaN; zero-base silent-black → `check_base`;
-    `pub` → `pub(crate)` + validated-constructor in `render`; test gaps (non-finite
-    input, non-tautological soft-clip-in-render, no-blow-up) → added.
-  - Round 2: code-reviewer clean; silent-failure-hunter flagged `soft_clip` still
-    masking `+inf` → `1+amount` under compression → fixed with the `!x.is_finite()`
-    guard + test. Re-ran gates: clean.
-  - Minor/dismissed: `check_base` uses exit-1 (`Other`) rather than exit-4
-    (`Unsupported`) for a bad *estimated* base — a defensible judgment call, kept
-    (explicit bad base is already exit-2 at the CLI).
-- **2026-07-12 — closed out.** Manual review approved; shipped via `/ship` (gates
-  re-run green, PR opened from branch `algo-density`). **Follow-up for the spec:**
-  design-spec §7.2's stage-3 sketch (`10^(−D'·gamma)`) has the polarity bug
-  described above — correct it (and design-spec.html together) to `10^(+gamma·D')`.
-- **2026-07-13 — PR-review follow-ups.** From bot review on the PR: `render` now
-  consumes its `DensityImage` (in-place transform, IR moved not cloned); film-base
-  transmissions are bounded to `(0, 1]` at both the CLI (`--film-base`, exit 2) and
-  `check_base` (estimated/recipe base, exit 1) — a `90`-for-`0.90` typo previously
-  blew out silently. **Deferred design finding (for `pipeline-orchestration` /
-  spec):** with default params the render maps scene black (base) to `1.0` and all
-  detail *above* it, so the default u16 encode clips the whole image (loudly, via
-  the clip report, but still unusable). Needs a display-range anchor — e.g. a
-  Dmax-style white anchor or different default `print_exposure`/`black_point` —
-  decided at the spec level (§7.2/§9 defaults) alongside the polarity correction.
+`src/algo/density.rs` implements the density-domain converter as two independently
+testable pure sub-stages composed by the converter (`to_density` = stages 1–2,
+`render` = stages 3–4). The exact equations, kept here because the task file asks for
+them and later tasks build on them:
+
+1. transmission → density: `D_c = -log10(max(scan_c, EPS) / base_c)`, `EPS = 1e-6`,
+   applied only to *finite* zero/negative/denormal transmission — `NaN`/`±inf` scan
+   samples propagate as `NaN` density so `io::encode`'s non-finite counter sees them.
+2. density correction: `D'_c = density_scale_c · D_c + density_offset_c` (dividing by
+   the per-channel base lands an unexposed sample on `D = 0` in every channel, so
+   orange-mask compensation is structural; `scale`/`offset` trim the residual).
+3. density → positive: `lin_c = 10^(density_gamma · D'_c)` — **positive sign**. The
+   task file and early design-spec §7.2 wrote `10^(−D'·gamma)`, which yields the
+   original *negative*; verified against darktable `negadoctor` (denser negative →
+   brighter print) and pinned by `convert_is_positive_polarity_denser_is_brighter`.
+   `dmax-white-anchor` later made this `10^(γ·(D' − Dmax))`.
+4. print render: `lin_c = white_balance_c · 2^print_exposure · lin_c − black_point`,
+   then a per-channel highlight soft-clip: identity for `x ≤ 1.0` or `amount ≤ 0`;
+   above white `out = 1 + amount·(1 − e^(−(x−1)/amount))`, asymptoting to
+   `1 + amount` (`amount = highlight_compress`; the `1.0` threshold is the documented
+   definition of "highlight", not a hidden knob). Non-finite passes through unchanged.
+
+Decisions still in force:
+
+- `--highlight-compress` must be `≥ 0` (a negative value was a silent no-op).
+- `check_base` guards an estimated/recipe base finite, `> 0` and `≤ 1` at the point
+  of consumption (exit 1); an explicit `--film-base` is bounded to `(0, 1]` at the
+  CLI (exit 2). A `90`-for-`0.90` typo previously blew out silently.
+- `render` consumes its `DensityImage` (in-place, IR moved not cloned).
+- **Silent underflow is real and unowned by this task.** A hugely *negative* `D'`
+  underflows `10^(γ·D')` to a finite `+0.0` that no counter flags (a hugely positive
+  one overflows to `+inf`, which the non-finite counter catches). Recorded at the
+  time as an orchestration warning to add; it is `algo/density-safety-bounds`' second
+  context block (which also found the same shape in `render_print`'s exposure gain).
 
 
 ## dmax-white-anchor
-**Status:** done
-**Updated:** 2026-07-13
+**Status:** done (2026-07-14; PR #17)
 
-- Goal: anchor scene white (Dmax) in the density render so default u16 output
-  fills the display range instead of clipping (PR #12 review finding; NLP
-  comparison priority 1). Includes the design-spec §7.2 polarity correction.
-- **Done.** The `render` sub-stage (`src/algo/density.rs`) now renders density
-  relative to a display-white anchor `Dmax`; `to_density` is untouched and the two
-  sub-stages stay separate. Full CI gate clean; suite **122/122**.
-- **Exact formula + chosen form (for reproducibility):**
-  - Stage 3 is now `lin_c = 10^(density_gamma · (D'_c − Dmax))`.
-  - **Gain form (chosen):** this factors as `10^(γ·D') · 10^(−γ·Dmax)`, so the
-    constant `anchor_gain = 10^(−γ·Dmax)` is **folded into the stage-4 exposure
-    gain**: `exposure_gain = anchor_gain · 2^print_exposure`. Picked over
-    subtracting `Dmax` inside the exponent because the anchor and `print_exposure`
-    are both multiplicative scalars — folding makes the bit-exactness guarantee
-    trivial (see below) and keeps the per-pixel hot loop one multiply.
-  - **Auto percentile:** `AUTO_DMAX_PERCENTILE = 0.995` (99.5th) of the *finite*
-    corrected densities, **scalar/pooled across all channels** (a per-channel
-    anchor would double as color correction — deferred to `auto-neutral-wb`).
-    Nearest-rank via `select_nth_unstable_by(round((n−1)·p), f32::total_cmp)`
-    (O(n); the order-statistic value is tie-order-independent ⇒ deterministic).
-    Non-finite densities are filtered out first; empty/all-non-finite ⇒ `0.0`
-    (neutral gain 1.0, not a panic). 0.995 catches genuine scene white while
-    ignoring the top ~0.5% (specular sparkle / dust / hot pixels).
-- **Knob shape (one enum, per §9 conventions):** `DmaxSource { Auto (default) |
-  Explicit(f32) | None }` in `types.rs`, recipe key **`density.dmax`** (sits beside
-  `density_gamma` in `DensityParams`, and like `density_gamma` is applied in the
-  render sub-stage — that's why it lives under `density.*`, not `print.*`).
-  Serializes `"auto"` / `{"explicit":<d>}` / `"none"`, mirroring `FilmBaseSource`.
-  CLI: mutually-exclusive `--d-max <d>` / `--auto-d-max` / `--no-d-max` (clap
-  `conflicts_with_all`, dedicated `DmaxOverrides` group like `FilmBaseOverrides`).
-  Four coupled spots all wired: `DmaxOverrides` field + merge arm + `validate`
-  (explicit d-max must be finite & `> 0`) + recipe field, each with a test.
-- **Bit-exact `None` guarantee (HDR f32 workflows depend on it):** `DmaxSource::
-  None` ⇒ `resolve_dmax` returns `None` ⇒ `anchor_gain` returns the literal `1.0`
-  ⇒ `exposure_gain = 1.0 · 2^print_exposure`, which is `2^print_exposure`
-  bit-for-bit in IEEE-754, and the per-pixel arithmetic is otherwise unchanged.
-  Pinned by `none_anchor_is_bit_exact_with_pre_anchor_render`, which recomputes the
-  pre-anchor expression and asserts `assert_eq!` on f32 (not an epsilon).
-- **Default is now `Auto`** — this deliberately changes the default `density`
-  output from scene-referred (base → 1.0, everything above) to display-range-
-  filling (scene white → ≈1.0). That is the whole point of the task (closes PR #12's
-  "default u16 clips the whole image"). Verified on the real-scan fixture
-  (`tests/fixtures/hdr-48bit.tif`) via a throwaway `#[ignore]` probe (removed):
-  default `Auto` u16 clipped fraction **0.49%** (spot highlights only) vs
-  **99.9996%** with `--no-d-max`; resolved Dmax ≈ 1.087.
-- **Resolved anchor rides back for the report:** the `Converter` trait gained a
-  **defaulted** `convert_reported(&self, image, base) -> Result<(LinearImage,
-  ConvertReport)>` (`algo/mod.rs`); `ConvertReport { dmax: Option<f32> }`. `Density`
-  implements the real work in `convert_reported` and has `convert` delegate to it
-  (`.0`); `simple` inherits the default (no diagnostics). This is a *diagnostics
-  output* channel (analogous to `EncodeReport`), not a control knob, so it doesn't
-  reopen the "don't widen the trait for controls / associated-Params breaks
-  object-safety" decision — `Box<dyn Converter>` still works.
-- **Spec updated (md + html together):** §7.2 stage-3 corrected to `10^(+γ·D')`
-  (was the ambiguous "exponential back-transform"; polarity bug per the
-  `algo-density` note), plus new polarity + Dmax-anchor prose; §9 density-stage
-  gained the `--d-max`/`--auto-d-max`/`--no-d-max` keys under `density.dmax`.
-- **Review (pr-review-toolkit, 5 agents parallel):** code-reviewer, silent-failure,
-  type-design, tests, comments.
-  - code-reviewer: **no findings at threshold** — confirmed bit-exactness,
-    determinism, four-spot wiring, fail-loud all sound.
-  - silent-failure-hunter, 2 MEDIUM — both analyzed and **dismissed with rationale
-    (not code-changed):** (1) "Auto anchor can be non-positive → brightens" — this
-    is *correct* display-fill behavior for a dim frame (bring near-white content up
-    to 1.0); the explicit-path positivity guard exists for *typo* protection on user
-    input, whereas Auto is a trusted deterministic measurement, so the asymmetry is
-    intentional. (2) "pathological `--density-gamma`×`--d-max` underflows gain to 0 ⇒
-    all-black finite image the encoder backstop can't see" — reachable only with
-    absurd inputs, and in most such cases `10^(γ·D')` overflows to `+inf` first ⇒
-    `inf·0 = NaN` ⇒ *is* caught by the encoder's non-finite counter; the narrow
-    all-black-finite edge is best surfaced as an orchestration warning (see note
-    below), not speculative clamping in the pure stage.
-  - type-design: clean (DmaxSource is a textbook "one enum, not parallel fields",
-    defaulted `convert_reported` is a sound object-safe diagnostics channel).
-  - tests: added 5 (nearest-rank precision on distinct values, Auto→render
-    end-to-end scene-white→1.0, anchor×print_exposure composition at a known value,
-    scalar-pooled-across-channels guard, nested `density.dmax` recipe parse).
-  - comments: accurate; reworded the `Auto` doc ("no `--d-max` flag" → "none of the
-    three dmax flags").
-- **Notes for `algo-sigmoid`:** reuse this anchor — the S-curve tone map wants the
-  same "scene white → display white" reference. The resolved `Dmax` (frame-local
-  scene-white density) is the natural shoulder anchor; consume it via the same
-  `DmaxSource`/`convert_reported` path rather than re-measuring, and keep the
-  `None`-is-bit-exact escape hatch for HDR.
-- **Notes for `pipeline-orchestration`:** call `Converter::convert_reported` (not
-  `convert`) so `ConvertReport.dmax` reaches the JSON report — add it beside the
-  film base. **Nothing consumes `convert_reported` yet** (only tests), so wire it
-  or the reporting channel stays a no-op. Also consider a report warning when the
-  resolved anchor gain is degenerate (underflow → ~all-black, or overflow) since the
-  encoder's clip/non-finite counters can't see an all-zero-but-finite image
-  (silent-failure Finding 2). `convert`/`convert_reported` can still return
-  `NcError::Other` on a bad estimated base (unchanged from `algo-density`).
+Closed the PR #12 finding that the default u16 encode clipped the whole image: stage
+3 renders relative to a display-white anchor, `lin = 10^(γ·(D' − Dmax))`, so scene
+white lands at ≈1.0 and the film base at `10^(−γ·Dmax)`. `to_density` untouched;
+the sub-stages stay separate.
 
-- 2026-07-14 — **PR #17 review fixes.** (1) The anchor is now applied in the
-  exponent (`10^(γ·(D'−Dmax))`) instead of a folded `10^(−γ·Dmax)` gain — the
-  factored form overflowed f32 when `γ·D'` alone exceeded the pow10 range (e.g.
-  γ=5 with EPS-clamped D'≈8 rendered scene white as inf); regression test added.
-  `None` stays bit-exact (`d − 0.0 == d`). (2) The Auto anchor now measures a
-  deterministic strided sample capped at 2^20 values (~4 MB transient) instead
-  of copying the full density buffer — stride derived from length only, bumped
-  off multiples of 3 so interleaved RGB isn't single-channel biased; small
-  images are unaffected (stride 1). Spec §7.2 sentence updated to match.
-- 2026-07-14 — **closed out.** Manual review approved; shipped via `/ship`
-  (gates re-run green: 122 tests; branch rebased onto post-docs main). Unblocks
-  `algo-sigmoid`. Merge-time follow-up with `pipeline-orchestration` stands:
-  wire `convert_reported`'s `ConvertReport.dmax` into the JSON report.
+- **Apply the anchor in the exponent, not as a folded gain.** The first version
+  factored it as `10^(γ·D') · 10^(−γ·Dmax)` and overflowed f32 when `γ·D'` alone
+  exceeded the pow10 range (γ = 5 with EPS-clamped `D' ≈ 8` rendered scene white as
+  `inf`). Regression test added. `None` stays bit-exact (`d − 0.0 == d`).
+- **`DmaxSource { Auto | Explicit(f32) | None }`**, one enum, serializing
+  `"auto"` / `{"explicit": d}` / `"none"`; CLI `--d-max` / `--auto-d-max` /
+  `--no-d-max` conflict at the clap layer. `Auto` was the default here; it has since
+  been demoted to opt-in (`film-base/dmax-reference` made the default `Fixed`, and
+  the key moved to `reconstruction.curve.dmax`).
+- **`Auto` measurement**: `AUTO_DMAX_PERCENTILE = 0.995` of the *finite* corrected
+  densities, **scalar, pooled across all channels** (a per-channel anchor would double
+  as colour correction). Nearest-rank via `select_nth_unstable_by(round((n−1)·p),
+  f32::total_cmp)`, tie-order-independent so deterministic; empty/all-non-finite ⇒
+  `0.0`. Measured from a deterministic strided sample capped at 2^20 values
+  (`AUTO_DMAX_MAX_SAMPLES`), stride derived from length only and bumped off multiples
+  of 3 so interleaved RGB is not single-channel biased.
+  **Known since 2026-08-03: it samples the *whole* scan, so the opaque holder owns
+  the top percentile on every real full-frame scan** (resolves 2.23–2.37 against roll
+  `Dmax` 1.28–1.38) — `algo/auto-anchor-interior-measurement`.
+- **`None` is bit-exact with the pre-anchor render** — HDR f32 workflows depend on it;
+  pinned by `none_anchor_is_bit_exact_with_pre_anchor_render` with `assert_eq!` on
+  f32, not an epsilon.
+- The resolved anchor rides back for the report (then `ConvertReport.dmax`, now
+  `ReconstructionReport`).
+- Two silent-failure findings were dismissed with rationale and are worth keeping:
+  an `Auto` anchor ≤ 0 brightening a dim frame is *correct* display-fill behaviour
+  (the sigmoid later added its own positivity guard because its toe floor inverts
+  there); and a pathological `--density-gamma` × `--d-max` underflowing the gain to a
+  finite all-black image that no counter sees — deferred to an orchestration warning,
+  i.e. `algo/density-safety-bounds`.
+- Real-scan check on `tests/fixtures/hdr-48bit.tif`: default `Auto` clipped 0.49%
+  (spot highlights) against 99.9996% with `--no-d-max`; resolved `Dmax ≈ 1.087`.
 
 
 ## sigmoid
-**Status:** done
-**Updated:** 2026-07-14
+**Status:** done (2026-07-14; #27)
 
-- Goal: third converter — S-curve (H&D / paper response) tone mapping in density
-  space with toe/shoulder control (design-spec §12 roadmap; NLP comparison
-  priority 2).
-- **Done.** New `Converter` impl in `src/algo/sigmoid.rs`, selected via
-  `--algorithm sigmoid`. Reuses `to_density` (stages 1–2), the resolved `Dmax`
-  anchor (`resolve_dmax`), and the film-base guard (`check_base`) from
-  `density`; stage 4 was factored out of `density::render` into a shared
-  `render_print` and is reused unchanged. Full CI gate clean (see the final gate
-  run at the end of this section for the current suite total).
-- **Exact formula (the concrete, documented curve — spec §7.3):** per channel,
-  in log₁₀-output space, with `A = Dmax` (resolved anchor) and `c = contrast`:
-  ```text
-  t = c·(D' − A)                                 the density algorithm's straight line
-  F = −c·A                                       paper-black floor (the line's value at D' = 0)
-  p = F + toe·log10(1 + 10^((t−F)/toe))          toe  FIRST: soft-max with F   (skipped if toe = 0)
-  v = p − shoulder·log10(1 + 10^(p/shoulder))    shoulder LAST: soft-min with 0 (skipped if shoulder = 0)
-  lin = 10^v
-  ```
-  Chosen over a closed-form logistic because the task requires **reduction to
-  the straight line as toe/shoulder → 0** — with both `0` the knee branches are
-  skipped and the expression is *bit-identical* to density's stage 3
-  (`10^(c·(D'−A))`), pinned by an `assert_eq!` end-to-end test. Properties (all
-  test-pinned): strictly monotonic; **white asymptote `1.0` reached from strictly
-  below with the guarantee `lin ≤ 1.0` for every finite density when
-  `shoulder > 0`** (so the default u16 encode cannot clip highlights — verified on
-  the real-scan fixture: density default clips 3 429 samples / 0.49 %, sigmoid
-  clips **0**, same resolved anchor 1.6281); black asymptote `≈ 10^(−c·A)` (exact
-  when `shoulder = 0`). `shoulder = 0` gives no highlight roll-off — highlights
-  follow the toe-shaped line and can exceed `1.0` like `density`.
-- **Knee order is load-bearing (PR-review fix, 2026-07-14).** Two independent
-  reviews (Codex P2 + pr-review comment-analyzer) caught that the original order —
-  shoulder first, **toe last** — let the toe soft-max lift the white asymptote to
-  `(1 + 10^(−c·A/toe))^toe > 1`, which *overshoots and clips* for a small anchor
-  (e.g. `--d-max 0.1`, default `toe 0.2`, `c 1` → ≈ `1.056`), defeating the headline
-  "shoulder ⇒ no highlight clip" guarantee. **Fix: reorder to toe-first,
-  shoulder-last**, so the soft-min-with-white is the final op and nothing can lift
-  it. This trades a raised white asymptote for an *imperceptibly* lowered black
-  floor (the shoulder now nudges the floor a hair below `10^(−c·A)` — negligible).
-  The shoulder is written in the **manifestly-bounded** form
-  `−shoulder·log10(1 + 10^(−p/shoulder))` (algebraically equal to
-  `p − shoulder·log10(1 + 10^(p/shoulder))` but a negative × non-negative, so
-  `v ≤ 0` in *f32 by construction* — the subtraction form rounded a hair above 0,
-  `10^v = 1.0000006`, which would clip). Regression tests: a curve-level sweep over
-  small-anchor / low-contrast / toe≫shoulder param sets asserting `lin ≤ 1.0`, and
-  an e2e `--d-max 0.1` asserting `clipped_high == 0`. Bit-exact `toe=shoulder=0`
-  reduction preserved (both branches still skipped).
-- **Numerical gotchas (recorded for future density-domain curves):**
-  - `log10(1 + 10^y)` must be the stable `max(y,0) + log10(1 + 10^(−|y|))` —
-    the naive form overflows `10^y` at `y ≳ 38` (e.g. any tiny-but-nonzero knee
-    width) and would send the knee to `−inf` instead of its asymptote.
-  - Rust's `f32::max(NaN, 0.0)` returns `0.0` (NaN-launder trap!) — the stable
-    form still propagates NaN via its second term; pinned by a test. NaN
-    density → NaN output for `io::encode`'s non-finite counter, per the
-    `SCAN_EPSILON` convention in `density.rs`.
-- **Refactor first (pure, bit-exact):** `density::render` used to fuse stage 3
-  (`10^(γ·(D'−Dmax))`) with stage 4 (WB → `2^exposure` → black point →
-  soft-clip). Stage 4 is now `render_print(density, tone, print)` with the
-  stage-3 curve injected as a per-sample closure — same arithmetic order, so
-  the existing value-pinning render tests (incl.
-  `none_anchor_is_bit_exact_with_pre_anchor_render`) double as the bit-exact
-  regression suite; all pass unchanged. The two sub-stages stay separately
-  parameterized (core fidelity rule).
-- **Param/knob shape (four coupled spots wired, each with a test):**
-  - `SigmoidParams { contrast (>0, default 1.0), toe (≥0, default 0.2),
-    shoulder (≥0, default 0.2) }` in `types.rs`; recipe section `sigmoid.*`
-    (`sigmoid.contrast` / `sigmoid.toe` / `sigmoid.shoulder`).
-  - CLI flags `--sigmoid-contrast` / `--sigmoid-toe` / `--sigmoid-shoulder`
-    (`SigmoidOverrides` in `cli.rs`) — prefixed for namespacing; recipe keys
-    drop the prefix (like `--d-max` ⇒ `density.dmax`).
-  - `merge` arms + merge test; `validate`: contrast finite `>0`, knee widths
-    finite `≥0` (a negative width would silently read as "knee off").
-  - `ResolvedConfig` gained the `sigmoid` section; `AlgoParams::Sigmoid
-    { density, sigmoid, print }`; `stages::algo_params` takes `&SigmoidParams`.
-- **Anchor decision:** the S-curve is anchored on `[0, Dmax]` (white knee and
-  black floor both derive from it), so it **requires** an anchor — reused via
-  the same `DmaxSource`/`resolve_dmax`/`convert_reported` path as `density`
-  (one measurement, reported as `report.dmax` identically). `sigmoid` +
-  `dmax = none` is rejected: `validate` (Usage, exit 2) for the CLI/recipe
-  path, plus a fail-loud backstop inside `convert_reported` (exit 1) for
-  programmatic construction. The `None`-is-bit-exact HDR escape hatch stays a
-  `density`-algorithm feature (documented in §9).
-- **`density_gamma` is ignored under sigmoid** (it parameterizes the straight
-  line the S-curve replaces; `sigmoid.contrast` is the analogue). Because the
-  rest of the `density.*` section *is* consumed (scale/offset/dmax), a
-  customized-but-ignored gamma is the silent-no-op trap — `run_convert` emits a
-  report warning (which `--strict` promotes) when `algorithm = sigmoid` and
-  `density_gamma != 1.0`. Fully inert sections (e.g. `simple.*` under density)
-  stay silent as before — the warning is only for the partial-consumption case.
-- **`--highlight-compress` interaction (documented, not disabled):** the
-  shoulder compresses in density space before exposure/WB; the print soft-clip
-  compresses in linear space after them. They compose; with the shoulder on and
-  neutral print params nothing exceeds `1.0`, so the (default-off) soft-clip
-  simply never engages.
-- **Real-scan spot check** (committed fixture, throwaway `#[ignore]` probe,
-  removed): contrast sweep 0.7 / 1.0 / 1.5 → p50 0.373 / 0.245 / 0.121 and
-  mid-separation (p75−p25) 0.235 / 0.227 / 0.176 — midtone contrast visibly
-  adjustable; max sample 0.926 / 0.944 / 0.965 — highlights roll off smoothly,
-  never reaching 1.0 (no hard clip); shadow separation (p05−p01) stays positive
-  at every contrast.
-- **Docs:** design-spec **md + html together** — new §7.3 (curve, anchors,
-  reduction, anchor requirement, gamma/soft-clip interactions), §6 diagram and
-  §2/§12 algorithm lists, §8 recipe-section list, §9: `--algorithm` gains
-  `sigmoid`, density-stage header notes the sharing, `--no-d-max` marked
-  density-only, new "Sigmoid stage" section with the three knobs.
-- **Notes for dependents:** `render_print` is the shared stage-4 entry point
-  for any future density-domain curve (power-law roadmap item) — inject the
-  curve as the `tone` closure, keep `resolve_dmax` as the single anchor source.
-  `auto-neutral-wb` / `regional-color-balance` operate on `density.*`/`print.*`
-  and therefore apply to `sigmoid` runs unchanged.
-- **Review (pr-review-toolkit, parallel panel):** code-reviewer, comment,
-  test-coverage, type-design, silent-failure. Two findings fixed:
-  - **(type-design/silent-failure, correctness):** the `Auto`-resolved anchor was
-    only checked `Some(_)`, not positive. `auto_dmax` can return `0.0`
-    (empty/all-non-finite) or a *negative* percentile when a wrong film base
-    pushes most corrected densities below zero; with `anchor ≤ 0` the toe floor
-    `10^(−contrast·anchor) ≥ 1`, so every sample renders above display white — a
-    quietly-wrong all-white image. Fixed: `convert_reported` now guards
-    `resolved.filter(|a| a.is_finite() && *a > 0.0)` and errors loudly (exit 1),
-    covering the `none` programmatic path *and* the degenerate-`Auto` case (the
-    CLAUDE.md film-base gotcha, mirroring `simple.rs`). Tests added
-    (`convert_rejects_a_non_positive_auto_anchor`: scan>base → negative percentile,
-    plus a smuggled negative `Explicit`).
-  - **(test-coverage, sev-6):** the `density_gamma`-ignored-under-sigmoid warning
-    had no coverage. Added an e2e (`sigmoid_warns_when_density_gamma_is_ignored`)
-    asserting the warning fires for sigmoid+custom gamma, is absent for
-    sigmoid+default and density+custom, and `--strict` promotes it to exit 1.
-  - Re-ran code-review after the fixes: **clean, no findings** (bit-exact refactor,
-    four-spot wiring, exit codes, docs md+html sync all confirmed). Gates green:
-    fmt clean, clippy clean, build clean, **152 unit + 21 e2e** tests pass.
-- **Rebased onto `origin/main` 3c7f5bd** (post-#20/#21/#22). Conflicts resolved:
-  - `src/types.rs`, `src/cli.rs`: #20 renamed the output knob `--out-depth
-    u16|f32` → `--output-hdr` bool (`OutputParams.hdr`; `OutDepth` is now internal,
-    dropped from the cli import). Adjusted my sigmoid test in `pipeline/stages.rs`
-    (`out_depth: OutDepth::F32` → `hdr: true`) — the only code touch the rebase
-    needed. Kept `output_hdr_bool_drives_depth` (upstream) alongside my
-    `SigmoidParams` / `algorithm_serializes_sigmoid_lowercase` tests; dropped the
-    now-obsolete `out_depth_serializes_lowercase`.
-  - `docs/TASKS.md`: kept upstream's new `dmax-reference` task line and marked
-    `algo-sigmoid` `[x]`.
-  - `docs/design-spec.md`+`.html` §9/§12: combined upstream's `--output-hdr`
-    wording and the `bw-support` roadmap graduation with my §7.3/sigmoid-stage
-    additions.
-  - Confirmed no sibling-agent content leaked (initial bare `stash pop` grabbed a
-    sibling's stash off the **shared** worktree stash stack; recovered by
-    `reset --hard origin/main` then re-applying my own stash by immutable SHA).
-- **New-design review:** the new (unstarted) `dmax-reference` task will change the
-  *default acquisition* of `Dmax` (per-frame auto → roll-fixed reference) and
-  demote `--auto-d-max`, but explicitly **keeps the anchor a positive scalar in
-  density units and keeps the render machinery** — so the sigmoid anchor contract
-  (positive scalar via `DmaxSource`, `--no-d-max` rejected, degenerate-Auto guard)
-  is unaffected. No sigmoid change needed now; when `dmax-reference` lands the
-  sigmoid default path simply consumes the fixed reference anchor (still positive).
-- Post-rebase gates: fmt/clippy/build clean; **155 unit + 21 e2e** tests pass
-  (unit count rose from the new base's added tests).
-- **Second review round (2026-07-14, Codex + pr-review 5-agent).** Primary
-  correctness fix = the knee-order/white-overshoot bug (documented above). LOW
-  items folded in:
-  1. **Contrast upper bound** — `SIGMOID_CONTRAST_MAX = 50.0` (in `sigmoid.rs`),
-     enforced in `validate`. An extreme slope collapses the S-curve into a hard
-     threshold whose knees launder the blow-out into a finite two-level image that
-     trips *neither* the clip nor the non-finite counter (density surfaces `+inf`);
-     the cap closes that silent-destruction hole. Test + §9 docs (md+html) updated.
-  2. **`debug_assert!`** at the top of `s_curve` (`contrast > 0`, `toe/shoulder ≥ 0`)
-     — defense for the pure stage that otherwise trusts CLI-validated inputs.
-  3. **Contrast-backstop comment** in `convert_reported` explaining the asymmetry
-     (the anchor has a runtime guard; `contrast` is config-only, fully
-     CLI-validated, so no runtime re-check — the debug assert covers programmatic
-     callers).
-  4. **Anchor error now names the true cause** (`anchor_error` helper): `none` →
-     disabled-anchor message; `Some(≤0)` with no finite densities → corrupt/
-     non-finite input (not the base); `Some(≤0)` with finite densities → wrong
-     base. Test `anchor_error_distinguishes_corrupt_input_from_bad_base`.
-  5. **Sigmoid recipe round-trip e2e** with non-default toe/shoulder
-     (`sigmoid_sidecar_recipe_round_trips_through_recipe_in`) — guards the
-     four-spot serialization/merge for the sigmoid section.
-  Deferred (optional nice-to-haves): shoulder↔`--highlight-compress` composition
-  test and a sigmoid e2e determinism assertion — the shared `render_print`/anchor
-  paths are already determinism- and composition-tested via the density suite and
-  the existing sigmoid round-trip; judged low marginal value. Final gates green
-  (see the ship report).
-- **Third review round (2026-07-14, Codex + pr-review 5-agent).** Both reviewers
-  converged on one theme: the manifestly-bounded shoulder that fixed the white
-  overshoot also *silently launders extreme upstream inputs* into a clean in-range
-  sample, contradicting the fail-loud / non-finite-counter discipline. Two
-  complementary MUST-FIXes:
-  1. **Non-finite propagation in `s_curve`.** A non-finite corrected density
-     (`NaN`/`±inf`, e.g. an accepted-but-huge `--density-scale`/`--density-offset`
-     overflowing `to_density`) was mapped by the bounded knees to `10^v = 1.0`,
-     hiding the fault (`density` surfaces it as `+inf`). Fixed: `s_curve` now
-     returns the input `d` verbatim when `!d.is_finite()` **before** the knees, and
-     also surfaces a finite-`d`→non-finite-`p` knee-math overflow (capped contrast
-     × huge offset). So `10^v ≤ 1.0` is guaranteed only for *finite* stage-3
-     output; a non-finite sample rides through to `io::encode`'s counter. Bit-exact
-     `toe=shoulder=0` reduction preserved (finite path untouched). Tests:
-     `s_curve_propagates_non_finite` (NaN/±inf/overflow, knees on & off) and
-     `convert_propagates_non_finite_scan_to_output` (a non-finite scan rides
-     through the full converter). NB: a *CLI-driven* overflow e2e isn't
-     constructible on the committed fixture — its corrected densities are too small
-     to overflow f32 within validated param ranges (scale alone can't; a uniform
-     offset overflows *all* pixels → the anchor-guard's corrupt-input branch, exit
-     1) — so the converter-level test pins the path instead.
-  2. **Knee-width cap.** A huge *finite* `--sigmoid-toe`/`--sigmoid-shoulder`
-     (verified: `shoulder 10000` → all-black, `toe 10000` → all-white) flattens the
-     image with finite in-range samples that trip no counter — the same
-     silent-destruction class the contrast cap closed. Added
-     `SIGMOID_KNEE_MAX = 10.0` (shared for both; ~11× the ~0.05–0.9 photographic
-     range and ~5× a scan's full density range, so it rejects only degenerate
-     widths), enforced in `validate` with an actionable message; §9 docs (md+html)
-     updated; boundary tested (accept at cap, reject cap+1 / 10000 / +inf).
-  SHOULD/LOW also done: hardened the white-ceiling test with an FP-stressful corner
-  (`contrast 50, shoulder 0.001`) plus `s_curve_manifest_form_beats_the_naive_subtraction_form`
-  (asserts the naive subtraction form overshoots >1.0 where `s_curve` stays ≤1.0 —
-  guards against a revert); `convert_requires_a_dmax_anchor` now asserts the
-  `None`-specific "scene-referred" token; scoped the "clipping impossible" doc claim
-  to *stage-3 output under neutral print params* (the print stage can lift samples
-  back above 1.0); refreshed the stale headline test count; `anchor_error` now
-  distinguishes a programmatic non-positive `Explicit` anchor from the wrong-base
-  case; added a `shoulder = 0` complement test (highlights may exceed 1.0 like
-  density). Deferred: shoulder↔`--highlight-compress` composition e2e (low value;
-  both knobs' math is unit-tested and they compose additively in log/linear
-  space). Gates green: **159 unit + 23 e2e**.
-- **Final pass (2026-07-14).** Round-3 review converged (a Codex "won't compile"
-  P0 was a verified false positive — destructuring `self.sigmoid` copies the Copy
-  f32 fields; the crate builds). The one round-3 MEDIUM (within-cap extreme params
-  posterize with no warning) is an **accepted, documented tradeoff**: the caps
-  reject nonsense/degenerate-asymptote values, not aggression — no warning band, no
-  tighter caps (documented at the consts in `sigmoid.rs` and in §9, md+html). Also
-  added: a knees-off finite-overflow case to `s_curve_propagates_non_finite`; a
-  `debug_assert!(matches!(source, DmaxSource::None))` in `anchor_error`'s `None`
-  arm (pins `resolve_dmax` `None` ⟺ source `None`); a near-cap toe
-  (`SIGMOID_KNEE_MAX`) case in the white-ceiling sweep; and scoped the §7.3
-  "cannot clip" claim to stage-3-under-neutral-print (the print stage can lift
-  samples above 1.0). Gates green: **159 unit + 23 e2e**.
-- **Deferred (shared / general-robustness, NOT sigmoid-specific — do not fix under
-  this task):**
-  - A *tiny-positive* `Auto`/`Explicit` `Dmax` anchor passes the `> 0` guard yet is
-    degenerate (renders near-black or extreme). Pre-existing and shared with the
-    `density` render's anchor path (`dmax-white-anchor`); a general anchor-sanity
-    follow-up, not a regression here.
-  - Verifying a non-finite sample still reaches `io::encode`'s non-finite counter
-    *across the lcms2 color transform* (`pipeline::color::to_output`) — a gap
-    shared with `density` (both feed the same color→encode path); belongs to a
-    color/encode robustness pass, not this task.
+The S-curve tone map in density space, originally `--algorithm sigmoid`, now the
+`sigmoid` density curve and the product default since `pipeline_version` 2. Reuses
+`to_density` (stages 1–2), the resolved `Dmax` anchor and the base guard from
+`density`; stage 4 was factored out of `density::render` into the shared
+`render_print` (bit-exact refactor, pinned by the existing value tests).
+
+**The curve (design-spec §7.3)**, per channel, in log₁₀-output space, with `A` the
+resolved anchor and `c = contrast`:
+
+```text
+t = c·(D' − A)                                 the straight line
+F = −c·A                                       paper-black floor (the line at D' = 0)
+p = F + toe·log10(1 + 10^((t−F)/toe))          toe  FIRST: soft-max with F   (skipped if toe = 0)
+v = p − shoulder·log10(1 + 10^(p/shoulder))    shoulder LAST: soft-min with 0 (skipped if shoulder = 0)
+lin = 10^v
+```
+
+Chosen over a closed-form logistic because with both knees at `0` the expression is
+*bit-identical* to the exponential's stage 3 (pinned by `assert_eq!`;
+`convert_with_knees_off_matches_exponential_bit_exactly`). Since
+`reference-anchored-sigmoid` the anchor `A` is derived from the reference `Dmax` by
+an `AnchorPlacement` rule rather than being `Dmax` itself.
+
+Properties and gotchas that still hold:
+
+- **Knee order is load-bearing: toe first, shoulder last.** The reverse order let the
+  toe soft-max lift the white asymptote above 1 (≈1.056 at `--d-max 0.1`). With the
+  shoulder last and written in the manifestly bounded form
+  `−shoulder·log10(1 + 10^(−p/shoulder))`, `v ≤ 0` in f32 by construction, so for
+  every **finite** density `lin ≤ 1.0` when `shoulder > 0` — the default u16 encode
+  cannot clip highlights (scoped to stage-3 output under neutral print params; the
+  print stage can lift samples above 1.0). `shoulder = 0` removes the roll-off and
+  highlights can exceed 1.0 like the exponential.
+- **`log10(1 + 10^y)` must be the stable `max(y,0) + log10(1 + 10^(−|y|))`** — the
+  naive form overflows at `y ≳ 38`. And `f32::max(NaN, 0.0)` returns `0.0`: never
+  launder NaN. `s_curve` returns a non-finite `d` verbatim *before* the knees, and
+  surfaces a finite-`d` → non-finite knee overflow, so `10^v ≤ 1.0` is guaranteed only
+  for finite stage-3 output and corrupt samples still reach the encode counter.
+- **Caps close silent-destruction holes** that trip no counter: `SIGMOID_CONTRAST_MAX
+  = 50` (an extreme slope collapses the curve into a two-level image) and
+  `SIGMOID_KNEE_MAX = 10` for both knees (`shoulder 10000` → all-black, `toe 10000`
+  → all-white, all finite and in range). Within-cap extreme params posterizing
+  without a warning is an accepted, documented trade-off. These are the analogue
+  `algo/density-safety-bounds` wants for `density_scale/offset/gamma`.
+- **The anchor is required.** `dmax = none` is a usage error (exit 2) plus a
+  fail-loud backstop in the converter; a resolved anchor that is not finite and `> 0`
+  (an `Auto` percentile driven negative by a wrong base, or an empty sample) errors at
+  exit 1, with `anchor_error` distinguishing corrupt input from a wrong base — with
+  `anchor ≤ 0` the toe floor `10^(−c·A) ≥ 1` would render everything above white.
+- `density_gamma` is not read by the sigmoid; under the tagged schema a
+  `--density-gamma` beside a sigmoid curve is a post-merge usage error (originally a
+  `--strict`-promotable warning).
+- `--highlight-compress` composes with the shoulder rather than being disabled: with
+  the shoulder on and neutral print params nothing exceeds 1.0, so the soft-clip never
+  engages.
+
+**Deferred, shared, not sigmoid-specific:** a *tiny-positive* anchor passes the `> 0`
+guard yet renders degenerate (→ `algo/density-safety-bounds`); and nothing verifies
+that a non-finite sample survives the lcms2 colour transform to reach the encode
+counter — a colour/encode robustness gap with no owning task.
 
 
 ## auto-neutral-wb
-**Status:** done
-**Updated:** 2026-07-14
+**Status:** done (2026-07-14)
 
-- Goal: deterministic auto white-balance estimation (gray-world / neutral-
-  percentile) feeding `print.white_balance`, reported for roll reuse (NLP
-  comparison priority 3a).
-- **Done.** Two per-frame estimators behind the existing stage-4 slot; full CI
-  gate clean (fmt / clippy `-D warnings` / build / test), suite **216 tests**
-  (191 unit + 25 E2E). Rebased onto post-#27 main (the `--out-depth` → boolean
-  `--output-hdr` rename #20, bw-support docs #21, roll/versioning follow-ups
-  #22, auto-base inward-scan redesign #23, sigmoid tone algorithm #27). The
-  auto-WB E2E test uses `--output-hdr` (the removed `--out-depth f32`).
-- **Rebased onto the sigmoid refactor (#27): stage 4 is now the shared
-  `render_print(density, tone, white_balance, print)`** — sigmoid fuses its
-  S-curve as the `tone` map. Reconciliation: my WB change made `render_print`
-  take the **resolved** `white_balance: [f32;3]` (it no longer reads
-  `print.white_balance`, now a `WbSource`); the density `render` wrapper is kept
-  (resolved args → `render_print`) for density + its tests. **Auto-WB now works
-  for `sigmoid` too**, not just `density`: both share `render_print` and the
-  print WB stage, so `estimate_wb_gains` is `pub(crate)` and `Sigmoid::
-  convert_reported` runs the same two-pass (neutral analysis render → estimate →
-  re-render through the slot) and reports the gains. The `validate` guard now
-  whitelists `density | sigmoid` (rejects only `simple`, which has no print WB
-  stage) — supporting sigmoid was *less* special-casing than restricting it.
-  Also reconciled: `stages::render` now takes a resolved `&FilmBase`
-  (auto-base #23 moved estimation to the orchestrator) and `stages::algo_params`
-  takes 5 args (sigmoid) — both auto-merged; my WB wiring sits on top unchanged.
-- Design checked against the new `roll-conversion` (auto-WB is a frame-local
-  `--auto-*` mode; reported gains are the value to freeze into a roll recipe's
-  `print.white_balance = {"explicit": […]}`) and `dmax-reference` (Dmax stays a
-  scalar and the render machinery is unchanged, so resolving the anchor once and
-  sharing it across the analysis + final passes still holds) — no code change
-  needed.
-- **Knob shape (the task's core decision): `print.white_balance` is now one
-  source enum, `WbSource { Explicit([f32;3]) | GrayWorld | Percentile }`**
-  (`types.rs`), default `Explicit([1,1,1])` (= neutral, auto off). This is a
-  deliberate **recipe wire-format change**: the key serializes as
-  `{ "explicit": [r,g,b] }` / `"gray-world"` / `"percentile"` (kebab-case,
-  mirroring `FilmBaseSource`/`DmaxSource`), no longer a bare `[r,g,b]` array.
-  Rationale: explicit-beats-auto **by source** falls out of the type — after the
-  merge the variant records provenance, so `--white-balance 1,1,1` over a recipe
-  auto mode means "neutral gains", never re-estimation (a value-based or
-  parallel-field encoding cannot express that). Pre-release, so old sidecars
-  weren't grandfathered; §9 (md + html) updated. CLI: `--white-balance R,G,B`
-  vs `--auto-wb gray-world|percentile` (clap `conflicts_with`; `AutoWb`
-  ValueEnum in `cli.rs`). All four coupled spots wired with tests: override
-  fields, merge arm (source-precedence test included), `validate` (explicit
-  gains positive; auto modes carry no value), recipe nesting test.
-- **An auto mode without `--algorithm density` is a loud usage error (exit 2),
-  not a silent no-op** (review finding, fail-loudly rule): only `density` reads
-  `print.white_balance`, so an auto mode elsewhere would drop the requested
-  estimation silently. `validate` **whitelists `density`** (`!= Density`
-  errors), not blacklists `simple`, so a future third algorithm that also
-  ignores the print stage fails loudly by default — the "forgotten coupled
-  spot" trap (silent-failure review, MEDIUM). §9 (md + html) documents it; test
-  `validate_rejects_auto_wb_with_the_simple_algorithm`. Explicit
-  `print.white_balance` under `simple` stays allowed (inert, not an action
-  dropped — `simple` has its own `invert_white_balance`).
-- **CLI-flag coverage guard:** `every_auto_wb_source_has_a_cli_flag`
-  (`cli.rs`) uses an exhaustive `match` so a future `WbSource` auto mode fails
-  to compile until it is given an `--auto-wb` value — closes the type-design
-  review's "recipe-only mode could ship silently" drift risk.
-- **Estimators (`algo/density.rs::estimate_wb_gains`), deterministic statistics
-  only:** samples come from a strided pixel walk (`AUTO_WB_MAX_PIXELS = 2^20`,
-  whole-pixel stride so no channel bias), non-finite samples dropped per sample,
-  each channel fully sorted (`total_cmp`) so every statistic is order-defined.
-  - `GrayWorld` (≈ NLP Auto-AVG): per-channel mean of the central 98%
-    (`AUTO_WB_TRIM = 0.01` per end) — the trim is frame-relative, so clipped
-    speculars/dead pixels are excluded in both display-anchored and
-    scene-referred (`--no-d-max`) renders. Documented weakness: a dominant
-    scene color biases it (test pins this vs percentile).
-  - `Percentile` (≈ NLP Auto-Neutral): per-channel nearest-rank 95th percentile
-    (`AUTO_WB_PERCENTILE = 0.95`) — equalizes near-white, robust to dominant
-    colors; the top 5% never enters the statistic.
-  - Gains are **green-anchored** (`g = 1.0` exactly): WB corrects color, not
-    exposure. Degenerate channels (all non-finite / non-positive level /
-    non-finite gain) **fail loudly** (`NcError::Other`, exit 1) — never
-    silently-neutral gains.
-- **Estimation reads, application re-renders (the task's hard requirement).**
-  `Density::convert_reported` resolves the Dmax anchor **once**, renders an
-  analysis positive from a *clone* of the density buffer with a fully neutral
-  print (unit gains, 0 EV, no black point, no soft-clip — so the statistics
-  measure exactly the quantity the WB slot multiplies; the user's exposure
-  would cancel in the ratios, black/soft-clip would distort them), estimates,
-  then runs the real `render` with the resolved gains through the standard
-  stage-4 slot. `render`'s signature changed to take the **resolved** anchor
-  (`Option<f32>`) and **resolved** gains (`[f32;3]`) instead of the source
-  enums — both passes must share one anchor without re-measuring; it returns
-  just the image now (resolution moved to the caller). Explicit gains skip the
-  analysis pass entirely, so the default path's per-pixel arithmetic (and
-  output) is unchanged.
-- **Reuse contract pinned bit-exactly:** unit test
-  `auto_wb_output_is_bit_exact_with_explicit_rerun_of_reported_gains` plus E2E
-  `auto_wb_reports_gains_that_reproduce_the_output_when_reused` (report gains →
-  `--white-balance` → byte-identical f32 TIFF; JSON's shortest-round-trip f64
-  parses back to the identical f32). Determinism test (same input ⇒ same gains
-  and rgb) included.
-- **Report:** `ConvertReport` and the convert JSON `Report` gained
-  `white_balance: Option<[f32;3]>` — the *resolved* gains (auto-estimated or
-  explicit; `None` for `simple`). Per the task decision, `nc estimate` was NOT
-  extended (its contract is Dmin-only; it can't render the positive these
-  statistics need — `estimate-reuse-output` territory). Note: the **sidecar**
-  recipe records the auto *mode* (the run's parameters — rerunning it
-  re-estimates); the frozen gains live in the *report*, by design.
-- **Real-scan spot check** (committed fixtures, CLI runs, derived numbers only):
-  with the guessed base `0.9,0.55,0.42` — gray-world `[1.458, 1.0, 0.542]`
-  (hdr-48bit) / `[1.347, 1.0, 0.621]` (hdri-64bit); percentile
-  `[1.583, 1.0, 0.494]` / `[1.543, 1.0, 0.521]`. I.e. the typical blue-heavy
-  post-inversion cast is pulled down toward neutral; dmax unchanged (≈1.63 /
-  ≈1.62), 0% clipping at u16.
-- **Notes for dependents:**
-  - `regional-color-balance`: the global gains here are a single multiplier per
-    channel — they cannot fix shadow/highlight crossover; that task's
-    density-weighted offsets slot into stage 2. Reuse the sampling helpers
-    (`wb_channel_samples` / `trimmed_mean` / `nearest_rank`) if useful, and keep
-    its knob a single source enum like `WbSource`.
-  - Rebate/border pixels are *not* excluded from the statistics (no crop knob
-    exists yet). They render neutral by construction (base → `D=0` in all
-    channels), so they dilute gains toward 1 rather than casting them —
-    deterministic and mild; revisit if a crop/region knob lands.
-  - `estimate-reuse-output`: if `estimate` ever grows a WB story, the report's
-    `white_balance` array is the value to make drop-in reusable.
-- **Review (pr-review-toolkit, 5 dimensions):** code-reviewer clean (all four
-  hard requirements verified); comments clean; tests → the auto-wb+simple
-  no-op + the `--no-d-max` robustness gap (both fixed, above); type-design →
-  the CLI-flag exhaustiveness guard (fixed, above) plus a *recommended*
-  extraction of `render`'s three read `PrintParams` scalars out of the
-  `&PrintParams` arg; silent-failure → the whitelist-vs-blacklist polarity
-  (fixed) plus a LOW note that explicit `--white-balance` under `simple` is
-  silently inert.
-  - **Deliberately not changed (reported with reasoning):** (1) `render` keeps
-    `print: &PrintParams` with `white_balance` documented-as-ignored rather than
-    expanding to a 7-argument signature across ~13 call sites — one `pub(crate)`
-    caller, the ignored field is documented at the signature, and the
-    bit-exact-reuse contract is test-pinned; the code-reviewer did not flag it.
-    (2) explicit `--white-balance` under `simple` staying inert is pre-existing,
-    documented cross-algorithm-knob behavior (a *value* left unused, not a
-    *computation* dropped), not a regression from this task.
+Two deterministic per-frame estimators behind the stage-4 `print.white_balance`
+slot, ≈ NLP's Auto-AVG / Auto-Neutral.
+
+- **`print.white_balance` is one source enum, `WbSource { Explicit([f32;3]) |
+  GrayWorld | Percentile }`**, default `Explicit([1,1,1])`, serialized
+  `{"explicit": [...]}` / `"gray-world"` / `"percentile"` (a deliberate wire change
+  from a bare array). The variant records provenance, so explicit beats auto **by
+  source**: `--white-balance 1,1,1` over a recipe's auto mode means neutral gains,
+  never re-estimation. CLI `--white-balance R,G,B` vs `--auto-wb
+  gray-world|percentile`. `every_auto_wb_source_has_a_cli_flag` is an exhaustive
+  `match`, so a recipe-only mode cannot ship silently.
+- An auto mode under `simple` (no print WB stage) is a usage error, not a no-op — the
+  check *whitelists* `density | sigmoid` so a future path fails loudly by default.
+  Explicit gains under `simple` stay inert (a value unused, not a computation dropped).
+- **Estimators** (`density::estimate_wb_gains`): strided whole-pixel sample capped at
+  2^20, non-finite dropped per sample, each channel fully sorted with `total_cmp`.
+  `GrayWorld` = per-channel mean of the central 98% (`AUTO_WB_TRIM = 0.01`);
+  `Percentile` = per-channel nearest-rank 95th (`AUTO_WB_PERCENTILE = 0.95`). Gains
+  are **green-anchored** (`g = 1.0` exactly): WB corrects colour, not exposure.
+  Degenerate channels fail loudly (exit 1), never silently neutral.
+- **Estimation reads, application re-renders.** The anchor is resolved once; an
+  analysis positive is rendered with a fully neutral print (unit gains, 0 EV, no black
+  point, no soft-clip) so the statistic measures exactly what the WB slot multiplies;
+  then the real render runs with the resolved gains through the standard slot. Explicit
+  gains skip the analysis pass, so the default path's arithmetic is unchanged.
+- **Reuse is bit-exact**: report gains → `--white-balance` → byte-identical output,
+  pinned in unit and E2E tests. The **report** carries the resolved gains; the
+  **sidecar** records the mode (re-running re-estimates) — the hazard
+  `core/unfrozen-auto-mode-warning` exists for. `nc estimate` was deliberately not
+  extended (Dmin-only contract).
+- **Rebate/border pixels are not excluded** from the statistic: they render neutral by
+  construction and dilute gains toward 1 rather than casting them. The shared
+  measurement region is `algo/auto-anchor-interior-measurement`'s to own.
+- 2026-08-08 (sigmoid default): auto-WB is a *weaker* corrector for a **wrong** base
+  under the sigmoid — a wrong base leaves a constant per-channel density offset that
+  the exponential turns into a constant factor a gain cancels exactly, while the
+  sigmoid is nonlinear in that domain. The estimator is unchanged; the effect vanishes
+  with a correct base.
 
 
 ## regional-color-balance
-**Status:** done
-**Updated:** 2026-07-17
+**Status:** done (2026-07-17)
 
-- Goal: shadow/highlight per-channel balance (density-weighted offsets in stage
-  2) to correct color crossover a global gain can't fix (NLP comparison
-  priority 3b).
-- 2026-07-14 — **implemented.** New pure sub-stage `regional_balance`
-  (`algo/density.rs`) completing stage 2 between `to_density` and `render`:
-  `D'_c = B_c + shadow_balance_c·w_lo(D̄) + highlight_balance_c·w_hi(D̄)` with
-  `w_hi = smoothstep((D̄ − lo)/(hi − lo))`, `w_lo = 1 − w_hi` (complementary, so
-  equal balances degenerate to a uniform `density_offset`), and `D̄` the
-  per-pixel **scalar** tone = mean of the *finite* pre-regional corrected
-  channels (per-channel weighting would misfire on exactly the crossover pixels;
-  a NaN channel is excluded from the tone but stays NaN itself, so the encode
-  non-finite counter still sees it).
-- **Decisions:**
-  - *Naming convention (§9):* "shadow"/"highlight" are the **positive's** tone
-    regions — low corrected density (near base) = shadow, high = highlight — and
-    with the positive polarity a **positive balance value brightens that channel
-    in its region**. Documented in §7.2/§9.
-  - *Range anchors:* new enum `BalanceRange` (`types.rs`), `Auto` (default) |
-    `Explicit([lo, hi])` — one enum field, not parallel knobs. `Auto` measures
-    nearest-rank percentiles **0.5 % / 99.5 %** of the per-pixel tone `D̄` over a
-    deterministic strided pixel sample (cap 2^20 pixels, mirrors the `auto_dmax`
-    approach; strides whole RGB triples so no channel-bias bump is needed). The
-    measurement uses the same `D̄` domain the ramps consume, so non-default
-    `density_scale`/`offset` can't make anchors and inputs drift. It deliberately
-    does **not** anchor on the Auto `Dmax` (measured *after* stage 2 — circular).
-  - *Ordering:* regional balance runs **before** `render`, so an `Auto` `Dmax`
-    is resolved from the *post-balance* densities (display-white anchor stays
-    consistent with what is rendered), and before print WB (stage 2 fixes the
-    tone-dependent crossover; print WB the residual global cast).
-  - *Neutral default is bit-exact:* `[0,0,0]` balances return before touching
-    the buffer (even `+0.0` would flip `-0.0`) and skip the measuring pass;
-    pinned by a bit-level test.
-  - *Fail loudly:* a requested balance with an unmeasurable `Auto` range
-    (uniform / all-non-finite frame) is an `NcError::Other` naming
-    `--balance-range` as the recovery — never a silently skipped correction.
-    Explicit ranges are CLI-validated (finite, `lo < hi`; exit 2).
-  - *CLI:* `--shadow-balance R,G,B`, `--highlight-balance R,G,B` (both with
-    `allow_hyphen_values` — negative offsets are the common case),
-    `--balance-range LO,HI` ⊕ `--auto-balance-range` (clap-conflicting pair).
-    All four coupled spots wired (overrides, `DensityParams` fields, merge arms,
-    validate) + merge/recipe-nesting/conflict tests.
-  - *Report:* `ConvertReport.balance_range` → report key `balance_range`
-    (`[lo, hi]`, omitted when `None`) so a roll can reuse one frame's measured
-    range via `--balance-range` — same reuse pattern as `dmax`.
-- **Notes for dependents:** `auto-neutral-wb` — regional balance composes with
-  (and precedes) print WB; if auto-WB ever wants tone context, reuse the
-  measured `balance_range` from the report rather than re-measuring inside
-  stage 2. `algo-sigmoid` — the sub-stage boundary is unchanged: sigmoid replaces
-  the `render` tone map, not stage 2, so regional balance carries over as-is.
-- 2026-07-17 — **rebased onto `algo-sigmoid` (#27) + `auto-base-redesign` +
-  #24/#25/#26** (commit-WIP method). algo-sigmoid refactored `density::render`
-  into a shared `render_print(density, tone, print)` and added a `sigmoid`
-  converter that reuses stages 1–2 (`to_density`) and stage 4 (`render_print`).
-  My `render(density, gamma, dmax, print)` wrapper kept its signature (now
-  delegates to `render_print`), so `density::convert_reported` was unaffected.
-  **Decision — regional balance now applies under `sigmoid` too:** the
-  `shadow_balance`/`highlight_balance`/`balance_range` knobs live in the shared
-  `DensityParams` and regional balance is a stage-2 op, which sigmoid shares —
-  so `sigmoid::convert_reported` now calls `regional_balance` after `to_density`
-  (before its anchor resolve, same post-balance-`Dmax` ordering as `density`) and
-  surfaces `balance_range` in its `ConvertReport`. Without this, `--shadow-balance`
-  would have been a silent no-op under `--algorithm sigmoid` (violating the
-  fail-loud / no-silent-no-op rule). Pinned by three sigmoid tests
-  (applies-not-noop, reports the range, and bit-exact match to `density` with
-  knees off + a balance). `ConvertReport` gained `balance_range`, so sigmoid's
-  `ConvertReport { dmax }` construction was updated to include it. §7.2/§9
-  (both .md and .html) reconciled: the "sigmoid shares this whole section" note
-  now explicitly includes the regional balance.
+Shadow/highlight per-channel balance completing stage 2 between `to_density` and the
+curve (`regional_balance` in `algo/density.rs`):
+
+```text
+D'_c = B_c + shadow_balance_c·w_lo(D̄) + highlight_balance_c·w_hi(D̄)
+w_hi = smoothstep((D̄ − lo)/(hi − lo)),  w_lo = 1 − w_hi
+```
+
+`D̄` is the per-pixel **scalar** tone — mean of the *finite* pre-regional corrected
+channels (per-channel weighting would misfire on exactly the crossover pixels; a NaN
+channel is excluded from the tone but stays NaN). Equal balances degenerate to a
+uniform offset.
+
+- **Naming (§9):** "shadow"/"highlight" are the *positive's* regions — low corrected
+  density = shadow — and a positive balance value brightens that channel there.
+- **`BalanceRange { Auto | Explicit([lo, hi]) }`**: `Auto` measures nearest-rank
+  0.5% / 99.5% of `D̄` over a strided sample (cap 2^20 whole pixels), in the same
+  domain the ramps consume so non-default `scale`/`offset` cannot make them drift. It
+  deliberately does not anchor on an `Auto` `Dmax`, which is measured *after* stage 2.
+  Reported as `balance_range` for roll reuse via `--balance-range`.
+- **`consults_balance_range` is `shadow_balance != highlight_balance`**: equal
+  non-zero balances short-circuit to a tone-independent offset and never measure the
+  range. `algo/curve-endpoint-validation`'s per-endpoint deferral keys on this.
+- Ordering: before the curve, so an `Auto` `Dmax` resolves from post-balance
+  densities, and before print WB. Neutral `[0,0,0]` returns before touching the
+  buffer (bit-exact, even `+0.0` would flip `−0.0`). An unmeasurable `Auto` range
+  with a requested balance is `NcError::Other` naming `--balance-range`.
+- Applies under the sigmoid too (it shares stage 2); without that, `--shadow-balance`
+  would have been a silent no-op there.
 
 
 ## negative-reconstruction-density-curves
-**Status:** done
-**Updated:** 2026-07-24
+**Status:** done (2026-07-24; default flip 2026-08-08; warning rounds 2026-08-09)
 
-- 2026-07-24: Reviewed via the two-engine review-fix-loop (Codex + 5 pr-review
-  lenses: quality, tests, types, silent-failure, comments). Bit-identity was
-  independently proven — a reviewer re-ran the pre-refactor code at HEAD and
-  matched all 9 golden configs + 4 whole-TIFF hashes bit-for-bit. Five findings
-  fixed: `FilmRgbImage::from_linear` `pub(super)`→`pub(in crate::algo)` (the
-  boundary invariant was crate-wide, not module-private) + corrected the
-  overclaiming doc-comments; `merge_json` now handles internally-tagged
-  `reconstruction`/`curve` type switches in roll per-frame overrides
-  (`internally_tagged_switch`), carrying the shared roll-fixed `dmax` — matching
-  the CLI `merge()` semantics; +3 golden fixtures (auto-WB × regional balance,
-  auto-WB × sigmoid, auto balance-range); fixed a golden cross-ref comment; and
-  corrected the stale CLAUDE.md §9 legacy-schema carve-out. Loop converged, the
-  merge_json delta got a targeted re-review (sound). Rebased onto origin/main
-  (past #48 HDR, #49 telemetry, #50 display-p3); clean auto-merge, gates green
-  (325 unit incl. #50's tests + 86 integration). Shipped via /ship.
-- 2026-07-24: CI (Linux) surfaced a non-portable golden: `tiff_hash` hashed the
-  whole encoded TIFF including the embedded ICC, whose header carries
-  platform-dependent bytes (Little CMS), so the macOS-captured hash failed on CI
-  even though every per-pixel `f32::to_bits` golden passed there (pixels are
-  bit-identical cross-platform). Retargeted it to `tiff_pixels_hash`: decode the
-  written TIFF back and hash only the pixel samples + dimensions, excluding the
-  ICC/container. This matches nc's actual determinism contract (byte-identity is
-  per build/architecture, design-spec §8) while still pinning the encode
-  quantization/layout. Test renamed to
-  `golden_no_preset_encoded_pixels_are_unchanged`.
+**2026-07-23/24 — the tagged schema.** `Algorithm::{Simple,Density,Sigmoid}` became
+one nested tagged `reconstruction` object (`schema_version: 1`, `type:
+simple|density`, density carrying `.density {scale, offset, shadow_balance,
+highlight_balance, balance_range}` and one tagged `.curve` — `exponential {gamma,
+dmax}` or `sigmoid {contrast, toe, shoulder, dmax}`). `algo::reconstruct` /
+`finish_print` replaced the trait; every path returns a private-field `FilmRgbImage`
+(`pub(in crate::algo)` constructor — `pub(super)` on a top-level module is
+crate-wide, a review catch). Decisions still in force:
 
-- 2026-07-23: Defined tagged `simple` and `density` reconstruction. Density owns
-  its parameters and a tagged `exponential { gamma }` or
-  `sigmoid { contrast, toe, shoulder }` curve; exponential is the default. The
-  unreleased `--algorithm` and old recipe schema are rejected cleanly.
-- 2026-07-23: Separated corrected density `D′` from the curve, preserved current
-  exponential pixels and the exact sigmoid equation, moved Dmax ownership to
-  the curve, and made every path return typed `FilmRgbImage`. Simple WB/range
-  moves downstream for named presets while legacy no-preset TIFF ordering stays
-  unchanged through migration.
-- 2026-07-23: Pinned the target recipe to one nested tagged
-  `reconstruction` object: density correction lives under `.density`, while
-  exponential/sigmoid parameters and Dmax live under `.curve`. Pinned every CLI
-  key mapping and made cross-curve fields—including customized gamma with
-  sigmoid—fail after merge instead of being ignored.
-- 2026-07-23: Separated `reconstruction.schema_version = 1` from behavioral
-  `pipeline_version`. Partial input may omit the curve and resolve to tagged
-  exponential defaults, while normalized recipes/reports always emit the curve.
-  The bit-identical refactor/no-preset compatibility does not claim a behavioral
-  bump; `conversion-versioning` owns the prospective bump when named-preset
-  activation and simple reordering change default pixels.
-- 2026-07-23 (implementation): **Golden-first refactor.** Before touching any
-  code, captured pre-refactor outputs as bit-level fixtures: per-pixel
-  `f32::to_bits` for nine converter configurations (density exponential
-  default/custom/none/auto-dmax, sigmoid default/custom, simple default, and
-  both auto-WB modes) over a 5-pixel shadow/mid/highlight/out-of-range/base
-  vector, plus FNV-1a byte hashes of four whole encoded TIFFs (density/simple/
-  sigmoid u16 + density f32) from a synthetic 16×16 negative. These live as
-  `pipeline::stages::golden` tests (`golden_*`, incl.
-  `golden_no_preset_tiff_bytes_are_unchanged`) and all pass against the split
-  pipeline — the bit-identical default-exponential / numerically-exact-sigmoid
-  acceptance gate, and the proof this task claims no `pipeline_version` bump.
-- 2026-07-23: **Structure shipped.** `types.rs` gained the tagged
-  `Reconstruction` (custom serde: always emits `schema_version: 1` + `type`;
-  wire structs give named cross-variant-key errors and reject unknown fields at
-  every level; omitted curve normalizes to tagged exponential defaults) with
-  `DensityParams {scale, offset, shadow_balance, highlight_balance,
-  balance_range}`, `ExponentialParams {gamma, dmax}`, `SigmoidParams
-  {contrast, toe, shoulder, dmax}` under `DensityCurve`. `algo::` replaced the
-  `Converter` trait / `AlgoParams` with pure `reconstruct(image, base, config)
-  -> (FilmRgbImage, ReconstructionReport)` — `FilmRgbImage` has private fields
-  and a `pub(super)` constructor, so the reconstruction module is its only
-  producer — plus `finish_print` (the legacy stage-4 bridge; simple passes
-  through untouched). The old fused density render was split into `apply_curve`
-  (stage 3, mints the typed boundary) + `render_print` (stage 4); auto-WB now
-  strides the film positive instead of toning a strided density sample
-  (bit-identical: a per-sample map commutes with striding — pinned by
-  `golden_auto_wb_estimation_is_bit_identical`).
-- 2026-07-23: **Simple WB/clip removed from reconstruction.** Interpreting
-  "downstream, named-presets only": simple reconstruction ends at the unclamped
-  `1 − scan/Dmin` (bit-identical to the old default since the removed controls'
-  defaults were the exact identity), and `--invert-white-balance` /
-  `--clip-low` / `--clip-high` plus the `simple.*` recipe keys are **rejected
-  with migration errors** pointing at the future `print.white_balance` /
-  `print.linear_range` homes — an unreleased tool must not keep a control whose
-  placement is about to change. Customized values are inexpressible until
-  preset migration (loud, never silently different pixels).
-- 2026-07-23: **CLI/recipe surface.** `--reconstruction simple|density` +
-  `--density-curve exponential|sigmoid`; every existing flag remapped exactly
-  per the spec (`--density-scale/-offset` ⇒ `reconstruction.density.scale/
-  .offset`, regional-balance flags ⇒ same-named density fields,
-  `--density-gamma` ⇒ `curve.gamma`, sigmoid flags ⇒ `curve.{contrast,toe,
-  shoulder}`, the four Dmax flags ⇒ `curve.dmax`). `merge` became fallible:
-  invalid tagged combinations (density/curve/Dmax flags with simple, sigmoid
-  flags under exponential, `--density-gamma` under sigmoid — flag presence, not
-  value) are post-merge usage errors naming the offending flag; a curve switch
-  via `--density-curve` carries the roll-fixed `dmax` across variants.
-  `--algorithm` and the legacy `algorithm`/`density`/`sigmoid`/`simple` recipe
-  keys are rejected with migration errors (`reject_removed_flags` /
-  `reject_legacy_recipe_keys`, shared with roll per-frame overrides).
-- 2026-07-23: **Report & telemetry.** The convert report gained `recipe` (the
-  effective config — so `recipe.reconstruction` is the exact tagged schema) and
-  `reconstruction_result` (`{"type":"simple"}` or density with `curve.dmax =
-  {policy, value, provenance}`; policy `fixed|explicit|auto|none`, provenance
-  `default|recipe|cli|auto-frame` — `auto` always reports `auto-frame`, the
-  master-incompatibility marker). Recipe-vs-default provenance is witnessed
-  from the raw JSON at load (`LoadedRecipe.curve_dmax_present`), since a recipe
-  that wrote `"fixed"` is indistinguishable post-defaulting. Telemetry
-  `SCHEMA_VERSION` bumped to 2: `conversion.algorithm` → `conversion.
-  reconstruction` + optional `conversion.curve` (skill + design-spec §9 record
-  examples updated). `estimate`'s `d_max_recipe` fragment keeps its
-  `{"dmax":{"explicit":…}}` shape but now documents/tests the
-  `reconstruction.curve` destination.
-- 2026-07-23: **Docs.** design-spec §2/§4/§6/§7/§8/§9/§10/§12 flipped from
-  "current legacy vs target" to shipped-tagged-schema framing (examples, the
-  interface sketch — `reconstruct`/`finish_print` shipped, `map_nc_film_rgb_v1`
-  still target — and the §9 reconstruction-select section; the "Current shipped
-  keys" callout is gone). NOTE for the main-tree merge: `CLAUDE.md`'s
-  architecture section still describes the `Converter` trait and
-  `algo/{simple,density}` two-algorithm framing — update it there (kept
-  untouched here since the main tree owns it).
-- 2026-07-23: **For `film-rgb-working-space`:** the mapper's input contract is
-  ready — `algo::FilmRgbImage` (private fields; read via `width/height/rgb/ir`,
-  consume via `pub(crate) into_linear`; construction only inside `algo`), and
-  `algo::finish_print` is the seam to displace: the mapper slots between
-  `reconstruct` and the print controls once presets move stage 4 after ACEScg.
-  The report's `working_mapping` field (design-spec §8 example) was deliberately
-  left to that task.
-- 2026-07-23 (review fixes): (1) `FilmRgbImage::from_linear` visibility bug —
-  `pub(super)` on a top-level module is crate-wide; now `pub(in crate::algo)`
-  (real construction restriction) with the overclaiming doc-comments corrected.
-  (2) `merge_json` gained `internally_tagged_switch`: a per-frame roll override
-  that changes `reconstruction.type` or `curve.type` now replaces the tagged
-  object instead of deep-merging a rejected union, carrying the base's `dmax`
-  when the overlay doesn't set it — the same roll-fixed-anchor semantics the
-  CLI `merge` gives `--density-curve` (tests:
-  `merge_json_switches_internally_tagged_type_and_carries_dmax`,
-  `per_frame_override_switches_variants_and_keeps_the_roll_fixed_dmax`).
-  (3) Three golden gaps closed (captured from the proven pipeline): auto-WB ×
-  regional balance, auto-WB × sigmoid curve, and `BalanceRange::Auto` with
-  non-zero balances (`golden_auto_wb_with_regional_balance_is_bit_identical`,
-  `golden_auto_wb_with_sigmoid_curve_is_bit_identical`,
-  `golden_auto_measured_balance_range_is_bit_identical`). (4) `algo/mod.rs`
-  module doc now points at `pipeline::stages` `mod golden` for the fixtures.
-  (5) CLAUDE.md's §9 recipe carve-out corrected in place: the tagged schema is
-  shipped and the legacy forms are rejected (flagged for the user's manual
-  review — it edits project instructions).
+- **Golden-first.** Pre-refactor outputs were captured as per-pixel `f32::to_bits`
+  vectors for nine configurations plus decoded-pixel hashes before any code moved;
+  they live in `pipeline::stages::golden`. A whole-encoded-TIFF hash failed on Linux
+  CI because the embedded ICC carries platform-dependent bytes — retargeted to
+  `tiff_pixels_hash` (decode back, hash samples + dimensions). Bit-identity was
+  independently re-proven by a reviewer at HEAD.
+- **Legacy forms are rejected with migration errors, never aliased:** `--algorithm`,
+  the top-level `algorithm`/`density`/`sigmoid`/`simple` keys, and `simple`'s
+  `--invert-white-balance`/`--clip-*` (whose homes are `print.white_balance` /
+  `print.linear_range`). `merge` is fallible: density/curve/Dmax flags with `simple`,
+  sigmoid flags under exponential, `--density-gamma` under sigmoid are post-merge
+  usage errors keyed on **flag presence**.
+- **A curve switch carries `dmax`** (a roll calibration) across variants — in
+  `merge`'s `--density-curve` arm and in `merge_json`'s `internally_tagged_switch`
+  for roll per-frame overrides, which replaces the tagged object instead of
+  deep-merging a rejected union. Later widened: `anchor` is *not* carried (see
+  `exponential-anchor-placement`), and the carry is gated on `takes_dmax()` since
+  `characteristic` has no `dmax` key (see `film-stock-profiles`, 2026-09-09).
+- **Report:** `recipe` (the effective config) and `reconstruction_result` with
+  `curve.dmax = {policy, value, provenance}` — policy `fixed|explicit|auto|none`,
+  provenance `default|recipe|cli|auto-frame`. Recipe-vs-default provenance is
+  witnessed from the raw JSON at load (`LoadedRecipe.curve_dmax_present`), since a
+  recipe that wrote `"fixed"` is indistinguishable after defaulting. Telemetry
+  `SCHEMA_VERSION` 2 (`conversion.reconstruction` + optional `conversion.curve`).
+- `reconstruction.schema_version` versions the wire **shape** and is checked for
+  exact equality; behavioural drift is `pipeline_version`'s.
+
+**2026-08-08 — three render defaults moved together (`pipeline_version` 1 → 2):**
+`NOMINAL_DMAX` 2.0 → 1.3, default curve exponential → sigmoid, exponential `gamma`
+1.0 → 2.0. Baseline in `reports/render-defaults-v2.md`.
+
+- The headline was clipping: four real frames went from 0.00/3.38/4.86/1.98% clipped
+  to 0.00% on all four. Partly an accounting artifact — `io::encode` counts `v > 1.0`
+  strictly and the sigmoid saturates to exactly `1.0f32` above `D' ≈ 3.1`, so the clip
+  counter is not a sufficient measure of highlight preservation under this curve.
+- **Measurement lesson worth keeping:** a zsh helper interpolated an unquoted
+  parameter (zsh does not word-split), so `--d-max 2.0` was silently dropped and the
+  first table published 72% clipping for the wrong anchor. A comparison must assert
+  the varied thing changed (the report prints `dmax`); the measurement now lives in
+  `scripts/render-defaults-v2/measure.py` with an explicit argv list.
+- `NOMINAL_DMAX` 2.0 sat above **every** measured roll (0.90–1.74, median ≈1.34) and
+  darkened Ektar 963 by 5.09x in linear terms. 1.3 is the median rounded, still
+  *nominal*; `film-base/dmax-anchor-reliability` owns the calibrated value. This
+  **superseded** that task's 2026-08-03 "do not settle it yet" (user, 2026-08-08):
+  waiting meant shipping a wrong anchor. Harman Phoenix (0.8976) counts as the
+  population floor, not an exclusion example.
+- Exponential `gamma` 2.0 fixes the black floor (72 → 12/255 on confirmed shadow
+  patches) and costs 2.75 EV of midtone — a real partial win whose residual became
+  `algo/exponential-anchor-placement`. Lesson: a frame mean cannot separate "floor
+  fixed" from "midtones moved"; read percentile metrics.
+- Consequences: `film-master` and `hdr-linear-tiff` integration tests now select the
+  exponential explicitly (the sigmoid never exceeds 1.0, so they stopped exercising
+  their subject — the container); HDR headroom stays absent (`GainMapMax` ≈1.0027x
+  under both curves; the shoulder, not the curve family, decides it — see
+  `exponential-anchor-placement`); every single-rendition HDR preset emits a
+  `--strict`-promotable `hdr::sdr_range_warning` built on the existing `clli`
+  measurement when the render peaks at SDR range (201 vs 203 nits on the fixture)
+  while advertising 1000 nits — `ultra-hdr-v1` excluded, since low headroom there
+  shows as an inert gain map, a different diagnosis. Goldens were **not** rebased:
+  reference captures name their configuration (`frozen_reference_curve`,
+  `sigmoid_at_reference_anchor_2_0`) and the new default got a fresh golden that pins
+  "has not drifted since set", not "matches the reference implementation".
+
+**2026-08-09 — the moved-default warning, four rounds to a structural rule.**
+`curve_default_warning` / `unpinned_curve` warn that an archived recipe will render
+differently because defaults moved under it. The predicate went under-warned (omitted
+`curve` only), over-warned (any present key; but `"dmax":"fixed"` names a *policy*
+resolving through the moved `NOMINAL_DMAX`), over-warned again (any `"fixed"`, which is
+exactly what this build writes, so a sidecar failed its own `--strict` replay), then a
+version-based exemption that fixed the sidecar but not bare `--dump-params` output.
+Root cause of all four: the predicate was tuned against hand-written JSON while
+**nothing tested the one file nc itself writes**. Final rule: **warn only on shapes
+this build cannot produce** (absent `curve` / `anchor` / `gamma` / `dmax`), gated end
+to end by `recipe_dumped_by_this_build_replays_clean_under_strict` (dump → replay,
+byte-compared). Two residual gaps — an archived bare `"dmax":"fixed"` does not warn,
+and CLI overrides that pin the floating values still do — are recorded in the task file
+and belong to `core/recipe-replay-fidelity`'s policy, not to more special cases here.
+Also from those rounds: `sigmoid_rejects_no_d_max` had been passing on clap's
+duplicate-flag rejection (the fourth test that session found passing for the wrong
+reason — an exit-code assertion more than one rule can produce; assert the message);
+`scripts/analysis/benchmark.json` lost exponential coverage when the default flipped and
+gained an explicit `hdri-exponential` case; two shipped doc examples passing
+`--density-gamma` exited 2 and were fixed by *running* them.
 
 
 ## bw-support
@@ -1162,558 +570,94 @@ What other epics need to know about `algo`:
 
 
 ## reference-anchored-sigmoid
+**Status:** done (2026-08-03; PR #70; review follow-ups 2026-08-03/13)
 
-**Status:** not started
-**Updated:** 2026-07-30
+Fixed the shipped sigmoid's measured "pale, compressed shadows" defect. The whole
+phased record (fixture freezing, three review rounds of patch selection, the candidate
+harness, the review pages) is in git history; what follows is the evidence and the
+decisions that later tasks still read. Report: `docs/reports/sigmoid-reference-baseline.md`.
 
-- 2026-07-30: Product direction decided: Dmin remains the film-base/density
-  origin, while the reconstruction sigmoid owns shadow-floor/toe placement in a
-  roll-fixed Dmax-normalized coordinate. Film-master and display outputs must
-  therefore share the same tonal foundation; display rendering must not repair a
-  raised floor with a second large grade. The default is reference-based and
-  preserves under/overexposure. Sigmoid is the candidate sole product
-  reconstruction; exponential/simple remain explicit diagnostic paths until a
-  later evidence-backed retirement decision.
-- 2026-07-31: Review clarified the unshipped work: §7.3 already provides the
-  Dmin-origin, Dmax-normalized monotone sigmoid. The remaining defect is
-  empirical—frozen real-roll conversions crowd correctly exposed photographic
-  shadows into a narrow raised interval and look pale. The task now requires a
-  pinned fixture/reference/recipe baseline and quantitative film-master/SDR/HDR
-  shadow-spread metrics before deciding whether defaults, parameter semantics,
-  or the equation itself must change. `output/presets` remains the activation
-  boundary; content-aware fitting remains excluded from the default.
+**Direction (2026-07-30/31).** Dmin stays the density origin; the sigmoid owns floor /
+toe / midtone placement in a roll-fixed coordinate; film-master and display share one
+tonal foundation; the default is reference-driven and preserves under/overexposure.
+Terminology: the sigmoid is **Dmax-anchored** (`t = contrast·(D' − Dmax)`), not
+"Dmax-normalized".
 
+**Phase 0 — fixtures frozen (2026-08-02)** via `harness.sh freeze` from the manifest:
 
-## content-aware-sigmoid-toe
+| Roll | Dmin (r,g,b) | Dmax |
+|---|---|---|
+| `2026-07-24-Gold200` | 0.6001831, 0.27512017, 0.14776836 | 1.2758015 |
+| `Ektar` | 0.51679254, 0.2768597, 0.18973067 | 1.2933096 |
+| `Portra160-2026-07-22` | 0.49988556, 0.24776074, 0.14920272 | 1.3816013 |
 
-**Status:** not started
-**Updated:** 2026-07-30
+The older `Portra160.json` / `Portra400.json` recipes were *orphaned* by an asset
+reorganisation, not stale — restored folders reproduced their Dmax exactly (1.3352162,
+1.7382799). Gold 200 confirmed by the user as Kodak Gold 200 (E-7022).
 
-- 2026-07-30: Parked content-derived toe placement as an optional, explicit
-  follow-up rather than part of the product default. The task distinguishes
-  per-frame and roll-frozen acquisition, requires complete provenance, and
-  forbids frame-local fitting from film-master/normal product presets so nc does
-  not silently auto-correct exposure.
+**The leader `Dmax` is uncontrolled — same-stock pairs, same scanner** (the evidence
+`film-base/dmax-anchor-reliability` rests on):
 
+| Stock | pair | base Δ (r / g / b) | leader Dmax Δ |
+|---|---|---|---|
+| Portra 160 | `Portra160` vs `-2026-07-22` | +0.029 / +0.027 / +0.021 | +0.046 (0.15 stops) |
+| Portra 400 | `Portra400` vs `-leica-flaw` | **−0.0005** / +0.023 / +0.021 | **−0.295** (0.98 stops) |
 
-## reference-anchored-sigmoid (continued)
+Both quantities cannot be film properties. ±0.03 density is the cross-roll
+reproducibility floor for a Dmin-referenced quantity. Leaders are **uniform** (interior
+tile range 0.024–0.067, gradients ≤ 0.024), so the case rests on the level, not on a
+fogging gradient. In both pairs the later roll carries ~+0.02 more green/blue base
+(n = 2, hypothesis only — bounds how far a one-time scanner profile can be trusted).
 
-**Status:** not started
-**Updated:** 2026-07-31
+**Phases 1–3 — what the frames said** (`pipeline::shadow_metrics`, `#[cfg(test)]`,
+asset-gated; `scripts/sigmoid-baseline/fixtures.json` holds each patch's rectangle,
+user-confirmed semantics and **validity flags** — 2/10 valid diffuse whites, 7/10 mids,
+9/10 shadows, 2 frames usable for the datasheet Δ):
 
-- 2026-07-31 (PR review terminology correction): The shipped sigmoid is
-  **Dmax-anchored**, not Dmax-normalized: its coordinate is
-  `t = contrast * (D' - Dmax)` and does not divide by Dmax. The earlier
-  2026-07-30 and 2026-07-31 entries above used “Dmax-normalized” imprecisely;
-  this entry supersedes that wording while preserving the append-only history.
-
-
-## content-aware-sigmoid-toe (continued)
-
-**Status:** not started
-**Updated:** 2026-07-31
-
-- 2026-07-31 (PR review): Added `output/presets` as a prerequisite. This task
-  promises named-preset rejection and byte-identity verification, so the preset
-  surface must exist before those contracts can be implemented or tested.
-
-
-## film-stock-profiles
-
-**Status:** done
-**Updated:** 2026-09-10
-
-- Goal: A selectable registry of known film stocks carrying the per-stock reference
-  densities reconstruction needs, sourced from manufacturer datasheets with
-  provenance, with a generic C-41 fallback so naming a stock stays a refinement
-  rather than a requirement.
-- 2026-08-02 (filed during `reference-anchored-sigmoid` planning): the seed data
-  already exists — the Kodak *Judging Negative Exposures* aim tables plus the
-  Spectral-Dye-Density charts give, per stock, the grey-card and diffuse-white aim
-  densities (Status M, red, absolute) and per-channel `D-min`. Measured: Ektar 100
-  0.82 / 1.18, Δ 0.36, `D-min` red ≈0.20; Portra 160 0.84 / 1.20, Δ 0.36, ≈0.17;
-  Gold 200 0.95 / 1.35, Δ 0.40, ≈0.22 (E-4046 / E-4051 / E-7022).
-- Two decisions recorded up front: the professional C-41 aims cluster tightly enough
-  that a **generic profile is viable**, so stock selection must never be a
-  precondition; and the data's shape should follow `pipeline/colorimetry/` (source
-  data with provenance / pinned literals / `#[cfg(test)]` audit) rather than
-  inventing a second convention for reference data.
-- Deliberately **not** made a dependency of `film-base/dense-base-dmax-plausibility`,
-  which wants the C-41-calibrated plausibility floor made stock-relative: that task
-  can loosen its floor without a registry, and a false edge would kill real
-  parallelism. The two must still be coordinated so stock-awareness isn't solved
-  twice.
-- 2026-08-02 (PR #68 Codex review, two findings accepted): **measured roll `film_base`
-  stays authoritative; a published `D-min` is nominal only.** The repo already defines
-  `Dmin` as stock + development + scanner settings
-  (`film-base/estimate-reuse-output`), and base fog shifts with processing, storage and
-  the individual roll — so letting a stock selection substitute a nominal
-  standard-process base would misplace tones on a real roll.
-- **The chart-read `D-min` values are provisional, not Status M densities.** Status M is
-  a prescribed broadband response: a Status M channel density requires converting the
-  spectral-density curve to transmittance, integrating against that channel's response,
-  then taking the log. Single-wavelength sampling can be materially wrong where dye
-  spectra overlap — the Portra 160 midscale read of 0.73 against a tabulated 0.79–0.89
-  is likely this effect. The manufacturer-*tabulated* aims (and their difference Δ) are
-  the authoritative half; chart reads must not become ground truth for the registry or
-  for `io/scanner-density-calibration` until properly integrated or tabulated.
-- 2026-08-13 (**cross-reference from `algo/exponential-anchor-placement`; two consumers
-  of this registry, with different readiness**). Δ and the mid-above-base offset are
-  **not** equally available. Δ can supply the reconstruction **contrast** as soon as this
-  registry exists — candidate 8's rule `0.745/Δ` (where `0.745 = log10(1/0.18)`) gives
-  2.07 at Δ = 0.36, within 3% of the independent film-gamma route `1.2/0.6 = 2.00` — and
-  it is safe because a *difference* cancels base+fog, keeping it inside the tabulated
-  half. The **offset** (`mid aim − D-min`) is not: it consumes a chart-read `D-min`,
-  which Constraint 2 above forbids any render path from doing. So a task planning to
-  ship candidate 8 (mid anchored at `Dmin + offset`) on top of this registry is blocked
-  on spectral integration or a tabulated Status M measurement, not on the registry
-  itself. Full derivation in the `exponential-anchor-placement` section.
-- **2026-09-10 — done.** Shipped as a third density curve rather than as a table of
-  per-stock constants, which is the decision the rest follows from: `characteristic`
-  inverts each dye layer's *published* density-to-log-exposure relation per channel
-  (`--film-stock`, ten stocks in `src/algo/film_stock/`, sheets committed under
-  `docs/datasheets/`), so it resolves **no reference density and no anchor** — both come
-  off the film. Mid-grey lands at 0.18 by construction. The registry the task was filed
-  for exists, but as the curve's own data, not as a knob feeding the parametric curves.
-
-  **Verified.** `PDF → curves.json` reproduces (`digitize_datasheets.py --check`, needs
-  poppler, manual) and `curves.json → curves.rs` is audited on every `cargo test`; that
-  covers extraction *reproducibility*, never fidelity to the printed artwork, which
-  nothing mechanical can check. All four gates plus the `nctool` suite green; 725 unit +
-  185 integration + **21 asset-gated probes**. `cargo doc` holds the 16-link baseline.
-
-  **Three defaults moved with it** — `pipeline_version` 3 → 4, one new fingerprint row,
-  `golden_new_default` recaptured (red bit-identical; only green and blue move, which is
-  the shape a per-channel gain should produce): `density.scale` `[1,1,1]` →
-  `[1, 0.90, 0.86]` with a **per-curve** default (`DensityParams::default_scale_for` —
-  identity under `characteristic`, which already carries each stock's structure and would
-  otherwise be corrected twice), and `extended_reinhard` became
-  `extended-reinhard-mid-preserving-v2`, preserving scene mid-grey instead of mapping the
-  white point to 1.0.
-
-  **For dependent tasks.** `io/scanner-density-calibration` owns the residual: green and
-  blue come out ~11–18% steeper than red *in the scan* where the sheets say green is
-  barely steeper, so the shipped gain is a scanner calibration wearing a film default's
-  clothes, and it nulls the corpus mean rather than any roll (±0.5 stop per density
-  remains on the green–magenta axis). `algo/conversion-presets` and
-  `algo/characteristic-curve-coverage` were filed out of this work; the latter records
-  that **no golden vector or fingerprint covers this curve**, deliberately — its
-  inversion runs `10f32.powf`, which would be green on aarch64 and red on x86_64 CI — so
-  the open question is what shape of pin works without one. `algo/split-default-migration`
-  inherits the default move and its no-stock blocker is still open.
-
-  **One trap worth carrying forward.** Moving `DensityParams::default()` off identity
-  silently broke three `#[ignore]`d probes that used it as a stand-in for identity,
-  including the one cited as evidence for the new default. Every gate stayed green because
-  `cargo test` never runs them. `identity_gain()` in `curve_probe.rs` now names the trap;
-  the general lesson is that a probe measuring a shipped default must state the identity
-  explicitly, and that changing a default means re-running the ignored set by hand.
-## reference-anchored-sigmoid (Phase 0)
-
-**Status:** in progress
-**Updated:** 2026-08-02
-
-- 2026-08-02: **Phase 0 complete — fixture Dmin/Dmax frozen for all three fixture rolls**
-  via `harness.sh freeze`, which now reads its roll triples from the asset manifest:
-
-  | Roll | Dmin (r,g,b) | Dmax | note |
-  |---|---|---|---|
-  | `2026-07-24-Gold200` | 0.6001831, 0.27512017, 0.14776836 | 1.2758015 | new; no estimator warning |
-  | `Ektar` | 0.51679254, 0.2768597, 0.18973067 | 1.2933096 | reproduced bit-identically |
-  | `Portra160-2026-07-22` | 0.49988556, 0.24776074, 0.14920272 | **1.3816013** | re-frozen; see below |
-
-- **The Portra160 re-freeze was necessary and material.** The committed `Portra160.json`
-  named Dmin/Dmax frames `20260720-nikon-1059` / `1058`, neither of which is in the
-  current `Portra160-2026-07-22` roll (manifest: unexposed 1097 / leader 1096) — the
-  recipes predate an asset reorganisation. Re-freezing from the manifest's frames gives
-  Dmax **1.3816** against the stale **1.3352**, a 0.046 shift. Reusing the old value
-  would have anchored the entire baseline comparison on a different piece of film.
-- `Ektar`, `Portra400-leica-flaw` and `phoenix` reproduced bit-identically, which both
-  validates harness determinism and confirms the defect was specific to Portra160.
-- Gold200 raised **no** plausibility warning (Dmax 1.2758 is above the C-41 `≳1.0`
-  floor), so the `film-base/dense-base-dmax-plausibility` risk did not materialise here.
-- **Stale artifacts left in place, flagged not fixed:** `Portra160.json` and
-  `Portra400.json` name rolls that no longer exist under those names. `Portra160.json`
-  now sits beside `Portra160-2026-07-22.json` with a *different* Dmax, which is a trap
-  for the next reader — recommend deleting both stale files, but that removes another
-  task's committed artifacts so it is the user's call, not a side effect of this task.
-- Three `*.hdr.json` files show as modified with **no value change** — the harness now
-  emits the `output` block after `reconstruction` instead of before. Committed so a
-  future re-freeze shows a clean diff.
-- α recomputed against the frozen anchors: Ektar 0.479, Portra160 0.485, Gold200 0.572
-  (mean ≈ 0.51). Config 3's sweep covers 0.5/0.6/0.65, so it still spans the range —
-  and per the PR #68 review the numerator is a provisional chart read, so this must not
-  be used to narrow the sweep.
-- 2026-08-02 (**Evidence D upgraded from suggestive to measured**): the user restored the
-  `Portra160` and `Portra400` roll folders, so both same-stock pairs now exist. **Correction
-  to the Phase 0 entry above: those recipes were never "stale" — they were *orphaned* by the
-  folders' removal.** Re-freezing reproduced their recorded Dmax exactly (1.3352162 and
-  1.7382799), so they were correct for their rolls all along. The `Portra160-2026-07-22`
-  freeze was still necessary: that is a *different* roll of the same stock, with no recipe
-  of its own.
-- The controlled comparison — same stock, same scanner, contrasting the **base** (a genuine
-  film + development property) against the leader-derived Dmax:
-
-  | Stock | pair | base Δ (r / g / b) | leader Dmax Δ |
-  |---|---|---|---|
-  | Portra 160 | `Portra160` vs `-2026-07-22` | +0.029 / +0.027 / +0.021 | +0.046 (0.15 stops) |
-  | Portra 400 | `Portra400` vs `-leica-flaw` | **−0.0005** / +0.023 / +0.021 | **−0.295** (0.98 stops) |
-
-  The Portra 400 row is decisive: its **red base agrees to 0.0005 density** — same stock,
-  same instrument — while the leader-derived Dmax differs by a **full stop**. Both
-  quantities cannot be film properties.
-- **Framing sharpened:** "accidental" was too strong. Portra 160's leaders agree to 0.046,
-  within base-level variation. The leader is not reliably wrong, it is **uncontrolled** —
-  sometimes it lands, sometimes it is a stop out, and a single measurement cannot tell you
-  which. That is worse for an anchor than a consistent bias.
-- By-products: **±0.03 density is the cross-roll reproducibility floor** for a
-  Dmin-referenced quantity (good for config 8 — ~0.07 decades at contrast 2.2); and in
-  *both* pairs the later-dated roll carries ~+0.02 more green/blue base while red does not
-  move consistently — n = 2, so a hypothesis, but a systematic per-session per-channel shift
-  would bound how far any one-time scanner profile can be trusted
-  (`io/scanner-density-calibration`).
-- Gold200's stock confirmed by the user as **Kodak Gold 200** (E-7022), retroactively
-  validating the use of that datasheet's aims (0.95 / 1.35, Δ 0.40) — previously inferred
-  from the folder name.
-- 2026-08-02 (**Phase 2 harness landed; Phase 1 proposal run**): added
-  `src/pipeline/shadow_metrics.rs`, declared `#[cfg(test)] pub mod` in
-  `pipeline/mod.rs`. Two `#[ignore]`d entry points — `propose_patches` and
-  `characterise_reference_frames` — plus 4 always-on unit tests for the geometry and
-  statistics. Skips with a message when `../nc-assets` is absent, so the full suite
-  (126 tests) stays green with no assets and CI needs none.
-- **Harness bug caught by its own first run:** it globbed the roll directory and so
-  proposed "shadow" and "diffuse white" patches on the *leader* and *unexposed* frames,
-  where both are meaningless. Now reads `role` from the manifest and proposes only over
-  `real` frames; leader/unexposed get their own characterisation pass. Also note the two
-  `#[ignore]`d tests interleave stdout when run together — use `--test-threads=1` or the
-  roll headers are misattributed.
-- **Leaders are uniform — no fogging gradient.** Interior tile `D′` range across the
-  leader: Gold200 0.024, Ektar 0.039, Portra160 0.067; L−R / T−B gradients ≤ 0.024.
-  Their median `D′` is 99.9 / 100.1 / 100.3 % of the frozen Dmax, confirming the anchor
-  is that frame's own level. **This refutes a speculation in the plan** — non-uniformity
-  is *not* additional evidence for the leader problem, because there is none. The case
-  rests entirely on the cross-roll comparison: a uniform field at an *uncontrolled level*.
-- Unexposed frames sit at `D′` 0.016–0.026 over the interior (the base was frozen from a
-  centre 40% region, so the wider interior reads marginally denser) with in-tile spread
-  0.024–0.040. That spread is the **measurement noise floor** — any patch spread below
-  ~0.04 is grain, not texture. Real-frame candidates ran 0.15–0.98, comfortably above it.
-- **The decisive measurement: diffuse white lands at 41–93 % of the leader Dmax (median
-  ~66 %), never near 100 %.** Density headroom above the brightest textured diffuse
-  candidate is 0.09–0.81 (median ≈ 0.43). At contrast 1.0 that is ~0.43 decades of range
-  reserved for densities no photograph in the set contains — the saturation-as-white
-  hypothesis, measured on real frames rather than inferred from a datasheet.
-- Mid-tone sits at 11–58 % of Dmax across frames: the genuine exposure spread the task
-  must preserve, and a usable signal for the exposure-spacing metric.
-- **Check A is not evaluable from auto-proposed patches, as expected.** The implied
-  mid→white Δ scatters 0.085–0.850 against the datasheet's 0.36, because the proposal's
-  "mid-tone" is the frame's *median tile* (not a mid-grey surface) and its "diffuse
-  white" is the brightest textured tile (not necessarily a diffuse reflector). Suggestive
-  detail: the three frames whose Δ lands nearest 0.36 (0.303, 0.347, 0.435) are the ones
-  whose mid-tone sits at 37–46 % of Dmax, i.e. the normally-exposed-looking ones. Δ is
-  printed labelled "orientation only, NOT Check A".
-- 2026-08-02 (Phase 1 review aid): added `scripts/sigmoid-baseline/patch-review.sh` +
-  `build_patch_review.py`, which turn the `propose_patches` output into a reviewable HTML
-  page — each `real` frame rendered as a positive with the candidate rectangles drawn on
-  it, a magnified crop per box, and per-frame questions keyed to a stable mark (G1–G3,
-  E1–E3, P1–P4) so a later discussion can name one box. Crops are pure CSS
-  `background-position` off the single per-frame JPEG, so no crop files are generated.
-- Deliberate choices there: previews render through **`--density-curve sigmoid`**, both
-  because it is the curve under investigation and because the frozen *exponential* recipe
-  clips ~10.3% of samples — blown highlights would defeat the "is this a diffuse white?"
-  judgement the page asks for. Output goes to `../temp/patch-review` (throwaway), never
-  into `../nc-assets` or the repo, and it is **not** published as an Artifact: these are
-  the user's personal photographs and publishing would upload them to an external host.
-- 2026-08-02 (review-page bug, fixed): the magnified crops rendered as solid black. Cause
-  was HTML, not CSS geometry — the crop's inline style used `url("X.jpg")` with **double
-  quotes inside a double-quoted `style` attribute**, so the attribute terminated at
-  `url(` and the remainder was parsed as junk attributes. Fixed to single quotes, with a
-  comment at the site since the failure mode (black box) does not point at quoting.
-  Verified in Chrome by inverting the CSS background math to recover the displayed source
-  region: all 30 crops resolve to their declared rectangle within ~1 px, aspect 0.959
-  (= 328/342), `background-size` 1580.49 % (= 5184/328), no crop left without a
-  background. Verification used JS introspection only — no screenshots — so no sample
-  pixels entered an agent context.
-- 2026-08-02 (exposure question reworked, at the user's request): "correct / under / over"
-  proved genuinely hard to answer, and the reason is diagnostic — **at the shipped contrast
-  the raised black floor leaves no black reference, so a frame reads as neither under nor
-  over.** The question is now "which EV variant reads as correctly exposed?", answered from
-  a row of five real renders per frame.
-- Implemented as **real `--print-exposure` renders, not a CSS `filter: brightness()`**. CSS
-  filters act on *encoded* sRGB, so `brightness(2)` is not one stop; it is a non-photometric
-  curve and a variant chosen that way would not map back to any pipeline value. The real
-  knob is a true `2^EV` linear gain, so the chosen variant converts directly into an EV
-  offset — and it is the *relative* answers across frames that classify exposure.
-- The row renders at `--sigmoid-contrast 2.0` (the datasheet-derived ≈2.07) while the
-  full frame above stays at the shipped 1.0, so the page also shows the contrast comparison
-  directly. Sweep runs downward (−2 … 0) because at contrast 2.0, EV 0 clips **nothing** on
-  these frames while EV +1 clips ~14 %. A brightness/contrast slider is included for
-  free-form looking, labelled non-photometric so it is not mistaken for a candidate setting.
-- WB deliberately left neutral despite the visible blue cast: auto-WB is frame-local, and
-  injecting a per-frame correction into a comparison whose purpose is reading per-frame
-  differences would confound it.
-- 2026-08-03 (Phase 1 round 1 reviewed; tool improved per user feedback):
-  - **Patches were too coarse.** The 12 × 8 grid gave 328 × 342 patches (6.3 % × 9.5 % of
-    frame) and the user's answers showed they straddled objects — "dark branch *and*
-    distant forest", "2/3 shadow *and* background forest", and for P1 all three boxes were
-    "a mix of dark forest and bright sky". A patch whose semantics cannot be stated is
-    useless for the Δ calibration. Grid is now 32 × 22 → ~123 × 124 (a quarter the area),
-    overridable via `NC_TILES=<x>x<y>`, plus **non-maximum suppression**
-    (`MIN_SEPARATION_TILES = 3`) so the reported top-3 are spatially distinct rather than
-    three adjacent cells of one surface.
-  - **Consequence, flagged to the user:** the boxes moved, so round-1 answers no longer
-    describe them (E1's white went from the lake at 2262,1115 to 2713,555). Round 1 is not
-    wasted — its *general* observations stand (P1 is all forest/sky mixture; P2 has no
-    large shadow area; P4's white is a specular tractor highlight) — but the per-box
-    yes/no answers must be re-collected against the new geometry.
-  - **My sweep was one-sided, and that was a measurement error.** All ten frames picked
-    EV 0, the boundary of a −2…0 range, which means the optimum sat at or beyond it. Now
-    two-sided (−2 … +1.5), and `EVS` is overridable.
-  - **Upward EV clips heavily and that is itself a finding:** at contrast 2.0, EV 0 clips
-    *nothing* on E1 while +0.5 clips 11.6 % and P3 reaches 20.1 %. Raising exposure buys
-    brighter midtones only by blowing 7–26 % of highlights, because the shoulder has
-    already packed content against white. **Exposure is the wrong knob for a raised
-    floor** — an argument for changing the curve's shape (configs 3/4/8) over recalibrating
-    defaults.
-  - **Why the boundary preference happens at all:** with white pinned at Dmax, raising
-    contrast pivots the line *around white*, pushing everything below it down. So more
-    contrast darkens midtones and needs +EV to compensate — the two knobs fight. A
-    mid-anchored or diffuse-white-anchored form would not have that interaction.
-  - **The same-illumination constraint on Δ** (missed until the user's descriptions
-    exposed it): the datasheet says the grey card and the paper grey scale each *"receiv[e]
-    same illumination as subject"*, so Δ = 0.36 is defined for white and mid under the
-    **same light**. The proposal ranks on density alone and has no notion of illumination,
-    so it will pair a sunlit white with a shadowed mid and put the lighting difference
-    straight into Δ — very likely much of the 0.085–0.850 scatter. P3 is the clearest
-    casualty: its white (window ledge in sunshine) is the best in the set, but its mid
-    (sofa in shadow) makes the pair invalid.
-  - Patch-quality triage from round 1: genuine diffuse whites on only **G1** (painted
-    garage door), **G2** (white flower) and **P3** (window ledge); bad mids on G1 (blue
-    sky) and P4 (parking lot in shade); **P1 unusable for patch metrics entirely.** So
-    Check A may rest on one or two frames — far too thin, which independently confirms the
-    user's own point that a grey card in frame (not merely more frames) is what is needed.
-  - User asks the tool be kept and reused for config comparison beyond this task; `EVS`
-    and `NC_TILES` are the first steps toward that.
-- 2026-08-03 (review-page tweaks, user request): removed the CSS brightness/contrast
-  sliders (unused — and they were non-photometric anyway, so nothing is lost), and added a
-  **hover zoom** on the EV variants: hovering a thumbnail shows the same file full-size in
-  a fixed overlay labelled with its mark and EV. Same `src`, so it is served from cache
-  rather than downloaded twice. Variant renders bumped 1000 → 1600 px so the zoom actually
-  resolves detail (~45 MB total in `../temp`, throwaway).
-- 2026-08-03 (variant comparison reworked; hover replaced by a click lightbox): hover was
-  unusable for two reasons the user hit immediately — a centred thumbnail is covered by its
-  own popover, so you cannot move to the next one, and the gaps between thumbnails make the
-  overlay flicker as the pointer crosses them. Replaced with **one shared lightbox**: click a
-  variant to open, ‹ / › buttons or arrow keys to step through that frame's row (wrapping at
-  both ends), Esc or a click anywhere in the overlay except the buttons to dismiss. One
-  modal rather than 80 overlays is what makes prev/next possible at all.
-- **Verification limit, stated rather than glossed:** the interactive behaviour could *not*
-  be confirmed in the Chrome-automation sandbox. Inline scripts appear to be blocked there —
-  a capture listener saw zero clicks from a synthetic dispatch, and the page's own keydown
-  handler did not respond to a bubbling Escape, while the script text is demonstrably present
-  in the document. Structure, CSS and the handler's logic were verified (row length 8, index
-  lookup, opening resolves to `display: grid`); the event wiring is unverified here and needs
-  a human check in a normal browser. This is an artifact of the automation environment, not
-  of a local `file://` page, where inline scripts run normally.
-- User asks for a **separate task** to improve this tool properly rather than continuing to
-  patch it inline. Not filed yet: `docs/TASKS.md` is currently modified on the open PR #68
-  branch, so adding another task now would conflict. File it once #68 merges.
-- 2026-08-03 (Phase 1 round 2 answers; sweep extended a **second** time):
-  - **My sweep was bounded too low twice.** A −2…0 range had all ten frames pick 0; a
-    −2…+1.5 range had six of ten pick +1.5. A near-unanimous boundary choice means the
-    optimum lies *outside* the range. Now −1…+3.5, and the generator reads the same `EVS`
-    list the render script uses so the two cannot drift into referencing unrendered images.
-  - **The deficit is quantified and it is large.** At contrast 2.0 with white pinned at
-    Dmax, a measured mid-tone lands at `10^(2·(D′−Dmax))`: E1's 0.5418 → 0.031 linear
-    (50/255), needing **+2.52 EV** to reach 0.18; E2 needs **+3.57 EV**. So the shipped
-    anchor places midtones 2.5–3.6 stops too dark once contrast is photographic — which is
-    exactly why every frame wanted more exposure than I offered.
-  - **The datasheet chain closes on itself.** With white pinned at *diffuse* white and
-    `contrast = 0.745/Δ = 2.07`, a mid-grey sitting Δ below white lands at
-    `10^(2.07·−0.36) = 0.18` — mid-grey, exactly, by construction. So the entire observed
-    EV deficit is attributable to anchoring on Dmax rather than diffuse white, and configs
-    4/7/8 predict **zero** exposure compensation. Sharp and falsifiable.
-  - **Content exceeds the leader Dmax.** G3's auto white measures `D′` 1.3265 against
-    Dmax 1.2758, and P3's 1.5062 against 1.3816 — real photographic content sits *above*
-    the anchor. The leader-derived Dmax does not even bound the frame, which is an
-    independent blow to it beyond the same-stock inconsistency already recorded.
-  - Testing "chosen EV == the diffuse-white pin" gave mean |diff| 1.50 EV — **not** a clean
-    confirmation, but the residual is structured, not random: it is ≤0.5 EV on the frames
-    whose white is genuinely diffuse and below Dmax (E1 +0.27, E3 +0.50, G2 +0.41) and
-    breaks down precisely where the patch is invalid — G3 −1.84 and P3 −2.33, the two
-    super-Dmax speculars. The test is also censored, since six answers sat at my +1.5 cap.
-    Re-run once the extended sweep is answered.
-  - **Confirmed patch semantics (round 2).** Genuine diffuse whites on only **G2** (white
-    lily) and **P4** (white painted sign); P3's window ledge is white but sunlit and
-    super-Dmax. Speculars: E2 and E3 ("sunshine reflected on leaves"), P4's earlier tractor
-    highlight. Sky: G3, P1. Fog: E1, P2. **E1's white is contaminated by a scanning dust
-    speck** — dust blocks light, so it is dense in the negative and renders as a false
-    highlight; IR-based dust removal is a roadmap item, and that patch must move.
-  - **User pushback on G1's mid being blue sky, partially accepted:** sky luminance can sit
-    near mid-grey, so it is defensible as an *exposure* reference. It is still poor for Δ,
-    which needs a spectrally *neutral* surface — strongly blue sky has very unequal
-    per-channel densities, and sky luminance varies with angle to the sun and haze.
-  - P1's blue cast: agreed out of scope. The frozen recipe uses neutral WB deliberately.
-- 2026-08-03 (**review path corrected — previews now come from the measured renderer**):
-  the user asked whether the review JPEGs carry HDR. They do not (8-bit, sRGB, no gain map)
-  — but the question exposed a worse problem: previews came from the **legacy** path
-  (`reconstruct → finish_print → color::to_output`) while the acceptance bounds are measured
-  on `pipeline::sdr::render`, which is different code (Hermite shoulder + radial gamut
-  mapping vs legacy's linear-space soft clip). Reviewing one renderer while measuring
-  another is not a fair test. Previews now render with `--output-preset ultra-hdr-v1`,
-  whose JPEG **base is** the `pipeline::sdr` rendition, so the page shows what gets
-  measured. Display P3 survives the `sips` downscale (verified: red matrix column 0.51512 /
-  0.2412 / −0.00105); the gain map is dropped, which is correct for SDR thumbnails.
-  - **Correction to a previously reported finding.** "Exposure is the wrong knob because it
-    costs 7–26 % blown highlights" was measured on the **legacy** path only. On the display
-    path, contrast 2.0 at EV +1.5 reports `clipped_high: 0`. The clipping argument does not
-    transfer. What survives is the *exposure deficit* itself (midtones 2.5–3.6 stops too
-    dark), which is density arithmetic and path-independent.
-  - HDR review deferred by user decision: "we are just at the first one at our all
-    comparison, and this white-pinned one is even not the one with highest expectation."
-    Full-size gain-map files for the mixed-range frames (G3, P3) come once every candidate
-    config is renderable, so the HDR question can be judged across all of them at once.
-    Constraint to remember: `sips` cannot downscale a gain-map JPEG without destroying the
-    gain map, so HDR review needs full-size (~6.5 MB) files.
-- 2026-08-03 (**first uncensored exposure comparison — reference-driven anchor beats
-  content-driven**). Round-3 EV preferences on the corrected display path, extended range
-  −1…+3.5 with no answer at the boundary: E1 +1.5, E2 +1, E3 +1.5, G1 +2.5, G2 +1.5,
-  G3 mixed (sky +0 / tree +2), P1 +2.5, P2 +2.5, P3 +1.5 (people) / +0 (window), P4 +2.5.
-- Two candidate anchors were scored against those preferences, expressing each as the
-  equivalent `--print-exposure` at contrast 2.0 (`EV = c·(Dmax − W)/log10 2`):
-
-  | | mean \|diff\| | median |
-  |---|---|---|
-  | **A** content-driven — pin the *measured* brightest diffuse patch | 0.96 EV | 0.59 |
-  | **B** reference-driven — pin the *datasheet* diffuse-white-above-base | **0.63 EV** | 0.58 |
-
-- **B wins, and its residuals are per-stock systematic rather than random:** Ektar ≈ +0.6
-  throughout, Portra 160 ≈ 0 (P1/P2/P4 all within **0.16 EV** — one constant predicting
-  three different scenes to a sixth of a stop), Gold 200 ≈ −1.0. A constant per-stock
-  offset is exactly the signature expected if each stock's derived white is off by a fixed
-  amount — which is anticipated, since they rest on the **provisional chart-read `D-min`**
-  values PR #68 flagged as not true Status M densities. The *form* is supported; the
-  constants are the uncertain part. (Correcting each stock by its mean residual would fit
-  within ~0.3 EV everywhere, but that is fitting, not prediction, so it is not validation.)
-- **This favours the shippable candidate over the diagnostic one.** A is config 4/7 —
-  frame-local content adaptation, forbidden for the default — while B is config 8, which is
-  content-free and default-eligible. A's failures are also explained by that: it stretches
-  whatever the brightest diffuse patch happens to be up to 1.0, so a frame containing no
-  true white (P2 fog, P4 sign, E2 specular leaves) is forced too bright. Frame-local
-  fitting misbehaving exactly as the plan predicted.
-- **G3 and P3 are unresolvable by any single global curve** (sky +0 vs trees +2; window +0
-  vs people +1.5) — their scene range exceeds SDR. That is the HDR question, deferred.
-- 2026-08-03 (**scope reduced by the user: filter methods, do not tune parameters**).
-  - **Bias identified in my measurement design:** asking for a preferred EV frame by frame
-    *is* per-frame optimisation, which contradicts being honest to the film. Quantified —
-    the user's preferences have stdev 0.57 EV with a **within-stock spread of 0.5–1.0 EV**,
-    and that within-stock part is what a fixed anchor cannot follow and must not chase:
-    some is real exposure variation in the negatives (which the task requires *preserving*)
-    and the rest is judgement noise. For comparison, candidate A's own frame-to-frame swing
-    is 1.43 EV across 8 distinct values — it adapts *more* than the human — while B's is
-    0.54 EV across 3 values, one per stock.
-  - **Correct use of the data is the central tendency, not the per-frame values.** Median
-    preference is +1.5 EV at contrast 2.0 = white pinned **0.452 density below Dmax**, close
-    to the median *measured* diffuse-white gap of 0.417 — two independent routes to
-    ~0.42–0.45. Candidates will no longer be scored frame-by-frame against preference. Note
-    an offset stated relative to Dmax inherits Dmax's unreliability; config 8's Dmin
-    reference does not.
-  - **Revised goal:** (1) do not seek the optimal parameter — contrast ≈2 ≫ 1.0 suffices,
-    2.21 vs 2.22 is out of scope; (2) filter which anchoring forms deserve support, with
-    **no requirement to pick a single winner** — closer to the task file's "choose the least
-    invasive remedy" than a parameter hunt; (3) parameter tuning moves to a follow-up task
-    once higher-quality, deliberately correctly-exposed samples exist (the current ten were
-    picked at random).
-  - **Consequences:** acceptance bounds become **qualitative gates** (reaches a plausible
-    black; needs no per-frame correction; preserves exposure spacing; finite/continuous/
-    monotone; no clipping) rather than numeric thresholds — defensible at n = 10, which
-    thresholds never were. And the deliverable becomes a filtered candidate set plus a
-    *provisional* parameter; since `output/presets` activates whatever default this task
-    lands, it would ship a provisional value. Acceptable pre-release, and the seam is clean
-    (a later parameter change is a default change + conversion-version bump, not a change of
-    form) — recorded so it is a conscious decision rather than a surprise at activation.
-- 2026-08-03 (**Phase 3 measured — candidate set filtered**). Froze
-  `scripts/sigmoid-baseline/fixtures.json` (schema 1) with each patch's rectangle *and*
-  user-confirmed semantics plus validity flags, so invalid patches are skipped rather than
-  averaged in: 2/10 valid diffuse whites (G2 white lily, P4 painted sign), 7/10 valid mids,
-  9/10 valid shadows, **2 frames usable for the datasheet Δ**. Added
-  `shadow_metrics::measure_candidates`, which exploits the fact that **every anchoring form
-  reduces to one number** — the sigmoid anchor `A` (`curve.dmax`) plus a contrast — so no new
-  curve code was needed. Report: `docs/reports/sigmoid-reference-baseline.md` (+ raw output).
-- **The defect, precisely: the shipped default gets midtones nearly right and blacks badly
-  wrong.** Candidate 1 needs only 0.14 EV to place a mid-grey yet its darkest *confirmed*
-  shadow patch sits at 72/255. That is why the complaint is "pale" and not "dark", and it is
-  now reproduced on confirmed patches rather than inferred.
-- Filtering outcome: **reject 1** (black gate, 72/255); **reject 5** (black-pinned needs
-  +4.75 EV — pinning black alone leaves white and mid unplaced, and fixing that requires a
-  second pin ⇒ adaptive contrast, already rejected); **4 and 7 diagnostic-only** on the
-  frame-local argument, explicitly *not* on this data since both resolve on **2 frames only**;
-  **2 and 3 contingent** on a `film-base` Dmax fix; **support 8** — smallest residual (0.78 EV)
-  of any black-passing shippable form, Dmax-free and content-free.
-- **A gate I had backwards, now corrected in the harness output.** "Lower mid spread = more
-  reference-driven" is wrong. A reference-driven anchor applied to frames that genuinely differ
-  in exposure *should* leave spread; **low** spread means the anchor is *correcting* exposure —
-  the frame-local behaviour the default must not have. Also only comparable at equal contrast,
-  since low contrast compresses between-frame differences (candidate 1's small sd is that
-  artifact, not a merit).
-- 2026-08-03 (**two of my rejections were wrong; user caught both**):
-  - **Candidate 5 (black-pinned) was rejected on my parameter, not its form.** Pinning black
-    at NLP's 0.00061 with c=2.0 implies an anchor of `−log10(0.00061)/2 = 1.607` — *above*
-    every roll's Dmax (1.28–1.38) — so nothing reached white and the frame rendered dark. My
-    stated reason ("pinning black alone leaves everything unplaced at any fixed contrast") was
-    simply false: fixed contrast is exactly what candidate 2 does. Retested at targets
-    consistent with the contrast — 0.002 → anchor 1.349, 0.005 → anchor 1.151. Black-pinning
-    is as legitimate as white- or mid-pinning: another rule for the same single anchor, and
-    **Dmax-free**. Results: 5a needs +3.04 EV (shadow 9/255), 5b +1.71 EV (shadow 20/255).
-  - **Gating the content-driven candidates on a *semantically valid* white was incoherent.**
-    A content-driven mode has no knowledge of what a real white is — it measures the brightest
-    content and adapts. Requiring validity also meant they resolved on 2 frames only, making
-    their statistics worthless. They now use the shipped `DmaxSource::Auto` (99.5th percentile
-    of corrected densities), so they resolve on all ten and test *shipped* behaviour. Verdict
-    changes from "diagnostic only" to **"explicit-mode only"** — a legitimate opt-in mode
-    (`algo/content-aware-sigmoid-toe`), just never the default.
-  - **And that immediately found a real defect: `Auto` is dominated by the film holder.** It
-    resolves to **2.23–2.37** on every frame against a roll Dmax of 1.28–1.38, because the
-    opaque holder has near-zero transmission and therefore enormous corrected density, so it
-    owns the 99.5th percentile of a full-frame scan. Candidates 4 and 7 render everything to
-    0/255 — that is holder contamination, not content adaptation, so it is **not** a verdict on
-    the form. A content-driven mode must measure the *interior*, which is what `film-base`'s
-    rebate detection exists for. This also explains why `--auto-d-max` was demoted to opt-in.
-- Added `scripts/sigmoid-baseline/candidate-review.sh` + `build_candidate_review.py`: renders
-  all 8 candidate forms × 10 frames (80 images) through the display path with **no exposure
-  applied**, and builds a comparison page with the same click lightbox. The anchor rules live
-  in one place so renders and page cannot disagree.
-- 2026-08-03 (**user verdicts on the candidate forms, and a gap in my sweep**):
-  - Ranking, best to worst: **3 and 8** (both GO), then **5b** (most likely GO), **5a**
-    (unsure), **1** (maybe not go), **2** (not go). Plus two per-frame notes: on **G3, 8 > 3**;
-    on **E2, 2 > 1**.
-  - The user notes the ranking is partly exposure-driven, since exposure is the most salient
-    cue to the eye. Recorded as an honest property of the data, not a contamination — the
-    verdicts are per *form* and aggregated, which is what the reduced scope asks for.
-  - **P3 exposes a clean physical trade, and the arithmetic reproduces the user's eye
-    exactly.** Output gap between `D′` 1.40 and 1.50 (where the curtain detail lives):
-    c1 0.067, c2 0.083, c5a 0.047 (detail kept) · c5b **0.00057** ("lost some") · c3 0.00008,
-    c8 0.00003 ("lost all"). Mechanism: lowering the anchor to lift midtones and blacks puts
-    more content *above* white, where the shoulder must compress it — and at width 0.2 that
-    compression saturates and differentiation collapses.
-  - **Answer to the user's question — yes, recoverable, via the shoulder, which I never
-    varied.** All eight configs used the shipped `shoulder = 0.2`; that is a real gap. Swept on
-    c8 (A=1.03, c=2.069): shoulder 0.2 → gap 0.00003, mid 0.1799; 0.6 → 0.0164 / 0.1740;
-    **1.0 → 0.0502 / 0.1525**; 1.5 → 0.0699 / 0.1188; 2.0 → 0.0684 / 0.0887. So **0.6–1.0
-    recovers most highlight differentiation** (1.0 is comparable to c1's 0.067) for ~0.24 EV of
-    midtone cost; beyond 1.5 midtones darken for little gain.
-  - **Why the shipped default is too narrow:** 0.2 was calibrated for a regime where content
-    essentially never exceeded white (anchor at Dmax, nothing reaches it). Moving the anchor to
-    diffuse white makes the shoulder **load-bearing for the first time**, so a width chosen for
-    a decorative roll-off is inadequate. Testing 0.2 vs ~1.0 is therefore a *form-viability*
-    question, not the 2.21-vs-2.22 tuning that was deferred.
-  - Mechanism summary that now ties the three datapoints together: **anchor height governs
-    highlights** (G3: 8's 1.13 anchor beats 3's 1.01 on a sky-heavy frame; P3 likewise),
-    **contrast governs shadows** (E2: 2 > 1 on a dark forest frame where the pale floor is most
-    objectionable), and **the shoulder is what relaxes the conflict between them**.
-- 2026-08-03 (**shoulder verdict: ≈0.6, with a mechanism, not a preference**). User read:
-  0.2 sharper in the regular range but obvious highlight loss; 0.6 and 1.0 both avoid most of
-  the loss; 1.0 only beats 0.6 on P3; 0.6 sharper than 1.0. Verdict **0.6 > 1.0 > 0.2**.
-  Quantified — local contrast per 0.05 density on c8 (A=1.03, c=2.069):
+- **Diffuse white lands at 41–93% of the leader `Dmax` (median ~66%), never near
+  100%**; density headroom above the brightest textured diffuse candidate is 0.09–0.81
+  (median ≈0.43). Mid-tone sits at 11–58% of `Dmax` across frames — the genuine
+  exposure spread the default must preserve.
+- **The exposure deficit is large and path-independent**: with white pinned at `Dmax`
+  and contrast 2.0, measured mid-tones need +2.52 … +3.57 EV to reach 0.18. The
+  datasheet chain closes on itself: white pinned at *diffuse* white with `contrast =
+  0.745/Δ = 2.07` puts a mid-grey Δ below white at exactly 0.18 — so the whole deficit
+  is the anchor, and reference-driven forms predict zero compensation.
+- **Real content exceeds the leader `Dmax`** (G3 1.3265 vs 1.2758; P3 1.5062 vs
+  1.3816): the anchor does not even bound the frame.
+- **Reference-driven beats content-driven.** Scoring anchors against uncensored EV
+  preferences (−1…+3.5): pin the *measured* brightest diffuse patch — mean |diff| 0.96
+  EV; pin the *datasheet* diffuse-white-above-base — **0.63 EV**, with residuals
+  **systematic per stock** (Ektar ≈ +0.6, Portra 160 ≈ 0 within 0.16 EV on three
+  scenes, Gold 200 ≈ −1.0) — the signature of per-stock constants each off by a fixed
+  amount (they rested on chart-read `D-min`, since superseded by curve-digitized values
+  in `film-stock-profiles`). Content-driven modes force frames with no true white (fog,
+  a sign, specular leaves) too bright — frame-local fitting misbehaving as predicted.
+- **Scope reduced by the user: filter forms, do not tune parameters.** Asking for a
+  preferred EV per frame *is* frame optimisation; only the central tendency is usable
+  (median +1.5 EV at contrast 2.0 = white 0.452 density below `Dmax`, against a measured
+  diffuse-white gap of 0.417 — two routes to ~0.42–0.45). Acceptance became qualitative
+  gates; parameter tuning is `algo/sigmoid-parameter-calibration`, which needs a
+  bracketed roll and a grey card rather than more random frames.
+- **Every anchoring form reduces to one anchor `A` plus a contrast**, so eight
+  candidates ran through one curve implementation with no new curve code. Verdicts
+  (user, on renders): **3 and 8 GO** (mid pinned at `f·Dmax` / at `Dmin + datasheet
+  offset`), **5b most likely GO** (black pinned — its first rejection was a parameter
+  error, anchor 1.607 above every roll's Dmax), 1 (shipped) maybe not, 2 not.
+  Candidate 8 scored best of any shippable form (0.78 EV, 27/255) but could not ship:
+  its per-stock offset needed a Status M `D-min` that did not yet exist.
+  **A low between-frame spread is not a merit** — a reference-driven anchor applied to
+  frames that differ in exposure *should* leave spread; low spread means the anchor is
+  correcting exposure.
+- **`DmaxSource::Auto` is dominated by the film holder** (found here): 2.23–2.37 on
+  every frame against roll Dmax 1.28–1.38, so content-driven candidates rendered 0/255
+  — holder contamination, not a verdict on the form. Filed as
+  `algo/auto-anchor-interior-measurement`; content-driven anchoring is "explicit-mode
+  only" (`algo/content-aware-sigmoid-toe`), never the default.
+- **Shoulder ≈ 0.6, with a mechanism.** All eight configs had used the shipped 0.2,
+  which was calibrated for a regime where content never exceeded white; moving the
+  anchor to diffuse white made the shoulder load-bearing. Local contrast per 0.05
+  density on candidate 8 (A = 1.03, c = 2.069):
 
   | `D′` | region | sh 0.2 | sh 0.6 | sh 1.0 |
   |---|---|---|---|---|
@@ -1722,75 +666,507 @@ What other epics need to know about `algo`:
   | 1.20 | highlight | 0.0043 | 0.0428 | **0.0507** |
   | 1.40 | curtain | **0.0000** | 0.0117 | **0.0298** |
 
-- **The decisive figure is where each shoulder begins eating local contrast:** `D′` 0.95
-  (sh 0.2), **0.70** (sh 0.6), **0.45** (sh 1.0). Mid-grey is at 0.67 — so **0.6 begins bending
-  right at mid-grey**, where a print shoulder belongs, while **1.0 begins well below it** and is
-  therefore no longer a highlight shoulder but a flattening of the entire upper half. That is
-  the mechanism behind "0.6 is sharper than 1.0", and it makes 0.6 principled rather than
-  merely preferred.
-- **On the user's "clamp to 1.0 when part of the image is too light":** their own instinct that
-  it belongs to a different story is correct, and the reason is precise — selecting the shoulder
-  from how much content is too light is **content-adaptive**, so two frames of one roll would
-  get different curves and their highlight relationships would stop being comparable. Same
-  category as content-driven anchoring; belongs in the explicit mode, not the default.
-- **Better resolution:** the *only* frame where 1.0 beats 0.6 is **P3** — already identified as
-  one of the two frames whose scene range exceeds SDR. So the frames that would trigger the
-  clamp are exactly the frames that should get **HDR output** instead. Do not adapt the shoulder
-  to force a high-DR scene into SDR; give it the range it needs.
-- **A legitimate reference-driven version does exist**, and should be recorded rather than lost:
-  a **per-stock** shoulder taken from datasheet curve shape (not per-frame content) would be as
-  defensible as the per-stock anchor. No datasheet shoulder data exists yet, so it is follow-up
-  work under the parameter-tuning task — but it is the honest way to get what the clamp was
-  reaching for.
+  Each shoulder starts eating local contrast at `D′` 0.95 (0.2), **0.70** (0.6),
+  **0.45** (1.0); mid-grey is 0.67, so 0.6 bends at mid-grey where a print shoulder
+  belongs and 1.0 flattens the whole upper half. User verdict 0.6 > 1.0 > 0.2.
+  Anchor height governs highlights, contrast governs shadows, the shoulder relaxes the
+  conflict. A shoulder selected from how much content is too light is content-adaptive
+  and belongs to the explicit mode; a *per-stock* shoulder from datasheet curve shape
+  would be legitimate (no data yet — sigmoid-parameter-calibration).
+- **G3 and P3 are unresolvable by any single global curve** (sky +0 vs trees +2;
+  window +0 vs people +1.5): their scene range exceeds SDR — the HDR question, deferred
+  by the user until every candidate is renderable. `sips` cannot downscale a gain-map
+  JPEG without destroying the gain map, so HDR review needs full-size files.
+- Review previews must come from the **measured** renderer: the first pages rendered
+  through the legacy path while bounds were measured on `pipeline::sdr`; corrected to
+  `--output-preset ultra-hdr-v1`, whose JPEG base *is* the SDR rendition. A finding
+  measured on the legacy path only ("exposure costs 7–26% blown highlights") did not
+  transfer; the exposure deficit did.
 
-### 2026-08-03 — Phase 4: the remedy, and why it stopped at step 2
+**Phase 4 — what shipped (2026-08-03), and why it stopped at remedy 2.** §7.3's
+equation is unchanged; the defect was never in the curve but in *which tone it pins*,
+and recalibration alone could not fix it (steepening a white-pinned line pivots about
+white and drags midtones down), so two coupled changes were needed:
 
-- **Remedies 1 and 2 sufficed; §7.3's equation is character-for-character unchanged.**
-  Recorded because the task mandated that order and the outcome is the answer to "why did
-  the less invasive options suffice": the defect was never in the curve, it was in *which
-  tone the curve pins*. Recalibrating alone could not fix it — at contrast 1.0 the floor is
-  72/255, and raising contrast with white pinned drags midtones down, because steepening a
-  line pivots it about the pinned point. Two coupled changes were needed, not one.
-- **Defaults recalibrated:** `contrast 1.0 → 0.745/0.36 ≈ 2.0687`, `shoulder 0.2 → 0.6`,
-  `toe` unchanged. Both derived, with the derivation in the doc comments so a future reader
-  can re-check rather than trust: the contrast from the manufacturers' own mid-to-white aim
-  delta (film gamma 0.52 / system gamma 1.07 as independent corroboration), the shoulder
-  from where its bend begins (`D′ ≈ 0.70`, essentially mid-grey).
-- **Anchor reparameterized** — the substantive change. `curve.dmax` was overloaded: the
-  roll's *reference* density **and** the density rendering to `1.0`. Now `curve.dmax` is the
-  reference and `curve.anchor` (`AnchorPlacement`) says which tone it places, defaulting to
-  `{"mid-at-dmax-fraction": 0.5}` — candidate 3's form, `A = f·R + 0.745/contrast`.
-- **`AnchorPlacement` is an enum, not a bool + f32**, for the same reason `DmaxSource` and
-  `FilmBaseSource` are: independent fields can encode illegal combinations that a flags-win
-  merge then silently mis-resolves. The two CLI flags conflict at the clap layer and each
-  replaces the whole variant.
-- **Golden impact, verified rather than predicted.** The two sigmoid goldens moved and were
-  recaptured with the reasoning at the site — the default vector's base pixel 0.0115 →
-  0.00177 (≈28/255 → ≈6/255, an actual black), its dense highlight 0.448 → 0.946. The
-  **auto-WB golden gain dropped 2.2304 → 1.0574**, which is worth keeping: the estimator
-  samples the rendered positive, so WB had been partly compensating for the broken curve.
-  Both drift fingerprints are **unmoved**, as predicted — the default recipe still selects
-  `exponential`, so `output/presets` still owns the bump when it flips the default curve.
-- **Candidate 8 could not ship here, and that is a dependency fact rather than a
-  reversal.** Its per-stock offsets *are* `algo/film-stock-profiles`, and they currently
-  rest on chart reads PR #68 established are not true Status M densities. So the user's
-  routing lands in two pieces: this task ships the no-stock arm (3) plus the opt-in escape
-  hatch, and the stock arm is a **third `AnchorPlacement` variant** when the registry
-  exists. Recording the seam explicitly so the next task does not re-litigate the design.
-- **`NOMINAL_DMAX` deliberately left at 2.0.** The measured rolls cluster near 1.36 with
-  Phoenix excluded, but the user is adding samples and asked for that calculation to wait.
-  Safe to defer *because* of the mid placement: `dA/dR = f`, so the fallback's error is now
-  halved (fixed default gives `A = 1.36` against a measured ≈1.01, where the old rule gave
-  2.0 against 1.3).
-- **Two doc claims were conditional on the old rule and are now qualified, not left
-  quietly false:** the paper-black floor is `10^(−contrast·A)`, and "zero knees reduce to
-  the exponential curve bit-for-bit" holds only under `white-at-dmax` — under the default
-  placement it is the same line *offset*. The existing reduction test already pinned that
-  variant explicitly, which is why it stayed green and the staleness was invisible to CI.
-- **Gate:** `fmt` clean, `clippy --all-targets -D warnings` clean, 507 binary + 126
-  integration tests green, drift gate 4/4. End-to-end on `tests/fixtures/hdr-48bit.tif`:
-  both flags reach the resolved report, each changes the image, and the emitted recipe fed
-  back through `--params` reproduces the render bit-identically.
+- **Defaults recalibrated:** `contrast 1.0 → 0.745/0.36 ≈ 2.0687` (from the
+  manufacturers' mid-to-white aim delta; film gamma 0.52 / system gamma 1.07 as
+  corroboration), `shoulder 0.2 → 0.6`, `toe` unchanged; derivations in the doc comments.
+- **Anchor reparameterized:** `curve.dmax` is the roll's *reference*; `curve.anchor`
+  (`AnchorPlacement`, an enum, not bool + f32) says which tone it places, default
+  `{"mid-at-dmax-fraction": 0.5}` (candidate 3, `A = f·R + 0.745/contrast`), with
+  `white-at-dmax` retained as the diagnostic reproducing the old defect. `f = 0.5`
+  halves the fallback's `Dmax` error (`dA/dR = f`).
+- Goldens moved and were recaptured with reasoning at the site (base pixel 0.0115 →
+  0.00177; the auto-WB golden gain dropped 2.2304 → 1.0574, i.e. WB had been partly
+  compensating for the broken curve). Drift fingerprints unmoved — the default recipe
+  still selected `exponential`; that bump came 2026-08-08.
+- `NOMINAL_DMAX` was deliberately left at 2.0 (user asked to wait for more rolls) —
+  **superseded 2026-08-08**, see `negative-reconstruction-density-curves`.
+
+### 2026-08-03 (later) — PR #70 review: four findings, and why one remedy was refused
+
+(Relocated verbatim from `## sigmoid-parameter-calibration` on 2026-09-13; PR #70 was this
+task's PR.)
+
+- **The report named a number the render did not use.** `ReconstructionReport.dmax` was
+  documented as "the display-white anchor the curve used" and, after the placement split,
+  carried the *reference* instead. Now both travel: `dmax` (reference, what a recipe freezes
+  back) and `curve_anchor` (derived, what rendered to 1.0 and therefore sets the floor at
+  `10^(−contrast·anchor)`). The JSON `reconstruction_result.curve` gained the placement
+  *rule* plus `anchor_value`, so that block is self-contained — a consumer no longer has to
+  re-derive the anchor from the echoed recipe, which is the opposite of what diagnostics are
+  for. Exponential reports both fields equal rather than a null, so consumers need no special
+  case.
+- **A tiny contrast panicked instead of erroring.** `MID_GREY_OUTPUT_DECADES / contrast`
+  overflows below ~2.2e-39, and the `debug_assert` I had left there turned that into exit
+  101 in debug and `inf` fed into `s_curve` in release. Now a `validate` usage error naming
+  the flag, plus `apply_curve` returning a real error for the programmatic path (the
+  defense-in-depth pattern `algo/simple.rs` already uses). Two things worth recording: the
+  bound applies **only** to the mid-grey placement, since `WhiteAtDmax` performs no
+  division; and `f32::MIN_POSITIVE` is *accepted* on purpose — the quotient is finite there,
+  and because `contrast · anchor` is then exactly `MID_GREY_OUTPUT_DECADES` the render is a
+  flat mid-grey rather than a broken one. My first test asserted it should fail, which was
+  wrong about the arithmetic.
+- **The roll consistency check had a fourth hole.** `resolve_frames` probed `film_base`,
+  `curve.dmax` and `output.preset`, so a per-frame `curve.anchor` override silently gave one
+  frame a different placement *rule* — subtler than a different Dmax number and, by our own
+  documentation, a roll-level property. Added as warning (5) of six.
+- **Refused: bumping `reconstruction.schema_version`.** The reviewer was right that an
+  archived sigmoid recipe now renders differently — real, and it would have been silent. But
+  the proposed remedy is wrong for this codebase and the reasoning is worth keeping: that
+  constant versions the schema **shape** and the reader checks it for *exact* equality, so
+  bumping to 2 would reject every archived recipe outright, including the large majority that
+  select `exponential` and are wholly unaffected. The alternative — preserving v1 semantics
+  via a per-version default table — is a real design, but it would have to cover `contrast`
+  and `shoulder` too (both moved in the same commit with the identical property), and that is
+  `core/conversion-versioning` policy, not something to improvise inside an algo task.
+  **What is not acceptable is silence**, so it is now a loud, `--strict`-promotable warning
+  when a loaded recipe selects sigmoid with no `anchor` — modelled directly on the existing
+  `pipeline_version_warning`, which handles the same "parameters still apply, default moved
+  underneath them" situation one level up.
+- **A gap that is genuinely unowned, flagged rather than filed:** `core/conversion-versioning`
+  is scoped to *default* behaviour ("bumps only when default conversion behaviour changes"),
+  so nothing currently owns "a non-default path changed and archived recipes for it are
+  reinterpreted". The warning covers this instance; the policy question is open.
+
+**2026-08-13 — the shipped `MidAtDmaxFraction(0.5)` has a quantified error** (from
+`exponential-anchor-placement`): the mid patch sits at `D′ = 0.513` where `0.5·Dmax`
+puts the anchor at 0.650; that 0.137 density is 0.91 stops at contrast 2.0 against
+candidate 3's measured 0.93 EV — the shipped default's whole residual is the fraction,
+and 0.395 would be correct for these rolls. But (a) it is correct only while `Dmax`
+means the leader, and (b) `f` is also the coupling to that unreliable anchor (the two
+rolls 0.295 apart swing 0.98 stops at `f = 0.5`, zero at `f = 0`), so re-tuning it
+fixes the systematic half and leaves the roll-to-roll half. The calibrated answer is
+more likely a change of *reference* than a better fraction.
+
+**Where the artefacts are.** `pipeline::shadow_metrics` (`propose_patches`,
+`characterise_reference_frames`, `measure_candidates`; run with `--test-threads=1`
+or roll headers interleave), `scripts/sigmoid-baseline/` (fixtures, review-page
+builders — the review pages themselves were superseded by
+`analysis/comparison-review-tooling`). Output under `../temp`, never published as an
+Artifact: the frames are the user's own photographs.
+
+
+## content-aware-sigmoid-toe
+
+**Status:** not started
+**Updated:** 2026-07-31
+
+- 2026-07-30: Parked content-derived toe placement as an optional, explicit
+  follow-up rather than part of the product default. The task distinguishes
+  per-frame and roll-frozen acquisition, requires complete provenance, and
+  forbids frame-local fitting from film-master/normal product presets so nc does
+  not silently auto-correct exposure.
+- 2026-07-31 (PR review): Added `output/presets` as a prerequisite. This task
+  promises named-preset rejection and byte-identity verification, so the preset
+  surface must exist before those contracts can be implemented or tested.
+
+
+## film-stock-profiles
+**Status:** done (filed 2026-08-02; built 2026-09-04; closed 2026-09-08; merged 2026-09-10 as #105; `density.scale` default 2026-09-09)
+
+**Goal and the decision everything follows from.** A selectable registry of known
+stocks carrying the per-stock reference densities reconstruction needs, from
+manufacturer datasheets with provenance, with a generic C-41 fallback so naming a stock
+is a refinement, never a precondition. It shipped as a **third density curve**,
+`characteristic` (`--density-curve characteristic` + `--film-stock`, recipe
+`reconstruction.curve = {"type":"characteristic","stock":…}`), which inverts each dye
+layer's *published* density-to-log-exposure relation per channel — so the registry
+stores **curves, not scalars**, and resolves no reference density and no anchor.
+Opt-in, no default moved for the curve itself.
+
+**Constraints recorded up front (2026-08-02, PR #68 review)** and still in force:
+measured roll `film_base` stays authoritative — a published `D-min` is nominal only
+(base fog shifts with processing, storage and roll); and single-wavelength
+*chart-read* values off the Spectral-Dye-Density chart are **not** Status M densities
+and must never reach a render path (provenance kind `chart-read`). Deliberately not a
+dependency of `film-base/dense-base-dmax-plausibility` (a false edge would kill
+parallelism; coordinate so stock-awareness is not solved twice).
+
+### 2026-09-04 — the datasheet corpus, digitized
+
+- **Corpus — 8 colour stocks digitized from the published curves:** 7 Kodak C-41 sheets (Ektar 100 `E-4046`, Portra 160 `E-4051`, Portra
+  400 `E-4050`, Portra 800 `E-4040`, Gold 200 `E-7022`, UltraMax 400 `E-7023`,
+  UltraMax 800 `E-7024`) plus the legacy five-stock Portra sheet (160NC/160VC/400NC/
+  400VC/800, E-4040 2009-02 — `publication` alone is not an identifier, the
+  `(publication, revision)` pair is); 16 B&W sheets (Kodak, Ilford, Kentmere). **No
+  data exists for Harman Phoenix** (a fixture roll — "unnamed stock resolves to
+  generic" is a first-class path), no Fuji (never publishes the diffuse-white row).
+  Aim values are identical across the 2016 and 2025 revisions.
+- **Method:** Kodak still sheets are vector art, so curves digitize exactly. Calibrate
+  `y` off the **plot frame** (bottom `D = 0`, top `4.0`) — calibrating off the axis
+  *label baselines* biases every density by ~0.05. Two independent extraction paths
+  (raw content stream, `pdftocairo -svg`) agree to ±0.002. Ilford/Harman/Kentmere are
+  raster and Fuji's PDFs encrypted; both need a different route. Take `D-min` from the
+  leftmost point with monotonicity enforced (Gold 200's blue dips 0.03 there).
+- **Constraint 2 lifted for Kodak still stocks:** the characteristic curve is plotted
+  in **Status M** (stated on the plot, same densitometry as the aim table), so its
+  `D-min` is a Status M density and `mid aim − D-min` — the `MidAtBaseOffset`
+  `reference-anchored-sigmoid` could not ship — is available at ~±0.01. Provenance
+  kind `curve-digitized` was added for exactly this.
+
+  | Stock | mid aim | white aim | Δ tab | D-min R/G/B | mid−D-min | Δ curve | γ R/G/B |
+  |---|---|---|---|---|---|---|---|
+  | Ektar 100 | 0.82 ±.05 | 1.18 ±.05 | 0.36 | 0.209/0.634/0.844 | 0.611 | 0.401 | 0.608/0.589/0.656 |
+  | Portra 160 | 0.84 ±.05 | 1.20 ±.05 | 0.36 | 0.200/0.616/0.835 | 0.640 | 0.370 | 0.524/0.536/0.587 |
+  | Portra 400 | 0.82 ±.05 | 1.18 ±.05 | 0.36 | 0.220/0.647/0.867 | 0.600 | 0.376 | 0.531/0.555/0.633 |
+  | Portra 160VC | 0.87 ±.06 | 1.28 ±.06 | 0.41 | 0.219/0.645/0.860 | 0.651 | 0.391 | 0.552/0.572/0.656 |
+  | Portra 400VC | 0.87 ±.06 | 1.28 ±.06 | 0.41 | 0.219/0.646/0.867 | 0.651 | 0.392 | 0.553/0.573/0.655 |
+  | Portra 800 (EI 800) | 0.85 ±.10 | 1.10 ±.10 | 0.25 | 0.308/0.706/1.021 | 0.542 | 0.362 | 0.512/0.532/0.594 |
+  | Gold 200 | 0.95 ±.10 | 1.35 ±.10 | 0.40 | 0.251/0.657/0.991 | 0.699 | 0.383 | 0.543/0.565/0.611 |
+  | UltraMax 400 | 0.90 ±.10 | 1.30 ±.10 | 0.40 | 0.285/0.694/0.980 | 0.615 | 0.355 | 0.503/0.524/0.583 |
+
+  Red channel; `Δ curve` is the density rise over the 0.694 decades between an 18%
+  grey card and a ~89% paper white, taken at the mid aim's own exposure.
+- **Δ is stock-dependent** (the NC/VC pair: 0.36 vs 0.41 at the same speed, corroborated
+  by their curves), so a generic Δ is a fallback, not a law. **Both 800-speed sheets
+  tabulate Δ 0.25 against curves saying ~0.36** (±0.10 aim ranges make the table
+  uninformative there) — prefer the curve; `Δ_tab / γ ≈ 0.69` holds to ±0.05 on every
+  other stock. Aim-table tolerance bounds what any registry can buy: ±0.05 is ±0.34 EV
+  at contrast 2.07, ±0.10 is ±0.68 EV.
+- **The per-channel structure — the one per-channel datum the sheets carry — says
+  `density.scale = [1,1,1]` is wrong on every stock:** blue runs 12–19% steeper than
+  red, green 2–5%. A neutral ramp in nc's `D′` (Portra 400):
+
+  | stops vs mid | −4 | −3 | −2 | −1 | 0 | +1 | +2 | +3 | +4 |
+  |---|---|---|---|---|---|---|---|---|---|
+  | D′_R | 0.035 | 0.133 | 0.287 | 0.442 | 0.600 | 0.762 | 0.926 | 1.093 | 1.262 |
+  | D′_G | 0.038 | 0.145 | 0.311 | 0.479 | 0.646 | 0.813 | 0.979 | 1.144 | 1.311 |
+  | D′_B | 0.085 | 0.247 | 0.435 | 0.624 | 0.814 | 1.005 | 1.197 | 1.390 | 1.582 |
+  | blue error after WB at mid | −0.164 | −0.100 | −0.066 | −0.032 | 0 | +0.029 | +0.057 | +0.083 | +0.106 |
+
+  White balance is one gain (a constant density shift) and can zero one row only: 1.9
+  EV of blue swing at contrast 2.07. **`scale` alone cannot fix it** — the channels'
+  toes sit at different exposures (`D′_B/D′_R` drifts 1.25–2.43); the (scale, offset)
+  pair fitted over −2…+4 stops:
+
+  | stock | scale G | offset G | scale B | offset B |
+  |---|---|---|---|---|
+  | Ektar 100 | 0.996 | −0.023 | 0.857 | −0.090 |
+  | Portra 160 | 0.975 | −0.039 | 0.863 | −0.067 |
+  | Portra 400 | 0.976 | −0.025 | 0.850 | −0.088 |
+  | Portra 160VC | 0.986 | −0.031 | 0.852 | −0.101 |
+  | Portra 400VC | 0.988 | −0.031 | 0.856 | −0.096 |
+  | Portra 800 | 0.967 | −0.058 | 0.857 | −0.004 |
+  | Gold 200 | 0.971 | −0.035 | 0.887 | −0.002 |
+  | UltraMax 400 | 0.956 | −0.045 | 0.862 | −0.012 |
+  | **generic** | **0.977** | −0.036 | **0.860** | −0.057 |
+
+  The **gain is nearly stock-independent** (blue 0.850–0.887), the **offset is not**
+  (−0.101…−0.002, splitting by tier), so a generic scale is defensible and a generic
+  offset is not. Deriving either from roll statistics *per run* is content-derived and
+  forbidden for a default; a constant calibrated once from a corpus is not (2026-09-09).
+- **The leader cannot validate any of this.** Evaluating each sheet at the leader's
+  red `D′`: measured `G−R` / `B−R` do not reproduce the published divergence (Ektar
+  predicted B−R +0.322, measured +0.048; Portra 160's leader has **red** densest, which
+  no C-41 neutral response gives). The leader's exposing light is not neutral and/or
+  the scanner's slopes are not Status M's — either way it is not a neutral reference,
+  and an earlier suggestion here to measure per-channel gamma on it was wrong.
+- **Curve shape:** the film has a toe and essentially no shoulder in the scanned range
+  (local γ/mid γ: Portra 400 0.35 at −4 stops → 1.09 at +6; real rolls reach ~+4 stops
+  over mid). So the sigmoid's default shoulder (bending from mid-grey) is print
+  character, not film — measured support for `reconstruction-render-curve-split` — and
+  nc's toe has the wrong sign (the film compresses shadows; the sigmoid compresses them
+  again).
+- **User decisions:** the blue highlight cast is gamma, not base offset (it grows with
+  density); try the datasheet structure on our scans rather than gating on a
+  calibration; the scanner-to-Status-M slope is postponed to
+  `io/scanner-density-calibration`; no ColorChecker frame exists, so the numbers ship as
+  a hypothesis judged on rendered results.
+- **Measured transfer (21 frames, 6 rolls, 4 stocks, `algo::curve_probe::channel_drift`
+  — asset-gated, `#[ignore]`d):** bin interior pixels by red corrected density and
+  measure how the blue-minus-red log-exposure ratio drifts across bins after
+  normalising at the middle bin (a scene-colour bias shifts every bin together and
+  cancels).
+
+  | | scalar | curve | datasheet predicts |
+  |---|---|---|---|
+  | blue drift slope, stops per unit density | **+1.26** | **+0.09** | **+1.29** |
+  | ektar-100 (n=3) | +1.22 | +0.13 | +1.23 |
+  | portra-160 (n=8) | +1.18 | +0.15 | +1.11 |
+  | portra-400 (n=7) | +1.24 | −0.07 | +1.62 |
+  | gold-200 (n=3) | +1.54 | +0.29 | +1.07 |
+
+  The scans carry 90% of the divergence the sheets claim and inverting the curves
+  removes it. **Read the slope, not the swing** — per-frame slopes scatter −3.7…+4.8
+  from real scene colour; only the mean is the film's signature.
+
+### 2026-09-04 → 09-06 — the `characteristic` curve shipped
+
+- **It is the ACES `ADX10 → ACES` film-scan transform with per-stock data:**
+  per-channel density → cross-channel matrix → per-channel curve inverse → `10^` →
+  matrix, **no tone curve anywhere**. ACES's two free constants (film gamma 0.55,
+  mid-grey 0.70 above base) sit inside what our per-stock measurements bracket. nc
+  substitutes the stock's own data and **omits the cross-channel matrix** — the
+  scanner-to-Status-M correction (ST 2065-2 NOTE 3: "3 × 3 matrix followed by an
+  offset", product-specific, "likely imperfect") deferred to
+  `io/scanner-density-calibration`.
+- **Self-anchoring:** each table's log-exposure axis is shifted so the stock's mid-grey
+  aim sits at `log10(0.18)`, so `10^(curve⁻¹(D′))` is relative scene exposure with
+  mid-grey at 0.18 by construction. No `dmax`, no `AnchorPlacement`;
+  `DensityCurve::anchor()` returns `Option` and the report emits `null`.
+- Ten stocks in `algo/film_stock/curves.rs`: the eight measured, `ultramax-800`
+  (needed three silent extractor fixes; it digitizes to the same curve as Portra 800 —
+  D-min 0.308/0.706/1.021 both, γ within 0.003 — from different publications, which
+  is an independent check on the extraction and explains both anomalous Δ 0.25 tables),
+  and `generic-c41`, the average (red mid-scale γ 0.541, mid-grey 0.624 above base).
+- **Every parametric knob is refused, not ignored**, each naming a remedy the branch
+  accepts: `--d-max`/`--auto-d-max` by **flag presence** in `validate_convert` (a
+  resolved value cannot tell "asked for fixed" from "left at the default"),
+  `--sigmoid-*`, `--anchor-*`, `--density-gamma` (remedy `--density-curve
+  exponential`, the curve that has a gamma), and `stock` under either parametric curve.
+- **Roll-fixed:** `sets_curve_stock` is the fifth roll-consistency probe — a per-frame
+  `curve.stock` override converts but warns, `--strict` promotes.
+- **Out-of-table samples extrapolate along the end slope and are counted**, never
+  clamped. The warning shipped at 1% and fired on every real scan (5.2–7.2%): **100% of
+  those samples lie in the outer 12% of the frame** (holder and rebate, denser than any
+  exposed image), **0.00% of the frame sits at the `SCAN_EPSILON` floor** (the holder
+  is dense, not clamped — the first proposed fix would have been a no-op), and the
+  statistic cannot diagnose a wrong stock or base (seven stock profiles move it
+  5.75→6.55%, a 30% wrong base 6.00→6.44%). Threshold now **0.20**, the message states
+  the fact, and the per-channel fractions ride unconditionally in
+  `reconstruction_result.curve.out_of_table`. The *interior* fraction (0.00% on every
+  fixture) is the statistic that would diagnose; it needs
+  `algo/auto-anchor-interior-measurement`.
+- **Re-derivable registry (2026-09-06):** publications in `docs/datasheets/` (24
+  files), `scripts/analysis/digitize_datasheets.py` (`PDF → curves.json`, needs poppler,
+  run by hand, `--check` reproduces), and `curves_match_the_digitized_json` audits
+  `curves.json → curves.rs` in CI with no poppler. A wrong publication id (`E-4022`,
+  invented) for the VC pair was caught by committing the sources. Every stock
+  round-trips through an emitted recipe byte-for-byte (serde's `kebab-case` renames
+  `Portra400` to `portra400` — hand-written `Serialize`/`Deserialize` against one
+  `as_str`/`parse` pair). The aims ride in `curves.json`, the pinned table and the
+  report (`stock.aims`).
+- Tests are property-based rather than golden bit vectors (a neutral ramp run forward
+  through each stock's curves reconstructs on every stock and channel), since a new
+  bit-exact vector would be a coin flip on the Linux runner — the pin came later in
+  `characteristic-curve-coverage`.
+- Clippy's `approx_constant` fires on the digitized `0.78539` (near π/4); the module
+  allows the lint with a comment.
+
+### 2026-09-06 — user review: blue fixed, a green cast left
+
+Ten frames × six configs. The characteristic curve keeps detail and fixes the blue
+cast; the shoulder display tone loses highlight detail on it. A **green cast** remains,
+ranked by the user Ektar worst, Portra slight, Gold 200 clean — with `generic-c41`
+*better* than the per-stock profile on the bad stocks. `channel_drift` extended to green
+reproduces that ranking exactly:
+
+| stock | green: scan | datasheet predicts | **residual** | blue residual |
+|---|---|---|---|---|
+| ektar-100 | +1.26 | +0.22 | **+1.00** | +0.13 |
+| portra-160 | +0.88 | +0.40 | **+0.48** | +0.15 |
+| portra-400 | +0.65 | +0.46 | **+0.18** | −0.07 |
+| gold-200 | +0.41 | +0.36 | **+0.08** | +0.29 |
+
+- **This corrects the 2026-09-04 "cast removed" claim**: that measured blue. Green
+  does not transfer, and a green/magenta error has no warm/cool reading the eye
+  forgives. **Measure the channel that matters perceptually, not the one with the
+  biggest number.**
+- The digitization is right (Ektar checked through both extraction paths: γ agrees to
+  0.004, `D-min` to three decimals; x-axis 37.16 vs 37.29 pt/decade). Ektar's sheet is
+  the corpus outlier — it draws red and green nearly parallel (`γ_G/γ_R` 1.002 against
+  1.02–1.05) and predicts the *least* green divergence where the scans show the most.
+- **`aim_table_agrees_with_the_curve`** checks each sheet's two halves against each
+  other over exactly the interval the two aims span: Portra 160 +3%, Portra 400 +6%,
+  Gold 200 −5%, VC pair −4/−5%, **Ektar 100 +11%, UltraMax 400 −11%** (the 800s +44/45%,
+  exempt). A first, window-sensitive version (±0.35 decade gamma) manufactured a −15%
+  and a spurious sub-unity `γ_G/γ_R` — **match intervals when comparing two published
+  quantities**. It is a sheet-quality check, **not** a predictor of rendered colour
+  (Portra 160 passes and still casts +0.48).
+- **Leading hypothesis for green:** the cross-channel `CDD → CID` term — its magnitude
+  depends on dye set and mask, which is the stock-dependence seen; blue happens to
+  survive per-channel treatment and green does not. Routes to
+  `io/scanner-density-calibration` with one known-neutral frame. `generic-c41` renders
+  better on Ektar/Portra only because averaging nine curves dilutes any one sheet's
+  error — a reason to fit the matrix, not to prefer the generic.
+
+### 2026-09-08 — close-out
+
+**Verified.** Blue's exposure-dependent cast falls from +1.26 to +0.09 stops per unit
+density against +1.29 predicted (21 frames, 6 rolls, 4 stocks); a neutral ramp
+round-trips on every stock and channel; all ten stocks round-trip through an emitted
+recipe byte-for-byte; the user's ten-frame review confirmed the blue fix and kept
+detail. Reading the ACES source first is what made this cheap.
+
+**What a dependent task must know.**
+
+- The cross-channel matrix is the one stage deliberately not implemented; the green
+  residual (+0.40 mean, +1.00 on the Ektar roll) most likely lives there.
+  `io/scanner-density-calibration` owns it and needs a **known-neutral target on
+  film** — replacing Ektar's anomalous channel relationship with the corpus consensus
+  would move its residual only +1.00 → +0.87.
+- **Do not read the per-stock or per-roll residual breakdown as established.**
+  Frame-to-frame scatter is sd 0.3–1.6 at n=3–4, one roll spans −1.88…+2.03; only the
+  21-frame aggregate and Ektar's roll (sem 0.17) are solid. Two claims were retracted
+  for this; resolving a 0.3 difference needs ~11 frames per roll.
+- Two sheets disagree with themselves (Ektar +11%, UltraMax 400 −11%); what to do about
+  an internally inconsistent stock (ship, warn, withhold) is undecided.
+- Anything wanting per-stock *parameters* reads the 2026-09-04 tables above rather than
+  re-deriving. B&W cannot use this shape (contrast index is set by development) —
+  `algo/bw-support`.
+
+### 2026-09-09 — the sigmoid's `density.scale` default: the datasheet value is the wrong one, but `[1,1,1]` is not the answer either
+
+Measured on the scalar (sigmoid) render path over 21 real frames from six rolls:
+`algo::curve_probe::sigmoid_scale`. Drift is the least-squares slope of each channel's
+log2 exposure ratio against red density, normalised at the middle bin — a pure tilt in
+stops per unit density, 0 neutral, and an offset cannot move it. The scalar path leaves
+`contrast · (D'_c − D'_R)`, so with `D'_c = s_c · D_c` each channel's drift is exactly
+linear in its own scale: `drift_c(s) = (contrast / log10 2) · (s_c · r_c − 1)` with
+`r_c = dD_c/dD_R` the scan's slope ratio; the probe verifies the closed form against
+real re-renders (worst disagreement 0.017 stops/density). Measured `r`: **green 1.115,
+blue 1.183**, so the corpus nulls at green 0.897, blue 0.845.
+
+| scale | green | blue | **green–magenta** | \|g–m\| | rolls within ¼ |
+|---|---|---|---|---|---|
+| `[1, 1, 1]` (shipped) | +0.79 | +1.26 | +0.16 | 0.60 | 1/6 |
+| `[1, 0.977, 0.860]` (datasheet generic) | +0.61 | +0.12 | +0.55 | 0.73 | 2/6 |
+| `[1, 0.90, 0.86]` | **+0.02** | **+0.12** | **−0.04** | 0.53 | 2/6 |
+| `[1, 0.897, 0.845]` (corpus null) | −0.00 | +0.00 | −0.00 | 0.52 | 1/6 |
+| `[1, 0.905, 0.905]` (equal slopes) | +0.06 | +0.49 | −0.18 | 0.57 | 2/6 |
+
+- **The figure of merit is green–magenta, `(G−R) − (B−R)/2`**, not each channel's
+  drift: `G−R` and `B−R` tilting together reads as a colour-temperature drift the eye
+  attributes to the light. The datasheet scale shrinks both drifts while making
+  green–magenta *worse* (+0.16 → +0.55, worse on 4 of 6 rolls): the sheets correct blue
+  well (predicted +1.29 vs measured +1.26, 98%) and green badly (predicted +0.39 vs
+  +0.79, 49%), so nulling blue un-masks a green tilt.
+- **Recommended and shipped: `[1, 0.90, 0.86]`** — blue 0.860 from the datasheets
+  (independently corroborated at 98%), green 0.900 from the scans (the published 0.977
+  is the one number known wrong here). Preferred over the raw corpus null because 0.860
+  is the better-evidenced blue and the two differ by 0.01 stop/density.
+- **What it does not fix:** the green–magenta *mean* goes to zero but the magnitude
+  barely moves (0.60 → 0.53), only 2 of 6 rolls land within a quarter stop, because the
+  residual is per-roll scatter no constant removes (Ektar +0.65 → +0.41,
+  Portra160-2026-07-22 +0.08 → −0.09, Portra160 +0.49 → +0.24, Portra400 +0.50 → +0.26,
+  Portra400-leica-flaw −0.32 → −0.47, Gold200 −0.36 → −0.50). A better default, not a fix.
+- **It is a scanner calibration wearing a film default's clothes:** the two nulling
+  scales came out close (0.897, 0.845) against datasheet values far apart (0.977,
+  0.860) — green and blue are *both* ~11–18% steeper than red in our scans where the
+  sheets say green barely is. An excess on both channels against red is the signature
+  of the scan/decode/base path, not chemistry. `io/scanner-density-calibration` is the
+  real fix; label this constant as calibrated on one scanner and one six-roll corpus.
+- Two corrections to the first version of this entry: it recommended leaving
+  `[1, 1, 1]` (treating the choice as binary when green is a free parameter), and it
+  averaged per-frame nulls (`mean(1/r)`, biased high by Jensen — the corpus null is
+  `1/mean(r)`). And **the flat level is not a non-issue**: the drift probes normalise
+  at the middle bin and define the level away, but a scale is a tilt about `D = 0` and
+  moves the level at every non-zero density — on a mid-grey patch
+  (`midtone_placement::the_default_gain_shifts_per_channel_level_on_both_curves`) the
+  gain moves R/G/B by −0.061/−0.371/−0.565 (characteristic) and −0.080/−0.413/−0.672
+  (sigmoid): green ~0.31 and blue ~0.50 stop below red, a strong yellow shift the
+  offset half of the pair exists to absorb.
+
+### 2026-09-09 — `density.scale` `[1, 0.90, 0.86]` shipped as `pipeline_version` 4, and it splits the two curves
+
+On a scene-neutral patch (Portra 400's datasheet mid-grey), delivered spread (max
+per-channel deviation from the mean):
+
+| curve | identity gain | `[1, 0.90, 0.86]` |
+|---|---|---|
+| sigmoid | 0.545 | **0.327** |
+| characteristic | **0.000** | 0.194 |
+
+The same constant is a 40% improvement on one curve and a pure regression on the
+other: the sigmoid has no per-channel film model, so the gain covers film structure
+*and* scanner residual; the characteristic curve already removes the film half and is
+exactly neutral on a datasheet neutral, so the gain corrects twice. The decomposition is
+clean — sigmoid drifts green +0.79 / blue +1.26, characteristic +0.40 / +0.09, and the
+difference (+0.39, +1.17) is what the sheets predict (+0.39, +1.29). **So the sheets
+predict green correctly**; what they lack is an *additional* scanner residual of about
+the same size in green. The characteristic path's own nulling gain would be
+`[1, 0.938, 0.985]`, and even that measures worse than identity on real frames (0.047
+vs 0.039 on `|G/R−1|+|B/R−1|`, identity vs the shipped gain 0.039 vs 0.185), so the
+residual stays visible for `io/scanner-density-calibration` rather than half-absorbed.
+
+**Per-curve default** (`DensityParams::default_scale_for(DensityCurveType)`:
+`[1, 0.90, 0.86]` for `sigmoid`/`exponential`, `[1, 1, 1]` for `characteristic`),
+following the `anchor` precedent, resolved in **three** places:
+
+1. a recipe omitting `density.scale` — in `Reconstruction`'s `Deserialize`, reading
+   key *presence* off the raw JSON (the field is a concrete `[f32; 3]`, so after serde
+   an absent key and an explicit `[1,1,1]` are the same value);
+2. `--density-curve` — the merge arm resets the gain to the target curve's default,
+   and runs **before** the `--density-scale` arm so an explicit gain still wins;
+3. a per-frame `roll` overlay — reset by hand in the planner, because the overlay is
+   JSON-merged onto the *serialized* shared config where the key is always present
+   (`sets_density_scale` keeps the reset from overriding a stated overlay).
+
+`curve_switch_dropped_density_scale` warns when a reset discards a value that was not
+its own curve's default. Two roll-path defects the seam hid: switching a frame to
+`characteristic` from a manifest was impossible (`internally_tagged_switch` carried
+`dmax` unconditionally and `characteristic` rejects the key — now gated on
+`takes_dmax()`), and the overlay carried the sigmoid's gain onto the switched curve.
+Nothing prevents code from building `Reconstruction::Density { density:
+DensityParams::default(), curve: Characteristic }` directly — the two in-crate call
+sites state their gain explicitly; a resolving constructor would be tighter if a third
+appears.
+
+**What landed:** `PIPELINE_VERSION` 3 → 4 with a new row (`render`
+`323499bad6c71237`, `recipe` `72e424ee6a15d53b`, `base` unchanged);
+`golden_new_default_is_bit_identical` recaptured (red bit-identical, only green and
+blue move); every frozen/reference golden and the tests asserting the density
+definition or auto-WB robustness now state `frozen_density()` / an explicit identity
+gain — **a probe measuring a shipped default must state the identity, never inherit
+it** (moving `DensityParams::default()` off identity silently desynchronised three
+`#[ignore]`d probes, including the one cited as evidence, with every gate green;
+`curve_probe::identity_gain` names the trap, and changing a default means re-running
+the ignored set by hand).
+
+### 2026-09-09 — five conversion presets scoped; two calibration traps
+
+`--preset` was filed as `algo/conversion-presets`; the evidence gathered while defining
+the five removed candidate designs. All five are calibrated to **one target** — scene
+mid-grey (0.18) delivered at 0.223, the brightness approved this round — and each
+preset's `print_exposure` is whatever lands it there
+(`midtone_placement::each_candidate_look_needs_its_own_print_exposure` fails if the
+spread collapses to one shared default):
+
+| preset | reconstruction | tone | delivers | needs |
+|---|---|---|---|---|
+| `characteristic-stock` | characteristic, the stock | reinhard | 0.1800 | +0.31 |
+| `characteristic-generic` | characteristic, `generic-c41` | reinhard | 0.1702 | +0.39 |
+| `sigmoid-flat` | sigmoid, no knees | reinhard | 0.1461 | +0.61 |
+| `sigmoid-knees` | sigmoid, toe/shoulder | none | 0.1372 | +0.70 → **impossible** |
+
+- **Trap 1: `sigmoid-knees` cannot use `print_exposure`.** `--display-tone none` is
+  self-policing on the render ceiling and `print_exposure` is a scalar gain *after* the
+  bounded curve, so any positive value is refused (measured: luminance 1.6236 at +0.70,
+  exactly `2^0.70`). The anchor is the knob that works — `mid-fraction 0.42` lands the
+  target to 0.027 stop (`the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor`).
+- **Trap 2: the aim-matched red scale is a reciprocal.** `stock_table_variants` prints
+  the factor scaling the **table's** red density (Ektar 0.898); `--density-scale`
+  multiplies the **scan's**, so the flag takes `1/k = 1.114`. Measured on 21 frames
+  (`scale_against_the_characteristic_curve`): identity green–magenta +0.35, 0.898
+  table-side **+0.72**, 1.114 as the flag **+0.01** — the flattest of anything on this
+  path. `portra-800`/`ultramax-800` have no usable aim delta and must be refused.
+- The survey harness had been double-correcting (characteristic cases built with
+  `DensityParams::default()`, ~0.06 stop); it now resolves the gain from the curve.
+- On whole-image channel means four of the five presets sit within 0.005 of each other
+  (`|G/R−1|+|B/R−1|` 0.033–0.038, `sigmoid-flat` 0.063) — the metric is a tie and the
+  visual verdict is the whole decision.
+
 
 ## auto-anchor-interior-measurement
 
@@ -1860,6 +1236,7 @@ What other epics need to know about `algo`:
     content), `Explicit`'s is a *film* property (the leader), and the holder is neither. A
     plausibility check must say which range it asserts instead of borrowing the leader's.
 
+
 ## sigmoid-parameter-calibration
 
 **Status:** not started
@@ -1877,49 +1254,6 @@ What other epics need to know about `algo`:
   **grey card in frame** (a real 18% reference under the same illumination as a diffuse white —
   only 2 of 10 existing frames could even approximate the datasheet Δ), and ideally the
   calibrated transmission step wedge.
-
-### 2026-08-03 (later) — PR #70 review: four findings, and why one remedy was refused
-
-- **The report named a number the render did not use.** `ReconstructionReport.dmax` was
-  documented as "the display-white anchor the curve used" and, after the placement split,
-  carried the *reference* instead. Now both travel: `dmax` (reference, what a recipe freezes
-  back) and `curve_anchor` (derived, what rendered to 1.0 and therefore sets the floor at
-  `10^(−contrast·anchor)`). The JSON `reconstruction_result.curve` gained the placement
-  *rule* plus `anchor_value`, so that block is self-contained — a consumer no longer has to
-  re-derive the anchor from the echoed recipe, which is the opposite of what diagnostics are
-  for. Exponential reports both fields equal rather than a null, so consumers need no special
-  case.
-- **A tiny contrast panicked instead of erroring.** `MID_GREY_OUTPUT_DECADES / contrast`
-  overflows below ~2.2e-39, and the `debug_assert` I had left there turned that into exit
-  101 in debug and `inf` fed into `s_curve` in release. Now a `validate` usage error naming
-  the flag, plus `apply_curve` returning a real error for the programmatic path (the
-  defense-in-depth pattern `algo/simple.rs` already uses). Two things worth recording: the
-  bound applies **only** to the mid-grey placement, since `WhiteAtDmax` performs no
-  division; and `f32::MIN_POSITIVE` is *accepted* on purpose — the quotient is finite there,
-  and because `contrast · anchor` is then exactly `MID_GREY_OUTPUT_DECADES` the render is a
-  flat mid-grey rather than a broken one. My first test asserted it should fail, which was
-  wrong about the arithmetic.
-- **The roll consistency check had a fourth hole.** `resolve_frames` probed `film_base`,
-  `curve.dmax` and `output.preset`, so a per-frame `curve.anchor` override silently gave one
-  frame a different placement *rule* — subtler than a different Dmax number and, by our own
-  documentation, a roll-level property. Added as warning (5) of six.
-- **Refused: bumping `reconstruction.schema_version`.** The reviewer was right that an
-  archived sigmoid recipe now renders differently — real, and it would have been silent. But
-  the proposed remedy is wrong for this codebase and the reasoning is worth keeping: that
-  constant versions the schema **shape** and the reader checks it for *exact* equality, so
-  bumping to 2 would reject every archived recipe outright, including the large majority that
-  select `exponential` and are wholly unaffected. The alternative — preserving v1 semantics
-  via a per-version default table — is a real design, but it would have to cover `contrast`
-  and `shoulder` too (both moved in the same commit with the identical property), and that is
-  `core/conversion-versioning` policy, not something to improvise inside an algo task.
-  **What is not acceptable is silence**, so it is now a loud, `--strict`-promotable warning
-  when a loaded recipe selects sigmoid with no `anchor` — modelled directly on the existing
-  `pipeline_version_warning`, which handles the same "parameters still apply, default moved
-  underneath them" situation one level up.
-- **A gap that is genuinely unowned, flagged rather than filed:** `core/conversion-versioning`
-  is scoped to *default* behaviour ("bumps only when default conversion behaviour changes"),
-  so nothing currently owns "a non-default path changed and archived recipes for it are
-  reinterpreted". The warning covers this instance; the policy question is open.
 - 2026-08-13 (**cross-reference from `algo/exponential-anchor-placement`: the shipped
   `MidAtDmaxFraction(0.5)` has a quantified error, so this task starts with a number**).
   The mid patch sits at `D′ = 0.513` where `0.5·Dmax` puts the anchor at 0.650; that
@@ -1934,6 +1268,12 @@ What other epics need to know about `algo`:
   calibrated answer is more likely a change of *reference* (to `Dmin` + offset, `f = 0`)
   than a better fraction. Full derivation in the `exponential-anchor-placement` section;
   the offset half is blocked per the note added to `film-stock-profiles`.
+
+> Consolidation note (2026-09-13): the "PR #70 review: four findings" sub-entry that sat
+> here belonged to `reference-anchored-sigmoid` (PR #70 was that task's PR) and was moved
+> into that section. The `NOMINAL_DMAX = 2.0` figure above is historical — it became `1.3`
+> on 2026-08-08 — and the chart-read `D-min` caveat was lifted on 2026-09-04
+> (`film-stock-profiles`, curve-digitized Status M values); the task file is current on both.
 
 
 ## curve-endpoint-validation
@@ -2038,819 +1378,260 @@ What other epics need to know about `algo`:
     applies WB and exposure, subtracts `black_point`, then soft-clips, so a curve
     black of 0.053 is not the displayed black.
   - `algo/regional-color-balance` added as a dependency.
-## negative-reconstruction-density-curves (sigmoid becomes the default)
-
-**Status:** done
-**Updated:** 2026-08-08
-
-- 2026-08-08: **Three render defaults moved together** (`pipeline_version` 1 → 2):
-  `NOMINAL_DMAX` 2.0 → 1.3, the default curve exponential → sigmoid, and the
-  exponential's own `gamma` 1.0 → 2.0. Measured baseline in
-  [reports/render-defaults-v2.md](../reports/render-defaults-v2.md).
-- 2026-08-08: **The headline is clipping, not brightness.** On four real frames the
-  old defaults clipped 0.00% / 3.38% / 4.86% / 1.98% of samples; the new ones clip
-  **0.00% on all four**. Real, and modest — a few percent of clipped highlights is a
-  defect worth removing, not a rescue. Do not read the per-frame means as a quality
-  score: they conflate scene content with rendering.
-- 2026-08-08: **My first version of that table was wrong, and the mechanism is worth
-  remembering.** I measured it through a zsh helper that interpolated an unquoted
-  `$extra` parameter. zsh does **not** word-split unquoted parameters, so
-  `--d-max 2.0` arrived as one argument and the flag was silently dropped — the "v1"
-  column was measured with a v2 anchor, and I published clipping figures up to 72%.
-  Two lessons. (a) A comparison run must assert that the thing it varied actually
-  changed: the report prints `dmax`, and reading it would have caught this
-  immediately. (b) A headline number a reviewer cannot re-run is not evidence, so the
-  measurement now lives in `scripts/render-defaults-v2/measure.py` (explicit argv
-  list to `subprocess`, which cannot reproduce the bug) rather than in a shell
-  session I described afterwards.
-- 2026-08-08: **The sigmoid's 0.00% clipped is partly an accounting artifact, and
-  the report says so.** `io::encode` counts a clip as `v > 1.0` strictly, and the
-  sigmoid's asymptotic approach to white saturates to exactly `1.0f32` from just
-  above `D′ ≈ 3.1` at the shipped defaults — so densities that used to be counted as
-  clipped now quantize to the same 65535 uncounted, with `--strict` green. Narrow
-  (near-opaque negative) but it means the clip counter is not a sufficient measure of
-  highlight preservation under this curve.
-- 2026-08-08: `NOMINAL_DMAX` 2.0 sat above **every** roll measured in this repo
-  (0.90–1.74, median ≈1.34). Because the exponential renders
-  `10^(γ·(D′ − Dmax))`, that darkened Ektar 963 by 5.09x in linear terms versus its
-  own measured anchor. 1.3 is the median rounded to one decimal, still explicitly
-  *nominal* — `film-base/dmax-anchor-reliability` is open on the anchor's level and
-  still owns the calibrated number. This **supersedes** that task's 2026-08-03 "do
-  not settle the fallback yet" decision (user, 2026-08-08): waiting was not neutral,
-  because leaving 2.0 in place meant shipping an anchor above every measured roll and
-  darkening every default conversion. Harman Phoenix (0.8976) is counted in as the
-  **worst case showing where the population's floor is**, not held out as an
-  exclusion example — that framing was corrected in the task file.
-- 2026-08-08: **The user asked for exponential gamma 2.0 as well, and was right to
-  push back on my objection.** I had claimed contrast ≈2 needs a mid-grey anchor
-  first, citing an 8.4x drop in mean. The mean conflated two effects:
-  `reports/sigmoid-reference-baseline.md` measures that contrast 2.0 *does* fix the
-  black floor immediately (72 → 12/255 on user-confirmed shadow patches) and costs
-  2.75 EV of midtone placement. It is a real, partial win; the residual is filed as
-  `algo/exponential-mid-grey-anchor`. Lesson: a frame mean cannot separate "floor
-  fixed" from "midtones moved" — read the report's percentile metrics.
-- 2026-08-08: **Two consequences that cost test-fixing time, worth knowing before
-  touching a fixture.** (a) The sigmoid never exceeds 1.0, so `film-master` and
-  `hdr-linear-tiff`'s integration tests no longer exercised their subject (unclamped
-  float / samples above reference white) and now select the exponential explicitly —
-  their subject is the *container*, not the default curve. (b) Auto-WB is a weaker
-  corrector for a **wrong** base under the sigmoid: a wrong base leaves a constant
-  per-channel density offset, which the exponential turns into a constant factor a
-  stage-4 gain cancels exactly, while the sigmoid is nonlinear in the same domain.
-  The estimator is unchanged and the effect vanishes with a correct base.
-- 2026-08-08: **HDR headroom is unchanged and still absent** — the `ultra-hdr-v1`
-  gain map measures `GainMapMax` ≈ 1.0027x under *both* curves, because content sits
-  below the shared display stage's shoulder knee either way. Not this change's to
-  fix; it belongs with `output/presets` and the display stage.
-- 2026-08-08: **The sigmoid default must not degrade HDR silently, so it now says so.**
-  Measured on the IR-free fixture, the default render peaks at **201 nits** against
-  the 203-nit SDR reference white (the exponential exceeds it), while the report
-  still advertises `target_peak_nits: 1000` — an HDR container around an SDR-range
-  signal. Every single-rendition HDR preset (`hdr-pq`, `hdr-hlg`, `hdr-linear-tiff`,
-  `hdr-pq-tiff`, `hdr-hlg-tiff`) now emits a `--strict`-promotable warning for it,
-  built on `hdr::sdr_range_warning` over the **existing** `clli` measurement
-  (`ContentLightLevel`) rather than a second scan — so the warning and the file's own
-  `clli` box can never disagree. `ultra-hdr-v1` is deliberately excluded: it is
-  dual-rendition, so low headroom shows up as an inert gain map, which is a different
-  diagnosis about a different artifact and belongs with the gain-map stage.
-- 2026-08-08: Golden vectors were **not** rebased. The reference-derived captures
-  now name their configuration explicitly (`frozen_reference_curve`,
-  `sigmoid_at_reference_anchor_2_0`) so they keep pinning what they were captured
-  for, and the new default got its own freshly-captured golden — which honestly
-  pins "the default has not drifted since it was set", not "matches the reference
-  implementation". A golden that silently follows the default stops pinning
-  anything the moment the default moves.
 
 
 ## exponential-anchor-placement
+**Status:** done (filed 2026-08-08 as `exponential-mid-grey-anchor`; renamed and re-scoped 2026-08-12; mechanism 2026-08-18; measured 2026-08-28; merged 2026-08-29 as #98; closed 2026-08-31)
 
-**Status:** done
-**Updated:** 2026-08-31
+> Renamed from `exponential-mid-grey-anchor` on 2026-08-12 — the stem changed, so the old id
+> resolves to nothing; live references were repointed. Filed *after* three sources had cited
+> it as existing (a docstring, `reports/render-defaults-v2.md`, a log entry): naming a
+> follow-up task in a docstring is a promise that the task file, checklist entry, dependency
+> entry and graph node all exist.
 
-> Renamed from `exponential-mid-grey-anchor` on 2026-08-12 (see the entry at the end of
-> this section). Entries below predate the rename and are left verbatim; earlier
-> sections elsewhere in this file still cite the old id for the same reason.
+**Why, and why the direction changed.** The exponential pinned display white at `Dmax`
+with no placement rule, so contrast pivoted the line *around white*: gamma 2.0 took the
+black floor 72 → 12/255 and cost 2.75 EV of midtone. The filed proposal copied the
+sigmoid's mid pin; the user's proposal was to **pin black at the film base**, which
+anchors the reliable measurement (base agrees to 0.0005 across rolls of one stock where
+the leader `Dmax` is 0.295 apart) and is candidate 5b from `reference-anchored-sigmoid`.
 
-- 2026-08-08: Filed. The exponential curve pins display white at `Dmax` and has no
-  `AnchorPlacement`, so its contrast knob pivots the line *around white* — measured
-  in `reports/sigmoid-reference-baseline.md` as: `gamma = 2.0` takes the black floor
-  72 → 12/255 **and** costs 2.75 EV of midtone placement, from the same pivot. Giving
-  it the sigmoid's mid-grey anchor removes the conflict rather than re-picking a
-  point on the trade.
-- 2026-08-08: Filed *after* three sources had already cited it as existing
-  (`types::ExponentialParams::default`, `reports/render-defaults-v2.md`, and the
-  entry above). It did not exist. Worth remembering: naming a follow-up task in a
-  docstring is a promise that the task file, the `TASKS.md` checklist entry, the
-  dependency-list entry and the graph node all exist — a task id that resolves to
-  nothing is worse than an unexplained residual, because it reads as tracked.
-- 2026-08-08: Deliberately **not** blocking anything. Since `pipeline_version` 2 the
-  exponential is the explicit diagnostic straight line, not the default, so this
-  improves a non-default path. Depends on
-  `algo/negative-reconstruction-density-curves` (the tagged curve schema it would add
-  an `anchor` field to).
-- 2026-08-12 (**renamed, re-scoped, started**). `algo/exponential-mid-grey-anchor` →
-  `algo/exponential-anchor-placement`, and the task now tracks the reconstruction-curve
-  work that came out of reviewing `algo/reconstruction-render-curve-split`. The stem
-  changed, so the old id resolves to nothing; live references were repointed
-  (`TASKS.md` node/edge/list/checklist, the split task's open question,
-  `reports/render-defaults-v2.md`, `types::ExponentialParams::default`). Historical
-  progress entries — here and at the `curve-endpoint-validation` and
-  `reconstruction-render-curve-split` sections — keep the old id verbatim under the
-  append-only rule; this entry is the bridge.
-- **Direction changed from mid-grey to the black end.** The filed proposal was to pin
-  mid-grey, copying the sigmoid. The user's proposal is to pin **black at the film
-  base** and let contrast carry white upward, into HDR range if it goes there. Three
-  things support it. (a) It anchors the reliable measurement: the base agrees to
-  **0.0005** across rolls of one stock where the leader `Dmax` is **0.295** apart
-  (`film-base/dmax-anchor-reliability`), so the curve becomes `Dmax`-free. (b) The base
-  is *already* `D′ = 0` — stage 1 divides it out — so Dmin is the black reference
-  today; only the black *value* is unstated, currently falling out as
-  `10^(−contrast·Dmax)`. (c) It is candidate **5b** from `reference-anchored-sigmoid`,
-  which the user ranked "most likely GO" after its first rejection was overturned as a
-  parameter error. The name was widened to the mechanism rather than to `black-anchor`
-  so a third change of placement does not force a third rename.
-- **The code change is a gain swap.** `density.rs` already records that the anchor
-  "factors into `10^(γ·D')` times a constant gain `10^(−γ·Dmax)`"; a black pin replaces
-  that emergent gain with a stated floor. `white-at-dmax` must stay bit-identical.
-- **Two questions deliberately left open rather than decided in discussion.** First,
-  whether contrast should be *derived* from the density range instead of chosen —
-  pinning both ends determines it, and on a 1.3 roll with a 0.0025 floor the formula
-  returns **2.00**, the value the default reached by eye. The `reference-anchored-sigmoid`
-  log calls this "adaptive contrast, already rejected", but a search found only that
-  back-reference, with no recorded rationale, inside a sentence the log itself later
-  retracts as false — so it is *unexamined*, not settled, and recorded that way. The
-  objection that does survive on its own: deriving contrast from `Dmax` routes that
-  anchor's unreliability into the slope. Second, what `DmaxSource` means on this curve
-  once it no longer anchors anything; the user's read is that this matters less here
-  than under white-pinning, and it is not being solved now.
-- **The finding this task owes the split task.** A straight line places two points, not
-  three: with both endpoints pinned, mid-grey is forced to the geometric mean, which
-  arithmetic puts roughly 2 stops under an 18% aim at contrast 2.0. If that survives
-  measurement it explains the whole pale-blacks/dark-midtones history as one constraint
-  seen twice, and it is the quantified case for moving the S-shape to the render stage.
-  Measure it across a roll — per-frame preference is frame optimisation.
-- 2026-08-12 (**the 2.75 EV defect is explained; the cause is the anchor, not the
-  formula**). Worked through against `reports/sigmoid-reference-baseline.md`. The mid
-  patch back-solves to `D′ = 0.513` from the `c=1.0` row and the `c=2.0` row
-  *independently*, so the measurement is internally consistent. A straight line placing
-  mid at 0.18 **and** the base at 8/255 needs mid at **71.4%** of the density range; it
-  sits at **39.5%**. Shortfall **0.415 density**, and `0.415 × 2.0 / log10(2)` = **2.75
-  stops** — the reported number, reproduced from geometry alone.
-- **0.415 is the Dmax-to-diffuse-white gap, reached three independent ways**: this
-  geometric shortfall (0.415), the directly measured diffuse-white gap (0.417), and the
-  median exposure preference (0.452). The defect is therefore neither the mid-patch
-  formula nor patch selection — **display white is pinned about 0.42 density too high**.
-  The mid patches are user-confirmed regions and only approximately mid-grey, but the
-  conclusion survives that because it does not rest on them alone.
-- **Why contrast 1.0 looked right on midtones: two errors cancelling.** Decomposed on the
-  mid patch, starting from a correct configuration (white at `D′ 0.88`, contrast 2.03):
-  moving the anchor to `Dmax` costs **−2.83 stops**; then dropping contrast to 1.0 gives
-  back **+2.69**; net **−0.14**, the reported figure. Contrast 2.0 removes the
-  compensating error and leaves the anchor error standing alone. Neither setting was ever
-  right, and the shipped 0.14 was a coincidence, not a calibration.
-- **`Dmax` is the wrong *quantity* — a stronger claim than "unreliable".** A leader is
-  film **saturation**; diffuse white is a scene object reflecting ~90% of the
-  illumination, with speculars and light sources in between, compressed by the film
-  shoulder (small density gap, large light gap). Anchoring display white to saturation is
-  a category error, independent of `film-base/dmax-anchor-reliability`'s reproducibility
-  complaint. A **better use for the leader, not yet investigated**: a development-
-  variation signal, which is what a fully-exposed reference actually measures. Blocked on
-  explaining why two rolls of one stock sit 0.295 apart while their bases agree to 0.0005.
-- **Contrast is not a scene measurement, and must not become one.** The chain is
-  `scene log-exposure → (× film gamma) → density → (× contrast) → output`, so
-  `contrast = target_system_gamma / film_gamma`. Both terms are constants: C-41 is
-  processed to a film gamma of ≈0.6, and target system gamma is rendering intent
-  (≈1.1–1.25 for a self-luminous display in a dim surround). `1.2 / 0.6 = 2.00`.
-  Equivalently from the datasheet, candidate 8's rule `0.745/Δ` — where `0.745 =
-  log10(1/0.18)` — gives **2.07** at the professional-stock `Δ` of 0.36. Two independent
-  routes within 3%. **The number is well supported; the decomposition is not** — the two
-  disagree on how much is film gamma versus target gamma, which will matter when the
-  value is tuned.
-- **Content-measured contrast is ruled out, on the user's own argument:** a frame of a
-  grey object has no range, and no contrast should invent one. Same failure mode the log
-  already recorded for content-driven *anchoring* (candidates 4/7 forcing P2 fog and P4
-  sign too bright). Measured frame/roll range is a diagnostic, never the default.
-- **The rejected axis is content-measured versus reference-derived, not black versus
-  mid.** Candidate 8 is a *mid* pin and scored best of every shippable form (0.78 EV,
-  27/255) because it anchors at `Dmin + a datasheet offset` — content-free, and
-  Dmin-referenced exactly as the black pin is. The special-case "we do know what white
-  is" modes (snow, and similar) belong to `algo/content-aware-sigmoid-toe`, which already
-  exists for explicit opt-in modes; no new task needed.
-- **Decisions for this task.** Black pin at `Dmin`; contrast hard-coded at **2.0**;
-  per-stock `Δ` deferred to `algo/film-stock-profiles`, which already tabulates it
-  (0.36 Ektar/Portra, 0.40 Gold) and needs no data-model change to serve as the contrast
-  source.
-- **The mechanism is byte-identical under defaults, and that is the point.**
-  `NOMINAL_DMAX = 1.3` with `DmaxSource::Fixed` is the default, so
-  `10^(2.0·(D′ − 1.3))` and `0.00251 · 10^(2.0·D′)` are the same curve. Shipping it
-  therefore needs **no `pipeline_version` bump** and leaves the goldens green. The
-  deliverable is **`Dmax`-independence, not a better picture**: today the floor is
-  `10^(−contrast·Dmax)` and moves with the anchor — 1.4 stops apart on the two rolls
-  measured 0.295 apart — and afterwards it does not move at all. The change is visible
-  only under `Explicit`/`Auto` Dmax or across rolls.
-- **Open, and the sharpest thing left.** Under a black pin at contrast 2.0 diffuse white
-  renders at **0.144 (106/255)**, so the render stage would have to supply a **2.79-stop
-  gain** before its toe does anything. The user's objection: that gain is *fixing*
-  reconstruction, not optimising for a display, and the render curve should only be doing
-  the latter. Two positions to settle, not yet decided:
-  **(A)** reconstruction pins the reliable end (black) and the render stage places white;
-  **(B)** reconstruction places the picture (white or mid, from `Dmin + datasheet
-  offset`) and the render stage only adapts to display limits — a toe pulling a 34/255
-  base down, which *is* display adaptation. **(B) is candidate 8**, the best-measured
-  form, and it matches the user's architectural instinct. Note both are Dmin-referenced
-  and mathematically one free parameter; the disagreement is about which stage owns it.
-- **The user has low confidence in 2.0 and it is deliberately deferred**, not settled
-  here. Related recorded constraint: `algo/sigmoid-parameter-calibration` already
-  establishes that more random frames cannot settle a contrast — it needs a bracketed
-  roll and a grey card, because per-frame exposure preference is frame optimisation.
-- 2026-08-13 (**the same defect is in the shipped sigmoid default, and the report already
-  measured it**). User's inference: if `Dmax` is not white, then pinning mid at
-  `0.5·Dmax` is wrong too. It is, and by a computable amount.
-  `MidAtDmaxFraction(0.5)` puts mid at `D′ = 0.650`; mid sits at **0.513**; the 0.137
-  density error is `0.137 × 2.0 / log10(2)` = **0.91 stops**, against candidate 3's
-  measured **0.93 EV**. So candidate 3's entire residual is the fraction. The value that
-  would be correct for these rolls is **0.395**, and it is 0.395 rather than 0.5
-  precisely because `Dmax` is the leader.
-- **The fraction is also the coupling strength to the unreliable anchor**, which is the
-  more durable point. Across the two rolls of one stock 0.295 apart: white-pin
-  (`f = 1.0`) swings **1.96 stops**, mid-pin (`f = 0.5`) **0.98**, black-pin (`f = 0`)
-  **zero**. So `f = 0` is not merely one option among three — it is the only placement
-  with no roll-to-roll term at all, which is the strongest argument yet for this task's
-  direction.
-- **`0.5` was not arbitrary and should not be read as a mistake.** The earlier entry
-  records `dA/dR = f`, i.e. it was chosen to *halve* the fallback's Dmax error relative
-  to white-pinning. It does that. It just attenuates rather than eliminates, and it
-  introduces a systematic error of its own. Both effects are in the **shipped
-  `pipeline_version` 3 default**, which is worth stating plainly: the current default
-  carries ≈0.9 stops of systematic midtone error plus ≈1.0 stop of roll-to-roll swing.
-- **Constraint that is not written down anywhere else: from the datasheet, `Δ` is usable
-  today and the mid-above-base offset is not.** Candidate 8 needs `mid aim − D-min`, and
-  the registry's `D-min` values are chart-read, not Status M — `algo/film-stock-profiles`
-  Constraint 2 requires a test asserting **no render path consumes one**. The Phase-3 log
-  already traced candidate 8's per-stock residuals (Ektar ≈ +0.6, Portra 160 ≈ 0, Gold 200
-  ≈ −1.0) to exactly that. `Δ` survives because a *difference* cancels base+fog, which is
-  why it can supply contrast now while the offset waits on spectral integration or a
-  tabulated measurement. **Candidate 8 is therefore not buildable the day
-  `film-stock-profiles` lands** — do not plan on it.
-- 2026-08-14 (**the placement vocabulary is shared across both curves; the *rule* must not
-  branch on data availability**). Considered and rejected: "datasheet present → mid-pin,
-  otherwise black-pin". Placement genuinely is curve-independent — the Phase-3 harness
-  established that every anchoring form reduces to one anchor `A` plus a contrast fed to
-  the same curve code, which is why eight candidates needed no new curve — so one
-  vocabulary for exponential and sigmoid is right. Branching the rule is not, for two
-  reasons.
-- **(a) It makes stock selection structural rather than a refinement**, which
-  `algo/film-stock-profiles` explicitly rules out ("a *refinement*, never a
-  precondition"). Naming a stock would change which end of the curve is nailed down, so
-  two frames off one roll would differ in kind, not degree.
-- **(b) The decisive one: black-pin does not escape the missing offset, it defers it.**
-  At contrast 2.0 on the exponential, black-pin at floor 0.0025 resolves `A =
-  −log10(0.0025)/2.0 = 1.301`, while mid-pin at `Dmin + 0.513` resolves `A = 0.513 +
-  0.745/2.0 = 0.886`. The **0.415** between them is exactly the diffuse-white gap, i.e.
-  the picture rendering 2.79 stops dark. So "where does diffuse white sit above the base"
-  is **unavoidable** for correct placement — the only real choice is which stage owns it,
-  which is the A-versus-B question recorded above, reached from a second direction.
-  Black-pin as a *fallback for missing data* is therefore a false economy: it yields a
-  dark picture unless something downstream supplies the same number.
-- **The fallback should be a generic offset, not a different rule.** One mechanism —
-  anchor at `Dmin + offset`, `f = 0`, no Dmax coupling — with the offset degrading:
-  per-stock datasheet (blocked, above) → generic C-41 from the clustered aims (same
-  blocker) → **empirical generic ≈0.51 measured from real rolls, available today and
-  provisional**. That third tier is no worse founded than the shipped `0.5` fraction,
-  which is not measured at all and additionally carries a roll-to-roll term.
-- **Trap on that third tier:** deriving the generic offset from the same ten frames and
-  then scoring it against them is fitting, not prediction. Already a recorded lesson here
-  ("correcting each stock by its mean residual would fit within ~0.3 EV everywhere, but
-  that is fitting … not validation"). It needs held-out frames or a grey card.
-- **Shared vocabulary does not mean shared implementation cost.** Black-pinning the
-  *exponential* is a one-scalar gain swap because the straight line makes the base's
-  rendered value a simple multiply. Black-pinning the *sigmoid* is not: its toe
-  asymptotes, so placing the base's rendered value means inverting the S-curve — the same
-  nonlinearity `algo/curve-endpoint-validation` refers to when it notes the sigmoid's
-  asymptote can sit far below its reachable base. If mid-pin becomes the universal rule,
-  the sigmoid never needs a black-pin variant at all.
-- 2026-08-18 (**mechanism shipped; no pixel change**). `AnchorPlacement` gained
-  `BlackAtBase(floor)` (`A = −log10(floor)/contrast`) and `MidAtBaseOffset(offset)`
-  (`A = offset + 0.745/contrast`), and `ExponentialParams` gained the `anchor` field.
-  Placement is now **shared by both curves** — it was always orthogonal to curve shape,
-  which is what let the 2026-08-03 harness score eight forms through one curve
-  implementation.
-- **Default deliberately left at `white-at-dmax` on the exponential**, so the whole
-  change is a no-op for every existing invocation. Verified rather than assumed: the
-  default `gain-map-hdr` render is **byte-identical** to a build of HEAD (same
-  `params_hash` `55a841428c1e6671`, same SHA-256), and the drift gate is unmoved. The
-  curve's job since v2 is being the debuggable straight line; moving its default is a
-  rendering decision with its own evidence bar, and the floor has not been chosen on
-  this curve's own measurements. No `pipeline_version` bump, and no replay hazard —
-  an archived recipe selecting `exponential` without `anchor` resolves exactly what it
-  always did.
-- **CLI is one curve-neutral family** (user decision: option A):
-  `--anchor-mid-fraction` / `--anchor-white-at-reference` / `--anchor-black-floor` /
-  `--anchor-mid-offset`, mutually exclusive at the clap layer, with
-  `--sigmoid-mid-fraction` and `--sigmoid-white-at-d-max` kept as aliases since they
-  appear in committed recipes. Validation moved out of the sigmoid arm to a shared
-  block — the bounds now apply to *both* curves, which a per-arm check would have
-  silently skipped on the exponential.
-- **Verified end to end against the binary**, not the diff: all four placements resolve
-  through `nc convert` on both curves, the emitted recipe replays **byte-identically**
-  through `--params`, and `--anchor-black-floor 0.005` at contrast 2.0 resolves
-  `anchor_value` **1.150515** — matching the 1.151 the 2026-08-03 retest recorded, which
-  is the arithmetic checking itself against an independent source.
-- **Tests pin properties, not captured bits**, for a rule introduced in the same commit:
-  the film base renders to exactly the stated floor across three floors × three slopes,
-  and `BlackAtBase` is bit-identical to `WhiteAtDmax` at the derived anchor (so the
-  straight line cannot fork). `white-at-dmax` bit-identity needed no new golden — the
-  existing `frozen_reference_*` vectors already pin it and pass untouched.
-- **One documentation error caught by computing it:** the floor's sRGB equivalent was
-  written as "0.005 ≈ 20/255" in the help text and both docs. It is **16/255**. The
-  20/255 in the candidate-5b report row is a different quantity — the darkest confirmed
-  *shadow patch*, which legitimately sits just above the base.
-- Gate: `fmt`, `clippy -D warnings`, `build`, the stdlib analysis suite (112), and
-  645 binary + 153 integration tests all green.
-- 2026-08-28 (**experiments run on ten real frames; the rendering direction this task was
-  pointing at is NOT supported, and the mechanism stays as shipped**). `../nc-assets` was
-  linked and `pipeline::shadow_metrics` extended: per-candidate curve (it hardcoded
-  sigmoid, so this task's own curve had never been through it), per-candidate
-  toe/shoulder/`black_point`, a film-base probe, and highlight metrics. Visual review
-  pages under `../temp/tier{2,3}-review/`.
-- **The harness arithmetic validates against the frozen report** — white@Dmax 2.74 EV /
-  12/255 against a recorded 2.75 / 12, black@0.005 1.79 / 19 against 1.71 / 20,
-  black@0.002 3.11 / 8 against 3.04 / 9, mid@0.5·Dmax 0.95 / 27 against 0.93 / 30. Worth
-  trusting the numbers below on that basis.
+**The 2.75 EV defect explained (2026-08-12/13) — the cause is the anchor, not the
+formula.** A straight line placing mid at 0.18 *and* the base at 8/255 needs mid at
+71.4% of the density range; it sits at 39.5%. Shortfall 0.415 density = 2.75 stops at
+contrast 2.0 — the reported number reproduced from geometry. **0.415 is the
+`Dmax`-to-diffuse-white gap, reached three independent ways** (geometric shortfall
+0.415, measured diffuse-white gap 0.417, median exposure preference 0.452): display white
+was pinned ~0.42 density too high. Contrast 1.0 only *looked* right on midtones because
+two errors cancelled (anchor at `Dmax` −2.83 stops, contrast 1.0 +2.69, net −0.14).
+
+- **`Dmax` is the wrong *quantity*, not merely unreliable:** a leader is film
+  *saturation*; diffuse white is a scene object at ~90% reflectance, compressed by the
+  film shoulder. Anchoring display white to saturation is a category error. A leader's
+  better use — a development-variation signal — is uninvestigated.
+- **Contrast is not a scene measurement.** `contrast = target_system_gamma /
+  film_gamma`: C-41 ≈ 0.6, display intent ≈ 1.1–1.25, giving `1.2 / 0.6 = 2.00`; the
+  datasheet route `0.745/Δ` gives 2.07 at Δ = 0.36. Two routes within 3%; the
+  decomposition (how much is film vs target gamma) is not settled. Content-measured
+  contrast is ruled out (a frame of a grey object has no range and no contrast should
+  invent one). A derived contrast (pin both ends → 2.00 on a 1.3 roll with floor 0.0025)
+  is *unexamined*, not rejected — the earlier "adaptive contrast, already rejected" had no
+  recorded rationale — but it would route the anchor's unreliability into the slope.
+- **The shipped sigmoid default carries the same defect:** `MidAtDmaxFraction(0.5)`
+  puts mid at `D′ = 0.650` where it measures 0.513 — 0.91 stops, candidate 3's whole
+  residual (0.93 EV); 0.395 would be right for these rolls. `f` is also the coupling
+  strength to the unreliable anchor: white-pin swings 1.96 stops across the two rolls
+  0.295 apart, mid-pin 0.98, black-pin **zero**. `0.5` was not arbitrary (chosen to halve
+  the fallback's error) but the `pipeline_version` 3 default carries ≈0.9 stops of
+  systematic midtone error plus ≈1.0 stop of roll-to-roll swing.
+- **The placement *rule* must not branch on data availability** ("datasheet present →
+  mid-pin, else black-pin"): it would make stock selection structural, and black-pin does
+  not escape the missing offset, it defers it — black at floor 0.0025 resolves `A =
+  1.301`, mid at `Dmin + 0.513` resolves `A = 0.886`, and the 0.415 between them is the
+  picture rendering 2.79 stops dark unless something downstream supplies the same number.
+  The right fallback is one mechanism, `Dmin + offset` with `f = 0`, and an offset that
+  degrades per-stock → generic → empirical. Deriving a generic offset from the same ten
+  frames and scoring it on them is fitting, not prediction.
+- Black-pinning the sigmoid is not a gain swap (its toe asymptotes, so placing the base
+  means inverting the S-curve); if mid-pin is the universal rule the sigmoid never needs
+  a black-pin variant.
+- The 2026-08-13 constraint that candidate 8's per-stock offset was blocked on a Status M
+  `D-min` was **lifted 2026-09-04** (`film-stock-profiles`, curve-digitized values).
+
+**Mechanism shipped (2026-08-18), no pixel change.** `AnchorPlacement` gained
+`BlackAtBase(floor)` (`A = −log10(floor)/contrast`) and `MidAtBaseOffset(offset)`
+(`A = offset + 0.745/contrast`); `ExponentialParams` gained `anchor`. Placement is
+**shared by both curves** — orthogonal to curve shape, which is what let eight forms run
+through one curve. **Default left at `white-at-dmax` on the exponential**, verified
+byte-identical to HEAD (`params_hash 55a841428c1e6671`, drift gate unmoved); an archived
+exponential recipe without `anchor` resolves exactly what it always did. CLI is one
+curve-neutral family — `--anchor-mid-fraction` / `--anchor-white-at-reference` /
+`--anchor-black-floor` / `--anchor-mid-offset` — with `--sigmoid-mid-fraction` /
+`--sigmoid-white-at-d-max` as aliases (they appear in committed recipes); validation
+moved to a shared block so the bounds apply to both curves. `--anchor-black-floor 0.005`
+at contrast 2.0 resolves `anchor_value` 1.150515, matching the independent 2026-08-03
+retest. The floor's sRGB equivalent is **16/255**, not the 20/255 that had been written
+(that figure is the darkest confirmed shadow patch, a different quantity).
+
+**Measured on ten real frames, nineteen configs (2026-08-28) — the rendering premise
+failed; the mechanism stays as shipped.** `pipeline::shadow_metrics` extended
+(per-candidate curve, toe/shoulder/`black_point`, a film-base probe, highlight metrics);
+its arithmetic validates against the frozen report (white@Dmax 2.74 EV / 12 vs recorded
+2.75 / 12).
+
 - **The trade is three-way and every single-anchor form sits on one frontier.** Anchor
-  height trades midtone placement against black *and* against highlights, monotonically:
-  anchor 1.293 → 0.906 gives |EV| 2.75 → 0.03, base 10 → 38, and highlight separation
-  (p90→p99, code values) 122 → 19. Ten frames, nineteen configs, no exceptions. This is
-  the two-points-not-three constraint measured rather than argued.
-- **The toe does NOT pull the film base down — refuted, not merely unsupported.** Widening
-  it 0.2 → 0.4 → 0.6 moved the base **38 → 41 → 44**. A toe is a soft approach to black
-  *from above*, so it necessarily raises the floor. Any future proposal of the form
-  "reconstruction places mid, a toe recovers black" is dead on arrival.
-- **A black point does what the toe cannot.** `print.black_point = 0.019` on top of
-  mid@base+0.508 gives |EV| 0.13 with the base at **1/255** — dominating every other form
-  on both axes at once, where the best previous pairing was 0.78 EV at base 24. It costs
-  0.16 stops of midtone (the subtraction moves mid 0.1834 → 0.1644), and it lands in the
-  **display** stage, so `film-master` keeps the unclipped rendering.
-- **`GainMapMax` is controlled by the shoulder and by nothing else.** Measured on the
-  shipped container: shoulder 0.6 → **1.000x**, shoulder 0.2 → **1.000x**, shoulder 0.0 →
-  **4.866x**; the exponential (which has no shoulder) → 4.866x under `white-at-dmax` *and*
-  under `black-at-base`, i.e. **identical across completely different anchors**. So the
-  anchor is ruled out directly and the earlier 1.0x-vs-4.87x observation is explained: the
-  sigmoid's shoulder runs during *reconstruction* and removes every above-white value
-  before either display branch sees it, so SDR and HDR receive identical input and their
-  ratio is 1.0 by construction. Note 4.866x is 98.8% of the 4.926 declared headroom —
-  turning the shoulder off does not give graceful HDR, it saturates the ceiling.
-  `GainMapMax` lives in the **second MPF image's** XMP, not the baseline's; `exiftool -b
-  -GainMapImage` then read its XMP.
-- **The exponential is not competitive at any anchor — the task's own rendering premise
-  fails.** With the *same* anchor as the sigmoid (0.875) it blows **21.4%** of every frame
-  to absolute white with **zero** separation in the top decile, against 6.9% / 19 code
-  values for the sigmoid: no shoulder, so the top hard-clips wherever the anchor is put.
-  At high anchors it converges on the sigmoid (white@Dmax 122.5 code sep against the
-  sigmoid's 122.6) because the S-curve is straight up there. User verdict on renders:
-  **X1 (white@Dmax) has the best highlights in the whole set but is 2.75 EV too dark; X2
-  (black@0.005) is *dominated* by the shipped default — darker AND worse highlights.** X2
-  is candidate 5b, which had ranked "most likely GO" on shadow numbers alone; judged as a
-  whole picture it loses. The exponential's problem was never the anchor.
-- **Therefore no default moves.** `white-at-dmax` stays the exponential's default — the
-  call made when the mechanism shipped, now supported by evidence rather than caution.
-- **Three metric traps, all of which misled me, all in a committed harness.**
-  **(a)** `sat%` counts samples above a fixed 0.999, so any `black_point` shift deflates it
-  — it read 0.13% for a config whose highlights were exactly as flattened as the 6.4% one
-  it was compared against. Unusable across black points.
-  **(b)** `flat%` measured against each frame's *own* maximum, which for a config too dark
-  to reach 1.0 is a cluster in the upper midtones, not clipping.
-  **(c)** Highlight separation as a **linear ratio** (p99/p90 in stops) inverted against
-  visual review: sRGB spends more code values per stop at higher levels, so a darker config
-  scores better in stops and looks worse. Measuring the same percentiles in **code values**
-  reproduced the user's ranking. The surviving pair is `blown%` (samples ≥ 0.999 absolute)
-  and `code sep`; neither alone matches the eye, both together do.
-- **Still unmeasured:** hard clip versus soft roll-off. The exponential clips abruptly and
-  the sigmoid gradates into white; X2 and the default differ by only 1.6pp of blown pixels
-  but read further apart than that, which is likely the missing term.
-- **The shoulder is now implicated in all three findings** — inert gain maps, highlight
-  loss at low anchors, and the exponential's clipping — which is a much stronger case for
-  `algo/reconstruction-render-curve-split` than the single observation that filed it.
-- **User decision: the exponential is not retired.** It stays a supported path.
-- 2026-08-28 (**two-engine review: twelve verified findings in round 1, four
-  comment/doc items in round 2; no default moved**). Three were real behaviour:
-  - **A non-finite derived anchor escaped `validate` and rendered an all-black frame at
-    exit 0** — no clip count, no warning, which the fail-loudly rule forbids. The guard
-    tested the proxy `MID_GREY_OUTPUT_DECADES / slope`, which bounds only the mid-grey
-    rules; `black-at-base` divides `−log10(floor)`, unbounded as the floor shrinks, so
-    `--anchor-black-floor 1e-45 --density-gamma 1e-37` passed a finite proxy with a real
-    anchor of `inf`. `validate` now resolves `placement.anchor(reference, slope)` and
-    rejects a non-finite result, and `density::reconstruct` carries the same guard for
-    programmatic callers (mirroring the sigmoid's). **The lesson generalises: validate
-    the resolved value, never a stand-in for it.** The proxy was correct when written and
-    silently stopped covering the rule set it guarded when the set grew.
-  - **Ordering that guard above the slope-positivity checks regressed two diagnostics.**
-    `--sigmoid-contrast 0` and `nan` both read "too small to place the anchor" — neither
-    is small — and recommended `--anchor-white-at-reference`, which then failed on the
-    positivity rule the message had just steered the user away from. Rule: diagnose the
-    *more specific* fault first, and never offer a remedy that does not work.
-  - **`master_places_dmax` keyed on `curve.dmax()` alone**, so a stated base-derived
-    anchor and a genuinely unanchored run emitted identical `film-master` provenance,
-    and a render that never read `Dmax` claimed the roll-fixed placement. Replaced by
-    `MasterAnchor` (roll-fixed / base-derived / none), which keys on whether the
-    placement *reads* the reference rather than on whether a reference resolved.
-  Report shape: `curve.anchor` is now emitted for **both** curves — it was sigmoid-only,
-  so a consumer could not tell a roll-invariant base-derived placement from a
-  reference-pinned one — and `unpinned_curve` warns on an exponential recipe missing
-  `anchor`, since `--dump-params` writes that key now and its absence marks a foreign
-  build. Docs: design-spec §7.3/§8/§9, `using-nc.md` and `CLAUDE.md` all still carried
-  the pre-placement claim that this curve "pins white at `Dmax` with no placement rule";
-  six such statements were corrected.
-- 2026-08-28 (**HDR-headroom figures are film-base-dependent, and the first write-up did
-  not say so**). `GainMapMax` on `tests/fixtures/hdr-48bit.tif`, measured at two bases:
-  the exponential's default reads **4.866x** at `--film-base 1,1,1` but **2.620x** at
-  `0.9,0.55,0.42`, and `--d-max 1.5` reads **3.738x** versus **1.052x**. The two
-  base-derived anchors, `--d-max 2.0` and every sigmoid row are identical under both —
-  the reference-free property doing exactly what it claims. The two review engines
-  reported 2.620 and 4.866 for the same config purely because neither stated its base.
-  `using-nc.md` now names the fixture and the base and gives both columns. **A headroom
-  figure quoted without its film base is not reproducible.**
-- **The default render stayed byte-identical to the merge base across both rounds** —
-  verified by building `HEAD` in a throwaway worktree and diffing the artifact
-  (`md5 8cb9cb143c6aad615a4be90fe5925498`, `params_hash 55a841428c1e6671`), not by
-  inspection.
-- 2026-08-28 (**round 3: a curve switch silently discarded a stated `anchor`; found by a
-  third review engine after two missed it**). Both switch sites — `merge`'s
-  `--density-curve` arm and `internally_tagged_switch` for `roll`'s per-frame overrides —
-  carry `dmax` and reset every other field. That was exactly right while `dmax` was the
-  only field the two curve variants shared, and this task made `anchor` a **second** one
-  (by dropping it from the exponential's rejected-key list in the deserializer) without
-  revisiting either. A roll pinning `{"anchor":{"black-at-base":0.005}}` with a per-frame
-  override of only `{"curve":{"type":"exponential"}}` rendered that frame on
-  `white-at-dmax` — a different tonal rule from the rest of the roll — and **none of the
-  four roll-consistency warnings fired**, because `sets_curve_anchor` probes for an
-  `anchor` *key* and the override has none. Nothing in the report showed it.
-  - **Chose to keep the reset and make it loud, not to carry the anchor.** Carrying it is
-    the tempting symmetry with `dmax` and it is wrong: `dmax` is a *measured roll
-    calibration*, curve-independent by construction, while `anchor` is a *rendering rule*
-    whose right value is per-curve — the two variants have deliberately different
-    defaults. Carrying would make `--density-curve sigmoid` over an exponential recipe
-    resolve `white-at-dmax`, the placement the docs warn renders midtones 2.5–3.6 stops
-    dark, and would strip the exponential of the `white-at-dmax` straight line that is its
-    whole reason to exist. It would also break each curve's documented default. So:
-    `curve_switch_dropped_anchor` warns (roll-level, `--strict`-promotable, in the report)
-    when a switch discards a placement that was **not the base curve's own default** —
-    that last qualifier is what keeps an ordinary `--density-curve exponential` on a
-    default recipe silent, the same false-positive trap `unpinned_curve` records.
-  - Covered on **both** paths, not just `roll`: the CLI drop is equally silent on stderr,
-    and the shared helper made the second call site one line. Suppressed where the user
-    restated a placement (`--anchor-*`, or an overlay `anchor` key, which has its own
-    warning).
-  - **The durable lesson: making a field shared between two variants means revisiting
-    every site that treats "shared" as a closed set.** Both switch sites *documented* the
-    assumption in prose — "the one field the curve variants deliberately share", "`dmax`
-    is the single field the curve variants share by design … the deserializer would
-    loudly reject the union" — and those comments were the only record of it. Neither was
-    updated with the change, so the comments went from true to actively misleading, and
-    the stated justification (a union the deserializer rejects) silently stopped applying
-    to the one field it now accepts. **A comment asserting a closed set is a maintenance
-    obligation**; grep for the assumption's *wording*, not just its identifier.
-  - Also corrected here: `sigmoid.rs`'s runtime anchor guard still explained the overflow
-    as "the mid-grey placement adds 0.745/contrast", now one of three dividing rules on
-    that curve, and `reconstruction-render-curve-split.md` still said the exponential has
-    no `AnchorPlacement`.
-  - Default render still byte-identical (`md5 8cb9cb143c6aad615a4be90fe5925498`,
-    `params_hash 55a841428c1e6671`); the new behaviour is a warning, not a pixel change.
-- 2026-08-29 (**round 4: two P2s from the PR bot on #98; the first is a miss in round 1's
-  own fix**).
-  - **A finite anchor can still overflow the *product*, and that is the same silent
-    all-black frame.** Round 1 rejected a non-finite *anchor*; the curve evaluates
-    `slope · (density − anchor)`, and `--anchor-mid-offset 2e38` keeps the anchor finite
-    (2e38) while the product overflows to `−inf`, whose `10^` is exactly `0.0`. Exit 0,
-    mean `[0,0,0]`, `clipped_high 0`, `non_finite 0`, no warning — and it needs **no
-    exotic slope**, the shipped default gamma of 2.0 reaches it. Fixed by checking
-    `slope · anchor` in `validate` and at both render sites.
-    **The lesson, which is the round-1 lesson sharpened: "validate the resolved value"
-    was still too narrow — the line is "does any intermediate overflow".** Round 1
-    replaced a proxy quotient with the resolved anchor and stopped there, because the
-    anchor was the value the failing case produced. The anchor is not the last
-    intermediate before the pixel; the exponent is. When a guard is written against a
-    reproduction, walk the arithmetic *forward* to the output and check every step, not
-    just the one the reproduction happened to break.
-    Scope held deliberately: a large offset whose product stays *finite* (3e38 at gamma
-    1e-37 is −3e1) is honest arithmetic on absurd input and still validates — bounding
-    that is `algo/density-safety-bounds`' job, and a test pins the boundary so a later
-    tightening is a deliberate act.
-  - **Reference-free placements were blocked by a `Dmax` setting they never read.**
-    `film-master` hard-rejected `--auto-d-max --anchor-black-floor 0.005` and `roll`
-    warned "Dmax is NOT frozen" (exit 1 under `--strict`) for the same shape. Both
-    diagnostics are false: `auto` measures a reference the base-derived rules discard, so
-    the render is deterministic and roll-consistent. Both gates now ask
-    `AnchorPlacement::reads_reference()` — a new shared predicate in `types.rs`, which
-    `master_anchor` (round 1's three-way provenance classifier) also routes through, so
-    there is one answer to "is this placement reference-free" instead of three.
-    **`DmaxSource` describes the *policy*; whether it reaches the pixels is a property of
-    the placement.** Every gate keyed on the source alone was asking the wrong object,
-    and each read plausibly in isolation — the bug only shows when a second axis
-    (placement) gains the power to nullify the first.
-  - Both fixes are refusals and gate-relaxations, not rendering changes: default render
-    byte-identical (`params_hash 55a841428c1e6671`).
-- 2026-08-31 (**closed**). Merged as #98 (`b44427e`) after four review rounds. Every
-  acceptance bullet is met: `white-at-dmax` is bit-identical (the existing
-  `frozen_reference_*` goldens covered it, no new vector needed), the black-pin trade was
-  measured on the same frozen shadow patches the baseline report used, mid-grey was measured
-  **across a roll** rather than judged on a frame, and no default moved — so no
-  `pipeline_version` bump was owed and the drift gate never fired.
-- **What the task set out to do and what it actually delivered are different things, and the
-  second is the more useful one.** It was filed to fix the exponential's 2.75 EV midtone
-  defect by pinning the black end. The mechanism shipped and works, but the *rendering*
-  premise failed: the exponential is not competitive at any anchor, so the black pin it was
-  filed for is not a better default and `white-at-dmax` stays. What the work actually
-  produced is a measured map of the trade — anchor height moves midtone, black **and**
-  highlights monotonically; a toe raises the floor rather than lowering it; a display-stage
-  black point does what the toe cannot; and `GainMapMax` answers to the shoulder alone.
-  **A task whose stated fix is refuted but whose measurements redirect two downstream tasks
-  is a success, not a failure** — provided the negative result is written down as loudly as a
-  positive one would have been.
-- **Handed to `algo/reconstruction-render-curve-split`** (see the new entry in its section):
-  its reconstruction curve is open again, and its HDR-headroom question is already answered.
-- Left deliberately unresolved, and *not* refiled as a task: the A-versus-B question of which
-  stage places the picture. It belongs to the split task, which owns the stage boundary; the
-  `AnchorPlacement` enum carries both positions, so the comparison needs no further knob work.
-- Also still unmeasured, recorded so it is not rediscovered: **hard clip versus soft roll-off.**
-  X2 and the shipped default differ by only 1.6pp of blown pixels but read further apart than
-  that, so a term is missing from the metric pair (`blown%` + code separation).
+  1.293 → 0.906 gives |EV| 2.75 → 0.03, base 10 → 38, highlight separation (p90→p99,
+  code values) 122 → 19, monotonically, no exceptions. Two-points-not-three, measured.
+- **The toe does NOT pull the film base down — refuted.** Widening it 0.2 → 0.4 → 0.6
+  moved the base 38 → 41 → 44: a toe is a soft approach to black *from above*.
+  "Reconstruction places mid, a toe recovers black" is dead on arrival.
+- **A display-stage black point does what the toe cannot:** `print.black_point = 0.019`
+  over mid@base+0.508 gives |EV| 0.13 with the base at 1/255, dominating every other form
+  on both axes; costs 0.16 stops of midtone; lands in the display stage so `film-master`
+  keeps the unclipped rendering. (Later refined by `reconstruction-render-curve-split`:
+  0.019 crushes 0.69–8.66% of every frame to code 0; ~0.005 is the largest safe fixed
+  value.)
+- **`GainMapMax` is controlled by the shoulder and nothing else.** Shoulder 0.6 →
+  1.000x, 0.2 → 1.000x, 0.0 → **4.866x**; the exponential reads 4.866x under
+  `white-at-dmax` *and* `black-at-base`. The sigmoid's shoulder runs during
+  *reconstruction* and strips every above-white value before either display branch sees
+  it, so SDR and HDR receive identical input. 4.866x is 98.8% of the 4.926 declared
+  headroom — turning the shoulder off saturates the ceiling rather than buying graceful
+  HDR (under the *old fixed-ceiling knee*; see the split task). `GainMapMax` lives in the
+  second MPF image's XMP (`exiftool -b -GainMapImage`). **The figures are film-base
+  dependent**: on `tests/fixtures/hdr-48bit.tif` the exponential default reads 4.866x at
+  `--film-base 1,1,1` but 2.620x at `0.9,0.55,0.42`; base-derived anchors and every
+  sigmoid row are identical under both. A headroom figure quoted without its film base
+  is not reproducible.
+- **The exponential is not competitive at any anchor — under the shipped knee.** At the
+  sigmoid's own anchor (0.875) it blows 21.4% of every frame to white with zero
+  top-decile separation (sigmoid 6.9% / 19 code values); at high anchors it converges on
+  the sigmoid. User verdict: X1 (white@Dmax) has the best highlights in the set but is
+  2.75 EV too dark; X2 (black@0.005, candidate 5b) is *dominated* by the shipped default.
+  **Therefore no default moved**, on evidence rather than caution. **Rescoped
+  2026-09-02**: the same straight line under the unbounded display operator at
+  lightness-matched anchors measures 3.89–5.95% blown — the pairing failed, not the
+  curve (`reconstruction-render-curve-split`). The user decided the exponential is not
+  retired.
+- **Three metric traps, all in a committed harness:** `sat%` (fixed 0.999 threshold, any
+  `black_point` shift deflates it), `flat%` (measured against each frame's own maximum),
+  and highlight separation as a **linear ratio** (inverts against visual review — sRGB
+  spends more code values per stop higher up). Surviving pair: `blown%` (absolute ≥
+  0.999) and separation in **code values**; both together match the eye. Still
+  unmeasured: hard clip versus soft roll-off.
 
-## negative-reconstruction-density-curves (review follow-up)
+**Review rounds (2026-08-28/29) — three real behaviours, each a general lesson:**
 
-**Status:** done
-**Updated:** 2026-08-09
+- **Validate the resolved value, never a stand-in.** The anchor guard tested the proxy
+  `MID_GREY_OUTPUT_DECADES / slope`, which bounds only the mid-grey rules; `black-at-base`
+  divides the unbounded `−log10(floor)`, so `--anchor-black-floor 1e-45 --density-gamma
+  1e-37` passed with a real anchor of `inf` and rendered an all-black frame at exit 0.
+  `validate` now resolves `placement.anchor(reference, slope)` and rejects a non-finite
+  result; `density::reconstruct` carries the same guard. **Sharpened in round 4: "does
+  any intermediate overflow"** — a finite anchor still overflowed the *product*
+  (`--anchor-mid-offset 2e38` at the default gamma 2.0 gives `slope · (d − anchor) =
+  −inf`, `10^` of which is exactly `0.0`), so `slope · anchor` is checked in `validate`
+  and at both render sites. Walk the arithmetic forward to the pixel. A large offset whose
+  product stays *finite* still validates — bounding that is `algo/density-safety-bounds`'
+  job, and a test pins the boundary.
+- **Diagnose the more specific fault first, and never offer a remedy that does not
+  work.** Ordering the anchor guard above the slope-positivity checks told
+  `--sigmoid-contrast 0` "too small to place the anchor" and recommended
+  `--anchor-white-at-reference`, which then failed the positivity rule.
+- **`DmaxSource` describes the *policy*; whether it reaches the pixels is a property of
+  the placement.** `master_places_dmax` keyed on `curve.dmax()` alone, so a base-derived
+  anchor and an unanchored run emitted identical `film-master` provenance; `film-master`
+  hard-rejected `--auto-d-max --anchor-black-floor 0.005` and `roll` warned "Dmax is NOT
+  frozen" for a render that never read `Dmax`. All three now route through
+  `AnchorPlacement::reads_reference()` (`MasterAnchor`: roll-fixed / base-derived / none).
+  `curve.anchor` is emitted for both curves; `unpinned_curve` warns on an exponential
+  recipe missing `anchor`. Six doc statements claiming the curve "pins white at `Dmax`
+  with no placement rule" were corrected.
+- **A curve switch silently discarded a stated `anchor`** (round 3, found by a third
+  review engine). Both switch sites carry `dmax` and reset every other field — right
+  while `dmax` was the only shared field, wrong once `anchor` became a second one. A roll
+  pinning `black-at-base` with a per-frame `{"curve":{"type":"exponential"}}` rendered
+  that frame on `white-at-dmax` and none of the roll warnings fired. **Kept the reset,
+  made it loud**: `curve_switch_dropped_anchor` warns (roll-level, `--strict`-promotable,
+  both CLI and roll paths) when the discarded placement was not the base curve's own
+  default — carrying would make `--density-curve sigmoid` over an exponential recipe
+  resolve `white-at-dmax` and strip the exponential of its straight line. **A comment
+  asserting a closed set is a maintenance obligation**; grep for the assumption's
+  *wording*, not its identifier.
 
-- 2026-08-09: **The migration warning was scoped too narrowly and missed the most
-  deceptive case.** It fired for a recipe with *no* `curve` section, but returned
-  `None` for one that pins only the type — and
-  `{"curve":{"type":"exponential"}}` used to mean gamma 1.0 at anchor 2.0 and now
-  means gamma 2.0 at anchor 1.3. That file *looks* pinned, which is exactly why it
-  is worse than the bare case: nothing in it shows the render moved, and a bare
-  recipe carries no `meta.pipeline_version` for the other warning to catch. New
-  `UnpinnedCurve::MovedDefaults` covers it, plus a sigmoid that pins `anchor` but
-  omits `dmax` (the nominal moved for *both* curves). Pinning both moved scalars
-  silences it — the falsifiable half.
-- 2026-08-09: `sigmoid_rejects_no_d_max` was passing on clap's **duplicate-flag**
-  rejection: a sweep had added a second `--density-curve`, so it exited 2 during
-  parsing and never reached the merge/validation path it exists to pin. Removed,
-  and it now asserts the message names the sigmoid — exit 2 alone cannot say which
-  rule fired. That is the fourth test this session found passing for the wrong
-  reason; the pattern is always the same, an assertion on an exit code that more
-  than one rule can produce.
-- 2026-08-09: `scripts/analysis/benchmark.json` lost exponential coverage entirely
-  when the default flipped — all four remaining fixture cases resolved to the
-  sigmoid while the manifest's own note still claimed it covered "the default
-  exponential path". Added an explicit `hdri-exponential` case. The asset-free set
-  is the one used for determinism and zero-diff checks, so a still-supported path
-  being invisible there is a real gap rather than a tidiness point.
+**Closed 2026-08-31.** Filed to fix the 2.75 EV defect by pinning black; the mechanism
+shipped and the *rendering* premise was refuted — a task whose stated fix is refuted but
+whose measurements redirect two downstream tasks is a success, provided the negative
+result is written down as loudly. Handed to `reconstruction-render-curve-split` (its
+curve open again, its HDR question answered). The A-versus-B question — which stage
+places the picture — belongs to that task and was not refiled; the enum carries both.
 
-## negative-reconstruction-density-curves (second review round)
-
-**Status:** done
-**Updated:** 2026-08-09
-
-- 2026-08-09: **The `MovedDefaults` warning had a hole in exactly the recipes people
-  archive.** It treated any present `dmax` key as pinned — but `"dmax":"fixed"`
-  names a *policy*, not a value, and resolves through `NOMINAL_DMAX`, which moved
-  2.0 → 1.3. That is the spelling `--dump-params` writes, so the fix excused the
-  single most likely archived recipe while catching the rarer omitted-key case.
-  `dmax` now counts as floating when absent **or** `"fixed"`; `"auto"` is per-frame
-  (a different thing) and `"none"`/`{"explicit":…}` are genuinely pinned. Lesson
-  that generalises: "is the key present" is not the same question as "is the value
-  pinned" whenever a key can name a policy.
-- 2026-08-09: Two shipped examples exited 2 after the default flip — `README.md`'s
-  HDR example and design-spec's transitional float example, both passing
-  `--density-gamma` (exponential-only) with the sigmoid now default. Both now
-  select the curve explicitly, and both were **run** to confirm exit 0 rather than
-  eyeballed. Worth noting the first doc pass on this PR missed them: I grepped for
-  statements *about* the defaults and not for commands that *depend* on them.
-
-## negative-reconstruction-density-curves (third review round)
-
-**Status:** done
-**Updated:** 2026-08-09
-
-- 2026-08-09: **The `dmax:"fixed"` fix over-corrected and broke the documented
-  reproducibility path.** Treating `"fixed"` as floating is right *across* versions
-  — but the resolved default sigmoid this build writes also spells `"dmax":"fixed"`,
-  so a sidecar `--dump-params` had just produced failed its own `--strict` replay
-  (exit 1, claiming a render moved that demonstrably had not). The warning now
-  returns `None` when the recipe records **this** build's `pipeline_version`:
-  nothing moved underneath a recipe produced by these defaults, and
-  `pipeline_version_warning` already owns the cross-version case. An **absent**
-  version still warns — there is no evidence which defaults it was written
-  against, which is exactly the uncertainty worth surfacing.
-- 2026-08-09: The pattern across all three rounds on this warning is worth naming:
-  under-warned (omitted key), then over-warned (any present key), then over-warned
-  again (any `"fixed"`). Each fix was correct about the mechanism and wrong about
-  the population it applied to. The question that resolves it is not "did a default
-  move?" but "did it move *for this recipe*", and `meta.pipeline_version` is the
-  only witness to that. Both directions are pinned now.
-- 2026-08-09 (fourth round, and the one that ends it): the version-based
-  exemption fixed the *sidecar* but not `--dump-params`, which writes a **bare**
-  recipe with no `meta.pipeline_version` — so a file the tool had just produced
-  still failed its own `--strict` replay while the output was byte-identical.
-  Root cause of all four rounds: the predicate kept being tuned against
-  hand-written JSON while **nothing tested the one file nc itself writes**. The
-  rule is now structural — *warn only on shapes this build cannot produce*
-  (absent `curve` / `anchor` / `gamma` / `dmax`) — and
-  `recipe_dumped_by_this_build_replays_clean_under_strict` gates dump → replay
-  end to end, byte-comparing the two outputs so a future false positive fails
-  loudly. `"dmax":"fixed"` is therefore treated as pinned; that residual gap and
-  the override-provenance one are written down in the task doc rather than
-  patched over, and both belong to `core/conversion-versioning`'s per-version
-  default table.
 
 ## reconstruction-render-curve-split
+**Status:** done (filed 2026-08-10; started and closed 2026-09-02; review 2026-09-03; merged as #102)
 
-**Status:** done
-**Updated:** 2026-09-02
+**Filed** out of the `output/presets` review round: the reference-anchored sigmoid does
+tone shaping *during reconstruction* (floor, midtone, shoulder), partly collapsing the
+separate-sub-stages rule, and it is the same question as HDR headroom (on one Gold 200
+frame the sigmoid's HDR rendition peaks at exactly reference white, `GainMapMax` 1.0x,
+while the exponential reaches 4.87x). **The film is not the limitation** — negative
+stock carries 10–14 stops; the *print rendering* decides whether output exceeds diffuse
+white, which is why HDR is deprioritised rather than abandoned.
 
-- Goal: try a modified exponential as the density→linear reconstruction with the
-  sigmoid character applied by the display stage instead of inside reconstruction.
-  See [the task file](../tasks/algo/reconstruction-render-curve-split.md).
-- Filed 2026-08-10, user's stated next step, out of the `output/presets` review
-  round. Two things motivated it. **(a)** The reference-anchored sigmoid does tone
-  shaping *during reconstruction* — floor, midtone, shoulder — which partly
-  collapses the "density conversion and print rendering are separate sub-stages"
-  rule; `pipeline::sdr`/`pipeline::hdr` already carry a reference-white-preserving
-  shoulder, so some of the downstream machinery exists. **(b)** It is the same
-  question as HDR headroom: on one Gold 200 frame with identical base and `Dmax`,
-  the sigmoid's HDR rendition peaks at *exactly* the 203-nit reference white
-  (`GainMapMax` 1.0x) while the exponential reaches 4.87x, because the exponential
-  pins white at `Dmax` with no placement rule.
-- **Correction worth carrying:** the film is not the limitation. Negative stock has
-  wide latitude (10–14 stops is the usual figure); the *print rendering* decides
-  whether output exceeds diffuse white, and today's default declines to. So HDR is a
-  rendering-intent choice, not range the source failed to supply — which is why it
-  is deprioritised rather than abandoned, and why the HDR presets stay first-class.
-- Deliberately left open: what "modified" must mean for the exponential (it has no
-  `AnchorPlacement`, worth 2.75 EV of midtone displacement — possibly subsuming
-  `algo/exponential-mid-grey-anchor`), what reconstruction should still own, whether
-  the existing display shoulder suffices, and **what happens to `film-master`**,
-  whose definition includes the curve. That last one is likely the sharpest
-  constraint.
-- 2026-08-31 (**the handoff from `algo/exponential-anchor-placement` arrived, and it is a
-  "no"**). That task shipped its mechanism and then measured the rendering question on ten
-  real frames / nineteen configs. Five results land directly on this task:
-  - **The modified exponential cannot be this task's reconstruction curve.** Given the *same*
-    anchor as the sigmoid (0.875) it blows **21.4%** of every frame to absolute white with
-    **zero** separation in the top decile, against 6.9% / 19 code values for the sigmoid — it
-    has no shoulder, so the top hard-clips wherever the anchor is put. At high anchors it
-    simply converges on the sigmoid (122.5 code separation against 122.6), because the S-curve
-    is straight up there. So the open question this task recorded as "settled — it is being
-    worked in `exponential-anchor-placement`" is answered in the negative, and the curve is
-    **open again**.
-  - **The HDR-headroom half is already decided, and it was never about the anchor.**
-    `GainMapMax` answers to the **shoulder** and nothing else: shoulder 0.6 → 1.000x,
-    shoulder 0.2 → 1.000x, shoulder 0.0 → 4.866x, and the exponential reads 4.866x under
-    `white-at-dmax` *and* under `black-at-base` — identical across completely different
-    anchors. The sigmoid's shoulder runs during **reconstruction** and removes every
-    above-white value before either display branch sees it, so SDR and HDR receive identical
-    input and their ratio is 1.0 by construction. That is this task's premise stated
-    mechanically, and it is a far stronger case for the split than the single 1.0x-vs-4.87x
-    observation that filed it. Note 4.866x is 98.8% of the declared 4.926 headroom — turning
-    the shoulder off does not buy graceful HDR, it saturates the ceiling.
-  - **"Reconstruction places mid, a toe recovers black" is refuted, not merely unsupported.**
-    Widening the toe 0.2 → 0.4 → 0.6 moved the film base **38 → 41 → 44**. A toe is a soft
-    approach to black *from above*, so it necessarily raises the floor. Any future proposal of
-    that shape is dead on arrival.
-  - **A display-stage black point does what the toe cannot**, which is evidence for the split
-    rather than against it: `print.black_point = 0.019` over mid@base+0.508 gives |EV| 0.13
-    with the base at **1/255**, dominating every single-anchor form on both axes at once (the
-    best previous pairing was 0.78 EV at base 24). It costs 0.16 stops of midtone and lands in
-    the **display** stage, so `film-master` keeps the unclipped rendering — a partial answer to
-    this task's sharpest constraint.
-  - **Two-points-not-three is now measured, not argued.** Anchor 1.293 → 0.906 moves |EV|
-    2.75 → 0.03, base 10 → 38, and highlight separation 122 → 19 code values, monotonically,
-    with no exceptions across the set. Every single-anchor form sits on one frontier, which is
-    the quantified case that a second stage is needed at all.
-- **Metric warning for whoever picks this up** — three measures in the committed
-  `pipeline::shadow_metrics` harness actively mislead, and all three fooled the previous author:
-  `sat%` (fixed 0.999 threshold, so any `black_point` shift deflates it), `flat%` (measured
-  against each frame's *own* maximum, meaningless for a config too dark to reach 1.0), and
-  highlight separation as a **linear ratio** (inverts against visual review, because sRGB
-  spends more code values per stop higher up). The surviving pair is `blown%` (absolute
-  ≥ 0.999) and separation in **code values**; neither alone matches the eye, both together do.
+**Handoff from `exponential-anchor-placement` (2026-08-31):** the modified exponential
+could not be the reconstruction curve *under the shipped knee* (21.4% blown at the
+sigmoid's anchor); `GainMapMax` answers to the shoulder alone; the toe as a
+black-recovery device is refuted; a display-stage black point does what the toe cannot;
+and every single-anchor form sits on one measured frontier. Metric warning: `sat%`,
+`flat%` and linear-ratio separation in `pipeline::shadow_metrics` all mislead; use
+`blown%` and code-value separation.
 
-### 2026-09-02 — started; chunk A: what reconstruction keeps, measured on seven frames
+### 2026-09-02 — chunk A: what reconstruction keeps, measured on seven frames
 
-Scope agreed with the user: **verdict + shape + `film-master` reconciliation**, with the
-default migration deliberately split off (it inherits a calibration and a colour-model fix
-this task does not own — see the end of this entry). Chunk A is measurement only: no CLI
-surface, no default moved, `pipeline_version` untouched.
+Scope agreed with the user: **verdict + shape + `film-master` reconciliation**; the
+default migration split off (it inherits a calibration and a colour-model fix this task
+does not own).
 
-**The split is confirmed, and the direction was already decided elsewhere.** Two of the
-three legs this task was filed on were answered while it sat: `algo/exponential-anchor-placement`
-ruled the exponential out (2026-08-29) and `output/display-tone-mapping` closed on a user
-visual verdict for `s0-reinhard` — shoulder-less reconstruction under the unbounded display
-operator (2026-09-02). So this is a landing task, not an open experiment.
+- **The split was already decided elsewhere**: `exponential-anchor-placement` ruled the
+  exponential out (under the old knee) and `output/display-tone-mapping` closed on a user
+  visual verdict for `s0-reinhard` — `--sigmoid-shoulder 0 --display-tone reinhard`,
+  everything else default. So the reconstruction curve is *the shipped sigmoid with its
+  shoulder set to zero*; the shoulder was the only genuinely print-side operation.
+- **The anchor is a pure gain exactly when the shoulder is off**: `t − floor` is
+  `contrast·d`, so the curve factors as `10^(−contrast·anchor) · h(d)`. Measured 5e-7
+  relative deviation at `shoulder = 0` with the toe on, against 69–81% at the shipped
+  0.6 (`algo::sigmoid::anchor_is_a_pure_gain_only_without_the_shoulder`,
+  mutation-verified). Under today's default the exposure anchor and print shoulder
+  interact — the stage collapse the fidelity rule names, measured.
+- `shadow_metrics::reconstruction_shape_probe`: every candidate matched to the
+  benchmark's **mean encoded lightness**, every row asserting the render hit the
+  statistic it solved for (guard verified to fail).
+- **All five shapes beat the shipped sigmoid on both metrics on all seven frames** —
+  35/35 rows on `blown%`, 33/35 on separation (exceptions: the deepest black-point rows
+  on P4).
+- **The toe is dead.** Toe 0.2 against 0: `blown%` identical to two decimals, separation
+  within 0.2 code values, and the floor consistently **lower without it** (E3 27.9 →
+  25.9, P3 27.0 → 25.3, P4 22.8 → 20.9). Reconstruction should keep neither knee.
+- **So the split's endpoint is the straight line** — `toe = shoulder = 0` is bit-exactly
+  the exponential (`convert_with_knees_off_matches_exponential_bit_exactly`). Not a
+  contradiction of `exponential-anchor-placement` but a **rescoping**: under the
+  unbounded operator at lightness-matched anchors (0.954–1.030) the same curve measures
+  **3.89–5.95% blown with 10.9–120.1 code separation**. The curve was never the problem;
+  the pairing was.
+- **`black_point = 0.019` is refuted at that value, and it took a fifth metric to see
+  it** — neither |EV| nor a floor percentile can see *crushing*:
 
-**The reviewed configuration needs no new curve, which resizes the whole task.**
-`scripts/hdr-tone-review/generate.py` shows `s0-reinhard` is `--sigmoid-shoulder 0
---display-tone reinhard`, everything else at defaults. The reconstruction curve the task
-went looking for is *the shipped sigmoid with its shoulder set to zero*. The shoulder was
-the only genuinely print-side operation the curve performed; moving it out is a default
-change plus a definitional reconciliation, not a new algorithm.
+  | black point | floor (code) | crushed% | separation cost |
+  | --- | --- | --- | --- |
+  | 0     | 20.9–30.7 | 0.00 | — |
+  | 0.005 | 10.4–23.2 | **0.00 on 7/7** | 1–4 |
+  | 0.010 | 0.0–14.8 | 0.00 on 6/7, **P4 2.07** | 2–7 |
+  | 0.019 | 0.0 | **0.69–8.66** | 5–14 |
 
-**A new argument for the split, mechanical rather than aesthetic: the anchor is a pure gain
-exactly when the shoulder is off.** `t − floor` is `contrast·d`, so the toe term carries no
-`anchor` and the curve factors as `10^(−contrast·anchor) · h(d)`. Measured: 5e-7 relative
-deviation at `shoulder = 0` **with the toe on**, against 69–81% at the shipped `0.6`. Pinned
-by `algo::sigmoid::anchor_is_a_pure_gain_only_without_the_shoulder` (both assertions
-mutation-verified). So under today's default the exposure anchor and the print shoulder
-interact — which is the stage-collapse the fidelity rule names, now measured instead of
-argued — and the split makes the anchor a clean exposure control. It also makes the
-matched-exposure probes exact: the gain is solved on a scalar array rather than fitted.
+  A fixed black point cannot be pushed past ≈0.005 without crushing some frame; the
+  linear subtraction trades floor against crushing ~1:1, so it is a per-frame grading
+  control, not a default. `crushed%` joined the harness (the fifth metric trap after
+  `sat%`, `flat%`, linear-ratio and unclamped separation).
+- **The anchor placement cannot be adjudicated by this probe.** Matching to a common
+  lightness *solves* the anchor, and the anchor is a pure gain, so every placement
+  converges on identical pixels (`MidAtBaseOffset(0.626)` and `MidAtDmaxFraction(0.5)`
+  agreed to four decimals). The bias column is confounded (the target is matched to a
+  `Dmax`-reading render); the uncontaminated spread is identical by construction — 0.07
+  EV (Gold), 0.10 (Ektar), 0.32 (Portra), frame-to-frame exposure disagreement no
+  single-anchor rule can remove. Adjudication needs a grey card on a bracketed roll
+  (`algo/sigmoid-parameter-calibration`'s precondition).
 
-New `shadow_metrics::reconstruction_shape_probe`. Every candidate is matched to the
-benchmark's **mean encoded lightness** (chunk 4's protocol from `output/display-tone-mapping`)
-and every row asserts the render hit the statistic it solved for; that guard was verified to
-fail, as was the black-point term in the scalar model.
+**Shape verdict:** reconstruction keeps the density conversion, the contrast and the
+anchor, and sheds **both knees**; character comes from the display operator; black
+placement is a display-stage control well below the value previously measured.
 
-**Result: all five shapes beat the shipped sigmoid on both metrics on all seven frames** —
-35/35 rows on `blown%`, 33/35 on separation (the two exceptions are the deepest black-point
-rows on P4). The split is not marginal.
+### 2026-09-02 — chunk B: `film-master` reconciled; the "sharpest constraint" dissolves
 
-**The toe is dead — it buys nothing and costs black depth.** Across all seven frames, toe
-`0.2` against `0`: `blown%` identical to two decimals on every frame, separation within 0.2
-code values, and the floor consistently **lower without it** (E3 27.9 → 25.9, P3 27.0 → 25.3,
-P4 22.8 → 20.9). `algo/exponential-anchor-placement` refuted the toe as a black-recovery
-device; this shows it is not a highlight device either once the operator carries the
-character. Reconstruction should keep neither knee.
-
-**Which means the split's endpoint is the straight line — the curve this task recorded as
-ruled out.** `toe = shoulder = 0` is bit-exactly the exponential, pinned by the existing
-`convert_with_knees_off_matches_exponential_bit_exactly`. That is not a contradiction of
-`algo/exponential-anchor-placement` but a **rescoping of its verdict**: it measured the
-exponential under the shipped fixed-ceiling knee at anchor 0.875 and got 21.4% blown with
-zero top-decile separation. Under the unbounded operator at the lightness-matched anchors
-(0.954–1.030) the same curve measures **3.89–5.95% blown with 10.9–120.1 code separation**.
-The curve was never the problem; the pairing was. Worth stating plainly because this file
-records "the modified exponential cannot be this task's reconstruction curve", and that
-sentence is true only of the pairing it was measured in.
-
-**`black_point = 0.019` is refuted at that value, and it took a fifth metric to see it.**
-`algo/exponential-anchor-placement` measured it dominating every reconstruction-side form on
-both its axes (|EV| 0.13, base at 1/255). Neither |EV| nor a floor percentile can see
-*crushing*: at 0.019 this probe measures **0.69–8.66% of every frame pinned to code 0**,
-where the benchmark and every black-point-free shape crush 0.00%. Swept properly:
-
-| black point | floor (code) | crushed% | separation cost |
-| --- | --- | --- | --- |
-| 0     | 20.9–30.7 | 0.00 | — |
-| 0.005 | 10.4–23.2 | **0.00 on 7/7** | 1–4 |
-| 0.010 | 0.0–14.8 | 0.00 on 6/7, **P4 2.07** | 2–7 |
-| 0.019 | 0.0 | **0.69–8.66** | 5–14 |
-
-So a *fixed* black point cannot be pushed past ≈0.005 without crushing some frame, which is
-itself the finding: the linear subtraction trades floor against crushing roughly 1:1, so this
-is a per-frame grading control, not a default. `crushed%` is added to the harness as
-`blown%`'s shadow counterpart — the **fifth** metric trap this harness has produced, after
-`sat%`, `flat%`, linear-ratio separation and unclamped separation.
-
-**The anchor placement cannot be adjudicated by this probe, and the reason is worth recording
-so it is not rediscovered as a result.** Matching to a common lightness *solves* the anchor,
-and the anchor is a pure gain, so every placement converges on identical pixels — measured:
-`MidAtBaseOffset(0.626)` and `MidAtDmaxFraction(0.5)` agreed to four decimals on every metric,
-which is why they are no longer separate rows. A placement's value is how well it *predicts*
-that solved anchor, and the probe reports that per roll — but **the bias column is confounded**:
-the solved anchor is matched to the shipped sigmoid, which reads the roll `Dmax` itself, so a
-`Dmax`-reading rule is scored against a target built from it. The uncontaminated column is the
-spread, and within a roll the two rules differ by a constant, so their spreads are **identical
-by construction**: 0.07 EV (Gold), 0.10 (Ektar), 0.32 (Portra). That is frame-to-frame exposure
-disagreement no single-anchor rule can remove, and it bounds what any placement can deliver.
-Adjudicating the placement needs a content-independent target — a grey card on a bracketed roll
-— which is `algo/sigmoid-parameter-calibration`'s recorded precondition, not something to fit
-here.
-
-**Shape verdict for chunk B:** reconstruction keeps the density conversion, the contrast and
-the anchor, and sheds **both knees**. Character comes from the display operator; black
-placement is a display-stage control at a value well below the one previously measured.
-
-Gates: fmt clean, clippy `-D warnings` clean, 702 unit + 174 integration, 112 Python,
-unresolved doc links at the 16-link baseline. No production code touched — the probe is
-`#[cfg(test)]` and `#[ignore]`d; the one non-harness addition is the `algo::sigmoid` test.
-
-### 2026-09-02 — chunk B: `film-master` reconciled, and the "sharpest constraint" dissolves
-
-The task recorded `film-master` as likely the sharpest constraint, on the reasoning that it
-is "defined as the intentional film rendering *including* the curve", so moving the curve
-downstream changes the master's meaning. Checked against the code and the binary, and the
-premise is a **documentation artefact rather than a design conflict**.
-
-**`film-master`'s contract was never a curve shape.** `render_split::film_master` is
-`aces.into_linear()` — a pure unwrap with no range check, no `PrintParams`, and no knowledge
-of which curve ran. The branch already varies with `--density-curve` and every curve knob
-today. What named a shape was the `TASKS.md` rollup sentence ("It includes reconstruction and
-the reference-anchored sigmoid's toe/midtone/shoulder rendering"), which stated the *current
-default's* shape as if it were part of the definition. Reworded to separate contract from
-default; it is true today either way, so this fixes a misleading claim rather than describing
-a default that has not moved.
-
-**Verified against the binary**, `film-master` on `tests/fixtures/hdr-48bit.tif` (IR-free, so
-`--strict` stays usable; `--film-base 1,1,1` because the fixture has no rebate):
+`film-master`'s contract was never a curve shape: `render_split::film_master` is
+`aces.into_linear()` — a pure unwrap, no range check, no `PrintParams` — and the branch
+already varies with every curve knob. The `TASKS.md` rollup sentence naming the sigmoid's
+toe/midtone/shoulder had stated the *current default's* shape as if it were the
+definition; reworded. Verified on `tests/fixtures/hdr-48bit.tif` (`--film-base 1,1,1`):
 
 | reconstruction | anchor | clipped hi/lo | non-finite | mean RGB |
 | --- | --- | --- | --- | --- |
@@ -2858,46 +1639,21 @@ a default that has not moved.
 | `--sigmoid-shoulder 0` | 1.010 | 0 / 0 | 0 | 3.81 5.15 30.15 |
 | that, `--sigmoid-toe 0` | 1.010 | 0 / 0 | 0 | 3.81 5.15 30.15 |
 
-Three things it establishes. The branch **accepts a shoulder-less reconstruction cleanly** —
-exit 0, nothing clipped, nothing non-finite — so there is no structural work to do. The
-master's *values* change materially at the same anchor (the shoulder was compressing hard),
-which is the anchor pairing chunk A solves, not a defect. And **the toe changes nothing at
-this boundary either**, corroborating chunk A from a second direction.
-
-**The report needs no change, and that is the fifth-spot trap already avoided.**
-`output_render.content` reads "…reconstruction, **density curve**, and the resolved
-roll-fixed Dmax placement", naming the stage generically rather than naming the sigmoid's
-shoulder — so unlike the case CLAUDE.md records for `--display-tone none`, no prose here
-becomes false when the curve's shape changes. Worth recording as a positive instance: the
-claim was written at the right altitude the first time.
-
-**The reconciliation, stated for the default-migration task to inherit:** after the split,
-`film-master` is the film's density record — density conversion, contrast and anchor —
-carried unclamped into ACEScg with **no print decision baked in**. That is a *better* master
-by the epic's own fidelity rule, not a diminished one: a print shoulder in a master is
-precisely the stage collapse the rule forbids, and every print decision stays available
-downstream where a grader can change it. The one real consequence is that the master becomes
-unbounded above 1.0 where the shoulder previously held reconstruction at `lin ≤ 1.0` — which
-is already its documented contract (unclamped f32), and the mapping through
-`map_nc_film_rgb_v1` could exceed 1.0 even with the shoulder on, so nothing downstream was
-relying on the bound.
+The branch accepts a shoulder-less reconstruction cleanly; the master's values change
+materially at the same anchor (the pairing chunk A solves); the toe changes nothing at
+this boundary either. The report needs no change — `output_render.content` names
+"density curve" generically, so no prose becomes false (the fifth-spot trap avoided).
+**After the split `film-master` is the film's density record — density conversion,
+contrast and anchor, carried unclamped into ACEScg with no print decision baked in** — a
+*better* master by the fidelity rule. The one consequence: it becomes unbounded above
+1.0, which is already its documented contract.
 
 ### 2026-09-02 — closed: the verdict, and what the split does to HDR
 
-The task's three verification items, answered:
-
-**1. A written verdict with measurements on real rolls.** The split holds. Reconstruction
-keeps the density conversion, the contrast and the anchor, and sheds **both knees**;
-character comes from the display operator. Measured on seven frames at matched mean encoded
-lightness: 35/35 rows beat the shipped sigmoid on `blown%`, 33/35 on highlight separation.
-
-**2. `film-master` reconciled explicitly** rather than left to drift — chunk B. Its contract
-is the configured reconstruction, not a curve shape, and the rollup sentence that said
-otherwise was describing the current default.
-
-**3. What the chosen split does to HDR headroom**, which the task asked for as a side effect
-either way. It is the whole difference between a live gain map and an inert one, and the
-numbers come from `output/display-tone-mapping`'s HDR review:
+1. **The split holds**, measured on seven frames at matched mean encoded lightness.
+2. **`film-master` reconciled** explicitly (chunk B).
+3. **HDR** — the whole difference between a live gain map and an inert one (numbers
+   from `output/display-tone-mapping`'s HDR review):
 
 | | shipped default | split (`s0` + unbounded tone) |
 | --- | --- | --- |
@@ -2905,35 +1661,22 @@ numbers come from `output/display-tone-mapping`'s HDR review:
 | frame on the top gain code | **6.6-15.2%** (shouldered) / 92.68% (default) | **0.26-0.61%** |
 | above reference white | 0% by construction | 7-26% |
 
-The mechanism is the one this task was filed on: the shoulder ran during *reconstruction* and
-stripped every above-white value before either display branch saw it, so SDR and HDR received
-identical input and their ratio was 1.0 by construction. Removing it is what makes the
-container carry information. **`GainMapMax` is the wrong instrument** for reading this — it
-reports 4.87x vs 4.79x for the two live configs, identical on all four review frames — which
-is why the plateau share is the row that matters.
+`GainMapMax` is the wrong instrument (4.87x vs 4.79x for the two live configs, identical
+on all four review frames); the plateau share is the row that matters.
 
-**Not done here, deliberately:** no default moved, `pipeline_version` is untouched and the
-drift gate is quiet (verified). Activation is `algo/split-default-migration`, blocked on
-`film-base/dmax-per-channel-reduction` — the shoulder being removed is what hides a 17-83%
-off-neutral channel error on the grey leader, so the split's own success is what promotes
-that task from optional investigation to prerequisite.
+**Not done here, deliberately:** no default moved, `pipeline_version` untouched, drift
+gate quiet. Activation is `algo/split-default-migration`. (At close-out it was recorded
+as blocked on `film-base/dmax-per-channel-reduction`, on the reasoning that the shoulder
+hides a 17-83% off-neutral leader reading; that edge was **removed 2026-09-10** when
+`film-stock-profiles` disqualified the leader as a per-channel source — see the
+migration task's section.) Nothing in `src/` outside a test module changed.
 
-Nothing in `src/` outside a test module changed: the probe is `#[cfg(test)]` + `#[ignore]`d,
-and the one production-adjacent addition is `algo::sigmoid`'s pure-gain test. All five gates
-green, doc links at the 16-link baseline.
+### 2026-09-03 — the fourth quadrant: `shipped sigmoid + --display-tone none`
 
-### 2026-09-03 — the fourth quadrant measured: `shipped sigmoid + --display-tone none`
-
-Asked whether `output/linear-render`'s pairing — keep the shoulder in *reconstruction*, skip
-the tone at *display* — is a viable default instead of the split. It had never been
-benchmarked against the split: `linear-render` measured itself against the old default, and
-`reconstruction-render-curve-split`'s chunk A did the same, so the two candidates had only
-ever been compared to a common baseline. Added as a row to
-`shadow_metrics::reconstruction_shape_probe` (no exposure matching needed, and the scalar
-solve would be *invalid* here: it shares the benchmark's reconstruction exactly, and with
-`shoulder > 0` the anchor is not a gain).
-
-Seven frames, means:
+`output/linear-render`'s pairing had never been benchmarked against the split (each had
+only been compared to the common baseline). Added as a row (no exposure matching — it
+shares the benchmark's reconstruction, and with `shoulder > 0` the anchor is not a gain).
+Seven-frame means:
 
 | config | blown% | code sep | sep vs benchmark | `GainMapMax` |
 | --- | --- | --- | --- | --- |
@@ -2941,75 +1684,32 @@ Seven frames, means:
 | shipped sigmoid + `none` | **4.95** | 49.9 | **+0.9** | **1.0027x** |
 | `s0` + reinhard (the split) | **4.93** | 61.5 | **+12.5** | **4.7929x** |
 
-**The two candidates tie on `blown%` and are not close on anything else.** 4.95 against 4.93
-is a tie on every frame individually too (largest gap 0.17pp, sign varying). But `none`'s
-separation is *unchanged from the benchmark* on five of seven frames — 43.0/43.0, 37.9/37.9,
-67.2/67.2, 75.7/75.7, 113.9/114.0 — improving only on G3 (4.5 → 8.8) and P3 (0.6 → 2.9), the
-two frames where the benchmark had almost none to begin with.
-
-**The mechanism, which makes this predictable rather than surprising:** the reconstruction
-shoulder fuses highlights **in density space**, upstream of everything. Skipping the display
-tone avoids the *second* compression, which is enough to stop values being pushed to 1.0
-(hence the `blown%` win) but cannot recover spread that was already collapsed. `s0` never
-fuses them, so the display operator has real separation to preserve. Same reason the floor is
-*bit-identical* to the benchmark under `none` — nothing below the knee changes, exactly as
-`linear-render` documented.
-
-**And the HDR half is settled by construction.** `shoulder > 0` keeps reconstruction bounded
-at `lin ≤ 1.0`, so the gain map stays inert: measured **1.0027x** on a real Gold 200 frame
-against the split's 4.7929x. The 0.0027 is the SDR branch losing its shoulder while HDR keeps
-its own; it is not headroom.
-
-**But it has one real advantage the split does not, and it is worth recording:** because the
-shoulder is still there washing highlights toward white, it still **hides** the per-channel
-neutrality error. So `shipped + none` is *not* blocked on
-`film-base/dmax-per-channel-reduction`, where `algo/split-default-migration` is. It is
-therefore available as a **conservative interim default** — already shipped, no new operator,
-byte-identical below the knee, ~80% of the `blown%` improvement, no new blocker — at the cost
-of forgoing highlight separation and HDR entirely. That is a scheduling option, not a
-destination.
+The two tie on `blown%` and are not close on anything else: `none`'s separation is
+unchanged from the benchmark on five of seven frames, because the reconstruction shoulder
+fuses highlights in density space upstream of everything; skipping the display tone stops
+values being pushed to 1.0 but cannot recover collapsed spread. The HDR half is settled by
+construction (`shoulder > 0` keeps `lin ≤ 1.0`; the 0.0027 is the SDR branch losing its
+shoulder, not headroom). It remains available as a **conservative interim default** —
+shipped, byte-identical below the knee, ~80% of the `blown%` win, at the cost of forgoing
+highlight separation and HDR. A scheduling option, not a destination.
 
 ### 2026-09-03 — review round: one real output bug behind five green gates
 
-Twelve findings from the ship review, all acted on. Two were substantive; the rest were
-doc/robustness. Recording the first because it is the harness failure mode this file keeps
-re-learning.
+- **The `bias EV` column printed the wrong sign** — the comment dropped a minus, and the
+  code implemented the comment. Magnitudes and `spread`/`worst` were unaffected, but the
+  direction was wrong wherever read: the shipped placement anchors *above* the solved one
+  and renders **0.21–0.28 EV darker** (`split-default-migration`'s open question now says
+  so). The sign convention is stated at the definition.
+- The `linear-render` row `unwrap`ped the one fallible render in the loop
+  (`DisplayTone::None` refuses any sample above reference white, and the film-RGB →
+  P3-luma functional sums to 1.0000000468, so a near-white pixel can round over); a
+  refusal is now a result for that row, not a reason to lose six frames.
+- Prose no gate reads: two stale task-owner references (`output`'s epic summary and
+  `types.rs`) and this task's `How to Verify` bullet 2 being half-met without saying the
+  version bump had moved downstream. One remedy declined — the branch had zero commits, so
+  two misfiled entries were moved rather than pointed at (append-only protects what others
+  may have read; it is not a reason to make a filing mistake permanent).
 
-**The `bias EV` column printed the wrong sign.** The comment read "an anchor error `dA` in
-density is a gain of `10^(−contrast·dA)`, i.e. `contrast·dA·log2(10)` **stops**" — the gain
-is right, the "i.e." drops the minus. `stops` implemented the comment, so every bias figure
-came out inverted: the shipped placement anchors *above* the solved one and therefore renders
-**darker**, which the table reported as positive. Magnitudes (and so the 0.21-0.28 EV figure
-quoted downstream) were never affected, and `spread`/`worst` are magnitudes, so nothing
-already concluded moves — but the direction was wrong wherever it was read, including
-`split-default-migration`'s open-questions bullet, which now states "0.21-0.28 EV **darker**".
-The column's sign convention is now stated at the definition rather than left to be re-derived.
-
-**The `linear-render` row was the one fallible render in the loop and it `unwrap`ped.**
-`DisplayTone::None` refuses any sample above reference white, and the composite film-RGB →
-P3-luma functional sums to **1.0000000468**, so a near-white pixel can round over 1.0 even
-with the shoulder holding film RGB at ≤ 1.0. One such pixel would have aborted the whole
-seven-frame run instead of printing a refusal for that row. Now matched; a refusal is a
-result, not a reason to lose six other frames.
-
-Also fixed: the probe's rustdoc summary described the original two-question probe rather than
-the shipped one (three black-point rows, `crushed%`, the `linear-render` row); the scalar
-model's justification named only `linear_range` when it leans on the white-balance and
-exposure defaults too — the WB one load-bearing, since an auto mode re-estimates per candidate
-and the solve stops commuting; `SUBSAMPLE`'s raster stride is column-aliased on both fixture
-widths (documented, not changed — the assert bounds it); the placement table's rows sat two
-characters off its header; `wins` printed no denominator. Outside the probe: two stale
-task-owner references (`output`'s epic summary still said the split "explores" moving tone
-shaping out — the same sentence CLAUDE.md had already been corrected for, missed because the
-grep was run before that edit; and `types.rs` credited this task with a coupling now owned by
-`split-default-migration`), and this task's `How to Verify` bullet 2 was half-unmet on an
-`[x]` task without saying the version bump had moved downstream.
-
-**One remedy was declined.** The reviewer proposed fixing two misfiled progress entries with a
-pointer entry rather than relocating them, on append-only grounds. Checked first: the branch
-had **zero commits** and every one of those lines was a `+` in the uncommitted diff, so there
-was no committed history to preserve. Append-only protects what others may have read; it is
-not a reason to make a filing mistake permanent before it has ever been published. Moved.
 
 ## contrast-latitude-spike
 
@@ -3025,6 +1725,7 @@ not a reason to make a filing mistake permanent before it has ever been publishe
   task because the scene range was never measured, so the cause of the gap is open.
   Read the §3.8 principle before starting: the per-roll recipe is deliberate, so a
   narrower range may be the design working rather than failing.
+
 
 ## split-default-migration
 
@@ -3079,795 +1780,33 @@ not a reason to make a filing mistake permanent before it has ever been publishe
   - Nothing about the fingerprint-portability hazard changed; it is still the single most
     important thing to read before writing a `PIPELINE_FINGERPRINTS` row.
 
-## film-stock-profiles (continued — datasheet corpus and curve digitization)
-
-**Status:** done
-**Updated:** 2026-09-08
-
-- 2026-09-04 (**corpus collected; every number below is digitized from the published
-  curves, not read by eye**).
-  - **Colour C-41 (7 sheets, all usable):** Ektar 100 `E-4046`, Portra 160 `E-4051`,
-    Portra 400 `E-4050`, Portra 800 `E-4040`, Gold 200 `E-7022`, UltraMax 400 `E-7023`,
-    UltraMax 800 `E-7024`, plus the legacy five-stock Portra sheet
-    (160NC / 160VC / 400NC / 400VC / 800).
-  - **B&W (16 sheets):** Kodak TMax 100/400, Tri-X 320/400; Ilford Delta 100/400/3200,
-    FP4+, HP5+, Pan F+, SFX 200, Ortho Plus, XP2 Super; Kentmere Pan 100/200/400.
-  - **No data exists for Harman Phoenix** — its sheet carries no characteristic curve and
-    no densities at all, only ISO, a wedge spectrogram, reciprocity and lab scanner
-    settings. Phoenix is a fixture roll, so "unnamed stock resolves to generic" is a
-    first-class path, not an edge case. No Fuji in the corpus (Fuji publishes curves but
-    only sometimes a grey-card aim, and never the diffuse-white row, so no tabulated Δ).
-  - Aim values are **identical** between the Feb-2016 and Jan-2025 revisions of all five
-    current sheets. Revision drift is not a live risk; still record the revision.
-
-- **Method — the Kodak still sheets are vector art with no raster layer**, so the curves
-  digitize exactly rather than approximately. Calibrate `y` off the **plot frame** (frame
-  bottom is `D = 0.0`, top `4.0`) and `x` off the axis tick spacing. Two independent
-  extraction paths — raw PDF content stream and `pdftocairo -svg` — agree to **±0.002
-  density** where both run, and the legacy sheet's Portra 800 reproduces current `E-4040`
-  to the same tolerance from a completely different page layout. **Calibrating off the
-  axis *label baselines* instead of the frame biases every density by ~0.05** — the
-  baseline sits ~2.4 pt below the tick centre. Ilford / Harman / Kentmere sheets are
-  **raster** and Fuji's PDFs are **encrypted**; both need a different route.
-
-- **Constraint 2 is liftable for Kodak still stocks, and that unblocks the anchor
-  offset.** The 2026-08-02 values came off the *Spectral-Dye-Density* chart, which is
-  per-wavelength diffuse density — genuinely the wrong quantity. The **characteristic
-  curve is plotted in Status M** (stated on the plot; the same densitometry as the aim
-  table) and its left end is flat (rise over the first 0.3 dec ≤ 0.016; Gold 200's blue
-  instead *dips* 0.03 there, so a table built on `min(D)` would sit above the real floor —
-  enforce monotonicity from the leftmost point and take `D-min` from that), so its `D-min`
-  *is* a Status M density. That
-  makes `mid aim − D-min` — the `MidAtBaseOffset` `algo/reference-anchored-sigmoid` wanted
-  and could not ship — available at ~±0.01 rather than blocked. Provenance needs a **third
-  kind, `curve-digitized`**: folding it into `chart-read` would forbid the exact use that
-  motivates this task.
-
-  | Stock | mid aim | white aim | Δ tab | D-min R/G/B | mid−D-min | Δ curve | γ R/G/B |
-  |---|---|---|---|---|---|---|---|
-  | Ektar 100 | 0.82 ±.05 | 1.18 ±.05 | 0.36 | 0.209/0.634/0.844 | 0.611 | 0.401 | 0.608/0.589/0.656 |
-  | Portra 160 | 0.84 ±.05 | 1.20 ±.05 | 0.36 | 0.200/0.616/0.835 | 0.640 | 0.370 | 0.524/0.536/0.587 |
-  | Portra 400 | 0.82 ±.05 | 1.18 ±.05 | 0.36 | 0.220/0.647/0.867 | 0.600 | 0.376 | 0.531/0.555/0.633 |
-  | Portra 160VC | 0.87 ±.06 | 1.28 ±.06 | 0.41 | 0.219/0.645/0.860 | 0.651 | 0.391 | 0.552/0.572/0.656 |
-  | Portra 400VC | 0.87 ±.06 | 1.28 ±.06 | 0.41 | 0.219/0.646/0.867 | 0.651 | 0.392 | 0.553/0.573/0.655 |
-  | Portra 800 (EI 800) | 0.85 ±.10 | 1.10 ±.10 | 0.25 | 0.308/0.706/1.021 | 0.542 | 0.362 | 0.512/0.532/0.594 |
-  | Gold 200 | 0.95 ±.10 | 1.35 ±.10 | 0.40 | 0.251/0.657/0.991 | 0.699 | 0.383 | 0.543/0.565/0.611 |
-  | UltraMax 400 | 0.90 ±.10 | 1.30 ±.10 | 0.40 | 0.285/0.694/0.980 | 0.615 | 0.355 | 0.503/0.524/0.583 |
-
-  Red channel; `Δ curve` is the density rise over the 0.694 decades separating an 18 %
-  grey card from a ~89 % paper white, taken at the mid aim's own exposure. Supersedes the
-  provisional 0.62 / 0.67 / 0.73 offsets in `shadow_metrics::datasheet_mid_above_base`
-  (Ektar 0.611, Portra 160 0.640, Gold 200 0.699).
-
-- **Correction to this task's stated premise: Δ *is* stock-dependent, and the tabulated Δ
-  is not always trustworthy.** Three findings, in order of how much they change the plan:
-  - The legacy sheet's **NC/VC pair settles it**: 160NC/400NC give 0.82/1.18 (Δ 0.36) while
-    160VC/400VC give 0.87/1.28 (Δ 0.41) — same speed, same maker, different contrast grade
-    — and their own curves agree (γ_R 0.52–0.53 vs 0.55). Δ tracks a real design property,
-    so it is legitimate registry content. It looks constant across *today's* line only
-    because today's C-41 stocks are all similar-contrast.
-  - **Both 800-speed sheets tabulate Δ 0.25 while both their curves say ~0.36.** Their aim
-    ranges are ±0.10, so the tabulated difference carries ±0.14 — *consistent* with the
-    curve but uninformative at that width. Prefer the curve; keep the table as a check.
-  - The internal-consistency test for any new sheet: `Δ_tab / γ` must equal
-    `log10(white/mid reflectance) ≈ 0.69`. It does, to ±0.05 density, on every stock
-    **except** the two 800s (0.49).
-
-- **Aim-table tolerance bounds what any registry can buy.** ±0.05 (professional) is
-  **±0.34 EV** of exposure placement at contrast 2.07; ±0.10 (consumer) is ±0.68 EV. Store
-  the range, not just the midpoint, and don't chase precision below it.
-
-- **The per-channel structure is the one genuinely per-channel datum the sheets carry, and
-  it says `density.scale = [1,1,1]` is wrong on all eight stocks.** Blue runs 12–19 %
-  steeper than red, green 2–5 %. The plotted curves are the response to a **neutral**
-  wedge, so this is what a grey ramp looks like in nc's own `D′` (Portra 400):
-
-  | stops vs mid | −4 | −3 | −2 | −1 | 0 | +1 | +2 | +3 | +4 |
-  |---|---|---|---|---|---|---|---|---|---|
-  | D′_R | 0.035 | 0.133 | 0.287 | 0.442 | 0.600 | 0.762 | 0.926 | 1.093 | 1.262 |
-  | D′_G | 0.038 | 0.145 | 0.311 | 0.479 | 0.646 | 0.813 | 0.979 | 1.144 | 1.311 |
-  | D′_B | 0.085 | 0.247 | 0.435 | 0.624 | 0.814 | 1.005 | 1.197 | 1.390 | 1.582 |
-  | blue error after WB at mid | −0.164 | −0.100 | −0.066 | −0.032 | 0 | +0.029 | +0.057 | +0.083 | +0.106 |
-
-  White balance is a single gain, i.e. a constant density shift, so it can only zero one
-  row: anchored at mid it still leaves 0.46× blue at −4 stops and 1.66× at +4 — **1.9 EV of
-  blue swing** at contrast 2.07, warm below, blue above.
-
-- **`scale` alone cannot fix it — the channels' toes sit at different exposures**, so `D′_B`
-  is not a constant multiple of `D′_R` (the ratio drifts 1.25–2.43). The correction needs
-  the **(scale, offset) pair nc already has**. Fitted over −2…+4 stops:
-
-  | stock | scale G | offset G | scale B | offset B |
-  |---|---|---|---|---|
-  | Ektar 100 | 0.996 | −0.023 | 0.857 | −0.090 |
-  | Portra 160 | 0.975 | −0.039 | 0.863 | −0.067 |
-  | Portra 400 | 0.976 | −0.025 | 0.850 | −0.088 |
-  | Portra 160VC | 0.986 | −0.031 | 0.852 | −0.101 |
-  | Portra 400VC | 0.988 | −0.031 | 0.856 | −0.096 |
-  | Portra 800 | 0.967 | −0.058 | 0.857 | −0.004 |
-  | Gold 200 | 0.971 | −0.035 | 0.887 | −0.002 |
-  | UltraMax 400 | 0.956 | −0.045 | 0.862 | −0.012 |
-  | **generic** | **0.977** | −0.036 | **0.860** | −0.057 |
-
-  On Portra 400 that takes the blue neutral error from ±0.16 density to **≤0.011 over
-  −3…+5 stops** (−0.051 remains at −4, in the toe). **The gain is nearly stock-independent
-  (blue 0.860, range 0.850–0.887 — a 4.3 % spread on a 14 % correction); the offset is
-  not** (−0.101…−0.002, and it splits by tier: professional ≈ −0.09, consumer/800 ≈ 0). So
-  a generic `scale` is defensible for the no-stock path; a generic `offset` is not, and
-  should stay 0 unless a stock or a measurement supplies it. Where the per-channel term
-  belongs is `film-base/dmax-per-channel-reduction`; deriving it from **roll statistics** is
-  not an option — that is content-derived, and forbidden for a default for the same reason
-  the content-driven anchor was rejected.
-
-- **The leader cannot validate any of this, and there is now data saying so.** Evaluating
-  each datasheet at the exposure where its red `D′` equals the measured leader's red `D′`
-  (leader values from `reports/sigmoid-reference-baseline.md`):
-
-  | stock | leader D′_R | meas G−R | pred G−R | meas B−R | pred B−R |
-  |---|---|---|---|---|---|
-  | Gold 200 | 1.224 | +0.010 | +0.079 | +0.139 | +0.139 |
-  | Ektar 100 | 1.272 | +0.014 | +0.026 | +0.048 | **+0.322** |
-  | Portra 160 | 1.440 | −0.110 | +0.116 | −0.059 | **+0.372** |
-
-  The published divergence does not reproduce, and Portra 160's leader has **red** densest,
-  which no C-41 stock's neutral response gives. Two explanations this data cannot separate:
-  the leader's exposing light is not neutral (and it sits near the shoulder), or our
-  channel slopes are not Status M's. Either way **the leader is not a usable neutral
-  reference** — an earlier suggestion in this work to measure per-channel gamma on it was
-  wrong. More leader scans still have one specific use: with ~4–5 per stock, clustering
-  per stock would indicate something systematic while scatter would indicate the leader's
-  own exposure varying. Collect the unexposed frame alongside each.
-
-- **Curve shape — the film has a toe and essentially no shoulder in the range we scan.**
-  Local γ as a fraction of mid-scale γ, red channel:
-
-  | stops vs mid | −4 | −3 | −2 | 0 | +2 | +3 | +4 | +6 |
-  |---|---|---|---|---|---|---|---|---|
-  | Portra 400 | 0.35 | 0.87 | 0.97 | 1.00 | 1.04 | 1.05 | 1.07 | 1.09 |
-  | Portra 160 | 0.52 | 0.91 | 0.94 | 1.00 | 1.04 | 1.01 | 0.86 | 0.69 |
-  | Ektar 100 | 0.27 | 0.66 | 0.91 | 1.07 | 0.96 | 0.92 | 0.84 | 0.76 |
-
-  Real rolls measure ~1.3 density above base ≈ **+4 stops over mid**, so a scan lives
-  almost entirely on the straight line, with the film's toe active in the bottom ~1–1.5
-  stops. Two consequences: the sigmoid's default shoulder (bending from `D′ ≈ 0.70`, i.e.
-  at mid-grey) is **nowhere in the film** — it is print character, which is
-  `algo/reconstruction-render-curve-split`'s verdict with measurements behind it; and nc's
-  **toe has the wrong sign** — the film compresses shadows, so reconstruction should
-  *expand* them, while the sigmoid compresses the same region a second time.
-
-- **User decisions, 2026-09-04.**
-  - The blue highlight cast is diagnosed as **gamma, not base offset**. The signature is
-    growth with density (a base error would be a constant shift, since `D′ = scale·D +
-    offset` acts on an already base-relative `D`), and the observed cast is strong in
-    highlights and absent as a matching warm shadow. The weak shadow half is *predicted*:
-    −0.066 density at −2 stops against +0.106 at +4, and the display toe compresses
-    shadows further.
-  - The datasheet's per-channel structure is to be **tried on our scans** rather than gated
-    on a calibration.
-  - The **scanner-to-Status-M slope is postponed** (`io/scanner-density-calibration`).
-  - A ColorChecker / grey-card calibration frame is **not available**, so the per-channel
-    numbers ship as a hypothesis judged on rendered results, not as a verified transfer.
-    The one frame that would settle it — a ColorChecker whose neutral row gives six points
-    of the ramp in a single exposure — remains the cheapest unblock when it becomes
-    possible.
-
-- **Open.** Whether reconstruction should keep a parametric curve at all or invert the
-  digitized characteristic curve per channel (which would subsume `scale`/`offset`
-  entirely) — under research, and it decides whether this registry stores a handful of
-  scalars or a curve per channel, so it should settle first. The digitizer is **not
-  committed**, so today's numbers are reproducible only from the recorded publication ids
-  and revision dates. B&W is a different shape and stays with `algo/bw-support`: contrast
-  index is set by developer, time and temperature, not by the film (Tri-X's recommended
-  times target CI 0.56), so a B&W profile cannot resolve a contrast the way a C-41 profile
-  can.
-
-- 2026-09-04 (**the datasheet's per-channel structure transfers to our scans — measured,
-  21 frames**). `algo::curve_probe` (test-only, asset-gated) bins interior pixels by red
-  corrected density and measures how the blue-minus-red log exposure ratio **drifts across
-  the bins** after normalising at the middle bin — which is what a white balance does, so
-  a scene-colour bias shifts every bin together and cancels, leaving only the drift. Both
-  paths run on identical pixels of identical frames: `scalar` is one contrast for all three
-  channels (what nc does today), `curve` is each channel through its own published inverse.
-
-  | | scalar | curve | datasheet predicts |
-  |---|---|---|---|
-  | blue drift slope, stops per unit density | **+1.26** | **+0.09** | **+1.29** |
-  | ektar-100 (n=3) | +1.22 | +0.13 | +1.23 |
-  | portra-160 (n=8) | +1.18 | +0.15 | +1.11 |
-  | portra-400 (n=7) | +1.24 | −0.07 | +1.62 |
-  | gold-200 (n=3) | +1.54 | +0.29 | +1.07 |
-
-  The scans carry **90 %** of the divergence the datasheets claim (81–117 % per stock), and
-  inverting the published curves removes it: the residual slope is ~0 on every stock. This
-  is the measurement the missing ColorChecker frame was going to provide, obtained from
-  ordinary picture content instead — and it retires the objection that the leader raised,
-  since the leader failed only because it is not a neutral exposure.
-- **Read the slope, not the swing.** The raw max−min swing improves only 26 % (1.76 → 1.30
-  stops) and two frames of 21 get worse, because the swing is dominated by real scene colour
-  that varies with luminance and no probe can subtract it. Per-frame slopes scatter from
-  −3.7 to +4.8 for the same reason. Only the **mean slope** is the film's signature, and it
-  is what the datasheet predicts to within 2 %.
-- Consequence for the design: the blue highlight cast is quantified — **+1.26 stops per unit
-  corrected density** — and it is a *film property nc was not modelling*, not a scanner
-  artefact. `density.scale`/`offset` could approximate it; inverting the curve removes it by
-  construction, and also fixes the toe, which no scale/offset pair can.
-
-- 2026-09-04 (**shipped: the `characteristic` curve — reconstruction by inverting the
-  published response, opt-in, no default moved**). `--density-curve characteristic`
-  (recipe `reconstruction.curve = {"type": "characteristic", "stock": …}`) selects
-  `algo::film_stock`, which inverts each dye layer's digitized curve per channel. Nine
-  stocks ship in `algo/film_stock/curves.rs` — the eight measured plus `generic-c41`, the
-  average of them (red mid-scale γ 0.541, mid-grey 0.624 above base; the per-stock spreads
-  are 0.50–0.61 and 0.54–0.70, and ACES's own generic model sits at 0.55 / 0.70).
-- **It is the ACES film-scan transform with per-stock data.** Reading the actual
-  `ADX10 → ACES` source settled the shape question: per-channel density → cross-channel
-  matrix → per-channel curve inverse (a toe LUT below a threshold, a straight line above)
-  → `10^` → matrix, with **no tone curve anywhere**. Its two free numbers — an implied film
-  gamma of `100/55 = 0.55`, and mid-grey pinned at printing density **0.70 above the film
-  base** (the constant `(7120−1520)/8000` in `REF_PT`) — are a *generic* film model that our
-  per-stock measurements bracket. So the design is not novel; what nc adds is the stock's
-  own data in place of the generic. The cross-channel matrix is the one element **not**
-  implemented: it is the scanner-to-Status-M correction, deferred with
-  `io/scanner-density-calibration`, and ST 2065-2's NOTE 3 says its form is a "3 × 3 matrix
-  transformation followed by an offset", product-specific and "likely imperfect".
-- **The curve is self-anchoring, and that is what removes the knobs.** Each table's
-  log-exposure axis is shifted so the stock's own mid-grey aim sits at `log10(0.18)`, so
-  `10^(curve⁻¹(D′))` is relative scene exposure with mid-grey at 0.18 by construction. There
-  is therefore no `dmax` to resolve and no `AnchorPlacement` to apply — `DensityCurve::anchor()`
-  returns `Option` for exactly this reason, and the report emits `null` rather than naming a
-  rule the render never read.
-- **Every parametric knob is refused, not ignored**, each naming a remedy that branch
-  accepts: `--d-max`/`--auto-d-max` (by **flag presence**, in `validate_convert` — `merge`
-  has nowhere to write them and a resolved value cannot tell "asked for fixed" from "left at
-  the default"), `--sigmoid-*`, `--anchor-*`, `--density-gamma`, and `stock` under either
-  parametric curve. `--density-gamma`'s remedy is `--density-curve exponential`, not
-  `sigmoid` — the curve that actually has a gamma. A test asserts each message offers a
-  route the curve does not itself refuse.
-- **Roll-fixed like the base and the reference.** `sets_curve_stock` is the fifth
-  roll-consistency probe: a per-frame `curve.stock` override converts, but warns loudly and
-  `--strict` promotes it. It is the most literally roll-fixed key in the recipe — it names
-  the film that was in the camera.
-- **Out-of-table samples extrapolate along the end slope and are counted**, never clamped:
-  clamping would fold them onto one exposure and invent a flat patch. The per-channel
-  fractions ride in the report; the warning threshold was set from measurement (see the
-  next entry, which corrects a first pass at 1%).
-- **No default moved and no fingerprint bumped.** `nc params` still resolves the sigmoid;
-  the drift gate is untouched. Adding a variant to the tagged enum is additive, so
-  `reconstruction.schema_version` stays 1 and every archived recipe still loads.
-- Verification: 894 tests green (fmt / clippy `-D warnings` / build / test, plus the
-  `nctool` suite and `cargo doc` at its 16-link baseline). The load-bearing tests are
-  property-based rather than golden bit vectors — **a neutral exposure ramp run forward
-  through each stock's own curves and reconstructed must return to the exposure it started
-  from, on every stock and every channel.** Curated per-pixel goldens were deliberately not
-  added: CLAUDE.md records that only the *existing* vectors are known to agree across libm,
-  and a new bit-exact vector would be a coin flip on the Linux CI runner. Same-machine
-  bit-identity is covered instead by the recipe round-trip test.
-- **Two traps worth recording.** Serde's `kebab-case` renames `Portra400` to `portra400`
-  (it splits on case boundaries, and there is none before a digit), which gave the recipe a
-  *different* spelling from the CLI flag — the emitted recipe would not have loaded back.
-  `FilmStock` now implements `Serialize`/`Deserialize` by hand against one `as_str`/`parse`
-  pair. And clippy's `approx_constant` fires on the digitized coordinate `0.78539` because
-  it is near π/4; the module allows the lint with a comment, since "use the constant
-  directly" would replace a measurement with an unrelated number.
-
-- 2026-09-04 (**the out-of-table warning was a false alarm on every real scan; corrected,
-  and one proposed fix measured and abandoned**). Shipped at a 1% threshold, it fired on
-  every full-frame fixture (5.2–7.2%). Three measurements settled what it is and is not:
-  - **It is the scan's border.** `curve_probe::out_of_table_provenance` splits the frame:
-    on twelve frames across four rolls, **100% of out-of-table samples lie in the outer 12%
-    and 0.00% inside the picture**. The holder and rebate are denser than any exposed image.
-  - **The fix I proposed first does not work.** The plan was to exclude samples sitting on
-    the decoder's `SCAN_EPSILON` transmission clamp, on the assumption (recorded in
-    CLAUDE.md) that the holder lands there. Measured: **0.00% of the frame is at the floor**.
-    The holder is merely very dense, not clamped. Implementing it would have shipped a
-    no-op — the reason to measure a premise before building on it.
-  - **The statistic cannot diagnose what the message claimed.** Rendering one Ektar frame
-    under all seven distinct stock profiles moved it only 5.75%→6.55%, because every C-41
-    table ends within ~0.2 density of the others; a **30% wrong film base** moved it
-    6.00%→6.44%. So "usually means the declared stock or the film base is wrong" was a
-    promise the number cannot keep.
-  - Corrected: threshold **0.20** (a floor above the measured border cost, not a tuned
-    value), the message states the fact instead of diagnosing, and the per-channel fractions
-    are reported **unconditionally** in `reconstruction_result.curve.out_of_table` so the
-    data is available without the noise. The statistic that *would* diagnose a wrong stock
-    or base is the **interior** fraction — 0.00% on every fixture — which needs a resolved
-    picture region and belongs to `algo/auto-anchor-interior-measurement` (or IR-based
-    border detection). Once that lands, this whole-frame figure can be dropped.
-
-- 2026-09-06 (**registry made re-derivable; a tenth stock; one provenance error found and
-  fixed**). The datasheets are now **in-repo** (`docs/datasheets/`, 7.7 MB, 24 files) with a
-  committed digitizer (`scripts/analysis/digitize_datasheets.py`). The chain is
-  `PDF → curves.json → curves.rs`, split the way `pipeline/colorimetry/` splits its own:
-  extraction needs poppler and is run by hand, while **the audit
-  (`curves_match_the_digitized_json`) needs neither poppler nor network and runs in CI**, so
-  the pinned literals cannot drift from the extraction. Verified falsifiable by perturbing
-  one point: the test names the stock, channel and index.
-- **A publication id was wrong in the shipped data.** `portra-160vc` / `portra-400vc` were
-  recorded as `E-4022`, which I had invented — the legacy five-stock Portra sheet is
-  **E-4040 (2009-02)**. Kodak later reused that number for the current Portra 800 sheet, so
-  **`publication` alone is not an identifier**; the `(publication, revision)` pair is, which
-  is why both ride in the report. Exactly the class of error committing the sources exists
-  to catch.
-- **`ultramax-800` now digitizes**, taking the registry to ten. Three extractor faults had
-  to be fixed, each silent:
-  - the SVG parser dropped paths with fewer than three points, so a plot frame drawn as
-    four straight lines was invisible — that is Portra 400's layout, which had been read
-    through a second (content-stream) path until now;
-  - subpaths were concatenated, so one `<path>` holding two dye curves became a single
-    doubling-back polyline whose green channel reduced to two usable points;
-  - the 2007 sheet draws each curve as dozens of short subpaths, so after splitting they
-    must be **stitched** back by endpoint matching.
-  Every other stock's tables are byte-identical across all three fixes, which is the
-  evidence that they were extractor bugs rather than a change of method.
-- **UltraMax 800 and Portra 800 digitize to the same curve** — D-min 0.308/0.706/1.021
-  against 0.308/0.706/1.021, per-channel gamma within 0.003, curve Δ 0.360 against 0.362 —
-  from different publications, years and pages, extracted independently. Either the two
-  films share a response or Kodak reused the artwork; as evidence it is an independent
-  check on the extraction. It also explains why *both* 800-speed sheets carry the anomalous
-  tabulated Δ 0.25 against their own curves' ~0.36.
-- Coverage closed: **every** stock now round-trips through an emitted recipe byte-for-byte
-  (a single-stock test would have passed while nine spellings were unloadable), and the
-  characteristic curve joined `film_master_render_works_for_every_reconstruction_path`.
-- One verification bullet in the task file was **retired rather than ticked**: "omitting the
-  stock renders identically to the pre-task default" died with the shape change, since
-  `generic-c41` is a different curve and is meant to differ. The invariant that matters —
-  a bare `nc convert` is unchanged — is pinned by the unmoved drift-gate row.
-
-- 2026-09-06 (**user review: the blue cast is gone, a green one is left — and the
-  re-derivation it seemed to call for was unnecessary**). Ten frames × six configs
-  reviewed. Verdict: the characteristic curve keeps detail and fixes the blue cast; the
-  shoulder display tone loses highlight detail on it (config 6 rejected). The remaining
-  fault is a **green cast**, and the user's per-frame notes ranked the stocks — Ektar worst
-  ("obvious"), Portra 160 and 400 slight, **Gold 200 clean** — with `generic-c41` looking
-  *better* than the per-stock profile on the bad stocks and *worse* on Gold.
-- **The measurement reproduces that ranking exactly.** `channel_drift`'s slope metric,
-  extended from blue to green:
-
-  | stock | green: scan | datasheet predicts | **residual** | blue residual |
-  |---|---|---|---|---|
-  | ektar-100 | +1.26 | +0.22 | **+1.00** | +0.13 |
-  | portra-160 | +0.88 | +0.40 | **+0.48** | +0.15 |
-  | portra-400 | +0.65 | +0.46 | **+0.18** | −0.07 |
-  | gold-200 | +0.41 | +0.36 | **+0.08** | +0.29 |
-
-  Stops per unit density. **This corrects the 2026-09-04 claim that the cast is removed**:
-  that measured *blue*, the channel where the effect was largest, and blue does transfer
-  (residual ≈0.1). Green does not, and a green/magenta error has no warm/cool reading the
-  eye forgives, so it reads as a cast where an equal blue residual would not. Measure the
-  channel that matters perceptually, not the one with the biggest number.
-- **The datasheets get green *ranked wrong*, so this is not a transcription fault.** Ektar's
-  sheet predicts the *smallest* green divergence of the four (+0.22) while its scans show
-  the *largest* (+1.26). Before concluding that, the extraction was checked by running
-  Ektar through **two independent paths** — the raw PDF content stream and `pdftocairo`'s
-  SVG — which agreed to **0.004** on all three channels' gamma and to three decimals on
-  every `D-min`. The digitization is right; re-deriving would have changed nothing. The
-  first hypothesis (a sparse-bézier reading error, since Ektar's red curve has 18 control
-  points against Portra 160's 241) was wrong, and the x-axis calibration was checked too:
-  37.16 pt/decade against Portra 400's 37.29, a 0.3% difference, not the 15% needed.
-- **Two sheets disagree with themselves, and there is now a test for it.**
-  `aim_table_agrees_with_the_curve` checks each sheet's two independent halves against each
-  other, comparing the curve's own density rise across **exactly the interval the two aims
-  span** with the tabulated difference. Measured: Portra 160 +3%, Portra 400 +6%, Gold 200
-  −5%, the VC pair −4/−5% — and **Ektar 100 +11%**, **UltraMax 400 −11%** (the 800s, whose
-  tabulated Δ is separately known bad, come out +44/+45% and are exempt). The two failures
-  are named in the test with their measured figures at ±1 rather than hidden behind a loose
-  tolerance.
-- **The first version of that metric was window-sensitive, and it produced two figures I
-  had already reported.** Measuring gamma over ±0.35 decade around mid-grey and dividing
-  the tabulated Δ by 0.694 gave Ektar −15% and a `γ_G/γ_R` of **0.970** — "the only
-  sub-unity value in the corpus". Widening the window to ±0.5 decade moves Ektar to
-  **1.002** and leaves every other stock unchanged to three decimals, which is what exposed
-  it: Ektar's curve has local structure right where that narrow window sat. Interval-matched
-  quantities have no such freedom, so the test now compares Δ against Δ. Ektar's sheet is
-  still the outlier — it draws red and green nearly parallel (1.002 against everyone else's
-  1.02–1.05), which is why it predicts the *least* green divergence of the four stocks where
-  the scans show the *most* — but the anomaly is "unusually parallel", not "inverted", and
-  the self-inconsistency is 11%, not 15%. Its aim table being digit-for-digit Portra 400's
-  stands.
-  The test is **not** a predictor of rendered colour — Portra 160 passes at −1% and still
-  casts +0.48 — and its doc comment says so, so nobody reads a pass as a promise.
-- **What the green residual most likely is.** It varies per stock (+0.08…+1.00) and in an
-  order the datasheets do not predict, so it is not a fixed scanner-gamma error. The
-  leading hypothesis is the **cross-channel term** — the one stage of the ACES film chain
-  deliberately not implemented: `CDD → CID`, a 3×3 that removes each dye's unwanted
-  absorption *before* the per-channel curves. Its magnitude depends on the dye set and mask,
-  which is exactly the stock-dependence seen; blue happens to survive per-channel treatment
-  and green does not. ST 2065-2 NOTE 3 independently says the scanner↔standard-density
-  transform is a "3 × 3 matrix followed by an offset", **product specific** and "likely
-  imperfect". That routes to `io/scanner-density-calibration`, and it still needs one
-  known-neutral frame to fit.
-- Interim consequence for anyone using this today: on the reviewed rolls `generic-c41`
-  renders *better* than the matching per-stock profile on Ektar and Portra, not because the
-  generic is better data but because averaging nine curves dilutes any single sheet's error
-  ninefold — and correspondingly *worse* on Gold 200, whose own sheet is the cleanest. That
-  is a reason to fix the cross-channel term, not to prefer the generic.
-- The published aims now ride in `curves.json`, the pinned table and the report
-  (`stock.aims`), since they are the most directly checkable numbers on a sheet.
-
-### 2026-09-08 — close-out
-
-**What landed.** Reconstruction can now invert a film stock's *published* response instead
-of modelling it: `--density-curve characteristic` + `--film-stock` (recipe
-`reconstruction.curve = {"type":"characteristic","stock":…}`), ten stocks digitized from
-the publications now kept in `docs/datasheets/`, provenance and out-of-table fractions in
-the report, roll-fixed with a `--strict`-promotable per-frame warning, and every parametric
-knob refused rather than ignored. **Opt-in throughout — no default moved and no fingerprint
-bumped**, so a bare `nc convert` is byte-identical to before.
-
-**Verified.** Blue's exposure-dependent cast, the defect that motivated the shape, is
-removed: the drift falls from +1.26 to +0.09 stops per unit density against +1.29 predicted
-by the datasheets (21 frames, 6 rolls, 4 stocks). A neutral exposure ramp run forward
-through each stock's own curves reconstructs back to the exposure it started from on every
-stock and channel. All ten stocks round-trip through an emitted recipe byte-for-byte. The
-user's ten-frame visual review confirmed the blue fix and that detail is kept.
-
-**The approach that worked, and why.** Reading the ACES `ADX10 → ACES` source first, before
-writing anything, is what made this cheap: the shape (per-channel density → cross-channel
-matrix → per-channel curve inverse → `10^` → matrix, no tone curve) was already standard,
-and its two free constants — film gamma 0.55, mid-grey 0.70 density above base — sit inside
-what our per-stock measurements bracket. nc's version is that transform with the stock's own
-data substituted for ACES's generic model, minus the cross-channel matrix.
-
-**What a dependent task must know.**
-
-- **The cross-channel matrix is the one stage deliberately not implemented**, and it is
-  where the remaining green residual (+0.40 mean, +1.00 on the Ektar roll) most likely
-  lives. `io/scanner-density-calibration` owns it. Fitting it needs a **known-neutral
-  target on film**; no datasheet correction substitutes — arithmetic on the Ektar case
-  shows replacing its anomalous channel relationship with the corpus consensus would move
-  its residual only +1.00 → +0.87.
-- **Do not read the per-stock or per-roll residual breakdown as established.** Frame-to-
-  frame scatter is sd 0.3–1.6 at n=3–4, and one roll spans −1.88…+2.03. Only the 21-frame
-  aggregate and Ektar's roll (sem 0.17, all three frames ≥ +0.83) are solid. Two claims in
-  this log were retracted for exactly this reason; resolving a 0.3 difference needs ~11
-  frames per roll.
-- **`generic-c41` currently renders better than the matching profile on some stocks**,
-  because averaging nine curves dilutes any one sheet's error. That is a reason to fit the
-  matrix, not to prefer the generic.
-- **Two sheets disagree with themselves** (Ektar 100 +11%, UltraMax 400 −11% between aim
-  table and curve), pinned by `aim_table_agrees_with_the_curve`. It is a sheet-quality
-  check, **not** a predictor of rendered colour — Portra 160 passes at +3% and still casts.
-- **The registry stores curves, not scalars.** Anything wanting per-stock *parameters*
-  (`film-base/dmax-per-channel-reduction`'s generic `density.scale`/`offset`) should read
-  the measured values from the 2026-09-04 entries rather than re-derive them.
-- Measurement discipline this task paid for twice: **measure the channel that matters
-  perceptually, not the one with the biggest number** (blue was fixed while green was not,
-  and green is where the eye is unforgiving), and **match intervals when comparing two
-  published quantities** (a ±0.35-decade gamma window manufactured a 15% error and a
-  spurious sub-unity `γ_G/γ_R`).
-
-### 2026-09-09 — the sigmoid's `density.scale` default: the datasheet value is the wrong one, but `[1,1,1]` is not the answer either
-
-Measured on the scalar (sigmoid) render path over 21 real frames from six rolls:
-`algo::curve_probe::sigmoid_scale`. Drift is the least-squares slope of each channel's log2
-exposure ratio against red density, normalised at the middle bin — a pure tilt in stops per
-unit density, 0 neutral, and an offset cannot move it.
-
-The scalar path leaves `contrast · (D'_c − D'_R)`, so with `D'_c = s_c · D_c` each channel's
-drift is **exactly linear in that channel's own scale**:
-`drift_c(s) = (contrast / log10 2) · (s_c · r_c − 1)` with `r_c = dD_c/dD_R` the scan's own
-slope ratio. One measurement per frame therefore determines every candidate; the probe
-verifies the closed form against real re-renders at two scales on every frame (worst
-disagreement 0.017 stops/density).
-
-Measured `r`: **green 1.115, blue 1.183** — so the corpus nulls at green 0.897, blue 0.845.
-
-| scale | green | blue | **green–magenta** | \|g–m\| | rolls within ¼ |
-|---|---|---|---|---|---|
-| `[1, 1, 1]` (shipped) | +0.79 | +1.26 | +0.16 | 0.60 | 1/6 |
-| `[1, 0.977, 0.860]` (datasheet generic) | +0.61 | +0.12 | +0.55 | 0.73 | 2/6 |
-| `[1, 0.90, 0.86]` | **+0.02** | **+0.12** | **−0.04** | 0.53 | 2/6 |
-| `[1, 0.897, 0.845]` (corpus null) | −0.00 | +0.00 | −0.00 | 0.52 | 1/6 |
-| `[1, 0.905, 0.905]` (equal slopes) | +0.06 | +0.49 | −0.18 | 0.57 | 2/6 |
-
-**The figure of merit is not each channel's drift magnitude.** `G−R` and `B−R` are not
-perceptually independent: when both tilt together the result reads as a colour-temperature
-drift (warm shadows, cool highlights), which the eye attributes to the light. The
-unforgiving axis is green–magenta, `(G−R) − (B−R)/2`. A scale can shrink both per-channel
-drifts while making *that* worse — which is exactly what the datasheet-derived scale does
-(+0.16 → +0.55, worse on 4 of 6 rolls), because the sheets correct blue well and green
-badly, so nulling blue un-masks a green tilt that was riding inside a larger, more forgiving
-temperature tilt.
-
-**Why the datasheets split that way, quantitatively.** Predicted blue drift +1.29 against a
-measured +1.26 (98%); predicted green +0.39 against a measured +0.79 (49%). The blue term of
-the published fit does real work; the green term corrects about half of what is there. Same
-split `channel_drift` found, and the same reason the characteristic curve leaves a green
-residual.
-
-**Recommended default: `[1, 0.90, 0.86]`.** It is the only candidate that nulls *both*
-per-channel drifts, and its two halves have the right provenance each:
-
-- **blue 0.860 from the datasheets**, where the published structure reproduces at 98% and is
-  therefore independently corroborated rather than fitted to our corpus;
-- **green 0.900 from the scans**, because the published green structure demonstrably does not
-  transfer, so the sheet's 0.977 is the one number in the fit known to be wrong here.
-
-Preferred over the raw corpus null `[1, 0.897, 0.845]` for that reason: the two differ by
-0.01 stop/density on every aggregate, and 0.860 is the better-evidenced blue.
-
-**What it does not fix, and this is the load-bearing caveat.** The green–magenta *mean* goes
-to zero but the magnitude barely moves (0.60 → 0.53) and only 2 of 6 rolls land within a
-quarter stop per density of neutral, because the residual is dominated by **per-roll
-scatter** no single constant can remove:
-
-| roll | shipped | `[1, 0.90, 0.86]` |
-|---|---|---|
-| Ektar | +0.65 | +0.41 |
-| Portra160-2026-07-22 | +0.08 | −0.09 |
-| Portra160 | +0.49 | +0.24 |
-| Portra400 | +0.50 | +0.26 |
-| Portra400-leica-flaw | −0.32 | −0.47 |
-| 2026-07-24-Gold200 | −0.36 | −0.50 |
-
-Four rolls improve, two get worse — the two already on the magenta side, which the
-correction over-shoots. So this is a better default, not a fix.
-
-**And it is a scanner calibration wearing a film default's clothes.** The two nulling scales
-came out close (0.897, 0.845) against datasheet values that are far apart (0.977, 0.860): in
-our scans green and blue are *both* ~11–18% steeper than red, where the sheets say green is
-barely steeper at all. An excess that lands on both channels against red is the signature of
-something in the scan/decode/base path, not of film chemistry. `io/scanner-density-
-calibration` is the real fix; this constant is the honest interim, and it should be labelled
-as calibrated on one scanner and one six-roll corpus rather than as a property of C-41.
-
-Note the prohibition recorded on 2026-09-05 — "deriving it from roll statistics is not an
-option, that is content-derived" — does **not** bar this. It bars deriving a value *per run*
-from the frame being converted, which is what made the content-driven anchor unacceptable. A
-constant calibrated once from a corpus and pinned in the source is a calibration like any
-other; what limits it is generality, not determinism.
-
-**Two corrections to the first version of this entry, both mine:**
-
-- It recommended leaving the scale at `[1, 1, 1]`. That treated the choice as binary —
-  shipped versus the datasheet value — when the green scale is a free parameter. Reducing it
-  further nulls both drifts, which neither candidate did.
-- It reported the scan-nulling scales as 0.912 (green) and 0.904 (blue), averaged from the
-  per-frame nulls. The corpus null is `1 / mean(r)`, not `mean(1 / r)`; by Jensen those were
-  biased high, and applying 0.904 left blue drifting +0.48 — which is visible in the
-  superseded run as a number that should have nulled and did not.
-
-**Correction — the flat level is NOT a non-issue, and an earlier version of this entry said
-it was.** The claim rested on whole-image means from `nc convert --output-preset display-p3`
-across three rolls, which moved ≤0.010 stop in green and ≤0.060 in blue. That measurement
-was bad: two of the three frames sat near clipping, where a mean cannot move. Measured
-properly on a mid-grey patch
-(`pipeline::stages::midtone_placement::the_default_gain_shifts_per_channel_level_on_both_curves`)
-the gain moves per-channel **level** by:
-
-| curve | R | G | B |
-|---|---|---|---|
-| characteristic | −0.061 | −0.371 | −0.565 |
-| sigmoid | −0.080 | −0.413 | −0.672 |
-
-i.e. green lands ~0.31 and blue ~0.50 stop below red — a strong yellow shift, not a
-rounding error. The reason the drift probes could not see it is structural: they normalise
-at the middle bin, which *defines away* the level. A per-channel **scale** is a tilt about
-`D = 0`, so at any non-zero density it moves the level too. This is exactly what the
-2026-09-05 entry above already said — "`scale` alone cannot fix it … the correction needs
-the (scale, offset) pair nc already has" — and dismissing the offset as "the loose half"
-was the error.
-
-### 2026-09-09 — `density.scale` default changed to `[1, 0.90, 0.86]` (`pipeline_version` 4), and it splits the two curves
-
-Implemented as asked, and then measured end-to-end, which surfaced a fork the drift analysis
-above could not see.
-
-**On a patch that is neutral in the scene** — the datasheet mid-grey for Portra 400, whose
-three densities are the published ones at the grey aim's exposure — the delivered spread
-(max per-channel deviation from the mean) is:
-
-| curve | identity gain | `[1, 0.90, 0.86]` |
-|---|---|---|
-| sigmoid | 0.545 | **0.327** |
-| characteristic | **0.000** | 0.194 |
-
-**So the same constant is a 40% improvement on one curve and a pure regression on the
-other**, and the reason is structural rather than a tuning accident:
-
-- the sigmoid applies one scalar contrast to every channel, so it has no per-channel film
-  model at all — the gain has to cover both the film's channel structure *and* the scanner
-  residual;
-- the characteristic curve already removes the film half through each stock's published
-  tables, and on a datasheet neutral it is **exactly** neutral (spread 0.0000). The same
-  gain then corrects a second time.
-
-The decomposition is clean and worth keeping: the sigmoid path drifts green +0.79 / blue
-+1.26 stops per unit density, the characteristic path +0.40 / +0.09. The difference
-(+0.39, +1.17) is almost exactly what the sheets predict (+0.39, +1.29) — so the curve does
-remove the published structure, and what is left is a scanner residual no datasheet
-contains. **That also corrects the "the sheets fail on green" reading above**: the sheets
-predict green structure correctly; what they do not contain is an *additional* scanner
-residual that happens to be about the same size in green, which on the sigmoid path makes
-the published value look like it under-predicts by half.
-
-The characteristic path's own nulling gain is therefore about `[1, 0.938, 0.985]`, not the
-shipped default.
-
-**Open: how the two curves should get different defaults.** `density.scale` is a
-`DensityParams` field, a sibling of the curve, so there is no per-curve slot for it today —
-unlike `anchor`, where each curve struct carries its own default. The candidate mechanism is
-to make the field resolve from the curve when unstated (the `film_base.source` precedent),
-emitting the resolved value into the recipe so determinism is unaffected. Held pending the
-visual review, because if the eye finds the over-corrected characteristic render acceptable
-the mechanism is not needed.
-
-**What landed:** `PIPELINE_VERSION` 3 → 4 with a new fingerprint row (`render`
-`323499bad6c71237`, `recipe` `72e424ee6a15d53b`; `base` unchanged, since the gain is applied
-downstream of film-base estimation). `golden_new_default_is_bit_identical` recaptured — red
-is bit-identical on all five vectors and only green and blue move, which is the shape a
-per-channel gain should produce. Every frozen/reference-derived golden now states
-`frozen_density()` (an explicit identity gain) so a future default cannot silently rewrite
-what those captures verify, and the tests that assert the `D = −log10(scan / base)`
-definition or auto-WB's robustness likewise state the identity — a per-channel gain is a
-calibration, not part of either property.
-
-### 2026-09-09 — `density.scale` becomes a **per-curve** default, and two seam bugs fell out
-
-The user's intent was to fix the sigmoid, not to change the characteristic path; the global
-default did both. Split as asked, following the `anchor` precedent — that knob is also
-schema-shared by two curves and also per-curve in *meaning*.
-
-**The rule.** `DensityParams::default_scale_for(DensityCurveType)` is the single definition:
-`[1, 0.90, 0.86]` for `sigmoid`/`exponential`, `[1, 1, 1]` for `characteristic`. It is
-resolved at three places, and each needed its own mechanism:
-
-1. **A recipe that omits `density.scale`** — resolved in `Reconstruction`'s `Deserialize`.
-   Presence has to be read off the raw JSON object: the field is a concrete `[f32; 3]`, so
-   once serde has built a `DensityParams` an absent key and an explicit `[1, 1, 1]` are the
-   same value. Both halves are pinned, because losing either is a silent colour change.
-2. **`--density-curve`** — the merge arm resets the gain to the target curve's default.
-   Load-bearing ordering: the curve arm runs *before* the `--density-scale` arm, so an
-   explicit gain still wins on the same command line. Reversed, a stated gain would be
-   silently overwritten.
-3. **A per-frame `roll` overlay** — reset by hand in the planner, because the overlay is
-   JSON-merged onto the *serialized* shared config, where `density.scale` is always present
-   and the deserialize-time resolution cannot fire. `sets_density_scale` is the key probe
-   that keeps the reset from overriding an overlay that states one.
-
-`curve_switch_dropped_density_scale` warns when a reset discards a value that was **not**
-its own curve's default, and stays quiet when it swaps one documented default for another —
-the same false-positive discipline as the anchor warning, which exists so the warning stays
-worth reading.
-
-**Two defects the seam was hiding, both found by testing the roll path rather than reasoning
-about it:**
-
-- **Switching a frame to `characteristic` was impossible from a roll manifest.**
-  `internally_tagged_switch` carries the roll's `dmax` across a curve switch (correct: it is
-  a roll calibration, not a curve knob) but did so unconditionally, and `characteristic` has
-  no `dmax` key — so the merged object was rejected with "`dmax` is a parametric-curve key",
-  blaming the user for a key the merge itself had inserted. There was no override text that
-  worked. Now gated on `DensityCurveType::takes_dmax`. The function's own doc still listed
-  the curve variants as `exponential`/`sigmoid`, which is how the third one slipped past.
-- **The roll overlay carried the sigmoid's gain onto the switched curve**, for the
-  serialization reason above. `roll_per_frame_curve_switch_resolves_that_curves_own_density_gain`
-  covers both end-to-end, and was verified falsifiable by disabling the reset (it fails with
-  `[1, 0.9, 0.86]` against the expected `[1, 1, 1]`).
-
-**Evidence for identity on the characteristic curve**, all measured rather than argued:
-
-| what | identity | `[1, 0.90, 0.86]` | its own solved gain |
-|---|---|---|---|
-| datasheet-neutral patch, delivered spread | **0.0000** | 0.194 | — |
-| ten reference frames, \|G/R−1\|+\|B/R−1\| | **0.039** | 0.185 | 0.047 |
-
-Note the third column: the characteristic path's own nulling gain (`[1, 0.938, 0.985]`,
-solved from its measured +0.40 / +0.09 drift) is *also* worse than identity on real frames.
-So the residual is not worth chasing with a scale at all, and it stays visible for
-`io/scanner-density-calibration` to own rather than being half-absorbed by a curve default.
-
-**Not done, deliberately:** nothing prevents code from constructing
-`Reconstruction::Density { density: DensityParams::default(), curve: Characteristic }`
-directly — the resolution lives in the recipe and CLI paths, not in the type. The two
-call sites that build a characteristic reconstruction in-crate state their gain explicitly
-and say why (`pipeline::stages::midtone_placement`). A constructor that resolved it would be
-the tighter design if a third call site ever appears.
-
-### 2026-09-09 — five conversion presets scoped, and two calibration traps found while scoping them
-
-`--preset` is filed as `algo/conversion-presets` (task file + `docs/TASKS.md` entry, graph
-node and canonical dependency). What follows is the evidence gathered while defining the
-five, because each item removed a candidate design.
-
-**All five are calibrated to one target, not five tastes.** The target is scene mid-grey
-(0.18) delivered at 0.223 — the brightness approved this round — and each preset's
-`print_exposure` is whatever lands it there. Measured on a datasheet mid-grey patch
-(`midtone_placement::each_candidate_look_needs_its_own_print_exposure`, which fails if the
-spread ever collapses to where one shared default would serve):
-
-| preset | reconstruction | tone | delivers | needs |
-|---|---|---|---|---|
-| `characteristic-stock` | characteristic, the stock | reinhard | 0.1800 | +0.31 |
-| `characteristic-generic` | characteristic, `generic-c41` | reinhard | 0.1702 | +0.39 |
-| `sigmoid-flat` | sigmoid, no knees | reinhard | 0.1461 | +0.61 |
-| `sigmoid-knees` | sigmoid, toe/shoulder | none | 0.1372 | +0.70 → **impossible** |
-
-**Trap 1: `sigmoid-knees` cannot use `print_exposure` at all, and the reason is
-structural.** `--display-tone none` is self-policing on the render's ceiling, while
-`print_exposure` is a scalar gain applied *after* the curve — so any positive value pushes
-the shoulder's bounded output past reference white and the frame is refused. Measured on a
-real Ektar scan at the +0.70 the table calls for: *"pixel 0 sits above reference white
-(luminance 1.6236235)"*, which is exactly `2^0.70`. The knobs are incompatible by
-construction, not by tuning. The anchor is the knob that works, because it moves mid-grey
-*within* the bounded range instead of scaling the range: swept in
-`midtone_placement::the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor`,
-`mid-fraction 0.42` lands the target to 0.027 stop and renders clean on the real frames
-(the shipped default is 0.50). So a preset cannot assume brightness always lives in one
-knob.
-
-**Trap 2: the aim-matched red scale is a reciprocal, and getting it backwards doubles the
-error.** `curve_probe::stock_table_variants` prints the factor that scales the **table's**
-red density (Ektar 0.898); `--density-scale` multiplies the **scan's** density before the
-table is inverted, so the flag takes `1/k = 1.114`. Both directions measured on 21 frames
-(`curve_probe::scale_against_the_characteristic_curve`), because the number alone does not
-say which it is:
-
-| red scale | green | blue | green–magenta |
-|---|---|---|---|
-| identity | +0.40 | +0.09 | +0.35 |
-| 0.898 (table-side) | +1.10 | +0.77 | **+0.72** |
-| 1.114 (as the flag) | −0.25 | −0.52 | **+0.01** |
-
-The reciprocal is not just correct but the flattest green–magenta of anything measured on
-this path. Once `--preset` derives it from the shipped aim tables the four per-stock
-constants disappear rather than moving into the preset table — `portra-800` and
-`ultramax-800` must then be refused, having no usable aim delta.
-
-**Also fixed while measuring: the survey harness was double-correcting.** `midtone_placement`
-built its characteristic cases with `DensityParams::default()`, i.e. the parametric curves'
-gain on top of a curve that already carries per-channel structure — worth ~0.06 stop, and it
-made the characteristic rows read dark for a reason unconnected to what the table measures.
-It now resolves the gain from the curve, as the recipe and CLI paths do.
-
-**The review set is the acceptance test for the mechanism, and it exists first.**
-`scripts/preset-review/generate.py` (renamed from `density-scale-review`) renders all five
-from their expanded flags, so regenerating through `--preset` must produce byte-identical
-files. Ten frames × five presets, and on whole-image channel means four of the five sit
-within 0.005 of each other (`|G/R − 1| + |B/R − 1|`: 0.033–0.038, `sigmoid-flat` 0.063) —
-so the metric is a tie and the visual verdict is the whole decision.
 
 ## characteristic-curve-coverage
+**Status:** done (filed and closed 2026-09-10; #107)
 
-### 2026-09-10 — the wiring pinned two ways, and the libm premise corrected
-
-The curve shipped with its *tables* well covered and its wiring barely covered: nothing
+The curve shipped with its *tables* well covered and its wiring barely covered — nothing
 asserted what `to_density → check_tables → apply_curve_per_channel → FilmRgbImage`
-produces, so a refactor between the stages moved every characteristic pixel with four
-green gates. Closed with two complementary pins. The correction to the task's premise is
-the part worth reading.
+produces. Closed with two complementary pins, and a correction to the premise.
 
-**The premise was half wrong — but the *first two* attempts to say how were also wrong,
-and that is the part worth reading.** The task recorded that a bit-exact capture "is not
-available" because `10f32.powf` differs ~1 ULP across libm implementations. True of
-particular *values*, not of the mechanism. Three designs followed, each falsified by
-evidence rather than by argument:
+**The premise was half wrong, and so were the first two attempts to say how.** "A
+bit-exact capture is not available because `10f32.powf` differs ~1 ULP across libm" is
+true of particular *values*, not of the mechanism. Three designs, each falsified by
+evidence:
 
-1. **Threshold from "computed in double, then rounded."** Claimed two libms diverge only
-   within `2^-5` of an f32 ULP from a rounding boundary. The arithmetic is simply wrong:
-   one f64 ULP *is* ~`2^-29` of an f32 ULP, so a few of them is ~`2^-27`, seven orders
-   tighter — under which nothing here is thin at all. The slip was converting one
-   quantity to a relative error twice, and it survived because the number it produced
-   sat plausibly between the measured margins. Caught in review.
-2. **Threshold from glibc's published `powf` error** (0.52 ULP, so `E − 0.5` = 0.02,
-   padded to 0.03), applied to both libm calls in the chain, with the pass condition
-   being that no sample is both near a boundary *and* in a part of the curve that
-   amplifies a 1-ULP density difference. This survived longer and was **still unsound**:
-   a bound published for one function does not transfer to another, and neither target
-   documents `log10f` at all. Two observations killed it. x86_64 CI disagreed with this
-   host on sample 1's `log10` (margin 0.0153 — the sample the measurement had flagged,
-   which looked like vindication), and then review found x86_64 *also* disagreeing on
-   **sample 9, whose margin is 0.456 ULP — twenty times the threshold that called it
-   safe**. The golden passed both times only because each disagreement fell in the
-   direction the curve happens to flatten. That is luck, not an argument.
-3. **What shipped: enumeration instead of inference.** `reachable_window` renders every
-   density a libm within 1 ULP can return — `d.next_down()`, `d`, `d.next_up()` around
-   the correctly-rounded value — takes the widest excursion from the captured pixel, and
-   adds one more ULP for the curve's own `10^`. The golden then asserts the render lands
-   inside *that*. No threshold, no published error bound, no premise about which target
-   is better: any conforming libm is inside the window by construction.
-
-The derived windows, which also show why this costs nothing:
+1. **Threshold from "computed in double, then rounded"** — claimed divergence only within
+   `2^-5` of an f32 ULP from a rounding boundary. Wrong arithmetic: one f64 ULP is
+   ~`2^-29` of an f32 ULP, so the real figure is ~`2^-27`, seven orders tighter (one
+   quantity converted to a relative error twice). Caught in review.
+2. **Threshold from glibc's published `powf` error** (0.52 ULP) applied to both libm
+   calls. Unsound: a bound for one function does not transfer to another, and neither
+   target documents `log10f`. x86_64 CI disagreed with this host on sample 1 (margin
+   0.0153) *and* on **sample 9, margin 0.456 ULP — twenty times the threshold that called
+   it safe**; the golden passed only because each disagreement fell where the curve
+   flattens.
+3. **What shipped: enumeration.** `reachable_window` renders every density a libm within
+   1 ULP can return (`d.next_down()`, `d`, `d.next_up()` around the correctly-rounded
+   value), takes the widest excursion from the captured pixel, and adds one ULP for the
+   curve's own `10^`. Any conforming libm is inside by construction.
 
 | samples | window |
 |---|---|
@@ -3877,86 +1816,40 @@ The derived windows, which also show why this costs nothing:
 | 9, 11 (out-of-range, extrapolated) | 27, 38 ULP |
 | 10 (out-of-range green) | **63 ULP** |
 
-Nine of fifteen are effectively bit-exact; the window only opens where the curve is
-steep, because a 1-ULP density difference is amplified by `ln(10)·d·(1/γ_local)`. Against
-that, the smallest real fault measured moves these pixels **115,549 ULPs** (a `1e-6` nudge
-to one table literal), so a 63-ULP worst case gives up three orders of nothing.
-`MAX_REASONABLE_WINDOW_ULPS` reports a future vector that lands somewhere steeper —
-`PORTRA_160_B` has a segment with `1/γ = 767`.
+Nine of fifteen are effectively bit-exact; the window opens where a 1-ULP density
+difference is amplified by `ln(10)·d·(1/γ_local)`. The smallest real fault measured moves
+these pixels 115,549 ULPs. `MAX_REASONABLE_WINDOW_ULPS` reports a future vector landing
+somewhere steeper (`PORTRA_160_B` has a segment with `1/γ = 767`; `check_tables` bounds
+slope by nothing — not worth an invariant today, worth knowing before trusting an
+analytic bound). **One rule generalises:** assert *conformance* (within 1 ULP), never
+correct rounding — both dead designs asserted the host's libm was correctly rounding.
+Three modelling traps, each producing a plausible wrong number: dividing scan by base in
+f64 when `to_density` divides in f32 before the `log10` (5 ULPs out); dropping the
+identity gain and zero offset as a no-op (`+ offset` normalises the film-base pixel's
+`−0.0` to the stored `+0.0`); taking the ULP width from `bits + 1` at a binade boundary.
 
-**One rule generalises out of the two failures.** A portability harness must not demand
-the platform be perfect, only that it be within the bound the argument assumes. Both dead
-designs asserted, in different words, that the host's libm was correctly rounding —
-design 1 by deriving a threshold that only holds for correct rounding, design 2 by
-asserting bit equality against an f64 reference. The shipped one asserts *conformance*
-(within 1 ULP) and derives everything else from the correctly-rounded value, so every
-number it reports is a property of the values rather than of the machine measuring them.
+**px4 is the one to carry forward:** its corrected density is exactly `0.0` (it *is* the
+film base), so the rendered value is the constant `10^(table[0].0)` — a property of the
+shipped table literal with a 0.006 ULP margin. If this curve becomes the default that
+margin reaches every base-density pixel of every frame.
 
-Three modelling traps the harness hit, all of which produced a *plausible* wrong number
-rather than an error:
-- dividing the scan by the base in f64 when `to_density` divides in f32 before the
-  `log10` — reference 5 ULPs out;
-- dropping the identity gain and zero offset as a no-op — `+ offset` is what normalises
-  the film-base pixel's `-0.0` to the `+0.0` actually stored;
-- taking the ULP width from `bits + 1` alone — at a binade boundary the step below is half
-  the step above, so a power-of-two sample would have its margin *overstated*. Latent
-  today (no sample has a zero mantissa), fixed anyway.
+**Pin 1 — properties, in `algo::film_stock::tests`**, running the real
+`algo::reconstruct` over a synthesized scan: a neutral ramp round-trips on all ten stocks
+(relative error 4.8e-7); the published mid-grey reconstructs to 0.18 with `dmax` and
+`curve_anchor` both absent; stages 1-2 are `scale·d + offset` not `scale·(d + offset)`
+(needs an explicit non-neutral pair); the reported `out_of_table` fractions match a
+recount and out-of-range samples render *outside* the endpoint exposures. Plus an
+integration test that an off-table render warns and `--strict` refuses it, with a
+sane-base control.
 
-Also noted while measuring, and deliberately not acted on: `check_tables` bounds slope by
-nothing, and `PORTRA_160_B[14]` spans 0.184 decades across 0.00024 density — 1/γ = 767,
-which would amplify a stage-1 ULP enormously. It cannot reach this golden (generic-c41
-tops out at 8.4), the segment is one 8-bit code wide and six stops below mid-grey, and the
-global ceiling is set by `SCAN_EPSILON` (~46 ULPs) rather than by the tables. Not worth a
-new invariant today; worth knowing before anyone trusts an analytic bound.
+**Pin 2 — bits, in `pipeline::stages::golden`:**
+`golden_characteristic_is_correct_within_its_libm_window` and
+`the_characteristic_capture_is_correctly_rounded_and_the_host_conforms` (each captured
+constant is what a correctly-rounded f64 chain produces; the running host's `log10` is
+within 1 ULP). What was there before: one point (mid-grey, one stock, red only, ±0.01)
+as a side effect of `midtone_placement`.
 
-**px4 is the one to carry forward.** Its corrected density is exactly `0.0` — it *is* the
-film base — so `invert` returns `table[0].0` verbatim and the rendered value is the
-constant `10^(table[0].0)`: a property of the shipped table literal, not of this vector.
-If `algo/split-default-migration` makes this curve the default, that 0.006 ULP margin
-reaches every base-density pixel of every frame.
-
-**Pin 1 — properties, in `algo::film_stock::tests`.** Four tests that run the real
-`algo::reconstruct` instead of `invert` alone, by synthesizing the *scan* a film would
-hand the decoder (stages 1-2 inverted) so `to_density` sits inside the assertion:
-
-- a neutral exposure ramp round-trips on all ten stocks, and the three channels reconverge
-  (relative error measured at **4.8e-7**, 8 ULPs; the bound is 1e-5);
-- the published mid-grey aim reconstructs to 0.18 through the chain, with `dmax` and
-  `curve_anchor` both absent — the self-anchoring property stated where a curve that
-  quietly acquired an anchor would be caught;
-- stages 1-2 are `scale·d + offset` and not `scale·(d + offset)`, which needs an explicit
-  non-neutral pair to state at all: this curve resolves the identity gain, where the two
-  spellings are arithmetically the same;
-- the reported `out_of_table` fractions match a recount from `invert`'s own per-sample
-  flag, and the out-of-range samples render *outside* the table's endpoint exposures
-  rather than clamped onto them. Nothing asserted those fractions before, though they
-  reach the JSON report and a `--strict`-promotable warning; the count is a separate
-  parallel reduction from the transform that renders them, so the two can drift apart.
-
-Plus one integration test: an off-table render warns, carries the per-channel figures, and
-`--strict` refuses it counting exactly one warning — with a sane-base control so the
-assertion is falsifiable.
-
-**Pin 2 — bits, in `pipeline::stages::golden`.**
-`golden_characteristic_is_correct_within_its_libm_window` pins the captured fifteen
-within the per-sample window `reachable_window` derives, and
-`the_characteristic_capture_is_correctly_rounded_and_the_host_conforms` checks the two
-things that window assumes but cannot verify itself: that each captured constant is what
-a correctly-rounded chain produces (computed in f64, whose own error is ~4e-9 of an f32
-ULP), and that the running host's `log10` is within the 1 ULP every window is derived
-from. A table edit, a changed vector, an edited constant, or a host worse than the
-premise fails one of them.
-
-**What was actually there before, stated honestly.** Not nothing:
-`stages::midtone_placement::mid_grey_lands_at_eighteen_percent_through_every_display_tone`
-runs the characteristic curve end to end. But it is one point (mid-grey) on one stock,
-red channel only, at ±0.01 absolute — a side effect of a test about the *display
-operator*. It catches a permuted channel because that moves mid-grey; it cannot see the
-extrapolation direction, the counting pass, green or blue, or anything that preserves
-red's mid-grey placement.
-
-**Falsifiability, measured rather than argued.** Each perturbation applied to the shipped
-code, full `cargo test` run, reverted (new tests in bold):
+**Falsifiability matrix (2026-09-10), measured rather than argued** — each perturbation applied to the shipped code, full `cargo test` run, reverted (new tests in bold):
 
 | perturbation | caught by |
 |---|---|
@@ -3969,271 +1862,102 @@ code, full `cargo test` run, reverted (new tests in bold):
 | one table literal moved by 1e-6 | **both new golden tests**; `curves_match_the_digitized_json` |
 
 Re-run after the window design changed, and it earned its keep: the first
-`reachable_window` measured each candidate render's distance *from the captured value*,
-so the table nudge inflated the window by exactly as much as it inflated the drift and
-the golden passed on a frame whose every pixel had moved 115,523 ULPs. Only the
-capture-integrity test caught it. A window that depends on the value under test is not a
-window; it now measures the reachable set's own spread and is blind to the capture. No
-gate would have found that — only re-running the perturbations after the redesign did.
+`reachable_window` measured distance *from the captured value*, so the table nudge
+inflated the window as much as the drift and the golden passed on a frame whose every
+pixel had moved 115,523 ULPs. A window that depends on the value under test is not a
+window; it now measures the reachable set's own spread. The transposition is the case the
+golden provably *cannot* see; the counting drift the case only the new tests see.
 
-The transposition is the case the golden provably *cannot* see (identity gain, zero
-offset), and the counting drift is the case only the new tests see. The two pins are
-complementary by construction, not redundant.
+**`version::PIPELINE_FINGERPRINTS` is deliberately untouched — the handoff.** The gate
+fingerprints the *default* render; adding a column would force values into historical
+rows for behaviour those builds never emitted. When `algo/split-default-migration` moves
+the default here it bumps `PIPELINE_VERSION` and records a new row, and the margin harness
+decides whether that row's `render` hash is portable: the drift gate hashes raw f32 bits
+with no window, and px4's 0.006 ULP margin says the answer is not automatically yes.
 
-**`version::PIPELINE_FINGERPRINTS` is deliberately untouched, and this is the handoff.**
-The gate fingerprints the *default* render; this curve is not a default. The precedent is
-`golden_sigmoid_at_the_reference_anchor_is_numerically_exact`, pinned by a golden and
-explicitly never hashed. Adding a fourth column would force values into historical rows
-for behaviour those builds never emitted — the defect the v2 row's `recipe` note warns
-about. When `algo/split-default-migration` moves the default here it bumps
-`PIPELINE_VERSION` and records a new row in the ordinary way, and the margin harness is
-the tool for deciding whether that row's `render` hash is portable: the drift gate hashes
-raw f32 bits, so it has no 1-ULP window, and px4's 0.006 ULP margin says the answer is
-not automatically yes.
+
 ## conversion-presets
+**Status:** done (filed 2026-09-09; shipped 2026-09-10 as #110)
 
-**Status:** done
-**Updated:** 2026-09-10
+`--preset` names five reconstruction + display bundles (`characteristic-generic`,
+`characteristic-stock`, `characteristic-aim`, `sigmoid-knees`, `sigmoid-flat`), all
+calibrated to one brightness target. The scoping evidence is the 2026-09-09 entry under
+`film-stock-profiles`; this section is the build.
 
-- Goal: name the five reconstruction + display bundles so a user selects a conversion by
-  name instead of assembling four coupled flags. See
-  [the task file](../tasks/algo/conversion-presets.md). The scoping evidence is the
-  2026-09-09 entry above; this section is the build.
-
-### 2026-09-10 — `--preset` ships as a CLI-only expansion
-
-**The precedence the task proposed cannot work, and the reason decides the design.**
-`preset → --params → flags` (a preset as a set of *defaults*, under the recipe) is inert:
-`nc params` / `--dump-params` write **every** key explicitly, so a preset layered beneath
-any recipe nc itself produced has nothing left to set — and the dump→`roll` workflow is
-exactly what the flag exists to feed. The shipped chain is
-`defaults < params < preset < flags`: a preset is a named bundle of flag values, and
-individual flags still win over it.
-
-**A preset is not a recipe key at all.** The task left "provenance or re-expanding?" open;
-the answer is neither. `--dump-params` writes the **expanded** values, a recipe naming a
-preset is rejected by `deny_unknown_fields`, and the name survives only as report
-provenance (`conversion_preset`). Three reasons, in order: a re-expanding key would render
-an archived recipe differently on a build whose definitions had moved — the drift
-`PIPELINE_FINGERPRINTS` exists to prevent; a bundle spans `reconstruction` *and* `print`,
-so design-spec §9's stage sections have no home for it; and `roll` needs no new surface,
-since the dumped recipe already replays exactly (verified: exit 0 on a dumped
-`characteristic-stock`). This is a **documented exception** to "every knob is a flag and a
-recipe key" — narrower than the operational exceptions, because a preset is not a knob: it
-only sets knobs, and all four of those are already both.
-
-**The report carries an override diff, which is what keeps the name honest.** Flags win
-over a preset, so `--preset characteristic-aim --density-curve sigmoid` renders a sigmoid;
-a block naming the preset and stopping there would be a report contradicting its own
-recipe. `conversion_preset.overridden` lists the recipe paths whose resolved value moved
-— a diff against the resolved config, not a record of which flags were typed, so
-`--preset sigmoid-flat --sigmoid-shoulder 0` correctly lists nothing.
-
-**The aim-matched red scale is now derived, and the three constants are gone.**
-`algo::film_stock::aim_red_scale` computes `rise / Δ` — the reciprocal, since
-`--density-scale` multiplies the *scan's* density where the aim factor scales the
-*table's*. It shares `AIM_SEPARATION_DECADES` and `usable_aim_delta` with
-`aim_table_agrees_with_the_curve`, so a sheet can never be correctable by one and
-unchecked by the other; equivalently the flag value is `1 + error/100` for the
-disagreement that test reports.
-
-**Acceptance test: the review set, rendered both ways.** Three frames across three rolls,
-five presets each. **12 of 15 renditions are byte-identical**; the three that differ are
-all `chr-aim`, because the script's hand-written constants were rounded to three decimals
-where the derivation is exact:
-
-| stock | derived | script constant | Δ | red channel mean moves |
-|---|---|---|---|---|
-| ektar-100 | 1.1133202 | 1.114 | −0.00068 | −2.25e−4 |
-| portra-160 | 1.0282816 | 1.029 | −0.00072 | −2.35e−4 |
-| gold-200 | 0.9547126 | 0.955 | −0.00029 | −6.23e−5 |
-
-So the mechanism reproduces the reviewed pixels exactly everywhere the old script stated an
-exact value, and the only divergence is the rounding the task predicted would disappear.
-`scripts/preset-review/generate.py` now drives `--preset` and states no constants.
-
-**Four refusals, each with a remedy that was run.** `--film-stock` beside a stockless
-preset (otherwise `characteristic-generic --film-stock ektar` silently becomes
-`characteristic-stock` at the wrong exposure — 0.39 against 0.31); `--film-stock
-generic-c41` under the stock presets (an average of nine sheets is not one film's
-response, and that bundle's brightness is calibrated for a real sheet);
-`characteristic-aim` on `portra-800`/`ultramax-800`; and `--print-exposure` on
-`sigmoid-knees`. The accepted-stock list each message prints is **that preset's**, not
-`FilmStock::ALL` — offering a name the next run refuses is the remedy-must-work defect,
-and the aim preset's list is the one that would have had three.
-
-**`--print-exposure` on `sigmoid-knees` is refused by *preset*, not by combination.** The
-underlying pair (`--display-tone none` plus a positive exposure) has no general rule and
-must not gain one — dark enough content renders under it at exit 0, so a general refusal
-would reject valid frames. What is refused is stating a knob the named bundle does not
-use, which is a contradiction visible in the request itself.
-
-**One ordering bug found by testing rather than reasoning.** The preset arm first ran
-before `--reconstruction`, so `--preset X --reconstruction simple` passed its own
-`simple` guard (the recipe still resolved density) and then rendered a `simple` frame
-carrying the preset's exposure and tone, reported under the preset's name. It now runs
-*after* that arm, so it sees the type the command line actually resolved.
-
-**No default moved.** `PIPELINE_VERSION` stays 4 and all three fingerprints are unchanged
-— `--preset` adds no default and changes no pixel of a render that does not name it.
-Making `characteristic-generic` the default remains `algo/split-default-migration`, still
-blocked on `film-base/dmax-per-channel-reduction`.
-
-**Not done, deliberately:** `nc roll` gains no `--preset` flag. It has no override flags at
-all, and adding one is `core/recipe-composition`'s scope; the dumped recipe covers the
-workflow today. The headroom question (`reinhard` at 4 stops rather than the shipped 6)
-is untouched and stays with `output/sdr-preset-followups` or the default migration.
-
-### 2026-09-10 — review round: two ordering defects, both invisible to the tests that guarded them
-
-`/code-review` on the worktree. Six findings, all real; the two that mattered were the same
-shape — a rule that was *written* correctly and *reached* wrongly.
-
-**The `--film-stock`-beside-a-stockless-preset rule never fired for the two sigmoid
-presets.** It lived in `validate_convert`, which runs *after* `merge`, and merge's own
-`--film-stock` arm already refuses a stock beside a resolved parametric curve. So
-`--preset sigmoid-flat --film-stock ektar-100` got "pass `--density-curve
-characteristic`" — and following that remedy landed on the preset rule saying the preset
-has no stock. A two-step contradictory diagnosis, the defect CLAUDE.md records as having
-shipped three times already. The rule now runs inside merge's preset arm, where the
-ordering is structural rather than a property of where the call sits.
-
-**Its test could not have caught it**: it called `reject_conversion_preset_conflicts`
-directly, so it exercised the rule and never the path. Now it goes through `merge` and
-additionally asserts the *losing* rule's wording is **absent** — the discipline CLAUDE.md
-prescribes for exactly this, since `err.contains("--film-stock")` cannot tell two rules
-apart when both name the flag.
-
-**The curve-switch warnings were three ways wrong under a preset.** With
-`--params <sigmoid recipe> --preset characteristic-aim` the run warned that "the switch to
-`--density-curve characteristic` reset the recipe's `density.scale` (1,0.8,0.7) to that
-curve's default (1,1,1) … Restate `--density-scale 1,0.8,0.7` to keep it" — naming a flag
-never passed, stating a gain the render did not use (it used the derived `[1.1133202, 1,
-1]`), and offering a remedy that would have silently defeated the preset's aim correction.
-Both warnings are now suppressed when a preset is named, on the same principle that
-already suppresses them when a flag restates the value: the replacement is the user's own
-request, not a silent reset, and `conversion_preset` reports it. Guarded by
-`tests/pipeline.rs::a_preset_does_not_warn_about_the_curve_switch_it_was_asked_to_make`,
-which runs the binary (the defect was in `run_convert`'s composition, not in either
-warning function) and asserts the gain really was replaced, so the suppression is
-load-bearing rather than a condition that never matches.
-
-**Three doc/prose fixes, all the same class — prose no gate reads.** A rustdoc on
-`FilmStock::accepted_list` claimed sharing with `--preset`'s missing-stock message that
-never happened (the extraction had one caller and is reverted); `aim_red_scale` cited
-`curve_probe::scale_against_the_characteristic_curve` as evidence for a *per-stock*
-derivation when that probe hard-codes Ektar's pair across all three rolls — it establishes
-the **direction**, and the citation now says so; and the review page's own `description`
-still opened "rendered through the flags it will expand to" beside an appended sentence
-saying the opposite. `docs/using-nc.md` also said "Four combinations are refused" where
-design-spec listed five (the `simple` one was missing).
-
-### 2026-09-10 — ship review: a preset was discarding the roll's measured `Dmax`
-
-`ship:diff-reviewer` on the same worktree, after the earlier round. Two findings, and the
-first is the most serious defect this task produced.
-
-**`reconstruction.curve` is one recipe path but six knobs, and one of them is not a look.**
-The preset arm did `*curve = expansion.curve`, replacing the whole object — including
-`dmax`, the reference `nc estimate --d-max-region` measures **once for a roll**. Measured:
-
-| invocation | resolved `dmax` | warnings |
-|---|---|---|
-| `--params roll.json` | `{explicit: 2.1}` | — |
-| `--params roll.json --preset sigmoid-flat` | **`fixed`** | **0**, `overridden: []`, exit 0 |
-| `--params roll.json --density-curve exponential` | `{explicit: 2.1}` carried | 2 |
-
-So the calibration that survives a curve-**type** switch was thrown away by a same-type
-preset, silently, on every frame of a roll — with the report asserting `overridden: []`,
-i.e. "the render is the bundle exactly". It also contradicted the `PresetExpansion`
-rustdoc, which said the recipe's other fields stay untouched "which is what lets a preset
-be layered onto a roll calibration". Fixed by `preset_curve`, which carries `dmax` on
-exactly the condition the `--density-curve` arm uses (both sides `takes_dmax()`, so the
-`characteristic` "reads no reference" spelling cannot leak across). An explicit `--d-max`
-still wins.
-
-**The previous entry's claim that `conversion_preset` reported the replacement was false,
-and so was the comment justifying the warning suppression.** `overridden` diffs the
-resolved config against the **preset's own expansion**, so when the *preset* is what
-replaced a recipe value it is empty **by construction** — empty exactly when a reader most
-needs telling. The block now carries a second list, `replaced`: preset-owned paths where
-the render differs from the loaded recipe. That is what makes the suppression honest, and
-it is what surfaces the second instance the reviewer found — a recipe pinned to
-`ektar-100` silently rendered on `generic-c41`, where the *flag* spelling of the same
-request is a loud exit-2 error.
-
-Both diffs share `preset_curve`, which is load-bearing: with the carry applied only in
-`merge`, `overridden` saw the resolved curve differ from the raw expansion and reported
-`reconstruction.curve` as flag-overridden on a run with no such flag. `replaced` is also
-computed only when `--params` was actually given, since without a recipe there is nothing
-to have replaced.
-
-Both are pinned by falsifiable tests (`a_preset_carries_the_recipes_roll_fixed_dmax`,
-`the_report_separates_what_the_preset_replaced_from_what_a_flag_overrode`), each verified
-to fail when its fix is reverted. **No warning was added**: the existing curve-switch
-warnings' own false-positive discipline is to stay quiet when a value did not really
-change, and the report is this project's primary machine-readable channel — a warning on
-every preset-over-recipe run would be noise.
-
-### 2026-09-10 — the acceptance test, re-run on the full review set
-
-Ten frames x five presets, rendered through `--preset` and through the flag expansion the
-script used to state by hand. **40 of 50 renditions byte-identical.** All ten that differ
-are `chr-aim` — one per frame, every frame — and no other preset differs anywhere, which
-is the shape the change predicts: `characteristic-aim` is the only bundle whose value is
-now *derived* (`aim_red_scale`) rather than copied from a constant the script rounded to
-three decimals.
-
-The size of that difference, isolated from JPEG block re-quantization by re-rendering one
-Ektar frame to a lossless 16-bit `display-p3` TIFF with each value:
-
-| | max Δ | mean Δ |
-|---|---|---|
-| lossless TIFF | 2081/65535 (8.1 code values in 8-bit) | 5.92/65535 (**0.023** code values) |
-| the JPEG set | 19/255 | 0.12–0.50/255 |
-
-So the true signal difference averages **under 1/40th of an 8-bit code value**, and the
-JPEG figures are that shift amplified by DCT re-quantization at block boundaries. The
-isolated 8-code-value maxima sit where the inverted curve is steepest. The reviewed look is
-reproduced; what moved is a rounded constant becoming exact, in the direction of the
-derivation.
-
-Regenerate with `NC_PRESET_OUT=../temp/preset-review python3
-scripts/preset-review/generate.py`, then `cd tools/review-app && pnpm dev
-<that path>/review.json`.
-
-### 2026-09-10 — closed out
-
-`--preset` ships with five bundles, as a **CLI-only expansion**: `--dump-params` writes the
-expanded values, a recipe naming a preset is rejected, and the name survives as the
-report's `conversion_preset` provenance. Precedence is `defaults < params < preset < flags`
-— above the recipe, because nc writes every key explicitly and a preset underneath one
-would be inert. **No default moved**: `PIPELINE_VERSION` stays 4 with all three
-fingerprints unchanged.
-
-Verified: the review set rendered through `--preset` is **byte-identical to the flag
-expansion on 40 of 50 renditions**, the ten exceptions all `chr-aim`, where the script's
-3-decimal constant became the exact derivation (red moves ~0.06 of an 8-bit code value,
-systematically, with isolated clipped highlights up to 8). Four Rust gates plus the
-`nctool` suite green; `cargo doc` adds no unresolved links over the 16-link baseline.
-
-**Two review rounds found seven findings, three of them the same defect class** — a rule
-written correctly and *reached* wrongly. The HIGH one was a silent wrong image: replacing
-`reconstruction.curve` wholesale discarded the roll's measured `dmax`. For dependent tasks:
-
-- **`algo/split-default-migration` is now down to one blocker.** Rebased onto `main`, its
-  other three are all `[x]`: `reconstruction-render-curve-split`, this task, and
-  `characteristic-curve-coverage` (#107, landed the same day). `film-base/dmax-per-channel-
-  reduction` was lifted as an edge by #109. What remains is **`io/scanner-density-
-  calibration`** — the green residual. `characteristic-generic` is the default it should
-  activate, and the preset machinery including its brightness calibration is in place, so
-  the migration is a `pipeline_version` bump plus a golden recapture, not new CLI surface.
-  Note #107's warning that the fingerprint row gets **no** per-sample window: the gate
-  hashes raw f32 bits, so budget for choosing a new vector rather than reusing that pin's.
-- Anything replacing a tagged recipe sub-object wholesale must carry the roll calibration
-  inside it; `cli::preset_curve` is the shared helper and CLAUDE.md records the trap.
-- `core/recipe-composition` owns giving `roll` the override flags; until then a preset
-  reaches a roll only through `--dump-params`, which is exact.
+- **Precedence is `defaults < params < preset < flags`.** The proposed
+  `preset → --params → flags` (a preset as *defaults* under the recipe) is inert: `nc
+  params` / `--dump-params` write every key explicitly, so a preset beneath any recipe nc
+  produced has nothing left to set.
+- **A preset is not a recipe key.** `--dump-params` writes the expanded values, a recipe
+  naming a preset is rejected by `deny_unknown_fields`, and the name survives only as the
+  report's `conversion_preset` provenance. Three reasons: a re-expanding key would render an
+  archived recipe differently on a build whose definitions moved (the drift
+  `PIPELINE_FINGERPRINTS` exists to prevent); a bundle spans `reconstruction` *and*
+  `print`, so §9 has no home for it; and `roll` needs no new surface — the dumped recipe
+  replays exactly. A documented exception to "every knob is a flag and a recipe key",
+  narrower than the operational ones: a preset is not a knob, it only sets knobs that are
+  already both.
+- **The report carries two diffs.** `conversion_preset.overridden` lists recipe paths
+  whose resolved value a *flag* moved off the preset's expansion (so `--preset
+  characteristic-aim --density-curve sigmoid` cannot report a preset it did not render).
+  **`overridden` is empty by construction exactly when the preset itself replaced a recipe
+  value** — so a second list, `replaced` (preset-owned paths where the render differs
+  from the loaded recipe, computed only when `--params` was given), is what surfaces a
+  recipe pinned to `ektar-100` silently rendered on `generic-c41`.
+- **The aim-matched red scale is derived** — `algo::film_stock::aim_red_scale` computes
+  `rise / Δ` (the reciprocal, since `--density-scale` multiplies the scan's density),
+  sharing `AIM_SEPARATION_DECADES` / `usable_aim_delta` with
+  `aim_table_agrees_with_the_curve` so a sheet cannot be correctable by one and unchecked
+  by the other. The review script's three hand-written constants are gone.
+- **Four refusals, each with a remedy that was run:** `--film-stock` beside a stockless
+  preset (otherwise `characteristic-generic --film-stock ektar` silently becomes
+  `characteristic-stock` at the wrong exposure); `--film-stock generic-c41` under the
+  stock presets; `characteristic-aim` on `portra-800`/`ultramax-800`; `--print-exposure`
+  on `sigmoid-knees` — refused *by preset*, not by combination, since the underlying pair
+  (`--display-tone none` + positive exposure) has no general rule and must not gain one
+  (dark enough content renders at exit 0). Each message prints **that preset's**
+  accepted-stock list, not `FilmStock::ALL`.
+- **Ordering bugs found by testing, not reasoning.** The preset arm ran before
+  `--reconstruction`, so `--preset X --reconstruction simple` rendered a `simple` frame
+  carrying the preset's exposure and tone under the preset's name — now it runs after.
+  The `--film-stock`-beside-stockless-preset rule lived in `validate_convert`, after
+  `merge`'s own `--film-stock` arm had already refused with "pass `--density-curve
+  characteristic`", whose remedy then landed on the preset rule — a two-step
+  contradictory diagnosis; the rule now runs inside merge's preset arm, and its test goes
+  through `merge` and asserts the *losing* rule's wording is absent.
+- **`reconstruction.curve` is one recipe path but six knobs, and `dmax` is a roll
+  calibration, not a look** (the most serious defect this task produced, found by the ship
+  review). `*curve = expansion.curve` replaced the whole object including `dmax`, so
+  `--params roll.json --preset sigmoid-flat` resolved `fixed` with zero warnings and
+  `overridden: []` on every frame of a roll, while a same-type `--density-curve` switch
+  carried it. Fixed by `cli::preset_curve`, which carries `dmax` on exactly the condition
+  the `--density-curve` arm uses (both sides `takes_dmax()`); an explicit `--d-max` still
+  wins; both diffs share the helper. Pinned by falsifiable tests. CLAUDE.md records the
+  trap.
+- The curve-switch warnings are suppressed when a preset is named (the replacement is the
+  user's own request, and `replaced` reports it) — guarded by a binary-level test that
+  also asserts the gain really was replaced.
+- **Acceptance:** the preset-review set rendered through `--preset` is byte-identical to
+  the flag expansion — **12 of 15** on the three-frame set, then **40 of 50** on the full ten-frame set; all ten exceptions are `chr-aim`, whose
+  constant became the exact derivation (Ektar 1.1133202 vs the script's 1.114, etc.). On a
+  lossless 16-bit `display-p3` TIFF the true difference averages 0.023 of an 8-bit code
+  value (max 8.1, where the inverted curve is steepest); the JPEG figures (up to 19/255)
+  are DCT re-quantization. `scripts/preset-review/generate.py` now drives `--preset` and
+  states no constants (later replaced by `scripts/preset-review/presets.matrix.json` +
+  `nctool review generate`, `analysis/comparison-review-tooling`).
+- **No default moved:** `PIPELINE_VERSION` stays 4, all three fingerprints unchanged.
+- **Not done, deliberately:** `nc roll` gains no `--preset` (it has no override flags at
+  all — `core/recipe-composition`'s scope; the dumped recipe reaches a roll exactly). The
+  headroom question (`reinhard` at 4 stops rather than 6) is untouched.
+- **For `algo/split-default-migration`:** its constructive deps are all `[x]` and the
+  preset machinery including its brightness calibration is in place, so the migration is
+  a `pipeline_version` bump plus a golden recapture, not new CLI surface. (The close-out
+  on 2026-09-10 named `io/scanner-density-calibration` as the one remaining blocker; since
+  2026-09-12 the gate is `analysis/calibration-frame-capture`.) Note #107's warning that
+  the fingerprint row gets no per-sample window.
+- Three doc/prose fixes of the class no gate reads: a rustdoc claiming a sharing that never
+  happened, a citation that established the *direction* cited as per-stock evidence, and
+  `using-nc.md` saying "four combinations are refused" where the design lists five.
 
 
 ## characteristic-default-audit
@@ -4274,3 +1998,12 @@ written correctly and *reached* wrongly. The HIGH one was a silent wrong image: 
   while `--preset characteristic-generic --output-preset film-master` is exit 2. The
   "a preset must not set `output.preset`" escape has to survive the default move.
 
+## characteristic-fingerprint-vector
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: a `PIPELINE_FINGERPRINTS` `render` vector that is bit-identical on both CI
+  targets under the `characteristic` curve. Split out of `split-default-migration`
+  because `characteristic-curve-coverage` observed x86_64 and macOS disagreeing in
+  `log10f` on two of the fifteen golden samples, and a fingerprint has no ULP window.

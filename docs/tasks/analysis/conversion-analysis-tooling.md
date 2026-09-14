@@ -59,7 +59,8 @@ concretely-scoped child tasks; no code is written here.
 - **Tooling: a Python package** `scripts/analysis/nctool/` (numpy + tifffile +
   Pillow, isolated venv — none installed system-wide; system Python is 3.14). It
   becomes the toolkit's single documented entry point (`python -m nctool …`) and
-  **subsumes** `real-scan-verify`; `harness.sh` retires or reduces to a shim.
+  **subsumes** `real-scan-verify`. (`harness.sh` was expected to retire or shrink to a
+  shim; it stayed the CI-tested driver instead, see `analysis/harness-regression-tests`.)
 - **Asset root: configurable, local for now.** Keep reading `../nc-assets`;
   make `asset_root` a single overridable value with relative paths + portable
   checksums so a later Google Drive switch is a one-line change. Drive handling is

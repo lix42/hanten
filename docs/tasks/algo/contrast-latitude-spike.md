@@ -92,3 +92,6 @@ rendered into a review set (`tools/review-app`) rather than argued numerically.
 
 - [Conversion Metrics & Photographic Analysis](../analysis/conversion-metrics.md)
 - [Named conversion presets](conversion-presets.md)
+- [Reference comparison: nc vs NLP](../analysis/nlp-comparison.md) — added 2026-09-13:
+  the scene-range regression over the 32 pixel-aligned Ektar pairs is that harness's
+  job; without it this spike grows a second pairing script

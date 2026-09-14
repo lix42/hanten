@@ -83,7 +83,9 @@ holder, bottom/left = film, right = partial, matching the RGB heatmap.
   right edge** is split into holder vs film *segments* (not one whole-edge label)
   — only the film segments reach the rebate search.
 - Ektar `1009` (fully-exposed) is classified all-film (bright IR) despite being
-  dark in RGB — the disambiguation RGB can't make.
+  dark in RGB — the disambiguation RGB can't make. (On the real frame every edge
+  measured all-holder at the 0.5% probe depth, so the mask fell back to RGB-only;
+  the log records it.)
 - An HDR 48-bit scan (no IR) falls back to the RGB-only path without error.
 
 ## Dependencies

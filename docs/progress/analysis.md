@@ -9,6 +9,12 @@ after the `/`). Read this whole file before starting a task in this epic, and
 read other epics' `Epic summary` sections when you depend on them. Append
 entries — don't rewrite earlier ones.
 
+> **Consolidated 2026-09-13** (user-authorised; see CLAUDE.md's exception to the
+> append-only rule). Sections of *done* tasks were rewritten as summaries keeping the
+> decisions, gotchas and every measurement an open task cites; the full history is in
+> git before that date. Sections of open and parked tasks are unchanged except: a
+> 2026-09-14 entry under `nlp-comparison` records a supersession.
+
 ## Epic summary
 
 What other epics need to know about `analysis`:
@@ -41,7 +47,10 @@ What other epics need to know about `analysis`:
   to a JSON file rather than to any script, and a review set now carries its **measurements**,
   which the app draws as tone and cast charts under each picture. It needs `../nc-assets` and
   the metrics venv, so it is not in CI, and its output goes to a throwaway directory outside
-  the repo — the frames are the user's own photographs.
+  the repo — the frames are the user's own photographs. **Every cell is an `nc convert`**, so
+  a study comparing nc against an *outside* reference (NLP's own TIFFs) cannot be expressed
+  as a matrix today; `film-base/dmax-per-channel-reduction` (parked 2026-09-13) asks for a
+  reference-cell kind rather than a bespoke script.
 - **The tone bands are cut in CIELAB lightness, and the record is `schema_version`
   2 (2026-09-10).** Edges every 15 L\* to 75, then diffuse white (L\* 100), then an
   overflow band above it — `deep_shadow, shadow, low_mid, mid, high_mid,
@@ -74,9 +83,7 @@ What other epics need to know about `analysis`:
 - **Real-scan core verification is done (2026-07-22/23)** across five rolls; the
   write-up is [`docs/reports/real-scan-verification.md`](../reports/real-scan-verification.md)
   and the rerunnable harness plus frozen recipes are under
-  `scripts/real-scan-verify/`. (The task section below still mirrors an old
-  `not started` status — `TASKS.md` is authoritative and marks it `[x]`.)
-- **Note:** the execution record for `real-scan-verification` is in
+  `scripts/real-scan-verify/`. The execution record itself is in
   [`_unassigned.md`](_unassigned.md) — in the flat log it was nested under the
   `color-management planning` heading, so the epic split carried it there
   verbatim. Read it there.
@@ -85,7 +92,9 @@ What other epics need to know about `analysis`:
   (~50 MiB/MP)**, ~1.6 s wall — about 1.5× the design's model, which omits the
   carried IR plane and the `to_output` clone. That is the STEP 0 input for
   `io/streaming-tiled-io`: `io/memory-preflight` is required, streaming is a
-  conditional GO pending a post-preflight re-measure.
+  conditional GO pending a post-preflight re-measure. (`io/memory-preflight` has
+  since shipped and re-measured: 975 → 681 MB at 18.66 MP, 3.808 → 3.146 GB on the
+  74.65 MP `largest.tif` — see `docs/progress/io.md`; STEP 0 is still unwritten.)
 - **Also found:** `--auto-base` fails loudly on every real frame (correct, given
   the holder layout — use the measured-reference workflow); u16 output clips
   4.8–10.3% high by default, routed to the display-output roadmap; float output is
@@ -96,7 +105,8 @@ What other epics need to know about `analysis`:
   (no `asset_root` field), so it is machine-portable. sha256 is recorded for
   irreplaceable data and omitted for regenerable nc outputs.
 - **`python -m nctool manifest {generate,validate,roles}`** is the entry point
-  (stdlib only; needs `scripts/analysis` on `PYTHONPATH`).
+  (stdlib only; needs `scripts/analysis` on `PYTHONPATH`; `--asset-root` defaults
+  to `$NC_ASSET_ROOT`, else `../nc-assets`).
   `scripts/analysis/generate_manifest.py` is now a thin shim.
   `generate` is idempotent — a re-run must stay byte-identical. `validate`
   **reports only, never deletes**, and exits 0 clean / 1 discrepancies / 2
@@ -124,9 +134,15 @@ What other epics need to know about `analysis`:
   no skipped checksum, same output depth, same per-frame `params_hash`); a failed
   precondition is rc 0 plus a `determinism_check_blocked` note, never an accusation.
   Documented in `compare.py`'s module docstring and `determinism_blockers`.
-- **NLP comparison is global-metrics + side-by-side thumbnails, no registration**
-  — NLP outputs are cropped and differently sized, aligned only by manifest
-  `source_frame` identity.
+- **Reference comparison (NLP and hand-edited targets) pairs by manifest
+  `source_frame` identity, never by registration.** Global metrics carry it; a
+  pixel-wise section is an opt-in gated on exact dimension equality (2026-09-02).
+  The reference set is **two export regimes with different declared spaces** —
+  11 float files, linear sRGB/709 (`nlp/2026-07-23`, `2026-07-24`, `2026-08-04`)
+  and a 32-file 16-bit Adobe RGB batch (`nlp/2026-09-09`) that is **pixel-aligned
+  with its sources** and is the set any number that has to hold up should use
+  (2026-09-11). A `nlp/2026-09-11` Portra400 batch (32 files) has since been added
+  and registered but not surveyed.
 - **Open question for the user:** the committed `recipes/*.hdr.json` key order
   lags the current harness `jq` (values identical); a `freeze` re-run will
   reorder them.
@@ -137,20 +153,26 @@ What other epics need to know about `analysis`:
 
 
 ## real-scan-verification
-**Status:** not started
-**Updated:** 2026-07-21
+**Status:** done (2026-07-23)
+**Updated:** 2026-09-13 (consolidated)
 
 - Goal: run the verification matrix (inspect/estimate/convert/IR/determinism/
-  resources) against the full-size real scans once the user prepares the assets;
-  record results here, file follow-up tasks for defects.
-- 2026-07-21: Narrowed this to the current TIFF pipeline so full-size resource
-  measurements can run before the HDR/display roadmap and can inform the
-  `streaming-tiled-io` go/no-go. Final preset and cross-device checks moved to
-  `display-output-acceptance`.
-- 2026-07-27: Epic migration — the actual execution record for this task is in
-  [`_unassigned.md`](_unassigned.md) (`### Real-scan core verification — executed
-  2026-07-22`); it was nested under another heading in the flat log, so the split
-  carried it there verbatim rather than into this section.
+  resources) against the full-size real scans; record results, file follow-up
+  tasks for defects. Narrowed 2026-07-21 to the current TIFF pipeline so full-size
+  resource measurements could run before the HDR/display roadmap; final preset and
+  cross-device checks moved to `display-output-acceptance`.
+- **Execution record:** [`_unassigned.md`](_unassigned.md) (`### Real-scan core
+  verification — executed 2026-07-22`), carried there verbatim by the epic split.
+  Write-up: [`docs/reports/real-scan-verification.md`](../reports/real-scan-verification.md).
+  Harness + frozen per-roll recipes with provenance: `scripts/real-scan-verify/`.
+- **What downstream tasks take from it:** every matrix row passed on five rolls;
+  per-roll `Dmin`/`Dmax` frozen from a holder-free centre-40% region (4/5 rolls
+  clean — Harman Phoenix trips the C41-calibrated `Dmax ≳ 1.0` floor and the
+  base-uniformity check, filed as `film-base/dense-base-dmax-plausibility`);
+  measured peak **~930 MiB @ 18.66 MP** (the `io/streaming-tiled-io` STEP 0
+  input); u16 clips 4.8–10.3% high (display-output roadmap); float byte-lossless;
+  determinism byte-identical. `display-output-acceptance` reuses the same asset
+  classes and frozen recipes.
 
 
 ## display-output-acceptance
@@ -187,473 +209,170 @@ What other epics need to know about `analysis`:
 
 
 ## conversion-analysis-tooling
-**Status:** done (spike)
-**Updated:** 2026-07-23
+**Status:** done (spike, 2026-07-23)
+**Updated:** 2026-09-13 (consolidated)
 
-- Goal: decide scope/structure to grow `real-scan-verify` into a reusable
-  conversion-analysis toolkit (asset manifest, image-library analysis, NLP-vs-nc
-  comparison). Spike deliverable = design note + concretely-scoped child tasks.
-- **Research.** Confirmed the current state: `harness.sh` drives `nc` with a
-  hard-coded `ROLLS` array; **all quantitative numbers today come from nc's own
-  JSON reports** (clip %, Dmin/Dmax) — the numpy/tifffile + ImageMagick analysis
-  the task mentions was ad-hoc and **not committed anywhere**, so the
-  image-library layer is net-new. Assets (`../nc-assets`, ~11 GB rolls + 6.2 GB
-  converted) match the user's three categories: experiments (`48/64bit-*`,
-  `samples/`), rolls (5, each unexposed+leader+real), converted (`V0` = the
-  v0-baseline set; `2026-07-22` = harness output). **numpy/tifffile/Pillow are not
-  installed** (system Python 3.14) → toolkit needs its own venv.
-- **Decisions (with the user, via interview):**
-  - Tooling → **Python package** `scripts/analysis/nctool/`; single entry point;
-    subsumes `real-scan-verify` (`harness.sh` retires/shims).
-  - Asset root → **configurable, local for now**; relative paths + portable
-    checksums so a later Drive switch is one line. Drive = deferred task.
-  - Manifest → **JSON, rolls + converted, experiments excluded**; roles
-    (`unexposed|leader|real`) human-seeded, derived facts generated from
-    `nc inspect`; replaces `ROLLS`. `manifest validate` (orphans/missing/drift) is
-    the cleanup surfacing mechanism (reports, never deletes).
-  - NLP → **global metrics + side-by-side thumbnails, no registration**; align by
-    manifest `source_frame` identity.
-- **Invariant preserved:** only derived numbers (JSON) + downscaled thumbnails
-  leave the tools; full-res pixels read one-at-a-time, never surfaced.
-- **Split into 4 child tasks:** `asset-manifest` → `conversion-metrics` →
-  `nlp-comparison`; `asset-manifest` → `drive-asset-migration` (deferred). Graph
-  wired in TASKS.md.
-- **Cleanup done:** removed 4 stray `.DS_Store` from `../nc-assets`.
-  `converted/V0/` kept (v0-baseline artifacts for `conversion-versioning`).
-- **Next:** `asset-manifest` is the unblocked starting task.
-
----
-
-**Update 2026-07-24 — assets moved to Google Drive + reorg + first manifest.**
-
-- User relocated nc-assets from local `../nc-assets` to
-  `…/GoogleDrive-devlix42@gmail.com/My Drive/temp/nc-assets` (12 GB) for
-  multi-machine work, and added: `samples/largest.tif` (10368×7200 = **74.6 MP**,
-  HDRi w/ IR — the ~4× perf worst-case the memory report lacked) and an NLP set
-  (`NLP converted/`) for a new roll `Portra160-7-22` (renamed `Portra160-2026-07-22`
-  in the reorg below).
-- **Reorg (full category regroup):** `rolls/{Ektar,phoenix,Portra160,
-  Portra160-2026-07-22,Portra400,Portra400-leica-flaw}`, `samples/`
-  (`largest.tif` + `icc/`), `converted/{nc/{2026-07-22,V0},nlp/2026-07-23}`.
-  Dropped the 48/64bit experiment fixtures (repo tests use committed
-  `tests/fixtures/`, not these); kept `converted/nc/V0` (v0-baseline). Cleaned
-  `.DS_Store`.
-- **Manifest rethink:** lives **at the assets root** (`manifest.json`) with paths
-  **relative to its own dir** → no `asset_root` field, machine-portable; scope
-  broadened to a **full inventory** (rolls+roles, samples, converted nc+nlp).
-  sha256 for irreplaceable data (rolls/samples/NLP/V0); omitted for regenerable
-  nc/2026-07-22 outputs. `source_frame` links + `coverage_gaps`.
-- **Generated** `manifest.json` (throwaway `nc inspect`-driven Python script;
-  formalized later by `asset-manifest`'s `manifest generate`). `nc inspect`
-  corrected exiftool: all frames incl. largest.tif are **hdri w/ IR**. NLP outputs
-  are **4406×2930 32-bit float, cropped** (validates no-registration); frames
-  1096/1097 have no NLP output (coverage gap).
-- Task docs synced (`asset-manifest`, `drive-asset-migration` [now in-progress,
-  not deferred], spike outcome, `nlp-comparison`). **Open:** repo `../nc-assets`
-  convention (recommend machine-local symlink → Drive) — CLAUDE.md/harness still
-  say `../nc-assets`.
-
-**Update 2026-07-24 (cont.) — symlink bridge + committed manifest tooling + skill.**
-
-- Created machine-local symlink `~/src/nc/nc-assets → <Drive>/temp/nc-assets` so
-  the repo's `../nc-assets` convention (CLAUDE.md, harness `A=../nc-assets`,
-  reports) keeps working unchanged across worktrees; not committed (machine-local).
-- `scripts/analysis/generate_manifest.py` — reusable, update-aware, stdlib
-  generator (locates `nc`/exiftool; preserves human fields role/stock/kind/note +
-  bucket regenerable/nc_version/recipe_dir; recomputes sha256 every run by
-  default for source-of-truth integrity, opt-in size-based reuse via
-  `--reuse-hash`). **Idempotent** (byte-identical re-run). Reproduces the live
-  manifest and adds `megapixels` on converted outputs.
-- `scripts/analysis/manifest.sample.json` — committed trimmed schema reference
-  (every shape; real values; ~7 KB). Update only on **schema** change.
-- `asset-manifest` **skill** (`.agents/skills/asset-manifest/` + `.claude/skills/`
-  symlink) — when/how to regenerate, invariants (no pixels; roles preserved),
-  layout the scanner expects.
-- The live `manifest.json` stays in the Drive folder (not committed). `asset-manifest`
-  task doc updated to point at these precursors; remaining task work = fold into
-  `nctool` + add `validate` (orphans/missing/drift).
+- Spike outcome, decided with the user: a **Python package** `scripts/analysis/nctool/`
+  as the single entry point (`python -m nctool …`); a **JSON manifest** of rolls +
+  converted outputs with human-seeded roles (`unexposed|leader|real`) and
+  `nc inspect`-derived facts, replacing the harness's hard-coded `ROLLS` array,
+  with `validate` as the cleanup-surfacing mechanism (reports, never deletes);
+  **NLP comparison by manifest `source_frame` identity, no registration.** Split
+  into `asset-manifest` → `conversion-metrics` → `nlp-comparison`, plus
+  `drive-asset-migration`. Details in the task file's "Spike outcome".
+- One decision did **not** survive: the spike said `harness.sh` would retire or
+  become a shim. It did not — it is the real-scan verification driver, now
+  fixture-tested in CI (`harness-regression-tests`, 2026-08-11).
+- **2026-07-24 — the assets moved to Google Drive** (`…/My Drive/temp/nc-assets`,
+  12 GB), reorganised into `rolls/ samples/ converted/{nc,nlp}/` (experiment
+  fixtures dropped — repo tests use `tests/fixtures/`; `converted/nc/V0` kept as the
+  v0-baseline set), with `samples/largest.tif` (10368×7200, **74.6 MP**, HDRi) as
+  the perf worst-case. The manifest was rethought to live **at the assets root**
+  with paths relative to its own directory, so it is machine-portable; sha256 for
+  irreplaceable data only. The repo's `../nc-assets` convention is bridged by a
+  **machine-local, uncommitted symlink** `~/src/nc/nc-assets → <Drive>/temp/nc-assets`,
+  so CLAUDE.md, the harness (`A=../nc-assets`) and the reports work unchanged
+  across worktrees. `drive-asset-migration` owns what remains (materialisation
+  guard, sync hygiene).
 
 
 ## asset-manifest
-**Status:** implemented (uncommitted, in worktree `feat/asset-manifest`)
-**Updated:** 2026-07-24
+**Status:** done (2026-07-24)
+**Updated:** 2026-09-13 (consolidated)
 
-Formalized the precursor `generate_manifest.py` into the `nctool` package and
-added the missing `validate` mode + a manifest-driven harness. Stdlib only; the
-"never read sample pixels" invariant is preserved (metadata via `nc inspect`,
-bytes only streamed to hash).
-
-- **Package seed** `scripts/analysis/nctool/` (minimal — full skeleton lands in
-  `conversion-metrics`):
-  - `manifest.py` — one implementation of `generate` / `validate` / `roles` plus
-    shared directory walkers (`walk_rolls`/`walk_samples`/`walk_converted`, and a
-    flat `disk_files` for validate) so generate's structured build and validate's
-    on-disk set can never diverge. The generate logic is a faithful port of
-    `generate_manifest.py` (same seeds, rename/checksum-identity preservation,
-    source_frame retarget, encoding inference, atomic write).
-  - `__main__.py` — `python -m nctool manifest {generate,validate,roles}` argparse
-    dispatcher (`--asset-root`, defaults `$NC_ASSET_ROOT` → `../nc-assets`).
-  - `__init__.py` — dependency-free seed docstring.
-- **`generate_manifest.py`** retired to a thin backward-compat shim forwarding its
-  historical CLI to `nctool.manifest.cmd_generate` (the skill/docs reference it by
-  path; no `PYTHONPATH` needed since it inserts its own dir).
-- **`validate`** (new) — reports **drift** (recorded sha256 ≠ file, with a
-  byte-size pre-check before hashing hundreds of MB), **missing** (in manifest, off
-  disk), **orphans** (on disk, untracked); lists regenerable no-sha outputs as
-  `unchecked`. REPORTS only, never deletes. Exit 0 clean / 1 discrepancies / 2
-  operational (no/invalid/unsupported-schema manifest). Does **not** need `nc`.
-- **Harness** `scripts/real-scan-verify/harness.sh` — replaced the hard-coded
-  `ROLLS` array with a `while read` loop (bash 3.2-safe) filling it from
-  `nctool manifest roles`. Only rolls with exactly one unexposed + one leader are
-  emitted (NLP-source roll skipped), reproducing the original five-roll set. Fails
-  loudly (exit 2 + remediation) if the manifest is absent.
-
-**Verified (all on this build, macOS/aarch64):**
-- `generate` on the live assets reproduces the existing/live `manifest.json`
-  **byte-identical** (full sha256 recompute of ~12 GB, ~10 s): 6 rolls, 5 samples,
-  buckets `nc/2026-07-22` (34, regenerable), `nc/V0` (8), `nlp/2026-07-23` (4),
-  same coverage_gaps. Shim path reproduces it too.
-- `validate` on the clean tree → 0 orphans/missing/drift (exit 0). A synthetic
-  tree with a deleted / added / edited file surfaces missing + orphan + drift
-  (exit 1).
-- `roles` emits the five calibration triples with unexposed/leader **matching the
-  hard-coded ROLLS exactly**; `Portra160-2026-07-22` (all real) correctly skipped.
-- **Harness parity:** ran `freeze` with the old hard-coded array vs the new
-  manifest-driven harness on the same binary → **byte-identical `recipes/`**. The
-  new `.json` / `.provenance.json` also match the committed set; the committed
-  `.hdr.json` differ **only in JSON key order** (`output` vs `reconstruction`
-  position, identical values) — a pre-existing artifact of an older harness jq
-  revision, unrelated to this change and reproduced by the old array too. Repo
-  `recipes/` left untouched (restored to committed state after the A/B).
-
-**Notes for `conversion-metrics` / `nlp-comparison`:**
-- The package is intentionally minimal: `__main__.py` dispatches only the
-  `manifest` group. When adding `metrics` / `thumbs`, either extend `__main__.py`
-  or introduce the documented `cli.py` and have `__main__` delegate — the shared
-  walkers and `iter_meta`/`load_manifest`/`Prev` in `manifest.py` are reusable.
-- `python -m nctool` needs `scripts/analysis` on `PYTHONPATH` (the harness and docs
-  set it inline); the shim avoids that only because it inserts its own dir.
-- Open question for the user: the committed `recipes/*.hdr.json` key order lags the
-  current `harness.sh` jq (values identical). Harmless, but a `freeze` re-run will
-  reorder those keys — decide whether to refresh the committed recipes.
-
-**Update 2026-07-24 (review-fix round) — hardened `validate` + tests.**
-Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
-- **Full-tree orphan scan** (`all_disk_images`): `validate`'s orphan check now
-  walks the entire asset tree recursively for `.tif`/`.tiff`, so a root-level stray
-  or a deeply-nested scan (`samples/icc/sub/x.tif`, `rolls/<roll>/sub/x.tif`) is
-  flagged instead of being invisible to the structured generate walkers (left
-  unchanged). Non-image companions (`.json`/`.jpg`) and `manifest.json` are excluded
-  by the extension filter.
-- **Fail on missing checksum for irreplaceable/error entries**: entries carrying an
-  `error`/`metadata_source:"none"` (new `ERRORS`) and non-regenerable entries lacking
-  `sha256` (new `NO CHECKSUM`) are now PROBLEMS (exit 1). Only entries in an explicitly
-  `regenerable: true` bucket may legitimately be `unchecked`.
-- **`inspect()` loud on nc-parse-failure**: `nc inspect` exit 0 with unparseable/
-  missing-key JSON is now a per-file `error` (`metadata_source:"none"`), not a silent
-  downgrade to exiftool placeholders. Non-zero exit (rejection) still falls back.
-  Happy path unchanged (byte-identical reproduction preserved).
-- **Harness roles exit-code**: `harness.sh` now captures `nctool manifest roles` to a
-  temp file and checks `$?` (process substitution discarded it) — a mid-stream `roles`
-  crash fails loud (exit 2 + remediation) instead of proceeding on a truncated ROLLS.
-- **`cmd_roles` unknown-role guard**: a typo'd role warns loudly and is folded into
-  `real` (was silently bucketed into a phantom key via `setdefault`, dropping a frame).
-- **nc-absent is loud**: a wholesale nc-absent `generate` now exits 2 with remediation
-  by default; the degraded exiftool-only mode is gated behind `--allow-exiftool-fallback`.
-- **`write_manifest` durability**: unique `mkstemp` temp + `fsync` before `os.replace`
-  (concurrent-run safe; no zero-length file after a crash).
-- **New committed test suite** `scripts/analysis/nctool/test_manifest.py` (stdlib
-  `unittest`, hermetic synthetic tree, no real assets, `nc` stubbed): 30 tests over
-  roles parity, build preservation/rename/encoding/coverage, load_manifest schema,
-  `inspect` parse-vs-rejection, and `validate` classification + 0/1/2 exit contract.
-  Run: `PYTHONPATH=scripts/analysis python3 -m unittest nctool.test_manifest`.
-- **Verified:** `generate` on live assets still reproduces the manifest
-  **byte-identical** (sha `7351955…`); `validate` clean → exit 0; 30/30 unittests
-  pass; Rust CI green (fmt / clippy -D warnings / build / 411 tests).
+- Shipped `scripts/analysis/nctool/manifest.py` — `generate` / `validate` /
+  `roles` over shared directory walkers, so generate's structured build and
+  validate's on-disk set cannot diverge — and the `python -m nctool` dispatcher
+  (`--asset-root`, default `$NC_ASSET_ROOT` → `../nc-assets`).
+  `generate_manifest.py` is a backward-compat shim; the `asset-manifest` skill
+  documents when and how to regenerate. `harness.sh` fills its roll list from
+  `manifest roles` (only rolls with exactly one unexposed + one leader are emitted)
+  and fails loud (exit 2) if the manifest or `roles` fails.
+- **Contracts other tools rely on** (cited by `nctool compare` and `roll`):
+  `generate` is idempotent and byte-identical on re-run, preserves human fields
+  (role/stock/kind/note, bucket `regenerable`/`nc_version`/`recipe_dir`), and
+  recomputes sha256 by default (`--reuse-hash` opts into size-based reuse).
+  `validate` reports **drift** / **missing** / **orphans** (full-tree `.tif`/`.tiff`
+  scan, so a stray at any depth is flagged) and treats a non-regenerable entry with
+  no sha256, or an entry carrying an `error`, as a PROBLEM; exit **0 clean / 1
+  discrepancies / 2 operational**; never deletes; needs no `nc`. A wholesale
+  nc-absent `generate` exits 2 unless `--allow-exiftool-fallback`; an `nc inspect`
+  that returns unparseable JSON is a per-file `error`, not a silent exiftool
+  downgrade. Writes are `mkstemp` + `fsync` + `os.replace`.
+- **Roles.** `roles` folds an unrecognised role into `real` with a loud warning
+  (it once silently bucketed a typo into a phantom key and dropped the frame).
+  Relevant to `calibration-frame-capture`, whose bracketed target frames need a
+  fourth role plus exposure offset and lighting — the existing three describe a
+  roll's frames only.
+- **Known inference to fix with real provenance** (`manifest.py`, the `bits == 16`
+  arm): every 16-bit nc output is labelled `u16-srgb`, which is wrong for a
+  `display-p3` result; tracked under `output/sdr-preset-followups`.
+- Verified at the time: `generate` reproduced the live manifest byte-identical
+  (6 rolls, 5 samples, ~12 GB hashed in ~10 s); manifest-driven `freeze` produced
+  recipes byte-identical to the hard-coded array. **Open:** the committed
+  `recipes/*.hdr.json` key order lags the harness `jq` (values identical), so a
+  `freeze` re-run reorders those keys — decide whether to refresh them.
+- Tests: `scripts/analysis/nctool/test_manifest.py`, hermetic, `nc` stubbed.
 
 
 ## conversion-metrics
 
 **Status:** done (2026-09-03)
-**Updated:** 2026-09-10
+**Updated:** 2026-09-13 (consolidated; the 2026-09-10 band re-cut is kept in full)
 
-- Goal: Formalize the ad-hoc image-library analysis from real-scan verification into the reusable Python toolkit that is the toolkit's single documented entry point.
-- 2026-08-12: Folded the briefly separate `photographic-result-analysis` follow-up into this
-  task rather than creating a false dependency between overlapping work. The trigger was the
-  Portra 400 Dmax 1.2-versus-1.9 comparison: provenance, channel means, and clipping counters
-  establish that the runs differ, but do not explain color and tone distribution,
-  shadow/highlight occupancy, range use, or proximity to the endpoints. Metric definitions and
-  the final artifact design remain opening questions for implementation.
-- 2026-09-02: Task file rewritten; three decisions taken before implementation.
-  (1) `numpy` + `tifffile` in a venv, replacing the stdlib-only assumption the old
-  Design section carried — that section also claimed `harness.sh` would be retired,
-  which never happened (it is fixture-tested in CI). The Python CI gate will have to
-  install the dependencies on both platforms. (2) Every input's color space is
-  declared, never guessed; unstated is a loud refusal. Verified motive: the manifest's
-  `encoding` field records depth (`f32`) but not transfer, while the NLP files
-  themselves carry a *linear* sRGB profile — measuring them against nc's
-  transfer-encoded u16 without decoding would have produced a plausible, wrong table.
-  (3) Tone metrics live in log2 stops relative to 0.18, where exposure is an offset and
-  contrast is a slope. Also confirmed by survey that nothing in `scripts/` reads output
-  pixels today: `roll analyze`, `compare run`, and the `render-defaults` scripts all
-  derive their numbers from nc's own JSON report, so they cover nc outputs only. The
-  film-holder problem is handled by an explicit fractional region, with the note that a
-  5% inset does not clear a real holder and that excluding dark pixels as a holder proxy
-  would bias the very shadow statistics being measured.
-- 2026-09-02: Tone slice implemented — `nctool metrics image`, the toolkit's first
-  reader of output pixels. `scripts/analysis/nctool/metrics.py` declares the colour
-  space (never infers it), decodes to linear, adapts to D65, and reports endpoint
-  occupancy on the stored samples plus tone statistics in log2 stops relative to
-  0.18: key (geometric mean), an eleven-point percentile vector, contrast spreads,
-  toe/shoulder spans, and band occupancy. Regions are fractional (`--inset`,
-  `--region`). `numpy`/`tifffile` arrive via `scripts/analysis/requirements.txt`;
-  the import is lazy so every stdlib command still runs without them, CI installs
-  them, and `NCTOOL_REQUIRE_DEPS=1` turns a forgotten install into a failure rather
-  than 29 skips under a green `ok` (the guard was checked by running it against an
-  interpreter without the packages).
-  Colorimetry is not restated: primaries, whites and Bradford are transcribed from
-  `definitions.rs`, and tests re-read that file plus the generated
-  `derived-artifacts.txt`. Python's independent derivation reproduces the Rust
-  audit's binary64 `SRGB_LUMA` and `DISPLAY_P3_LUMA` exactly; a test also pins that
-  the BT.2020 derivation from primaries deliberately stays ~2e-6 from the tabulated
-  vector, since a linear-light luminance weighting is not the non-constant-luminance
-  luma.
-  **Verified against an independent source of truth.** On a legacy-preset render of
-  Ektar 971 nc reported `clipped_high` = 0.103282844 of samples; the tool measured
-  0.103283 at the top code — agreement to the artifact's own rounding. Measuring the
-  same file declared `linear-srgb` instead of `srgb` moved the key by 2.22 stops with
-  no error raised either way, which is why the declaration is mandatory.
-- 2026-09-02: Finding — **on an uncropped frame the film holder *is* the highlight
-  distribution, and it is measurable.** The opaque holder blocks all light, so it is
-  maximum density in the negative and renders to white in the positive; it therefore
-  lands at the top code and dominates every highlight statistic. Measured on Ektar 971
-  (`display-p3`, default sigmoid) as the region tightens: samples at the top code
-  0.0950 → 0.0134 → 0.0018 → 0.0000 for insets 0 / 0.05 / 0.10 / 0.15, with
-  `shoulder_span_stops` recovering 0.000 → 0.186 → 0.385 → 0.417 and the
-  `above_diffuse_white` band going 0.0541 → 0. So the render has real highlight
-  separation; the full-frame numbers were the holder. The same effect on Portra160
-  1102 moves the *median* by 3.1 stops between the full frame and a centre-76% region
-  (-2.30 → -5.42), because the white border was holding the whole distribution up.
-  Two consequences. **A full-frame measurement of an uncropped scan is not a
-  measurement of the picture** — the region parameter is not a convenience, and this
-  quantifies what `film-base/ir-holder-detection` would automate. And a first pass at
-  this entry read the same pile-up as evidence that `loss.clipped_high` cannot see
-  highlight compression on the bounded display shoulder; that was wrong, and the inset
-  sweep is what falsified it. `clipped_high: 0` was accurate. The `legacy` render on
-  that frame does genuinely clip (nc: 10.3 % of samples), and unlike the sigmoid its
-  top-code population survives the holder's removal (2.85 % at inset 0.15).
-- 2026-09-02: Adobe RGB support, and where a colour space's definition lives. User
-  asked for it (Lightroom exports reach us in that space). Defined as
-  `definitions::ADOBE_RGB` in the **Rust**, not in the Python, even though nc renders
-  to no such space: primaries living only in `metrics.py` would be a second
-  colorimetry source of truth by construction, which is the arrangement CLAUDE.md's
-  rule exists to prevent. The metrics tests re-read `definitions.rs`, so a one-sided
-  edit now fails on both sides. No `allow(dead_code)` was needed — `cargo build` and
-  `clippy --all-targets -D warnings` are clean with the constant unused by the
-  runtime — and `derived-artifacts.txt` is untouched, since no pinned artifact derives
-  from it. Its red and blue primaries are Rec.709's exactly and only green moves, so
-  both suites assert that relationship rather than just the values; that is the pair
-  most likely to be transcribed wrongly. Transfer is the pure 563/256 power law with
-  no linear segment, verified end to end: a file encoding exactly 18% linear grey
-  measures 0.000 stops.
-  Two process notes. A first version of the luma test asserted the published
-  `[0.2974, 0.6273, 0.0753]` from memory and failed at 5.5e-5; published RGB→XYZ
-  tables round D65 to five decimals where `definitions::D65` rounds to four, and the
-  remembered digits could not be checked against any source in the repo. It was
-  replaced by the checkable relationship (weight moves off green onto red versus
-  Rec.709) plus a deliberately coarse three-decimal bound. And adding the space left
-  `--help`'s hand-written space list stale with every gate green — the same defect
-  CLAUDE.md records for `OutputPreset`'s help text. The parser now builds that list
-  from `metrics.SPACES`, and a test asserts it; the test was confirmed to fail when
-  the list is hardcoded again. It has to collapse whitespace first, because argparse
-  wraps a long name across lines at its hyphen.
-- 2026-09-02: Review round on the tone slice (`/code-review`), 11 findings, all
-  fixed. Three were real defects that produced a *plausible wrong answer* rather
-  than an error, which is the failure class this module exists to avoid.
-  **(a)** A planar-layout TIFF (`PLANARCONFIG=2`) was accepted and measured. The
-  guard tested the decoded array's shape, but tifffile hands a planar file back as
-  `(samples, height, width)`, which passes `ndim == 3 and shape[2] >= 3` — so a
-  30x20 RGB file measured as a 20x3 image with 27 of its 30 rows silently dropped,
-  exit 0. Reproduced three ways before fixing; note the finding as first written
-  did *not* reproduce, because writing an `(H, W, 3)` array with
-  `planarconfig="separate"` produces a malformed file rather than a planar one —
-  the real reproduction needs the array already in planar order. The check now
-  reads the file's own `planarconfig`/`samplesperpixel`/dimensions instead of
-  trusting the array's shape.
-  **(b)** `parse_region` let NaN through every bound check (NaN compares false
-  against all of them) and died later in `int(round(nan * width))`.
-  **(c)** `--region ""` bypassed the region/inset mutual exclusion via a truthiness
-  test, so a run silently measured the inset while the user had asked for a region.
-  Also: a non-TIFF input escaped as a `TiffFileError` traceback instead of exit 2
-  (pointing this at a JPEG is the likeliest mistake there is); `bands` did not
-  actually partition the frame when any sample was non-finite, and the test
-  asserting that it did used `rng.random`, which never produces a NaN; two fields
-  named `non_finite_fraction` used different denominators (samples vs pixels) and
-  are now named for their base; CI's `pip install --user` would hit PEP 668 on both
-  runner images and now builds the same venv the README documents.
-  Memory measured rather than guessed while fixing the decode's temporaries: 1.18 GB
-  peak at 18.66 MP (~63 B/px), ~4.7 GB extrapolated to 10368x7200. The rewritten
-  decode is bit-identical on the real frame — same percentiles, same key, and the
-  nc `loss.*` cross-check still agrees to rounding.
-- 2026-09-02: Colour slice. `color_stats` reports per-channel balance in stops,
-  mean cast and chroma, chroma percentiles, neutral share, six hue sectors, and
-  **the cast of each tone band separately** — the crossover detector, and the
-  reason a whole-frame cast is not enough: the characteristic negative-conversion
-  fault moves shadows one way and highlights the other, which averages to nothing.
-  Measured on the Portra160 1102 pair it separates cleanly — nc goes `b* = -0.7`
-  (deep shadow) → `-32.2` (mid) where NLP goes `-0.1` → `-3.8`, with nc's blue
-  running 0.715 stops hot against green.
-  Three design points. CIELAB's reference white is **derived from this module's own
-  D65**, not the tabulated `(0.95047, 1, 1.08883)`: the headline number is a cast,
-  so an RGB-neutral frame has to read `a* = b* = 0` exactly or every image acquires
-  a constant tint. Verified in all five linear spaces, ProPhoto included, which
-  only holds because the Bradford adaptation runs first. `display-output-acceptance`
-  pins the tabulated white for its own oracle — that one compares absolute
-  colorimetry across renditions rather than relative cast within one image — and
-  the two choices coexist deliberately; a test pins the difference.
-  Colour **streams in row blocks** because it needs only aggregates: ~13 B/px
-  instead of the ~40 B/px an unchunked XYZ→Lab→chroma→hue pass would have added.
-  Peak went 1.18 → 1.43 GB at 18.66 MP (~77 B/px, ~5.7 GB extrapolated to
-  10368x7200 — inside nc's 6 GiB default, but not by much). A test pins that the
-  block size cannot change the answer, and tone/endpoint output is byte-identical
-  to the pre-colour run.
-  One correction while writing the tests: the circular-mean comment claimed it
-  prevents averaging 350 and 10 degrees to 180, which **cannot happen** with
-  60-degree bins — no sector spans the wrap, so an arithmetic mean would agree
-  today. The operator is still right and stays right if the sectors are ever re-cut
-  around hue centres; the comment now says that instead of a failure it prevents.
-  The test that went with it only checked the output range, and was replaced by one
-  tying `mean_a`/`mean_b`, the derived hue angle, and the sector binning together —
-  a units or off-by-one error breaks one of the three and not the others.
-  Two defects found by self-review before the slice was reported, both of the
-  plausible-wrong-answer kind. `np.histogram(range=...)` **discards** out-of-range
-  values rather than clipping them, so a frame more saturated than the chroma
-  histogram's 150 ceiling emptied the histogram outright: `mean_chroma` read 208.45
-  while `median_chroma` and `p90_chroma` both read 0.12, with nothing to signal it.
-  Samples are clipped into the top bin now and `max_chroma` is reported exactly, so
-  a saturated percentile is recognizable rather than merely wrong. And colour's band
-  fractions divided by its own measured count while tone's divided by the region —
-  on a frame with one NaN row colour called a band 1.0 that tone called 0.95, which
-  is the same one-name-two-denominators defect the review had already found once in
-  `non_finite_fraction`. Every colour fraction is now over the region, with
-  `measured_fraction` stating how much of it had a measurable luminance.
-- 2026-09-03: Roll rollup and Markdown artifact — the task's last two pieces.
-  `metrics roll <roll> <run>` measures every successfully converted frame and writes
-  `metrics.json` beside the tag (per-frame records embedded, plus a spread table);
-  `metrics table` re-renders it without re-reading pixels. Thirteen tracked axes
-  plus two derived crossover terms.
-  **The spread, not the mean, is what a roll gets** — frame 3 is a backlit portrait
-  and frame 11 a shaded street, so averaging their exposures describes the subjects.
-  But a first draft of that claim went further and said the spread *measures the
-  calibration*; it does not. One frozen recipe served every frame, so variation
-  combines scene content with calibration fit and one roll's numbers cannot separate
-  them. Measured on Ektar under `display-p3`: key spread 1.12 stops, `b_over_g`
-  spread 0.62 stops across three frames — as easily three different scenes as a
-  calibration that does not fit. The wording in the renderer, the artifact note and
-  the docstring all say that now, and there is deliberately no outlier rule and no
-  verdict; the extreme frames are named so a human can look.
-  **The colour space is resolved from the frozen recipe**, which is recorded
-  provenance rather than a guess at the pixels, and an under-determined one is
-  refused. The table was established by conversion + exiftool, not from the docs,
-  which turned up something worth keeping: `display-p3` and `film-master` outputs
-  carry the *same* ICC description ("RGB built-in"), so profile metadata cannot tell
-  them apart — the preset can. Refused with reasons: the JPEG and AVIF presets, the
-  PQ/HLG TIFFs, an `--output-profile` path, and an f32 `legacy` TIFF whose transfer
-  was never established. **nc's default is among them**, so the first run of this
-  command on a default roll is a refusal with instructions.
-  `linear-acescg` was added for `film-master`, which needed the ACES white point;
-  the definitions cross-check caught the incomplete transcription immediately (a
-  `KeyError` on the white-point map), and a new test now asserts every entry in
-  `PRIMARIES` is covered by that check, since the maps are hand-written.
-  Two defects the tests found, both mine. `markdown_table` relied on dict insertion
-  order, so a record re-read from disk rendered its spread rows **alphabetically**
-  while the same record rendered in-run came out in axis order — one artifact, two
-  tables. The renderer imposes its own order now. And a test asserting a 2.0-stop
-  spread across frames built one stop apart failed at 3.63: the fixture's steps are
-  one stop in *stored* values, which under `display-p3`'s sRGB transfer is ~1.8
-  stops of linear light. The expectation was wrong, not the code — the test now
-  declares a linear space and says why.
-  A `metrics-p3-probe` run was converted into the shared assets folder for the
-  end-to-end check and removed afterwards (320 MB); its `metrics.json` is kept
-  outside the repo. Verified: 188 analysis tests, both interpreters; fmt clean; no
-  Rust touched.
-- 2026-09-03: JPEG input, and a report pass over the Markdown artifact. User asked
-  for it against three points, all of which hold: a gain-map JPEG's ambiguity is
-  answerable with a parameter rather than a refusal; an 8-bit-to-8-bit comparison
-  still tells the story even if it is not exact; and the NLP outputs that matter
-  arrive **as JPEGs**, so "re-render through a TIFF preset" was not an answer for
-  the reference side at all.
-  `--jpeg-image sdr|hdr` (default `sdr`) selects which rendition of a gain-map
-  JPEG to measure. `sdr` reads the base image; Pillow opens an nc gain-map JPEG as
-  a single frame — it is registered as JPEG, not MPO — so the appended gain map is
-  never touched, which is right for `sdr` and is exactly why the gain map has to be
-  detected separately (MPF segment, else a second SOI; `FFD8FF` can only be a real
-  marker because entropy-coded data byte-stuffs `FF`). `hdr` is refused with two
-  tiers of diagnosis: "this file has no gain map" before "reconstruction is not
-  implemented". It is not implemented deliberately — applying the ISO 21496-1 /
-  Ultra HDR metadata slightly wrong yields plausible wrong numbers, and
-  `hdr-linear-tiff` is the display-linear HDR signal with no container in the way.
-  The record now carries `image.container`, `bits_per_sample`, and for JPEGs
-  `decoder` (Pillow/libjpeg build) plus `gain_map_present` and `jpeg_image` —
-  provenance a lossy read needs, since a JPEG's pixels are whatever its decoder
-  says they are. **Verified against the TIFF path**, which already has nc's `loss.*`
-  as its oracle: the same content as 16-bit TIFF, 8-bit TIFF and JPEG at q100/q85
-  gave identical keys (0.256) and identical p95, diverging only at p0.1
-  (-4.117 / -4.119 / -4.132) and `toe_span` — and most of that is the bit depth,
-  not the codec, which is the documented caveat reproducing itself.
-  **This falsified four of my own tests and three doc claims**, none of which the
-  gates would have caught on their own: `gain-map-hdr` and `ultra-hdr-v1` moved
-  from refused to `display-p3`, so the preset table, `nlp-comparison`'s "the metric
-  reader will not open it", and the README's "nc's default preset is among the
-  refused" were all wrong. Found by re-running the suite and then grepping for the
-  negation of the claim, per CLAUDE.md.
-  Markdown report pass, four fixes: the spread table printed six decimals where
-  the per-frame table printed two; `at_top_code` rendered as `1e-06`; fractions
-  read as `0.284` rather than `28.38%`; and the build identity was absent from the
-  report although it sits in the JSON. Formatting is now per-axis (`AXIS_FORMAT`:
-  unit + precision), fixed-point always, with `<0.01` for a value that rounds to
-  zero without being zero — "nothing clipped" and "one pixel in a million clipped"
-  are different findings. The header names the build and marks `git_dirty` as
-  **uncommitted changes**, since a committed report that cannot say which build
-  made the pixels is hard to trust later. Percentages live only in the report; the
-  JSON keeps fractions, because a field that sometimes means 22 and sometimes 0.22
-  is a standing 100x error.
-- 2026-09-03 (close-out): Landed as `nctool metrics {image,roll,table}`. A `/ship`
-  review round after the close-out above found seven real defects, four of them the
-  plausible-wrong-number kind this module exists to avoid, all fixed with regression
-  tests. Worth carrying forward:
-  **(a)** The three channels' geometric means rested on *different pixel supports* —
-  each over the pixels where that channel is positive. Blue crushed to black over
-  half a frame reported `b_over_g = 0.0`, a perfectly neutral balance for an image
-  with `mean_b = +26.7`. The ratios are now withheld when the supports disagree and
-  `color.balance_support` publishes them — the same "counted, not folded" treatment
-  `tone_stats` already gave non-positive luminance.
-  **(b)** `crossover_a`/`crossover_b` difference the **shadow and mid** bands, while
-  four separate places of prose said shadow-to-highlight. Kept the bands (the
-  `highlight` band is 0.47 stops wide and often empty, so an axis built on it would
-  vanish exactly where a render is darkest) and fixed the prose to say so.
-  **(c)** Gain-map detection counted `FFD8FF` across the file, justified by byte
-  stuffing — which applies only to entropy-coded scan data, not marker payloads. An
-  EXIF APP1 carries a whole embedded thumbnail JPEG, so **every camera and Lightroom
-  export** reported a gain map it does not have, and `--jpeg-image hdr` then gave the
-  wrong tier of diagnosis. Replaced with a marker walk.
-  **(d)** `np.where(finite, encoded, 0.0)` made a NaN sample count as sitting *at
-  black*. Comparing `encoded` directly is what the substitution was reaching for —
-  numpy comparisons against NaN are already False.
-  **(e)** `--output-profile prophoto` was decoded with the ROMM piecewise toe, but
-  `color::build_profile` writes a **pure 1.8** power law and says so. Below encoded
-  0.03125 they diverge as `16*v^0.8` — 1.3 stops at v=0.01 — exactly what `p0.1`,
-  `toe_span` and `deep_shadow` are made of. Two ProPhoto spaces now exist:
-  `prophoto` (ISO 22028-2, for third-party exports) and `prophoto-gamma1.8` (nc's).
-  **(f)** `metrics roll --space <typo>` decoded the whole roll before failing, then
-  reported "no frame could be measured" and returned *before* writing the `skipped`
-  list holding the reason. Validated up front now.
-  **(g)** `Pillow` was a hard dependency that `HAVE_DEPS` did not import, so
-  `NCTOOL_REQUIRE_DEPS=1` — added precisely to stop silent skips — passed without it
-  while the JPEG tests errored rather than skipped.
-  Verified: 207 analysis tests on both interpreters, fmt, clippy `-D warnings`,
-  build, Rust suite (702 + 174). Codex review was unavailable (workspace spend cap),
-  so `ship:diff-reviewer` was the sole reviewer.
+- Goal: a deterministic, pixel-derived metric artifact for *any* output image,
+  regardless of producer, describing tone, colour, range use and endpoint
+  behaviour well enough that two renderings can be compared numerically. It
+  describes, it does not rank. 2026-08-12: the briefly separate
+  `photographic-result-analysis` follow-up was folded in.
+- **Decisions (2026-09-02), all still standing:** `numpy` + `tifffile` (+ `Pillow`)
+  in a venv — `nctool` stopped being stdlib-only, the import is lazy, CI installs
+  them and `NCTOOL_REQUIRE_DEPS=1` turns a forgotten install into a failure rather
+  than 29 skips under a green `ok`; **every input's colour space is declared,
+  never guessed** (measuring one file as `linear-srgb` instead of `srgb` moved the
+  key 2.22 stops with no error either way — and the manifest's `encoding` names
+  depth, not transfer); measure in linear light in one common space; tone in log2
+  stops relative to 0.18; regions are fractions (`--inset` / `--region`) and are
+  recorded in the artifact. Colorimetry is transcribed from `definitions.rs` and the
+  tests re-read it, so a one-sided edit fails on both sides — which is also why
+  **`ADOBE_RGB` was defined in the Rust first** (2026-09-02) although nc renders to
+  no such space. Its `--help` space list is built from `metrics.SPACES` and pinned
+  by a test, after it went stale by hand once.
+- **Shipped as `nctool metrics {image,roll,table}`** (tone slice and colour slice
+  2026-09-02, roll rollup + Markdown table + JPEG input 2026-09-03, band re-cut and
+  histogram 2026-09-10). Verified against nc's own `loss.*` counters — the one
+  independent source of truth: `clipped_high` 0.103282844 reported, 0.103283
+  measured. Tests: `test_metrics.py`.
+- **The film holder *is* the highlight distribution on an uncropped frame, and it
+  is measurable** (2026-09-02). It blocks all light, so it is maximum density and
+  renders to white — the top code. Ektar 971 (`display-p3`, default sigmoid): top-code
+  share 0.0950 → 0.0134 → 0.0018 → 0.0000 for insets 0 / 0.05 / 0.10 / 0.15, with
+  `shoulder_span_stops` recovering 0.000 → 0.417 and `above_diffuse_white` 0.0541 →
+  0. On Portra160 1102 the white border moved the *median* by **3.1 stops** between
+  the full frame and a centre-76% region (−2.30 → −5.42). So a full-frame
+  measurement of an uncropped scan is not a measurement of the picture; the region
+  parameter is not a convenience. A 5% inset does not clear a real holder (it can
+  occupy 10–15% of one edge); excluding dark pixels as a holder proxy would bias the
+  shadow statistics being measured — region only. (Relevant to
+  `algo/auto-anchor-interior-measurement`'s no-IR inset question.) The `legacy`
+  render on that frame does genuinely clip (10.3%) and its top-code population
+  survives the holder's removal (2.85% at inset 0.15).
+- **Colour** (`color_stats`): per-channel balance in stops, mean cast and chroma,
+  chroma percentiles, neutral share, six hue sectors, and **the cast of each tone
+  band separately** — the crossover detector, because the characteristic
+  negative-conversion fault moves shadows one way and highlights the other and
+  averages to nothing. On the Portra160 1102 pair nc goes `b* = −0.7` (deep
+  shadow) → `−32.2` (mid) where NLP goes `−0.1` → `−3.8`, with nc's blue 0.715 stops
+  hot against green. CIELAB's reference white is **derived from this module's own
+  D65**, not the tabulated triple, so an RGB-neutral frame reads `a* = b* = 0`
+  exactly; `display-output-acceptance` pins the tabulated white for its absolute
+  cross-encoding oracle and the two coexist deliberately (a test pins the
+  difference). Colour streams in row blocks; every colour fraction is over the
+  region, with `measured_fraction` stating how much had measurable luminance.
+- **Memory, measured:** 1.18 GB peak at 18.66 MP after the tone slice (~63 B/px),
+  1.43 GB with colour (~77 B/px) — **~5.7 GB extrapolated to 10368×7200**, inside
+  nc's 6 GiB default but not by much. Nothing gates it.
+- **Roll rollup (2026-09-03):** `metrics roll <roll> <run>` writes `metrics.json`
+  beside the tag (per-frame records + a spread table over thirteen axes plus two
+  crossover terms); `metrics table` re-renders it. **The spread, not the mean, is
+  what a roll gets — and it does not measure the calibration**: one frozen recipe
+  served every frame, so variation combines scene content with calibration fit
+  (Ektar under `display-p3`: key spread 1.12 stops, `b_over_g` 0.62 across three
+  frames — as easily three scenes as a bad fit). No outlier rule, no verdict; the
+  extreme frames are named. **The colour space is resolved from the run's frozen
+  recipe**, established by conversion + exiftool: `display-p3` and `film-master`
+  carry the *same* ICC description ("RGB built-in"), so only the preset can tell
+  them apart; refused with reasons are the AVIF presets, the PQ/HLG TIFFs, an
+  `--output-profile` path, and an f32 `legacy` TIFF whose transfer is unverified.
+- **JPEG input (2026-09-03):** `--jpeg-image sdr|hdr` (default `sdr`) selects which
+  rendition of a gain-map JPEG to measure. `sdr` reads the base (Pillow opens an nc
+  gain-map JPEG as a single frame, so the appended gain map is never touched); `hdr`
+  is refused in two tiers — "no gain map" before "reconstruction is not
+  implemented", deliberately, since applying the metadata slightly wrong yields
+  plausible wrong numbers and `hdr-linear-tiff` is the HDR signal with no
+  container. Gain-map detection is a **marker walk**, not a count of `FFD8FF`
+  across the file (an EXIF APP1 embeds a whole thumbnail JPEG, so every camera and
+  Lightroom export had reported a gain map). Records carry `image.container`,
+  `bits_per_sample`, `decoder`, `gain_map_present`, `jpeg_image`. Verified against
+  the TIFF path: 16-bit TIFF, 8-bit TIFF and JPEG q100/q85 give identical keys and
+  p95, diverging only at p0.1 — mostly bit depth, not codec. **This moved
+  `gain-map-hdr` and `ultra-hdr-v1` from refused to measurable as `display-p3`**,
+  which falsified the earlier "nc's default is among the refused" claim and
+  `nlp-comparison`'s "the metric reader will not open it" — so a default roll and
+  the NLP JPEGs are comparable without a re-render, but `gain_map_present` has to
+  reach any comparison output or a P3 SDR base gets compared as the whole rendition.
+- **Durable gotchas from the review rounds** (all fixed, all regression-tested):
+  a planar TIFF must be detected from the file's own `planarconfig`, not the
+  decoded array's shape; the three channels' geometric means must share one pixel
+  support or `b_over_g` reads neutral on a frame with half its blue crushed (ratios
+  are withheld and `color.balance_support` says so); `crossover_a/b` difference the
+  **shadow and mid** bands (the `highlight` band is often empty), and the prose says
+  so; `np.histogram(range=…)` discards out-of-range values, so saturated samples
+  are clipped into the top bin and `max_chroma` reported exactly; nc's ProPhoto is
+  a **pure 1.8** power law, so two ProPhoto spaces exist (`prophoto` for ISO
+  22028-2 exports, `prophoto-gamma1.8` for nc's); percentages live only in the
+  Markdown report, the JSON keeps fractions; the report header names the build and
+  marks `git_dirty`.
 
 - 2026-09-10: **Re-cut the tone bands in CIELAB lightness, and added the per-channel
   histogram.** `schema_version` 1 -> 2.
@@ -689,149 +408,83 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   (Every cut's `above_diffuse_white` band accounts for 33 of its own `<0.1%`
   count: all 33 renders are SDR. Net of it, A is 35/132 and F is 11/198.)
   **B**, Adobe's parametric-curve splits converted to stops (-1.82 / +0.25 /
-  +1.54, widths 2.07 / 1.29 / 0.94), is the reference that named the *shape* of
-  the answer — narrowing smoothly, because equal steps in an encoded domain
-  compress in stops — but it is not a spec to copy: Adobe's regions are
-  overlapping weighting regions for editing, not disjoint measurement bins, and
-  at four regions one still takes a median 64.5%. **C**, the literal Zone system,
-  is eleven equal 1-stop bins; on a display-referred render that is the wrong
-  shape at both ends — 96 of its 330 entries under 0.1%, three whole bands whose
-  *median* is under 0.1%. **D**, the cheapest diff, keeps the Zone framing and
-  splits `mid`; at 58.7% median it shows the framing was the problem, not the
-  band count.
+  +1.54), named the *shape* of the answer — narrowing smoothly, because equal
+  steps in an encoded domain compress in stops — but Adobe's regions are
+  overlapping weighting regions for editing, not disjoint measurement bins. **C**,
+  the literal Zone system, is the wrong shape at both ends on a display-referred
+  render — three whole bands whose *median* is under 0.1%. **D** shows the framing
+  was the problem, not the band count.
   **Chosen: equal steps of CIELAB L\***, every 15 to L\* 75, then diffuse white
-  (L\* 100), then an overflow band. Seven names: `deep_shadow, shadow, low_mid,
-  mid, high_mid, highlight, above_diffuse_white`. Why L\* rather than the encoded
-  axis Adobe splits: it is the **same perceptual space the colour stage already
-  measures cast in**, so the two stages now share a domain and not merely a list of
-  edges — and splitting sRGB's curve would have made nc's own output encoding the
-  authority for measuring everyone else's. The two agree closely anyway (an equal
-  five-way split of the sRGB axis lands at -2.44 / -0.44 / +0.82 / +1.75 against
-  L\* 20/40/60/80's -2.59 / -0.68 / +0.64 / +1.65), which is itself the argument
-  that the family is right and the choice within it is not delicate.
-  **Measured before -> after, same code path, both cuts:** largest band as a share
-  of the frame, median **82.6% -> 46.3%**, worst **95.0% -> 56.2%**; `highlight`
-  median **0.85% -> 3.84%** and frames under 0.1% **15/33 -> 6/33**; `deep_shadow`
-  frames under 0.1% **20/33 -> 5/33**; cast entries resting on under 0.1% of the
-  region **18 of 120 -> 12 of 200**. The headline is discrimination: across the
-  five presets of frame G2 the old band vector spread **2.1 percentage points**
-  (`mid` 91.70 / 93.78 / 91.81 / 93.26 / 92.84 — five presets, one reading), the
-  new one spreads **24.0** (`low_mid` 51.34 / 27.32 / 49.71 / 30.02 / 28.97).
-  **Why 15 and not 20, and why stop there.** L\* 20/40/60/80 (**E**) gives six
-  bands and the same round story, and was rejected on measurement: its largest
-  band still takes 66.2% of one real frame against 56.2%. Going finer stops
-  paying — L\* every 12.5 (**G**) buys 3.5 points of worst case for two more
-  bands, one of which reads under 0.1% on most frames, and takes the sparse-entry
-  rate from 5.6% to 14.8% (net of the SDR-empty overflow band).
+  (L\* 100), then an overflow band. Why L\* rather than the encoded axis: it is the
+  **same perceptual space the colour stage already measures cast in**, and splitting
+  sRGB's curve would have made nc's own output encoding the authority for measuring
+  everyone else's. The two agree closely anyway, which is itself the argument that
+  the family is right and the choice within it is not delicate.
+  **Measured before -> after, same code path, both cuts:** largest band median
+  **82.6% -> 46.3%**, worst **95.0% -> 56.2%**; `highlight` median **0.85% -> 3.84%**
+  and frames under 0.1% **15/33 -> 6/33**; `deep_shadow` frames under 0.1% **20/33
+  -> 5/33**; cast entries resting on under 0.1% of the region **18 of 120 -> 12 of
+  200**. The headline is discrimination: across the five presets of frame G2 the
+  old band vector spread **2.1 percentage points** (`mid` 91.70 / 93.78 / 91.81 /
+  93.26 / 92.84), the new one spreads **24.0** (`low_mid` 51.34 / 27.32 / 49.71 /
+  30.02 / 28.97).
+  **Why 15 and not 20, and why stop there.** L\* 20/40/60/80 (**E**) was rejected
+  on measurement: its largest band still takes 66.2% of one real frame against
+  56.2%. Going finer stops paying — L\* every 12.5 (**G**) buys 3.5 points of worst
+  case for two more bands and takes the sparse-entry rate from 5.6% to 14.8%.
   **`above_diffuse_white` stays, and is a deliberate exception to "no band empty on
   a normal frame".** It is an overflow bin: an SDR rendition cannot populate it,
   but on `film-master` or `hdr-linear-tiff` it is the only place in the tone stage
-  where headroom above display white appears, and `endpoints` cannot stand in for
-  it on a float file. Documented as such rather than quietly dropped.
+  where headroom above display white appears.
   **The population rule is a caveat, not a filter.** Every `cast_by_tone_band`
   entry now carries `pixels` and `sparse` (under `BAND_SPARSE_FRACTION`, 0.1% of
   the region). Sparse entries are **kept** — a band set that varies frame to frame
   cannot be diffed — but the rollup's `crossover_a`/`crossover_b` are withheld when
-  either contributing band is sparse, because a difference of two means is only as
-  good as the thinner of them and a roll spread cannot say which frame was thin.
-  `highlight` is now a tracked rollup axis; on the old cut an axis built on it said
-  nothing about a roll.
+  either contributing band is sparse. `highlight` is now a tracked rollup axis.
   **`tone.histogram`**: the record's first list-valued field. Four series
-  (`luminance`, `r`, `g`, `b`), 100 counts each, one per L\* unit from black to
-  diffuse white, plus per-series counters for samples above diffuse white and for
-  those with no lightness (non-positive, non-finite) — they partition the region,
-  and a test pins that. L\* and not the stored code values, which describe the
-  file's encoding as much as the picture; L\* and not stops, which give black an
-  unbounded tail no chart can draw; and because the bands are cut on the same axis
-  **every band edge falls exactly on a bin edge**, so one chart can shade bands
-  over bars without interpolating (a test breaks if either the edges leave integer
-  L\* or the bins leave L\*). The channel series apply the same L\* curve to one
-  channel, which is a level and not a colorimetric lightness — stated in the record
-  rather than left to be inferred. It streams in row blocks like `color_stats`:
-  measured **+0.55 s** (2.42 -> 2.97 s) at 18.7 MP and **no measurable memory**
-  (1.40 GB both ways); a record grows to ~6.8 KB.
+  (`luminance`, `r`, `g`, `b`), one count per L\* unit, plus per-series counters
+  for samples above the range and for those with no lightness — they partition the
+  region, and a test pins that. L\* and not stored code values (which describe the
+  encoding), and not stops (which give black an unbounded tail); and because the
+  bands are cut on the same axis **every band edge falls exactly on a bin edge**, so
+  one chart can shade bands over bars without interpolating (a test breaks if
+  either side leaves integer L\*). The channel series apply the same L\* curve to
+  one channel, which is a level and not a colorimetric lightness — stated in the
+  record. Streams in row blocks: **+0.55 s** at 18.7 MP and no measurable memory.
   **The record states its own band cut** (`record.bands`: domain, names, L\* edges,
-  stops edges, sparse threshold), because the edges have now moved once and would
-  read plausibly against the wrong definition if they move again. `metrics table`
-  **refuses** a record whose `schema_version` is not the current one: every column
-  label still fits a schema-1 record, so rendering it would silently compare two
-  definitions of shadow. Checked the other consumers — `nctool roll` and `nctool
-  compare` carry their own schema constants and never read a metrics record, and
-  `scripts/real-scan-verify/` does not use `metrics` at all.
-  Verified: 226 analysis tests (207 before) on the venv interpreter, and the four
-  new invariants were each confirmed to fail when deliberately broken — the
-  sparse flag in both directions, the schema refusal, and bin/band alignment
-  broken two ways (a fractional L\* edge, and a histogram binned in something
-  other than L\*). The stdlib interpreter still skips cleanly (87 skips, 226 run).
-  No Rust was touched, and the Rust gates were run anyway and are green: fmt,
-  clippy `-D warnings`, build, 755 + 191 tests.
+  stops edges, sparse threshold), because the edges have now moved once. `metrics
+  table` **refuses** a record whose `schema_version` is not the current one: every
+  column label still fits a schema-1 record, so rendering it would silently compare
+  two definitions of shadow. `nctool roll` and `nctool compare` carry their own
+  schema constants and never read a metrics record; `scripts/real-scan-verify/`
+  does not use `metrics` at all.
+  Verified: 226 analysis tests, each new invariant confirmed to fail when broken.
 
-- 2026-09-10 (follow-up): **Histogram range extended past diffuse white; survey of
-  how other tools bin tonal regions.** Supersedes the histogram range described in
-  the entry above.
-  **The range now runs L\* 0..200 in 200 bins**, not 0..100 in 100. Two reasons,
-  both of which the first version got wrong. A float or HDR rendition genuinely
-  carries samples above display white and a scalar overflow counter **cannot be
-  drawn** — L\* 200 is 6.46x diffuse white (+5.17 stops), covering nc's own
-  1000/203 HDR ceiling (L\* 181.4) with margin. And putting white at the *edge* of
-  the axis hid the commoner SDR question: how far short of diffuse white the
-  highlights stop. Measured on the five preset renders of G2, the last non-empty
-  luminance bin sits at L\* **88 / 92 / 88 / 92 / 98** — 12, 8, 12, 8 and 2 L\*
-  short of white, with `sig-knees` the only one that nearly reaches it. Diffuse
-  white is now the bin-100 boundary, exactly halfway along, and the per-series
-  overflow counter is renamed `above_range` (it no longer means "above diffuse
-  white", which the bins themselves now resolve). Cost is unchanged: +0.60 s at
-  18.7 MP, no measurable memory, a record 6.8 -> 8.2 KB with ~107 empty bins on an
-  SDR frame — the price of one axis that serves both SDR and HDR.
-  The record now also names `mid_grey_bin` (49) and `diffuse_white_bin` (100), so
-  a chart does not re-derive the L\* formula to place its two reference lines.
+- 2026-09-10 (follow-up): **Histogram range extended past diffuse white.**
+  **The range now runs L\* 0..200 in 200 bins**, not 0..100 in 100. A float or HDR
+  rendition genuinely carries samples above display white and a scalar overflow
+  counter **cannot be drawn** — L\* 200 is 6.46x diffuse white (+5.17 stops),
+  covering nc's own 1000/203 HDR ceiling (L\* 181.4) with margin. And putting white
+  at the *edge* of the axis hid the commoner SDR question: how far short of diffuse
+  white the highlights stop. Measured on the five preset renders of G2, the last
+  non-empty luminance bin sits at L\* **88 / 92 / 88 / 92 / 98** — `sig-knees` the
+  only one that nearly reaches it (input to `algo/contrast-latitude-spike`).
+  Diffuse white is the bin-100 boundary; the per-series overflow counter is
+  `above_range`. Cost unchanged: +0.60 s at 18.7 MP, a record 6.8 -> 8.2 KB. The
+  record names `mid_grey_bin` (49) and `diffuse_white_bin` (100).
   **A test pins that the `luminance` series and `tone.percentiles_stops` describe
-  the same quantity**: both take the declared space's own luma weighting, and the
-  test brackets every one of the eleven percentiles into the bin its cumulative
-  count lands in. Worth recording *how* it was falsified, because the obvious break
-  does not work — monkeypatching `luminance_weights` moves the tone stage and the
-  histogram *together*, so consistency survives and the test passes. Breaking only
-  the histogram's weighting is the real check: an equal-weight luma fails it, and
-  so does a Rec.709 luma on a Display P3 file and a 1% error in the green
-  coefficient — but only after the fixture was made strongly channel-separated and
-  the assertion widened from the median to all eleven percentiles. At the first
-  attempt (median only, mild cast) the Rec.709 swap passed.
-  Luminance is **emitted, not left to be derived at draw time**: luma is a weighted
-  sum of linear channel values and is not recoverable from three independent
-  per-channel histograms.
-  **Survey of how other tools bin tonal regions, since nc's cut should not rest on
-  one vendor's reverse-engineered defaults.** Adobe's parametric-curve splits
-  default to 25/50/75 of the **encoded** axis; the conversion to stops re mid grey
-  was recomputed here rather than taken on trust and it checks out — -1.823 /
-  +0.250 / +1.538, with diffuse white at +2.474. The wider finding is the useful
-  one: **no surveyed tool defines disjoint bins for *measurement*.** Every tonal
-  region that could be checked is an *editing* construct, and they are overlapping
-  weighting regions, not bins — Adobe's parametric curve by its own description,
-  darktable's `color balance rgb` by alpha masks with a luminance fulcrum set where
-  all three masks reach 50% opacity, RawTherapee's shadows/highlights by a "tonal
-  width" measured in from each end.
-  The one disjoint binning found is **darktable's tone equalizer: nine zones, 1 EV
-  apart, spanning -8 to 0 EV** ("this tab splits the brightness of the guided mask
-  into nine zones (from -8 to 0 EV)"; the manual does not state the anchor
-  unambiguously and it was not pinned). That is a shipping, principled,
-  stops-even, Zone-like cut — i.e. candidate **C**, which this task rejected. The
-  reason the same cut suits darktable and not this record is **what an empty bin
-  costs**: in an editing tool an empty zone is a slider that does nothing, which is
-  harmless; in a measurement record it is a reported number with nothing behind it.
-  Measured, C had the best largest-band share of all seven candidates (37.4%
-  median) and the worst sparsity — 96 of 330 band shares under 0.1%, three whole
-  bands whose *median* is under 0.1%. So the survey does not overturn the choice,
-  but it does mean the stops-even family has a real advocate and the rejection
-  rests on the sparsity measurement, not on principle.
-  On the histogram's domain the survey is supportive rather than mixed:
-  **RawTherapee draws its L curve histogram in CIELAB L\*** ("the histogram on the
-  L curve reflects lightness after the Lab adjustments"), which is the same domain
-  chosen here. Sources: Adobe Camera Raw / Lightroom tone-control docs, darktable's
-  tone-equalizer and color-balance-rgb manual pages, RawPedia's Lab Adjustments and
-  Shadows/Highlights pages.
-  Verified: 229 analysis tests (226 before), venv interpreter; the new range tests
-  were each confirmed to fail when broken (range cut back to diffuse white, and the
-  three luma-weighting breaks above). No Rust touched.
+  the same quantity** — and the obvious break does not work: monkeypatching
+  `luminance_weights` moves both together. Breaking only the histogram's weighting
+  is the real check, and it needed a strongly channel-separated fixture and all
+  eleven percentiles asserted before a Rec.709-on-P3 swap failed it.
+  **Survey of how other tools bin tonal regions:** no surveyed tool defines
+  disjoint bins for *measurement* — Adobe's parametric curve, darktable's `color
+  balance rgb` and RawTherapee's shadows/highlights are all overlapping *editing*
+  weights. The one disjoint binning found is darktable's tone equalizer (nine
+  zones, 1 EV apart, −8 to 0 EV) — candidate **C** above, which this task rejected
+  on sparsity, not principle: in an editing tool an empty zone is a harmless
+  slider, in a measurement record it is a reported number with nothing behind it.
+  RawTherapee draws its L-curve histogram in CIELAB L\*, the domain chosen here.
 
 ## drive-asset-migration
 
@@ -972,6 +625,12 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
   of one stock, one calibration, no registration problem and no colour-space ambiguity.
   Prefer it over the three Gold200 frames for any number that has to hold up.
   Follow-up is `algo/contrast-latitude-spike`.
+- 2026-09-13 (note, no work): a further batch `converted/nlp/2026-09-11/2026-09-11-Portra400`
+  (32 files) is registered in the manifest but was not part of the survey above; its
+  declared space must be established the same way before it is measured.
+- 2026-09-14: the 2026-09-02 note above that the default gain-map JPEG is unreadable by
+  the metric reader was superseded on 2026-09-03 — `metrics --jpeg-image sdr` reads the
+  base, so a default roll is comparable as its SDR rendition (see `conversion-metrics`).
 
 ## display-output-acceptance (continued)
 
@@ -989,413 +648,140 @@ Addressed the `asset-manifest` review findings (all uncommitted, in worktree):
 
 ## comparison-review-tooling
 
-**Status:** done
-**Updated:** 2026-09-12
+**Status:** done (2026-09-12)
+**Updated:** 2026-09-13 (consolidated)
 
 - Goal: promote the ad-hoc review pages built during `algo/reference-anchored-sigmoid` into a
   maintained tool for comparing rendering configurations by eye. Requested explicitly by the
   user rather than continuing to patch the scripts inline.
-- Lessons already paid for and worth preserving: **render through the path being measured** (the
-  previews originally used the *legacy* path while the metrics measured `pipeline::sdr::render` —
-  reviewing one renderer while measuring another); **click, not hover** (a hover popover covers
-  the thumbnail you are trying to leave, and inter-thumbnail gaps make it flicker); **one shared
-  lightbox**, which is what makes prev/next possible; **single-quote CSS `url()`** inside a
-  double-quoted `style` attribute or the attribute terminates and the tile renders black;
-  **never publish these pages** (rendered personal photographs — throwaway dir only, never
-  `../nc-assets` or the repo); and **`sips` destroys a gain map when downscaling**, so HDR review
-  needs full-size files.
-- Wanted: one entry point instead of two overlapping script pairs, the configuration matrix as
-  data rather than code, HDR review for frames whose range exceeds SDR, and build-vs-build
-  comparison so a future default change can be reviewed the same way.
-
-### 2026-09-02 — the viewer half shipped: `tools/review-app/`
-
-- **Scope was deliberately halved** (user decision): a **viewer only**, plus the data format.
-  The generator that renders a matrix and emits the JSON is *not* built — image and
-  `review.json` production stays ad-hoc for now. So the task's "one documented entry point
-  renders a described matrix" is **not** met yet, and neither are HDR review nor build-vs-build.
-  What *is* settled is the contract those will target.
-- **The format is the deliverable as much as the app.** `review.json` (`tools/review-app/SCHEMA.md`)
-  declares `configs` and `images`, `snake_case` like every other JSON contract here, with image
-  paths resolved against the review file so a set is one movable directory. That answers "matrix
-  as data rather than code" from the viewer's side. Config order sets both button order and the
-  number-key mapping. An unknown config id in `renditions` is a loud error naming the typo (the
-  `deny_unknown_fields` reflex); a *missing* rendition is not — it renders as a visible gap,
-  because a comparison silently missing half of itself is the worst of the three outcomes.
-- **Toggling in place is the whole point, and it is structural**: every rendition of a frame
-  occupies one CSS grid cell, inactive ones hidden but still laid out, so switching config
-  cannot move the picture by a pixel. Side-by-side hides exactly the highlight differences this
-  was built to see. Verified in the browser — all renditions at row 1 / column 1, identical
-  bounding boxes.
-- **`fullsize` gained pan controls and a mini-map** (the user's sketch): edge buttons stepping
-  80% of a viewport, and a window box showing where the viewport sits in the image.
-- Stack is **Vite+ (`vp`) + Solid + StyleX + pnpm**, in `tools/review-app/` with its own CI job
-  (`pnpm check` / `test` / `build`). Deliberately *not* joined to the Rust matrix: a Rust change
-  cannot break it and vice versa.
-- **Four traps, every one of which failed silently** — all recorded in the app's `README.md`:
-  StyleX drops CSS shorthands it does not model (`background`, `border`, `gridArea` vanished,
-  leaving white text on a white button); `stylex.props()` returns React's `className` *and*
-  spreading it is not reactive in Solid; a scroll handler that writes a signal creates a
-  measure → render → layout → measure cycle that wedged the renderer so hard Chrome could not
-  inject a script; and `requestAnimationFrame` never fires in a hidden tab, which silently
-  disabled the pan controls and dropped smooth scrolls. Each cost a debugging round.
-- **The old lessons above still stand and are not yet re-implemented here.** In particular
-  "render through the path being measured" is now the *generator's* obligation, and the
-  `sips`-destroys-a-gain-map constraint still blocks HDR review. Whoever builds the generator
-  should read that bullet before starting.
-
-### 2026-09-10 — the viewer became fullstack: set loaded by path, watched for changes
-
-- **The friction was setup, not viewing** (user request). `?data=` made a review set something
-  that had to be reachable from the served root, so reviewing one cost either a `dist/` copied
-  next to it or a hand-built relative URL. The app now runs **TanStack Start** and the server
-  reads the set off disk: `pnpm dev <path to review.json>` (a directory works, meaning the
-  `review.json` in it), or `REVIEW_SET`. The path may be anywhere. A bare `pnpm dev` still
-  renders the committed synthetic example, which is why that example is in the repo.
-- **It is dev-server-only by decision** (user). `vp build` stays in CI as a compile check;
-  nothing is served from `.output/` and there is no `pnpm start`.
-- **Images are served from an allowlist, not a confined root.** Every rendition registers its
-  absolute path while the set is parsed and is addressed afterwards by an opaque id, so a path
-  is never taken from a URL and `..` in one means nothing — which is also what lets a set
-  legitimately name files outside its own directory, as a root-prefix check could not. The id
-  carries the file's mtime, so a re-render is a different URL: that is the whole refresh
-  mechanism, and it lets responses be cached `immutable`.
-- **`renditions` became a plain record.** Start's serializable check is `T extends Map<any,any>`,
-  which `ReadonlyMap` fails. `strict: false` would have silenced it; the record is simply the
-  better model, being exactly what crosses the wire and what the JSON already is.
-- **Live refresh cost four attempts and the failure mode is the lesson.** Restarting the dev
-  server under an open page left it showing the previous render with **no error anywhere** —
-  indistinguishable from a re-render that changed nothing, which is the one wrong answer this
-  tool must never give. Trusting `EventSource`'s retry, replacing the retry, and reloading on
-  reopen all failed. Measured cause: after a restart the `changed` event still arrives but
-  `router.invalidate()` issues *no request at all*, the router being stale once the module graph
-  is replaced — so no repair to the stream could have worked. Recovery now rests on a plain
-  `fetch` poll of `/alive`, whose boot id changes with the server; the stream is the fast path
-  only. Cost: a restart reloads the page, losing selected config and scroll. Ordinary set edits
-  do not.
-- **Two Start behaviours that fail silently**, both in the app's `README.md`: `shellComponent`
-  renders **server-side only**, so a stylesheet linked there names an asset the client build
-  never emits and a browser-side import from there is tree-shaken away entirely (stylesheets go
-  through the root route's `head.links`); and a route's `server.handlers` *is* stripped from the
-  client bundle, which is what makes importing `node:fs` in a route file legitimate. StyleX
-  needed its dev CSS wired by hand for the same root cause — its unplugin auto-injects only when
-  Vite's entry is an HTML file.
-- **Deliberately dropped:** `loadReview` / `reviewUrl` / `hasDataParam` and their three test
-  blocks, the browser no longer fetching anything. The twelve `parseReview` tests survive through
-  an injected resolver; the server modules add eighteen, including one that reads the committed
-  example off disk so the file-touching path is covered at all. 42 tests, all four gates green.
-- **Review caught the headline feature not working, and the reason is a lesson about
-  verification.** The held set was dropped only when `review.json`'s own mtime moved, but a
-  rendition's mtime is frozen into the asset map at parse time and *is* its `/img/` URL — so a
-  re-rendered frame kept its old URL and the browser served it from the `immutable` cache entry.
-  Every manual check had missed it because they all used `pnpm dev <directory>`, and the cache
-  key compared the *stated* path against the loaded set's *resolved* one; the directory form
-  therefore never hit the cache and accidentally looked correct, while the file form — the one
-  every doc tells people to use — went stale. Two bugs hiding each other. Both fixed, both now
-  covered by tests that were checked to fail against the old code. Test live refresh with the
-  **file** form. A third finding: the `renditions` record inherits `Object.prototype`, so a
-  config id named `toString` read as a *present* rendition and rendered a broken image where the
-  gap belongs; it is built with a null prototype now, which SSR serialization was verified to
-  survive.
-- **A second reviewer (Codex, on the PR) found four more, three of them the same shape.** The
-  watch targets were derived once, so a `review.json` edit moving a rendition into a new
-  directory left it unwatched; the starting baseline was taken from disk rather than from the
-  *loaded* set, so a render landing between the page's first read and the watcher's first breath
-  was recorded as already-seen; and the boot-id baseline was established one poll interval late,
-  so a server replaced inside that window was never recognised as different. Each ends in the
-  page silently showing the previous render, which is why all three were fixed rather than
-  noted. The fourth: the selected config was held as an **index**, so a live edit that removed or
-  reordered configs silently moved the selection — it is held by **id** now, verified by removing
-  a config from a live set and watching the selection stay put.
-- **Not done, and unchanged by this:** the generator is still the reason this task is open, and
-  HDR review and build-vs-build are still untouched. The server could now measure `width`/`height`
-  itself and retire those schema fields — it does not, and the schema is unchanged.
-
-### 2026-09-10 — styling moved from StyleX to Panda CSS
-
-- **User request, exploratory** ("I want to try to switch to panda-css"). Pure swap of the
-  styling mechanism: no visual change intended, and none observed — every declaration in the
-  emitted stylesheet was compared against the pre-change one (106 rules each), and the computed
-  values were read back out of the browser and compared to the palette. Measure the *emitted
-  CSS*, not the source style objects: a first pass quoted a count of the latter that a second
-  pass could not reproduce (165 vs 190 vs 207, depending on how the regex treated nested keys
-  and multi-line values), while the emitted rules are exact and reproducible.
-- **The dev/build asymmetry is gone.** Panda runs as a PostCSS plugin, and Vite pipes every
-  stylesheet through PostCSS in dev and in a build alike — so `src/index.css` is the whole
-  stylesheet in both modes. That retires `StyleXDevRuntime.tsx` (the hand-wired dev runtime
-  the entry above describes), the dev-only `/virtual:stylex.css` link, the `virtual:stylex:runtime`
-  module declaration, and the plugin's exclusion from the Vite config's test mode.
-- **The `@layer` line in `src/index.css` is the injection point, and losing it fails silently.**
-  Panda's PostCSS plugin only treats a file as its output target when an `@layer` at-rule names
-  **all five** layers (`isValidLayerParams`: `names.size >= 5 && every(...)`); with no such
-  rule it returns early and emits nothing — no tokens, no utilities, no `globalCss`. Because
-  that file now holds no literal CSS of its own, the page then renders completely unstyled.
-  Measured: trimming the list to the three layers the app actually uses builds at **exit 0,
-  no error, no warning**, writing a 0.03 kB stylesheet in place of 6.9 kB. Found in review,
-  where the comment above the line had described it as a stylistic ordering choice.
-- **`cls.ts` is gone too.** Panda's `css()` returns a plain class string and accepts
-  `false`/`undefined` arguments, so `class={css(a, cond && b)}` needs no adapter — the two
-  traps `cls()` existed to close (React's `className` spelling, and a spread evaluated once)
-  are both absent by construction. Styles are `css.raw()` objects merged by `css()` at the call
-  site, so an override *replaces* the base's declaration rather than competing with it in the
-  cascade. That is not an improvement: `stylex.props()` merged by property and emitted only the
-  winning class too. The two are equivalent here, and a future reader weighing a move back
-  should not be told otherwise.
-- **The palette moved into `panda.config.ts`** as semantic tokens: `base` is the dark value,
-  `_osLight` the light one. Emitted shape is the same as the hand-written custom properties
-  (dark on `:root`, light under `prefers-color-scheme: light`), but `color: "fg.dim"` is now
-  type-checked and a typo fails `vp check`.
-- **The one real trap, measured: a bare number is a *token lookup*, not pixels.** `gap: 16`
-  compiles to `var(--spacing-16)` — `4rem`, four times too big — because the default preset has
-  a spacing token named `16`; `padding: 18` compiles to `18px` because it has no token named
-  `18`. Same syntax, opposite meanings, decided by the preset. Every length in the app now
-  states its unit; bare numbers survive only where the property is genuinely unitless.
-- **pnpm 11 blocks esbuild's install script** (Panda bundles its config with esbuild), and an
-  undecided script makes `pnpm install` **exit 1** — including the install `vp check` runs for
-  itself, so the gate fails before it starts. `allowBuilds: {esbuild: true}` in
-  `pnpm-workspace.yaml` is the decision; note the field is `allowBuilds`, not the
-  `onlyBuiltDependencies` the older docs name.
-- **Accepted cost:** Panda's default preset emits its whole token set — ~300 preset colours and
-  every spacing/radius/font-size scale as `:root` custom properties, used or not. 16.6 kB of
-  CSS, 5.2 kB gzipped, for a 12-colour app. Irrelevant for a dev-server-only tool, so it is left
-  alone; the README records the lever (`presets: ['@pandacss/preset-base']`) and its cost.
-- **Verified**: all three gates green (`pnpm check`, `pnpm test` — 49 tests, `pnpm build`); the
-  dev server serves the generated rules at `/src/index.css` and updates them in place on edit;
-  and in the browser, the config buttons, the active fill, the preview borders, the mini-map,
-  the pan controls and the scrim all read the right palette values, with the renditions'
-  bounding boxes byte-identical across a config switch (the in-place promise) and a clean
-  console.
-
-### 2026-09-10 — `strictTokens` on, and the theme became the design system
-
-- **User request**, with the constraint that the `[value]` escape hatch was not to be used
-  without a strong reason. None was needed: `strictTokens` + `strictPropertyValues` are on, all
-  77 resulting type errors are fixed, and no escape hatch appears in `src/`.
-  `strictPropertyValues` was free — it flagged nothing, every enum-valued property already
-  naming a real CSS keyword. All 77 were `strictTokens`.
-- **`presets` dropped to `['@pandacss/preset-base']`, and that is the substantive decision.**
-  Panda's default is two presets doing unrelated jobs, which is easy to miss: `preset-base` is
-  the machinery (357 utilities, 107 conditions including `_osLight`, the patterns) and carries
-  **no tokens at all**; `preset-panda` is *only* token ladders — 246 colours and rem-valued
-  spacing/size/font scales, 422 tokens in all. With `strictTokens` on, keeping `preset-panda`
-  would put 422 valid-but-meaningless entries behind every autocomplete, which is the opposite
-  of the point. Side effects: the stylesheet went 16.6 kB → 6.9 kB (5.2 → 2.1 kB gzipped) and
-  the emitted token block down to 52 custom properties — exactly what the theme declares.
-- **Naming rule, applied deliberately.** A value denoting a *specific thing* gets a role name
-  (`sizes.thumbWidth`/`thumbHeight`, `sizes.stageCap`, `sizes.panControl`, `fontSizes.key`),
-  which retired literals the app repeated across files — 104x70 in three places, 82vh in two.
-  `spacing` gets no role names because it has no such structure (the same 8px is a gap, an
-  inset and a padding), so it is named by measurement (`spacing["8px"]`): call sites still read
-  like CSS, and the gate still holds. Values kept in **px, not the preset's rem**, on purpose —
-  this is a pixel-inspection tool, and its chrome should not rescale with the reader's font
-  size while the images do not.
-- **A token name must not mean two things across categories.** `panel` was both a colour and a
-  size, so `backgroundColor: "panel"` was a surface and `maxWidth: "panel"` a column width. Now
-  `panelMeasure`. Found by auditing names across categories, not by any gate — nothing warns.
-  The one deliberately shared name is `body` (font, font size, line height), where all three
-  genuinely mean "the body's".
-- **The two escape-hatch temptations, and what they became.** `width: auto` / `maxWidth: none`
-  on `fullsize` → `sizes.natural` / `sizes.unconstrained`: "render at the size the file is" is a
-  real decision this app makes, so it earns a name rather than `[auto]`. And
-  `fontFamily`/`fontSize: inherit` on the buttons → the `body` font and size tokens outright,
-  which is the same value today and states what a control matches instead of inheriting it.
-- **Verified as a pure value substitution, which is the right check for this shape of change.**
-  Every declaration in the emitted utilities layer was resolved back through its token and
-  compared with the pre-strict stylesheet: 106 rules before, 106 after, **104 identical** — the
-  only two differences being the deliberate `inherit` → explicit body font/size. Also checked:
-  every class the SSR'd page emits resolves to a rule in the stylesheet (75 Panda atoms, all
-  matched; the 76th class is TanStack Router's own `$tsr`), and the dev-served CSS is
-  declaration-identical to the built one. All three gates green.
-- **Re-verified in the browser too.** Every computed value read back matches what was recorded
-  before the flags went on — palette, 104x70 thumbnails, 82vh cap, 120px floor, 34px controls,
-  6px/4px/8px radii, 11px `<kbd>`, 78ch measure, 600 weight — and the buttons' font now
-  resolves to the same `-apple-system` / 14px they used to inherit. Switching config still moves
-  the picture by zero pixels. The one token worth a live test rather than a CSS diff was
-  `sizes.natural`, which exists to beat the presentational `width=`/`height=` attributes: lying
-  to an image's `width` attribute (600 against a 2400px file) leaves it rendered at 2400px, so
-  the token does the job `auto` did. Console clean.
-- **Surfaced, not fixed:** the app has two reading measures, 78ch under the title and 80ch in
-  the standalone panels, which looks like drift rather than intent. Both are kept as separate
-  tokens because unifying them would move the layout; someone should decide which.
-- **Review found no code defect and five prose defects, which is the expected shape here.**
-  Both the `@layer` trap above and the corrections in this entry came from it: a
-  "theme is exhaustive" claim the same file contradicted 30 lines later (and CLAUDE.md
-  repeated without the caveat), five measured figures that did not reproduce, a longhand
-  rationale that was true of borders but not of the grid placement it also named, and a
-  "strictly better than StyleX" claim that was simply wrong. Codex was unavailable (workspace
-  spend cap), so this was a single-reviewer pass. The lesson is the project's own: no gate
-  reads prose, so a number quoted from a one-off script survives every green run — re-derive
-  it, or say how it was counted.
-
-### 2026-09-12 — the generator half shipped: `nctool review generate`
-
-The remaining half, and what closes the task. `python -m nctool review generate
-<matrix.json>` renders every (frame x config) cell a matrix names and writes the
-`review.json` for it.
-
-- **The matrix is data.** `scripts/preset-review/presets.matrix.json` replaces the Python
-  list `generate.py` carried; the script is gone. A config states its own `args`, and the
-  per-roll values they need arrive through placeholders — `{dmin}` from
-  `scripts/sigmoid-baseline/fixtures.json` (the declaration the metrics already read, so the
-  two cannot drift) and `{film_stock}` from the matrix's own `rolls` block. Nothing is
-  derived from a name: the fixtures call a roll `2026-07-24-Gold200` where the registry calls
-  the stock `gold-200`. Which configs take a stock is therefore stated by their args, which
-  is the property the old script protected with a hand-maintained boolean column.
-- **Placeholders are validated when the matrix loads**, not when a frame renders: `--film-stock
-  {film_stok}` would otherwise reach `nc` as a literal stock name, 35 renders in.
-- **The file suffix comes from the matrix's preset** (mirroring `cli::derived_extension`;
-  `nc` refuses a mismatched `-o`, so a stale entry fails loudly), but **the colour space each
-  cell is measured in comes from the recipe `nc` reports it resolved**. The first version read
-  both off the preset name, which is wrong for `legacy` and `custom`: they accept
-  `--output-profile`, which a matrix is free to pass, so a ProPhoto render would have been
-  measured as sRGB — every tone and cast number wrong while every one of them still looked
-  reasonable, which is the plausible wrong answer `metrics` exists to refuse. `space_for_recipe`
-  also declines an `f32` output whose transfer is unverified, and that now costs one cell's
-  charts instead of being papered over. A matrix restating a flag the generator owns
-  (`--output-preset`, `-o`, `--report`) is refused rather than silently overridden — `nc` takes
-  the last occurrence of a `Set` argument, and `--output-preset` decides the suffix too.
-  A preset the metrics cannot read at all (`hdr-pq` writes AVIF) still renders a reviewable
-  page — without charts, and saying why, once up front.
-- **Each rendition gets its metric record written beside it**, which is what the app's charts
-  draw. Re-measuring is skipped when a stored record already carries that file's **checksum**
-  and the same region — not its mtime, which a re-render always moves. Measuring a 74 MP frame
-  is minutes of work.
-- **Failure is per cell.** A roll with no stock loses one column, not the frame; a failed
-  render is reported and its config simply has no rendition, which the page draws as a gap.
-- **Each measured rendition also gets its `width`/`height`**, so the page can reserve the
-  box before the image loads — the record is the only source, since `nc`'s report carries no
-  image size. A `--no-metrics` set therefore still omits them, which the schema allows.
-- **It refuses an output directory inside the repository.** The frames are the user's own
-  photographs; the old script relied on the operator remembering, and this is now the
-  blessed entry point. Argument checks run **before** environment checks, so `--out .` is
-  told about `--out .` rather than about an unbuilt binary — CI caught the original order,
-  because it builds only the debug binary.
-- **Reuse is keyed to the declared space and the JPEG decoder as well as the checksum**,
-  and colliding cell names are refused up front — case-folded, because the default macOS
-  volume treats `A-c.jpg` and `a-c.jpg` as one file. `<frame>-<config>` is not injective
-  when either id may carry a hyphen, and config ids routinely do. Ids are checked
-  filename-safe for the same reason the output directory is: both sources are inputs, and
-  one holding `../` writes outside the directory that was just validated.
-- Verified end to end on P3, G2 and E1 — one frame from each of the three rolls — across all
-  five presets: 15 renditions + 15 records, exit 0. The matrix's `metrics.inset` of 0.18 does
-  clear the film holder on all three (0.000% of pixels below L\* 5; a holder in the region
-  reads as a hard spike at the bottom of the histogram, which is the check, and the app draws
-  that histogram). A second run re-rendered every cell byte-identically and **re-measured
-  none** of the five it already had — the checksum reuse path, on real data.
-- 55 hermetic tests (`test_review.py`); the analysis suite is 284, up from 229. The matrix
-  is read with `deny_unknown_fields` discipline, which is not fussiness: `"arg"` for
-  `"args"` loads as *no* arguments, so that cell renders the default conversion under a
-  label promising something else — five buttons, five labels, identical pixels, exit 0 —
-  and `"insets"` for `"inset"` measures the whole frame, film holder included.
-- **Deferred with reasons rather than left open** (both in the task file): HDR review, because
-  nothing downscales a gain map — the blocker that motivated it — and build-vs-build, because
-  identifying two builds in a page is a provenance problem, not a flag.
+- **Lessons paid for before the tool existed, and still binding on it:** render through the
+  path being measured (the previews once used the *legacy* path while the metrics measured
+  `pipeline::sdr::render`); click, not hover; one shared lightbox; never publish these pages
+  (rendered personal photographs — throwaway dir only, never `../nc-assets` or the repo);
+  and **`sips` destroys a gain map when downscaling**, so HDR review needs full-size files.
+- **Viewer shipped 2026-09-02 as `tools/review-app/`** (user decision to halve the scope to
+  a viewer plus the data format). `review.json` (`tools/review-app/SCHEMA.md`) declares
+  `configs` and `images`, `snake_case`, paths resolved against the review file so a set is
+  one movable directory; config order sets button order and the number-key mapping; an
+  unknown config id in `renditions` is a loud error, a *missing* rendition renders as a
+  visible gap. **Toggling in place is structural**: every rendition of a frame occupies one
+  CSS grid cell, so switching config cannot move the picture by a pixel — side-by-side
+  hides exactly the highlight differences this exists to show. `fullsize` has pan controls
+  and a mini-map. Own CI job (`pnpm check` / `test` / `build`), deliberately not joined to
+  the Rust matrix.
+- **Fullstack since 2026-09-10** (TanStack Start): the server reads the set off disk —
+  `pnpm dev <path to review.json>` (a directory means the `review.json` in it) or
+  `REVIEW_SET` — and a bare `pnpm dev` renders the committed synthetic example, which is why
+  that example is in the repo. Dev-server-only by decision (no `pnpm start`). Images are
+  served from an **allowlist by opaque id**, never a path from a URL, which is also what
+  lets a set name files outside its own directory; the id carries the file's mtime, so a
+  re-render is a different URL (responses cache `immutable`). **It watches the set**: a
+  re-run of `nc` updates the page in place, keeping selected config (held by **id**, not
+  index) and scroll. Live refresh after a *server restart* rests on a plain `fetch` poll of
+  `/alive` (boot id), because `router.invalidate()` issues no request once the module
+  graph is replaced — the `EventSource` stream is the fast path only; a restart reloads the
+  page. Test live refresh with the **file** form of the path: the directory form never hit
+  the cache and hid a stale-URL bug for a whole review round. Every silent trap found on the
+  way (`shellComponent` is server-only, `server.handlers` is stripped from the client, a
+  scroll handler writing a signal, `requestAnimationFrame` in a hidden tab) is in the app's
+  `README.md`.
+- **Styling is Panda CSS with `strictTokens` + `strictPropertyValues` (2026-09-10)**, so
+  `panda.config.ts`'s theme is the app's design system; `presets` is
+  `['@pandacss/preset-base']` alone (machinery, no token ladders — keeping `preset-panda`
+  would put 422 meaningless entries behind every autocomplete). Values are **px, not rem**,
+  on purpose: a pixel-inspection tool's chrome should not rescale with the reader's font
+  size while the images do not. The `@layer` line in `src/index.css` naming all five layers
+  is Panda's injection point — drop one and it emits nothing at exit 0. `pnpm-workspace.yaml`
+  needs `allowBuilds: {esbuild: true}` under pnpm 11. Verified as a pure value substitution:
+  106 emitted rules before and after, 104 identical, the two differences deliberate.
+  **Surfaced, not fixed:** the app has two reading measures (78ch under the title, 80ch in
+  the standalone panels), kept as separate tokens because unifying them moves the layout —
+  someone should decide which.
+- **Generator shipped 2026-09-12 as `nctool review generate <matrix.json>`**, which closes
+  the task. The matrix is data: `scripts/preset-review/presets.matrix.json` replaces the
+  Python list `generate.py` carried, and the script is gone. A config states its own
+  `args`; per-roll values arrive through placeholders — `{dmin}` from
+  `scripts/sigmoid-baseline/fixtures.json` (the declaration the metrics already read) and
+  `{film_stock}` from the matrix's `rolls` block — validated when the matrix loads, not 35
+  renders in. **The suffix comes from the matrix's preset, but the colour space each cell
+  is measured in comes from the recipe `nc` reports it resolved**: `legacy` and `custom`
+  accept `--output-profile`, so reading the space off the preset name would have measured
+  a ProPhoto render as sRGB with every number looking reasonable. A matrix restating a flag
+  the generator owns (`--output-preset`, `-o`, `--report`) is refused. Each rendition gets
+  its `nctool metrics` record and its `width`/`height` written beside it; re-measuring is
+  keyed to the file's **checksum**, declared space and JPEG decoder, not its mtime (a 74 MP
+  measurement is minutes). Failure is per cell. It **refuses an output directory inside the
+  repository**, and checks arguments before the environment. Colliding cell names are
+  refused case-folded (the default macOS volume treats `A-c.jpg` and `a-c.jpg` as one
+  file); ids are checked filename-safe. The matrix is read with `deny_unknown_fields`
+  discipline: `"arg"` for `"args"` would render the default under five labels at exit 0.
+  Verified end to end on P3, G2, E1 across five presets: 15 renditions + 15 records; the
+  matrix's `metrics.inset` 0.18 clears the holder on all three (a holder in the region reads
+  as a hard spike at the bottom of the histogram); a second run re-rendered byte-identically
+  and re-measured none. Tests: `test_review.py` (55).
+- **Deferred with reasons (in the task file):** HDR review — nothing downscales, so an
+  HDR-capable browser already shows the HDR rendition; a deliberate HDR review (headroom
+  readout, SDR/HDR toggle) is a new task. Build-vs-build — identifying two builds in a
+  page is a provenance problem, not a flag; worth doing when a default actually moves.
+  **Not covered and wanted:** a **reference-cell kind** (an existing TIFF/JPEG from another
+  producer, brought to a common SDR sRGB JPEG) — every cell today is an `nc convert`, which
+  is what stopped `film-base/dmax-per-channel-reduction`'s NLP-comparison review set from
+  shipping (2026-09-13).
 
 ## metrics-chart-design
 
-**Status:** done
-**Updated:** 2026-09-12
+**Status:** done (accepted as v1, 2026-09-12)
+**Updated:** 2026-09-13 (consolidated)
 
 - Goal: settle the chart encodings, the rendering technology and the component split,
-  independently of the review app.
-- 2026-09-10: Split out of `metrics-visualization` at the user's request — "how to
-  visualize the metrics" and "integrate the visuals into the app" are two jobs, and the
-  first is the harder one. The 2026-09-03 chart ranking and its reasoning stay recorded
-  under `metrics-visualization` below; this task is where they get tested against real
-  records rather than reasoned about. Executable now: its only dependency
-  (`analysis/conversion-metrics`) is done, whereas `analysis/comparison-review-tooling`
-  is still `[~]`.
-
-- 2026-09-10: Design canvas drafted against **real** records — frame G2 through the five
-  `--preset` bundles, measured with `nctool metrics`. Three findings the 2026-09-03 reasoning
-  did not have:
-  - **A colour vertex must carry its band's population.** The `highlight` point is the largest
-    excursion in every encoding of `cast_by_tone_band` and rests on **under 1 px in 18.7 M** on
-    some presets (56 px for `chr-generic`). At equal weight it manufactures a crossover out of
-    rounding. Independent of any re-cut.
-  - **The presets are brightness-matched, so the curves fan rather than shift**: 0.02 st apart
-    at p50, 0.27 at the toe, 0.34 at the shoulder. That fan is contrast, and no scalar in the
-    record locates it — the strongest argument for ranking the percentile curve first.
-  - **Colour alone stops separating past three overlaid configs** — the `dataviz` reference dark
-    steps pass all-pairs CVD at 2 and 3 series and fail at 5. Compare mode must become small
-    multiples beyond three.
-- 2026-09-10: **Two modes, separated at the user's request.** Compare (n variants) and inspect
-  (one variant) are different designs, not one with a parameter. The rule: a chart takes n
-  variants only if it still has a free series dimension — per-channel histograms spend it on
-  RGB, the hue polar on angle. They also want opposite things from the config toggle, which
-  settles the integration half's open question: compare-mode charts draw every config and the
-  toggle *emphasises* one (nothing moves); inspect-mode charts bind to the active config and
-  swap in place like the picture. An n-variant chart at n=1 is its own design — the legend
-  goes, a difference strip has nothing to compare — not merely fewer lines.
-- 2026-09-10: Rebased onto the `bands` measurement change (`schema_version` 2) **by
-  re-applying this task's split onto that branch's content, not by resolving a conflict
-  line-by-line**. The branch edited `metrics-visualization.md` against its pre-split
-  version, so a mechanical rebase would have stranded its additions in the wrong half or
-  dropped them: the histogram description and the band/bin alignment belong with the
-  encodings, the record-size point belongs with transport. Recorded here because the
-  dropped half of such a merge is what nothing references and no gate catches.
-  Three facts from it that change the encodings: the histogram is the first drawable
-  field and its luminance series is the primary single-frame view; bands and histogram
-  are both cut in L\* so every band edge lands on a bin edge and a band overlay needs no
-  interpolation; and `sparse` is now a field, so the population weighting these artboards
-  argued for is read rather than derived.
-- 2026-09-11: **v1 component set locked with the user: three charts.** Luminance histogram,
-  per-channel histogram, and cast-over-tone as two axis-coloured curves. The task file
-  carries the decision and the reasons for every deferral; what is worth repeating here is
-  how the cast chart was arrived at, because three encodings were drawn before one worked.
-  The **a\*/b\* path was rejected by the user as unreadable** — "this is a path goes through
-  a 2d points, it's too hard for me to read" — which no amount of annotating the plane
-  fixed. What replaced it was the user's own design: two lines over the bands, y in CIELAB
-  with 0 as neutral, **each line coloured by its own value** (a\* green-to-red, b\*
-  blue-to-yellow). That inverts the usual relationship — the colour is there to teach the
-  axis, not to carry data — and it made the crossover on `sig-flat` (b\* to -20, a\* to +8
-  in the top two bands) legible at a glance where the path never was.
-  Three implementation facts that cost a round each: the ramp must be **fixed, not scaled to
-  the data**, or a mild cast and a severe one look alike; its ends belong at the **measured
-  sRGB gamut limit per direction** (at L\* 65 green clips at 42.8 and blue at 54.3, so the
-  a\* ramp caps at ±41 and b\* at ±52 — one number for both under-saturates one of them);
-  and a **mark and the line beneath it must share one mapping**, or the marker reads more
-  muted than its own stroke.
-  The governing constraint fell out of the same work: **once colour carries hue it cannot
-  also carry config identity**, so this chart is inspect-mode by construction and compare
-  mode needs a different cast encoding. That is the two-mode split earning its keep rather
-  than an inconvenience.
-- 2026-09-11: **The v1 components are built** — `tools/review-app/src/charts/`, with a
-  `/charts` demo route rendering them from a committed synthetic record. Geometry is in
-  pure `.ts` with tests (90 in the app, up from 49) because **no `.tsx` in that app can be
-  tested at all**: `vp test` collects only `.test.ts` under `src/` and gives it no DOM.
-  That boundary is not bookkeeping. Two review rounds found four defects that a green
-  type-check and 83 tests had passed, every one of them inside a component: a mid-grey
-  reference line whose condition (`midGreyBin + 0.5` against ticks at multiples of ten)
-  could never be true, so it never drew; a required `bands` prop nothing read; `bounds()`
-  destructured inside a `<For>` over a module constant, which freezes at the first record;
-  and the x axis equating bin index with L\*, true only because the record currently uses
-  one bin per unit.
-  **The ramp was the serious one.** `ramp.ts` claimed as its headline property that colour
-  is "fixed, never scaled to the data — scale it and a mild cast on one frame looks like a
-  severe one on another", and the code normalised by the plotted range, so a frame whose
-  worst band was `b* = +2` painted *identically* to one whose worst was `+20`. It was also
-  asymmetric: with bounds `[-10, +18]`, `b* = -5` came out at chroma 26 against `+5` at 14.
-  Fixed in the code rather than the prose — a fixed `RAMP_REFERENCE` of 20 CIELAB units,
-  widened only when a frame exceeds it, symmetric and clamped. A mild cast now renders
-  mild, which is visible on the demo: `a*` sits near neutral and reads near-grey.
-  Also corrected: a fixture whose channels were independently shaped and so did not
-  partition `pixels` (blue summed to 101.2% of the frame) while the test that should have
-  caught it checked only luminance; `sparse` read as `=== true` where every neighbouring
-  field threw; and a figure cited without its scope.
-
-### 2026-09-12 — accepted as v1
-
-The user accepted the shipped component set ("I'm fine with the v1 components. They are
-enough for the current work"), which closes this task. The three items under *Still open* in
-the task file stay open as v2 questions — the cast chart's x axis, a compare-mode cast chart,
-and how far `sparse` should demote the curve rather than only its mark — and none of them
-blocks the v1 set, which is now drawn under every picture in the review app.
+  independently of the review app. Split out of `metrics-visualization` 2026-09-10 at the
+  user's request as the harder, app-independent half; the 2026-09-03 chart ranking stays
+  recorded under `metrics-visualization` below.
+- **Findings from a design canvas drawn against real records** (frame G2 through the five
+  `--preset` bundles): a colour vertex must carry its band's population — the `highlight`
+  point rested on under 1 px in 18.7 M on some presets and manufactured a crossover out of
+  rounding (this is why `pixels`/`sparse` exist in the record); the presets are
+  brightness-matched, so curves **fan** rather than shift (0.02 st apart at p50, 0.27 at the
+  toe, 0.34 at the shoulder — that fan is contrast, and no scalar in the record locates it);
+  and colour alone stops separating past **three** overlaid configs (the `dataviz` dark
+  steps pass all-pairs CVD at 2 and 3 series, fail at 5), so compare mode must become small
+  multiples beyond three.
+- **Two modes, separated at the user's request:** compare (n variants) and inspect (one).
+  A chart takes n variants only if it still has a free series dimension — per-channel
+  histograms spend it on RGB, the hue polar on angle. Compare-mode charts draw every config
+  and the toggle *emphasises* one; inspect-mode charts bind to the active config and swap
+  in place like the picture. An n-variant chart at n=1 is its own design.
+- **v1 locked 2026-09-11: three charts** — luminance histogram, per-channel histogram, and
+  cast-over-tone as two axis-coloured curves. The **a\*/b\* path was rejected by the user as
+  unreadable**; what replaced it was the user's own design — two lines over the bands, y in
+  CIELAB with 0 as neutral, each line **coloured by its own value** (a\* green-to-red, b\*
+  blue-to-yellow), colour there to teach the axis rather than carry data. Three facts that
+  cost a round each: the ramp is **fixed, never scaled to the data** (a fixed
+  `RAMP_REFERENCE` of 20 CIELAB units, widened only when a frame exceeds it, symmetric and
+  clamped — the first implementation normalised by the plotted range, so `b* = +2` painted
+  identically to `+20`); its ends sit at the **measured sRGB gamut limit per direction**
+  (at L\* 65 green clips at 42.8 and blue at 54.3 — ±41 for a\*, ±52 for b\*); and a mark
+  and the line beneath it share one mapping. **Once colour carries hue it cannot also carry
+  config identity**, so this chart is inspect-mode by construction.
+- **Built 2026-09-11** in `tools/review-app/src/charts/`, geometry in pure `.ts` with
+  tests, a `/charts` demo route from a committed synthetic record. Four defects sat inside
+  components and passed a green type-check and 83 tests (a reference line whose condition
+  could never be true, a required prop nothing read, a `bounds()` frozen at the first
+  record, an x axis equating bin index with L\*) — the reason arithmetic stays out of
+  `.tsx` in that app.
+- **Accepted as v1 2026-09-12** ("enough for the current work"). **Still open for v2**, in
+  the task file: whether chart 3's x axis moves to true L\* centres (which would let bands,
+  histogram and cast share one axis); what a compare-mode cast chart looks like; degenerate
+  cases beyond `sparse`; and how far `sparse` should demote the **curve** rather than only
+  the mark (today the polyline runs through a sparse band at full weight, so a one-pixel
+  outlier can still read as a crossover). Also deferred there: a `tone.bands` stacked bar
+  (its rejection no longer holds after the L\* re-cut — a strong v2 candidate and the
+  natural roll view) and a conditional `endpoints` strip.
 
 ## metrics-visualization
 
-**Status:** done
-**Updated:** 2026-09-12
+**Status:** done (2026-09-12)
+**Updated:** 2026-09-13 (consolidated)
 
 - Goal: plot the `nctool metrics` output inside `tools/review-app`, so numeric review
   sits beside visual review rather than in a separate tool.
@@ -1410,121 +796,57 @@ blocks the v1 set, which is now drawn under every picture in the review app.
   path is the crossover. `hue_sectors` ranks last because six sectors is coarse and two
   polar charts compare poorly. `endpoints` was added to the list although the user did
   not name it — a per-channel bar is what made a 22% top-code population visibly
-  *blue-only* on a real frame.
+  *blue-only* on a real frame. (Both leading picks were later overturned against real
+  records — see `metrics-chart-design`: the histogram displaced the percentile curve and
+  the a\*/b\* path was rejected as unreadable.)
 - The constraint that ranks them: **every chart must overlay two configs**, because the
   app's premise is toggling configs in place.
-- 2026-09-03: Rebased onto the viewer half (`tools/review-app/`, merged to main
-  2026-09-02). Read its `SCHEMA.md` before starting: `review.json` is
-  `configs x images -> renditions`, which is exactly the shape a metrics record has,
-  and the schema already calls `images[].note` "the natural home for measured
-  numbers".
-
-
-### 2026-09-12 — the charts landed under the picture
-
-The wiring half. A review set may now name a measurement per rendition, and the app draws the
-three v1 charts below the picture, bound to the active config.
-
-- **Transport: a sibling file, read server-side.** `renditions[config].metrics` names a
-  record relative to `review.json`. It is not inlined — ~20 kB of histogram counts per
-  rendition, written by a different tool at a different time, and a separate file is what lets
-  a re-measurement update the page without rewriting the review document. The server reads and
-  parses it, so what crosses the wire is the charted subset: measured at **27 kB of payload
-  for five records**, which is 5.4 kB each rather than 20.
-- `schema_version` stays **1**. The key is additive and optional, so a set written by the new
-  generator still loads in an older build, which a bump would have broken for no gain.
-- **It joins the watch targets**, stamped beside the renditions. The model holds the *parsed*
-  record, so nothing re-reads it until the held set is dropped — a record that nothing stamps
-  produces a filesystem event that diffs to no change, and the charts sit on the previous
-  numbers with no error anywhere. That is the same failure renditions had before their mtime
-  rode in the URL. Records are deliberately **not** in the asset map: that map is the set of
-  files the server may serve, and a record has no business behind an `/img/` URL.
-- **Placement settled by the encoding, not by taste.** All three v1 charts spend colour on
-  what they encode — channel identity, or the sign of `a*`/`b*` — so none has a series
-  dimension left for a second config. They swap with the config exactly as the picture does.
-  Below the picture rather than beside it, because the stage is the widest thing on the page.
-- **Two failure modes, both local.** A rendition with no record renders its picture and says
-  it has no measurement; one whose record will not parse says why, where the charts would be.
-  Refusing the set over an unreadable record would take four good comparisons down with it.
-- **The panel states what was measured** — "the central 41% of the frame, 7.6 Mpx" — because a
-  set insets its measurement to keep the film holder out of the statistics, and a reader told
-  nothing would take the histogram for the whole picture. That meant parsing `region` into the
-  charted subset, which had not needed it before.
-- **The panel says which rendition the numbers describe.** A gain-map JPEG is one file
-  carrying two, the page hands the browser the file (which an HDR display decodes as the
-  HDR rendition), and `nctool metrics` reads the SDR base — so picture and charts can
-  describe different renditions of one file unless the charts say which.
-- The `/charts` demo route now renders the same `MetricsPanel` the app mounts, from the
-  synthetic fixture, so the two cannot drift — and it keeps the degenerate cases a real record
-  rarely carries at once (a sparse band, a band with no pixels, a channel past the top of the
-  range).
-- App suite 128 tests, up from 102; `pnpm check`, `pnpm test`, `pnpm build` green. Verified
-  against the real generated set: three SVGs server-rendered per section, the histogram
-  spanning the full plot height, the axis labelled 0 to 110.
+- **2026-09-12 — wired.** A rendition may name a record via an optional `metrics` key
+  relative to `review.json` (a **sibling file**, not inlined: ~20 kB of histogram counts,
+  written by a different tool at a different time, and a separate file is what lets a
+  re-measurement update the page without rewriting the review document). It is read and
+  parsed **server-side**, so the wire carries the charted subset (27 kB for five records,
+  5.4 kB each rather than 20); `review.json`'s `schema_version` stays **1** (additive,
+  optional). **It joins the watch targets** — the model holds the *parsed* record, so a
+  record nothing stamps would sit invisibly behind the previous numbers; records are
+  deliberately not in the asset map. All three v1 charts spend colour on what they encode,
+  so they **swap with the config** below the picture (the stage is the widest thing on the
+  page). A rendition with no record renders its picture and says so; an unreadable record
+  costs only its own charts. The panel states **what was measured** ("the central 41% of
+  the frame, 7.6 Mpx") and **which rendition** — a gain-map JPEG is one file carrying two,
+  the browser shows the HDR one on an HDR display, and `nctool metrics` reads the SDR base.
+  The `/charts` demo renders the same `MetricsPanel` the app mounts. App suite 128 tests.
+- **Known and unowned:** nothing checks that a record describes the rendition it is
+  attached to — the generator keys reuse to the image's checksum, but a hand-assembled
+  set could pair them wrongly and nothing would notice.
 
 ## harness-regression-tests
 
-**Status:** done
-**Updated:** 2026-08-11
+**Status:** done (2026-08-11)
+**Updated:** 2026-09-13 (consolidated)
 
-- Goal: give `scripts/real-scan-verify/harness.sh` automated coverage, so a change
-  to nc's CLI surface cannot break it silently. See
-  [the task file](../tasks/analysis/harness-regression-tests.md).
-- Filed 2026-08-09 out of the `output/presets` review round. The default flip to
-  `gain-map-hdr` broke the harness in three places with all four CI gates green:
-  `stage_freeze`'s `jq` generator still wrote the removed `output.hdr` key; the four
-  `convert` stages passed `.tiff` paths and hit exit 2; and `stage_convert` failed
-  **without an error at all** — `nc roll` had become container-aware, so it succeeded
-  and wrote `_positive.jpg`, the `for g in "$htmp"/*_positive.tiff` rename glob
-  matched nothing, the float-HDR outputs stayed stranded in `.hdrtmp`, and the stage
-  printed its usual `converted <roll>: N frames x2 modes`.
-- The silent one is the reason the task exists. An exit 2 is found the next time
-  someone runs the harness; a success line over the wrong container in the wrong
-  directory is not.
-- Second, narrower lesson recorded in the task: the checked-in recipes were migrated
-  by hand while the `jq` generator that *writes* them was not, so re-running
-  `stage_freeze` would have silently restored the broken state. Coverage that ties
-  the generator to the committed recipes would catch that class directly.
-- Deliberately left open: whether a fixture-only harness run is possible at all,
-  whether it belongs in CI (no assets, no `exiftool` there), and what language it
-  should be in — `scripts/analysis/`'s 91 Python tests already run under no CI gate,
-  which is worth resolving together rather than adding a third untested surface.
-- 2026-08-11: Started implementation after inspecting the harness and the existing
-  stdlib `nctool` tests. The committed TIFF fixtures are sufficient for a hermetic
-  `freeze` → `convert` run against the real debug binary: region-based Dmin/Dmax
-  estimation succeeds (a low-Dmax warning is harmless), and neither Drive assets
-  nor `exiftool` is needed. Plan: make recipe/output staging test-overridable, add
-  exact artifact postconditions, reproduce the successful-wrong-container failure
-  with a fake `nc`, and put the full analysis unittest suite into CI.
-- 2026-08-11: Completed. `harness.sh` now uses fail-fast shell semantics, accepts
-  an isolated `REC`, renders u16/f32 into a fresh per-run staging tree, requires
-  exactly one TIFF+sidecar pair per frame per mode, and publishes only after the
-  complete set validates. Wrong suffixes, extra files, ordinary command failures,
-  and determinism differences are hard failures; the expected strict failure is
-  asserted explicitly. `nctool.test_harness` covers the real fixture-backed
-  `freeze` → `convert` path and a fake u16-success/f32-JPEG-success regression that
-  must fail before publication. CI now runs all 94 stdlib analysis tests on Linux
-  and macOS. Verified: targeted harness tests, full Python suite, fmt, clippy with
-  warnings denied, build, and the Rust suite (793 passed, 5 ignored). A real Drive-backed `freeze`
-  regenerated 21 files across seven rolls, all semantically identical to the
-  committed recipes/provenance after normalizing JSON key order.
-- 2026-08-11: Review hardening. Staged and published artifacts are now checked by
-  content (TIFF magic and JSON-object sidecars), directory and directory-symlink
-  publication targets are rejected before any move, and final artifacts are
-  revalidated before the success line. Saved roll reports normalize
-  `frames[].output` to the durable u16 / `_hdr` publication paths instead of
-  retaining deleted `.rsv-*` staging paths; each raw report must name every
-  expected successful staging path before any image moves. The intentional strict probe now
-  accepts only warning-promotion exit 1 with both the IR-ignored and strict
-  diagnostics; usage/crash statuses and unrelated warnings fail. Hermetic tests
-  cover each regression. Verified: 7 targeted harness tests; all 99 analysis
-  tests; fmt; clippy with warnings denied; build; Rust tests (793 passed, 5
-  ignored).
-- 2026-08-11: Sidecar contract correction. Artifact validation now distinguishes
-  generic JSON-object roll reports from conversion sidecars, which must carry the
-  binary's real envelope: object-valued `meta` and `params`. The negative harness
-  case uses parseable `{}` to prove a wrong envelope is rejected before
-  publication; successful fakes emit the minimal valid envelope.
+- Filed 2026-08-09 out of the `output/presets` review round: the default flip to
+  `gain-map-hdr` broke `scripts/real-scan-verify/harness.sh` in three places with all
+  four CI gates green — `stage_freeze`'s `jq` still wrote the removed `output.hdr`
+  key; the `convert` stages passed `.tiff` paths and hit exit 2; and `stage_convert`
+  failed **without an error at all** (`nc roll` had become container-aware, wrote
+  `_positive.jpg`, the `*_positive.tiff` rename glob matched nothing, and the stage
+  printed its usual success line). The silent one is the reason the task exists.
+- **Shipped 2026-08-11.** `harness.sh` uses fail-fast shell semantics, accepts an
+  isolated `REC`, renders u16/f32 into a fresh per-run staging tree, requires exactly
+  one TIFF+sidecar pair per frame per mode (TIFF magic; sidecars with object-valued
+  `meta` and `params`), rejects directory-shaped publication targets, and publishes
+  only after the complete set validates and revalidates it before the success line.
+  Saved roll reports have `frames[].output` rewritten to the durable published paths.
+  The intentional strict probe accepts only exit 1 carrying both the IR-ignored and
+  strict-promotion diagnostics. `nctool.test_harness` drives the real debug binary
+  through `freeze` → `convert` on the committed fixtures (no assets, no `exiftool`)
+  and reproduces the successful-wrong-container failure with a fake `nc`.
+- **The full `scripts/analysis` unittest suite runs in CI on Linux and macOS** since
+  this task (it had run under no gate before). The Drive-backed image-quality,
+  interoperability, IR, determinism and resource checks remain manual. A real
+  Drive-backed `freeze` regenerated 21 files across seven rolls, semantically
+  identical to the committed recipes after normalising JSON key order.
 
 
 ## calibration-frame-capture
@@ -1545,3 +867,21 @@ three v1 charts below the picture, bound to the active config.
 - Mostly photographic work. The code half is the manifest role for a bracketed target frame
   (exposure offset + lighting recorded alongside it) and whether one measurement command
   serves all three consumers or each wants its own read.
+
+## review-reference-cells
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: an outside producer's image (NLP export, SmartConvert, hand-tweaked target) as
+  a grid cell beside nc's renders of the same frame, brought to a common SDR sRGB JPEG,
+  paired by manifest `source_frame`. Asked for by three tasks; filed 2026-09-13.
+
+## review-build-axis
+
+**Status:** not started
+**Updated:** 2026-09-13
+
+- Goal: the same frame and config across two builds as toggling cells, labelled from
+  the sidecar's `identity` block. Deferred by `comparison-review-tooling` until a
+  default moves; two default moves are now filed.

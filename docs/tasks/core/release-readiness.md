@@ -16,21 +16,16 @@ platforms, packaging, some of which need decisions and later-phase work.
 The docs describe a product that "hasn't started" while the pipeline is fully
 built. Correct, at minimum:
 
-- **README status.** `README.md:24` says "Pre-implementation… coding hasn't
-  started"; `README.md:33` heads the examples "**Planned** usage." Both false —
-  the commands are functional. Rewrite the Status section to reflect a working
-  tool and drop "Planned" from the usage heading.
-- **Algorithm count.** `docs/TASKS.md:31` says "**two** implementations (`simple`,
-  `density`)" and the pipeline diagram at `docs/TASKS.md:24` reads
-  `algorithm (simple|density)` — both omit **`sigmoid`**. There are three
-  converters (`simple`, `density`, `sigmoid`); fix the count and the diagram.
-  (Sweep the design-spec for the same omission.)
-- **Obsolete `--out-depth` flag.** Renamed pre-release to the boolean
-  `--output-hdr` (`cli.rs` guards the removed recipe key). The real-scan task has
-  already been corrected; it remains stale in
-  only `docs/tasks/core/pipeline-orchestration.md` (`--out-depth f32`). Replace with
-  `--output-hdr`. Leave the `docs/progress/` epic logs' history as-is (they are
-  dated execution logs that legitimately record the rename).
+- ~~README status~~ and ~~algorithm count~~ — **done** by 2026-09-13 (the README
+  `Status` describes the working converter and `docs/TASKS.md` no longer counts
+  algorithms; verified by grep).
+- **Flag names in docs.** The original item said to replace `--out-depth` with
+  `--output-hdr`; that is now backwards. `output/presets` (2026-08-09) removed
+  `--output-hdr`/`--output-sdr` and shipped `--out-depth u16|f32`, so
+  `pipeline-orchestration.md`'s `--out-depth f32` is correct again. Sweep the
+  user-facing docs and the open task files for `--output-hdr` shown as a *live* flag
+  (the README quick-start carried one until 2026-09-14); done tasks' files and
+  `docs/progress/` legitimately record the old name as history.
 - **Research-report citation tokens.** `docs/negative-convertor-research-report.md`
   contains unresolved `citeturn…` tokens throughout. They are **wrapped in
   invisible Unicode private-use characters** (plain `grep citeturn` finds nothing),
@@ -90,10 +85,9 @@ resource/pipeline evidence, and the doc fixes in Part 1 need not wait.
 
 - README no longer claims pre-implementation; usage heading isn't "Planned"; a
   fresh reader would understand the tool works.
-- `docs/TASKS.md` (and design-spec) state three algorithms and show `sigmoid` in
-  the pipeline description.
-- No `--out-depth` remains in `docs/tasks/` or the design spec (`docs/progress/`
-  history excepted); the replacements use `--output-hdr` and match `cli.rs`.
+- No user-facing doc (README, `docs/using-nc.md`, the design spec, the skills) or open
+  task file shows `--output-hdr` / `--output-sdr` as a live flag; done tasks and
+  `docs/progress/` history excepted. Flag names match `cli.rs`.
 - The research report contains no `citeturn` tokens or their invisible PUA
   delimiters (verify with a PUA-aware scan, not plain-text grep).
 - `LICENSE` file present and `Cargo.toml` carries the agreed license + metadata

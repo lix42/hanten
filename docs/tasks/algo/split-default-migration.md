@@ -40,7 +40,10 @@ each channel's own published curve, so it needs neither a scalar `Dmax` nor a
 per-channel gain.
 
 It also un-inerts HDR: same frame, same tone, MaxCLL 101 nits under the shipped
-sigmoid against 999 under the characteristic curve.
+sigmoid against 999 under the characteristic curve. **That payoff reaches the explicit
+gain-map presets, not the default path:** the user decided (2026-08-09, reaffirmed 2026-09-13) that the default
+output becomes SDR lossless (`output/display-p3-default`). Prefer landing the two
+default moves in one `pipeline_version` bump; the order is that task's open question.
 
 ## The release gate — colour, not tone
 
@@ -98,22 +101,9 @@ improves 10–25x; a historical `PIPELINE_FINGERPRINTS` row must never be edited
 refuses any non-default `print_exposure`. A global default move that ignored this would
 break a bare `nc convert --output-preset film-master`.
 
-**The new fingerprint row may not be portable, and this is the single most important
-thing to read before writing one.** `algo/characteristic-curve-coverage` established by
-*observation* — not by argument — that **x86_64 and macOS return different `f32` results
-from `log10f`** on two of the fifteen `stages::golden::pixels()` samples under this curve.
-The chain has two libm calls (`log10` in `to_density`, `10^` in the curve), and a 1-ULP
-difference in the first is amplified by `ln(10)·d·(1/γ_local)` — up to 62 pixel ULPs.
-
-The golden there survives with a derived per-sample window
-(`stages::golden::reachable_window`). **A fingerprint row has no window at all** — it
-hashes raw f32 bits — so it is a strictly harder bar, and the current vector is known to
-fail it on at least those two samples. Budget for choosing sample values whose *rendered*
-pixels are identical on both targets, and verify by running CI on both rather than by any
-margin argument; two threshold-based arguments were tried during that task and both were
-unsound. Note that moving `golden::pixels()` itself is not free — it is shared with every
-historical row, whose meaning would shift with it. A separate vector for the new
-fingerprint is likely cheaper.
+**The new fingerprint row may not be portable.** The problem and its evidence belong to
+`algo/characteristic-fingerprint-vector` (split out 2026-09-13), which delivers the
+vector this row hashes; do not write the row from `golden::pixels()` as it stands.
 
 ## How to Verify
 
@@ -143,6 +133,8 @@ fingerprint is likely cheaper.
 - [Reconstruction / render curve split](reconstruction-render-curve-split.md) — the verdict
 - [Named conversion presets](conversion-presets.md) — the mechanism; this migration is the
   last step of that task, not separate work
+- [A portable fingerprint vector](characteristic-fingerprint-vector.md) — split out
+  2026-09-13: the `render` row's cross-target portability problem, solvable before the frames
 - [Pin the characteristic curve against regression](characteristic-curve-coverage.md) —
   **done 2026-09-10.** Four property tests over the real `algo::reconstruct` plus a 1-ULP
   golden, so the default moves onto pinned wiring. The fingerprint row was deliberately left

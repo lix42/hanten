@@ -21,8 +21,12 @@ and new metrics recorded.
 
 For representative color and HDR frames, execute this matrix:
 
-1. **Default `gain-map-hdr`** — the HDR rendition uses declared headroom and the
-   SDR Display P3 base independently passes its decode-back oracle.
+1. **The default preset, as shipped** — decided to become `display-p3`
+   (`output/display-p3-default`), so this row is the SDR TIFF's decode-back oracle;
+   `gain-map-hdr` is covered below as an explicit preset. Both default moves
+   (`output/display-p3-default` and `algo/split-default-migration`) are
+   dependencies so this row tests what users actually get. Rows 2–9 do not need
+   them and could be run earlier if acceptance is ever split.
 2. **Explicit presets** — `display-p3` and `compatibility` render correctly;
    `film-master` preserves unclamped linear ACEScg film rendering and cross-frame
    exposure under fixed/roll-calibrated Dmax; `hdr-pq` and `hdr-hlg` carry
@@ -49,13 +53,16 @@ For representative color and HDR frames, execute this matrix:
 8. **Simple boundary and migration** — simple reconstruction maps raw
    unclamped `1 - scan/Dmin`; named display output applies resolved
    `print.white_balance`/`print.linear_range` afterward, while film master
-   rejects non-default values and legacy aliases follow their warned migration
-   contract.
+   rejects non-default values. (The old `--output-hdr`/`--output-sdr` aliases are
+   hard-rejected, not warned; there is no migration contract to test.)
 9. **Master/display tonal delta** — using shared, non-gamut-limited patches,
    compare normalized film-master values with the SDR/HDR render inputs and
-   decoded outputs. The sigmoid reconstruction owns the shadow toe. Display
-   defaults may adapt transfer, reference white, highlights, and gamut, but a
-   second shadow-floor lift or broad midtone re-grade fails acceptance.
+   decoded outputs. **Re-evaluate this row against the split verdict
+   (`algo/reconstruction-render-curve-split`, 2026-09-02):** the display operator now
+   carries the tonal character by design, so "a second shadow-floor lift or broad
+   midtone re-grade fails acceptance" describes the pre-split contract. What still
+   holds is that the master and the display render must agree on mid-grey
+   (`extended-reinhard-mid-preserving-v2` pins `f(0.18) = 0.18`).
 
 ### Automated oracles
 
@@ -87,8 +94,9 @@ decoder independent of nc:
   decoded SDR base must also pass the manifest row's lossy 8-bit JPEG gain-map
   base bounds. A semantic metadata oracle must prove their
   scale/offset/gamma/capacity meanings agree after dialect-specific unit
-  conversion, and a deliberately conflicting dual-metadata fixture must prove a
-  dual-aware decoder gives ISO 21496-1 precedence. The oracle independently
+  conversion. A deliberately conflicting dual-metadata fixture records which dialect
+  each dual-aware decoder selects as **observed behaviour** (ISO 21496-1 is silent on
+  coexistence, so precedence is never a conformance claim; Apple selects ISO). The oracle independently
   converts both linear Display P3 renderings to reference-white-relative units:
   SDR/reference white is `1.0`, and HDR absolute luminance is divided by the
   pinned 203 cd/m² reference white. It then derives each canonical gain as
@@ -173,3 +181,6 @@ every failure has a tracked follow-up (or the log explicitly records none).
 
 - [Output presets and guidance](../output/presets.md)
 - [Real-scan core verification](real-scan-verification.md)
+- [Make `characteristic-generic` the default](../algo/split-default-migration.md) and
+  [Make `display-p3` the default output preset](../output/display-p3-default.md) —
+  the default this task accepts is the one both moves ship

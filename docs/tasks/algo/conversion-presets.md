@@ -106,8 +106,9 @@ These are measured, and each one killed a simpler design:
 
 - [Film stock profiles](film-stock-profiles.md) — ships the characteristic curve, the
   registry and the aim tables the derived scale reads.
-- [Make `characteristic-generic` what a bare `nc convert` resolves](split-default-migration.md) —
-  owns the default migration this task's last step performs; read its release gate first
-  (since 2026-09-12 it is the known-neutral reference from
-  `analysis/calibration-frame-capture`, which replaced the "necessary, not sufficient" edge
-  on `io/scanner-density-calibration`).
+
+Depended on by (not a dependency; the edge runs the other way in `TASKS.md`):
+[Make `characteristic-generic` what a bare `nc convert` resolves](split-default-migration.md),
+which owns the default migration this task's last step performs. Read its release gate
+first (since 2026-09-12 it is the known-neutral reference from
+`analysis/calibration-frame-capture`).

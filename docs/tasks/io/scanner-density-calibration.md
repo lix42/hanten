@@ -1,5 +1,16 @@
 # Scanner Density Calibration
 
+> **Needs re-evaluation before pickup (2026-09-13).** The file carries two designs that
+> disagree. The `Design` section specifies a **transmission step wedge** and a profile "keyed
+> by scanner + scan settings, a different axis from the film stock". The 2026-09-08 input says
+> the wedge is blind to dye cross-talk and the fit is a **3×3 + offset from a ColorChecker
+> through film**, which is scanner × film × development and not separable into a scanner
+> profile. Settle which instrument and which model this task delivers, and rename the
+> output if it is not a scanner profile. It also overlaps
+> `color/optional-color-correction-profiles` (chart fitting, profile format, provenance);
+> decide where correction lives before either builds tooling.
+
+
 
 ## Goal
 

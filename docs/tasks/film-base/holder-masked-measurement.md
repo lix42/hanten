@@ -2,10 +2,11 @@
 
 ## Goal
 
-Make `Dmin` and `Dmax` measurement sample only film: mask the holder per edge when
-IR permits, fall back to a fixed fraction when it does not — and once the sampled
-region is a single population, estimate its **centre** rather than reaching for an
-extreme percentile.
+Make `Dmin` and `Dmax` measurement sample only film: apply the per-edge holder mask
+that `holder-depth-mask` provides (IR where it permits, a fixed fraction where it does
+not) and, once the sampled region is a single population, estimate its **centre**
+rather than reaching for an extreme percentile. Since 2026-09-13 the mask itself is
+that task's; this one consumes it and changes the estimator.
 
 **Pixel change.** The base is the divisor of the whole conversion, so this owes a
 `pipeline_version` bump. Masking and the estimator ship together for that reason:
@@ -78,6 +79,8 @@ mixtures (`--auto-base` rebate strips, an untrusted user rectangle).
 ## Dependencies
 
 - [Decide IR usability by measurement](ir-usability-detection.md)
+- [A depth-aware holder mask](holder-depth-mask.md) — the mask primitive, split out on
+  2026-09-13 so the other consumers need not wait for this task's estimator change
 - [Conversion versioning and baseline comparison](../core/conversion-versioning.md)
 - [Roll-fixed Dmax from a fully-exposed reference frame](dmax-reference.md) — this task
   changes `reference_dmax` sampling, which that task introduced

@@ -57,7 +57,8 @@ and a wrong one is not. Tune the confidence gates against the
 
 **Also in this task's scope (same file/family, from the §9 ladder):**
 
-- **Content-based source (ladder Tier 3, explicit opt-in).** New
+- **Content-based source (ladder Tier 3, explicit opt-in) — reassigned to
+  `film-base/content-fallback` on 2026-07-15 and not shipped here.** New
   `film_base.source = "content"` (flag e.g. `--base-content`) for scans cropped
   to the image with no unexposed film visible: per-channel high percentile of the
   exposed content (thinnest area ≈ scene's deepest black ≈ base). It is never a
@@ -83,7 +84,7 @@ and a wrong one is not. Tune the confidence gates against the
 - A uniform dark picture region does **not** out-rank a genuine (brighter) rebate.
 - No-rebate image still fails loudly with an actionable error that names the
   recovery flags (`--film-base`, `--base-region`, `--base-content`).
-- Content mode: synthetic image with a known near-black patch → base ≈ that
+- Content mode (now `film-base/content-fallback`'s): synthetic image with a known near-black patch → base ≈ that
   patch; report marks the content source; merge test for the new source arm.
 - `--base-region` over a deliberately mixed rectangle emits the uniformity
   warning; a clean rebate rectangle does not.

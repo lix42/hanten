@@ -69,7 +69,7 @@ field.** Most users will not know or will not say, so stock selection must be a
 error; *no* stock named resolves to generic without complaint. What the measurements
 say about the generic values:
 
-- the per-channel **gain** is nearly stock-independent (blue 0.859, range 0.850–0.881
+- the per-channel **gain** is nearly stock-independent (blue 0.860, range 0.850–0.887
   over eight stocks — a 3.6 % spread on a 14 % correction), so a generic `density.scale`
   captures most of the effect and is a real improvement on `[1,1,1]`;
 - the per-channel **offset** is not (−0.101…+0.015, splitting by tier), so it stays 0
@@ -112,11 +112,10 @@ re-derivable rather than transcribed: the publications live in `docs/datasheets/
 committed digitizer produces `curves.json` from them, and a `cargo test` audit pins the
 Rust literals to that extraction. What that leaves for this task:
 
-- the **generic fallback for the *parametric* path** — a `density.scale`/`offset` pair for
-  users who do not name a stock and do not select the characteristic curve. The measured
-  generic gain is solid (blue 0.860, range 0.850–0.887); the offset is not (−0.101…−0.002).
-  Coordinate with `film-base/dmax-per-channel-reduction`, which owns where a per-channel
-  term belongs;
+- ~~the generic fallback for the parametric path~~ — the **scale half shipped 2026-09-09**
+  as `density.scale = [1, 0.90, 0.86]` (`pipeline_version` 4); the offset half
+  (−0.101…−0.002, not stock-independent) stays at 0 and, with any measured alternative,
+  belongs to `film-base/dmax-per-channel-reduction` (parked 2026-09-13);
 - whether the characteristic curve should become the **default** — that is
   `algo/split-default-migration`'s call, with a `pipeline_version` bump, and it wants the
   scanner-to-Status M question answered first;
