@@ -5,6 +5,11 @@ sits in one grid cell, so switching config swaps the picture without moving it b
 a pixel. That is the whole point — toggling in place shows differences that
 side-by-side hides, especially in highlights.
 
+Each frame gets **one screen** — picture, preview strip and charts together — and
+scrolling settles a frame at a time. Only the frames near the viewport render
+their pictures at all, so a set of thirty-odd frames costs the same to open as a
+set of three.
+
 Built with [TanStack Start](https://tanstack.com/start) on
 [Vite+](https://viteplus.dev) (`vp`), Solid, and Panda CSS. It is a **local** tool:
 the server exists to read your review set off disk and watch it, and there is no
@@ -56,11 +61,43 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
 | ------------------ | -------------------------------------- |
 | `1`–`9`, `0`       | Select config 1–10                     |
 | `f`                | Toggle fit / fullsize                  |
+| `j` / `k`          | Step to the next / previous frame      |
+| `h` / `l`          | Step to the previous / next config     |
+| `a`                | Note on the current frame              |
+| `n`                | Every note, editable, with Copy all    |
+| `c`                | Clear all notes (asks first)           |
 | Config buttons     | Same as the number keys                |
 | Preview thumbnails | Select that config for **every** image |
 
-`fit` scales each image into the column; `fullsize` shows it at natural size and
-the viewport scrolls.
+The **current frame** — the one whose title is underlined — is the lowest frame
+whose picture is on screen. Lowest, because scrolling down reveals the next
+picture at the bottom of the screen and that is the frame you are moving to, so
+it takes the mark as soon as it appears.
+
+`j` and `k` step it, aligning the frame they land on. **An unaligned frame is
+aligned first**: after a free scroll the first press settles what you are already
+looking at rather than skipping past it, in either direction.
+
+`h` and `l` step the selected config instead, and **wrap** where `j`/`k` clamp.
+That difference follows the thing being stepped: the configs are a handful of
+renderings of one frame, cycled repeatedly to see what moves, so running off one
+end and back on is the gesture — while frames are a long list you work down, and
+wrapping from the last to the first would lose your place.
+
+`fit` **contains** the whole frame in the space left over — the entire picture is
+visible whatever its aspect, letterboxed against the panel, and that pane never
+scrolls. `fullsize` shows it at natural size and the pane scrolls, with the pan
+controls and mini-map. Note `fit` is bounded by height as well as width now, so
+raising `sizes.chartsBand` costs picture size in both directions.
+
+A frame is exactly one screen tall, and scrolling **snaps** to a frame — by
+proximity, so a flick settles on one but a small drag leaves you where you put
+it, and scrolling _inside_ a `fullsize` picture is not fought. The page header is
+a snap stop of its own, so the title and the set's path stay reachable at the top.
+
+Within that screen the picture takes every pixel the head and the charts leave.
+When there is not enough for both, the **charts** are what gives way: they are a
+summary of numbers held elsewhere, while the picture is the thing you came for.
 
 The page follows the set while it is open. Re-run `nc` over the same directory
 and the renditions that changed swap in place — the selected config and the
@@ -68,18 +105,60 @@ scroll position stay put, so you can keep toggling while renders land. Editing
 `review.json` works the same way: a config added to it simply appears. A
 re-measurement lands the same way, because the records are watched too.
 
+## Notes
+
+Reviewing a roll usually means writing down what you saw. `a` opens a note on the
+current frame, `n` opens every note at once — one textarea per frame, editable
+there too — and **Copy all** puts the lot on the clipboard as one block, in set
+order, listing only the frames actually noted:
+
+```text
+# Review notes — Ektar roll
+
+2 of 14 frames noted
+
+## F0005 — synthetic frame 5
+
+Highlights clip on this one.
+```
+
+A frame that has a note says so beside its title, so you can see what you have
+already covered while scrolling. `c` clears every note and **asks first** — notes
+live only in the page, so there is nothing to restore them from. (`c` on a review
+with no notes does nothing rather than asking.)
+
+**Notes are frontend-only**: no server, no storage, gone on reload. They are meant
+to be collected in one go and pasted somewhere that keeps them, which is what
+Copy all is for.
+
+They are dropped automatically when the set's **path or frame list** changes,
+because a note then describes something that is no longer there. Deliberately
+_not_ on every refresh: re-running `nc` over the same frames and watching them
+update in place is the workflow this app exists for, and wiping the notes each
+time would make them useless.
+
 ## Measurements
 
 When a rendition names a metric record (`metrics` in SCHEMA.md), the three charts
 appear under the picture and swap with the config exactly as the picture does: a
-tone histogram, the same histogram per channel, and colour cast across the tone
-bands. They describe the **measured region**, which a set usually insets so the
+tone histogram, the same histogram split into red, green and blue, and colour
+cast across the tone bands. They sit in **one row of three equal columns** and share one `viewBox`, so
+they render at identical size and never wrap — the three are read together, and
+comparing a shape against one below it is not the same gesture as comparing it
+against one beside it. They describe the **measured region**, which a set usually insets so the
 film holder stays out of the statistics — the panel says what share of the frame
 that is.
 
 A rendition with no record shows its picture and says it has no measurement; a
 record that will not parse says why, in place of the charts. Neither refuses the
 set.
+
+**The charts lag the picture by design.** Switching config swaps the picture at
+once and the panel follows about 200ms later, once the new picture has loaded and
+the selection has been still — so toggling two configs to compare them draws no
+charts at all until you stop. The panel is fed the config it is describing
+throughout, label included, so it never labels one config's numbers with
+another's; during the lag it simply still names the previous one.
 
 **Nothing checks that a record describes the pixels beside it.** Re-run `nc` by
 hand over a set and the picture updates while the charts go on describing the
@@ -129,30 +208,40 @@ if you ever need the npm _script_ of the same name.
 - **A dev-server restart reloads the page**, losing the selected config and
   scroll position. Ordinary edits to a set never do this — they update in place.
 
-- **The metrics panel's height depends on the active config** — three charts, one
-  line of "no measurement", or nothing at all when a config has no rendition.
-  Within a section nothing moves, because the panel sits below the picture; but
-  switching config changes the height of the sections _above_ the viewport, and a
-  browser without scroll anchoring moves the picture you were looking at. Accepted
-  rather than reserved: a fixed panel height would leave a hole under every
-  unmeasured set, which is the common case while a measurement is still running.
+- **A frame more than one screen away is unmounted, and its pan position goes
+  with it.** Scroll two frames past one you had panned into in `fullsize`, come
+  back, and it is at the top-left again. The neighbours stay mounted, so this
+  costs nothing while you are toggling between adjacent frames; retaining the
+  offset would mean restoring it after the images decode, since the stage cannot
+  scroll to an offset it is not yet tall enough to hold.
 
-- **Every rendition of every image is fetched eagerly.** The stacking that makes
-  switching instant requires the inactive renditions to be laid out, and
-  `loading="lazy"` on them would collapse a section to zero height whenever a set
-  omits `width`/`height` — which the schema permits. So a large set (many frames x
-  many configs of full-size JPEGs) downloads everything up front. `nctool review
-generate` states `width`/`height` for every rendition it **measures** (the size
-  comes from the metric record; `nc`'s report does not carry it), so a set built
-  with `--no-metrics` is the one that still omits them. Fixing it properly means
-  the server measuring the files itself — see below.
-  Each image is fetched once and no more, though: `/img/` URLs carry the file's
-  mtime and are served `immutable`, so switching configs and re-reading the set
-  cost nothing.
+- **The charts are drawn well below their natural size, and the band is what
+  decides that.** `sizes.chartsBand` is a stated 280px — applied only when charts
+  are actually drawn, since a set rendered with `--no-metrics` would otherwise
+  hold the band open for one line of "not measured" and take ~220px of picture
+  from every frame — of which a fixed 121px
+  goes to the panel head and each card's title, gaps, padding and caption — so
+  the chart gets 159px against the 300px its `viewBox` describes, and the three
+  share that `viewBox`, so a shorter slot letterboxes them rather than distorting
+  them. Measured: 0.53 scale at any viewport from 1570px down to about 845px, the
+  same on every screen by design. Below that the band can no longer coexist with
+  `sizes.pictureFloor` and starts shrinking — 195px at a 728px viewport, 0.36
+  scale, where the 10px tick labels stop being readable; below 820px the captions
+  drop out **inside a frame** so the drawing keeps what they were using. `/charts`
+  keeps them at any height — the rule is scoped to the band, not the viewport.
 
-- **The server could measure `width`/`height` itself now**, which would retire
-  both the manual fields and the limit above. It does not yet; the schema is
-  unchanged.
+  Raising `chartsBand` is the one-line way to trade picture height for chart
+  legibility. Making them fill their slot instead would mean measuring each one
+  and setting its `viewBox` from the measurement — cheap, but it puts a
+  `ResizeObserver` write in the path of the layout it measures, which is the
+  cycle this app has been bitten by before. `/charts` is uncapped and always
+  draws them at full size.
+
+- **The server could measure `width`/`height` itself**, which would retire the
+  manual fields. It does not yet; the schema is unchanged. Note this is no longer
+  what gates lazy loading — that limit closed instead by making a frame's shell
+  one screen tall whether or not its contents are mounted, so no image dimension
+  is needed to reserve the right space.
 
 ## Notes for the next person
 
@@ -245,9 +334,9 @@ generate` states `width`/`height` for every rendition it **measures** (the size
   no token named `18`. Same syntax, opposite meanings, decided by the preset and
   silent either way. That class of bug is now a compile error.
 - **Token naming follows one rule.** A value that denotes a _specific thing_ gets
-  a role name — `sizes.thumbWidth`, `sizes.stageCap`, `fontSizes.key` — and that
-  is what retired the literals this app used to repeat across files (104x70 in
-  three places, 82vh in two). `spacing` gets no such names because it has no such
+  a role name — `sizes.thumbWidth`, `sizes.frameHeight`, `fontSizes.key` — and
+  that is what retired the literals this app used to repeat across files (104x70
+  in three places). `spacing` gets no such names because it has no such
   structure: the same 8px is a gap here, an inset there and a padding elsewhere,
   so a semantic name would be fiction. It is named by its measurement
   (`spacing["8px"]`), which keeps call sites reading like CSS while `strictTokens`
@@ -270,6 +359,53 @@ generate` states `width`/`height` for every rendition it **measures** (the size
   `css()` accepts `false`/`undefined` for the inactive branch. Because the merge
   happens on the _objects_ and not on class strings, an override replaces the
   base's declaration outright rather than competing with it in the cascade.
+- **The charts must never be redrawn synchronously with the picture, and two
+  separate things guarantee it.** Measured on 14 frames x 6 configs: a config
+  switch cost **~360ms** of synchronous work — one long task — of which the charts
+  were 99% (the same set with its measurements stripped switched in 2ms).
+
+  The first cause was that no derivation in either chart component was a
+  `createMemo`. A plain `() => ...` recomputes on every read, and
+  `histogramOutline`'s callbacks read the scales once per bin, so `y()` re-entered
+  `ceiling()` -> `peak()` -> `drawn()` — a full scan of every series' bins — for
+  each of ~220 points. Memoizing took the switch to ~10ms. The second is that even
+  10ms does not belong in the keypress: `ImageSection` holds a _separate_ charted
+  config id that advances only after the picture has loaded and the selection has
+  been still for `CHART_SETTLE_MS`, which took it to **~2.8ms** and means rapid
+  toggling draws no charts at all.
+
+  **Memoizing changed the evaluation order, and that is the trap.** A `createMemo`
+  body runs eagerly at creation where a plain arrow ran on first read, so a memo
+  calling a `const` declared below it hits the temporal dead zone. `peak` calls
+  `visibleBins`; memoizing in place turned that into a `ReferenceError` that
+  blanked the whole page — with `check`, `test` and `build` all green, because it
+  only fails when the component runs. The bin-geometry block is now declared above
+  its readers, and it has to stay there.
+
+- **A hydrated `<img>` fires no `load` event, and a client-created one has no
+  `src` when its ref runs.** Both halves matter to the charts' wait-for-the-
+  picture gate, and each one alone gets it wrong. An image that came down in the
+  server-rendered HTML can finish before Solid attaches the listener, so it must
+  be recognised in the ref or its charts never appear — deleting the ref check
+  blanked every chart on first load. But Solid assigns `src` in an effect that
+  runs _after_ the ref (verified in the compiled output: `addEventListener` ->
+  ref -> `setAttribute("src")`), and per the HTML spec `complete` is `true` when
+  there is no `src` — so testing `complete` alone marks every config loaded at
+  mount and retires the gate silently. The check is
+  `element.complete && element.currentSrc !== ""`; it needs both.
+
+- **A percentage height on a grid item resolves against its grid _area_, and an
+  implicit row is content-sized.** So `max-height: 100%` / `height: 100%` on a
+  rendition resolves against an indefinite value and is dropped — silently, with
+  every gate green. This shipped: `fit` had been `maxHeight: stageCap` (82vh, an
+  absolute length that always resolved) and became `maxHeight: full` during the
+  one-screen work, at which point the picture was width-limited only, overflowed
+  its pane and put a second scrollbar inside the page's own. The fix is
+  `stageFit`'s explicit `100%` tracks, which make the cell's height definite;
+  `object-fit: contain` then does the scaling. If you touch those tracks, check
+  the pane for a scrollbar in `fit` — that is the visible symptom, and nothing
+  else reports it.
+
 - **Keep the border longhands.** Not a Panda limitation — it models shorthands
   fine — but a consequence of the merge above: `previewActive` and `active`
   override only `borderColor`, and a base that spelled the whole border as one
@@ -305,6 +441,71 @@ generate` states `width`/`height` for every rendition it **measures** (the size
   renderer so hard that Chrome could not inject a script into the page. The
   mini-map is therefore painted imperatively (`paintMap`), and only coarse
   "does it overflow at all" state is reactive.
+
+- **The current-frame mark and the `j`/`k` keys read the same rule two different
+  ways, deliberately.** `currentFrame` is the rule; the mark is driven by an
+  `IntersectionObserver` on each picture pane, because it has to follow a free
+  scroll, while the keys re-measure straight off the DOM at keypress time. An
+  observer callback is asynchronous, so two quick presses of `j` would both act
+  on the same stale answer and the second would scroll _backwards_. A keypress is
+  not a scroll handler, so measuring inside one is free.
+
+  **That measurement is only trustworthy because `align` scrolls instantly**, and
+  a smooth scroll broke it in exactly the way the observer would have. Measured:
+  aligned on frame 4, `k` twice in quick succession landed back on frame 4.
+  Mid-animation both the frame being left and the one being entered have a
+  picture on screen, so `currentFrame` answers with the _lower_ — the one you are
+  leaving — and the second press aligned that. Landing immediately means every
+  press measures a settled page. Do not restore `behavior: "smooth"` here without
+  also tracking the in-flight target.
+
+- **The mounting observer is the exception to that rule, and one invariant is
+  what makes it safe.** `App` writes a signal from an `IntersectionObserver`
+  callback, which is the same shape. It is safe only because a frame's shell is
+  `frameHeight` tall **whether or not its contents are mounted** — so a render
+  caused by that callback changes no geometry and cannot move a sibling across
+  the viewport edge into the next callback. Break that invariant (give the shell
+  `height: auto`, or let the charts push it past one screen) and the observer
+  starts feeding itself. It is also what makes the scrollbar right on the first
+  paint instead of growing as pictures arrive, and it retired the old limit where
+  switching config resized every section above the viewport.
+
+- **One number decides where a frame snaps, and JS reads it from the token.**
+  `sizes.barHeight` is used three ways: `frameHeight` subtracts it,
+  `scroll-padding-top` is it, and `App`'s `SNAP_LINE` reads it through Panda's
+  `token()`. Measuring the bar instead would be a second source of truth for the
+  same offset — and the failure is quiet: let the two diverge and the browser's
+  own snapping pulls the page a few pixels after `align` lands, so `isAligned`
+  is never true and `j` re-aligns the same frame forever instead of stepping.
+  Reading the token also retires a `?? 0` fallback that would have aligned every
+  frame _under_ the bar had the ref ever been unset.
+
+- **The control bar must stay a single non-wrapping row.** `sizes.frameHeight` is
+  `calc(100dvh - {sizes.barHeight})`, a stated constant — so a bar that wrapped on
+  a set with many configs would make every frame the wrong height, with nothing
+  reporting it. The config group scrolls sideways instead, and only that group:
+  letting the whole bar scroll pushes `fit`/`fullsize` off the right edge.
+
+- **`globalCss` is outside `strictTokens`, and an unresolved token name is
+  emitted verbatim.** `scrollPaddingTop: "barHeight"` compiled to
+  `scroll-padding-top: barHeight` — invalid CSS, silently dropped by the browser —
+  because that property reads the `spacing` scale while `barHeight` is a `sizes`
+  token. All four gates stayed green while every snapped frame sat with its label
+  under the control bar. Inside `css()` this is a compile error; in `globalCss` it
+  is not, so spell cross-category values as references: `"{sizes.barHeight}"`.
+  Worth checking the emitted rule when adding one — `curl -H 'Accept: text/css'
+localhost:5173/src/index.css`.
+
+- **`flexBasis: zero` on the picture is load-bearing.** At the default `auto` a
+  flex item's base size is its own content height, so the picture did not grow
+  into the space left over — it started at its content height, overflowed the
+  frame, and squeezed the charts to nothing. From a zero basis it takes exactly
+  what the head and the charts leave, and `minHeight: pictureFloor` is then what
+  it is _guaranteed_ rather than what it starts from. That floor is also what
+  makes the charts the side that yields — **not** a `flex-shrink` difference, as
+  an earlier draft of this note claimed: both items shrink at `1`, and the
+  asymmetry is that the picture floors at `pictureFloor` while the band's
+  `minHeight` is zero, so a frame too short for both takes it out of the charts.
 - **Correctness must not depend on `requestAnimationFrame`.** A hidden or
   backgrounded tab never fires it, and `scrollTo({behavior:'smooth'})` is driven
   by the same loop. Both bit here: the pan controls stayed permanently absent and

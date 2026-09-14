@@ -22,7 +22,7 @@ import { defineConfig } from "@pandacss/dev";
  * no tokens at all, so it stays.
  *
  * Naming follows one rule: a value that denotes a *specific thing* gets a role
- * name (`sizes.thumbWidth`, `sizes.stageCap`), and that is what retires the
+ * name (`sizes.thumbWidth`, `sizes.frameHeight`), and that is what retires the
  * literals this app used to repeat in two or three files. `spacing` gets no such
  * names because it has no such structure — the same 8px is a gap here, an inset
  * there and a padding elsewhere — so it is named by its measurement, and
@@ -132,12 +132,46 @@ export default defineConfig({
         thumbWidth: { value: "104px" },
         thumbHeight: { value: "70px" },
         panControl: { value: "34px" },
-        // How tall the image viewport may get, and the ceiling `fit` scales an
-        // image into — the same decision, previously two literals.
-        stageCap: { value: "82vh" },
-        // Keeps an empty viewport from collapsing before the first image loads.
-        stageFloor: { value: "120px" },
+
+        // One frame fills one screen, and these four say how that screen is
+        // divided. `barHeight` is **stated, not measured**: the control bar is a
+        // single non-wrapping row (its config group scrolls sideways instead), so
+        // its height is a constant, and `frameHeight` can subtract it in CSS
+        // rather than the page having to observe it and publish a variable.
+        barHeight: { value: "52px" },
+        frameHeight: { value: "calc(100dvh - {sizes.barHeight})" },
+        // The charts' height, in pixels rather than a share of the viewport: the
+        // band is the same on every screen, so the picture is the only thing that
+        // grows with the window. A `vh` share instead gave the row three different
+        // behaviours — content-sized on a tall display, capped in the middle,
+        // squeezed on a short one — and made the charts biggest exactly where
+        // there was already room for the picture.
+        // Of the band, `MetricsPanel`'s own head and the card's title, gaps,
+        // padding and caption take a fixed 121px, so the chart itself gets
+        // `chartsBand - 121`.
+        chartsBand: { value: "280px" },
+        // And the picture's guaranteed share, which is what makes the charts the
+        // side that yields. Without it flexbox took the shortfall out of the
+        // picture instead: on a 609px-tall window the charts held their full
+        // ceiling while the picture fell below them, inverting the whole point
+        // of the split.
+        pictureFloor: { value: "45vh" },
+
         full: { value: "100%" },
+
+        // The note dialogs. Two widths because they hold different things: one
+        // note, and one per frame in the set.
+        dialogNarrow: { value: "min(680px, 92vw)" },
+        dialogWide: { value: "min(900px, 94vw)" },
+        dialogTall: { value: "80vh" },
+        noteBox: { value: "180px" },
+        noteRow: { value: "90px" },
+        // The flexbox idiom for "this may shrink below its own content". A flex
+        // item's `min-height` defaults to `auto`, which floors it at content
+        // size — so a picture floors at the whole scan and a chart at its
+        // natural height, and neither fits in a frame that is one screen tall.
+        // `spacing` has a `0`, but min/max sizes read this scale.
+        zero: { value: "0" },
         // Reading measures. Suffixed rather than called `prose` and `panel`,
         // because `panel` is already a *colour*: one name meaning a surface in
         // one property and a column width in another is exactly the confusion
@@ -147,10 +181,6 @@ export default defineConfig({
         // unifying them would move the layout. Worth someone deciding.
         proseMeasure: { value: "78ch" },
         panelMeasure: { value: "80ch" },
-        // A chart caption's measure. Pinned to the chart it sits under
-        // (`MetricsPanel`'s `CHART_WIDTH`), so the text never runs wider than
-        // the thing it describes and the three cards keep one column width.
-        chartMeasure: { value: "460px" },
         // `fullsize` means natural size, and the two keywords that say so.
         // Tokens rather than `[auto]` / `[none]`: "render at the size the file
         // is" is a real decision this app makes, and naming it is what lets the
@@ -212,6 +242,24 @@ export default defineConfig({
   },
 
   globalCss: {
+    // Snapping lives on the scroll container, which is the document: one frame
+    // fills one screen, so a scroll that lands near a boundary settles on it.
+    // `proximity` rather than `mandatory` — `fullsize` scrolls *inside* a frame,
+    // and a mandatory snap fights that.
+    //
+    // `scrollPaddingTop` is what keeps a snapped frame out from under the sticky
+    // control bar: without it the frame's top edge aligns with the scrollport's,
+    // which the bar covers.
+    html: {
+      scrollSnapType: "y proximity",
+      // **Spelled as a reference, not as a token name.** `scrollPaddingTop` reads
+      // the `spacing` scale, and `barHeight` is a `sizes` token, so the bare name
+      // was emitted verbatim as `scroll-padding-top: barHeight` — invalid CSS,
+      // dropped by the browser, and reported by nothing: `globalCss` is outside
+      // `strictTokens`, so all four gates stayed green while every snapped frame
+      // had its label sitting under the control bar.
+      scrollPaddingTop: "{sizes.barHeight}",
+    },
     ":root": {
       // Lets the UA draw form controls and scrollbars in either scheme. It does
       // not choose one: which palette applies is decided by the tokens above,

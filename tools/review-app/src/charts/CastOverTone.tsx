@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { css } from "../../styled-system/css";
 import { AxisLine, AxisTitle, Grid } from "./Frame";
 import type { CastBand } from "./metrics";
@@ -41,7 +41,17 @@ const AXES: readonly { axis: CastAxis; label: string; hint: string; dash?: strin
 ];
 
 const styles = {
-  svg: css.raw({ display: "block", width: "full", height: "auto" }),
+  // Scales into whatever box its card gives it. `viewBox` plus the default
+  // `preserveAspectRatio` fits the drawing inside that box rather than
+  // distorting it, so a capped card letterboxes the chart instead of stretching
+  // it. `minHeight` is what lets a flex item shrink past its own content.
+  svg: css.raw({
+    display: "block",
+    width: "full",
+    height: "auto",
+    minHeight: "zero",
+    maxHeight: "full",
+  }),
   line: css.raw({
     fill: "transparent",
     strokeWidth: "3px",
@@ -67,31 +77,40 @@ interface Props {
   cast: readonly CastBand[];
   /** Distinguishes the gradient ids when more than one chart is on a page. */
   id: string;
-  width?: number;
-  height?: number;
+  /** The chart's `viewBox`; see `Histogram`'s note — stated, never defaulted. */
+  width: number;
+  height: number;
 }
 
 export function CastOverTone(props: Props) {
-  const width = () => props.width ?? 500;
-  const height = () => props.height ?? 330;
-  const plot = () => plotArea(width(), height(), MARGINS);
+  /*
+    Memoized for the same reason `Histogram` is — a plain `() => ...` recomputes
+    on every read — though the shape of the waste here is its own. There are no
+    bins: `y()`, `slots()` and `span()` are read once per band per axis and again
+    per marker, and each read of `y()` re-entered `bounds()` -> `values()`, a
+    `flatMap` rebuilding both means for every band. See `Histogram` for the
+    measurement that covers both.
+  */
+  const width = createMemo(() => props.width);
+  const height = createMemo(() => props.height);
+  const plot = createMemo(() => plotArea(width(), height(), MARGINS));
 
-  const values = () => props.cast.flatMap((c) => [c.meanA, c.meanB]);
+  const values = createMemo(() => props.cast.flatMap((c) => [c.meanA, c.meanB]));
   // The axis covers every value on both curves, padded to a round number, and
   // always includes zero — the whole chart is read against neutral.
-  const bounds = () => paddedBounds(values());
+  const bounds = createMemo(() => paddedBounds(values()));
   // **The ramp is normalised by what was measured, never by the padded axis.**
   // Padding can push a frame whose worst band is 19 past the 20-unit reference,
   // and normalising by that would paint the same cast weaker on one frame than
   // another for no reason but axis geometry — the opposite of what the fixed
   // ramp exists to guarantee.
-  const span = () => rampSpan(...extent(values()));
-  const step = () => niceStep(bounds()[1] - bounds()[0]);
+  const span = createMemo(() => rampSpan(...extent(values())));
+  const step = createMemo(() => niceStep(bounds()[1] - bounds()[0]));
 
   // Bands the record omits carry no pixels, so they get no slot: the curve spans
   // the bands that exist rather than dipping to zero through a band that does not.
-  const slots = () => slotCentres(props.cast.length, plot().left, plot().right);
-  const y = () => linearScale(bounds(), [plot().top, plot().bottom], true);
+  const slots = createMemo(() => slotCentres(props.cast.length, plot().left, plot().right));
+  const y = createMemo(() => linearScale(bounds(), [plot().top, plot().bottom], true));
 
   const valueOf = (band: CastBand, axis: CastAxis) => (axis === "a" ? band.meanA : band.meanB);
 

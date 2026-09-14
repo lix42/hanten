@@ -11,20 +11,56 @@ import type { Rendition, ReviewConfig, ReviewImage, ZoomMode } from "./review";
 // that: nothing overrides them, and `gridArea: "1 / 1"` would work fine now.
 // They are inherited spelling from StyleX, which dropped `gridArea` silently.
 const styles = {
-  section: css.raw({ paddingBlock: "20px", paddingInline: "16px" }),
-  head: css.raw({ display: "flex", gap: "12px", alignItems: "baseline", marginBottom: "8px" }),
+  // Fills the one-screen shell `App` renders around it. Head and strip take what
+  // they need, the charts take at most their band, and the picture gets every
+  // pixel left over — so the thing this app exists to show is what grows when
+  // there is room and what is measured against when there is not.
+  section: css.raw({
+    display: "flex",
+    flexDirection: "column",
+    height: "full",
+    minHeight: "zero",
+    paddingBlock: "20px",
+    paddingInline: "16px",
+    boxSizing: "border-box",
+  }),
+  head: css.raw({
+    display: "flex",
+    gap: "12px",
+    alignItems: "baseline",
+    marginBottom: "8px",
+    flexShrink: 0,
+  }),
   label: css.raw({ fontWeight: "semibold" }),
+  // The mark on the frame you are looking at. Underline rather than a border or
+  // a background: text decoration takes no space, so marking a frame cannot
+  // change its head's height — and a frame's height is the invariant the whole
+  // page rests on.
+  labelCurrent: css.raw({
+    textDecorationLine: "underline",
+    textDecorationColor: "accent",
+    textDecorationThickness: "2px",
+    textUnderlineOffset: "5px",
+  }),
   note: css.raw({ color: "accent", fontVariantNumeric: "tabular-nums" }),
+  noted: css.raw({ color: "accent", fontSize: "meta" }),
 
+  // Scrolls sideways rather than wrapping. A wrapping strip makes the head
+  // taller on sets with many configs, which would come straight out of the
+  // picture's height — and by a different amount per set.
   strip: css.raw({
     display: "flex",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     gap: "8px",
     alignItems: "center",
     marginBottom: "10px",
+    flexShrink: 0,
+    overflowX: "auto",
+    overflowY: "hidden",
   }),
   preview: css.raw({
     padding: "0",
+    flexShrink: 0,
     borderRadius: "md",
     borderWidth: "2px",
     borderStyle: "solid",
@@ -57,6 +93,7 @@ const styles = {
   // The mini-map: where the fullsize viewport currently sits inside the image.
   mapOuter: css.raw({
     marginInlineStart: "auto",
+    flexShrink: 0,
     width: "thumbWidth",
     height: "thumbHeight",
     borderRadius: "sm",
@@ -75,7 +112,22 @@ const styles = {
     backgroundColor: "accent.wash",
   }),
 
-  frame: css.raw({ position: "relative" }),
+  // The picture absorbs whatever the head and the charts leave, down to a floor.
+  // Both this and the band shrink (`flex-shrink: 1` on each); what makes the
+  // *charts* the side that gives way is the asymmetry in their floors — this one
+  // stops at `pictureFloor`, the band's `minHeight` is zero — so once the picture
+  // is at its floor every further pixel of deficit comes out of the band.
+  frame: css.raw({
+    position: "relative",
+    flexGrow: 1,
+    // **`flexBasis: zero` is load-bearing.** At the default `auto` the picture's
+    // base size is its own content height, so it does not grow into free space —
+    // it starts oversized and pushes the charts out of the frame entirely. From
+    // zero it takes exactly what the head and the charts leave, and `minHeight`
+    // is then what it is guaranteed.
+    flexBasis: "zero",
+    minHeight: "pictureFloor",
+  }),
   viewport: css.raw({
     borderWidth: "1px",
     borderStyle: "solid",
@@ -83,20 +135,44 @@ const styles = {
     borderRadius: "lg",
     backgroundColor: "panel",
     overflow: "auto",
-    maxHeight: "stageCap",
-    minHeight: "stageFloor",
+    height: "full",
+    boxSizing: "border-box",
   }),
   // Every rendition occupies the *same* grid cell, so switching config cannot
   // move the picture by a pixel — the whole point of comparing this way.
   // Inactive ones stay laid out (hidden, not removed) so nothing reflows.
-  stage: css.raw({ display: "grid", alignItems: "start", justifyItems: "start" }),
+  // `height: full` gives the stage the viewport's own (definite) height. How the
+  // renditions sit inside it differs by mode — see `stageFit` / `stageFullsize`.
+  stage: css.raw({ display: "grid", height: "full" }),
+  // **One cell, exactly the viewport, with the renditions stretched into it.**
+  // The explicit `100%` tracks are what make the cell's height *definite*: a
+  // percentage height on a grid item resolves against its grid area, and an
+  // implicit row is content-sized, so `height`/`max-height` in percent resolve
+  // against an indefinite value and are dropped. That is precisely how `fit`
+  // stopped constraining height — it had been `maxHeight: stageCap` (82vh, an
+  // absolute length, which always resolved) and became `maxHeight: full`, which
+  // silently did nothing: the picture was width-limited only, overflowed the
+  // viewport, and put a second scrollbar inside the page's own.
+  stageFit: css.raw({
+    gridTemplateRows: "100%",
+    gridTemplateColumns: "100%",
+    alignItems: "stretch",
+    justifyItems: "stretch",
+  }),
+  // Natural size, top-left, overflowing the stage so the viewport scrolls.
+  stageFullsize: css.raw({ alignItems: "start", justifyItems: "start" }),
   rendition: css.raw({ gridRowStart: "1", gridColumnStart: "1", display: "block" }),
   hidden: css.raw({ visibility: "hidden" }),
+  // Fills the cell and is *contained* in it, so the whole frame is visible at
+  // once whatever its aspect — which is what `fit` should have meant all along.
+  // `object-fit` scales by the decoded image's own intrinsic ratio, not by the
+  // `width=`/`height=` attributes, so a stale dimension in `review.json` still
+  // cannot distort the picture — the same property `fullsize` protects below.
   fit: css.raw({
-    maxWidth: "full",
-    maxHeight: "stageCap",
-    height: "natural",
-    width: "natural",
+    width: "full",
+    height: "full",
+    objectFit: "contain",
+    objectPosition: "center",
   }),
   // `width`/`height` set to `natural` (i.e. `auto`), not just the max-* releases
   // set to `unconstrained` (i.e. `none`). The `width=`/`height=`
@@ -134,6 +210,22 @@ const styles = {
   panDown: css.raw({ bottom: "8px", insetInlineStart: "half" }),
   panLeft: css.raw({ insetInlineStart: "8px", top: "half" }),
   panRight: css.raw({ insetInlineEnd: "8px", top: "half" }),
+  // The charts' share of the screen. The height lives here rather than inside
+  // `MetricsPanel` because that component is also mounted on `/charts`, in
+  // ordinary flow, where it should draw at natural size.
+  //
+  // `flexShrink: 1` with a zero floor is what happens below about 845px of
+  // viewport: there is not room for this band *and* `pictureFloor`, and
+  // `minHeight: zero` against the picture's floor is what decides who yields.
+  // Both shrink; only this one may shrink to nothing. The charts are a summary
+  // of numbers held elsewhere, whereas the picture is the thing this app exists
+  // to show.
+  band: css.raw({ flexShrink: 1, minHeight: "zero", display: "flex" }),
+  // **The stated height applies only when charts are actually drawn.** A set
+  // rendered with `--no-metrics` has nothing to put in the band, and holding
+  // 280px open for one line of "not measured" took ~220px of picture from every
+  // frame — measured on a 1618px viewport, band 280 against 59 of content.
+  bandCharted: css.raw({ height: "chartsBand" }),
   // An overlay, not a replacement. Swapping the scroller out for a message
   // unmounts it, and the scroll position goes with it: park somewhere in
   // fullsize, toggle through a config that has no rendition, and you come back
@@ -179,12 +271,31 @@ function warnOnDimensionMismatch(
   );
 }
 
+/**
+ * How still the selection must be before the charts redraw.
+ *
+ * Long enough that toggling two configs back and forth draws none of them, short
+ * enough that stopping feels immediate.
+ */
+const CHART_SETTLE_MS = 200;
+
 interface Props {
   image: ReviewImage;
   configs: readonly ReviewConfig[];
   activeIndex: number;
   onActivate: (index: number) => void;
   zoom: ZoomMode;
+  /** Whether this is the frame the viewer is looking at — see `currentFrame`. */
+  isCurrent: boolean;
+  /** Whether a review note has been written about this frame. */
+  hasNote: boolean;
+  /**
+   * Watches the picture pane, which is what decides the answer above.
+   *
+   * The pane rather than the section: a section is a whole screen, so two are
+   * nearly always in view, and which *picture* is on screen is the question.
+   */
+  paneObserver: IntersectionObserver | undefined;
 }
 
 /**
@@ -204,6 +315,12 @@ interface Overflow {
 
 export function ImageSection(props: Props) {
   const [viewport, setViewport] = createSignal<HTMLDivElement>();
+  // Handed back when this frame scrolls out of the mount window: the observer
+  // holds its targets strongly, and sections churn as you scroll.
+  let pane: HTMLDivElement | undefined;
+  onCleanup(() => {
+    if (pane) props.paneObserver?.unobserve(pane);
+  });
   const [overflow, setOverflow] = createSignal<Overflow>(
     { x: false, y: false },
     { equals: (a, b) => a.x === b.x && a.y === b.y },
@@ -281,6 +398,25 @@ export function ImageSection(props: Props) {
     });
   };
 
+  /*
+    The charts lag the picture, on purpose.
+
+    Swapping the picture is a class change on stacked `<img>`s and costs
+    ~2ms; drawing three charts costs an order of magnitude more, and putting
+    both in one synchronous handler makes the picture wait for numbers nobody
+    has looked at yet. So the panel follows a **separate** config id that
+    advances only once two things are true: the picture for it has loaded, and
+    the selection has been still for `CHART_SETTLE_MS`. Toggling between two
+    configs to compare them therefore draws no charts at all until you stop.
+
+    The panel is fed the *charted* id throughout — rendition, label and chart
+    ids — so it always describes the config it names, never the one on screen.
+  */
+  const [loaded, setLoaded] = createSignal<ReadonlySet<string>>(new Set<string>());
+  const [charted, setCharted] = createSignal<string | undefined>(undefined);
+  const markLoaded = (configId: string) =>
+    setLoaded((previous) => (previous.has(configId) ? previous : new Set(previous).add(configId)));
+
   const activeId = () => props.configs[props.activeIndex]?.id;
   const activeRendition = () => {
     const id = activeId();
@@ -307,17 +443,60 @@ export function ImageSection(props: Props) {
       "min-height": `${rendition.height}px`,
     };
   };
+  /**
+   * Whether the picture for the selected config is up.
+   *
+   * **The active config's loadedness, not the whole set's.** Depending on
+   * `loaded` itself re-runs the effect below whenever *any* rendition finishes,
+   * which restarts the settle timer — on a set whose renditions arrive closer
+   * together than `CHART_SETTLE_MS`, the charts would be starved until loading
+   * happened to pause.
+   */
+  const activeLoaded = () => {
+    const id = activeId();
+    if (id === undefined) return false;
+    // A config with no rendition has nothing to wait for, so the panel can still
+    // clear for it.
+    return !props.image.renditions[id] || loaded().has(id);
+  };
+
+  createEffect(
+    on([() => props.activeIndex, activeLoaded], () => {
+      const id = activeId();
+      if (id === undefined || !activeLoaded()) return;
+      const timer = setTimeout(() => setCharted(id), CHART_SETTLE_MS);
+      onCleanup(() => clearTimeout(timer));
+    }),
+  );
+
+  const chartedRendition = () => {
+    const id = charted();
+    return id === undefined ? undefined : props.image.renditions[id];
+  };
+
   const hasActive = () => {
     const id = activeId();
     return id !== undefined && props.image.renditions[id] !== undefined;
   };
 
   return (
-    <section class={css(styles.section)}>
+    // A `div`, not a `section`: the one-screen shell `App` wraps around this is
+    // already the `<section>` for this frame, and nesting a second one inside it
+    // announces two landmarks for one frame.
+    <div class={css(styles.section)}>
       <div class={css(styles.head)}>
-        <span class={css(styles.label)}>{props.image.label}</span>
+        <span class={css(styles.label, props.isCurrent && styles.labelCurrent)}>
+          {props.image.label}
+        </span>
         <Show when={props.image.note}>
           {(note) => <span class={css(styles.note)}>{note()}</span>}
+        </Show>
+        {/* Which frames you have already written about, visible while scrolling
+            — otherwise the only way to tell is to open every note. */}
+        <Show when={props.hasNote}>
+          <span class={css(styles.noted)} title="This frame has a review note (a to edit)">
+            ● noted
+          </span>
         </Show>
       </div>
 
@@ -375,9 +554,19 @@ export function ImageSection(props: Props) {
         </Show>
       </div>
 
-      <div class={css(styles.frame)}>
+      <div
+        class={css(styles.frame)}
+        data-pane
+        ref={(element) => {
+          pane = element;
+          props.paneObserver?.observe(element);
+        }}
+      >
         <div class={css(styles.viewport)} ref={setViewport} onScroll={paintMap}>
-          <div class={css(styles.stage)} style={reservation()}>
+          <div
+            class={css(styles.stage, props.zoom === "fit" ? styles.stageFit : styles.stageFullsize)}
+            style={reservation()}
+          >
             <For each={props.configs}>
               {(config) => (
                 <Show when={props.image.renditions[config.id]}>
@@ -392,6 +581,22 @@ export function ImageSection(props: Props) {
                       width={rendition().width}
                       height={rendition().height}
                       alt={`${props.image.label} — ${config.label}`}
+                      ref={(element) => {
+                        // **A hydrated rendition fires no `load` event for us.**
+                        // It arrived in the server-rendered HTML and finished
+                        // before Solid attached the listener, so it must be
+                        // recognised here or its charts never appear.
+                        //
+                        // `currentSrc` is what makes that check honest. On a
+                        // client-created element Solid assigns `src` in a later
+                        // effect, so at this point there is no source and
+                        // `complete` is vacuously `true` — testing it alone
+                        // marks every config loaded at mount and quietly retires
+                        // the whole wait-for-the-picture rule.
+                        if (element.complete && element.currentSrc !== "") {
+                          markLoaded(config.id);
+                        }
+                      }}
                       onLoad={(event) => {
                         warnOnDimensionMismatch(
                           event.currentTarget,
@@ -399,6 +604,7 @@ export function ImageSection(props: Props) {
                           props.image.label,
                           config.label,
                         );
+                        markLoaded(config.id);
                         measureOverflow();
                       }}
                     />
@@ -459,11 +665,16 @@ export function ImageSection(props: Props) {
       {/* Below the picture rather than beside it: the stage is the widest thing
           on the page and the charts must not narrow it. They swap with the
           config exactly as the picture does. */}
-      <MetricsPanel
-        id={domId(props.image.id, activeId() ?? "none")}
-        rendition={activeRendition()}
-        configLabel={props.configs[props.activeIndex]?.label ?? "?"}
-      />
-    </section>
+      <div
+        class={css(styles.band, chartedRendition()?.metrics !== undefined && styles.bandCharted)}
+        data-charts-band
+      >
+        <MetricsPanel
+          id={domId(props.image.id, charted() ?? "none")}
+          rendition={chartedRendition()}
+          configLabel={props.configs.find((config) => config.id === charted())?.label ?? "?"}
+        />
+      </div>
+    </div>
   );
 }

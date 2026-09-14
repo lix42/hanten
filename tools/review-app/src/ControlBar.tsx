@@ -8,23 +8,44 @@ import type { ReviewConfig, ZoomMode } from "./review";
 // border as one shorthand would leave the override as a second, competing
 // declaration.
 const styles = {
+  // A **single row of stated height**, never wrapping. That is what lets
+  // `sizes.frameHeight` subtract the bar in CSS: a bar whose height depended on
+  // how many configs a set declares would have to be measured and published to
+  // the page, and every frame's height would follow it.
   bar: css.raw({
     position: "sticky",
     top: "0",
     zIndex: 10,
     display: "flex",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     gap: "16px",
     alignItems: "center",
-    paddingBlock: "10px",
+    height: "barHeight",
+    boxSizing: "border-box",
+    paddingBlock: "0",
     paddingInline: "16px",
     backgroundColor: "panel",
     borderBottomWidth: "1px",
     borderBottomStyle: "solid",
     borderBottomColor: "edge",
   }),
-  group: css.raw({ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }),
-  spacer: css.raw({ marginInlineStart: "auto" }),
+  group: css.raw({ display: "flex", flexWrap: "nowrap", gap: "6px", alignItems: "center" }),
+  // Only the config list scrolls sideways. Letting the whole bar scroll would
+  // push fit/fullsize off the right edge on a set with many configs — reachable
+  // only by scrolling to find a control that is supposed to be always at hand.
+  // `minWidth: 0` is what allows a flex item to shrink below its content.
+  // `overflowY: hidden` is not redundant: a non-`visible` value in one axis
+  // promotes the other to `auto`, and on a platform with space-taking scrollbars
+  // that puts a ~15px horizontal scrollbar *inside* a group whose height the
+  // stated `barHeight` has to hold. Same reason `ImageSection`'s strip sets it.
+  configs: css.raw({
+    overflowX: "auto",
+    overflowY: "hidden",
+    minWidth: "zero",
+    flexGrow: 1,
+    paddingBlock: "10px",
+  }),
+  zoom: css.raw({ flexShrink: 0, marginInlineStart: "auto" }),
   button: css.raw({
     display: "inline-flex",
     alignItems: "baseline",
@@ -42,6 +63,11 @@ const styles = {
     fontFamily: "body",
     fontSize: "body",
     cursor: "pointer",
+    // Inside the horizontally scrolling config group, a button must keep its
+    // own width rather than being squeezed to fit — that is what makes the
+    // group overflow (and scroll) instead of compressing every label.
+    flexShrink: 0,
+    whiteSpace: "nowrap",
   }),
   active: css.raw({
     backgroundColor: "accent",
@@ -73,7 +99,7 @@ interface Props {
 export function ControlBar(props: Props) {
   return (
     <div class={css(styles.bar)}>
-      <div class={css(styles.group)}>
+      <div class={css(styles.group, styles.configs)}>
         <For each={props.configs}>
           {(config, index) => {
             const shortcut = () => keyForConfigIndex(index());
@@ -104,7 +130,7 @@ export function ControlBar(props: Props) {
         </For>
       </div>
 
-      <div class={css(styles.group, styles.spacer)}>
+      <div class={css(styles.group, styles.zoom)}>
         <For each={["fullsize", "fit"] as const}>
           {(mode) => (
             <button
@@ -121,6 +147,17 @@ export function ControlBar(props: Props) {
         </For>
         <kbd class={css(styles.hint)} aria-hidden="true">
           f
+        </kbd>
+        {/* Said out loud because nothing else on the page hints at them, and a
+            frame is a whole screen — so stepping frames is the main gesture. */}
+        <kbd class={css(styles.hint)} aria-hidden="true">
+          j/k frame
+        </kbd>
+        <kbd class={css(styles.hint)} aria-hidden="true">
+          h/l config
+        </kbd>
+        <kbd class={css(styles.hint)} aria-hidden="true">
+          a/n/c notes
         </kbd>
       </div>
     </div>

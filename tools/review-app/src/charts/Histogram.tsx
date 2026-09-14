@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { css } from "../../styled-system/css";
 import { AxisLine, AxisTitle, Grid } from "./Frame";
 import type { Histogram as HistogramData, SeriesName } from "./metrics";
@@ -27,7 +27,17 @@ const DASH: Readonly<Record<SeriesName, string | undefined>> = {
 };
 
 const styles = {
-  svg: css.raw({ display: "block", width: "full", height: "auto" }),
+  // Scales into whatever box its card gives it. `viewBox` plus the default
+  // `preserveAspectRatio` fits the drawing inside that box rather than
+  // distorting it, so a capped card letterboxes the chart instead of stretching
+  // it. `minHeight` is what lets a flex item shrink past its own content.
+  svg: css.raw({
+    display: "block",
+    width: "full",
+    height: "auto",
+    minHeight: "zero",
+    maxHeight: "full",
+  }),
   fill: css.raw({ fillOpacity: 0.13, strokeWidth: "1.5px", strokeLinejoin: "round" }),
   reference: css.raw({ stroke: "accent", strokeWidth: "1.5px", strokeDasharray: "4 3" }),
   referenceLabel: css.raw({ fill: "accent", fontSize: "tick" }),
@@ -68,23 +78,62 @@ interface Props {
   series: readonly SeriesName[];
   /** How far up the L* axis to show. The record stores 200; a render rarely passes 110. */
   visibleLstar?: number;
-  width?: number;
-  height?: number;
+  /**
+   * The chart's `viewBox`, stated by the caller rather than defaulted.
+   *
+   * Required because the three charts in a panel must share one box to render at
+   * the same size, and per-component defaults are exactly how they drifted apart
+   * before — this one defaulted to 300 tall and the cast chart to 330.
+   */
+  width: number;
+  height: number;
 }
 
 export function Histogram(props: Props) {
-  const width = () => props.width ?? 500;
-  const height = () => props.height ?? 300;
-  const visible = () => props.visibleLstar ?? 110;
-  const plot = () => plotArea(width(), height(), MARGINS);
+  /*
+    Every derivation below is a `createMemo`, and that is load-bearing rather
+    than tidiness. A plain `() => ...` is recomputed on **every read**, and the
+    scales here are read once per bin by `histogramOutline`'s callbacks — so each
+    of ~220 points re-entered `y()` -> `ceiling()` -> `peak()` -> `drawn()`, a
+    full scan of every series' bins. Measured: one config switch cost ~360ms of
+    synchronous work across three mounted frames, of which the charts were 99%
+    (the same set with its measurements removed switched in 2ms).
+  */
+  const width = createMemo(() => props.width);
+  const height = createMemo(() => props.height);
+  const visible = createMemo(() => props.visibleLstar ?? 110);
+  const plot = createMemo(() => plotArea(width(), height(), MARGINS));
 
+  /*
+    **Declared before `drawn`/`peak`, and that ordering is now required.** A
+    `createMemo` body runs eagerly at creation, where a plain `() => ...` ran
+    only when first read — so a memo that calls a `const` declared further down
+    hits the temporal dead zone instead of resolving later. `peak` calls
+    `visibleBins`, and memoizing in place turned that into a `ReferenceError`
+    that blanked the whole page.
+  */
+  /**
+   * Bin index -> L*, taken from the record rather than assumed.
+   *
+   * One bin per L* unit is true today, and equating the two would work — until a
+   * producer re-cuts the histogram, as it already re-cut the bands once. Then the
+   * axis would silently mislabel with nothing to catch it.
+   */
+  const binWidth = createMemo(() => {
+    const [lo, hi] = props.histogram.lstarRange;
+    return props.histogram.bins === 0 ? 1 : (hi - lo) / props.histogram.bins;
+  });
+  const lstarOf = (bin: number) => props.histogram.lstarRange[0] + bin * binWidth();
+  const visibleBins = createMemo(() =>
+    Math.ceil((visible() - props.histogram.lstarRange[0]) / binWidth()),
+  );
   // A requested channel the record does not carry is refused, not dropped: a chart
   // silently missing one curve looks exactly like a frame whose channel is flat.
   // `parseMetrics` already refuses such a record, which is where the failure
   // belongs — a throw *here* is a render error that replaces the whole page
   // instead of one rendition's charts. This stays as the guard for a model built
   // by hand.
-  const drawn = () =>
+  const drawn = createMemo(() =>
     props.series.map((name) => {
       const series = props.histogram.series[name];
       if (!series) {
@@ -92,10 +141,11 @@ export function Histogram(props: Props) {
         throw new Error(`tone.histogram.series has no ${JSON.stringify(name)}; it carries ${have}`);
       }
       return { name, series };
-    });
+    }),
+  );
 
   /** The tallest bin in view, so one frame's peak fills the plot. */
-  const peak = () => {
+  const peak = createMemo(() => {
     const total = props.histogram.pixels || 1;
     let max = 0;
     for (const { series } of drawn()) {
@@ -104,26 +154,13 @@ export function Histogram(props: Props) {
       }
     }
     return max;
-  };
+  });
   // Round up to a whole percent so the gridlines land on readable numbers.
-  const ceiling = () => Math.max(Math.ceil(peak() * 100), 1) / 100;
-  const step = () => niceStep(ceiling());
+  const ceiling = createMemo(() => Math.max(Math.ceil(peak() * 100), 1) / 100);
+  const step = createMemo(() => niceStep(ceiling()));
 
-  /**
-   * Bin index -> L*, taken from the record rather than assumed.
-   *
-   * One bin per L* unit is true today, and equating the two would work — until a
-   * producer re-cuts the histogram, as it already re-cut the bands once. Then the
-   * axis would silently mislabel with nothing to catch it.
-   */
-  const binWidth = () => {
-    const [lo, hi] = props.histogram.lstarRange;
-    return props.histogram.bins === 0 ? 1 : (hi - lo) / props.histogram.bins;
-  };
-  const lstarOf = (bin: number) => props.histogram.lstarRange[0] + bin * binWidth();
-  const visibleBins = () => Math.ceil((visible() - props.histogram.lstarRange[0]) / binWidth());
   /** Share of the frame the drawn range leaves out, counting `above_range`. */
-  const clipped = () => {
+  const clipped = createMemo(() => {
     const total = props.histogram.pixels || 1;
     let out = 0;
     for (const { series } of drawn()) {
@@ -132,11 +169,12 @@ export function Histogram(props: Props) {
       out = Math.max(out, beyond / total);
     }
     return out;
-  };
+  });
 
-  const x = () =>
-    linearScale([props.histogram.lstarRange[0], visible()], [plot().left, plot().right]);
-  const y = () => linearScale([0, ceiling()], [plot().top, plot().bottom], true);
+  const x = createMemo(() =>
+    linearScale([props.histogram.lstarRange[0], visible()], [plot().left, plot().right]),
+  );
+  const y = createMemo(() => linearScale([0, ceiling()], [plot().top, plot().bottom], true));
 
   return (
     <svg
