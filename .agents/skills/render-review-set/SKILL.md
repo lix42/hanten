@@ -31,8 +31,10 @@ wrong one costs a full re-render:
 
 - `cargo build --release` — the generator shells out to the binary.
 - Venv, for measuring only: `uv venv --python 3.12 .venv && uv pip install --python .venv -r
-  scripts/analysis/requirements.txt`. Without it the set still renders, loudly noting it will
-  have no charts.
+  scripts/analysis/requirements.txt`. The generator is stdlib-only apart from measuring, so a
+  set still renders without it — but then run `python3` in place of `.venv/bin/python`, since
+  the command in step 4 names an interpreter that will not exist, and pass `--no-metrics`.
+  A set built that way has no charts.
 - `../nc-assets` must resolve (machine-local symlink).
 - **The frames are the user's own photographs**: output goes outside the repo and is never
   committed or published. `nctool review generate` refuses an output directory inside it.
@@ -73,7 +75,10 @@ never edit `scripts/preset-review/presets.matrix.json` or
 `scripts/sigmoid-baseline/fixtures.json` in place — they describe a curated study and their
 roll names predate the asset rename.
 
-Two files, both derived from `manifest.json` by a short script kept beside the set:
+Two files, built by a short script kept beside the set. The frame lists come from
+`manifest.json`; the `dmin` values do **not** — the manifest does not carry them, so the script
+has to merge in the per-roll measurements from step 2. Miss that and `review generate` skips
+every cell whose `common_args` reference `{dmin}`.
 
 - **fixtures copy** — `{"rolls": {<roll>: {"dmin": [r,g,b]}}, "frames": {<key>: {"roll",
   "file"}}}`. Nothing else per frame is read. Keys must be filename-safe and unique across
@@ -148,9 +153,12 @@ would make this first-class; until then it is manual. Three things to get right:
 3. **Measure it in the space it is now in, and write the record to disk**:
 
    ```sh
-   nctool metrics image <converted>.jpg --space srgb --inset <same as the matrix> \
-     --out <converted>.jpg.metrics.json
+   PYTHONPATH=scripts/analysis .venv/bin/python -m nctool metrics image <converted>.jpg \
+     --space srgb --inset <same as the matrix> --out <converted>.jpg.metrics.json
    ```
+
+   Run from the repo root: `nctool` is not installed as an executable, and this is the half
+   that genuinely needs the venv.
 
    `srgb`, because the record must describe *that* rendition. `--out`, because the record
    otherwise goes to stdout and there is no file to name in the rendition's `metrics` field —
@@ -174,7 +182,10 @@ through one roll at a time.
 failures, where it is — then ask whether to start it or just hand over the path:
 
 ```sh
-cd tools/review-app && pnpm dev ../../../temp/<set>/review.json
+cd tools/review-app
+corepack enable pnpm   # once per machine
+pnpm install           # once per checkout — `pnpm dev` does not install, and `vp` is local
+pnpm dev ../../../temp/<set>/review.json
 ```
 
 Serving costs memory and only one set is visible at a time, so the user may prefer the path,
@@ -213,8 +224,11 @@ weeks later.
   every flag pins those *values*, not the omitted defaults and not the algorithm inside the
   `--nc` binary, so the same matrix re-run after a pipeline change can produce different
   pixels. A matrix naming only `--preset` is looser still: it renders what that preset means
-  *today*. The matrix has no build axis, so if a set is meant to compare builds — or to be
-  trusted months later — record which binary made it: keep nc's own report sidecars, which
-  carry the build identity, and say which commit was built.
+  *today*. **Nothing in the set records which binary made it**: the generator reads nc's report
+  off stdout for the per-frame cast note and then discards it, `review.json` carries only the
+  title, the config list and the image paths, and `--report-file` is generator-owned so a
+  config cannot ask for one. The matrix has no build axis either. So for a build comparison —
+  or for a set meant to be trusted months later — write the commit and `nc --version` into the
+  set's own `scripts/` folder yourself; that is the only place the provenance can live.
 - **Deleting source frames breaks later reruns, not the existing set.** Rendered JPEGs and
   their records survive; the generator simply skips the missing sources.
