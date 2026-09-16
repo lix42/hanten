@@ -1728,7 +1728,8 @@ highlight separation and HDR. A scheduling option, not a destination.
 - 2026-09-15: **Evidence that NLP fits each frame's extremes to the output range — and the
   earlier rejection of that model tested the wrong statistic.** Reviewing 43 frames by eye
   against NLP, the user reported that NLP collapses on frames filled by a single surface
-  (all water, cloudless sky), losing almost all information — `ektar0909-1612` — while every
+  (all water, cloudless sky), losing almost all information —
+  `rolls/2026-09-09-Ektar100/1612.tif` — while every
   nc config holds them. The task file had dismissed "NLP normalises each frame" because it
   predicts a near-zero `p95 − p5` spread against the measured 4.31; that inference holds only
   for a stretch fitted to `p5`/`p95`, not to the extremes, where a 4.31 spread is exactly what

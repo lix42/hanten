@@ -79,13 +79,20 @@ million pixels anyway.
 
   The positive evidence is a failure mode the statistics cannot show: on frames filled
   by a single surface — all water, or cloudless sky — NLP loses almost all the
-  information (`ektar0909-1612`) while every nc config holds it. That is what stretching
-  a narrow input range across the full output does, and no faithful-reproduction model
-  predicts it. **Test it directly**: regress each converter's output extremes against the
-  negative's own extremes, and check whether NLP's gain *rises* as the scene range
-  narrows. If it does, the remedy for nc is bounded per-frame adaptation at most — never
-  mapping a frame's own range onto the full output, which is the line `--auto-d-max`
-  already draws ("grading, not conversion").
+  information (`rolls/2026-09-09-Ektar100/1612.tif`) while every nc config holds it. That
+  is what stretching a narrow input range across the full output does, and no
+  faithful-reproduction model predicts it. **Test it directly**: regress each converter's
+  output extremes against the negative's own extremes, and check whether NLP's gain
+  *rises* as the scene range narrows. If it does, the remedy for nc is bounded per-frame
+  adaptation at most — never mapping a frame's own range onto the full output, which is
+  the line `--auto-d-max` already draws ("grading, not conversion").
+
+  **Mask the holder first, and pick the endpoint statistic before measuring.** On a scan
+  that keeps its border the literal extrema are the opaque holder, not the scene
+  (`scripts/analysis/README.md:340-345`), so an unmasked regression measures cropping.
+  Both sides need a matched interior region — the exports are cropped differently, so the
+  region is defined per side rather than shared — and "extreme" needs a definition robust
+  to dust and specular pixels.
 - **Which end?** On G2 the gap splits 43% shadow / 57% highlight. Raising global
   contrast would treat both, and nc already cannot reach diffuse white — the last
   non-empty luminance bin on five G2 presets is L\* 88–98 against white at 100.
@@ -117,5 +124,7 @@ rendered into a review set (`tools/review-app`) rather than argued numerically.
 - [Conversion Metrics & Photographic Analysis](../analysis/conversion-metrics.md)
 - [Named conversion presets](conversion-presets.md)
 - [Reference comparison: nc vs NLP](../analysis/nlp-comparison.md) — added 2026-09-13:
-  the scene-range regression over the 32 pixel-aligned Ektar pairs is that harness's
-  job; without it this spike grows a second pairing script
+  the scene-range regression is that harness's job; without it this spike grows a second
+  pairing script. Revised 2026-09-15: the dataset is **12** pixel-aligned Ektar pairs, not
+  the 32 first scoped (see above), so the harness should expect to pool the Portra rolls —
+  11 and 10 pairs of a different stock — rather than treat Ektar alone as sufficient
