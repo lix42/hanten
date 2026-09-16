@@ -17,11 +17,18 @@ The figures in this section come from **three** Gold200 frames whose NLP referen
 is cropped to a different aspect ratio and carries a self-contradictory colour
 profile. Treat them as the reason this task exists, not as its evidence.
 
-`converted/nlp/2026-09-09/2026-09-09-Ektar/` is strictly better on every axis: **32
-frames** of one stock, 16-bit Adobe RGB (1998) at gamma 2.1992 with `desc`,
-primaries and TRC all in agreement, and **pixel-aligned with its sources** under
-`rolls/2026-09-09-Ektar/` — identical dimensions, so no registration is needed and
-a per-pixel comparison is available. Re-measure there first. Note the declared
+`converted/nlp/2026-09-09-Ektar100/` is strictly better on every axis: one stock,
+16-bit Adobe RGB (1998) at gamma 2.1992 with `desc`, primaries and TRC all in
+agreement, and **pixel-aligned with its sources** under `rolls/2026-09-09-Ektar100/`
+— identical dimensions, so no registration is needed and a per-pixel comparison is
+available. Re-measure there first.
+
+**2026-09-15 — the pairing is now 12 frames, not 32.** At the user's request 20 of that
+roll's 32 frames were deleted as near-duplicates; the NLP outputs survive, so those 20
+have no source to pair with. The sibling rolls are likewise reduced —
+`2026-09-11-Portra400` to 11 of 32, `2026-09-13-Portra400` to 10 of 36 — so any
+regression planned below has roughly a third of the samples it was scoped for. (Paths
+above also predate the roll rename and are corrected here.) Note the declared
 space differs per directory: that batch is `--space adobe-rgb`, while
 `2026-07-2x`/`2026-08-04` are `--space linear-srgb`.
 
@@ -52,16 +59,33 @@ million pixels anyway.
 
 - **Measure the scene range first.** The negative's own density distribution, per
   frame, from `nc inspect` — a distribution, not patches. Everything below is
-  guesswork until this exists. With 32 pixel-aligned Ektar pairs there is enough
-  data to regress output range against scene range for both converters, which is
-  what actually separates "nc compresses" from "nc carries a narrower scene": a
-  slope near 1 means it carries, near 0 means it compresses.
+  guesswork until this exists. Regressing output range against scene range for both
+  converters is what actually separates "nc compresses" from "nc carries a narrower
+  scene": a slope near 1 means it carries, near 0 means it compresses. Note the sample
+  is now **12** pixel-aligned Ektar pairs rather than the 32 this was scoped for (see
+  above), so pooling the Portra rolls — 11 and 10 pairs, different stocks — may be
+  necessary to say anything with confidence.
 - **Is the gap a consequence of §3.8 rather than a defect?** If nc faithfully
   carries each frame's own range while NLP adapts per frame, then the remedy is
-  per-frame opt-in, not a global change. But note NLP's output range varies *more*
-  than the scene range plausibly does, so "NLP normalises each frame to fill the
-  output" does not describe what it is doing either — that model predicts a
-  near-zero spread and the measurement gives 4.31.
+  per-frame opt-in, not a global change.
+
+  **2026-09-15 — the normalisation model is back on the table; the rejection above
+  tested the wrong statistic.** "NLP normalises each frame to fill the output" was
+  dismissed because it predicts a near-zero `p95 − p5` spread against a measured 4.31.
+  That follows only if the stretch is fitted to `p5`/`p95`. Fitted to the **extremes**,
+  a frame whose content clusters between two outliers keeps a narrow `p95 − p5` while
+  one whose content fills the frame keeps a wide one — so a 4.31 spread is what
+  extreme-fitting produces, not evidence against it.
+
+  The positive evidence is a failure mode the statistics cannot show: on frames filled
+  by a single surface — all water, or cloudless sky — NLP loses almost all the
+  information (`ektar0909-1612`) while every nc config holds it. That is what stretching
+  a narrow input range across the full output does, and no faithful-reproduction model
+  predicts it. **Test it directly**: regress each converter's output extremes against the
+  negative's own extremes, and check whether NLP's gain *rises* as the scene range
+  narrows. If it does, the remedy for nc is bounded per-frame adaptation at most — never
+  mapping a frame's own range onto the full output, which is the line `--auto-d-max`
+  already draws ("grading, not conversion").
 - **Which end?** On G2 the gap splits 43% shadow / 57% highlight. Raising global
   contrast would treat both, and nc already cannot reach diffuse white — the last
   non-empty luminance bin on five G2 presets is L\* 88–98 against white at 100.
