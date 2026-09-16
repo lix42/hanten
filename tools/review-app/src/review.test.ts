@@ -36,9 +36,45 @@ describe("parseReview", () => {
     expect(image.renditions["none"]!.src).toBe("resolved:E1-none.jpg");
   });
 
-  it("accepts a bare string as the rendition shorthand and mirrors it to preview", () => {
+  it("gives the bare-string shorthand a preview as well as a src", () => {
+    // Both roles are resolved, from the one path the shorthand states — what
+    // each resolves *to* is the resolver's business, and the production one
+    // answers the preview role with a size. `RESOLVE` ignores the role, so the
+    // two come back equal here; the next test is what pins the roles.
     const rendition = parseReview(doc(), RESOLVE).images[0]!.renditions["shoulder"]!;
-    expect(rendition.preview).toBe(rendition.src);
+    expect(rendition.src).toBe("resolved:E1-shoulder.jpg");
+    expect(rendition.preview).toBe("resolved:E1-shoulder.jpg");
+  });
+
+  it("tells the resolver which role each URL is for", () => {
+    // The strip shows the same file in a 104px box, so the server answers the
+    // preview role with a downscaled URL. Both roles resolve the *same path*,
+    // including the shorthand form, or a set whose renditions are full-size
+    // scans would hand the strip a 7 MB file again.
+    const roles: ResolveRendition = (path, _at, role) => `${role}:${path}`;
+    const renditions = parseReview(doc(), roles).images[0]!.renditions;
+    expect(renditions["shoulder"]).toMatchObject({
+      src: "src:E1-shoulder.jpg",
+      preview: "preview:E1-shoulder.jpg",
+    });
+    expect(renditions["none"]).toMatchObject({
+      src: "src:E1-none.jpg",
+      preview: "preview:E1-none.jpg",
+    });
+  });
+
+  it("resolves a declared preview in the preview role too", () => {
+    // One rule rather than two: a set that names a thumbnail has no idea how big
+    // the strip's box is, and one that points `preview` at a second full-size
+    // file would otherwise be the one case left unprotected.
+    const roles: ResolveRendition = (path, _at, role) => `${role}:${path}`;
+    const review = parseReview(
+      doc({
+        images: [{ id: "E1", renditions: { shoulder: { src: "big.jpg", preview: "thumb.jpg" } } }],
+      }),
+      roles,
+    );
+    expect(review.images[0]!.renditions["shoulder"]!.preview).toBe("preview:thumb.jpg");
   });
 
   it("keeps a distinct preview when one is given", () => {

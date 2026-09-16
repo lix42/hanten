@@ -159,6 +159,11 @@ export function ControlBar(props: Props) {
         <kbd class={css(styles.hint)} aria-hidden="true">
           a/n/c notes
         </kbd>
+        {/* Said here because once the charts are away nothing else on the page
+            hints that they exist, let alone which key brings them back. */}
+        <kbd class={css(styles.hint)} aria-hidden="true">
+          m charts
+        </kbd>
       </div>
     </div>
   );

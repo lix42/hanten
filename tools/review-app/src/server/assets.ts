@@ -14,6 +14,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { PIPELINE_VERSION } from "./thumbs";
 
 /** What the map needs off disk, or `undefined` when the file is absent. */
 export type StatFile = (absolutePath: string) => { mtimeMs: number; size: number } | undefined;
@@ -48,6 +49,26 @@ export function assetUrl(id: string, mtimeMs: number): string {
   return `/img/${id}?v=${String(mtimeMs)}`;
 }
 
+/**
+ * The same file, asked for at thumbnail size.
+ *
+ * A suffix on the asset URL rather than a route of its own, so the id and the
+ * `?v=` stamp keep meaning exactly what they mean everywhere else: one file,
+ * one cache entry per version of it, and a re-render still changes every URL
+ * that names it.
+ *
+ * `&t=` carries the generation pipeline's version, because the response is
+ * `immutable` for a year: with the source unchanged the URL would be
+ * byte-identical after a pipeline change and the browser would never ask again,
+ * so a fix — the ICC profile the chain now keeps — would never reach a page that
+ * had already viewed the set. It is inert server-side (only `w` is read); it
+ * exists to make the URL change. Imported rather than passed in so the URL and
+ * the disk cache cannot be versioned differently.
+ */
+export function thumbnailUrl(url: string, width: number): string {
+  return `${url}&w=${String(width)}&t=${String(PIPELINE_VERSION)}`;
+}
+
 export function createAssetMap(stat: StatFile): AssetMap {
   const assets = new Map<string, Asset>();
   return {
@@ -76,10 +97,16 @@ export function createAssetMap(stat: StatFile): AssetMap {
  * as something a browser will execute. Note `.svg` is on the list and *is* active
  * content when opened directly — acceptable only because this serves the user's
  * own files to their own machine.
+ *
+ * It must cover every extension `thumbs.ts` calls thumbnailable: generation can
+ * decline, and the fallback then serves the original — which a browser handed
+ * `application/octet-stream` shows as nothing at all.
  */
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".avif": "image/avif",
   ".gif": "image/gif",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
   ".png": "image/png",

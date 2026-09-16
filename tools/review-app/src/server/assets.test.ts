@@ -1,8 +1,21 @@
 import { describe, expect, it } from "vite-plus/test";
-import { assetId, contentTypeFor, createAssetMap, type StatFile } from "./assets";
+import { assetId, contentTypeFor, createAssetMap, thumbnailUrl, type StatFile } from "./assets";
+import { PIPELINE_VERSION } from "./thumbs";
 
 const AT = "/sets/tone/E1-shoulder.jpg";
 const stat: StatFile = (path) => (path === AT ? { mtimeMs: 1700, size: 42 } : undefined);
+
+describe("thumbnailUrl", () => {
+  it("asks for a size of the same file, keeping the id and the version stamp", () => {
+    const url = createAssetMap(stat).register(AT);
+    // Not a route of its own: a thumbnail is another cache entry for this
+    // version of this file, so a re-render still changes it along with the rest.
+    // `&t=` is the generation pipeline's version: the response is `immutable`
+    // for a year, so with the source unchanged a pipeline fix that did not move
+    // the URL would never reach a browser that has already viewed the set.
+    expect(thumbnailUrl(url, 208)).toBe(`${url}&w=208&t=${String(PIPELINE_VERSION)}`);
+  });
+});
 
 describe("createAssetMap", () => {
   it("only serves files that were registered", () => {

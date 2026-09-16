@@ -66,6 +66,7 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
 | `a`                | Note on the current frame              |
 | `n`                | Every note, editable, with Copy all    |
 | `c`                | Clear all notes (asks first)           |
+| `m`                | Show / hide the charts row             |
 | Config buttons     | Same as the number keys                |
 | Preview thumbnails | Select that config for **every** image |
 
@@ -98,6 +99,9 @@ a snap stop of its own, so the title and the set's path stay reachable at the to
 Within that screen the picture takes every pixel the head and the charts leave.
 When there is not enough for both, the **charts** are what gives way: they are a
 summary of numbers held elsewhere, while the picture is the thing you came for.
+`m` says the same thing by hand: it puts the charts away for every frame at once
+and hands their band to the picture, which is how you get the most picture a
+screen can hold without leaving the app.
 
 The page follows the set while it is open. Re-run `nc` over the same directory
 and the renditions that changed swap in place — the selected config and the
@@ -137,6 +141,12 @@ _not_ on every refresh: re-running `nc` over the same frames and watching them
 update in place is the workflow this app exists for, and wiping the notes each
 time would make them useless.
 
+The same change scrolls the page back to the top, for the same reason: the scroll
+position means a frame, and once the frame list has moved the offset you were
+parked at lands on some other frame — or, on a shorter set, past the end, where
+the browser leaves you at the bottom with no way to tell what you are looking
+at.
+
 ## Measurements
 
 When a rendition names a metric record (`metrics` in SCHEMA.md), the three charts
@@ -170,6 +180,83 @@ set.
 degenerate cases a real record rarely carries at once — a sparse band, a band
 with no pixels, a channel running past the top of the range. It needs no review
 set, no assets and no venv.
+
+## Thumbnails
+
+The preview strip shows the same file as the stage, in a 104x70 box. On a set of
+real scans that file is the scan — 5184x3600, ~7 MB — so a frame coming into
+view used to ask the browser to decode **six 18.7 Mpx photographs** to paint six
+thumbnails. Measured on a 43-frame, 6-config set, one `j` press cost **832-888
+ms**, of which ~1 ms was script: the rest was a single RasterTask full of
+`Decode Image`, i.e. presentation delay. Stepping _back_ onto frames mounted
+seconds earlier cost 712 ms, because an 18.7 Mpx image is ~75 MB decoded and the
+browser's decode cache evicts it long before you return.
+
+So the server shrinks them: `/img/<id>?w=` resizes with libvips (sharp), caches
+the result under the OS temp dir keyed by the source's path, mtime and size — plus
+the width and the pipeline version below — and the page's `preview` URLs carry the
+`?w=`. **Only the strip** — the stage always gets the file itself, because that is
+the picture under review. The same press
+now costs **24-80 ms** warm, 208 ms the first time a frame is seen (70 ms to
+generate a thumbnail, once per rendition, against ~6 KB served instead of 7 MB).
+
+**The thumbnail keeps the source's ICC profile.** That is load-bearing, not an
+implementation detail: an untagged JPEG is read as sRGB, so a Display P3
+rendition served without its profile shows visibly more saturated in the strip
+than on the stage next to it — in a tool whose whole purpose is judging colour by
+eye. The chain also applies EXIF `Orientation` and flattens alpha onto white, for
+the same reason: the strip must show the picture the stage shows.
+
+**So bump `PIPELINE_VERSION` when you change that chain.** It is in the cache key
+_and_ in every preview URL (`&t=`), and it has to be in both: an entry on disk is
+keyed by the source, and the response is `immutable` for a year, so with the
+source unchanged neither the server nor an already-loaded browser would otherwise
+notice that the chain now produces different bytes. This is not theoretical — the
+profile-less first version was still being served from a browser cache after the
+fix landed.
+
+**Nothing prunes the cache, deliberately.** An entry is keyed by the source's
+mtime and size, so re-rendering a frame orphans its old thumbnail rather than
+replacing it — a full re-render of a 43x6 set leaves ~1.5 MB behind. It sits in
+the OS temp dir because that is the directory whose contents the system reclaims
+for you: macOS runs `dirhelper` at load and daily at 03:35, with
+`CLEAN_FILES_OLDER_THAN_DAYS = 3` — which age it reads was not verified here, so
+do not assume an entry you keep opening is kept. The directory name carries the
+uid, because `tmpdir()` is `/tmp` on Linux and a directory shared with another
+user is one this server can never write to.
+If you ever do add a sweep, do **not** prune entries that are not in the current
+set: two servers on two sets run side by side routinely, and each would wipe the
+other's cache. Age plus a size cap is the safe form.
+
+Two things worth knowing if you touch this:
+
+- **Neither browser-side fix works, and both were measured.** `decoding="async"`
+  leaves the decode on the raster path (872 ms), and pre-decoding the neighbours
+  the overscan has already fetched does nothing (872 ms) — the cache cannot hold
+  images this size. Shrinking the bytes is the only lever.
+- **The residual is the stage picture, not the strip.** With previews hidden
+  entirely the same presses still cost 16-176 ms, so pre-generating every
+  thumbnail at startup would buy ~25 ms on a first visit and was declined.
+  Serving a display-sized stage image in `fit` would flatten it — at the price of
+  reviewing a server-resampled picture, which is a different decision.
+
+`sharp` is the app's one native dependency. Its binaries are prebuilt per
+platform (`optionalDependencies`), so it needs no compiler and no `allowBuilds`
+entry — unlike `esbuild`, it has no install script. `--frozen-lockfile` resolves
+the linux-x64 entry the lockfile carries, which is exactly why the chain's tests
+**do** decode, resize and re-encode in CI rather than skipping: a change to the
+sharp chain can turn CI red, which is the point. The skip path exists for a
+platform with no prebuilt binary, and there nothing is fatal either — the import
+is inside the call, so the server starts and serves originals.
+
+**The strip is not downscaled in three cases**, all of which serve the file
+itself: a format off the thumbnailable list (an SVG, which the browser draws at
+any size for nothing, or a GIF, which a thumbnail would freeze); an extension
+nothing recognises, which is never mangled into a JPEG; and a generation the
+libvips build declined. Only the last is a statement about an _attempt_ rather
+than about the file, which is why it alone is served with a short cache lifetime
+— see `img.$id.ts`. A decline is remembered for the process, so it costs one
+attempt and one warning, not one per view.
 
 ## Gates
 
