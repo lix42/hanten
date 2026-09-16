@@ -33,6 +33,9 @@ and hardening work tracked in the task roadmap.
 - [`docs/TASKS.md`](docs/TASKS.md) — the build plan and dependency graph.
 - [`docs/negative-convertor-research-report.md`](docs/negative-convertor-research-report.md)
   — background research.
+- [`docs/gpu-rendering-spike.md`](docs/gpu-rendering-spike.md) — where `nc` spends
+  its time, and the decision to multithread the CPU stages (planned, not yet
+  shipped) rather than render on a GPU.
 
 ## Usage (current CLI)
 
