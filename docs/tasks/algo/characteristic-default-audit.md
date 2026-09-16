@@ -92,7 +92,7 @@ Not exhaustive — the point is the shape, and implementation will find the rest
 - `--display-tone none`, which characteristic refuses at **render** time (exit 1) rather
   than by a validate rule — content-dependent, so it is a refusal the default inherits
   for ordinary pictures;
-- `print_exposure` 0.39 and `display_tone` reinhard as *resolved defaults*, against
+- `print_exposure` 1.91 and `display_tone` reinhard as *resolved defaults*, against
   `film-master`'s refusal of a non-default exposure and `legacy`/`custom`/`film-master`'s
   refusal of reinhard;
 - **rule ordering**, which CLAUDE.md warns has shipped wrong four times: a rule that also

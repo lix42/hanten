@@ -1970,9 +1970,11 @@ crossover.
 ### Named conversion presets
 - `--preset characteristic-generic|characteristic-stock|characteristic-aim|sigmoid-knees|sigmoid-flat`
   — a named bundle setting `reconstruction.curve`, `reconstruction.density.scale`,
-  `print.print_exposure` and `print.display_tone` together. All five are calibrated to
-  one brightness (scene mid-grey 0.18 delivered at 0.4525), so what differs between them
-  is the reconstruction and the display tone.
+  `print.print_exposure` and `print.display_tone` together. Each carries the exposure
+  that lands scene mid-grey 0.18 at 0.4525 on `portra-400`, so switching preset changes
+  the reconstruction and the display tone rather than the brightness. That calibration is
+  a convenience for comparison, **not** a claim that the presets render alike or that
+  mid-grey lands identically on every stock.
 - **No recipe key.** `--dump-params` writes the expanded values, so a recipe replays
   identically on a build whose preset definitions have moved; a recipe naming a preset
   is rejected as an unknown field. The name rides in the report as

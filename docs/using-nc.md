@@ -483,6 +483,13 @@ mean anything **together**: the exposure that lands one brightness runs from 1.5
 2.17 depending on the reconstruction, because the curves place mid-grey differently.
 `--preset` names a bundle so you don't have to carry four coupled numbers.
 
+Each bundle's exposure is solved so that **switching preset changes the look, not the
+brightness** — what you compare is then the reconstruction and the display tone. That
+calibration is done on `portra-400`; on another stock the parametric presets drift with
+how closely they model it, by up to about half a stop. Presets are not meant to render
+alike, so a brightness difference between two of them on your film is part of what they
+offer, not something to correct.
+
 | `--preset` | Reconstruction | Display tone | Needs |
 |---|---|---|---|
 | `characteristic-generic` | `characteristic`, the averaged generic C-41 profile | `reinhard` | — |

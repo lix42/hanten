@@ -1962,8 +1962,9 @@ calibrated to one brightness target. The scoping evidence is the 2026-09-09 entr
 ### 2026-09-15 — the shared brightness target moves up one stop
 
 **Scene mid-grey 0.18 is now delivered at 0.4525 (+1.33 stop), replacing 0.223 (+0.31).** The
-first change to it since it was approved on 2026-09-09. The family stays on *one* target: every
-preset was re-solved against the new one, so presets remain comparable by eye.
+first change to it since it was approved on 2026-09-09. Every preset was re-solved against the
+new one, so switching preset still changes the look rather than the brightness — on the
+calibration stock; see the 2026-09-16 entry below for what that does and does not claim.
 
 **Provenance.** The user reviewed 43 frames x 5 presets rendered one stop above calibration and
 judged +1 stop better on all five — hence the target moved rather than one preset leaving it.
@@ -1992,7 +1993,22 @@ one target lifts them to match. Worth one confirming look.
 untouched and `PIPELINE_FINGERPRINTS` is unaffected. All four gates green (755 unit + 191
 integration passed, 23 ignored, zero clippy/build warnings).
 
-`every_preset_lands_the_shared_brightness_target` now collects every row and asserts once at the
+**2026-09-16 — the target is a calibration convenience, not an invariant: the claim was fixed,
+not the constants.** Review asked why `characteristic-aim`'s single exposure was solved only on
+`portra-400`, since the same harness delivers 0.3606 on `gold-200` (−0.33 stop) and 0.3162 on
+`ultramax-400` (−0.52). It reproduces exactly — but it is **pre-existing and not confined to
+that preset**: `ultramax-400` was already −0.408 under the old constants, and `sigmoid-knees` on
+`gold-200` is +0.443. `characteristic-stock` is the only one that lands identically on every
+stock (0.4367), and only because it inverts the very curve the patch is built from, so the
+per-stock spread measures reconstruction accuracy rather than a miscalibration. The user's
+ruling: rendering the five presets alike — mid-grey included — **was never a goal**; the only
+goal they share is a satisfying result, and that goal itself has room to move (whether a stock's
+colour cast is character worth keeping is the live case). So the prose stops claiming an
+invariant, no per-stock exposure is introduced, and the test asserts the calibration stock while
+**printing** the other eight — the spread is now documented rather than bounded.
+
+`presets_land_the_calibration_target_on_the_calibration_stock` (renamed from
+`every_preset_lands_the_shared_brightness_target`) collects every row and asserts once at the
 end. A per-row assert hid the other four presets behind the first miss, which is precisely the
 table a recalibration needs. Twelve call sites and prose references were updated with the
 numbers, including `design-spec.md` §"Named conversion presets", `using-nc.md`, this task's file,

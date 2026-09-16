@@ -233,8 +233,9 @@ pub struct ConvertArgs {
     /// Named reconstruction + display bundle: `characteristic-generic`,
     /// `characteristic-stock`, `characteristic-aim`, `sigmoid-knees`, `sigmoid-flat`.
     /// Sets the density curve, its per-channel gain, `--print-exposure` and
-    /// `--display-tone` together, all calibrated to one brightness; individual flags
-    /// still win over it. `characteristic-stock` / `-aim` need `--film-stock`.
+    /// `--display-tone` together, each carrying the exposure that keeps brightness steady
+    /// when you switch; individual flags still win over it.
+    /// `characteristic-stock` / `-aim` need `--film-stock`.
     /// A CLI-only expansion — the recipe records the expanded values, not the name.
     // A plain `String` rather than a `value_enum`: the parse error then lists the
     // accepted spellings from one place (`ConversionPreset::parse`), the same reason
@@ -798,12 +799,18 @@ pub struct OutputOverrides {
 /// use that knob at all. Handing a user four coupled numbers is handing them four ways
 /// to get one look wrong.
 ///
-/// All five are calibrated to **one** target, not five tastes: scene mid-grey (0.18)
-/// delivered at 0.4525, the brightness approved on 2026-09-15. Each preset's exposure is
-/// whatever lands it there.
-/// `pipeline::stages::midtone_placement::each_candidate_look_needs_its_own_print_exposure`
-/// prints the calibration and fails if the spread ever collapses to where one shared
-/// default would serve.
+/// Each carries the exposure that lands scene mid-grey (0.18) at 0.4525, solved on
+/// `portra-400` — the brightness approved on 2026-09-15. That is a **calibration
+/// convenience, not a promise about the render**: it means switching preset changes the
+/// look rather than the brightness, so a comparison is about the reconstruction and the
+/// display tone. It is *not* a claim that two presets agree, nor that mid-grey lands
+/// alike on every stock — on another film the parametric presets drift with how well they
+/// model it, by up to about half a stop, and that drift is a property of the
+/// reconstruction rather than a defect to be tuned out.
+/// `pipeline::stages::midtone_placement::presets_land_the_calibration_target_on_the_calibration_stock`
+/// asserts the calibration stock and prints the rest;
+/// `each_candidate_look_needs_its_own_print_exposure` fails if the spread between the
+/// looks ever collapses to where one shared default would serve.
 ///
 /// # It is a CLI-only expansion, not a recipe key
 ///
@@ -8644,7 +8651,7 @@ mod tests {
     /// Every preset resolves the four knobs it owns, and **only** those four.
     ///
     /// The values themselves are calibrated and pinned by
-    /// `pipeline::stages::midtone_placement::every_preset_lands_the_shared_brightness_target`;
+    /// `pipeline::stages::midtone_placement::presets_land_the_calibration_target_on_the_calibration_stock`;
     /// what this pins is that the expansion reaches the resolved config through the real
     /// parser and merge — a preset whose `expand` is right but whose merge arm lands in
     /// the wrong place would still pass the calibration test.

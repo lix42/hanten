@@ -654,7 +654,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `algo/conversion-presets` (post-MVP): `algo/film-stock-profiles`
   — filed 2026-09-09. `--preset` names five reconstruction + display bundles, because every
   configuration worth shipping is a *bundle* whose numbers are meaningless separately: the
-  `print_exposure` that matches one brightness runs 0.31–0.70 across reconstructions, and
+  `print_exposure` that matches one brightness runs 1.59–2.17 across reconstructions, and
   `sigmoid-knees` cannot use that knob at all (`--display-tone none` is bounded by the
   render ceiling, so a scalar gain after the curve is refused — its brightness comes from
   the anchor instead). Also the reason the default can move without breaking `film-master`:
