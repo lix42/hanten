@@ -27,9 +27,14 @@ describe("actionForKey", () => {
     expect(actionForKey("F", NONE, 3)).toEqual({ kind: "zoom" });
   });
 
+  it("toggles the charts on m, in either case", () => {
+    expect(actionForKey("m", NONE, 3)).toEqual({ kind: "metrics" });
+    expect(actionForKey("M", NONE, 3)).toEqual({ kind: "metrics" });
+  });
+
   it("ignores everything else", () => {
-    // `a`/`c`/`n` used to sit in this list and are now the note shortcuts; `z`
-    // stands in for a key that really is unbound.
+    // `a`/`c`/`m`/`n` used to sit in this list and are now bound; `z` stands in
+    // for a key that really is unbound.
     for (const key of ["z", "Enter", "ArrowLeft", " ", "Shift"]) {
       expect(actionForKey(key, NONE, 4)).toBeNull();
     }

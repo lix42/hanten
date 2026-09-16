@@ -12,8 +12,9 @@ import { readFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { parseReview, type Review } from "../review";
-import { createAssetMap, type Asset, type AssetMap, type StatFile } from "./assets";
+import { createAssetMap, thumbnailUrl, type Asset, type AssetMap, type StatFile } from "./assets";
 import { createMetricsFiles } from "./metricsFiles";
+import { PREVIEW_WIDTH } from "./thumbs";
 
 /** Env var naming the review set. */
 export const SET_ENV_VAR = "REVIEW_SET";
@@ -123,7 +124,16 @@ export async function loadReviewSet(
   }
 
   const metrics = createMetricsFiles(dir, stat);
-  const review = parseReview(json, (path) => assets.register(resolvePath(dir, path)), metrics.load);
+  const review = parseReview(
+    json,
+    // One registration per file whichever role asks for it — the map dedups by
+    // path — and the strip's URL is that same URL plus the size it wants.
+    (path, _at, role) => {
+      const url = assets.register(resolvePath(dir, path));
+      return role === "preview" ? thumbnailUrl(url, PREVIEW_WIDTH) : url;
+    },
+    metrics.load,
+  );
   return { review, assets, data: metrics.files(), path, dir, source: setPath.source };
 }
 

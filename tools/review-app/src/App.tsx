@@ -74,6 +74,11 @@ const SNAP_LINE = Number.parseFloat(token("sizes.barHeight"));
 export function App(props: { set: ReviewSetPayload }) {
   const review = createMemo(() => props.set.review);
   const [zoom, setZoom] = createSignal<ZoomMode>("fit");
+  // Whether the charts row is drawn, for every frame at once rather than per
+  // frame: it is a band of the one-screen layout, and a set where some frames
+  // showed charts and others did not would move the picture as you stepped
+  // through them — the thing this page is arranged to prevent.
+  const [showMetrics, setShowMetrics] = createSignal(true);
 
   // The selection is held as a config **id**, not an index. A live edit to
   // `review.json` can insert, remove or reorder configs, and a retained index
@@ -235,7 +240,17 @@ export function App(props: { set: ReviewSetPayload }) {
   createEffect(
     on(
       () => notesScope(props.set.path, imageIds()),
-      () => setNotes({}),
+      () => {
+        setNotes({});
+        // Back to the top with them. The scroll position is held against the
+        // *frames*, and this is the one change that invalidates it: a different
+        // set, or a set whose frame list moved, leaves you parked at an offset
+        // that now lands on some other frame — or past the end of a shorter set,
+        // where the browser clamps you to the bottom with no way to tell what
+        // you are looking at. Instant, like `align`, so the frame mark below is
+        // read off a settled page.
+        window.scrollTo({ top: 0, behavior: "auto" });
+      },
       { defer: true },
     ),
   );
@@ -270,6 +285,8 @@ export function App(props: { set: ReviewSetPayload }) {
         setNotesOpen(true);
       } else if (action.kind === "clearNotes") {
         if (noteCount(notes()) > 0) setClearOpen(true);
+      } else if (action.kind === "metrics") {
+        setShowMetrics((shown) => !shown);
       } else {
         const here = currentFrame(imageIds(), picturesOnScreen(), current());
         const target = frameForKey(imageIds(), here, action.delta, isAligned(here));
@@ -343,6 +360,7 @@ export function App(props: { set: ReviewSetPayload }) {
                       activeIndex={activeIndex()}
                       onActivate={setActiveIndex}
                       zoom={zoom()}
+                      showMetrics={showMetrics()}
                       isCurrent={current() === id}
                       hasNote={(notes()[id] ?? "").trim() !== ""}
                       paneObserver={paneObserver}
