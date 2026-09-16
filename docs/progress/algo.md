@@ -1736,6 +1736,12 @@ highlight separation and HDR. A scheduling option, not a destination.
   the model produces. Recorded in the task file's second open question together with the
   regression that would settle it (output extremes against the negative's own extremes, and
   whether NLP's gain rises as the scene range narrows).
+  Corrected on review, 2026-09-16: the single-surface frame is an **observation to explain,
+  not positive evidence** for the model. A monotone stretch of a narrow interval onto the
+  full output increases sample separation and destroys no information by itself; losing
+  detail needs a further stage — end clipping, post-stretch quantization, or a nonlinearity —
+  and which one is unidentified. Both must be measured, or the spike picks a remedy for a
+  mechanism it never located.
 - 2026-09-15 (caveat for whoever measures): the **"32 pixel-aligned Ektar pairs"** this task
   plans to regress are now **12**. At the user's request 20 of the 32 `rolls/2026-09-09-Ektar100`
   frames were deleted as near-duplicates; their NLP outputs survive, so those 20 have no source.

@@ -64,7 +64,12 @@ million pixels anyway.
   scene": a slope near 1 means it carries, near 0 means it compresses. Note the sample
   is now **12** pixel-aligned Ektar pairs rather than the 32 this was scoped for (see
   above), so pooling the Portra rolls — 11 and 10 pairs, different stocks — may be
-  necessary to say anything with confidence.
+  necessary to say anything with confidence. **Pooling is not free**: each roll shares one
+  development and scan recipe, and the two stocks differ in both input distribution and
+  response, so a single pooled slope can charge a between-roll or between-stock difference
+  to converter compression. Carry a per-roll (or per-stock) term or an interaction, and
+  cluster the uncertainty by roll — with three rolls it is the clustered interval, not the
+  pooled one, that the decision rests on.
 - **Is the gap a consequence of §3.8 rather than a defect?** If nc faithfully
   carries each frame's own range while NLP adapts per frame, then the remedy is
   per-frame opt-in, not a global change.
@@ -77,15 +82,25 @@ million pixels anyway.
   one whose content fills the frame keeps a wide one — so a 4.31 spread is what
   extreme-fitting produces, not evidence against it.
 
-  The positive evidence is a failure mode the statistics cannot show: on frames filled
-  by a single surface — all water, or cloudless sky — NLP loses almost all the
-  information (`rolls/2026-09-09-Ektar100/1612.tif`) while every nc config holds it. That
-  is what stretching a narrow input range across the full output does, and no
-  faithful-reproduction model predicts it. **Test it directly**: regress each converter's
-  output extremes against the negative's own extremes, and check whether NLP's gain
-  *rises* as the scene range narrows. If it does, the remedy for nc is bounded per-frame
-  adaptation at most — never mapping a frame's own range onto the full output, which is
-  the line `--auto-d-max` already draws ("grading, not conversion").
+  The suggestive observation — **not yet evidence** — is a failure mode the statistics do
+  not show: on frames filled by a single surface (all water, or cloudless sky) the user
+  reported NLP losing almost all the detail (`rolls/2026-09-09-Ektar100/1612.tif`) while
+  every nc config holds it.
+
+  **Do not read that as confirming the model.** A monotone stretch of a narrow input
+  interval onto the full output *increases* the separation between its samples; on its
+  own it destroys no information. For detail to be lost some further stage has to act —
+  clipping at the ends, quantization after the stretch, or a nonlinear step — and which
+  one is **unidentified**. Treat the frame as the thing to be explained rather than as
+  proof, or the spike will choose a remedy for a mechanism it never located.
+
+  **Test it directly**: regress each converter's output extremes against the negative's
+  own extremes, and check whether NLP's gain *rises* as the scene range narrows; then on
+  the frames that look degraded, measure where the detail actually goes — end clipping and
+  post-stretch quantization are the two candidates and they are separable. If the gain
+  does rise, the remedy for nc is bounded per-frame adaptation at most — never mapping a
+  frame's own range onto the full output, which is the line `--auto-d-max` already draws
+  ("grading, not conversion").
 
   **Mask the holder first, and pick the endpoint statistic before measuring.** On a scan
   that keeps its border the literal extrema are the opaque holder, not the scene
