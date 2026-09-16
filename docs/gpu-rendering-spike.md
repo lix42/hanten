@@ -30,7 +30,7 @@ from the roll's `base.tif` (`--base-region 2000,1400,800,600`):
 `--film-base 0.3199054,0.14962997,0.081757836`. Warm file cache. Stage timings from
 `--telemetry`, in ms.
 
-| Preset | decode | reconstruction | colour + display | encode | total |
+| Preset | decode | algorithm | colour + display | encode | total |
 |---|---|---|---|---|---|
 | legacy | 34 | 88 | 1141 | 106 | 1377 |
 | film-master | 34 | 96 | 0 | 96 | 235 |
@@ -39,19 +39,23 @@ from the roll's `base.tif` (`--base-region 2000,1400,800,600`):
 | gain-map-hdr | 36 | 105 | 649 | 1489 | 2285 |
 | hdr-pq | 33 | 105 | 565 | 2824 | 3532 |
 
-- Reconstruction is the only stage using rayon (`algo/density.rs`,
-  `algo/simple.rs`, `algo/film_stock`). It is already ~90 ms.
-- Every later per-pixel loop is sequential: the lcms2 transform in
+- *algorithm* is the telemetry bucket of that name: reconstruction plus
+  `finish_print` on `legacy`, or plus the ACEScg mapper and the shared print
+  controls on every other preset. Reconstruction is the only part of it using
+  rayon (`algo/density.rs`, `algo/simple.rs`, `algo/film_stock`); it is not timed
+  on its own, so the ~90 ms is an upper bound for it.
+- Every other per-pixel loop is sequential: the lcms2 transform in
   `pipeline/color.rs`, `sdr::render`, `hdr::render`, `hdr::encode_transfer`,
-  `render_split::apply_shared_controls`, `working_space::map_nc_film_rgb_v1`,
-  `gain_map::build`, `io::encode::quantize_u16`. The single largest item is the
+  `gain_map::build`, `io::encode::quantize_u16`, and inside the *algorithm*
+  bucket `render_split::apply_shared_controls` and
+  `working_space::map_nc_film_rgb_v1`. The single largest item is the
   lcms2 transform (~1100 ms), which runs on `legacy`, `display-p3` and the
   gain-map preset's SDR base (there it is booked under *encode*).
 - The HDR presets are encoder-bound: libaom 2.8 s, the gain-map JPEG path 1.5 s.
 - Everything is per-pixel, so ratios are size-invariant. The 18.7 MP
   `Portra4000-2026-08-05-positive/20260807-film-1325.tif` scaled every stage by
-  ~1.14x. A cold read of the 134 MB file from Google Drive took ~750 ms, more than
-  any single nc stage.
+  ~1.14x. A cold read of the 134 MB file from Google Drive took ~750 ms, about
+  twice a whole `legacy` run after Experiment 1.
 
 ## Experiment 1 — CPU multithreading (throwaway patch, reverted)
 
@@ -167,8 +171,12 @@ the one delivered. Either both use the same kernel or a tolerance is stated.
 - **WebGPU is mature in Chrome.** wgpu targets it; compute shaders and f32 storage
   buffers work; the preview renders to a canvas with no readback. Buffers above
   the default limits need requested limits or tiling.
-- **Memory fits.** wasm32 allows 4 GB; a 150 MB scan is 131 MB decoded + 197 MB f32.
-  A 600 MB, 74 MP scan would be tight.
+- **Memory is a constraint.** wasm32 allows 4 GB. The pixel data alone is small
+  (a 150 MB scan is 131 MB decoded + 197 MB f32), but the CLI's buffer lifetimes
+  peak far higher (`pipeline/memory.rs`): 0.9–1.7 GB measured on a 16–19 MP frame,
+  3.6 GB (SDR) to 5.9 GB (`hdr-pq`) on a 74.65 MP scan. A 150 MB scan fits; a 74 MP
+  scan does not without streaming or shorter buffer lifetimes. A preview-resolution
+  path sidesteps this until the final export.
 - **Encoders get worse and the GPU cannot help.** libaom, libjpeg-turbo, libultrahdr
   and lcms2 are C (emscripten/wasi toolchain). Without threads a 16 MP AVIF encode
   is roughly 5–10 s. TIFF is pure Rust and cheap. lcms2 is replaceable: nc builds
@@ -236,6 +244,12 @@ added first. **No layer.** What is added is a rule and one small helper.
   become buffer/texture lookups.
 
 ## Reproduction
+
+This reproduces the sequential `legacy` row of the timing table. The two
+experiments were throwaway patches, reverted and not preserved: Experiment 1 was
+rayon over the loops named under *Where the time goes today*; Experiment 2
+changed only `g_threads` and `AV1E_SET_ROW_MT` in `io/avif.rs`. Their numbers are
+re-measured when the multithreading work ships.
 
 ```sh
 cargo build --release
