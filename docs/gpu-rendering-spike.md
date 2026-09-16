@@ -9,9 +9,10 @@ Apple M4 Pro (14 cores, 48 GiB)
 ## Decision
 
 1. **Do not port the pipeline to the GPU for the CLI.** On a real 150 MB scan the
-   math a shader could take over is under 10% of an HDR run and at most ~40% of a
-   TIFF run *after* the CPU fix below, and the transfer of ~200 MB of f32 pixels
-   each way eats most of what is left.
+   math a shader could take over is ~150–350 ms per frame — under 10% of today's
+   `hdr-pq` run, and at most ~40% of any run *after* the two CPU fixes below — and
+   the transfer of ~200 MB of f32 pixels each way eats most of that. The realistic
+   saving is 100–250 ms per frame.
 2. **Multithread the CPU stages instead.** Everything after reconstruction is
    single-threaded today. A rayon pass over eight per-pixel loops produced
    byte-identical output and cut the TIFF and gain-map presets 3–4x.
@@ -69,7 +70,7 @@ integer clip counters are order-free.
 | Preset | sequential | parallel | bytes |
 |---|---|---|---|
 | legacy | 1377 | 360 | identical |
-| film-master | 235 | 296 | identical (path untouched; noise) |
+| film-master | 235 | 296 | identical (the mapper was one of the eight loops; the +61 ms was not analysed, and the patch's extra copy is a plausible cause) |
 | display-p3 | 1567 | 417 | identical |
 | hdr-linear-tiff | 463 | 358 | identical |
 | gain-map-hdr | 2285 | 882 | identical |
@@ -179,8 +180,10 @@ the one delivered. Either both use the same kernel or a tolerance is stated.
   path sidesteps this until the final export.
 - **Encoders get worse and the GPU cannot help.** libaom, libjpeg-turbo, libultrahdr
   and lcms2 are C (emscripten/wasi toolchain). Without threads a 16 MP AVIF encode
-  is roughly 5–10 s. TIFF is pure Rust and cheap. lcms2 is replaceable: nc builds
-  matrix-and-curve profiles in code, and that math is a small shader.
+  is roughly 5–10 s. TIFF is pure Rust and cheap. lcms2 is replaceable for the
+  fixed display presets: nc builds those matrix-and-curve profiles in code, and
+  that math is a small shader. A `custom` ICC output (`OutputSpace::Custom`, any
+  valid RGB profile) still needs an ICC engine.
 
 In the browser the GPU is the realistic path to an interactive preview; CPU
 threads are an enhancement where the host allows isolation.
@@ -233,8 +236,10 @@ added first. **No layer.** What is added is a rule and one small helper.
 
 - Move the **per-pixel** stages: reconstruction, ACEScg mapping, print controls,
   tone, gamut mapping, transfer encode. Keep the **reductions** on the CPU: film
-  base, white-balance percentiles, MaxCLL/MaxFALL — they run once per image, not
-  per knob.
+  base and the white-balance percentiles run once per image, not per knob;
+  MaxCLL/MaxFALL are measured off the tone-mapped pixels (`hdr::render_linear`),
+  so they change with every display knob and are computed once at final export
+  from the downloaded render.
 - Settle first how the per-pixel math is written once and run on both CPU and GPU,
   so preview and final never drift. Candidates (`rust-gpu`, CubeCL) were **not**
   verified in this spike.
