@@ -285,6 +285,8 @@ interface Props {
   activeIndex: number;
   onActivate: (index: number) => void;
   zoom: ZoomMode;
+  /** Whether the charts row is drawn at all — the `m` toggle, set-wide. */
+  showMetrics: boolean;
   /** Whether this is the frame the viewer is looking at — see `currentFrame`. */
   isCurrent: boolean;
   /** Whether a review note has been written about this frame. */
@@ -374,7 +376,10 @@ export function ImageSection(props: Props) {
       // from the *active* rendition, so switching to one that declares different
       // dimensions changes the stage's scroll size. Watching only the zoom left the
       // pan controls and mini-map stale until the next load, resize or toggle.
-      () => [props.zoom, props.activeIndex] as const,
+      // Hiding the charts is the same kind of change from the other side: the band
+      // hands its height to the picture, so a `fullsize` pane that was scrolling
+      // may stop, and one that fit may start.
+      () => [props.zoom, props.activeIndex, props.showMetrics] as const,
       () => {
         measureOverflow();
         requestAnimationFrame(measureOverflow);
@@ -664,17 +669,27 @@ export function ImageSection(props: Props) {
 
       {/* Below the picture rather than beside it: the stage is the widest thing
           on the page and the charts must not narrow it. They swap with the
-          config exactly as the picture does. */}
-      <div
-        class={css(styles.band, chartedRendition()?.metrics !== undefined && styles.bandCharted)}
-        data-charts-band
-      >
-        <MetricsPanel
-          id={domId(props.image.id, charted() ?? "none")}
-          rendition={chartedRendition()}
-          configLabel={props.configs.find((config) => config.id === charted())?.label ?? "?"}
-        />
-      </div>
+          config exactly as the picture does.
+
+          Hidden by unmounting rather than by a style, because the cost `m` is
+          put away for is the *drawing* — three SVGs per mounted frame — and only
+          unmounting stops that. (`display: none` would free the band's height
+          just as well, generating no box at all; `visibility: hidden` is the one
+          that would hold `chartsBand` open. Neither stops the charts drawing.)
+          What survives is `charted`, which lives in this component, so bringing
+          them back draws the config you are on rather than restarting the wait. */}
+      <Show when={props.showMetrics}>
+        <div
+          class={css(styles.band, chartedRendition()?.metrics !== undefined && styles.bandCharted)}
+          data-charts-band
+        >
+          <MetricsPanel
+            id={domId(props.image.id, charted() ?? "none")}
+            rendition={chartedRendition()}
+            configLabel={props.configs.find((config) => config.id === charted())?.label ?? "?"}
+          />
+        </div>
+      </Show>
     </div>
   );
 }

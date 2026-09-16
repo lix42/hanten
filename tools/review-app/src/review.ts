@@ -27,7 +27,13 @@ export interface ReviewConfig {
 export interface Rendition {
   /** URL the page loads the full image from, produced by the resolver. */
   readonly src: string;
-  /** URL of the thumbnail; falls back to `src` when unstated. */
+  /**
+   * URL the preview strip loads, for the same image `src` names.
+   *
+   * A separate URL rather than the same one because the server answers the
+   * preview role with a size (`&w=`); a set that states no `preview` path
+   * still gets one, resolved from `src`.
+   */
   readonly preview: string;
   readonly width?: number;
   readonly height?: number;
@@ -112,6 +118,16 @@ function describe(value: unknown): string {
 }
 
 /**
+ * What a resolved URL is going to be used for.
+ *
+ * The strip shows the same file as the stage, in a 104px box, so the two roles
+ * want different bytes of the same path — the server answers `preview` with a
+ * downscaled URL. Passed as a role rather than sniffed from `at`, because which
+ * URL a caller gets is a decision, not a string pattern.
+ */
+export type RenditionRole = "src" | "preview";
+
+/**
  * Turns a path written in a review file into the URL the page loads it from.
  *
  * Injected rather than fixed because the two sides resolve differently: the
@@ -119,7 +135,7 @@ function describe(value: unknown): string {
  * it, while a test only needs something deterministic to assert on. `at` is the
  * document path of the offending field, for error messages.
  */
-export type ResolveRendition = (path: string, at: string) => string;
+export type ResolveRendition = (path: string, at: string, role: RenditionRole) => string;
 
 /**
  * Turns a metrics path written in a review file into that rendition's record.
@@ -168,16 +184,22 @@ function parseRendition(
 ): Rendition {
   // Shorthand: a bare string is the src, which is all a generator usually has.
   if (typeof raw === "string") {
-    const src = resolve(asString(raw, at), at);
-    return { src, preview: src };
+    const path = asString(raw, at);
+    return { src: resolve(path, at, "src"), preview: resolve(path, at, "preview") };
   }
   const record = asRecord(raw, at);
-  const src = resolve(asString(record["src"], `${at}.src`), `${at}.src`);
+  const srcPath = asString(record["src"], `${at}.src`);
+  const src = resolve(srcPath, `${at}.src`, "src");
   const previewRaw = optionalString(record["preview"], `${at}.preview`);
   const metricsRaw = optionalString(record["metrics"], `${at}.metrics`);
   return {
     src,
-    preview: previewRaw ? resolve(previewRaw, `${at}.preview`) : src,
+    // **The preview role applies to a declared thumbnail too**, not only to the
+    // fallback. A set that names one has no idea how big the strip's box is, and
+    // a thumbnail already small enough is not resized — so one rule ("the strip
+    // is served downscaled") beats two, and a set that points `preview` at
+    // another full-size file gets the same protection as one that omits it.
+    preview: resolve(previewRaw ?? srcPath, `${at}.preview`, "preview"),
     ...dimensions(record, at),
     ...(metricsRaw && loadMetrics ? loadMetrics(metricsRaw, `${at}.metrics`) : {}),
   };

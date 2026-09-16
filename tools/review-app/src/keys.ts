@@ -24,7 +24,9 @@ export type KeyAction =
   /** Note on the current frame (`a`), every note (`n`), clear them all (`c`). */
   | { readonly kind: "note" }
   | { readonly kind: "notes" }
-  | { readonly kind: "clearNotes" };
+  | { readonly kind: "clearNotes" }
+  /** Show or hide the charts row (`m`), giving its band back to the picture. */
+  | { readonly kind: "metrics" };
 
 /**
  * The action a keypress should perform, or `null` for keys we leave alone.
@@ -48,6 +50,7 @@ export function actionForKey(
   if (key === "a" || key === "A") return { kind: "note" };
   if (key === "n" || key === "N") return { kind: "notes" };
   if (key === "c" || key === "C") return { kind: "clearNotes" };
+  if (key === "m" || key === "M") return { kind: "metrics" };
 
   if (key.length === 1 && key >= "0" && key <= "9") {
     // '1'..'9' are 0..8; '0' is the tenth slot rather than the first.
