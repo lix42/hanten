@@ -78,14 +78,21 @@ Two files, both derived from `manifest.json` by a short script kept beside the s
 - **fixtures copy** — `{"rolls": {<roll>: {"dmin": [r,g,b]}}, "frames": {<key>: {"roll",
   "file"}}}`. Nothing else per frame is read. Keys must be filename-safe and unique across
   rolls: `<short-roll-tag>-<serial>` (`g200-1137`, `ektar0909-1605`).
-- **matrix copy** — `output_dir`, `output_preset`, `common_args` (usually `["--film-base",
+  **`file` is relative to the roll directory, not to the asset root** — the generator builds
+  `<assets>/rolls/<roll>/<file>`, so copying the manifest's own `rolls/<roll>/<serial>.tif`
+  produces a doubled path and every frame is reported missing and skipped.
+- **matrix copy** — `schema_version` (must be `1`; the loader refuses the document
+  otherwise), `output_dir`, `output_preset`, `common_args` (usually `["--film-base",
   "{dmin}"]`), `metrics.inset`, a `rolls` block mapping roll → `film_stock` if any config uses
   `{film_stock}`, and one entry per configuration under `configs`.
 
 Rules, each with a reason:
 
-- A config may not restate `--output-preset`, `-o`, `--report`: `nc` takes the **last**
-  occurrence, so the override would be silent. State the preset once as `output_preset`.
+- A config may not restate any flag the generator owns — `--output-preset`, `-o` /
+  `--output`, `--report`, `--report-file`. `nc` takes the **last** occurrence, so an output
+  override would be silent, and redirecting the report to a file stops the generator reading
+  the resolved recipe back from stdout. State the preset once as `output_preset`. The loader
+  rejects all five by name, so a config that restates one fails before anything renders.
 - A cell that fails costs only itself; the app draws the gap.
 - Re-measuring is keyed to the image's **checksum**, not mtime, because a rerun re-renders
   everything.
@@ -119,12 +126,35 @@ would make this first-class; until then it is manual. Three things to get right:
    the right decode, a primaries-derived matrix to sRGB where needed, then the sRGB OETF.
    **Verify one file per encoding** against an independent decode (`sips -m` with the
    embedded profile) before converting a batch — a wrong matrix still looks plausible.
+
+   **Converting only the reference is not enough, and no preset fixes it.** With the usual
+   `gain-map-hdr` matrix, nc's cells are gain-map JPEGs: on an HDR display the browser shows
+   the *HDR* rendition while the reference stays plain SDR, so the two cells differ in
+   rendering intent before any conversion is compared — and `nctool metrics` meanwhile reads
+   nc's **SDR base**, so the charts and the picture describe different renditions. nc cannot
+   be asked for a plain SDR JPEG instead: the only JPEG writers are `gain-map-hdr` and
+   `ultra-hdr-v1`, both gain-map carriers, and every SDR preset writes TIFF, which browsers
+   will not display. So either strip the gain map from nc's JPEGs so both sides are plain SDR
+   (what makes the comparison honest), or review on an SDR display and **say** that is what
+   was done. Making this first-class belongs to `analysis/review-reference-cells`.
 2. **Pair by filename identity, never registration.** An export usually carries its source's
    serial (`converted/<producer>/<roll>/<serial>.tif` ↔ `rolls/<roll>/<serial>.tif`). Exports
    are often cropped differently, so never expect pixel alignment. A frame with no match gets
    no key and the app draws a gap — never force a mapping.
-3. **Measure it in the space it is now in**: `nctool metrics image <converted>.jpg --space srgb
-   --inset <same as the matrix>`. `srgb`, because the record must describe *that* rendition.
+   The manifest carries a `source_frame` link meant to be this identity and to survive a
+   rename, and it is what `analysis/review-reference-cells` plans to pair on — but **check it
+   before relying on it**: on the current manifest it is `null` on all 122 converted entries,
+   so pairing on it today yields nothing.
+3. **Measure it in the space it is now in, and write the record to disk**:
+
+   ```sh
+   nctool metrics image <converted>.jpg --space srgb --inset <same as the matrix> \
+     --out <converted>.jpg.metrics.json
+   ```
+
+   `srgb`, because the record must describe *that* rendition. `--out`, because the record
+   otherwise goes to stdout and there is no file to name in the rendition's `metrics` field —
+   so the reference cell silently renders with no charts beside the nc cells that have them.
 
 Keep converted references in their own folder, shared across sets.
 
@@ -179,7 +209,12 @@ weeks later.
 - **Nothing checks that a metric record describes the pixels beside it.** Re-render by hand
   and the charts go on describing the previous render; `nctool review generate` re-measures on
   checksum change, which is why it is the way to rebuild a set.
-- **A preset's calibration can move.** A set rendered with explicit flags is frozen, but
-  re-running a matrix that names only `--preset` renders what that preset means *today*.
+- **A preset's calibration can move, and explicit flags do not freeze a render.** Stating
+  every flag pins those *values*, not the omitted defaults and not the algorithm inside the
+  `--nc` binary, so the same matrix re-run after a pipeline change can produce different
+  pixels. A matrix naming only `--preset` is looser still: it renders what that preset means
+  *today*. The matrix has no build axis, so if a set is meant to compare builds — or to be
+  trusted months later — record which binary made it: keep nc's own report sidecars, which
+  carry the build identity, and say which commit was built.
 - **Deleting source frames breaks later reruns, not the existing set.** Rendered JPEGs and
   their records survive; the generator simply skips the missing sources.
