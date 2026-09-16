@@ -45,7 +45,13 @@
       "Bash(gh run list*)",
       "Bash(gh run watch*)",
       "Bash(gh api *)",
-      "Bash(gh repo view*)"
+      "Bash(gh repo view*)",
+      "Bash(echo*)",
+      "Bash(head*)",
+      "Bash(tail*)",
+      "Bash(grep*)",
+      "Bash(sed*)",
+      "Bash(wc*)"
     ]
   },
   "enabledPlugins": {
