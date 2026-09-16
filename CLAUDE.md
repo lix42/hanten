@@ -37,6 +37,9 @@ explicitly corrected once already.
   future versions are measured against; see the `conversion-versioning` task).
 - `docs/negative-convertor-research-report.md` — background research (image
   science, library survey). Context, not spec.
+- `docs/gpu-rendering-spike.md` — measured stage timings per preset and the
+  decision to multithread on the CPU rather than port to a GPU; revisit for an
+  interactive native app or a browser build.
 
 ## Task-tracking workflow
 
