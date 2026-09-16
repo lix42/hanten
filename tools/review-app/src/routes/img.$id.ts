@@ -50,22 +50,23 @@ export const Route = createFileRoute("/img/$id")({
           // one: between a re-render and the watcher's reload the full-size
           // path already streams the new bytes, and the strip must not answer
           // for the same URL out of the previous render's cache entry.
-          const body = await thumbnail(
+          const result = await thumbnail(
             { path: asset.path, mtimeMs: stats.mtimeMs, size: stats.size },
             width,
           );
-          if (body) {
-            return new Response(new Uint8Array(body), {
+          if (result.kind === "thumbnail") {
+            return new Response(new Uint8Array(result.body), {
               headers: {
                 "content-type": "image/jpeg",
-                "content-length": String(body.byteLength),
+                "content-length": String(result.body.byteLength),
                 "cache-control": "public, max-age=31536000, immutable",
               },
             });
           }
-          // Generation declined — say so, because it changes how long the
-          // fallback may be kept.
-          declined = true;
+          // A failed *attempt* may succeed next time; a file that should not be
+          // shrunk at all never will. Only the first restricts how long the
+          // fallback below may be kept.
+          declined = result.kind === "declined";
         }
 
         const body = Readable.toWeb(createReadStream(asset.path)) as ReadableStream<Uint8Array>;

@@ -10,6 +10,7 @@ import {
   type ThumbnailSource,
   isThumbnailable,
   parseThumbnailWidth,
+  unsuitableReason,
   thumbnail,
   thumbnailKey,
 } from "./thumbs";
@@ -106,6 +107,34 @@ describe("thumbnailKey", () => {
   });
 });
 
+describe("unsuitableReason", () => {
+  it("shrinks an ordinary still picture", () => {
+    expect(unsuitableReason({ pages: 1, width: 5184 }, 208)).toBeUndefined();
+    // No `pages` at all is the common case — a JPEG says nothing about frames.
+    expect(unsuitableReason({ width: 5184 }, 208)).toBeUndefined();
+  });
+
+  it("serves an animation as it is, whatever its extension", () => {
+    // `.gif` is off the thumbnailable list for this reason, but WebP, AVIF and
+    // PNG animate too, and the strip must not freeze one beside a moving stage.
+    expect(unsuitableReason({ pages: 2, width: 5184 }, 208)).toBe("animated");
+  });
+
+  it("serves a file already inside the box rather than re-encoding it", () => {
+    // Lossy work, sometimes producing *more* bytes, for no change in size.
+    expect(unsuitableReason({ width: 100 }, 208)).toBe("already within the preview width");
+    // Exactly the box is already inside it: resizing would be a no-op too.
+    expect(unsuitableReason({ width: 208 }, 208)).toBe("already within the preview width");
+    expect(unsuitableReason({ width: 209 }, 208)).toBeUndefined();
+  });
+
+  it("shrinks when the width is unknown, rather than declining blind", () => {
+    // An unreadable header is the chain's problem, not this rule's: let it try
+    // and fail loudly rather than silently serving every such file whole.
+    expect(unsuitableReason({}, 208)).toBeUndefined();
+  });
+});
+
 describe("THUMBNAILABLE", () => {
   it("names only formats the fallback can state a content type for", () => {
     // Generation may decline — a format this libvips build lacks, a corrupt
@@ -179,18 +208,25 @@ describe("THUMBNAILABLE", () => {
     return said;
   }
 
+  /** The thumbnail bytes, failing the test if the chain declined to make any. */
+  async function bytesOf(at: ThumbnailSource, width: number): Promise<Buffer> {
+    const result = await thumbnail(at, width);
+    expect(result.kind).toBe("thumbnail");
+    if (result.kind !== "thumbnail") throw new Error("no thumbnail");
+    return result.body;
+  }
+
   it("keeps the source's colour profile, so the strip matches the stage", async () => {
     // An untagged JPEG is read as sRGB: a Display P3 rendition served without
     // its profile shows visibly more saturated in the strip than on the stage.
     const tagged = await canvas().withIccProfile("p3").jpeg().toBuffer();
     const at = await source("p3.jpg", tagged);
 
-    const body = await thumbnail(at, 10);
-    expect(body).toBeDefined();
+    const body = await bytesOf(at, 10);
 
     // The bytes, not just the length: a profile of the right size is not the
     // right profile.
-    const kept = (await lib(body!).metadata()).icc;
+    const kept = (await lib(body).metadata()).icc;
     const original = (await lib(tagged).metadata()).icc;
     expect(original).toBeInstanceOf(Buffer);
     expect(kept).toBeInstanceOf(Buffer);
@@ -200,7 +236,7 @@ describe("THUMBNAILABLE", () => {
     // and re-tagged them P3 would be wrong the other way round and still carry
     // a matching profile.
     const before = (await lib(tagged).stats()).channels;
-    const after = (await lib(body!).stats()).channels;
+    const after = (await lib(body).stats()).channels;
     expect(after.map((channel) => channel.mean)).toEqual(before.map((channel) => channel.mean));
   });
 
@@ -211,9 +247,8 @@ describe("THUMBNAILABLE", () => {
     const rotated = await canvas().withMetadata({ orientation: 6 }).jpeg().toBuffer();
     const at = await source("rotated.jpg", rotated);
 
-    const body = await thumbnail(at, 10);
-    expect(body).toBeDefined();
-    const meta = await lib(body!).metadata();
+    const body = await bytesOf(at, 10);
+    const meta = await lib(body).metadata();
     expect(meta).toMatchObject({ width: 10, height: 20 });
     // The rotation is in the pixels, so the tag must not survive as well — a
     // later `.keepExif()` would otherwise have a viewer turn the picture twice.
@@ -226,9 +261,8 @@ describe("THUMBNAILABLE", () => {
     const transparent = await canvas(4).png().toBuffer();
     const at = await source("transparent.png", transparent);
 
-    const body = await thumbnail(at, 10);
-    expect(body).toBeDefined();
-    for (const channel of (await lib(body!).stats()).channels) {
+    const body = await bytesOf(at, 10);
+    for (const channel of (await lib(body).stats()).channels) {
       expect(channel.mean).toBeGreaterThan(250);
     }
   });
@@ -242,8 +276,8 @@ describe("THUMBNAILABLE", () => {
     await mkdir(THUMBNAIL_DIR, { recursive: true });
     await writeFile(join(THUMBNAIL_DIR, key), Buffer.alloc(0));
 
-    const body = await thumbnail(at, 10);
-    expect(body?.byteLength).toBeGreaterThan(0);
+    const body = await bytesOf(at, 10);
+    expect(body.byteLength).toBeGreaterThan(0);
     // And the bad entry is replaced, so the next run does not read it either.
     expect((await readFile(join(THUMBNAIL_DIR, key))).byteLength).toBeGreaterThan(0);
   });
@@ -261,12 +295,38 @@ describe("THUMBNAILABLE", () => {
     await writeFile(entry, Buffer.alloc(0));
     const before = await stat(entry);
 
-    expect((await thumbnail(at, 10))?.byteLength).toBeGreaterThan(0);
+    expect((await bytesOf(at, 10)).byteLength).toBeGreaterThan(0);
 
     expect((await stat(entry)).ino).not.toBe(before.ino);
     // And nothing staged is left behind for the next run to trip over.
     const staged = (await readdir(THUMBNAIL_DIR)).filter((name) => name.startsWith(`${key}.`));
     expect(staged).toEqual([]);
+  });
+
+  it("leaves a source already inside the box alone, and caches nothing for it", async () => {
+    const small = await lib({
+      create: { width: 6, height: 4, channels: 3, background: "#336699" },
+    })
+      .jpeg()
+      .toBuffer();
+    const at = await source("already-small.jpg", small);
+
+    const result = await thumbnail(at, 10);
+    expect(result).toEqual({ kind: "unsuitable", why: "already within the preview width" });
+    // Nothing to cache: the answer is the file, and the route serves it.
+    const entries = await readdir(THUMBNAIL_DIR);
+    expect(entries).not.toContain(thumbnailKey(at, 10));
+  });
+
+  it("keeps the cache directory and its entries owner-only", async () => {
+    // These are derived from the user's own photographs and `tmpdir()` is the
+    // shared `/tmp` on Linux, where the uid in the directory name prevents a
+    // collision but grants no privacy.
+    const at = await source("private.jpg", await canvas().jpeg().toBuffer());
+    await bytesOf(at, 10);
+
+    expect((await stat(THUMBNAIL_DIR)).mode & 0o077).toBe(0);
+    expect((await stat(join(THUMBNAIL_DIR, thumbnailKey(at, 10)))).mode & 0o077).toBe(0);
   });
 
   it("still uses a cache entry for a key it once declined", async () => {
@@ -277,13 +337,13 @@ describe("THUMBNAILABLE", () => {
     // rendition to the full-size file for the life of the process.
     const at = await source("declined-then-cached.jpg", Buffer.from("not an image"));
     await quietly(async () => {
-      expect(await thumbnail(at, 10)).toBeUndefined();
+      expect((await thumbnail(at, 10)).kind).toBe("declined");
     });
 
     const good = await canvas().jpeg().toBuffer();
     await mkdir(THUMBNAIL_DIR, { recursive: true });
     await writeFile(join(THUMBNAIL_DIR, thumbnailKey(at, 10)), good);
-    expect((await thumbnail(at, 10))?.byteLength).toBe(good.byteLength);
+    expect((await bytesOf(at, 10)).byteLength).toBe(good.byteLength);
   });
 
   it("asks sharp about a file it cannot read exactly once", async () => {
@@ -292,8 +352,8 @@ describe("THUMBNAILABLE", () => {
     // per-view cost this module exists to remove.
     const at = await source("not-an-image.jpg", Buffer.from("plain text, despite the name"));
     const warned = await quietly(async () => {
-      expect(await thumbnail(at, 10)).toBeUndefined();
-      expect(await thumbnail(at, 10)).toBeUndefined();
+      expect((await thumbnail(at, 10)).kind).toBe("declined");
+      expect((await thumbnail(at, 10)).kind).toBe("declined");
     });
     expect(warned.length).toBe(1);
   });

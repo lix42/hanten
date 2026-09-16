@@ -24,7 +24,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -91,6 +91,38 @@ export function parseThumbnailWidth(raw: string | null): number | undefined {
   return width;
 }
 
+/** The parts of a sharp `metadata()` the rule below reads. */
+export interface ThumbnailProbe {
+  readonly pages?: number | undefined;
+  readonly width?: number | undefined;
+}
+
+/**
+ * Why this file should be served as it is, or `undefined` to shrink it.
+ *
+ * Kept a pure function of the probe because it is the half worth testing and
+ * the half that cannot be exercised through the real chain: sharp declines to
+ * *write* an animated file from raw frames, so an animated fixture cannot be
+ * built in memory to drive it end to end.
+ *
+ * **Animation is a property of the file, not of its extension.** `.gif` is off
+ * the thumbnailable list for that reason, but WebP, AVIF and PNG all animate
+ * too, and a strip quietly showing frame one beside a moving picture is exactly
+ * the wrongness the extension rule was reaching for.
+ *
+ * **Already inside the box is the other.** `withoutEnlargement` declines to
+ * resize such a file and then the chain re-encodes it anyway — a lossy
+ * generation, sometimes *larger* than the source, for a picture the strip could
+ * have shown untouched. A set that states its own small `preview` is this case.
+ */
+export function unsuitableReason(probe: ThumbnailProbe, width: number): string | undefined {
+  if ((probe.pages ?? 1) > 1) return "animated";
+  if (probe.width !== undefined && probe.width <= width) {
+    return "already within the preview width";
+  }
+  return undefined;
+}
+
 /**
  * Whether shrinking this file is worth doing at all.
  *
@@ -142,7 +174,9 @@ export function thumbnailKey(source: ThumbnailSource, width: number): string {
  * but `/tmp` on Linux, shared by everyone on the box. A second user's
  * `mkdir -p` against the first user's directory succeeds silently and every
  * write after it fails `EACCES` — a warning per request and no caching, for as
- * long as that directory exists. `process.getuid` rather than `os.userInfo()`:
+ * long as that directory exists. The uid separates users but does not *protect*
+ * one from another; `ensureDir` is what makes the directory owner-only.
+ * `process.getuid` rather than `os.userInfo()`:
  * it answers from the process, so it cannot throw for a uid with no passwd
  * entry, which would take the whole module — and with it the server — down.
  */
@@ -160,7 +194,7 @@ export const THUMBNAIL_DIR = join(
  * names one file as several configs' rendition, so without this the same image
  * is decoded several times over — the very cost this module exists to remove.
  */
-const inFlight = new Map<string, Promise<Buffer | undefined>>();
+const inFlight = new Map<string, Promise<ThumbnailResult>>();
 
 /**
  * Keys generation has already declined, so it is asked once.
@@ -174,16 +208,40 @@ const inFlight = new Map<string, Promise<Buffer | undefined>>();
 const declined = new Set<string>();
 
 /**
- * A JPEG thumbnail of `source` at `width`, or `undefined` to serve the original.
+ * Keys that should never be shrunk, and why — animated, or already small.
+ *
+ * Separate from `declined` because the answer is permanent for as long as the
+ * file is: it is remembered so the probe runs once, and the route may cache it
+ * for as long as it caches the file itself.
+ */
+const unsuitable = new Map<string, string>();
+
+/**
+ * What to serve for one preview request.
+ *
+ * Three outcomes, not two, because "serve the original" arrives for two
+ * unrelated reasons and they must not be cached alike: a *failed attempt* (fd
+ * exhaustion, a read-only temp dir, a format this libvips build lacks) may
+ * succeed on the next request, while a file that should not be shrunk at all —
+ * animated, or already smaller than the box — will never change its mind. One
+ * enum rather than a boolean pair, so an impossible combination cannot be
+ * spelled.
+ */
+export type ThumbnailResult =
+  | { readonly kind: "thumbnail"; readonly body: Buffer }
+  /** Serve the file itself, and keep that answer as long as the file lives. */
+  | { readonly kind: "unsuitable"; readonly why: string }
+  /** Serve the file itself, but ask again soon — this was one bad attempt. */
+  | { readonly kind: "declined" };
+
+/**
+ * A thumbnail of `source` at `width`, or a reason to serve the original.
  *
  * Failure is never fatal: a file sharp cannot read, a missing install, a
  * read-only temp dir all fall back to the full-size file, which is what the
  * server did before thumbnails existed. A slow strip beats an empty one.
  */
-export async function thumbnail(
-  source: ThumbnailSource,
-  width: number,
-): Promise<Buffer | undefined> {
+export async function thumbnail(source: ThumbnailSource, width: number): Promise<ThumbnailResult> {
   const key = thumbnailKey(source, width);
   // The disk first, and only then the decline: a transient read failure — fd
   // exhaustion under six concurrent previews plus libvips' own handles — reads
@@ -191,31 +249,41 @@ export async function thumbnail(
   // decline first would retire a perfectly good entry on disk for the life of
   // the process. The read it saves is negligible; a declined key rarely has one.
   const cached = await readCached(key);
-  if (cached) return cached;
-  if (declined.has(key)) return undefined;
+  if (cached) return { kind: "thumbnail", body: cached };
+  const known = unsuitable.get(key);
+  if (known !== undefined) return { kind: "unsuitable", why: known };
+  if (declined.has(key)) return { kind: "declined" };
 
   const running = inFlight.get(key);
   if (running) return running;
 
   const work = generate(source, width)
-    .then(async (body) => {
-      if (body) await writeCached(key, body);
+    .then(async (result) => {
+      if (result.kind === "thumbnail") await writeCached(key, result.body);
+      else if (result.kind === "unsuitable") unsuitable.set(key, result.why);
       else declined.add(key);
-      return body;
+      return result;
     })
     .finally(() => inFlight.delete(key));
   inFlight.set(key, work);
   return work;
 }
 
-async function generate(source: ThumbnailSource, width: number): Promise<Buffer | undefined> {
+async function generate(source: ThumbnailSource, width: number): Promise<ThumbnailResult> {
   try {
     // Imported here, not at module scope: this is the only code in the app that
     // needs a native module, and keeping the import inside the call means a
     // platform with no prebuilt binary degrades to serving originals instead of
     // failing to start.
     const { default: sharp } = await import("sharp");
-    return await sharp(source.path, { failOn: "none" })
+    const image = sharp(source.path, { failOn: "none" });
+
+    // One header read, reused by the pipeline below, answering the questions an
+    // extension cannot.
+    const why = unsuitableReason(await image.metadata(), width);
+    if (why !== undefined) return { kind: "unsuitable", why };
+
+    const body = await image
       // Before the resize, or a portrait scan tagged `Orientation` 6 is shrunk
       // on its stored axes and the tag is dropped, so the strip shows it
       // landscape while the stage shows it upright.
@@ -231,9 +299,10 @@ async function generate(source: ThumbnailSource, width: number): Promise<Buffer 
       // eye. Preserved rather than converted, so the two match.
       .keepIccProfile()
       .toBuffer();
+    return { kind: "thumbnail", body };
   } catch (cause) {
     console.warn(`could not thumbnail ${source.path}: ${describe(cause)}`);
-    return undefined;
+    return { kind: "declined" };
   }
 }
 
@@ -249,16 +318,38 @@ async function readCached(key: string): Promise<Buffer | undefined> {
   }
 }
 
+/**
+ * Create the cache directory owner-only, once per process.
+ *
+ * **These are derived from the user's own photographs, in a directory other
+ * people can read.** On Linux `tmpdir()` is the shared `/tmp`, and `mkdir` under
+ * the usual `0022` umask would leave the directory `0755` and its entries
+ * `0644`: the uid in the name prevents a collision, but it is a name, not a
+ * permission. A directory left over from an earlier run of this app is widened
+ * back — only when we own it, since chmod on someone else's fails and the write
+ * after it would have failed anyway.
+ */
+async function ensureDir(): Promise<void> {
+  await mkdir(THUMBNAIL_DIR, { recursive: true, mode: 0o700 });
+  if (tightened) return;
+  tightened = true;
+  const stats = await stat(THUMBNAIL_DIR);
+  const ours = process.getuid === undefined || stats.uid === process.getuid();
+  if (ours && (stats.mode & 0o077) !== 0) await chmod(THUMBNAIL_DIR, 0o700);
+}
+
+let tightened = false;
+
 async function writeCached(key: string, body: Buffer): Promise<void> {
   const final = join(THUMBNAIL_DIR, key);
   const staging = `${final}.${randomBytes(8).toString("hex")}.tmp`;
   try {
-    await mkdir(THUMBNAIL_DIR, { recursive: true });
+    await ensureDir();
     // Written aside and renamed, never in place: `writeFile` truncates, so an
     // in-place write leaves the entry 0 bytes for its whole duration and a
     // reader in that window — or a server killed inside it — gets an empty
     // file. A rename within one directory is atomic.
-    await writeFile(staging, body);
+    await writeFile(staging, body, { mode: 0o600 });
     await rename(staging, final);
   } catch (cause) {
     await unlink(staging).catch(() => undefined);

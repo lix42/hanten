@@ -249,14 +249,28 @@ sharp chain can turn CI red, which is the point. The skip path exists for a
 platform with no prebuilt binary, and there nothing is fatal either — the import
 is inside the call, so the server starts and serves originals.
 
-**The strip is not downscaled in three cases**, all of which serve the file
+**The strip is not downscaled in four cases**, all of which serve the file
 itself: a format off the thumbnailable list (an SVG, which the browser draws at
-any size for nothing, or a GIF, which a thumbnail would freeze); an extension
-nothing recognises, which is never mangled into a JPEG; and a generation the
-libvips build declined. Only the last is a statement about an _attempt_ rather
-than about the file, which is why it alone is served with a short cache lifetime
-— see `img.$id.ts`. A decline is remembered for the process, so it costs one
-attempt and one warning, not one per view.
+any size for nothing, or a GIF); an extension nothing recognises, which is never
+mangled into a JPEG; a file whose header says to leave it alone — **animated**,
+because a strip showing frame one beside a moving picture is worse than a large
+one, or **already inside the 208px box**, where the chain would re-encode it
+lossily (sometimes _larger_) for no change in size; and a generation the libvips
+build declined.
+
+Only the last is a statement about an _attempt_ rather than about the file, and
+that distinction lives in the type (`ThumbnailResult`) rather than in a boolean,
+because it decides how long the fallback may be cached: a decline gets a short
+lifetime, since fd exhaustion or a read-only temp dir can clear, while the others
+are cached as long as the file itself. Both are remembered per process, so each
+costs one probe — and a decline one warning — not one per view.
+
+**Alpha is flattened onto white**, which is a compromise rather than a right
+answer: JPEG has nowhere to put it, the page composites the stage over its own
+panel colour, and that colour is the viewer's theme, which the server cannot
+know. A transparent rendition therefore reads white in the strip and
+theme-coloured on the stage. `nc` writes no such rendition; if one ever matters,
+the fix is an alpha-capable thumbnail format, not a guess at the background.
 
 ## Gates
 
