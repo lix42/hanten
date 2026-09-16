@@ -1107,14 +1107,15 @@ mod midtone_placement {
     #[test]
     fn every_preset_lands_the_shared_brightness_target() {
         use crate::cli::ConversionPreset;
-        // Scene mid-grey 0.18 rendered 0.31 stop up — the brightness approved
-        // 2026-09-09, and the same target the exposure table above solves against.
-        let target = 0.18 * 2f32.powf(0.31);
+        // Scene mid-grey 0.18 rendered 1.33 stop up — the brightness approved
+        // 2026-09-15, and the same target the exposure table above solves against.
+        let target = 0.18 * 2f32.powf(1.33);
         let stock = FilmStock::Portra400;
         println!(
             "\n  target {target:.4}\n\n  {:24}{:>11}{:>12}",
             "preset", "delivered", "stop"
         );
+        let mut off = Vec::new();
         for preset in ConversionPreset::ALL {
             let e = preset.expand(Some(stock)).unwrap();
             let print = PrintParams {
@@ -1137,13 +1138,24 @@ mod midtone_placement {
                 .unwrap_or_else(|| panic!("{} was refused by the renderer", preset.name()));
             let stops = (rgb[0] / target).log2();
             println!("  {:24}{:>11.4}{:>+12.3}", preset.name(), rgb[0], stops);
-            assert!(
-                stops.abs() < 0.15,
-                "{} delivered {:.4}, {stops:+.3} stop from the shared target {target:.4}",
-                preset.name(),
-                rgb[0]
-            );
+            if stops.abs() >= 0.15 {
+                off.push(format!(
+                    "{} delivered {:.4} ({stops:+.3} stop)",
+                    preset.name(),
+                    rgb[0]
+                ));
+            }
         }
+        // Collected, not asserted per row: recalibrating the family means reading every
+        // preset's offset from one run, and a per-row assert hides the rest behind the
+        // first one that misses.
+        assert!(
+            off.is_empty(),
+            "{} of {} presets miss the shared target {target:.4}: {}",
+            off.len(),
+            ConversionPreset::ALL.len(),
+            off.join("; ")
+        );
     }
 
     /// **The `print_exposure` each candidate look needs to deliver one common mid-grey.**
@@ -1155,7 +1167,7 @@ mod midtone_placement {
     /// of "one is brighter".
     ///
     /// Printed rather than asserted per row: the target is a **taste** (the user's approved
-    /// `+0.31` over scene mid-grey), so pinning each value here would pin a preference in a
+    /// `+1.33` over scene mid-grey), so pinning each value here would pin a preference in a
     /// test. What *is* asserted is that the spread between looks is real — if it were
     /// noise, one number would serve them all and the looks would not need their own.
     #[test]
@@ -1171,8 +1183,8 @@ mod midtone_placement {
             curve,
         };
         let stock = FilmStock::Portra400;
-        // The approved look: scene mid-grey rendered 0.31 stop up.
-        let target = 0.18 * 2f32.powf(0.31);
+        // The approved look: scene mid-grey rendered 1.33 stop up.
+        let target = 0.18 * 2f32.powf(1.33);
 
         let looks: [(&str, Reconstruction, DisplayTone); 4] = [
             (
@@ -1209,7 +1221,7 @@ mod midtone_placement {
             ),
         ];
         println!(
-            "\n  target: scene mid-grey 0.18 rendered at {target:.4} (+0.31 stop)\n\n  \
+            "\n  target: scene mid-grey 0.18 rendered at {target:.4} (+1.33 stop)\n\n  \
              {:34}{:>11}{:>16}",
             "look", "delivered", "needs exposure"
         );
@@ -1253,7 +1265,7 @@ mod midtone_placement {
     fn the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor() {
         let print = PrintParams::default();
         let sigmoid = crate::types::SigmoidParams::default();
-        let target = 0.18 * 2f32.powf(0.31);
+        let target = 0.18 * 2f32.powf(1.33);
         let at_fraction = |f: f32| {
             let curve = crate::types::DensityCurve::Sigmoid(crate::types::SigmoidParams {
                 anchor: crate::types::AnchorPlacement::MidAtDmaxFraction(f),

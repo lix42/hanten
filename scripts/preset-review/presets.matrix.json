@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "title": "The five conversion presets",
-  "description": "Each button is one `--preset`. All five are calibrated to the same target — scene mid-grey 0.18 delivered at 0.223, the brightness approved on 2026-09-09 — so brightness is held constant and what differs is the reconstruction and the display tone. chr-generic is the proposed default. Two of them change the display stage as well as the curve: sig-knees applies no display tone at all (the sigmoid's own shoulder does that work), while the other four use extended Reinhard at 6 stops. Each button is `nc convert --preset <name>` and nothing else — the exposure and the density scale come from the preset.",
+  "description": "Each button is one `--preset`. All five are calibrated to the same target — scene mid-grey 0.18 delivered at 0.4525, the brightness approved on 2026-09-15 — so brightness is held constant and what differs is the reconstruction and the display tone. chr-generic is the proposed default. Two of them change the display stage as well as the curve: sig-knees applies no display tone at all (the sigmoid's own shoulder does that work), while the other four use extended Reinhard at 6 stops. Each button is `nc convert --preset <name>` and nothing else — the exposure and the density scale come from the preset.",
 
   "output_dir": "../temp/preset-review",
   "output_preset": "gain-map-hdr",

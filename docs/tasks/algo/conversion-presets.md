@@ -24,7 +24,7 @@ value per curve. None of these numbers means anything on its own, and today the 
 they exist together is a review-set generator and this task's progress log.
 
 A name also makes the brightness calibration honest. Instead of five tastes there is **one**
-— scene mid-grey rendered 0.31 stop up, the 2026-09-09 review verdict — and each preset's
+— scene mid-grey rendered 1.33 stop up, the 2026-09-15 review verdict — and each preset's
 exposure is whatever lands it there.
 
 ## The five
@@ -49,7 +49,7 @@ These are measured, and each one killed a simpler design:
   the curve — so any positive value pushes the shoulder past reference white and the frame
   is refused (measured on a real scan: `+0.70` gave luminance 1.6236, exactly `2^0.70`).
   Its brightness must come from the anchor, which moves mid-grey *within* the bounded range.
-  `mid-fraction 0.42` lands the shared target.
+  `mid-fraction 0.28` lands the shared target.
 - **`legacy` / `custom` / `film-master` refuse `reinhard`, and `film-master` refuses any
   non-default `print_exposure`.** So the default preset cannot simply set them globally —
   a bare `nc convert --output-preset film-master` would stop working. A preset must

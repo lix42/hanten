@@ -1971,7 +1971,7 @@ crossover.
 - `--preset characteristic-generic|characteristic-stock|characteristic-aim|sigmoid-knees|sigmoid-flat`
   — a named bundle setting `reconstruction.curve`, `reconstruction.density.scale`,
   `print.print_exposure` and `print.display_tone` together. All five are calibrated to
-  one brightness (scene mid-grey 0.18 delivered at 0.223), so what differs between them
+  one brightness (scene mid-grey 0.18 delivered at 0.4525), so what differs between them
   is the reconstruction and the display tone.
 - **No recipe key.** `--dump-params` writes the expanded values, so a recipe replays
   identically on a build whose preset definitions have moved; a recipe naming a preset

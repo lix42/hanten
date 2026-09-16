@@ -38,7 +38,7 @@ passed on 2026-09-10: 12 of 15 renditions byte-identical, the three that differe
 value exactly. See `docs/progress/algo.md`.
 
 **Every preset is calibrated to one brightness, not to its own taste** — scene mid-grey
-0.18 delivered at 0.223 (0.31 stop up), the target approved on 2026-09-09. `nc` owns those
+0.18 delivered at 0.4525 (1.33 stop up), the target approved on 2026-09-15. `nc` owns those
 numbers now, so a recalibration cannot leave this set rendering the previous ones;
 `pipeline::stages::midtone_placement::every_preset_lands_the_shared_brightness_target`
 fails if any bundle drifts off the shared target.

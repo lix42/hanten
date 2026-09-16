@@ -479,8 +479,8 @@ to keep it.
 ### `--preset` — pick a look by name
 
 The five settings below (curve, per-channel gain, print exposure, display tone) only
-mean anything **together**: the exposure that lands one brightness runs from 0.31 to
-0.61 depending on the reconstruction, because the curves place mid-grey differently.
+mean anything **together**: the exposure that lands one brightness runs from 1.59 to
+2.17 depending on the reconstruction, because the curves place mid-grey differently.
 `--preset` names a bundle so you don't have to carry four coupled numbers.
 
 | `--preset` | Reconstruction | Display tone | Needs |
@@ -543,7 +543,7 @@ Six combinations are refused rather than quietly doing something else:
   `--display-tone none`, which relies on the reconstruction staying inside the render's
   ceiling, and `--print-exposure` is a gain applied *after* the curve, so any positive
   value pushes it past reference white and the frame is refused. Brighten it with
-  `--anchor-mid-fraction` instead (the preset resolves `0.42`; **lower is brighter**).
+  `--anchor-mid-fraction` instead (the preset resolves `0.28`; **lower is brighter**).
 - **A preset with `--reconstruction simple`** (or a recipe resolving `simple`) — the
   direct inversion has no curve stage, so there is nothing for a bundle to configure.
 - **A preset with `--output-preset legacy` / `custom` / `film-master`** — see below.

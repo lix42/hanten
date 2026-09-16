@@ -792,14 +792,14 @@ pub struct OutputOverrides {
 /// # Why a name rather than four flags
 ///
 /// Every configuration worth shipping is a *bundle* whose numbers are meaningless
-/// separately. The `print_exposure` that lands one brightness runs **0.31 to 0.61**
+/// separately. The `print_exposure` that lands one brightness runs **1.59 to 2.17**
 /// across the reconstructions — because they place mid-grey differently, not because
 /// anyone preferred a different look — and [`SigmoidKnees`](Self::SigmoidKnees) cannot
 /// use that knob at all. Handing a user four coupled numbers is handing them four ways
 /// to get one look wrong.
 ///
 /// All five are calibrated to **one** target, not five tastes: scene mid-grey (0.18)
-/// delivered at 0.223, the brightness approved on 2026-09-09. Each preset's exposure is
+/// delivered at 0.4525, the brightness approved on 2026-09-15. Each preset's exposure is
 /// whatever lands it there.
 /// `pipeline::stages::midtone_placement::each_candidate_look_needs_its_own_print_exposure`
 /// prints the calibration and fails if the spread ever collapses to where one shared
@@ -905,7 +905,7 @@ impl ConversionPreset {
     /// from, against the shipped default of 0.50 — swept and pinned by
     /// `pipeline::stages::midtone_placement::the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor`.
     /// A *lower* fraction renders brighter.
-    pub const ANCHOR_MID_FRACTION: f32 = 0.42;
+    pub const ANCHOR_MID_FRACTION: f32 = 0.28;
 
     /// The wire name, matching the `--preset` spelling.
     pub fn name(self) -> &'static str {
@@ -991,13 +991,13 @@ impl ConversionPreset {
             ConversionPreset::CharacteristicGeneric => PresetExpansion {
                 curve: characteristic(FilmStock::GenericC41),
                 density_scale: characteristic_scale,
-                print_exposure: 0.39,
+                print_exposure: 1.91,
                 display_tone: reinhard,
             },
             ConversionPreset::CharacteristicStock => PresetExpansion {
                 curve: characteristic(self.require_stock(stock)?),
                 density_scale: characteristic_scale,
-                print_exposure: 0.31,
+                print_exposure: 1.82,
                 display_tone: reinhard,
             },
             ConversionPreset::CharacteristicAim => {
@@ -1022,7 +1022,7 @@ impl ConversionPreset {
                 PresetExpansion {
                     curve: characteristic(stock),
                     density_scale: [red, characteristic_scale[1], characteristic_scale[2]],
-                    print_exposure: 0.31,
+                    print_exposure: 1.59,
                     display_tone: reinhard,
                 }
             }
@@ -1044,7 +1044,7 @@ impl ConversionPreset {
                     ..SigmoidParams::default()
                 }),
                 density_scale: sigmoid_scale,
-                print_exposure: 0.61,
+                print_exposure: 2.17,
                 display_tone: reinhard,
             },
         })
@@ -1068,7 +1068,7 @@ impl ConversionPreset {
         })?;
         // The generic profile is a stock *name* but not a published response — it is the
         // average of nine sheets. Accepting it here would render the generic curve at
-        // this bundle's own exposure (0.31 against `characteristic-generic`'s 0.39),
+        // this bundle's own exposure (1.82 against `characteristic-generic`'s 1.91),
         // i.e. the generic look, miscalibrated, under a name promising the roll's own.
         if named == FilmStock::GenericC41 {
             return Err(NcError::Usage(format!(
@@ -3946,8 +3946,8 @@ fn reject_conversion_preset_conflicts(preset: ConversionPreset, args: &ConvertAr
     // `--film-stock` next to a preset that reconstructs through the generic profile is
     // accepted-and-ignored otherwise: the merge arm writes the stock onto a
     // `characteristic-generic` curve and the render silently becomes
-    // `characteristic-stock` under the wrong name and the wrong exposure (0.39 against
-    // that bundle's 0.31).
+    // `characteristic-stock` under the wrong name and the wrong exposure (1.91 against
+    // that bundle's 1.82).
     if args.density.film_stock.is_some() && !preset.needs_film_stock() {
         return Err(NcError::Usage(format!(
             "--film-stock names a published response, but `--preset {}` does not \
@@ -8744,7 +8744,7 @@ mod tests {
             scale,
             DensityParams::default_scale_for(DensityCurveType::Sigmoid)
         );
-        assert_eq!(exposure, 0.61);
+        assert_eq!(exposure, 2.17);
         assert!(matches!(tone, DisplayToneCurve::Reinhard { .. }));
     }
 

@@ -1959,6 +1959,47 @@ calibrated to one brightness target. The scoping evidence is the 2026-09-09 entr
   happened, a citation that established the *direction* cited as per-stock evidence, and
   `using-nc.md` saying "four combinations are refused" where the design lists five.
 
+### 2026-09-15 — the shared brightness target moves up one stop
+
+**Scene mid-grey 0.18 is now delivered at 0.4525 (+1.33 stop), replacing 0.223 (+0.31).** The
+first change to it since it was approved on 2026-09-09. The family stays on *one* target: every
+preset was re-solved against the new one, so presets remain comparable by eye.
+
+**Provenance.** The user reviewed 43 frames x 5 presets rendered one stop above calibration and
+judged +1 stop better on all five — hence the target moved rather than one preset leaving it.
+Offered anchor 0.30 (the +1.0 stop measured on real-frame median luminance, i.e. the rendering
+actually reviewed) against 0.28 (the harness's exact +1.00 on its synthetic mid-grey, 0.13 stop
+brighter), the user chose **0.28**.
+
+**New values.** `ConversionPreset::ANCHOR_MID_FRACTION` 0.42 -> **0.28**; `print_exposure`
+`characteristic-generic` 0.39 -> **1.91**, `characteristic-stock` 0.31 -> **1.82**,
+`characteristic-aim` 0.31 -> **1.59**, `sigmoid-flat` 0.61 -> **2.17**. Delivered: −0.051 /
+−0.051 / −0.030 / +0.005 / −0.056 stop off target, **tighter than the previous shipped spread**
+(max 0.108).
+
+**Why the exposures rose further than the target did.** Reinhard returns only ~73% of a
+post-curve gain — measured here, +0.89 nominal bought +0.652 delivered — so the four toned
+presets need roughly 1.5x the nominal move. `sigmoid-knees` takes no exposure knob at all and
+moves by the anchor, which is 1:1. The asymmetry is why a single "+1 stop for everyone" flag
+sweep does *not* keep the family aligned.
+
+**Caveat worth acting on before this is called settled.** The three characteristic presets now
+ship **brighter than anything reviewed by eye**: in the reviewed set they carried a nominal +1.0
+and so landed ~0.5 stop below `sigmoid-knees` once Reinhard took its share. Putting all five on
+one target lifts them to match. Worth one confirming look.
+
+**Not a `pipeline_version` bump.** Presets are CLI-only expansions; the default recipe is
+untouched and `PIPELINE_FINGERPRINTS` is unaffected. All four gates green (755 unit + 191
+integration passed, 23 ignored, zero clippy/build warnings).
+
+`every_preset_lands_the_shared_brightness_target` now collects every row and asserts once at the
+end. A per-row assert hid the other four presets behind the first miss, which is precisely the
+table a recalibration needs. Twelve call sites and prose references were updated with the
+numbers, including `design-spec.md` §"Named conversion presets", `using-nc.md`, this task's file,
+`scripts/preset-review/` (README + matrix) and the test that pinned `sigmoid-flat`'s old 0.61.
+Review sets already rendered in `../temp` passed their flags explicitly and are unchanged;
+re-running `presets.matrix.json` now renders the new brightness.
+
 
 ## characteristic-default-audit
 
