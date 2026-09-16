@@ -177,6 +177,50 @@ the one delivered. Either both use the same kernel or a tolerance is stated.
 In the browser the GPU is the realistic path to an interactive preview; CPU
 threads are an enhancement where the host allows isolation.
 
+## Architecture for the multithreading work
+
+Decided 2026-09-16, after asking whether a parallel-compute layer (a wrapper over
+rayon, or an executor abstraction a GPU backend could later implement) should be
+added first. **No layer.** What is added is a rule and one small helper.
+
+- **No wrapper over rayon.** The parallel iterators are the abstraction; every
+  call site is the same few lines (chunk into triples, map, collect). A wrapper
+  would hide nothing and add a name to learn.
+- **No executor trait, because a GPU is not "the same closure on a different
+  executor".** A closure cannot be compiled to a shader; a per-pixel `?` with a pixel
+  index becomes a flags buffer; data lives on the device across a whole *chain* of
+  stages; readback is asynchronous; reductions need fixed-order trees. A GPU
+  backend therefore plugs in at the orchestrator over the whole chain
+  (reconstruction → transfer encode), uploading once and downloading or
+  presenting once — the seams are the existing typed boundaries `FilmRgbImage`,
+  `AcesCgImage` and `SharedDisplaySource`, not a new one per stage.
+- **Kernel/driver split inside each stage.** Each per-pixel stage is a pure
+  per-pixel function (`(triple, resolved params) -> triple`, e.g.
+  `sdr::render_pixel_checked`) plus a buffer driver that applies it. The kernel is
+  what a shader would reimplement and what it would be tested against; the driver
+  is what rayon parallelizes. Most stages already have this shape. Where a loop
+  fuses the map with a **reduction** — the MaxFALL sum in `hdr::render`, the gain
+  min/max in `gain_map::build`, the clip counters in `quantize_u16` — the two must
+  be separated anyway, because the map is order-free and a floating-point sum is
+  not. That separation *is* the multithreading change in those places, not extra
+  work. The GPU-only parts of the split (a uniform kernel signature, kernels as
+  named public items, lookup tables arranged for textures, one kernel source for
+  CPU and GPU) are **postponed** until a GPU backend is actually built.
+- **Reductions stay explicit.** Floating-point sums run as their own sequential
+  pass over the rendered buffer. Only integer counters, `min` and `max` may be
+  folded in parallel.
+- **One small helper module, justified by de-duplication only**: an in-place
+  pixel map, a checked map that returns the first error with its pixel index, and
+  an integer fold — one place for the chunk size and the `as_chunks` guard, and an
+  API that cannot express a parallel f32 sum. If it ever grows a backend enum it
+  has become the layer above.
+- **Encoders get no abstraction.** libaom has row multithreading with a pinned
+  thread count; the pure-Rust JPEG encoder has none; TIFF is I/O. They share
+  nothing worth naming.
+- **Thread count.** rayon's global pool; if control is ever needed it is an
+  operational flag like `--max-memory` (arg struct only, never a recipe key) and
+  must not touch libaom's pinned count, which changes bytes.
+
 ## Design notes for a future GPU path
 
 - Move the **per-pixel** stages: reconstruction, ACEScg mapping, print controls,
