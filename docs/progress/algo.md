@@ -33,7 +33,8 @@ What other epics need to know about `algo`:
   density and no anchor placement**: `DensityCurve::anchor()` returns `Option` for that
   reason, `dmax()` reports `None`, and the report emits `null` rather than naming a rule the
   render never read. **The curve is opt-in, but a default did move**: `density.scale` went
-  `[1, 1, 1]` → `[1, 0.90, 0.86]` on 2026-09-09 (`pipeline_version` **4**), and its default
+  `[1, 1, 1]` → `[1, 0.90, 0.86]` on 2026-09-09 (`pipeline_version` **4**) and again to
+  `[1, 0.84, 0.73]` on 2026-09-16 (`pipeline_version` **5**), and its default
   is **per-curve** — `DensityParams::default_scale_for` is the single definition, giving the
   parametric curves that calibration and `characteristic` the identity, because that curve
   already carries each stock's per-channel structure and the same gain would correct it

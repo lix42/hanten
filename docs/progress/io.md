@@ -506,6 +506,49 @@ pre-change binary: byte-identical primary, sidecar differing only in
   protocol agreed 2026-09-08 moved to that task; what stays here is *why* each requirement
   exists (neutral series vs one patch, coloured patches for the off-diagonal terms, the
   bracket's illuminant-independence, two rolls, one development batch and scan session).
+- 2026-09-16 (**the placeholder gain was re-calibrated, `pipeline_version` 5**):
+  `density.scale` moved `[1, 0.90, 0.86]` → **`[1, 0.84, 0.73]`** on the parametric curves.
+  This does **not** close the task — the 3x3 + offset argued above is still the answer, and
+  this is still a per-channel gain, i.e. still the placeholder. What changed is that the
+  placeholder is now calibrated against something closer to a reference than the tone-scale
+  slope was.
+  - **Method.** 31 hand-marked neutral patches over five rolls (white flags, cloud, snow;
+    `../temp/neutral-patches/`, uncommitted — the frames are the user's photographs). Per
+    patch, the scale that nulls that patch; per roll, the median; the default is the **mean
+    of the five per-roll medians**, green 0.837 and blue 0.733. Equal weight per roll is
+    load-bearing: 21 of the 31 patches are September, so a plain corpus median lands at
+    0.773 / 0.708 and lets one scan date set the default.
+  - **Blue is the half that holds.** Every roll wants 0.68–0.78 against v4's 0.860, which
+    came from the manufacturers' published per-channel structure. That figure reproduces
+    the *slope* well and still overcorrects the *level* on this scanner — which is the
+    task's own thesis, now with a second line of evidence.
+  - **Green splits by scan date, not by stock**: July rolls 0.86–0.90, September ~0.77. The
+    user's recollection is that the July rolls were developed in CineStill and the September
+    ones were not. Unexposed frames agree that something changed — the September base is
+    ~0.15–0.17 density denser in the same stock, at identical scanner settings. A denser
+    base divides out per roll; a different green slope does not. **So one shared default
+    cannot fit both dates**, and `0.84` is a deliberate compromise, not a fit.
+  - **Basis for shipping is a visual verdict, not the numbers.** Five rolls x
+    {`sig-knees`, `sig-flat`} x {v4 gain, candidate gain} with an NLP reference in the same
+    grid, reviewed frame by frame (`tools/review-app`). The candidate won on every frame but
+    one: `2026-07-15-Ektar100/991` reads green-yellow under it — exactly the overshoot the
+    July patches predict, so the eye and the measurement agree about where it fails.
+  - **It supersedes the 2026-09-13 park** recorded under `film-base/dmax-per-channel-reduction`,
+    which suspended the *slope* measurement and said the shipped value stands. That entry's own
+    first option was "manual review and tweak"; this is that, with more rolls and a reference.
+    The slope method stays parked — nothing here rehabilitates it.
+  - **The two calibrations disagree, and the disagreement is kept rather than smoothed.** The
+    21-frame tone-scale slope nulls at `[1, 0.897, 0.845]`; these patches null at
+    `[1, 0.837, 0.733]`. `algo::density::tests::convert_neutral_patch_stays_neutral` builds
+    its patch from the *slope* ratios, so v5 leaves 0.1286 spread on it against 0.1791
+    uncorrected — a 1.39x improvement where v4 managed ~4x. The test was **not** rebuilt from
+    the new ratios (that would assert the default nulls the data it came from); its claim was
+    weakened to "must still improve the slope-derived patch" and the disagreement written into
+    its comment. Whoever fits the 3x3 should treat that gap as a datum, not as noise.
+  - Every default pixel moves. `PIPELINE_VERSION` 4 → 5 with a new `PIPELINE_FINGERPRINTS`
+    row (`render` 9c97b6954612c356, `recipe` a50af8692558b3d0; `base` unmoved, since the gain
+    is applied downstream of film-base estimation), `PIPELINE_BEHAVIOR` rewritten and v4's
+    string frozen into its row.
 
 ## gray-primary-decode
 

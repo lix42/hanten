@@ -986,7 +986,7 @@ impl ConversionPreset {
         let characteristic =
             |stock: FilmStock| DensityCurve::Characteristic(CharacteristicParams { stock });
         // The characteristic curve's own per-channel default: it already carries each
-        // stock's channel structure, so the parametric curves' `[1, 0.90, 0.86]`
+        // stock's channel structure, so the parametric curves' `[1, 0.84, 0.73]`
         // calibration would correct it twice. Resolved through the shared definition
         // rather than spelled here — `DensityParams::default_scale_for` is the single
         // one, and a literal would be a second that could drift from it.
@@ -2652,8 +2652,9 @@ enum UnpinnedCurve {
     /// substantially different render with nothing in the file to show it.
     MovedDefaults,
     /// The recipe states a `reconstruction` block but leaves `density.scale` unstated,
-    /// so the **per-channel gain** floats — and `pipeline_version` 4 (2026-09-09) took
-    /// it from `[1, 1, 1]` to `[1, 0.90, 0.86]` for both parametric curves.
+    /// so the **per-channel gain** floats — and it has moved twice for both parametric
+    /// curves: `pipeline_version` 4 (2026-09-09) took it from `[1, 1, 1]` to
+    /// `[1, 0.90, 0.86]`, and 5 (2026-09-16) to `[1, 0.84, 0.73]`.
     ///
     /// The one variant here that is not about the `curve` object, and the reason it is
     /// worth its own message: a recipe can pin every curve knob, *look* fully pinned,
@@ -2769,7 +2770,7 @@ fn unpinned_curve(v: &serde_json::Value) -> Option<UnpinnedCurve> {
     };
     // The gain is the second moved default (see this function's doc), and it lives
     // beside `curve` rather than inside it. Only an *unstated* one counts: an explicit
-    // `[1, 0.90, 0.86]` is what this build writes, so warning on the value rather than
+    // `[1, 0.84, 0.73]` is what this build writes, so warning on the value rather than
     // on the shape would fail a freshly dumped recipe's own `--strict` replay.
     curve_finding.or_else(|| {
         let scale_stated = reconstruction
@@ -2799,8 +2800,10 @@ fn unpinned_curve(v: &serde_json::Value) -> Option<UnpinnedCurve> {
 ///   entirely. Bigger than the anchor case, and previously unwarned.
 /// - [`UnpinnedCurve::DensityScale`] — `algo/film-stock-profiles` (2026-09-09,
 ///   `pipeline_version` 4) moved `reconstruction.density.scale` from `[1, 1, 1]` to
-///   `[1, 0.90, 0.86]`, so a recipe silent on the gain replays in a different colour
-///   however completely it pins the curve. The second instance of the class
+///   `[1, 0.90, 0.86]`, and `io/scanner-density-calibration` (2026-09-16,
+///   `pipeline_version` 5) to `[1, 0.84, 0.73]` — so a recipe silent on the gain replays
+///   in a different colour however completely it pins the curve, and now across two
+///   moves rather than one. The second instance of the class
 ///   `docs/tasks/core/recipe-replay-fidelity.md` tracks.
 ///
 /// Why a warning and not a `reconstruction.schema_version` bump: that constant versions the
@@ -2856,7 +2859,9 @@ fn curve_default_warning(
         UnpinnedCurve::DensityScale => "the loaded recipe states a `reconstruction` \
          block but leaves `reconstruction.density.scale` to this build's default: the \
          per-channel density gain moved [1, 1, 1] → [1, 0.90, 0.86] on 2026-09-09 \
-         (`pipeline_version` 4) for the sigmoid and exponential curves. That moves \
+         (`pipeline_version` 4) and again → [1, 0.84, 0.73] on 2026-09-16 \
+         (`pipeline_version` 5) for the sigmoid and exponential curves — so a recipe \
+         silent on the gain now replays differently across two moves, not one. That moves \
          *colour*, not only tone, so this render will not match the original even with the \
          whole curve pinned. Write `reconstruction.density.scale` explicitly to pin it."
             .to_string(),
@@ -6445,10 +6450,10 @@ fn convert_frame(
 /// warns loudly (`--strict`-promotable) so the user re-measures the anchor under these
 /// density params (or resets them).
 ///
-/// **The parametric curves' own default scale is non-identity** (the `[1, 0.90, 0.86]`
+/// **The parametric curves' own default scale is non-identity** (the `[1, 0.84, 0.73]`
 /// scanner calibration), so this fires on the documented measure-once workflow — an
 /// `estimate`-measured `--d-max` reused on a sigmoid/exponential render — and that is
-/// the intent: the mismatch is real there (~8% high, ≈0.36 stop) and `estimate` has no
+/// the intent: the mismatch is real there (~14% high, ≈0.62 stop) and `estimate` has no
 /// density params to measure in the corrected domain with. It stays scoped to an
 /// *explicitly stated* anchor, so no default resolution ever trips it.
 ///
@@ -6470,7 +6475,7 @@ fn explicit_dmax_domain_warning(cfg: &ResolvedConfig) -> Option<String> {
     }
     // Compared against the **identity** correction, not `DensityParams::default()`.
     // Since `algo/film-stock-profiles` the parametric default scale *is* the scanner
-    // calibration `[1, 0.90, 0.86]`, which made a `default()` comparison both dead and
+    // calibration (now `[1, 0.84, 0.73]`), which made a `default()` comparison both dead and
     // inverted: it could fire only when the user moved the scale away from that default,
     // including `--density-scale 1,1,1` — the one combination where the raw measured
     // anchor and the render's corrected domain actually agree.
@@ -6488,7 +6493,7 @@ fn explicit_dmax_domain_warning(cfg: &ResolvedConfig) -> Option<String> {
              anchor is in a different density domain than the curve subtracts it \
              from, uniformly mis-anchoring the frame. Note the parametric curves' \
              *default* scale is the non-identity scanner calibration, so a measured \
-             --d-max is systematically high there (about 8% at the shipped gain, ~0.36 \
+             --d-max is systematically high there (about 14% at the shipped gain, ~0.62 \
              stop darker at the default anchor placement); use the roll-fixed \
              --fixed-d-max, re-measure --d-max under these density params, or set \
              --density-scale 1,1,1 to render in the measured domain",
@@ -10361,7 +10366,7 @@ mod tests {
     /// The per-channel density gain is **per-curve**, and a curve switch re-resolves it.
     ///
     /// The regression this pins is a colour bug with no loud symptom: the shipped
-    /// `[1, 0.90, 0.86]` is calibrated for the scalar-contrast curves, and carrying it onto
+    /// `[1, 0.84, 0.73]` is calibrated for the scalar-contrast curves, and carrying it onto
     /// the `characteristic` curve — which already inverts each channel through its stock's
     /// published response — corrects the same thing twice. Measured on ten reference
     /// frames, that takes `|G/R − 1| + |B/R − 1|` from 0.039 to 0.185, and every gate stays
@@ -10375,7 +10380,7 @@ mod tests {
         };
         let parametric = DensityParams::default_scale_for(DensityCurveType::Sigmoid);
         let stock_curve = DensityParams::default_scale_for(DensityCurveType::Characteristic);
-        assert_eq!(parametric, [1.0, 0.90, 0.86]);
+        assert_eq!(parametric, [1.0, 0.84, 0.73]);
         assert_eq!(stock_curve, [1.0, 1.0, 1.0]);
 
         // Switching to the stock curve takes its identity gain...
@@ -11137,11 +11142,11 @@ mod tests {
         assert_eq!(v["reconstruction"]["type"], "density");
         assert_eq!(v["reconstruction"]["curve"]["type"], "sigmoid");
         assert_eq!(v["reconstruction"]["curve"]["dmax"], "fixed");
-        // `f32` literals, not `[1.0, 1.0, 1.0]`: the default gain is `[1, 0.90, 0.86]`
-        // and `0.90f32` widens to `0.8999999761581421` as an `f64`.
+        // `f32` literals, not `[1.0, 1.0, 1.0]`: the default gain is `[1, 0.84, 0.73]`
+        // and `0.84f32` widens to `0.8399999737739563` as an `f64`.
         assert_eq!(
             v["reconstruction"]["density"]["scale"],
-            serde_json::json!([1.0f32, 0.90f32, 0.86f32])
+            serde_json::json!([1.0f32, 0.84f32, 0.73f32])
         );
 
         // Partial input: omitted curve normalizes to the tagged default curve.
@@ -13837,7 +13842,7 @@ mod tests {
             )
         };
         // Baseline is the **identity** correction, not `DensityParams::default()`: the
-        // parametric curves default to the non-identity `[1, 0.90, 0.86]` scanner gain,
+        // parametric curves default to the non-identity `[1, 0.84, 0.73]` scanner gain,
         // and a measured (raw-domain) anchor reused under it really is mis-anchored.
         let identity = DensityParams {
             scale: [1.0, 1.0, 1.0],
@@ -13851,7 +13856,10 @@ mod tests {
         // domains agree. The message must name the scale and point at a remedy.
         let msg = explicit_dmax_domain_warning(&explicit(DensityParams::default()))
             .expect("the default non-identity scanner gain must warn beside an explicit --d-max");
-        assert!(msg.contains("1.0, 0.9, 0.86"), "must name the scale: {msg}");
+        assert!(
+            msg.contains("1.0, 0.84, 0.73"),
+            "must name the scale: {msg}"
+        );
         assert!(msg.contains("--fixed-d-max"), "must offer a remedy: {msg}");
 
         // B1: a non-neutral regional balance shifts D′ (the corrected density the
