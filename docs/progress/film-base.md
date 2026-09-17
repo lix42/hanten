@@ -839,6 +839,21 @@ one. Both rolls report all 32 measured. The cross-roll block iterates **every pa
 the rolls, so the documented "add a roll and re-run" path cannot leave a third roll out of the
 verdict at exit 0.
 
+### 2026-09-16 — the shipped gain moved anyway, by a different route
+
+The 2026-09-13 park above still stands **for the slope method**: nothing here rehabilitates a
+per-density-bin tilt measured over Hawaii rolls, and that measurement is still suspended.
+
+What changed is the sentence "current default `density.scale = [1, 0.90, 0.86]` stands". It no
+longer does — `pipeline_version` 5 ships **`[1, 0.84, 0.73]`**, calibrated from 31 hand-marked
+neutral patches over five rolls and shipped on a whole-set visual verdict. That is the park
+entry's own **option 1, "manual review and tweak"**, carried out with more rolls and an NLP
+reference rather than by eye on one set; the verdict came out the other way this time.
+
+The full record, including why blue transfers across rolls and green splits by scan date, is
+under `io/scanner-density-calibration` in `docs/progress/io.md` (2026-09-16). Read it before
+re-reading the park above as a statement about the shipped value.
+
 
 ## ir-usability-detection
 **Status:** done (#104, 2026-09-04)

@@ -1077,7 +1077,7 @@ mod tests {
     /// `DensityParams` with an **identity** per-channel gain, for tests about the
     /// density transform itself rather than about the shipped default.
     ///
-    /// The default gain is `[1, 0.90, 0.86]` — a scanner calibration, not part of the
+    /// The default gain is `[1, 0.84, 0.73]` — a scanner calibration, not part of the
     /// `D = −log10(scan / base)` definition — so a test asserting that definition, or
     /// asserting that equal base fractions give equal densities, has to state the
     /// identity or it is asserting the calibration instead.
@@ -1336,12 +1336,24 @@ mod tests {
         assert!(approx(out.rgb[1], out.rgb[2], 1e-4));
 
         // (b) Under the shipped gain, a patch carrying the **measured** channel slope
-        // ratios reconstructs neutral instead. `algo::curve_probe::sigmoid_scale`
-        // measures those ratios at green 1.115, blue 1.183 against red, and the default
-        // `[1, 0.90, 0.86]` is what cancels them — so build the patch from the ratios and
-        // assert the render neutralises it. Tolerance is 2%: the gain nulls the corpus
-        // *mean*, and the small residual (green 0.35%, blue 1.7%) is the documented
-        // "better default, not a fix".
+        // ratios reconstructs *closer to* neutral. `algo::curve_probe::sigmoid_scale`
+        // measures those ratios at green 1.115, blue 1.183 against red — so build the
+        // patch from the ratios and assert the render improves it.
+        //
+        // **The patch is deliberately not rebuilt from the shipping gain, and the claim
+        // is weaker since `pipeline_version` 5.** Two calibrations of this gain exist and
+        // they disagree: the tone-scale slope over 21 frames nulls at `[1, 0.897, 0.845]`
+        // (v4 shipped `[1, 0.90, 0.86]` from it and cancelled this patch ~4x), while the
+        // 31 hand-marked neutral patches over five rolls null at `[1, 0.837, 0.733]`
+        // (v5 ships `[1, 0.84, 0.73]`). On *this* patch — built from the slope corpus —
+        // v5 leaves 0.1286 spread against 0.1791 uncorrected, a 1.39x improvement rather
+        // than v4's 4x, because it corrects past what the slope measurement asked for.
+        //
+        // Rebuilding the patch from the neutral-patch ratios would make this assert that
+        // the default nulls the data it was derived from, which is circular and would
+        // delete the disagreement. Keeping it records that the two measurements do not
+        // agree — the residual `io/scanner-density-calibration` owns — and still catches
+        // a gain that stops correcting the measured slope at all.
         let (d_r, r_g, r_b) = (0.4f32, 1.115f32, 1.183f32);
         let transmission = |d: f32, b: f32| b * 10f32.powf(-d);
         let img = pixel(
@@ -1366,12 +1378,14 @@ mod tests {
         let corrected = spread(&neutral_out(img.clone(), DensityParams::default()));
         let uncorrected = spread(&neutral_out(img, identity_gain()));
         assert!(
-            corrected < uncorrected / 4.0,
-            "the default gain left {corrected:.4} spread on a scene-neutral patch              against {uncorrected:.4} uncorrected — it should cancel most of it"
+            corrected < uncorrected / 1.25,
+            "the default gain left {corrected:.4} spread on a scene-neutral patch built from \
+             the measured slope ratios, against {uncorrected:.4} uncorrected — it must still \
+             improve that patch, whatever else it is calibrated against"
         );
         assert!(
-            corrected < 0.05,
-            "residual spread {corrected:.4} is larger than the measurement predicts"
+            corrected < 0.20,
+            "residual spread {corrected:.4} is larger than either calibration predicts"
         );
     }
 

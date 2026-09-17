@@ -156,8 +156,9 @@ struct Drift {
 /// The identity per-channel density gain — **not** `DensityParams::default()`.
 ///
 /// Every measurement here is differenced against a prediction derived from the *uncorrected*
-/// datasheet tables, so "no correction" has to be spelled out. Since 2026-09-09 the
-/// parametric default is `[1, 0.90, 0.86]`, so `DensityParams::default()` as a stand-in for
+/// datasheet tables, so "no correction" has to be spelled out. The parametric default has
+/// been non-identity since 2026-09-09 and is `[1, 0.84, 0.73]` since `pipeline_version` 5,
+/// so `DensityParams::default()` as a stand-in for
 /// identity silently pre-corrects the scan half of that difference while the prediction half
 /// stays uncorrected — the trap the crate records for probes that follow a shipped value
 /// (`algo::density::tests::identity_gain` and `pipeline::stages::golden::frozen_density`
@@ -1098,10 +1099,11 @@ fn sigmoid_scale() {
         "  {:28}{:>9}{:>9}{:>12}{:>10}{:>10}",
         "scale [R,G,B]", "green", "blue", "green-mag", "|g-m|", "rolls<.25"
     );
-    let candidates: [(&str, [f32; 3]); 6] = [
+    let candidates: [(&str, [f32; 3]); 7] = [
         ("shipped", [1.0, 1.0, 1.0]),
         ("datasheet generic", [1.0, 0.977, 0.860]),
         ("proposed", [1.0, 0.90, 0.86]),
+        ("v5 default", [1.0, 0.84, 0.73]),
         ("corpus null", [1.0, 1.0 / mean_r_g, 1.0 / mean_r_b]),
         ("green-magenta optimum", [1.0, 0.0, 0.0]), // filled below
         ("equal-slope", [1.0, 0.905, 0.905]),
@@ -1176,9 +1178,10 @@ fn scale_against_the_characteristic_curve() {
         return;
     };
     let recipes = repo_root().join("scripts/real-scan-verify/recipes");
-    let candidates: [(&str, [f32; 3]); 5] = [
+    let candidates: [(&str, [f32; 3]); 6] = [
         ("identity", [1.0, 1.0, 1.0]),
-        ("new default", [1.0, 0.90, 0.86]),
+        ("v4 default", [1.0, 0.90, 0.86]),
+        ("v5 default", [1.0, 0.84, 0.73]),
         ("blue only", [1.0, 1.0, 0.86]),
         // Which way round is the aim-matched red scale? `stock_table_variants` prints the
         // factor that scales the **table's** red density (Ektar 0.898); `--density-scale`
@@ -1641,7 +1644,7 @@ fn whole_roll_scale() {
             let sg = fg.len() as f32 / fg.iter().map(|r| r.r_g).sum::<f32>();
             let sb = fb.len() as f32 / fb.iter().map(|r| r.r_b).sum::<f32>();
             fit_sum += score(sg, sb, held);
-            def_sum += score(0.90, 0.86, held);
+            def_sum += score(0.84, 0.73, held);
         }
         println!(
             "    split-half |green-magenta|, held out: fitted {:.2} vs current default {:.2}",
@@ -1649,8 +1652,8 @@ fn whole_roll_scale() {
             def_sum / 2.0
         );
         println!(
-            "    green-magenta at the current default [1, 0.90, 0.86]: {:+.2}",
-            kept.iter().map(|r| gm(0.90, 0.86, r)).sum::<f32>() / c
+            "    green-magenta at the current default [1, 0.84, 0.73]: {:+.2}",
+            kept.iter().map(|r| gm(0.84, 0.73, r)).sum::<f32>() / c
         );
         summary.push((
             roll,

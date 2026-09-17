@@ -31,9 +31,10 @@ renderer, with measurements to aim at.
   +1.29 predicted) but leaves **green at +0.40 mean, +1.00 on the Ektar roll** across 21
   frames. Blue transfers; green does not.
 - **Added 2026-09-09: a per-channel gain now ships as a default, and it is a placeholder
-  this task should replace.** `density.scale` defaults to `[1, 0.90, 0.86]` under the
-  parametric curves (`pipeline_version` 4). Two measurements make it this task's business
-  rather than the curve's:
+  this task should replace.** `density.scale` defaults to `[1, 0.84, 0.73]` under the
+  parametric curves — `[1, 0.90, 0.86]` at `pipeline_version` 4, re-calibrated at **5**
+  (2026-09-16) from 31 hand-marked neutral patches over five rolls. Two measurements make
+  it this task's business rather than the curve's:
   - **The scan's green and blue slopes against red are nearly equal** (1.115 and 1.183),
     where the datasheets say they are far apart (green barely steeper, blue 16%). An excess
     landing on *both* channels against red is not film chemistry — it is the signature of

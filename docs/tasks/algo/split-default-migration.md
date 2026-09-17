@@ -15,7 +15,7 @@ measured report and guide update that a default move owes.
 
 The default has already moved along several axes, and none of them is this one:
 
-- **per curve** — `DensityParams::default_scale_for` gives `[1, 0.90, 0.86]` for the
+- **per curve** — `DensityParams::default_scale_for` gives `[1, 0.84, 0.73]` for the
   parametric curves and `[1, 1, 1]` for `characteristic`;
 - **per stock** — `--film-stock` selects a published curve; `characteristic-aim`
   derives a per-stock red scale;

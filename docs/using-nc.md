@@ -8,9 +8,9 @@ A practical guide to converting film negative scans to positives with `nc`.
 > *intent* — but this document is verified against the binary, so it wins on
 > *what the CLI currently accepts*.
 >
-> **Verified against:** `nc 0.1.0`, `pipeline_version 4`, built at commit
-> `750b0515b3e1` plus the `characteristic` curve (§6), the mid-grey-preserving
-> extended Reinhard (§7) and the calibrated `--density-scale` default (§6). The staleness signal is `pipeline_version`: if `nc --version`
+> **Verified against:** `nc 0.1.0`, `pipeline_version 5`, built at commit
+> `e204b74d319f` plus the `characteristic` curve (§6), the mid-grey-preserving
+> extended Reinhard (§7) and the neutral-patch-calibrated `--density-scale` default (§6). The staleness signal is `pipeline_version`: if `nc --version`
 > reports a different one, treat this document as suspect and re-verify.
 >
 > **Known issue:** under the default render the gain map is inert (no HDR
@@ -330,7 +330,7 @@ nc params
     "schema_version": 1,
     "type": "density",
     "density": {
-      "scale": [1.0, 0.9, 0.86],
+      "scale": [1.0, 0.84, 0.73],
       "offset": [0.0, 0.0, 0.0],
       "shadow_balance": [0.0, 0.0, 0.0],
       "highlight_balance": [0.0, 0.0, 0.0],
@@ -419,7 +419,7 @@ needed:
 ```json
 {
   "meta":   { "nc_version": "0.1.0", "git_commit": "e4a56bb2540d",
-              "pipeline_version": 4, "target": "aarch64-apple-darwin",
+              "pipeline_version": 5, "target": "aarch64-apple-darwin",
               "params_hash": "18b95264170ab67a" },
   "params": { ...the exact recipe... }
 }
@@ -745,44 +745,48 @@ is to be the predictable straight-line reference.
 > on the evidence — now ships as the `characteristic` curve above, but it is **opt-in**:
 > the sigmoid's own `contrast`/`toe`/`shoulder`/`anchor` still describe what a bare
 > `nc convert` does. What *has* moved is the per-channel density gain beside them
-> (`--density-scale`, `pipeline_version` 4 — see below); the curve shape has not.
+> (`--density-scale`, `pipeline_version` 4 and again 5 — see below); the curve shape has not.
 > Expect further movement, with a `pipeline_version` bump when it happens.
 
 ### Density correction (before the curve)
 
 | Flag | Effect |
 |---|---|
-| `--density-scale R,G,B` | Per-channel density gain — **default `1,0.90,0.86`**, see below |
+| `--density-scale R,G,B` | Per-channel density gain — **default `1,0.84,0.73`**, see below |
 | `--density-offset R,G,B` | Per-channel density offset — **orange-mask compensation** |
 | `--shadow-balance R,G,B` | Per-channel offset applied to the positive's **shadows** |
 | `--highlight-balance R,G,B` | Per-channel offset applied to the positive's **highlights** |
 | `--balance-range LO,HI` | Fix the regional-balance tone anchors (default: measured per frame) |
 
-**`--density-scale` does not default to `1,1,1`.** It is `1,0.90,0.86` — a
+**`--density-scale` does not default to `1,1,1`.** It is `1,0.84,0.73` — a
 calibration, not an identity. Green and blue density rise faster than red in a scan,
-so with no gain they drift against it across the tone scale: measured `+0.79` (green)
-and `+1.26` (blue) stops per unit density over 21 frames from six rolls, which shows
-up as a tone-dependent cast rather than an overall one. The default cancels both
-(`+0.02` and `+0.12`). Blue's `0.86` is the manufacturers' published per-channel
-structure, which reproduces in real scans at 98%; green's `0.90` is calibrated from
-scans, because the published `0.977` covers only about half of the real green drift.
+so with no gain they drift against it across the tone scale, which shows up as a
+tone-dependent cast rather than an overall one.
+
+The values come from **31 hand-marked neutral patches** across five rolls: per patch,
+the gain that renders it neutral; per roll, the median; the default is the mean of the
+five roll medians (green `0.837`, blue `0.733`). Rolls are weighted equally on purpose
+— two thirds of the patches come from one scan date, and weighting by patch would let
+that date set the default on its own. It replaced `1,0.90,0.86` at `pipeline_version` 5.
 
 Two things to know before relying on it:
 
 - **The default is per-curve, and you do not have to manage it.** `sigmoid` and
   `exponential` apply one scalar contrast to every channel, so they have no per-channel
-  film model of their own and take `1,0.90,0.86`. The `characteristic` curve carries each
+  film model of their own and take `1,0.84,0.73`. The `characteristic` curve carries each
   stock's published per-channel structure already, so the same gain would correct it twice
   — on ten reference frames that moves the channel means *away* from neutral
   (`|G/R − 1| + |B/R − 1|` rises from 0.04 to 0.19) — and it therefore defaults to
   `1,1,1`. Selecting a curve re-resolves the gain unless you state one: `--density-scale`
   always wins, and switching away from a gain you had stated warns rather than dropping it
   in silence.
-- **It nulls the ten-roll mean, not your roll.** Per-roll residuals still span about
-  ±0.5 stop per density on the green–magenta axis, and the value is calibrated on one
-  scanner. A roll that still shows a tone-dependent cast wants its own
-  `--density-scale`; `io/scanner-density-calibration` is the task that should remove
-  the need to guess.
+- **It balances five rolls; it does not fit yours.** Blue is the steady half — every
+  roll measured wants 0.68–0.78. Green is not: it splits by **scan date** (one group
+  0.86–0.90, another ~0.77, which tracks a change of developer rather than of film), so
+  the shipped `0.84` is a compromise that fits neither group exactly and can push a roll
+  from the higher group slightly green-yellow. The value is also calibrated on one
+  scanner. A roll that still shows a cast wants its own `--density-scale`;
+  `io/scanner-density-calibration` is the task that should remove the need to guess.
 
 A positive balance value brightens that channel in that region. `0,0,0` (default)
 skips the regional pass entirely and is bit-exact with the unbalanced output.
@@ -826,8 +830,8 @@ Where the reference density comes from. (What it *places* is the anchor, above.)
 > render in.** `estimate --d-max-region` reports the **raw** base-relative density
 > `D = -log10(t/base)`, but `sigmoid` / `exponential` subtract the anchor from the
 > *corrected* density `D' = scale·D + offset`, and their default `density.scale` is
-> the non-identity scanner calibration `1,0.90,0.86`. So a measured value reused as
-> `--d-max` is systematically high — about 8% at that gain, roughly 0.36 stop darker
+> the non-identity scanner calibration `1,0.84,0.73`. So a measured value reused as
+> `--d-max` is systematically high — about 14% at that gain, roughly 0.62 stop darker
 > on every frame at the default anchor placement. `nc convert` warns
 > (`--strict`-promotable) whenever an explicit `--d-max` is combined with a
 > non-identity scale/offset or a non-neutral regional balance. Your options: keep the

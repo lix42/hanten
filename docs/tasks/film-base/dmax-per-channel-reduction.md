@@ -278,8 +278,8 @@ referee it, since the sheet in question is the one already doubted on green.
 
 Three routes forward, and this task should wait for one of the last two:
 
-1. **Manual review and tweak** — the status quo. `[1, 0.90, 0.86]` reads as good enough by
-   eye; nothing to do.
+1. **Manual review and tweak** — ~~the status quo~~. **Taken, 2026-09-16.** See the note
+   below: this route was followed and it moved the default.
 2. **More rolls with *different subject matter*.** Variety is the requirement, not count —
    more of the same trip adds n without removing the confound.
 3. **A bracketed ColorChecker or grey target.** The only route that removes the scene from the
@@ -290,6 +290,18 @@ Three routes forward, and this task should wait for one of the last two:
    owns that shoot and carries the protocol, including the **subject-variety** requirement this
    task's route 2 identified. Deliberately **not** a dependency edge: routes 2 and 3 both unblock
    this task, so the prerequisite belongs to one approach rather than to the goal.
+
+**2026-09-16 — route 1 was taken, and the shipped value above is no longer current.** The
+default is now `density.scale = [1, 0.84, 0.73]` (`pipeline_version` 5), calibrated from 31
+hand-marked neutral patches over five rolls and shipped on a whole-set visual verdict against
+an NLP reference. The park stands for the **slope method** this task was pursuing — that
+measurement is still suspended on the same confound — but "the shipped value stands" and
+"route 1: nothing to do" above are both superseded. The record is under
+`io/scanner-density-calibration` in `docs/progress/io.md`; read it before treating the 2026-09-13
+text as a statement about what nc ships. Note it changes what remains here: the parametric
+`scale` half is now calibrated against neutral patches rather than datasheets, so this task's
+open question narrows to the `offset` half and to whether a roll-scoped measurement can source
+either.
 
 **The visual review set is not shipped, and needs one thing first.** A local generator was
 written and used to sanity-check the Ektar numbers, but `analysis/comparison-review-tooling`

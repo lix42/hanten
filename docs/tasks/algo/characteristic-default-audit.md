@@ -88,7 +88,7 @@ Not exhaustive — the point is the shape, and implementation will find the rest
 - `density.scale`'s default, resolved in **three** places (recipe `Deserialize` off raw
   JSON key presence, the `--density-curve` merge arm, the `roll` planner by hand) — a
   changed default curve reaches all three differently, and `default_scale_for` returns
-  `[1,1,1]` for characteristic against `[1, 0.90, 0.86]` for the parametric curves;
+  `[1,1,1]` for characteristic against `[1, 0.84, 0.73]` for the parametric curves;
 - `--display-tone none`, which characteristic refuses at **render** time (exit 1) rather
   than by a validate rule — content-dependent, so it is a refusal the default inherits
   for ordinary pictures;

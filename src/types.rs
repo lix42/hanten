@@ -533,23 +533,27 @@ pub enum BalanceRange {
 pub struct DensityParams {
     /// Per-channel density gain `[r, g, b]`.
     ///
-    /// **Default `[1, 0.90, 0.86]` under the parametric curves, `[1, 1, 1]` under
+    /// **Default `[1, 0.84, 0.73]` under the parametric curves, `[1, 1, 1]` under
     /// `characteristic`** — see [`DensityParams::default_scale_for`], which owns the split.
-    /// Both non-unity values are calibrations rather than film constants. The scalar path leaves `contrast · (D'_c − D'_R)`, so a
-    /// channel whose density rises faster than red drifts against it across the tone
-    /// scale; this gain is what cancels that. Blue's `0.860` is the manufacturers' own
-    /// per-channel structure (fitted over nine C-41 sheets), which reproduces in real
-    /// scans at 98% of its predicted drift. Green's `0.900` is **not** the published
-    /// value — the sheets say `0.977`, which measured only 49% of the real green drift,
-    /// so this one is calibrated from scans instead. `algo::curve_probe::sigmoid_scale`
-    /// carries the measurement and `docs/progress/algo.md` (2026-09-09) the reasoning.
+    /// Both non-unity values are calibrations rather than film constants. The scalar path
+    /// leaves `contrast · (D'_c − D'_R)`, so a channel whose density rises faster than red
+    /// drifts against it across the tone scale; this gain is what cancels that.
     ///
-    /// Two caveats a caller should know. It nulls the corpus *mean* drift, not each
-    /// roll's: per-roll residuals still span ±0.5 stop per density on the green–magenta
-    /// axis, so this is a better default and not a fix. And it is calibrated on one
-    /// scanner — that green and blue both come out ~11–18% steeper than red, where the
-    /// sheets say green is barely steeper at all, points at the scan/decode path rather
-    /// than at film chemistry (`io/scanner-density-calibration`).
+    /// **Calibrated from 31 hand-marked neutral patches** over five rolls (2026-09-16): each
+    /// roll's median nulling scale, averaged with **equal weight per roll**, gives green
+    /// 0.837 and blue 0.733. Weighting by roll rather than by patch is the point — 21 of the
+    /// 31 patches are September, so a plain corpus median lands at 0.773 / 0.708 and lets one
+    /// scan date set the default. `docs/progress/algo.md` (2026-09-16) carries the reasoning.
+    ///
+    /// Three caveats a caller should know. **Blue is the solid half and green is not**: every
+    /// roll measured wants blue 0.68–0.78, so the previous `0.860` — taken from the
+    /// manufacturers' published per-channel structure — overcorrects on this scanner, while
+    /// green **splits by scan date** (July rolls 0.86–0.90, September ~0.77, consistent with
+    /// a change of developer). `0.84` therefore fits neither group exactly and can overshoot
+    /// toward green-yellow on a July roll. It nulls per-roll medians, not frames: patch-level
+    /// scales span 0.64–0.95 green and 0.40–1.04 blue. And it is calibrated on **one
+    /// scanner**, which is why the residual belongs to `io/scanner-density-calibration`
+    /// rather than here.
     pub scale: [f32; 3],
     /// Per-channel density offset `[r, g, b]` (orange-mask compensation).
     pub offset: [f32; 3],
@@ -576,7 +580,7 @@ impl DensityParams {
     ///
     /// - `sigmoid` / `exponential` apply one scalar contrast to every channel, so they
     ///   carry no per-channel film model at all. The gain must cover both the film's own
-    ///   channel structure *and* the scanner residual: measured `[1, 0.90, 0.86]`.
+    ///   channel structure *and* the scanner residual: measured `[1, 0.84, 0.73]`.
     /// - `characteristic` inverts each channel through its stock's published curve, so the
     ///   film half is already removed. On a datasheet neutral it is *exactly* neutral, and
     ///   the parametric gain then corrects a second time — measured on ten reference
@@ -602,7 +606,7 @@ impl DensityParams {
     pub fn default_scale_for(curve: DensityCurveType) -> [f32; 3] {
         match curve {
             // Both parametric curves are scalar-contrast, so they share the calibration.
-            DensityCurveType::Sigmoid | DensityCurveType::Exponential => [1.0, 0.90, 0.86],
+            DensityCurveType::Sigmoid | DensityCurveType::Exponential => [1.0, 0.84, 0.73],
             DensityCurveType::Characteristic => [1.0, 1.0, 1.0],
         }
     }
@@ -3094,14 +3098,14 @@ mod tests {
         let json = serde_json::to_value(Reconstruction::default()).unwrap();
         assert_eq!(json["schema_version"], 1);
         assert_eq!(json["type"], "density");
-        // The default gain is `[1, 0.90, 0.86]` (a scanner calibration; see
+        // The default gain is `[1, 0.84, 0.73]` (a scanner calibration; see
         // `DensityParams::scale`). Compared against the `f32` values rather than a JSON
-        // literal, because `0.90f32` widens to `0.8999999761581421` as an `f64` — the
-        // emitted *text* is still the round-trip-shortest `0.9`, which is what a user's
+        // literal, because `0.84f32` widens to `0.8399999737739563` as an `f64` — the
+        // emitted *text* is still the round-trip-shortest `0.84`, which is what a user's
         // recipe carries.
         assert_eq!(
             json["density"]["scale"],
-            serde_json::json!([1.0f32, 0.90f32, 0.86f32])
+            serde_json::json!([1.0f32, 0.84f32, 0.73f32])
         );
         assert_eq!(json["curve"]["type"], "sigmoid");
     }
@@ -3163,10 +3167,10 @@ mod tests {
         );
         assert_eq!(
             scale(
-                r#"{"type":"density","density":{"scale":[1.0,0.9,0.86]},
+                r#"{"type":"density","density":{"scale":[1.0,0.84,0.73]},
                     "curve":{"type":"characteristic"}}"#
             ),
-            [1.0, 0.90, 0.86]
+            [1.0, 0.84, 0.73]
         );
         assert_eq!(
             scale(

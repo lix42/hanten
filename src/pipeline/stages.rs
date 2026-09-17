@@ -999,7 +999,7 @@ mod midtone_placement {
         // **Identity per-channel gain, deliberately.** These are tests of the *display
         // operator*, and they need a reconstruction that puts mid-grey exactly at 0.18 —
         // extended Reinhard is free at 0.18 and only there, so measuring its cost anywhere
-        // else measures the offset instead. The default gain `[1, 0.90, 0.86]` moves this
+        // else measures the offset instead. The default gain `[1, 0.84, 0.73]` moves this
         // patch off 0.18 (it is calibrated for the sigmoid, which has no per-channel film
         // model; the characteristic curve already has one). That effect is the subject of
         // `the_default_gain_shifts_per_channel_level_on_both_curves`, not of these.
@@ -1599,11 +1599,13 @@ pub(crate) mod golden {
     /// reference implementation or a past build rather than tracking the live default.
     ///
     /// `DensityParams::default()`'s gain became `[1, 0.90, 0.86]` in `pipeline_version` 4
-    /// — a scanner calibration. A capture whose meaning is "this still agrees with the
-    /// reference implementation's arithmetic" must not absorb that: recapturing it under a
-    /// new default would keep the test green while silently deleting the agreement it
-    /// exists to prove. Only `golden_new_default_is_bit_identical` tracks the default, and
-    /// it was recaptured.
+    /// and `[1, 0.84, 0.73]` in 5 — a scanner calibration, and one that has now moved
+    /// twice, which is the whole argument for this helper. A capture whose meaning is
+    /// "this still agrees with the reference implementation's arithmetic" must not absorb
+    /// that: recapturing it under a new default would keep the test green while silently
+    /// deleting the agreement it exists to prove. Only
+    /// `golden_new_default_is_bit_identical` tracks the default, and it is recaptured on
+    /// each move.
     fn frozen_density() -> DensityParams {
         DensityParams {
             scale: [1.0, 1.0, 1.0],
@@ -1734,19 +1736,22 @@ pub(crate) mod golden {
         // above and are untouched — they now say `frozen_density()` explicitly, so a
         // future default gain cannot silently rewrite what they verify.
         //
-        // RECAPTURED 2026-09-09 (`pipeline_version` 4): `density.scale` `[1, 1, 1]` →
-        // `[1, 0.90, 0.86]`. **Red is bit-identical on all five vectors** — its gain is
+        // RECAPTURED 2026-09-16 (`pipeline_version` 5): `density.scale` `[1, 0.90, 0.86]`
+        // → `[1, 0.84, 0.73]`. **Red is bit-identical on all five vectors** — its gain is
         // still 1 — and only green and blue move, which is the shape a per-channel gain
         // should produce and a useful check that nothing else drifted with it. The
-        // mid-tone vector moves most (green ×0.796, blue ×0.700) because the sigmoid's
-        // slope is steepest there; the near-white vector barely moves (×0.991, ×0.983)
-        // since it sits on the shoulder, and the two clamped/base vectors not at all.
+        // mid-tone vector moves most because the sigmoid's slope is steepest there; the
+        // near-white vector moves least, sitting on the shoulder, and the two
+        // clamped/base vectors not at all.
+        //
+        // (The previous recapture was 2026-09-09 for v4, `[1, 1, 1]` → `[1, 0.90, 0.86]`,
+        // with the same red-unchanged signature.)
         assert_golden(
             Reconstruction::default(),
             PrintParams::default(),
             &[
-                0x3c23e35f, 0x3c2a9542, 0x3c2aa7fc, 0x3da066cb, 0x3d848c78, 0x3d9999d1, 0x3f7f12f0,
-                0x3f7cc9ee, 0x3f7ae485, 0x3c05798b, 0x3f800000, 0x3f800000, 0x3c1928cc, 0x3c1928cc,
+                0x3c23e35f, 0x3c292c32, 0x3c277eef, 0x3da066cb, 0x3d67141a, 0x3d5c186e, 0x3f7f12f0,
+                0x3f790e0d, 0x3f667c12, 0x3c05798b, 0x3f800000, 0x3f800000, 0x3c1928cc, 0x3c1928cc,
                 0x3c1928cc,
             ],
             Some(0x3fa66666), // NOMINAL_DMAX = 1.3

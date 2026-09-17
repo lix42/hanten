@@ -1123,7 +1123,7 @@ shapes (other stage objects are omitted here):
     "schema_version": 1,
     "type": "density",
     "density": {
-      "scale": [1.0, 0.9, 0.86],
+      "scale": [1.0, 0.84, 0.73],
       "offset": [0.0, 0.0, 0.0],
       "shadow_balance": [0.0, 0.0, 0.0],
       "highlight_balance": [0.0, 0.0, 0.0],
@@ -1152,7 +1152,7 @@ density block and a calibrated anchor, to show the other fields too):
     "schema_version": 1,
     "type": "density",
     "density": {
-      "scale": [1.0, 0.9, 0.86],
+      "scale": [1.0, 0.84, 0.73],
       "offset": [0.0, 0.0, 0.0],
       "shadow_balance": [0.0, 0.0, 0.0],
       "highlight_balance": [0.0, 0.0, 0.0],
@@ -1403,7 +1403,7 @@ task):
       "schema_version": 1,
       "type": "density",
       "density": {
-        "scale": [1.0, 0.9, 0.86],
+        "scale": [1.0, 0.84, 0.73],
         "offset": [0.0, 0.0, 0.0],
         "shadow_balance": [0.0, 0.0, 0.0],
         "highlight_balance": [0.0, 0.0, 0.0],
@@ -2022,14 +2022,17 @@ crossover.
 
 ### Density stage (`reconstruction = density`)
 - `--density-scale R,G,B` ⇒ `reconstruction.density.scale` — per-channel
-  density gain. **Default `[1, 0.90, 0.86]` since `pipeline_version` 4**, not
+  density gain. **Default `[1, 0.84, 0.73]` since `pipeline_version` 5**, not
   identity: green and blue density rise faster than red in a scan, so without a
-  gain they drift against it across the tone scale (measured +0.79 and +1.26 stops
-  per unit density over 21 frames). Blue's value is the manufacturers' own
-  per-channel structure; green's is calibrated from scans, because the published
-  figure corrects only about half of the real drift. It is a **calibration**, so it
-  is nulled deliberately in tests of the `D = −log10(scan / base)` definition.
-  **Its default is per-curve**: `[1, 0.90, 0.86]` under `sigmoid`/`exponential`, which
+  gain they drift against it across the tone scale. Calibrated from 31 hand-marked
+  neutral patches over five rolls — each roll's median nulling scale, averaged with
+  equal weight per roll. It replaced `[1, 0.90, 0.86]`, whose blue came from the
+  manufacturers' published per-channel structure and overcorrects on this scanner;
+  every roll measured wants blue 0.68–0.78. Green splits by scan date (July rolls
+  0.86–0.90, September ~0.77), so `0.84` is a compromise rather than a fit. It is a
+  **calibration**, so it is nulled deliberately in tests of the
+  `D = −log10(scan / base)` definition.
+  **Its default is per-curve**: `[1, 0.84, 0.73]` under `sigmoid`/`exponential`, which
   have no per-channel film model, and `[1, 1, 1]` under `characteristic`, which carries
   each stock's structure itself and would otherwise be corrected twice. Resolved when a
   recipe omits the key and re-resolved on a `--density-curve` switch; an explicit value

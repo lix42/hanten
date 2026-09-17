@@ -4817,7 +4817,7 @@ fn roll_per_frame_curve_switch_resolves_that_curves_own_density_gain() {
     };
     assert_eq!(
         round(scale_of(&tmp.path("shared.tiff"))),
-        vec![1.0, 0.9, 0.86],
+        vec![1.0, 0.84, 0.73],
         "the unswitched frame keeps the parametric calibration"
     );
     assert_eq!(
@@ -8769,7 +8769,7 @@ fn the_default_output_is_the_dual_dialect_gain_map_jpeg() {
         report["output_render"]["encoding"],
         "dual-dialect-gain-map-jpeg"
     );
-    assert_eq!(report["identity"]["pipeline_version"], 4);
+    assert_eq!(report["identity"]["pipeline_version"], 5);
     let bytes = std::fs::read(&out).unwrap();
     assert_eq!(&bytes[..2], &[0xff, 0xd8], "the default writes a JPEG");
     assert!(
@@ -9332,6 +9332,15 @@ fn a_curveless_tone_is_told_to_change_the_flag_it_passed() {
             // Overshoots the peak, which is what the range check exists to catch.
             "--sigmoid-shoulder",
             "0",
+            // **Identity per-channel gain, deliberately.** This test is about the display
+            // operator's ceiling and about each remedy naming the flag the user passed —
+            // not about the colour calibration. Reading the shipped gain made it depend on
+            // a value that moves: at `pipeline_version` 5's `[1, 0.84, 0.73]` the frame
+            // renders dark enough to sit *under* the ceiling, so the premise evaporated and
+            // the run exited 0. Stating identity restores the overshoot and keeps the next
+            // gain change from silently disarming this guard.
+            "--density-scale",
+            "1,1,1",
             "-o",
             out.to_str().unwrap(),
         ];
