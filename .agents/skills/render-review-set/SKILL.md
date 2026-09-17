@@ -139,9 +139,16 @@ would make this first-class; until then it is manual. Three things to get right:
    nc's **SDR base**, so the charts and the picture describe different renditions. nc cannot
    be asked for a plain SDR JPEG instead: the only JPEG writers are `gain-map-hdr` and
    `ultra-hdr-v1`, both gain-map carriers, and every SDR preset writes TIFF, which browsers
-   will not display. So either strip the gain map from nc's JPEGs so both sides are plain SDR
-   (what makes the comparison honest), or review on an SDR display and **say** that is what
-   was done. Making this first-class belongs to `analysis/review-reference-cells`.
+   will not display. So either strip the gain map from nc's JPEGs, or review on an SDR display
+   and **say** that is what was done. Making this first-class belongs to
+   `analysis/review-reference-cells`.
+
+   **Stripping the gain map fixes the rendering intent, not the gamut.** nc's SDR base is
+   **Display P3** for both gain-map presets (`metrics.py`'s `PRESET_SPACES`), so a strip that
+   drops the ICC profile leaves P3 numbers that a viewer then shows as sRGB — saturation
+   errors that look like a conversion difference. Either convert the stripped base to sRGB as
+   well, so "a common sRGB pair" is true, or keep its P3 profile and stop calling the pair
+   common-sRGB. Whichever you pick, measure each side in the space it is actually in.
 2. **Pair by filename identity, never registration.** An export usually carries its source's
    serial (`converted/<producer>/<roll>/<serial>.tif` ↔ `rolls/<roll>/<serial>.tif`). Exports
    are often cropped differently, so never expect pixel alignment. A frame with no match gets
@@ -164,6 +171,15 @@ would make this first-class; until then it is manual. Three things to get right:
    `srgb`, because the record must describe *that* rendition. `--out`, because the record
    otherwise goes to stdout and there is no file to name in the rendition's `metrics` field —
    so the reference cell silently renders with no charts beside the nc cells that have them.
+
+   **The matrix's inset is a fraction, so it does not survive a different crop.** These
+   exports are usually cropped differently — the Gold batch is 4897x3265 against a 5184x3600
+   source — and the same fractional inset then selects different scene content on each side,
+   which `docs/progress/analysis.md` records as the reason those cross-producer numbers are
+   not comparable at this precision. Derive a region that covers the *same scene area* on the
+   reference, or leave the reference without charts. Do not put a record measured over
+   unmatched content beside nc's and present the two as comparable; if you keep it anyway,
+   mark it in the rendition's note as measuring a different region.
 
    **The record belongs to the set, not to the reference image.** It is measured over *that
    set's* `metrics.inset`, so a fixed path beside the shared reference is overwritten by the
