@@ -246,6 +246,10 @@ graph TD
     output/hdr-avif-windows-packaging
     output/lossless-hdr-tiff
     output/presets
+    output/parallel-display-stages
+    output/parallel-hdr-stages
+    output/avif-row-multithreading
+    output/post-fanout-encode-slowdown
   end
   subgraph telemetry
     telemetry/perf-instrumentation
@@ -442,6 +446,14 @@ graph TD
   output/hdr-avif-output --> output/presets
   output/hdr-avif-output --> output/hdr-avif-windows-packaging
   output/hdr-avif-output --> output/output-path-suffix
+  output/sdr-display-rendering --> output/parallel-display-stages
+  color/film-master-render-pipeline --> output/parallel-display-stages
+  output/parallel-display-stages --> output/parallel-hdr-stages
+  output/hdr-display-rendering --> output/parallel-hdr-stages
+  output/gain-map-hdr-output --> output/parallel-hdr-stages
+  output/hdr-avif-output --> output/avif-row-multithreading
+  core/conversion-versioning --> output/avif-row-multithreading
+  output/parallel-hdr-stages --> output/post-fanout-encode-slowdown
   output/lossless-hdr-tiff --> output/presets
   algo/reference-anchored-sigmoid --> output/presets
   core/roll-conversion --> output/presets
@@ -769,6 +781,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   Coordinate with `output/presets`, which owns the "never silently renamed" wording and
   container-aware roll naming — deliberately *not* a dependency, since the suffix table already
   shipped and this stands alone for `convert`
+- `output/parallel-display-stages` (post-MVP): `output/sdr-display-rendering`, `color/film-master-render-pipeline` — byte-identical rayon drivers for the lcms2 transform, SDR render, ACEScg mapping and print controls, plus the small `pipeline::pixels` helper; decided in [gpu-rendering-spike](gpu-rendering-spike.md)
+- `output/parallel-hdr-stages` (post-MVP): `output/parallel-display-stages`, `output/hdr-display-rendering`, `output/gain-map-hdr-output` — the HDR render (MaxFALL sum kept sequential), transfer encode, gain-map build and quantize on the same helper
+- `output/avif-row-multithreading` (post-MVP): `output/hdr-avif-output`, `core/conversion-versioning` — libaom row-mt with a pinned thread count ≥ 2; changes shipped `hdr-pq`/`hdr-hlg` bytes, so it rides the versioning rules
+- `output/post-fanout-encode-slowdown` (post-MVP): `output/parallel-hdr-stages` — investigate the single-threaded encode running 30–90 ms slower right after a wide rayon section (`film-master` still carries it); cause unknown, byte-identical fix or documented non-issue
 - `telemetry/perf-instrumentation` (post-MVP, **parked**): `core/pipeline-orchestration`
   — LAB criterion benches; prototyped and parked on git branch
   prototype/perf-bench-instrumentation, superseded by telemetry/perf-telemetry as
@@ -1171,6 +1187,19 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   sigmoid (`GainMapMax` 1.0x — the HDR rendition peaks at reference white), so the
   default currently writes a valid HDR container carrying no HDR. That is a render
   gap, tracked for the follow-on tuning work and recorded in the v3 report
+- [x] [Parallel display stages](tasks/output/parallel-display-stages.md) — rayon drivers for
+  the lcms2 transform, SDR render, ACEScg mapping and print controls, byte-identical;
+  measured 3–4x on `legacy`/`display-p3` in [gpu-rendering-spike](gpu-rendering-spike.md)
+- [x] [Parallel HDR stages](tasks/output/parallel-hdr-stages.md) — HDR render with the
+  MaxFALL reduction split out, transfer encode, gain-map build, quantize; memory model re-checked
+- [x] [AVIF row multithreading](tasks/output/avif-row-multithreading.md) — libaom row-mt at a
+  pinned thread count of 8 (identical bytes at every worker count from 2 up, ~5x faster). Changes shipped
+  `hdr-pq`/`hdr-hlg` bytes; **no `pipeline_version` bump** since neither is the default — the
+  change is recorded in [reports/render-defaults-v3.md](reports/render-defaults-v3.md)'s
+  addendum and pinned by a thread-count equality test in CI
+- [ ] [Sequential encode slows after a wide rayon fan-out](tasks/output/post-fanout-encode-slowdown.md) —
+  `film-master`'s f32 TIFF write measured 96 → 150–192 ms after the parallel stages landed,
+  back to ~117 ms with `RAYON_NUM_THREADS=4`; cause unknown, not yet reproduced on Linux
 
 ### telemetry — [progress](progress/telemetry.md)
 > `src/telemetry.rs` and the opt-in upload stack (schema, ingestion service,

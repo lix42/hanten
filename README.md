@@ -34,8 +34,8 @@ and hardening work tracked in the task roadmap.
 - [`docs/negative-convertor-research-report.md`](docs/negative-convertor-research-report.md)
   — background research.
 - [`docs/gpu-rendering-spike.md`](docs/gpu-rendering-spike.md) — where `nc` spends
-  its time, and the decision to multithread the CPU stages (planned, not yet
-  shipped) rather than render on a GPU.
+  its time, and why it multithreads every per-pixel stage and the AV1 encoder on the
+  CPU rather than rendering on a GPU; revisit for an interactive or browser app.
 
 ## Usage (current CLI)
 

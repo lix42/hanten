@@ -16,6 +16,7 @@ use crate::pipeline::colorimetry::pinned::{
     ACESCG_TO_DISPLAY_P3, ACESCG_TO_SRGB, DISPLAY_P3_LUMA, SRGB_LUMA,
 };
 use crate::pipeline::display_tone::{self, DisplayTone};
+use crate::pipeline::pixels;
 use crate::pipeline::render_split::SharedDisplaySource;
 use crate::types::{LinearImage, NcError, Result};
 
@@ -103,11 +104,9 @@ pub fn render(
     gamut: SdrGamut,
     tone: DisplayTone,
 ) -> Result<RenderedSdr> {
-    let mut rgb = Vec::with_capacity(shared.source.rgb().len());
-    for (index, px) in shared.source.rgb().as_chunks::<3>().0.iter().enumerate() {
-        let rendered = render_pixel_checked(*px, index, gamut, tone)?;
-        rgb.extend_from_slice(&rendered);
-    }
+    let rgb = pixels::try_map(shared.source.rgb(), |index, px| {
+        render_pixel_checked(px, index, gamut, tone)
+    })?;
     let image = LinearImage::new(shared.source.width(), shared.source.height(), rgb, None)?;
     Ok(RenderedSdr {
         image,

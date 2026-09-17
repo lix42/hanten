@@ -59,6 +59,7 @@
 //! which are this half's consumers.
 
 use crate::algo::density;
+use crate::pipeline::pixels;
 use crate::pipeline::working_space::AcesCgImage;
 use crate::types::{LinearImage, NcError, PrintParams, Result, WbSource};
 
@@ -374,22 +375,12 @@ pub fn apply_shared_controls(
     let span = high - low;
 
     let mut image = aces.into_linear();
-    // `len % 3 == 0` is a `LinearImage` invariant; `as_chunks_mut` would silently
-    // drop a 1–2 element tail, so assert it (`working_space.rs` uses the same
-    // `debug_assert!`; `color.rs`, whose `rgb` field is `pub` and reachable from
-    // outside its module, returns an `Err` instead). Debug-only, so this documents
-    // and catches a regression in tests rather than guarding release.
-    let (pixels, rest) = image.rgb.as_chunks_mut::<3>();
-    debug_assert!(
-        rest.is_empty(),
-        "LinearImage rgb length must be a multiple of 3"
-    );
-    for px in pixels {
+    pixels::map_in_place(&mut image.rgb, |px| {
         for c in 0..3 {
             let exposed = px[c] * wb[c] * exposure_gain;
             px[c] = (exposed - black_point - low) / span;
         }
-    }
+    });
 
     AdjustedAcesCgImage::new(image)
 }

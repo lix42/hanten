@@ -98,3 +98,20 @@ preset selects neither, so the v3 row carries the **same** two hashes as v2 and 
 `version::PipelineFingerprint`, not a sign the render is unchanged — this report is
 the evidence for v3, and the numbers above are what a future comparison should be
 measured against.
+
+## Addendum 2026-09-16 — `hdr-pq` / `hdr-hlg` codestream bytes changed, no version bump
+
+`output/avif-row-multithreading` turned on libaom row multithreading with a pinned
+worker count of 8. The AV1 codestream differs from the single-threaded one (on the
+16.4 MP `2026-09-13-Portra400/1675.tif` frame: `hdr-pq` 2,122,509 → 2,125,084 bytes
+(+0.12%), `hdr-hlg` 2,753,572 → 2,755,822 (+0.08%) — re-measured against
+`Re-calibrate the per-channel density gain from neutral patches (#124)`, whose
+default-render change moved the absolute sizes but not this delta), decodes with
+`avifdec`, and reproduces the pinned
+per-plane code-error bounds on the 256x64 test field (one superblock row, where row-mt
+has nothing to split). Output is identical for every worker count from 2 upward and
+run to run; one worker disables row-mt and would differ, which is why the count is a
+constant. `pipeline_version` stays 3: the rule bumps it only when the *default* render
+changes, and neither preset is the default. The rendered pixels handed to the encoder
+are unchanged (`hdr-pq-tiff`/`hdr-hlg-tiff` stay byte-identical). Details in
+`docs/progress/output.md`, section `avif-row-multithreading`.
