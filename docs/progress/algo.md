@@ -1714,7 +1714,7 @@ highlight separation and HDR. A scheduling option, not a destination.
 ## contrast-latitude-spike
 
 **Status:** not started
-**Updated:** 2026-09-11
+**Updated:** 2026-09-15
 
 - Goal: decide whether nc's tonal latitude should change — which end, which mechanism,
   or not at all.
@@ -1725,6 +1725,31 @@ highlight separation and HDR. A scheduling option, not a destination.
   task because the scene range was never measured, so the cause of the gap is open.
   Read the §3.8 principle before starting: the per-roll recipe is deliberate, so a
   narrower range may be the design working rather than failing.
+- 2026-09-15: **Evidence that NLP fits each frame's extremes to the output range — and the
+  earlier rejection of that model tested the wrong statistic.** Reviewing 43 frames by eye
+  against NLP, the user reported that NLP collapses on frames filled by a single surface
+  (all water, cloudless sky), losing almost all information —
+  `rolls/2026-09-09-Ektar100/1612.tif` — while every
+  nc config holds them. The task file had dismissed "NLP normalises each frame" because it
+  predicts a near-zero `p95 − p5` spread against the measured 4.31; that inference holds only
+  for a stretch fitted to `p5`/`p95`, not to the extremes, where such a spread is **compatible
+  with** the model rather than predicted by it. The objection falls away; that is not the same
+  as support, since the model permits identical spreads too and the input distributions are
+  unmeasured. Recorded in the task file's second open question together with the
+  regression that would settle it (output extremes against the negative's own extremes, and
+  whether NLP's gain rises as the scene range narrows).
+  Corrected on review, 2026-09-16: the single-surface frame is an **observation to explain,
+  not positive evidence** for the model. A monotone stretch of a narrow interval onto the
+  full output increases sample separation and destroys no information by itself; losing
+  detail needs a further stage — end clipping, post-stretch quantization, or a nonlinearity —
+  and which one is unidentified. Both must be measured, or the spike picks a remedy for a
+  mechanism it never located.
+- 2026-09-15 (caveat for whoever measures): the **"32 pixel-aligned Ektar pairs"** this task
+  plans to regress are now **12**. At the user's request 20 of the 32 `rolls/2026-09-09-Ektar100`
+  frames were deleted as near-duplicates; their NLP outputs survive, so those 20 have no source.
+  `2026-09-11-Portra400` is down to 11 of 32 and `2026-09-13-Portra400` to 10 of 36. The paths in
+  the task file also predate the roll rename (`converted/nlp/2026-09-09-Ektar100/`,
+  `rolls/2026-09-09-Ektar100/`).
 
 
 ## split-default-migration

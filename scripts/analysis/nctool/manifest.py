@@ -47,12 +47,16 @@ SEED_ROLES = {
                            "20260724-leica-1129": "leader"},
     "portra400-2026-08-04": {"20260803-film-1230": "unexposed",
                               "20260803-film-1229": "leader"},
+    # Stems here are the post-rename spelling (2026-09-13): frames carry their serial
+    # number, and a roll's reference frames are named for their role. The entries above
+    # keep the old `<date>-<camera>-<serial>` stems and no longer match anything on disk.
+    "2026-09-14-Ektar100": {"base": "unexposed", "leader": "leader"},
 }
 SEED_STOCK = {
     "Ektar": "Kodak Ektar 100", "phoenix": "Harman Phoenix 200",
     "Portra160": "Kodak Portra 160", "Portra160-2026-07-22": "Kodak Portra 160",
     "Portra400": "Kodak Portra 400", "Portra400-leica-flaw": "Kodak Portra 400",
-    "2026-07-24-Gold200": "Kodak Gold 200",
+    "2026-07-24-Gold200": "Kodak Gold 200", "2026-09-14-Ektar100": "Kodak Ektar 100",
 }
 SEED_ROLL_NOTE = {
     # The earlier "no in-roll unexposed/leader reference frame" claim was wrong: this
