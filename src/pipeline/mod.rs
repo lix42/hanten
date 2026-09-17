@@ -9,6 +9,7 @@ pub mod gain_map;
 pub mod hdr;
 pub mod input_semantics;
 pub mod memory;
+pub mod pixels;
 pub mod render_split;
 pub mod sdr;
 /// Test-only diagnostic harness for `algo/reference-anchored-sigmoid`. `cfg(test)` so it

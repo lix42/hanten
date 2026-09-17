@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::pipeline::colorimetry::definitions::transfer;
 use crate::pipeline::colorimetry::pinned::{ACESCG_TO_BT2020, BT2020_LUMA};
 use crate::pipeline::display_tone::{self, DisplayTone};
+use crate::pipeline::pixels;
 use crate::pipeline::render_split::SharedDisplaySource;
 use crate::types::{LinearImage, NcError, OutputPreset, Result};
 
@@ -317,24 +318,26 @@ pub fn render_linear(shared: &SharedDisplaySource, tone: DisplayTone) -> Result<
     // "drop --display-tone none", a mode they never selected.
     let tone_curve = tone_curve_id(tone)?;
     let shoulder_start = shoulder_start(tone);
-    let source = shared.source.rgb().as_chunks::<3>().0;
-    let mut rgb = Vec::with_capacity(shared.source.rgb().len());
+    let rgb = pixels::try_map(shared.source.rgb(), |index, px| {
+        render_pixel_checked(px, index, tone, shoulder_start)
+    })?;
+    // MaxCLL/MaxFALL are reductions over the rendered frame. The `f64` sum depends
+    // on its order, so it stays one sequential pass in pixel order (the rule
+    // `pipeline::pixels` exists to keep); the max is order-free but rides along.
     let mut peak_luminance = 0.0_f32;
     let mut luminance_sum = 0.0_f64;
-    for (index, px) in source.iter().enumerate() {
-        let rendered = render_pixel_checked(*px, index, tone, shoulder_start)?;
+    for rendered in rgb.as_chunks::<3>().0 {
         // Gamut mapping is luminance-preserving, so this is the rendered pixel's
         // luminance whether or not it was moved to the cube boundary.
-        let luminance = dot(rendered, BT2020_LUMA).max(0.0);
+        let luminance = dot(*rendered, BT2020_LUMA).max(0.0);
         peak_luminance = peak_luminance.max(luminance);
         luminance_sum += f64::from(luminance);
-        rgb.extend_from_slice(&rendered);
     }
     let content_light = ContentLightLevel {
         max_cll_nits: whole_nits(f64::from(peak_luminance)),
-        max_fall_nits: match source.len() {
+        max_fall_nits: match rgb.len() / 3 {
             0 => 0,
-            pixels => whole_nits(luminance_sum / pixels as f64),
+            count => whole_nits(luminance_sum / count as f64),
         },
     };
     let image = LinearImage::new(shared.source.width(), shared.source.height(), rgb, None)?;
@@ -362,14 +365,7 @@ pub fn render_linear(shared: &SharedDisplaySource, tone: DisplayTone) -> Result<
 /// one final neutral-axis boundary intersection in scene-linear BT.2020 so the
 /// delivered full-range signal remains representable without channel clipping.
 pub fn encode_transfer(mut linear: LinearBt2020Hdr, transfer: HdrTransfer) -> Result<RenderedHdr> {
-    for (index, px) in linear
-        .image
-        .rgb
-        .as_chunks_mut::<3>()
-        .0
-        .iter_mut()
-        .enumerate()
-    {
+    pixels::try_map_in_place(&mut linear.image.rgb, |index, px| {
         let encoded = match transfer {
             HdrTransfer::Pq => px.map(|channel| pq_encode_nits(channel * REFERENCE_WHITE_NITS)),
             HdrTransfer::Hlg => {
@@ -390,7 +386,8 @@ pub fn encode_transfer(mut linear: LinearBt2020Hdr, transfer: HdrTransfer) -> Re
             )));
         }
         *px = encoded;
-    }
+        Ok(())
+    })?;
 
     let metadata = HdrRenderMetadata {
         transfer,

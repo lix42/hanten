@@ -22,10 +22,12 @@ use std::ffi::OsString;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
 use tiff::encoder::colortype::{ColorType, Gray16, Gray32Float, RGB16, RGB32Float};
 use tiff::encoder::{TiffEncoder, TiffKind, TiffKindBig, TiffKindStandard, TiffValue};
 use tiff::tags::Tag;
 
+use crate::io::QUANTIZE_BAND_SAMPLES;
 use crate::io::staged::{self, Staged};
 use crate::pipeline::hdr::{ContentLightLevel, LinearBt2020Hdr, LinearHdrMetadata};
 use crate::types::{
@@ -633,23 +635,33 @@ fn resolve_bigtiff(
 /// log/division math), so any non-finite sample is counted as `non_finite` (kept
 /// out of the `clipped_*` finite-clamp tallies) to keep the fault visible.
 fn quantize_u16(samples: &[f32]) -> (Vec<u16>, EncodeReport) {
-    let mut report = EncodeReport {
-        total_samples: samples.len() as u64,
-        ..EncodeReport::default()
-    };
-    let data = samples
-        .iter()
-        .map(|&v| {
-            if !v.is_finite() {
-                report.non_finite += 1;
-            } else if v < 0.0 {
-                report.clipped_low += 1;
-            } else if v > 1.0 {
-                report.clipped_high += 1;
+    // One parallel pass: each band quantizes into its slice of the output and counts
+    // its own losses. The counts are integers, so their sum is exact in any order.
+    let mut data = vec![0_u16; samples.len()];
+    let (non_finite, clipped_low, clipped_high) = data
+        .par_chunks_mut(QUANTIZE_BAND_SAMPLES)
+        .zip(samples.par_chunks(QUANTIZE_BAND_SAMPLES))
+        .map(|(out, band)| {
+            let (mut non_finite, mut low, mut high) = (0_u64, 0_u64, 0_u64);
+            for (o, &v) in out.iter_mut().zip(band) {
+                if !v.is_finite() {
+                    non_finite += 1;
+                } else if v < 0.0 {
+                    low += 1;
+                } else if v > 1.0 {
+                    high += 1;
+                }
+                *o = (v.clamp(0.0, 1.0) * 65535.0).round() as u16;
             }
-            (v.clamp(0.0, 1.0) * 65535.0).round() as u16
+            (non_finite, low, high)
         })
-        .collect();
+        .reduce(|| (0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+    let report = EncodeReport {
+        total_samples: samples.len() as u64,
+        clipped_low,
+        clipped_high,
+        non_finite,
+    };
     (data, report)
 }
 
@@ -663,13 +675,29 @@ fn quantize_u16(samples: &[f32]) -> (Vec<u16>, EncodeReport) {
 /// an RGB image (`LinearImage` enforces it), and a partial tail would simply
 /// contribute to the channels it covers.
 fn channel_means_u16(data: &[u16]) -> OutputStats {
-    let mut sums = [0u64; 3];
-    let mut counts = [0u64; 3];
-    for (i, &v) in data.iter().enumerate() {
-        let c = i % 3;
-        sums[c] += v as u64;
-        counts[c] += 1;
-    }
+    // Folded per band: `QUANTIZE_BAND_SAMPLES` is a multiple of 3, so every band
+    // starts on channel 0 and an in-band `i % 3` is the true channel. The sums stay
+    // `u64`, so combining bands is exact and order-free.
+    let (sums, counts) = data
+        .par_chunks(QUANTIZE_BAND_SAMPLES)
+        .map(|band| {
+            let (mut sums, mut counts) = ([0u64; 3], [0u64; 3]);
+            for (i, &v) in band.iter().enumerate() {
+                let c = i % 3;
+                sums[c] += u64::from(v);
+                counts[c] += 1;
+            }
+            (sums, counts)
+        })
+        .reduce(
+            || ([0u64; 3], [0u64; 3]),
+            |a, b| {
+                (
+                    std::array::from_fn(|c| a.0[c] + b.0[c]),
+                    std::array::from_fn(|c| a.1[c] + b.1[c]),
+                )
+            },
+        );
     OutputStats {
         mean: std::array::from_fn(|c| {
             if counts[c] == 0 {
@@ -881,6 +909,54 @@ mod tests {
         let outcome = encode_outcome(&faulty, &out(OutDepth::F32, BigTiff::Off));
         assert_eq!(outcome.loss.non_finite, 1);
         assert_eq!(outcome.stats.mean[0], 0.75);
+    }
+
+    #[test]
+    fn quantize_and_channel_means_agree_with_one_sequential_pass_across_band_boundaries() {
+        // Every other test of these two is a handful of samples — far inside one
+        // `QUANTIZE_BAND_SAMPLES` band, so none of them would notice a band that
+        // misaligned the channels or dropped a tail. This one spans two full bands
+        // plus a ragged remainder, and checks both the codes and the per-channel
+        // means against a plain sequential computation.
+        let len = QUANTIZE_BAND_SAMPLES * 2 + 7;
+        let samples: Vec<f32> = (0..len)
+            .map(|i| match i % 2521 {
+                0 => f32::NAN,
+                1 => -0.25,
+                2 => 1.5,
+                n => n as f32 / 2520.0,
+            })
+            .collect();
+
+        let (data, report) = quantize_u16(&samples);
+        let stats = channel_means_u16(&data);
+
+        let mut want = Vec::with_capacity(len);
+        let (mut non_finite, mut low, mut high) = (0_u64, 0_u64, 0_u64);
+        let (mut sums, mut counts) = ([0_u64; 3], [0_u64; 3]);
+        for (i, &v) in samples.iter().enumerate() {
+            if !v.is_finite() {
+                non_finite += 1;
+            } else if v < 0.0 {
+                low += 1;
+            } else if v > 1.0 {
+                high += 1;
+            }
+            let code = (v.clamp(0.0, 1.0) * 65535.0).round() as u16;
+            sums[i % 3] += u64::from(code);
+            counts[i % 3] += 1;
+            want.push(code);
+        }
+
+        assert_eq!(data, want);
+        assert_eq!(report.non_finite, non_finite);
+        assert_eq!(report.clipped_low, low);
+        assert_eq!(report.clipped_high, high);
+        assert_eq!(report.total_samples, len as u64);
+        for (c, ((sum, count), mean)) in sums.iter().zip(&counts).zip(&stats.mean).enumerate() {
+            let expect = *sum as f64 / *count as f64 / 65535.0;
+            assert_eq!(*mean, expect, "channel {c}");
+        }
     }
 
     #[test]

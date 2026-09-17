@@ -290,6 +290,12 @@ const WORKING_CHANNELS: u64 = 3;
 /// `accounted` enumerates buffers, the allowance covers allocator overhead. Do not
 /// "fix" the 3.8% gap by raising this — double-counting it pushed the 18.66 MP
 /// estimate to 1.43x measured, which rejects runs the machine could serve.
+/// **Measured before `output/avif-row-multithreading` (2026-09-16)**, i.e. with one
+/// libaom worker and row-mt off. Turning row-mt on with 8 pinned workers adds only
+/// per-worker buffers — about 10 MB measured at 16.4 MP — which stays inside the
+/// model's 15% allowance, so the fit was not redone. Anyone re-fitting this slope
+/// must encode with the *current* thread pinning, or they will be comparing against
+/// a configuration nc no longer runs.
 const AVIF_STAGING_BYTES_PER_PX: u64 = 48;
 
 /// Default memory budget when `--max-memory` is not given: 6 GiB.
@@ -1837,7 +1843,8 @@ mod tests {
                 1_681_408_000,
             ),
             // The two `hdr-pq` calibration runs behind
-            // `AVIF_STAGING_BYTES_PER_PX`. Both used an explicit `--film-base`.
+            // `AVIF_STAGING_BYTES_PER_PX`. Both used an explicit `--film-base`, and
+            // both predate row multithreading (see that constant's note).
             (
                 ultra_hdr,
                 RunProfile::HdrAvif { export_ir: false },

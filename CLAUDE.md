@@ -183,7 +183,7 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   IR-based dust removal remains a roadmap follow-up.
 - Current module map (`src/`, all implemented): `types.rs` (shared types),
   `io/{decode,encode,ultra_hdr,avif}.rs`,
-  `pipeline/{film_base,color,stages,input_semantics,working_space,render_split,display_tone,sdr,hdr,gain_map,memory}.rs`
+  `pipeline/{film_base,color,stages,input_semantics,working_space,render_split,display_tone,sdr,hdr,gain_map,memory,pixels}.rs`
   plus `pipeline/colorimetry/` — the **single source of truth for every
   standards-based matrix and luma vector**; see the colorimetry note below
   (`film_base::estimate` is stage 2, resolved by the orchestrator before the
@@ -328,6 +328,22 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `main`/`cli` are the only orchestrators; stages stay pure. `build.rs` exposes
   the compile target triple as `NC_TARGET` plus `NC_GIT_COMMIT`/`NC_GIT_DIRTY`
   for the report's identity block.
+- **Per-pixel *map* stages run on all cores through `pipeline/pixels`; reductions
+  and the encoders' banded quantizers drive rayon directly.** Its drivers
+  (`map_in_place`, `try_map`, `try_map_in_place`, `try_zip_map`) are pure maps, so
+  output stays byte-identical to the sequential loop; the fallible ones use rayon's
+  positional `find_map_first`, so an error names the *lowest* failing pixel, not
+  whichever thread lost. A floating-point sum must run in a **fixed order**: today
+  the MaxFALL sum in `hdr::render_linear` is one sequential pass over the mapped
+  buffer, and fixed index bands would also qualify but associate differently, so
+  switching is a `clli` byte change, not a refactor. Integer counts, `min` and `max`
+  may be folded in parallel. The lcms2 transform is shared across workers as
+  `Transform<_, _, GlobalContext, DisallowCache>`, the type lcms2 itself marks
+  `Sync` — built with `new_flags_context` and `Flags::NO_CACHE`, because the
+  `GlobalContext` shortcut constructors (`new`, `new_flags`) erase the flag from the
+  type; no `unsafe` is involved, and the global context keeps Little CMS reporting
+  faults to the handler `cli` installs. Rationale and measurements in
+  `docs/gpu-rendering-spike.md`.
 - **Telemetry is operational, not a conversion knob.** `src/telemetry.rs` emits
   an opt-in, fail-soft, schema-versioned JSON record per `nc convert` run (image
   facts, per-stage timings, conversion summary) to a JSONL log / one-off file.
@@ -475,8 +491,20 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
     **not** `aom_img_alloc`'s documented `2^27` — that one bounds the *allocator*,
     and using it let a whole quantization pass run before libaom refused the frame.
   - **Encoder settings are pinned parts of the preset, not knobs** (the
-    `ultra_hdr::JPEG_QUALITY` precedent): quality, speed, one thread, no tiling,
-    so repeated encodes on one build are byte-identical. `cq_level` is calibrated
+    `ultra_hdr::JPEG_QUALITY` precedent): quality, speed, **row multithreading on
+    with the worker count pinned at `AV1_THREADS = 8`**, no tiling, so repeated
+    encodes on one build are byte-identical. The count is pinned rather than read
+    off the machine because it is part of the contract: on libaom 3.11.0 the row-mt
+    output **measured** identical for every count from 2 upward, and two tests pin
+    it — libaom documents no such guarantee, so the tests, not the library, hold the
+    contract across a `libaom-sys` bump. Both are easy to make vacuous. The field
+    must be **noisy** (a smooth ramp compressed to 546 bytes, identical even at 1
+    thread) and **2048 px wide**, because libaom caps the workers it spawns near
+    half the superblock columns: at 1024x1024 the 4-, 8- and 16-worker encodes take
+    the same time, so the pinned 8 is never reached. **1 thread switches row-mt off
+    inside libaom and writes different bytes**, which is the separate test that
+    proves row-mt is on at all.
+    `cq_level` is calibrated
     in a documented table — note `cq_level = 0` is *mathematically* lossless.
     Codec bounds are pinned by **equality**, not a tolerance, because AV1
     reconstruction is normative and bit-exact: libaom and dav1d agree exactly, which
@@ -558,9 +586,12 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   the in-`src` unit tests; a bare `cargo test <filter>` also runs `tests/pipeline.rs`.
 - `cargo clippy --all-targets` — lint (keep clean)
 - **Before pushing, match CI** (`.github/workflows/ci.yml`, runs on every PR):
-  `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings` →
-  `cargo build` → the `scripts/analysis` unittest command below → `cargo test`.
-  The gate is strict — warnings fail the build.
+  `python3 scripts/check-vendored-native.py` → `cargo fmt --all --check` →
+  `cargo clippy --all-targets --all-features -- -D warnings` →
+  `cargo build --all-targets --all-features` → the `scripts/analysis` unittest
+  command below → `cargo test --all-features`. The gate is strict — warnings fail
+  the build. Run CI's flags, not shorter ones: the crate declares no `[features]`
+  today, but a bare `cargo build` skips the test targets CI compiles.
 - **Match CI's *toolchain*, not just its commands.** CI resolves
   `dtolnay/rust-toolchain@stable` fresh on every run, so it can be several releases
   ahead of the local one and a green local clippy then proves nothing. This has
@@ -874,7 +905,10 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     handlers, so `cli` installs the global handler via `lcms2-sys` FFI at
     startup (sets an `AtomicBool` + logs to stderr); `run_convert` clears the
     flag before the render and checks it after, turning a CMS fault into a loud
-    error instead of a silently unconverted image.
+    error instead of a silently unconverted image. This is also why the parallel
+    transform stays on the **global** context (see the `pipeline/pixels` note
+    above): a `ThreadContext` is equally `Sync` but would route faults to a
+    per-context handler nothing reads.
   - *Film-base gotcha:* an explicit `--film-base` is CLI-validated; a
     `Region`/`Auto` base is estimated from pixels at runtime. Since
     the `auto-base-redesign` task, `film_base::estimate` **guards the resolved

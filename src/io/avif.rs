@@ -120,6 +120,16 @@ const CPU_USED: c_int = 6;
 /// bit-exact HDR still if a preset ever wants one, at ~20x the size.
 const CQ_LEVEL: c_uint = 8;
 
+/// libaom worker threads, with row multithreading on. **Pinned, not derived from
+/// the machine**, because the thread count is part of the determinism contract:
+/// libaom's row-mt output is identical for every count from 2 upward (measured on
+/// a 16.4 MP scan at 2, 4 and 8, and pinned by a test at 2 vs this constant), but a
+/// count of **1 switches row-mt off** inside libaom and produces different bytes.
+/// 8 is the measured 5x on a 14-core machine; a machine with fewer cores runs the
+/// same 8 workers more slowly and writes the same file.
+const AV1_THREADS: c_uint = 8;
+const _: () = assert!(AV1_THREADS >= 2, "one thread disables libaom row-mt");
+
 /// Which AVIF profile the produced file may honestly advertise.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AvifProfile {
@@ -169,7 +179,7 @@ pub fn encode(
     check_encodable_dimensions(width, height)?;
 
     let (planes, loss, stats) = quantize_to_ycbcr(image.rgb(), width, height)?;
-    let codestream = encode_codestream(&planes, width, height, &metadata)?;
+    let codestream = encode_codestream(&planes, width, height, &metadata, AV1_THREADS)?;
 
     // Read back what libaom actually wrote and refuse to package a file whose
     // codestream disagrees with the signalling the renderer declared.
@@ -586,11 +596,15 @@ impl Drop for Image {
 }
 
 /// Encode the planes into a single still-picture AV1 codestream.
+///
+/// `threads` is [`AV1_THREADS`] on the shipping path; the parameter exists so a test
+/// can prove the output does not depend on it.
 fn encode_codestream(
     planes: &Planes,
     width: u32,
     height: u32,
     metadata: &hdr::HdrRenderMetadata,
+    threads: c_uint,
 ) -> Result<Vec<u8>> {
     // SAFETY: `aom_codec_av1_cx` returns a static interface descriptor; `cfg` is
     // a live out-parameter for the duration of the call.
@@ -616,8 +630,8 @@ fn encode_codestream(
     cfg.g_profile = u32::from(SEQ_PROFILE_HIGH);
     cfg.g_bit_depth = aom::AOM_BITS_10;
     cfg.g_input_bit_depth = u32::from(BIT_DEPTH);
-    // One thread is part of the determinism contract, not a performance choice.
-    cfg.g_threads = 1;
+    // Part of the determinism contract (see `AV1_THREADS`), not a performance choice.
+    cfg.g_threads = threads;
     // `g_limit = 1` makes libaom set `still_picture`, and leaving
     // `full_still_picture_hdr` at 0 makes it use the reduced header AVIF wants.
     cfg.g_limit = 1;
@@ -648,9 +662,10 @@ fn encode_codestream(
         c_int::from(metadata.full_range),
         "setting the AV1 colour range",
     )?;
-    // Tiling and row multithreading both perturb output bytes; pin them off so a
-    // single-thread encode is reproducible.
-    encoder.control_int(aom::AV1E_SET_ROW_MT, 0, "disabling AV1 row threading")?;
+    // Row multithreading changes the bytes relative to a single-threaded encode but
+    // is then independent of the worker count (`AV1_THREADS`); tiling would change
+    // the bitstream structure itself, so it stays off.
+    encoder.control_int(aom::AV1E_SET_ROW_MT, 1, "enabling AV1 row threading")?;
     encoder.control_int(aom::AV1E_SET_TILE_COLUMNS, 0, "pinning AV1 tile columns")?;
     encoder.control_int(aom::AV1E_SET_TILE_ROWS, 0, "pinning AV1 tile rows")?;
 
@@ -1765,6 +1780,113 @@ mod tests {
         // Measured: a pure neutral ramp comes back with chroma exactly at the
         // achromatic level, because flat chroma planes are free for the codec.
         assert_eq!(worst, 0, "neutral ramp picked up {worst} codes of chroma");
+    }
+
+    /// A noisy gradient: the encoder needs real per-row decisions, or thread counts
+    /// cannot be told apart. A smooth 64x1024 ramp compressed to 546 bytes, identical
+    /// at every count including 1, which would make the equalities below vacuous.
+    fn thread_test_field(w: u32, h: u32) -> Vec<f32> {
+        let mut seed = 0x9E37_79B9_u32;
+        let mut noise = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed >> 8) as f32 / (1_u32 << 24) as f32 * 0.3
+        };
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let (t, s) = (x as f32 / (w - 1) as f32, y as f32 / (h - 1) as f32);
+                let n = noise();
+                rgb.extend_from_slice(&[
+                    (t + n).min(1.0),
+                    (s + n * 0.5).min(1.0),
+                    ((t * s).sqrt() + n * 0.7).min(1.0),
+                ]);
+            }
+        }
+        rgb
+    }
+
+    fn thread_test_planes(w: u32, h: u32, rgb: &[f32]) -> Planes {
+        let render = render_tiny(hdr::HdrTransfer::Pq, rgb, w, h);
+        quantize_to_ycbcr(render.image().rgb(), w, h).unwrap().0
+    }
+
+    fn thread_test_codestream(w: u32, h: u32, rgb: &[f32], threads: c_uint) -> Vec<u8> {
+        let render = render_tiny(hdr::HdrTransfer::Pq, rgb, w, h);
+        let planes = quantize_to_ycbcr(render.image().rgb(), w, h).unwrap().0;
+        encode_codestream(&planes, w, h, render.metadata(), threads).unwrap()
+    }
+
+    #[test]
+    fn row_multithreading_is_what_makes_the_pinned_bytes_differ_from_one_thread() {
+        // The other half of `AV1_THREADS`' contract, and what stops the equality test
+        // below being vacuous: row-mt is genuinely active, so a 1-worker encode (which
+        // libaom treats as row-mt off) does *not* reproduce the shipped bytes. Cheap
+        // to show on a small field, so it is tested here rather than at 2048x1024.
+        let (w, h) = (256_u32, 256_u32);
+        let rgb = thread_test_field(w, h);
+        let pinned = thread_test_codestream(w, h, &rgb, AV1_THREADS);
+        let single = thread_test_codestream(w, h, &rgb, 1);
+        assert!(
+            single != pinned,
+            "one worker reproduced the {AV1_THREADS}-worker bytes: row-mt is not active \
+             on this field, so the thread-count equality test proves nothing",
+        );
+    }
+
+    #[test]
+    fn codestream_does_not_depend_on_the_worker_thread_count() {
+        // The determinism contract behind `AV1_THREADS`: with row-mt on, libaom writes
+        // the same bytes whatever the worker count.
+        //
+        // **The field has to be this big.** libaom caps the row-mt workers it actually
+        // spawns at roughly half the superblock columns, so on a small frame every
+        // count collapses to the same few workers and the equality is vacuous. Measured
+        // encode times (debug, this machine) show where the cap bites: at 1024x1024,
+        // 4/8/16 workers all take ~1.02 s, so 8 is never reached; at 2048x1024 the
+        // times are 2.68 / 1.87 / 1.48 / 1.48 s for 2 / 4 / 8 / 16, so 2 and 8 are
+        // genuinely different worker counts and 16 is where it caps. Shrinking this
+        // frame silently stops testing the count nc actually ships.
+        let (w, h) = (2048_u32, 1024_u32);
+        let rgb = thread_test_field(w, h);
+        let planes = thread_test_planes(w, h, &rgb);
+        let render = render_tiny(hdr::HdrTransfer::Pq, &rgb, w, h);
+        let pinned = encode_codestream(&planes, w, h, render.metadata(), AV1_THREADS).unwrap();
+        let two = encode_codestream(&planes, w, h, render.metadata(), 2).unwrap();
+        assert!(
+            two == pinned,
+            "2 worker threads produced a different codestream than {AV1_THREADS}",
+        );
+
+        // And it decodes. `decoded_code_error_stays_within_the_pinned_codec_bounds`
+        // pins the exact error, but only on a 256x64 field — one superblock row,
+        // where row-mt has nothing to split — so nothing else in the suite decodes a
+        // codestream that row multithreading actually produced. The bound here is
+        // deliberately loose: this asserts the row-split bitstream is real image
+        // data, not that the quantizer still rounds the way that test pins. Measured
+        // 38 of 1023 on this field at `CQ_LEVEL`; a wrong decode is in the hundreds.
+        let decoded = decode_codestream(&pinned, w, h);
+        assert_eq!(decoded.len(), (w * h) as usize);
+        let worst = [&planes.y, &planes.cb, &planes.cr]
+            .into_iter()
+            .enumerate()
+            .map(|(plane, want)| {
+                decoded
+                    .iter()
+                    .zip(want)
+                    .map(|(px, &w)| px[plane].abs_diff(w))
+                    .max()
+                    .unwrap()
+            })
+            .max()
+            .unwrap();
+        assert!(
+            worst <= 64,
+            "a row-multithreaded codestream decoded {worst} code units off the source \
+             (out of 1023) — far past lossy-coding error, so it is not decoding correctly",
+        );
     }
 
     #[test]

@@ -1,7 +1,11 @@
 # GPU Rendering Spike
 
-**Status:** closed — decision recorded; revisit when nc gains an interactive
-native app or a browser (WASM) build.
+**Status:** closed — decision recorded and **carried out**: the CPU multithreading
+of decisions 2 and 3 shipped on 2026-09-16 (`output/parallel-display-stages`,
+`output/parallel-hdr-stages`, `output/avif-row-multithreading`). Everything below
+describes the pipeline **as it was measured**, before that work; the timings are the
+before/after evidence, not a description of today's code. Revisit when nc gains an
+interactive native app or a browser (WASM) build.
 
 **Investigated:** 2026-09-16 · `nc` at `6643a23`, release build, rustc 1.98.1 ·
 Apple M4 Pro (14 cores, 48 GiB)
@@ -13,9 +17,9 @@ Apple M4 Pro (14 cores, 48 GiB)
    `hdr-pq` run, and at most ~40% of any run *after* the two CPU fixes below — and
    the transfer of ~200 MB of f32 pixels each way eats most of that. The realistic
    saving is 100–250 ms per frame.
-2. **Multithread the CPU stages instead.** Everything after reconstruction is
-   single-threaded today. A rayon pass over eight per-pixel loops produced
-   byte-identical output and cut the TIFF and gain-map presets 3–4x.
+2. **Multithread the CPU stages instead.** Everything after reconstruction *was*
+   single-threaded. A rayon pass over eight per-pixel loops produced byte-identical
+   output and cut the TIFF and gain-map presets 3–4x. Shipped.
 3. **Let libaom use row multithreading with a fixed thread count ≥ 2.** Output is
    identical for 2, 4 and 8 threads and 5x faster at 8; only the one-thread case
    differs, so the pinned single thread is a choice, not a format constraint.
@@ -87,8 +91,8 @@ place; any added buffer must be reflected in `pipeline/memory.rs`.
 
 ## Experiment 2 — libaom row multithreading (`hdr-pq`)
 
-`io/avif.rs` pins `g_threads = 1` and `AV1E_SET_ROW_MT = 0` for determinism.
-Measured on the same frame:
+At the time of the spike `io/avif.rs` pinned `g_threads = 1` and
+`AV1E_SET_ROW_MT = 0` for determinism. Measured on the same frame:
 
 | threads | row-mt | encode (ms) | output |
 |---|---|---|---|
@@ -221,10 +225,12 @@ added first. **No layer.** What is added is a rule and one small helper.
   pass over the rendered buffer. Only integer counters, `min` and `max` may be
   folded in parallel.
 - **One small helper module, justified by de-duplication only**: an in-place
-  pixel map, a checked map that returns the first error with its pixel index, and
-  an integer fold — one place for the chunk size and the `as_chunks` guard, and an
-  API that cannot express a parallel f32 sum. If it ever grows a backend enum it
-  has become the layer above.
+  pixel map and checked maps that return the first error with its pixel index —
+  one place for the `as_chunks` guard, and an API that cannot express a parallel
+  f32 sum. Band sizes stay with their reason rather than moving here, because the
+  reasons differ: lcms2's per-call setup cost is amortised over *rows*, while the
+  encoders' sample bands must be a multiple of 3 to keep channels aligned. If this
+  module ever grows a backend enum it has become the layer above.
 - **Encoders get no abstraction.** libaom has row multithreading with a pinned
   thread count; the pure-Rust JPEG encoder has none; TIFF is I/O. They share
   nothing worth naming.
@@ -253,8 +259,8 @@ added first. **No layer.** What is added is a rule and one small helper.
 This reproduces the sequential `legacy` row of the timing table. The two
 experiments were throwaway patches, reverted and not preserved: Experiment 1 was
 rayon over the loops named under *Where the time goes today*; Experiment 2
-changed only `g_threads` and `AV1E_SET_ROW_MT` in `io/avif.rs`. Their numbers are
-re-measured when the multithreading work ships.
+changed only `g_threads` and `AV1E_SET_ROW_MT` in `io/avif.rs`. Both shipped on
+2026-09-16; `docs/progress/output.md` carries the as-shipped numbers.
 
 ```sh
 cargo build --release

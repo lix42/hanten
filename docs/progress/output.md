@@ -162,6 +162,16 @@ What other epics need to know about `output`:
 - **ICC bytes are platform-dependent**, so profile-inclusive byte hashes are not a
   valid cross-platform gate — profile determinism here is pinned per build via the
   dateTime-zeroing path.
+- **Per-pixel stages run in parallel through `pipeline::pixels`, and the rule is
+  map-only** (2026-09-16). Any epic adding a per-pixel stage should use its drivers
+  rather than hand-rolling rayon: they keep output byte-identical and make a failing
+  pixel's reported index deterministic (`find_map_first`, lowest index wins). A
+  floating-point reduction must run in a **fixed order** — the MaxFALL sum is a
+  sequential pass over the mapped buffer, and banding it would move `clli`; integer
+  counts, `min` and `max` may be folded in parallel. Two encoder-side consequences:
+  the shared lcms2 transform must stay `DisallowCache` on the **global** context, and
+  `io::QUANTIZE_BAND_SAMPLES` must stay a multiple of 3 (a `const` assertion holds
+  it) or every per-band channel sum misattributes.
 
 
 ## display-p3-output
@@ -1281,3 +1291,228 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 - Goal: the SDR rendition as an 8-bit JPEG with no gain map. Filed 2026-09-13 when the
   user set the product shape (SDR lossless default; HDR lossless, SDR JPEG supported;
   HDR JPEG good to have) and this was the one of the four nc lacks.
+
+## parallel-display-stages
+
+**Status:** done
+**Updated:** 2026-09-16
+
+- Goal: byte-identical rayon drivers for the lcms2 transform, SDR render, ACEScg
+  mapping and print controls, plus the `pipeline::pixels` helper. Filed 2026-09-16 from
+  [gpu-rendering-spike](../gpu-rendering-spike.md), Experiment 1, which measured the
+  sequential colour stage at ~1100–1300 ms of a 1.4–1.6 s run on a 16.4 MP scan.
+- 2026-09-16: started. The spike's throwaway patch is the reference for what to expect:
+  `legacy` 1377 → 360 ms, `display-p3` 1567 → 417 ms, all six presets `cmp`-identical.
+- 2026-09-16: **done.** New `pipeline/pixels.rs` with two drivers — `map_in_place`
+  (parallel in-place map over RGB triples) and `try_map` (parallel fallible map into a
+  fresh buffer). `try_map` **re-scans sequentially on failure and returns the
+  lowest-indexed error**: stage errors quote a pixel index, and rayon's `try_for_each`
+  would otherwise report whichever thread lost the race. No integer fold yet — nothing
+  in this chunk needs one, and the crate's dead-code stance forbids speculative API
+  (`parallel-hdr-stages` adds it with its first user). `working_space::map_nc_film_rgb_v1`
+  and `render_split::apply_shared_controls` use `map_in_place`; `sdr::render` uses
+  `try_map` (writes straight into the output, so no temporary — peak RSS unchanged).
+  `color::transform_in_place` builds the lcms2 transform with `Flags::NO_CACHE` and runs
+  it over 8-row bands on all cores behind a `SharedTransform` wrapper carrying the one
+  `unsafe impl Sync`: the crate marks only its `DisallowCache` type `Sync` and no 6.x
+  constructor returns that type, so the claim is made at the one call site with the
+  reasoning beside it. A unit test pins the banded transform bit-identical to one
+  sequential `cmsDoTransform` (37 rows, so the tail band runs). Four gates green, 16
+  pre-existing unresolved rustdoc links, none added.
+  Measured on the spike frame (16.4 MP), all six presets `cmp`-identical to the
+  pre-change binary, peak RSS unchanged per preset:
+
+  | preset | before (ms) | after (ms) | colour stage |
+  |---|---|---|---|
+  | legacy | 1377 | 390 | 1141 → 110 |
+  | display-p3 | 1567 | 404 | 1321 → 128 |
+  | gain-map-hdr | 2285 | 1101 | 649 → 505 (its lcms2 sits in *encode*: 1489 → 469) |
+  | film-master / hdr-linear-tiff / hdr-pq | unchanged within noise | | |
+
+  **One observation for `parallel-hdr-stages`:** the sequential stage that *follows* a
+  wide fan-out runs slower on this M4 Pro — `legacy` encode 106–115 → 134–144 ms,
+  `film-master` encode 96 → 150–192 ms with 10–14 rayon threads, back to ~117–120 ms
+  with `RAYON_NUM_THREADS=4`. Consistent run to run, not chased; the u16 quantize is
+  parallelized next anyway, and the f32 TIFF write is the case to re-measure. Nothing
+  user-visible changed, so `docs/using-nc.md` is untouched.
+- 2026-09-16 (review follow-up): two claims in the entry above were wrong and are
+  **superseded**. The lcms2 crate *does* return its `Sync` transform type: the generic
+  `new_flags_context` keeps `Flags::NO_CACHE` in the type as `DisallowCache`; only the
+  `GlobalContext` shortcuts (`new`, `new_flags`) erase it via `allow_cache()`. Built that
+  way with `GlobalContext::new()` — the same null context, so identical bytes and the
+  global error handler `cli` installs still receives faults — the transform is
+  `Sync` by the crate's own impl, and the `SharedTransform` wrapper with its
+  `unsafe impl Sync` is **gone**. And `try_map` no longer re-scans on failure: since
+  `parallel-hdr-stages` both fallible drivers use rayon's positional `find_map_first`
+  (see that entry). `color::transform_in_place` now also takes its ragged-buffer guard
+  from `pixels::triples_mut`, so the message exists once.
+- 2026-09-16 (ship run): all gates green on **CI's exact commands**, which is how the
+  `--all-features` / `--all-targets` gap in CLAUDE.md's gate list was found and fixed —
+  vendored-native check, `fmt --check`, `clippy --all-targets --all-features -D warnings`,
+  `build --all-targets --all-features`, `cargo test --all-features` (766 + 191) and the
+  `nctool` suite (284); 16 pre-existing unresolved rustdoc links, none added. Ten presets
+  re-verified `cmp`-identical on the 16.4 MP frame with report fields equal apart from
+  path/identity/elapsed. A third review round ran; the second Codex attempt hit a
+  workspace spend cap and returned nothing, so it counted as a skipped reviewer. Its
+  findings are recorded under the task each belongs to.
+- 2026-09-16 (ship review): `color::to_output`'s rustdoc still claimed `cmsDoTransform`
+  sees "the same values in the same order" — true of the clone-based version it was
+  written for, false now that the transform runs over row bands. Reworded: the values are
+  the same, the order is not, and the transform is per-pixel with its only shared mutable
+  state (the cache) disabled.
+
+## parallel-hdr-stages
+
+**Status:** done
+**Updated:** 2026-09-16
+
+- Goal: the HDR render (MaxFALL sum kept as a sequential pass), transfer encode,
+  gain-map build and quantize on the same helper, byte-identical; re-measure peak
+  memory. Filed 2026-09-16 from the spike's Experiment 1.
+- 2026-09-16: **done.** `pipeline::pixels` gained `try_map_in_place` and both fallible
+  drivers now use rayon's positional `find_first` instead of a rescan: it returns the
+  lowest-indexed error directly and stops the work to its right, so the "non-pure kernel"
+  caveat is gone. `hdr::render_linear` maps through `try_map` and then runs MaxCLL/MaxFALL
+  as one sequential pass over the rendered buffer in pixel order — `clli` and the report's
+  `content_light` are unchanged on every HDR preset. `hdr::encode_transfer` uses
+  `try_map_in_place`. `gain_map::build` is split into a `gain_pixel` kernel and a driver
+  that writes both outputs (common-P3 HDR and gains) into preallocated buffers under the
+  same `find_first` rule — two inputs and two outputs, so it drives rayon directly — with
+  the per-channel min/max folded in parallel (exact, order-free; gains are finite by
+  construction). `encode_legacy_gain_map`'s three maps and `io::encode::quantize_u16` /
+  `io::ultra_hdr::quantize_base` run over bands with integer loss counts and channel sums
+  reduced afterwards; `quantize_base`'s band length is a multiple of 3 so the channel of
+  a sample is its in-band index mod 3. No new full-frame buffer anywhere: peak RSS is
+  unchanged on all nine presets measured, so `pipeline/memory.rs` needed no change.
+  Four gates green; 16 pre-existing unresolved rustdoc links, none added.
+  Measured on the spike frame (16.4 MP), every preset `cmp`-identical to the chunk-1
+  binary and reports equal apart from path/identity/elapsed:
+
+  | preset | chunk 1 (ms) | chunk 2 (ms) | colour | encode |
+  |---|---|---|---|---|
+  | hdr-linear-tiff | 448 | 296 | 182 → 38 | |
+  | hdr-pq-tiff | 785 | 317 | 536 → 89 | |
+  | hdr-hlg-tiff | 786 | 308 | 477 → 76 | |
+  | gain-map-hdr | 1045 | 517 | 479 → 104 | 446 → 275 (base JPEG ~120 of it) |
+  | hdr-pq / hdr-hlg | 3313 / 3862 | 2939 / 3525 | 544 → 89 | libaom, `avif-row-multithreading` |
+  | display-p3 / legacy | 360 / 362 | 321 / 294 | | u16 quantize 110 → 66 |
+
+  Against the original sequential binary the gain-map default went 2285 → 517 ms. The
+  post-fan-out slowdown noted under `parallel-display-stages` no longer shows on the
+  u16 presets (encode fell to 66–69 ms once quantize went parallel); the f32
+  `film-master` write was not re-measured.
+- 2026-09-16 (review follow-up): `gain_map::build` now goes through
+  `pixels::try_zip_map` (two inputs, two outputs) instead of a hand-rolled copy of the
+  lowest-index rule; `encode_legacy_gain_map` folds validity into its min/max pass so the
+  ratios are read once (`f32::min`/`max` drop NaN, so validity cannot be inferred from
+  the bounds); both quantizers share `io::encode::QUANTIZE_BAND_SAMPLES`, a multiple of 3
+  so a sample's channel is its in-band index mod 3. All presets re-verified
+  `cmp`-identical. **Not taken:** folding MaxCLL/MaxFALL into fixed index bands — it is
+  reproducible, but associates the `f64` sum differently and can move a rounded nit,
+  i.e. a `clli` byte change; recorded as an option in `pipeline/pixels`' module doc.
+  The `film-master` post-fan-out encode figure could not be re-measured cleanly (the
+  machine was loaded by review agents); still open.
+- 2026-09-16 (ship review): **the multiple-of-3 band invariant was load-bearing in three
+  comments and asserted nowhere**, and every test of the two quantizers used six samples
+  against a 98,304-sample band, so nothing crossed a boundary. Retuning
+  `QUANTIZE_BAND_SAMPLES` to a non-multiple of 3 would have silently misattributed every
+  per-band channel sum with all gates green. Added a `const` assertion (the `AV1_THREADS`
+  precedent) and two tests spanning two full bands plus a ragged tail, checking codes,
+  loss counts and channel means against a plain sequential pass.
+  **Declined:** parallelizing `quantize_coded_u16`'s fused RMS pass, the last sequential
+  per-sample loop on the coded-HDR TIFF path. Preserving the `f64` sum's exact order would
+  need a full-frame error buffer at 24 B/px, and banding it would move the reported RMS —
+  the same reason the MaxFALL sum stays sequential. `hdr-pq-tiff`/`hdr-hlg-tiff` still pay
+  one sequential pass over ~49 M samples.
+- 2026-09-16 (second review pass): four more fixes. `QUANTIZE_BAND_SAMPLES` had landed
+  **between `quantize_u16`'s doc comment and its signature** — the exact insertion trap
+  CLAUDE.md records, leaving the function undocumented and the constant owning twelve
+  lines about clamping and NaN; it now lives in `io/mod.rs`, the common parent of the two
+  encoders that share it. `channel_means_u16` folds per band (u64 sums, exact and
+  order-free), removing the last sequential full-frame pass in the u16 encode; it is
+  parallelized in place rather than folded into `quantize_u16`, because that function
+  also quantizes the **single-channel IR plane**, where an `index % 3` channel sum is
+  meaningless. Every preset re-verified byte-identical with equal report fields.
+
+## avif-row-multithreading
+
+**Status:** done
+**Updated:** 2026-09-16
+
+- Goal: libaom row-mt with a pinned thread count ≥ 2. Filed 2026-09-16 from the spike's
+  Experiment 2: identical bytes at 2/4/8 threads, 2824 → 570 ms; changes shipped
+  `hdr-pq`/`hdr-hlg` bytes (+0.11% size), so it needs the baseline bump and a CI
+  equal-hash test.
+- 2026-09-16: **done.** `io/avif.rs` pins `AV1_THREADS = 8` (a `const` assertion keeps
+  it ≥ 2) and turns `AV1E_SET_ROW_MT` on; `encode_codestream` takes the count as a
+  parameter so a test can vary it. The test encodes a noisy 256x256 field at 2, 3 and 4
+  workers and asserts byte equality with the constant, **and** asserts that 1 worker
+  differs — the first fixture tried, a smooth 64x1024 gradient, compressed to 546 bytes
+  identical at every count, which would have made the equality vacuous. Scratch runs
+  showed 1 ≠ 8 and 2 = 8 on every field from 256x256 up, noisy or smooth, once the frame
+  is wider than one superblock. Supersedes the "one thread, no tiling" sentence in the
+  `hdr-avif-output` summary above.
+  **Versioning:** `pipeline_version` bumps only when *default* behaviour changes
+  (design-spec §9) and `hdr-pq`/`hdr-hlg` are not the default, so no bump; the byte
+  change is recorded here and in the task file. The pinned codec-bounds test still
+  passes unchanged: its 256x64 field is one superblock row, where row-mt has nothing to
+  split, so the dav1d-measured figures stand. The new 16.4 MP files decode with
+  `avifdec` 1.x (10-bit, 4927x3335).
+  Measured on the spike frame against the chunk-2 binary (single thread):
+
+  | preset | encode (ms) | total (ms) | size | run-to-run |
+  |---|---|---|---|---|
+  | hdr-pq | 2652 → 573 | 3313 → 795 | +0.12% | identical |
+  | hdr-hlg | 3282 → 683 | 3862 → 912 | +0.08% | identical |
+
+  The timings above were taken before this work was rebased onto #120/#124, which
+  moved the *default render* and so every absolute file size; the sizes were then
+  re-measured against that new base (`hdr-pq` 2,122,509 → 2,125,084 bytes, `hdr-hlg`
+  2,753,572 → 2,755,822) and only the percentages carried over. The parallel
+  structure and the byte-identity result are unaffected either way.
+
+  Peak RSS 1.34 → 1.35 GB (worker buffers, ~10 MB), inside the memory model's 15%
+  allowance, so `RunProfile::HdrAvif`'s staging constant is unchanged. Against the
+  original sequential binary `hdr-pq` went 3532 → 795 ms. No flag or recipe key changed,
+  so `docs/using-nc.md` is untouched.
+- 2026-09-16 (review follow-up): the checklist entry in `TASKS.md` had promised a
+  "baseline bump"; reconciled to what happened — no `pipeline_version` bump, the byte
+  change recorded as an addendum to `reports/render-defaults-v3.md`. Thread-count
+  independence is stated as *measured on libaom 3.11.0 and pinned by the test*, not as
+  documented libaom behaviour: `AV1E_SET_ROW_MT`'s documentation says only on/off.
+- 2026-09-16 (ship review): **nothing in CI decoded a row-multithreaded codestream.** The
+  pinned codec-bounds test runs on a 256x64 field — one superblock row, where row-mt has
+  nothing to split — so this task's own "re-check the bounds on the new codestream"
+  verification item was satisfied vacuously, and decodability of the shipped path rested
+  on one manual `avifdec` run. The 2048x1024 thread test now also decodes its codestream
+  and bounds the per-plane error loosely: measured **38 of 1023** at `CQ_LEVEL`, against a
+  ceiling of 64, where a wrong decode is in the hundreds. Deliberately loose — the exact
+  error stays pinned on the small field.
+  Two provenance fixes alongside it. `AVIF_STAGING_BYTES_PER_PX` and the two frozen
+  measured literals in `memory.rs` were fitted with one worker and row-mt off; the figures
+  still hold (the extra worker buffers are ~10 MB at 16.4 MP, inside the 15% allowance)
+  but nothing said so, so a future re-fit would have measured a configuration nc no longer
+  runs. And `docs/TASKS.md` claimed "identical bytes for 2/3/4/8 threads" where the shipped
+  test pins 2 against 8 — the "3" survived from the superseded first test.
+- 2026-09-16 (second review pass): **the thread-count test was nearly vacuous and the
+  field is now sized by measurement.** libaom caps the row-mt workers it spawns near half
+  the superblock columns, so on the original 256x256 field every count from 2 up
+  collapsed to the same ~2 workers and the equality with the pinned 8 proved nothing.
+  Measured debug encode times: 1024x1024 takes ~1.02 s at 4, 8 *and* 16 workers (8 never
+  reached), while 2048x1024 takes 2.68 / 1.87 / 1.48 / 1.48 s at 2 / 4 / 8 / 16 — so the
+  equality now runs there, 2 vs the pinned 8, both genuine. The cheap 1-vs-8 discriminator
+  that proves row-mt is active at all moved to its own test on the small field. Cost: the
+  in-`src` test binary went from ~1 s to ~5 s.
+
+## post-fanout-encode-slowdown
+
+**Status:** not started
+**Updated:** 2026-09-16
+
+- Goal: explain the 30–90 ms slowdown of the sequential encode that follows a wide
+  rayon section, seen on the M4 Pro while landing `parallel-display-stages`
+  (`film-master` 96 → 150–192 ms, `legacy` 106–115 → 134–144 ms; ~117 ms at
+  `RAYON_NUM_THREADS=4`, not restored at 10). Filed 2026-09-16 from the review of the
+  multithreading work; the measurements and the candidate causes are in the task file
+  and under `parallel-display-stages` above. A clean re-measurement was blocked by a
+  loaded machine (load average ~40 from other sessions).

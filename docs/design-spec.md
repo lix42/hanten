@@ -2448,9 +2448,13 @@ would cost a Unix-only code path for output that is reproducible by re-running.
     the renderer's peak; HLG omits the box because HLG is display-referred and
     absolute values would be a false claim. Being named
     presets they are **atomic** on the same terms as `film-master`, and they consume
-    the shared post-ACEScg print controls. Encoder settings (quality, speed, one
-    thread, no tiling) are pinned parts of the preset, not knobs: repeated encodes on
-    one build are byte-identical. No EXIF, XMP, ICC, timestamp or identifier is
+    the shared post-ACEScg print controls. Encoder settings (quality, speed, row
+    multithreading with a pinned worker count of 8, no tiling) are pinned parts of
+    the preset, not knobs: repeated encodes on one build are byte-identical. The
+    worker count is a constant, never derived from the machine: libaom documents no
+    thread-count independence, so it is measured (identical bytes for every count
+    from 2 upward on libaom 3.11.0) and pinned by a test, while one thread disables
+    row-mt and writes different bytes. No EXIF, XMP, ICC, timestamp or identifier is
     written.
   - `hdr-linear-tiff` is the display-linear HDR **interchange master**, accepted by
     requiring a `.tif`/`.tiff` output path. It writes the

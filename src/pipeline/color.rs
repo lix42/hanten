@@ -32,12 +32,15 @@
 use std::path::PathBuf;
 
 use lcms2::{
-    CIExyY, CIExyYTRIPLE, ColorSpaceSignature, Intent, PixelFormat, Profile, ToneCurve, Transform,
+    CIExyY, CIExyYTRIPLE, ColorSpaceSignature, DisallowCache, Flags, GlobalContext, Intent,
+    PixelFormat, Profile, ToneCurve, Transform,
 };
+use rayon::prelude::*;
 
 use crate::pipeline::colorimetry::definitions::{self, ColorSpace, transfer};
 use crate::pipeline::colorimetry::pinned;
 use crate::pipeline::hdr;
+use crate::pipeline::pixels;
 use crate::pipeline::sdr::{RenderedSdr, SdrGamut, SdrRenderMetadata};
 use crate::types::{LinearImage, NcError, OutDepth, OutputParams, Result};
 
@@ -154,9 +157,11 @@ fn profile_icc(profile: &Profile) -> Result<Vec<u8>> {
 /// values are neither working-space nor output-space.
 ///
 /// The values are pixel-for-pixel identical to the old clone-based transform:
-/// `cmsDoTransform` is applied to the same values in the same order, and lcms2
-/// supports in-place operation when the input and output pixel formats match (both
-/// `RGB_FLT` here).
+/// `cmsDoTransform` is applied to the same values, and lcms2 supports in-place
+/// operation when the input and output pixel formats match (both `RGB_FLT` here).
+/// The transform runs on several bands of rows at once, which does not change them
+/// — it is per-pixel, and the cache that was its only shared mutable state is
+/// disabled (see `transform_in_place`).
 pub fn to_output(mut image: LinearImage, params: &OutputParams) -> Result<(LinearImage, Vec<u8>)> {
     let explicit = params
         .output_profile
@@ -807,25 +812,37 @@ impl Drop for PipelineHandle {
     }
 }
 
+/// Rows per `cmsDoTransform` call when the transform runs across cores. Each call
+/// has a fixed setup cost that a band amortises; whole rows keep every pixel in the
+/// order the single sequential call used.
+const TRANSFORM_ROWS_PER_BAND: usize = 8;
+
 fn transform_in_place(image: &mut LinearImage, input: &Profile, output: &Profile) -> Result<()> {
-    let transform: Transform<[f32; 3], [f32; 3]> = Transform::new(
-        input,
-        PixelFormat::RGB_FLT,
-        output,
-        PixelFormat::RGB_FLT,
-        Intent::RelativeColorimetric,
-    )
-    .map_err(|e| NcError::Other(format!("failed to build color transform: {e}")))?;
+    // `NO_CACHE` drops Little CMS's one-pixel result cache, the only per-transform
+    // mutable state, which is what lets one transform serve every rayon worker; it
+    // changes no output value. The flag has to reach the *type*: lcms2 marks only
+    // `Transform<_, _, _, DisallowCache>` as `Sync`, and the `GlobalContext`
+    // shortcut constructors (`new`, `new_flags`) erase it, so the transform is built
+    // through `new_flags_context` with the same null global context — identical
+    // bytes, and Little CMS keeps reporting faults to the global handler `cli`
+    // installs.
+    let transform: Transform<[f32; 3], [f32; 3], GlobalContext, DisallowCache> =
+        Transform::new_flags_context(
+            GlobalContext::new(),
+            input,
+            PixelFormat::RGB_FLT,
+            output,
+            PixelFormat::RGB_FLT,
+            Intent::RelativeColorimetric,
+            Flags::NO_CACHE,
+        )
+        .map_err(|e| NcError::Other(format!("failed to build color transform: {e}")))?;
     // `rgb` is interleaved RGB with len == w*h*3 (enforced by `LinearImage::new`),
     // but the field is public, so guard against silently dropping a trailing tail.
-    let rgb_len = image.rgb.len();
-    let (pixels, rest) = image.rgb.as_chunks_mut::<3>();
-    if !rest.is_empty() {
-        return Err(NcError::Other(format!(
-            "rgb buffer length {rgb_len} is not a multiple of 3"
-        )));
-    }
-    transform.transform_in_place(pixels);
+    let band = (image.width as usize).max(1) * TRANSFORM_ROWS_PER_BAND;
+    pixels::triples_mut(&mut image.rgb)?
+        .par_chunks_mut(band)
+        .for_each(|rows| transform.transform_in_place(rows));
     Ok(())
 }
 
@@ -1367,6 +1384,33 @@ mod tests {
             4,
             "Display P3 TRC must be the parametric sRGB curve (type 4)"
         );
+    }
+
+    #[test]
+    fn parallel_transform_matches_one_sequential_call() {
+        // Same machine, same lcms2 build: the banded parallel transform must be
+        // bit-identical to one sequential `cmsDoTransform` over the whole buffer.
+        // 37 rows is not a multiple of the band, so the short tail band runs too.
+        let working = working_profile().unwrap();
+        let output = build_profile(&OutputSpace::DisplayP3).unwrap();
+        let (w, h) = (64_u32, 37_u32);
+        let rgb: Vec<f32> = (0..(w * h * 3) as usize)
+            .map(|i| ((i * 7919) % 1000) as f32 / 1000.0 * 1.2 - 0.05)
+            .collect();
+        let mut image = LinearImage::new(w, h, rgb.clone(), None).unwrap();
+        transform_in_place(&mut image, &working, &output).unwrap();
+
+        let mut expect = rgb;
+        let t: Transform<[f32; 3], [f32; 3]> = Transform::new(
+            &working,
+            PixelFormat::RGB_FLT,
+            &output,
+            PixelFormat::RGB_FLT,
+            Intent::RelativeColorimetric,
+        )
+        .unwrap();
+        t.transform_in_place(expect.as_chunks_mut::<3>().0);
+        assert_eq!(image.rgb, expect);
     }
 
     #[test]

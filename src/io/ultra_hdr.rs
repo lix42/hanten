@@ -16,8 +16,10 @@ use std::path::Path;
 use std::ptr::NonNull;
 
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
+use rayon::prelude::*;
 use ultrahdr_sys as uhdr;
 
+use crate::io::QUANTIZE_BAND_SAMPLES;
 use crate::io::staged::{self, Staged};
 use crate::pipeline::gain_map::iso;
 use crate::pipeline::{color, gain_map};
@@ -180,32 +182,60 @@ fn encode_jpeg(
 }
 
 fn quantize_base(rgb: &[f32]) -> (Vec<u8>, EncodeReport, OutputStats) {
-    let mut bytes = Vec::with_capacity(rgb.len());
-    let mut loss = EncodeReport {
-        total_samples: rgb.len() as u64,
-        ..EncodeReport::default()
-    };
-    let mut sums = [0_u64; 3];
-    let mut pixels = 0_u64;
-    for (index, value) in rgb.iter().copied().enumerate() {
-        let byte = if !value.is_finite() {
-            loss.non_finite += 1;
-            0
-        } else if value < 0.0 {
-            loss.clipped_low += 1;
-            0
-        } else if value > 1.0 {
-            loss.clipped_high += 1;
-            u8::MAX
-        } else {
-            (value * u8::MAX as f32).round() as u8
-        };
-        sums[index % 3] += u64::from(byte);
-        bytes.push(byte);
-        if index % 3 == 2 {
-            pixels += 1;
-        }
+    // One parallel pass over bands whose length is a multiple of 3
+    // (`QUANTIZE_BAND_SAMPLES`), so a sample's channel is its index within the band
+    // modulo 3. Loss counts and channel sums are integers, so their totals are exact
+    // in any order.
+    #[derive(Default)]
+    struct Band {
+        non_finite: u64,
+        clipped_low: u64,
+        clipped_high: u64,
+        sums: [u64; 3],
     }
+    let mut bytes = vec![0_u8; rgb.len()];
+    let band = bytes
+        .par_chunks_mut(QUANTIZE_BAND_SAMPLES)
+        .zip(rgb.par_chunks(QUANTIZE_BAND_SAMPLES))
+        .map(|(out, values)| {
+            let mut band = Band::default();
+            for (index, (o, value)) in out.iter_mut().zip(values.iter().copied()).enumerate() {
+                let byte = if !value.is_finite() {
+                    band.non_finite += 1;
+                    0
+                } else if value < 0.0 {
+                    band.clipped_low += 1;
+                    0
+                } else if value > 1.0 {
+                    band.clipped_high += 1;
+                    u8::MAX
+                } else {
+                    (value * u8::MAX as f32).round() as u8
+                };
+                band.sums[index % 3] += u64::from(byte);
+                *o = byte;
+            }
+            band
+        })
+        .reduce(Band::default, |a, b| Band {
+            non_finite: a.non_finite + b.non_finite,
+            clipped_low: a.clipped_low + b.clipped_low,
+            clipped_high: a.clipped_high + b.clipped_high,
+            sums: [
+                a.sums[0] + b.sums[0],
+                a.sums[1] + b.sums[1],
+                a.sums[2] + b.sums[2],
+            ],
+        });
+    let loss = EncodeReport {
+        total_samples: rgb.len() as u64,
+        clipped_low: band.clipped_low,
+        clipped_high: band.clipped_high,
+        non_finite: band.non_finite,
+    };
+    let sums = band.sums;
+    // Whole triples, as the sequential loop counted them (its `index % 3 == 2`).
+    let pixels = (rgb.len() / 3) as u64;
     let mean = if pixels == 0 {
         [0.0; 3]
     } else {
@@ -511,6 +541,54 @@ mod tests {
         assert_eq!(loss.clipped_high, 1);
         assert_eq!(loss.non_finite, 1);
         assert_eq!(stats.mean[0], 0.5);
+    }
+
+    #[test]
+    fn quantize_base_matches_one_sequential_pass_across_band_boundaries() {
+        // Spans two full `QUANTIZE_BAND_SAMPLES` bands plus a ragged triple, so a
+        // band that misaligned the `% 3` channel sums would show up here; every
+        // other test of this function is six samples inside a single band.
+        let len = QUANTIZE_BAND_SAMPLES * 2 + 6;
+        let rgb: Vec<f32> = (0..len)
+            .map(|i| match i % 1777 {
+                0 => f32::NAN,
+                1 => -0.5,
+                2 => 1.25,
+                n => n as f32 / 1776.0,
+            })
+            .collect();
+
+        let (bytes, loss, stats) = quantize_base(&rgb);
+
+        let mut want = Vec::with_capacity(len);
+        let (mut non_finite, mut low, mut high) = (0_u64, 0_u64, 0_u64);
+        let mut sums = [0_u64; 3];
+        for (i, &v) in rgb.iter().enumerate() {
+            let byte = if !v.is_finite() {
+                non_finite += 1;
+                0
+            } else if v < 0.0 {
+                low += 1;
+                0
+            } else if v > 1.0 {
+                high += 1;
+                u8::MAX
+            } else {
+                (v * u8::MAX as f32).round() as u8
+            };
+            sums[i % 3] += u64::from(byte);
+            want.push(byte);
+        }
+
+        assert_eq!(bytes, want);
+        assert_eq!(loss.non_finite, non_finite);
+        assert_eq!(loss.clipped_low, low);
+        assert_eq!(loss.clipped_high, high);
+        let pixels = (len / 3) as f64;
+        for (c, (sum, mean)) in sums.iter().zip(&stats.mean).enumerate() {
+            let expect = *sum as f64 / pixels / u8::MAX as f64;
+            assert_eq!(*mean, expect, "channel {c}");
+        }
     }
 
     /// List the APPn/SOI/SOS marker sequence of a JPEG stream, for probes.

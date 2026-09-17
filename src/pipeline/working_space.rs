@@ -55,6 +55,7 @@
 
 use crate::algo::FilmRgbImage;
 use crate::pipeline::colorimetry::pinned::NC_FILM_RGB_V1_TO_ACESCG;
+use crate::pipeline::pixels;
 use crate::types::LinearImage;
 
 /// The pinned identifier this mapping records in the convert report
@@ -167,21 +168,14 @@ pub fn map_nc_film_rgb_v1(film: FilmRgbImage) -> AcesCgImage {
     let mut image = film.into_linear();
     let m = &NC_FILM_RGB_V1_TO_ACESCG;
 
-    // Interleaved r,g,b; `len % 3 == 0` is a LinearImage invariant, but guard the
-    // chunking loudly rather than silently dropping a tail (matches `color.rs`).
-    let (pixels, rest) = image.rgb.as_chunks_mut::<3>();
-    debug_assert!(
-        rest.is_empty(),
-        "LinearImage rgb length must be a multiple of 3"
-    );
-    for px in pixels {
+    pixels::map_in_place(&mut image.rgb, |px| {
         // Compute in f64 for precision, then store f32. Read the source triple
         // first so the in-place write of channel 0 doesn't feed channels 1/2.
         let (r, g, b) = (px[0] as f64, px[1] as f64, px[2] as f64);
         px[0] = (m[0][0] * r + m[0][1] * g + m[0][2] * b) as f32;
         px[1] = (m[1][0] * r + m[1][1] * g + m[1][2] * b) as f32;
         px[2] = (m[2][0] * r + m[2][1] * g + m[2][2] * b) as f32;
-    }
+    });
 
     AcesCgImage::new(image)
 }

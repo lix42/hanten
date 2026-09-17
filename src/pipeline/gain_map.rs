@@ -8,6 +8,7 @@
 //! consumes [`GainMapRender`] directly; only a serializer inside this module (or
 //! a child module) may destructure its private fields.
 
+use rayon::prelude::*;
 use serde::Serialize;
 
 pub(crate) mod iso;
@@ -15,6 +16,7 @@ pub(crate) mod iso;
 use crate::pipeline::colorimetry::pinned::{BT2020_TO_DISPLAY_P3, DISPLAY_P3_LUMA};
 use crate::pipeline::display_tone::DisplayTone;
 use crate::pipeline::hdr::{LINEAR_HEADROOM, LinearBt2020Hdr, REFERENCE_WHITE_NITS, render_linear};
+use crate::pipeline::pixels;
 use crate::pipeline::render_split::SharedDisplaySource;
 use crate::pipeline::sdr::{RenderedSdr, SdrGamut, render as render_sdr};
 use crate::types::{LinearImage, NcError, Result};
@@ -201,45 +203,69 @@ pub(crate) fn encode_legacy_gain_map(render: &GainMapRender) -> Result<EncodedGa
     // Legacy XMP mode supports one luminance gain channel. Derive it from the
     // paired common-P3 renditions; keep the canonical RGB ratios untouched for
     // the future ISO serializer.
-    let mut ratios = Vec::with_capacity((width * height) as usize);
-    let mut gain_min = f32::INFINITY;
-    let mut gain_max = f32::NEG_INFINITY;
-    for (sdr, hdr) in render
+    // Per-pixel maps plus one exact min/max fold that also carries validity, so the
+    // ratios are read once; the error names no pixel, so any failing sample may
+    // trigger it. (`f32::min`/`max` drop NaN silently, which is why validity cannot
+    // be inferred from the bounds.)
+    let ratios: Vec<f32> = render
         .sdr
         .image()
         .rgb
         .as_chunks::<3>()
         .0
-        .iter()
-        .zip(render.hdr_display_p3.image.rgb.as_chunks::<3>().0)
-    {
-        let sdr_luma = dot(*sdr, DISPLAY_P3_LUMA);
-        let hdr_luma = dot(*hdr, DISPLAY_P3_LUMA);
-        let ratio = (hdr_luma + policy.offset_hdr[0]) / (sdr_luma + policy.offset_sdr[0]);
-        if !ratio.is_finite() || ratio <= 0.0 {
-            return Err(NcError::Other(
-                "legacy Ultra HDR luminance gain is non-finite or non-positive".into(),
-            ));
-        }
-        gain_min = gain_min.min(ratio);
-        gain_max = gain_max.max(ratio);
-        ratios.push(ratio);
+        .par_iter()
+        .zip(
+            render
+                .hdr_display_p3
+                .image
+                .rgb
+                .as_chunks::<3>()
+                .0
+                .par_iter(),
+        )
+        .map(|(sdr, hdr)| {
+            let sdr_luma = dot(*sdr, DISPLAY_P3_LUMA);
+            let hdr_luma = dot(*hdr, DISPLAY_P3_LUMA);
+            (hdr_luma + policy.offset_hdr[0]) / (sdr_luma + policy.offset_sdr[0])
+        })
+        .collect();
+    let (gain_min, gain_max, valid) = ratios
+        .par_iter()
+        .fold(
+            || (f32::INFINITY, f32::NEG_INFINITY, true),
+            |(lo, hi, valid), ratio| {
+                (
+                    lo.min(*ratio),
+                    hi.max(*ratio),
+                    valid && ratio.is_finite() && *ratio > 0.0,
+                )
+            },
+        )
+        .reduce(
+            || (f32::INFINITY, f32::NEG_INFINITY, true),
+            |a, b| (a.0.min(b.0), a.1.max(b.1), a.2 && b.2),
+        );
+    if !valid {
+        return Err(NcError::Other(
+            "legacy Ultra HDR luminance gain is non-finite or non-positive".into(),
+        ));
     }
     let log_min = gain_min.log2();
     // A spatially constant map still needs a finite normalization denominator.
     let log_span = (gain_max.log2() - log_min).max(1.0 / 255.0);
 
     let normalized = ratios
-        .iter()
+        .par_iter()
         .map(|ratio| normalize_log_gain(*ratio, log_min, log_span, policy.gain_gamma[0]))
         .collect::<Vec<_>>();
-    let mut samples = Vec::with_capacity((out_width * out_height) as usize);
-    for y in 0..out_height {
-        for x in 0..out_width {
+    let samples: Vec<u8> = (0..out_width * out_height)
+        .into_par_iter()
+        .map(|i| {
+            let (x, y) = (i % out_width, i / out_width);
             let value = bilinear_sample(&normalized, width, height, out_width, out_height, x, y);
-            samples.push((value * 255.0).round() as u8);
-        }
-    }
+            (value * 255.0).round() as u8
+        })
+        .collect();
 
     let gain_max = 2.0f32.powf(log_min + log_span);
     Ok(EncodedGainMap {
@@ -328,6 +354,66 @@ fn validate_config(config: GainMapConfig) -> Result<()> {
     Ok(())
 }
 
+/// The gain-map kernel for one pixel: the HDR sample mapped into common linear
+/// Display P3 and the per-channel gain against the SDR base *as stored*.
+fn gain_pixel(
+    sdr_px: [f32; 3],
+    hdr_px: [f32; 3],
+    index: usize,
+    config: &GainMapConfig,
+) -> Result<([f32; 3], [f32; 3])> {
+    validate_non_negative_finite("SDR", sdr_px, index)?;
+    validate_non_negative_finite("HDR", hdr_px, index)?;
+    let converted = mul(BT2020_TO_DISPLAY_P3, hdr_px);
+    if !converted.iter().all(|value| value.is_finite()) {
+        return Err(NcError::Other(format!(
+            "gain-map BT.2020 to Display P3 conversion produced a non-finite sample at \
+             pixel {index}"
+        )));
+    }
+    let luminance = dot(converted, DISPLAY_P3_LUMA);
+    if !luminance.is_finite() || !(0.0..=LINEAR_HEADROOM).contains(&luminance) {
+        return Err(NcError::Other(format!(
+            "gain-map Display P3 HDR luminance is outside the reference-white-relative \
+             display range at pixel {index}"
+        )));
+    }
+    let mapped = gamut_map(converted, luminance, LINEAR_HEADROOM);
+    validate_non_negative_finite("common-domain HDR", mapped, index)?;
+
+    let mut gain_px = [0.0; 3];
+    for channel in 0..3 {
+        // **The base as *stored*, not as rendered.** A decoder reconstructs
+        // `base × gain`, and the base it multiplies is what the JPEG carries — which
+        // the encode clamps to `[0, 1]` per channel. Ratioing against an SDR sample
+        // above reference white would therefore store a gain short by exactly what was
+        // clamped, and the highlight would come back *dark*: at a 1.30 sample the
+        // reconstruction lands 23% low, in a structurally valid file with every
+        // counter reading zero.
+        //
+        // Under the two bounded tones this is an exact identity — `sdr::render`'s own
+        // postcondition asserts `[0, 1]` for them — so it moves no shipped pixel. It is
+        // what makes an unbounded-SDR tone admissible here at all.
+        let denominator = sdr_px[channel].min(1.0) + config.offset_sdr[channel];
+        let numerator = mapped[channel] + config.offset_hdr[channel];
+        let gain = numerator / denominator;
+        if !denominator.is_finite()
+            || denominator <= 0.0
+            || !numerator.is_finite()
+            || numerator <= 0.0
+            || !gain.is_finite()
+            || gain <= 0.0
+        {
+            return Err(NcError::Other(format!(
+                "gain-map formula produced an invalid value at pixel {index}, channel \
+                 {channel}"
+            )));
+        }
+        gain_px[channel] = gain;
+    }
+    Ok((mapped, gain_px))
+}
+
 fn build(sdr: RenderedSdr, hdr: LinearBt2020Hdr, config: GainMapConfig) -> Result<GainMapRender> {
     if sdr.metadata().gamut != SdrGamut::DisplayP3 {
         return Err(NcError::Other(
@@ -350,74 +436,32 @@ fn build(sdr: RenderedSdr, hdr: LinearBt2020Hdr, config: GainMapConfig) -> Resul
         )));
     }
 
-    let mut hdr_p3 = Vec::with_capacity(hdr.image().rgb.len());
-    let mut gains = Vec::with_capacity(hdr.image().rgb.len());
-    let mut gain_min = [f32::INFINITY; 3];
-    let mut gain_max = [f32::NEG_INFINITY; 3];
-
-    for (index, (sdr_px, hdr_px)) in sdr
-        .image()
-        .rgb
+    let (hdr_p3, gains) = pixels::try_zip_map(
+        &sdr.image().rgb,
+        &hdr.image().rgb,
+        |index, sdr_px, hdr_px| gain_pixel(sdr_px, hdr_px, index, &config),
+    )?;
+    // Per-channel min/max are exact and order-free (the gains are finite by
+    // construction), so they may be folded in parallel.
+    let bounds = || ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+    let (gain_min, gain_max) = gains
         .as_chunks::<3>()
         .0
-        .iter()
-        .zip(hdr.image().rgb.as_chunks::<3>().0)
-        .enumerate()
-    {
-        validate_non_negative_finite("SDR", *sdr_px, index)?;
-        validate_non_negative_finite("HDR", *hdr_px, index)?;
-        let converted = mul(BT2020_TO_DISPLAY_P3, *hdr_px);
-        if !converted.iter().all(|value| value.is_finite()) {
-            return Err(NcError::Other(format!(
-                "gain-map BT.2020 to Display P3 conversion produced a non-finite sample at \
-                 pixel {index}"
-            )));
-        }
-        let luminance = dot(converted, DISPLAY_P3_LUMA);
-        if !luminance.is_finite() || !(0.0..=LINEAR_HEADROOM).contains(&luminance) {
-            return Err(NcError::Other(format!(
-                "gain-map Display P3 HDR luminance is outside the reference-white-relative \
-                 display range at pixel {index}"
-            )));
-        }
-        let mapped = gamut_map(converted, luminance, LINEAR_HEADROOM);
-        validate_non_negative_finite("common-domain HDR", mapped, index)?;
-
-        let mut gain_px = [0.0; 3];
-        for channel in 0..3 {
-            // **The base as *stored*, not as rendered.** A decoder reconstructs
-            // `base × gain`, and the base it multiplies is what the JPEG carries — which
-            // the encode clamps to `[0, 1]` per channel. Ratioing against an SDR sample
-            // above reference white would therefore store a gain short by exactly what was
-            // clamped, and the highlight would come back *dark*: at a 1.30 sample the
-            // reconstruction lands 23% low, in a structurally valid file with every
-            // counter reading zero.
-            //
-            // Under the two bounded tones this is an exact identity — `sdr::render`'s own
-            // postcondition asserts `[0, 1]` for them — so it moves no shipped pixel. It is
-            // what makes an unbounded-SDR tone admissible here at all.
-            let denominator = sdr_px[channel].min(1.0) + config.offset_sdr[channel];
-            let numerator = mapped[channel] + config.offset_hdr[channel];
-            let gain = numerator / denominator;
-            if !denominator.is_finite()
-                || denominator <= 0.0
-                || !numerator.is_finite()
-                || numerator <= 0.0
-                || !gain.is_finite()
-                || gain <= 0.0
-            {
-                return Err(NcError::Other(format!(
-                    "gain-map formula produced an invalid value at pixel {index}, channel \
-                     {channel}"
-                )));
+        .par_iter()
+        .fold(bounds, |(mut lo, mut hi), px| {
+            for channel in 0..3 {
+                lo[channel] = lo[channel].min(px[channel]);
+                hi[channel] = hi[channel].max(px[channel]);
             }
-            gain_px[channel] = gain;
-            gain_min[channel] = gain_min[channel].min(gain);
-            gain_max[channel] = gain_max[channel].max(gain);
-        }
-        hdr_p3.extend_from_slice(&mapped);
-        gains.extend_from_slice(&gain_px);
-    }
+            (lo, hi)
+        })
+        .reduce(bounds, |(mut lo, mut hi), (lo2, hi2)| {
+            for channel in 0..3 {
+                lo[channel] = lo[channel].min(lo2[channel]);
+                hi[channel] = hi[channel].max(hi2[channel]);
+            }
+            (lo, hi)
+        });
 
     let width = sdr.image().width;
     let height = sdr.image().height;
