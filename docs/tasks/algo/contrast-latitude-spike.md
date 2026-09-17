@@ -103,24 +103,35 @@ million pixels anyway.
   proof, or the spike will choose a remedy for a mechanism it never located.
 
   **Test it directly**: regress each converter's output extremes against the negative's
-  own extremes, and check whether NLP's gain *rises* as the scene range narrows; then on
-  the frames that look degraded, measure where the detail actually goes. All **three**
+  own extremes. **"Gain rises as the scene range narrows" does not establish per-frame
+  adaptation** and must not be the test: if gain is read as `output_range / scene_range`, the
+  predictor sits in the denominator and the relationship is close to arithmetic; and a single
+  fixed nonlinear transfer curve yields different local gains for frames occupying different
+  input intervals. NLP can satisfy that check without adapting at all, so a remedy inferred
+  from it would be constrained for the wrong reason. Fit a **common transfer curve across all
+  frames** first, then test whether adding a frame-specific scale or effect explains the
+  residual variation — per-frame adaptation is the term that earns its place, not the slope.
+  Then on the frames that look degraded, measure where the detail actually goes. All **three**
   candidates need a test, not just the two that are easy: end clipping (count samples at
   the endpoints), post-stretch quantization (look for a comb in the histogram), and the
   nonlinearity (measure the transfer curve, or local slope over the flat region — a
   response that flattens water or sky produces neither clipping nor a quantization
   signature, so testing only the first two can leave the failure unexplained while looking
-  complete). If the gain
-  does rise, the remedy for nc is bounded per-frame adaptation at most — never mapping a
-  frame's own range onto the full output, which is the line `--auto-d-max` already draws
-  ("grading, not conversion").
+  complete). If a frame-specific term does earn its place, the remedy for nc is bounded
+  per-frame adaptation at most — never mapping a frame's own range onto the full output,
+  which is the line `--auto-d-max` already draws ("grading, not conversion"). If it does
+  not, the common curve is the whole story and no per-frame mechanism is warranted here.
 
   **Mask the holder first, and pick the endpoint statistic before measuring.** On a scan
   that keeps its border the literal extrema are the opaque holder, not the scene
   (`scripts/analysis/README.md:340-345`), so an unmasked regression measures cropping.
-  Both sides need a matched interior region — the exports are cropped differently, so the
-  region is defined per side rather than shared — and "extreme" needs a definition robust
-  to dust and specular pixels.
+  Both sides need a region covering the **same scene area**, and how you get one differs by
+  batch. The primary Ektar pairs are pixel-aligned with identical dimensions (see above), so
+  there use **one shared mask** — defining a region independently per side there can select
+  different scene pixels and manufacture the very range relationship being measured. Only for
+  genuinely differently-cropped batches does the region have to be derived per side, by
+  registration or by an intersecting content crop. "Extreme" also needs a definition robust to
+  dust and specular pixels.
 - **Which end?** On G2 the gap splits 43% shadow / 57% highlight. Raising global
   contrast would treat both, and nc already cannot reach diffuse white — the last
   non-empty luminance bin on five G2 presets is L\* 88–98 against white at 100.
