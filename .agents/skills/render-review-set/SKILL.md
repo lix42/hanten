@@ -154,7 +154,8 @@ would make this first-class; until then it is manual. Three things to get right:
 
    ```sh
    PYTHONPATH=scripts/analysis .venv/bin/python -m nctool metrics image <converted>.jpg \
-     --space srgb --inset <same as the matrix> --out <converted>.jpg.metrics.json
+     --space srgb --inset <same as the matrix> \
+     --out ../temp/<set>/<frame>-<producer>.metrics.json
    ```
 
    Run from the repo root: `nctool` is not installed as an executable, and this is the half
@@ -164,7 +165,14 @@ would make this first-class; until then it is manual. Three things to get right:
    otherwise goes to stdout and there is no file to name in the rendition's `metrics` field —
    so the reference cell silently renders with no charts beside the nc cells that have them.
 
-Keep converted references in their own folder, shared across sets.
+   **The record belongs to the set, not to the reference image.** It is measured over *that
+   set's* `metrics.inset`, so a fixed path beside the shared reference is overwritten by the
+   next set that uses a different inset — and because every earlier `review.json` still points
+   at that same path, its reference charts quietly begin describing another region while its
+   nc charts describe the original. Nothing detects this. Write the record into the set.
+
+Keep the converted reference **images** in their own folder, shared across sets; their
+**measurements** are per-set and live with the set that measured them.
 
 ## 6. Assemble `review.json`
 
@@ -172,6 +180,14 @@ The generator writes one review file per run. Merge in anything rendered elsewhe
 configurations, references — writing every path **relative to the review file**, so sibling
 folders are referenced rather than copied. Verify every `src` and `metrics` path resolves
 before handing it over; a broken path is a silent gap.
+
+**Declare a `configs` entry for every merged rendition, before adding its paths.** The
+generator builds `configs` from the matrix, so it names only the nc configurations. A
+rendition keyed by an id that is not declared there makes the app refuse the **whole set**
+(`… not one of the declared configs`), and quietly reusing an existing id is worse than the
+error — it replaces that nc rendition rather than sitting beside it, so the cell you wanted
+to compare against is the one you lose. Add `{"id": "nlp", "label": "NLP"}` first; the order
+of `configs` sets the `1`–`9` keys.
 
 Split large sets per roll (`review-<roll>.json`) alongside the combined one: a reviewer works
 through one roll at a time.
