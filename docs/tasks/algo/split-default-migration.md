@@ -19,8 +19,9 @@ The default has already moved along several axes, and none of them is this one:
   parametric curves and `[1, 1, 1]` for `characteristic`;
 - **per stock** — `--film-stock` selects a published curve; `characteristic-aim`
   derives a per-stock red scale;
-- **per bundle** — five `--preset` bundles, all calibrated to one brightness target
-  (scene mid-grey +0.31 stop);
+- **per bundle** — five `--preset` bundles, each carrying the exposure that lands scene
+  mid-grey +1.33 stop on `portra-400` (a calibration convenience, not a promise that the
+  presets render alike);
 - **per output preset** — `legacy` / `film-master` / the display presets each resolve
   their own tone and exposure.
 

@@ -1082,41 +1082,47 @@ mod midtone_placement {
         );
     }
 
-    /// **Every `--preset` lands the one shared brightness target.**
+    /// **Each `--preset` carries the exposure that lands the calibration target on the
+    /// calibration stock.**
     ///
-    /// The claim the five presets exist to make: a user picks a look by name and the
-    /// brightness does not move, so what they are comparing is the reconstruction and
-    /// the display tone rather than "one is brighter". Its neighbour
-    /// [`each_candidate_look_needs_its_own_print_exposure`] measures the exposure each
-    /// look *needs*; this one checks the shipped bundles actually carry it — the two
-    /// halves of the same calibration, and the second is what a wrong constant in
-    /// `ConversionPreset::expand` breaks.
+    /// What a preset promises is that *switching* it changes the look rather than the
+    /// brightness, so a comparison is about the reconstruction and the display tone
+    /// instead of "one is brighter". That is a **calibration convenience, not a rendering
+    /// goal.** nc does not promise that two presets render the same picture, and does not
+    /// promise a common mid-grey on every stock; making the five agree is not what any of
+    /// them exists for, and a preset that suits a film better by sitting slightly off is
+    /// doing its job.
     ///
-    /// Synthetic and asset-free, on the same datasheet mid-grey patch as the rest of
-    /// this module.
+    /// So the assertion is scoped to the stock the constants were solved on
+    /// (`Portra400`), and every other stock is **printed, never asserted**. A residual
+    /// there measures how well that preset models that film: `characteristic-stock`
+    /// inverts the very curve the patch is built from and so lands the same value on all
+    /// of them, while the parametric presets drift with the stock (to about half a stop).
+    /// That drift is information about the reconstruction, not a constant to tune away —
+    /// per-stock exposures would buy uniformity nobody asked for at the cost of five more
+    /// numbers to keep true. [`each_candidate_look_needs_its_own_print_exposure`] is the
+    /// other half: it measures the gap each look starts from.
     ///
-    /// The tolerance is 0.15 stop and every row is inside it. The exposures are stated
-    /// to two decimals, which is ±0.005 stop of quantization on its own; the residuals
-    /// below run to 0.11 because a solved exposure was rounded, not because a bundle
-    /// drifted. `characteristic-aim` is the largest and the only one that is not
-    /// rounding: its red density scale is a *slope* correction, measured to take the
-    /// green–magenta drift from +0.35 to +0.01 stop per unit density on 21 real frames,
-    /// and on a neutral patch that shows up as a red level shift of about +0.10 stop.
-    /// It shares `characteristic-stock`'s exposure deliberately — re-solving one for it
-    /// would trade a known colour correction for an unmeasured brightness constant.
+    /// Synthetic and asset-free, on the same datasheet mid-grey patch as the rest of this
+    /// module. `generic-c41` is skipped throughout — it is derived rather than measured,
+    /// so it carries neither an aim table nor a `d_min` to build a patch from.
+    ///
+    /// The tolerance is 0.15 stop. The exposures are stated to two decimals, which is
+    /// ±0.005 stop of quantization on its own; the residuals run to 0.06 because a solved
+    /// exposure was rounded, not because a bundle drifted.
     #[test]
-    fn every_preset_lands_the_shared_brightness_target() {
+    fn presets_land_the_calibration_target_on_the_calibration_stock() {
         use crate::cli::ConversionPreset;
-        // Scene mid-grey 0.18 rendered 0.31 stop up — the brightness approved
-        // 2026-09-09, and the same target the exposure table above solves against.
-        let target = 0.18 * 2f32.powf(0.31);
-        let stock = FilmStock::Portra400;
-        println!(
-            "\n  target {target:.4}\n\n  {:24}{:>11}{:>12}",
-            "preset", "delivered", "stop"
-        );
-        for preset in ConversionPreset::ALL {
-            let e = preset.expand(Some(stock)).unwrap();
+        // Scene mid-grey 0.18 rendered 1.33 stop up — the brightness approved
+        // 2026-09-15, and the same target the exposure table above solves against.
+        let target = 0.18 * 2f32.powf(1.33);
+        // The stock every preset constant was solved on.
+        let calibration = FilmStock::Portra400;
+
+        // `None` when the preset refuses the stock (`characteristic-aim` has no usable
+        // aim delta on three of them) or the renderer refuses the bundle.
+        let delivered_red = |preset: ConversionPreset, stock: FilmStock| -> Option<f32> {
+            let e = preset.expand(Some(stock)).ok()?;
             let print = PrintParams {
                 print_exposure: e.print_exposure,
                 display_tone: e.display_tone,
@@ -1130,19 +1136,69 @@ mod midtone_placement {
                 },
                 curve: e.curve,
             };
-            // `None` means the renderer *refused* the bundle — which for `sigmoid-knees`
-            // is exactly the failure `--print-exposure` would cause, so it must not be
-            // silently skipped.
-            let rgb = delivered_by(&reconstruction, stock, tone, &print)
-                .unwrap_or_else(|| panic!("{} was refused by the renderer", preset.name()));
-            let stops = (rgb[0] / target).log2();
-            println!("  {:24}{:>11.4}{:>+12.3}", preset.name(), rgb[0], stops);
-            assert!(
-                stops.abs() < 0.15,
-                "{} delivered {:.4}, {stops:+.3} stop from the shared target {target:.4}",
-                preset.name(),
-                rgb[0]
-            );
+            delivered_by(&reconstruction, stock, tone, &print).map(|rgb| rgb[0])
+        };
+
+        println!(
+            "\n  target {target:.4}\n\n  asserted — {}\n\n  {:24}{:>11}{:>12}",
+            calibration.as_str(),
+            "preset",
+            "delivered",
+            "stop"
+        );
+        let mut off = Vec::new();
+        for preset in ConversionPreset::ALL {
+            // A refusal on the calibration stock is a real failure: for `sigmoid-knees`
+            // it is exactly what `--print-exposure` would cause, so it is never skipped.
+            let red = delivered_red(preset, calibration).unwrap_or_else(|| {
+                panic!("{} was refused on {}", preset.name(), calibration.as_str())
+            });
+            let stops = (red / target).log2();
+            println!("  {:24}{:>11.4}{:>+12.3}", preset.name(), red, stops);
+            if stops.abs() >= 0.15 {
+                off.push(format!(
+                    "{} delivered {red:.4} ({stops:+.3} stop)",
+                    preset.name()
+                ));
+            }
+        }
+        // Collected, not asserted per row: recalibrating the family means reading every
+        // preset's offset from one run, and a per-row assert hides the rest behind the
+        // first one that misses.
+        assert!(
+            off.is_empty(),
+            "{} of {} presets miss the calibration target {target:.4} on {}: {}",
+            off.len(),
+            ConversionPreset::ALL.len(),
+            calibration.as_str(),
+            off.join("; ")
+        );
+
+        // Printed and never asserted. One brightness across *stocks* is not a goal, so
+        // this table is a description of the family rather than a bound on it: the
+        // spread is what each preset's modelling of that film costs.
+        println!("\n  printed only — stop from target, every measured stock\n");
+        // Wide enough for the longest preset name, so the header sits over its column.
+        const COL: usize = 23;
+        print!("  {:16}", "stock");
+        for preset in ConversionPreset::ALL {
+            print!("{:>COL$}", preset.name());
+        }
+        println!();
+        for &stock in FilmStock::ALL {
+            // The derived generic states no aim table and no d_min, so there is no
+            // datasheet patch to build from it.
+            if film_stock::curves_for(stock).aims.is_none() {
+                continue;
+            }
+            print!("  {:16}", stock.as_str());
+            for preset in ConversionPreset::ALL {
+                match delivered_red(preset, stock) {
+                    Some(red) => print!("{:>+COL$.3}", (red / target).log2()),
+                    None => print!("{:>COL$}", "refused"),
+                }
+            }
+            println!();
         }
     }
 
@@ -1155,9 +1211,16 @@ mod midtone_placement {
     /// of "one is brighter".
     ///
     /// Printed rather than asserted per row: the target is a **taste** (the user's approved
-    /// `+0.31` over scene mid-grey), so pinning each value here would pin a preference in a
+    /// `+1.33` over scene mid-grey), so pinning each value here would pin a preference in a
     /// test. What *is* asserted is that the spread between looks is real — if it were
     /// noise, one number would serve them all and the looks would not need their own.
+    ///
+    /// **The printed gap is not the `print_exposure` to pass.** That knob is a gain applied
+    /// *before* extended Reinhard, which returns only ~73% of it, so the constant a look
+    /// needs is roughly 1.5x the gap shown here — `characteristic-generic` ships 1.91
+    /// against a gap near 1.33. Solving a constant means re-rendering while searching for
+    /// it, which is how the shipped values were found; this table shows only where each
+    /// look starts.
     #[test]
     fn each_candidate_look_needs_its_own_print_exposure() {
         let print = PrintParams::default();
@@ -1171,8 +1234,8 @@ mod midtone_placement {
             curve,
         };
         let stock = FilmStock::Portra400;
-        // The approved look: scene mid-grey rendered 0.31 stop up.
-        let target = 0.18 * 2f32.powf(0.31);
+        // The approved look: scene mid-grey rendered 1.33 stop up.
+        let target = 0.18 * 2f32.powf(1.33);
 
         let looks: [(&str, Reconstruction, DisplayTone); 4] = [
             (
@@ -1209,28 +1272,29 @@ mod midtone_placement {
             ),
         ];
         println!(
-            "\n  target: scene mid-grey 0.18 rendered at {target:.4} (+0.31 stop)\n\n  \
+            "\n  target: scene mid-grey 0.18 rendered at {target:.4} (+1.33 stop)\n\n  \
              {:34}{:>11}{:>16}",
-            "look", "delivered", "needs exposure"
+            "look", "delivered", "gap (stops)"
         );
-        let mut needed = vec![];
+        // The *gap* to the target, not the exposure that closes it — see the rustdoc.
+        let mut gaps = vec![];
         for (name, reconstruction, tone) in looks {
             let Some(rgb) = delivered_by(&reconstruction, stock, tone, &print) else {
                 println!("  {name:34}    refused");
                 continue;
             };
             let stops = (target / rgb[0]).log2();
-            needed.push(stops);
+            gaps.push(stops);
             println!("  {name:34}{:>11.4}{:>+16.3}", rgb[0], stops);
         }
         let (lo, hi) = (
-            needed.iter().cloned().fold(f32::MAX, f32::min),
-            needed.iter().cloned().fold(f32::MIN, f32::max),
+            gaps.iter().cloned().fold(f32::MAX, f32::min),
+            gaps.iter().cloned().fold(f32::MIN, f32::max),
         );
         assert!(
             hi - lo > 0.25,
-            "the looks needed exposures within {:.3} stop of each other — if that is real, \
-             one default would serve them all and a per-look value is unjustified",
+            "the looks started within {:.3} stop of each other — if that is real, one \
+             default would serve them all and a per-look value is unjustified",
             hi - lo
         );
     }
@@ -1253,7 +1317,7 @@ mod midtone_placement {
     fn the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor() {
         let print = PrintParams::default();
         let sigmoid = crate::types::SigmoidParams::default();
-        let target = 0.18 * 2f32.powf(0.31);
+        let target = 0.18 * 2f32.powf(1.33);
         let at_fraction = |f: f32| {
             let curve = crate::types::DensityCurve::Sigmoid(crate::types::SigmoidParams {
                 anchor: crate::types::AnchorPlacement::MidAtDmaxFraction(f),

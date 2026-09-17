@@ -654,7 +654,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `algo/conversion-presets` (post-MVP): `algo/film-stock-profiles`
   — filed 2026-09-09. `--preset` names five reconstruction + display bundles, because every
   configuration worth shipping is a *bundle* whose numbers are meaningless separately: the
-  `print_exposure` that matches one brightness runs 0.31–0.70 across reconstructions, and
+  `print_exposure` that matches one brightness runs 1.59–2.17 across reconstructions, and
   `sigmoid-knees` cannot use that knob at all (`--display-tone none` is bounded by the
   render ceiling, so a scalar gain after the curve is refused — its brightness comes from
   the anchor instead). Also the reason the default can move without breaking `film-master`:
@@ -1051,8 +1051,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   reconstruction, not a curve shape. Default activation is `algo/split-default-migration`
 - [x] [Named conversion presets](tasks/algo/conversion-presets.md) — `--preset` selecting
   one of five reconstruction + display bundles by name, folding the coupled magic numbers
-  (a per-reconstruction `print_exposure` from 0.31 to 0.70, the per-stock aim-matched red
-  scale) into one stated brightness target. **The default did not move with it** —
+  (a per-reconstruction `print_exposure` from 1.59 to 2.17, the per-stock aim-matched red
+  scale) into one name each. Every bundle carries the exposure that keeps brightness steady
+  when you switch preset, calibrated on `portra-400` — a convenience that makes a comparison
+  about reconstruction and tone, **not** a claim that the presets render alike or that
+  mid-grey lands identically on every stock (decided 2026-09-16).
+  **The default did not move with it** —
   making `characteristic-generic` the no-flag state is `algo/split-default-migration`
 - [ ] [Contrast / latitude spike](tasks/algo/contrast-latitude-spike.md) — decide whether
   nc's tonal latitude should change, at which end, and by which mechanism. nc's `p95 − p5`

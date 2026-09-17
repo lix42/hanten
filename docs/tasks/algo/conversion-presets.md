@@ -17,15 +17,17 @@ nothing owned.
 ## Why
 
 Every good configuration found so far is a *bundle* of coupled parameters, and the coupling
-is the problem. `--print-exposure` alone needs a different value per reconstruction (0.31 to
-0.70, measured) because the reconstructions place mid-grey differently; the aim-matched red
+is the problem. `--print-exposure` alone needs a different value per reconstruction (1.59 to
+2.17, measured) because the reconstructions place mid-grey differently; the aim-matched red
 scale needs a different value per stock; the per-channel gain already needed a different
 value per curve. None of these numbers means anything on its own, and today the only place
 they exist together is a review-set generator and this task's progress log.
 
-A name also makes the brightness calibration honest. Instead of five tastes there is **one**
-— scene mid-grey rendered 0.31 stop up, the 2026-09-09 review verdict — and each preset's
-exposure is whatever lands it there.
+A name also makes the brightness calibration honest. Each preset's exposure is whatever lands
+scene mid-grey 1.33 stop up on `portra-400` — the 2026-09-15 review verdict — so switching
+preset changes the look rather than the brightness. That is a calibration convenience and not
+a goal in itself: the presets are **not** meant to render alike, and a common mid-grey on
+every stock is explicitly not promised (decided 2026-09-16).
 
 ## The five
 
@@ -49,7 +51,7 @@ These are measured, and each one killed a simpler design:
   the curve — so any positive value pushes the shoulder past reference white and the frame
   is refused (measured on a real scan: `+0.70` gave luminance 1.6236, exactly `2^0.70`).
   Its brightness must come from the anchor, which moves mid-grey *within* the bounded range.
-  `mid-fraction 0.42` lands the shared target.
+  `mid-fraction 0.28` lands the shared target.
 - **`legacy` / `custom` / `film-master` refuse `reinhard`, and `film-master` refuses any
   non-default `print_exposure`.** So the default preset cannot simply set them globally —
   a bare `nc convert --output-preset film-master` would stop working. A preset must

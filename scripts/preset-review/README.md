@@ -37,11 +37,14 @@ passed on 2026-09-10: 12 of 15 renditions byte-identical, the three that differe
 `chr-aim`, where the script's constants were rounded to three decimals and `nc` derives the
 value exactly. See `docs/progress/algo.md`.
 
-**Every preset is calibrated to one brightness, not to its own taste** — scene mid-grey
-0.18 delivered at 0.223 (0.31 stop up), the target approved on 2026-09-09. `nc` owns those
-numbers now, so a recalibration cannot leave this set rendering the previous ones;
-`pipeline::stages::midtone_placement::every_preset_lands_the_shared_brightness_target`
-fails if any bundle drifts off the shared target.
+**Every preset carries the exposure that keeps brightness steady when you switch** — scene
+mid-grey 0.18 delivered at 0.4525 (1.33 stop up) on `portra-400`, the target approved on
+2026-09-15. It removes exposure as a variable so the comparison is about the reconstruction
+and the tone; it is not a claim that the presets should look alike, and mid-grey is not
+promised to land identically on another stock. `nc` owns those numbers now, so a
+recalibration cannot leave this set rendering the previous ones;
+`pipeline::stages::midtone_placement::presets_land_the_calibration_target_on_the_calibration_stock`
+fails if a bundle drifts off it on the calibration stock, and prints the per-stock spread.
 
 A config's `args` may not restate what the generator supplies — `--output-preset`, `-o`,
 `--report` — because `nc` takes the last occurrence of such a flag and the override would be
