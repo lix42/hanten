@@ -1732,8 +1732,10 @@ highlight separation and HDR. A scheduling option, not a destination.
   `rolls/2026-09-09-Ektar100/1612.tif` — while every
   nc config holds them. The task file had dismissed "NLP normalises each frame" because it
   predicts a near-zero `p95 − p5` spread against the measured 4.31; that inference holds only
-  for a stretch fitted to `p5`/`p95`, not to the extremes, where a 4.31 spread is exactly what
-  the model produces. Recorded in the task file's second open question together with the
+  for a stretch fitted to `p5`/`p95`, not to the extremes, where such a spread is **compatible
+  with** the model rather than predicted by it. The objection falls away; that is not the same
+  as support, since the model permits identical spreads too and the input distributions are
+  unmeasured. Recorded in the task file's second open question together with the
   regression that would settle it (output extremes against the negative's own extremes, and
   whether NLP's gain rises as the scene range narrows).
   Corrected on review, 2026-09-16: the single-surface frame is an **observation to explain,

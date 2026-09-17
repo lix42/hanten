@@ -68,8 +68,11 @@ million pixels anyway.
   development and scan recipe, and the two stocks differ in both input distribution and
   response, so a single pooled slope can charge a between-roll or between-stock difference
   to converter compression. Carry a per-roll (or per-stock) term or an interaction, and
-  cluster the uncertainty by roll — with three rolls it is the clustered interval, not the
-  pooled one, that the decision rests on.
+  report the per-roll slopes separately. **Do not lean on a cluster-robust interval**:
+  three rolls is three clusters, far too few for one to have reliable coverage, and it
+  would understate the uncertainty it appears to quantify. With this dataset the per-roll
+  results are descriptive evidence — if the three agree, say so and say it is three; an
+  inferential claim needs more independent rolls.
 - **Is the gap a consequence of §3.8 rather than a defect?** If nc faithfully
   carries each frame's own range while NLP adapts per frame, then the remedy is
   per-frame opt-in, not a global change.
@@ -79,8 +82,13 @@ million pixels anyway.
   dismissed because it predicts a near-zero `p95 − p5` spread against a measured 4.31.
   That follows only if the stretch is fitted to `p5`/`p95`. Fitted to the **extremes**,
   a frame whose content clusters between two outliers keeps a narrow `p95 − p5` while
-  one whose content fills the frame keeps a wide one — so a 4.31 spread is what
-  extreme-fitting produces, not evidence against it.
+  one whose content fills the frame keeps a wide one — so a 4.31 spread is **compatible
+  with** extreme-fitting rather than evidence against it.
+
+  That is all it is. The model permits a range of spreads and equally permits identical
+  ones; it does not predict 4.31, and the input distributions have not been measured. So
+  this removes the objection without supplying any support — the model is back on the
+  table, not ahead.
 
   The suggestive observation — **not yet evidence** — is a failure mode the statistics do
   not show: on frames filled by a single surface (all water, or cloudless sky) the user
@@ -96,8 +104,13 @@ million pixels anyway.
 
   **Test it directly**: regress each converter's output extremes against the negative's
   own extremes, and check whether NLP's gain *rises* as the scene range narrows; then on
-  the frames that look degraded, measure where the detail actually goes — end clipping and
-  post-stretch quantization are the two candidates and they are separable. If the gain
+  the frames that look degraded, measure where the detail actually goes. All **three**
+  candidates need a test, not just the two that are easy: end clipping (count samples at
+  the endpoints), post-stretch quantization (look for a comb in the histogram), and the
+  nonlinearity (measure the transfer curve, or local slope over the flat region — a
+  response that flattens water or sky produces neither clipping nor a quantization
+  signature, so testing only the first two can leave the failure unexplained while looking
+  complete). If the gain
   does rise, the remedy for nc is bounded per-frame adaptation at most — never mapping a
   frame's own range onto the full output, which is the line `--auto-d-max` already draws
   ("grading, not conversion").
@@ -142,4 +155,10 @@ rendered into a review set (`tools/review-app`) rather than argued numerically.
   the scene-range regression is that harness's job; without it this spike grows a second
   pairing script. Revised 2026-09-15: the dataset is **12** pixel-aligned Ektar pairs, not
   the 32 first scoped (see above), so the harness should expect to pool the Portra rolls —
-  11 and 10 pairs of a different stock — rather than treat Ektar alone as sufficient
+  11 and 10 pairs of a different stock — rather than treat Ektar alone as sufficient.
+  **Resolve each NLP directory's declared space before pooling it.** Only the Ektar and the
+  July/August batches have been established; `docs/progress/analysis.md` records that the
+  2026-09-11 Portra batch's space "must be established the same way before it is measured",
+  and there is no determination on record for 2026-09-13 at all. Reading a batch's own ICC
+  profile per directory is the prerequisite — guessing or inheriting one is what produced
+  the transfer-function decoding error that invalidated the first round of measurements
