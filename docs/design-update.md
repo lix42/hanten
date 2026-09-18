@@ -207,16 +207,11 @@ reference white, where the renderer's range check rejects the frame.)
   `--d-max`, `--auto-d-max` and `estimate --d-max-region` stop mattering for the
   decode, and the four `--anchor-*` flags collapse to one number. The reference
   stays alive for the `sigmoid-knees` comparison only.
-- **`offset` stays `[0, 0, 0]` — tested, not assumed.** It is *not* a mere
-  duplicate of the base: the base is measured from the rebate, while the offset
-  is the gap between "density measured from the rebate" and "the density at
-  which the three layers correspond to equal exposure" — the layers' toes start
-  at different exposures, and the datasheet fits carry exactly that term (blue
-  −0.002…−0.101 by stock). With the base free the two are degenerate; with it
-  measured, the offset is identifiable in principle. It is frozen at zero
-  because **the review rejected it** (2026-09-17, `../temp/offset-test/`):
-  neither the datasheet pair nor one re-fitted to our own patches removed the
-  cast — both moved it, and the datasheet pair was worst on all six frames.
+- **`offset` stays `[0, 0, 0]` — tested, not assumed.** It is not a duplicate of
+  the measured base: it is the gap between density measured from the rebate and
+  the density where the three layers correspond to equal exposure, and the
+  datasheets carry that term. It is frozen at zero because a visual review
+  rejected both candidates for it — neither removed the cast (Appendix E).
 - **`gamma` is two things and splits.** Linearizing the film (≈1/0.55 ≈ 1.8) is
   calibration and stays; print contrast is a look and moves to rendering.
   Today's single 2.0 bundles both — roughly linearization plus ≈1.10× print
@@ -828,6 +823,15 @@ map stripped so every cell is plain SDR. Configs: `sigmoid-flat` with the
 shipped gain `[1, 0.84, 0.73]`; the same with the datasheet-fitted pair (`[1,
 0.977, 0.860]` + `[0, −0.036, −0.057]`); the same pair re-fitted to our own
 patches (`[1, 0.902, 0.790]` + `[0, −0.073, −0.075]`); and `sigmoid-knees`.
+
+**Why the offset was a candidate.** It is physically distinct from the film base
+even though the two share an axis: the base is *measured* from the rebate, so
+the offset is the residual between that and the density where the three layers
+correspond to equal exposure — the layers' toes start at different exposures.
+The datasheet fits carry exactly that term (blue −0.002…−0.101 by stock). With
+the base left free the two are degenerate; with it measured, the offset is
+identifiable in principle, which is why it was worth a render rather than an
+argument.
 
 **Verdict (user, all six frames):** `sigmoid-knees` is white on every white
 surface; the datasheet pair is worst, strongly blue; the shipped gain and the
