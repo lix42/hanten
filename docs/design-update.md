@@ -94,10 +94,10 @@ invertible, that step can move there without losing anything (see the key argume
   the digitized datasheet corpus is in, and it is what `io/scanner-density-calibration`'s
   3×3-plus-offset targets. So: **scanner → Status M**, and the gap from there to any paper is
   small beside it. That calibration is a measurement and stays in reconstruction.
-- **What the calibration must explain is green, not blue.** Blue's exposure-dependent cast
-  measures +1.26 stops per unit density against **+1.29 predicted by the sheets** — a film
-  term, already published. Ektar's *green* measures +1.26 against **+0.22 predicted**. The
-  film half is known; the scanner/developer half is green.
+- **What the calibration must explain is green, not blue.** Blue's exposure-dependent cast is
+  the film's own and the datasheets predict it almost exactly; Ektar's green is roughly six
+  times what its sheet predicts. The film half is known; the scanner/developer half is green.
+  (Appendix B.)
 
 ## Key argument: pick reconstruction by what its output means
 
@@ -113,9 +113,10 @@ transform can reproduce characteristic + reinhard exactly:
   White balance and exposure would also have to move after it.
 - This holds only while nothing between the stages loses information (no clamping).
 
-Consequence: **the final image cannot justify a choice of reconstruction**, and neither
-can information content, since every invertible reconstruction keeps the same
-information. Reconstruction is chosen for **what its intermediate image means**, and
+Consequence: **the final image cannot justify a choice of reconstruction while rendering is
+free to be redesigned** — and neither can information content, since every invertible
+reconstruction keeps the same information. (With rendering *held fixed*, the final image is
+the only thing that can: that is what makes a review set evidence. See Part 3.) Reconstruction is chosen for **what its intermediate image means**, and
 rendering for the result. The fixed decode is chosen because it means one thing for
 every stock: the negative, as a print sees it.
 
@@ -210,7 +211,7 @@ white, where the renderer's range check rejects the frame.)
 
 | Method | Role |
 |---|---|
-| exponential (≡ sigmoid with `toe = shoulder = 0`, bit-exact) | **Default candidate.** A straight line in density against log exposure, with the toe passed through as recorded. |
+| exponential (≡ sigmoid with `toe = shoulder = 0` at the same anchor, bit-exact) | **Default candidate.** A straight line in density against log exposure, with the toe passed through as recorded. |
 | `generic-c41` characteristic | **Alternative candidate** for the fixed decode. It is stock-agnostic but inverts an averaged toe. Needs a comparison against the exponential, or a toe-limited form. |
 | per-stock `characteristic` | **Leaves reconstruction** and becomes an optional per-stock normalization in rendering. |
 | sigmoid with toe/shoulder | **Leaves reconstruction:** a decode with a rendering fused on top. Kept for now as the **visual reference** for the migration (see below). Retired from the product later. |
@@ -223,66 +224,42 @@ white, where the renderer's range check rejects the frame.)
   Today's crude form is the per-channel `density.scale`, re-calibrated on 2026-09-16
   (`pipeline_version` 5) to **`[1, 0.84, 0.73]`** from 31 hand-marked neutral patches over
   five rolls.
-- **It depends on development, not only on stock or scanner.** Green splits by date/developer:
-  July rolls (CineStill, from the user's recollection; the unexposed frames agree something
-  changed) want ≈0.86–0.90 and September rolls ≈0.77, on the same scanner. One shared default
-  cannot fit both, so the calibration should be per roll or per developer, frozen into the roll
-  recipe.
+- **It depends on development, not only on stock or scanner.** Green splits by scan date on one
+  scanner, and the split follows the developer, so one shared default cannot fit every roll: the
+  calibration belongs per roll or per developer, frozen into the roll recipe. (Appendix C.)
 - **Why a per-channel gain cannot be the end state:** interimage effects and DIR couplers make
   each layer's slope depend on the *other* layers' exposure. That is not a per-channel quantity
   at all, which is why the standard model is a matrix in density — and it is per stock, so it
   also breaks "one calibration per scanner and developer".
-- **The marked patches cannot separate a slope from a level.** They span a wide density range
-  (red 0.28–1.33), but they are 29 white surfaces and 2 greys, and density there is set by
-  *illumination*, not exposure: the dark end is shade, interior and sunset, the bright end is
-  sun. Shade is bluer, so its blue layer really did receive more exposure, and a fitted offset
-  absorbs that. The bracketed calibration frames (`analysis/calibration-frame-capture`) vary
-  density at one illuminant, which is the whole point of them.
+- **The marked patches can anchor a level, not a slope.** Their density range comes from
+  *illumination* rather than exposure, so a fitted slope absorbs the illuminant. The bracketed
+  calibration frames (`analysis/calibration-frame-capture`) vary density at one illuminant,
+  which is the whole point of them. (Appendix C.)
 
 ### Why dividing by the base is not enough
 
-Dividing the scan by the film base fixes the **offset**, not the **slope**. It makes
-unexposed film neutral (`D = 0` in every channel), which removes the mask's constant part.
-What remains is that each channel's density **rises at a different rate** with exposure: an
-error that is zero where you normalized and grows with density, so it is worst in the
-highlights. Contributors: the film's own layer gammas differ (the registry's corpus rule is
-blue 12–19 % steeper than red, green 2–5 %; they look parallel on the page only because the
-plot is logarithmic); interimage effects, which are cross-channel and per stock; the scanner's
-channels each integrate a band overlapping more than one dye, so what they report is not the
-dye's own density, and that cross term depends on the dye set; and development, which splits
-green by date on one scanner.
-
-**How far our fit is from the sheets, stated carefully.** The sheets' per-channel structure was
-fitted as a **(gain, offset) pair** — generic green 0.977/−0.036, blue 0.860/−0.057 — while our
-`[1, 0.84, 0.73]` is a gain alone, so comparing the two numbers directly is not like for like.
-Collapsed onto a zero-offset gain at our own patch densities the sheets imply ≈0.94 green and
-≈0.80 blue, so the real disagreement is ≈10 %, not the factor of two an earlier draft claimed.
-Blue is close to the sheets once the offset is respected; **green is the term neither the
-sheets nor a per-channel model explain**, and closing it is `io/scanner-density-calibration`.
+Dividing the scan by the film base fixes the **offset**, not the **slope**. It makes unexposed
+film neutral (`D = 0` in every channel), which removes the mask's constant part. What remains is
+that each channel's density **rises at a different rate** with exposure — an error that is zero
+where you normalized and worst in the highlights. It has four contributors (film layer gammas,
+interimage effects, the scanner's channels, development), and our shipped gain sits ≈10 % from
+what the datasheets imply once their own offset term is respected. **Appendix B** carries both,
+and the reason the earlier "factor of two" claim was wrong.
 
 ### What NLP's white-balance step does, and why ours differs
 
-Negative Lab Pro's workflow starts by white-balancing on the film base in Lightroom. That is
-**the same operation** as nc's base division, in another domain: a per-channel gain on the
-negative is a per-channel offset in density. (Not exactly — Lightroom's white balance runs
-through the camera profile and its matrix — but close.) Crucially it also fixes only the
-constant and leaves the slope.
-
-NLP's next step **appears** to fit each channel's range onto the output range per frame, which
-would be a per-channel slope + offset derived from the frame's own content. Treat that as a
-hypothesis, not a finding: `algo/contrast-latitude-spike` records that the measured spreads are
-*compatible with* the model rather than evidence for it, and that the single-surface collapse
-(`ektar0909-1612`) is an observation to explain — a monotone stretch destroys nothing by itself,
-so the mechanism that loses the detail is unidentified. Whatever it is, nc's roll-consistency
-principle rules out fitting per frame, so nc's equivalent is the same two numbers **measured per
-roll** and frozen into the recipe: not "datasheet vs content", but "fitted per frame vs measured
-per roll".
+Negative Lab Pro white-balances on the film base in Lightroom, which is **the same operation** as
+nc's base division in another domain — and so it also fixes only the constant and leaves the
+slope. It then appears to fit each channel per frame, which nc's roll-consistency principle rules
+out. The real difference is not "datasheet vs content" but **fitted per frame vs measured per
+roll**. (Appendix D; `algo/contrast-latitude-spike` owns what NLP actually does.)
 
 ### Knobs currently in reconstruction, sorted
 
-- **Measurement, keep:** film base; `density.scale` (scanner → printing density);
-  `gamma`'s linearization half; the anchor's `d` (mid-above-base).
-- **Convention, frozen:** the anchor rule (`mid-at-base-offset`) and `offset = [0, 0, 0]`.
+- **Measurement, keep:** film base; `density.scale` (scanner → Status M).
+- **Convention, frozen:** the anchor rule (`mid-at-base-offset`), its `d`, the linearization
+  half of `gamma`, and `offset = [0, 0, 0]`. `d` and the linearization are *per stock* in the
+  registry, so fixing them is what keeps the decode stock-agnostic.
 - **Rendering, move out:** sigmoid `toe` / `shoulder`; per-stock curves; `gamma`'s print-
   contrast half; `shadow_balance` / `highlight_balance` (a grade — see Part 2's per-channel
   control, which subsumes them).
@@ -300,46 +277,27 @@ per roll".
 
 ## Reference for the migration
 
-As of `pipeline_version` 5 and the 2026-09-15 brightness target, **`--preset sigmoid-knees`
-(scale `[1, 0.84, 0.73]`, anchor mid-fraction 0.28) is the best result reviewed so far.** It
-stays available as the reference that the fixed decode plus rendering is judged against,
-even though the knee'd sigmoid leaves the product later.
+As of `pipeline_version` 5 and the 2026-09-15 brightness target, **`--preset sigmoid-knees` is
+the best result reviewed so far** — on whites decisively, on midtones not. It stays available as
+the reference the fixed decode plus rendering is judged against, even though the knee'd sigmoid
+leaves the product later.
 
-`sigmoid-flat` (the exponential with reinhard, exposure +2.17) improved with the same
-calibration, but reads cast against `sigmoid-knees` on every white surface.
+**Measured 2026-09-17: `sigmoid-knees` is not more neutral, it desaturates highlights.** Its
+per-channel shoulder pulls the channels together as lightness rises, so every white surface reads
+white under it; in the midtones, where the shoulder does not act, it is no better, and on asian
+skin the user ranked it worst of three. A luminance-preserving operator like reinhard cannot
+reproduce that by construction.
 
-**Measured 2026-09-17 (`../temp/offset-test/`), and the suspicion is confirmed: `sigmoid-knees`
-is not more neutral, it desaturates highlights.** Its per-channel shoulder pulls the channels
-together as lightness rises — over one frame's deciles, B/R falls 1.65 → 1.27 under `knees`
-against 1.76 → 1.48 under `flat` — so every white surface reads white under it. On a white flag
-the patch means are `knees` G/R 1.024, B/R 1.027 against `flat` 1.084 / 1.089. In the midtones,
-where the shoulder does not act, `knees` is no better, and on asian skin the user ranked it
-**worst** of the three (slightly green). A luminance-preserving operator like reinhard cannot
-reproduce this by construction.
-
-Two consequences. **The decode is not what makes whites white here**, so a cast measured on
-white surfaces is partly a statement about the display operator. And **the behaviour the user
-prefers is a real print behaviour** — paper applies per-channel curves, which desaturate
-highlights — so it belongs in rendering as an explicit control (Part 2), not in the decode.
-
-The cast's *direction* is per roll: blue on 2026-09-09-Ektar100, pink on 2026-07-15-Ektar100 and
-2026-09-11-Portra400. No single global correction fixes both, which fits the developer split.
+Two consequences. **The decode is not what makes whites white here**, so a cast measured on white
+surfaces is partly a statement about the display operator. And **the behaviour the user prefers is
+a real print behaviour** — paper applies per-channel curves, which desaturate highlights — so it
+belongs in rendering as an explicit control (Part 2), not in the decode. The cast's *direction* is
+per roll, which fits the developer split. (Appendix E.)
 
 ## Colour: what "character" is, and what the decode must keep
 
-### Datasheet facts
-
-- **The flat left end of a curve is base + fog, i.e. Dmin**: film that got no image
-  exposure, matching the unexposed rebate in a scan. nc's tables store density above Dmin.
-- **B > G > R density is the orange mask.** Density measures how much light is blocked;
-  blocking blue most and red least looks orange. Scan and sheet agree in order: an Ektar scan
-  base of `[0.53, 0.26, 0.16]` transmission (design-spec §4) is D `[0.28, 0.59, 0.80]`, against
-  the sheet's Dmin `[0.21, 0.63, 0.84]`. Measured bases move with development — this roll's own
-  values live in the review notes — so only the ordering transfers.
-- **The x-axis position encodes film speed only** (absolute lux-seconds). nc discards it
-  and places each stock by its published grey-card aim density.
-- **Curves are measured on a neutral exposure under the rated light**, so all three layers
-  received the same exposure at every point.
+What the datasheet curves actually show — the orange mask, the film base, the exposure axis — is
+in **Appendix A**; this section is only about which differences between stocks the decode keeps.
 
 ### Kinds of character
 
@@ -365,16 +323,6 @@ known primaries. **NC film RGB v1 declares the film's channels to be Rec.709 pri
 D65 white**, then applies the standard matrix into ACEScg. Nothing measured supports that
 declaration. Neutrals are unaffected (white maps to white); saturation and hue of colours
 depend on it. A real characterization would come from spectral data or a ColorChecker.
-
-### Correction to an earlier claim
-
-The "Ektar green cast is a drift, not a hue" argument used `curve_probe::channel_drift`.
-That probe groups **ordinary picture pixels** by red density and reads the green/red ratio
-across the groups; it uses no grey patch. A constant scene colour cancels, but scene colour
-that correlates with brightness does not. Hawaii frames (bright blue sky and sea over mid-tone
-foliage) are exactly that case, so the result is suggestive, not shown. Two points still
-stand: the Ektar sheet predicts +0.22 green drift where scans show +1.26, and `generic-c41`
-renders Ektar better than Ektar's own sheet.
 
 ## The sigmoid shoulder is a contract violation, not a rendering option
 
@@ -624,13 +572,9 @@ accuracy.
 - **The 31 marked patches are white surfaces, and only approximately neutral.** In ordinary
   photographs the only findable neutral is white; the eye cannot tell a slightly tinted grey
   from a pure one, and cloud and snow carry the sky's blue.
-- **Their density range is real but confounded.** Red density spans 0.28–1.33, yet that range
-  comes from *illumination*, not exposure: the dark end is shade, interior and sunset, the
-  bright end is sun. A fitted offset absorbs the illuminant difference, which is why the
-  per-roll two-parameter fits disagree wildly (blue offsets −0.50 to +0.07) while the sheets
-  span only −0.002…−0.101. So these patches can anchor a level, not a slope — and the
-  2026-09-17 offset test is what that confound predicted: neither offset candidate improved the
-  render.
+- **Their density range is real but confounded with illumination**, so they can anchor a level,
+  not a slope — and the 2026-09-17 offset test is what that confound predicted: neither offset
+  candidate improved the render. (Appendix C.)
 
 ## The interim method: compare against other converters
 
@@ -703,3 +647,142 @@ Deliberately empty. The same questions (what is measurable, what is opinion, wha
 against) apply to the rendering stages, but they cannot be answered before the decode is
 settled: every rendering judgement made on top of a moving decode has to be redone. Recorded
 here so the gap is visible rather than forgotten.
+
+# Appendices
+
+The body states what a decision rests on; these carry the measurements behind it. The permanent
+record is `docs/progress/algo.md` and `docs/progress/io.md` — where an appendix and a log
+disagree, the log wins.
+
+## Appendix A — The datasheet and the film base
+
+- **The flat left end of a curve is base + fog, i.e. Dmin**: film that got no image
+  exposure, matching the unexposed rebate in a scan. nc's tables store density above Dmin.
+- **B > G > R density is the orange mask.** Density measures how much light is blocked;
+  blocking blue most and red least looks orange. Scan and sheet agree in order: an Ektar scan
+  base of `[0.53, 0.26, 0.16]` transmission (design-spec §4) is D `[0.28, 0.59, 0.80]`, against
+  the sheet's Dmin `[0.21, 0.63, 0.84]`. Measured bases move with development — this roll's own
+  values live in the review notes — so only the ordering transfers.
+- **The x-axis position encodes film speed only** (absolute lux-seconds). nc discards it
+  and places each stock by its published grey-card aim density.
+- **Curves are measured on a neutral exposure under the rated light**, so all three layers
+  received the same exposure at every point.
+
+## Appendix B — Why base division leaves a slope, and how far our gain is from the sheets
+
+Dividing the scan by the film base fixes the **offset**, not the **slope**. It makes
+unexposed film neutral (`D = 0` in every channel), which removes the mask's constant part.
+What remains is that each channel's density **rises at a different rate** with exposure: an
+error that is zero where you normalized and grows with density, so it is worst in the
+highlights. Contributors: the film's own layer gammas differ (the registry's corpus rule is
+blue 12–19 % steeper than red, green 2–5 %; they look parallel on the page only because the
+plot is logarithmic); interimage effects, which are cross-channel and per stock; the scanner's
+channels each integrate a band overlapping more than one dye, so what they report is not the
+dye's own density, and that cross term depends on the dye set; and development, which splits
+green by date on one scanner.
+
+**How far our fit is from the sheets, stated carefully.** The sheets' per-channel structure was
+fitted as a **(gain, offset) pair** — generic green 0.977/−0.036, blue 0.860/−0.057 — while our
+`[1, 0.84, 0.73]` is a gain alone, so comparing the two numbers directly is not like for like.
+Collapsed onto a zero-offset gain at our own patch densities the sheets imply ≈0.94 green and
+≈0.80 blue, so the real disagreement is ≈10 %, not the factor of two an earlier draft claimed.
+Blue is close to the sheets once the offset is respected; **green is the term neither the
+sheets nor a per-channel model explain**, and closing it is `io/scanner-density-calibration`.
+
+`docs/progress/algo.md` (2026-09-04, 2026-09-06) carries the per-stock tables and the drift
+measurements.
+
+## Appendix C — The marked patches: what they are, and what they can measure
+
+31 hand-marked patches over five rolls, in `../temp/neutral-patches/` (uncommitted — the frames
+are the user's photographs). They are the data behind `density.scale = [1, 0.84, 0.73]`
+(`pipeline_version` 5) and behind the 2026-09-17 offset test.
+
+- **What they are:** 29 `white` and 2 `grey` — cloud x10, walls, cloth, cars, snow, a flag, a
+  boat, a lily, a door, a curtain. No grey cards. White is the only neutral findable in ordinary
+  photographs, which is the limitation, not a choice.
+- **Density range is real but confounded.** Red density spans 0.28–1.33, and sorted by density
+  the patches sort by *illumination*: the dark end is shade, interior, sunrise and sunset, the
+  bright end is sun. Shade is bluer, so its blue layer genuinely received more exposure.
+- **Which is why a two-parameter fit is unstable.** Per roll, adding an offset cuts the blue
+  residual sharply (Ektar 09-09 rms 0.087 → 0.020; Portra 160 0.081 → 0.052) — the term is real —
+  but the fitted values scatter far beyond anything physical: blue gains 0.63–1.18 with offsets
+  −0.50…+0.07, against the datasheets' −0.002…−0.101. Pooled over all 31 the fit is green
+  0.902/−0.073, blue 0.790/−0.075.
+- **The development split.** Green wants ≈0.86–0.90 on the July rolls and ≈0.77 on the September
+  ones, on the same scanner and with the same stock; blue wants 0.68–0.78 everywhere. The July
+  rolls were developed in CineStill by the user's recollection, and the unexposed frames agree
+  something changed (the September base is ~0.15–0.17 density denser). Recorded in
+  `docs/progress/io.md`, 2026-09-16.
+
+## Appendix D — What NLP appears to do
+
+Negative Lab Pro's workflow starts by white-balancing on the film base in Lightroom. That is
+**the same operation** as nc's base division, in another domain: a per-channel gain on the
+negative is a per-channel offset in density. (Not exactly — Lightroom's white balance runs
+through the camera profile and its matrix — but close.) Crucially it also fixes only the
+constant and leaves the slope.
+
+NLP's next step **appears** to fit each channel's range onto the output range per frame, which
+would be a per-channel slope + offset derived from the frame's own content. Treat that as a
+hypothesis, not a finding: `algo/contrast-latitude-spike` records that the measured spreads are
+*compatible with* the model rather than evidence for it, and that the single-surface collapse
+(`ektar0909-1612`) is an observation to explain — a monotone stretch destroys nothing by itself,
+so the mechanism that loses the detail is unidentified. Whatever it is, nc's roll-consistency
+principle rules out fitting per frame, so nc's equivalent is the same two numbers **measured per
+roll** and frozen into the recipe: not "datasheet vs content", but "fitted per frame vs measured
+per roll".
+
+## Appendix E — The 2026-09-17 offset test
+
+Set: `../temp/offset-test/`, six frames x four configs, reviewed with the gain map stripped so
+every cell is plain SDR. Configs: `sigmoid-flat` with the shipped gain `[1, 0.84, 0.73]`; the
+same with the datasheet-fitted pair (`[1, 0.977, 0.860]` + `[0, −0.036, −0.057]`); the same pair
+re-fitted to our own patches (`[1, 0.902, 0.790]` + `[0, −0.073, −0.075]`); and `sigmoid-knees`.
+
+**Verdict (user, all six frames):** `sigmoid-knees` is white on every white surface; the
+datasheet pair is worst, strongly blue; the shipped gain and the re-fitted pair sit between, and
+the re-fitted pair is not an improvement — pinker on the July Ektar and Portra frames, slightly
+bluer on `ektar0909-1632`. On asian skin the ranking reverses: the re-fitted pair is reddest,
+then the shipped gain, then `sigmoid-knees`, which reads slightly green and worst.
+
+**Measured on the same renders:**
+
+| | white flag, G/R · B/R | deciles L1 → L9, B/R |
+|---|---|---|
+| `flat`, shipped gain | 1.084 · 1.089 | 1.76 → 1.48 |
+| `flat`, re-fitted pair | 1.069 · 1.086 | 1.70 → 1.47 |
+| `flat`, datasheet pair | 1.273 · 1.263 | — |
+| `sigmoid-knees` | 1.024 · 1.027 | **1.65 → 1.27** |
+
+(Encoded 8-bit, 18 % inset; the decile columns are one frame's own scene colour, so only the
+*trend* across them is comparable.) The knee'd render's much steeper fall is its per-channel
+shoulder pulling the channels together as lightness rises. The cast's direction is per roll: blue
+on 2026-09-09-Ektar100, pink on 2026-07-15-Ektar100 and 2026-09-11-Portra400.
+
+Frame-by-frame notes are in `../temp/notes/observations.md`.
+
+## Appendix F — Superseded claims
+
+Kept so a reader who meets the old number elsewhere knows it was retired, and why.
+
+- **"The Ektar green cast is a drift, not a hue."** The argument used
+  `curve_probe::channel_drift`, which groups **ordinary picture pixels** by red density and reads
+  the green/red ratio across the groups, with no grey patch. A constant scene colour cancels, but
+  scene colour that correlates with brightness does not — and Hawaii frames (bright blue sky and
+  sea over mid-tone foliage) are exactly that case, so the result is suggestive, not shown. Two
+  points still stand: the Ektar sheet predicts +0.22 green drift where scans show +1.26, and
+  `generic-c41` renders Ektar better than Ektar's own sheet.
+
+- **"The sheet and the scanner disagree by a factor of two."** Written in the first draft of
+  Part 1 and wrong: it compared the datasheets' **(gain, offset)** fit against our **gain-only**
+  fit. Collapsed onto a zero-offset gain at our own patch densities the sheets imply ≈0.94 green
+  and ≈0.80 blue, so the disagreement is ≈10 %.
+- **The mid-slope figures "Ektar 0.64/0.60/0.76, Portra 400 0.52/0.57/0.63."** Computed by
+  sampling each channel's table at its own index midpoint — but the channels have different point
+  counts, so those are three different densities. The registry's own γ column is the number to
+  use, and it puts every stock's green *above* red, not below.
+- **Reconstruction as "the best estimate of relative per-channel exposure, per stock."** Part 1's
+  first goal, replaced 2026-09-17 by the fixed stock-agnostic decode, because per-stock inversion
+  normalizes tone character, inverts a toe that carries no information, and needs data that
+  cannot exist for every stock, developer and scanner.
