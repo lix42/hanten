@@ -982,8 +982,13 @@ mod tests {
     fn render_sdr(rgb: &[f32], gamut: SdrGamut) -> RenderedSdr {
         let scan = rgb.iter().map(|value| 1.0 - value).collect();
         let image = LinearImage::new((rgb.len() / 3) as u32, 1, scan, None).unwrap();
-        let (film, _) =
-            reconstruct(&image, &FilmBase::from([1.0; 3]), &Reconstruction::Simple).unwrap();
+        let (film, _) = reconstruct(
+            &image,
+            &FilmBase::from([1.0; 3]),
+            &Reconstruction::Simple,
+            None,
+        )
+        .unwrap();
         let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
         sdr::render(&shared, gamut, DisplayTone::DEFAULT).unwrap()
     }

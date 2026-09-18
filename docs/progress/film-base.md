@@ -64,8 +64,17 @@ What other epics need to know about `film-base`:
   open. Known limitation, in the mask rather than the verdict: a thin holder margin
   that is IR-dark only in the shallow probe can hide a rebate behind it; the
   workaround is `--base-region`. The mask restricts **along** each edge only, not in
-  depth — depth is `holder-depth-mask`'s work, which `auto-anchor-interior-measurement`,
-  `holder-masked-measurement` and `tiling-uniformity-validator` consume. A holder covering *every* edge (22 of 25 real
+  depth — depth is `film_base::effective_area`'s, **shipped 2026-09-18**
+  (`holder-depth-mask`): the per-edge IR holder march plus a user-sizable static inset
+  (`measure.inset` / `--measure-inset`, the recipe's sixth section), returned as a
+  rectangle with `holder_applied` and per-edge `capped`. Call it; do not re-derive it.
+  Two things constrain callers: **`converged` is not a quality signal on its own** — a
+  capped edge inflates its perpendicular edges at a stable fixed point, so read it with
+  per-edge `capped` (`film-base/holder-cap-contamination` narrows this) — and **which
+  region a measurement gets is `measures_over_region`, while whether the IR plane moved
+  a pixel is `region_reaches_a_rendered_pixel`**; a new consumer adds its condition to
+  one of those two, never to a merged one. `DmaxSource::Auto` is the only consumer so
+  far; `Dmin`/`Dmax` estimation is still unmoved (`holder-masked-measurement`). A holder covering *every* edge (22 of 25 real
   chromogenic frames at the 0.5% probe depth) **is** handled: `ir_holder_mask`
   returns no mask when no edge would yield a film range, so the search falls back
   to RGB-only instead of getting nothing to scan.
@@ -1059,10 +1068,577 @@ re-reading the park above as a statement about the shipped value.
 
 ## holder-depth-mask
 
-**Status:** not started
-**Updated:** 2026-09-13
+**Status:** done (2026-09-18)
+**Updated:** 2026-09-18
 
 - Goal: one per-edge holder-depth primitive (IR-measured where usable, fixed fraction
   otherwise) for `holder-masked-measurement`, `algo/auto-anchor-interior-measurement`
   and `tiling-uniformity-validator`. Split out of `holder-masked-measurement` so the
   mask is not held behind that task's estimator change and version bump. No pixel change.
+
+### 2026-09-16 — widened to own the effective area (user decisions)
+
+Reviewed the depth tasks with the user against what was actually recorded. The
+model was right in `algo/auto-anchor-interior-measurement` and had **not** survived
+the 2026-09-13 split into this task, which had gone back to modelling the static
+value as a *fallback* for a missing IR mask. These decisions supersede every earlier
+conflicting record:
+
+- **This task owns the "effective area", not just the holder.** The two values are
+  consumed together on every path, so they are resolved together. The scope note the
+  split left behind — "the consumers' inset for the rebate is a different thing and
+  stays with them" — is reversed. The one thing that would justify separating them
+  again is using the holder depth to auto-crop the output, which is not planned.
+- **It is the first step of every measurement path** — `Dmin`, `Dmax`, content
+  exposure/contrast, tiling, roll-wide content. Exceptions exist only where the user
+  states a region explicitly; nothing in nc opts itself out.
+- **Two cuts in order, always both.** IR holder cut, then the static inset. The inset
+  is not a substitute for a missing IR cut: it runs regardless, and where IR did not
+  run it is simply the only cut. `auto-anchor-interior-measurement`'s claim that the
+  two fractions are different things and must not be shared is withdrawn.
+- **nc never searches for a rebate.** `Dmin` is measured either over the whole
+  effective area of a reference frame or over a user-stated region. The blind inset
+  removes the rebate; nothing detects it. (See the open item below — the shipped
+  `--auto-base` source *is* a rebate detector, and this decision reaches it.)
+- **B&W takes the same rule as everything else.** Clear IR separation → cut the holder
+  automatically. No clear separation → treat the frame as having no IR, and the inset
+  depth is the user's. No chemistry-keyed branch; `ir-usability-detection` already
+  removed that. Consequence worth knowing: exposed silver frames often decline (HP5
+  1354 reads interior IR 0.0818 against the 0.25 line), so the no-IR path is the
+  normal one for B&W rather than an edge case.
+- **The 10–15% holder-occupancy measurement does not force a second default.** The
+  earlier open decision ("whether cut 2 takes a different default when cut 1 did not
+  run") is **closed**: it stays 5% of the shorter edge, and the override is how a
+  deeper holder is handled. nc measures what it can measure and reports what it did;
+  sizing a blind cut is the user's call, not a number nc guesses.
+- **A warning when the holder was not measured** (no IR plane, or no separation) is
+  agreed in principle and explicitly **low priority** — it must not hold up the region.
+
+Still open after this pass: the shipped `FilmBaseSource::Auto` detector (`rebate_candidates`
+/ `select_auto_base`, design-spec §9) is a rebate-band search, which the no-rebate-detection
+decision contradicts. Recorded here and cross-referenced from `holder-masked-measurement`
+open question 4; not carried into the `auto-base-*` task files or the design spec pending
+the user's call on whether that source is replaced or kept as a legacy option.
+
+### 2026-09-16 (later) — the rebate detector is retired; Dmin/Dmax becomes area x method
+
+The open item above is answered. **nc is not shipped, so a breaking change is
+acceptable** (user), and the rebate-band search goes.
+
+- **`Dmin`/`Dmax` measurement is rebuilt on two inputs and nothing else**: an **area**
+  (the effective area, or one the user states) and a **method** (a percentile over that
+  whole area, or the grid). The user leans whole-area percentile. `holder-masked-measurement`
+  is re-scoped to own this — it was already the estimator task, so the migration lands
+  there rather than in a new one, and it keeps its `pipeline_version` bump.
+- **A user-stated area is per *usage*, not per frame.** The worked example: one `convert`
+  where the user points `--base-region` at a rebate strip for `Dmin` while a content-aware
+  render measures exposure and contrast over the derived effective area. So a shared
+  effective-area function takes a **usage** parameter and decides per usage whether the
+  user's region overrides. Explicitly **not needed yet** — the requirement is that the
+  signature not preclude it, i.e. do not return one region per frame.
+- **Four tasks are downstream of the retirement**, all parked with a pointer rather than
+  deleted (their real-scan evidence is worth keeping): `auto-base-real-scan-refusal`
+  (its "which gate refuses" question dies with the detector; "is a rebate visible at all"
+  survives for `content-fallback`), `auto-base-neutral-stock` and `white-holder-support`
+  (both most likely moot — a search that does not happen cannot mis-anchor, and neither
+  remaining path asks about holder polarity), and `core/base-acquisition-planner`, whose
+  auto rung now means "measure the effective area".
+- **`content-fallback` is *not* retired** — estimating the base from picture content when
+  no unexposed film exists anywhere is a different question from where to measure.
+
+Two things deliberately left open rather than inferred:
+
+- **Whether the grid survives as a method.** The user enumerated it and preferred
+  percentile. It collides with `tiling-uniformity-validator`, which plans to retire
+  `--grid` outright on the grounds that it would select no estimator. Recorded as that
+  task's open question 1 so it is settled once, in the task that owns the method.
+- **"Whole-area percentile" is not "keep p97".** The 2026-08-11 measurement stands:
+  over a single population an extreme percentile is its noise tail, 0.046 density /
+  0.16 stops in the pale direction. Which percentile is open; an extreme one is not.
+
+### 2026-09-16 (third pass) — scope interview: the deliverable is settled
+
+Four questions put to the user, to find the places where two readings would have built
+different things:
+
+- **Return shape: a per-edge rectangle**, `{top, bottom, left, right}` — not a
+  per-segment mask. Consumers clamp bounds, so there is no mask buffer and
+  `pipeline::memory` owes no new term. Accepted cost: a holder covering part of one edge
+  widens that whole edge to its deepest segment. `EdgeHolderMask`'s segments remain an
+  *input* to the depth, never the output.
+- **Inset basis: the *original* frame's shorter edge**, not the post-holder remainder. A
+  scan always insets the same pixel count whatever IR measured, so the resolved value
+  does not move with a measurement and an override is predictable.
+- **Deliverable: region + knob + report/`inspect` + one consumer.** `auto_dmax` takes the
+  rectangle, so the inset flag is not the accepted-and-ignored knob the project forbids.
+- **The consumer is wired region-only.** `algo/auto-anchor-interior-measurement` keeps the
+  loud-failure range check, `measure_balance_range` and the "does `Auto` survive" question.
+
+**One accepted risk, recorded so it is not rediscovered as a bug.** Between the two tasks
+`Auto` reads a better region while an out-of-range result still renders black instead of
+refusing. The user took this seam knowingly; what makes it tolerable is that
+`DmaxSource::Fixed` is the default (`src/types.rs:485`) and `Auto` is opt-in via
+`--auto-d-max`, so only a user who asked for it is exposed. The check is still the half
+that makes `Auto` *safe* and nothing but that task will land it.
+
+**"No pixel change" is therefore now qualified.** Default renders stay byte-identical and
+`version::PIPELINE_FINGERPRINTS` does not move — its golden vectors resolve `Fixed`, never
+`Auto`. A `--auto-d-max` run does change, which is the point of wiring it. Output
+*dimensions* are still byte-identical on every path; nothing is ever cropped.
+
+### 2026-09-17 — implemented (#TBD)
+
+**Status:** done. Four chunks, all four gates green at each one, no commits.
+
+- **`film_base::effective_area(image, inset_frac) -> EffectiveArea`** — the per-edge
+  rectangle `[x, y, w, h]` plus `holder: Option<HolderDepths>` and the resolved
+  `inset`. `holder_depths` marches inward per along-edge segment in
+  `holder_probe_depth` steps until IR reads film, and the edge takes its **deepest**
+  segment. Built on `ir_separability` + the segment helpers directly, **not** on
+  `ir_holder_mask`, whose all-holder `None` is the decline this must not inherit.
+  `median_ir_probe` was generalized to `median_ir_band` (a band at arbitrary depth,
+  caller-owned scratch buffer) and now delegates to it, so the geometry has one copy.
+- **Two bugs found by measuring rather than by reasoning**, both worth keeping:
+  - **A holder *ring* makes corner segments read holder for the frame's whole
+    height**, so every edge marched to its cap and the rectangle collapsed. Each
+    edge must be measured only over the along-edge positions that survive the
+    *perpendicular* edges' cuts — which are what we are computing, so it is a fixed
+    point. `holder_depths` iterates (up to `HOLDER_MARCH_PASSES = 4`, exiting on the
+    first repeat) starting untrimmed; it converges **downward** in two or three
+    passes. The existing rebate search has the same problem and solves it the same
+    way (`film_along_ranges` trims by the scan depth).
+  - **A trailing sliver segment dragged a whole edge to the cap.**
+    `edge_holder_segments`' floor-plus-leftover split leaves a remainder segment —
+    harmless when each segment is classified independently, fatal under a `max`
+    reduction. On Portra160 `1102` a **6 px** trailing segment never cleared and
+    reported the left holder as the 900 px cap where the other 24 segments agreed on
+    108-126 px: a 7x over-cut discarding 15% of the frame width, with `capped` the
+    only hint. `march_edge_depth` now spreads `IR_HOLDER_SEGMENTS` evenly (every
+    segment within a pixel of the others) and deliberately does *not* share the
+    mask's split. `edge_holder_segments` itself is untouched — changing it would move
+    the mask and the film-base path, i.e. pixels.
+- **Real-scan verification, 31 IR frames across 7 rolls** (`nc inspect`, derived
+  numbers only): **all 31 measured, zero capped**, depths consistent within each
+  roll — top ~90, bottom ~72, left/right 18-144 px, i.e. **2.5-4% of the shorter
+  edge**. That corroborates the 2-5% HP5 figure and does **not** reproduce the
+  10-15% one, which came from a different measurement (top-code share vs inset on a
+  *rendered* frame, `analysis/conversion-metrics`) — worth knowing before either
+  number is cited as "holder depth". The 2026-09 rolls read `0,0,0,0`: measured, no
+  holder, which is the already-cropped verdict and matches
+  `auto-base-redesign`'s note that those scans' cropped holder defeats the rebate
+  detector. Contrast `ir_holder_mask`, which declines on 22 of 25.
+- **The knob is `measure.inset` / `--measure-inset FRAC`**, its own recipe section
+  rather than a key under `film_base`, because the area governs every measurement
+  path and `deny_unknown_fields` makes a key's section permanent. Default and bound
+  live **once** in `types.rs` (`DEFAULT_MEASURE_INSET`, `MAX_MEASURE_INSET`,
+  `check_measure_inset`) so `cli::validate` and `film_base::effective_area` cannot
+  disagree — the `headroom_stops` precedent. The bound is a *value* rule, so it is in
+  `validate`, not `validate_convert`.
+  - **`inspect`/`estimate` check the flag before the decode.** They resolve no
+    recipe, so `validate` never sees it, and the best-effort `effective_area` call
+    would have swallowed a bad value as a warning at **exit 0**. Now exit 2 from all
+    three commands, before a 160 MB read.
+- **`recipe` fingerprint refreshed in place** to `e194308725fd2cf1`, no version bump:
+  the default document gained `"measure": {"inset": 0.05}` while `render` and `base`
+  are byte-identical. Precedent is the v1 row's `film_base.source` refresh.
+- **`auto_dmax` is wired, region only.** `resolve_dmax` now takes
+  `(&DensityImage, DmaxSource, Option<[u32; 4]>)` — the region threads from the
+  orchestrator through `stages::render*` → `algo::reconstruct` →
+  `density::reconstruct` / `sigmoid::apply_curve`, so stages stay pure. Three shape
+  decisions:
+  - **The `None` arm is its own path**, not a full-frame rectangle, so the
+    unrestricted result is *bit-identical* to the old walk (pinned by a test on raw
+    bits). Adding the parameter moved nothing.
+  - **A region restricts the walk rather than adding one** — one `step_by` over the
+    region's rows chained end to end, so the stride keeps a single phase and the
+    visited set is a function of the rectangle and the dimensions alone. The 1 MiB
+    sample cap and the ~4 MB transient are unchanged, so `pipeline::memory` owes this
+    no new term (asserted, not assumed).
+  - **The rectangle is clamped, not trusted** — a region resolved for other
+    dimensions must not index out of bounds.
+- **Measured: `Auto` resolves 0.76-1.18 across 12 real frames from 6 rolls**, all
+  below the roll `Dmax` of 1.28-1.38 and inside the frames' bright content, against
+  the recorded **2.23-2.37** it used to return. That is the defect
+  `algo/auto-anchor-interior-measurement` was filed for, on its measurement half.
+- **`convert` resolves the region only when something consumes it**
+  (`consumes_measure_region`: `DmaxSource::Auto` alone today). Resolving it always
+  would read the IR plane on every run and then make the "IR preserved but not used"
+  note claim the plane was used on runs where the region changed nothing. This keeps
+  a default conversion byte-identical **and** keeps that note honest — it is now
+  keyed on `measure_area.holder.is_some()`, a **fact about what happened**, beside
+  `base.ir_mask_applied`, never a prediction from the inputs. Verified both ways on
+  the fixture: default anchor warns and reports no area; `--auto-d-max` reports the
+  area and does not warn.
+- **"No pixel change" is qualified, and the gate cannot see the difference.**
+  Default renders are byte-identical and `PIPELINE_FINGERPRINTS` does not move —
+  `golden`'s vectors resolve `Fixed`, never `Auto`. The `--auto-d-max` change is
+  verified by the table above and by a committed synthetic opaque-border fixture,
+  not by the drift gate.
+- Docs: design-spec gained a `measure` section before "Film base / Dmin";
+  `using-nc.md` gained "The measurement region (the effective area)" with the
+  three-case `holder` table (depths / all-zero / `null`), and its `--auto-d-max` row
+  and `--strict`+IR blockquote were corrected — that note now lists **two**
+  consumers of the plane.
+
+**What this did *not* do**, so it is not mistaken for finished: the loud-failure
+range check on `Auto` stays with `algo/auto-anchor-interior-measurement`, which
+leaves a window where `Auto` reads a better region but an out-of-range result still
+renders black instead of refusing. The user took that seam knowingly (2026-09-16);
+it is tolerable only because `Fixed` is the default and `Auto` is opt-in. `Dmin` /
+`Dmax` estimation is untouched — that is `holder-masked-measurement`.
+
+
+### 2026-09-17 (later) — review round: the honesty fixes, and the version decision
+
+Two review engines against the implementation above. Nine findings, all fixed in the
+working tree; the three that changed behaviour were one coupled defect.
+
+- **`convert` now resolves the effective area unconditionally and always reports
+  it.** The "resolve only when something consumes it" decision recorded above fixed
+  one honesty problem and created three: `--measure-inset` was accepted and silently
+  ignored (output byte-identical, no `effective_area`, no warning — against
+  `using-nc.md`'s own "Nothing is silently ignored" section); `--strict` stopped
+  failing on the "IR preserved but not used" note for `--auto-d-max` configs where
+  the plane provably never reached a pixel; and `inspect` carried a measured
+  `effective_area.holder` *and* that note in one report. Measured before choosing:
+  on an 18.7 MP real frame the marching run is **not slower** than the non-marching
+  one — the march is below run-to-run noise, so there was nothing to save.
+- **Consumption is now two returned facts, never re-derived from the inputs.**
+  `EffectiveArea::holder_applied` (the holder was measured *and* some depth is
+  non-zero) comes back from `effective_area`, where the arithmetic happens; the note
+  is suppressed only when that **and** `consumes_measure_region` hold. The previous
+  guard was `holder.is_some()`, which counts the all-zero "measured, no holder"
+  verdict — i.e. both committed fixtures and every 2026-09 roll. This is the
+  `BaseEstimate::ir_mask_applied` shape, for the same reason.
+- **`consumes_measure_region` gained `&& anchor().reads_reference()`.**
+  `dmax() == Auto` alone is not consumption: a reference-free placement
+  (`--anchor-black-floor`, `--anchor-mid-offset`) discards the measured anchor. The
+  `film-master` rejection and roll's not-frozen warning already carried both
+  conditions; this was the third site and had only one.
+  - Deliberately **no presence rule** refusing `--measure-inset`: always reporting
+    the resolved region is what makes the flag observable (the `IoArgs::film_type`
+    precedent), and a presence rule would need ordering against the existing
+    dmax/curve rules — the defect that has shipped four times here already.
+- **The march's "converges downward in two or three passes" was an unproven claim,
+  and is corrected.** The edge depth is a `max` over segments whose partition is
+  recomputed from the *trimmed* extent, so a larger trim makes segments narrower,
+  which makes a partially-holder segment **more** likely to read holder: a depth can
+  *rise* as the trim rises. The map is not monotone and nothing excludes a 2-cycle.
+  What is true is the observation — every frame measured so far settles in two or
+  three passes. So `HolderDepths` now carries `converged`, and on exhausting
+  `HOLDER_MARCH_PASSES` without a repeat the reported depths are the **elementwise
+  max of the last two passes**: a cycle degrades to an over-cut (costing measurement
+  area) rather than an under-cut (holder left inside the measured region). The merge
+  is its own function so the rule is testable — no fixture exhibits a cycle.
+- **A frame too small to fit one probe band is now "not measured" rather than
+  capped.** `march_edge_depth`'s limit applies `.min(perpendicular / 2)` last, so
+  where that is below the probe step the `while` loop never ran, every segment took
+  the not-cleared arm, and the edge reported the cap with `capped: true` on **zero**
+  bands read — against `capped`'s documented contract of being a floor on the real
+  holder. `holder_depths` declines such a frame up front, which is a state every
+  caller already handles. Unreachable on real scans; it was dishonest, not wrong.
+- **`pipeline_version` stays 4 — recorded as a decision, not as a consequence.**
+  The in-place `recipe` refresh is sanctioned and `render`/`base` really are
+  byte-identical, but the v1/v3 precedents for that refresh were *new* knobs, where
+  no pre-existing recipe could change meaning. Here a frozen recipe carrying
+  `reconstruction.curve.dmax: "auto"` renders differently before and after this
+  change under the same `pipeline_version: 4` and the same `behavior` string, on a
+  path the fingerprints cannot witness (`golden`'s vectors resolve `Fixed`). That is
+  a version-**identity** question, not merely the verification gap the entry above
+  frames it as. Accepted because nc is unshipped, `Auto` is opt-in, and the prior
+  behaviour rendered every real frame black. `core/conversion-versioning` is its
+  home if revisited. The comment in `version.rs` says all of this at the row.
+- **Two `shadow_metrics` probes were measuring retired behaviour.** Candidates 4 and
+  7 are the shipped `DmaxSource::Auto` — that is the stated premise of their rows —
+  but took the mechanical `, None` and so kept measuring the whole frame (2.23-2.37)
+  where shipped now measures the effective area (0.76-1.18). They print and never
+  assert, so they reported plausible numbers at exit 0 for behaviour nc retired:
+  the trap this file's own header records twice. `measure_candidates` now resolves
+  the area per frame and hands it to exactly those two rows; the other nine `None`
+  sites use explicit anchors and correctly keep their meaning.
+- **The 10-15% figure is no longer cited as a holder depth.** It is the holder's
+  share of a *rendered* frame's top codes (`analysis/conversion-metrics`), not a
+  measured depth, and the entry above already flagged that before either number was
+  quoted as one. `types.rs`'s `DEFAULT_MEASURE_INSET` doc, the user-visible
+  `check_measure_inset` message, `HOLDER_MARCH_MAX_FRAC`'s doc, `using-nc.md`,
+  `design-spec.md` and this task's own file now all cite the measured 2.5-4% of the
+  shorter edge and describe the other figure as what it is.
+- **The `None`-region bit-identity test was a tautology** — it compared
+  `resolve_dmax(.., None)` against `auto_dmax_strided`, which *is* the `None` arm. It
+  now pins a literal captured from the pre-region code (`2.4`, the fixture border's
+  holder density) and cross-checks the full-frame *rectangle* against it.
+- Docs: `design-spec.md`'s recipe-section enumeration gained `measure` (six sections
+  now, and in a `deny_unknown_fields` spec that enumeration is load-bearing);
+  `using-nc.md`'s verbatim `nc params` block gained `"measure": {"inset": 0.05}`; the
+  `--measure-inset 0.12` example is re-framed as the arithmetic on the *measured*
+  frame it actually shows, with the `null`-scan advice stated separately; and both
+  `converged` and `holder_applied` are documented beside `capped`.
+- **Out of scope, for the user:** `CLAUDE.md`'s module map wants a line noting
+  `effective_area` as a second orchestrator-resolved entry point in `film_base`
+  beside `film_base::estimate`.
+
+### 2026-09-17 (third pass) — re-review of the round-1 delta: prose, roll, reachability
+
+Nine findings against the fix round above (three Medium, six Low), **no logic or
+behaviour defect**. The two Medium items that follow from round 1's design —
+resolving the area unconditionally on `convert`, and reporting consumption as a
+returned fact — were re-confirmed and kept; only their prose and their reach moved.
+
+- **`convert`'s "IR preserved but not used" note is reworded, not re-gated.** With
+  the area resolved unconditionally, a default-anchor `convert` of an IR frame
+  legitimately reports `holder_applied: true` *and* the note, so the round-1
+  sentence ("not used in Step 1") contradicted the field one line above it — and the
+  identical sentence meant "not measured" on `inspect` and "never reached a pixel"
+  here. The note now says "not used in the **conversion** — no rendered pixel
+  depends on it, whatever `effective_area.holder` measured"; `inspect`'s keeps the
+  round-1 wording, so the two commands' verdicts no longer collide in one sentence.
+  The verdict and the exit code are unchanged. `scripts/analysis/nctool`'s fake-nc
+  fixture echoes the new text; `scripts/real-scan-verify/harness.sh`'s grep is a
+  prefix of both and was not touched.
+- **A `roll` frame now carries `effective_area`.** `measure.inset` is accepted from
+  the shared recipe *and* from a per-frame override, and was reaching the region
+  invisibly — which is precisely what round 1's remedy for the accepted-and-ignored
+  flag exists to prevent, so it was fixed for three commands of four. It sits beside
+  the frame's `dmax`, which is the value measured over it, and per-frame is where it
+  belongs: one shared inset meets a holder depth that is genuinely each frame's own.
+  Verified on Portra160 `1102`: the frame entry gains the key, and a per-frame
+  `{"measure": {"inset": 0.12}}` override now shows as `inset: 432` against the
+  shared `180`, and `roll_frame_report_makes_the_measurement_area_observable` pins
+  that pair on the committed fixture (shared `0.05` in the recipe, resolved `55` in
+  the frame) so the field cannot quietly go away again.
+  The field is boxed (`Option<Box<EffectiveArea>>`) — with it unboxed
+  `FrameStatus::Ok` trips `clippy::large_enum_variant`, the same reason
+  `input_color` is boxed. The design-spec and `using-nc.md` claim "every command
+  that decodes resolves the area and reports it" is now true **unedited**; both were
+  widened only to name where a roll reports it.
+- **`converged`'s guarantee is scoped to a two-phase cycle.** Max-of-the-last-two
+  guarantees the over-cut for a two-phase cycle and for a monotone transient, but a
+  period-≥3 cycle can still under-cut: passes 3 and 4 are only two of its phases.
+  The merge is deliberately **not** widened to all four passes — pass 1 is the
+  untrimmed, corner-contaminated upper bound and would over-cut every ordinary ring
+  frame. The rustdoc also now records the consequence: the merge can raise
+  `top + bottom` to the frame height, which with the inset trips `effective_area`'s
+  empty-region refusal, so a far enough over-cut is a hard refusal (exit 2, or a
+  failed roll frame) rather than a degraded measurement. `using-nc.md`'s
+  `converged: false` bullet carries the same two caveats; "no real scan has produced
+  this" stands.
+- **The exhaustion path is now reachable, and tested.** The march loop is extracted
+  as `march_to_fixed_point(image, ir, step, passes)`; at `HOLDER_MARCH_PASSES` no
+  fixture cycles, so `passes = 1` on the existing ring fixture is what exercises the
+  `!converged` merge (pass 1 cannot repeat the all-zero start) and both of its lines.
+  The wiring was already correct — this is about it staying correct.
+- **The timing measurement behind "resolve unconditionally" is scoped, not
+  reversed.** The march measured free on an 18.7 MP frame, and that frame
+  **converged**: a capped frame runs up to 4 passes x 4 edges x 24 segments x ~50
+  bands, roughly 50x the work. Zero of 31 real frames capped, so the decision
+  stands — but the evidence covers the converging case, which is every real frame
+  measured so far, not the capped worst case.
+- Two rustdoc corrections: `Report::effective_area` was still scoped
+  "(`inspect` / `estimate`)", and `film_base::effective_area`'s said it "is called
+  per measurement rather than resolved once per frame" when every caller resolves it
+  once per frame — the real constraint is only that the signature not *preclude* a
+  per-usage region, which it does not.
+- `inspect`'s third IR-note branch had a comment describing the all-holder fallback,
+  which the round-1 `ir_consumed` disjunct excludes (an all-holder frame marches to a
+  ring, so `holder_applied` is true — verified on `1102`: `holder_mask: null`,
+  `ir_separability.usable: true`, holder measured, and the note does not fire). The
+  comment now says what the branch actually covers ("both readers declined for a
+  reason neither note above named", with the effective-area error path warning
+  separately) and the branch is **kept** as defence for a future third IR reader.
+- `shadow_metrics`' per-frame area resolution no longer ends in `.ok()`: degrading to
+  `None` there is exactly the retired whole-frame walk the comment above it guards
+  against, and a probe only prints. It now prints a loud line and skips the frame.
+
+### 2026-09-17 (ship review) — a different reviewer, four Mediums the loop missed
+
+The two-engine review loop above converged; a **ship review by a different reviewer**
+then found four Medium and seven Low findings. All fixed in the working tree, no
+commits. The pattern worth keeping: that reviewer was strong on this project's
+conventions and weak on premises, so two of its four recommended remedies were
+wrong and are recorded below with what was done instead.
+
+- **The empty-region refusal fired on runs that read no region, with a remedy that
+  could not work** (M1). `convert_frame` called `effective_area(...)?`
+  unconditionally, *before* asking whether anything consumed the region, so a run
+  whose output would be byte-identical failed at exit 2 with nothing written — while
+  `inspect`/`estimate` degraded the identical measurement to a warning at exit 0.
+  That contradicted the rationale comment directly above the call. Now: a refusal
+  only for a run that measures over the region, a warning otherwise, with
+  `effective_area` omitted (there is no region to report). The knock-on —
+  `--measure-inset` inert on such a run — is correct, because the warning is the
+  observable. And the message's "or state a region explicitly" was the **fifth**
+  instance of the remedy-that-does-not-work defect CLAUDE.md records: `effective_area`
+  takes only the image and the inset, so `--base-region` never reaches it. It now
+  names lowering the inset, plus dropping `--auto-d-max` on the fatal path only,
+  where that is what measures over the region.
+- **A capped edge inflates the perpendicular edges tenfold, at `converged: true`**
+  (M2). The trim can only remove as much holder as the perpendicular edge
+  *reported*, so once a true depth exceeds `HOLDER_MARCH_MAX_FRAC` the residual strip
+  stays inside the perpendicular edges' extent and they cap too — at a **stable**
+  fixed point. Measured: 400x400, 120 px top holder, 10 px sides →
+  `{100, 10, 100, 100}`, a 10x over-cut discarding 45% of the frame width, exit 0.
+  This round fixes the **reporting**, not the algorithm: `capped` is now per edge
+  (`CappedEdges`, with `contaminated()` = "a capped edge has a capped perpendicular
+  neighbour", the exact condition under which a trim was truncated). The deep fix is
+  filed as `film-base/holder-cap-contamination`, which records why **raising the cap
+  is rejected** — it widens M1's refusal into ordinary use (the predicate is
+  `2*(cap_frac + inset) >= 1`, so 0.35 makes `inset >= 0.15` fail) and removes the
+  only bound on an ambiguous IR read.
+  - **The committed `[4, 4, 60, 4]` fixture was already a contamination case**,
+    reporting `{50, 50, 50, 4}` where top and bottom are 4 px — 12x out on two edges.
+    Its test asserted only `d.left == 50` and the frame-wide `capped`, so it passed.
+    The per-edge flags surfaced it on the first run. Evidence that M2 was reachable
+    from a *committed* fixture, not only from a hand-built one.
+- **`capped` and `converged` emitted no warning, so `--strict` could not see either**
+  (M4, the task's own open question 3, now closed). Both mean "the reported rectangle
+  is not a measurement", which CLAUDE.md's fail-loudly rule puts in a warning, not a
+  `Serialize`-only field — and the progress entry above records this exact class of
+  bug already happening once during implementation (the 6 px sliver reporting a 900 px
+  cap, caught only because someone was reading the numbers).
+  `film_base::effective_area_warnings` is a pure function all three commands push, so
+  the field and the warning cannot disagree. This is what converts M2 from silently
+  wrong to loudly suspect.
+- **The reported `dmax` was holder-contaminated under a base-derived anchor** (M3),
+  and the reviewer's one-line remedy was wrong. `consumes_measure_region` was one flag
+  doing two jobs, and the two questions have different answers:
+  - *What region does the measurement use?* → `measures_over_region`, keyed on
+    `DmaxSource::Auto` alone. Under `--anchor-black-floor` / `--anchor-mid-offset` the
+    region moved and the reported `dmax` did not (1.6848611 at `--measure-inset 0.4`
+    and at the default), so one report field meant the effective area under one
+    placement and the whole frame under another — and the contaminated value is the
+    one the calibrate-once workflow has users copy into `--d-max`, i.e. the 2.23-2.37
+    figure this task exists to eliminate.
+  - *Did the IR plane change a rendered pixel?* → `region_reaches_a_rendered_pixel`,
+    which keeps `Auto && reads_reference()`. **The reviewer proposed dropping that
+    conjunct outright**, which would have re-broken the fix two entries above:
+    `--strict` stopped failing on runs where the plane provably never reached a pixel,
+    and `strict_still_fails_when_an_auto_dmax_anchor_reads_no_reference` pins it. Two
+    predicates, two rustdocs saying which question each answers, and both behaviours
+    intact. Pixels are byte-identical under the base-derived placements — the same
+    fact the old gate relied on, used in the other direction. Accepted consequence:
+    `sigmoid::apply_curve`'s finite-and-positive guard now sees the region-restricted
+    value, so a genuinely degenerate measurement can newly fail loudly there.
+  - Side effect: `shadow_metrics` keys its probe region on `AnchorRule::Auto`, which
+    the review noted disagreed with the shipped gate. It now agrees, without a change.
+- **Correction to the third-pass entry above** (L1; recorded here rather than edited
+  in place, per the append-only rule). That entry, and `HolderDepths::converged`'s
+  rustdoc, claimed the last-two-passes max guarantees an over-cut "for a monotone
+  transient in either direction". False for a transient settling **upward**:
+  `max(p3, p4) = p4` then sits *below* the fixed point, which is an under-cut. The
+  honest statement, now in the rustdoc, is a two-phase cycle and a transient settling
+  **downward**. (Unlikely in practice for the same reason the merge is not widened:
+  pass 1 is measured untrimmed and is the corner-contaminated upper bound, so the
+  sequence starts high.)
+- **`converged` and `capped` are documented as independent and are not.** A cap
+  *creates* a stable fixed point, so the worst answer the march can produce comes back
+  `converged: true`. Said in the rustdoc and in `using-nc.md`, where the caveat sat
+  under the `converged: false` bullet while the reachable risk is one bullet up.
+- Doc fixes: `using-nc.md`'s opening "Every number nc measures off a frame is
+  measured over the effective area" contradicted its own closing "the `Dmin`/`Dmax`
+  estimators still measure as they always have" 84 lines later — one consumer exists,
+  so the guide now says one measurement (the aspiration stays in design-spec §1861,
+  which states intent and is correct as written). The `null`-holder advice told users
+  to raise the inset "past" 2.5-4% when the default is already 5%; the right
+  reasoning is `DEFAULT_MEASURE_INSET`'s — where cut 1 did not run, the same 5% must
+  clear the holder **and** its rebate. And `estimate`'s IR-note comment now says its
+  scoping to "for the film base" is **deliberate and load-bearing**, so the next
+  reader does not "fix" the three commands' divergent rules by adding the march
+  disjunct and make that message wrong.
+- **A premise that became load-bearing without being stated** (L7, recorded on
+  `EffectiveArea::holder`): `ir_separability` samples only the interior (border
+  trimmed 10%) *by design*, so `usable: true` asserts nothing about whether an
+  IR-opaque holder exists — and the user-facing "measured, and there is no holder"
+  verdict therefore rests on the march's own outermost band with no corroboration.
+  No plausible failing case could be constructed and the project's own physical
+  premise cuts against one (`white-holder-support`: IR opacity is thickness, not
+  colour), so this is an unstated assumption, not a defect.
+- Report shape changed (`capped` bool → object); `render`, `base` and `recipe`
+  fingerprints all unmoved, which the green gate pins. 780 + 197 tests (was 778 + 194).
+
+### 2026-09-18 — close-out
+
+**Landed.** `film_base::effective_area(image, inset_frac)` returns a per-edge
+rectangle plus `holder: Option<HolderDepths>`, `holder_applied`, and the resolved
+`inset`. Two cuts in order: the IR holder march (per along-edge segment, in
+`holder_probe_depth` steps, deepest segment wins the edge), then a static inset from
+the **original** shorter edge. `measure.inset` / `--measure-inset` is the knob, the
+recipe's sixth top-level section; default and bound live once in `types.rs`
+(`DEFAULT_MEASURE_INSET`, `MAX_MEASURE_INSET`, `check_measure_inset`) so the stage
+and `cli::validate` cannot disagree. Every decoding command resolves and reports it.
+
+**Verified.** Four Rust gates green (781 + 197, counts read), `nctool` 284 OK,
+`cargo doc` at the 16-link baseline, `render`/`base` fingerprints unmoved with only
+the sanctioned in-place `recipe` refresh. Real scans: 31 IR frames across 7 rolls all
+measured, none capped, holder 2.5-4% of the shorter edge; the 2026-09 rolls read
+all-zero (already cropped). `--auto-d-max` resolves 0.76-1.18 across 12 real frames
+from 6 rolls, against the 2.23-2.37 it used to return — the defect
+`algo/auto-anchor-interior-measurement` was filed for, on its measurement half.
+
+**What a dependent task needs to know.**
+
+- **Call `effective_area`; do not re-derive any of it.** `holder: None` means *not
+  measured* (no IR plane, shape-only, or film too IR-opaque — routine for silver);
+  all-zero depths mean measured-and-none, the already-cropped case. `holder_applied`
+  is the returned fact for "did the IR read move the rectangle", and
+  `EffectiveArea` is `Copy`.
+- **Read `converged` together with per-edge `capped`, never alone.** A capped edge
+  inflates its *perpendicular* edges at a stable fixed point, so the worst answer the
+  march produces reports `converged: true`. `film-base/holder-cap-contamination` owns
+  the narrowing; raising `HOLDER_MARCH_MAX_FRAC` was considered and rejected (it
+  widens the empty-region refusal into ordinary use at `inset >= 0.15`).
+  `effective_area_warnings` is the `--strict`-promotable channel for both flags.
+- **Two predicates, not one.** `measures_over_region` (`DmaxSource::Auto`) decides
+  what the measurement uses; `region_reaches_a_rendered_pixel` (`Auto` *and*
+  `anchor().reads_reference()`) decides whether the IR plane moved a pixel. Add a new
+  consumer's condition to whichever one it belongs to — collapsing them breaks either
+  report honesty or `--strict`, and both have shipped once.
+- **The estimators are untouched.** `Dmin`/`Dmax` still measure as they always have;
+  moving them onto this region is `film-base/holder-masked-measurement`, which also
+  owns the area x method rebuild. `algo/auto-anchor-interior-measurement` still owns
+  the loud-failure range check that makes `Auto` safe — the region landed without it.
+- **`pipeline_version` was deliberately not bumped** and that is recorded as a
+  decision in `version.rs`: a frozen `dmax: "auto"` recipe renders differently across
+  this change under the same version label, on a path no fingerprint witnesses.
+  `core/conversion-versioning` is its home if revisited.
+
+### 2026-09-17 (later) — review round 3: the inset carries the march's resolution
+
+Three P2 findings from the PR review. Two were prose (the "remedy must actually work"
+and "over-general claim" classes, both repeats); one was real behaviour.
+
+- **`march_edge_depth` reports the *start* of the first band whose median reads film**,
+  and a film median only means the holder covers less than half that band — so up to
+  ~`step/2` of holder can sit inboard of any measured depth, **including a measured
+  zero**. At the default the inset absorbs it (180 px against an 18 px step on a
+  3600 px frame), which is why an earlier round cleared it; at the documented
+  `--measure-inset 0` the residual *is* the whole defence, and a 9-18 px holder ring
+  is ~1-2% of the region at `SCAN_EPSILON` density — enough to own the percentile
+  `auto_dmax` reads. **Fix: `effective_area` floors the applied inset at one
+  `holder_probe_depth` step wherever the march ran**, so the mixed band is absorbed by
+  construction. No measured depth moves, so no fixture, doc figure or `--auto-d-max`
+  number changes; reporting `depth + step` instead would have moved all of them.
+  - **Keyed on `holder.is_some()`, not `holder_applied`** (the review proposed the
+    latter). A sub-band holder reads *zero* on the edges it covers, so
+    `holder_applied` is exactly false in the case with the thinnest margin — the
+    keying would have left the defect open there. Where the holder was not measured
+    at all there is no measurement resolution to respect and a stated `0` is exact.
+  - A stated `0` is therefore **deliberately not honoured exactly** on a measured
+    frame. `EffectiveArea::inset` is documented and reported as the *applied* value,
+    which is what makes the floor visible; verified on Portra160 `1121`
+    (`--measure-inset 0` → `inset: 18`, default → `180`, unchanged).
+  - The empty-region refusal grew a second remedy: where the floor set the inset,
+    "lower the fraction" cannot work, so it says so instead.
+- **`check_measure_inset`'s over-maximum message** still ended "state a region
+  explicitly instead" — the sibling of the `film_base.rs` wording fixed in round 1,
+  and the sixth instance of the class. `--base-region` sets the *film-base source* and
+  never reaches `effective_area`; there is no explicit measurement region. It now says
+  lower the fraction, or drop what measures over the area (`--auto-d-max`), and a
+  `cli::validate` test asserts the retired wording's **absence** as well as the new
+  one's presence.
+- **The `!converged` warning claimed an unconditional over-cut**, which
+  `HolderDepths::converged`'s rustdoc had already been corrected away from: the merge
+  guarantees that direction only for a two-phase cycle or a march still settling
+  downward, and a longer cycle or an upward transient can leave holder inside the
+  region. The user-facing copy now says both, and two further copies (the inline
+  comment in `holder_depths`, a test's name and comment) were corrected with it.
+  `docs/using-nc.md` already carried the honest version.

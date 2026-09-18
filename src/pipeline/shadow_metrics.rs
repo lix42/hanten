@@ -707,7 +707,11 @@ enum AnchorRule {
 ///   confirmed white patch. Requiring a *valid* white was incoherent: a content-driven mode
 ///   has no knowledge of what is a real white — it measures the brightest content and
 ///   adapts. Gating on validity also meant they resolved on 2 frames only, making their
-///   statistics useless. `Auto` is exactly that measurement and is already shipped.
+///   statistics useless. `Auto` is exactly that measurement and is already shipped —
+///   which also means it is measured over the **effective area**
+///   (`film-base/holder-depth-mask`), not the whole frame, and `measure_candidates`
+///   hands those two rows that region. A probe that keeps measuring what the shipped
+///   function no longer does prints plausible numbers for retired behaviour.
 /// - **Black-pinning is tested at targets consistent with the contrast.** The first attempt
 ///   used NLP's 0.00061 at contrast 2.0, which implies an anchor of 1.607 — above every
 ///   roll's Dmax, so nothing reached white and the whole frame rendered dark. That rejected
@@ -1138,6 +1142,28 @@ fn measure_candidates() {
             continue;
         };
 
+        // The effective measurement area, as shipped `--auto-d-max` resolves it.
+        // Candidates 4 and 7 are the shipped `DmaxSource::Auto`, and that is the
+        // whole premise of their rows — so they must measure the area shipped
+        // measures. Over the whole frame `Auto` reads the opaque holder (2.23-2.37
+        // on these very rolls, against 0.76-1.18 over the area), which would leave
+        // this probe printing plausible numbers for behaviour nc retired.
+        //
+        // Loud on failure, and the frame is skipped rather than measured: `.ok()`
+        // here would degrade to `None`, i.e. silently back to the retired
+        // whole-frame walk this very comment exists to prevent — and a probe only
+        // prints, so nothing else would catch it.
+        let measure_region = match crate::pipeline::film_base::effective_area(
+            &image,
+            crate::types::DEFAULT_MEASURE_INSET,
+        ) {
+            Ok(area) => Some(area.region),
+            Err(e) => {
+                println!("{mk}: EFFECTIVE AREA FAILED ({e}) — skipping, not falling back");
+                continue;
+            }
+        };
+
         let rect = |c: &str| -> Option<(u32, u32, u32, u32)> {
             let p = &f["patches"][c];
             p["valid"].as_bool().unwrap_or(false).then(|| {
@@ -1178,7 +1204,14 @@ fn measure_candidates() {
                 highlight_compress: cand.hc,
                 ..PrintParams::default()
             };
-            let (film, report) = crate::algo::reconstruct(&image, &base, &recon).unwrap();
+            // The region is handed over exactly where shipped hands it over — the
+            // content-driven `Auto` forms — so the other rows keep their meaning
+            // (they resolve a constant and read no pixels for the anchor).
+            let region = match cand.anchor {
+                AnchorRule::Auto => measure_region,
+                AnchorRule::Explicit(_) => None,
+            };
+            let (film, report) = crate::algo::reconstruct(&image, &base, &recon, region).unwrap();
             // For `Auto` the anchor is measured inside `reconstruct`; read it back so the
             // printed value is the one actually used rather than a guess.
             let anchor = report.dmax.unwrap_or(f32::NAN);
@@ -1268,7 +1301,7 @@ fn measure_candidates() {
                     density: DensityParams::default(),
                     curve: curve_for(&pinned, contrast),
                 };
-                let (bf, _) = crate::algo::reconstruct(&probe, &base, &probe_recon).unwrap();
+                let (bf, _) = crate::algo::reconstruct(&probe, &base, &probe_recon, None).unwrap();
                 let ba = crate::pipeline::working_space::map_nc_film_rgb_v1(bf);
                 let bs = crate::pipeline::render_split::display_source(ba, &print).unwrap();
                 let br = crate::pipeline::sdr::render(
@@ -1598,7 +1631,7 @@ fn tone_map_probe() {
                 anchor: crate::types::AnchorPlacement::WhiteAtDmax,
             }),
         };
-        let (film, _) = crate::algo::reconstruct(&image, &base, &recon).unwrap();
+        let (film, _) = crate::algo::reconstruct(&image, &base, &recon, None).unwrap();
         let aces = crate::pipeline::working_space::map_nc_film_rgb_v1(film);
         let shared =
             crate::pipeline::render_split::display_source(aces, &PrintParams::default()).unwrap();
@@ -1739,7 +1772,7 @@ fn linear_render_probe() {
             }),
         };
         let print = PrintParams::default();
-        let (film, _) = crate::algo::reconstruct(&image, &base, &recon).unwrap();
+        let (film, _) = crate::algo::reconstruct(&image, &base, &recon, None).unwrap();
         let aces = crate::pipeline::working_space::map_nc_film_rgb_v1(film);
         let shared = crate::pipeline::render_split::display_source(aces, &print).unwrap();
 
@@ -1938,7 +1971,7 @@ fn tone_map_stage_probe() {
                 anchor: crate::types::AnchorPlacement::WhiteAtDmax,
             }),
         };
-        let (film, _) = crate::algo::reconstruct(&image, &base, &recon).unwrap();
+        let (film, _) = crate::algo::reconstruct(&image, &base, &recon, None).unwrap();
         let aces = crate::pipeline::working_space::map_nc_film_rgb_v1(film);
         let shared =
             crate::pipeline::render_split::display_source(aces, &PrintParams::default()).unwrap();
@@ -2061,7 +2094,7 @@ fn tone_map_matched_probe() {
         // The benchmark: the shipped sigmoid at its own defaults. Its mid is the target.
         let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
         let sigmoid = benchmark_sigmoid(dmax);
-        let (film, _) = crate::algo::reconstruct(&image, &base, &sigmoid).unwrap();
+        let (film, _) = crate::algo::reconstruct(&image, &base, &sigmoid, None).unwrap();
         let shared = crate::pipeline::render_split::display_source(
             crate::pipeline::working_space::map_nc_film_rgb_v1(film),
             &PrintParams::default(),
@@ -2216,7 +2249,8 @@ fn tone_map_match_point_probe() {
         };
 
         let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
-        let (film, _) = crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax)).unwrap();
+        let (film, _) =
+            crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax), None).unwrap();
         let shared = crate::pipeline::render_split::display_source(
             crate::pipeline::working_space::map_nc_film_rgb_v1(film),
             &PrintParams::default(),
@@ -2475,7 +2509,7 @@ fn reconstruction_shape_probe() {
         };
 
         let shared_for = |recon: &Reconstruction, print: &PrintParams| {
-            let (film, _) = crate::algo::reconstruct(&image, &base, recon).unwrap();
+            let (film, _) = crate::algo::reconstruct(&image, &base, recon, None).unwrap();
             crate::pipeline::render_split::display_source(
                 crate::pipeline::working_space::map_nc_film_rgb_v1(film),
                 print,
@@ -2799,7 +2833,8 @@ fn hdr_gain_probe() {
         // Match the shipped sigmoid's mean lightness, per chunk 4: comparing at equal
         // brightness is the only way these numbers mean anything.
         let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
-        let (film, _) = crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax)).unwrap();
+        let (film, _) =
+            crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax), None).unwrap();
         let bench = crate::pipeline::sdr::render(
             &crate::pipeline::render_split::display_source(
                 crate::pipeline::working_space::map_nc_film_rgb_v1(film),
@@ -3141,7 +3176,8 @@ fn curve_colour_probe() {
     );
 
     let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
-    let (film, _) = crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax)).unwrap();
+    let (film, _) =
+        crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax), None).unwrap();
     let shared = crate::pipeline::render_split::display_source(
         crate::pipeline::working_space::map_nc_film_rgb_v1(film),
         &PrintParams::default(),
@@ -3318,7 +3354,8 @@ fn tone_map_visual_review() {
         // Benchmark: the shipped sigmoid at its defaults. Sets the midtone target and the
         // crop window every other config reuses.
         let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
-        let (film, _) = crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax)).unwrap();
+        let (film, _) =
+            crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax), None).unwrap();
         let shared = crate::pipeline::render_split::display_source(
             crate::pipeline::working_space::map_nc_film_rgb_v1(film),
             &PrintParams::default(),

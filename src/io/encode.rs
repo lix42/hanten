@@ -1115,8 +1115,13 @@ mod tests {
 
         let scan = rgb.iter().map(|value| 1.0 - value).collect();
         let image = LinearImage::new(w, h, scan, None).unwrap();
-        let (film, _) =
-            reconstruct(&image, &FilmBase::from([1.0; 3]), &Reconstruction::Simple).unwrap();
+        let (film, _) = reconstruct(
+            &image,
+            &FilmBase::from([1.0; 3]),
+            &Reconstruction::Simple,
+            None,
+        )
+        .unwrap();
         let print = PrintParams {
             print_exposure,
             ..PrintParams::default()
@@ -1313,8 +1318,13 @@ mod tests {
 
         let scan = rgb.iter().map(|value| 1.0 - value).collect();
         let image = LinearImage::new(w, h, scan, None).unwrap();
-        let (film, _) =
-            reconstruct(&image, &FilmBase::from([1.0; 3]), &Reconstruction::Simple).unwrap();
+        let (film, _) = reconstruct(
+            &image,
+            &FilmBase::from([1.0; 3]),
+            &Reconstruction::Simple,
+            None,
+        )
+        .unwrap();
         let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
         crate::pipeline::hdr::render(&shared, transfer, DisplayTone::shoulder(0.75).unwrap())
             .unwrap()

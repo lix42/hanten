@@ -148,6 +148,7 @@ pub(super) fn reconstruct(
     base: &FilmBase,
     params: &DensityParams,
     curve: &DensityCurve,
+    measure_region: Option<[u32; 4]>,
 ) -> Result<(FilmRgbImage, ReconstructionReport)> {
     // `to_density` divides by the per-channel base, so a zero / negative /
     // non-finite base would yield a silently-black or non-finite image. The CLI
@@ -174,7 +175,7 @@ pub(super) fn reconstruct(
             // white into `inf` instead of `1.0`. A `None` anchor is applied as
             // exactly `0.0`, so it reproduces the unanchored render bit-for-bit
             // (`d − 0.0 == d` for every `f32`).
-            let dmax = resolve_dmax(&density.density, exp.dmax);
+            let dmax = resolve_dmax(&density, exp.dmax, measure_region);
             let gamma = exp.gamma;
             // `WhiteAtDmax` over a `None` reference resolves `A = 0.0`, reproducing the
             // unanchored render bit-for-bit exactly as `dmax.unwrap_or(0.0)` did before
@@ -212,7 +213,7 @@ pub(super) fn reconstruct(
             };
             (film, dmax, curve_anchor)
         }
-        DensityCurve::Sigmoid(sig) => sigmoid::apply_curve(density, sig)?,
+        DensityCurve::Sigmoid(sig) => sigmoid::apply_curve(density, sig, measure_region)?,
         DensityCurve::Characteristic(ch) => {
             // No reference and no anchor to resolve: the published curve carries both, so
             // the report's `dmax` / `curve_anchor` are `None` rather than a derived number
@@ -619,12 +620,16 @@ pub(crate) const NOMINAL_DMAX: f32 = 1.3;
 /// anchor. Deterministic: same buffer + params ⇒ same value. `pub(crate)` because
 /// the sigmoid curve anchors its S-curve on the same resolved `Dmax` rather than
 /// inventing a second measurement.
-pub(crate) fn resolve_dmax(densities: &[f32], source: DmaxSource) -> Option<f32> {
+pub(crate) fn resolve_dmax(
+    density: &DensityImage,
+    source: DmaxSource,
+    region: Option<[u32; 4]>,
+) -> Option<f32> {
     match source {
         DmaxSource::None => None,
         DmaxSource::Fixed => Some(NOMINAL_DMAX),
         DmaxSource::Explicit(d) => Some(d),
-        DmaxSource::Auto => Some(auto_dmax(densities)),
+        DmaxSource::Auto => Some(auto_dmax(density, region)),
     }
 }
 
@@ -786,7 +791,21 @@ fn auto_dmax_stride(len: usize) -> usize {
 /// Uses `select_nth_unstable` (O(n)) — the returned order-statistic value is
 /// independent of tie ordering — and a fixed stride derived only from the buffer
 /// length, so the result stays deterministic: same buffer ⇒ same anchor.
-fn auto_dmax(densities: &[f32]) -> f32 {
+fn auto_dmax(density: &DensityImage, region: Option<[u32; 4]>) -> f32 {
+    match region {
+        // No region → the whole interleaved buffer, on exactly the walk this
+        // function has always used. Kept as its own arm rather than expressed as a
+        // full-frame rectangle so the unrestricted result stays *bit-identical*: a
+        // programmatic `Auto` with no region must not move because a region
+        // parameter was added.
+        None => auto_dmax_strided(&density.density),
+        Some(rect) => auto_dmax_over(collect_region_samples(density, rect)),
+    }
+}
+
+/// [`AUTO_DMAX_PERCENTILE`] of the finite densities in `densities`, by nearest
+/// rank over the deterministic stride [`auto_dmax_stride`] defines.
+fn auto_dmax_strided(densities: &[f32]) -> f32 {
     let stride = auto_dmax_stride(densities.len());
     let mut finite: Vec<f32> = Vec::with_capacity(densities.len().div_ceil(stride));
     finite.extend(
@@ -796,12 +815,65 @@ fn auto_dmax(densities: &[f32]) -> f32 {
             .copied()
             .filter(|v| v.is_finite()),
     );
+    auto_dmax_over(finite)
+}
+
+/// The percentile core: nearest-rank [`AUTO_DMAX_PERCENTILE`] of an
+/// already-collected, already-finite-filtered sample.
+///
+/// An empty sample yields `0.0` — a neutral anchor rather than a panic; the
+/// encoder's non-finite counter still surfaces the underlying fault.
+/// `select_nth_unstable` is O(n) and the returned order statistic is independent
+/// of tie ordering, so the result is a function of the sample alone.
+fn auto_dmax_over(mut finite: Vec<f32>) -> f32 {
     if finite.is_empty() {
         return 0.0;
     }
     let rank = ((finite.len() - 1) as f32 * AUTO_DMAX_PERCENTILE).round() as usize;
     let (_, nth, _) = finite.select_nth_unstable_by(rank, f32::total_cmp);
     *nth
+}
+
+/// The finite corrected densities inside `rect`, on the same deterministic stride
+/// the whole-frame walk uses.
+///
+/// A region **restricts the walk** rather than adding one: the stride is taken over
+/// the samples actually visited, so the sample budget and the ~4 MB transient
+/// buffer are unchanged and `pipeline::memory` owes this no new term.
+///
+/// Why a region at all: the opaque film holder sits at the [`SCAN_EPSILON`] floor,
+/// so its corrected density is enormous and it **owns** the top percentile of a
+/// whole-frame read — measured resolving 2.23-2.37 against a roll `Dmax` of
+/// 1.28-1.38, with every frame rendering black
+/// (`algo/auto-anchor-interior-measurement`).
+///
+/// `rect` is clamped to the frame rather than trusted: it is resolved from the
+/// *scan*, and a caller that hands over one computed for different dimensions must
+/// not index out of bounds.
+fn collect_region_samples(density: &DensityImage, rect: [u32; 4]) -> Vec<f32> {
+    let (w, h) = (density.width as usize, density.height as usize);
+    let [x, y, rw, rh] = {
+        let [rx, ry, cw, ch] = rect;
+        let (x, y) = ((rx as usize).min(w), (ry as usize).min(h));
+        [x, y, (cw as usize).min(w - x), (ch as usize).min(h - y)]
+    };
+    let visited = rw * rh * 3;
+    let stride = auto_dmax_stride(visited);
+    let mut finite: Vec<f32> = Vec::with_capacity(visited.div_ceil(stride));
+    // One `step_by` over the region's rows chained end to end, so the stride keeps a
+    // single phase across row boundaries and the visited set is a function of the
+    // rectangle and the dimensions alone.
+    finite.extend(
+        (y..y + rh)
+            .flat_map(|row| {
+                let start = (row * w + x) * 3;
+                density.density[start..start + rw * 3].iter()
+            })
+            .step_by(stride)
+            .copied()
+            .filter(|v| v.is_finite()),
+    );
+    finite
 }
 
 // ---------------------------------------------------------------------------
@@ -1047,7 +1119,7 @@ mod tests {
         print: PrintParams,
     ) -> Result<Converted> {
         let config = Reconstruction::Density { density, curve };
-        let (film, rep) = reconstruct_config(img, base, &config)?;
+        let (film, rep) = reconstruct_config(img, base, &config, None)?;
         let (out, white_balance) = finish_print(film, &config, &print)?;
         Ok(Converted {
             out,
@@ -1275,7 +1347,7 @@ mod tests {
         )
         .unwrap();
         let dimg = to_density(&img, &base, &density);
-        let anchor = resolve_dmax(&dimg.density, DmaxSource::Auto);
+        let anchor = resolve_dmax(&dimg, DmaxSource::Auto, None);
         let via_parts = render(dimg, gamma, anchor, wb, &print);
         assert_eq!(via_config.out.rgb, via_parts.rgb);
         assert_eq!(via_config.out.ir, via_parts.ir);
@@ -1963,7 +2035,7 @@ mod tests {
         };
         let gamma = 1.3;
         assert_eq!(
-            resolve_dmax(&density, DmaxSource::None),
+            resolve_dmax(&one_row(&density), DmaxSource::None, None),
             None,
             "no anchor resolved for None"
         );
@@ -1993,7 +2065,7 @@ mod tests {
             ir: None,
         };
         assert_eq!(
-            resolve_dmax(&dimg.density, DmaxSource::Explicit(dmax)),
+            resolve_dmax(&dimg, DmaxSource::Explicit(dmax), None),
             Some(dmax)
         );
         let out = render(dimg, gamma, Some(dmax), [1.0; 3], &PrintParams::default());
@@ -2013,7 +2085,11 @@ mod tests {
         // 99.5th percentile stays on the bulk value, not the specular/dust outlier.
         let mut d = vec![1.0f32; 200];
         d.push(1000.0);
-        assert!(approx(auto_dmax(&d), 1.0, 1e-6), "got {}", auto_dmax(&d));
+        assert!(
+            approx(auto_dmax_strided(&d), 1.0, 1e-6),
+            "got {}",
+            auto_dmax_strided(&d)
+        );
     }
 
     #[test]
@@ -2022,17 +2098,17 @@ mod tests {
         // directions (a constant-bulk test would pass for any rank ≤ the top).
         // 1000 values 0..=999: index = round(999·0.995) = round(994.005) = 994.
         let d: Vec<f32> = (0..1000).map(|i| i as f32).collect();
-        assert_eq!(auto_dmax(&d), 994.0);
+        assert_eq!(auto_dmax_strided(&d), 994.0);
     }
 
     #[test]
     fn auto_dmax_ignores_non_finite() {
         // Non-finite densities are excluded from the rank, never returned.
         let d = vec![f32::NAN, 0.5, f32::INFINITY, 0.5, f32::NEG_INFINITY, 0.5];
-        assert!(approx(auto_dmax(&d), 0.5, 1e-6));
+        assert!(approx(auto_dmax_strided(&d), 0.5, 1e-6));
         // All-non-finite / empty → 0.0 neutral fallback (gain 1.0), not a panic.
-        assert_eq!(auto_dmax(&[f32::NAN, f32::INFINITY]), 0.0);
-        assert_eq!(auto_dmax(&[]), 0.0);
+        assert_eq!(auto_dmax_strided(&[f32::NAN, f32::INFINITY]), 0.0);
+        assert_eq!(auto_dmax_strided(&[]), 0.0);
     }
 
     #[test]
@@ -2132,7 +2208,7 @@ mod tests {
         let base = FilmBase::from([0.8, 0.8, 0.8]);
         let img = LinearImage::new(4, 1, vec![0.2f32; 12], None).unwrap(); // scan < base ⇒ D > 0
         let dimg = to_density(&img, &base, &identity_gain());
-        let resolved = resolve_dmax(&dimg.density, DmaxSource::Auto);
+        let resolved = resolve_dmax(&dimg, DmaxSource::Auto, None);
         let out = render(dimg, gamma, resolved, [1.0; 3], &PrintParams::default());
         let dmax = resolved.unwrap();
         assert!(
@@ -2182,7 +2258,7 @@ mod tests {
             ir: None,
         };
         let gamma = 1.0f32;
-        let resolved = resolve_dmax(&dimg.density, DmaxSource::Auto);
+        let resolved = resolve_dmax(&dimg, DmaxSource::Auto, None);
         let out = render(
             dimg.clone(),
             gamma,
@@ -2204,16 +2280,134 @@ mod tests {
 
     // --- Dmax: fixed nominal + roll-fixed reference ----------------------------
 
+    /// A flat interleaved density buffer as a one-row [`DensityImage`], for the
+    /// anchor-source tests that care about the *source* rather than the geometry.
+    /// The length must be a multiple of 3 (one row of `len / 3` pixels).
+    fn one_row(densities: &[f32]) -> DensityImage {
+        assert_eq!(densities.len() % 3, 0, "interleaved RGB");
+        DensityImage {
+            width: (densities.len() / 3) as u32,
+            height: 1,
+            density: densities.to_vec(),
+            ir: None,
+        }
+    }
+
+    /// A frame with an opaque border: the `SCAN_EPSILON`-floor holder ring that
+    /// owns the top percentile of a whole-frame read, plus a dim picture interior.
+    /// Synthetic and committed, so the regression is caught with no external assets.
+    fn frame_with_opaque_border(w: u32, h: u32, border: u32) -> DensityImage {
+        let mut density = Vec::with_capacity((w * h * 3) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let on_border = x < border || y < border || x >= w - border || y >= h - border;
+                // The holder's corrected density is enormous (it blocked all light);
+                // the picture sits well below the roll's real Dmax.
+                let d = if on_border { 2.4 } else { 0.9 };
+                density.extend_from_slice(&[d, d, d]);
+            }
+        }
+        DensityImage {
+            width: w,
+            height: h,
+            density,
+            ir: None,
+        }
+    }
+
+    #[test]
+    fn a_region_keeps_the_opaque_border_out_of_the_auto_anchor() {
+        // The defect this wiring exists to fix: `Auto` over the whole frame is owned
+        // by the holder. Measured on the fixture rolls it resolved 2.23-2.37 against
+        // a roll Dmax of 1.28-1.38, rendering every frame black
+        // (`algo/auto-anchor-interior-measurement`).
+        let dimg = frame_with_opaque_border(200, 200, 20);
+
+        let whole = resolve_dmax(&dimg, DmaxSource::Auto, None).unwrap();
+        assert!(
+            whole > 2.0,
+            "falsifiability: the whole-frame read must still be contaminated, got {whole}"
+        );
+
+        // The same frame measured over its interior lands in the picture.
+        let inside = resolve_dmax(&dimg, DmaxSource::Auto, Some([20, 20, 160, 160])).unwrap();
+        assert!(
+            (inside - 0.9).abs() < 1e-6,
+            "the interior read must be the picture density, got {inside}"
+        );
+    }
+
+    #[test]
+    fn a_none_region_is_bit_identical_to_the_unrestricted_walk() {
+        // The `None` arm is deliberately its own path rather than a full-frame
+        // rectangle, so that adding the region parameter moved no existing result.
+        //
+        // Pinned against a **literal** captured from the pre-region code (`2.4`, the
+        // holder density this fixture's border carries), not against
+        // `auto_dmax_strided`: the `None` arm *is* a call to that function, so
+        // comparing the two asserts nothing and would stay green if a refactor
+        // re-expressed `None` as a full-frame rectangle. The frame's densities are
+        // exact f32 literals and the percentile is an order statistic, so there is
+        // no transcendental in the chain and the bits are the same on every target.
+        let dimg = frame_with_opaque_border(64, 48, 5);
+        assert_eq!(
+            resolve_dmax(&dimg, DmaxSource::Auto, None)
+                .unwrap()
+                .to_bits(),
+            2.4f32.to_bits(),
+            "the unrestricted result must still be the pre-region walk's value"
+        );
+
+        // And the full-frame *rectangle* agrees, which is the invariant that makes
+        // the separate arm an optimization rather than a second behaviour.
+        assert_eq!(
+            resolve_dmax(&dimg, DmaxSource::Auto, Some([0, 0, 64, 48]))
+                .unwrap()
+                .to_bits(),
+            2.4f32.to_bits()
+        );
+    }
+
+    #[test]
+    fn a_region_is_clamped_to_the_frame_rather_than_trusted() {
+        // A region resolved for different dimensions must not index out of bounds.
+        let dimg = frame_with_opaque_border(40, 30, 3);
+        for rect in [
+            [0, 0, 10_000, 10_000],
+            [39, 29, 100, 100],
+            [10_000, 10_000, 5, 5],
+            [0, 0, 0, 0],
+        ] {
+            let got = resolve_dmax(&dimg, DmaxSource::Auto, Some(rect));
+            assert!(got.is_some(), "no panic and an anchor for {rect:?}");
+        }
+    }
+
+    #[test]
+    fn a_region_does_not_enlarge_the_sample_budget() {
+        // The region restricts the walk rather than adding one, which is why
+        // `pipeline::memory` owes this no term. A region can never visit more
+        // samples than the frame does.
+        let dimg = frame_with_opaque_border(300, 200, 10);
+        let full = collect_region_samples(&dimg, [0, 0, 300, 200]).len();
+        let part = collect_region_samples(&dimg, [10, 10, 280, 180]).len();
+        assert!(part <= full, "region {part} must not exceed frame {full}");
+        assert!(full <= AUTO_DMAX_MAX_SAMPLES, "the cap still holds: {full}");
+    }
+
     #[test]
     fn fixed_anchor_resolves_to_the_nominal_constant() {
         // The default `Fixed` anchor is scene-independent: it ignores the buffer
         // and always resolves to NOMINAL_DMAX, so it is roll-fixed (every frame
         // gets the same anchor), unlike `Auto`.
-        assert_eq!(resolve_dmax(&[], DmaxSource::Fixed), Some(NOMINAL_DMAX));
+        assert_eq!(
+            resolve_dmax(&one_row(&[]), DmaxSource::Fixed, None),
+            Some(NOMINAL_DMAX)
+        );
         // A wildly different density distribution resolves to the same value.
         assert_eq!(
-            resolve_dmax(&[0.1, 0.2, 0.3], DmaxSource::Fixed),
-            resolve_dmax(&[5.0, 6.0, 7.0], DmaxSource::Fixed)
+            resolve_dmax(&one_row(&[0.1, 0.2, 0.3]), DmaxSource::Fixed, None),
+            resolve_dmax(&one_row(&[5.0, 6.0, 7.0]), DmaxSource::Fixed, None)
         );
     }
 

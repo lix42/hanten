@@ -1,5 +1,16 @@
 # Why `--auto-base` refuses every real scan
 
+> **Parked 2026-09-16 — the detector this task serves is being retired.**
+> `film-base/holder-masked-measurement` rebuilds `Dmin`/`Dmax` on **area x method**,
+> and nc no longer searches for a rebate band at all (user, 2026-09-16; not shipped,
+> so the breaking change is accepted).
+> Its question — *why* the detector never fires — stops being load-bearing once the
+> detector goes; what survives is question 1, whether a rebate is visible on these
+> scans at all, which is worth knowing for `content-fallback`'s tier ordering.
+> Do not start this before that task settles what `FilmBaseSource` becomes. The
+> evidence below is kept because it is still the best record of how the detector
+> behaved on real scans.
+
 ## Goal
 
 Find out why the redesigned auto film-base detector has **never resolved a base on a

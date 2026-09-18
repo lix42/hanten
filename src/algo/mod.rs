@@ -172,6 +172,7 @@ pub fn reconstruct(
     image: &LinearImage,
     base: &FilmBase,
     config: &Reconstruction,
+    measure_region: Option<[u32; 4]>,
 ) -> Result<(FilmRgbImage, ReconstructionReport)> {
     match config {
         Reconstruction::Simple => Ok((
@@ -179,7 +180,7 @@ pub fn reconstruct(
             ReconstructionReport::default(),
         )),
         Reconstruction::Density { density, curve } => {
-            density::reconstruct(image, base, density, curve)
+            density::reconstruct(image, base, density, curve, measure_region)
         }
     }
 }
@@ -264,7 +265,7 @@ mod tests {
         // `FilmRgbImage` (enforced by `reconstruct`'s signature — this test
         // exercises all paths) with the dimensions and IR plane intact.
         for config in all_configs() {
-            let (film, _) = reconstruct(&image(), &base(), &config).unwrap();
+            let (film, _) = reconstruct(&image(), &base(), &config, None).unwrap();
             assert_eq!((film.width(), film.height()), (2, 1), "{config:?}");
             assert_eq!(film.rgb().len(), 6, "{config:?}");
             assert_eq!(film.ir(), Some(&[0.25_f32, 0.75][..]), "{config:?}");
@@ -283,14 +284,14 @@ mod tests {
 
     #[test]
     fn simple_reports_no_curve_diagnostics() {
-        let (_, report) = reconstruct(&image(), &base(), &Reconstruction::Simple).unwrap();
+        let (_, report) = reconstruct(&image(), &base(), &Reconstruction::Simple, None).unwrap();
         assert_eq!(report, ReconstructionReport::default());
     }
 
     #[test]
     fn density_paths_report_their_resolved_anchor() {
         for config in &all_configs()[1..] {
-            let (_, report) = reconstruct(&image(), &base(), config).unwrap();
+            let (_, report) = reconstruct(&image(), &base(), config, None).unwrap();
             // Both curves default to the fixed nominal anchor.
             assert_eq!(report.dmax, Some(density::NOMINAL_DMAX), "{config:?}");
             assert_eq!(report.balance_range, None, "{config:?}");
@@ -301,7 +302,7 @@ mod tests {
     fn finish_print_passes_simple_through_and_prints_density() {
         // Simple: no print stage — the positive passes through bit-identically
         // and no gains are reported, even with non-default print params.
-        let (film, _) = reconstruct(&image(), &base(), &Reconstruction::Simple).unwrap();
+        let (film, _) = reconstruct(&image(), &base(), &Reconstruction::Simple, None).unwrap();
         let expected = film.rgb().to_vec();
         let print = PrintParams {
             print_exposure: 1.0,
@@ -314,7 +315,7 @@ mod tests {
         // Density: the print stage runs (2^1 exposure doubles every sample)
         // and the resolved (explicit, neutral) gains are reported.
         let config = all_configs()[1].clone();
-        let (film, _) = reconstruct(&image(), &base(), &config).unwrap();
+        let (film, _) = reconstruct(&image(), &base(), &config, None).unwrap();
         let expected: Vec<f32> = film.rgb().iter().map(|v| v * 2.0).collect();
         let (out, wb) = finish_print(film, &config, &print).unwrap();
         assert_eq!(out.rgb, expected);

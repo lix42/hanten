@@ -2963,6 +2963,56 @@ fn roll_frame_report_includes_resolved_input_color() {
 }
 
 #[test]
+fn roll_frame_report_makes_the_measurement_area_observable() {
+    // `measure.inset` reaches the measurement region from the shared recipe *and*
+    // from a per-frame override, so a roll frame has to report the resolved area —
+    // otherwise the knob is accepted and its effect invisible, which is exactly the
+    // defect reporting it unconditionally on `convert` exists to prevent.
+    let tmp = TempDir::new("roll-area");
+    let out_dir = tmp.path("out");
+    let recipe = tmp.path("recipe.json");
+    std::fs::write(
+        &recipe,
+        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}}}"#,
+    )
+    .unwrap();
+    let frames = tmp.path("frames.json");
+    let src = fixture("hdr-48bit.tif");
+    std::fs::write(
+        &frames,
+        format!(
+            r#"{{"frames":[{{"input":{:?},"params":{{"measure":{{"inset":0.12}}}}}}]}}"#,
+            src.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let (code, stdout, err) = run(&[
+        "roll",
+        "--frames",
+        frames.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "roll should succeed: {err}");
+    let report = json(&stdout);
+    // The shared recipe keeps the default; the frame resolved the override. Both
+    // numbers in one document is what makes the override falsifiable — a frame
+    // echoing the shared value would look identical without the pair.
+    assert_eq!(report["recipe"]["measure"]["inset"], 0.05);
+    let area = &report["frames"][0]["effective_area"];
+    assert_eq!(
+        area["inset"], 55,
+        "the per-frame inset must reach the region and be reported: {report}"
+    );
+    assert_eq!(
+        area["region"][0], 55,
+        "the reported rectangle must follow the resolved inset: {report}"
+    );
+}
+
+#[test]
 fn roll_rejects_colorimetric_shared_recipe_before_decode() {
     // M1: an unconditionally-unsupported shared assertion fails fast, before the
     // first (large) scan is decoded — exit 4 with an actionable message.
@@ -9700,9 +9750,9 @@ fn export_ir_keeps_strict_clean_when_the_plane_cannot_serve_detection() {
 }
 
 /// A holder that occludes every edge leaves the masked rebate search nothing to
-/// scan, which is strictly worse than not masking. The mask falls back, and
-/// `inspect` reports the plane as unconsumed rather than claiming a mask it
-/// doesn't have.
+/// scan, which is strictly worse than not masking. The mask falls back rather than
+/// claiming a mask it doesn't have — and the holder *march*, which does not inherit
+/// that decline, measures the ring instead, so the plane is still consumed.
 #[test]
 fn an_all_holder_border_falls_back_instead_of_emptying_the_search() {
     let dir = TempDir::new("ir-all-holder");
@@ -9738,13 +9788,144 @@ fn an_all_holder_border_falls_back_instead_of_emptying_the_search() {
         report["holder_mask"].is_null(),
         "an all-holder mask must fall back rather than be reported: {report}"
     );
+    // The plane is still consumed — by the *other* IR reader. The holder march
+    // deliberately does not inherit the mask's all-holder decline, so it measures
+    // the ring and moves the reported rectangle. Keying the note on the mask alone
+    // made one report carry both a measured `effective_area.holder` and "preserved
+    // but not used" (`film-base/holder-depth-mask` review, 2026-09-17).
+    let area = &report["effective_area"];
+    assert_eq!(
+        area["holder_applied"], true,
+        "the march must measure the ring the mask declined: {report}"
+    );
     assert!(
-        report["warnings"]
+        area["holder"]["left"].as_u64().unwrap() > 0,
+        "and report a real depth for it: {report}"
+    );
+    assert!(
+        !report["warnings"]
             .as_array()
             .unwrap()
             .iter()
             .any(|w| w.as_str().unwrap().contains("preserved but not used")),
-        "a plane that produced no mask is unconsumed and must say so: {report}"
+        "a plane the march consumed must not be reported as unused: {report}"
+    );
+}
+
+/// The measurement region is resolved and reported on **every** `convert`, so
+/// `--measure-inset` is observable rather than accepted-and-ignored — and the flag
+/// moves the reported rectangle without moving a pixel, because nothing under the
+/// default anchor consumes the region (`film-base/holder-depth-mask` review).
+#[test]
+fn convert_always_reports_the_measurement_region_and_the_inset_flag_moves_it() {
+    let dir = TempDir::new("measure-inset-convert");
+    let (a, b) = (dir.path("a.tif"), dir.path("b.tif"));
+
+    let base = ["--film-base", "0.9,0.6,0.5"];
+    let mut args = vec!["convert", "--output-preset", "legacy"];
+    args.extend(base);
+    args.extend(["-o", a.to_str().unwrap(), "tests/fixtures/hdr-48bit.tif"]);
+    let (code, stdout, _) = run_exact(&args);
+    assert_eq!(code, 0);
+    let default_area = json(&stdout)["effective_area"].clone();
+    assert!(
+        !default_area.is_null(),
+        "a bare convert must report the area it resolved: {default_area}"
+    );
+
+    let mut args = vec![
+        "convert",
+        "--output-preset",
+        "legacy",
+        "--measure-inset",
+        "0.2",
+    ];
+    args.extend(base);
+    args.extend(["-o", b.to_str().unwrap(), "tests/fixtures/hdr-48bit.tif"]);
+    let (code, stdout, _) = run_exact(&args);
+    assert_eq!(code, 0);
+    let wider = json(&stdout)["effective_area"].clone();
+    assert_ne!(
+        wider["inset"], default_area["inset"],
+        "the flag must reach the resolved region: {wider} vs {default_area}"
+    );
+
+    // And nothing consumed it, so the pixels are untouched — observability is not
+    // a pixel change.
+    assert_eq!(
+        std::fs::read(&a).unwrap(),
+        std::fs::read(&b).unwrap(),
+        "an unconsumed region must not move a pixel"
+    );
+}
+
+/// `--strict` must keep failing on the "IR preserved but not used" note when the
+/// plane never reaches a pixel. `dmax = auto` alone is not consumption: a
+/// reference-free placement discards the measured anchor, so the region changes
+/// nothing **in the render** — the measurement is still taken over it and still
+/// reported, which is why `measures_over_region` and
+/// `region_reaches_a_rendered_pixel` are two predicates. Keying suppression on the
+/// source alone made `--strict` pass here while the output stayed byte-identical to
+/// the non-auto run.
+#[test]
+fn strict_still_fails_when_an_auto_dmax_anchor_reads_no_reference() {
+    let dir = TempDir::new("auto-dmax-strict");
+    let path = dir.path("ringed.tif");
+    const W: u32 = 200;
+    const H: u32 = 200;
+    let mut rgb = vec![0u16; (W * H * 3) as usize];
+    let mut ir = vec![41_000u16; (W * H) as usize];
+    for y in 0..H {
+        for x in 0..W {
+            let i = ((y * W + x) * 3) as usize;
+            let holder = x < 6 || y < 6 || x >= W - 6 || y >= H - 6;
+            rgb[i..i + 3].copy_from_slice(&if holder {
+                [655, 655, 655]
+            } else {
+                [12000, 7000, 4000]
+            });
+            if holder {
+                ir[(y * W + x) as usize] = 1_300;
+            }
+        }
+    }
+    write_hdri(&path, W, H, &rgb, &ir);
+
+    let out = dir.path("out.tif");
+    let case = |extra: &[&str]| -> (i32, String) {
+        let mut args = vec![
+            "convert",
+            "--output-preset",
+            "legacy",
+            "--film-base",
+            "0.9,0.6,0.5",
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            "--auto-d-max",
+            "--strict",
+        ];
+        args.extend(extra);
+        args.extend(["-o", out.to_str().unwrap(), path.to_str().unwrap()]);
+        let (code, _, err) = run_exact(&args);
+        (code, err)
+    };
+
+    // Reference-reading placement (the default): the region is consumed, the march
+    // moved it, so the plane is genuinely used and `--strict` is satisfied.
+    let (code, err) = case(&[]);
+    assert_eq!(code, 0, "a consumed region must silence the note: {err}");
+
+    // Reference-free placement: the anchor discards the measurement, so no rendered
+    // pixel depends on the region and the note — and `--strict` — must stand. The
+    // region is still what the reference was measured over; that is the report's
+    // business, not this note's.
+    let (code, err) = case(&["--anchor-black-floor", "0.05"]);
+    assert_eq!(code, 1, "the note must still fail --strict: {err}");
+    assert!(
+        err.contains("preserved but not used"),
+        "and for the right reason: {err}"
     );
 }
 
@@ -10321,5 +10502,349 @@ fn a_preset_does_not_warn_about_the_curve_switch_it_was_asked_to_make() {
     assert_eq!(
         report["conversion_preset"]["name"], "characteristic-aim",
         "the replacement must still be attributed somewhere"
+    );
+}
+
+/// The reported `dmax` is measured over the effective area whatever the anchor
+/// placement does with it, so one report field has one meaning
+/// (`film-base/holder-depth-mask` ship review, M3).
+///
+/// The calibrate-once workflow (§4) has users copy a `--auto-d-max` reading into
+/// `--d-max`. Keyed on the narrower "does a rendered pixel depend on it" predicate,
+/// a base-derived placement measured the reference over the **whole frame** — the
+/// 2.23–2.37 figure the effective area exists to eliminate — while the same report's
+/// `effective_area` asserted the holder had been cut. Pixels are unaffected either
+/// way, which is what makes this a report-honesty rule rather than a render change.
+#[test]
+fn the_reported_auto_dmax_follows_the_measurement_region_under_every_placement() {
+    let dir = TempDir::new("auto-dmax-region-report");
+    let read = |extra: &[&str], out: &std::path::Path| -> (f32, serde_json::Value, Vec<u8>) {
+        let mut args = vec![
+            "convert",
+            "--output-preset",
+            "legacy",
+            "--film-base",
+            "0.9,0.9,0.9",
+            "--auto-d-max",
+        ];
+        args.extend(extra);
+        args.extend(["-o", out.to_str().unwrap(), "tests/fixtures/hdr-48bit.tif"]);
+        let (code, stdout, err) = run_exact(&args);
+        assert_eq!(code, 0, "{err}");
+        let report = json(&stdout);
+        (
+            report["reconstruction_result"]["curve"]["dmax"]["value"]
+                .as_f64()
+                .expect("an auto reference reports its measured value") as f32,
+            report["effective_area"]["region"].clone(),
+            std::fs::read(out).unwrap(),
+        )
+    };
+
+    // The default reference-reading placement: the region moves, the number moves.
+    // Falsifiability for the assertion below — the fixture's measurement really is
+    // region-sensitive.
+    let (wide, wide_region, _) = read(&[], &dir.path("wide.tif"));
+    let (narrow, narrow_region, _) = read(&["--measure-inset", "0.4"], &dir.path("narrow.tif"));
+    assert_ne!(wide_region, narrow_region, "the region must actually move");
+    assert_ne!(
+        wide, narrow,
+        "the reference must follow it: {wide} vs {narrow}"
+    );
+
+    // A base-derived placement discards the reference for the *render*, and the
+    // number is still measured over the region it is reported beside.
+    let floor = ["--anchor-black-floor", "0.005"];
+    let (bf_wide, bf_wide_region, bytes_wide) = read(&floor, &dir.path("bf-wide.tif"));
+    let mut narrow_floor = floor.to_vec();
+    narrow_floor.extend(["--measure-inset", "0.4"]);
+    let (bf_narrow, bf_narrow_region, bytes_narrow) =
+        read(&narrow_floor, &dir.path("bf-narrow.tif"));
+
+    assert_eq!(bf_wide_region, wide_region);
+    assert_eq!(bf_narrow_region, narrow_region);
+    // Equality with the reference-reading rows, not merely `bf_wide != bf_narrow`:
+    // the same region was measured either way, so the placement must not change the
+    // number *at all*. Asserting only that the two differ would stay green on any
+    // value that happens to move with the region — "one field, one meaning" is an
+    // equality, and before the fix both of these read 1.6848611 (the whole frame)
+    // while the rows above read 1.6883355 and 1.7025654.
+    assert_eq!(
+        (bf_wide, bf_narrow),
+        (wide, narrow),
+        "a base-derived placement must report the same measured reference as a \
+         reference-reading one, or `dmax` means the effective area under one \
+         placement and the whole frame under another"
+    );
+
+    // And the render is untouched, which is why this can be fixed as reporting.
+    assert_eq!(
+        bytes_wide, bytes_narrow,
+        "a base-derived anchor discards the reference, so no pixel may move"
+    );
+}
+
+/// An empty measurement region is fatal only for a run that measures over it
+/// (`film-base/holder-depth-mask` ship review, M1).
+///
+/// Refusing unconditionally failed a conversion at exit 2, with nothing written,
+/// over a measurement no stage read — on a run whose output would have been
+/// byte-identical, and which `inspect`/`estimate` degrade to a warning at exit 0.
+#[test]
+fn an_empty_measurement_region_only_refuses_a_run_that_measures_over_it() {
+    let dir = TempDir::new("empty-measure-region");
+    let path = dir.path("ringed.tif");
+    const W: u32 = 200;
+    const H: u32 = 200;
+    const RING: u32 = 30;
+    let mut rgb = vec![0u16; (W * H * 3) as usize];
+    let mut ir = vec![41_000u16; (W * H) as usize];
+    for y in 0..H {
+        for x in 0..W {
+            let i = ((y * W + x) * 3) as usize;
+            let holder = x < RING || y < RING || x >= W - RING || y >= H - RING;
+            rgb[i..i + 3].copy_from_slice(&if holder {
+                [655, 655, 655]
+            } else {
+                [12000, 7000, 4000]
+            });
+            if holder {
+                ir[(y * W + x) as usize] = 1_300;
+            }
+        }
+    }
+    write_hdri(&path, W, H, &rgb, &ir);
+
+    // 30 px of measured holder plus a 40% (80 px) inset on each side of a 200 px
+    // frame leaves nothing.
+    let run = |extra: &[&str], out: &std::path::Path| -> (i32, String, String) {
+        let mut args = vec![
+            "convert",
+            "--output-preset",
+            "legacy",
+            "--film-base",
+            "0.9,0.6,0.5",
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            "--measure-inset",
+            "0.4",
+        ];
+        args.extend(extra);
+        args.extend(["-o", out.to_str().unwrap(), path.to_str().unwrap()]);
+        run_exact(&args)
+    };
+
+    // Nothing measures over the region: a warning, a written file, and no
+    // `effective_area` — there is no region to report.
+    let out = dir.path("unread.tif");
+    let (code, stdout, err) = run(&[], &out);
+    assert_eq!(code, 0, "an unread region must not fail the run: {err}");
+    assert!(out.exists(), "and the output must be written");
+
+    // The reason the refusal was wrong: the output is byte-identical to the same
+    // run with a region that resolves. If this ever differs, the empty region *is*
+    // reaching the render and the refusal belongs back.
+    let control = dir.path("control.tif");
+    let (code, _, err) = run_exact(&[
+        "convert",
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.6,0.5",
+        "--input-transfer",
+        "linear",
+        "--input-meaning",
+        "scanner-device",
+        "-o",
+        control.to_str().unwrap(),
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        std::fs::read(&control).unwrap(),
+        "an unread empty region must not move a pixel"
+    );
+    let report = json(&stdout);
+    assert!(
+        report["effective_area"].is_null(),
+        "a refused region has nothing to report: {report}"
+    );
+    let warnings = report["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("measurement region is empty")),
+        "the warning is the observable: {warnings:?}"
+    );
+    // The measured depths and the inset must be separate quantities: the message
+    // used to print the post-inset totals as "holder depths", sending a reader
+    // after a 110 px holder that measured 30.
+    let empty = warnings
+        .iter()
+        .find_map(|w| {
+            let w = w.as_str().unwrap();
+            w.contains("measurement region is empty").then_some(w)
+        })
+        .unwrap();
+    assert!(
+        empty.contains("measured holder depths (top 30, bottom 30, left 30, right 30)")
+            && empty.contains("80 px inset"),
+        "{empty}"
+    );
+    // And the remedy must be one that exists — `effective_area` never sees a
+    // user-stated region, so "state a region explicitly" could not work.
+    assert!(
+        empty.contains("Lower the inset fraction") && !empty.contains("state a region"),
+        "{empty}"
+    );
+
+    // Something measures over it: a loud refusal, naming a second working remedy.
+    let (code, _, err) = run(&["--auto-d-max"], &dir.path("read.tif"));
+    assert_eq!(code, 2, "a consumer with no region must fail loudly: {err}");
+    assert!(
+        err.contains("measurement region is empty") && err.contains("drop --auto-d-max"),
+        "{err}"
+    );
+}
+
+/// A capped or unsettled holder march warns, so `--strict` can see it
+/// (`film-base/holder-depth-mask` ship review, M4).
+///
+/// `capped` and `converged` both mean "the reported rectangle is not a
+/// measurement", and as `Serialize`-only fields nothing on any command read them.
+/// That is the channel that let a tenfold over-cut through at exit 0 during
+/// implementation, caught only because someone was reading the numbers.
+#[test]
+fn a_capped_holder_march_warns_and_strict_promotes_it() {
+    let dir = TempDir::new("capped-march-warns");
+    // 400x400 → march cap 100. A 120 px top holder is beyond it, which also
+    // inflates left/right from their true 10 px to the cap.
+    let path = dir.path("deep.tif");
+    const W: u32 = 400;
+    const H: u32 = 400;
+    let mut rgb = vec![0u16; (W * H * 3) as usize];
+    let mut ir = vec![41_000u16; (W * H) as usize];
+    for y in 0..H {
+        for x in 0..W {
+            let i = ((y * W + x) * 3) as usize;
+            let holder = y < 120 || !(10..W - 10).contains(&x) || y >= H - 10;
+            rgb[i..i + 3].copy_from_slice(&if holder {
+                [655, 655, 655]
+            } else {
+                [12000, 7000, 4000]
+            });
+            if holder {
+                ir[(y * W + x) as usize] = 1_300;
+            }
+        }
+    }
+    write_hdri(&path, W, H, &rgb, &ir);
+
+    // `--export-ir` keeps the unrelated "IR preserved but not used" note off the
+    // `--strict` run below, so the only thing that can fail it is the cap warning.
+    let (out, ir_out) = (dir.path("out.tif"), dir.path("ir.tif"));
+    let run = |extra: &[&str]| -> (i32, String, String) {
+        let mut args = vec![
+            "convert",
+            "--output-preset",
+            "legacy",
+            "--film-base",
+            "0.9,0.6,0.5",
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            "--export-ir",
+            ir_out.to_str().unwrap(),
+        ];
+        args.extend(extra);
+        args.extend(["-o", out.to_str().unwrap(), path.to_str().unwrap()]);
+        run_exact(&args)
+    };
+
+    let (code, stdout, err) = run(&[]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let holder = &report["effective_area"]["holder"];
+    assert_eq!(
+        (
+            holder["top"].as_u64(),
+            holder["bottom"].as_u64(),
+            holder["left"].as_u64(),
+            holder["right"].as_u64()
+        ),
+        (Some(100), Some(10), Some(100), Some(100)),
+        "the beyond-cap frame the warning exists for: {holder}"
+    );
+    assert_eq!(
+        holder["capped"],
+        serde_json::json!({"top": true, "bottom": false, "left": true, "right": true}),
+        "per-edge, so an inflated edge is distinguishable from a measured one"
+    );
+    assert!(
+        holder["converged"].as_bool().unwrap(),
+        "and the cap settles, which is why `converged` cannot be read alone"
+    );
+    let warnings = report["warnings"].as_array().unwrap();
+    let capped = warnings
+        .iter()
+        .find_map(|w| {
+            let w = w.as_str().unwrap();
+            w.contains("depth march hit its cap").then_some(w)
+        })
+        .unwrap_or_else(|| panic!("the cap must warn: {warnings:?}"));
+    assert!(
+        capped.contains("top, left, right") && capped.contains("artifacts"),
+        "naming the edges and the consequence: {capped}"
+    );
+
+    // Falsifiability, and the `--strict` half: the same frame with a sub-cap holder
+    // warns about nothing, while the capped one fails.
+    let (code, _, err) = run(&["--strict"]);
+    assert_eq!(code, 1, "--strict must promote it: {err}");
+    assert!(err.contains("depth march hit its cap"), "{err}");
+
+    let shallow = dir.path("shallow.tif");
+    for y in 0..120u32 {
+        for x in 0..W {
+            let i = ((y * W + x) * 3) as usize;
+            let holder = y < 10 || !(10..W - 10).contains(&x);
+            rgb[i..i + 3].copy_from_slice(&if holder {
+                [655, 655, 655]
+            } else {
+                [12000, 7000, 4000]
+            });
+            ir[(y * W + x) as usize] = if holder { 1_300 } else { 41_000 };
+        }
+    }
+    write_hdri(&shallow, W, H, &rgb, &ir);
+    let (code, stdout, err) = run_exact(&[
+        "convert",
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.6,0.5",
+        "--input-transfer",
+        "linear",
+        "--input-meaning",
+        "scanner-device",
+        "--export-ir",
+        dir.path("ir2.tif").to_str().unwrap(),
+        "--strict",
+        "-o",
+        dir.path("out2.tif").to_str().unwrap(),
+        shallow.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code, 0,
+        "falsifiability: a sub-cap march must not warn at all: {err}"
+    );
+    assert_eq!(
+        json(&stdout)["effective_area"]["holder"]["capped"],
+        serde_json::json!({"top": false, "bottom": false, "left": false, "right": false}),
+        "{stdout}"
     );
 }

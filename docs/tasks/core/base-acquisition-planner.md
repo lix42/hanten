@@ -1,5 +1,11 @@
 # Base-acquisition planner (the roll / single cascade)
 
+> **Its auto rung changes (2026-09-16).** `film-base/holder-masked-measurement` is
+> rebuilding `Dmin`/`Dmax` on **area x method** and retiring the rebate-band search,
+> so "try auto-base" below means "measure the effective area", not "detect a rebate".
+> The cascade's shape is unaffected; the rung's mechanism is not. Re-read that task
+> before implementing the cascade.
+
 ## Goal
 
 Implement the automatic **acquisition cascade** that resolves a roll's `Dmin` and

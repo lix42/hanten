@@ -1236,6 +1236,21 @@ spread collapses to one shared default):
   - Recorded a naming trap: `Auto`'s "Dmax" is a *scene* statistic (this frame's brightest
     content), `Explicit`'s is a *film* property (the leader), and the holder is neither. A
     plausibility check must say which range it asserts instead of borrowing the leader's.
+- 2026-09-16 (**superseding the two open items above**, user): the region model moved
+  wholesale to `film-base/holder-depth-mask`, which now resolves the **effective area** —
+  holder cut then static inset — for every measurement path, not just a holder depth. See
+  `docs/progress/film-base.md` → `## holder-depth-mask`, 2026-09-16, for the decisions.
+  Two entries above are now wrong and are corrected here rather than edited in place:
+  - The **no-IR default is settled at 5%** of the shorter edge, not left open. The
+    10–15% holder-occupancy measurement is handled by the **user override**, not by nc
+    choosing a second default. The 2026-09-13 correction that reopened this stands as a
+    correct reading of the evidence; what changed is who decides.
+  - The **inset is not a fallback for the IR cut** and is not this task's own fraction.
+    Both cuts, the default and the override live in `holder-depth-mask`. The claim that
+    "sharing the mask does not mean sharing the fraction" is withdrawn.
+  This task's file was trimmed accordingly: the two cut sub-sections became a short
+  "what this consumer adds" note (picture frames only, the loud-failure requirement,
+  reuse the region rule rather than copying it).
 
 
 ## sigmoid-parameter-calibration

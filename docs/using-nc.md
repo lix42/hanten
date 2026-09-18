@@ -165,6 +165,10 @@ nc inspect scan.tif | jq '.base_candidates'
 Confirm one of those rectangles and pass it to step 2 as `--base-region` — that
 saves measuring coordinates by hand on a scan where auto-detection won't commit.
 
+`inspect` also reports the **effective area** — the region nc reads measurements
+over, after the film holder and a border inset are removed. Worth a look on any
+uncropped scan; see [The measurement region](#the-measurement-region-the-effective-area).
+
 ### Step 2 — Measure the film base
 
 **This step is mandatory.** `convert` and `roll` refuse to run without a stated
@@ -343,6 +347,7 @@ nc params
   "input":     { "transfer": "auto", "meaning": "auto",
                  "film_type": "unknown", "export_ir": null },
   "film_base": { "source": null },
+  "measure":   { "inset": 0.05 },
   "print":     { "print_exposure": 0.0, "black_point": 0.0,
                  "white_balance": { "explicit": [1.0, 1.0, 1.0] },
                  "display_tone": "shoulder",
@@ -814,7 +819,7 @@ Where the reference density comes from. (What it *places* is the anchor, above.)
 |---|---|
 | *(none)* / `--fixed-d-max` | Fixed nominal reference (1.3 density), reused across the roll. **Default.** Darker frames render darker — faithful relative exposure. |
 | `--d-max D` | Explicit roll-fixed reference — your measured calibration. |
-| `--auto-d-max` | Measure per frame. **Per-frame exposure normalization**: brightens underexposed frames and breaks roll consistency. Grading, not conversion. Inert under the two base-derived anchors, which never read the reference — so it is neither warned about nor rejected there. |
+| `--auto-d-max` | Measure per frame, over the [effective area](#the-measurement-region-the-effective-area) rather than the whole scan (so the film holder no longer owns the top percentile) — always, whatever the anchor placement, so the reported `dmax` has one meaning. **Per-frame exposure normalization**: brightens underexposed frames and breaks roll consistency. Grading, not conversion. Inert *on the pixels* under the two base-derived anchors, which never read the reference — so it is neither warned about nor rejected there, though the measurement is still taken and reported. |
 | `--no-d-max` | No reference. Scene-referred output (base → 1.0, detail above) **under the default `white-at-dmax` placement** — it resolves the reference to 0, so any other `--anchor-*` rule still derives an anchor from the slope (`--anchor-mid-fraction 0.5` there pins mid-grey 0.37 above the base and clips ~99.9% of the frame). **Exponential only**: the sigmoid needs an anchor and rejects it (exit 2), so pair it with `--density-curve exponential`. |
 
 > **A caveat on measuring `Dmax` from a leader** (§4 step 3). The baseline report
@@ -1286,14 +1291,166 @@ exception that needs nothing from you:
 
 IR-based dust removal is not implemented.
 
+### The measurement region (the "effective area")
+
+A region nc resolves on every frame it decodes, so that a measurement reads the
+picture rather than the film holder: on an uncropped scan the holder is maximum
+density, so a whole-frame statistic measures the holder instead. Today one
+measurement is taken over it (`--auto-d-max`; see the end of this section) —
+moving the rest onto it is separate work. The area is two cuts, in order:
+
+1. **The film holder**, measured per edge from the IR plane — the same separability
+   verdict above. Nothing to configure.
+2. **A static inset** of what is left, `--measure-inset FRAC` (recipe key
+   `measure.inset`), default `0.05` of the shorter edge.
+
+The inset is **not** a fallback for the first cut: it runs either way. Where the
+holder could not be measured, it is simply the only cut.
+
+Where the holder **was** measured, the applied inset is floored at one holder-probe
+step — 0.5% of the shorter edge, which is the resolution the holder cut itself has.
+The march stops at the start of the first band whose median reads film, and a film
+median only means the holder covers less than half that band, so up to half a band
+of it can sit inboard of any reported depth (a measured `0` included). The floor
+absorbs that band. It binds only near zero — a 3600 px frame insets 180 px against
+an 18 px step — and `inset` is the **applied** value, so `--measure-inset 0` on a
+measured frame reads back as the step, not as 0:
+
+```sh
+nc inspect --measure-inset 0 scan.tif | jq -c '.effective_area | {region, inset}'
+```
+```json
+{"region":[90,108,5040,3402],"inset":18}
+```
+
+Where the holder was *not* measured there is no measurement resolution to respect,
+and the fraction you state is exact.
+
+Every command that decodes reports the result — `inspect`, `estimate`, `convert`,
+and each frame of a `roll` (under its own `effective_area` key, beside that frame's
+`dmax`). `convert` and `roll` resolve it on every run, so `--measure-inset` and the
+recipe key are never silently ignored:
+
+```sh
+nc inspect scan.tif | jq -c '.effective_area'
+```
+```json
+{"region":[306,270,4662,3078],"holder":{"top":90,"bottom":72,"left":126,"right":36,"capped":{"top":false,"bottom":false,"left":false,"right":false},"converged":true},"holder_applied":true,"inset":180}
+```
+
+`region` is `[x, y, w, h]`, in the same convention as `--base-region`.
+`holder_applied` is the short answer to "did reading the IR plane change this
+rectangle?" — true only when the holder was measured *and* some edge is non-zero.
+Read `holder` itself carefully, because the three cases are different answers:
+
+| `holder` | meaning |
+|---|---|
+| `{"top":90, …}` | measured, and the holder is that deep on each edge |
+| `{"top":0,"bottom":0,"left":0,"right":0, …}` | measured, and there is **no** holder — an already-cropped scan |
+| `null` | **not measured**: no IR plane, a plane identified by shape alone, or film too IR-opaque to separate |
+
+That last row is the one that should change what you do. The default 5% is sized
+for the **rebate**, on the assumption that cut 1 removed the holder first. Where cut
+1 did not run, that same 5% has to clear the holder *and* its rebate together — so
+on a `null` scan with a visible holder, raise the inset past holder-plus-rebate, not
+past the holder alone. (For scale: the IR march measures holder depths of 2.5–4% of
+the shorter edge on real scans, which is already most of the default on its own.)
+`--measure-inset FRAC` is the flag; here it is on the *measured* frame above, so you
+can see the arithmetic (the holder cut is unchanged and the inset goes from 180 px
+to 432):
+
+```sh
+nc inspect --measure-inset 0.12 scan.tif | jq -c '.effective_area'
+```
+```json
+{"region":[558,522,4158,2574],"holder":{"top":90,"bottom":72,"left":126,"right":36,"capped":{"top":false,"bottom":false,"left":false,"right":false},"converged":true},"holder_applied":true,"inset":432}
+```
+
+nc will not guess that number for you — it reports which case the run was in and
+leaves the blind cut to you. Values outside `[0, 0.4]` are a usage error (exit 2)
+from every command, before the file is read.
+
+Two fields on `holder` say the measurement is not what it looks like. **Both emit a
+warning, which `--strict` promotes to a failure** — the fields alone are not the
+channel, because a silent field is exactly what let a tenfold over-cut through at
+exit 0 while it was being built.
+
+- `capped` — one flag per edge. A capped edge marched as deep as nc looks (25% of
+  the shorter edge) without finding film, so its depth is a **floor**, not a
+  measurement. The consequence does not stop at that edge: each edge is measured
+  over what the *perpendicular* edges' cuts leave, so a truncated depth truncates
+  that cut too, and the perpendicular edges then cap as well — at depths that are
+  **artifacts of the cap, not floors on their own holder**. A 400×400 frame with a
+  120 px top holder and 10 px sides reports `top: 100` (a floor, correctly) and
+  `left`/`right` as 100 as well, a tenfold over-cut. So the reading that matters is
+  whether a capped edge has a capped *perpendicular* neighbour: with one, treat no
+  depth on the frame as measured; without one (a single edge exactly at the cap) the
+  other three stand. The warning says which case you are in. No real scan has capped
+  — 31 measured IR frames, zero caps, a 6–10× margin.
+- `converged: false` — the per-edge march did not settle (the iteration above). nc
+  then reports the deeper of the last two rounds, which over-cuts rather than leaving
+  holder inside the region for a two-round oscillation or a run still settling
+  downward; a longer cycle, or one settling upward, could still under-cut. A far
+  enough over-cut leaves nothing to measure, which is refused outright on a run that
+  measures over the region (exit 2, or a failed frame on a roll) and warned about
+  otherwise. No real scan has produced this.
+
+`converged` and `capped` are **not** independent, and `converged: true` is not a
+quality verdict on its own: a cap *creates* a stable fixed point, so the worst
+answer the march can produce — the tenfold over-cut above — settles and reports
+`converged: true`. Read the two together.
+
+Two things this does *not* do:
+
+- **It never crops the image.** Written dimensions, aspect ratio and pixel count are
+  exactly as decoded. The effective area changes only which pixels a statistic is
+  computed over.
+- **It never looks for the rebate.** The inset passes over it blind. Where a
+  measurement needs unexposed film, give it a region (`--base-region`) or measure a
+  reference frame.
+
+Every command that decodes resolves the area and reports it. Whether anything
+**measures over** it is a separate question, and today only `--auto-d-max` does —
+every other `Dmax` source is a constant or a roll-fixed calibration and reads no
+pixels. So a default conversion is byte-identical to before, and `--auto-d-max` now
+measures the picture instead of the holder: across 12 real frames from 6 rolls it
+resolves 0.76–1.18, against a roll `Dmax` of 1.28–1.38 and the 2.23–2.37 it used to
+return. That holds whatever the anchor placement does with the number, so the
+reported `dmax` has one meaning.
+
+Whether the measurement then reaches a **pixel** is narrower again: the two
+base-derived placements (`--anchor-black-floor`, `--anchor-mid-offset`) discard the
+measured reference, so under those the output is byte-identical to a non-auto run
+even though the reported `dmax` was measured over the area. That distinction is what
+the `--strict` note below turns on.
+
+If the two cuts leave **nothing** to measure, a run that measures over the region is
+refused (exit 2, or a failed frame on a roll); a run that does not is warned instead,
+and its report omits `effective_area` — there is no region to report, and
+`--measure-inset` has no effect on that run.
+
+The `Dmin` / `Dmax` *estimators* still measure as they always have; moving them onto
+the effective area is separate work, which is why the opening of this section says
+one measurement rather than all of them.
+
 > A scan carrying an IR plane that nothing consumes emits an "IR preserved but
-> not used" warning, which **`--strict` promotes to a failure**. The plane is
-> consumed only by holder detection, and only when it actually masked something:
-> the base source must be `auto`, the plane marker-verified and measured usable,
-> *and* the resulting mask must leave some film to search (a holder wrapping all
-> four edges falls back to RGB-only). So a frozen explicit `--film-base` — the
-> recommended roll workflow — still warns. Either drop `--strict` for those runs,
-> or use `--export-ir` so the plane is consumed.
+> not used" warning, which **`--strict` promotes to a failure**. Two things consume
+> the plane, and either one silences it:
+>
+> - **Film-base holder detection**, when it actually masked something: the base
+>   source must be `auto`, the plane marker-verified and measured usable, *and* the
+>   resulting mask must leave some film to search (a holder wrapping all four edges
+>   falls back to RGB-only).
+> - **The effective measurement area**, when the holder march actually moved the
+>   rectangle (`holder_applied: true`) *and* the region reaches a rendered pixel —
+>   today `--auto-d-max` with a reference-reading anchor. The area is resolved on
+>   every run, but reading the plane and finding no holder, or measuring a reference
+>   a base-derived anchor then discards, leaves the plane genuinely unused by the
+>   render.
+>
+> So a frozen explicit `--film-base` with the default anchor — the recommended roll
+> workflow — still warns. Either drop `--strict` for those runs, or use
+> `--export-ir` so the plane is consumed.
 
 ---
 

@@ -249,21 +249,75 @@ impl NcError {
     }
 }
 
+impl NcError {
+    /// The message without the `kind:` prefix [`Display`](std::fmt::Display) adds.
+    ///
+    /// For composing one error's text into another message: `Display` prefixes the
+    /// kind, so `format!("{e} …")` inside a warning carries a stray `usage:`, and
+    /// inside a new `NcError` prints it twice.
+    ///
+    /// **Not a second rendering of the error** — it is the one `Display` is built
+    /// from (below), so the two cannot drift. Print an error with `Display`; use
+    /// this only to compose its text into a longer message.
+    pub fn message(&self) -> &str {
+        match self {
+            NcError::Usage(m)
+            | NcError::Decode(m)
+            | NcError::Unsupported(m)
+            | NcError::Write(m)
+            | NcError::Resource(m)
+            | NcError::Other(m) => m,
+        }
+    }
+
+    /// The `kind:` label [`Display`](std::fmt::Display) prefixes, which is also the
+    /// exit-code family (design-spec §11).
+    fn kind(&self) -> &'static str {
+        match self {
+            NcError::Usage(_) => "usage",
+            NcError::Decode(_) => "decode",
+            NcError::Unsupported(_) => "unsupported",
+            NcError::Write(_) => "write",
+            NcError::Resource(_) => "resource",
+            NcError::Other(_) => "error",
+        }
+    }
+}
+
 impl std::fmt::Display for NcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (kind, msg) = match self {
-            NcError::Usage(m) => ("usage", m),
-            NcError::Decode(m) => ("decode", m),
-            NcError::Unsupported(m) => ("unsupported", m),
-            NcError::Write(m) => ("write", m),
-            NcError::Resource(m) => ("resource", m),
-            NcError::Other(m) => ("error", m),
-        };
-        write!(f, "{kind}: {msg}")
+        write!(f, "{}: {}", self.kind(), self.message())
     }
 }
 
 impl std::error::Error for NcError {}
+
+#[cfg(test)]
+mod error_tests {
+    use super::NcError;
+
+    /// `Display` is `kind: message`, and `message()` is exactly the second half —
+    /// so composing one error's text into another cannot pick up a stray `usage:`
+    /// and the two spellings cannot drift apart.
+    #[test]
+    fn message_is_display_without_the_kind_prefix() {
+        for e in [
+            NcError::Usage("u".into()),
+            NcError::Decode("d".into()),
+            NcError::Unsupported("n".into()),
+            NcError::Write("w".into()),
+            NcError::Resource("r".into()),
+            NcError::Other("o".into()),
+        ] {
+            let shown = e.to_string();
+            let (kind, msg) = shown.split_once(": ").expect("`kind: message`");
+            assert_eq!(msg, e.message(), "{shown}");
+            assert!(!kind.is_empty() && !kind.contains(' '), "{shown}");
+            // Falsifiability: the prefix is real, so this is not a tautology.
+            assert_ne!(shown, e.message());
+        }
+    }
+}
 
 /// Convenience alias for fallible operations across the tool.
 pub type Result<T> = std::result::Result<T, NcError>;
@@ -377,6 +431,95 @@ pub enum FilmType {
     /// any exposure (measured 0.58-0.73 interior IR transmission over 25 frames,
     /// 9 rolls, leaders included).
     Chromogenic,
+}
+
+/// Measurement knobs — where a statistic read off the frame may be read from
+/// (design-spec §9, `measure`).
+///
+/// Its own section rather than a key under `film_base`, because the effective area
+/// governs **every** measurement path (`Dmin`/`Dmax`, content exposure and
+/// contrast, tiling uniformity), not just the film base. Filing it under one
+/// consumer would misplace it permanently: every recipe struct carries
+/// `deny_unknown_fields`, so a key's section is part of its identity.
+///
+/// Operational-only flags do not belong here — a `measure` key is a conversion
+/// knob and must be both a CLI flag and a recipe key.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MeasureParams {
+    /// The static border inset, as a fraction of the **original** frame's shorter
+    /// dimension — the second of the effective area's two cuts.
+    ///
+    /// The holder is cut first, from IR, so this only has to clear a rebate; the
+    /// default is [`DEFAULT_MEASURE_INSET`] and the bound is [`MAX_MEASURE_INSET`],
+    /// both checked by [`check_measure_inset`]. Where the holder
+    /// could **not** be measured (no IR plane, or film too IR-opaque to separate —
+    /// routine for silver stock) this is the *only* cut, and the default will
+    /// under-clear a real holder. Raising it is then the user's call, deliberately:
+    /// nc declines to guess a depth it could not measure, and says in the report
+    /// which case a run was in.
+    pub inset: f32,
+}
+
+impl Default for MeasureParams {
+    fn default() -> Self {
+        Self {
+            inset: DEFAULT_MEASURE_INSET,
+        }
+    }
+}
+
+/// Default static border inset, as a fraction of the **original** frame's shorter
+/// dimension — the second of the effective area's two cuts.
+///
+/// It is sized for a rebate, because the holder is cut first from IR. Where the
+/// holder could *not* be measured this same 5% is the only cut, and it may then
+/// under-clear the holder and its rebate together: the only directly measured
+/// holder depth nc has is **2.5-4% of the shorter edge** (the IR march across 31
+/// real frames, `film-base/holder-depth-mask`). The 10-15% figure quoted elsewhere
+/// is *not* a depth — it is the holder's share of a rendered frame's top codes
+/// (`analysis/conversion-metrics`) — so it does not bound this. Under-clearing is
+/// deliberate: nc declines to guess a depth it could not measure, and the user
+/// raises the fraction instead (user decision 2026-09-16).
+pub const DEFAULT_MEASURE_INSET: f32 = 0.05;
+
+/// Largest accepted [`MeasureParams::inset`]. Insetting half the shorter dimension
+/// from *each* side would leave nothing, so the bound sits strictly below 0.5 — a
+/// fraction this large is a mistake, not a measurement choice. The bound itself is
+/// accepted ([`check_measure_inset`] refuses only `frac > MAX_MEASURE_INSET`).
+pub const MAX_MEASURE_INSET: f32 = 0.4;
+
+/// Check a measurement inset fraction, or refuse it.
+///
+/// The **single** definition of the rule, called from both places that need it:
+/// `cli::validate` (so `convert`, `roll` and every per-frame override refuse a bad
+/// value before a frame is decoded) and `pipeline::film_base::effective_area` (so a
+/// programmatic caller cannot bypass it). Two gates bounding one knob differently
+/// is the defect this shape exists to prevent.
+pub fn check_measure_inset(frac: f32) -> Result<()> {
+    if !frac.is_finite() || frac < 0.0 {
+        return Err(NcError::Usage(format!(
+            "--measure-inset / measure.inset must be finite and non-negative (got \
+             {frac}). It is the fraction of the shorter edge inset from each side \
+             after the holder cut; `0` asks for no inset (floored at one \
+             holder-probe step on a frame where the holder was measured — see \
+             `pipeline::film_base::effective_area`)."
+        )));
+    }
+    if frac > MAX_MEASURE_INSET {
+        return Err(NcError::Usage(format!(
+            "--measure-inset / measure.inset is {frac}, beyond the supported maximum \
+             of {MAX_MEASURE_INSET}. It is inset from *each* side, so {frac} would \
+             remove {:.0}% of the shorter dimension; the default is \
+             {DEFAULT_MEASURE_INSET}. Measured holder depth is 2.5-4% of the shorter \
+             edge (IR march, 31 real frames), so lower the fraction. There is no \
+             explicit measurement region to point at instead — `--base-region` sets \
+             the film-base source, not the measured area — so if nothing should be \
+             measured over that area, drop what measures it (`--auto-d-max`).",
+            (frac * 2.0 * 100.0).min(100.0)
+        )));
+    }
+    Ok(())
 }
 
 /// Input / decode knobs (design-spec §9, stage 1).
@@ -495,6 +638,13 @@ pub enum DmaxSource {
     /// opt-in (`--auto-d-max`), *demoted* from the former default: it silently
     /// brightens underexposed frames and breaks roll-to-roll consistency, so it
     /// is a grading convenience, not the faithful-conversion default.
+    ///
+    /// Measured over the **effective area** ([`MeasureParams`]), not the whole
+    /// scan: the opaque film holder is at the density floor's other end and would
+    /// own the top percentile outright (it resolved 2.23-2.37 against a roll `Dmax`
+    /// of 1.28-1.38 that way, rendering every frame black). This is the **only**
+    /// anchor source that reads anything off the frame, which is why it is also the
+    /// only one for which `convert` resolves a region at all.
     Auto,
     /// No anchor: scene-referred output (base → `1.0`, exposed detail above it).
     /// Reproduces the pre-anchor render bit-for-bit — HDR f32 workflows rely on it.

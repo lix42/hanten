@@ -181,6 +181,25 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   inward *past* the holder. The guard asks `film_along_ranges` itself, not "are all
   segments holder", so the corner-trim case counts too; don't "simplify" it back.
   IR-based dust removal remains a roadmap follow-up.
+- **The measurement region is `film_base::effective_area`, a *second*
+  orchestrator-resolved entry point beside `film_base::estimate`** — two cuts in
+  order: the per-edge IR holder march, then a static inset (`measure.inset` /
+  `--measure-inset`, the recipe's **sixth** top-level section, default 5% of the
+  *original* shorter edge). Resolved on every decoding command and always reported
+  as `effective_area`; that is what keeps the knob observable rather than
+  accepted-and-ignored. **Two predicates, not one** — `measures_over_region`
+  (`DmaxSource::Auto`, what the measurement uses) and
+  `region_reaches_a_rendered_pixel` (`Auto` *and* `anchor().reads_reference()`,
+  what the IR-note suppression keys on). Collapsing them either reports a
+  whole-frame `dmax` beside an `effective_area` claiming the holder was cut, or
+  stops `--strict` failing when the plane moved no pixel; both shipped once.
+  `EffectiveArea::holder_applied` is a second *returned-fact* suppressor of the
+  "IR preserved but not used" warning beside `BaseEstimate::ir_mask_applied`, and
+  no fingerprint witnesses it. **A capped edge inflates its *perpendicular*
+  edges** — the trim can only remove what they reported, so a residual strip caps
+  them too, at a *stable* fixed point: `converged: true` is therefore not a quality
+  signal on its own and must be read with per-edge `capped`. Measured 12x out on a
+  committed fixture. Deep fix: `film-base/holder-cap-contamination`.
 - Current module map (`src/`, all implemented): `types.rs` (shared types),
   `io/{decode,encode,ultra_hdr,avif}.rs`,
   `pipeline/{film_base,color,stages,input_semantics,working_space,render_split,display_tone,sdr,hdr,gain_map,memory,pixels}.rs`
@@ -581,6 +600,9 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   its verdict twice over** — the exit status becomes the *pipe's*, so a red suite reports 0,
   and the per-binary `test result` lines scroll past the window you kept. Redirect to a file
   and check `$?`; this shipped a "green" gate run once.
+  Filtering a test that lives in `tests/pipeline.rs` prints **two** `test result` lines
+  — the `bin` target's `0 passed; N filtered out` first — so `| head -1` looks like the
+  test does not exist. Read both.
 - **`cargo test --lib` fails here** — `nc` is a binary crate with no `[lib]` target, so it
   errors with "no library targets found". Use `cargo test --bin nc <filter>` to run only
   the in-`src` unit tests; a bare `cargo test <filter>` also runs `tests/pipeline.rs`.
@@ -893,11 +915,18 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     knob — assert the losing rule's wording is *absent*; and drive the test through the
     real path (`merge`/the binary), since a test calling the rule **directly** exercises
     it and never the ordering, which is how the fourth instance passed CI.
+    The same narrowness bites a **struct**: an assertion naming one field passes over
+    every other. `d.left == 50` plus a frame-wide `capped` held while `top`/`bottom`
+    were 12x wrong; a per-edge flag red it on the first run. Assert the whole tuple.
   - *Validate the resolved value, never a stand-in for it.* The anchor guard once
     tested a proxy (`MID_GREY_OUTPUT_DECADES / slope`), correct for the placements
     that existed then; `black-at-base` divides the unbounded `−log10(floor)`, so a
     finite-looking config derived an infinite anchor and wrote an all-black frame with
     zero clipped, zero non-finite, no warnings, exit 0.
+  - *`NcError`'s `Display` prefixes the kind*, so `format!("… — {e}")` renders
+    `warning: … — error: …`. Use `NcError::message()` for the bare text; `Display` is
+    built from it plus a private `kind()` so the two cannot drift. Four pre-existing
+    warning sites in `cli.rs` still double it.
   - *lcms2 gotcha:* `Transform::transform_in_place` (`cmsDoTransform`) is
     infallible — Little CMS reports runtime transform failures only via the
     process-global `cmsSetLogErrorHandler`. `color.rs` uses the **global**

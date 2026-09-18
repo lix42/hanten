@@ -185,6 +185,7 @@ graph TD
     film-base/dmax-per-channel-reduction
     film-base/ir-usability-detection
     film-base/holder-depth-mask
+    film-base/holder-cap-contamination
     film-base/holder-masked-measurement
     film-base/tiling-uniformity-validator
     film-base/half-frame-calibration
@@ -374,6 +375,7 @@ graph TD
   film-base/ir-holder-detection --> film-base/ir-usability-detection
   film-base/ir-usability-detection --> film-base/holder-masked-measurement
   film-base/ir-usability-detection --> film-base/holder-depth-mask
+  film-base/holder-depth-mask --> film-base/holder-cap-contamination
   film-base/holder-depth-mask --> film-base/holder-masked-measurement
   core/conversion-versioning --> film-base/holder-masked-measurement
   film-base/dmax-reference --> film-base/holder-masked-measurement
@@ -564,10 +566,33 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   an unexposed silver frame separates 20:1 (0.47 film vs 0.02 holder) while its leader is
   uniformly opaque. Today's gate is wrong for exactly the frame `Dmin` uses
 - `film-base/holder-depth-mask` (post-MVP): `film-base/ir-usability-detection`
+  — one **effective area** for every measurement path: the IR-measured holder cut, then a
+  static inset (default 5% of the **original** frame's shorter edge, user-overridable). **Two
+  cuts in order, not alternatives** — the inset runs whether or not IR did. Widened 2026-09-16
+  to own the inset it had disowned. nc never searches for a rebate; where IR cannot separate,
+  the depth is the user's to state. Returns a **per-edge rectangle**, not a mask, and ships
+  the knob, the report/`inspect` surface and **one consumer** (`auto_dmax`, region only) so
+  the flag is not accepted-and-ignored. Default renders byte-identical, fingerprints unmoved
+  (`recipe` refreshed in place, no bump); `--auto-d-max` runs change. **Done 2026-09-17** —
+  two bugs the measurement caught (a holder ring's corners collapsing every edge; a 6 px
+  sliver segment dragging one edge to the cap, a 7x over-cut) are recorded in the progress log
+- `film-base/holder-cap-contamination` (post-MVP): `film-base/holder-depth-mask`
+  — a holder deeper than the march cap (25% of the shorter edge) leaves the **perpendicular**
+  edges' depths artifacts rather than floors, because the trim they are measured over is
+  truncated with it: 120 px top holder + 10 px sides reports left/right as 100, a 10x over-cut.
+  `holder-depth-mask` made it loud (per-edge `capped`, a `--strict` warning, corrected prose);
+  this makes the measurement right. Candidates: decline when an edge and a perpendicular edge
+  both cap (`CappedEdges::contaminated`), or trim from a source other than the capped report.
+  **Raising the cap is rejected** with reasons in the task file. Zero of 31 real IR frames cap,
+  so this is a robustness gap — but `half-frame-calibration`'s geometry can reach it
 - `film-base/holder-masked-measurement` (post-MVP): `film-base/ir-usability-detection`, `film-base/holder-depth-mask`, `core/conversion-versioning`, `film-base/dmax-reference`
-  — apply `holder-depth-mask`'s per-edge mask, then estimate the **centre** of what is now a
-  single population instead of reaching for p97, which biases ~0.046 density (0.16 stops, the
-  "pale" direction). **Pixel change**: one `pipeline_version` bump. Provenance is per-run
+  — **area x method** and nothing else (user, 2026-09-16): the effective area or a user-stated
+  one, measured by a whole-area percentile (leading) or the grid. **Retires the rebate-band
+  search** (`rebate_candidates` / `select_auto_base`) — accepted as a breaking change, nc is not
+  shipped — which parks `auto-base-real-scan-refusal`, `auto-base-neutral-stock` and
+  `white-holder-support` and changes `core/base-acquisition-planner`'s auto rung. Estimates the
+  **centre** instead of p97, which biases ~0.046 density (0.16 stops, the "pale" direction).
+  **Pixel change**: one `pipeline_version` bump. Provenance is per-run
 - `film-base/tiling-uniformity-validator` (post-MVP): `film-base/holder-masked-measurement`, `film-base/estimate-reuse-output`
   — coarse tiling in the estimate's own pass, reporting within-tile (grain) separately from
   between-tile (gradient): measured 0.0081 on Gold 200 against 0.0390 on Portra 160, reproducing
@@ -636,7 +661,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `algo/auto-anchor-interior-measurement` (post-MVP): `algo/reference-anchored-sigmoid`, `film-base/auto-base-redesign`, `film-base/holder-depth-mask`
   — rescoped 2026-09-12: **measurement only, the output image is never cropped**. The holder
   owns the top percentile of a whole-scan read; the rebate sits at `D ≈ 0` and is deliberately
-  not detected. Depends on `film-base/holder-depth-mask` so the holder region has one owner
+  not detected. Depends on `film-base/holder-depth-mask` so the measurement region has one owner
+  — both cuts, the inset default, its override **and the `auto_dmax` wiring** live there
+  (2026-09-16). What is left here is the **loud-failure range check** that makes `Auto` safe,
+  `measure_balance_range`, and whether `Auto` survives at all
   — `DmaxSource::Auto` measures the whole frame, so the opaque holder owns the 99.5th
   percentile (resolves 2.23–2.37 against a roll Dmax of 1.28–1.38). Blocks every
   content-driven mode, hence the edge into `algo/content-aware-sigmoid-toe`
@@ -933,10 +961,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 
 - [x] [Film-base / Dmin estimation](tasks/film-base/estimation.md)
 - [x] [Robust auto film-base detection](tasks/film-base/auto-base-redesign.md)
-- [ ] [Neutral-base robustness for auto film-base detection](tasks/film-base/auto-base-neutral-stock.md)
-- [ ] [Why `--auto-base` refuses every real scan](tasks/film-base/auto-base-real-scan-refusal.md)
+- [ ] [Neutral-base robustness for auto film-base detection](tasks/film-base/auto-base-neutral-stock.md) — **parked, likely moot** — hardens a detector being retired
+- [ ] [Why `--auto-base` refuses every real scan](tasks/film-base/auto-base-real-scan-refusal.md) — **parked** — the detector it investigates is being retired
 - [x] [IR-assisted film-holder detection](tasks/film-base/ir-holder-detection.md)
-- [ ] [Light film holder support](tasks/film-base/white-holder-support.md)
+- [ ] [Light film holder support](tasks/film-base/white-holder-support.md) — **parked, likely moot** — polarity has nothing left to configure
 - [ ] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — owns `--base-content`; supersedes the content-source sub-item in `film-base/auto-base-redesign`
 - [x] [Reuse-ready `nc estimate` output](tasks/film-base/estimate-reuse-output.md)
 - [x] [Roll-fixed Dmax from a fully-exposed reference frame](tasks/film-base/dmax-reference.md) — shipped roll-fixed acquisition/default policy; the replacement density-curve stage preserves scalar exponential placement and sigmoid curve shaping
@@ -966,9 +994,20 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   real Ilford HP5: separability tracks the *frame's density*, not the stock's chemistry — an unexposed silver
   frame separates 20:1 while its own leader is uniformly opaque. So today's `silver → IR off` rule is wrong
   for precisely the frame `Dmin` is measured from
-- [ ] [A depth-aware holder mask](tasks/film-base/holder-depth-mask.md) — the per-edge holder depth three tasks consume; no pixel change
-- [ ] [Mask the holder, then estimate from a single population](tasks/film-base/holder-masked-measurement.md) —
-  apply `holder-depth-mask`'s per-edge mask, then estimate the centre of what is now one population rather
+- [x] [The effective measurement area](tasks/film-base/holder-depth-mask.md) — one region every
+  measurement path starts from: IR holder cut, then a user-sizable static inset. Per-edge
+  rectangle + `measure.inset` knob + report + `auto_dmax` wired; default renders unchanged.
+  Measured on 31 real IR frames: all measured, none capped, holder 2.5-4% of the shorter edge;
+  `--auto-d-max` now resolves 0.76-1.18 against the 2.23-2.37 it used to
+- [ ] [Narrow the beyond-cap holder march](tasks/film-base/holder-cap-contamination.md) — a holder
+  deeper than the march cap inflates the **perpendicular** edges' depths into artifacts (120 px top
+  holder + 10 px sides reports left/right as 100, a 10x over-cut, `converged: true`).
+  `holder-depth-mask` made it loud; make it right. Decline on a capped perpendicular pair, or find a
+  trim that does not depend on the capped report. Raising the cap is rejected. Robustness gap —
+  zero of 31 real frames cap. No pixel change
+- [ ] [Rebuild Dmin and Dmax measurement on area x method](tasks/film-base/holder-masked-measurement.md) —
+  area (the effective area, or a user-stated one) x method (whole-area percentile, or grid); retires the
+  rebate-band search. Estimate the centre of what is now one population rather
   than reaching for p97, whose ~0.046-density bias costs 0.16 stops in the "pale" direction. **Pixel change,
   one `pipeline_version` bump**
 - [ ] [Validate reference frames by tiling](tasks/film-base/tiling-uniformity-validator.md) — coarse tiling in
@@ -1052,9 +1091,11 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   `DmaxSource::Auto` takes the 99.5th percentile over the *whole* scan, so the nearly-opaque
   film holder owns it (resolves 2.23–2.37 against roll Dmax 1.28–1.38) and every frame renders
   black. **Rescoped 2026-09-12: measurement only — the output image is never cropped**, so
-  dimensions and aspect ratio are untouched. **Two cuts in order**: IR removes the holder at its
-  measured depth (the existing mask has no *depth*, which is the real work), then a fixed 5%
-  inset removes the rebate from what is left. The **rebate is never detected**, only inset past.
+  dimensions and aspect ratio are untouched. **Rescoped again 2026-09-16**: the region *and*
+  the `auto_dmax` wiring moved to `film-base/holder-depth-mask`. What is left is the
+  **loud-failure range check** that makes `Auto` safe (the seam deliberately leaves a window
+  where `Auto` reads a better region but still renders black out of range — tolerable only
+  because `Auto` is opt-in), `measure_balance_range`, and whether `Auto` survives at all.
   Blocks every content-driven rendering mode.
 - [x] [Reconstruction / render curve split](tasks/algo/reconstruction-render-curve-split.md) —
   move the sigmoid character to the render stage, restoring the separate-sub-stages rule.

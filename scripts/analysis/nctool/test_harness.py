@@ -312,7 +312,7 @@ for arg in "$@"; do
 done
 if [ "$strict" = true ]; then
   if [ "${FAKE_STRICT_DIAGNOSTIC:-expected}" = expected ]; then
-    echo 'nc: warning: input carries an IR plane; it is preserved but not used in Step 1' >&2
+    echo 'nc: warning: input carries an IR plane; it is preserved but not used in the conversion' >&2
   else
     echo 'nc: warning: an unrelated warning' >&2
   fi

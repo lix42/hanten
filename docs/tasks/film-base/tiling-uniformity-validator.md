@@ -33,10 +33,13 @@ the evidence this belongs in `estimate`.
 
 ## What this absorbs and retires
 
-- **`--grid` should be retired.** Once masking and a central estimator are
-  unconditional, grid no longer selects an estimator, and the tiling runs for free
-  in the pass the estimate already makes. A flag that no longer changes the
-  estimate would be exactly the silently-ignored knob the project forbids.
+- **`--grid` should be retired — *if* it stops being an estimator.** The argument
+  holds only while grid selects nothing: once masking and a central estimator are
+  unconditional, the tiling runs for free in the pass the estimate already makes, and
+  a flag that no longer changes the estimate is the silently-ignored knob the project
+  forbids. But `holder-masked-measurement` now lists grid as one of **two methods**
+  (user, 2026-09-16, leaning percentile). If grid survives as a method, it still
+  selects an estimator and this retirement does not apply — that task settles it.
 - **`film-base/grid-verdict-enum` is removed with it** — that task exists to give
   `GridEstimate.agreement` a self-describing verdict. Its *intent* carries over
   here: report a verdict, not a bool plus an overloaded spread sentinel.
@@ -65,14 +68,19 @@ the evidence this belongs in `estimate`.
   within-tile and near-zero between-tile — the decomposition's whole point.
 - A synthetic frame with a smooth ramp reports the inverse.
 - A single bad tile is localised in the report, not just summed into a spread.
-- `--grid` is gone: the flag, its clap conflicts, `GridEstimate`, and the tests
-  that pinned it. No path silently accepts it.
-- Running on a masked region, frame corners no longer raise a false "light leak"
-  on a holder-mounted scan — the failure mode the old full-frame grid had.
+- If `holder-masked-measurement` drops grid as a method: `--grid` is gone — the flag,
+  its clap conflicts, `GridEstimate`, and the tests that pinned it, with no path
+  silently accepting it. If grid survives there, this verifies the tiling alongside it
+  instead.
+- Running on `film_base::effective_area`'s rectangle (shipped 2026-09-17), frame
+  corners no longer raise a false "light leak" on a holder-mounted scan — the failure
+  mode the old full-frame grid had.
 
 ## Dependencies
 
-- [Mask the holder, then estimate from a single population](holder-masked-measurement.md)
+- [Rebuild Dmin and Dmax measurement on area x method](holder-masked-measurement.md) —
+  it owns the method, so **it decides whether `--grid` survives**; do not retire the flag
+  here if that task keeps it (its open question 1, 2026-09-16)
 - [Reuse-ready `nc estimate` output](estimate-reuse-output.md) — carried over from the
   retired `grid-verdict-enum`: this task removes the `--grid` reporting that task shipped
 
