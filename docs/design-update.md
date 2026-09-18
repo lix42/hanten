@@ -166,18 +166,16 @@ out_c = 10^(−gamma·A) × 10^(gamma·offset_c) × (10^(D_c))^(gamma · scale_c
 |---|---|---|
 | **anchor `A`** | one gain on all channels | **Exactly exposure** — a scalar commutes with the 3×3. |
 | **`offset [3]`** | a per-channel gain, constant at every brightness | **White balance** — but in film-layer space, *before* the 3×3, so it is not the same operator as rendering's white balance after it (≈2.6 % apart on a neutral, more on saturated colour). |
-| **`scale [3]`** | a per-channel *exponent*: the rate each channel grows with exposure | **None.** No gain, white balance or luminance curve reproduces it. |
-| **`gamma`** | overall contrast | None today; rendering has no contrast control yet. |
+| **`scale [3]`** | a per-channel *exponent*: the rate each channel grows with exposure | The pivoted per-channel grade (Part 2) — same symptom, different basis, not the same correction. |
+| **`gamma`** | overall contrast | The contrast knob (Part 2) — the same for neutrals, different for saturated colour. |
 | `shadow_balance` / `highlight_balance` | per-channel offsets by tone region | A grade. |
 
-So only `scale` (and `gamma`'s look half) do something **rendering's own
-controls** cannot — the Key argument above still holds in the abstract, since a
-transform free to undo the 3×3 could reproduce any of it; what rendering *has*
-is per-channel gains, a scalar exposure, a pivoted per-channel power and a
-luminance curve, and none of those is a per-channel exponent in film-layer
-space. Offset and anchor duplicate scene correction, so tuning them here while
-"holding rendering fixed" is really tuning the final image and attributing it to
-reconstruction.
+So `scale` and `gamma`'s calibration half are the decode's own. Rendering has a
+counterpart for every knob here — exposure, white balance, contrast, and the
+pivoted per-channel grade — but a counterpart acts **after** the 3×3, in a
+different basis, so it addresses the symptom rather than the error. Offset and
+anchor are pure duplicates and belong there; tuning them here while "holding
+rendering fixed" is tuning the final image and calling it reconstruction.
 
 Note also that `gamma` and `scale` are over-parameterized: only the products
 `gamma · scale_c` enter, pinned by the convention `scale_r = 1`. "Measure
@@ -604,10 +602,11 @@ artifact on which a reconstruction is measured. Caveats:
 Because the decode is invertible, "how much information survived" cannot grade
 it. The final image can — but only with **rendering held fixed**, which is what
 makes a review set evidence about the decode rather than about a redesigned
-rendering. What is left to judge is the two knobs rendering's own controls
-cannot reproduce: `scale` (a cast that grows with brightness) and `gamma`
-(contrast). Everything else — exposure, white balance, the anchor — is a
-convention here and a control there.
+rendering. What is left to judge is the two knobs that are the decode's own
+rather than duplicates of rendering: `scale` (a cast that grows with brightness)
+and `gamma`'s calibration half. Both must be right before the 3×3, where a
+rendering grade cannot reach them. Everything else — exposure, white balance,
+the anchor — is a convention here and a control there.
 
 **And the rendering that is held fixed shapes what the eye can see.** Measured
 2026-09-17: a per-channel highlight compression desaturates whites toward
