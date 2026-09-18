@@ -193,6 +193,17 @@ reference white, where the renderer's range check rejects the frame.)
 
 ### Decisions
 
+**What is decided is the *rule*; the numbers filling it are current picks.** One
+anchor rule, `offset` frozen, `gamma` split into a calibrated half and a look
+half, `Dmax` out of the default path — those are the design, and moving one is a
+design change. The values in them — `d ≈ 0.62`, the linearization ≈1.8,
+`density.scale` — are today's best estimates and are **expected to move**: by
+visual review now (Part 3), and by the bracketed calibration frames later. That
+is not free (every default pixel moves, so it costs a `pipeline_version` bump
+and a drift-gate row) but it is planned, not a regression. Whether a value
+should also stay reachable by the end user is a separate question this doc does
+not settle; today all of them are flags and recipe keys.
+
 - **One anchor rule: `mid-at-base-offset(d)`**, with `d` the film's
   mid-above-base density (≈0.62; stocks measure 0.54–0.70). Mid-grey is what
   "exposed correctly" means, it is reference-free (no leader, no roll-to-roll
@@ -697,6 +708,13 @@ the argument for it: the user could see that a surface was not white but could
 not name the direction as green, and a colour picker settled it.
 
 ## Tuning order
+
+The loop tunes **decode** knobs — `scale` and `gamma` — while rendering is held
+fixed, and the "direct" preset (Part 2) is the rendering to hold: with scene
+correction identity and the look empty, what the eye judges is the decode. The
+2026-09-17 caution still applies in that setup: a defect seen there may belong
+to the fixed rendering rather than to the decode, so a candidate that loses
+should be re-checked under a second rendering before the decode is blamed.
 
 `scale` first, then `gamma`: the cast is the open question, and contrast is
 easier to judge once the cast is settled. Two or three candidates per review set
