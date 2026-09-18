@@ -351,8 +351,13 @@ mod tests {
     fn shared_from_film_rgb(rgb: &[f32], print: &PrintParams) -> SharedDisplaySource {
         let scan = rgb.iter().map(|value| 1.0 - value).collect();
         let image = LinearImage::new((rgb.len() / 3) as u32, 1, scan, None).unwrap();
-        let (film, _) =
-            reconstruct(&image, &FilmBase::from([1.0; 3]), &Reconstruction::Simple).unwrap();
+        let (film, _) = reconstruct(
+            &image,
+            &FilmBase::from([1.0; 3]),
+            &Reconstruction::Simple,
+            None,
+        )
+        .unwrap();
         display_source(map_nc_film_rgb_v1(film), print).unwrap()
     }
 

@@ -118,8 +118,9 @@ pub(crate) fn reconstruct_and_print(
     film_base: &FilmBase,
     reconstruction: &Reconstruction,
     print: &PrintParams,
+    measure_region: Option<[u32; 4]>,
 ) -> Result<(LinearImage, ConvertReport)> {
-    let (film, recon) = algo::reconstruct(image, film_base, reconstruction)?;
+    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, measure_region)?;
     let (positive, white_balance) = algo::finish_print(film, reconstruction, print)?;
     Ok((
         positive,
@@ -161,14 +162,22 @@ pub fn render(
     reconstruction: &Reconstruction,
     print: &PrintParams,
     output_params: &OutputParams,
+    measure_region: Option<[u32; 4]>,
 ) -> Result<Rendered> {
     match output_params.preset {
         // `custom` is the same legacy branch, explicitly chosen rather than
         // inherited from the default — same bytes, different provenance.
-        OutputPreset::Legacy | OutputPreset::Custom => {
-            render_legacy(image, film_base, reconstruction, print, output_params)
+        OutputPreset::Legacy | OutputPreset::Custom => render_legacy(
+            image,
+            film_base,
+            reconstruction,
+            print,
+            output_params,
+            measure_region,
+        ),
+        OutputPreset::FilmMaster => {
+            render_film_master(image, film_base, reconstruction, measure_region)
         }
-        OutputPreset::FilmMaster => render_film_master(image, film_base, reconstruction),
         // Every display preset renders from the shared source instead, so that
         // reconstruction and the print controls resolve exactly once for whichever
         // rendition(s) the preset needs.
@@ -203,11 +212,12 @@ pub fn render_sdr_preset(
     reconstruction: &Reconstruction,
     print: &PrintParams,
     gamut: sdr::SdrGamut,
+    measure_region: Option<[u32; 4]>,
 ) -> Result<Rendered> {
     // Before the source render, so an unusable knee width fails without having paid
     // for reconstruction and the print stage.
     let tone = DisplayTone::resolve(print)?;
-    let source = render_display_source(image, film_base, reconstruction, print)?;
+    let source = render_display_source(image, film_base, reconstruction, print, measure_region)?;
     let mut timings = source.timings;
     let started = Instant::now();
     let rendered = sdr::render(&source.shared, gamut, tone)?;
@@ -230,9 +240,10 @@ pub fn render_display_source(
     film_base: &FilmBase,
     reconstruction: &Reconstruction,
     print: &PrintParams,
+    measure_region: Option<[u32; 4]>,
 ) -> Result<DisplaySource> {
     let started = Instant::now();
-    let (film, recon) = algo::reconstruct(image, film_base, reconstruction)?;
+    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, measure_region)?;
     let shared = render_split::display_source(working_space::map_nc_film_rgb_v1(film), print)?;
     let algorithm_ms = ms_since(started);
 
@@ -263,9 +274,11 @@ fn render_legacy(
     reconstruction: &Reconstruction,
     print: &PrintParams,
     output_params: &OutputParams,
+    measure_region: Option<[u32; 4]>,
 ) -> Result<Rendered> {
     let started = Instant::now();
-    let (positive, convert) = reconstruct_and_print(image, film_base, reconstruction, print)?;
+    let (positive, convert) =
+        reconstruct_and_print(image, film_base, reconstruction, print, measure_region)?;
     let algorithm_ms = ms_since(started);
 
     // No copy here (`io/memory-preflight`): the pre-transform positive has no
@@ -305,9 +318,10 @@ fn render_film_master(
     image: &LinearImage,
     film_base: &FilmBase,
     reconstruction: &Reconstruction,
+    measure_region: Option<[u32; 4]>,
 ) -> Result<Rendered> {
     let started = Instant::now();
-    let (film, recon) = algo::reconstruct(image, film_base, reconstruction)?;
+    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, measure_region)?;
     let master = render_split::film_master(working_space::map_nc_film_rgb_v1(film));
     let algorithm_ms = ms_since(started);
 
@@ -452,6 +466,7 @@ mod tests {
             &Reconstruction::Simple,
             &PrintParams::default(),
             &legacy_output(),
+            None,
         )
         .unwrap();
         assert_eq!((out.image.width, out.image.height), (40, 40));
@@ -474,6 +489,7 @@ mod tests {
                 depth: OutDepth::F32,
                 ..OutputParams::default()
             },
+            None,
         )
         .unwrap();
         assert_eq!(out.image.rgb.len(), 16 * 16 * 3);
@@ -493,6 +509,7 @@ mod tests {
                 depth: OutDepth::F32,
                 ..OutputParams::default()
             },
+            None,
         )
         .unwrap();
         assert_eq!(out.image.rgb.len(), 16 * 16 * 3);
@@ -538,9 +555,9 @@ mod tests {
                     ..OutputParams::default()
                 },
             ] {
-                let got = render(&img, &base, &reconstruction, &print, &output).unwrap();
+                let got = render(&img, &base, &reconstruction, &print, &output, None).unwrap();
                 let (positive, convert) =
-                    reconstruct_and_print(&img, &base, &reconstruction, &print).unwrap();
+                    reconstruct_and_print(&img, &base, &reconstruction, &print, None).unwrap();
                 let (want_image, want_icc) = color::to_output(positive, &output).unwrap();
                 let bits = |v: &[f32]| -> Vec<u32> { v.iter().map(|x| x.to_bits()).collect() };
                 assert_eq!(
@@ -578,10 +595,11 @@ mod tests {
                 preset: OutputPreset::FilmMaster,
                 ..OutputParams::default()
             },
+            None,
         )
         .unwrap();
 
-        let (film, _) = algo::reconstruct(&img, &base, &density_default()).unwrap();
+        let (film, _) = algo::reconstruct(&img, &base, &density_default(), None).unwrap();
         let want = working_space::map_nc_film_rgb_v1(film).into_linear();
         let bits = |v: &[f32]| -> Vec<u32> { v.iter().map(|x| x.to_bits()).collect() };
         assert_eq!(bits(&out.image.rgb), bits(&want.rgb));
@@ -608,7 +626,7 @@ mod tests {
             preset: OutputPreset::FilmMaster,
             ..OutputParams::default()
         };
-        let (film, _) = algo::reconstruct(&img, &base, &midtone_reconstruction()).unwrap();
+        let (film, _) = algo::reconstruct(&img, &base, &midtone_reconstruction(), None).unwrap();
         let mapped = working_space::map_nc_film_rgb_v1(film).into_linear();
 
         // (a) A print control the legacy branch honours (2^1 exposure doubles every
@@ -619,7 +637,15 @@ mod tests {
             print_exposure: 1.0,
             ..PrintParams::default()
         };
-        let master = render(&img, &base, &midtone_reconstruction(), &hot, &master_params).unwrap();
+        let master = render(
+            &img,
+            &base,
+            &midtone_reconstruction(),
+            &hot,
+            &master_params,
+            None,
+        )
+        .unwrap();
         let bits = |v: &[f32]| -> Vec<u32> { v.iter().map(|x| x.to_bits()).collect() };
         assert_eq!(
             bits(&master.image.rgb),
@@ -636,6 +662,7 @@ mod tests {
                 depth: OutDepth::F32,
                 ..OutputParams::default()
             },
+            None,
         )
         .unwrap();
         // `master * 1.5` is only a meaningful bar if the master sample is positive —
@@ -669,6 +696,7 @@ mod tests {
                 output_profile: Some("srgb".into()),
                 ..OutputParams::default()
             },
+            None,
         )
         .unwrap();
         let master_plain = render(
@@ -677,6 +705,7 @@ mod tests {
             &midtone_reconstruction(),
             &PrintParams::default(),
             &master_params,
+            None,
         )
         .unwrap();
         assert!(
@@ -709,6 +738,7 @@ mod tests {
                     depth,
                     ..OutputParams::default()
                 },
+                None,
             )
             .unwrap()
         };
@@ -747,6 +777,7 @@ mod tests {
                 &reconstruction,
                 &PrintParams::default(),
                 &params,
+                None,
             )
             .unwrap();
             assert_eq!(out.image.rgb.len(), 8 * 8 * 3, "{reconstruction:?}");
@@ -767,6 +798,7 @@ mod tests {
             &density_default(),
             &PrintParams::default(),
             &legacy_output(),
+            None,
         ) {
             Err(e) => assert_eq!(e.exit_code(), 1),
             Ok(_) => panic!("expected a degenerate-base error"),
@@ -842,7 +874,7 @@ mod midtone_placement {
         print: &PrintParams,
     ) -> Option<[f32; 3]> {
         let (image, base) = mid_grey_patch(stock);
-        let shared = render_display_source(&image, &base, reconstruction, print).ok()?;
+        let shared = render_display_source(&image, &base, reconstruction, print, None).ok()?;
         let out = sdr::render(&shared.shared, SdrGamut::DisplayP3, tone).ok()?;
         let rgb = &out.image().rgb;
         Some([rgb[0], rgb[1], rgb[2]])
@@ -1010,7 +1042,7 @@ mod midtone_placement {
             },
             curve: crate::types::DensityCurve::Characteristic(CharacteristicParams { stock }),
         };
-        let shared = render_display_source(&image, &base, &reconstruction, print).unwrap();
+        let shared = render_display_source(&image, &base, &reconstruction, print, None).unwrap();
         let out = sdr::render(&shared.shared, SdrGamut::DisplayP3, tone).unwrap();
         // **Red, not green.** The patch is uniform, so any channel reads the same *tone* —
         // but only red's `density.scale` gain is 1, so only red measures the tone question
@@ -1575,7 +1607,7 @@ pub(crate) mod golden {
         expected_range_bits: Option<[u32; 2]>,
     ) {
         let (out, report) =
-            reconstruct_and_print(&pixels(), &base(), &reconstruction, &print).unwrap();
+            reconstruct_and_print(&pixels(), &base(), &reconstruction, &print, None).unwrap();
         let got: Vec<u32> = out.rgb.iter().map(|v| v.to_bits()).collect();
         assert_eq!(got, expected_rgb_bits, "pixel bits drifted");
         assert_eq!(report.dmax.map(f32::to_bits), expected_dmax_bits, "dmax");
@@ -1668,6 +1700,7 @@ pub(crate) mod golden {
                     &base(),
                     &reconstruction,
                     &PrintParams::default(),
+                    None,
                 )
                 .unwrap();
                 // Pixel 5 (rgb offsets 12..15) is exactly the base.
@@ -1711,6 +1744,7 @@ pub(crate) mod golden {
                     &base(),
                     &reconstruction,
                     &PrintParams::default(),
+                    None,
                 )
                 .unwrap();
                 out.rgb.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
@@ -2105,6 +2139,7 @@ pub(crate) mod golden {
             &base(),
             &characteristic_config(),
             &PrintParams::default(),
+            None,
         )
         .unwrap();
         // `zip` below truncates, so the length is asserted rather than assumed.

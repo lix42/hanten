@@ -251,7 +251,31 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         pipeline_version: 5,
         render: "9c97b6954612c356",
         base: "01c5acccc36a3388",
-        recipe: "a50af8692558b3d0",
+        // Refreshed in place when the `measure` recipe section arrived
+        // (`film-base/holder-depth-mask`): the default document gained
+        // `"measure": {"inset": 0.05}`, so the recipe hash moved while `render` and
+        // `base` are byte-identical. The default anchor is `Fixed`, so no default
+        // render moved — the "new value in the default document, no default pixel
+        // change" case this field sanctions editing for. **v4's row is deliberately
+        // untouched**: v4's default document never carried `measure`, so editing it
+        // would make a historical row describe a document that version never had.
+        //
+        // **Not bumping `PIPELINE_VERSION` is a recorded decision, not a
+        // consequence of the above.** The v1/v3 precedents for an in-place refresh
+        // were *new* knobs, where no pre-existing recipe could change meaning.
+        // Here a frozen recipe carrying `reconstruction.curve.dmax: "auto"` renders
+        // differently before and after this change under the same
+        // `pipeline_version` and the same `behavior` string — and on a path the
+        // fingerprints cannot witness at all, since `golden`'s vectors resolve
+        // `Fixed`. That is a version-*identity* question, not merely the
+        // verification gap it looks like. It is accepted because nc is unshipped,
+        // `Auto` is opt-in via `--auto-d-max`, and the prior behaviour rendered
+        // every real frame black (it measured the opaque holder). If it is
+        // revisited, `core/conversion-versioning` is its home.
+        //
+        // So the `--auto-d-max` change that *did* happen is verified by
+        // same-machine before/after, not here.
+        recipe: "fc8f9c58acc360e6",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -575,8 +599,14 @@ mod drift_gate {
     /// print it and a developer can *see* which pixel or diagnostic moved instead of
     /// only that a hash differs.
     fn render_fingerprint_text(recon: &Reconstruction, print: &PrintParams) -> String {
-        let (out, report) = reconstruct_and_print(&golden::pixels(), &golden::base(), recon, print)
-            .expect("the render must succeed on the curated vectors");
+        // `None` region: the gate fingerprints the *default* render, and the default
+        // anchor is `DmaxSource::Fixed`, which measures nothing off the frame. So
+        // this pins the render as it always has — and note what that means: the gate
+        // cannot see the effective-area path at all, because no curated vector
+        // resolves `Auto`.
+        let (out, report) =
+            reconstruct_and_print(&golden::pixels(), &golden::base(), recon, print, None)
+                .expect("the render must succeed on the curated vectors");
         let rgb: Vec<String> = out.rgb.iter().copied().map(hex).collect();
         let opt = |v: Option<f32>| v.map_or_else(|| "-".to_string(), hex);
         let triple = |v: Option<[f32; 3]>| {

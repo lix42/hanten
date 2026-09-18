@@ -283,6 +283,7 @@ fn anchor_error(resolved: Option<f32>, source: DmaxSource, densities: &[f32]) ->
 pub(super) fn apply_curve(
     density: DensityImage,
     params: &SigmoidParams,
+    measure_region: Option<[u32; 4]>,
 ) -> Result<(FilmRgbImage, Option<f32>, Option<f32>)> {
     // One anchor measurement, shared semantics with the exponential curve. The
     // S-curve is anchored on `[0, Dmax]` — its white knee and its black floor
@@ -293,7 +294,7 @@ pub(super) fn apply_curve(
     // fail loudly (the CLAUDE.md film-base gotcha pattern, mirroring
     // `simple.rs`). `Explicit` is CLI-validated positive, so this only fires
     // on `none` (config/programmatic) or a degenerate `Auto` measurement.
-    let resolved = resolve_dmax(&density.density, params.dmax);
+    let resolved = resolve_dmax(&density, params.dmax, measure_region);
     let Some(reference) = resolved.filter(|a| a.is_finite() && *a > 0.0) else {
         return Err(NcError::Other(anchor_error(
             resolved,
@@ -383,7 +384,7 @@ mod tests {
         print: PrintParams,
     ) -> crate::types::Result<Converted> {
         let config = Reconstruction::Density { density, curve };
-        let (film, rep) = reconstruct(img, base, &config)?;
+        let (film, rep) = reconstruct(img, base, &config, None)?;
         let (out, white_balance) = finish_print(film, &config, &print)?;
         Ok(Converted {
             out,

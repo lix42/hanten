@@ -1,18 +1,41 @@
-# Mask the holder, then estimate from a single population
+# Rebuild Dmin and Dmax measurement on area x method
 
 ## Goal
 
-Make `Dmin` and `Dmax` measurement sample only film: apply the per-edge holder mask
-that `holder-depth-mask` provides (IR where it permits, a fixed fraction where it does
-not) and, once the sampled region is a single population, estimate its **centre**
-rather than reaching for an extreme percentile. Since 2026-09-13 the mask itself is
-that task's; this one consumes it and changes the estimator.
+Migrate `Dmin` and `Dmax` measurement onto **two inputs and nothing else**
+(user, 2026-09-16):
+
+- **Area** — either the effective area `holder-depth-mask` resolves, or an area the
+  user states.
+- **Method** — a percentile over that whole area, or the grid. (The user leans
+  whole-area percentile; see open question 1.)
+
+Everything else that currently decides where and how the base is measured goes away,
+including the rebate-band search. nc is not shipped, so a breaking change here is
+accepted (user, 2026-09-16).
 
 **Pixel change.** The base is the divisor of the whole conversion, so this owes a
-`pipeline_version` bump. Masking and the estimator ship together for that reason:
+`pipeline_version` bump. The area and the estimator ship together for that reason:
 split, they cost two bumps and two baselines for one conceptual change.
 
-## Why the estimator must change with the mask
+## What this retires
+
+`FilmBaseSource::Auto` today is a **rebate detector** — `rebate_candidates` +
+`select_auto_base` march inward per edge for a thin uniform band sitting behind the
+holder (`auto-base-redesign`, design-spec §9). Under area x method there is no such
+search: `Auto` becomes "the effective area, measured by the configured method".
+
+Removing it reaches four other tasks, all of which exist to serve the detector:
+`auto-base-real-scan-refusal` (why it never fires), `auto-base-neutral-stock`
+(hardening it for a neutral base), `white-holder-support` (its holder polarity), and
+`core/base-acquisition-planner`'s auto rung. Their disposition is part of this task,
+not a silent consequence of it — each is parked with a pointer here.
+
+**`content-fallback` is not retired.** Tier 3 estimates the base from picture content
+when there is no unexposed film anywhere on the frame; that is a different question
+from where to measure, and the effective area is what it would measure over.
+
+## Why the estimator must change with the area
 
 p97 exists to perform **population selection**: on a rebate strip the region is a
 *mixture*, unexposed film is the sub-population with the largest transmission, and
@@ -28,8 +51,12 @@ Measured on the Gold 200 leader (2026-08-11), p97 sits 0.046 density from p50 �
 across the roll and in the "pale" direction the sigmoid work exists to fix.
 
 `reference_dmax` already samples at p = 0.5 for exactly this reason. This task
-brings `Dmin` onto the same rule, keeping p97 for the paths that are still
-mixtures (`--auto-base` rebate strips, an untrusted user rectangle).
+brings `Dmin` onto the same rule.
+
+**"Whole-area percentile" must not be read as "keep p97".** Which percentile is the
+open question below; what the measurement above rules out is an *extreme* one over a
+single population. p97 survives only where the region is still a genuine mixture —
+an untrusted user rectangle is the one remaining candidate.
 
 ## What is known
 
@@ -37,11 +64,12 @@ mixtures (`--auto-base` rebate strips, an untrusted user rectangle).
   at ~2% of the short edge on the right, ~3% top and bottom, ~5% left. A single
   rectangular crop must take the worst edge; per-edge masking need not, and
   `EdgeHolderMask` already expresses per-edge segments.
-- **The fallback is a first-class path, not a rare one.** For silver stock IR can
-  never separate the holder on a *leader*, so every silver `Dmax` measurement
-  takes it. It deserves a reported, deliberate value rather than a safety net.
-- **Existing fractions to align with, not multiply:** `REBATE_SCAN_FRAC = 0.10`
-  and `IR_HOLDER_PROBE_FRAC = 0.005`.
+- **The no-IR path is a first-class path, not a rare one.** For silver stock IR can
+  never separate the holder on a *leader*, so every silver `Dmax` measurement takes
+  the static inset alone. It deserves a reported, deliberate value rather than a
+  safety net — and its size is the user's knob, owned by `holder-depth-mask`.
+- **There is no rebate search here** (user, 2026-09-16). `Dmin` is measured over the
+  whole effective area of a reference frame, or over a region the user states.
 - **The spread within a leader is grain and scanner noise**, not defects — smooth,
   symmetric, no discontinuity — and the median of ~40k samples is reproducible to
   1.4e-4 density on split halves. The wide distribution does not threaten the
@@ -51,17 +79,24 @@ mixtures (`--auto-base` rebate strips, an untrusted user rectangle).
 
 ## Open questions
 
-1. **Which central estimator** — median, or a trimmed mean, and trimmed where? On
-   a distribution this symmetric they agree to a few thousandths, so pick for
+1. **Does the grid survive as a method at all?** The user enumerated grid and
+   whole-area percentile and leans percentile. If percentile wins, `--grid` goes and
+   `tiling-uniformity-validator`'s planned retirement of it stands unchanged; if grid
+   stays, that task must not retire the flag it keeps. Settle it here, once.
+2. **Which percentile** — median, or a trimmed mean, and trimmed where? On a
+   distribution this symmetric they agree to a few thousandths, so pick for
    robustness against the asymmetric case rather than for the symmetric one.
-2. **The fallback fraction.** Measured need is 2–5%; `REBATE_SCAN_FRAC` is 10%.
-   Reuse it, or introduce a measurement-specific value and justify it.
-3. **Memory.** Materialising the whole masked region is ~900 MB of `Vec<f32>` on a
+3. ~~The fallback fraction.~~ **Answered 2026-09-16**: the inset and its override
+   belong to `holder-depth-mask`; this task neither sizes nor duplicates it.
+4. **Memory.** Materialising the whole masked region is ~900 MB of `Vec<f32>` on a
    75 MP frame. A 16-bit histogram per channel gives exact percentiles and a
    trimmed mean in O(1) — expected to be the shape here, which means
    `pipeline::memory` gets *new* numbers rather than the current `12·s` term.
-4. **Does `--auto-base` change at all?** Its strips stay mixtures, so its estimator
-   should not — but confirm it still shares the masking.
+5. **What do the film-base *sources* collapse to?** With no rebate search, `Auto`
+   and `Region` differ only in where the area came from, which is the "area" input.
+   Whether `FilmBaseSource` keeps three variants, or becomes an area plus a method,
+   is a CLI/recipe surface question — and `film_base.source` is the one knob with no
+   default, so whatever replaces it inherits that rule.
 
 ## How to Verify
 
@@ -69,7 +104,8 @@ mixtures (`--auto-base` rebate strips, an untrusted user rectangle).
   away produce the same base, to within the estimator's reproducibility.
 - The holder contributes nothing: a synthetic frame with a deliberately extreme
   holder value yields the same base masked as it does cropped.
-- `--auto-base` rebate-strip results are unchanged — the mixture path keeps p97.
+- Any surviving mixture path (an untrusted user rectangle) keeps p97; the single-
+  population path does not.
 - Per-edge asymmetry is exercised: a fixture whose holder is deeper on one edge is
   masked per edge, not to the worst edge everywhere.
 - Silver-leader `Dmax` takes the fallback and **says so** in the report.
@@ -79,8 +115,12 @@ mixtures (`--auto-base` rebate strips, an untrusted user rectangle).
 ## Dependencies
 
 - [Decide IR usability by measurement](ir-usability-detection.md)
-- [A depth-aware holder mask](holder-depth-mask.md) — the mask primitive, split out on
-  2026-09-13 so the other consumers need not wait for this task's estimator change
+- [The effective measurement area](holder-depth-mask.md) — **done 2026-09-17**. Call
+  `film_base::effective_area(&image, cfg.measure.inset)`; it returns a per-edge
+  rectangle plus `holder: Option<HolderDepths>`, where `None` means the holder was not
+  measured and all-zero means measured-and-none. Do not re-derive either. Measured
+  holder depth on real scans is **2.5-4% of the shorter edge** (31 frames), which is
+  the number to reason from — not the 10-15% figure, which measures something else
 - [Conversion versioning and baseline comparison](../core/conversion-versioning.md)
 - [Roll-fixed Dmax from a fully-exposed reference frame](dmax-reference.md) — this task
   changes `reference_dmax` sampling, which that task introduced

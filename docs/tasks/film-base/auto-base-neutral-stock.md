@@ -1,5 +1,15 @@
 # Neutral-base robustness for auto film-base detection
 
+> **Parked 2026-09-16 — the detector this task serves is being retired.**
+> `film-base/holder-masked-measurement` rebuilds `Dmin`/`Dmax` on **area x method**,
+> and nc no longer searches for a rebate band at all (user, 2026-09-16; not shipped,
+> so the breaking change is accepted).
+> A neutral base cannot mis-anchor a search that no longer happens, so this task is
+> most likely **moot** rather than merely parked — confirm when the replacement lands.
+> Do not start this before that task settles what `FilmBaseSource` becomes. The
+> evidence below is kept because it is still the best record of how the detector
+> behaved on real scans.
+
 ## Goal
 
 Harden auto film-base detection for film stocks whose base is **near-neutral**

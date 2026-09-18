@@ -1,5 +1,16 @@
 # Light film holder support
 
+> **Parked 2026-09-16 — the detector this task serves is being retired.**
+> `film-base/holder-masked-measurement` rebuilds `Dmin`/`Dmax` on **area x method**,
+> and nc no longer searches for a rebate band at all (user, 2026-09-16; not shipped,
+> so the breaking change is accepted).
+> This one is the clearest casualty: under IR a light holder is still opaque, and
+> without IR the holder is cleared by a blind user-sized inset — neither path asks
+> about polarity, so `--holder white|black` has nothing left to configure.
+> Do not start this before that task settles what `FilmBaseSource` becomes. The
+> evidence below is kept because it is still the best record of how the detector
+> behaved on real scans.
+
 ## Goal
 
 Let film-base auto/border detection work when the film holder is **white** (light)

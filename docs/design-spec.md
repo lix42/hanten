@@ -1102,7 +1102,7 @@ no interactive prompts.
   so an agent can load a roll recipe and tweak one value per frame.
 
 The shipped recipe is grouped into `reconstruction`, `input`, `film_base`,
-`print`, and `output`. The algorithm selection is exactly one tagged
+`measure`, `print`, and `output`. The algorithm selection is exactly one tagged
 `reconstruction` object; the removed legacy forms (top-level `algorithm` and the
 sibling `density`/`sigmoid`/`simple` sections) are rejected at recipe load with
 a migration error — they are not aliases. These are the complete reconstruction
@@ -1856,6 +1856,74 @@ flags that touch no parameter at all.
   In roll mode a shared recipe (or per-frame override) asserting the
   unconditionally-unsupported `input.meaning: colorimetric` is rejected up front
   (exit 4), before any frame is decoded.
+
+### Measurement region (`measure`)
+Every statistic nc reads off a frame — `Dmin`/`Dmax`, content exposure and
+contrast, tiling uniformity — is read over the **effective area**, not the whole
+scan. An uncropped scan carries an opaque film holder that is maximum density, so a
+whole-frame statistic measures the holder rather than the picture (`DmaxSource::Auto`
+resolved 2.23–2.37 against a roll `Dmax` of 1.28–1.38 that way, rendering every
+frame black).
+
+The area is **two cuts, in order — never one or the other**:
+
+1. **The film holder**, measured per edge from the IR plane by marching inward
+   until IR reads film. Only where `film_base::ir_separability` measures the plane
+   able to separate holder from film *on this frame*; declared chemistry takes no
+   part in it. No IR plane, a plane identified by shape alone, or film too
+   IR-opaque to separate (routine for exposed silver stock) all mean **not
+   measured** — a different report from "measured, and there is no holder", which
+   is what an already-cropped scan yields.
+2. **A static inset** of what remains, recipe key `measure.inset` /
+   `--measure-inset FRAC`, default `0.05` of the **original** frame's shorter
+   dimension (so the pixel count does not move with the holder measurement).
+   Accepted range `[0, 0.4]`; outside it is a usage error (exit 2) from every
+   command, checked before the decode. Where cut 1 **ran**, the applied inset is
+   floored at one holder-probe step (0.5% of the shorter edge): a march resolves a
+   depth only to the start of the first band whose median reads film, so up to half
+   a band of holder can sit inboard of any measured depth — including a measured
+   zero. The floor absorbs that band, binds only near `0` (a 3600 px frame insets
+   180 px against an 18 px step), and is reported, so a stated `0` on a measured
+   frame is deliberately not honoured exactly. Where cut 1 did not run there is no
+   measurement resolution to respect and the stated fraction is exact.
+
+The inset is **not a fallback** for cut 1 — it runs either way, and where cut 1 did
+not run it is simply the only cut. Because it is then sized for a rebate rather than
+a holder, it may under-clear the holder and its rebate together: the only directly
+measured holder depth is 2.5–4% of the shorter edge (the IR march across 31 real
+frames). The 10–15% figure recorded in `analysis/conversion-metrics` is a holder
+*occupancy* share of a rendered frame, not a depth, and bounds nothing here. That is deliberate: nc declines to guess a depth it could not measure, and
+the user raises the fraction instead. The report records which case a run was in.
+
+**nc never searches for a rebate**, for measurement or otherwise: the inset passes
+over it blind. Where a measurement needs unexposed film, it is taken over the whole
+effective area of a reference frame or over a region the user states.
+
+**The image is never cropped.** The effective area changes only *which pixels a
+statistic is computed over*; written dimensions, aspect ratio and pixel count are
+exactly as decoded.
+
+**Every command that decodes resolves the area and reports it**, under the report
+key `effective_area` — the resolved rectangle, the per-edge holder depths (with a
+per-edge `capped` and the frame-wide `converged`), `holder_applied`, and the applied
+inset — for a `roll`, inside each frame's entry, beside that frame's resolved `dmax`.
+`convert` and every roll frame resolve it unconditionally so `--measure-inset` and
+the `measure.inset` recipe key (including a per-frame override) are observable rather
+than accepted-and-ignored. A `capped` edge or `converged: false` also emits a
+`--strict`-promotable warning: both mean the reported rectangle is not a
+measurement, and a capped edge truncates the cut its *perpendicular* edges are
+measured over, so their depths may be artifacts rather than floors.
+
+Two narrower questions sit under "is the region used", and they have different
+answers. **Which region a measurement is taken over** is decided by
+`DmaxSource::Auto` alone, whatever the `AnchorPlacement` then does with the result —
+so the reported `dmax` has one meaning, and an *empty* region is a refusal for such
+a run (a warning, with no reported area, for a run that measures nothing).
+**Whether reading the IR plane changed a rendered pixel** is narrower: `Auto` under a
+reference-reading placement, since the base-derived rules discard the measured
+reference and render byte-identically. It is that narrower condition, together with
+`holder_applied` (the holder was measured *and* moved the rectangle), that decides
+whether the plane counts as used for the "IR preserved but not used" warning.
 
 ### Film base / Dmin (stage 2)
 The base source is a single mutually-exclusive choice, recipe key

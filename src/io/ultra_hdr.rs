@@ -1047,8 +1047,13 @@ mod tests {
         ];
         let scan = film_rgb.iter().map(|value| 1.0 - value).collect();
         let image = LinearImage::new(4, 1, scan, None).unwrap();
-        let (film, _) =
-            reconstruct(&image, &FilmBase::from([1.0; 3]), &Reconstruction::Simple).unwrap();
+        let (film, _) = reconstruct(
+            &image,
+            &FilmBase::from([1.0; 3]),
+            &Reconstruction::Simple,
+            None,
+        )
+        .unwrap();
         let print = PrintParams::default();
         let shared = display_source(map_nc_film_rgb_v1(film), &print).unwrap();
         gain_map::render(
@@ -1143,8 +1148,9 @@ mod tests {
             print_exposure: ev,
             ..PrintParams::default()
         };
-        let source = stages::render_display_source(&image, &film_base, &reconstruction, &print)
-            .expect("display source");
+        let source =
+            stages::render_display_source(&image, &film_base, &reconstruction, &print, None)
+                .expect("display source");
         println!("oracle render: {input} at {ev:+} EV, dmax {dmax}");
         gain_map::render(
             &source.shared,

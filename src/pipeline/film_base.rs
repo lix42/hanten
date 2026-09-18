@@ -64,7 +64,7 @@
 
 use serde::Serialize;
 
-use crate::types::{FilmBase, FilmBaseSource, LinearImage, NcError, Result};
+use crate::types::{FilmBase, FilmBaseSource, LinearImage, NcError, Result, check_measure_inset};
 
 /// Percentile used to summarize a region per channel. A high percentile (rather
 /// than the raw max) resists hot pixels / dust sparkles while still landing on
@@ -180,6 +180,35 @@ const IR_HOLDER_PROBE_FRAC: f32 = 0.005;
 /// Minimum holder probe depth in pixels — floors [`IR_HOLDER_PROBE_FRAC`] so a
 /// small image still samples more than a single noisy row.
 const IR_HOLDER_PROBE_MIN: u32 = 2;
+
+/// How deep [`holder_depths`] marches before giving up on an edge, as a fraction
+/// of the shorter dimension. Measured depths are 2.5-4% of the shorter edge (the
+/// IR march across 31 real frames), so this is generous headroom rather than a
+/// threshold anything is calibrated on; an edge that reaches it reports the cap and
+/// sets its flag in [`CappedEdges`], so the number is visible as a floor rather
+/// than mistaken for a measurement. Also clamped to half the perpendicular extent
+/// per edge, so two opposing capped edges still leave a region.
+///
+/// **A cap does not stay on its own edge.** The reported depth is what the
+/// *perpendicular* edges are trimmed by (see [`holder_depths`]), so truncating one
+/// edge's depth at the cap also truncates the trim protecting the two edges
+/// perpendicular to it: the residual strip between the cap and the real holder edge
+/// stays inside their along-edge extent, every segment there reads holder, and they
+/// cap too. Their depths are then **artifacts**, not floors — on a 400x400 frame
+/// with a 120 px top holder and 10 px sides, left and right report 100. So "visible
+/// as a floor" is true only of the edge that capped; the safety argument for the cap
+/// rests on the [`CappedEdges`] flags plus the warning
+/// [`effective_area_warnings`] emits, not on the cap alone. Narrowing that case is
+/// `film-base/holder-cap-contamination`.
+const HOLDER_MARCH_MAX_FRAC: f32 = 0.25;
+
+/// How many times [`holder_depths`] re-measures with the previous pass's depths as
+/// the next pass's along-edge trims. It exits early on the first repeat, so raising
+/// this cannot change an answer that settled — and on every frame measured so far
+/// it settles in two or three passes. Settling is *not* guaranteed, though (the
+/// depth map is not monotone; see [`holder_depths`]), so this is a stop, and
+/// `HolderDepths::converged` reports which kind of answer came back.
+const HOLDER_MARCH_PASSES: usize = 4;
 
 /// Shared recovery advice appended to every auto-detection refusal, naming the
 /// fallback options. Kept in one place so the too-small and no-band errors stay
@@ -949,22 +978,609 @@ fn median_ir_probe(
     along_hi: u32,
     probe: u32,
 ) -> f32 {
+    let mut buf = Vec::new();
+    median_ir_band(image, ir, edge, along_lo, along_hi, 0, probe, &mut buf)
+}
+
+/// [`median_ir_probe`] generalized to a band at an arbitrary **depth** from the
+/// edge: the `thickness`-deep strip starting `depth` px inward. Depth 0 is the
+/// near-edge probe band, which is why `median_ir_probe` delegates here rather than
+/// carrying a second copy of this geometry — the depth march
+/// ([`holder_depths`]) needs every band, not just the first.
+///
+/// `buf` is caller-owned so the march reuses one allocation across its bands
+/// instead of allocating per step. It is cleared on entry; its contents on return
+/// are scratch.
+#[allow(clippy::too_many_arguments)]
+fn median_ir_band(
+    image: &LinearImage,
+    ir: &[f32],
+    edge: Edge,
+    along_lo: u32,
+    along_hi: u32,
+    depth: u32,
+    thickness: u32,
+    buf: &mut Vec<f32>,
+) -> f32 {
     let (w, h) = (image.width, image.height);
-    // The probe band: `probe` deep from the edge, spanning the segment along-edge.
     let [x, y, rw, rh] = match edge {
-        Edge::Top => [along_lo, 0, along_hi - along_lo, probe],
-        Edge::Bottom => [along_lo, h - probe, along_hi - along_lo, probe],
-        Edge::Left => [0, along_lo, probe, along_hi - along_lo],
-        Edge::Right => [w - probe, along_lo, probe, along_hi - along_lo],
+        Edge::Top => [along_lo, depth, along_hi - along_lo, thickness],
+        Edge::Bottom => [
+            along_lo,
+            h - depth - thickness,
+            along_hi - along_lo,
+            thickness,
+        ],
+        Edge::Left => [depth, along_lo, thickness, along_hi - along_lo],
+        Edge::Right => [
+            w - depth - thickness,
+            along_lo,
+            thickness,
+            along_hi - along_lo,
+        ],
     };
-    let mut vals = Vec::with_capacity((rw as usize) * (rh as usize));
+    buf.clear();
+    buf.reserve((rw as usize) * (rh as usize));
     for row in y..y + rh {
         let row_start = row as usize * w as usize;
         for col in x..x + rw {
-            vals.push(ir[row_start + col as usize]);
+            buf.push(ir[row_start + col as usize]);
         }
     }
-    percentile(&mut vals, 0.5)
+    percentile(buf, 0.5)
+}
+
+/// The **effective measurement area** of one frame: the rectangle a measurement
+/// may be computed over, after the opaque holder and a static border inset have
+/// been removed (`film-base/holder-depth-mask`).
+///
+/// It is a **per-edge rectangle, not a mask**. A holder covering only part of one
+/// edge widens that whole edge to its deepest segment — the accepted cost of
+/// letting every consumer clamp its walk to bounds instead of testing each pixel,
+/// which is what keeps `pipeline::memory` free of a mask buffer.
+///
+/// The image is **never cropped**: this describes where a statistic is read, not
+/// what is written.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct EffectiveArea {
+    /// The resolved rectangle `[x, y, w, h]`, in the same convention as
+    /// `--base-region`.
+    pub region: [u32; 4],
+    /// The measured holder depths, or `None` when the holder was **not measured**
+    /// (no IR plane, a shape-only plane, or IR that does not separate on this
+    /// frame). `Some` with all-zero depths is a different answer: the holder *was*
+    /// measured and there is none, which is what an already-cropped scan looks
+    /// like. The report must keep the two apart — "no holder found" is a verdict,
+    /// "not measured" is not.
+    ///
+    /// **Premise behind the all-zero verdict, recorded because it is load-bearing
+    /// and unstated elsewhere:** the gate that lets the march run at all is
+    /// [`ir_separability`], which samples only the frame *interior* (border trimmed
+    /// by [`IR_USABLE_INTERIOR_MARGIN`]) precisely so a verdict about the film does
+    /// not sample the border it exists to detect. So `usable: true` asserts nothing
+    /// about whether an IR-opaque holder exists, and "measured, and there is no
+    /// holder" therefore rests on the march's own outermost band alone, with no
+    /// corroborating evidence. It is asserted, not falsified. What makes that
+    /// tolerable is the project's physical premise (`film-base/white-holder-support`:
+    /// IR opacity comes from material thickness, not colour, so even a light holder
+    /// blocks 850-950 nm), which is why no plausible failing case has been
+    /// constructed — not a second measurement.
+    pub holder: Option<HolderDepths>,
+    /// Whether the holder measurement **moved this rectangle**: the holder was
+    /// measured *and* at least one edge's depth is non-zero.
+    ///
+    /// Returned rather than left to the caller, because it is the fact callers
+    /// actually want — "did consuming the IR plane change anything?" — and
+    /// recomputing it downstream is how the equivalent question for the film base
+    /// went wrong (see `BaseEstimate::ir_mask_applied`). `holder: Some` with
+    /// all-zero depths reads `false`: the plane was read and the answer was "no
+    /// holder", which moved nothing.
+    pub holder_applied: bool,
+    /// The static inset **applied** inside the holder, in pixels — the same value
+    /// on every edge, taken from the **original** frame's shorter dimension so it
+    /// does not move with the holder measurement.
+    ///
+    /// The applied value, not the requested one: on a frame where the holder was
+    /// measured it is floored at one holder-probe step (see [`effective_area`]), so
+    /// a stated fraction near `0` can report more than it asked for. That is the
+    /// point of reporting it.
+    pub inset: u32,
+}
+
+/// Which edges' marches reached [`HOLDER_MARCH_MAX_FRAC`] without finding film.
+///
+/// Per edge rather than one frame-wide boolean, because a capped edge and an edge
+/// *inflated by* a perpendicular cap are different answers and a single flag cannot
+/// tell them apart: it says "somewhere, something capped" while every depth in the
+/// rectangle still reads like a measurement. See [`HOLDER_MARCH_MAX_FRAC`] for how
+/// a cap propagates to the perpendicular edges.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct CappedEdges {
+    pub top: bool,
+    pub bottom: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+impl CappedEdges {
+    /// The four flags in the depth array's order (top, bottom, left, right), so
+    /// callers indexing the depths can index these the same way.
+    fn from_array([top, bottom, left, right]: [bool; 4]) -> Self {
+        Self {
+            top,
+            bottom,
+            left,
+            right,
+        }
+    }
+
+    /// Whether any edge capped — the question the old frame-wide boolean answered.
+    pub fn any(self) -> bool {
+        self.top || self.bottom || self.left || self.right
+    }
+
+    /// The capped edges' names, in report order, for a warning that names them.
+    pub fn names(self) -> Vec<&'static str> {
+        [
+            (self.top, "top"),
+            (self.bottom, "bottom"),
+            (self.left, "left"),
+            (self.right, "right"),
+        ]
+        .into_iter()
+        .filter_map(|(hit, name)| hit.then_some(name))
+        .collect()
+    }
+
+    /// Whether a capped edge has a capped **perpendicular** neighbour — the exact
+    /// condition under which some edge's trim was truncated, so its depth may be an
+    /// artifact of another edge's cap rather than a floor on its own holder. Top and
+    /// bottom are trimmed by left/right and vice versa, so the predicate reduces to
+    /// "one of top/bottom capped *and* one of left/right capped".
+    pub fn contaminated(self) -> bool {
+        (self.top || self.bottom) && (self.left || self.right)
+    }
+}
+
+/// Per-edge holder depth in pixels, measured inward from each edge.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct HolderDepths {
+    pub top: u32,
+    pub bottom: u32,
+    pub left: u32,
+    pub right: u32,
+    /// Which edges' marches reached [`HOLDER_MARCH_MAX_FRAC`] without finding film.
+    /// A capped edge's depth is the cap, so it is a *floor* on the real holder
+    /// rather than a measurement of it — and it truncates the trim the
+    /// perpendicular edges are measured over, so read
+    /// [`CappedEdges::contaminated`] before trusting any depth on such a frame.
+    pub capped: CappedEdges,
+    /// Whether the fixed-point march *settled* — a pass reproduced the previous
+    /// pass's depths — rather than exhausting [`HOLDER_MARCH_PASSES`].
+    ///
+    /// **Read this together with `capped`, not as an independent quality signal.**
+    /// A cap *creates* a stable fixed point — identical trims give an identical
+    /// measurement — so the worst answer the march can produce (a beyond-cap holder
+    /// inflating the perpendicular edges tenfold) comes back `converged: true`.
+    /// `converged` says the iteration settled; it says nothing about whether what it
+    /// settled on is a measurement.
+    ///
+    /// `false` is not an error, but it is not a settled measurement either: the
+    /// edge-depth map is not monotone (a deeper trim narrows the along-edge
+    /// segments, which can make a partially-covered segment read holder where a
+    /// wider one read film), so nothing rules out a cycle. On exhaustion
+    /// [`holder_depths`] reports the elementwise **max** of the last two passes.
+    ///
+    /// That guarantees an over-cut (costing measurement area) rather than an
+    /// under-cut (leaving holder inside the region) for a **two-phase** cycle, whose
+    /// last two passes are every phase there is, and for a transient still settling
+    /// **downward**, where the earlier of the two passes is the deeper one. It does
+    /// *not* cover a transient settling upward: `max(p3, p4) = p4` then sits below
+    /// the fixed point, which is an under-cut. (Unlikely in practice for the same
+    /// reason the merge is not widened below: pass 1 is measured untrimmed and is
+    /// the corner-contaminated upper bound, so the sequence starts high.) A
+    /// period-≥3 cycle can likewise still under-cut:
+    /// passes 3 and 4 are only two of its phases, and a third may carry the deeper
+    /// value on some edge. Widening the merge to all four passes is *not* the fix —
+    /// pass 1 is the untrimmed, corner-contaminated upper bound, so it would
+    /// over-cut every ordinary ring frame.
+    ///
+    /// The over-cut is not free either: the merge can raise `top + bottom` to the
+    /// frame height (or `left + right` to its width), which with the inset added
+    /// trips [`effective_area`]'s empty-region error. The orchestrator decides how
+    /// loud that is — exit 2 on a `convert` that measures over the region (a
+    /// per-frame failure on `roll`), a warning with no reported area otherwise. So a
+    /// far enough over-cut is a hard refusal for a run that would have read it,
+    /// rather than a degraded measurement.
+    pub converged: bool,
+}
+
+/// Resolve the [`EffectiveArea`]: measure the holder where IR permits, then inset
+/// what remains.
+///
+/// **Two cuts, in order — never one or the other.** The inset is not a fallback for
+/// a missing holder measurement: it runs on every path, and where the holder could
+/// not be measured it is simply the only cut. Sizing it is the user's call
+/// (`inset_frac`, default [`crate::types::DEFAULT_MEASURE_INSET`]) precisely because nc declines to
+/// guess a holder depth it cannot measure.
+///
+/// `inset_frac` is a fraction of the **original** frame's shorter dimension, so a
+/// given scan insets the same pixel count whatever the holder measured. Where the
+/// holder *was* measured the resolved inset is floored at one holder-probe step,
+/// which is the holder cut's own resolution — see the comment on the arithmetic;
+/// [`EffectiveArea::inset`] reports the applied value.
+///
+/// Takes the resolved fraction rather than reading a config, and returns a region
+/// per **call** — not one region per frame. Every caller today happens to resolve
+/// it once per frame, which is fine; the constraint is only that the signature not
+/// *preclude* a per-usage region (`holder-depth-mask`), since a measurement handed
+/// a user-stated region does not call this at all and a future per-usage
+/// distinction must be able to extend the arguments instead of rewriting every
+/// call site.
+pub fn effective_area(image: &LinearImage, inset_frac: f32) -> Result<EffectiveArea> {
+    // The same check `cli::validate` runs, so a programmatic caller cannot bypass
+    // the bound and the two gates cannot disagree about it.
+    check_measure_inset(inset_frac)?;
+    let holder = holder_depths(image);
+    let requested = (image.width.min(image.height) as f32 * inset_frac).round() as u32;
+    // **The inset carries the holder cut's own resolution.** A march reports the
+    // *start* of the first band whose median read film, and a film median only
+    // means the holder covers less than half that band — so up to ~`step/2` of
+    // holder can sit inboard of any measured depth, including a measured **zero**
+    // ("no holder in the outermost band" is not "no holder"). So where the march
+    // ran, the inset is floored at one probe step and the mixed band is absorbed by
+    // construction. Same spirit as [`IR_HOLDER_PROBE_MIN`] flooring the probe
+    // itself.
+    //
+    // At the default it never binds (a 3600 px frame insets 180 px against an 18 px
+    // step); it takes effect only near `--measure-inset 0`, where the residual is
+    // otherwise the whole defence — a 9-18 px holder ring is ~1-2% of the region at
+    // `SCAN_EPSILON` density, enough to own the percentile `auto_dmax` reads. A
+    // stated `0` is therefore not honoured exactly on a measured frame; that is
+    // deliberate, and [`EffectiveArea::inset`] reports the **applied** value so the
+    // floor is visible rather than silent. Where the holder was *not* measured
+    // there is no measurement resolution to respect, and the stated fraction is
+    // used as-is.
+    let inset = match holder {
+        Some(_) => requested.max(holder_probe_depth(image)),
+        None => requested,
+    };
+    let (top, bottom, left, right) = match holder {
+        Some(h) => (
+            h.top + inset,
+            h.bottom + inset,
+            h.left + inset,
+            h.right + inset,
+        ),
+        None => (inset, inset, inset, inset),
+    };
+    // Recorded here, where the arithmetic happens, so no caller has to re-derive
+    // "did the IR plane change anything?".
+    let holder_applied =
+        holder.is_some_and(|h| [h.top, h.bottom, h.left, h.right].iter().any(|&d| d != 0));
+    if left + right >= image.width || top + bottom >= image.height {
+        // The measured depths and the inset are printed as **separate** quantities.
+        // `top`/`bottom`/`left`/`right` above are the post-inset totals, and
+        // labelling those "holder depths" sent a reader after a 110 px holder that
+        // measured 30.
+        let measured = match holder {
+            Some(h) => format!(
+                "measured holder depths (top {}, bottom {}, left {}, right {})",
+                h.top, h.bottom, h.left, h.right
+            ),
+            None => "no holder measurement".to_string(),
+        };
+        // Naming "lower the fraction" when the probe-step floor is what set the
+        // inset would be a remedy that cannot work.
+        let remedy = if inset > requested {
+            format!(
+                "The inset is the {inset} px holder-probe step, its floor on a frame \
+                 where the holder was measured, so lowering the fraction (currently \
+                 {inset_frac}) cannot shrink it — the measured holder alone leaves \
+                 too little to measure over."
+            )
+        } else {
+            format!("Lower the inset fraction (currently {inset_frac}).")
+        };
+        return Err(NcError::Usage(format!(
+            "the measurement region is empty: on a {}x{} frame, {measured} plus a \
+             {inset} px inset on every edge leave nothing to measure. {remedy}",
+            image.width, image.height
+        )));
+    }
+    Ok(EffectiveArea {
+        region: [
+            left,
+            top,
+            image.width - left - right,
+            image.height - top - bottom,
+        ],
+        holder,
+        holder_applied,
+        inset,
+    })
+}
+
+/// The warnings a resolved [`EffectiveArea`] carries out of the stage, in report
+/// order.
+///
+/// Both of them mean "the reported rectangle is not a measurement", which is a
+/// warning and not merely a field: a `Serialize`-only flag is exactly what let a
+/// tenfold over-cut through at exit 0 during implementation, caught only because
+/// someone was reading the numbers. Every command that resolves the area pushes
+/// these, so `--strict` promotes them like any other report warning.
+///
+/// A pure function rather than a field on [`EffectiveArea`], because that struct is
+/// serialized straight into the report and warnings ride the report's own
+/// `warnings` array.
+pub fn effective_area_warnings(area: &EffectiveArea) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(h) = area.holder else {
+        return out;
+    };
+    if h.capped.any() {
+        let edges = h.capped.names().join(", ");
+        let depth_pct = (HOLDER_MARCH_MAX_FRAC * 100.0).round();
+        let tail = if h.capped.contaminated() {
+            // See `HOLDER_MARCH_MAX_FRAC`: a capped edge truncates the trim its
+            // perpendicular neighbours are measured over, and a capped
+            // perpendicular pair is exactly when that happened.
+            " A capped edge also truncates the cut its perpendicular edges are \
+             measured over, and here a capped edge has a capped perpendicular \
+             neighbour — so those depths may be artifacts of the cap rather than \
+             floors on their own holder, and no depth on this frame should be \
+             trusted. Every statistic read over `effective_area.region` inherits \
+             that."
+        } else {
+            " No capped edge has a capped perpendicular neighbour, so the other \
+             edges' depths are unaffected."
+        };
+        out.push(format!(
+            "the film-holder depth march hit its cap ({depth_pct}% of the shorter \
+             edge) on the {edges} edge(s) without finding film: `effective_area.\
+             holder` reports the cap there, which is a floor on the real holder, not \
+             a measurement of it.{tail}"
+        ));
+    }
+    if !h.converged {
+        out.push(format!(
+            "the film-holder depth march did not settle within \
+             {HOLDER_MARCH_PASSES} passes, so `effective_area.holder` reports the \
+             deeper of the last two passes, which is not a settled measurement. \
+             That over-cuts — costing measurement area — for a two-phase cycle or \
+             a march still settling downward, but a longer cycle or one settling \
+             upward can sit below the fixed point and leave holder inside the \
+             region. Every statistic read over `effective_area.region` inherits \
+             that."
+        ));
+    }
+    out
+}
+
+/// March inward from each edge and return where the opaque holder ends, or `None`
+/// when this frame's IR cannot answer.
+///
+/// `None` means **not measured**: no IR plane, a plane identified by shape alone
+/// (unverified provenance must not be thresholded), or [`ir_separability`]
+/// measuring that this frame's own film is too IR-opaque to be told from the
+/// holder. Consume that verdict; do not re-derive it from "is there an IR plane".
+/// Silver film declines routinely — it blocks IR in proportion to accumulated
+/// density — so the not-measured path is normal for B&W, not an edge case.
+///
+/// **Deliberately not built on [`ir_holder_mask`].** That function returns `None`
+/// when no film is found *along* any edge, which is 22 of 25 real chromogenic
+/// frames: correct for an along-edge mask (nothing to search) and wrong here,
+/// where the same reading just means the holder wraps the whole border — the
+/// normal case — and the answer is to keep marching inward.
+///
+/// Per edge, each along-edge segment ([`IR_HOLDER_SEGMENTS`], as the mask uses)
+/// marches in [`holder_probe_depth`] steps until a band reads film; the edge's
+/// depth is the **deepest** segment, since the result is a rectangle. A segment
+/// with no holder stops at the first band, so an uncropped-but-clear frame costs
+/// one shallow pass.
+pub fn holder_depths(image: &LinearImage) -> Option<HolderDepths> {
+    let ir = image.ir.as_deref()?;
+    // Trust the plane only when its provenance is marker-verified, for the same
+    // reason `ir_holder_mask` does: a stray grayscale page thresholded as IR could
+    // silently move every measurement that starts from this region.
+    if !image.ir_verified {
+        return None;
+    }
+    if !ir_separability(image).is_some_and(|s| s.usable) {
+        return None;
+    }
+    let step = holder_probe_depth(image);
+    // A frame too small to fit one probe band within half an edge cannot be
+    // measured at all: [`march_edge_depth`]'s `while depth + step <= limit` would
+    // never run, so every segment would take the not-cleared arm and the edge would
+    // report the cap with `capped: true` on *no* band read. "Not measured" is the
+    // honest verdict, and it is a state every caller already handles.
+    if image.width.min(image.height) / 2 < step {
+        return None;
+    }
+    // Each edge is measured only over the along-edge positions that survive the
+    // **perpendicular** edges' cuts. Without that, a holder *ring* — the normal
+    // case — makes the corner columns read holder for the frame's entire height, so
+    // every edge marches to its cap and the rectangle collapses. The existing
+    // rebate search has the same problem and solves it the same way
+    // ([`film_along_ranges`] trims by the scan depth at both ends).
+    //
+    // The trims are the other edges' depths, which are what we are computing, so it
+    // is a fixed point: start untrimmed (the corner-contaminated upper bound) and
+    // feed each pass's depths in as the next pass's trims. On every frame measured
+    // so far it settles in two or three passes, pass 1 over-reporting and pass 2
+    // reading the true depths — but that is an observation, **not** a proof. The
+    // map is not monotone: the segment partition is recomputed from the *trimmed*
+    // extent, so a deeper trim makes segments narrower, which can make a
+    // partially-covered segment read holder where a wider one read film. A depth
+    // can therefore rise as the trim rises, and nothing excludes a cycle.
+    //
+    // So the loop reports whether it settled (`converged`), and on exhaustion
+    // returns the elementwise **max** of the last two passes, which over-cuts
+    // (costing measurement area) for a two-phase cycle or a march still settling
+    // downward. It is not a guarantee in either direction — see
+    // [`HolderDepths::converged`] for the cases that can still under-cut.
+    let (depths, capped, converged) = march_to_fixed_point(image, ir, step, HOLDER_MARCH_PASSES);
+    Some(HolderDepths {
+        top: depths[0],
+        bottom: depths[1],
+        left: depths[2],
+        right: depths[3],
+        capped: CappedEdges::from_array(capped),
+        converged,
+    })
+}
+
+/// The fixed-point march itself: returns `(depths, capped, converged)`, `capped`
+/// per edge in the depths array's order.
+///
+/// Split out of [`holder_depths`] with `passes` as a parameter purely so the
+/// exhaustion path is *reachable* — no fixture exhibits a cycle, so at
+/// [`HOLDER_MARCH_PASSES`] the `!converged` merge would never run under test.
+/// `passes = 1` reaches it on any frame with a holder: pass 1 cannot repeat the
+/// all-zero start, so the merge runs against it.
+fn march_to_fixed_point(
+    image: &LinearImage,
+    ir: &[f32],
+    step: u32,
+    passes: usize,
+) -> ([u32; 4], [bool; 4], bool) {
+    let mut depths = [0u32; 4];
+    let mut capped = [false; 4];
+    let mut converged = false;
+    let mut last: Option<([u32; 4], [bool; 4])> = None;
+    for _ in 0..passes {
+        let mut next = [0u32; 4];
+        let mut next_capped = [false; 4];
+        for (slot, edge) in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right]
+            .into_iter()
+            .enumerate()
+        {
+            // Top/bottom run along x, so they are trimmed by left/right; left/right
+            // run along y and are trimmed by top/bottom.
+            let (trim_lo, trim_hi) = match edge {
+                Edge::Top | Edge::Bottom => (depths[2], depths[3]),
+                Edge::Left | Edge::Right => (depths[0], depths[1]),
+            };
+            let (depth, hit_cap) = march_edge_depth(image, ir, edge, step, trim_lo, trim_hi);
+            next[slot] = depth;
+            next_capped[slot] = hit_cap;
+        }
+        let prev = (depths, capped);
+        depths = next;
+        capped = next_capped;
+        if next == prev.0 {
+            converged = true;
+            break;
+        }
+        // Not settled *yet*. Keep the previous pass so that, if this turns out to
+        // be the last one, the answer can be the elementwise max of the two rather
+        // than whichever phase the final pass happened to land on.
+        last = Some(prev);
+    }
+    if !converged && let Some((prev, prev_capped)) = last {
+        depths = merge_unsettled_passes(depths, prev);
+        // Elementwise, matching the depth merge: an edge whose reported depth came
+        // from the earlier pass must carry that pass's cap flag with it.
+        for (slot, hit) in prev_capped.into_iter().enumerate() {
+            capped[slot] |= hit;
+        }
+    }
+    (depths, capped, converged)
+}
+
+/// What an unsettled march reports: the elementwise **max** of the last two
+/// passes.
+///
+/// A cycle between two phases has no right answer, so the choice is which way to
+/// be wrong. Over-cutting costs measurement area; under-cutting leaves holder
+/// inside the region and corrupts every statistic read from it. Its own function
+/// so the rule is testable — no fixture exhibits a cycle.
+fn merge_unsettled_passes(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
+    [
+        a[0].max(b[0]),
+        a[1].max(b[1]),
+        a[2].max(b[2]),
+        a[3].max(b[3]),
+    ]
+}
+
+/// The holder depth on one edge: the deepest of its along-edge segments, and
+/// whether any segment hit the march cap without finding film.
+///
+/// `trim_lo` / `trim_hi` drop that many pixels from each end of the along-edge
+/// extent — the perpendicular edges' depths, so a corner that belongs to another
+/// edge's cut does not inflate this one (see [`holder_depths`]). A trim wider than
+/// the edge is ignored rather than yielding an empty extent: a degenerate frame
+/// still gets *a* measurement, and the caller's own region guard is what refuses.
+fn march_edge_depth(
+    image: &LinearImage,
+    ir: &[f32],
+    edge: Edge,
+    step: u32,
+    trim_lo: u32,
+    trim_hi: u32,
+) -> (u32, bool) {
+    let along_full = along_len(image, edge);
+    let (along_lo, along_hi) = if trim_lo + trim_hi < along_full {
+        (trim_lo, along_full - trim_hi)
+    } else {
+        (0, along_full)
+    };
+    // [`IR_HOLDER_SEGMENTS`] segments spread **evenly** over the extent, every one
+    // within a pixel of the others.
+    //
+    // Deliberately *not* [`edge_holder_segments`]' floor-plus-leftover split. That
+    // one ends the edge with a narrow remainder segment, which is harmless when
+    // each segment is classified on its own — but this function reduces its
+    // segments with a `max`, so a sliver too narrow to measure drags the whole edge
+    // to the cap. Measured on Portra160 `1102`: a **6 px** trailing segment never
+    // cleared, reporting the left holder as the 900 px cap where the other 24
+    // segments agreed on 108-126 — a 7x over-cut that discarded 15% of the frame
+    // width, with `capped` the only hint anything was wrong.
+    let extent = (along_hi - along_lo) as u64;
+    let bound = |i: u64| along_lo + (extent * i / IR_HOLDER_SEGMENTS as u64) as u32;
+    let perpendicular = match edge {
+        Edge::Top | Edge::Bottom => image.height,
+        Edge::Left | Edge::Right => image.width,
+    };
+    // Never march past half the frame from one edge, whatever the fraction says —
+    // two opposing edges at the cap must still leave a region. `holder_depths`
+    // declines a frame too small for `step` to fit inside that clamp, so the loop
+    // below always reads at least one band and `capped` is never set on no
+    // evidence.
+    let limit = ((image.width.min(image.height) as f32 * HOLDER_MARCH_MAX_FRAC).round() as u32)
+        .max(step)
+        .min(perpendicular / 2);
+
+    let mut buf = Vec::new();
+    let mut deepest = 0u32;
+    let mut capped = false;
+    for i in 0..IR_HOLDER_SEGMENTS as u64 {
+        let (start, end) = (bound(i), bound(i + 1));
+        if start >= end {
+            // Fewer pixels than segments: the extra segments are empty.
+            continue;
+        }
+        let mut depth = 0u32;
+        let mut cleared = false;
+        while depth + step <= limit {
+            let med = median_ir_band(image, ir, edge, start, end, depth, step, &mut buf);
+            if med > IR_HOLDER_MAX_TRANSMISSION {
+                cleared = true;
+                break;
+            }
+            depth += step;
+        }
+        if !cleared {
+            // This segment is holder as deep as we looked. Report the cap as a
+            // floor and say so, rather than pretending the holder ends there.
+            capped = true;
+            depth = limit;
+        }
+        deepest = deepest.max(depth);
+    }
+    (deepest, capped)
 }
 
 /// The along-edge pixel ranges to run the rebate inward-scan over on `edge`,
@@ -2050,6 +2666,537 @@ mod tests {
         let opaque = with_uniform_ir(scan_with_rebate(&[Edge::Bottom]), IR_OPAQUE_FILM);
         assert!(opaque.ir.is_some() && opaque.ir_verified);
         assert!(ir_holder_mask(&opaque).unwrap().is_none());
+    }
+
+    // --- the effective measurement area (`holder-depth-mask`) ----------------
+
+    /// A frame whose film is IR-transparent, wrapped by an IR-dark holder of the
+    /// given per-edge depths. Corners overlap, as a real holder ring's do — which
+    /// is the case the depth march has to survive.
+    fn ir_holder_edges(w: u32, h: u32, [top, bottom, left, right]: [u32; 4]) -> LinearImage {
+        let mut img = with_uniform_ir(solid(w, h, [0.2, 0.2, 0.2]), IR_FILM);
+        for (depth, rect) in [
+            (top, [0, 0, w, top]),
+            (bottom, [0, h - bottom, w, bottom]),
+            (left, [0, 0, left, h]),
+            (right, [w - right, 0, right, h]),
+        ] {
+            if depth > 0 {
+                fill_ir_rect(&mut img, rect, IR_HOLDER);
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn holder_depths_measures_each_edge_independently() {
+        // 200x200 → probe step 2, so a depth is resolved to within one step. The
+        // four edges differ deliberately: a rectangle taking the worst edge
+        // everywhere would report 12 on all four.
+        let img = ir_holder_edges(200, 200, [4, 8, 12, 2]);
+        let d = holder_depths(&img).expect("IR separates on this frame");
+        assert_eq!((d.top, d.bottom, d.left, d.right), (4, 8, 12, 2));
+        assert!(!d.capped.any(), "none of these reaches the march cap");
+    }
+
+    #[test]
+    fn a_holder_wrapping_the_whole_border_is_measured_not_declined() {
+        // The case that made this a separate function. `ir_holder_mask` refuses
+        // here — every along-edge segment reads holder, so it has no film range to
+        // hand the rebate search — and that is 22 of 25 real chromogenic frames.
+        // A depth-aware read of the same frame is the *normal* case: the holder
+        // wraps the border, and the answer is how deep it goes.
+        let img = ir_holder_edges(200, 200, [6, 6, 6, 6]);
+        assert!(
+            ir_holder_mask(&img).unwrap().is_none(),
+            "falsifiability: this is exactly the frame the along-edge mask declines"
+        );
+        let d = holder_depths(&img).expect("measured, not declined");
+        assert_eq!((d.top, d.bottom, d.left, d.right), (6, 6, 6, 6));
+    }
+
+    #[test]
+    fn the_deepest_segment_sets_the_whole_edge() {
+        // A holder covering only part of the top edge, deeper than the ring: the
+        // rectangle cannot follow the notch, so the whole top edge widens to it.
+        let mut img = ir_holder_edges(200, 200, [4, 4, 4, 4]);
+        fill_ir_rect(&mut img, [80, 0, 40, 20], IR_HOLDER);
+        let d = holder_depths(&img).unwrap();
+        assert_eq!(d.top, 20, "the deepest segment wins");
+        assert_eq!((d.bottom, d.left, d.right), (4, 4, 4));
+    }
+
+    #[test]
+    fn holder_depths_declines_when_it_cannot_measure_rather_than_guessing() {
+        // No IR plane at all.
+        let no_ir = solid(200, 200, [0.2, 0.2, 0.2]);
+        assert!(no_ir.ir.is_none());
+        assert!(holder_depths(&no_ir).is_none());
+
+        // A plane identified by shape alone: carried, but not trusted for a
+        // threshold that moves every measurement downstream.
+        let mut shape_only = ir_holder_edges(200, 200, [6, 6, 6, 6]);
+        shape_only.ir_verified = false;
+        assert!(holder_depths(&shape_only).is_none());
+
+        // This frame's own film is as IR-opaque as the holder (an exposed silver
+        // frame). Nothing here can separate the two, so it declines — the normal
+        // path for B&W, not an error.
+        let opaque = with_uniform_ir(solid(200, 200, [0.2, 0.2, 0.2]), IR_OPAQUE_FILM);
+        assert!(opaque.ir_verified);
+        assert!(holder_depths(&opaque).is_none());
+    }
+
+    #[test]
+    fn a_settled_march_says_so_and_an_unsettled_one_reports_the_deeper_pass() {
+        // `converged` is the difference between a settled measurement and whichever
+        // phase the last pass landed on. The edge-depth map is not monotone (a
+        // deeper trim narrows the along-edge segments, so a partially-covered
+        // segment can start reading holder), so nothing excludes a cycle — and an
+        // unsettled answer takes the deeper of the last two passes, which over-cuts
+        // for a two-phase cycle without guaranteeing it for a longer one
+        // (`HolderDepths::converged`).
+        let settled = holder_depths(&ir_holder_edges(200, 200, [4, 8, 12, 2])).expect("measured");
+        assert!(
+            settled.converged,
+            "a real frame settles — falsifiability for the flag"
+        );
+
+        // The merge rule itself, exercised directly: whatever phases the last two
+        // passes landed on, the reported depth is their elementwise max.
+        assert_eq!(
+            merge_unsettled_passes([4, 8, 12, 2], [6, 8, 3, 2]),
+            [6, 8, 12, 2]
+        );
+    }
+
+    #[test]
+    fn exhausting_the_passes_merges_the_last_two_rather_than_the_final_phase() {
+        // At `HOLDER_MARCH_PASSES` the exhaustion path is unreachable — no fixture
+        // cycles — which is why the loop takes `passes` as a parameter. With
+        // `passes = 1` any frame carrying a holder reaches it: pass 1 marches
+        // untrimmed (the corner-contaminated upper bound) and cannot repeat the
+        // all-zero start, so the run ends `!converged` and the merge runs against
+        // the previous pass.
+        let img = ir_holder_edges(200, 200, [4, 8, 12, 2]);
+        let ir = img.ir.as_deref().expect("the fixture carries an IR plane");
+        let step = holder_probe_depth(&img);
+
+        let (settled, settled_capped, converged) =
+            march_to_fixed_point(&img, ir, step, HOLDER_MARCH_PASSES);
+        assert!(
+            converged,
+            "falsifiability: this frame settles when given passes"
+        );
+        assert_eq!(settled, [4, 8, 12, 2]);
+        assert_eq!(
+            settled_capped, [false; 4],
+            "and it settles on a *measurement*, not on capped edges — discarding \
+             this into `_` let the settled pass cap unnoticed"
+        );
+
+        let (one, capped_one, converged_one) = march_to_fixed_point(&img, ir, step, 1);
+        assert!(!converged_one, "one pass cannot repeat the all-zero start");
+        // Untrimmed, the ring's corners make every edge read holder for the frame's
+        // whole extent, so pass 1 runs to the cap on all four edges. That is the
+        // over-cut direction the merge rule prefers.
+        assert_eq!(
+            one, [50; 4],
+            "pass 1 is the corner-contaminated upper bound"
+        );
+        assert_eq!(
+            capped_one, [true; 4],
+            "and it gets there by capping — on every edge"
+        );
+        for (i, (&m, &s)) in one.iter().zip(settled.iter()).enumerate() {
+            assert!(m >= s, "edge {i}: {m} under-cut the settled {s}");
+        }
+
+        // One pass reaches the exhaustion path but cannot *test* it: both merged
+        // operations are identities there. `merge(P1, [0; 4])` is `P1`, and
+        // `prev_capped` is `[false; 4]` on the all-zero start state, so the
+        // elementwise cap merge is a no-op — dropping either from the merge leaves the arm
+        // above green. Two passes is the shortest run that pins both, because pass 2
+        // already reads the settled depths while pass 1 sits at the cap:
+        //
+        //   P1 = [50, 50, 50, 50] capped     P2 = [4, 8, 12, 2] not capped
+        //
+        // so the merge must report P1's depths and P1's `capped`, neither of which
+        // pass 2 carries. Don't collapse this back into the single-pass arm.
+        let (two, capped_two, converged_two) = march_to_fixed_point(&img, ir, step, 2);
+        assert!(
+            !converged_two,
+            "P2 differs from P1, so two passes do not settle"
+        );
+        assert_eq!(
+            two, one,
+            "the merge must take the *previous* pass, not the final one \
+             (`last = Some(prev)`); holding the final pass would report P2"
+        );
+        assert_eq!(
+            capped_two, [true; 4],
+            "`capped` must carry from pass 1 through the elementwise merge; \
+             pass 2 alone does not cap"
+        );
+    }
+
+    #[test]
+    fn a_frame_too_small_to_probe_a_band_is_not_measured_rather_than_capped() {
+        // `capped` is documented as a *floor* on the real holder, which is a claim
+        // about a band that was read. On a frame where the probe step does not fit
+        // inside half an edge, the march loop never runs a single band, so reporting
+        // the cap would be a verdict on no evidence. "Not measured" is the honest
+        // answer and every caller already handles it.
+        let tiny = with_uniform_ir(solid(3, 3, [0.2, 0.2, 0.2]), IR_FILM);
+        assert!(holder_probe_depth(&tiny) > tiny.width.min(tiny.height) / 2);
+        assert!(holder_depths(&tiny).is_none());
+
+        // Only the inset is left, and the area still reports honestly.
+        let area = effective_area(&tiny, 0.0).unwrap();
+        assert!(area.holder.is_none() && !area.holder_applied);
+
+        // Falsifiability: one step bigger and the same frame *is* measured.
+        let ok = with_uniform_ir(solid(4, 4, [0.2, 0.2, 0.2]), IR_FILM);
+        assert!(holder_depths(&ok).is_some());
+    }
+
+    #[test]
+    fn holder_applied_separates_a_moved_rectangle_from_a_measured_zero() {
+        // The fact callers want is "did consuming the IR plane change anything?",
+        // and it is returned rather than re-derived — the `ir_mask_applied` lesson.
+        // All-zero depths are a *measurement* that moved nothing, which is what both
+        // committed fixtures and the 2026-09 rolls read; keying suppression of the
+        // "IR preserved but not used" note on `holder.is_some()` suppressed it there.
+        let moved = effective_area(&ir_holder_edges(200, 200, [4, 8, 12, 2]), 0.05).unwrap();
+        assert!(moved.holder.is_some() && moved.holder_applied);
+
+        let cropped =
+            effective_area(&with_uniform_ir(solid(200, 200, [0.2; 3]), IR_FILM), 0.05).unwrap();
+        assert!(
+            cropped.holder.is_some() && !cropped.holder_applied,
+            "measured, no holder — the plane was read and moved nothing"
+        );
+
+        let not_measured = effective_area(&solid(200, 200, [0.2; 3]), 0.05).unwrap();
+        assert!(not_measured.holder.is_none() && !not_measured.holder_applied);
+    }
+
+    #[test]
+    fn an_already_cropped_frame_measures_zero_rather_than_declining() {
+        // No holder anywhere: the answer is "measured, and there is none", which is
+        // a different report from "not measured". Both cut to the same region here;
+        // only the provenance tells them apart.
+        let cropped = with_uniform_ir(solid(200, 200, [0.2, 0.2, 0.2]), IR_FILM);
+        let d = holder_depths(&cropped).expect("measured");
+        assert_eq!((d.top, d.bottom, d.left, d.right), (0, 0, 0, 0));
+
+        let measured = effective_area(&cropped, 0.05).unwrap();
+        assert!(measured.holder.is_some(), "measured, no holder");
+        let not_measured = effective_area(&solid(200, 200, [0.2; 3]), 0.05).unwrap();
+        assert!(not_measured.holder.is_none(), "not measured at all");
+        assert_eq!(
+            measured.region, not_measured.region,
+            "same region, different verdict — which is why the region alone cannot \
+             be the report"
+        );
+    }
+
+    #[test]
+    fn a_holder_deeper_than_the_march_cap_reports_the_cap_and_says_so() {
+        // 200x200 → cap 50. A 60 px left holder cannot be measured, so the depth
+        // reported is a floor and the flag says the number is not a measurement.
+        //
+        // This fixture is *also* a contamination case, which the earlier
+        // frame-wide `capped` boolean hid: the 10 px residual beyond the cap keeps
+        // top and bottom reading holder at every depth, so their true 4 px reports
+        // as 50 as well. The per-edge flags are what surface it — the old
+        // assertions here (`d.left == 50` and `capped` alone) passed while two of
+        // the four numbers were 12x out. The case built to show this is
+        // `a_beyond_cap_edge_inflates_the_perpendicular_edges_and_says_so`.
+        let img = ir_holder_edges(200, 200, [4, 4, 60, 4]);
+        let d = holder_depths(&img).unwrap();
+        assert_eq!(d.left, 50, "the cap, as a floor on the real depth");
+        assert_eq!(
+            (d.top, d.bottom, d.right),
+            (50, 50, 4),
+            "top/bottom are 4 px holder inflated by the left edge's cap"
+        );
+        assert!(
+            d.capped.contaminated(),
+            "and the flags say which: {:?}",
+            d.capped
+        );
+        let warnings = effective_area_warnings(&effective_area(&img, 0.05).unwrap());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("hit its cap") && warnings[0].contains("left"),
+            "the count alone would pass on the *unsettled* warning instead: {}",
+            warnings[0]
+        );
+
+        let shallow = ir_holder_edges(200, 200, [4, 4, 4, 4]);
+        assert!(
+            !holder_depths(&shallow).unwrap().capped.any(),
+            "falsifiability: `capped` is not simply always set"
+        );
+        assert!(
+            effective_area_warnings(&effective_area(&shallow, 0.05).unwrap()).is_empty(),
+            "falsifiability: an uncapped settled frame warns about nothing"
+        );
+    }
+
+    #[test]
+    fn a_beyond_cap_edge_inflates_the_perpendicular_edges_and_says_so() {
+        // The failure the cap creates, and the only route to it: a *mid-edge* notch
+        // cannot contaminate a perpendicular edge (left/right sample only
+        // `x in [0, left)` and `[w-right, w)`), and a deep-but-uncapped edge
+        // produces a trim that exactly covers its own corner. So the cap truncating
+        // the trim is the whole failure surface.
+        //
+        // 400x400 → cap 100. A 120 px top holder is beyond it: the top reports the
+        // cap, the residual 20 px strip stays inside the left/right edges'
+        // along-edge extent, and they cap too — at a *stable* fixed point, so this
+        // comes back `converged: true`. Their 10 px holder is reported as 100, a
+        // tenfold over-cut discarding 45% of the frame width.
+        let img = ir_holder_edges(400, 400, [120, 10, 10, 10]);
+        let d = holder_depths(&img).expect("IR separates on this frame");
+        assert_eq!((d.top, d.bottom, d.left, d.right), (100, 10, 100, 100));
+        assert!(
+            d.converged,
+            "the cap creates a *stable* fixed point — which is why `converged` \
+             cannot be read on its own"
+        );
+        assert_eq!(
+            (d.capped.top, d.capped.bottom, d.capped.left, d.capped.right),
+            (true, false, true, true),
+            "the inflated edges cap too, which is what makes them detectable"
+        );
+        assert!(
+            d.capped.contaminated(),
+            "a capped edge with a capped perpendicular neighbour: the depths may be \
+             artifacts rather than floors"
+        );
+
+        // And it is loud rather than a `Serialize`-only field, which is what a
+        // 10x over-cut at exit 0 needs.
+        let warnings = effective_area_warnings(&effective_area(&img, 0.05).unwrap());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        for expect in ["top, left, right", "not a measurement", "artifacts"] {
+            assert!(
+                warnings[0].contains(expect),
+                "the warning must name the edges and the consequence, missing \
+                 {expect:?}: {}",
+                warnings[0]
+            );
+        }
+
+        // Falsifiability, and the case the contamination predicate must *not*
+        // over-trigger on: a holder exactly at the cap. The top caps correctly and
+        // the other three are measured, so declining here would throw away three
+        // good answers.
+        let at_cap = holder_depths(&ir_holder_edges(400, 400, [100, 10, 10, 10])).unwrap();
+        assert_eq!(
+            (at_cap.top, at_cap.bottom, at_cap.left, at_cap.right),
+            (100, 10, 10, 10)
+        );
+        assert_eq!(
+            (
+                at_cap.capped.top,
+                at_cap.capped.bottom,
+                at_cap.capped.left,
+                at_cap.capped.right
+            ),
+            (true, false, false, false),
+            "the full tuple, not `top && !contaminated()` — that leaves `bottom` \
+             free, since `contaminated()` is false whenever left and right are"
+        );
+    }
+
+    #[test]
+    fn an_unsettled_march_warns_that_the_rectangle_is_not_a_measurement() {
+        // `converged: false` is unreachable on any fixture at `HOLDER_MARCH_PASSES`,
+        // so the warning is pinned on a hand-built `HolderDepths` — the flags are
+        // what `effective_area_warnings` reads, and both reach `--strict`.
+        let unsettled = EffectiveArea {
+            region: [10, 10, 180, 180],
+            holder: Some(HolderDepths {
+                top: 4,
+                bottom: 4,
+                left: 4,
+                right: 4,
+                capped: CappedEdges::default(),
+                converged: false,
+            }),
+            holder_applied: true,
+            inset: 10,
+        };
+        let warnings = effective_area_warnings(&unsettled);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("did not settle"), "{}", warnings[0]);
+        // And it must not promise an over-cut. The merge guarantees that direction
+        // only for a two-phase cycle or a march still settling downward; a longer
+        // cycle or an upward transient can sit below the fixed point and leave
+        // holder *inside* the region, which is the opposite of what a reader would
+        // act on. The honest wording is `HolderDepths::converged`'s.
+        assert!(
+            warnings[0].contains("leave holder inside the region"),
+            "the warning must name the under-cut case too: {}",
+            warnings[0]
+        );
+        assert!(
+            !warnings[0].contains("rather than leaving holder inside the region"),
+            "the unconditional over-cut claim is back: {}",
+            warnings[0]
+        );
+
+        // Not measured at all: nothing to warn about, since no depth is claimed.
+        let not_measured = EffectiveArea {
+            holder: None,
+            holder_applied: false,
+            ..unsettled
+        };
+        assert!(effective_area_warnings(&not_measured).is_empty());
+    }
+
+    #[test]
+    fn the_inset_is_a_fraction_of_the_original_frame_not_the_remainder() {
+        // Same frame size, very different holder depths: the inset is identical, so
+        // a stated fraction does not move with an IR measurement.
+        let shallow = effective_area(&ir_holder_edges(200, 200, [2, 2, 2, 2]), 0.05).unwrap();
+        let deep = effective_area(&ir_holder_edges(200, 200, [30, 30, 30, 30]), 0.05).unwrap();
+        assert_eq!(shallow.inset, 10, "5% of the 200 px short edge");
+        assert_eq!(deep.inset, shallow.inset);
+
+        // And the two cuts compose in order: holder first, then the inset.
+        assert_eq!(shallow.region, [12, 12, 176, 176]);
+        assert_eq!(deep.region, [40, 40, 120, 120]);
+    }
+
+    #[test]
+    fn the_inset_runs_even_when_the_holder_was_not_measured() {
+        // The inset is not a fallback for a missing holder cut — it is the second
+        // cut, and where the first did not run it is simply the only one.
+        let no_ir = solid(200, 200, [0.2, 0.2, 0.2]);
+        let area = effective_area(&no_ir, 0.05).unwrap();
+        assert!(area.holder.is_none());
+        assert_eq!(area.region, [10, 10, 180, 180]);
+    }
+
+    #[test]
+    fn a_measured_frame_floors_the_inset_at_one_probe_step() {
+        // 200x200 → probe step 2, so a **3 px** top holder puts the boundary inside
+        // the second band (rows 2..4: one holder row, one film row). That band's
+        // median reads film, so the march reports 2 and row 2 stays inboard of the
+        // reported depth — the march can only ever resolve a depth to the start of
+        // the first film-reading band. At `--measure-inset 0` the floor is the only
+        // thing keeping that residual holder out of the region.
+        let img = ir_holder_edges(200, 200, [3, 0, 0, 0]);
+        let d = holder_depths(&img).expect("measured");
+        assert_eq!(
+            d.top, 2,
+            "the march under-reports the 3 px holder by design"
+        );
+
+        let area = effective_area(&img, 0.0).unwrap();
+        assert_eq!(area.inset, 2, "a stated 0 is floored at the probe step");
+        let ir = img.ir.as_deref().expect("the fixture carries an IR plane");
+        let [x, y, w, h] = area.region;
+        let holder_px = (y..y + h)
+            .flat_map(|row| (x..x + w).map(move |col| (row, col)))
+            .filter(|&(row, col)| {
+                ir[row as usize * 200 + col as usize] <= IR_HOLDER_MAX_TRANSMISSION
+            })
+            .count();
+        assert_eq!(
+            holder_px, 0,
+            "without the floor the region starts at y = 2 and keeps a holder row in"
+        );
+
+        // It binds only near zero: the default is well above one step.
+        assert_eq!(effective_area(&img, 0.05).unwrap().inset, 10);
+
+        // A measured **zero** is floored too, not only a moved rectangle: "no holder
+        // in the outermost band" is not "no holder", since the band's median can
+        // hide up to half a band of it. So the floor is keyed on the march having
+        // *run*, not on `holder_applied`.
+        let cropped = effective_area(&with_uniform_ir(solid(200, 200, [0.2; 3]), IR_FILM), 0.0)
+            .expect("measured, no holder");
+        assert!(cropped.holder.is_some() && !cropped.holder_applied);
+        assert_eq!(cropped.inset, 2);
+
+        // Where the holder was *not* measured there is no measurement resolution to
+        // respect, and a stated 0 is exact.
+        assert_eq!(
+            effective_area(&solid(200, 200, [0.2; 3]), 0.0)
+                .unwrap()
+                .inset,
+            0
+        );
+    }
+
+    #[test]
+    fn effective_area_refuses_an_empty_region_and_a_nonsense_fraction() {
+        // 40 px of holder each side (still shallow enough that the interior
+        // usability verdict passes) plus a 30% inset is 100 px from each side of a
+        // 200 px frame — exactly nothing left.
+        let img = ir_holder_edges(200, 200, [40, 40, 40, 40]);
+        assert!(
+            holder_depths(&img).is_some_and(|d| d.left == 40),
+            "the fixture must actually measure a holder, or this tests the wrong path"
+        );
+        let err = effective_area(&img, 0.3).unwrap_err();
+        assert!(
+            format!("{err}").contains("empty"),
+            "an empty measurement region must be loud: {err}"
+        );
+        for bad in [-0.1, 0.5, 1.0, f32::NAN] {
+            assert!(
+                effective_area(&img, bad).is_err(),
+                "inset fraction {bad} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn the_effective_area_never_reports_a_region_outside_the_frame() {
+        // The rectangle is what consumers clamp their walk to, so a region running
+        // past the frame would index out of bounds in every one of them.
+        for depths in [[0, 0, 0, 0], [2, 9, 13, 4], [40, 1, 1, 40]] {
+            let img = ir_holder_edges(200, 200, depths);
+            let [x, y, w, h] = effective_area(&img, 0.05).unwrap().region;
+            assert!(w > 0 && h > 0, "non-empty for {depths:?}");
+            assert!(
+                x + w <= 200 && y + h <= 200,
+                "inside the frame for {depths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_narrow_edge_artifact_does_not_drag_the_whole_edge_to_the_cap() {
+        // The segments are spread evenly, so the along-edge extent not dividing by
+        // `IR_HOLDER_SEGMENTS` cannot leave a sliver segment too narrow to measure.
+        // Measured on Portra160 `1102` before the fix: a 6 px trailing segment
+        // never cleared and reported the left holder as the 900 px cap, where the
+        // other 24 segments agreed on 108-126 px — 15% of the frame width thrown
+        // away, with `capped` the only signal.
+        //
+        // 203 px tall so the left edge's trimmed extent (195) is not a multiple of
+        // 24, plus a deep IR-dark streak at the far end of that edge, narrow enough
+        // to be a minority of its own segment.
+        let mut img = ir_holder_edges(200, 203, [4, 4, 4, 4]);
+        fill_ir_rect(&mut img, [0, 196, 60, 3], IR_HOLDER);
+
+        let d = holder_depths(&img).expect("IR separates");
+        assert!(
+            !d.capped.any(),
+            "a narrow artifact must not cap the edge; got {d:?}"
+        );
+        assert!(
+            d.left <= 8,
+            "the left holder is 4 px, not the march cap; got {}",
+            d.left
+        );
     }
 
     #[test]

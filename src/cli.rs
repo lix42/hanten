@@ -31,11 +31,12 @@ use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
 use crate::pipeline::{color, film_base, gain_map, hdr, sdr, stages, working_space};
 use crate::telemetry;
 use crate::types::{
-    AnchorPlacement, BalanceRange, BigTiff, CharacteristicParams, DensityCurve, DensityCurveType,
-    DensityParams, DisplayToneCurve, DmaxSource, EncodeReport, FilmBase, FilmBaseParams,
-    FilmBaseSource, FilmStock, FilmType, InputParams, MeaningAssertion, NcError, OutDepth,
-    OutputParams, OutputPreset, OutputStats, PrintParams, Reconstruction, ReconstructionType,
-    Result, SigmoidParams, TransferAssertion, WbSource,
+    AnchorPlacement, BalanceRange, BigTiff, CharacteristicParams, DEFAULT_MEASURE_INSET,
+    DensityCurve, DensityCurveType, DensityParams, DisplayToneCurve, DmaxSource, EncodeReport,
+    FilmBase, FilmBaseParams, FilmBaseSource, FilmStock, FilmType, InputParams, MeaningAssertion,
+    MeasureParams, NcError, OutDepth, OutputParams, OutputPreset, OutputStats, PrintParams,
+    Reconstruction, ReconstructionType, Result, SigmoidParams, TransferAssertion, WbSource,
+    check_measure_inset,
 };
 use crate::version::{self, Identity};
 
@@ -161,6 +162,8 @@ pub struct IoArgs {
     #[arg(long = "film-type", value_enum, value_name = "TYPE")]
     pub film_type: Option<FilmType>,
     #[command(flatten)]
+    pub measure: MeasureOverrides,
+    #[command(flatten)]
     pub memory: MemoryArgs,
     #[command(flatten)]
     pub report: ReportArgs,
@@ -198,6 +201,8 @@ pub struct EstimateArgs {
     pub film_type: Option<FilmType>,
     #[command(flatten)]
     pub film_base: FilmBaseOverrides,
+    #[command(flatten)]
+    pub measure: MeasureOverrides,
     /// Treat estimation warnings (a non-uniform `--base-region`, grid
     /// disagreement, decode notes, …) as a hard error. `estimate` produces the
     /// `Dmin` a roll is calibrated on, so a script baking the result into a
@@ -252,6 +257,8 @@ pub struct ConvertArgs {
     pub input_opts: InputOverrides,
     #[command(flatten)]
     pub film_base: FilmBaseOverrides,
+    #[command(flatten)]
+    pub measure: MeasureOverrides,
     #[command(flatten)]
     pub density: DensityOverrides,
     #[command(flatten)]
@@ -417,6 +424,24 @@ pub struct FilmBaseOverrides {
     /// flags at all).
     #[arg(long)]
     pub auto_base: bool,
+}
+
+/// Measurement-region overrides (design-spec §9, `measure`).
+#[derive(Args, Debug, Default)]
+pub struct MeasureOverrides {
+    /// Static border inset for measurements, as a fraction of the shorter edge
+    /// (default 0.05). The effective area is two cuts in order: the film holder,
+    /// measured from the IR plane where it separates, then this inset. The inset
+    /// runs either way — where the holder could not be measured (no IR plane, or
+    /// film too IR-opaque, which is routine for B&W) it is the only cut, and the
+    /// default is sized for a rebate rather than a holder. Raise it for such a
+    /// scan; the report says which case the run was in. Where the holder *was*
+    /// measured the applied inset is floored at one holder-probe step (0.5% of the
+    /// shorter edge), the cut's own resolution, so a stated value near 0 can report
+    /// more than it asked for — `effective_area.inset` is the applied value. Never
+    /// crops the image.
+    #[arg(long = "measure-inset", value_name = "FRAC")]
+    pub measure_inset: Option<f32>,
 }
 
 /// Density-reconstruction overrides (design-spec §9,
@@ -1315,6 +1340,7 @@ pub struct ResolvedConfig {
     pub reconstruction: Reconstruction,
     pub input: InputParams,
     pub film_base: FilmBaseParams,
+    pub measure: MeasureParams,
     pub print: PrintParams,
     pub output: OutputParams,
 }
@@ -2270,6 +2296,18 @@ pub struct Report {
     /// this call — holder and dense film are both dark in RGB.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub holder_mask: Option<Vec<film_base::EdgeHolderMask>>,
+    /// The resolved **effective measurement area** (every command that decodes —
+    /// `inspect`, `estimate`, `convert`, and each `roll` frame via
+    /// `FrameStatus::Ok`): the rectangle a measurement may be read over, after the
+    /// IR-measured holder cut and the static inset. Reported so both cuts are
+    /// falsifiable from a run —
+    /// `holder: null` means the holder was *not measured* (no IR, shape-only, or
+    /// not separable here), while all-zero depths mean it was measured and there is
+    /// none. `inset` is the **applied** inset, which the holder cut's resolution
+    /// floors at one probe step wherever the march ran. The image is never cropped;
+    /// this is where statistics are read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_area: Option<film_base::EffectiveArea>,
     /// Reuse-ready forms of the measured base (`estimate`): a ready-to-paste
     /// `--film-base R,G,B` flag and the matching `film_base` recipe fragment, so
     /// the calibrate-once → reuse workflow (design-spec §8) is copy-paste smooth.
@@ -3482,6 +3520,12 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
         cfg.film_base.source = Some(src);
     }
 
+    // measurement region: the static inset. A plain value override — the holder
+    // half of the effective area is measured, never configured.
+    if let Some(f) = args.measure.measure_inset {
+        cfg.measure.inset = f;
+    }
+
     // Density-reconstruction, curve, and Dmax flags — all live inside the tagged
     // `reconstruction`, so with a resolved `simple` any of them is an invalid
     // combination (fail loudly, never a silent no-op).
@@ -3737,6 +3781,57 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
 /// Map the (clap-mutually-exclusive) film-base flags to a [`FilmBaseSource`],
 /// or `None` when none was passed. Shared by `convert`'s [`merge`] and
 /// `estimate`, so the two resolve the source identically.
+/// **Which region does the measurement use?** Whether this resolved
+/// reconstruction contains a measurement that should be taken over the effective
+/// area rather than the whole frame.
+///
+/// One flag used to answer this *and* [`region_reaches_a_rendered_pixel`], and the
+/// two questions have different answers: keyed on the narrower one, a base-derived
+/// placement measured the reference over the **whole frame** while the same report
+/// carried an `effective_area` asserting the holder was cut — one field with two
+/// meanings, and the contaminated value is the one the calibrate-once workflow has
+/// users copy into `--d-max`. So the region goes to the measurement whenever
+/// [`DmaxSource::Auto`] is resolved, whatever the placement does with the result.
+///
+/// Pixels stay byte-identical under the base-derived placements
+/// (`black-at-base`, `mid-at-base-offset`) because the reference reaches nothing
+/// there — the same fact [`region_reaches_a_rendered_pixel`] relies on, used in the
+/// other direction. One consequence accepted deliberately:
+/// `sigmoid::apply_curve`'s finite-and-positive guard now sees the
+/// region-restricted value, so a genuinely degenerate measurement can newly fail
+/// loudly there.
+///
+/// Today exactly one measurement reads it. As further consumers land
+/// (`film-base/holder-masked-measurement`,
+/// `algo/auto-anchor-interior-measurement`'s balance range) each adds its own
+/// condition here.
+fn measures_over_region(reconstruction: &Reconstruction) -> bool {
+    match reconstruction {
+        Reconstruction::Simple => false,
+        Reconstruction::Density { curve, .. } => curve.dmax() == DmaxSource::Auto,
+    }
+}
+
+/// **Did reading the IR plane change a rendered pixel?** Whether the region the
+/// measurement was taken over reaches the output, which is what decides whether
+/// consuming the IR plane counts as "using" it for the "IR preserved but not used"
+/// note and so for `--strict`.
+///
+/// Strictly narrower than [`measures_over_region`]: `dmax = auto` alone is not
+/// consumption, because a reference-free placement (`--anchor-black-floor`,
+/// `--anchor-mid-offset`) discards the measured anchor and the output is
+/// byte-identical to the non-auto run. Keying suppression on the source alone made
+/// `--strict` stop failing on exactly those configs; the same two conditions gate
+/// the `film-master` rejection and roll's not-frozen warning, for the same reason.
+fn region_reaches_a_rendered_pixel(reconstruction: &Reconstruction) -> bool {
+    match reconstruction {
+        Reconstruction::Simple => false,
+        Reconstruction::Density { curve, .. } => {
+            curve.dmax() == DmaxSource::Auto && curve.anchor().is_some_and(|a| a.reads_reference())
+        }
+    }
+}
+
 fn film_base_source_override(o: &FilmBaseOverrides) -> Option<FilmBaseSource> {
     if let Some(v) = o.film_base {
         Some(FilmBaseSource::Explicit(v))
@@ -4247,6 +4342,13 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
         }
         Some(FilmBaseSource::Region(_)) | Some(FilmBaseSource::Auto) | None => {}
     }
+
+    // Measurement region: a *value* rule, so it lives here rather than in
+    // `validate_convert` — `roll` and every per-frame override reach only this
+    // gate, and a stage-only check would let a whole roll decode before failing
+    // per frame. The bound itself is `types::check_measure_inset`, the one
+    // definition `film_base::effective_area` also calls.
+    check_measure_inset(cfg.measure.inset)?;
 
     // Reconstruction: the tagged config's value checks, per variant. `simple`
     // carries no further knobs (its old WB/clip controls were removed — see
@@ -5843,26 +5945,104 @@ fn convert_frame(
         push_warning_buf(warnings, log, w);
     }
 
-    // Note an IR plane that's carried but not consumed. Keyed on what stage 2
-    // actually did (`ir_mask_applied`), never on a prediction from the inputs: a
-    // marker-verified plane that measures usable can still produce no mask (the
-    // all-holder fallback), and predicting consumption silently suppressed this
-    // warning — and so `--strict` — on exactly that case. Not emitted when the
-    // plane is being exported (`--export-ir` is the user handling it, so warning —
-    // and failing under `--strict` — would be wrong; keeps `--strict --export-ir`
-    // usable on the primary HDRi format), and not when one of the two fallback
-    // notes above already covered this plane.
+    // The effective measurement area, resolved **unconditionally** and always
+    // reported: that is what makes `--measure-inset` observable rather than
+    // accepted-and-ignored, which the project forbids. The march costs less than
+    // run-to-run noise even on an 18.7 MP frame, so there is nothing to save by
+    // skipping it.
+    //
+    // Whether anything *measures over* it is a separate question
+    // (`measures_over_region`): the region is handed to the render only then, so a
+    // run that measures nothing off the frame stays byte-identical.
+    //
+    // That same question decides whether an **empty** region is fatal. Refusing
+    // unconditionally contradicted the paragraph above: a run nothing measures over
+    // would produce byte-identical output, yet failed at exit 2 with nothing
+    // written, while `inspect`/`estimate` degraded the identical measurement to a
+    // warning at exit 0. So it is a refusal only for a run that has a consumer with
+    // no region to measure over, and a warning otherwise — with no
+    // `report.effective_area`, because there is no region to report. The knock-on is
+    // that `--measure-inset` is inert on such a run; the warning is the observable.
+    let region_measured = measures_over_region(&cfg.reconstruction);
+    let measure_area = match film_base::effective_area(&image, cfg.measure.inset) {
+        Ok(area) => {
+            report.effective_area = Some(area);
+            for w in film_base::effective_area_warnings(&area) {
+                push_warning_buf(warnings, log, w);
+            }
+            Some(area)
+        }
+        // Both arms rebuild the message from the error's own text rather than
+        // `Display`, which prefixes the kind (`usage: …`) — a warning must not
+        // carry it, and a returned `NcError::Usage` would print it twice.
+        Err(e) if region_measured => {
+            // `validate_convert` refused an out-of-bound inset before the decode, so
+            // the only error reachable here is the empty region — and the extra
+            // remedy is accurate for it.
+            return Err(NcError::Usage(format!(
+                "{} Alternatively drop --auto-d-max: the per-frame reference is \
+                 what measures over the region, and with nothing reading it an \
+                 empty region is a warning rather than a refusal.",
+                e.message()
+            )));
+        }
+        Err(e) => {
+            push_warning_buf(
+                warnings,
+                log,
+                format!(
+                    "{} Nothing in this conversion measures over the region, so the \
+                     render is unaffected and the report omits `effective_area` \
+                     (--measure-inset has no effect on this run).",
+                    e.message()
+                ),
+            );
+            None
+        }
+    };
+    let measure_region = measure_area
+        .filter(|_| region_measured)
+        .map(|area| area.region);
+
+    // Note an IR plane that's carried but not consumed. Keyed on what each stage
+    // actually did, never on a prediction from the inputs: a marker-verified plane
+    // that measures usable can still produce no mask (the all-holder fallback), and
+    // predicting consumption silently suppressed this warning — and so `--strict` —
+    // on exactly that case.
+    //
+    // The measurement area suppresses it only when **both** halves hold: the march
+    // moved the rectangle (`holder_applied` — "measured, no holder" moved nothing),
+    // *and* the region reaches a rendered pixel. Either alone leaves the plane
+    // genuinely unused in the render — which is why this reads
+    // `region_reaches_a_rendered_pixel` and not `measures_over_region`: the latter
+    // is true under a base-derived placement that discards the measurement, where
+    // the output is byte-identical to the non-auto run.
+    //
+    // That is also why the wording is about the **conversion** and names
+    // `effective_area` rather than repeating `inspect`'s sentence: `convert`
+    // resolves the area unconditionally, so a default-anchor run legitimately
+    // reports a measured `holder_applied: true` beside this note. "Not used in
+    // Step 1" would contradict the field one line above it, and the same sentence
+    // would mean "not measured" on `inspect` and "never reached a pixel" here.
+    // Not emitted when the plane is being exported
+    // (`--export-ir` is the user handling it, so warning — and failing under
+    // `--strict` — would be wrong; keeps `--strict --export-ir` usable on the
+    // primary HDRi format), and not when one of the two fallback notes above
+    // already covered this plane.
     if info.ir_present
         && export_ir.is_none()
         && !base.ir_mask_applied
+        && !(region_reaches_a_rendered_pixel(&cfg.reconstruction)
+            && measure_area.is_some_and(|a| a.holder_applied))
         && !shape_only_holder_note
         && !ir_unusable_note
     {
         push_warning_buf(
             warnings,
             log,
-            "input carries an IR plane; it is preserved but not used in Step 1 \
-             (use --export-ir to write it out)"
+            "input carries an IR plane; it is preserved but not used in the \
+             conversion — no rendered pixel depends on it, whatever \
+             `effective_area.holder` measured (use --export-ir to write it out)"
                 .into(),
         );
     }
@@ -5908,8 +6088,13 @@ fn convert_frame(
             // Resolved before the source is rendered: an unusable knee width then
             // fails without having paid for the reconstruction and print stage.
             let tone = DisplayTone::resolve(&cfg.print)?;
-            let source =
-                stages::render_display_source(&image, &base.base, &cfg.reconstruction, &cfg.print)?;
+            let source = stages::render_display_source(
+                &image,
+                &base.base,
+                &cfg.reconstruction,
+                &cfg.print,
+                measure_region,
+            )?;
             let convert = source.convert;
             let mut timings = source.timings;
             let display_started = Instant::now();
@@ -5931,8 +6116,13 @@ fn convert_frame(
             // one stage earlier — `render_linear` without `encode_transfer`, so the
             // samples stay display-linear BT.2020 and no transfer is ever applied.
             let tone = DisplayTone::resolve(&cfg.print)?;
-            let source =
-                stages::render_display_source(&image, &base.base, &cfg.reconstruction, &cfg.print)?;
+            let source = stages::render_display_source(
+                &image,
+                &base.base,
+                &cfg.reconstruction,
+                &cfg.print,
+                measure_region,
+            )?;
             let convert = source.convert;
             let mut timings = source.timings;
             let display_started = Instant::now();
@@ -5961,8 +6151,13 @@ fn convert_frame(
                 ))
             })?;
             let tone = DisplayTone::resolve(&cfg.print)?;
-            let source =
-                stages::render_display_source(&image, &base.base, &cfg.reconstruction, &cfg.print)?;
+            let source = stages::render_display_source(
+                &image,
+                &base.base,
+                &cfg.reconstruction,
+                &cfg.print,
+                measure_region,
+            )?;
             let convert = source.convert;
             let mut timings = source.timings;
             let display_started = Instant::now();
@@ -6035,6 +6230,7 @@ fn convert_frame(
                 &cfg.reconstruction,
                 &cfg.print,
                 gamut,
+                measure_region,
             )?)
         }
         OutputPreset::Legacy | OutputPreset::Custom | OutputPreset::FilmMaster => {
@@ -6044,6 +6240,7 @@ fn convert_frame(
                 &cfg.reconstruction,
                 &cfg.print,
                 &cfg.output,
+                measure_region,
             )?)
         }
     };
@@ -6918,11 +7115,25 @@ enum FrameStatus {
         white_balance: Option<[f32; 3]>,
         #[serde(skip_serializing_if = "Option::is_none")]
         balance_range: Option<[f32; 2]>,
+        /// The resolved effective measurement area — mirrors the single-frame
+        /// `Report` field, and sits beside `dmax` because it is the region that
+        /// `dmax` was measured over. Per-frame rather than roll-level: one shared
+        /// `measure.inset` meets a holder depth that is genuinely this frame's
+        /// own, and a per-frame `params` override can change the inset too. It is
+        /// also what makes `measure.inset` observable on `roll` at all, the same
+        /// reason `convert` reports it unconditionally.
+        ///
+        /// Boxed for the same reason as `input_color` below — between them they
+        /// are what would otherwise make `Ok` dwarf `Failed`
+        /// (`clippy::large_enum_variant`); `Box` serializes transparently.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        effective_area: Option<Box<film_base::EffectiveArea>>,
         /// Resolved input color semantics (transfer + meaning + evidence + ICC
         /// summary) the frame ran on — mirrors the single-frame `Report` field so a
-        /// roll frame reports the same input semantics `convert` does. Boxed: this
-        /// is the one large field, and unboxed it makes `Ok` dwarf `Failed`
-        /// (`clippy::large_enum_variant`); `Box` serializes transparently.
+        /// roll frame reports the same input semantics `convert` does. Boxed like
+        /// `effective_area` above: these are the two large fields, and unboxed they
+        /// make `Ok` dwarf `Failed` (`clippy::large_enum_variant`); `Box`
+        /// serializes transparently.
         #[serde(skip_serializing_if = "Option::is_none")]
         input_color: Option<Box<InputColorReport>>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -7659,6 +7870,7 @@ fn frame_report_ok(pf: &PlannedFrame, report: Report) -> FrameReport {
             dmax: report.dmax,
             white_balance: report.white_balance,
             balance_range: report.balance_range,
+            effective_area: report.effective_area.map(Box::new),
             input_color: report.input_color.map(Box::new),
             loss: report.loss,
             output_stats: report.output_stats,
@@ -7949,6 +8161,15 @@ fn run_inspect(args: IoArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
 
+    // A bad `--measure-inset` is a *usage* error (exit 2), not a diagnostic that
+    // degrades to a warning: these commands resolve no recipe, so `validate` never
+    // sees the flag and the best-effort `effective_area` call below would swallow
+    // it at exit 0. Checked before the decode, so a 160 MB read is not wasted on a
+    // typo.
+    if let Some(f) = args.measure.measure_inset {
+        check_measure_inset(f)?;
+    }
+
     if let Some(rf) = args.report.report_file.as_deref() {
         ensure_write_targets_distinct(&args.input, &[("--report-file", rf)])?;
     }
@@ -8033,7 +8254,40 @@ fn run_inspect(args: IoArgs) -> Result<()> {
             );
         }
     }
-    let ir_consumed = report.holder_mask.is_some();
+    // The effective measurement area: the holder depth march plus the static
+    // inset. Independent of the along-edge mask above — it deliberately does not
+    // inherit `ir_holder_mask`'s all-holder decline, so a frame whose holder wraps
+    // the whole border is measured here even when the mask above is `None`.
+    // Best-effort like every other `inspect` diagnostic.
+    match film_base::effective_area(
+        &image,
+        args.measure.measure_inset.unwrap_or(DEFAULT_MEASURE_INSET),
+    ) {
+        Ok(area) => {
+            report.effective_area = Some(area);
+            for w in film_base::effective_area_warnings(&area) {
+                push_warning(&mut report, &log, w);
+            }
+        }
+        Err(e) => push_warning(
+            &mut report,
+            &log,
+            // `message()`, not `{e}`: `Display` prefixes the kind, so this
+            // rendered as "skipped — usage: …" — a warning announcing an error
+            // inside itself.
+            format!("effective-area resolution skipped — {}", e.message()),
+        ),
+    }
+    // Both IR consumers, each reporting what it did rather than what the inputs
+    // predict. The holder march is the second one: on 22 of 25 real chromogenic
+    // frames the mask above declines while the march measures a holder and moves
+    // the reported rectangle, and keying the note on the mask alone made one report
+    // carry both a measured `effective_area.holder` and "preserved but not used".
+    let ir_consumed = report.holder_mask.is_some()
+        || report
+            .effective_area
+            .is_some_and(|a: film_base::EffectiveArea| a.holder_applied);
+
     if info.ir_present && !image.ir_verified {
         // Shape-only IR plane: carried/exportable but not trusted for detection.
         push_warning(
@@ -8056,8 +8310,18 @@ fn run_inspect(args: IoArgs) -> Result<()> {
             ),
         );
     } else if info.ir_present && !ir_consumed && !mask_error {
-        // Measured usable, yet no mask — the all-holder fallback, which leaves the
-        // plane genuinely unconsumed. (`mask_error` already said its piece.)
+        // Marker-verified and measured usable, yet **neither** reader consumed it:
+        // "both declined for a reason neither note above named". This is no longer
+        // the all-holder fallback — that frame marches to a ring, so
+        // `holder_applied` is true and `ir_consumed` short-circuits here. With a
+        // usable plane the only combination left is an errored `effective_area`
+        // beside an all-holder mask, and the "effective-area resolution skipped"
+        // warning above already describes that event.
+        //
+        // Kept as a safety net all the same, and deliberately *not* gated on
+        // `report.effective_area.is_some()`: if a third IR reader ever lands, this
+        // is the branch that keeps saying so rather than going quiet.
+        // (`mask_error` already said its piece.)
         push_warning(
             &mut report,
             &log,
@@ -8151,6 +8415,15 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
 
+    // A bad `--measure-inset` is a *usage* error (exit 2), not a diagnostic that
+    // degrades to a warning: these commands resolve no recipe, so `validate` never
+    // sees the flag and the best-effort `effective_area` call below would swallow
+    // it at exit 0. Checked before the decode, so a 160 MB read is not wasted on a
+    // typo.
+    if let Some(f) = args.measure.measure_inset {
+        check_measure_inset(f)?;
+    }
+
     if let Some(rf) = args.report.report_file.as_deref() {
         ensure_write_targets_distinct(&args.input, &[("--report-file", rf)])?;
     }
@@ -8223,6 +8496,29 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     // about it: `estimate` is where a user decides how to acquire a base, so the
     // number that drove the decision belongs in its artifact too.
     report.ir_separability = film_base::ir_separability(&image);
+    // Same rationale for the effective area: `estimate` is where a user decides how
+    // to acquire a base, so the region a measurement would be read over belongs in
+    // its artifact. It does not (yet) drive this command's estimate — that is
+    // `film-base/holder-masked-measurement`'s change.
+    match film_base::effective_area(
+        &image,
+        args.measure.measure_inset.unwrap_or(DEFAULT_MEASURE_INSET),
+    ) {
+        Ok(area) => {
+            report.effective_area = Some(area);
+            for w in film_base::effective_area_warnings(&area) {
+                push_warning(&mut report, &log, w);
+            }
+        }
+        Err(e) => push_warning(
+            &mut report,
+            &log,
+            // `message()`, not `{e}`: `Display` prefixes the kind, so this
+            // rendered as "skipped — usage: …" — a warning announcing an error
+            // inside itself.
+            format!("effective-area resolution skipped — {}", e.message()),
+        ),
+    }
     let mut ir_note_pending = !args.grid && matches!(source, FilmBaseSource::Auto);
     if ir_note_pending && info.ir_present {
         let sep = report.ir_separability;
@@ -8298,8 +8594,19 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
         for w in est.warnings {
             push_warning(&mut report, &log, w);
         }
-        // A plane that survived both notes above and still went unused: the
-        // all-holder fallback. Read off what stage 2 did, never predicted.
+        // A plane that survived both notes above and still went unused **for the
+        // film base**. Read off what stage 2 did, never predicted.
+        //
+        // The all-holder fallback is no longer the only route here: since
+        // `holder-depth-mask`, `estimate` also resolves the effective area, whose
+        // march can measure a holder on the same frame. This note deliberately does
+        // **not** gain that disjunct — the scoping to "for the film base" is what
+        // makes it honest, and it is load-bearing rather than incidental. The film
+        // base really did not use the plane, which is the verdict a calibration
+        // command owes; `inspect` (which reports on the whole Step-1 read) counts
+        // both readers, and `convert` counts the region only when it reaches a
+        // pixel. Three questions, three rules, each individually honest — adding the
+        // march here would make *this* message wrong.
         if info.ir_present && image.ir_verified && !est.ir_mask_applied && ir_note_pending {
             push_warning(
                 &mut report,
@@ -9281,6 +9588,133 @@ mod tests {
         )
         .unwrap();
         assert_eq!(gamma_of(&cfg), 2.0);
+    }
+
+    #[test]
+    fn merge_measure_inset_flag_overrides_recipe_else_keeps_recipe_else_default() {
+        // The forgotten-merge-arm regression: without the arm, `--measure-inset`
+        // parses and is silently dropped.
+        let recipe: ResolvedConfig = serde_json::from_str(r#"{"measure":{"inset":0.2}}"#).unwrap();
+        assert_eq!(recipe.measure.inset, 0.2, "the recipe key deserializes");
+
+        let cfg = merge(recipe.clone(), &parse_convert(&[])).unwrap();
+        assert_eq!(cfg.measure.inset, 0.2, "recipe kept with no flag");
+
+        let cfg = merge(recipe, &parse_convert(&["--measure-inset", "0.12"])).unwrap();
+        assert_eq!(cfg.measure.inset, 0.12, "flag wins over the recipe");
+
+        let cfg = merge(base_cfg(), &parse_convert(&[])).unwrap();
+        assert_eq!(
+            cfg.measure.inset, DEFAULT_MEASURE_INSET,
+            "unstated everywhere → the shared default"
+        );
+    }
+
+    #[test]
+    fn validate_bounds_the_measure_inset_from_either_provenance() {
+        // A *value* rule, so it is in `validate` rather than `validate_convert` —
+        // `roll` and every per-frame override reach only the former. Both
+        // provenances hit the same check, which is why the bound has one home.
+        for bad in [-0.1, 0.5, 1.0, f32::NAN, f32::INFINITY] {
+            let mut cfg = base_cfg();
+            cfg.measure.inset = bad;
+            let err = validate(&cfg).unwrap_err();
+            assert!(
+                format!("{err}").contains("measure-inset"),
+                "inset {bad} must be refused by name, got: {err}"
+            );
+            // Every remedy it names must be one that exists. `effective_area` never
+            // sees a user-stated region — `--base-region` sets the film-base
+            // source — so "state a region explicitly" was advice nothing could
+            // follow. Asserting its *absence*, because both wordings name the knob.
+            let err = format!("{err}");
+            assert!(
+                !err.contains("state a region"),
+                "inset {bad}: there is no explicit measurement region to state: {err}"
+            );
+        }
+        // Over the maximum, the remedies are lowering the fraction or not measuring
+        // over the area at all.
+        let mut over = base_cfg();
+        over.measure.inset = 0.5;
+        let err = format!("{}", validate(&over).unwrap_err());
+        assert!(
+            err.contains("lower the fraction") && err.contains("--auto-d-max"),
+            "{err}"
+        );
+        let mut ok = base_cfg();
+        ok.measure.inset = 0.0;
+        assert!(
+            validate(&ok).is_ok(),
+            "zero is legal — the stage floors it at one probe step on a measured \
+             frame, which is not a usage question"
+        );
+        ok.measure.inset = crate::types::MAX_MEASURE_INSET;
+        assert!(validate(&ok).is_ok(), "the bound itself is inclusive");
+    }
+
+    #[test]
+    fn the_region_predicates_answer_two_different_questions() {
+        // Two questions, deliberately decoupled. "What region does the measurement
+        // use?" is answered by `DmaxSource::Auto` alone, so one report field has one
+        // meaning — keyed on the narrower predicate, a base-derived placement
+        // measured the reference over the whole frame while the same report's
+        // `effective_area` asserted the holder was cut. "Did the IR plane change a
+        // rendered pixel?" is the narrower one and stays narrow: a reference-free
+        // placement discards the measured anchor, so the output is byte-identical to
+        // the non-auto run, and keying suppression of the "IR preserved but not
+        // used" note on the source alone made `--strict` stop failing there. The
+        // same two conditions gate the `film-master` rejection and roll's
+        // not-frozen warning.
+        let resolved = |flags: &[&str]| {
+            merge(base_cfg(), &parse_convert(flags))
+                .unwrap()
+                .reconstruction
+        };
+        let measures = |flags: &[&str]| measures_over_region(&resolved(flags));
+        let renders = |flags: &[&str]| region_reaches_a_rendered_pixel(&resolved(flags));
+
+        assert!(
+            measures(&["--auto-d-max"]) && renders(&["--auto-d-max"]),
+            "auto + the default reference-reading placement does both"
+        );
+
+        // The case that separates them: the measurement is taken over the region
+        // (so the reported number means one thing), and no rendered pixel depends
+        // on it (so the plane is still genuinely unused).
+        for reference_free in [
+            ["--auto-d-max", "--anchor-black-floor", "0.05"],
+            ["--auto-d-max", "--anchor-mid-offset", "1.0"],
+        ] {
+            assert!(
+                measures(&reference_free),
+                "the measurement is still taken over the region: {reference_free:?}"
+            );
+            assert!(
+                !renders(&reference_free),
+                "but a reference-free placement discards it: {reference_free:?}"
+            );
+        }
+
+        for none in [vec![], vec!["--reconstruction", "simple"]] {
+            assert!(
+                !measures(&none) && !renders(&none),
+                "nothing measures off the frame: {none:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_measure_inset_bound_has_exactly_one_definition() {
+        // Two gates gave one knob different bounds once (the `headroom_stops`
+        // lesson). `film_base::effective_area` and `cli::validate` must agree by
+        // construction, so pin that they both refuse the same value.
+        let img = crate::types::LinearImage::new(64, 64, vec![0.5; 64 * 64 * 3], None).unwrap();
+        let over = crate::types::MAX_MEASURE_INSET + 0.01;
+        assert!(film_base::effective_area(&img, over).is_err());
+        let mut cfg = base_cfg();
+        cfg.measure.inset = over;
+        assert!(validate(&cfg).is_err());
     }
 
     #[test]
@@ -14973,6 +15407,7 @@ mod tests {
                     dmax: Some(1.6),
                     white_balance: None,
                     balance_range: None,
+                    effective_area: None,
                     input_color: None,
                     loss: None,
                     output_stats: Some(OutputStats {

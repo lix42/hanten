@@ -295,7 +295,12 @@ stage_ir() {
     cat "$ART/strict.err" >&2
     return 1
   fi
-  if ! grep -Fq 'input carries an IR plane; it is preserved but not used' "$ART/strict.err" ||
+  # Matches only the stable clause of the IR note. Its tail is wording and has
+  # already moved once ("not used in Step 1" -> "not used in the conversion"), and
+  # this harness is not in CI, so a prose pin here breaks silently. Don't tighten it
+  # back. The second grep pins the *mechanism* — strict promoted a warning — which is
+  # the property this check exists for.
+  if ! grep -Fq 'input carries an IR plane' "$ART/strict.err" ||
       ! grep -Fq 'error: --strict:' "$ART/strict.err"; then
     echo "error: --strict exit 1 lacked the expected IR-ignored/strict diagnostic" >&2
     cat "$ART/strict.err" >&2
