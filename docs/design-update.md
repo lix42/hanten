@@ -194,10 +194,10 @@ reference white, where the renderer's range check rejects the frame.)
 ### Decisions
 
 **What is decided is the *rule*; the numbers filling it are current picks.** One
-anchor rule, `offset` frozen, `gamma` split into a calibrated half and a look
-half, `Dmax` out of the default path — those are the design, and moving one is a
-design change. The values in them — `d ≈ 0.62`, the linearization ≈1.8,
-`density.scale` — are today's best estimates and are **expected to move**: by
+anchor rule, `gamma` split into a calibrated half and a look half, `Dmax` out of
+the default path — those are the design, and moving one is a design change. The
+values in them — `d ≈ 0.62`, the linearization ≈1.8, `density.scale`, and
+`offset = [0, 0, 0]` — are today's best estimates and are **expected to move**: by
 visual review now (Part 3), and by the bracketed calibration frames later. That
 is not free (every default pixel moves, so it costs a `pipeline_version` bump
 and a drift-gate row) but it is planned, not a regression. Whether a value
@@ -218,11 +218,13 @@ not settle; today all of them are flags and recipe keys.
   `--d-max`, `--auto-d-max` and `estimate --d-max-region` stop mattering for the
   decode, and the four `--anchor-*` flags collapse to one number. The reference
   stays alive for the `sigmoid-knees` comparison only.
-- **`offset` stays `[0, 0, 0]` — tested, not assumed.** It is not a duplicate of
-  the measured base: it is the gap between density measured from the rebate and
-  the density where the three layers correspond to equal exposure, and the
-  datasheets carry that term. It is frozen at zero because a visual review
-  rejected both candidates for it — neither removed the cast (Appendix E).
+- **`offset` defaults to `[0, 0, 0]` for now — a pick, not a closed question.**
+  It is not a duplicate of the measured base: it is the gap between density
+  measured from the rebate and the density where the three layers correspond to
+  equal exposure, and the datasheets carry that term. A 2026-09-17 review
+  rejected **two candidate values** for it, not the term itself (Appendix E);
+  the data that could identify one — density varied at a single illuminant —
+  does not exist yet.
 - **`gamma` is two things and splits.** Linearizing the film (≈1/0.55 ≈ 1.8) is
   calibration and stays; print contrast is a look and moves to rendering.
   Today's single 2.0 bundles both — roughly linearization plus ≈1.10× print
@@ -291,10 +293,11 @@ not "datasheet vs content" but **fitted per frame vs measured per roll**.
 ### Knobs currently in reconstruction, sorted
 
 - **Measurement, keep:** film base; `density.scale` (scanner → Status M).
-- **Convention, frozen:** the anchor rule (`mid-at-base-offset`), its `d`, the
-  linearization half of `gamma`, and `offset = [0, 0, 0]`. `d` and the
-  linearization are *per stock* in the registry, so fixing them is what keeps
-  the decode stock-agnostic.
+- **Convention, frozen:** the anchor rule (`mid-at-base-offset`), its `d`, and
+  the linearization half of `gamma`. `d` and the linearization are *per stock*
+  in the registry, so fixing them is what keeps the decode stock-agnostic.
+- **Default pending evidence:** `offset = [0, 0, 0]` — a real term with no
+  identifiable value yet.
 - **Rendering, move out:** sigmoid `toe` / `shoulder`; per-stock curves;
   `gamma`'s print- contrast half; `shadow_balance` / `highlight_balance` (a
   grade — see Part 2's per-channel control, which subsumes them).
@@ -414,6 +417,10 @@ single step. The fix is the migration already planned
 - **How to get to Status M:** the 3×3 + offset, fitted per roll or per
   developer, and from which frames. Interimage effects are per stock and
   cross-channel, so a per-scanner matrix cannot be the whole answer.
+- **Whether `offset` earns a non-zero default.** The term is real and the
+  datasheets carry it; two candidate values lost a review, and identifying one
+  needs density varied at a single illuminant (`analysis/calibration-frame-capture`,
+  or the within-frame two-density test in Part 3).
 - **Whether the green residual is film, scanner or developer.** Blue's drift
   matches the sheets (+1.26 measured, +1.29 predicted); Ektar's green does not
   (+1.26 against +0.22). Green is the unexplained term, and the shipped `scale`
@@ -841,6 +848,10 @@ map stripped so every cell is plain SDR. Configs: `sigmoid-flat` with the
 shipped gain `[1, 0.84, 0.73]`; the same with the datasheet-fitted pair (`[1,
 0.977, 0.860]` + `[0, −0.036, −0.057]`); the same pair re-fitted to our own
 patches (`[1, 0.902, 0.790]` + `[0, −0.073, −0.075]`); and `sigmoid-knees`.
+
+**What the test rejected.** Two *values* for `offset`, not the term: the
+datasheet-fitted pair and one re-fitted to our own patches. The term stays open
+(Part 1's open questions); what is missing is data that can identify a value.
 
 **Why the offset was a candidate.** It is physically distinct from the film base
 even though the two share an axis: the base is *measured* from the rebate, so
