@@ -523,9 +523,10 @@ Constraints the order carries:
   reconstructions already bounded at white, and `shoulder` flattens everything
   above 1.0. Their knob `highlight_compress` goes with them. They're retired
   after `algo/split-default-migration`, since `shoulder` is still the default
-  tone. "Fit range" rather than "highlight compression", because reinhard
-  compresses the whole range: it holds mid-grey and costs ≈0.86 stop at diffuse
-  white.
+  tone. "Fit range" rather than "highlight compression", because reinhard holds
+  mid-grey and reshapes everything above it, costing ≈0.86 stop at diffuse white
+  — but note what it does *not* do: below mid it is a pure gain (see "The shadow
+  end" below).
 - **Retire `legacy` and `custom`.** This removes the second implementation of
   the print controls: `density::render_print` runs them on film RGB before the
   NC film RGB v1 mapping, while the display presets run them on ACEScg.
@@ -592,6 +593,32 @@ stage needs it explicitly rather than inheriting it from a reconstruction curve:
 - **Before the SDR/HDR branch**, like the rest of the look, or the two
   renditions disagree.
 
+### The shadow end: reinhard compresses upward only
+
+Measured on the shipped operator at the default 6 stops of headroom (input gain
+1.2194): the local slope is **1.00 at 0.002 and 0.99 at 0.01**, 0.82 at mid-grey,
+0.45 at diffuse white and 0.10 an octave above. So below mid-grey reinhard is a
+gain, not a curve, and all of its compression is above.
+
+That leaves the dark end to whatever else is in the chain:
+
+- **Nothing clips at the bottom** — zero maps to zero — but where black lands is
+  decided by the decode's contrast, not by the operator. At gamma 2 with
+  `d ≈ 0.62` the film base renders near 0.01, about code 28 in sRGB: the pale
+  blacks that opened `algo/reference-anchored-sigmoid`.
+- **So the black point is doing the job today, by subtraction**, which is the
+  wrong instrument: 0.019 crushed 0.69–8.66 % of frames to code 0. Reaching black
+  by subtracting is exactly what a toe exists to avoid.
+- **The principled fix is a toe in the operator**, which is one of the reasons to
+  prefer a parametric member of the sigmoid family over Reinhard. Note the
+  measured caution points the other way only for *reconstruction*: a toe there
+  bought nothing and cost 1–2 code values of black depth. A toe belongs where the
+  display range is known, which is here.
+
+Two open questions below are the same question seen from each end: the parametric
+operator (does it earn its keep?) and the black point split (flare removal versus
+display black).
+
 ### A "direct" preset for external editing
 
 A render that does as little as possible, for a workflow that continues in
@@ -631,8 +658,9 @@ artifact on which a reconstruction is measured. Caveats:
 ## Open questions
 
 - **A parametric fit-range operator.** Classic Reinhard is one member of the
-  sigmoid family. An operator with contrast, shoulder and display-peak
-  parameters could hold both mid-grey and diffuse white, which reinhard can't.
+  sigmoid family. An operator with a toe, contrast, shoulder and display-peak
+  parameters could hold both mid-grey and diffuse white, which reinhard can't,
+  and could shape the approach to black instead of leaving it to a subtraction.
   Add it only if it beats reinhard at matched lightness.
 - **How contrast and the per-channel grade are spelled** — one CDL-style object,
   or separate knobs — and whether the "direct" preset is a named output preset
