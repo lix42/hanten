@@ -304,6 +304,19 @@ frame, which nc's roll-consistency principle rules out. The real difference is
 not "datasheet vs content" but **fitted per frame vs measured per roll**.
 (Appendix D; `algo/contrast-latitude-spike` owns what NLP actually does.)
 
+**No content-based fit can identify the slope, whatever it measures.** A slope
+needs the true colour of a surface at two exposures, and content gives densities
+rather than truths: scene colour that varies with brightness is indistinguishable
+from channels whose slopes differ. The confound is systematic, not noise — bright
+sky over mid-tone foliage, frame after frame — so more frames shrink the variance
+and leave the bias, which is why nc's own `channel_drift` probe is only
+suggestive (Appendix F). An endpoint fit adds two assumptions of its own, that
+the frame's darkest and brightest points are neutral, and a slope drawn through
+two wrong endpoints is wrong. So a per-frame fit buys **acceptability for that
+frame**, not accuracy — at the cost of frame-to-frame consistency and of real
+scene colour. Identifying a slope needs a reference: a known-neutral surface at
+two exposures in one frame, a bracketed card, or a calibration to Status M.
+
 ### Knobs currently in reconstruction, sorted
 
 - **Measurement, keep:** film base; `density.scale` (scanner → Status M).
@@ -692,12 +705,15 @@ direction* is evidence where one disagreeing is not.
   `offset`; where they differ **per frame in different directions**, that is
   their adaptation. A table across many frames separates those; the eye on one
   frame cannot.
-- **A consensus reference is cheap, for the slope only.** The references are
-  images, so `nctool metrics` reads them. But NLP and CCR-on share a grey-world
-  prior, so averaging them shrinks the apparent spread without cancelling the
-  bias: two families, not three votes. That shared bias is approximately a
-  per-frame per-channel **gain**, i.e. a level, so a consensus is defensible for
-  the **slope** and not for the level — which is the half we most need.
+- **A consensus reference is cheap, but it is not a slope reference.** The
+  references are images, so `nctool metrics` reads them. But NLP and CCR-on share
+  a grey-world prior, so averaging them shrinks the apparent spread without
+  cancelling the bias: two families, not three votes. A consensus would be usable
+  for the slope only where each reference's own correction is **level-only** — a
+  per-frame gain leaves the slope alone. NLP's endpoint fit is not level-only, it
+  moves the slope per frame, and SilverFast's CCR is unverified. So treat the
+  references as evidence of **direction and rank**, not as a measurement of
+  either the slope or the level.
 - **Estimate the slope within a frame, never by pooling frames.** Every
   reference except CCR-off re-balances per frame, and a per-frame gain is a
   per-frame density offset, so pooling patches across frames confounds the slope
