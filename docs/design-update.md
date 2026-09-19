@@ -253,15 +253,28 @@ not settle; today all of them are flags and recipe keys.
 ### Calibration: the part that is a measurement
 
 - **Film base** (Dmin) per roll.
-- **Scanner → Status M.** Target: a 3×3 + offset
-  (`io/scanner-density-calibration`). Today's crude form is the per-channel
-  `density.scale`, re-calibrated on 2026-09-16 (`pipeline_version` 5) to **`[1,
-  0.84, 0.73]`** from 31 hand-marked neutral patches over five rolls.
+- **Toward Status M — and what can actually be fitted.** The *target* is a common
+  densitometry, so datasheet numbers mean something here; what an achievable
+  measurement produces is a fit of the **whole chain** — film × development ×
+  scanner — not a scanner profile. A chart shot on film cannot separate them, and
+  a transmission step wedge, which would isolate the scanner, is blind to dye
+  cross-talk. Separating the two needs the developed negative read on a real
+  densitometer. `io/scanner-density-calibration` owns settling which instrument
+  and which model it delivers. Target form: a 3×3 + offset; today's crude form is
+  the per-channel `density.scale`, re-calibrated on 2026-09-16
+  (`pipeline_version` 5) to **`[1, 0.84, 0.73]`** from 31 hand-marked neutral
+  patches over five rolls.
 - **It depends on development, not only on stock or scanner.** Green splits by
   scan date on one scanner, and the split follows the developer, so no single
   value fits every roll. The decode ships the common-ground value anyway — a
   per-roll default would stop being fixed — and the roll-level remainder is
   rendering's. (Appendix C.)
+- **We cannot measure a user's chain, only our own.** Their scanner, developer and
+  stock differ, so whatever we fit ships as a **default prior**, not as their
+  calibration. Two consequences: the default should be the most transferable value
+  we can justify rather than the best fit to our rolls, and a user who wants better
+  needs a calibration *procedure* — shoot a target, fit, freeze it into the roll
+  recipe — which is a product feature, not a default.
 - **Why a per-channel gain cannot be the end state:** interimage effects and DIR
   couplers make each layer's slope depend on the *other* layers' exposure. That
   is not a per-channel quantity at all, which is why the standard model is a
@@ -304,22 +317,11 @@ frame, which nc's roll-consistency principle rules out. The real difference is
 not "datasheet vs content" but **fitted per frame vs measured per roll**.
 (Appendix D; `algo/contrast-latitude-spike` owns what NLP actually does.)
 
-**No content-based fit can identify the slope, whatever it measures.** A slope
-needs the true colour of a surface at two exposures, and content gives densities
-rather than truths: scene colour that varies with brightness is indistinguishable
-from channels whose slopes differ. The confound is systematic, not noise — bright
-sky over mid-tone foliage, frame after frame — so more frames shrink the variance
-and leave the bias, which is why nc's own `channel_drift` probe is only
-suggestive (Appendix F). An endpoint fit adds two assumptions of its own, that
-the frame's darkest and brightest points are neutral, and a slope drawn through
-two wrong endpoints is wrong. So a per-frame fit buys **acceptability for that
-frame**, not accuracy — at the cost of frame-to-frame consistency and of real
-scene colour. Identifying a slope needs a reference: a known-neutral surface at
-two exposures in one frame, a bracketed card, or a calibration to Status M.
-
 ### Knobs currently in reconstruction, sorted
 
-- **Measurement, keep:** film base; `density.scale` (scanner → Status M).
+- **Measurement, keep:** film base (per roll, from that roll's own rebate);
+  `density.scale` — but see below: it is a fit of *our* chain, shipped as a prior
+  for everyone else's.
 - **Convention, frozen:** the anchor rule (`mid-at-base-offset`), its `d`, and
   the linearization half of `gamma`. `d` and the linearization are *per stock*
   in the registry, so fixing them is what keeps the decode stock-agnostic.
@@ -444,6 +446,10 @@ single step. The fix is the migration already planned
 - **How to get to Status M:** the 3×3 + offset, fitted per roll or per
   developer, and from which frames. Interimage effects are per stock and
   cross-channel, so a per-scanner matrix cannot be the whole answer.
+- **Whether nc ships a user-facing calibration workflow**, and in which stage its
+  result lands (`io/scanner-density-calibration`,
+  `color/optional-color-correction-profiles`). Without one, every user inherits a
+  prior fitted on one scanner and two developers.
 - **Whether `offset` earns a non-zero default.** The term is real and the
   datasheets carry it; two candidate values lost a review, and identifying one
   needs density varied at a single illuminant (`analysis/calibration-frame-capture`,
@@ -705,15 +711,12 @@ direction* is evidence where one disagreeing is not.
   `offset`; where they differ **per frame in different directions**, that is
   their adaptation. A table across many frames separates those; the eye on one
   frame cannot.
-- **A consensus reference is cheap, but it is not a slope reference.** The
-  references are images, so `nctool metrics` reads them. But NLP and CCR-on share
-  a grey-world prior, so averaging them shrinks the apparent spread without
-  cancelling the bias: two families, not three votes. A consensus would be usable
-  for the slope only where each reference's own correction is **level-only** — a
-  per-frame gain leaves the slope alone. NLP's endpoint fit is not level-only, it
-  moves the slope per frame, and SilverFast's CCR is unverified. So treat the
-  references as evidence of **direction and rank**, not as a measurement of
-  either the slope or the level.
+- **A consensus reference is cheap, for the slope only.** The references are
+  images, so `nctool metrics` reads them. But NLP and CCR-on share a grey-world
+  prior, so averaging them shrinks the apparent spread without cancelling the
+  bias: two families, not three votes. That shared bias is approximately a
+  per-frame per-channel **gain**, i.e. a level, so a consensus is defensible for
+  the **slope** and not for the level — which is the half we most need.
 - **Estimate the slope within a frame, never by pooling frames.** Every
   reference except CCR-off re-balances per frame, and a per-frame gain is a
   per-frame density offset, so pooling patches across frames confounds the slope
