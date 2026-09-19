@@ -225,6 +225,9 @@ not settle; today all of them are flags and recipe keys.
   rejected **two candidate values** for it, not the term itself (Appendix E);
   the data that could identify one — density varied at a single illuminant —
   does not exist yet.
+- **`density.scale` is one global value.** It is the decode's calibration of the
+  common per-channel slope error, never varied per stock, roll or frame. What one
+  value cannot reach is a rendering correction, not a second decode.
 - **`gamma` is two things and splits.** Linearizing the film (≈1/0.55 ≈ 1.8) is
   calibration and stays; print contrast is a look and moves to rendering.
   Today's single 2.0 bundles both — roughly linearization plus ≈1.10× print
@@ -255,9 +258,10 @@ not settle; today all of them are flags and recipe keys.
   `density.scale`, re-calibrated on 2026-09-16 (`pipeline_version` 5) to **`[1,
   0.84, 0.73]`** from 31 hand-marked neutral patches over five rolls.
 - **It depends on development, not only on stock or scanner.** Green splits by
-  scan date on one scanner, and the split follows the developer, so one shared
-  default cannot fit every roll: the calibration belongs per roll or per
-  developer, frozen into the roll recipe. (Appendix C.)
+  scan date on one scanner, and the split follows the developer, so no single
+  value fits every roll. The decode ships the common-ground value anyway — a
+  per-roll default would stop being fixed — and the roll-level remainder is
+  rendering's. (Appendix C.)
 - **Why a per-channel gain cannot be the end state:** interimage effects and DIR
   couplers make each layer's slope depend on the *other* layers' exposure. That
   is not a per-channel quantity at all, which is why the standard model is a
@@ -280,6 +284,16 @@ effects, the scanner's channels, development), and our shipped gain sits ≈10 %
 from what the datasheets imply once their own offset term is respected.
 **Appendix B** carries both, and the reason the earlier "factor of two" claim
 was wrong.
+
+**The decode corrects the common part, and only that.** One global
+`density.scale` is the best single value across stocks, developers and scanners;
+it cannot fit every scan, because the residual varies by stock, by developer and
+— through the illuminant — by frame. Fixing it perfectly would mean measuring
+each scan, which nothing short of the calibration frames provides. So the decode
+aims at **acceptable on any stock**, not neutral on every frame, and the
+remainder is closed in rendering, per stock, roll or frame, with the per-channel
+grade (Part 2). A per-roll or per-frame value in the decode would make it stop
+being fixed, which is the property the whole design rests on.
 
 ### What NLP's white-balance step does, and why ours differs
 
@@ -569,7 +583,9 @@ and both come from reconstruction's conventions rather than from rendering:
 - **Mid-grey lands mid** when the frame was exposed correctly — the
   `mid-at-base-offset` anchor.
 - **The cast stays within an acceptable range on any stock** — the `scale`
-  calibration.
+  calibration. Acceptable, not perfect: one global value cannot neutralize every
+  stock, developer and light, and closing the remainder is a grade, which this
+  preset deliberately does not apply.
 
 "Minimal" cannot mean "no tone": Adobe RGB ends at 1.0 and a real decode exceeds
 it, so a gentle compression is still a choice, just a fixed and documented one.
@@ -723,8 +739,10 @@ correction identity and the look empty, what the eye judges is the decode. The
 to the fixed rendering rather than to the decode, so a candidate that loses
 should be re-checked under a second rendering before the decode is blamed.
 
-`scale` first, then `gamma`: the cast is the open question, and contrast is
-easier to judge once the cast is settled. Two or three candidates per review set
+The loop settles the **common-ground** values, not per-frame neutrality: one
+`scale` cannot fit every scan, and the residual is rendering's to grade. `scale`
+first, then `gamma`: the cast is the open question, and contrast is easier to
+judge once the cast is settled. Two or three candidates per review set
 keeps a frame's toggle manageable. `#124` and the 2026-09-17 offset test are the
 rounds so far.
 
