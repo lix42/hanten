@@ -483,7 +483,7 @@ Rendering is a chain of named stages, each with one job, followed by two output
 stages:
 
 ```text
-reconstruction (exposure estimate)
+reconstruction (the fixed decode)
   → scene correction → look → fit range → fit gamut    rendering
   → encode → package                                   output
 ```
