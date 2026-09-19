@@ -173,9 +173,11 @@ out_c = 10^(−gamma·A) × 10^(gamma·offset_c) × (10^(D_c))^(gamma · scale_c
 So `scale` and `gamma`'s calibration half are the decode's own. Rendering has a
 counterpart for every knob here — exposure, white balance, contrast, and the
 pivoted per-channel grade — but a counterpart acts **after** the 3×3, in a
-different basis, so it addresses the symptom rather than the error. Offset and
-anchor are pure duplicates and belong there; tuning them here while "holding
-rendering fixed" is tuning the final image and calling it reconstruction.
+different basis, so it addresses the symptom rather than the error. The anchor is
+an exact duplicate and belongs there; `offset` duplicates white balance only
+approximately, since it acts before the 3×3, and stays a calibration term (see
+Decisions). Tuning either here while "holding rendering fixed" is tuning the
+final image and calling it reconstruction.
 
 Note also that `gamma` and `scale` are over-parameterized: only the products
 `gamma · scale_c` enter, pinned by the convention `scale_r = 1`. "Measure
@@ -583,15 +585,19 @@ all three channels by one factor, so a cast survives to display white.
 This is a real print behaviour — paper applies per-channel curves — so the look
 stage needs it explicitly rather than inheriting it from a reconstruction curve:
 
-- **A controlled path to white**: as luminance approaches display white, chroma
-  goes to zero. The SDR renderer's gamut map already does something like this at
-  the cube boundary (`sdr.rs:249-266`); this would make it a deliberate,
+- **A controlled path to white**: chroma goes to zero as a pixel approaches
+  white. The SDR renderer's gamut map already does something like this at the
+  cube boundary (`sdr.rs:249-266`); this would make it a deliberate,
   parameterised part of the look instead of a side effect at the boundary.
 - **Parameterised, because it is a look.** How early it starts and how hard it
   pulls are choices, and "off" must stay available: it hides residual cast,
   which is useful for a print and wrong for a diagnostic.
-- **Before the SDR/HDR branch**, like the rest of the look, or the two
-  renditions disagree.
+- **Anchored to diffuse white, not to a branch's display white.** "Display white"
+  differs between SDR and HDR, so a single pre-branch operator cannot be defined
+  against it. Diffuse white is scene-referred and common to both, and a gain map
+  only requires the renditions to agree *below* it — which is the same crossover
+  the HDR highlight lift already uses. So the trigger point is shared even where
+  the pull above it is applied per branch.
 
 ### The shadow end: reinhard compresses upward only
 
@@ -698,7 +704,7 @@ Compare decodes under one operator, and prefer midtone neutrals for accuracy.
 | `gamma`'s linearization half | **Measurable, but only with a bracket:** if exposure doubles, the reconstructed value must double. That measures the film's own slope. |
 | `gamma`'s print-contrast half | **Opinion.** No neutral reference constrains it, and it belongs to rendering anyway. |
 | Whether a per-channel gain suffices | **Measurable:** whatever is left after the best `scale` is the evidence for how much of a 3×3 is needed. |
-| Model stability | **Measurable without any reference:** fit `scale` per frame; the better model is the one whose fitted value has the smallest spread across a roll, and across rolls sharing a developer. |
+| Model stability | **Needs a reference after all.** Fitting `scale` per frame and comparing the spread looks reference-free, but a per-frame fit absorbs scene colour and illuminant, so the spread partly measures subject matter — and a model that suppresses real between-frame differences scores *better*. Usable only on known-neutral or bracketed captures under one illuminant. |
 
 ## The limits of the data we have
 
@@ -759,23 +765,6 @@ direction* is evidence where one disagreeing is not.
 - Same output space, same viewer.
 - **Judge colour more than tone.** NLP and SilverFast bake their own looks, so a
   contrast comparison mostly compares looks, while a cast comparison transfers.
-
-### A test available now
-
-Pick frames where the same near-neutral surface appears at **two brightnesses
-within one frame** (a white flag in sun and in shade, lit and shadowed snow) and
-measure the channel residual at both. Flat across brightness → an offset or
-white-balance issue, and `scale` is the wrong knob. Growing with density →
-`scale` is right, and its slope is the value. Within one frame, because any
-per-frame rebalancing then cancels. Weaker than a bracket, but it needs no new
-shoot.
-
-**A tool would make this routine.** Marking a patch in `tools/review-app` and
-having it measure that region across every config of the frame — in linear
-light, in the image's own Display P3, reported as channel ratios and `a*`/`b*` —
-turns "is this white white?" into a number in place. The 2026-09-17 review is
-the argument for it: the user could see that a surface was not white but could
-not name the direction as green, and a colour picker settled it.
 
 ## Tuning order
 
