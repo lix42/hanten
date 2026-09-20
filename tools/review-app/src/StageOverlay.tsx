@@ -275,6 +275,13 @@ export function StageOverlay(props: Props) {
   );
 
   const onPointerDown = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
+    // **A tap has no move before it.** Touch and non-hovering pens emit
+    // pointerdown/up/click with no `pointermove` at all, so nothing would have
+    // sampled by the time the click asks to copy, and colour mode would appear
+    // dead. Reading here makes the click self-sufficient on any pointer. (A
+    // hovering readout is still a mouse affordance — there is no hover to
+    // follow on a touchscreen — but a tap should at least answer.)
+    if (props.mode === "color") return sampleAt(event);
     if (props.mode !== "patch" || event.button !== 0) return;
     // Captured so a drag that runs off the picture — off the *window*, even —
     // still ends on this element. Without it, releasing outside leaves the

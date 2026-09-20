@@ -549,6 +549,14 @@ export function ImageSection(props: Props) {
           props.showMetrics,
           props.pointerMode,
           activeRendition()?.src,
+          // And whether the charts band is *holding its height*, which is not
+          // the same question as whether charts are shown. `charted` advances
+          // `CHART_SETTLE_MS` after the selection settles, so the band takes or
+          // releases its 280px a beat later than everything else here — on first
+          // load, and whenever the settled config differs from the previous one
+          // in having a measurement. The picture resizes with it, so a pointer
+          // overlay measured before that beat draws at the wrong coordinates.
+          chartedRendition()?.metrics !== undefined,
         ] as const,
       () => {
         measureOverflow();
