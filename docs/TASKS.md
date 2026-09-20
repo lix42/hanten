@@ -158,6 +158,7 @@ graph TD
   nf-verification --> nf-calibration
   analysis --> nf-calibration
   io --> nf-calibration
+  nf-calibration --> nf-look
   analysis --> nf-verification
   nf-core --> nf-verification
   nf-reconstruction --> nf-verification
@@ -169,7 +170,6 @@ graph TD
   nf-scene-correction --> nf-retire
   nf-core --> nf-docs
   nf-core --> analysis
-  nf-look --> nf-core
 ```
 
 ```mermaid
@@ -318,7 +318,6 @@ graph TD
     nf-scene-correction/levels-knob
   end
   subgraph nf-look
-    nf-look/path-to-white-spike
     nf-look/stage
     nf-look/per-channel-grade
     nf-look/path-to-white
@@ -340,6 +339,7 @@ graph TD
     nf-destinations/default-destination
   end
   subgraph nf-calibration
+    nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
     nf-calibration/neutrality-gate
@@ -607,8 +607,8 @@ graph TD
   nf-core/stage-skeleton --> nf-core/recipe-schema
   nf-core/minimal-end-to-end --> nf-core/subcommands
   nf-core/stage-skeleton --> nf-core/buffer-strategy
-  nf-look/path-to-white-spike --> nf-core/stage-skeleton
-  nf-look/path-to-white-spike --> nf-look/path-to-white
+  nf-calibration/scale-ladder --> nf-look/path-to-white
+  nf-calibration/scale-ladder --> nf-calibration/scale-gamma-loop
 ```
 
 Dependency list (a task is executable when all its deps are `[x]` done):
@@ -905,7 +905,7 @@ the design in `docs/design-update.md`:
 - `nf-core/new-flow-flag` (new flow): none
   — scaffolding with a written expiry — CLI-only, never a recipe key, removed
   by `nf-core/default-flip`
-- `nf-core/stage-skeleton` (new flow): `nf-core/new-flow-flag`, `nf-look/path-to-white-spike`
+- `nf-core/stage-skeleton` (new flow): `nf-core/new-flow-flag`
   — the modules and typed boundaries, written fresh rather than extracted
 - `nf-core/minimal-end-to-end` (new flow): `nf-core/stage-skeleton`, `nf-reconstruction/fixed-decode`
   — the milestone that expires the flag and unblocks retirement
@@ -943,7 +943,7 @@ the design in `docs/design-update.md`:
 - `nf-look/per-channel-grade` (new flow): `nf-look/stage`
   — the tunable counterpart of the decode's `scale`; subsumes the regional
   balance
-- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-look/path-to-white-spike`
+- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`
   — what makes whites read clean, made a deliberate control instead of a
   gamut-map side effect
 - `nf-look/contrast` (new flow): `nf-look/stage`, `nf-reconstruction/gamma-split`
@@ -975,7 +975,7 @@ the design in `docs/design-update.md`:
   — a `RunProfile` per destination; sharing an arm is measured, not assumed
 - `nf-destinations/default-destination` (new flow): `nf-destinations/preset-set`, `nf-destinations/direct-preset`
   — supersedes `output/display-p3-default`; one bump rather than two
-- `nf-calibration/scale-gamma-loop` (new flow): `nf-destinations/preset-set`, `nf-verification/reference-snapshot`
+- `nf-calibration/scale-gamma-loop` (new flow): `nf-destinations/preset-set`, `nf-verification/reference-snapshot`, `nf-calibration/scale-ladder`
   — the two knobs the decode owns, tuned against a held-fixed rendering.
   Supersedes `algo/sigmoid-parameter-calibration` and
   `film-base/dmax-per-channel-reduction`
@@ -1022,10 +1022,11 @@ the design in `docs/design-update.md`:
   — the architecture map, the HDR framing, and retiring the migration rule
   itself
 
-- `nf-look/path-to-white-spike` (new flow): none
-  — runs against today's binary so it can run first; `path-to-white` sits at
-  depth 5, so without it the plan tests its central promise after the sigmoid
-  is retired
+- `nf-calibration/scale-ladder` (new flow): none
+  — runs against today's binary so it can run first; the decode would otherwise
+  inherit a sigmoid-era scale whose green half is documented as unresolved, and
+  whether any scale reaches the knee'd render's whites is what decides
+  `nf-look/path-to-white`
 - `nf-retire/characteristic` (new flow): `nf-retire/sigmoid-and-simple`, `nf-look/stock-data-home`
   — the curve, `--film-stock`, three preset names and `default_scale_for`'s
   per-curve case; the stock *data* is `nf-look/stock-data-home`'s call
@@ -1542,10 +1543,6 @@ the design in `docs/design-update.md`:
 - [ ] [Spike: opt-in bounded scene-range
   mapping](tasks/nf-look/scene-range-mapping.md) — a spike: opt-in and
   bounded, never the default — roll consistency is the promise
-- [ ] [Spike: can a look-stage operator reproduce the knee'd sigmoid's
-  whites?](tasks/nf-look/path-to-white-spike.md) — runs against today's binary
-  so it can run first; `path-to-white` sits at depth 5, so without it the plan
-  tests its central promise after the sigmoid is retired
 
 ### nf-display-stages — [progress](progress/nf-display-stages.md)
 > Fit range and fit gamut as real stages shared by both display branches, plus the
@@ -1580,9 +1577,14 @@ the design in `docs/design-update.md`:
   `output/display-p3-default`; one bump rather than two
 
 ### nf-calibration — [progress](progress/nf-calibration.md)
-> The numbers rather than the machinery: the `scale`/`gamma` review loop, the offset
-> question, the neutrality release gate, and what a user would actually run.
+> The numbers rather than the machinery: an early `scale` ladder, the `scale`/`gamma`
+> review loop, the offset question, the neutrality release gate, and what a user would
+> actually run.
 
+- [ ] [A `density.scale` ladder, before the calibration frames
+  exist](tasks/nf-calibration/scale-ladder.md) — runs against today's binary so
+  it can run first; the decode would otherwise inherit a sigmoid-era value whose
+  green half is documented as unresolved
 - [ ] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering. Supersedes

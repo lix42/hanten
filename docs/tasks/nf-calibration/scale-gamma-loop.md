@@ -48,3 +48,5 @@ whether `scale` stays one global value once a second stock family is in the set.
 - [The destination set](../nf-destinations/preset-set.md) — the fixed rendering the
   loop holds is a destination
 - [The frozen reference build](../nf-verification/reference-snapshot.md)
+- [A `density.scale` ladder, before the calibration frames exist](scale-ladder.md)
+  — inherits its candidate value and its method caution

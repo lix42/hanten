@@ -98,10 +98,12 @@ the "direct" combination for external editing; encode and package wiring; memory
 profiles; file-suffix rules; the two `nctool` lookup tables.
 
 ### `nf-calibration`
-The `scale` and `gamma` tuning loop against a held-fixed rendering; whether `offset`
-earns a value; the measurement plumbing and what a user-facing calibration procedure
-would be. Carries the **release gate**: the default cannot move until neutrality is
-checked against known-neutral frames.
+An early `scale` ladder against today's binary, then the `scale` and `gamma` tuning
+loop against a held-fixed rendering; whether `offset` earns a value; the measurement
+plumbing and what a user-facing calibration procedure would be. Carries the **release
+gate**: the default cannot move until neutrality is checked against known-neutral
+frames. The ladder is the without-colorchecker pass and the gate is the with-one pass;
+neither replaces the other.
 
 ### `nf-verification`
 The reference snapshot (the tag, the worktree, and how to drive that binary in a
@@ -131,9 +133,12 @@ HDR framing. Runs alongside the others rather than at the end.
   display stages → destinations.
 - `nf-verification`'s **reference snapshot lands before `nf-retire`**.
 - `nf-retire` needs `nf-core` plus one working destination.
-- `nf-calibration` needs renders to judge, so it follows `nf-destinations`, and its
-  release gate additionally waits on the calibration frames (an existing task in the
-  `analysis` epic).
+- `nf-calibration` mostly needs renders to judge, so it follows `nf-destinations`,
+  and its release gate additionally waits on the calibration frames (an existing task
+  in the `analysis` epic). **The one exception runs first:** `scale-ladder` judges the
+  decode's per-channel gain against today's binary, because the new chain would
+  otherwise inherit a sigmoid-era value unexamined, and the question outranks the
+  chain it would be measured in.
 
 ## What carries over untouched
 

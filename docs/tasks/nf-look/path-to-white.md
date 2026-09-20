@@ -48,4 +48,6 @@ white.
 ## Dependencies
 
 - [The look stage](stage.md)
-- [Spike: can a look-stage operator reproduce the knee'd sigmoid's whites?](path-to-white-spike.md)
+- [A `density.scale` ladder, before the calibration frames exist](../nf-calibration/scale-ladder.md)
+  — whether any scale reaches the knee'd render's whites is what decides whether
+  this task is load-bearing or an optional look

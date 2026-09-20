@@ -36,6 +36,12 @@ migration plan (`docs/nf-migration.md`).
 **Updated:** 2026-09-19
 
 - 2026-09-19: created with the new-flow plan. Goal: highlight desaturation.
+- 2026-09-19: the gating spike moved to `nf-calibration/scale-ladder` and was
+  redefined. The evidence behind this task's premise — that the knee'd sigmoid's
+  clean whites come from its per-channel shoulder — does not separate the shoulder
+  from the anchor (0.28 vs 0.5 mid-fraction) or the display tone (`none` vs
+  reinhard), which the two presets also differ in. Whether any `density.scale`
+  reaches those whites now decides if this task is load-bearing or an optional look.
 
 ## contrast
 
@@ -65,9 +71,3 @@ migration plan (`docs/nf-migration.md`).
 
 - 2026-09-19: created with the new-flow plan. Goal: spike: opt-in bounded scene-range mapping.
 
-## path-to-white-spike
-
-**Status:** not started
-**Updated:** 2026-09-19
-
-- 2026-09-19: filed after the plan review. Goal: can a look-stage operator reproduce the knee'd sigmoid's whites?.

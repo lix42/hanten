@@ -576,11 +576,16 @@ out_c = mid · (in_c / mid)^k_c        mid = 0.18
 
 ### Highlight desaturation (path to white)
 
-Measured 2026-09-17: `sigmoid-knees` reads clean on every white surface because
-its per-channel shoulder pulls the channels together as lightness rises (B/R
-1.65 → 1.27 across one frame's deciles, against 1.76 → 1.48 for the
-shoulder-less render). A luminance-preserving operator cannot do that: it scales
-all three channels by one factor, so a cast survives to display white.
+Measured 2026-09-17: `sigmoid-knees` reads clean on every white surface, and its
+channels converge as lightness rises (B/R 1.65 → 1.27 across one frame's deciles,
+against 1.76 → 1.48 for the shoulder-less render). **The cause is not established.**
+The two presets differ in four ways at once — the per-channel shoulder, the anchor
+(mid-fraction 0.28 vs 0.5), `print_exposure` and `display_tone` (`none` vs reinhard)
+— so the comparison cannot attribute the whites to the shoulder alone; and the
+verdict that ranked them was made by eye, on an axis the reviewer reports being
+insensitive to. `nf-calibration/scale-ladder` separates these before this stage is
+built. What *is* settled: a luminance-preserving operator cannot converge channels at
+all — it scales all three by one factor, so a cast survives to display white.
 
 This is a real print behaviour — paper applies per-channel curves — so the look
 stage needs it explicitly rather than inheriting it from a reconstruction curve:

@@ -50,5 +50,3 @@ decided once, deliberately, rather than falling out of whichever stage ships fir
 ## Dependencies
 
 - [The `--new-flow` selector](new-flow-flag.md)
-- [Spike: can a look-stage operator reproduce the knee'd sigmoid's whites?](../nf-look/path-to-white-spike.md)
-  — the spike runs first, so no structural work starts before its answer
