@@ -663,10 +663,15 @@ if you ever need the npm _script_ of the same name.
   worked throughout, which is exactly why it survived testing: the trap is only
   on the mode-to-mode edge. The mode is now a dependency of the resample effect.
 
-- **A hidden control must use `visibility`, not `opacity`.** A patch's delete
-  button appears on hover. At `opacity: 0` it still takes the click, so every
-  patch carried an invisible delete control at its corner — confirmed with a real
-  pointer, and fixed by hiding it properly.
+- **A control hidden until hover needs `opacity` _and_ `pointer-events`, and
+  neither alone is enough.** A patch's delete button appears on hover, and the
+  two obvious spellings each ship a bug. Bare `opacity: 0` leaves it taking
+  clicks, so every patch carried an invisible delete control at its corner —
+  confirmed with a real pointer. `visibility: hidden` fixes that and takes the
+  button out of the tab order, which for the _only_ way to delete a patch, on an
+  object with no edit operation, means a keyboard-only user can never correct a
+  mis-drawn one. It is `opacity: 0` plus `pointer-events: none`, revealed by
+  `:hover` and `:focus-within`: an `opacity: 0` element is still focusable.
 
 - **Nothing in a `.tsx` file is tested, and that is a structural fact, not an
   omission.** `vite.config.ts` collects only `.test.ts` under `src/` and runs it

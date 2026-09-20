@@ -195,11 +195,31 @@ export function samplePlan(
   const ratio = devicePixelRatio > 0 ? devicePixelRatio : 1;
   const span = Math.max(1, Math.round(naturalWidth / (painted.width * ratio)));
   const scaled = normalizePoint(point, painted);
-  // Clamped to the last whole sample box, so a point on the right or bottom edge
-  // still reads pixels that exist.
-  const x = Math.min(Math.floor(scaled.x * naturalWidth), naturalWidth - span);
-  const y = Math.min(Math.floor(scaled.y * naturalHeight), naturalHeight - span);
-  return { x: Math.max(0, x), y: Math.max(0, y), span };
+  /*
+    **Centred on the point, not starting at it.** Taking the mapped position as
+    the crop's top-left corner samples a box that sits entirely below and to the
+    right of the cursor, off by as much as a whole span — which at `fit` on a
+    real scan is a dozen image pixels. Across a sharp edge that reports the
+    colour on the *other* side of it, while the crosshair sits on this one.
+    Centring halves the worst error and makes it symmetric, which is what "the
+    colour under the pointer" has to mean when the pointer is one screen pixel
+    over many image pixels.
+
+    The offset is `(span - 1) / 2`, not `span / 2`, so that at `span = 1` it is
+    zero and the result is exactly the pixel under the point — there is nothing
+    to centre when nothing is being averaged, and half a pixel of shift there
+    would report the neighbour.
+
+    Then clamped, so a point on the right or bottom edge still reads pixels that
+    exist rather than running off the end of the image.
+  */
+  const x = Math.floor(scaled.x * naturalWidth - (span - 1) / 2);
+  const y = Math.floor(scaled.y * naturalHeight - (span - 1) / 2);
+  return {
+    x: Math.max(0, Math.min(x, naturalWidth - span)),
+    y: Math.max(0, Math.min(y, naturalHeight - span)),
+    span,
+  };
 }
 
 /**

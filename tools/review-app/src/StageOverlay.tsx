@@ -40,6 +40,14 @@ import { sampleImage } from "./sample";
 const styles = {
   layer: css.raw({
     position: "absolute",
+    // **Nothing inside may enlarge the scroller.** The layer sits in the
+    // `overflow: auto` viewport, so a chip or a button poking past the picture's
+    // right or bottom edge joins that scroller's scrollable area — which in
+    // `fit` puts a scrollbar in a pane documented never to scroll, and in
+    // `fullsize` lets panning run into blank space past the image. Clipping here
+    // bounds every decoration to the picture; a label too long for the space
+    // left is cut, and its `title` still carries the whole of it.
+    overflow: "hidden",
     // Above the stacked renditions, below the pane's own overlays (the pan
     // controls and the "no rendition" note), which are rendered in the pane.
     zIndex: 2,
@@ -96,8 +104,10 @@ const styles = {
     It is **not bounded by the rectangle**, though. A patch is often smaller than
     its label — a 40px square marked "white shirt" — and a chip clipped to the
     rectangle truncates to a letter and an ellipsis, which names nothing. It runs
-    past the edge instead; two chips may overlap, and reading the label beats
-    avoiding that.
+    past the rectangle instead; two chips may overlap, and reading the label
+    beats avoiding that. It is bounded by the *picture*, because the layer clips:
+    a label with no room left before the picture's edge is cut there rather than
+    growing the scroller, and `title` still carries the whole of it.
   */
   chip: css.raw({
     position: "absolute",
@@ -112,13 +122,13 @@ const styles = {
     whiteSpace: "nowrap",
     pointerEvents: "none",
   }),
-  // Outside the rectangle's top-right corner, so it never covers the pixels the
-  // patch was drawn around.
+  // Inside the rectangle's top-right corner rather than straddling it: the layer
+  // clips, and the half of a straddling button outside the picture would be the
+  // half that got cut.
   remove: css.raw({
     position: "absolute",
     top: "0",
     insetInlineEnd: "0",
-    transform: "translate(50%, -50%)",
     width: "patchClose",
     height: "patchClose",
     display: "grid",
