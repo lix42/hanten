@@ -23,7 +23,11 @@ pnpm install
 pnpm dev ~/sets/display-tone/review.json
 ```
 
-Then open <http://localhost:5173>. The server reads the set from disk, so the
+Then open <http://localhost:5173> — but **check the port it printed**. Another
+`pnpm dev` already holding 5173 does not fail; Vite binds 5174 instead and the
+old server goes on serving _its_ set at the address you were about to open. The
+page states its own source path under the title, which is the thing to read when
+a set looks wrong. The server reads the set from disk, so the
 path may be anywhere — it does not have to sit beside the app, and there is no
 URL to construct. A directory works too, meaning the `review.json` inside it:
 
@@ -64,8 +68,10 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
 | `j` / `k`          | Step to the next / previous frame      |
 | `h` / `l`          | Step to the previous / next config     |
 | `a`                | Note on the current frame              |
-| `n`                | Every note, editable, with Copy all    |
-| `c`                | Clear all notes (asks first)           |
+| `n`                | Every note and patch, with Copy all    |
+| `c`                | Clear notes and patches (asks first)   |
+| `p`                | Patch mode — draw and label regions    |
+| `i`                | Colour mode — read the pixel under it  |
 | `m`                | Show / hide the charts row             |
 | Config buttons     | Same as the number keys                |
 | Preview thumbnails | Select that config for **every** image |
@@ -146,6 +152,87 @@ position means a frame, and once the frame list has moved the offset you were
 parked at lands on some other frame — or, on a shorter set, past the end, where
 the browser leaves you at the bottom with no way to tell what you are looking
 at.
+
+## Patches
+
+`p` turns the picture into a drawing surface: drag a rectangle, give it a label —
+"cloud", "white shirt", "the shadow under the bridge" — and it is marked. A
+second `p` puts it away. Hovering a patch shows its delete button; there is no
+edit, because a patch is a rectangle and a few words, and correcting one is
+quicker to redraw than to edit.
+
+**A patch belongs to the frame, not to the config.** Every rendition of a frame
+is the same subject rendered differently, so one rectangle sits on the same cloud
+in all of them — which is what makes a patch useful for comparing variants, and
+is the same in-place principle the stage is built on. The coordinates are
+normalised to the image, so a patch survives a config switch, `fit`/`fullsize`
+and a window resize without moving off its subject. Verified: the same patch
+reports an identical position to four decimal places in both zoom modes.
+
+They are listed in the `n` dialog and go out with **Copy all**, as percentages of
+the frame:
+
+```text
+## F0005 — synthetic frame 5
+
+Highlights clip on this one.
+
+Patches:
+- "white shirt" — x 31.2% y 12.4% w 18.0% h 9.1%
+```
+
+Percentages rather than pixels because the renditions of one frame need not share
+a pixel size — a percentage is the one spelling true of all of them. The labels
+are the point: a reader who cannot see your screen learns _where to look_, which
+is the thing a note alone cannot say.
+
+Patches live only in the page, exactly like notes, and are cleared by the same
+rule — a different set, or one whose frame list changed. `c` clears both.
+
+## Colour
+
+`i` reads the pixel under the pointer: the HEX, a phrase for it, the RGB triple,
+L\* and chroma. Clicking copies the HEX. **It re-reads whenever the picture
+moves under the pointer, not only when the pointer moves** — turning the mode on,
+scrolling the page, stepping a frame with `j`/`k`, panning inside a `fullsize`
+picture, and switching config. That last one is the whole comparison: the pixel
+does not move at all, but what is under it is a different rendering, and a
+reading taken only on `pointermove` would go on describing the previous config.
+Move the picture off the pointer entirely and the readout clears rather than
+going stale. It works in both zoom modes, and in
+`fit` it reports the colour the screen is showing — one screen pixel there covers
+several image pixels, so the sampler downscales exactly that span to one, the
+same reduction the browser performed to draw it. **`devicePixelRatio` is part of
+that span**: a raster image is rasterised at device resolution, so on a 2x
+display the screen shows twice as many samples across as there are CSS pixels,
+and dividing by CSS pixels alone would average a box twice as wide as the one
+drawn — a 4x error in area, visible wherever the spot has detail. In `fullsize`
+on an ordinary display the span is one pixel and the reading is the file's own.
+
+**The values are sRGB as displayed.** Renditions carry ICC profiles, and the
+sampler reads through a plain sRGB canvas, so the browser has already converted:
+the HEX matches the screen rather than the bytes nc wrote, and a Display P3
+rendition's out-of-sRGB colours read clipped. That is deliberate — the readout
+answers "what colour am I looking at".
+
+The phrase is coarse on purpose, with one band that carries the weight. A colour
+within four code values of neutral is named grey and given **no** hue: a
+direction read off grain would be worse than none. Past that, and up to 23 code
+values, it is named on the grey scale _and_ told which way it leans — "near-white,
+slightly yellow", "dark grey, slightly blue" — because a faint cast is exactly
+what an eye cannot name, and it is what this was asked for. Only beyond that does
+it become a colour in its own right.
+
+That band is measured in **channel span, not HSL saturation**, and the difference
+is not cosmetic: `s` divides by how much room a colour of that lightness has to
+be saturated, so the same lean reads as 4% on a light grey and 10% on a dark one.
+Measured on this app's own example, one cutoff in `s` could not catch both
+without also naming single-code-value noise on a near-white.
+
+The lightness _word_ comes from L\*, the same number printed beside it — not from
+HSL's `l`. `#A7A7A7` is `l` 0.65 and L\* 68.5, which sit on opposite sides of
+"light grey", so a chip could otherwise say "grey" on one line and 68.5 on the
+next.
 
 ## Measurements
 
@@ -520,6 +607,60 @@ if you ever need the npm _script_ of the same name.
   override is the light one — the same shape the hand-written custom properties
   had (dark by default, light under `prefers-color-scheme: light`), except that
   `color: "fg.dim"` is now type-checked and a typo fails `vp check`.
+- **The pointer modes are exclusive by construction, not by checking.** `p` and
+  `i` each take over the pointer on the picture, so a pair that could both be on
+  is a state with no sensible behaviour. They are one `PointerMode` value rather
+  than two booleans, which makes the illegal pair unrepresentable — the same
+  reasoning the recipe structs in `nc` use for mutually exclusive knobs.
+
+- **The patch overlay is anchored to the stage, at the picture's _painted_ box.**
+  Both halves matter. Inside the stage, it scrolls with the picture in `fullsize`
+  and needs no scroll handler at all — which is how it avoids the
+  scroll-writes-a-signal cycle this app has been bitten by. At the painted box
+  rather than the `<img>` element box, because `fit` letterboxes: on a portrait
+  frame in a landscape pane most of the element is empty, and a patch measured
+  against it would sit nowhere near the subject. `geometry.ts` owns that
+  arithmetic and is tested; the components only place what it returns.
+
+  The **colour readout is the exception** and is rendered in the pane instead. In
+  `fullsize` the overlay is far larger than the window, so a chip placed there
+  could sit off screen; the pane is the picture's fixed frame, which is the box
+  the chip has to stay inside. Its size is _stated_ in tokens rather than
+  measured, because the flip arithmetic needs it before layout — measuring would
+  put a read of the element in the path of the write that positions it.
+
+- **The colour readout re-reads from a remembered pointer position, because the
+  browser will not tell you where the pointer is.** `pointer.ts` keeps the last
+  seen position in a **plain variable, not a signal** — nothing should re-render
+  because the pointer moved a pixel — and the overlay reads it when one of the
+  triggers fires. The scroll trigger is one `capture: true` listener on `window`,
+  which catches the page scrolling _and_ the pane scrolling inside a `fullsize`
+  picture, since scroll events do not bubble. It is called straight from the
+  handler rather than through `requestAnimationFrame`, on the same reasoning as
+  `paintMap`: the browser already coalesces scroll to about one event per frame,
+  rAF does not run in a backgrounded tab, and this cannot feed itself because the
+  readout is absolutely positioned and changes no layout. Measured at **0.18 ms
+  per scroll event** with three frames mounted, so it needs no throttling.
+
+  **Which overlay owns a point is decided by `elementFromPoint`, not by a rect
+  test.** In `fullsize` the overlay is far larger than the pane that clips it, so
+  a rect test would let a frame claim a pointer that is over its neighbour — and
+  several frames are mounted at once, so more than one would claim it.
+
+- **`Show` does not recreate its children when the condition changes but stays
+  truthy, so `onMount` is not a substitute for a dependency.** The overlay is
+  shown for _either_ pointer mode, so going patch → colour keeps `when` truthy,
+  the component is never rebuilt, and the `onMount` that takes the first colour
+  reading never runs again — while the frame has meanwhile cleared the previous
+  one. The readout stayed blank until the pointer was jogged. `off → colour`
+  worked throughout, which is exactly why it survived testing: the trap is only
+  on the mode-to-mode edge. The mode is now a dependency of the resample effect.
+
+- **A hidden control must use `visibility`, not `opacity`.** A patch's delete
+  button appears on hover. At `opacity: 0` it still takes the click, so every
+  patch carried an invisible delete control at its corner — confirmed with a real
+  pointer, and fixed by hiding it properly.
+
 - **Nothing in a `.tsx` file is tested, and that is a structural fact, not an
   omission.** `vite.config.ts` collects only `.test.ts` under `src/` and runs it
   with `environment: "node"` — `.tsx` is not matched, and there is no DOM to mount

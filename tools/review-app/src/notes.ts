@@ -11,6 +11,8 @@
  * them.
  */
 
+import { formatPatch, patchCount, patchedFrameCount, patchesFor, type Patches } from "./patches";
+
 /** Frame id -> note. A frame with no note simply has no key. */
 export type Notes = Readonly<Record<string, string>>;
 
@@ -60,21 +62,54 @@ export function notesScope(path: string, imageIds: readonly string[]): string {
 }
 
 /**
- * Every note as one block, in set order.
+ * Every note and every patch as one block, in set order.
  *
  * Set order rather than the order they were written: the result is read beside
  * the review, and a reader scanning for a frame expects it where the set puts
- * it. Frames with no note are left out entirely rather than listed as empty —
- * the block is a summary of what was found, not a form.
+ * it. Frames with neither a note nor a patch are left out entirely rather than
+ * listed as empty — the block is a summary of what was found, not a form.
+ *
+ * Notes and patches share one block because they are one act of reviewing: a
+ * note says what is wrong and a patch says where, and splitting them across two
+ * clipboard operations would make the reader reassemble them.
  */
-export function formatNotes(frames: readonly NotedFrame[], notes: Notes, heading?: string): string {
-  const noted = frames.filter((frame) => (notes[frame.id] ?? "").trim() !== "");
-  if (noted.length === 0) return "";
+export function formatReview(
+  frames: readonly NotedFrame[],
+  notes: Notes,
+  patches: Patches,
+  heading?: string,
+): string {
+  const hasNote = (frame: NotedFrame) => (notes[frame.id] ?? "").trim() !== "";
+  const listed = frames.filter(
+    (frame) => hasNote(frame) || patchesFor(patches, frame.id).length > 0,
+  );
+  if (listed.length === 0) return "";
   const title = heading?.trim();
+  const noted = frames.filter(hasNote).length;
   const head = [
     title ? `# Review notes — ${title}` : "# Review notes",
-    `${noted.length} of ${frames.length} frames noted`,
+    [
+      `${noted} of ${frames.length} frames noted`,
+      patchCount(patches) > 0
+        ? `${plural(patchCount(patches), "patch", "patches")} on ` +
+          `${plural(patchedFrameCount(patches), "frame", "frames")}`
+        : undefined,
+    ]
+      .filter((part) => part !== undefined)
+      .join(" · "),
   ];
-  const body = noted.map((frame) => `## ${frame.label}\n\n${(notes[frame.id] ?? "").trim()}`);
+  const body = listed.map((frame) => {
+    const parts = [`## ${frame.label}`];
+    if (hasNote(frame)) parts.push((notes[frame.id] ?? "").trim());
+    const drawn = patchesFor(patches, frame.id);
+    if (drawn.length > 0) {
+      parts.push(["Patches:", ...drawn.map(formatPatch)].join("\n"));
+    }
+    return parts.join("\n\n");
+  });
   return [...head, ...body].join("\n\n") + "\n";
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
 }

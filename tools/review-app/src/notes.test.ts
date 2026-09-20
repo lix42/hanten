@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { formatNotes, noteCount, notesScope, setNote, type Notes } from "./notes";
+import { formatReview, noteCount, notesScope, setNote, type Notes } from "./notes";
+import type { Patch, Patches } from "./patches";
 
 const frames = [
   { id: "a", label: "F1 — first" },
@@ -53,10 +54,21 @@ describe("notesScope", () => {
   });
 });
 
-describe("formatNotes", () => {
+const NO_PATCHES: Patches = {};
+
+const patch = (id: string, label: string, x: number, y: number): Patch => ({
+  id,
+  label,
+  x,
+  y,
+  width: 0.2,
+  height: 0.1,
+});
+
+describe("formatReview", () => {
   it("lists noted frames in set order, whatever order they were written", () => {
     const notes = { c: "third note", a: "first note" };
-    expect(formatNotes(frames, notes, "Ektar roll")).toBe(
+    expect(formatReview(frames, notes, NO_PATCHES, "Ektar roll")).toBe(
       "# Review notes — Ektar roll\n\n" +
         "2 of 3 frames noted\n\n" +
         "## F1 — first\n\nfirst note\n\n" +
@@ -65,18 +77,55 @@ describe("formatNotes", () => {
   });
 
   it("omits the heading's dash when the set has no title", () => {
-    expect(formatNotes(frames, { a: "x" })).toContain("# Review notes\n");
+    expect(formatReview(frames, { a: "x" }, NO_PATCHES)).toContain("# Review notes\n");
   });
 
   it("trims each note, and skips whitespace-only ones", () => {
-    expect(formatNotes(frames, { a: "  padded  ", b: "   " })).toContain("1 of 3 frames noted");
-    expect(formatNotes(frames, { a: "  padded  " })).toContain("## F1 — first\n\npadded\n");
+    expect(formatReview(frames, { a: "  padded  ", b: "   " }, NO_PATCHES)).toContain(
+      "1 of 3 frames noted",
+    );
+    expect(formatReview(frames, { a: "  padded  " }, NO_PATCHES)).toContain(
+      "## F1 — first\n\npadded\n",
+    );
   });
 
   // Empty rather than a header with nothing under it: the copy button is
   // disabled on this, so it must be distinguishable from a real block.
   it("is empty when nothing is noted", () => {
-    expect(formatNotes(frames, {})).toBe("");
-    expect(formatNotes([], { a: "x" })).toBe("");
+    expect(formatReview(frames, {}, NO_PATCHES)).toBe("");
+    expect(formatReview([], { a: "x" }, NO_PATCHES)).toBe("");
+  });
+});
+
+describe("formatReview with patches", () => {
+  const patches: Patches = { b: [patch("p1", "cloud", 0.1, 0.2)] };
+
+  // A patch is as much a review finding as a sentence is, so a frame carrying
+  // only patches has to appear — listing it by note count alone would drop it.
+  it("lists a frame that has patches but no note", () => {
+    const block = formatReview(frames, {}, patches, "Ektar roll");
+    expect(block).toContain("0 of 3 frames noted · 1 patch on 1 frame");
+    expect(block).toContain(
+      '## F2 — second\n\nPatches:\n- "cloud" — x 10.0% y 20.0% w 20.0% h 10.0%\n',
+    );
+  });
+
+  it("puts a frame's note above its patches", () => {
+    expect(formatReview(frames, { b: "soft" }, patches)).toContain(
+      '## F2 — second\n\nsoft\n\nPatches:\n- "cloud"',
+    );
+  });
+
+  it("counts patches and the frames they sit on", () => {
+    const many: Patches = {
+      a: [patch("p1", "sky", 0, 0), patch("p2", "skin", 0.5, 0.5)],
+      b: [patch("p3", "cloud", 0.1, 0.2)],
+    };
+    expect(formatReview(frames, {}, many)).toContain("3 patches on 2 frames");
+  });
+
+  it("says nothing about patches when there are none", () => {
+    expect(formatReview(frames, { a: "x" }, NO_PATCHES)).toContain("1 of 3 frames noted\n");
+    expect(formatReview(frames, { a: "x" }, NO_PATCHES)).not.toContain("patch");
   });
 });

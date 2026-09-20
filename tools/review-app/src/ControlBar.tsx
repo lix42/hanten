@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import { css } from "../styled-system/css";
-import { keyForConfigIndex } from "./keys";
+import { keyForConfigIndex, type PointerMode } from "./keys";
 import type { ReviewConfig, ZoomMode } from "./review";
 
 // Border longhands rather than the `border` shorthand: `active` overrides only
@@ -94,7 +94,23 @@ interface Props {
   onActivate: (index: number) => void;
   zoom: ZoomMode;
   onZoom: (zoom: ZoomMode) => void;
+  /** Which pointer mode is on — the two are exclusive, see `keys.ts`. */
+  pointerMode: PointerMode;
+  /** Asks for a mode; pressing the one already on turns it off. */
+  onPointerMode: (mode: Exclude<PointerMode, "off">) => void;
 }
+
+/**
+ * The two pointer modes, in the order their keys sit on a keyboard.
+ *
+ * Said out loud in the bar because a mode changes what the pointer does to the
+ * picture, and a page that behaves differently with nothing on screen saying so
+ * is a page you have to remember the state of.
+ */
+const POINTER_MODES = [
+  { mode: "patch", key: "p", title: "Draw and label patches on the picture (p toggles)" },
+  { mode: "color", key: "i", title: "Read the colour under the pointer (i toggles)" },
+] as const satisfies readonly { mode: Exclude<PointerMode, "off">; key: string; title: string }[];
 
 export function ControlBar(props: Props) {
   return (
@@ -131,6 +147,23 @@ export function ControlBar(props: Props) {
       </div>
 
       <div class={css(styles.group, styles.zoom)}>
+        <For each={POINTER_MODES}>
+          {(entry) => (
+            <button
+              type="button"
+              class={css(styles.button, props.pointerMode === entry.mode && styles.active)}
+              aria-pressed={props.pointerMode === entry.mode}
+              aria-keyshortcuts={entry.key}
+              title={entry.title}
+              onClick={() => props.onPointerMode(entry.mode)}
+            >
+              <span>{entry.mode === "patch" ? "patch" : "colour"}</span>
+              <kbd class={css(styles.key)} aria-hidden="true">
+                {entry.key}
+              </kbd>
+            </button>
+          )}
+        </For>
         <For each={["fullsize", "fit"] as const}>
           {(mode) => (
             <button

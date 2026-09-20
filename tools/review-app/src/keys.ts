@@ -9,6 +9,9 @@
  * directions rather than the arrow keys': the arrows already scroll the page,
  * and a frame is a whole screen, so binding them would take away ordinary
  * scrolling inside a `fullsize` picture.
+ *
+ * `p` and `i` are the two pointer modes, and pressing the one already on turns
+ * it off — see `nextPointerMode`.
  */
 
 /** How many configs the number row can reach. */
@@ -26,7 +29,25 @@ export type KeyAction =
   | { readonly kind: "notes" }
   | { readonly kind: "clearNotes" }
   /** Show or hide the charts row (`m`), giving its band back to the picture. */
-  | { readonly kind: "metrics" };
+  | { readonly kind: "metrics" }
+  /**
+   * Enter or leave a pointer mode: `p` draws patches, `i` reads colour.
+   *
+   * One action for both, carrying which mode, because the two are **mutually
+   * exclusive** — each takes over the pointer on the picture, and a pointer that
+   * did two things at once would do neither predictably. Modelling them as one
+   * selection rather than two booleans is what makes an illegal pair
+   * unrepresentable, the same reason `FilmBaseSource` is one enum in nc.
+   */
+  | { readonly kind: "pointerMode"; readonly mode: PointerMode };
+
+/**
+ * What the pointer does over a picture.
+ *
+ * `"off"` is the ordinary page: the pointer selects text, scrolls, and clicks
+ * the controls. The other two claim it.
+ */
+export type PointerMode = "off" | "patch" | "color";
 
 /**
  * The action a keypress should perform, or `null` for keys we leave alone.
@@ -51,6 +72,8 @@ export function actionForKey(
   if (key === "n" || key === "N") return { kind: "notes" };
   if (key === "c" || key === "C") return { kind: "clearNotes" };
   if (key === "m" || key === "M") return { kind: "metrics" };
+  if (key === "p" || key === "P") return { kind: "pointerMode", mode: "patch" };
+  if (key === "i" || key === "I") return { kind: "pointerMode", mode: "color" };
 
   if (key.length === 1 && key >= "0" && key <= "9") {
     // '1'..'9' are 0..8; '0' is the tenth slot rather than the first.
@@ -87,4 +110,17 @@ export function isTextEntry(target: EventTarget | null): boolean {
   if (target.isContentEditable) return true;
   const tag = target.tagName;
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+/**
+ * The mode `p` or `i` lands on: the one asked for, or `"off"` if it was already on.
+ *
+ * So each key is its own toggle while the pair stays exclusive — `p` then `i`
+ * leaves you in colour mode rather than in both, and a second `p` leaves the
+ * picture alone. Pressing the other mode's key is a switch, not an error: having
+ * to turn one off before turning the other on would be a rule with nothing
+ * behind it.
+ */
+export function nextPointerMode(current: PointerMode, asked: PointerMode): PointerMode {
+  return current === asked ? "off" : asked;
 }

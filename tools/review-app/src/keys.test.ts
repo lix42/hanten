@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { actionForKey, keyForConfigIndex, stepConfigIndex } from "./keys";
+import { actionForKey, keyForConfigIndex, nextPointerMode, stepConfigIndex } from "./keys";
 
 const NONE = {};
 
@@ -90,5 +90,29 @@ describe("actionForKey — frame and config steps", () => {
   it("leaves modified presses alone", () => {
     expect(actionForKey("j", { meta: true }, 6)).toBeNull();
     expect(actionForKey("l", { ctrl: true }, 6)).toBeNull();
+  });
+});
+
+describe("pointer modes", () => {
+  it("maps p and i, in either case", () => {
+    expect(actionForKey("p", NONE, 4)).toEqual({ kind: "pointerMode", mode: "patch" });
+    expect(actionForKey("I", NONE, 4)).toEqual({ kind: "pointerMode", mode: "color" });
+  });
+
+  it("leaves them to the browser when modified", () => {
+    expect(actionForKey("p", { meta: true }, 4)).toBeNull();
+    expect(actionForKey("i", { ctrl: true }, 4)).toBeNull();
+  });
+
+  // Each key is its own toggle...
+  it("turns a mode off when its own key is pressed again", () => {
+    expect(nextPointerMode("patch", "patch")).toBe("off");
+    expect(nextPointerMode("color", "color")).toBe("off");
+  });
+
+  // ...while the pair stays exclusive: `p` then `i` is colour, never both.
+  it("switches straight between the two", () => {
+    expect(nextPointerMode("patch", "color")).toBe("color");
+    expect(nextPointerMode("off", "patch")).toBe("patch");
   });
 });
