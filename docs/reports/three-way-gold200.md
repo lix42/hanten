@@ -58,6 +58,24 @@ base indirectly through a Lightroom white balance and SF never sees one at all. 
 the whole roll the ratios scatter widely (NLP most), so read this as agreement on
 typical frames, not a shared constant.
 
+**But the method carries a systematic bias of about 0.05, so read the table loosely.**
+Measuring nc's *own* `film-master` the same way recovers **0.784 / 0.696** where nc is
+configured at 0.840 / 0.730 — the gap is the NC film RGB v1 → ACEScg matrix mixing
+channels after the per-channel gain is applied. Every producer's output sits behind its
+own matrix, so each carries its own version of this error and it cannot be removed
+without knowing them. On a like-for-like measured basis:
+
+| measured the same way | G/R | B/R |
+|---|---|---|
+| nc `film-master` | 0.784 | 0.696 |
+| NLP | 0.826 | 0.757 |
+| SF | 0.835 | 0.643 |
+| SFC | 0.848 | 0.653 |
+
+Differences under ~0.05 are inside the method's error. What survives it: **everyone's
+green sits in 0.78–0.85**, and **blue genuinely splits** — NLP high (0.757), SilverFast
+low (0.643–0.653), a 0.11 gap that is larger than the bias. nc's blue sits between them.
+
 ## Which frames lose the neutral white, and why
 
 Two of 35: **1799** and **1817**, both SilverFast's failures (NLP holds white on 34/35).
@@ -151,6 +169,53 @@ So the S-shape those tools carry has to come from somewhere in the new chain. Th
 already says where: a straight decode plus a fit-range operator with a toe and a
 shoulder composes to exactly this shape. This measurement is the argument for that
 operator existing, and a target for what it has to do.
+
+## Where each tool anchors, and how NLP picks its per-channel slopes
+
+Expressing the density at which the output reaches a reference level as a **percentile
+of that frame's own density distribution**, then looking at how stable that percentile
+is across the roll (green channel, sd over frames):
+
+| | near-white (0.90) | mid (0.18) | dark (0.02) |
+|---|---|---|---|
+| NLP | 95.6% ± **6.1** | 30.4% ± 16.4 | 11.6% ± 8.0 |
+| SF | 96.8% ± **2.5** | 35.6% ± 19.3 | 18.6% ± 9.1 |
+| SFC | 96.8% ± **2.6** | 35.7% ± 19.1 | 15.4% ± 9.9 |
+
+**All three anchor the bright end, on content, at about the 96–97th percentile.** The mid
+floats (sd 16–19). SilverFast is the most consistent about it (sd 2.5), so yes — SF maps
+content to its tone placement, and the anchor is the highlight, not the mid.
+
+Two hypotheses for NLP's per-channel slopes are ruled out by measurement:
+
+- **Not per-channel range normalisation.** If each channel's own range were mapped to the
+  output range, `slope_c x span_c` would be equal across channels. It differs by a median
+  of **48%** (SF 35%, SFC 28%).
+- **Not grey-world.** Frame-mean `a*` has sd 8.25 (NLP), 5.13 (SF), 2.36 (SFC) across the
+  roll — nothing is being driven to an average neutral.
+
+What *is* pinned is the highlight, **per channel**: the spread of the near-white anchor
+percentile across R/G/B within a frame is **2.3 percentile points** for NLP — tighter than
+any other point, for any tool. So NLP sets each channel's slope so that channel's own
+highlight lands on white, and the per-channel differences fall out of wherever those
+highlights sit.
+
+That closes the loop on 1799. Its channels' **dark** ends are spread by 0.123 density, the
+widest on the roll. Pin three highlights to a common white while the dark ends disagree
+and the three slopes must diverge to absorb it — G/R falls to 0.624, and the error lands
+where the anchor is not, which is the shadows.
+
+**The clean distinction between the two products:**
+
+- **SilverFast** — content sets the *overall* tone placement (one anchor, bright end);
+  per-channel balance comes from a fixed calibration plus CCR's stock-keyed offset.
+- **NLP** — content sets tone placement *and* per-channel balance, each channel pinned
+  to white independently.
+
+nc's design is SilverFast's shape, with two differences in nc's favour: it **measures**
+the base rather than looking it up, and it does not re-fit colour per frame. The one
+place nc differs structurally is the anchor — nc's is a reference-free *mid* anchor,
+where all three of these anchor the *highlight* on content.
 
 ## What nc can take from this
 
