@@ -217,6 +217,48 @@ the base rather than looking it up, and it does not re-fit colour per frame. The
 place nc differs structurally is the anchor — nc's is a reference-free *mid* anchor,
 where all three of these anchor the *highlight* on content.
 
+## The cost of content-adaptive contrast is noise, and it is measurable
+
+Per-frame fitting has a price. Measured at full resolution on a central crop, as a low
+percentile of `|I(x+1) - I(x)|` (flat areas dominate the low percentiles, so this reads
+the grain/scanner floor rather than scene detail):
+
+| | corr(slope, noise) | corr(source density span, noise) |
+|---|---|---|
+| NLP | **+0.89** | -0.46 |
+| SF | +0.71 | -0.59 |
+| SFC | +0.66 | -0.51 |
+
+**Noise gain follows the slope, essentially one-for-one.** The chain is: a narrow
+negative gets more contrast, and the contrast multiplies the scanner's own noise with
+the signal. The negatives themselves are uniform — the scan's noise floor differs by
+only 1.01x between the roll's thinnest and thickest frames — so everything above that is
+amplification the tool added.
+
+**Brightening is not what costs.** Correlation between how far a frame was *lifted*
+(delivered L\* above what its own source density predicts) and its delivered noise is
+**-0.49** for all three: the most-lifted frames are the *least* noisy. Level is free;
+slope is not.
+
+Worst cases on this roll, as a multiple of that scan's own noise floor:
+
+| frame | source span | NLP | SF | SFC | NLP slope |
+|---|---|---|---|---|---|
+| 1799 | 0.442 | **4.1x** | 2.4x | 2.3x | 8.14 |
+| 1813 | 0.408 | 3.5x | 2.6x | — | 7.10 |
+| 1800 | 0.445 | 2.6x | 2.9x | 2.9x | 3.87 |
+| 1817 | 0.456 | 2.5x | 2.0x | 2.0x | 3.84 |
+
+Five of the six noisiest frames are the five narrowest negatives. None of the three
+preserves the scene's own exposure — correlation between source median density and
+delivered median L\* is +0.08 to +0.13, i.e. none — so every frame is normalised and the
+thin ones pay for it.
+
+This gives the design's "bounded" requirement a number. An opt-in scene-range mapping
+needs a ceiling on its gain, and that ceiling is a **noise budget** computable from the
+negative's own density span before any pixel is rendered — not a constant picked by
+taste.
+
 ## What nc can take from this
 
 - **Their agreement is at white and their disagreement is in the shadows.** Judging a
