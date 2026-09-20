@@ -65,12 +65,21 @@ const styles = {
     outlineStyle: "solid",
     outlineColor: "patch.halo",
     outlineOffset: "1px",
-    // `visibility`, not `opacity`: an invisible button at 0 opacity still takes
-    // the click, so every patch would carry a hidden delete control at its
-    // corner. Hovering the button counts as hovering this rectangle, so it stays
-    // reachable once it has appeared.
-    "& [data-remove]": { visibility: "hidden" },
-    "&:hover [data-remove]": { visibility: "visible" },
+    /*
+      Hidden until wanted, by **opacity plus `pointer-events`** — not by
+      `visibility`.
+
+      Each half fixes a different bug. Bare `opacity: 0` leaves the button taking
+      clicks, so every patch carried an invisible delete control at its corner;
+      `pointer-events: none` is what closes that. But `visibility: hidden`, the
+      obvious alternative, takes the button out of the tab order entirely — and
+      since this is the *only* way to delete a patch and patches cannot be
+      edited, a keyboard-only user could never correct one. An `opacity: 0`
+      element is still focusable, so `:focus-within` brings it back.
+    */
+    "& [data-remove]": { opacity: 0, pointerEvents: "none" },
+    "&:hover [data-remove]": { opacity: 1, pointerEvents: "auto" },
+    "&:focus-within [data-remove]": { opacity: 1, pointerEvents: "auto" },
   }),
   pending: css.raw({ borderStyle: "dashed" }),
   /*

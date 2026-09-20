@@ -221,13 +221,14 @@ the HEX matches the screen rather than the bytes nc wrote, and a Display P3
 rendition's out-of-sRGB colours read clipped. That is deliberate — the readout
 answers "what colour am I looking at".
 
-The phrase is coarse on purpose, with one band that carries the weight. A colour
-within four code values of neutral is named grey and given **no** hue: a
-direction read off grain would be worse than none. Past that, and up to 23 code
-values, it is named on the grey scale _and_ told which way it leans — "near-white,
-slightly yellow", "dark grey, slightly blue" — because a faint cast is exactly
-what an eye cannot name, and it is what this was asked for. Only beyond that does
-it become a colour in its own right.
+The phrase is coarse on purpose, with one band that carries the weight. The
+bands are whole code values off an 8-bit sampler, so they are stated as the
+integer spans they are rather than as "up to": a channel span of **0–3** is
+named grey with **no** hue, because a direction read off grain would be worse
+than none; **4–22** is named on the grey scale _and_ told which way it leans —
+"near-white, slightly yellow", "dark grey, slightly blue" — because a faint cast
+is exactly what an eye cannot name, and it is what this was asked for; **23 and
+up** is a colour in its own right.
 
 That band is measured in **channel span, not HSL saturation**, and the difference
 is not cosmetic: `s` divides by how much room a colour of that lightness has to

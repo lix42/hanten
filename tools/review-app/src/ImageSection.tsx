@@ -518,6 +518,28 @@ export function ImageSection(props: Props) {
     onCleanup(() => window.removeEventListener("resize", onResize));
   });
 
+  /*
+    The backstop under every enumerated trigger: watch the stage itself.
+
+    The effect below lists the layout changes we know about, and that list has
+    already been wrong twice — the charts band taking its height a beat late, and
+    a rendition replaced under an unchanged config. It will be wrong again: a
+    live refresh can change an image's label or note, and if that wraps, the head
+    grows and the picture shrinks with no dependency here moving at all. An
+    overlay measured against the old box then draws patches and samples colours
+    offset from the picture.
+
+    **Safe despite the rule against observer-driven writes**, for the same reason
+    the mounting observer in `App` is: what this re-renders is an absolutely
+    positioned overlay, so a render caused by this callback changes no geometry
+    and cannot feed the next callback. The enumerated list stays as well —
+    element *identity* is not a size, so a rendition swapped for one of the same
+    dimensions moves nothing this could see.
+  */
+  const stageResize =
+    typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => measureOverflow());
+  onCleanup(() => stageResize?.disconnect());
+
   // Switching fit/fullsize resizes the stage, so re-check overflow. Measured
   // **synchronously** — Solid runs effects after the DOM is updated, so layout is
   // already current — with a follow-up frame for anything that settles late.
@@ -771,7 +793,10 @@ export function ImageSection(props: Props) {
           <div
             class={css(styles.stage, props.zoom === "fit" ? styles.stageFit : styles.stageFullsize)}
             style={reservation()}
-            ref={(element) => (stage = element)}
+            ref={(element) => {
+              stage = element;
+              stageResize?.observe(element);
+            }}
           >
             <For each={props.configs}>
               {(config) => (

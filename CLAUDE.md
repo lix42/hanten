@@ -1153,7 +1153,13 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   `opacity: 0` — invisible but still taking the click — passed every synthetic
   check and was caught in one real hover. Two notes: `agent-browser eval` shares
   **one top-level scope across calls**, so a bare `const` collides on the second
-  call (wrap each snippet in an IIFE), and the skill file is only a stub — the
+  call (wrap each snippet in an IIFE), and **its page does not run rendering
+  steps**, so `requestAnimationFrame` and `ResizeObserver` never fire there even
+  though `document.visibilityState` reports `visible` — which makes any check of
+  rAF- or observer-driven code silently *vacuous*: a correct `ResizeObserver`
+  measured as "never fired" and read as a bug until the same test in the headed
+  chrome-devtools MCP passed. That is the one case to fall back for. The skill
+  file is only a stub — the
   usage guide is `agent-browser skills get core`, served by the installed binary,
   so check `agent-browser --version` against npm when its documented commands are
   missing. **Panda runs with `strictTokens` +
