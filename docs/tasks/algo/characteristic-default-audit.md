@@ -1,5 +1,10 @@
 # Audit the flag surface against a characteristic default
 
+> **Superseded 2026-09-19 by `nf-core/knob-availability-audit`** — it audits
+> flags the new flow retires; its method — classify every rule flag-vs-value
+> before the default moves — is what carried over. Kept so existing references
+> resolve; see `docs/nf-migration.md` for the migration plan.
+
 ## Goal
 
 Find out what breaks when `characteristic-generic` becomes the no-flag default, and

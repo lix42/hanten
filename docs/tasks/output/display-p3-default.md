@@ -1,5 +1,10 @@
 # Make `display-p3` the default output preset
 
+> **Superseded 2026-09-19 by `nf-destinations/default-destination`** — the
+> destination set is redesigned and the default moves with the new flow; the
+> product shape and the one-bump argument carried over. Kept so existing
+> references resolve; see `docs/nf-migration.md` for the migration plan.
+
 ## Goal
 
 Execute the 2026-08-09 decision that the default output becomes `display-p3`, a

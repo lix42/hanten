@@ -1,5 +1,9 @@
 # Neutral-base robustness for auto film-base detection
 
+> **Retired 2026-09-19** — it hardens a rebate detector already being replaced
+> by `film-base/holder-masked-measurement`. Kept so existing references
+> resolve; see `docs/nf-migration.md` for the migration plan.
+
 > **Parked 2026-09-16 — the detector this task serves is being retired.**
 > `film-base/holder-masked-measurement` rebuilds `Dmin`/`Dmax` on **area x method**,
 > and nc no longer searches for a rebate band at all (user, 2026-09-16; not shipped,

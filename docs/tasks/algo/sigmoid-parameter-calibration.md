@@ -1,5 +1,10 @@
 # Sigmoid Parameter Calibration
 
+> **Superseded 2026-09-19 by `nf-calibration/scale-gamma-loop`** — the three
+> sigmoid parameters leave the product; the argument for a bracketed roll and
+> a grey card carried over. Kept so existing references resolve; see
+> `docs/nf-migration.md` for the migration plan.
+
 ## Goal
 
 Turn the **provisional** sigmoid parameters into calibrated ones. `reference-anchored-sigmoid`

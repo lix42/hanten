@@ -1,5 +1,10 @@
 # A portable fingerprint vector for the characteristic curve
 
+> **Superseded 2026-09-19 by `nf-verification/fingerprints`** — the row it
+> exists for is never written; its cross-target portability analysis carried
+> over. Kept so existing references resolve; see `docs/nf-migration.md` for
+> the migration plan.
+
 ## Goal
 
 Produce a `PIPELINE_FINGERPRINTS` `render` vector whose pixels are bit-identical on

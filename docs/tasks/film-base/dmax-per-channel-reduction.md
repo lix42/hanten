@@ -1,5 +1,12 @@
 # Per-channel Dmax and the gray-mean reduction
 
+> **Superseded 2026-09-19 by `nf-calibration/scale-gamma-loop`** (and, for the
+> offset half it narrowed to, `nf-calibration/offset-question`) — its finding
+> — the per-channel term is a slope, carried by `density.scale` — is that
+> task's subject; the measurements stay in `docs/progress/film-base.md`. Kept
+> so existing references resolve; see `docs/nf-migration.md` for the migration
+> plan.
+
 ## Goal
 
 Establish whether reducing the measured per-channel reference `Dmax` to a scalar

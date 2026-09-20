@@ -17,16 +17,16 @@ them owns producing them:
 
 - `io/scanner-density-calibration` — needs them for the 3×3 + offset fit. Its tier 1
   is deliberately non-calibrating, so its checkbox can go green without them.
-- `algo/sigmoid-parameter-calibration` — needs a bracketed roll and a grey card in
+- `nf-calibration/scale-gamma-loop` — needs a bracketed roll and a grey card in
   frame, which is the same shoot.
 - `film-base/dmax-per-channel-reduction` — **parked 2026-09-13** for want of exactly
   this (its route 3). Added here after #115 merged; it is the one consumer that was
   not visible when this task was filed on 2026-09-12.
-- `algo/split-default-migration` — its release gate is neutrality checked against a
+- `nf-calibration/neutrality-gate` — the release gate is neutrality checked against a
   **known-neutral reference, not the leader**. That gate is evidence, not a task, so
   the graph could not see it.
 
-`io/scanner-density-calibration` and `algo/sigmoid-parameter-calibration` each carry a
+`io/scanner-density-calibration` and `nf-calibration/scale-gamma-loop` each carry a
 dated note reaching the same conclusion independently (#115, 2026-09-13: "plan it once",
 "shooting for only one of them wastes the other two"). Those notes are the reasoning;
 this task is the owner.
@@ -78,9 +78,9 @@ In: the shoot, development, scanning, registering the frames in `manifest.json` 
 their roles and conditions, and a first neutrality measurement against them.
 
 Out: the 3×3 + offset fit itself (`io/scanner-density-calibration`), the sigmoid
-parameter values (`algo/sigmoid-parameter-calibration`), the parametric per-channel gain
+parameter values (`nf-calibration/scale-gamma-loop`), the parametric per-channel gain
 (`film-base/dmax-per-channel-reduction`), and any default move
-(`algo/split-default-migration`). This task produces evidence; those consume it.
+(`nf-calibration/neutrality-gate`). This task produces evidence; those consume it.
 
 ## Open questions
 

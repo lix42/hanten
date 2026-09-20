@@ -1,5 +1,10 @@
 # Content-Aware Sigmoid Toe (Optional)
 
+> **Superseded 2026-09-19 by `nf-display-stages/parametric-operator`** — a toe
+> in the reconstruction curve is dead, but the toe itself moves to the
+> fit-range stage. Kept so existing references resolve; see
+> `docs/nf-migration.md` for the migration plan.
+
 ## Goal
 
 Offer an explicit convenience mode that derives sigmoid-toe placement from

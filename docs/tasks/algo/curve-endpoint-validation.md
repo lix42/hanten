@@ -1,5 +1,10 @@
 # Curve endpoint validation (does this config place its endpoints usefully?)
 
+> **Superseded 2026-09-19 by `nf-reconstruction/curve-endpoint-warning`** —
+> what survives is reading the endpoint off the renderer's own curve, at
+> warning tier. Kept so existing references resolve; see
+> `docs/nf-migration.md` for the migration plan.
+
 > **Needs re-evaluation before pickup (2026-09-13).** Written against exponential and
 > sigmoid only. Since then: the reference-free placements (`black-at-base`,
 > `mid-at-base-offset`) never read `R`, so the white check `s_curve(R)` has no meaning there;

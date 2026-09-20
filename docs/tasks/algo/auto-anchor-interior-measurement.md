@@ -1,5 +1,10 @@
 # Exclude the holder from content-driven measurement
 
+> **Retired 2026-09-19** — `DmaxSource::Auto` and the regional balance both
+> leave; if an opt-in scene-range mapping lands, `nf-look/scene-range-mapping`
+> restates the measure-the-interior rule. Kept so existing references resolve;
+> see `docs/nf-migration.md` for the migration plan.
+
 ## Goal
 
 Stop the opaque film holder from dominating every measurement taken over a whole

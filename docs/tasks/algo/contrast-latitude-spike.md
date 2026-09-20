@@ -1,5 +1,10 @@
 # Contrast / Latitude Spike
 
+> **Superseded 2026-09-19 by `nf-look/contrast`** — contrast becomes a look
+> knob, so the spike is answered there; its nc-vs-NLP measurements are the
+> evidence that carried over. Kept so existing references resolve; see
+> `docs/nf-migration.md` for the migration plan.
+
 ## Goal
 
 Decide whether nc's tonal latitude should change — and if so, at **which end** and

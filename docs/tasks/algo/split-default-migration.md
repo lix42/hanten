@@ -1,5 +1,11 @@
 # Make `characteristic-generic` what a bare `nc convert` resolves
 
+> **Superseded 2026-09-19 by `nf-core/default-flip` and
+> `nf-calibration/neutrality-gate`** — the default now flips to the new chain
+> with the exponential, not to `characteristic-generic`; the flip half and the
+> neutrality gate landed in different epics. Kept so existing references
+> resolve; see `docs/nf-migration.md` for the migration plan.
+
 ## Goal
 
 Make the reconstruction / render split the shipped default: reconstruction stops

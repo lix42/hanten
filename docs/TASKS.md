@@ -106,6 +106,16 @@ graph TD
   output
   telemetry
   analysis
+  nf-core
+  nf-reconstruction
+  nf-scene-correction
+  nf-look
+  nf-display-stages
+  nf-destinations
+  nf-calibration
+  nf-verification
+  nf-retire
+  nf-docs
   core --> io
   core --> color
   core --> film-base
@@ -115,28 +125,51 @@ graph TD
   film-base --> core
   algo --> core
   analysis --> io
-  analysis --> algo
   core --> analysis
   core --> telemetry
   algo --> analysis
-  analysis --> algo
   film-base --> analysis
   algo --> film-base
-  algo --> io
   io --> color
-  color --> io
   io --> algo
-  io --> output
   film-base --> algo
-  algo --> color
   color --> algo
+  algo --> io
+  algo --> color
   film-base --> color
   color --> output
-  algo --> output
+  color --> io
   output --> color
+  io --> output
   core --> output
-  output --> algo
+  algo --> output
   output --> analysis
+  nf-reconstruction --> nf-core
+  nf-retire --> nf-core
+  nf-core --> nf-reconstruction
+  nf-core --> nf-scene-correction
+  nf-reconstruction --> nf-scene-correction
+  nf-scene-correction --> nf-look
+  nf-reconstruction --> nf-look
+  nf-look --> nf-display-stages
+  nf-display-stages --> nf-destinations
+  output --> nf-destinations
+  nf-destinations --> nf-calibration
+  nf-verification --> nf-calibration
+  analysis --> nf-calibration
+  io --> nf-calibration
+  analysis --> nf-verification
+  nf-core --> nf-verification
+  nf-reconstruction --> nf-verification
+  nf-core --> nf-retire
+  nf-verification --> nf-retire
+  nf-display-stages --> nf-retire
+  nf-reconstruction --> nf-retire
+  nf-look --> nf-retire
+  nf-scene-correction --> nf-retire
+  nf-core --> nf-docs
+  nf-core --> analysis
+  nf-look --> nf-core
 ```
 
 ```mermaid
@@ -172,17 +205,10 @@ graph TD
   subgraph film-base
     film-base/estimation
     film-base/auto-base-redesign
-    film-base/auto-base-neutral-stock
-    film-base/auto-base-real-scan-refusal
     film-base/ir-holder-detection
-    film-base/white-holder-support
     film-base/content-fallback
     film-base/estimate-reuse-output
     film-base/dmax-reference
-    film-base/clipped-dmax-reference
-    film-base/dense-base-dmax-plausibility
-    film-base/dmax-anchor-reliability
-    film-base/dmax-per-channel-reduction
     film-base/ir-usability-detection
     film-base/holder-depth-mask
     film-base/holder-cap-contamination
@@ -198,7 +224,6 @@ graph TD
     algo/negative-reconstruction-density-curves
     algo/reference-anchored-sigmoid
     algo/exponential-anchor-placement
-    algo/content-aware-sigmoid-toe
     algo/dmax-white-anchor
     algo/density-safety-bounds
     algo/auto-neutral-wb
@@ -206,15 +231,8 @@ graph TD
     algo/bw-support
     algo/film-stock-profiles
     algo/characteristic-curve-coverage
-    algo/auto-anchor-interior-measurement
-    algo/characteristic-default-audit
-    algo/curve-endpoint-validation
-    algo/sigmoid-parameter-calibration
     algo/reconstruction-render-curve-split
     algo/conversion-presets
-    algo/contrast-latitude-spike
-    algo/split-default-migration
-    algo/characteristic-fingerprint-vector
   end
   subgraph color
     color/management
@@ -236,7 +254,6 @@ graph TD
     output/mp-container-conformance
     output/gain-map-dialect-activation
     output/sdr-preset-followups
-    output/display-p3-default
     output/adobe-rgb-gamut
     output/sdr-report-block
     output/sdr-jpeg-preset
@@ -277,6 +294,79 @@ graph TD
     analysis/review-reference-cells
     analysis/review-build-axis
   end
+  subgraph nf-core
+    nf-core/buffer-strategy
+    nf-core/subcommands
+    nf-core/recipe-schema
+    nf-core/report-contract
+    nf-core/new-flow-flag
+    nf-core/stage-skeleton
+    nf-core/minimal-end-to-end
+    nf-core/knob-availability-audit
+    nf-core/default-flip
+  end
+  subgraph nf-reconstruction
+    nf-reconstruction/fixed-decode
+    nf-reconstruction/anchor-rule
+    nf-reconstruction/gamma-split
+    nf-reconstruction/curve-endpoint-warning
+    nf-reconstruction/mono-decode
+  end
+  subgraph nf-scene-correction
+    nf-scene-correction/stage
+    nf-scene-correction/flare-removal
+    nf-scene-correction/levels-knob
+  end
+  subgraph nf-look
+    nf-look/path-to-white-spike
+    nf-look/stage
+    nf-look/per-channel-grade
+    nf-look/path-to-white
+    nf-look/contrast
+    nf-look/look-presets
+    nf-look/stock-data-home
+    nf-look/scene-range-mapping
+  end
+  subgraph nf-display-stages
+    nf-display-stages/fit-range
+    nf-display-stages/fit-gamut
+    nf-display-stages/parametric-operator
+    nf-display-stages/branch-contract
+  end
+  subgraph nf-destinations
+    nf-destinations/preset-set
+    nf-destinations/direct-preset
+    nf-destinations/memory-profiles
+    nf-destinations/default-destination
+  end
+  subgraph nf-calibration
+    nf-calibration/scale-gamma-loop
+    nf-calibration/offset-question
+    nf-calibration/neutrality-gate
+    nf-calibration/user-calibration-procedure
+  end
+  subgraph nf-verification
+    nf-verification/reference-snapshot
+    nf-verification/fingerprints
+    nf-verification/stage-goldens
+    nf-verification/benchmark-set
+    nf-verification/film-rgb-export
+  end
+  subgraph nf-retire
+    nf-retire/characteristic
+    nf-retire/legacy-custom
+    nf-retire/display-tones
+    nf-retire/sigmoid-and-simple
+    nf-retire/dmax-machinery
+    nf-retire/regional-balance
+    nf-retire/print-prefix-rename
+  end
+  subgraph nf-docs
+    nf-docs/reference-sweep
+    nf-docs/design-spec
+    nf-docs/using-nc
+    nf-docs/claude-md
+  end
   core/project-foundation --> io/silverfast-decode
   core/project-foundation --> io/tiff-encode
   core/project-foundation --> color/management
@@ -301,7 +391,6 @@ graph TD
   io/memory-preflight --> io/streaming-tiled-io
   analysis/real-scan-verification --> io/streaming-tiled-io
   film-base/estimation --> film-base/auto-base-redesign
-  film-base/ir-holder-detection --> film-base/white-holder-support
   core/pipeline-orchestration --> film-base/estimate-reuse-output
   core/pipeline-orchestration --> analysis/real-scan-verification
   core/pipeline-orchestration --> telemetry/perf-instrumentation
@@ -327,11 +416,7 @@ graph TD
   algo/dmax-white-anchor --> algo/bw-support
   film-base/estimation --> film-base/content-fallback
   film-base/auto-base-redesign --> film-base/ir-holder-detection
-  film-base/auto-base-redesign --> film-base/auto-base-neutral-stock
-  film-base/auto-base-redesign --> film-base/auto-base-real-scan-refusal
   algo/dmax-white-anchor --> film-base/dmax-reference
-  film-base/dmax-reference --> film-base/clipped-dmax-reference
-  film-base/dmax-reference --> film-base/dense-base-dmax-plausibility
   core/pipeline-orchestration --> core/roll-conversion
   algo/dmax-white-anchor --> core/roll-conversion
   core/pipeline-orchestration --> core/conversion-versioning
@@ -347,29 +432,11 @@ graph TD
   algo/negative-reconstruction-density-curves --> algo/exponential-anchor-placement
   film-base/dmax-reference --> algo/reference-anchored-sigmoid
   algo/reference-anchored-sigmoid --> algo/film-stock-profiles
-  algo/reference-anchored-sigmoid --> algo/auto-anchor-interior-measurement
-  film-base/auto-base-redesign --> algo/auto-anchor-interior-measurement
-  film-base/holder-depth-mask --> algo/auto-anchor-interior-measurement
-  algo/auto-anchor-interior-measurement --> algo/content-aware-sigmoid-toe
   algo/reference-anchored-sigmoid --> algo/reconstruction-render-curve-split
   color/film-master-render-pipeline --> algo/reconstruction-render-curve-split
-  algo/reconstruction-render-curve-split --> algo/split-default-migration
-  analysis/calibration-frame-capture --> algo/split-default-migration
-  algo/reference-anchored-sigmoid --> algo/sigmoid-parameter-calibration
   algo/film-stock-profiles --> algo/conversion-presets
   algo/film-stock-profiles --> algo/characteristic-curve-coverage
-  algo/characteristic-curve-coverage --> algo/split-default-migration
-  algo/characteristic-curve-coverage --> algo/characteristic-fingerprint-vector
-  algo/characteristic-fingerprint-vector --> algo/split-default-migration
-  algo/conversion-presets --> algo/split-default-migration
-  algo/conversion-presets --> algo/characteristic-default-audit
-  algo/characteristic-default-audit --> algo/split-default-migration
-  algo/film-stock-profiles --> algo/sigmoid-parameter-calibration
-  analysis/calibration-frame-capture --> algo/sigmoid-parameter-calibration
   analysis/calibration-frame-capture --> io/scanner-density-calibration
-  film-base/dmax-reference --> film-base/dmax-anchor-reliability
-  algo/reference-anchored-sigmoid --> film-base/dmax-anchor-reliability
-  film-base/dmax-reference --> film-base/dmax-per-channel-reduction
   io/silverfast-decode --> io/gray-primary-decode
   io/gray-primary-decode --> algo/bw-support
   film-base/ir-holder-detection --> film-base/ir-usability-detection
@@ -392,17 +459,9 @@ graph TD
   core/roll-conversion --> core/unfrozen-auto-mode-warning
   core/base-acquisition-planner --> film-base/half-frame-calibration
   film-base/estimate-reuse-output --> film-base/tiling-uniformity-validator
-  algo/reference-anchored-sigmoid --> film-base/dmax-per-channel-reduction
-  algo/density --> algo/curve-endpoint-validation
-  core/pipeline-orchestration --> algo/curve-endpoint-validation
-  algo/regional-color-balance --> algo/curve-endpoint-validation
-  algo/reference-anchored-sigmoid --> algo/curve-endpoint-validation
   algo/reference-anchored-sigmoid --> analysis/comparison-review-tooling
   algo/film-stock-profiles --> io/scanner-density-calibration
   io/input-data-semantics --> io/scanner-density-calibration
-  algo/reference-anchored-sigmoid --> algo/content-aware-sigmoid-toe
-  core/roll-conversion --> algo/content-aware-sigmoid-toe
-  output/presets --> algo/content-aware-sigmoid-toe
   algo/negative-reconstruction-density-curves --> color/film-rgb-working-space
   color/management --> color/film-rgb-working-space
   color/film-rgb-working-space --> color/film-master-render-pipeline
@@ -427,7 +486,6 @@ graph TD
   output/iso-gain-map-metadata --> output/mp-container-conformance
   output/iso-gain-map-metadata --> output/gain-map-dialect-activation
   output/presets --> output/sdr-preset-followups
-  output/presets --> output/display-p3-default
   output/presets --> output/adobe-rgb-gamut
   output/presets --> output/sdr-report-block
   output/presets --> output/sdr-jpeg-preset
@@ -461,17 +519,12 @@ graph TD
   core/roll-conversion --> output/presets
   core/conversion-versioning --> output/presets
   output/presets --> analysis/display-output-acceptance
-  algo/split-default-migration --> analysis/display-output-acceptance
-  output/display-p3-default --> analysis/display-output-acceptance
   analysis/real-scan-verification --> analysis/display-output-acceptance
   analysis/real-scan-verification --> analysis/conversion-analysis-tooling
   analysis/real-scan-verification --> analysis/harness-regression-tests
   analysis/conversion-analysis-tooling --> analysis/asset-manifest
   analysis/asset-manifest --> analysis/conversion-metrics
   analysis/conversion-metrics --> analysis/nlp-comparison
-  analysis/conversion-metrics --> algo/contrast-latitude-spike
-  analysis/nlp-comparison --> algo/contrast-latitude-spike
-  algo/conversion-presets --> algo/contrast-latitude-spike
   analysis/conversion-metrics --> analysis/metrics-chart-design
   analysis/metrics-chart-design --> analysis/metrics-visualization
   analysis/comparison-review-tooling --> analysis/metrics-visualization
@@ -481,6 +534,81 @@ graph TD
   film-base/auto-base-redesign --> core/base-acquisition-planner
   film-base/ir-holder-detection --> core/base-acquisition-planner
   film-base/dmax-reference --> core/base-acquisition-planner
+  nf-core/new-flow-flag --> nf-core/stage-skeleton
+  nf-core/stage-skeleton --> nf-core/minimal-end-to-end
+  nf-reconstruction/fixed-decode --> nf-core/minimal-end-to-end
+  nf-core/new-flow-flag --> nf-core/knob-availability-audit
+  nf-core/minimal-end-to-end --> nf-core/default-flip
+  nf-core/knob-availability-audit --> nf-core/default-flip
+  nf-retire/sigmoid-and-simple --> nf-core/default-flip
+  nf-retire/display-tones --> nf-core/default-flip
+  nf-retire/dmax-machinery --> nf-core/default-flip
+  nf-core/stage-skeleton --> nf-reconstruction/fixed-decode
+  nf-reconstruction/fixed-decode --> nf-reconstruction/anchor-rule
+  nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
+  nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
+  nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
+  nf-core/stage-skeleton --> nf-scene-correction/stage
+  nf-reconstruction/fixed-decode --> nf-scene-correction/stage
+  nf-scene-correction/stage --> nf-scene-correction/flare-removal
+  nf-scene-correction/stage --> nf-scene-correction/levels-knob
+  nf-scene-correction/stage --> nf-look/stage
+  nf-look/stage --> nf-look/per-channel-grade
+  nf-look/stage --> nf-look/path-to-white
+  nf-look/stage --> nf-look/contrast
+  nf-reconstruction/gamma-split --> nf-look/contrast
+  nf-look/contrast --> nf-look/look-presets
+  nf-look/per-channel-grade --> nf-look/look-presets
+  nf-look/stage --> nf-look/stock-data-home
+  nf-look/stage --> nf-look/scene-range-mapping
+  nf-scene-correction/stage --> nf-look/scene-range-mapping
+  nf-look/stage --> nf-display-stages/fit-range
+  nf-display-stages/fit-range --> nf-display-stages/fit-gamut
+  nf-display-stages/fit-range --> nf-display-stages/parametric-operator
+  nf-display-stages/fit-range --> nf-display-stages/branch-contract
+  nf-display-stages/fit-gamut --> nf-display-stages/branch-contract
+  nf-display-stages/branch-contract --> nf-destinations/preset-set
+  output/output-path-suffix --> nf-destinations/preset-set
+  nf-destinations/preset-set --> nf-destinations/direct-preset
+  output/adobe-rgb-gamut --> nf-destinations/direct-preset
+  nf-destinations/preset-set --> nf-destinations/memory-profiles
+  nf-destinations/preset-set --> nf-destinations/default-destination
+  nf-destinations/direct-preset --> nf-destinations/default-destination
+  nf-destinations/preset-set --> nf-calibration/scale-gamma-loop
+  nf-verification/reference-snapshot --> nf-calibration/scale-gamma-loop
+  nf-calibration/scale-gamma-loop --> nf-calibration/offset-question
+  nf-calibration/scale-gamma-loop --> nf-calibration/neutrality-gate
+  analysis/calibration-frame-capture --> nf-calibration/neutrality-gate
+  io/scanner-density-calibration --> nf-calibration/user-calibration-procedure
+  nf-calibration/scale-gamma-loop --> nf-calibration/user-calibration-procedure
+  analysis/review-build-axis --> nf-verification/reference-snapshot
+  nf-core/minimal-end-to-end --> nf-verification/fingerprints
+  nf-core/minimal-end-to-end --> nf-verification/stage-goldens
+  nf-verification/reference-snapshot --> nf-verification/benchmark-set
+  nf-core/minimal-end-to-end --> nf-verification/benchmark-set
+  nf-reconstruction/fixed-decode --> nf-verification/film-rgb-export
+  nf-core/minimal-end-to-end --> nf-retire/legacy-custom
+  nf-verification/reference-snapshot --> nf-retire/legacy-custom
+  nf-retire/legacy-custom --> nf-retire/display-tones
+  nf-display-stages/fit-range --> nf-retire/display-tones
+  nf-retire/legacy-custom --> nf-retire/sigmoid-and-simple
+  nf-verification/stage-goldens --> nf-retire/sigmoid-and-simple
+  nf-reconstruction/fixed-decode --> nf-retire/sigmoid-and-simple
+  nf-reconstruction/anchor-rule --> nf-retire/dmax-machinery
+  nf-retire/legacy-custom --> nf-retire/dmax-machinery
+  nf-look/per-channel-grade --> nf-retire/regional-balance
+  nf-retire/legacy-custom --> nf-retire/print-prefix-rename
+  nf-scene-correction/stage --> nf-retire/print-prefix-rename
+  nf-core/default-flip --> nf-docs/using-nc
+  nf-core/default-flip --> analysis/display-output-acceptance
+  nf-retire/sigmoid-and-simple --> nf-retire/characteristic
+  nf-look/stock-data-home --> nf-retire/characteristic
+  nf-core/stage-skeleton --> nf-core/report-contract
+  nf-core/stage-skeleton --> nf-core/recipe-schema
+  nf-core/minimal-end-to-end --> nf-core/subcommands
+  nf-core/stage-skeleton --> nf-core/buffer-strategy
+  nf-look/path-to-white-spike --> nf-core/stage-skeleton
+  nf-look/path-to-white-spike --> nf-look/path-to-white
 ```
 
 Dependency list (a task is executable when all its deps are `[x]` done):
@@ -526,40 +654,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   transmission step wedge
 - `film-base/estimation`: `core/project-foundation`
 - `film-base/auto-base-redesign` (post-MVP): `film-base/estimation`
-- `film-base/auto-base-neutral-stock` (post-MVP): `film-base/auto-base-redesign`
-- `film-base/auto-base-real-scan-refusal` (post-MVP): `film-base/auto-base-redesign`
 - `film-base/ir-holder-detection` (post-MVP): `film-base/auto-base-redesign`
-- `film-base/white-holder-support` (post-MVP, the RGB-only fallback for the no-IR path):
-  `film-base/ir-holder-detection`
-  — film-base/auto-base-redesign is now transitive via film-base/ir-holder-detection
 - `film-base/content-fallback` (post-MVP): `film-base/estimation`
 - `film-base/estimate-reuse-output` (post-MVP): `core/pipeline-orchestration`
 - `film-base/dmax-reference` (post-MVP): `algo/dmax-white-anchor`
-- `film-base/clipped-dmax-reference` (post-MVP): `film-base/dmax-reference`
-  — preserve the estimate-to-recipe-to-convert workflow when a valid fully-exposed leader is
-  clipped at zero transmission: report a machine-readable out-of-boundary state and resolve a
-  documented conversion fallback without presenting it as a measured density. Provisional
-  fallback: 1.3, pending broader validation
-- `film-base/dense-base-dmax-plausibility` (post-MVP): `film-base/dmax-reference`
-- `film-base/dmax-anchor-reliability` (post-MVP): `film-base/dmax-reference`, `algo/reference-anchored-sigmoid`
-  — follow-up on a **completed** task's contract, so a new task rather than an edit: the
-  leader-measured anchor is uncontrolled (same stock 0.295 apart while the base agrees to
-  0.0005), is exceeded by real content, and the no-reference `NOMINAL_DMAX` fallback still
-  wants calibrating against measured rolls (0.90–1.74; the shipped nominal moved 2.0 → 1.3 on
-  2026-08-08, which is a rounded median, not a calibration). `algo` candidates 2 and 3 are
-  contingent on this
-- `film-base/dmax-per-channel-reduction` (post-MVP): `film-base/dmax-reference`, `algo/reference-anchored-sigmoid`
-  — sibling of `film-base/dmax-anchor-reliability` on a different axis: that one questions the
-  anchor's *level*, this one the per-channel *ratio* the gray-mean reduction discards
-  (`reference_dmax` measures `D_c` per channel, then averages). Measured spread is 0.05–0.14
-  density (0.16–0.46 stops) with inconsistent direction. Redundant with `print.white_balance`
-  under the **exponential** curve (a per-channel anchor is exactly a per-channel gain) but
-  **not** under the shipped sigmoid. That exemption is closing: `algo/reconstruction-render-curve-split`
-  settled (2026-09-02) that the default reconstruction sheds both knees, which *is* the
-  exponential. That briefly made it a **blocker** for `algo/split-default-migration`; the edge
-  was **removed 2026-09-10** — `algo/film-stock-profiles` disqualified the leader as a
-  per-channel source and showed the term is a *slope* (`density.scale`, and `characteristic`'s
-  own tables), not the anchor this task weighs. Changes no pixels
 - `film-base/ir-usability-detection` (post-MVP): `film-base/ir-holder-detection`
   — decide IR usability from the **plane itself**, not from `--film-type`, which becomes a hint.
   Measured 2026-08-11: IR separability tracks the frame's *density*, not the stock's chemistry —
@@ -637,18 +735,6 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   measured in, not against the curve. The black pin
   (candidate 5b, "most likely GO" on shadow numbers) is *dominated* by the shipped default when
   judged as a whole picture
-- `algo/content-aware-sigmoid-toe` (post-MVP, **optional / deferred**): `algo/reference-anchored-sigmoid`, `core/roll-conversion`, `output/presets`, `algo/auto-anchor-interior-measurement`; no downstream blockers
-  — the last is a hard prerequisite, not a nicety: content-driven anchoring is currently
-  unusable because `DmaxSource::Auto` measures the whole frame and the opaque holder owns the
-  top percentile
-- `algo/curve-endpoint-validation` (post-MVP): `algo/density`, `algo/reference-anchored-sigmoid`, `core/pipeline-orchestration`, `algo/regional-color-balance`
-  — pre-decode check that a resolved curve places its tonal endpoints usefully. The shipped sigmoid
-  defect (black asymptote 0.053 → 72/255) was computable from config the whole time; the same hole
-  is open on the default exponential curve, where the film base renders to
-  `10^(gamma*(D'base - Dmax))` (a measured `--d-max 0.391` at default gamma puts it at 0.406 and
-  nothing warns). Both endpoints must be read off the renderer's own curve, not a re-derived closed
-  form, and `DmaxSource::Auto` has no pre-decode value. Warning tier, not a hard error —
-  `--sigmoid-white-at-d-max` is a retained diagnostic. Ships no pixel change
 - `algo/film-stock-profiles` (post-MVP): `algo/reference-anchored-sigmoid`
 - `algo/characteristic-curve-coverage` (post-MVP): `algo/film-stock-profiles`
   — filed 2026-09-10, closed the same day. The wiring
@@ -658,26 +744,6 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   where the default actually moves — and it is still the one that owns the
   `PIPELINE_FINGERPRINTS` row, which stays unwritten here on purpose: the gate covers the
   *default* render, and it hashes raw f32 bits with no 1-ULP window
-- `algo/auto-anchor-interior-measurement` (post-MVP): `algo/reference-anchored-sigmoid`, `film-base/auto-base-redesign`, `film-base/holder-depth-mask`
-  — rescoped 2026-09-12: **measurement only, the output image is never cropped**. The holder
-  owns the top percentile of a whole-scan read; the rebate sits at `D ≈ 0` and is deliberately
-  not detected. Depends on `film-base/holder-depth-mask` so the measurement region has one owner
-  — both cuts, the inset default, its override **and the `auto_dmax` wiring** live there
-  (2026-09-16). What is left here is the **loud-failure range check** that makes `Auto` safe,
-  `measure_balance_range`, and whether `Auto` survives at all
-  — `DmaxSource::Auto` measures the whole frame, so the opaque holder owns the 99.5th
-  percentile (resolves 2.23–2.37 against a roll Dmax of 1.28–1.38). Blocks every
-  content-driven mode, hence the edge into `algo/content-aware-sigmoid-toe`
-- `algo/sigmoid-parameter-calibration` (post-MVP): `algo/reference-anchored-sigmoid`, `algo/film-stock-profiles`, `analysis/calibration-frame-capture`
-  — the bracketed roll + grey card it needs are the same shoot. The
-  `io/scanner-density-calibration` edge was removed 2026-09-13 as soft ("ideally" a step wedge)
-  — turns the provisional contrast/shoulder/offset values into calibrated ones. Needs a
-  bracketed roll and a grey card, not merely more frames: per-frame exposure preference is
-  frame optimisation and cannot select a parameter
-  — deliberately **not** a dependency of `film-base/dense-base-dmax-plausibility`
-  (that task can loosen its floor without a full registry; a false edge would kill
-  real parallelism), but the two must be coordinated so stock-awareness is not
-  solved twice
 - `algo/reconstruction-render-curve-split` (post-MVP, **verdict reached 2026-09-02**):
   `algo/reference-anchored-sigmoid`, `color/film-master-render-pipeline`
   — filed 2026-08-10 to move the sigmoid character to the *display* stage, restoring the
@@ -700,36 +766,6 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   the anchor instead). Also the reason the default can move without breaking `film-master`:
   a preset does not set `output.preset`, and the non-display presets keep resolving their
   own tone and exposure.
-- `algo/contrast-latitude-spike` (post-MVP): `analysis/conversion-metrics`,
-  `algo/conversion-presets`, `analysis/nlp-comparison`
-  — filed 2026-09-11 out of the first measured nc-versus-NLP numbers. nc's `p95 − p5` is
-  3.55-4.51 stops where NLP's is 3.83-8.14 on the same three frames, and nc's figure moves
-  0.96 stops across them where NLP's moves 4.31. A **spike**: the scene range was never
-  measured, so "nc is narrower" and "nc faithfully carries a narrower scene" are not yet
-  distinguishable, and "change nothing" is an acceptable outcome
-- `algo/characteristic-default-audit` (post-MVP, **executable now — no calibration gate**): `algo/conversion-presets`
-  — filed 2026-09-13. Three validation rules key on the **resolved curve**, not on flag
-  presence, so a characteristic default flips `--d-max`, `--auto-d-max` and `--sigmoid-*`
-  from exit 0 to exit 2 for users who typed only that flag — `--d-max` being the documented
-  roll-calibration workflow. Audit and fix the flag surface *before* the default moves, so
-  the migration is a version bump rather than a bump plus newly-wrong diagnostics
-- `algo/characteristic-fingerprint-vector` (post-MVP): `algo/characteristic-curve-coverage`
-- `algo/split-default-migration` (post-MVP): `algo/reconstruction-render-curve-split`,
-  `algo/conversion-presets`, `algo/characteristic-curve-coverage`,
-  `algo/characteristic-fingerprint-vector`,
-  `algo/characteristic-default-audit`, `analysis/calibration-frame-capture`
-  — filed 2026-09-02 out of `algo/reconstruction-render-curve-split`, which reached a positive
-  verdict but deliberately excluded the default migration. **Rescoped 2026-09-12** to what it
-  now actually is: since `algo/conversion-presets` shipped, activation means making a bare
-  `nc convert` resolve what `--preset characteristic-generic` already expands to. Four deps are
-  *constructive* — verdict, mechanism, pinned wiring, and the flag-surface audit. The last,
-  `analysis/calibration-frame-capture`, is a **gate on a different axis**: the goal is where
-  tone shaping happens, the gate is per-channel colour neutrality (the green residual, which
-  the split makes more visible rather than creating).
-  That gate pointed at `film-base/dmax-per-channel-reduction` until 2026-09-10 and at
-  `io/scanner-density-calibration` until 2026-09-12 — the latter was "necessary, not
-  sufficient" because that task produces the **fit**, not the **reference frames** a neutrality
-  measurement is taken against. It now points at the task that produces those frames
 - `algo/dmax-white-anchor` (post-MVP): `algo/density`
 - `algo/density-safety-bounds` (post-MVP): `algo/density`, `core/pipeline-orchestration`
 - `algo/auto-neutral-wb` (post-MVP): `algo/density`, `core/pipeline-orchestration`
@@ -771,9 +807,6 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   — Android 15+ is the only platform that reads *both* dialects, so the only place
   coexistence is observable. Rescoped 2026-09-13: the CLI half shipped as `gain-map-hdr`
 - `output/sdr-preset-followups` (post-MVP; no downstream blockers): `output/presets`
-- `output/display-p3-default` (post-MVP): `output/presets`
-  — SDR lossless is the default (decided 2026-08-09, reaffirmed 2026-09-13); order against
-  `algo/split-default-migration` open, one bump preferred
 - `output/adobe-rgb-gamut` (post-MVP): `output/presets`
 - `output/sdr-report-block` (post-MVP): `output/presets`
 - `output/sdr-jpeg-preset` (post-MVP): `output/presets`, `output/sdr-display-rendering`
@@ -824,8 +857,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `telemetry/upload` (post-MVP): `telemetry/schema-v2`, `telemetry/ingestion-service`
 - `telemetry/panic-hook` (post-MVP): `telemetry/upload`
 - `analysis/real-scan-verification` (post-MVP): `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `film-base/dmax-reference`
-- `analysis/display-output-acceptance` (post-MVP): `output/presets`, `analysis/real-scan-verification`, `algo/split-default-migration`, `output/display-p3-default`
-  — the default it accepts is the one both default moves ship
+- `analysis/display-output-acceptance` (post-MVP): `output/presets`, `analysis/real-scan-verification`, `nf-core/default-flip`
+  — the default it accepts is the one that move ships
 - `analysis/conversion-analysis-tooling` (post-MVP, spike): `analysis/real-scan-verification`
 - `analysis/asset-manifest` (post-MVP): `analysis/conversion-analysis-tooling`
 - `analysis/conversion-metrics` (post-MVP): `analysis/asset-manifest`
@@ -840,7 +873,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   — filed 2026-09-12. Three tasks named these frames as a precondition in their own words and
   none owned producing them, so the graph reported work executable when the thing blocking it
   was a roll of film that did not exist. It gates `io/scanner-density-calibration`,
-  `algo/sigmoid-parameter-calibration`, and `algo/split-default-migration`'s release gate
+  `nf-calibration/scale-gamma-loop`, and `nf-calibration/neutrality-gate`
 - `analysis/review-reference-cells` (post-MVP): `analysis/comparison-review-tooling`
 - `analysis/review-build-axis` (post-MVP): `analysis/comparison-review-tooling`
 - `analysis/comparison-review-tooling` (post-MVP): `algo/reference-anchored-sigmoid`
@@ -864,6 +897,153 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 > ones out of the PR #12 review and the Negative Lab Pro feature comparison (see
 > [progress/](progress/)). Design-spec §12 is the roadmap these follow-ups sit
 > against.
+
+
+**New-flow migration** (`docs/nf-migration.md`) — the `nf-*` epics that move nc to
+the design in `docs/design-update.md`:
+
+- `nf-core/new-flow-flag` (new flow): none
+  — scaffolding with a written expiry — CLI-only, never a recipe key, removed
+  by `nf-core/default-flip`
+- `nf-core/stage-skeleton` (new flow): `nf-core/new-flow-flag`, `nf-look/path-to-white-spike`
+  — the modules and typed boundaries, written fresh rather than extracted
+- `nf-core/minimal-end-to-end` (new flow): `nf-core/stage-skeleton`, `nf-reconstruction/fixed-decode`
+  — the milestone that expires the flag and unblocks retirement
+- `nf-core/knob-availability-audit` (new flow): `nf-core/new-flow-flag`
+  — classify every knob value-rejected vs flag-rejected before the default
+  moves
+- `nf-core/default-flip` (new flow): `nf-core/minimal-end-to-end`, `nf-core/knob-availability-audit`, `nf-retire/sigmoid-and-simple`, `nf-retire/display-tones`, `nf-retire/dmax-machinery`
+  — the default resolves the new chain; version bump, drift row, before/after
+  report. Supersedes the flip half of `algo/split-default-migration`
+- `nf-reconstruction/fixed-decode` (new flow): `nf-core/stage-skeleton`
+  — exponential, toe passed through as recorded — defaults and wiring, not new
+  arithmetic
+- `nf-reconstruction/anchor-rule` (new flow): `nf-reconstruction/fixed-decode`
+  — `mid-at-base-offset` as the only rule, and a runtime `d` the render path
+  is currently forbidden to read
+- `nf-reconstruction/gamma-split` (new flow): `nf-reconstruction/fixed-decode`
+  — the film-linearization half stays; print contrast becomes a look knob
+- `nf-reconstruction/curve-endpoint-warning` (new flow): `nf-reconstruction/anchor-rule`
+  — supersedes `algo/curve-endpoint-validation`: read the endpoint off the
+  renderer's own curve, at warning tier
+- `nf-reconstruction/mono-decode` (new flow): `nf-reconstruction/fixed-decode`
+  — a gap — the design is written for three dye layers and says nothing about
+  where mono pools
+- `nf-scene-correction/stage` (new flow): `nf-core/stage-skeleton`, `nf-reconstruction/fixed-decode`
+  — white balance and exposure resolved once and reported, instead of a fused
+  expression
+- `nf-scene-correction/flare-removal` (new flow): `nf-scene-correction/stage`
+  — the black point does two jobs today; the scene-referred half lands here
+- `nf-scene-correction/levels-knob` (new flow): `nf-scene-correction/stage`
+  — `linear_range` is a levels remap, not fit range — decide whether it
+  survives and where
+- `nf-look/stage` (new flow): `nf-scene-correction/stage`
+  — scene-referred and before the SDR/HDR branch, because a gain map needs
+  agreement below diffuse white
+- `nf-look/per-channel-grade` (new flow): `nf-look/stage`
+  — the tunable counterpart of the decode's `scale`; subsumes the regional
+  balance
+- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-look/path-to-white-spike`
+  — what makes whites read clean, made a deliberate control instead of a
+  gamut-map side effect
+- `nf-look/contrast` (new flow): `nf-look/stage`, `nf-reconstruction/gamma-split`
+  — the look half of `gamma`; supersedes `algo/contrast-latitude-spike`
+- `nf-look/look-presets` (new flow): `nf-look/contrast`, `nf-look/per-channel-grade`
+  — every current `--preset` names a retiring curve and an exposure calibrated
+  to the old chain
+- `nf-look/stock-data-home` (new flow): `nf-look/stage`
+  — the registry and datasheets lose their consumer when `characteristic`
+  leaves the decode
+- `nf-look/scene-range-mapping` (new flow): `nf-look/stage`, `nf-scene-correction/stage`
+  — a spike: opt-in and bounded, never the default — roll consistency is the
+  promise
+- `nf-display-stages/fit-range` (new flow): `nf-look/stage`
+  — one function both branches use, reinhard as the baseline setting
+- `nf-display-stages/fit-gamut` (new flow): `nf-display-stages/fit-range`
+  — one implementation, where there are three near-copies today
+- `nf-display-stages/parametric-operator` (new flow): `nf-display-stages/fit-range`
+  — reinhard compresses upward only, so the shadow end is a subtraction;
+  supersedes `algo/content-aware-sigmoid-toe`
+- `nf-display-stages/branch-contract` (new flow): `nf-display-stages/fit-range`, `nf-display-stages/fit-gamut`
+  — where the branch happens and what each side may differ in
+- `nf-destinations/preset-set` (new flow): `nf-display-stages/branch-contract`, `output/output-path-suffix`
+  — the destinations and their suffix rules
+- `nf-destinations/direct-preset` (new flow): `nf-destinations/preset-set`, `output/adobe-rgb-gamut`
+  — minimal rendering into Adobe RGB for a workflow that continues in an
+  editor
+- `nf-destinations/memory-profiles` (new flow): `nf-destinations/preset-set`
+  — a `RunProfile` per destination; sharing an arm is measured, not assumed
+- `nf-destinations/default-destination` (new flow): `nf-destinations/preset-set`, `nf-destinations/direct-preset`
+  — supersedes `output/display-p3-default`; one bump rather than two
+- `nf-calibration/scale-gamma-loop` (new flow): `nf-destinations/preset-set`, `nf-verification/reference-snapshot`
+  — the two knobs the decode owns, tuned against a held-fixed rendering.
+  Supersedes `algo/sigmoid-parameter-calibration` and
+  `film-base/dmax-per-channel-reduction`
+- `nf-calibration/offset-question` (new flow): `nf-calibration/scale-gamma-loop`
+  — the term is real; two candidate values lost a review, and identifying one
+  needs one illuminant
+- `nf-calibration/neutrality-gate` (new flow): `nf-calibration/scale-gamma-loop`, `analysis/calibration-frame-capture`
+  — the release gate — supersedes the gate half of
+  `algo/split-default-migration`
+- `nf-calibration/user-calibration-procedure` (new flow): `io/scanner-density-calibration`, `nf-calibration/scale-gamma-loop`
+  — we fit our own chain, never a user's, so the shipped value is a prior
+- `nf-verification/reference-snapshot` (new flow): `analysis/review-build-axis`
+  — a tag freezes the old binary — this is what lets `nf-retire` run early
+- `nf-verification/fingerprints` (new flow): `nf-core/minimal-end-to-end`
+  — retire the print half of the `render` row, not the row; supersedes
+  `algo/characteristic-fingerprint-vector`
+- `nf-verification/stage-goldens` (new flow): `nf-core/minimal-end-to-end`
+  — curated per-pixel vectors for the new stages; never a full-frame or
+  post-transform hash
+- `nf-verification/benchmark-set` (new flow): `nf-verification/reference-snapshot`, `nf-core/minimal-end-to-end`
+  — every current case names `legacy`; comparability comes from the tagged
+  build
+- `nf-verification/film-rgb-export` (new flow): `nf-reconstruction/fixed-decode`
+  — the cleanest measurement point is before the 3×3, which nc cannot export
+  today
+- `nf-retire/legacy-custom` (new flow): `nf-core/minimal-end-to-end`, `nf-verification/reference-snapshot`
+  — removes the second implementation of the print controls
+- `nf-retire/display-tones` (new flow): `nf-retire/legacy-custom`, `nf-display-stages/fit-range`
+  — both exist for reconstructions already bounded at white
+- `nf-retire/sigmoid-and-simple` (new flow): `nf-retire/legacy-custom`, `nf-verification/stage-goldens`, `nf-reconstruction/fixed-decode`
+  — `simple` is the cheap fixture in a dozen unrelated test modules
+- `nf-retire/dmax-machinery` (new flow): `nf-reconstruction/anchor-rule`, `nf-retire/legacy-custom`
+  — the reconstruction anchor and the leader-measured reference; frame-range
+  measurement may return as an opt-in
+- `nf-retire/regional-balance` (new flow): `nf-look/per-channel-grade`
+  — subsumed by the look's grade, and non-monotone at large values
+- `nf-retire/print-prefix-rename` (new flow): `nf-retire/legacy-custom`, `nf-scene-correction/stage`
+  — after the second implementation is gone, so nothing is renamed twice
+- `nf-docs/design-spec` (new flow): none
+  — principle 2, the NC film RGB v1 contract, and the curves section
+- `nf-docs/using-nc` (new flow): `nf-core/default-flip`
+  — verified against the binary, never against a diff
+- `nf-docs/claude-md` (new flow): none
+  — the architecture map, the HDR framing, and retiring the migration rule
+  itself
+
+- `nf-look/path-to-white-spike` (new flow): none
+  — runs against today's binary so it can run first; `path-to-white` sits at
+  depth 5, so without it the plan tests its central promise after the sigmoid
+  is retired
+- `nf-retire/characteristic` (new flow): `nf-retire/sigmoid-and-simple`, `nf-look/stock-data-home`
+  — the curve, `--film-stock`, three preset names and `default_scale_for`'s
+  per-curve case; the stock *data* is `nf-look/stock-data-home`'s call
+- `nf-core/report-contract` (new flow): `nf-core/stage-skeleton`
+  — ~20 report sections and the per-stage timing buckets are keyed to the old
+  chain, and `nctool` parses both
+- `nf-core/recipe-schema` (new flow): `nf-core/stage-skeleton`
+  — `deny_unknown_fields` cannot see a *known but meaningless* key, so a stale
+  `print.*` section is accepted-and-ignored
+- `nf-core/subcommands` (new flow): `nf-core/minimal-end-to-end`
+  — roll's planner is the third `default_scale_for` site; `inspect` reports a
+  resolved `dmax`; retirement adds a class of removed-flag errors
+- `nf-core/buffer-strategy` (new flow): `nf-core/stage-skeleton`
+  — the GPU spike decided the seams are the existing typed boundaries, not one
+  per stage; a buffer per stage is ≈0.9 GB each at 74.6 MP
+- `nf-docs/reference-sweep` (new flow): none
+  — about a dozen `src/` and doc pointers still assert an inactive task is
+  live or owns a decision
 
 ## Tasks
 
@@ -961,33 +1141,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 
 - [x] [Film-base / Dmin estimation](tasks/film-base/estimation.md)
 - [x] [Robust auto film-base detection](tasks/film-base/auto-base-redesign.md)
-- [ ] [Neutral-base robustness for auto film-base detection](tasks/film-base/auto-base-neutral-stock.md) — **parked, likely moot** — hardens a detector being retired
-- [ ] [Why `--auto-base` refuses every real scan](tasks/film-base/auto-base-real-scan-refusal.md) — **parked** — the detector it investigates is being retired
 - [x] [IR-assisted film-holder detection](tasks/film-base/ir-holder-detection.md)
-- [ ] [Light film holder support](tasks/film-base/white-holder-support.md) — **parked, likely moot** — polarity has nothing left to configure
 - [ ] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — owns `--base-content`; supersedes the content-source sub-item in `film-base/auto-base-redesign`
 - [x] [Reuse-ready `nc estimate` output](tasks/film-base/estimate-reuse-output.md)
 - [x] [Roll-fixed Dmax from a fully-exposed reference frame](tasks/film-base/dmax-reference.md) — shipped roll-fixed acquisition/default policy; the replacement density-curve stage preserves scalar exponential placement and sigmoid curve shaping
-- [ ] [Clipped Dmax reference handoff](tasks/film-base/clipped-dmax-reference.md) — represent a valid leader beyond the scanner boundary in estimate output and carry it into conversion with an explicit, documented fallback rather than a fabricated measurement; provisional fallback 1.3
-- [ ] [Stock-aware Dmax plausibility (dense-base stocks)](tasks/film-base/dense-base-dmax-plausibility.md) — from real-scan verification (2026-07-23): the reference-Dmax `≳1.0` floor + base-uniformity check are C41-calibrated and false-alarm on Harman Phoenix's dense/non-orange base; make the floor stock-relative while keeping a loud failure on genuinely wrong regions
-- [ ] [Dmax anchor reliability](tasks/film-base/dmax-anchor-reliability.md) — follow-up on a
-  **completed** contract: the leader-measured anchor is *uncontrolled* (two rolls of one stock
-  0.295 density apart while their red base agrees to 0.0005), real content measures *above* it,
-  and leaders are uniform so it is not a fogging gradient. The no-reference `NOMINAL_DMAX`
-  fallback also still wants calibrating against measured rolls (0.90–1.74, median ≈1.34); the
-  shipped nominal moved 2.0 → 1.3 on 2026-08-08, a rounded median rather than a calibrated
-  value, so this task still owns the number. `algo` candidates 2 and 3 are contingent on this.
-- [~] [Per-channel Dmax and the gray-mean reduction](tasks/film-base/dmax-per-channel-reduction.md) —
-  `reference_dmax` measures `D_c` per channel then reduces by `(r+g+b)/3`, asserting the highlight
-  end shares the base's colour cast. Committed leader data says otherwise: spread 0.05–0.14 density
-  (0.16–0.46 stops), direction inconsistent across stocks. A per-channel anchor is *algebraically* a
-  per-channel gain, so it is redundant with `print.white_balance` under the exponential curve — but
-  **not** under the sigmoid default, where it shifts each channel's toe/shoulder position.
-  Investigation + impact verdict; ships no pixel change. **Parked 2026-09-13**: the original
-  anchor question closed (*absorbed* — the term is a slope, and the leader is disqualified as
-  a source), and the re-scoped question — a measured per-channel gain for the parametric path
-  — cannot be settled on the current assets, whose two whole rolls share one trip's palette.
-  Waiting on rolls with different subject matter, or a bracketed grey/ColorChecker target
 
 - [x] [Decide IR usability by measurement](tasks/film-base/ir-usability-detection.md) — key IR holder
   detection on the **plane itself** rather than `--film-type`, which becomes a hint. Measured 2026-08-11 on
@@ -1042,19 +1199,6 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   blown under the shipped unbounded operator. Also measured here: the anchor trades
   midtone against black *and* highlights monotonically, a toe *raises* the black floor rather
   than pulling it down, and `GainMapMax` is controlled by the shoulder alone
-- [ ] [Content-aware sigmoid toe](tasks/algo/content-aware-sigmoid-toe.md) — **optional / deferred** explicit frame/roll convenience modes; the reference path remains the default and this blocks no output
-- [ ] [Curve endpoint validation](tasks/algo/curve-endpoint-validation.md) — warn **before decode**
-  when a resolved curve places its tonal endpoints so badly the render cannot approach white or
-  black. Read both endpoints off the renderer's own curve at the **reachable film base** — the
-  same rule for both curves: `D'base` is `density.offset` plus any balance, per channel, not 0.
-  An idealized floor is the wrong metric either way (exponential has none; the sigmoid's
-  asymptote can sit far below its reachable base). The white side is `s_curve(R)`, a
-  **reference-placement** check, not a reachability one. The shipped sigmoid defect (0.053 → 72/255) was computable from
-  config all along and took a visual review to find; the same hole is open on the **default**
-  exponential curve, where a measured `--d-max 0.391` at default gamma renders the base at 0.406
-  and only the encode-side clip counter says anything. Warning tier (`--strict` promotes);
-  `--no-d-max` is exempt on **exponential only** (sigmoid already hard-errors) and `simple` is out
-  of scope; ships no pixel change
 - [x] [Auto neutral white balance](tasks/algo/auto-neutral-wb.md)
 - [x] [Regional (shadow/highlight) color balance](tasks/algo/regional-color-balance.md)
 - [x] [Film-stock profiles](tasks/algo/film-stock-profiles.md) — a selectable registry of
@@ -1087,16 +1231,6 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   deliberately untouched — the gate covers the *default* render, so the row belongs to
   `algo/split-default-migration`, which now has the margin harness to decide whether its
   `render` hash is portable
-- [ ] [Exclude the holder from content-driven measurement](tasks/algo/auto-anchor-interior-measurement.md) —
-  `DmaxSource::Auto` takes the 99.5th percentile over the *whole* scan, so the nearly-opaque
-  film holder owns it (resolves 2.23–2.37 against roll Dmax 1.28–1.38) and every frame renders
-  black. **Rescoped 2026-09-12: measurement only — the output image is never cropped**, so
-  dimensions and aspect ratio are untouched. **Rescoped again 2026-09-16**: the region *and*
-  the `auto_dmax` wiring moved to `film-base/holder-depth-mask`. What is left is the
-  **loud-failure range check** that makes `Auto` safe (the seam deliberately leaves a window
-  where `Auto` reads a better region but still renders black out of range — tolerable only
-  because `Auto` is opt-in), `measure_balance_range`, and whether `Auto` survives at all.
-  Blocks every content-driven rendering mode.
 - [x] [Reconstruction / render curve split](tasks/algo/reconstruction-render-curve-split.md) —
   move the sigmoid character to the render stage, restoring the separate-sub-stages rule.
   **Verdict 2026-09-02: the split holds** — measured on seven frames at matched lightness, the
@@ -1115,33 +1249,6 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   mid-grey lands identically on every stock (decided 2026-09-16).
   **The default did not move with it** —
   making `characteristic-generic` the no-flag state is `algo/split-default-migration`
-- [ ] [Contrast / latitude spike](tasks/algo/contrast-latitude-spike.md) — decide whether
-  nc's tonal latitude should change, at which end, and by which mechanism. nc's `p95 − p5`
-  is narrower than NLP's on two of three frames and far more *stable* across them (0.96
-  stops against 4.31) — the signature of design-spec §3.8's per-roll recipe. The scene
-  range is unmeasured, so the cause is open; HDR and a new `--preset` axis are both
-  candidates, and "no change" is an acceptable outcome.
-- [ ] [A portable fingerprint vector for the characteristic curve](tasks/algo/characteristic-fingerprint-vector.md) — the `render` row the migration needs, bit-identical on both CI targets
-- [ ] [Make `characteristic-generic` what a bare `nc convert` resolves](tasks/algo/split-default-migration.md) —
-  the `pipeline_version` bump the split left out: reconstruction stops shaping tone, the display
-  operator carries the character. **Rescoped 2026-09-12** — since `--preset` shipped, activation
-  is making one already-expanded preset the no-flag state, not rewiring. The tone split is
-  decided; what gates the *release* is colour: neutrality against a known-neutral reference
-  (`analysis/calibration-frame-capture`), which replaced the "necessary, not sufficient" edge on
-  `io/scanner-density-calibration`. Read the fingerprint-portability note before writing a
-  `PIPELINE_FINGERPRINTS` row
-- [ ] [Audit the flag surface against a characteristic default](tasks/algo/characteristic-default-audit.md) —
-  **executable now, no calibration gate.** Three rules key on the *resolved curve* rather than
-  flag presence, so a characteristic default flips `--d-max`, `--auto-d-max` and `--sigmoid-*`
-  from exit 0 to exit 2 for users who typed only that flag, with a remedy naming a curve they
-  never chose. `--film-stock`'s no-flag path flips the other way (refusal → success) while its
-  guard stays live for explicit parametric curves, so it must **not** be deleted. Classify every
-  rule by all its inputs — flag, value, or both — and fix it before the default moves
-- [ ] [Sigmoid parameter calibration](tasks/algo/sigmoid-parameter-calibration.md) — turn the
-  provisional contrast (≈2.07), shoulder (≈0.6) and per-stock anchor offsets into calibrated
-  values. Needs a **bracketed roll** (so exposure labels are true by construction) and a **grey
-  card in frame**, not merely more frames — per-frame exposure preference is frame optimisation
-  and cannot select a parameter.
 - [ ] [Black & white negative support (mono color model)](tasks/algo/bw-support.md)
 - [ ] [Density safety bounds](tasks/algo/density-safety-bounds.md) — from the
   density-safety review: physical bounds on `density_scale`/`offset`/`gamma` (the
@@ -1181,7 +1288,6 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - [ ] [MP container conformance (CIPA DC-007)](tasks/output/mp-container-conformance.md) — **deferred conformance**, split out of `iso-gain-map-metadata` on 2026-08-06 after reading the free CIPA text. Three gaps, none functional: the gain map carries MP Type `000000` (Undefined) where DC-007 Table 4 assigns `050000` and marks `000000` "shall not be used" in a Baseline MP File — inherited from libultrahdr, whose own output does the same — the baseline is JFIF with no Exif APP1 where §4.2.1/§5.1 specify an Exif file (§7's *tag* requirements are only "should"), and in the gain-map image libultrahdr's prepended XMP puts `APP1` before `APP0 JFIF`, so JFIF is not first in the dependent image (found by review, not in the CIPA read). The type code is a masked 4-byte MPEntry patch but **changes shipped `ultra-hdr-v1` bytes**; the Exif half must be probed against `package()` and re-run through the ImageIO oracle, since a marker-layout change is exactly what silently disabled the ISO metadata once. Blocks nothing
 - [ ] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **Android 15+** decoder verification, the half `iso-gain-map-metadata` shipped without; the CLI path landed as the `gain-map-hdr` default (`output/presets`, 2026-08-09)
 - [ ] [SDR preset follow-ups (carried-over findings)](tasks/output/sdr-preset-followups.md) — the bounded review findings the SDR preset PRs left out; its three design questions are now the tasks below
-- [ ] [Make `display-p3` the default output preset](tasks/output/display-p3-default.md) — SDR lossless is the default (decided 2026-08-09, reaffirmed 2026-09-13); order against `algo/split-default-migration` still open
 - [ ] [Adobe RGB (1998) as an output gamut](tasks/output/adobe-rgb-gamut.md) — the definition exists; the gamut-mapped render does not
 - [ ] [Machine-readable SDR contract in the report](tasks/output/sdr-report-block.md) — the `hdr_coded_tiff` shape for the SDR presets
 - [ ] [A plain SDR JPEG output](tasks/output/sdr-jpeg-preset.md) — the SDR rendition as an 8-bit JPEG with no gain map; nc has none today
@@ -1341,3 +1447,212 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - [ ] [Reference cells in the review set](tasks/analysis/review-reference-cells.md) — an NLP export or hand-tweaked target as a grid cell beside nc's renders
 - [ ] [A build axis in the review set](tasks/analysis/review-build-axis.md) — the same frame and config across two builds, labelled from sidecar provenance
 
+
+
+### nf-core — [progress](progress/nf-core.md)
+> The new flow exists and can be selected: the `--new-flow` selector, the stage
+> module tree, a minimal end-to-end render, the knob audit, and the default flip.
+
+- [ ] [The `--new-flow` selector](tasks/nf-core/new-flow-flag.md) —
+  scaffolding with a written expiry — CLI-only, never a recipe key, removed by
+  `nf-core/default-flip`
+- [ ] [The new stage module tree](tasks/nf-core/stage-skeleton.md) — the
+  modules and typed boundaries, written fresh rather than extracted
+- [ ] [A minimal end-to-end render](tasks/nf-core/minimal-end-to-end.md) — the
+  milestone that expires the flag and unblocks retirement
+- [ ] [Audit every knob against the new
+  flow](tasks/nf-core/knob-availability-audit.md) — classify every knob
+  value-rejected vs flag-rejected before the default moves
+- [ ] [Flip the default to the new flow](tasks/nf-core/default-flip.md) — the
+  default resolves the new chain; version bump, drift row, before/after
+  report. Supersedes the flip half of `algo/split-default-migration`
+- [ ] [The report and telemetry shape for the new
+  chain](tasks/nf-core/report-contract.md) — ~20 report sections and the
+  per-stage timing buckets are keyed to the old chain, and `nctool` parses
+  both
+- [ ] [The recipe schema across the flow
+  boundary](tasks/nf-core/recipe-schema.md) — `deny_unknown_fields` cannot see
+  a *known but meaningless* key, so a stale `print.*` section is
+  accepted-and-ignored
+- [ ] [`roll`, `inspect` and `estimate` under the new
+  chain](tasks/nf-core/subcommands.md) — roll's planner is the third
+  `default_scale_for` site; `inspect` reports a resolved `dmax`; retirement
+  adds a class of removed-flag errors
+- [ ] [Stage seams, buffers and the IR
+  plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams
+  are the existing typed boundaries, not one per stage; a buffer per stage is
+  ≈0.9 GB each at 74.6 MP
+
+### nf-reconstruction — [progress](progress/nf-reconstruction.md)
+> The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`,
+> and `gamma` split into a calibration half and a look half.
+
+- [ ] [The fixed, stock-agnostic
+  decode](tasks/nf-reconstruction/fixed-decode.md) — exponential, toe passed
+  through as recorded — defaults and wiring, not new arithmetic
+- [ ] [One anchor rule, with a value for
+  `d`](tasks/nf-reconstruction/anchor-rule.md) — `mid-at-base-offset` as the
+  only rule, and a runtime `d` the render path is currently forbidden to read
+- [ ] [Split `gamma` into calibration and
+  look](tasks/nf-reconstruction/gamma-split.md) — the film-linearization half
+  stays; print contrast becomes a look knob
+- [ ] [Warn when the curve's endpoint is
+  unreachable](tasks/nf-reconstruction/curve-endpoint-warning.md) — supersedes
+  `algo/curve-endpoint-validation`: read the endpoint off the renderer's own
+  curve, at warning tier
+- [ ] [Where black-and-white fits the new
+  chain](tasks/nf-reconstruction/mono-decode.md) — a gap — the design is
+  written for three dye layers and says nothing about where mono pools
+
+### nf-scene-correction — [progress](progress/nf-scene-correction.md)
+> Photographic corrections as a named stage: white balance, exposure, and the
+> scene-referred half of the black point.
+
+- [ ] [Scene correction as a named stage](tasks/nf-scene-correction/stage.md)
+  — white balance and exposure resolved once and reported, instead of a fused
+  expression
+- [ ] [The scene-referred half of the black
+  point](tasks/nf-scene-correction/flare-removal.md) — the black point does
+  two jobs today; the scene-referred half lands here
+- [ ] [A home and a name for
+  `linear_range`](tasks/nf-scene-correction/levels-knob.md) — `linear_range`
+  is a levels remap, not fit range — decide whether it survives and where
+
+### nf-look — [progress](progress/nf-look.md)
+> The creative stage the old chain never had: the per-channel grade, the path to
+> white, contrast, look presets, and the film-stock data that outlives the decode's
+> `characteristic` curve.
+
+- [ ] [The look stage](tasks/nf-look/stage.md) — scene-referred and before the
+  SDR/HDR branch, because a gain map needs agreement below diffuse white
+- [ ] [A per-channel grade with a mid-grey
+  pivot](tasks/nf-look/per-channel-grade.md) — the tunable counterpart of the
+  decode's `scale`; subsumes the regional balance
+- [ ] [Highlight desaturation](tasks/nf-look/path-to-white.md) — what makes
+  whites read clean, made a deliberate control instead of a gamut-map side
+  effect
+- [ ] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
+  `gamma`; supersedes `algo/contrast-latitude-spike`
+- [ ] [Re-express the `--preset` bundles](tasks/nf-look/look-presets.md) —
+  every current `--preset` names a retiring curve and an exposure calibrated
+  to the old chain
+- [ ] [A home for the film-stock data](tasks/nf-look/stock-data-home.md) — the
+  registry and datasheets lose their consumer when `characteristic` leaves the
+  decode
+- [ ] [Spike: opt-in bounded scene-range
+  mapping](tasks/nf-look/scene-range-mapping.md) — a spike: opt-in and
+  bounded, never the default — roll consistency is the promise
+- [ ] [Spike: can a look-stage operator reproduce the knee'd sigmoid's
+  whites?](tasks/nf-look/path-to-white-spike.md) — runs against today's binary
+  so it can run first; `path-to-white` sits at depth 5, so without it the plan
+  tests its central promise after the sigmoid is retired
+
+### nf-display-stages — [progress](progress/nf-display-stages.md)
+> Fit range and fit gamut as real stages shared by both display branches, plus the
+> operator question the shadow end raises.
+
+- [ ] [Fit range as one stage](tasks/nf-display-stages/fit-range.md) — one
+  function both branches use, reinhard as the baseline setting
+- [ ] [One gamut-mapping implementation](tasks/nf-display-stages/fit-gamut.md)
+  — one implementation, where there are three near-copies today
+- [ ] [A parametric operator with a
+  toe](tasks/nf-display-stages/parametric-operator.md) — reinhard compresses
+  upward only, so the shadow end is a subtraction; supersedes
+  `algo/content-aware-sigmoid-toe`
+- [ ] [The SDR/HDR branch
+  contract](tasks/nf-display-stages/branch-contract.md) — where the branch
+  happens and what each side may differ in
+
+### nf-destinations — [progress](progress/nf-destinations.md)
+> Where a render can go: the destination set, the direct Adobe RGB combination,
+> memory profiles, and which destination the default resolves.
+
+- [ ] [The destination set](tasks/nf-destinations/preset-set.md) — the
+  destinations and their suffix rules
+- [ ] [The direct destination for external
+  editing](tasks/nf-destinations/direct-preset.md) — minimal rendering into
+  Adobe RGB for a workflow that continues in an editor
+- [ ] [A memory profile per
+  destination](tasks/nf-destinations/memory-profiles.md) — a `RunProfile` per
+  destination; sharing an arm is measured, not assumed
+- [ ] [Which destination the default
+  resolves](tasks/nf-destinations/default-destination.md) — supersedes
+  `output/display-p3-default`; one bump rather than two
+
+### nf-calibration — [progress](progress/nf-calibration.md)
+> The numbers rather than the machinery: the `scale`/`gamma` review loop, the offset
+> question, the neutrality release gate, and what a user would actually run.
+
+- [ ] [Tune `scale` and `gamma` by
+  review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
+  owns, tuned against a held-fixed rendering. Supersedes
+  `algo/sigmoid-parameter-calibration` and
+  `film-base/dmax-per-channel-reduction`
+- [ ] [Does `density.offset` earn a
+  value?](tasks/nf-calibration/offset-question.md) — the term is real; two
+  candidate values lost a review, and identifying one needs one illuminant
+- [ ] [The neutrality release gate](tasks/nf-calibration/neutrality-gate.md) —
+  the release gate — supersedes the gate half of
+  `algo/split-default-migration`
+- [ ] [What a user would actually
+  run](tasks/nf-calibration/user-calibration-procedure.md) — we fit our own
+  chain, never a user's, so the shipped value is a prior
+
+### nf-verification — [progress](progress/nf-verification.md)
+> Gates that describe the new chain, and the frozen reference build that lets the old
+> paths retire early.
+
+- [ ] [The frozen reference
+  build](tasks/nf-verification/reference-snapshot.md) — a tag freezes the old
+  binary — this is what lets `nf-retire` run early
+- [ ] [Rebase the drift gate on the new
+  chain](tasks/nf-verification/fingerprints.md) — retire the print half of the
+  `render` row, not the row; supersedes
+  `algo/characteristic-fingerprint-vector`
+- [ ] [Goldens for the new stages](tasks/nf-verification/stage-goldens.md) —
+  curated per-pixel vectors for the new stages; never a full-frame or
+  post-transform hash
+- [ ] [A benchmark set for the new
+  flow](tasks/nf-verification/benchmark-set.md) — every current case names
+  `legacy`; comparability comes from the tagged build
+- [ ] [Export the pre-matrix film
+  RGB](tasks/nf-verification/film-rgb-export.md) — the cleanest measurement
+  point is before the 3×3, which nc cannot export today
+
+### nf-retire — [progress](progress/nf-retire.md)
+> Remove the old paths once the reference build exists: `legacy`/`custom`, the bounded
+> display tones, the sigmoid and `simple`, the `Dmax` anchor machinery, the regional
+> balance, and the `print.*` prefix.
+
+- [ ] [Retire `legacy` and `custom`](tasks/nf-retire/legacy-custom.md) —
+  removes the second implementation of the print controls
+- [ ] [Retire the `shoulder` and `none`
+  tones](tasks/nf-retire/display-tones.md) — both exist for reconstructions
+  already bounded at white
+- [ ] [Retire the sigmoid and `simple`](tasks/nf-retire/sigmoid-and-simple.md)
+  — `simple` is the cheap fixture in a dozen unrelated test modules
+- [ ] [Retire the `Dmax` anchor machinery](tasks/nf-retire/dmax-machinery.md)
+  — the reconstruction anchor and the leader-measured reference; frame-range
+  measurement may return as an opt-in
+- [ ] [Retire the regional balance](tasks/nf-retire/regional-balance.md) —
+  subsumed by the look's grade, and non-monotone at large values
+- [ ] [Rename the `print.*` prefix](tasks/nf-retire/print-prefix-rename.md) —
+  after the second implementation is gone, so nothing is renamed twice
+- [ ] [Retire the `characteristic` curve
+  path](tasks/nf-retire/characteristic.md) — the curve, `--film-stock`, three
+  preset names and `default_scale_for`'s per-curve case; the stock *data* is
+  `nf-look/stock-data-home`'s call
+
+### nf-docs — [progress](progress/nf-docs.md)
+> Fold the new design into the spec, the user guide and CLAUDE.md.
+
+- [ ] [Fold the new design into the spec](tasks/nf-docs/design-spec.md) —
+  principle 2, the NC film RGB v1 contract, and the curves section
+- [ ] [Bring the guide up to the new flow](tasks/nf-docs/using-nc.md) —
+  verified against the binary, never against a diff
+- [ ] [Update CLAUDE.md for the new architecture](tasks/nf-docs/claude-md.md)
+  — the architecture map, the HDR framing, and retiring the migration rule
+  itself
+- [ ] [Re-point references to retired and superseded
+  tasks](tasks/nf-docs/reference-sweep.md) — about a dozen `src/` and doc
+  pointers still assert an inactive task is live or owns a decision

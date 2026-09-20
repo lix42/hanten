@@ -181,6 +181,5 @@ every failure has a tracked follow-up (or the log explicitly records none).
 
 - [Output presets and guidance](../output/presets.md)
 - [Real-scan core verification](real-scan-verification.md)
-- [Make `characteristic-generic` the default](../algo/split-default-migration.md) and
-  [Make `display-p3` the default output preset](../output/display-p3-default.md) —
-  the default this task accepts is the one both moves ship
+- [Flip the default to the new flow](../nf-core/default-flip.md) — the default this
+  task accepts is the one that move ships

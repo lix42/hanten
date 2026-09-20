@@ -11,8 +11,7 @@ generator happens to run.
 
 `analysis/comparison-review-tooling` deferred this "until a default actually moves",
 with the reason that a build axis needs **render provenance rather than a typed
-label**. Two default moves are now filed: `algo/split-default-migration` and
-`output/display-p3-default`. Each owes a before/after report, and the visual half of
+label**. The default move is now filed as `nf-core/default-flip`. Each owes a before/after report, and the visual half of
 that review has no tool.
 
 ## What is known
@@ -49,6 +48,5 @@ that review has no tool.
 
 - [Comparison review tooling](comparison-review-tooling.md)
 
-Wanted by [`algo/split-default-migration`](../algo/split-default-migration.md) and
-[`output/display-p3-default`](../output/display-p3-default.md) for their before/after
+Wanted by [`nf-core/default-flip`](../nf-core/default-flip.md) for its before/after
 review; not a dependency of either, since their numeric report does not need it.

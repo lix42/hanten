@@ -14,6 +14,24 @@ with JSON recipes/reports. It does **not** mean using ML/AI to process images
 and sits *around* a deterministic core. Keep this distinction — it has been
 explicitly corrected once already.
 
+## The migration rule (read before writing any `nf` code)
+
+nc is migrating to the design in `docs/design-update.md` (the fixed decode plus a
+staged rendering chain). While that migration runs, **structure for the long term
+beats reusing what is there**. Concretely:
+
+- **Write the new stages fresh.** Do not shape a new stage around the old code's
+  seams, types or fusions, and do not "extract" a stage out of a per-pixel body
+  because that is where the arithmetic happens to live today. Reuse is a *low*
+  priority; a clean stage boundary is a high one.
+- **Retiring an old path is not a loss of capability** — it is a list of abilities
+  the new code may need to add. Decide each on its merits rather than keeping a
+  branch alive to preserve it.
+- **The old behaviour is preserved by a git tag, not by code.** A reference
+  rendition is produced by building the tagged binary in a worktree
+  (`nctool review generate --nc <that binary>`), so nothing in the tree needs to
+  stay alive to remain comparable.
+
 ## Source of truth (read these first)
 
 - `docs/design-spec.md` — the authoritative Step-1 design (architecture, pipeline,

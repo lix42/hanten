@@ -1,5 +1,10 @@
 # Stock-aware Dmax plausibility (dense-base stocks)
 
+> **Retired 2026-09-19** — the `Dmax` floor goes with the anchor; the
+> base-uniformity half belongs to `film-base/tiling-uniformity-validator`.
+> Kept so existing references resolve; see `docs/nf-migration.md` for the
+> migration plan.
+
 > **Parametric curves only (noted 2026-09-13).** The `characteristic` curve resolves no
 > `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`nc convert`
 > default. Once that lands, this task serves `sigmoid`/`exponential` users only. Re-rank

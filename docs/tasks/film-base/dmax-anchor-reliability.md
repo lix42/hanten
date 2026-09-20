@@ -1,5 +1,9 @@
 # Dmax Anchor Reliability
 
+> **Retired 2026-09-19** — it asks whether the leader-measured anchor measures
+> anything real, and the new anchor rule never reads it. Kept so existing
+> references resolve; see `docs/nf-migration.md` for the migration plan.
+
 > **Parametric curves only (noted 2026-09-13).** The `characteristic` curve resolves no
 > `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`nc convert`
 > default. Once that lands, this task serves `sigmoid`/`exponential` users only. Re-rank

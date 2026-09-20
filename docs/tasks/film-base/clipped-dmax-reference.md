@@ -1,5 +1,9 @@
 # Clipped Dmax Reference Handoff
 
+> **Retired 2026-09-19** — its subject is the `Dmax` reference handoff, and
+> the reconstruction anchor leaves the path. Kept so existing references
+> resolve; see `docs/nf-migration.md` for the migration plan.
+
 > **Parametric curves only (noted 2026-09-13).** The `characteristic` curve resolves no
 > `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`nc convert`
 > default. Once that lands, this task serves `sigmoid`/`exponential` users only. Re-rank
