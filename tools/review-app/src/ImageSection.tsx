@@ -2,6 +2,12 @@ import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "s
 import { css } from "../styled-system/css";
 import { domId } from "./charts/domId";
 import { MetricsPanel } from "./charts/MetricsPanel";
+import { ColorReadout } from "./ColorReadout";
+import { type Rgb, toHex } from "./color";
+import { type Box, type NormalRect, type Point, paintedBox } from "./geometry";
+import type { PointerMode } from "./keys";
+import type { Patch } from "./patches";
+import { type ColorSample, StageOverlay } from "./StageOverlay";
 import type { Rendition, ReviewConfig, ReviewImage, ZoomMode } from "./review";
 
 // Border longhands rather than the `border` shorthand: `previewActive`
@@ -44,6 +50,7 @@ const styles = {
   }),
   note: css.raw({ color: "accent", fontVariantNumeric: "tabular-nums" }),
   noted: css.raw({ color: "accent", fontSize: "meta" }),
+  patched: css.raw({ color: "patch.line", fontSize: "meta" }),
 
   // Scrolls sideways rather than wrapping. A wrapping strip makes the head
   // taller on sets with many configs, which would come straight out of the
@@ -143,7 +150,10 @@ const styles = {
   // Inactive ones stay laid out (hidden, not removed) so nothing reflows.
   // `height: full` gives the stage the viewport's own (definite) height. How the
   // renditions sit inside it differs by mode — see `stageFit` / `stageFullsize`.
-  stage: css.raw({ display: "grid", height: "full" }),
+  // `position: relative` is the overlay's anchor: `StageOverlay` is placed at
+  // the picture's painted box in *this* element's coordinates, so it scrolls with
+  // the picture in `fullsize` and letterboxes with it in `fit`.
+  stage: css.raw({ display: "grid", height: "full", position: "relative" }),
   // **One cell, exactly the viewport, with the renditions stretched into it.**
   // The explicit `100%` tracks are what make the cell's height *definite*: a
   // percentage height on a grid item resolves against its grid area, and an
@@ -191,6 +201,14 @@ const styles = {
 
   pan: css.raw({
     position: "absolute",
+    // **Above `StageOverlay`.** Neither the pane, the viewport nor the stage
+    // creates a stacking context (all are `position: relative` at `z-index:
+    // auto`), so the overlay's own `z-index` competes with these controls
+    // directly — and being image-sized it covers them. Left equal, a click on a
+    // visible pan arrow in either pointer mode sampled a colour or started a
+    // patch instead of panning, which is the only way to move around a
+    // `fullsize` picture.
+    zIndex: 3,
     display: "grid",
     alignItems: "center",
     justifyItems: "center",
@@ -233,6 +251,8 @@ const styles = {
   // both the box and the position.
   missing: css.raw({
     position: "absolute",
+    // Above the pointer layer for the same reason as the pan controls.
+    zIndex: 3,
     top: "12px",
     insetInlineStart: "half",
     paddingBlock: "8px",
@@ -291,6 +311,14 @@ interface Props {
   isCurrent: boolean;
   /** Whether a review note has been written about this frame. */
   hasNote: boolean;
+  /** Which pointer mode is on, set-wide — see `keys.ts`. */
+  pointerMode: PointerMode;
+  /** This frame's patches, in image coordinates. */
+  patches: readonly Patch[];
+  /** A rectangle drawn on *this* frame and waiting for its label. */
+  pendingPatch: NormalRect | undefined;
+  onDrawPatch: (rect: NormalRect) => void;
+  onRemovePatch: (patchId: string) => void;
   /**
    * Watches the picture pane, which is what decides the answer above.
    *
@@ -329,6 +357,131 @@ export function ImageSection(props: Props) {
   );
   let mapWindow: HTMLDivElement | undefined;
 
+  /*
+    Where the picture is painted, for the pointer-mode overlay.
+
+    Held as a signal because the overlay is positioned from it, and re-measured
+    only by `measureOverflow` below — which is to say on load, resize, and the
+    three things that change the stage's shape. **Not on scroll**: the overlay is
+    inside the stage, so it is scrolled along with the picture and the box it
+    sits at never changes. That is the whole reason it is anchored there rather
+    than to the pane.
+  */
+  const [painted, setPainted] = createSignal<Box | undefined>(undefined, {
+    equals: (a, b) =>
+      a === b ||
+      (a !== undefined &&
+        b !== undefined &&
+        a.x === b.x &&
+        a.y === b.y &&
+        a.width === b.width &&
+        a.height === b.height),
+  });
+  let stage: HTMLDivElement | undefined;
+  // The rendition elements, so a colour can be read back off the active one and
+  // its painted box measured. Keyed by config id, and dropped with the section.
+  const renditionElements = new Map<string, HTMLImageElement>();
+
+  const measurePainted = () => {
+    const id = activeId();
+    const element = id === undefined ? undefined : renditionElements.get(id);
+    if (!stage || !element || element.naturalWidth === 0) return setPainted(undefined);
+    const stageBox = stage.getBoundingClientRect();
+    const box = element.getBoundingClientRect();
+    setPainted(
+      paintedBox(
+        {
+          x: box.left - stageBox.left,
+          y: box.top - stageBox.top,
+          width: box.width,
+          height: box.height,
+        },
+        element.naturalWidth,
+        element.naturalHeight,
+        props.zoom,
+      ),
+    );
+  };
+
+  /*
+    The colour under the cursor, converted to the *pane's* coordinates here.
+
+    Converted at sample time rather than at draw time so the readout component
+    holds no measurement of its own: one `getBoundingClientRect` per pointer move
+    either way, and this keeps the geometry out of a `.tsx` the test runner does
+    not collect.
+  */
+  const [sample, setSample] = createSignal<
+    { at: Point; pane: { width: number; height: number }; rgb: Rgb } | undefined
+  >(undefined);
+  // One state rather than a `copied` and a `failed` boolean, which between them
+  // can encode "both at once".
+  const [copyState, setCopyState] = createSignal<"idle" | "copied" | "failed">("idle");
+  let clearCopied: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(clearCopied));
+
+  // Leaving colour mode drops the reading with it: keeping it would flash the
+  // previous pixel's chip, at the previous cursor position, on the next `i`.
+  createEffect(
+    on(
+      () => props.pointerMode,
+      () => setSample(undefined),
+      { defer: true },
+    ),
+  );
+
+  const takeSample = (reading: ColorSample | undefined) => {
+    // A new reading is a new thing to copy, so a previous outcome must not
+    // linger beside it and claim this colour was the one copied.
+    if (copyState() !== "idle") {
+      clearTimeout(clearCopied);
+      setCopyState("idle");
+    }
+    if (!reading || !pane) return setSample(undefined);
+    const box = pane.getBoundingClientRect();
+    setSample({
+      at: { x: reading.clientX - box.left, y: reading.clientY - box.top },
+      pane: { width: box.width, height: box.height },
+      rgb: reading.rgb,
+    });
+  };
+
+  /**
+   * A click in colour mode copies the HEX — the one value you retype elsewhere.
+   *
+   * **`try`/`catch` around the whole thing, not a `.catch` on the promise.**
+   * `navigator.clipboard` is `undefined` outside a secure context — serving this
+   * over a LAN address rather than `localhost` is enough — so reading
+   * `.writeText` off it throws *synchronously*, before there is a promise to
+   * reject, and a `.catch` never sees it.
+   *
+   * The outcome is shown in the readout rather than only logged: a silent
+   * failure here is indistinguishable from a successful copy until you paste
+   * something else, and a `console.warn` is invisible to whoever clicked.
+   */
+  const copyColor = async () => {
+    const reading = sample();
+    if (!reading) return;
+    clearTimeout(clearCopied);
+    let outcome: "copied" | "failed";
+    try {
+      await navigator.clipboard.writeText(toHex(reading.rgb));
+      outcome = "copied";
+    } catch (cause) {
+      console.warn("Could not copy the colour", cause);
+      outcome = "failed";
+    }
+    // **The outcome belongs to the reading that was clicked.** The write is
+    // asynchronous, so the pointer can move while it is in flight — and the
+    // guard in `takeSample` cannot help, because at that moment the state is
+    // still `idle` and there is nothing for it to reset. Landing "copied"
+    // beside a HEX that was never copied is the exact claim this must not make,
+    // so a reading that has been replaced simply drops its result.
+    if (sample() !== reading) return;
+    setCopyState(outcome);
+    clearCopied = setTimeout(() => setCopyState("idle"), 1200);
+  };
+
   /** Position the mini-map's window box. Direct DOM write, no signals. */
   const paintMap = () => {
     const element = viewport();
@@ -355,6 +508,7 @@ export function ImageSection(props: Props) {
       y: element.scrollHeight - element.clientHeight > 1,
     });
     paintMap();
+    measurePainted();
   };
 
   onMount(() => {
@@ -363,6 +517,28 @@ export function ImageSection(props: Props) {
     window.addEventListener("resize", onResize);
     onCleanup(() => window.removeEventListener("resize", onResize));
   });
+
+  /*
+    The backstop under every enumerated trigger: watch the stage itself.
+
+    The effect below lists the layout changes we know about, and that list has
+    already been wrong twice — the charts band taking its height a beat late, and
+    a rendition replaced under an unchanged config. It will be wrong again: a
+    live refresh can change an image's label or note, and if that wraps, the head
+    grows and the picture shrinks with no dependency here moving at all. An
+    overlay measured against the old box then draws patches and samples colours
+    offset from the picture.
+
+    **Safe despite the rule against observer-driven writes**, for the same reason
+    the mounting observer in `App` is: what this re-renders is an absolutely
+    positioned overlay, so a render caused by this callback changes no geometry
+    and cannot feed the next callback. The enumerated list stays as well —
+    element *identity* is not a size, so a rendition swapped for one of the same
+    dimensions moves nothing this could see.
+  */
+  const stageResize =
+    typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => measureOverflow());
+  onCleanup(() => stageResize?.disconnect());
 
   // Switching fit/fullsize resizes the stage, so re-check overflow. Measured
   // **synchronously** — Solid runs effects after the DOM is updated, so layout is
@@ -379,7 +555,31 @@ export function ImageSection(props: Props) {
       // Hiding the charts is the same kind of change from the other side: the band
       // hands its height to the picture, so a `fullsize` pane that was scrolling
       // may stop, and one that fit may start.
-      () => [props.zoom, props.activeIndex, props.showMetrics] as const,
+      // The pointer mode joins them for a fourth reason: the overlay is mounted
+      // only while a mode is on, so entering one must find a measured box rather
+      // than waiting for the next resize.
+      //
+      // And the active rendition's **identity**, not just which config is
+      // selected: a live refresh can replace or remove the picture under an
+      // unchanged config, and a removal fires no `load` event to measure from.
+      // Without it `painted` kept the vanished image's box, so the overlay
+      // stayed mounted over a frame that had no rendition at all.
+      () =>
+        [
+          props.zoom,
+          props.activeIndex,
+          props.showMetrics,
+          props.pointerMode,
+          activeRendition()?.src,
+          // And whether the charts band is *holding its height*, which is not
+          // the same question as whether charts are shown. `charted` advances
+          // `CHART_SETTLE_MS` after the selection settles, so the band takes or
+          // releases its 280px a beat later than everything else here — on first
+          // load, and whenever the settled config differs from the previous one
+          // in having a measurement. The picture resizes with it, so a pointer
+          // overlay measured before that beat draws at the wrong coordinates.
+          chartedRendition()?.metrics !== undefined,
+        ] as const,
       () => {
         measureOverflow();
         requestAnimationFrame(measureOverflow);
@@ -419,8 +619,23 @@ export function ImageSection(props: Props) {
   */
   const [loaded, setLoaded] = createSignal<ReadonlySet<string>>(new Set<string>());
   const [charted, setCharted] = createSignal<string | undefined>(undefined);
-  const markLoaded = (configId: string) =>
+  /**
+   * How many loads have been *observed*, which is not how many configs are loaded.
+   *
+   * A counter rather than `loaded().size`, because the set answers "which configs
+   * can be charted" and deliberately stops changing once a config is in it. On a
+   * live refresh the rendition's URL changes and the same config loads again —
+   * `markLoaded` then returns the identical set, and if the replacement is the
+   * same size `painted` compares equal too, so nothing downstream could tell a
+   * new picture had arrived. A colour reading taken while it was decoding stayed
+   * blank until the pointer moved, in exactly the re-render-and-watch workflow
+   * this app exists for.
+   */
+  const [loadTicks, setLoadTicks] = createSignal(0);
+  const markLoaded = (configId: string) => {
+    setLoadTicks((count) => count + 1);
     setLoaded((previous) => (previous.has(configId) ? previous : new Set(previous).add(configId)));
+  };
 
   const activeId = () => props.configs[props.activeIndex]?.id;
   const activeRendition = () => {
@@ -503,6 +718,13 @@ export function ImageSection(props: Props) {
             ● noted
           </span>
         </Show>
+        {/* Patches are drawn only in patch mode, so without this there is no way
+            to tell a frame you have already marked up from one you have not. */}
+        <Show when={props.patches.length > 0}>
+          <span class={css(styles.patched)} title="Patches marked on this frame (p to show them)">
+            ▢ {props.patches.length} {props.patches.length === 1 ? "patch" : "patches"}
+          </span>
+        </Show>
       </div>
 
       <div class={css(styles.strip)}>
@@ -571,6 +793,10 @@ export function ImageSection(props: Props) {
           <div
             class={css(styles.stage, props.zoom === "fit" ? styles.stageFit : styles.stageFullsize)}
             style={reservation()}
+            ref={(element) => {
+              stage = element;
+              stageResize?.observe(element);
+            }}
           >
             <For each={props.configs}>
               {(config) => (
@@ -587,6 +813,11 @@ export function ImageSection(props: Props) {
                       height={rendition().height}
                       alt={`${props.image.label} — ${config.label}`}
                       ref={(element) => {
+                        // Held so a colour can be read back off the active one
+                        // and its painted box measured. `For` disposes this scope
+                        // when the config leaves the set, which is when it goes.
+                        renditionElements.set(config.id, element);
+                        onCleanup(() => renditionElements.delete(config.id));
                         // **A hydrated rendition fires no `load` event for us.**
                         // It arrived in the server-rendered HTML and finished
                         // before Solid attached the listener, so it must be
@@ -617,8 +848,45 @@ export function ImageSection(props: Props) {
                 </Show>
               )}
             </For>
+
+            {/* Inside the stage, so it letterboxes with the picture in `fit` and
+                scrolls with it in `fullsize` — see `StageOverlay`. Mounted only
+                while a mode is on, and only once the picture has been measured:
+                an overlay placed against an unknown box would sit on the wrong
+                pixels, which is worse than not being there. */}
+            <Show when={props.pointerMode !== "off" && painted()}>
+              {(box) => (
+                <StageOverlay
+                  mode={props.pointerMode === "patch" ? "patch" : "color"}
+                  painted={box()}
+                  image={renditionElements.get(activeId() ?? "")}
+                  patches={props.patches}
+                  pendingPatch={props.pendingPatch}
+                  onDraw={props.onDrawPatch}
+                  onRemove={props.onRemovePatch}
+                  loadedTick={loadTicks()}
+                  onSample={takeSample}
+                  onPick={() => void copyColor()}
+                />
+              )}
+            </Show>
           </div>
         </div>
+
+        {/* In the pane rather than in the overlay: the overlay is scrolled
+            content and in `fullsize` is far bigger than the window, so a chip
+            placed there could sit off screen. The pane is the picture's fixed
+            frame, which is the box the readout must stay inside. */}
+        <Show when={props.pointerMode === "color" && sample()}>
+          {(reading) => (
+            <ColorReadout
+              rgb={reading().rgb}
+              at={reading().at}
+              pane={reading().pane}
+              copyState={copyState()}
+            />
+          )}
+        </Show>
 
         <Show when={!hasActive()}>
           <div class={css(styles.missing)}>

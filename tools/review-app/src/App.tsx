@@ -12,11 +12,20 @@ import { css } from "../styled-system/css";
 import { token } from "../styled-system/tokens";
 import { ControlBar } from "./ControlBar";
 import { ImageSection } from "./ImageSection";
-import { actionForKey, isTextEntry, stepConfigIndex } from "./keys";
+import {
+  actionForKey,
+  isTextEntry,
+  nextPointerMode,
+  stepConfigIndex,
+  type PointerMode,
+} from "./keys";
+import type { NormalRect } from "./geometry";
+import { watchPointer } from "./pointer";
+import { addPatch, patchCount, patchesFor, removePatch, type Patch, type Patches } from "./patches";
 import type { ReviewSetPayload } from "./server/getReviewSet";
 import { type ZoomMode } from "./review";
 import { currentFrame, frameForKey, mountWindow, sameIds } from "./visible";
-import { ClearDialog, NoteDialog, NotesDialog } from "./NoteDialogs";
+import { ClearDialog, NoteDialog, NotesDialog, PatchDialog } from "./NoteDialogs";
 import { noteCount, notesScope, setNote, type NotedFrame, type Notes } from "./notes";
 
 const styles = {
@@ -70,6 +79,17 @@ const styles = {
  * fallback that would silently have aligned every frame under the bar.
  */
 const SNAP_LINE = Number.parseFloat(token("sizes.barHeight"));
+
+/**
+ * Patch ids, from a counter rather than from the content.
+ *
+ * Two patches on one frame may legitimately carry the same label and very nearly
+ * the same rectangle — "white 1" and "white 2" on one shirt is the expected use —
+ * so anything derived from a patch's own fields could collide, and deleting one
+ * would delete both. A counter cannot, and nothing outside the page ever reads it.
+ */
+let patchSerial = 0;
+const nextPatchId = () => `patch-${(patchSerial += 1)}`;
 
 export function App(props: { set: ReviewSetPayload }) {
   const review = createMemo(() => props.set.review);
@@ -216,6 +236,38 @@ export function App(props: { set: ReviewSetPayload }) {
     A note that outlives its picture is the lesser problem, and `c` is there for
     the rest.
   */
+  /*
+    The pointer modes, `p` and `i`, as **one selection rather than two flags**.
+
+    Each takes over the pointer on the picture — one draws rectangles, the other
+    reads pixels — so a pair that could both be on is a state with no sensible
+    behaviour. Holding one value makes it unrepresentable instead of having to be
+    checked, and each key toggles its own mode through `nextPointerMode`.
+
+    Set-wide, like the charts toggle: a frame is a whole screen, so the mode you
+    are in is the mode you are in, and per-frame modes would mean the picture
+    behaved differently depending on how far you had scrolled.
+  */
+  const [pointerMode, setPointerMode] = createSignal<PointerMode>("off");
+
+  /*
+    Patches: labelled rectangles, keyed by image id and shared by every config of
+    that frame — see `patches.ts`. Held here beside the notes because they are
+    cleared by the same rule, copied in the same block, and drawn on frames that
+    mount and unmount as you scroll.
+  */
+  const [patches, setPatches] = createSignal<Patches>({});
+  /**
+   * The rectangle just drawn, waiting for its label.
+   *
+   * Held with the frame it belongs to, for the same reason `noteTarget` is: the
+   * dialog is modal and the page can scroll behind it, so "which frame" must be
+   * decided when the drag ends rather than read again when the label is typed.
+   */
+  const [pendingPatch, setPendingPatch] = createSignal<
+    { imageId: string; rect: NormalRect } | undefined
+  >(undefined);
+
   const [notes, setNotes] = createSignal<Notes>({});
   const [noteOpen, setNoteOpen] = createSignal(false);
   /**
@@ -229,7 +281,7 @@ export function App(props: { set: ReviewSetPayload }) {
   const [noteTarget, setNoteTarget] = createSignal<string | undefined>(undefined);
   const [notesOpen, setNotesOpen] = createSignal(false);
   const [clearOpen, setClearOpen] = createSignal(false);
-  const dialogOpen = () => noteOpen() || notesOpen() || clearOpen();
+  const dialogOpen = () => noteOpen() || notesOpen() || clearOpen() || pendingPatch() !== undefined;
 
   const frames = createMemo<NotedFrame[]>(() =>
     review().images.map((image) => ({ id: image.id, label: image.label })),
@@ -242,6 +294,11 @@ export function App(props: { set: ReviewSetPayload }) {
       () => notesScope(props.set.path, imageIds()),
       () => {
         setNotes({});
+        // Patches go for the stronger version of the same reason: a note about a
+        // frame that is gone is merely stale, while a rectangle is a claim about
+        // *where* something is — on another frame it points at the wrong thing.
+        setPatches({});
+        setPendingPatch(undefined);
         // Back to the top with them. The scroll position is held against the
         // *frames*, and this is the one change that invalidates it: a different
         // set, or a set whose frame list moved, leaves you parked at an offset
@@ -254,6 +311,10 @@ export function App(props: { set: ReviewSetPayload }) {
       { defer: true },
     ),
   );
+
+  // Remembered from the first move onward, because the colour readout has to be
+  // able to answer at moments when the pointer has not moved — see `pointer.ts`.
+  onMount(() => onCleanup(watchPointer()));
 
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -284,7 +345,11 @@ export function App(props: { set: ReviewSetPayload }) {
       } else if (action.kind === "notes") {
         setNotesOpen(true);
       } else if (action.kind === "clearNotes") {
-        if (noteCount(notes()) > 0) setClearOpen(true);
+        // Patches count too: `c` is "throw away what I wrote on this review",
+        // and a rectangle is as much of that as a sentence is.
+        if (noteCount(notes()) + patchCount(patches()) > 0) setClearOpen(true);
+      } else if (action.kind === "pointerMode") {
+        setPointerMode((mode) => nextPointerMode(mode, action.mode));
       } else if (action.kind === "metrics") {
         setShowMetrics((shown) => !shown);
       } else {
@@ -305,6 +370,8 @@ export function App(props: { set: ReviewSetPayload }) {
         onActivate={setActiveIndex}
         zoom={zoom()}
         onZoom={setZoom}
+        pointerMode={pointerMode()}
+        onPointerMode={(mode) => setPointerMode((current) => nextPointerMode(current, mode))}
       />
       <header class={css(styles.header)}>
         <Show when={review().title}>{(title) => <h1 class={css(styles.title)}>{title()}</h1>}</Show>
@@ -363,6 +430,15 @@ export function App(props: { set: ReviewSetPayload }) {
                       showMetrics={showMetrics()}
                       isCurrent={current() === id}
                       hasNote={(notes()[id] ?? "").trim() !== ""}
+                      pointerMode={pointerMode()}
+                      patches={patchesFor(patches(), id)}
+                      pendingPatch={
+                        pendingPatch()?.imageId === id ? pendingPatch()?.rect : undefined
+                      }
+                      onDrawPatch={(rect) => setPendingPatch({ imageId: id, rect })}
+                      onRemovePatch={(patchId) =>
+                        setPatches((previous) => removePatch(previous, id, patchId))
+                      }
                       paneObserver={paneObserver}
                     />
                   </Show>
@@ -391,14 +467,33 @@ export function App(props: { set: ReviewSetPayload }) {
         onClose={() => setNotesOpen(false)}
         frames={frames()}
         notes={notes()}
+        patches={patches()}
         title={review().title}
         onInput={editNote}
       />
       <ClearDialog
         open={clearOpen()}
         onClose={() => setClearOpen(false)}
-        count={noteCount(notes())}
-        onConfirm={() => setNotes({})}
+        notes={noteCount(notes())}
+        patches={patchCount(patches())}
+        onConfirm={() => {
+          setNotes({});
+          setPatches({});
+        }}
+      />
+      {/* Cancelling is what removes a just-drawn patch, which is why the dialog
+          has no other way out: the rectangle exists only once it is labelled. */}
+      <PatchDialog
+        open={pendingPatch() !== undefined}
+        frame={frames().find((frame) => frame.id === pendingPatch()?.imageId)}
+        onCancel={() => setPendingPatch(undefined)}
+        onAdd={(label) => {
+          const drawn = pendingPatch();
+          setPendingPatch(undefined);
+          if (!drawn) return;
+          const patch: Patch = { id: nextPatchId(), label, ...drawn.rect };
+          setPatches((previous) => addPatch(previous, drawn.imageId, patch));
+        }}
       />
     </main>
   );

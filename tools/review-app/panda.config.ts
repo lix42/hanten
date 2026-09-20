@@ -102,11 +102,13 @@ export default defineConfig({
         // frames, and SetError's inline code chip
         md: { value: "6px" }, // buttons and preview frames
         lg: { value: "8px" }, // the viewport, pan controls, overlay notes
+        round: { value: "999px" }, // a patch's delete button
       },
 
       // A ladder, named by measurement — see the naming rule above.
       spacing: {
         "0": { value: "0" },
+        "1px": { value: "1px" },
         "2px": { value: "2px" },
         "4px": { value: "4px" },
         "5px": { value: "5px" },
@@ -132,6 +134,19 @@ export default defineConfig({
         thumbWidth: { value: "104px" },
         thumbHeight: { value: "70px" },
         panControl: { value: "34px" },
+
+        // The colour readout (`i`). **Stated, not measured**: the chip flips
+        // around the cursor at the pane's far edges, and that arithmetic needs
+        // its size before layout — measuring it would put a read of the element
+        // in the path of the write that positions it, which is the feedback
+        // shape this app forbids elsewhere. So these two are a contract with
+        // `ColorReadout`'s contents: change what it shows and check they still
+        // hold.
+        readoutWidth: { value: "212px" },
+        readoutHeight: { value: "118px" },
+        swatch: { value: "30px" },
+        // A patch's delete button, which straddles the rectangle's corner.
+        patchClose: { value: "18px" },
 
         // One frame fills one screen, and these four say how that screen is
         // divided. `barHeight` is **stated, not measured**: the control bar is a
@@ -211,6 +226,22 @@ export default defineConfig({
           wash: {
             value: { base: "rgba(127, 179, 255, 0.22)", _osLight: "rgba(28, 98, 196, 0.18)" },
           },
+        },
+        // A patch outline. One hue on both themes, unlike every other colour
+        // here, because it is drawn **over a photograph** rather than over the
+        // app's own surfaces — what it has to contrast with is the picture, and
+        // that is the same picture in either theme. Amber is the choice: it is
+        // far from anything a neutral render produces, so an outline never reads
+        // as part of the image.
+        patch: {
+          line: { value: "#ffc94a" },
+          // The dark companion the outline is ringed with. One colour cannot sit
+          // on both a blown highlight and a black shadow; two can.
+          halo: { value: "rgba(0, 0, 0, 0.55)" },
+          ink: { value: "#1b1200" },
+          // Only the in-progress marquee is filled, and only faintly: a wash over
+          // a finished patch would tint the colours it was drawn to isolate.
+          wash: { value: "rgba(255, 201, 74, 0.16)" },
         },
         // A config with no rendition for this image.
         missing: { value: { base: "#40211f", _osLight: "#f6dcda" } },

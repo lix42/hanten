@@ -1142,7 +1142,27 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   trap recorded there (a scroll handler that writes a signal wedging the renderer,
   `requestAnimationFrame` never firing in a hidden tab, and live refresh going
   *silently* stale if it is left to `EventSource` reconnecting) failed silently
-  and cost a debugging round each. **Panda runs with `strictTokens` +
+  and cost a debugging round each. **Drive it with the `agent-browser`
+  skill, and fall back to the chrome-devtools MCP only when that cannot do the
+  job** — `agent-browser mouse move/down/up` issues *real* CDP input, where the
+  MCP's `evaluate_script` can only dispatch synthetic events. The difference is
+  not cosmetic: nothing in this app is testable above the pure `.ts` layer
+  (`vp test` collects no `.tsx` and there is no DOM), so the browser is the only
+  gate on a component, and a synthetic `PointerEvent` cannot exercise
+  `setPointerCapture`, `:hover`, or real hit-testing. A delete button hidden at
+  `opacity: 0` — invisible but still taking the click — passed every synthetic
+  check and was caught in one real hover. Two notes: `agent-browser eval` shares
+  **one top-level scope across calls**, so a bare `const` collides on the second
+  call (wrap each snippet in an IIFE), and **its page does not run rendering
+  steps**, so `requestAnimationFrame` and `ResizeObserver` never fire there even
+  though `document.visibilityState` reports `visible` — which makes any check of
+  rAF- or observer-driven code silently *vacuous*: a correct `ResizeObserver`
+  measured as "never fired" and read as a bug until the same test in the headed
+  chrome-devtools MCP passed. That is the one case to fall back for. The skill
+  file is only a stub — the
+  usage guide is `agent-browser skills get core`, served by the installed binary,
+  so check `agent-browser --version` against npm when its documented commands are
+  missing. **Panda runs with `strictTokens` +
   `strictPropertyValues`, so `panda.config.ts`'s theme is the app's design
   system** — for the properties Panda checks, a measurement that is not a token
   there is a type error, and adding one is a deliberate edit to that file. The
