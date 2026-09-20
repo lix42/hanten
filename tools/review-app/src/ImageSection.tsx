@@ -201,6 +201,14 @@ const styles = {
 
   pan: css.raw({
     position: "absolute",
+    // **Above `StageOverlay`.** Neither the pane, the viewport nor the stage
+    // creates a stacking context (all are `position: relative` at `z-index:
+    // auto`), so the overlay's own `z-index` competes with these controls
+    // directly — and being image-sized it covers them. Left equal, a click on a
+    // visible pan arrow in either pointer mode sampled a colour or started a
+    // patch instead of panning, which is the only way to move around a
+    // `fullsize` picture.
+    zIndex: 3,
     display: "grid",
     alignItems: "center",
     justifyItems: "center",
@@ -243,6 +251,8 @@ const styles = {
   // both the box and the position.
   missing: css.raw({
     position: "absolute",
+    // Above the pointer layer for the same reason as the pan controls.
+    zIndex: 3,
     top: "12px",
     insetInlineStart: "half",
     paddingBlock: "8px",
@@ -526,7 +536,20 @@ export function ImageSection(props: Props) {
       // The pointer mode joins them for a fourth reason: the overlay is mounted
       // only while a mode is on, so entering one must find a measured box rather
       // than waiting for the next resize.
-      () => [props.zoom, props.activeIndex, props.showMetrics, props.pointerMode] as const,
+      //
+      // And the active rendition's **identity**, not just which config is
+      // selected: a live refresh can replace or remove the picture under an
+      // unchanged config, and a removal fires no `load` event to measure from.
+      // Without it `painted` kept the vanished image's box, so the overlay
+      // stayed mounted over a frame that had no rendition at all.
+      () =>
+        [
+          props.zoom,
+          props.activeIndex,
+          props.showMetrics,
+          props.pointerMode,
+          activeRendition()?.src,
+        ] as const,
       () => {
         measureOverflow();
         requestAnimationFrame(measureOverflow);

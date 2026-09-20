@@ -1,12 +1,10 @@
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { css } from "../styled-system/css";
-import { token } from "../styled-system/tokens";
 import type { Rgb } from "./color";
 import {
   type Box,
   type NormalRect,
   type Point,
-  chipGoesInside,
   isDragWorthKeeping,
   rectFromDrag,
   rectToBox,
@@ -75,22 +73,27 @@ const styles = {
     "&:hover [data-remove]": { visibility: "visible" },
   }),
   pending: css.raw({ borderStyle: "dashed" }),
-  // Sits *inside* the rectangle instead of above it, for a patch drawn against
-  // the top of the picture. The overlay does not clip, but the scrolling
-  // viewport around it does, so a chip at a negative offset is cut away
-  // entirely — leaving a bare rectangle with no label, which is the one thing a
-  // patch must not be.
-  chipInside: css.raw({ transform: "translateY(0)" }),
-  // **Not bounded by the rectangle.** A patch is often smaller than its label —
-  // a 40px square marked "white shirt" — and a chip clipped to the rectangle
-  // truncates to a letter and an ellipsis, which names nothing. It runs past the
-  // edge instead; two chips may overlap, and reading the label beats avoiding
-  // that.
+  /*
+    **Inside the rectangle, always.** Drawn above it, the chip is clipped away by
+    the scrolling viewport whenever the patch reaches the top of it — which in
+    `fullsize` is *any* patch, because scrolling brings each one to the top in
+    turn. A flip keyed on the patch's position within the image only caught the
+    ones near the image's own top edge; catching the rest would mean keying a
+    style on `scrollTop`, i.e. coupling the chip to scrolling, which this app
+    keeps out of the paint path. Inside is unconditional and cannot be clipped.
+    It costs the rectangle's top-left corner, which is free: patches are drawn
+    only in patch mode, never while a picture is being judged.
+
+    It is **not bounded by the rectangle**, though. A patch is often smaller than
+    its label — a 40px square marked "white shirt" — and a chip clipped to the
+    rectangle truncates to a letter and an ellipsis, which names nothing. It runs
+    past the edge instead; two chips may overlap, and reading the label beats
+    avoiding that.
+  */
   chip: css.raw({
     position: "absolute",
     top: "0",
     insetInlineStart: "0",
-    transform: "translateY(-100%)",
     paddingBlock: "0",
     paddingInline: "4px",
     backgroundColor: "patch.line",
@@ -134,15 +137,6 @@ const styles = {
     pointerEvents: "none",
   }),
 };
-
-/**
- * Roughly how tall the label chip is, for deciding when it would be clipped.
- *
- * Read from the token rather than measured: measuring it would put a layout read
- * in the path of the style that positions it, and being a pixel out here only
- * moves the chip inside the rectangle a pixel early.
- */
-const CHIP_HEIGHT = Number.parseFloat(token("sizes.patchChip"));
 
 /** A reading handed back to the frame, in client coordinates. */
 export interface ColorSample {
@@ -235,6 +229,13 @@ export function StageOverlay(props: Props) {
     if (props.mode !== "color") return;
     sampleAt(lastPointer());
   };
+
+  // **However the layer goes away, the reading goes with it.** It unmounts when
+  // the mode is turned off, when the frame scrolls out of the mount window, and
+  // when a live refresh removes the rendition under it — and the readout is
+  // rendered by the *pane*, not by this element, so without this it would go on
+  // describing a picture that is no longer on screen.
+  onCleanup(() => props.onSample(undefined));
 
   onMount(() => {
     // The mode was just turned on, with the pointer already over a picture.
@@ -343,13 +344,7 @@ export function StageOverlay(props: Props) {
         <For each={props.patches}>
           {(patch) => (
             <div class={css(styles.patch)} style={place(rectToBox(patch, local()))}>
-              <span
-                class={css(
-                  styles.chip,
-                  chipGoesInside(rectToBox(patch, local()), CHIP_HEIGHT) && styles.chipInside,
-                )}
-                title={patch.label}
-              >
+              <span class={css(styles.chip)} title={patch.label}>
                 {patch.label}
               </span>
               <button

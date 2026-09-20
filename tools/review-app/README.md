@@ -161,6 +161,12 @@ second `p` puts it away. Hovering a patch shows its delete button; there is no
 edit, because a patch is a rectangle and a few words, and correcting one is
 quicker to redraw than to edit.
 
+The label sits **inside** the rectangle's top-left corner, unconditionally.
+Drawn above it, the scrolling viewport clips it away as soon as the patch
+reaches the top — which in `fullsize` is every patch in turn, as you scroll. It
+costs a corner, which is free: patches are drawn only in patch mode, never while
+a picture is being judged.
+
 **A patch belongs to the frame, not to the config.** Every rendition of a frame
 is the same subject rendered differently, so one rectangle sits on the same cloud
 in all of them — which is what makes a patch useful for comparing variants, and

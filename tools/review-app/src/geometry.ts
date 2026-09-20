@@ -223,15 +223,3 @@ export function placeReadout(
     top: Math.max(0, fitsBelow ? point.y + gap : point.y - gap - chip.height),
   };
 }
-
-/**
- * Whether a patch's label chip must sit *inside* the rectangle.
- *
- * The chip is drawn above the rectangle, and the scrolling viewport around the
- * overlay clips anything at a negative offset — so a patch against the top of
- * the picture would show as a bare rectangle with no label, which is the one
- * thing a patch must not be.
- */
-export function chipGoesInside(box: Box, chipHeight: number): boolean {
-  return box.y < chipHeight;
-}

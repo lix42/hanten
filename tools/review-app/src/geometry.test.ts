@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   MIN_PATCH_PX,
-  chipGoesInside,
   containedBox,
   isDragWorthKeeping,
   normalizePoint,
@@ -171,17 +170,6 @@ describe("samplePlan on a HiDPI display", () => {
     const painted = { x: 0, y: 0, width: 400, height: 200 };
     expect(samplePlan({ x: 200, y: 100 }, painted, 4000, 2000, 0)?.span).toBe(10);
     expect(samplePlan({ x: 200, y: 100 }, painted, 4000, 2000, -2)?.span).toBe(10);
-  });
-});
-
-describe("chipGoesInside", () => {
-  // A patch against the top of the picture would otherwise have its label
-  // clipped away by the scrolling viewport, leaving a rectangle with no name.
-  it("flips the label inside only when it would be clipped", () => {
-    expect(chipGoesInside({ x: 0, y: 0, width: 50, height: 50 }, 16)).toBe(true);
-    expect(chipGoesInside({ x: 0, y: 15, width: 50, height: 50 }, 16)).toBe(true);
-    expect(chipGoesInside({ x: 0, y: 16, width: 50, height: 50 }, 16)).toBe(false);
-    expect(chipGoesInside({ x: 0, y: 400, width: 50, height: 50 }, 16)).toBe(false);
   });
 });
 

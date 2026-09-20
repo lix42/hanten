@@ -150,14 +150,21 @@ export function chroma(rgb: Rgb): number {
 }
 
 /**
- * Below this the hue is noise and is not reported at all.
+ * A span of **0 to 3** code values is noise, and its hue is not reported at all.
  *
- * Four code values: a single pixel of a film scan carries two or three of grain
- * on its own, and in `fullsize` the readout *is* a single pixel. Naming a
- * direction read off grain would be the one thing worse than naming none.
+ * A single pixel of a film scan carries two or three code values of grain on its
+ * own, and in `fullsize` the readout *is* a single pixel. Naming a direction
+ * read off grain would be the one thing worse than naming none. The comparison
+ * is strict, so a span of exactly 4 is already a lean.
  */
 const NEUTRAL_CHROMA = 4 / 255;
-/** Up to this a colour is a grey that leans; past it, it is a colour. */
+/**
+ * A span of **4 to 22** is a grey that leans; **23** and up is a colour.
+ *
+ * Strict here too. Both bounds are stated as the integer spans they are because
+ * these are whole code values off an 8-bit sampler, so "up to 23" and "below 23"
+ * name different bands and the prose has to pick one.
+ */
 const TINTED_CHROMA = 23 / 255;
 
 /**

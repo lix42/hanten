@@ -147,9 +147,6 @@ export default defineConfig({
         swatch: { value: "30px" },
         // A patch's delete button, which straddles the rectangle's corner.
         patchClose: { value: "18px" },
-        // Roughly the label chip's height — it decides when the chip flips inside
-        // the rectangle so the scrolling viewport cannot clip it away.
-        patchChip: { value: "16px" },
 
         // One frame fills one screen, and these four say how that screen is
         // divided. `barHeight` is **stated, not measured**: the control bar is a
