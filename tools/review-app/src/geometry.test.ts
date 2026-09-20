@@ -118,11 +118,22 @@ describe("samplePlan", () => {
   // them reports grain rather than the colour on screen.
   it("spans the image pixels one screen pixel covers", () => {
     const painted = { x: 0, y: 0, width: 400, height: 200 };
+    // Centred on the point, not starting at it: a crop anchored at the mapped
+    // position sits entirely below and right of the cursor, and across a sharp
+    // edge reports the colour on the other side of it.
     expect(samplePlan({ x: 200, y: 100 }, painted, 4000, 2000, 1)).toEqual({
-      x: 2000,
-      y: 1000,
+      x: 1995,
+      y: 995,
       span: 10,
     });
+  });
+
+  // At span 1 the centring offset must be exactly zero: there is nothing to
+  // average, and half a pixel of shift would report the neighbour instead.
+  it("reduces to the pixel under the point when nothing is averaged", () => {
+    const painted = { x: 0, y: 0, width: 400, height: 200 };
+    expect(samplePlan({ x: 10, y: 20 }, painted, 400, 200, 1)).toEqual({ x: 10, y: 20, span: 1 });
+    expect(samplePlan({ x: 137, y: 61 }, painted, 400, 200, 1)).toEqual({ x: 137, y: 61, span: 1 });
   });
 
   it("reads a single pixel at natural size", () => {
