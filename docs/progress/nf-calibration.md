@@ -74,6 +74,52 @@ migration plan (`docs/nf-migration.md`).
   `g=0.77` cell clipped (the null is interpolated between two unclipped cells, so it
   stands). The September patches erring **green** at the shipped value is the
   direction the reviewer reports not seeing.
+- 2026-09-20: **widened to every patched frame — the unit is the roll, not the scan
+  date, and there is no offset signature.** 14 frames x 4 green values (0.72–0.93,
+  blue held) in **2m26s**, ~2.6 s a cell. Five of the 19 patched frames no longer
+  have sources under `../nc-assets` (three 2026-09-09-Ektar100, two
+  2026-09-11-Portra400), which cost that Ektar roll most of its sample. Set:
+  `../temp/scale-ladder/`, with `analyse.py` beside it. 22 patches, 5 rolls;
+  interpolation excludes cells whose median clipped.
+
+  | roll | n | green null | within-roll spread |
+  |---|---|---|---|
+  | 2026-09-11-Portra400 | 8 | 0.783 | 0.030 |
+  | 2026-09-09-Ektar100 | 4 | 0.839 | **0.104** |
+  | 2026-07-15-Ektar100 | 1 | 0.865 | — |
+  | 2026-07-23-Portra160 | 5 | 0.877 | 0.027 |
+  | 2026-07-24-Gold200 | 3 | 0.886 | 0.032 |
+
+  **(1) Per-roll nulls are tight; roll-to-roll they span 0.103.** Four of five rolls
+  agree internally to <=0.032, which is what makes a per-roll correction
+  well-defined. The exception is 2026-09-09-Ektar100, and its spread is not noise —
+  it splits by *frame*, 1608 (sun) ~0.80 against 1627 (shade) ~0.875.
+
+  **(2) The scan-date story is too simple.** July's three rolls cluster
+  (0.865/0.877/0.886) but September's two do not (0.783 vs 0.839), and the clusters
+  overlap. Stock and scan date are confounded in this set — Portra400 is both the
+  lowest null and September-only — so neither can be isolated here.
+
+  **(3) The shipped 0.840 is a well-chosen compromise.** Patch-weighted optimum is
+  0.835, roll-weighted 0.850. At 0.840 the worst roll carries -0.057 in green scale;
+  at 0.850, -0.067. So retuning the global value buys almost nothing — the cost is
+  the spread, not the centre.
+
+  **(4) No offset signature, which cuts against the NLP hypothesis.** If the decode
+  error had an offset component, a patch's null would drift with its lightness
+  consistently. It does not: the slope is +0.027 per 10 L* on Portra160 (r=+0.97),
+  **-0.024 on Ektar0909** (r=-0.94), and +0.001 on Portra400 (r=+0.05) — the
+  best-sampled roll, 8 patches over L* 50–80, showing essentially nothing. Opposite
+  signs across rolls means the within-roll correlations are picking up scene and
+  illuminant differences, not a tone-dependent decode error. On this evidence the
+  error is well modelled as a pure slope, and NLP's red shadows are more likely its
+  own per-frame fitting than a term missing from ours.
+
+  **(5) The a*/b* disagreement is not clean evidence about blue.** Median gap 0.033,
+  8 of 16 patches over 0.03 — but the large gaps land on cars and clouds while walls
+  and cloth sit at 0.001–0.007. A surface with a real colour produces exactly this,
+  so the gap may measure patch quality rather than the decode. Separating the two
+  needs the ColorChecker.
 
 ## scale-gamma-loop
 
