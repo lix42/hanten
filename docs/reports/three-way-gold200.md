@@ -86,6 +86,72 @@ long-standing observation that NLP renders highlights cleanly and casts in the s
 Measured whole-frame cast reproduces the visual ranking exactly (SFC best, SF blue, NLP
 green): C\* **7.8 / 14.7 / 21.4** for SFC / SF / NLP.
 
+## NLP forces white; SilverFast does not
+
+This is the difference behind 1799, and it shows in the *distribution* rather than the
+median. NLP's top-end chroma is **bounded at 3.73** across all 35 frames (p25 0.09,
+p90 2.95); SF's has a tail to **9.04** and SFC's to 6.45. A hard ceiling with no tail is
+what forcing looks like; a tail is what leaving it where it lands looks like.
+
+The per-frame variability says the same thing. Coefficient of variation across the roll:
+
+| | red slope | G/R ratio | B/R ratio |
+|---|---|---|---|
+| NLP | 52.6% | 31.6% | **65.5%** |
+| SF | 24.6% | 25.2% | 35.7% |
+| SFC | 24.5% | **18.8%** | **28.4%** |
+
+NLP re-fits colour as hard as it re-fits contrast. SFC barely moves colour at all — which
+is what a fixed per-stock calibration looks like. So the trade is: **NLP never fails at
+white and can fail catastrophically away from it; SilverFast fails mildly at white and
+degrades gracefully.**
+
+## CCR is SilverFast's substitute for measuring the film base
+
+Isolating SFC against SF over 16 aligned frames, CCR changes **slope not at all**
+(R 1.007x, G 1.007x, B 1.001x; G/R ratio +0.019) and **level substantially**
+(median delta a\* +2.55, delta b\* -4.13, delta L\* -0.10). It cuts SF's mean cast
+`|a*| + |b*|` from **12.8 to 4.9**.
+
+A pure per-channel level correction, keyed to the stock, is a *film-base subtraction by
+lookup*. SilverFast never reads the rebate, so CCR supplies from the datasheet what nc
+measures directly. What that costs is now measurable:
+
+| Gold 200 mask, relative to red | G-R | B-R |
+|---|---|---|
+| datasheet E-7022 Status M `d_min` | +0.4054 | +0.7396 |
+| our measured base, this roll | +0.3067 | +0.6394 |
+| **gap** | **-0.0987** | **-0.1002** |
+
+The published mask has the right *shape* and the wrong *level*, by a constant **-0.10
+density on both G and B** — i.e. this scanner reads ~0.10 more density in red on the
+base than Status M does. That the two gaps agree to 0.0015 makes it a single systematic
+term, not stock variation, and it is a measured starting point for
+`io/scanner-density-calibration`.
+
+## nc today is not an S-curve, and is far flatter than any of them
+
+Same frame, same method, nc's own renders:
+
+| | mid-slope (R) | R² | toe residual | shoulder residual |
+|---|---|---|---|---|
+| nc `film-master` | 2.19 | 0.9908 | +0.05 | -0.08 |
+| nc `sigmoid-flat` | 1.72 | 0.9986 | -0.02 | -0.13 |
+| nc `sigmoid-knees` | 2.02 | 0.9991 | +0.03 | -0.13 |
+| NLP / SF / SFC | 4.44 / 4.19 / 4.21 | 0.945-0.990 | -1.75 / -0.34 / -0.17 | -0.95 / -0.72 / -0.78 |
+
+Every nc configuration measures as a **straight line** — even `sigmoid-knees`, whose
+knees the frame's density range never reaches. Normalised to a common mid-point, nc puts
+the darkest content 0.58 log units below mid where the tools put it **1.5-2.7** below.
+nc and the tools broadly agree in the highlights (+0.44 to +0.69 at the top) and differ
+enormously in the shadows — the same structure as tool-against-tool, with nc at the
+extreme.
+
+So the S-shape those tools carry has to come from somewhere in the new chain. The design
+already says where: a straight decode plus a fit-range operator with a toe and a
+shoulder composes to exactly this shape. This measurement is the argument for that
+operator existing, and a target for what it has to do.
+
 ## What nc can take from this
 
 - **Their agreement is at white and their disagreement is in the shadows.** Judging a
