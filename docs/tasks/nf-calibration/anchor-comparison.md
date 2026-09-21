@@ -15,7 +15,7 @@ the region a per-channel operator acts in — measured 0.55–1.28 stops short o
 three rolls — so a render before the operator exists would compare three configurations
 of which one is inert.
 
-The shortlist, from the spike:
+The shortlist, from [the report](../../reports/white-placement.md):
 
 | | pins mid | reaches white | per-roll contrast |
 |---|---|---|---|
