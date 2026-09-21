@@ -8,14 +8,28 @@ white.
 
 ## Design
 
-- **Why it has to be explicit.** Measured 2026-09-17 (design-update Appendix E):
-  the knee'd sigmoid reads clean on every white surface because its *per-channel*
-  shoulder pulls the channels together as lightness rises, B/R 1.65 → 1.27 across
-  one frame's deciles against 1.76 → 1.48 for the shoulder-less render. A
-  luminance-preserving operator scales all three channels by one factor, so a cast
-  survives to display white. It is a real print behaviour — paper applies
-  per-channel curves — so the look stage owes it explicitly rather than
-  inheriting it from a retiring reconstruction curve.
+- **Why it *might* have to be explicit — the premise is weaker than it looks.** The
+  2026-09-17 round (design-update Appendix E) measured the knee'd sigmoid's channels
+  converging as lightness rises, B/R 1.65 → 1.27 against 1.76 → 1.48 for the
+  shoulder-less render. It did **not** establish the shoulder as the cause: the two
+  presets differ in four ways at once (shoulder, anchor 0.28 vs 0.5 mid-fraction,
+  `print_exposure`, `display_tone`). What is settled is only the negative half — a
+  luminance-preserving operator scales all three channels by one factor, so it cannot
+  converge them at all and a cast survives to display white.
+- **And the 2026-09-20 measurements point at the anchor instead.** All three outside
+  converters produce neutral whites without any highlight-desaturation operator
+  (`docs/reports/three-way-gold200.md`): their channels converge because the anchor
+  sits high in density with a shoulder and a ceiling above it. SilverFast reaches a
+  near-neutral white with a *fixed* per-channel calibration and no colour step at all.
+  If that mechanism is what the eye was responding to, it belongs to
+  [`nf-reconstruction/anchor-rule`](../nf-reconstruction/anchor-rule.md) and this task
+  is an **optional look**, not a remedy for cast — which is the reading the design's
+  own "off must stay available" clause already implies, since an operator that hides
+  residual cast cannot also be the fix for it.
+- **A cost to weigh that was not previously recorded.** Per-channel highlight
+  compression pulls *saturated* highlights toward white, and a sunset is saturated
+  highlights. Whatever makes whites clean is the same mechanism that flattens a
+  sunset, which is a second, independent argument for the parameterisation below.
 - **Anchored at diffuse white.** Display white differs between SDR and HDR, so a
   single pre-branch operator cannot be defined against it. Diffuse white is
   scene-referred and common to both, and a gain map only requires the renditions
@@ -49,5 +63,8 @@ white.
 
 - [The look stage](stage.md)
 - [A `density.scale` ladder, before the calibration frames exist](../nf-calibration/scale-ladder.md)
-  — whether any scale reaches the knee'd render's whites is what decides whether
-  this task is load-bearing or an optional look
+  — **done 2026-09-20**, and it did not settle this task's status: the shipped scale
+  proved to be at the optimum of what one global value can do, so no scale was going
+  to reach the knee'd render's whites by itself. The evidence moved to the anchor
+  instead (see Design), which is why this task's premise needs re-reading before it is
+  picked up.

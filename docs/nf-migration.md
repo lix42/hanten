@@ -5,7 +5,7 @@ file is the **high-level** record: the strategy, the epic list, and the ordering
 constraints. Tasks, dependencies and status live in `docs/TASKS.md` as usual; each
 epic below is a `docs/tasks/nf-*/` directory with a `docs/progress/nf-*.md` log.
 
-**Status:** filed 2026-09-19 — ten epics, 46 tasks, and the triage of the existing
+**Status:** filed 2026-09-19 — ten epics, 53 tasks, and the triage of the existing
 plan (44 tasks carry over unchanged, 9 superseded, 7 retired; the superseded and
 retired files keep a header and leave the active checklist). `docs/TASKS.md` is
 authoritative for status and dependencies.

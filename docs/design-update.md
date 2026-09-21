@@ -353,11 +353,11 @@ rendering is judged against, even though the knee'd sigmoid leaves the product
 later.
 
 **Measured 2026-09-17: `sigmoid-knees` is not more neutral, it desaturates
-highlights.** Its per-channel shoulder pulls the channels together as lightness
-rises, so every white surface reads white under it; in the midtones, where the
-shoulder does not act, it is no better, and on asian skin the user ranked it
-worst of three. A luminance-preserving operator like reinhard cannot reproduce
-that by construction.
+highlights.** Its channels converge as lightness rises, so every white surface
+reads white under it; in the midtones they do not, and on asian skin the user
+ranked it worst of three. A luminance-preserving operator like reinhard cannot
+reproduce that by construction. **What causes the convergence is not
+established** — see Appendix F.
 
 Two consequences. **The decode is not what makes whites white here**, so a cast
 measured on white surfaces is partly a statement about the display operator. And
@@ -939,8 +939,8 @@ shipped gain, then `sigmoid-knees`, which reads slightly green and worst.
 
 (Encoded 8-bit, 18 % inset; the decile columns are one frame's own scene colour,
 so only the *trend* across them is comparable.) The knee'd render's much steeper
-fall is its per-channel shoulder pulling the channels together as lightness
-rises. The cast's direction is per roll: blue on 2026-09-09-Ektar100, pink on
+fall was read at the time as its per-channel shoulder pulling the channels
+together; that attribution did not survive (Appendix F). The cast's direction is per roll: blue on 2026-09-09-Ektar100, pink on
 2026-07-15-Ektar100 and 2026-09-11-Portra400.
 
 Frame-by-frame notes are in `../temp/notes/observations.md`.
@@ -950,6 +950,20 @@ Frame-by-frame notes are in `../temp/notes/observations.md`.
 Kept so a reader who meets the old number elsewhere knows it was retired, and
 why.
 
+- **"`sigmoid-knees` reads clean on every white surface *because* its per-channel
+  shoulder pulls the channels together."** The convergence is measured; the cause
+  was not. `sigmoid-flat` and `sigmoid-knees` differ in **four** ways at once —
+  the shoulder, the anchor (`mid-at-dmax-fraction` 0.28 against 0.5),
+  `print_exposure` (0 against 2.17) and `display_tone` (`none` against reinhard) —
+  so nothing in that round isolates the shoulder, and the ranking that anointed
+  the knee'd render was made by eye on an axis the reviewer reports being
+  insensitive to. Measurements on 2026-09-20 point at the anchor instead: three
+  commercial converters reach neutral whites with no highlight-desaturation
+  operator at all, their channels converging because the anchor sits high in
+  density with a shoulder and a ceiling above it
+  (`docs/reports/three-way-gold200.md`). What survives unchanged is the negative
+  half — a luminance-preserving operator scales all three channels by one factor,
+  so it cannot converge them at all.
 - **"The Ektar green cast is a drift, not a hue."** The argument used
   `curve_probe::channel_drift`, which groups **ordinary picture pixels** by red
   density and reads the green/red ratio across the groups, with no grey patch. A
