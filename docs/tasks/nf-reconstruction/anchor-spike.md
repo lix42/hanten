@@ -16,12 +16,22 @@ colour step — is why their whites read neutral. nc's chosen rule anchors the m
 **The anchor alone cannot do it, and the experiment has to reflect that.** In
 `out_c = 10^(gamma·(scale_c·D_c − A))` the anchor factors out as `10^(−gamma·A)`,
 identical on every channel — a pure common gain that cannot move a channel ratio.
-What the converters do is anchor high **and** compress above it *per channel*: the
-soft-min's compression differs by channel according to where each one sits relative
-to the ceiling, and the anchor decides how much content lands in that region. So the
-anchor is varied **with a per-channel shoulder present**, or it is varied against
-nothing. `reinhard` cannot substitute — it scales all three channels by one factor
-and so cannot converge them by construction.
+
+What converges channels is the **shoulder applied per channel against a common
+ceiling**: each channel asymptotes to the same 1.0, so one arriving higher is
+compressed more and the gap shrinks as brightness rises (SF measured 1.13× apart at
+p97, 1.05× at p99.5). The anchor's job is only to decide how much content lands in
+that compressed region. *Per channel* here means **one shoulder parameter evaluated on
+each channel's own density** — `s_curve` through `density::apply_curve`, which is what
+`sigmoid-knees` already does. Nothing sets a different shoulder per channel, and this
+task does not propose one.
+
+`reinhard` cannot substitute, and the reason is structural rather than a matter of
+strength: `sdr.rs` computes one luminance, curves that, and multiplies all three
+channels by the resulting ratio. A common multiplier leaves every channel ratio
+invariant, so a cast is carried untouched to display white however hard it compresses.
+So the anchor is varied **with the per-channel shoulder present**, or it is varied
+against nothing.
 
 **It still needs none of the migration.** Today's binary carries the whole anchor
 family and the sigmoid's per-channel shoulder, so the candidate is a flag
@@ -52,11 +62,37 @@ behind its worst failure; it also normalises HDR headroom away. Derive one densi
 per roll from a high percentile across the roll's frames, with a gap below the
 leader's `Dmax` so a single blown frame cannot drag it.
 
+## The decode-side half
+
+Some of this needs no rendering at all — it is the scans plus arithmetic, and it
+should be settled first because it decides what the rendered set is even testing.
+
+**What a white anchor does to the rest of the scale.** `algo/sigmoid.rs` records that
+the anchor "sets the black floor at `10^(−contrast·anchor)`", so pinning white *higher*
+darkens everything — which is where the documented 2.5–3.6 stops comes from. The pale
+risk is the compensation, not the anchor: brighten with `print_exposure` and the black
+floor lifts with everything else; raise contrast instead and the black returns, but
+contrast and exposure are now coupled. **That coupling is the real cost**, and it is
+exactly the property [the rule](anchor-rule.md) credits the mid anchor with. Measure
+where mid-grey and black land across a contrast range, per candidate anchor, before
+rendering anything.
+
+**Where white actually is.** Measure, on this roll and at least one other:
+
+- the density of the roll's diffuse white under each candidate rule (a high percentile
+  pooled across frames, per-frame p96–97, and the leader's `Dmax`);
+- the **gap between diffuse white and the leader's `Dmax`** — the headroom a specular
+  tail needs, and the margin a single blown frame would otherwise eat;
+- how much that gap varies frame to frame and roll to roll, since the anchor is fixed
+  per roll but the content is not.
+
 ## Open questions
 
 - **Which percentile, and of what.** Per-frame p96–97 is what the converters use, but
   nc needs a roll-level statistic, and pooling frames is not the same thing.
 - **How to derive diffuse white at all** on a roll with no white surface in it.
+- **How much headroom to leave**, which is the same choice as the percentile: p95/p97/p99
+  measured 1.23/1.03/0.67 median stops on `2026-09-18-Gold200`.
 - Whether the midtone cost, if real, is answerable by the look stage's print contrast
   rather than by rejecting the anchor.
 
