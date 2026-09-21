@@ -25,8 +25,8 @@ migration plan (`docs/nf-migration.md`).
 
 ## anchor-spike
 
-**Status:** not started
-**Updated:** 2026-09-20
+**Status:** done
+**Updated:** 2026-09-21
 
 - 2026-09-20: filed after the three-way converter measurements
   (`docs/reports/three-way-gold200.md`). Goal: does a diffuse-white anchor earn its
@@ -72,6 +72,22 @@ migration plan (`docs/nf-migration.md`).
   `holder_applied: false` and only its 5% static inset (167 px of 3343), which does not
   reach the holder on this scan. Relevant to `film-base/holder-cap-contamination`, and a
   trap for any measurement taken on a full frame rather than an inset one.
+- 2026-09-21: **done**, having costed a shortlist rather than picked from it. Four
+  placements, with what each gets right on 2026-09-18-Gold200 (`W` = 0.800, `d` = 0.62):
+  **A** fixed anchor pins mid and reaches 0.412; **B** content white reaches white and
+  puts a datasheet mid at 0.437; **C** pins both by solving
+  `gamma = MID_GREY_OUTPUT_DECADES / (W − d)` = 4.15; **D** is C with a noise ceiling,
+  sliding toward B when the cap binds. C is the only one that pins both ends, and
+  structurally — two free parameters against two constraints. It stays inside the design
+  because `gamma` already splits, so its per-roll contrast (2.31× / 1.43× / 1.73× over
+  the 1.8 linearization) is the look stage's knob and the decode stays fixed. Its cost is
+  that it asks Gold200 for more contrast than any converter used on that roll.
+
+  The rendered ranking is deliberately **not** here — under A nothing reaches the region
+  a per-channel operator acts in, so a render now would compare four configurations of
+  which one is inert. It moves to
+  [`nf-calibration/anchor-comparison`](../tasks/nf-calibration/anchor-comparison.md),
+  which waits on the operator.
 
 ## anchor-rule
 

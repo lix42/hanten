@@ -158,6 +158,8 @@ graph TD
   nf-verification --> nf-calibration
   analysis --> nf-calibration
   io --> nf-calibration
+  nf-look --> nf-calibration
+  nf-reconstruction --> nf-calibration
   nf-calibration --> nf-look
   analysis --> nf-verification
   nf-core --> nf-verification
@@ -341,6 +343,7 @@ graph TD
     nf-destinations/default-destination
   end
   subgraph nf-calibration
+    nf-calibration/anchor-comparison
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -550,6 +553,8 @@ graph TD
   nf-reconstruction/anchor-spike --> nf-reconstruction/anchor-rule
   nf-reconstruction/anchor-spike --> nf-look/path-to-white
   nf-look/desaturation-spike --> nf-look/path-to-white
+  nf-look/path-to-white --> nf-calibration/anchor-comparison
+  nf-reconstruction/anchor-spike --> nf-calibration/anchor-comparison
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
   nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
@@ -1494,7 +1499,7 @@ the design in `docs/design-update.md`:
 > The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`,
 > and `gamma` split into a calibration half and a look half.
 
-- [ ] [Spike: does a diffuse-white anchor earn its
+- [x] [Spike: does a diffuse-white anchor earn its
   place?](tasks/nf-reconstruction/anchor-spike.md) — runs against today's binary
   so it can run first; every converter measured anchors the bright end, and the
   rule currently has to choose on argument alone
@@ -1599,6 +1604,9 @@ the design in `docs/design-update.md`:
   exist](tasks/nf-calibration/scale-ladder.md) — runs against today's binary so
   it can run first; the decode would otherwise inherit a sigmoid-era value whose
   green half is documented as unresolved
+- [ ] [Choose the white placement by
+  rendering](tasks/nf-calibration/anchor-comparison.md) — rank the four options the
+  spike costed, once a highlight operator exists to make the differences visible
 - [ ] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering. Supersedes
@@ -1680,3 +1688,7 @@ the design in `docs/design-update.md`:
 - `nf-look/desaturation-spike` (new flow): none
   — the per-channel half runs against today's binary and the hue-preserving half is a
   throwaway patch, so it settles the operator's form before the look stage exists
+- `nf-calibration/anchor-comparison` (new flow): `nf-look/path-to-white`, `nf-reconstruction/anchor-spike`
+  — the spike costs the four white placements from the scans; only a render with a real
+  highlight operator in the chain can rank them, and under the fixed anchor that
+  operator has nothing to act on

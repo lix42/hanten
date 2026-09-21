@@ -2,9 +2,11 @@
 
 ## Goal
 
-Decide whether the decode's white should be **derived from the roll's own content**
-instead of from the film base plus a constant. [The anchor rule](anchor-rule.md) treats
-that as settled by principle; the measurements now give it a price.
+Price the candidate ways of placing the decode's white, from the scans and arithmetic
+alone, and hand [the anchor rule](anchor-rule.md) a costed shortlist instead of an
+argument. **The rendered verdict is deliberately not here** — it needs a per-channel
+operator to exist before the differences are visible, so it is
+[`nf-calibration/anchor-comparison`](../nf-calibration/anchor-comparison.md).
 
 ## Design
 
@@ -42,15 +44,41 @@ without moving their anchor.
 
 Neither pins both. That is the documented 2.5–3.6 stops seen from the other side, and it
 is the cost this spike has to price.
-**It needs none of the migration.** `--anchor-white-at-reference` already resolves
-`A = reference`, so what is new is only how the reference is computed — offline, then
-passed as `--d-max`:
+## The shortlist
 
-- **candidate** — `--anchor-white-at-reference --d-max <roll content percentile>`,
-  with a per-channel shoulder present so the anchor has something to act through.
-- **control** — the same curve and shoulder at `--anchor-mid-offset <d>`, i.e. today's
-  base-referenced rule.
-- **targets** — `--preset sigmoid-knees` and SFC, the least-cast outside converter.
+Three ways to place white, with what each gets right. Measured on
+2026-09-18-Gold200, whose roll white `W` sits at red density 0.800 against a datasheet
+`d` of 0.62 (`docs/progress/nf-reconstruction.md`, 2026-09-21):
+
+| | gamma | anchor `A` | a datasheet mid renders at | white reached |
+|---|---|---|---|---|
+| **A** fixed anchor — `mid-at-base-offset(d)` | 2.00 | 0.992 | **0.180** ✓ | 0.412 ✗ |
+| **B** content white — `A = W`, a level move | 2.00 | 0.800 | 0.437 ✗ | **1.000** ✓ |
+| **C** hybrid — pin mid *and* solve contrast | 4.15 | 0.800 | **0.180** ✓ | **1.000** ✓ |
+
+**C is the only one that pins both ends**, and structurally so: it has two free
+parameters (anchor and contrast) against two constraints where A and B each have one.
+Its contrast follows from `gamma = MID_GREY_OUTPUT_DECADES / (W − d)` — 4.15 / 2.57 /
+3.11 on the three rolls measured.
+
+**B is weaker than "level is free" suggested.** A level move puts a true datasheet
+mid-grey at 0.437 instead of 0.18, because it assumes the roll's brightest *is* white
+when the roll may simply be flat.
+
+**C stays inside the design.** `gamma` already splits — linearization (~1.8) in the
+decode, print contrast in rendering — so C's per-roll contrast is the **look stage's
+contrast knob** (2.31× / 1.43× / 1.73× over 1.8), not a decode that varies per roll.
+
+**C's cost is noise, and it is not small.** `corr(slope, noise) = 0.89`, and C asks
+Gold200 for gamma 4.15 where the converters measured 3.07–3.18 on that same roll —
+because its content spans only 0.18 density from `d` to its bright end where the
+datasheets expect 0.36. C cannot tell a genuinely flat roll from a wrong `d`, and pays
+for either in contrast.
+
+**D — C with a ceiling** is therefore worth carrying: cap gamma at a noise budget, and
+when the cap binds, close the remaining gap by sliding `A` down toward `W`, i.e. degrade
+toward B rather than refusing. Well-formed, and it makes the noise budget the explicit
+parameter it should be.
 
 **Two guards on the percentile**, and they pull opposite ways: a **high percentile
 rather than the maximum**, or one blown frame drags the anchor up and darkens the whole
@@ -95,28 +123,19 @@ set is testing.
 
 ## How to Verify
 
-**Judge on SDR, measure HDR separately** — the targets were ranked on SDR and the
-three-way numbers measured there, so the comparison is SDR with the gain map stripped
-(`render-review-set` carries the procedure). HDR enters as the headroom number only.
+A written answer in `docs/progress/nf-reconstruction.md`, all of it from the scans:
 
-**Both a measurement and a visual pass.** The original verdict was visual, the metric is
-a proxy, and the reviewer is insensitive to light green — so green is read off marked
-neutral patches (the review app measures them natively since #128) and the rest ranked
-by eye.
+- **Where each roll's white sits** against the base-referenced anchor, in the anchor's
+  own units (red, where `scale = 1`), on at least three rolls across stocks.
+- **What a fixed `d` costs** — the spread between rolls at the bright end.
+- **The contrast each option demands**, against the converters' measured slopes.
+- **Enough for the shortlist above to be read without re-deriving it.**
 
-A written answer in `docs/progress/nf-reconstruction.md`, against the control on the
-same frames: **whites** (top-end chroma on marked neutral patches — does pinning white
-to content put enough of it where the operator acts?), **midtones** (the level shift in
-stops, and whether the documented 2.5–3.6 reproduces once the reference is the roll's
-own white rather than a leader `Dmax`), **headroom** (the resulting `GainMapMax` against
-the ~1 stop predicted), **roll consistency** (that frames keep their relative exposure —
-the property a per-frame anchor loses), and **the user's ranking** against
-`sigmoid-knees`.
-
-Any of the three outcomes — it works, it works but costs too much, it does not work —
-completes the spike.
+Complete when the shortlist is costed. The rendered comparison is a separate task and
+should not be attempted here: under option A nothing reaches the region a per-channel
+operator acts in, so a render would compare three configurations of which one is inert.
 
 ## Dependencies
 
-None — it runs against today's binary, deliberately, so that it can run before the rule
-has to be chosen.
+None — it runs on the scans, deliberately, so that it can run before the rule has to be
+chosen.

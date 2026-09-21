@@ -16,6 +16,18 @@ The numbers rather than the machinery: an early `scale` ladder (runs against tod
 Nothing has landed yet: the epic was created on 2026-09-19 as part of the new-flow
 migration plan (`docs/nf-migration.md`).
 
+## anchor-comparison
+
+**Status:** not started
+**Updated:** 2026-09-21
+
+- 2026-09-21: filed to carry the rendered half of `nf-reconstruction/anchor-spike`,
+  which costed four white placements from the scans but could not rank them: under the
+  fixed anchor the three rolls measured land 0.55–1.28 stops short of white, so a
+  per-channel highlight operator has nothing to act on and a render would compare four
+  configurations of which one is inert. Waits on `nf-look/path-to-white`. A verdict of
+  "keep the fixed anchor and move `d` instead" is a complete outcome.
+
 ## scale-ladder
 
 **Status:** done
