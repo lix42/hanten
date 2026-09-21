@@ -10848,3 +10848,385 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
         "{stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `--new-flow` — the migration selector (`nf-core/new-flow-flag`)
+// ---------------------------------------------------------------------------
+//
+// Every test below is scaffolding with the same expiry as the flag itself:
+// `nf-core/stage-skeleton` replaces the not-implemented seam with the identity
+// chain, and `nf-core/default-flip` deletes the flag and these tests with it.
+// They use `run_exact` and state their own preset, so nothing is injected.
+
+#[test]
+fn without_new_flow_nothing_moves() {
+    // The flag's first contract: absent, it changes nothing — and present, it still
+    // resolves the *same* recipe, because it is not a knob. Asserted on the resolved
+    // params rather than on pixels: `--dump-params` is written before the render, so
+    // it is the one artifact both paths produce, and a `new_flow` key leaking into
+    // `ResolvedConfig` would show up here as a diff.
+    let tmp = TempDir::new("new-flow-params");
+    let dump_off = tmp.path("off.json");
+    let dump_on = tmp.path("on.json");
+    let args = |dump: &Path, out: &Path, flow: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = vec![
+            "convert".into(),
+            fixture("hdr-48bit.tif").display().to_string(),
+            "-o".into(),
+            out.display().to_string(),
+            "--output-preset".into(),
+            "legacy".into(),
+            "--film-base".into(),
+            "0.9,0.55,0.42".into(),
+            "--dump-params".into(),
+            dump.display().to_string(),
+            "--report".into(),
+            "none".into(),
+        ];
+        v.extend(flow.iter().map(|s| (*s).to_string()));
+        v
+    };
+    fn borrow(v: &[String]) -> Vec<&str> {
+        v.iter().map(String::as_str).collect()
+    }
+
+    let off = args(&dump_off, &tmp.path("off.tif"), &[]);
+    let (code, _out, err) = run_exact(&borrow(&off));
+    assert_eq!(code, 0, "the no-flag path still converts: {err}");
+
+    let on = args(&dump_on, &tmp.path("on.tif"), &["--new-flow"]);
+    let (code, _out, _err) = run_exact(&borrow(&on));
+    assert_eq!(code, 4, "the new flow has no render stages yet");
+
+    assert_eq!(
+        std::fs::read_to_string(&dump_off).unwrap(),
+        std::fs::read_to_string(&dump_on).unwrap(),
+        "`--new-flow` must not perturb the resolved recipe — it is not a recipe key"
+    );
+}
+
+#[test]
+fn new_flow_render_is_not_implemented_yet() {
+    // The seam. `nf-core/stage-skeleton` replaces this expectation with a render;
+    // exit 4 (`Unsupported`), not 2, because the command line is well-formed and the
+    // config resolved — it is this build that cannot serve it.
+    let tmp = TempDir::new("new-flow-seam");
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("out.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 4, "{err}");
+    assert!(
+        err.contains("has no stages yet") && err.contains("stage-skeleton"),
+        "the seam must say what is missing and who fills it: {err}"
+    );
+}
+
+#[test]
+fn a_recipe_cannot_select_the_flow() {
+    // CLI-only means a recipe naming it is rejected, not ignored. Free from
+    // `deny_unknown_fields` — pinned so a future `new_flow` field on `ResolvedConfig`
+    // (which would make the flag a knob) cannot land quietly.
+    let tmp = TempDir::new("new-flow-recipe");
+    let recipe = write_file(&tmp.path("recipe.json"), r#"{"new_flow": true}"#);
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("out.tif").to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("unknown field `new_flow`"), "{err}");
+}
+
+#[test]
+fn new_flow_refuses_a_knob_whose_counterpart_has_not_landed() {
+    // The presence half of the availability gate, and its wording: "not yet" advises
+    // waiting, where the other verdict advises replacing. Asserting the *losing*
+    // wording is absent is the only way to tell the two rules apart — both name the
+    // knob (CLAUDE.md: `err.contains(<knob>)` cannot distinguish them).
+    let tmp = TempDir::new("new-flow-not-yet");
+    let out = tmp.path("out.tif");
+    let flags: &[&str] = &[
+        "convert",
+        &fixture("hdr-48bit.tif").display().to_string(),
+        "-o",
+        out.to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--sigmoid-toe",
+        "0.2",
+        "--report",
+        "none",
+    ];
+    let mut with_flow = flags.to_vec();
+    with_flow.push("--new-flow");
+    let (code, _out, err) = run_exact(&with_flow);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--sigmoid-toe"), "names the knob typed: {err}");
+    assert!(err.contains("no counterpart for it yet"), "{err}");
+    assert!(
+        !err.contains("will not gain one"),
+        "the losing verdict's wording must be absent: {err}"
+    );
+    assert!(
+        !err.contains('*'),
+        "terminal output carries no markdown: {err}"
+    );
+
+    // Falsifiability: the same knob is accepted on the current chain.
+    let (code, _out, err) = run_exact(flags);
+    assert_eq!(code, 0, "the control run must succeed: {err}");
+}
+
+#[test]
+fn new_flow_accepts_a_knee_flag_that_asks_for_no_knee() {
+    // The tiebreaker's other half, and the reason the knee rules read the *value* the
+    // user typed rather than mere presence: `--sigmoid-toe 0` asks for a knee-less
+    // curve, which is bit-exactly the straight line the new flow decodes with. An
+    // identity value asks for nothing, and refusing it would kill the flags-win reset
+    // that lets one recipe be re-used on the new chain. Reaching the seam (exit 4) is
+    // what "accepted" looks like while the chain has no stages.
+    let tmp = TempDir::new("new-flow-knee-zero");
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("out.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--sigmoid-toe",
+        "0",
+        "--sigmoid-shoulder",
+        "0",
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 4, "a zero knee must not be refused: {err}");
+    assert!(err.contains("has no stages yet"), "{err}");
+}
+
+#[test]
+fn new_flow_refuses_a_knob_the_design_drops() {
+    // The value half, with the other verdict — and the other call site: this one is
+    // reached through the resolved config, so a recipe trips it as readily as a flag.
+    let tmp = TempDir::new("new-flow-never");
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("out.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--reconstruction",
+        "simple",
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("will not gain one"), "{err}");
+    assert!(
+        err.contains("--reconstruction density"),
+        "a `never` verdict names the replacement: {err}"
+    );
+    assert!(
+        !err.contains("no counterpart for it yet"),
+        "the losing verdict's wording must be absent: {err}"
+    );
+
+    // Falsifiability.
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("control.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--reconstruction",
+        "simple",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 0, "the control run must succeed: {err}");
+}
+
+#[test]
+fn the_availability_gate_outranks_the_rules_it_would_confuse() {
+    // Ordering, driven through the binary rather than by calling a rule directly —
+    // a direct call exercises the rule and never the ordering, which is how the
+    // fourth circular-remedy defect reached CI. With no film base *and* an
+    // unavailable knob, the unavailable knob must be diagnosed first: "no film base
+    // selected" is the least-specific diagnosis in `validate`, and following it
+    // would just earn the user this error on the next run.
+    let tmp = TempDir::new("new-flow-order");
+    for knob in [["--reconstruction", "simple"], ["--sigmoid-toe", "0.2"]] {
+        let (code, _out, err) = run_exact(&[
+            "convert",
+            fixture("hdr-48bit.tif").to_str().unwrap(),
+            "-o",
+            tmp.path("out.tif").to_str().unwrap(),
+            "--output-preset",
+            "legacy",
+            knob[0],
+            knob[1],
+            "--new-flow",
+            "--report",
+            "none",
+        ]);
+        assert_eq!(code, 2, "{err}");
+        assert!(
+            err.contains("has no meaning under `--new-flow`"),
+            "{knob:?} must be diagnosed before the missing film base: {err}"
+        );
+        assert!(
+            !err.contains("no film base selected"),
+            "the less specific diagnosis must not win: {err}"
+        );
+    }
+}
+
+#[test]
+fn roll_under_the_new_flow_refuses_once_before_any_decode() {
+    // `roll` takes the flag too, and refuses **once**, after the plan resolves and
+    // before the first decode. Not per frame: unlike the memory gate — whose verdict
+    // depends on each frame's own size — this condition is frame-independent and
+    // already known, so per-frame handling would decode every frame of a real roll to
+    // print one identical error N times. Pinned by counting what was written.
+    let tmp = TempDir::new("new-flow-roll");
+    // `ROLL_RECIPE` carries nothing new-flow-specific, so a refusal can only come
+    // from the flag.
+    let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
+    let out_dir = tmp.path("out");
+    let (code, _stdout, err) = run_exact(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        fixture("hdri-64bit.tif").to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 4, "{err}");
+    assert!(err.contains("has no stages yet"), "{err}");
+    // The refusal precedes `create_dir_all`, so the *directory* is the witness: a
+    // counted-zero read of a directory that was never created would pass whatever roll
+    // did before failing.
+    assert!(
+        !out_dir.exists(),
+        "roll must refuse before it creates --out-dir, let alone decodes a frame"
+    );
+}
+
+#[test]
+fn roll_refuses_an_unavailable_knob_from_either_recipe_site() {
+    // Roll accepts no conversion flags, so the knobs it can reach are resolved
+    // values — and it validates them in **two** places. Both are pinned, because a
+    // gate composed at one site and forgotten at the other is exactly how
+    // `OutputPreset::is_atomic`'s three call sites lost one.
+    let tmp = TempDir::new("new-flow-roll-knob");
+    let out_dir = tmp.path("out");
+
+    // (1) the shared recipe.
+    let shared_simple = write_file(
+        &tmp.path("shared.json"),
+        r#"{
+             "reconstruction": { "type": "simple" },
+             "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+             "output": { "preset": "legacy" }
+           }"#,
+    );
+    let (code, _out, err) = run_exact(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        shared_simple.to_str().unwrap(),
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("has no meaning under `--new-flow`"), "{err}");
+
+    // (2) a per-frame override, on a shared recipe the gate accepts.
+    let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{ "frames": [
+                 {{ "input": {src:?}, "params": {{ "reconstruction": {{ "type": "simple" }} }} }}
+               ] }}"#,
+            src = fixture("hdr-48bit.tif").to_str().unwrap(),
+        ),
+    );
+    let (code, _out, err) = run_exact(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("out2").to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("has no meaning under `--new-flow`"), "{err}");
+
+    // Falsifiability: the same manifest runs on the current chain.
+    let (code, _out, err) = run_exact(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("out3").to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 0, "the control roll must succeed: {err}");
+}
+
+#[test]
+fn help_documents_the_flag_as_transitional() {
+    // The expiry is part of the design, so it has to reach the user who meets the
+    // flag in `--help` rather than living only in the migration doc.
+    for command in ["convert", "roll"] {
+        let (code, stdout, _err) = run_exact(&[command, "--help"]);
+        assert_eq!(code, 0);
+        assert!(stdout.contains("--new-flow"), "{command}: {stdout}");
+        assert!(
+            stdout.contains("Transitional"),
+            "{command} must say the flag is transitional: {stdout}"
+        );
+    }
+}

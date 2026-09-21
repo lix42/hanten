@@ -21,6 +21,7 @@ use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
 use crate::algo::density;
+use crate::flow::{self, Flow};
 use crate::io::decode::{DecodeInfo, decode_within, probe};
 use crate::io::{avif, encode, staged, ultra_hdr};
 use crate::pipeline::display_tone::DisplayTone;
@@ -298,6 +299,18 @@ pub struct ConvertArgs {
     #[arg(long, value_name = "PATH")]
     pub telemetry_file: Option<String>,
 
+    /// Transitional: resolve the new rendering chain (docs/design-update.md,
+    /// docs/nf-migration.md) instead of the shipped one. Scaffolding rather than a
+    /// feature: CLI-only — never a recipe key, since it selects which knobs exist
+    /// rather than setting one — and removed when the default flips, as a migration
+    /// error with no alias (nc is unreleased, so removal is cheap). A knob the new
+    /// chain cannot honour is refused rather than accepted and ignored — the
+    /// inventory of those knobs is still being assembled.
+    // Plain prose on purpose: clap renders a doc comment verbatim as `--help` text,
+    // so markdown emphasis would print as asterisks.
+    #[arg(long = "new-flow")]
+    pub new_flow: bool,
+
     #[command(flatten)]
     pub memory: MemoryArgs,
     #[command(flatten)]
@@ -345,6 +358,12 @@ pub struct RollArgs {
     /// emitted), like `convert --strict`.
     #[arg(long)]
     pub strict: bool,
+    /// Transitional: resolve the new rendering chain for every frame — see
+    /// `convert --new-flow`. Roll accepts no conversion flags, so a knob the new
+    /// chain refuses reaches it only as a resolved value, from the shared recipe or
+    /// a per-frame override.
+    #[arg(long = "new-flow")]
+    pub new_flow: bool,
     #[command(flatten)]
     pub memory: MemoryArgs,
     #[command(flatten)]
@@ -3909,15 +3928,30 @@ fn reject_dmax_flag_with_characteristic_curve(
 ///
 /// `convert` orchestrators must call **this**, not `validate` — a `merge` + `validate`
 /// pair silently omits the flag-presence rules and reinstates the bug where
-/// `--out-depth u16` next to an atomic preset writes an f32 master. `roll` legitimately
-/// calls `validate` directly: it has no output flags at all, so there is nothing for
-/// the extra rules to see. `output/presets` must preserve the same rules when it
-/// adds roll-aware activation for the remaining named policies.
+/// `--out-depth u16` next to an atomic preset writes an f32 master. `roll` calls
+/// [`validate_with_flow`]: it has no output flags at all, so there is nothing for the
+/// provenance rules above to see, but it does accept `--new-flow`. `output/presets`
+/// must preserve the same rules when it adds roll-aware activation for the remaining
+/// named policies.
+///
+/// **One provenance rule is deliberately *not* here**, so "complete" above means
+/// complete for everything reachable after `merge`:
+/// [`flow::reject_unavailable_flags`] must run **before** `merge`, because a presence
+/// rule placed after it is unreachable on every command line `merge` refuses first.
+/// `run_convert` calls it there, and a future `convert` orchestrator owes that call as
+/// well as this one — the flow gate's *value* half is inside this function, so an
+/// orchestrator that forgets the presence call loses only the flag refusals, silently.
+/// It is scaffolding: `nf-core/default-flip` deletes it along with `--new-flow`.
 pub fn validate_convert(
     cfg: &ResolvedConfig,
     args: &ConvertArgs,
     recipe_preset: RecipePreset,
 ) -> Result<()> {
+    // Flow availability outranks even the flag-shape rules: every rule below
+    // reasons about the shipped chain, so under `--new-flow` their remedies can name
+    // knobs this flow refuses. Refusing the unavailable knob first is the only
+    // ordering whose advice a user can act on.
+    flow::reject_unavailable_values(Flow::from_flag(args.new_flow), cfg)?;
     // Flag-shape first: "these two requests contradict each other" is a clearer
     // diagnosis than whatever value rule the same config might also trip.
     //
@@ -4301,6 +4335,20 @@ pub fn missing_film_base_message(remedy: FilmBaseRemedy) -> String {
 /// recipe instead of flags `RollArgs` does not accept.
 pub fn validate(cfg: &ResolvedConfig) -> Result<()> {
     validate_with_remedy(cfg, FilmBaseRemedy::Flags)
+}
+
+/// [`validate_with_remedy`] preceded by the resolved-value half of the flow
+/// availability gate — `roll`'s whole gate, and the only spelling a `roll` call
+/// site should use.
+///
+/// Composed rather than repeated at each site: `roll` validates in **two** places
+/// (the shared recipe, then each per-frame override), and CLAUDE.md's record of
+/// `OutputPreset::is_atomic` is that a rule spread over three call sites loses one.
+/// `convert`'s equivalent composition is [`validate_convert`], which also carries
+/// the presence half.
+pub fn validate_with_flow(flow: Flow, cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Result<()> {
+    flow::reject_unavailable_values(flow, cfg)?;
+    validate_with_remedy(cfg, remedy)
 }
 
 /// [`validate`], with the caller stating which remedy its users actually have for
@@ -5727,6 +5775,7 @@ fn convert_frame(
     input: &Path,
     output: &Path,
     cfg: &ResolvedConfig,
+    flow: Flow,
     input_from_cli: InputFromCli,
     dmax_setting: DmaxSetting,
     conversion_preset: Option<ConversionPresetResult>,
@@ -6047,6 +6096,12 @@ fn convert_frame(
         );
     }
 
+    // The migration seam. Decode and film base are shared by both flows — the new
+    // design keeps them — so the branch belongs here, at the render, which is also
+    // what makes this the arm `nf-core/stage-skeleton` fills rather than moves.
+    if flow == Flow::New {
+        return Err(flow::render_not_implemented());
+    }
     // Clear any stale lcms2 flag so only errors from *this* render are counted.
     let _ = cms_error_occurred();
     // Stages 3–4 — reconstruction → legacy print → output color transform.
@@ -6753,6 +6808,12 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
 
     reject_deprecated_input_flags(&args.input_opts)?;
     reject_removed_flags(&args)?;
+    let flow = Flow::from_flag(args.new_flow);
+    // Presence-keyed availability runs **before** `merge`, deliberately: `merge`
+    // refuses some command lines itself, and a rule placed after it is unreachable
+    // on exactly those — handing the user a remedy that names a knob this flow
+    // rejects (CLAUDE.md, ordering across gates).
+    flow::reject_unavailable_flags(flow, &args)?;
     let loaded = load_recipe(args.recipe_in.as_deref())?;
     // Dmax provenance for the report: a CLI flag beats the recipe key beats the
     // default — the same precedence the merge applies to the value itself.
@@ -6889,6 +6950,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         &args.input,
         &args.output,
         &cfg,
+        flow,
         InputFromCli {
             transfer: args.input_opts.input_transfer.is_some(),
             meaning: args.input_opts.input_meaning.is_some(),
@@ -7699,7 +7761,11 @@ fn resolve_frames(
                         // rejections first, the least-specific missing-base last.
                         reject_roll_unsupported(&cfg)?;
                         reject_roll_unsupported_input(&cfg)?;
-                        validate_with_remedy(&cfg, FilmBaseRemedy::SharedRecipe)?;
+                        validate_with_flow(
+                            Flow::from_flag(args.new_flow),
+                            &cfg,
+                            FilmBaseRemedy::SharedRecipe,
+                        )?;
                         // A roll-consistency break, and the only one reachable
                         // *without* naming the key: an override that switches only
                         // `curve.type` takes the new curve's default placement, so a
@@ -7940,7 +8006,11 @@ fn run_roll(args: RollArgs) -> Result<()> {
     reject_roll_unsupported_input(&shared)?;
     // `roll`'s remedy for an unstated film base is the shared recipe, never a flag:
     // `RollArgs` accepts none of the three film-base flags.
-    validate_with_remedy(&shared, FilmBaseRemedy::SharedRecipe)?;
+    validate_with_flow(
+        Flow::from_flag(args.new_flow),
+        &shared,
+        FilmBaseRemedy::SharedRecipe,
+    )?;
 
     // A roll's headline guarantee is one frozen, roll-fixed film base shared by
     // every frame. Only an *explicit* base delivers that: `auto`/`region`
@@ -8044,6 +8114,17 @@ fn run_roll(args: RollArgs) -> Result<()> {
     }
     ensure_roll_targets_distinct(&inputs, &targets)?;
 
+    // The migration seam, refused **once** for the whole roll rather than per frame.
+    // Placed after the plan resolves, so every config diagnosis a roll would give is
+    // unchanged — and before the first decode, because unlike the memory gate (whose
+    // verdict is per frame, since it depends on the frame's own size) this condition
+    // is frame-independent and already known. Per-frame handling would otherwise
+    // decode all 25 frames of a real roll to print one identical error 25 times.
+    // Deleted by `nf-core/stage-skeleton`, which gives the new flow stages to run.
+    if Flow::from_flag(args.new_flow) == Flow::New {
+        return Err(flow::render_not_implemented());
+    }
+
     // Create the output directory now that the plan is known-good. A manifest may
     // name a per-frame output in a subdirectory (`sub/x.tiff`), so create each
     // frame's output parent too — otherwise the encode fails on a missing dir.
@@ -8081,6 +8162,10 @@ fn run_roll(args: RollArgs) -> Result<()> {
             &pf.input,
             &pf.output,
             &pf.cfg,
+            // `Legacy` today — the roll-level seam above returns before this loop
+            // whenever the new flow is selected. The argument is the wiring
+            // `nf-core/stage-skeleton` needs once there is a chain to run per frame.
+            Flow::from_flag(args.new_flow),
             InputFromCli::none(),
             pf.dmax_setting,
             // `roll` has no `--preset` flag — its shared recipe already carries the
@@ -15029,6 +15114,7 @@ mod tests {
             out_dir: dir.clone(),
             recipe_in: None,
             strict: false,
+            new_flow: false,
             memory: MemoryArgs::default(),
             report: ReportArgs::default(),
         };
@@ -15091,6 +15177,7 @@ mod tests {
             out_dir: dir.clone(),
             recipe_in: None,
             strict: false,
+            new_flow: false,
             memory: MemoryArgs::default(),
             report: ReportArgs::default(),
         };
@@ -15160,6 +15247,7 @@ mod tests {
             out_dir: dir.clone(),
             recipe_in: None,
             strict: false,
+            new_flow: false,
             memory: MemoryArgs::default(),
             report: ReportArgs::default(),
         };

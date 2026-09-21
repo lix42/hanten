@@ -41,6 +41,15 @@ one message, not a second matrix to keep in step.
 - **A knob the user never typed.** Refusing a flag someone passed is right; refusing
   because a default put them somewhere with no counterpart is not obviously right.
   Accepted-and-ignored is not an option, so each such knob needs a decision.
+  **A worked instance is already open**, left by `nf-core/new-flow-flag`: the sigmoid
+  knees are refused only through `--sigmoid-toe` / `--sigmoid-shoulder`, so the same
+  knee stated by a recipe or expanded from `--preset sigmoid-knees` is not refused.
+  A value rule cannot simply be added beside the flag rule — the shipped default
+  sigmoid *has* knees (`toe: 0.2`), so "refuse a non-zero resolved knee" would refuse
+  every `--new-flow` run. The asymmetry runs both ways: typing `--sigmoid-toe 0.2`,
+  which resolves today's default, is refused while the identical resolved config with
+  no flag reaches the render. Whatever resolves this has to wait for, or move with,
+  `nf-reconstruction/fixed-decode`.
 - **How much is testable before the flip?** Everything reachable by passing
   `--new-flow` explicitly is. Whether a test can resolve config *as if* the default
   had moved decides whether this ships a regression net or only a report.

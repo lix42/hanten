@@ -6,6 +6,7 @@
 
 mod algo;
 mod cli;
+mod flow;
 mod io;
 mod pipeline;
 mod telemetry;
