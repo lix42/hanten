@@ -120,6 +120,27 @@ migration plan (`docs/nf-migration.md`).
   and cloth sit at 0.001–0.007. A surface with a real colour produces exactly this,
   so the gap may measure patch quality rather than the decode. Separating the two
   needs the ColorChecker.
+- 2026-09-20: **outside evidence corroborates the shipped value; no tweak is
+  available now, and the tuning pass should wait for the anchor.** Three commercial
+  converters measured against the same negatives
+  (`docs/reports/three-way-gold200.md`) put green at 0.83–0.91 against nc's 0.840,
+  and blue between 0.44 and 0.76 — a range too wide to override our own 31-patch
+  measurement, which called blue solid at 0.68–0.78 on every roll. Neither value has
+  a reason to move.
+
+  **The optimum is anchor-independent, which is why one pass suffices.** With
+  `out_c = 10^(gamma·(scale_c·D_c − A))` and a *scalar* anchor `A`, a neutral patch
+  needs `scale_R·D_R = scale_G·D_G = scale_B·D_B` — `A` cancels. Moving the anchor
+  changes **where the error is visible**, not what the scale should be. (That holds on
+  the straight part; a shoulder compresses per channel by level, so a highlight anchor
+  would *mask* scale error at the top and leave it in the midtones — an argument for
+  measuring the scale in the midtones, not for measuring it twice.)
+
+  And the widened ladder already showed there is nothing to win: patch-weighted
+  optimum 0.835 against the shipped 0.840, roll-weighted 0.850, while the roll-to-roll
+  spread is 0.103. Retuning the centre moves the worst-case residual from 0.057 to
+  0.067 — the wrong direction. So: **do not tune now.** One pass, after
+  `nf-reconstruction/anchor-rule` settles and with the ColorChecker frames in hand.
 
 ## scale-gamma-loop
 
