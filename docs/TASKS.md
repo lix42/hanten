@@ -319,6 +319,7 @@ graph TD
     nf-scene-correction/levels-knob
   end
   subgraph nf-look
+    nf-look/desaturation-spike
     nf-look/stage
     nf-look/per-channel-grade
     nf-look/path-to-white
@@ -548,6 +549,7 @@ graph TD
   nf-reconstruction/fixed-decode --> nf-reconstruction/anchor-rule
   nf-reconstruction/anchor-spike --> nf-reconstruction/anchor-rule
   nf-reconstruction/anchor-spike --> nf-look/path-to-white
+  nf-look/desaturation-spike --> nf-look/path-to-white
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
   nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
@@ -946,7 +948,7 @@ the design in `docs/design-update.md`:
 - `nf-look/per-channel-grade` (new flow): `nf-look/stage`
   — the tunable counterpart of the decode's `scale`; subsumes the regional
   balance
-- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`, `nf-reconstruction/anchor-spike`
+- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`, `nf-reconstruction/anchor-spike`, `nf-look/desaturation-spike`
   — what makes whites read clean, made a deliberate control instead of a
   gamut-map side effect
 - `nf-look/contrast` (new flow): `nf-look/stage`, `nf-reconstruction/gamma-split`
@@ -1532,6 +1534,10 @@ the design in `docs/design-update.md`:
 > white, contrast, look presets, and the film-stock data that outlives the decode's
 > `characteristic` curve.
 
+- [ ] [Spike: what form should highlight desaturation
+  take?](tasks/nf-look/desaturation-spike.md) — per-channel curve against a
+  hue-preserving chroma pull; the design's prose describes one and every measured
+  reference does the other
 - [ ] [The look stage](tasks/nf-look/stage.md) — scene-referred and before the
   SDR/HDR branch, because a gain map needs agreement below diffuse white
 - [ ] [A per-channel grade with a mid-grey
@@ -1671,3 +1677,6 @@ the design in `docs/design-update.md`:
   — runs against today's binary so it can run before the rule has to be chosen;
   every converter measured anchors the bright end, and whether nc should is
   currently argued rather than measured
+- `nf-look/desaturation-spike` (new flow): none
+  — the per-channel half runs against today's binary and the hue-preserving half is a
+  throwaway patch, so it settles the operator's form before the look stage exists

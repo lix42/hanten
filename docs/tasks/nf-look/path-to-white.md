@@ -88,6 +88,9 @@ white.
   to reach the knee'd render's whites by itself. The evidence moved to the anchor
   instead (see Design), which is why this task's premise needs re-reading before it is
   picked up.
+- [Spike: what form should highlight desaturation take?](desaturation-spike.md)
+  — decides the operator's form (per-channel curve or hue-preserving pull) and which
+  share of the knee'd render's whites was the gamut map's
 - [Spike: does a diffuse-white anchor earn its place?](../nf-reconstruction/anchor-spike.md)
   — if the anchor produces the whites, this task is an optional look rather than a
   remedy for cast

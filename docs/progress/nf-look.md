@@ -30,6 +30,19 @@ migration plan (`docs/nf-migration.md`).
 
 - 2026-09-19: created with the new-flow plan. Goal: a per-channel grade with a mid-grey pivot.
 
+## desaturation-spike
+
+**Status:** not started
+**Updated:** 2026-09-21
+
+- 2026-09-21: filed once the three-way measurements had settled the structural half —
+  per-channel compression against a common ceiling is what converges channels, no nc
+  display tone can do it, and the operator belongs pre-branch at diffuse white. What is
+  left is the **form**: a per-channel curve (what film, paper and all three converters
+  do — desaturates *and* shifts hue) against a hue-preserving chroma pull (what the
+  design's prose describes). Nothing has compared them, and they differ most on exactly
+  the content the user cares about, saturated highlights.
+
 ## path-to-white
 
 **Status:** not started
