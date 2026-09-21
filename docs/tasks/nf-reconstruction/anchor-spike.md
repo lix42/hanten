@@ -95,6 +95,16 @@ rendering anything.
   measured 1.23/1.03/0.67 median stops on `2026-09-18-Gold200`.
 - Whether the midtone cost, if real, is answerable by the look stage's print contrast
   rather than by rejecting the anchor.
+- **Whether the convergence can live in fit range at all, or has to be pre-branch.**
+  The two branches compress against *different* ceilings — 1.0 for SDR against
+  `LINEAR_HEADROOM` ≈ 4.93 for HDR — so a per-channel compressor placed there converges
+  hard on SDR and barely at all on HDR, where a typical frame's ~1 stop above diffuse
+  white never approaches the ceiling. The same frame would then read neutral on an SDR
+  display and cast on an HDR one. A gain map tolerates that (it only requires agreement
+  *below* diffuse white), so nothing would fail loudly. If the spike confirms the
+  mechanism, this is the question it hands on: the effect belongs pre-branch at diffuse
+  white — which is where [path to white](../nf-look/path-to-white.md) already sits —
+  rather than as a side effect of whichever ceiling a branch happens to have.
 
 ## How to Verify
 
