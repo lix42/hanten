@@ -1581,7 +1581,7 @@ the design in `docs/design-update.md`:
 > review loop, the offset question, the neutrality release gate, and what a user would
 > actually run.
 
-- [ ] [A `density.scale` ladder, before the calibration frames
+- [x] [A `density.scale` ladder, before the calibration frames
   exist](tasks/nf-calibration/scale-ladder.md) — runs against today's binary so
   it can run first; the decode would otherwise inherit a sigmoid-era value whose
   green half is documented as unresolved

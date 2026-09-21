@@ -18,8 +18,8 @@ migration plan (`docs/nf-migration.md`).
 
 ## scale-ladder
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-20
 
 - 2026-09-19: filed after the plan review as `nf-look/path-to-white-spike`. Goal: can a look-stage operator reproduce the knee'd sigmoid's whites?.
 - 2026-09-19: moved here and redefined as a `density.scale` ladder. Three reasons.
@@ -141,6 +141,13 @@ migration plan (`docs/nf-migration.md`).
   spread is 0.103. Retuning the centre moves the worst-case residual from 0.057 to
   0.067 — the wrong direction. So: **do not tune now.** One pass, after
   `nf-reconstruction/anchor-rule` settles and with the ColorChecker frames in hand.
+- 2026-09-20: **done.** The question is answered, negatively: the split is real and
+  per-roll, and the shipped `[1, 0.84, 0.73]` already sits at the optimum of what one
+  global value can do. The HDR check this task listed is moot — it applied to a
+  *winning* scale, and nothing moved. The ColorChecker pass is
+  [neutrality-gate](../tasks/nf-calibration/neutrality-gate.md)'s, and the post-chain
+  tuning is [scale-gamma-loop](../tasks/nf-calibration/scale-gamma-loop.md)'s, which
+  already depends on this task and inherits both the value and the method caution.
 
 ## scale-gamma-loop
 
