@@ -50,6 +50,13 @@ one message, not a second matrix to keep in step.
   which resolves today's default, is refused while the identical resolved config with
   no flag reaches the render. Whatever resolves this has to wait for, or move with,
   `nf-reconstruction/fixed-decode`.
+- **A value rule cannot outrank `merge`.** It has nothing to read until `merge` has
+  resolved a value, so any command line `merge` itself refuses is diagnosed by the
+  legacy chain first. `simple` is listed in *both* tables for that reason (the
+  `is_atomic` dual-rule shape). A knob that reaches the new flow only through a
+  **recipe** cannot be pre-empted the same way — the recipe's value is not the
+  resolved one until the flags have won — so each recipe-reachable knob the audit
+  classifies needs a decision about whether that two-step diagnosis is acceptable.
 - **How much is testable before the flip?** Everything reachable by passing
   `--new-flow` explicitly is. Whether a test can resolve config *as if* the default
   had moved decides whether this ships a regression net or only a report.

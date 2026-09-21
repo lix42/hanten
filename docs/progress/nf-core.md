@@ -84,6 +84,17 @@ The epic was created on 2026-09-19 as part of the new-flow migration plan
   protects. A first version refused it by presence; caught in review, and pinned
   now by a test that the zero knee reaches the seam.
 
+  **A value rule cannot outrank `merge`** — it has nothing to read until `merge`
+  resolves a value, so `--new-flow --reconstruction simple --preset sigmoid-flat`
+  got merge's legacy "drop `--reconstruction simple`, or drop the preset" before the
+  flow's own refusal. Caught by the PR's Codex reviewer. Fixed with the
+  `OutputPreset::is_atomic` dual-rule shape: `simple` sits in **both** tables, the
+  flag row pre-empting `merge`, the value row still covering recipe provenance. A
+  unit test pins that the pair's verdicts agree, and an integration test pins the
+  ordering against both merge arms with a no-flag control. What stays open: a knob
+  arriving **only** through a recipe cannot be pre-empted, since the recipe's value
+  is not the resolved one until the flags have won.
+
   **Known hole, handed to the audit with its reasoning.** The knee rule sees only
   the flag, so the same knee from a recipe or from `--preset sigmoid-knees` is not
   refused. A value rule cannot just be added beside it: the default sigmoid *has*

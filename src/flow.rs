@@ -97,7 +97,14 @@ struct ValueEntry {
 /// the same knee stated by a *recipe* or expanded from `--preset sigmoid-knees` is
 /// not refused here — and the asymmetry runs the other way too: typing
 /// `--sigmoid-toe 0.2`, which resolves today's default, is refused while the
-/// identical resolved config with no flag reaches the seam. A value rule cannot simply be added beside it: the shipped
+/// identical resolved config with no flag reaches the seam.
+///
+/// The same gap has an *ordering* face, which is why `simple` is listed here as
+/// well as in [`VALUE_ENTRIES`]: a value rule cannot run until `merge` has resolved
+/// a value, so any command line `merge` itself refuses is diagnosed by the legacy
+/// chain first. A flag row pre-empts that; a knob reaching the new flow **only**
+/// through a recipe cannot be pre-empted, since the recipe's value is not the
+/// resolved one until the flags have won. A value rule cannot simply be added beside it: the shipped
 /// default sigmoid *has* knees (`toe: 0.2`), so "refuse a non-zero resolved knee"
 /// would refuse every `--new-flow` run before it reached the seam. Deciding what a
 /// knob the user never typed earns is exactly
@@ -110,6 +117,28 @@ struct ValueEntry {
 /// already settled ("sigmoid with toe/shoulder — leaves reconstruction"). Adding a
 /// row changes no message, ordering or call site.
 const FLAG_ENTRIES: &[FlagEntry] = &[
+    // Paired with the `simple` row in [`VALUE_ENTRIES`], which is the same dual-rule
+    // shape CLAUDE.md records for `OutputPreset::is_atomic` — a value rule for either
+    // provenance, plus a presence rule for what the value rule cannot see in time.
+    // Here that is *ordering*: `merge` refuses `--reconstruction simple` beside a
+    // `--preset` or a `--density-curve` before any value rule runs, so without this
+    // row the new flow's own refusal arrives second, behind advice about a chain the
+    // user did not select. The flag has no identity value to protect — its other
+    // value is `density`, which this flow wants.
+    FlagEntry {
+        knob: "--reconstruction simple",
+        present: |args| {
+            matches!(
+                args.reconstruction,
+                Some(crate::types::ReconstructionType::Simple)
+            )
+        },
+        availability: Availability::Never {
+            reason: "`1 - T/T_base` is an affine inversion of transmission, not a decode of \
+                     anything a print sees, so the fixed decode has nothing to map it onto",
+            instead: Some("`--reconstruction density`"),
+        },
+    },
     FlagEntry {
         knob: "--sigmoid-toe",
         present: |args| args.sigmoid.sigmoid_toe.is_some_and(|w| w != 0.0),
@@ -291,19 +320,43 @@ mod tests {
     }
 
     #[test]
-    fn every_entry_names_a_knob_and_no_knob_is_listed_twice() {
-        // Two rows matching one knob would make the diagnosis depend on table order.
-        let knobs: Vec<&str> = FLAG_ENTRIES
-            .iter()
-            .map(|e| e.knob)
-            .chain(VALUE_ENTRIES.iter().map(|e| e.knob))
-            .collect();
-        for knob in &knobs {
-            assert!(!knob.is_empty());
+    fn no_table_lists_one_knob_twice() {
+        // *Within* a table, two rows matching one knob would make the diagnosis depend
+        // on row order. **Across** the two tables is the deliberate dual-rule pattern
+        // (`simple` is both), so the check is per table, not over the union.
+        for (label, knobs) in [
+            (
+                "FLAG_ENTRIES",
+                FLAG_ENTRIES.iter().map(|e| e.knob).collect::<Vec<_>>(),
+            ),
+            (
+                "VALUE_ENTRIES",
+                VALUE_ENTRIES.iter().map(|e| e.knob).collect::<Vec<_>>(),
+            ),
+        ] {
+            for knob in &knobs {
+                assert!(!knob.is_empty(), "{label} has an unnamed row");
+            }
+            let mut sorted = knobs.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted.len(), knobs.len(), "duplicate knob in {label}");
         }
-        let mut sorted = knobs.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), knobs.len(), "duplicate knob in the tables");
+    }
+
+    #[test]
+    fn the_dual_rule_pair_agrees_on_its_verdict() {
+        // `simple` is refused by both tables, so the two rows must tell the user the
+        // same thing — a pair that disagreed would diagnose one knob two ways
+        // depending on whether it arrived by flag or by recipe.
+        let flag = FLAG_ENTRIES
+            .iter()
+            .find(|e| e.knob.contains("--reconstruction simple"))
+            .expect("the flag row for simple");
+        let value = VALUE_ENTRIES
+            .iter()
+            .find(|e| e.knob.contains("`simple` reconstruction"))
+            .expect("the value row for simple");
+        assert_eq!(flag.availability, value.availability);
     }
 }

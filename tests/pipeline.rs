@@ -11109,6 +11109,67 @@ fn the_availability_gate_outranks_the_rules_it_would_confuse() {
 }
 
 #[test]
+fn the_availability_gate_outranks_a_merge_refusal_too() {
+    // Ordering *across gates*, which is the half a value rule cannot reach on its own:
+    // `merge` refuses `--reconstruction simple` beside a `--preset` or a
+    // `--density-curve` before any value rule runs, so the new flow's refusal would
+    // arrive second — behind advice about a chain the user did not select. The flag
+    // row pre-empts it. (Reported by the PR's Codex reviewer.)
+    let tmp = TempDir::new("new-flow-merge-order");
+    for extra in [
+        ["--preset", "sigmoid-flat"],
+        ["--density-curve", "exponential"],
+    ] {
+        let (code, _out, err) = run_exact(&[
+            "convert",
+            fixture("hdr-48bit.tif").to_str().unwrap(),
+            "-o",
+            tmp.path("out.tif").to_str().unwrap(),
+            "--output-preset",
+            "legacy",
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--reconstruction",
+            "simple",
+            extra[0],
+            extra[1],
+            "--new-flow",
+            "--report",
+            "none",
+        ]);
+        assert_eq!(code, 2, "{err}");
+        assert!(
+            err.contains("has no meaning under `--new-flow`"),
+            "{extra:?}: the flow refusal must pre-empt merge: {err}"
+        );
+        assert!(
+            !err.contains("has no curve stage"),
+            "merge's legacy diagnosis must not win under the new flow: {err}"
+        );
+
+        // Falsifiability: without the flag, merge's diagnosis is still the right one.
+        let (code, _out, err) = run_exact(&[
+            "convert",
+            fixture("hdr-48bit.tif").to_str().unwrap(),
+            "-o",
+            tmp.path("out.tif").to_str().unwrap(),
+            "--output-preset",
+            "legacy",
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--reconstruction",
+            "simple",
+            extra[0],
+            extra[1],
+            "--report",
+            "none",
+        ]);
+        assert_eq!(code, 2, "{err}");
+        assert!(err.contains("no curve stage"), "{extra:?}: {err}");
+    }
+}
+
+#[test]
 fn roll_under_the_new_flow_refuses_once_before_any_decode() {
     // `roll` takes the flag too, and refuses **once**, after the plan resolves and
     // before the first decode. Not per frame: unlike the memory gate — whose verdict
