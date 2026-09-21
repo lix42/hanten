@@ -41,6 +41,22 @@ one message, not a second matrix to keep in step.
 - **A knob the user never typed.** Refusing a flag someone passed is right; refusing
   because a default put them somewhere with no counterpart is not obviously right.
   Accepted-and-ignored is not an option, so each such knob needs a decision.
+  **A worked instance is already open**, left by `nf-core/new-flow-flag`: the sigmoid
+  knees are refused only through `--sigmoid-toe` / `--sigmoid-shoulder`, so the same
+  knee stated by a recipe or expanded from `--preset sigmoid-knees` is not refused.
+  A value rule cannot simply be added beside the flag rule — the shipped default
+  sigmoid *has* knees (`toe: 0.2`), so "refuse a non-zero resolved knee" would refuse
+  every `--new-flow` run. The asymmetry runs both ways: typing `--sigmoid-toe 0.2`,
+  which resolves today's default, is refused while the identical resolved config with
+  no flag reaches the render. Whatever resolves this has to wait for, or move with,
+  `nf-reconstruction/fixed-decode`.
+- **A value rule cannot outrank `merge`.** It has nothing to read until `merge` has
+  resolved a value, so any command line `merge` itself refuses is diagnosed by the
+  legacy chain first. `simple` is listed in *both* tables for that reason (the
+  `is_atomic` dual-rule shape). A knob that reaches the new flow only through a
+  **recipe** cannot be pre-empted the same way — the recipe's value is not the
+  resolved one until the flags have won — so each recipe-reachable knob the audit
+  classifies needs a decision about whether that two-step diagnosis is acceptable.
 - **How much is testable before the flip?** Everything reachable by passing
   `--new-flow` explicitly is. Whether a test can resolve config *as if* the default
   had moved decides whether this ships a regression net or only a report.

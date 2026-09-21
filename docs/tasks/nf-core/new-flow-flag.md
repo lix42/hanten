@@ -23,17 +23,21 @@ half-live. It is **scaffolding with a written expiry** — the flag is removed b
   guidance, no alias (`cli::reject_removed_flags`, `src/cli.rs`). nc is unreleased, so
   removal is cheap; say so in the flag's own help text.
 
-## Open questions
+## Open questions — settled 2026-09-20
 
-- **Where the branch is taken.** The orchestrator (`main`/`cli`) is the house answer —
-  stages stay pure — but the new chain also has to reach `roll`, and roll resolves per
-  frame. Decide whether `roll` accepts it at all during the migration.
-- **`--new-flow` or `--pipeline <name>`.** A presence flag is the smaller surface and
-  matches the expiry; a named selector would survive a third flow, which nothing
-  plans. The migration doc names both spellings.
-- **What the generic refusal says.** It must name the knob the user typed and the
-  fact that the new flow has no counterpart *yet* versus no counterpart *ever* — those
-  are different sentences and the audit decides which knobs get which.
+All three were decided when the task shipped; the reasoning is in
+[the progress log](../../progress/nf-core.md#new-flow-flag).
+
+- **Where the branch is taken.** In `convert_frame`, immediately before the
+  output-preset render dispatch: decode and film base are shared by both flows, so
+  that dispatch is the seam. `roll` **does** accept the flag, and reaches only the
+  resolved-value half of the refusal (it takes no conversion flags).
+- **`--new-flow` or `--pipeline <name>`.** `--new-flow`, a presence flag.
+- **What the generic refusal says.** Two verdicts with different remedies —
+  `NotYet { arriving_with }` ("drop it for now") and
+  `Never { reason, instead }` ("use X") — over two tables in `src/flow.rs`. Which
+  knob gets which is still [the audit](knob-availability-audit.md)'s to decide; the
+  two entries seeded here are provisional.
 
 ## How to Verify
 

@@ -10,7 +10,8 @@ A practical guide to converting film negative scans to positives with `nc`.
 >
 > **Verified against:** `nc 0.1.0`, `pipeline_version 5`, built at commit
 > `e204b74d319f` plus the `characteristic` curve (§6), the mid-grey-preserving
-> extended Reinhard (§7) and the neutral-patch-calibrated `--density-scale` default (§6). The staleness signal is `pipeline_version`: if `nc --version`
+> extended Reinhard (§7), the neutral-patch-calibrated `--density-scale` default (§6)
+> and the transitional `--new-flow` selector (§11). The staleness signal is `pipeline_version`: if `nc --version`
 > reports a different one, treat this document as suspect and re-verify.
 >
 > **Known issue:** under the default render the gain map is inert (no HDR
@@ -25,7 +26,8 @@ shape every workflow below:
 
 - **Deterministic.** Same input + same parameters ⇒ byte-identical output (on one
   build and architecture). There is no hidden per-frame adaptation unless you
-  explicitly ask for it.
+  explicitly ask for it. (The transitional `--new-flow` selector in §11 is the one
+  flag outside that promise: it chooses a whole rendering chain.)
 - **Every knob is a CLI flag *and* a recipe key**, and nothing is reachable only
   from code. Passing a flag that doesn't apply to your selected *curve* or *preset*
   is a **loud error**, never a no-op. The exception is `--reconstruction simple`
@@ -1505,8 +1507,10 @@ controls before reaching for the curve or `Dmax`.
 
 ## 11. Operational flags
 
-These are **not** conversion knobs. They never appear in a recipe and can never
-perturb a pixel.
+The flags in the tables below are **not** conversion knobs: they never appear in a
+recipe and can never perturb a pixel. (The transitional `--new-flow` selector at the
+end of this section is CLI-only too, but for a different reason — it chooses a whole
+rendering chain, so it *does* change the render.)
 
 | Flag | Purpose |
 |---|---|
@@ -1532,6 +1536,54 @@ them and exit 2 if given one:
 
 On `roll`, the gate runs **per frame**: a rejected frame is recorded in the report,
 its siblings are still written, and the roll exits **1**, not 6.
+
+### `--new-flow` — the migration selector (transitional)
+
+`nc` is migrating to the design in [`design-update.md`](design-update.md): a fixed
+decode followed by named rendering stages. `--new-flow` (on `convert` and `roll`)
+selects that chain. It is **scaffolding with an expiry** — when the new chain
+becomes the default the flag is removed, and passing it will be a migration error.
+
+It is CLI-only like the flags above — a recipe naming `new_flow` is rejected as an
+unknown field — but **it is not in their "can never perturb a pixel" class**:
+choosing a chain is a choice of pixels. That is precisely why it must stay out of
+the recipe rather than merely out of the image.
+
+Today the new chain has no rendering stages, so selecting it resolves everything
+and then stops at the render, with **exit 4**:
+
+```console
+$ nc convert scan.tif -o out.tif --output-preset legacy --film-base 0.9,0.55,0.42 --new-flow
+unsupported: --new-flow selected the new rendering chain, which has no stages yet
+(`nf-core/stage-skeleton` fills them). Every other part of the run resolved: drop
+`--new-flow` to convert through the current chain.
+```
+
+What *is* live is the availability rule: a knob the new chain cannot honour is
+refused (exit 2) rather than accepted and ignored, and the message says whether the
+counterpart is missing **yet** or for good:
+
+```console
+$ nc convert … --new-flow --sigmoid-shoulder 0.4
+usage: --sigmoid-shoulder has no meaning under `--new-flow`: the new flow has no
+counterpart for it yet — one arrives with the fit-range stage: …
+
+$ nc convert … --new-flow --reconstruction simple
+usage: `simple` reconstruction (`--reconstruction simple`, recipe
+`reconstruction.type`) has no meaning under `--new-flow`: the new flow has no
+counterpart for it, and will not gain one: … Use `--reconstruction density`, …
+```
+
+The inventory is still being assembled (`nf-core/knob-availability-audit`), so
+today only a few knobs are classified — most notably, a knee stated by a *recipe*
+rather than by `--sigmoid-toe` / `--sigmoid-shoulder` is not yet refused.
+
+On `roll` the flag applies to every frame, and the "no stages yet" refusal comes
+**once**, after the plan is resolved and before the first frame is decoded — so a
+roll fails in a second rather than decoding every frame to print the same error N
+times. `roll` takes no conversion flags, so the knobs it can trip are resolved
+values, from the shared recipe or a per-frame override; those are still diagnosed
+first, per frame, at exit 2.
 
 ---
 

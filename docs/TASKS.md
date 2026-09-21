@@ -1454,9 +1454,10 @@ the design in `docs/design-update.md`:
 > The new flow exists and can be selected: the `--new-flow` selector, the stage
 > module tree, a minimal end-to-end render, the knob audit, and the default flip.
 
-- [ ] [The `--new-flow` selector](tasks/nf-core/new-flow-flag.md) —
+- [x] [The `--new-flow` selector](tasks/nf-core/new-flow-flag.md) —
   scaffolding with a written expiry — CLI-only, never a recipe key, removed by
-  `nf-core/default-flip`
+  `nf-core/default-flip`. `convert` **and** `roll`; the chain it selects has no
+  stages yet, so it stops at the render seam with exit 4 (`src/flow.rs`)
 - [ ] [The new stage module tree](tasks/nf-core/stage-skeleton.md) — the
   modules and typed boundaries, written fresh rather than extracted
 - [ ] [A minimal end-to-end render](tasks/nf-core/minimal-end-to-end.md) — the

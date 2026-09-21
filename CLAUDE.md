@@ -361,7 +361,9 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `algo/{mod,simple,density,sigmoid}.rs`, `telemetry.rs`, `version.rs`
   (build/pipeline identity + `stable_hash`, the crate's only params-hash
   implementation — `telemetry::params_hash` delegates to it so the core report
-  never depends on the opt-in telemetry module), `cli.rs`, `main.rs`.
+  never depends on the opt-in telemetry module), `cli.rs`, `main.rs`, plus
+  `flow.rs` — the `--new-flow` selector (`Flow`), the knob-availability tables and
+  the render seam, all of it scaffolding `nf-core/default-flip` deletes.
   `main`/`cli` are the only orchestrators; stages stay pure. `build.rs` exposes
   the compile target triple as `NC_TARGET` plus `NC_GIT_COMMIT`/`NC_GIT_DIRTY`
   for the report's identity block.
@@ -895,6 +897,18 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   exit 0. And a report field computed as a **diff against an expansion is empty exactly
   when the expansion won**, so `conversion_preset.overridden` (resolved vs the preset)
   could never report what the *preset* replaced — that needs its own `replaced` field.
+  **`--new-flow` is CLI-only for a third reason again, and it is the one flag that
+  *breaks* the determinism rule above** (`src/flow.rs`): it selects which chain — and
+  therefore which knobs — exist, so the same recipe renders differently with and
+  without it, which is exactly why it must stay out of the recipe rather than merely
+  out of the image. Do **not** describe it with the operational trio's "never affects
+  the output" wording. It is migration scaffolding with a written expiry
+  (`nf-core/default-flip` deletes the flag and the module), and its availability
+  refusals key on **presence before `merge`** and on **resolved value first inside
+  `validate_convert`** — a presence rule placed after `merge` is unreachable on every
+  command line `merge` refuses first. `roll` takes the flag too and reaches only the
+  value half (it accepts no conversion flags), at **two** validate sites composed into
+  `cli::validate_with_flow`.
   **`film_base.source` is the first knob with no default at all** (`Option`, no
   `Default` on `FilmBaseSource`): `convert`/`roll` refuse an unstated one rather
   than choosing. A defaultless knob adds two obligations — every `ResolvedConfig`
@@ -936,6 +950,14 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     The same narrowness bites a **struct**: an assertion naming one field passes over
     every other. `d.left == 50` plus a frame-wide `capped` held while `top`/`bottom`
     were 12x wrong; a per-edge flag red it on the first run. Assert the whole tuple.
+    **A remedy may also assert only what its own rule inspected** — a fifth instance,
+    in a new shape: not a rule matching a branch it did not mean to, but a sentence
+    claiming something unchecked. `--new-flow`'s refusal ended "run without
+    `--new-flow` — the current chain still accepts it", a statement about the *legacy*
+    chain from a rule that read only the new one, and false whenever the same line is
+    independently invalid there (`--density-curve exponential --sigmoid-toe 0.3`, a
+    non-finite knee). Word the escape hatch so it survives the branch you did not
+    look at.
   - *Validate the resolved value, never a stand-in for it.* The anchor guard once
     tested a proxy (`MID_GREY_OUTPUT_DECADES / slope`), correct for the placements
     that existed then; `black-at-base` divides the unbounded `−log10(floor)`, so a

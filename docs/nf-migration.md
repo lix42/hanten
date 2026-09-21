@@ -20,18 +20,27 @@ authoritative for status and dependencies.
   builds the same way. Nothing in the tree has to stay alive to remain comparable —
   which is what lets `nf-retire` run early instead of last.
 - **`--new-flow`** is a presence flag that selects the new chain. It is
-  **scaffolding, not a feature**: CLI-only (never a recipe key, like `--report` and
-  `--telemetry`), with coarse availability rules — one generic "this knob has no
-  meaning under the new flow" rejection rather than a per-knob matrix in two places.
+  **scaffolding, not a feature**: CLI-only — never a recipe key — with coarse
+  availability rules, one generic "this knob has no meaning under the new flow"
+  rejection rather than a per-knob matrix in two places. CLI-only for a *different*
+  reason than `--report` / `--telemetry` / `--max-memory`, though: those can never
+  change a pixel, while this one selects which chain — and so which knobs — exist,
+  which is precisely why it must stay out of the recipe rather than merely out of the
+  image. Do not describe it with the operational trio's "never affects the output"
+  wording.
 - **The chain's defaults move piecewise, with the retirements.** Removing the
   sigmoid, the `shoulder` tone or the `Dmax` anchor *is* a default change: each
   `nf-retire` task flips the default it removes, in the same change, and pays its own
   `pipeline_version` bump. That is cheaper than one large flip and leaves no window
   where the tree carries two defaults. What makes it safe is the tag — the old
   behaviour lives there, so main's default may be a half-built chain for a while.
-- **The flag's life is short.** `--new-flow` exists from the minimal end-to-end render
-  until the retirements have removed the old chain; after that there is nothing to
-  select. `nf-core/default-flip` is the last of those changes plus the flag's removal.
+- **The flag's life is short.** `--new-flow` ships with `nf-core/new-flow-flag` (on
+  `convert` and `roll`) and lasts until the retirements have removed the old chain;
+  after that there is nothing to select. `nf-core/default-flip` is the last of those
+  changes plus the flag's removal. Until `nf-core/stage-skeleton` and
+  `nf-core/minimal-end-to-end` it selects a chain with no stages, so it resolves the
+  run and then stops at the render seam with exit 4 — the availability refusals are
+  live before the renders are.
 - **The container default is untouched by all of this**, so it moves once, when
   `nf-destinations/default-destination` says so.
 - **New stages are written fresh.** See CLAUDE.md's migration rule: structure for

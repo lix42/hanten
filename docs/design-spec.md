@@ -1745,7 +1745,11 @@ object (§8). Names are binding and unknown keys are rejected
 — it only *sets* knobs, and all four of those are flags and recipe keys already — so
 a recipe carries the expanded values rather than the name. This is narrower than the
 **operational** exception (`--report`, `--telemetry*`, `--max-memory`), which covers
-flags that touch no parameter at all.
+flags that touch no parameter at all. A third, **transitional** case sits outside
+both while the new-flow migration runs: `--new-flow` selects which *chain* — and so
+which knobs — exist, so it is CLI-only yet does change the render
+(`docs/nf-migration.md`). It is removed when the default flips and is deliberately
+not specified here.
 
 ### Input / decode
 - `--export-ir <path>` — write the IR plane to a separate TIFF (HDRi only).

@@ -34,9 +34,11 @@ nothing in the plan owns them.
 
 ## Open questions
 
-- **Does `roll` accept `--new-flow` during the migration, or first see the chain at
-  the flip?** [The flag task](new-flow-flag.md) leaves this open; roll resolving per
-  frame is the reason it is not obvious.
+- ~~Does `roll` accept `--new-flow` during the migration?~~ **Settled 2026-09-20:**
+  it does ([the flag task](new-flow-flag.md)). Roll takes no conversion flags, so it
+  reaches only the resolved-value half of the availability refusal, at its two
+  validate sites (shared recipe, per-frame overlay). While the new chain has no
+  stages, roll refuses once after the plan resolves rather than per frame.
 - **Does `inspect` gain anything from the new chain** — a reported reconstruction
   fact — or stay strictly a pre-chain tool?
 
