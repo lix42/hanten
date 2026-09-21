@@ -306,6 +306,7 @@ graph TD
     nf-core/default-flip
   end
   subgraph nf-reconstruction
+    nf-reconstruction/anchor-spike
     nf-reconstruction/fixed-decode
     nf-reconstruction/anchor-rule
     nf-reconstruction/gamma-split
@@ -545,6 +546,8 @@ graph TD
   nf-retire/dmax-machinery --> nf-core/default-flip
   nf-core/stage-skeleton --> nf-reconstruction/fixed-decode
   nf-reconstruction/fixed-decode --> nf-reconstruction/anchor-rule
+  nf-reconstruction/anchor-spike --> nf-reconstruction/anchor-rule
+  nf-reconstruction/anchor-spike --> nf-look/path-to-white
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
   nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
@@ -918,7 +921,7 @@ the design in `docs/design-update.md`:
 - `nf-reconstruction/fixed-decode` (new flow): `nf-core/stage-skeleton`
   — exponential, toe passed through as recorded — defaults and wiring, not new
   arithmetic
-- `nf-reconstruction/anchor-rule` (new flow): `nf-reconstruction/fixed-decode`
+- `nf-reconstruction/anchor-rule` (new flow): `nf-reconstruction/fixed-decode`, `nf-reconstruction/anchor-spike`
   — `mid-at-base-offset` as the only rule, and a runtime `d` the render path
   is currently forbidden to read
 - `nf-reconstruction/gamma-split` (new flow): `nf-reconstruction/fixed-decode`
@@ -943,7 +946,7 @@ the design in `docs/design-update.md`:
 - `nf-look/per-channel-grade` (new flow): `nf-look/stage`
   — the tunable counterpart of the decode's `scale`; subsumes the regional
   balance
-- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`
+- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`, `nf-reconstruction/anchor-spike`
   — what makes whites read clean, made a deliberate control instead of a
   gamut-map side effect
 - `nf-look/contrast` (new flow): `nf-look/stage`, `nf-reconstruction/gamma-split`
@@ -1489,6 +1492,10 @@ the design in `docs/design-update.md`:
 > The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`,
 > and `gamma` split into a calibration half and a look half.
 
+- [ ] [Spike: does a diffuse-white anchor earn its
+  place?](tasks/nf-reconstruction/anchor-spike.md) — runs against today's binary
+  so it can run first; every converter measured anchors the bright end, and the
+  rule currently has to choose on argument alone
 - [ ] [The fixed, stock-agnostic
   decode](tasks/nf-reconstruction/fixed-decode.md) — exponential, toe passed
   through as recorded — defaults and wiring, not new arithmetic
@@ -1659,3 +1666,8 @@ the design in `docs/design-update.md`:
 - [ ] [Re-point references to retired and superseded
   tasks](tasks/nf-docs/reference-sweep.md) — about a dozen `src/` and doc
   pointers still assert an inactive task is live or owns a decision
+
+- `nf-reconstruction/anchor-spike` (new flow): none
+  — runs against today's binary so it can run before the rule has to be chosen;
+  every converter measured anchors the bright end, and whether nc should is
+  currently argued rather than measured

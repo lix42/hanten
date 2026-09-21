@@ -23,6 +23,17 @@ migration plan (`docs/nf-migration.md`).
 
 - 2026-09-19: created with the new-flow plan. Goal: the fixed, stock-agnostic decode.
 
+## anchor-spike
+
+**Status:** not started
+**Updated:** 2026-09-20
+
+- 2026-09-20: filed after the three-way converter measurements
+  (`docs/reports/three-way-gold200.md`). Goal: does a diffuse-white anchor earn its
+  place? Runs against today's binary — `--anchor-white-at-reference --d-max D` is the
+  candidate, `--anchor-mid-offset` the control — so it can answer `anchor-rule`'s
+  highlight-vs-mid question before the rule has to be chosen.
+
 ## anchor-rule
 
 **Status:** not started

@@ -68,3 +68,6 @@ white.
   to reach the knee'd render's whites by itself. The evidence moved to the anchor
   instead (see Design), which is why this task's premise needs re-reading before it is
   picked up.
+- [Spike: does a diffuse-white anchor earn its place?](../nf-reconstruction/anchor-spike.md)
+  — if the anchor produces the whites, this task is an optional look rather than a
+  remedy for cast

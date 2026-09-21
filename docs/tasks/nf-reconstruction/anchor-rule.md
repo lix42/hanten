@@ -105,3 +105,5 @@ tension rather than finesse it.
 ## Dependencies
 
 - [The fixed, stock-agnostic decode](fixed-decode.md)
+- [Spike: does a diffuse-white anchor earn its place?](anchor-spike.md)
+  — measures the highlight-anchor question below instead of arguing it
