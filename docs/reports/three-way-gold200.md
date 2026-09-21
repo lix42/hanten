@@ -22,6 +22,11 @@ in `log10(output)` against density**; curvature at either end is a toe or a shou
 Scripts and raw measurements: `../temp/gold200-3way/` (`curve.py`, `survey.py`,
 `slopes.py`, `anchor.py`, `whitepin.py`, `noise.py`, `dstats.py`, `headroom.py`).
 
+Neutral-surface colour was read by script from hand-marked patch coordinates. The review
+app gained native patch marking and measurement in #128 (`p` in
+`tools/review-app`, and a patch belongs to the *frame*, so it measures across every
+config) — **use that rather than rebuilding the script** for any repeat of this work.
+
 ### Two limits on what can be concluded
 
 **The per-channel slope comparison carries a systematic bias of about 0.05.** Measuring
@@ -82,8 +87,14 @@ anywhere.
 ### Contrast is content-adaptive
 
 Red slope correlates **−0.58 (NLP)**, −0.36 (SF), −0.22 (SFC) with the source's own
-density span: a flatter negative gets more contrast. Roll-median red slope is 3.08 /
-3.20 / 3.07.
+density span: a flatter negative gets more contrast.
+
+Roll-median red slope is **2.25 / 3.18 / 3.07** over every aligned frame, or **3.08 /
+3.20 / 3.07** over the subset whose straight-line fit holds (min R² ≥ 0.97: n = 9 / 12 /
+12). The two differ only for NLP, because NLP's fits are the poorest — which is itself
+the finding that its curve is the least straight, not a reason to prefer either number.
+Both are quoted because neither is safe alone: the unfiltered median includes slopes
+read off curves a line does not describe, and the filtered one rests on nine frames.
 
 None of them preserves the scene's own exposure — correlation between source median
 density and delivered median L\* is **+0.08 to +0.13**, i.e. none. Every frame is
@@ -181,9 +192,9 @@ highlights sit.
 
 ### CCR is SilverFast's substitute for measuring the film base
 
-Isolating SFC against SF over 16 aligned frames, CCR changes **slope not at all**
-(R 1.007×, G 1.007×, B 1.001×; G/R ratio +0.019) and **level substantially** (median
-Δa\* +2.55, Δb\* −4.13, ΔL\* −0.10). It cuts SF's mean cast `|a*| + |b*|` from **12.8 to
+CCR changes **slope not at all** (R 1.007×, G 1.007×, B 1.001×; G/R ratio +0.019, over
+the 16 frames where both are pixel-aligned with the source) and **level substantially**
+(median Δa\* +2.55, Δb\* −4.13, ΔL\* −0.10, over all 33 frames both produced). It cuts SF's mean cast `|a*| + |b*|` from **12.8 to
 4.9**.
 
 A pure per-channel level correction keyed to the stock *is* a film-base subtraction by
@@ -334,9 +345,12 @@ rolls its shoulder so diffuse white lands *at* reference white, which is why
 - **The "bounded" requirement now has a number.** An opt-in scene-range mapping's
   ceiling is a **noise budget** derived from the negative's own density span, not a
   constant picked by taste. Input to `nf-look/scene-range-mapping`.
-- **nc is much flatter than all three** (2.0 against ~3.1). Worth stating whenever an nc
-  render is compared against these: it is a look difference before it is a colour
-  difference.
+- **nc is flatter, and fixed where they vary.** On frame 1774 nc measures 2.19 against
+  their 4.19–4.44 — roughly half. Across the roll the gap narrows and depends on the fit
+  filter (nc's fixed ~2.0 against SF/SFC's ~3.1, NLP's 2.25 or 3.08). The durable
+  statement is not a single ratio but that **nc's contrast is a constant and theirs is a
+  variable**. Worth saying whenever an nc render is compared against these: it is a look
+  difference before it is a colour difference.
 - **CCR measurably works** — roll-median whole-frame cast SFC **3.8**, NLP 7.4, SF 10.9 —
   and it works by doing what nc already does better.
 - NLP is the most saturated: 1.33% of its pixels fall outside sRGB against 0.49%
