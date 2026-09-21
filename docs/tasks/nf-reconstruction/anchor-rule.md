@@ -43,6 +43,29 @@ tension rather than finesse it.
   today; the design deliberately does not settle whether it should remain one.
 - **What the other three placements become** — removed, or refused. That answer is an
   input to [the audit](../nf-core/knob-availability-audit.md).
+- **Should the anchor be at the highlight instead of the mid?** All three outside
+  converters anchor the **bright end on content**, at the 96–97th percentile of the
+  frame's own density (`docs/reports/three-way-gold200.md`), and that — not any colour
+  step — is why their whites read neutral: the channels converge where the shoulder
+  and the ceiling bring them together. The measurement also says what to avoid. NLP
+  pins each channel's highlight *independently*, which is a per-frame colour decision
+  fitted from content, and it is the mechanism behind its worst failure on that roll
+  (a\* −21 whole-frame while its top stayed neutral). SilverFast pins one common
+  stretch and keeps per-channel balance fixed; it degrades gracefully instead.
+
+  What that suggests, and what this task has to weigh: **the neutral-white effect needs
+  the anchor to sit high in density with a shoulder above it — not to be derived from
+  content.** A fixed, leader-derived white anchor would give neutral whites when the
+  frame actually holds white, and correctly decline to invent one when it does not,
+  keeping roll consistency that a per-frame anchor breaks. Against it: a *mid* anchor
+  makes contrast and exposure independent (above), which a highlight anchor gives up.
+
+  If a roll-level anchor is considered, two failure modes are already known. A single
+  blown frame drags a roll-max anchor up and darkens everything else, so it needs a
+  high percentile plus a **minimum gap below the leader's `Dmax`**. And an underexposed
+  roll is not a case to normalise away: the film holds less information there, so
+  pinning it to white either renders pale or, if contrast is stretched to compensate,
+  multiplies noise — measured at up to 4.1× the scan's own floor on a narrow negative.
 
 ## How to Verify
 
