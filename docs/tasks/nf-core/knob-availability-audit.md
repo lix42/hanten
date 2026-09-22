@@ -74,6 +74,11 @@ All four were decided as the audit landed; the reasoning is in
   exactly when `nf-core/minimal-end-to-end` lifts that guard. Owner:
   `nf-core/subcommands`.
 
+  *Closed 2026-09-22 by `nf-core/recipe-schema`*, which replaced the section refusal
+  (`reject_recipe_sections`, `UNREAD_RECIPE_SECTIONS`) with the new chain's own
+  recipe: a per-frame overlay is merged onto that document and checked by the same
+  load rule as the shared recipe.
+
 ## How to Verify
 
 - A written inventory: every knob and every validation rule whose condition reads a

@@ -50,6 +50,16 @@ epics each invent their own answer.
 - No stage section is named `params`; the existing assertion still holds.
 - The four CI gates pass.
 
+## Outcome (2026-09-22)
+
+Settled as: a required **document** version (`"recipe_version": 2`), no per-section
+versions; a separate `Recipe` type (`src/recipe.rs`) sharing only `input` and
+`measure` with the current chain; `reconstruction` kept as the decode's section name
+with `DecodeParams`' fields; all four stage sections present and empty; the current
+chain's sections and keys refused by name, no aliases or translation. The first
+verification bullet above was already met by `knob-availability-audit`'s section
+refusal, which this task replaced. Detail in the progress log.
+
 ## Dependencies
 
 - [The new stage module tree](stage-skeleton.md)

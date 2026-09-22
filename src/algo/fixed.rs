@@ -152,7 +152,7 @@ const SCAN_FLOOR: f32 = 1e-6;
 /// One variant today, and that is the point: a bare `f32` field would let a later
 /// content-referenced placement (`docs/spike/white-placement.md` B and D) reuse the
 /// same number for a different quantity. See the module docs.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AnchorRule {
     /// Pin **mid-grey** (output 0.18) at `d` density above the film base, letting
     /// white fall where the contrast puts it.
@@ -162,6 +162,9 @@ pub enum AnchorRule {
     /// about mid instead of moving the whole image. Pinning black instead would
     /// leave midtone brightness depending on contrast, and the base is fog rather
     /// than scene black anyway.
+    // Spelled as the current chain spells the placement it reproduces, so a
+    // recipe reads one name across both flows (see [`AnchorRule::name`]).
+    #[serde(rename = "mid-at-base-offset")]
     MidAboveBase(f32),
 }
 
@@ -199,10 +202,11 @@ impl AnchorRule {
 
 /// The decode's parameters — measurement, calibration, curve.
 ///
-/// Not a recipe type: `nf-core/recipe-schema` owns how a recipe spells these, and
-/// until it lands the new flow refuses a recipe that states a `reconstruction`
-/// section at all rather than accepting one and ignoring it (`crate::flow`).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Also the new chain's recipe section `reconstruction` (`crate::recipe`), field for
+/// field: the recipe spells exactly what the decode reads, so there is no mapping to
+/// drift. Omitted keys take [`Default`], which is these module constants.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct DecodeParams {
     /// Per-channel density gain — the calibration of the common slope error the
     /// film-base division leaves behind.
@@ -311,58 +315,92 @@ pub fn decode(
     ))
 }
 
-/// Guard the parameters and return the resolved anchor.
+/// What makes a [`DecodeParams`] unusable.
 ///
-/// Validates the **resolved** anchor, never a stand-in for it: the rule divides by
-/// the contrast, so a finite-looking configuration can derive a non-finite anchor,
-/// and both ways the exponent goes non-finite render `10^(−inf) = 0.0` for every
-/// sample — an all-black frame that trips neither the clip counter nor the
-/// non-finite one. `cli::validate` rejects these at the CLI boundary naming the
-/// flag; a programmatic caller reaches here first.
+/// **One checker, rendered two ways.** [`DecodeParams::check`] is the only place the
+/// rules live; the decode stage renders a fault as an internal error, and the recipe
+/// gate (`crate::recipe::validate`) as a usage error naming the flag and the recipe
+/// key. Two copies of these rules had already drifted apart on whether a
+/// non-positive mid-grey offset is legal.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DecodeFault {
+    /// A per-channel offset is not finite. The offset is signed, so finite is the
+    /// whole rule.
+    Offset { channel: usize, value: f32 },
+    /// A per-channel scale is not finite and positive. It is a *gain*: a zero renders
+    /// that channel flat (finite, in range, counted by nothing) and a negative one
+    /// reverses its density ordering, breaking the strictly-increasing contract.
+    Scale { channel: usize, value: f32 },
+    /// The contrast is not finite and positive.
+    Contrast(f32),
+    /// The anchor rule's mid-grey density above the base is not finite and positive —
+    /// the range `mid-at-base-offset` has always had on the current chain.
+    MidAboveBase(f32),
+    /// The resolved anchor, or the curve's exponent at it, overflows f32.
+    Anchor { anchor: f32, contrast: f32 },
+}
+
+impl DecodeParams {
+    /// Check the parameters and return the resolved anchor.
+    ///
+    /// Validates the **resolved** anchor, never a stand-in for it: the rule divides by
+    /// the contrast, so a finite-looking configuration can derive a non-finite anchor,
+    /// and both ways the exponent goes non-finite render `10^(−inf) = 0.0` for every
+    /// sample — an all-black frame that trips neither the clip counter nor the
+    /// non-finite one.
+    pub fn check(&self) -> std::result::Result<f32, DecodeFault> {
+        for (channel, &value) in self.offset.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(DecodeFault::Offset { channel, value });
+            }
+        }
+        for (channel, &value) in self.scale.iter().enumerate() {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(DecodeFault::Scale { channel, value });
+            }
+        }
+        if !self.contrast.is_finite() || self.contrast <= 0.0 {
+            return Err(DecodeFault::Contrast(self.contrast));
+        }
+        let AnchorRule::MidAboveBase(d) = self.anchor;
+        if !d.is_finite() || d <= 0.0 {
+            return Err(DecodeFault::MidAboveBase(d));
+        }
+        let anchor = self.anchor.anchor(self.contrast);
+        if !anchor.is_finite() || !(self.contrast * anchor).is_finite() {
+            return Err(DecodeFault::Anchor {
+                anchor,
+                contrast: self.contrast,
+            });
+        }
+        Ok(anchor)
+    }
+}
+
+/// [`DecodeParams::check`] for the stage: a programmatic caller reaches here, and a
+/// CLI one has already been refused at the recipe gate naming the flag.
 fn check_params(params: &DecodeParams) -> Result<f32> {
-    let bad = |what: &str, v: f32| {
-        Err(NcError::Other(format!(
-            "the fixed decode's {what} must be finite (got {v})"
-        )))
-    };
-    // The offset is signed, so finite is the whole rule. The scale is a per-channel
-    // *gain* and must be positive, matching `cli::validate`'s
-    // `positive("--density-scale", …)` at the CLI boundary: a zero makes every `D'` on
-    // that channel the offset, rendering a flat channel that is finite, in range, and
-    // counted by nothing, and a negative one reverses that channel's density ordering,
-    // which is the strictly-increasing contract this decode is built on.
-    for (c, v) in params.offset.iter().enumerate() {
-        if !v.is_finite() {
-            return bad(&format!("offset[{c}]"), *v);
-        }
-    }
-    for (c, v) in params.scale.iter().enumerate() {
-        if !v.is_finite() || *v <= 0.0 {
-            return Err(NcError::Other(format!(
-                "the fixed decode's scale[{c}] must be finite and > 0 (got {v})"
-            )));
-        }
-    }
-    if !params.contrast.is_finite() || params.contrast <= 0.0 {
-        return Err(NcError::Other(format!(
-            "the fixed decode's contrast must be finite and > 0 (got {})",
-            params.contrast
-        )));
-    }
-    let AnchorRule::MidAboveBase(d) = params.anchor;
-    if !d.is_finite() {
-        return bad("mid-above-base density", d);
-    }
-    let anchor = params.anchor.anchor(params.contrast);
-    if !anchor.is_finite() || !(params.contrast * anchor).is_finite() {
-        return Err(NcError::Other(format!(
-            "the fixed decode derived a non-usable anchor ({anchor:e}) at contrast {}: \
-             the curve's exponent `contrast · (density − anchor)` is not finite, so \
-             every sample would render as exactly 0.0",
-            params.contrast
-        )));
-    }
-    Ok(anchor)
+    params.check().map_err(|fault| {
+        NcError::Other(match fault {
+            DecodeFault::Offset { channel, value } => {
+                format!("the fixed decode's offset[{channel}] must be finite (got {value})")
+            }
+            DecodeFault::Scale { channel, value } => {
+                format!("the fixed decode's scale[{channel}] must be finite and > 0 (got {value})")
+            }
+            DecodeFault::Contrast(v) => {
+                format!("the fixed decode's contrast must be finite and > 0 (got {v})")
+            }
+            DecodeFault::MidAboveBase(d) => format!(
+                "the fixed decode's mid-above-base density must be finite and > 0 (got {d})"
+            ),
+            DecodeFault::Anchor { anchor, contrast } => format!(
+                "the fixed decode derived a non-usable anchor ({anchor:e}) at contrast \
+                 {contrast}: the curve's exponent `contrast · (density − anchor)` is not \
+                 finite, so every sample would render as exactly 0.0"
+            ),
+        })
+    })
 }
 
 #[cfg(test)]
@@ -761,6 +799,25 @@ mod tests {
             .unwrap_err();
             assert!(
                 err.message().contains("scale[1] must be finite and > 0"),
+                "{}",
+                err.message()
+            );
+        }
+
+        // The mid-grey offset is a density *above* the base, so it is positive — the
+        // range `mid-at-base-offset` has on the current chain too.
+        for d in [0.0, -0.1, f32::NAN] {
+            let err = decode(
+                &scan(),
+                &base(),
+                &DecodeParams {
+                    anchor: AnchorRule::MidAboveBase(d),
+                    ..DecodeParams::default()
+                },
+            )
+            .unwrap_err();
+            assert!(
+                err.message().contains("mid-above-base"),
                 "{}",
                 err.message()
             );

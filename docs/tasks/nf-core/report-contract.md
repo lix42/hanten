@@ -31,6 +31,13 @@ inherited one optional section at a time.
   A renamed field is their break, not nc's, and their fixtures are part of the change.
 - Telemetry stays **operational**: arg-struct only, never a recipe key.
 
+- **The new chain's recipe now exists** (`crate::recipe::Recipe`, `nf-core/recipe-schema`),
+  but a `--new-flow` run still writes no sidecar, echoes no `recipe` and reports no
+  `params_hash`, because those three were built around the current chain's config.
+  The recipe reloads under `--new-flow` (`--dump-params` round-trips byte-for-byte),
+  so all three can now carry it; which fields, and how the stale-sidecar cleanup
+  changes once a sidecar is written again, are this task's to decide.
+
 ## Open questions
 
 - **Does the new flow emit the old report shape while `--new-flow` lives?**

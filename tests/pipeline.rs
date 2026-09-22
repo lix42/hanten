@@ -11594,10 +11594,10 @@ fn without_new_flow_nothing_moves() {
     // recipe key. The *parity* half of this test is gone and deliberately so — since
     // `nf-reconstruction/fixed-decode` the new flow decodes through its own params,
     // so the resolved legacy recipe no longer describes what it would render, and
-    // `--dump-params` is refused under the flag rather than writing a recipe that
-    // replays as a different picture. What is still assertable: the no-flag path
-    // dumps and converts exactly as before, and nothing named `new_flow` reaches the
-    // recipe.
+    // under the flag `--dump-params` writes the new chain's own document
+    // (`nf-core/recipe-schema`) instead. What is assertable: the no-flag path dumps and
+    // converts exactly as before, nothing named `new_flow` reaches either recipe, and
+    // the new-flow dump round-trips under the flag and is refused without it.
     let tmp = TempDir::new("new-flow-params");
     let dump_off = tmp.path("off.json");
     let dump_on = tmp.path("on.json");
@@ -11638,24 +11638,57 @@ fn without_new_flow_nothing_moves() {
         "`--new-flow` must not leak into the recipe — it is not a recipe key: {dumped}"
     );
 
-    // With the flag, the dump is refused rather than written: it is produced before
-    // the render, from the resolved *legacy* config, so under `--new-flow` it would
-    // hand back a recipe describing a chain this run did not select.
+    // With the flag, the dump is the new chain's document: it states its version and
+    // none of the current chain's sections, and reloads under the same flag to the
+    // same document — the round-trip the recipe schema is gated on.
     let on = args(&dump_on, &tmp.path("on.tif"), &["--new-flow"]);
     let (code, _out, err) = run_exact(&borrow(&on));
-    assert_eq!(code, 2, "{err}");
-    assert!(err.contains("--dump-params"), "{err}");
-    assert!(err.contains("nf-core/recipe-schema"), "{err}");
-    assert!(!dump_on.exists(), "a refused dump must write nothing");
-
-    // Falsifiability: without the dump the same command line renders, so the refusal
-    // above keys on `--dump-params` and not on the flag alone.
-    let mut bare: Vec<String> = args(&dump_on, &tmp.path("bare.tif"), &["--new-flow"]);
-    let at = bare.iter().position(|a| a == "--dump-params").unwrap();
-    bare.drain(at..=at + 1);
-    let (code, _out, err) = run_exact(&borrow(&bare));
     assert_eq!(code, 0, "{err}");
-    assert!(tmp.path("bare.tif").exists());
+    let dumped = std::fs::read_to_string(&dump_on).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&dumped).unwrap();
+    assert_eq!(doc["recipe_version"], 2, "{dumped}");
+    for gone in ["print", "output"] {
+        assert!(doc.get(gone).is_none(), "`{gone}` leaked into {dumped}");
+    }
+    assert!(!dumped.contains("new_flow"), "{dumped}");
+    assert!(
+        !dumped.contains("\"dmax\""),
+        "no reference density in {dumped}"
+    );
+
+    let redump = tmp.path("redump.json");
+    let replay: Vec<String> = [
+        "convert".to_string(),
+        fixture("hdr-48bit.tif").display().to_string(),
+        "-o".into(),
+        tmp.path("replay.tif").display().to_string(),
+        "--new-flow".into(),
+        "--params".into(),
+        dump_on.display().to_string(),
+        "--dump-params".into(),
+        redump.display().to_string(),
+        "--report".into(),
+        "none".into(),
+    ]
+    .to_vec();
+    let (code, _out, err) = run_exact(&borrow(&replay));
+    assert_eq!(code, 0, "the dump reloads and renders: {err}");
+    assert_eq!(
+        std::fs::read_to_string(&redump).unwrap(),
+        dumped,
+        "a new-flow dump must reload to byte-identical output"
+    );
+
+    // …and the same document is refused without the flag, by name rather than as an
+    // unknown field.
+    let mut off_replay = replay.clone();
+    off_replay.retain(|a| a != "--new-flow");
+    let (code, _out, err) = run_exact(&borrow(&off_replay));
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("recipe_version") && err.contains("pass `--new-flow`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -12356,31 +12389,23 @@ fn the_fixed_decodes_own_knobs_reach_the_decode_under_the_new_flow() {
         assert_eq!(code, 0, "{extra:?} must be accepted: {err}");
     }
 
-    // The one exception the guide has to state: bare `--density-gamma` never reaches
-    // `--new-flow`'s rules at all. `merge` refuses it first (exit 2) because the
-    // resolved default curve is still the sigmoid, so the flag is reachable only with
-    // `--density-curve exponential` named alongside — which is why
-    // `--sigmoid-contrast`'s new-flow refusal names the pair rather than the flag.
-    let (code, _d, err) = decode_of(&["--density-gamma", "1.8"], "bare-gamma.tiff");
-    assert_eq!(code, 2, "{err}");
-    assert!(err.contains("the resolved curve is sigmoid"), "{err}");
+    // Bare `--density-gamma` too. Before `nf-core/recipe-schema` the new flow merged
+    // its flags into the current chain's config, whose default curve is the sigmoid,
+    // so `merge` refused the flag unless `--density-curve exponential` came with it.
+    // The new chain's recipe has no curve to disagree with: the flag sets
+    // `reconstruction.contrast` directly.
+    let (code, d, err) = decode_of(&["--density-gamma", "1.8"], "bare-gamma.tiff");
+    assert_eq!(code, 0, "{err}");
+    assert!(close(&d["contrast"], 1.8), "{d}");
 }
 
 /// `--new-flow` refuses a recipe-stated `calibration.dmax` exactly as it refuses the
 /// `--d-max` flag — and still accepts `calibration.film_base`.
 ///
-/// **A hole the schema move opened in the section rule above.** The reference used to
-/// live at `reconstruction.curve.dmax`, so a recipe stating one was already covered by
-/// the `reconstruction`-section refusal; moving it to its own top-level section put it
-/// out of that witness's reach, and the flag would have been refused while the recipe
-/// key saying the same thing was parsed and read by nothing.
-///
-/// It is closed the way `nf-core/knob-availability-audit` already closed the identical
-/// case for `input.export_ir`: the section stays in `READ_RECIPE_SECTIONS` and the one
-/// unread key gets a `VALUE_ENTRIES` row. That asymmetry is the point — the fixed decode
-/// divides by `calibration.film_base` like any other, so refusing the section whole
-/// would reject the base with the reference. Being a *value* rule also covers `roll`'s
-/// per-frame overrides, which a section witness on the shared recipe cannot see.
+/// The new chain's `calibration` section holds the film base alone, since the fixed
+/// decode's anchor rule reads no reference density. A recipe stating `dmax` there is
+/// refused at load by name (`crate::recipe::check_body`), with the same reason the flag
+/// gives — and so is a `roll` per-frame overlay, which runs the same check.
 #[test]
 fn convert_under_the_new_flow_refuses_a_recipe_calibration_dmax() {
     let tmp = TempDir::new("new-flow-calibration");
@@ -12401,7 +12426,8 @@ fn convert_under_the_new_flow_refuses_a_recipe_calibration_dmax() {
     };
 
     let (code, err) = run_with(
-        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]},
+        r#"{"recipe_version":2,
+            "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]},
                            "dmax":{"explicit":1.45}}}"#,
         "with-dmax.json",
     );
@@ -12412,15 +12438,16 @@ fn convert_under_the_new_flow_refuses_a_recipe_calibration_dmax() {
 
     // Falsifiable both ways. The base half is still read, so it renders…
     let (code, err) = run_with(
-        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
+        r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
         "base-only.json",
     );
     assert_eq!(code, 0, "the base half must still be accepted: {err}");
-    // A `roll` **per-frame** override states it too, and a value rule is what reaches
-    // there: the shared-recipe section witness cannot see an overlay at all.
+    // A `roll` **per-frame** override states it too, and is refused by the same load
+    // check, run on the overlay.
     let shared = write_file(
         &tmp.path("shared.json"),
-        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
+        r#"{"recipe_version":2,
+            "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "measure":{"inset":0.05}}"#,
     );
     let manifest = write_file(
@@ -12467,26 +12494,19 @@ fn convert_under_the_new_flow_refuses_a_recipe_calibration_dmax() {
 }
 
 #[test]
-fn convert_under_the_new_flow_refuses_a_recipe_reconstruction() {
-    // The provenance neither availability table can see. The new flow decodes through
-    // its own params, so this section would parse, validate, and then be read by
-    // nothing — `deny_unknown_fields` catches an unknown key and is blind to a known
-    // but meaningless one.
+fn convert_under_the_new_flow_refuses_the_current_chains_recipe() {
+    // The provenance neither availability table can see: a recipe written for the
+    // other chain. It would otherwise parse and be read by nothing —
+    // `deny_unknown_fields` catches an unknown key and is blind to a known but
+    // meaningless one. The document version is what makes it visible.
     let tmp = TempDir::new("new-flow-recipe");
-    let recipe = write_file(
-        &tmp.path("r.json"),
-        r#"{
-  "reconstruction": { "type": "density" },
-  "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
-  "output": { "preset": "legacy" }
-}"#,
-    );
-    let argv = |flow: &[&str], out: &Path| -> (i32, String) {
+    let run_with = |body: &str, name: &str, flow: &[&str]| -> (i32, String) {
+        let recipe = write_file(&tmp.path(name), body);
         let mut v: Vec<String> = vec![
             "convert".into(),
             fixture("hdr-48bit.tif").display().to_string(),
             "-o".into(),
-            out.display().to_string(),
+            tmp.path(&format!("{name}.tif")).display().to_string(),
             "--params".into(),
             recipe.display().to_string(),
             "--report".into(),
@@ -12497,34 +12517,133 @@ fn convert_under_the_new_flow_refuses_a_recipe_reconstruction() {
         let (code, _out, err) = run_exact(&borrowed);
         (code, err)
     };
+    let current = r#"{
+  "reconstruction": { "type": "density" },
+  "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
+  "output": { "preset": "legacy" }
+}"#;
 
-    let (code, err) = argv(&["--new-flow"], &tmp.path("out.tif"));
+    // (1) No version: the current chain's document, refused as a whole.
+    let (code, err) = run_with(current, "current.json", &["--new-flow"]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("`reconstruction` section"), "{err}");
-    assert!(err.contains("nf-core/recipe-schema"), "{err}");
-
-    // Falsifiability, both directions: the same recipe converts without the flag, and
-    // a recipe *without* the section renders under it rather than being refused.
-    let (code, err) = argv(&[], &tmp.path("legacy.tif"));
+    assert!(err.contains("\"recipe_version\": 2"), "{err}");
+    assert!(err.contains("hanten params --new-flow"), "{err}");
+    // Falsifiability: the same recipe converts without the flag.
+    let (code, err) = run_with(current, "current.json", &[]);
     assert_eq!(code, 0, "{err}");
 
-    // Only sections the new flow reads: `print` and `output` are refused the same way
-    // `reconstruction` is, so a control recipe stating either would prove nothing about
-    // which rule fired.
-    let clean = write_file(
-        &tmp.path("clean.json"),
-        r#"{
-  "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
-  "measure": { "inset": 0.05 }
-}"#,
+    // (2) Versioned, but still carrying the current chain's reconstruction keys:
+    // refused by key, with where each one went.
+    let (code, err) = run_with(
+        r#"{"recipe_version": 2,
+            "reconstruction": {"density": {"scale": [1, 0.9, 0.8]}},
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+        "old-keys.json",
+        &["--new-flow"],
     );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`reconstruction.density`"), "{err}");
+    assert!(err.contains("`reconstruction.scale`"), "{err}");
+
+    // (3) A new-chain recipe stating the decode renders, with its values.
+    let (code, err) = run_with(
+        r#"{"recipe_version": 2,
+            "reconstruction": {"scale": [1, 0.9, 0.8], "contrast": 1.8,
+                               "anchor": {"mid-at-base-offset": 0.6}},
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "measure": {"inset": 0.05},
+            "look": {}}"#,
+        "new.json",
+        &["--new-flow"],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (code, stdout, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("new-report.tif").to_str().unwrap(),
+        "--params",
+        tmp.path("new.json").to_str().unwrap(),
+        "--new-flow",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let decode = &json(&stdout)["new_flow"]["decode"];
+    let close = |v: &serde_json::Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-5;
+    assert!(close(&decode["contrast"], 1.8), "{decode}");
+    assert!(close(&decode["scale"][1], 0.9), "{decode}");
+
+    // (4) Its values are checked, whichever provenance set them.
+    let (code, err) = run_with(
+        r#"{"recipe_version": 2, "reconstruction": {"contrast": 0},
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+        "bad.json",
+        &["--new-flow"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`reconstruction.contrast`"), "{err}");
+
+    // (5) An identity stage takes no keys yet.
+    let (code, err) = run_with(
+        r#"{"recipe_version": 2, "look": {"contrast": 1.1},
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+        "look.json",
+        &["--new-flow"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("contrast"), "{err}");
+}
+
+#[test]
+fn availability_outranks_the_decodes_value_rules() {
+    // Both faults at once: the unavailable knob must be diagnosed first, or the user
+    // fixes a value only to be told the flag carrying it must go anyway. The refusal is
+    // by presence, before any recipe merges, so it wins by construction — pinned here
+    // so a later value rule placed ahead of it reds.
+    let tmp = TempDir::new("new-flow-order");
     let (code, _out, err) = run_exact(&[
         "convert",
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
-        tmp.path("clean.tif").to_str().unwrap(),
+        tmp.path("out").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--new-flow",
+        "--print-exposure",
+        "1",
+        "--density-scale",
+        "0,1,1",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--print-exposure"), "{err}");
+    assert!(!err.contains("reconstruction.scale"), "{err}");
+}
+
+#[test]
+fn hanten_params_writes_the_schema_the_flag_selects() {
+    let (code, legacy, err) = run_exact(&["params"]);
+    assert_eq!(code, 0, "{err}");
+    let (code, new, err) = run_exact(&["params", "--new-flow"]);
+    assert_eq!(code, 0, "{err}");
+    let legacy: serde_json::Value = serde_json::from_str(&legacy).unwrap();
+    let new: serde_json::Value = serde_json::from_str(&new).unwrap();
+    assert!(legacy.get("recipe_version").is_none());
+    assert_eq!(new["recipe_version"], 2);
+    assert!(new.get("print").is_none() && legacy.get("print").is_some());
+
+    // What it writes is what `--new-flow` reads, once a film base is stated.
+    let tmp = TempDir::new("params-new-flow");
+    let mut doc = new.clone();
+    doc["calibration"]["film_base"] = serde_json::json!({"explicit": [0.9, 0.55, 0.42]});
+    let recipe = write_file(&tmp.path("r.json"), &doc.to_string());
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("out").to_str().unwrap(),
         "--params",
-        clean.to_str().unwrap(),
+        recipe.to_str().unwrap(),
         "--new-flow",
         "--report",
         "none",
@@ -12541,8 +12660,8 @@ fn new_flow_refuses_every_print_control() {
     // Two of these resolve the documented **default** (`--white-balance 1,1,1`,
     // `--highlight-compress 0`) and are still refused, which is the tiebreaker applied
     // rather than waived: an identity value is spared to keep the flags-win reset
-    // usable, and `reject_recipe_sections` refuses any recipe stating `print`, so on
-    // this flow there is no pinned value for one to clear.
+    // usable, and the new chain's recipe has no `print` section, so on this flow there
+    // is no pinned value for one to clear.
     let tmp = TempDir::new("new-flow-print");
     let cases: &[(&[&str], &str)] = &[
         (&["--print-exposure", "1"], "nf-scene-correction/stage"),
@@ -12683,13 +12802,21 @@ fn new_flow_refuses_the_output_policy_flags() {
 #[test]
 fn a_print_or_output_recipe_section_is_refused_whole() {
     // The provenance no flag row can see, and the reason none of these knobs needs a
-    // value rule: between the rows above and this, both spellings are covered. Each
-    // section is named individually so a user fixing a recipe knows which key to
-    // remove.
+    // value rule: between the rows above and this, both spellings are covered. The
+    // new chain's recipe has neither section, and names each one so a user fixing a
+    // recipe knows which key to remove and where its knobs went.
     let tmp = TempDir::new("new-flow-sections");
-    for (name, body) in [
-        ("print", r#"{ "print": { "print_exposure": 1.0 } }"#),
-        ("output", r#"{ "output": { "preset": "display-p3" } }"#),
+    for (name, body, went) in [
+        (
+            "print",
+            r#"{ "recipe_version": 2, "print": { "print_exposure": 1.0 } }"#,
+            "scene_correction",
+        ),
+        (
+            "output",
+            r#"{ "recipe_version": 2, "output": { "preset": "display-p3" } }"#,
+            "nf-destinations/preset-set",
+        ),
     ] {
         let recipe = write_file(&tmp.path(&format!("{name}.json")), body);
         let out = tmp.path(&format!("{name}.tif"));
@@ -12709,17 +12836,26 @@ fn a_print_or_output_recipe_section_is_refused_whole() {
         ];
         let (code, _out, err) = run_exact(&argv);
         assert_eq!(code, 2, "a recipe `{name}` section must be refused: {err}");
-        assert!(err.contains(&format!("`{name}` section")), "{err}");
-        assert!(err.contains("nf-core/recipe-schema"), "{err}");
+        assert!(err.contains(&format!("`{name}` is a section")), "{err}");
+        assert!(err.contains(went), "{err}");
 
-        // Falsifiability: the same recipe is fine on the current chain. It needs a
-        // preset that writes TIFF, since the `.tif` path is judged there — which is
-        // the very rule `the_suffix_rule_stands_down_under_the_new_flow` covers.
+        // Falsifiability: the same section is fine on the current chain, in a recipe
+        // without the version. It needs a preset that writes TIFF, since the `.tif`
+        // path is judged there — which is the very rule
+        // `the_suffix_rule_stands_down_under_the_new_flow` covers.
+        let mut current: serde_json::Value = serde_json::from_str(body).unwrap();
+        current.as_object_mut().unwrap().remove("recipe_version");
+        let current_recipe = write_file(
+            &tmp.path(&format!("{name}-current.json")),
+            &current.to_string(),
+        );
         let mut legacy = argv.clone();
         legacy.retain(|a| *a != "--new-flow");
+        let at = legacy.iter().position(|a| *a == "--params").unwrap() + 1;
+        legacy[at] = current_recipe.to_str().unwrap();
         legacy.extend_from_slice(&["--output-preset", "display-p3"]);
         let (code, _out, err) = run_exact(&legacy);
-        assert_eq!(code, 0, "the same recipe must still convert: {err}");
+        assert_eq!(code, 0, "the same section must still convert: {err}");
     }
 }
 
@@ -12804,7 +12940,15 @@ fn the_anchor_guard_recommends_only_a_slope() {
         argv.extend(flow);
         let (code, _out, err) = run_exact(&argv.iter().map(String::as_str).collect::<Vec<_>>());
         assert_eq!(code, 2, "{err}");
-        assert!(err.contains("Use a photographic slope"), "{err}");
+        // Each chain has its own guard — the new one checks the decode's recipe
+        // (`crate::recipe::validate`) — and both remedies name only the slope and the
+        // offset, which is what this command line can change.
+        if under_new_flow {
+            assert!(err.contains("the decode's anchor is not usable"), "{err}");
+            assert!(err.contains("Use a larger --density-gamma"), "{err}");
+        } else {
+            assert!(err.contains("Use a photographic slope"), "{err}");
+        }
         assert!(
             !err.contains("which needs no such division"),
             "the remedy must not recommend a placement it never checked ({}): {err}",
@@ -12819,35 +12963,34 @@ fn the_gamma_arm_states_its_two_remedies_as_equals() {
     // as *the* answer with `--density-curve exponential` parenthesised, and under
     // `--new-flow` the ranked one is refused while the parenthetical works. Reordering
     // would promote the more invasive option on the legacy chain, so the ranking is
-    // dropped instead — which needs no knowledge of the flow, and is asserted on both.
+    // dropped instead — which needs no knowledge of the flow. (Under `--new-flow` the
+    // arm no longer runs: the flags merge into the new chain's recipe, which has no
+    // curve for `--density-gamma` to disagree with — see
+    // `the_fixed_decodes_own_knobs_stay_reachable_under_the_new_flow`.)
     let tmp = TempDir::new("gamma-arm-remedy");
     let out = tmp.path("out.tif");
-    for flow in [vec![], vec!["--new-flow"]] {
-        let mut argv: Vec<&str> = vec![
-            "convert",
-            "FIXTURE",
-            "-o",
-            out.to_str().unwrap(),
-            "--film-base",
-            "0.9,0.55,0.42",
-            "--density-gamma",
-            "2.5",
-            "--report",
-            "none",
-        ];
-        let fixture_path = fixture("hdr-48bit.tif").display().to_string();
-        argv[1] = &fixture_path;
-        argv.extend_from_slice(&flow);
-        let (code, _out, err) = run_exact(&argv);
-        assert_eq!(code, 2, "{err}");
-        assert!(err.contains("--sigmoid-contrast"), "{err}");
-        assert!(err.contains("--density-curve exponential"), "{err}");
-        // The ranked wording, asserted absent: "its mid-density slope is X (or pass Y)".
-        assert!(
-            !err.contains("(or pass"),
-            "neither remedy may be parenthetical: {err}"
-        );
-    }
+    let fixture_path = fixture("hdr-48bit.tif").display().to_string();
+    let argv: Vec<&str> = vec![
+        "convert",
+        &fixture_path,
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--density-gamma",
+        "2.5",
+        "--report",
+        "none",
+    ];
+    let (code, _out, err) = run_exact(&argv);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--sigmoid-contrast"), "{err}");
+    assert!(err.contains("--density-curve exponential"), "{err}");
+    // The ranked wording, asserted absent: "its mid-density slope is X (or pass Y)".
+    assert!(
+        !err.contains("(or pass"),
+        "neither remedy may be parenthetical: {err}"
+    );
 }
 
 #[test]
@@ -13007,10 +13150,11 @@ fn the_new_flow_removes_a_stale_sidecar_and_nothing_else() {
 
 #[test]
 fn the_new_flow_never_removes_the_recipe_it_read() {
-    // Found in review: a legacy sidecar is also a valid `--params` recipe once the
-    // sections the new flow refuses are stripped, and it sits exactly where the stale
-    // sidecar would. Reading it and then deleting it as "stale" would destroy the run's
-    // own input. It stays, and the run says why.
+    // Found in review: an enveloped recipe carries a sidecar's identity fields and can
+    // sit exactly where the stale sidecar would — here, a legacy sidecar whose `params`
+    // were rewritten to a new-chain recipe, which `--params` loads under the flag.
+    // Reading it and then deleting it as "stale" would destroy the run's own input. It
+    // stays, and the run says why.
     let tmp = TempDir::new("new-flow-recipe-is-the-sidecar");
     let out = tmp.path("out.tiff");
     let (code, _o, err) = run_exact(&[
@@ -13028,9 +13172,10 @@ fn the_new_flow_never_removes_the_recipe_it_read() {
     assert_eq!(code, 0, "{err}");
     let sidecar = sidecar_of(&out);
     let mut doc = json(&std::fs::read_to_string(&sidecar).unwrap());
-    for section in ["reconstruction", "print", "output"] {
-        doc["params"].as_object_mut().unwrap().remove(section);
-    }
+    doc["params"] = serde_json::json!({
+        "recipe_version": 2,
+        "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } }
+    });
     std::fs::write(&sidecar, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
 
     let (code, stdout, err) = run_exact(&[
@@ -13064,7 +13209,8 @@ fn roll_judges_a_manifest_suffix_against_the_new_flow_destination() {
     let tmp = TempDir::new("new-flow-roll-suffix");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{ "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
+        r#"{ "recipe_version": 2,
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
     );
     let roll_to = |output: &str, dir: &str| {
         let manifest = write_file(
@@ -13107,6 +13253,7 @@ fn roll_under_the_new_flow_renders_every_frame() {
     let recipe = write_file(
         &tmp.path("roll.json"),
         r#"{
+  "recipe_version": 2,
   "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
   "measure": { "inset": 0.05 }
 }"#,
@@ -13145,7 +13292,8 @@ fn roll_under_the_new_flow_refuses_an_unread_section_in_a_frame_override() {
     let tmp = TempDir::new("new-flow-roll-overlay");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{ "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
+        r#"{ "recipe_version": 2,
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
     );
     let manifest = write_file(
         &tmp.path("frames.json"),
@@ -13170,17 +13318,16 @@ fn roll_under_the_new_flow_refuses_an_unread_section_in_a_frame_override() {
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("frame "), "{err}");
-    assert!(err.contains("`print` section"), "{err}");
+    assert!(err.contains("`print` is a section"), "{err}");
     assert!(!out_dir.exists(), "refused before anything is created");
 }
 
 #[test]
-fn roll_under_the_new_flow_refuses_a_recipe_reconstruction() {
+fn roll_under_the_new_flow_refuses_the_current_chains_recipe() {
     // `roll` accepts no conversion flags, so its shared recipe is the *only* way it
     // can state a reconstruction — and therefore the only place the
-    // accepted-and-ignored hole could open, since the new flow decodes through its
-    // own params and would never read that section. Refused at exit 2 (a usage
-    // problem the user can fix) rather than the seam's exit 4.
+    // accepted-and-ignored hole could open for it. A recipe without the document
+    // version is the current chain's, refused at exit 2 before anything is created.
     let tmp = TempDir::new("new-flow-roll-recipe");
     let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
     let out_dir = tmp.path("out");
@@ -13196,12 +13343,10 @@ fn roll_under_the_new_flow_refuses_a_recipe_reconstruction() {
         "none",
     ]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("`reconstruction` section"), "{err}");
-    assert!(err.contains("nf-core/recipe-schema"), "{err}");
+    assert!(err.contains("\"recipe_version\": 2"), "{err}");
     assert!(!out_dir.exists(), "refused before anything is created");
 
-    // Falsifiability, both directions: the same recipe converts without the flag,
-    // and the refusal is about the section rather than about `--params`.
+    // Falsifiability: the same recipe converts without the flag.
     let (code, _stdout, err) = run_exact(&[
         "roll",
         fixture("hdr-48bit.tif").to_str().unwrap(),
@@ -13216,75 +13361,144 @@ fn roll_under_the_new_flow_refuses_a_recipe_reconstruction() {
 }
 
 #[test]
-fn roll_refuses_an_unavailable_knob_from_either_recipe_site() {
-    // Roll accepts no conversion flags, so the knobs it can reach are resolved
-    // values — and it validates them in **two** places. Both are pinned, because a
-    // gate composed at one site and forgotten at the other is exactly how
-    // `OutputPreset::is_atomic`'s three call sites lost one.
+fn roll_refuses_the_current_chains_keys_from_either_recipe_site() {
+    // Roll accepts no conversion flags, so what it can reach arrives in a recipe —
+    // and it reads recipes in **two** places. Both are pinned, because a check composed
+    // at one site and forgotten at the other is exactly how `OutputPreset::is_atomic`'s
+    // three call sites lost one. Before `nf-core/recipe-schema` the per-frame half was
+    // a hole: an overlay was merged onto the shared config with no section check.
     let tmp = TempDir::new("new-flow-roll-knob");
     let out_dir = tmp.path("out");
+    let roll = |manifest_or_input: &[&str], shared: &Path, out: &Path, flow: &[&str]| {
+        let mut v: Vec<String> = vec!["roll".into()];
+        v.extend(manifest_or_input.iter().map(|s| (*s).to_string()));
+        v.extend([
+            "--out-dir".to_string(),
+            out.display().to_string(),
+            "--params".into(),
+            shared.display().to_string(),
+            "--report".into(),
+            "none".into(),
+        ]);
+        v.extend(flow.iter().map(|s| (*s).to_string()));
+        let borrowed: Vec<&str> = v.iter().map(String::as_str).collect();
+        let (code, _out, err) = run_exact(&borrowed);
+        (code, err)
+    };
+    let input = fixture("hdr-48bit.tif").display().to_string();
 
     // (1) the shared recipe.
     let shared_simple = write_file(
         &tmp.path("shared.json"),
         r#"{
+             "recipe_version": 2,
              "reconstruction": { "type": "simple" },
-             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
-             "output": { "preset": "legacy" }
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } }
            }"#,
     );
-    let (code, _out, err) = run_exact(&[
-        "roll",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
-        "--out-dir",
-        out_dir.to_str().unwrap(),
-        "--params",
-        shared_simple.to_str().unwrap(),
-        "--new-flow",
-        "--report",
-        "none",
-    ]);
+    let (code, err) = roll(&[&input], &shared_simple, &out_dir, &["--new-flow"]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("has no meaning under `--new-flow`"), "{err}");
+    assert!(err.contains("`reconstruction.type`"), "{err}");
 
     // (2) a per-frame override, on a shared recipe the gate accepts.
-    let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
-    let manifest = write_file(
-        &tmp.path("frames.json"),
-        &format!(
-            r#"{{ "frames": [
-                 {{ "input": {src:?}, "params": {{ "reconstruction": {{ "type": "simple" }} }} }}
-               ] }}"#,
-            src = fixture("hdr-48bit.tif").to_str().unwrap(),
-        ),
+    let shared = write_file(
+        &tmp.path("roll-new.json"),
+        r#"{ "recipe_version": 2,
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
     );
-    let (code, _out, err) = run_exact(&[
-        "roll",
-        "--frames",
-        manifest.to_str().unwrap(),
-        "--out-dir",
-        tmp.path("out2").to_str().unwrap(),
-        "--params",
-        recipe.to_str().unwrap(),
-        "--new-flow",
-        "--report",
-        "none",
-    ]);
+    let manifest_with = |name: &str, params: &str| {
+        write_file(
+            &tmp.path(name),
+            &format!(r#"{{ "frames": [ {{ "input": {input:?}, "params": {params} }} ] }}"#),
+        )
+    };
+    let simple = manifest_with(
+        "simple.json",
+        r#"{ "reconstruction": { "type": "simple" } }"#,
+    );
+    let (code, err) = roll(
+        &["--frames", simple.to_str().unwrap()],
+        &shared,
+        &tmp.path("out2"),
+        &["--new-flow"],
+    );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("has no meaning under `--new-flow`"), "{err}");
+    assert!(err.contains("per-frame `params` override"), "{err}");
+    assert!(err.contains("`reconstruction.type`"), "{err}");
+    let print = manifest_with("print.json", r#"{ "print": { "print_exposure": 0.5 } }"#);
+    let (code, err) = roll(
+        &["--frames", print.to_str().unwrap()],
+        &shared,
+        &tmp.path("out2"),
+        &["--new-flow"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`print` is a section"), "{err}");
 
-    // Falsifiability: the same manifest runs on the current chain.
-    let (code, _out, err) = run_exact(&[
+    // The overlay lands on the new chain's document: a decode key it states is read
+    // and checked there, not refused as unknown…
+    let bad = manifest_with("bad.json", r#"{ "reconstruction": { "contrast": -1 } }"#);
+    let (code, err) = roll(
+        &["--frames", bad.to_str().unwrap()],
+        &shared,
+        &tmp.path("out2"),
+        &["--new-flow"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`reconstruction.contrast`"), "{err}");
+    // It names the frame, and only the recipe key: `roll` accepts no `--density-gamma`.
+    assert!(err.contains("per-frame `params` override"), "{err}");
+    assert!(!err.contains("--density-gamma"), "{err}");
+    // …and a valid one resolves and reaches the frame's render — the frame's own
+    // recipe, not the shared one, which is what the decode reads.
+    let good = manifest_with("good.json", r#"{ "reconstruction": { "contrast": 1.8 } }"#);
+    let (code, err) = roll(
+        &["--frames", good.to_str().unwrap()],
+        &shared,
+        &tmp.path("out2"),
+        &["--new-flow"],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (code, stdout, err) = run_exact(&[
         "roll",
         "--frames",
-        manifest.to_str().unwrap(),
+        good.to_str().unwrap(),
         "--out-dir",
-        tmp.path("out3").to_str().unwrap(),
+        tmp.path("out5").to_str().unwrap(),
         "--params",
-        recipe.to_str().unwrap(),
-        "--report",
-        "none",
+        shared.to_str().unwrap(),
+        "--new-flow",
     ]);
+    assert_eq!(code, 0, "{err}");
+    let frame = &json(&stdout)["frames"][0];
+    let contrast = frame["new_flow"]["decode"]["contrast"].as_f64().unwrap();
+    assert!((contrast - 1.8).abs() < 1e-5, "{frame}");
+
+    // The reverse at the override site: without the flag, an override that states the
+    // version is refused by name rather than as an unknown field. (An unversioned one
+    // cannot be told apart from a mistyped current-chain override, so serde's
+    // unknown-field error is the honest answer there.)
+    let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
+    let versioned = manifest_with(
+        "versioned.json",
+        r#"{ "recipe_version": 2, "reconstruction": { "contrast": 1.8 } }"#,
+    );
+    let (code, err) = roll(
+        &["--frames", versioned.to_str().unwrap()],
+        &recipe,
+        &tmp.path("out4"),
+        &[],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("pass `--new-flow`"), "{err}");
+
+    // Falsifiability: the simple overlay runs on the current chain.
+    let (code, err) = roll(
+        &["--frames", simple.to_str().unwrap()],
+        &recipe,
+        &tmp.path("out3"),
+        &[],
+    );
     assert_eq!(code, 0, "the control roll must succeed: {err}");
 }
 

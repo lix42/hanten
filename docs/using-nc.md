@@ -9,7 +9,7 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 5`, built at commit
-> `2a15e817c1c7` plus the `--new-flow` render (§11). The staleness signal
+> `1033b108e90a` plus the new chain's recipe (`nf-core/recipe-schema`, §11). The staleness signal
 > is `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -1651,8 +1651,9 @@ by `--strict`). Whether the picture *looks* right is not what this flow promises
   ```
 
 - **No sidecar is written**, and the report carries no `recipe` echo and no
-  `identity.params_hash`: the resolved recipe describes the *current* chain, not the one
-  that ran, so it would reload as a different picture. A sidecar an earlier run left at
+  `identity.params_hash`: all three were built around the *current* chain's config,
+  which does not describe what ran. The new chain has its own recipe (below);
+  carrying it in these is `nf-core/report-contract`'s to decide. A sidecar an earlier run left at
   the same path is **removed** — it describes the image just replaced — and the report
   names it in `new_flow.removed_sidecar`. A file there that is not one of Hanten's
   sidecars is left alone, and so is one this run read as its `--params` recipe (with a
@@ -1679,9 +1680,8 @@ usage: --reconstruction simple has no meaning under `--new-flow`: the new flow h
 no counterpart for it, and will not gain one: … Use `--reconstruction density`, …
 ```
 
-A knob can be refused by the **flag** you typed or by the **resolved value**, and
-`simple` is both, so the refusal also reaches a spelling with no flag on the command
-line — a `roll` per-frame override, for instance.
+A knob can be refused by the **flag** you typed, or — in a recipe — by the new
+chain's recipe schema, which has no key for it (below).
 
 **The reconstruction knobs are fully classified**, because the fixed decode that
 strands them has landed. It is one decode for every negative: a straight line in
@@ -1696,49 +1696,87 @@ refused:
 | `--film-stock` | per-stock normalization becomes an optional **rendering** step |
 | `--shadow-balance`, `--highlight-balance` (non-zero) | a grade; it moves to the look stage's per-channel control |
 | `--preset` | a preset sets knobs on both sides of the decode/rendering boundary |
-| `--dump-params` | it writes the resolved *current-chain* recipe, before the render — under `--new-flow` that would hand you a recipe describing a chain the run did not select |
+| `--balance-range`, `--auto-balance-range` | they shape the regional balance's tone ramp, which is itself refused |
 
 And these still work, because they *are* the fixed decode's own calibration and
-anchor: `--density-scale`, `--density-offset` and `--anchor-mid-offset`. So does
-`--density-curve exponential`, which names what the new flow already decodes
-with, and a zero `--shadow-balance` / `--highlight-balance`
-/ `--sigmoid-toe` / `--sigmoid-shoulder` — an identity value asks for nothing this
-flow cannot do. (It is *not* spared in order to let one recipe be re-used on either
-chain: a recipe stating any of the sections below is refused whole, so there is no
-pinned value for a flag to clear.)
+anchor: `--density-scale`, `--density-offset`, `--density-gamma` (the decode's
+contrast) and `--anchor-mid-offset`. So does `--density-curve exponential`, which
+names what the new flow already decodes with, and a zero `--shadow-balance` /
+`--highlight-balance` / `--sigmoid-toe` / `--sigmoid-shoulder` — an identity value
+asks for nothing this flow cannot do. (It is *not* spared in order to let one recipe
+be re-used on either chain: the new chain's recipe has no key for any of them, so
+there is no pinned value for a flag to clear.)
 
-`--density-gamma` is the fixed decode's own contrast and reaches it too, but **not on
-its own**: pass `--density-curve exponential --density-gamma <value>`. Bare, it is
-refused with exit 2 before `--new-flow`'s rules are consulted at all, because the
-resolved default curve is still the sigmoid and gamma is the *exponential* curve's
-knob. The qualification goes away when the new flow's default curve moves.
-
-A **recipe** is handled differently from a flag here. The new flow decodes through
-its own parameters rather than the `reconstruction` section, so a recipe carrying
-that section would be parsed and then read by nobody — refused whole rather than
-accepted and ignored:
+**A recipe for the new chain is its own document.** It states
+`"recipe_version": 2` and has one section per stage; `hanten params --new-flow`
+prints the defaults:
 
 ```console
-$ hanten convert … --new-flow --params recipe.json     # {"reconstruction": {…}}
-usage: a recipe `reconstruction` section has no meaning under `--new-flow`: the
-new flow has no counterpart for it yet — one arrives with the new chain's recipe
-schema, which decides how a recipe describes these stages at all — until then the
-new flow would parse this section and never read it (`nf-core/recipe-schema`). …
+$ hanten params --new-flow
+{
+  "recipe_version": 2,
+  "input": { … },
+  "calibration": { "film_base": null },
+  "measure": { "inset": 0.05 },
+  "reconstruction": {
+    "scale": [1.0, 0.84, 0.73],
+    "offset": [0.0, 0.0, 0.0],
+    "contrast": 2.0,
+    "anchor": { "mid-at-base-offset": 0.62 }
+  },
+  "scene_correction": {},
+  "look": {},
+  "fit_range": {},
+  "fit_gamut": {}
+}
 ```
 
-That is blunt and temporary: `nf-core/recipe-schema` decides how a recipe describes
-the new stages, and until it does, state the decode's knobs as flags.
+(Abridged; the real output is one value per line.) `input` and `measure` are the
+current chain's sections unchanged. `calibration` holds the film base only — the
+fixed decode reads no reference density. `reconstruction` spells the four decode
+knobs above (`--density-gamma` is `contrast` here). The four rendering stages are
+empty and refuse any key until their stage gains one. There is no `output` section:
+the new chain writes one fixed destination. `--dump-params` under `--new-flow` writes this
+document with your values resolved, and it reloads under the flag unchanged.
 
-**The rest of the inventory is now classified too.** The same rule applies to the
-`print` and `output` sections, and for the same reason — each of the new chain's
-stages carries its own parameters, and the chain writes one fixed destination:
+The version is what tells the two chains' recipes apart, and each refuses the other's
+by name rather than parsing it and reading nothing:
 
 ```console
-$ hanten convert … --new-flow --params recipe.json     # {"print": {…}}
-usage: a recipe `print` section has no meaning under `--new-flow`: the new flow
-has no counterpart for it yet — one arrives with the new chain's recipe schema,
-which decides how a recipe describes these stages at all — until then the new
-flow would parse this section and never read it (`nf-core/recipe-schema`). …
+$ hanten convert … --new-flow --params v1.json    # no "recipe_version"
+usage: recipe v1.json: under `--new-flow` a recipe must state `"recipe_version": 2`
+— without it the document describes the current chain, whose sections this chain
+does not read. `hanten params --new-flow` writes the new layout; or run without
+`--new-flow`, where a recipe with no `recipe_version` is read
+
+$ hanten convert … --params v2.json               # "recipe_version": 2, no flag
+usage: recipe v2.json: states `recipe_version`, so it describes the new rendering
+chain — pass `--new-flow` to read it. The current chain's recipe carries no version
+```
+
+Any other `recipe_version` reads on neither chain, and says so rather than sending
+you to `--new-flow` for a second refusal (`states `recipe_version` 1, which no chain
+reads — the current chain's recipe carries no `recipe_version` at all (remove it),
+and the new chain (`--new-flow`) reads only 2`).
+
+A versioned recipe that still carries one of the current chain's sections or keys is
+refused naming it, and where its knobs went:
+
+```console
+$ hanten convert … --new-flow --params old.json   # "reconstruction": {"density": {…}}
+usage: recipe old.json: `reconstruction.density` belongs to the current chain's
+recipe, not the new one's: `density.scale` and `density.offset` are
+`reconstruction.scale` and `reconstruction.offset`; the regional balances have no
+counterpart yet (`nf-look/per-channel-grade`). Drop it — the current chain reads
+it only in a recipe with no `recipe_version`
+
+$ hanten convert … --new-flow --params print.json # "print": {…}
+usage: recipe print.json: `print` is a section of the current chain's recipe, not
+the new one's: the print controls are split across the rendering stages — white
+balance and exposure to `scene_correction` (`nf-scene-correction/stage`), the
+display tone to `fit_range` (`nf-display-stages/fit-range`) — and none has a key
+there yet. Drop it — the current chain reads it only in a recipe with no
+`recipe_version`
 ```
 
 So every print and output **flag** is refused as well, each naming the stage that
@@ -1757,7 +1795,7 @@ will carry it:
 Unlike the decode's knees, **no value is spared here** — `--white-balance 1,1,1` and
 `--highlight-compress 0` resolve the documented defaults and are still refused. An
 identity value is normally left alone so a flag can clear what a recipe pinned, and
-with the whole `print` section refused there is nothing to clear.
+the new chain's recipe has no `print` section, so there is nothing to clear.
 
 What survives untouched is everything before the seam: `--film-base`,
 `--base-region`, `--auto-base`, `--measure-inset`, `--input-transfer`,
@@ -1769,10 +1807,11 @@ destination's depth, 16-bit.
 
 On `roll` the flag applies to every frame: each is written as
 `<stem>_positive.tiff`, with no sidecars and no `recipe` in the roll report. `roll`
-takes no conversion flags, so the knobs it can trip come from the shared recipe or a
-per-frame override. A section the new chain does not read (`reconstruction`,
-`print`, `output`) is refused up front in **either** — an override's refusal names
-its frame — and an override's resolved values are diagnosed per frame, at exit 2.
+takes no conversion flags, so its knobs come from the shared recipe and the
+per-frame overrides. The shared recipe must be the new chain's document, and each
+override is merged onto it and rendered with it, so an override uses the new
+sections too (`{"reconstruction": {"contrast": 1.8}}`) and one naming a
+current-chain key is refused the same way — naming its frame — at exit 2.
 
 ---
 

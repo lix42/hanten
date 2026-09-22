@@ -1283,6 +1283,51 @@ the complete `output/presets` migration so help, warnings, recipe provenance, ro
 handling, and the behavioral-version boundary land together. Legacy-preset TIFF
 calls retain their current pixel ordering until migration.
 
+### The new chain's recipe (`--new-flow`)
+
+The new chain (`docs/design-update.md`) reads its own document, declared by a
+top-level **document version** rather than per-object ones:
+
+```json
+{
+  "recipe_version": 2,
+  "input": { "…": "as above" },
+  "calibration": { "film_base": {"explicit": [0.163, 0.080, 0.0377]} },
+  "measure": { "inset": 0.05 },
+  "reconstruction": {
+    "scale": [1.0, 0.84, 0.73],
+    "offset": [0.0, 0.0, 0.0],
+    "contrast": 2.0,
+    "anchor": {"mid-at-base-offset": 0.62}
+  },
+  "scene_correction": {},
+  "look": {},
+  "fit_range": {},
+  "fit_gamut": {}
+}
+```
+
+- **One section per stage, in chain order.** `input` and `measure` are shared with
+  the current chain; `calibration` holds the film base alone, since the fixed
+  decode reads no reference density. `reconstruction` is the fixed decode's
+  parameters (`--density-scale`, `--density-offset`, `--density-gamma`,
+  `--anchor-mid-offset`). The four rendering stages are present and empty until
+  each stage's task gives it a knob, and refuse any key until then. There is no
+  `output` section while the new chain writes one fixed destination.
+- **The version is the chain declaration.** `recipe_version` is required and is
+  exactly `2`. Under `--new-flow` a recipe without it is refused; without the flag,
+  a recipe stating it is refused. The current chain's `print`/`output` sections, its
+  `reconstruction`/`calibration` keys, and the keys both chains retired (top-level
+  `algorithm`/`density`/`film_base`, `input.color`, …) are refused in a v2 document by
+  name, each with where its knobs went — a migration error, no aliases.
+- `hanten params --new-flow` writes the default document, and `--dump-params` under
+  `--new-flow` writes the resolved one; either reloads under the flag unchanged.
+  `recipe_version`, like `params`, is reserved and never a key of the current
+  chain's recipe.
+
+This section states the shape. Each stage's keys are specified by the task that
+ships the knob, not written here ahead of the code.
+
 ### Target: recipe composition and the calibrate/profile split
 
 > **This subsection describes the target, not the shipped surface** — like the
@@ -2897,6 +2942,7 @@ nc/
     │   ├── fixed.rs      # the new flow's fixed, stock-agnostic decode
     │   └── film_stock/   # the digitized per-stock curves `--film-stock` inverts
     ├── flow.rs           # the transitional --new-flow selector (deleted by the flip)
+    ├── recipe.rs         # the new chain's recipe (recipe_version 2), one section per stage
     ├── telemetry.rs      # opt-in JSONL perf/context record (never perturbs output)
     ├── version.rs        # build identity, pipeline_version, params hash
     └── types.rs          # LinearImage, FilmBase, Reconstruction, params, errors

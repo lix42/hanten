@@ -528,7 +528,7 @@ pub fn check_measure_inset(frac: f32) -> Result<()> {
 /// `input.color` choice, which conflated them): the resolver
 /// (`pipeline::input_semantics`) resolves each from separate evidence. There is
 /// deliberately no `input.color` field — the old combined key is rejected with a
-/// migration error at recipe load (see `cli::load_recipe`).
+/// migration error at recipe load (see `cli::load_recipe_for`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct InputParams {
@@ -3666,7 +3666,7 @@ mod tests {
     fn input_params_rejects_unknown_and_legacy_color_key() {
         // `deny_unknown_fields`: the removed combined `color` key is not a field,
         // so it is rejected at the struct level (the friendlier migration message
-        // is emitted earlier, by `cli::load_recipe`).
+        // is emitted earlier, by `cli::load_recipe_for`).
         assert!(serde_json::from_str::<InputParams>(r#"{"color":"linear"}"#).is_err());
     }
 

@@ -9,6 +9,7 @@ mod cli;
 mod flow;
 mod io;
 mod pipeline;
+mod recipe;
 mod telemetry;
 mod types;
 mod version;

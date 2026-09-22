@@ -1538,10 +1538,10 @@ the design in `docs/design-update.md`:
   chain](tasks/nf-core/report-contract.md) — ~20 report sections and the
   per-stage timing buckets are keyed to the old chain, and `nctool` parses
   both
-- [ ] [The recipe schema across the flow
-  boundary](tasks/nf-core/recipe-schema.md) — `deny_unknown_fields` cannot see
-  a *known but meaningless* key, so a stale `print.*` section is
-  accepted-and-ignored
+- [x] [The recipe schema across the flow
+  boundary](tasks/nf-core/recipe-schema.md) — the new chain reads its own
+  `"recipe_version": 2` document (`src/recipe.rs`, one section per stage), and
+  each chain refuses the other's recipe by name
 - [ ] [`roll`, `inspect` and `estimate` under the new
   chain](tasks/nf-core/subcommands.md) — roll's planner is the third
   `default_scale_for` site; `inspect` reports a resolved `dmax`; retirement
