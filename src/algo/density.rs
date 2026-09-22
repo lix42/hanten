@@ -100,8 +100,8 @@ use rayon::prelude::*;
 
 use crate::algo::{FilmRgbImage, ReconstructionReport, sigmoid};
 use crate::types::{
-    AnchorPlacement, BalanceRange, DensityCurve, DensityParams, DmaxSource, FilmBase, LinearImage,
-    NcError, PrintParams, Result, WbSource,
+    AnchorPlacement, BalanceRange, DensityCurve, DensityParams, DmaxInput, DmaxSource, FilmBase,
+    LinearImage, NcError, PrintParams, Result, WbSource,
 };
 
 /// Floor applied to the scan transmission before the `log10`, so a zero / negative
@@ -148,7 +148,7 @@ pub(super) fn reconstruct(
     base: &FilmBase,
     params: &DensityParams,
     curve: &DensityCurve,
-    measure_region: Option<[u32; 4]>,
+    dmax: DmaxInput,
 ) -> Result<(FilmRgbImage, ReconstructionReport)> {
     // `to_density` divides by the per-channel base, so a zero / negative /
     // non-finite base would yield a silently-black or non-finite image. The CLI
@@ -175,7 +175,7 @@ pub(super) fn reconstruct(
             // white into `inf` instead of `1.0`. A `None` anchor is applied as
             // exactly `0.0`, so it reproduces the unanchored render bit-for-bit
             // (`d − 0.0 == d` for every `f32`).
-            let dmax = resolve_dmax(&density, exp.dmax, measure_region);
+            let dmax = resolve_dmax(&density, dmax);
             let gamma = exp.gamma;
             // `WhiteAtDmax` over a `None` reference resolves `A = 0.0`, reproducing the
             // unanchored render bit-for-bit exactly as `dmax.unwrap_or(0.0)` did before
@@ -213,7 +213,7 @@ pub(super) fn reconstruct(
             };
             (film, dmax, curve_anchor)
         }
-        DensityCurve::Sigmoid(sig) => sigmoid::apply_curve(density, sig, measure_region)?,
+        DensityCurve::Sigmoid(sig) => sigmoid::apply_curve(density, sig, dmax)?,
         DensityCurve::Characteristic(ch) => {
             // No reference and no anchor to resolve: the published curve carries both, so
             // the report's `dmax` / `curve_anchor` are `None` rather than a derived number
@@ -620,16 +620,12 @@ pub(crate) const NOMINAL_DMAX: f32 = 1.3;
 /// anchor. Deterministic: same buffer + params ⇒ same value. `pub(crate)` because
 /// the sigmoid curve anchors its S-curve on the same resolved `Dmax` rather than
 /// inventing a second measurement.
-pub(crate) fn resolve_dmax(
-    density: &DensityImage,
-    source: DmaxSource,
-    region: Option<[u32; 4]>,
-) -> Option<f32> {
-    match source {
+pub(crate) fn resolve_dmax(density: &DensityImage, dmax: DmaxInput) -> Option<f32> {
+    match dmax.source {
         DmaxSource::None => None,
         DmaxSource::Fixed => Some(NOMINAL_DMAX),
         DmaxSource::Explicit(d) => Some(d),
-        DmaxSource::Auto => Some(auto_dmax(density, region)),
+        DmaxSource::Auto => Some(auto_dmax(density, dmax.region)),
     }
 }
 
@@ -664,7 +660,7 @@ pub(crate) struct ReferenceDmax {
 /// **fully-exposed reference frame** (the light-struck roll leader — near-opaque
 /// in every channel, always present, the film's max-density endpoint). This is the
 /// *plan-phase* measurement behind `estimate --d-max-region`; the resolved scalar
-/// is frozen into a roll recipe as `reconstruction.curve.dmax = {"explicit": <d>}`
+/// is frozen into a roll recipe as `calibration.dmax = {"explicit": <d>}`
 /// and reused across the roll exactly like an explicit `Dmin` base — the reference
 /// frame / region is recorded only as report provenance, never as a re-read
 /// directive (that would break the deterministic-apply contract).
@@ -1091,11 +1087,10 @@ mod tests {
         LinearImage::new(1, 1, rgb.to_vec(), ir.map(|v| vec![v])).unwrap()
     }
 
-    /// The exponential curve carrying `gamma` and a dmax source.
-    fn exponential(gamma: f32, dmax: DmaxSource) -> DensityCurve {
+    /// The exponential curve carrying `gamma`, at its default placement.
+    fn exponential(gamma: f32) -> DensityCurve {
         DensityCurve::Exponential(ExponentialParams {
             gamma,
-            dmax,
             anchor: AnchorPlacement::WhiteAtDmax,
         })
     }
@@ -1116,10 +1111,11 @@ mod tests {
         base: &FilmBase,
         density: DensityParams,
         curve: DensityCurve,
+        dmax: DmaxSource,
         print: PrintParams,
     ) -> Result<Converted> {
         let config = Reconstruction::Density { density, curve };
-        let (film, rep) = reconstruct_config(img, base, &config, None)?;
+        let (film, rep) = reconstruct_config(img, base, &config, DmaxInput::new(dmax))?;
         let (out, white_balance) = finish_print(film, &config, &print)?;
         Ok(Converted {
             out,
@@ -1342,12 +1338,13 @@ mod tests {
             &img,
             &base,
             density.clone(),
-            exponential(gamma, DmaxSource::Auto),
+            exponential(gamma),
+            DmaxSource::Auto,
             print.clone(),
         )
         .unwrap();
         let dimg = to_density(&img, &base, &density);
-        let anchor = resolve_dmax(&dimg, DmaxSource::Auto, None);
+        let anchor = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto));
         let via_parts = render(dimg, gamma, anchor, wb, &print);
         assert_eq!(via_config.out.rgb, via_parts.rgb);
         assert_eq!(via_config.out.ir, via_parts.ir);
@@ -1366,6 +1363,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams::default(),
         )
         .unwrap()
@@ -1395,6 +1393,7 @@ mod tests {
                 &base,
                 params,
                 DensityCurve::default(),
+                DmaxSource::Fixed,
                 PrintParams::default(),
             )
             .unwrap()
@@ -1508,6 +1507,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams::default(),
         )
         .unwrap()
@@ -1533,6 +1533,7 @@ mod tests {
                 &FilmBase::from(bad),
                 DensityParams::default(),
                 DensityCurve::default(),
+                DmaxSource::Fixed,
                 PrintParams::default(),
             )
             .unwrap_err();
@@ -1545,6 +1546,7 @@ mod tests {
                 &FilmBase::from([0.5, 0.5, 0.5]),
                 DensityParams::default(),
                 DensityCurve::default(),
+                DmaxSource::Fixed,
                 PrintParams::default(),
             )
             .is_ok()
@@ -1606,6 +1608,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams::default(),
         )
         .unwrap()
@@ -1902,7 +1905,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            exponential(1.0, DmaxSource::Auto),
+            exponential(1.0),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap();
@@ -1914,7 +1918,8 @@ mod tests {
                 highlight_balance: [0.5, 0.5, 0.5], // tone-independent +0.5
                 ..DensityParams::default()
             },
-            exponential(1.0, DmaxSource::Auto),
+            exponential(1.0),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap();
@@ -1937,6 +1942,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams::default(),
         )
         .unwrap();
@@ -1951,6 +1957,7 @@ mod tests {
                 ..DensityParams::default()
             },
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams::default(),
         )
         .unwrap();
@@ -1967,6 +1974,7 @@ mod tests {
                 ..DensityParams::default()
             },
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams::default(),
         )
         .unwrap();
@@ -1993,6 +2001,7 @@ mod tests {
             &base,
             params.clone(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams::default(),
         )
         .unwrap()
@@ -2002,6 +2011,7 @@ mod tests {
             &base,
             params,
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams::default(),
         )
         .unwrap()
@@ -2035,7 +2045,7 @@ mod tests {
         };
         let gamma = 1.3;
         assert_eq!(
-            resolve_dmax(&one_row(&density), DmaxSource::None, None),
+            resolve_dmax(&one_row(&density), DmaxInput::new(DmaxSource::None)),
             None,
             "no anchor resolved for None"
         );
@@ -2065,7 +2075,7 @@ mod tests {
             ir: None,
         };
         assert_eq!(
-            resolve_dmax(&dimg, DmaxSource::Explicit(dmax), None),
+            resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Explicit(dmax))),
             Some(dmax)
         );
         let out = render(dimg, gamma, Some(dmax), [1.0; 3], &PrintParams::default());
@@ -2126,7 +2136,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            exponential(1.0, DmaxSource::Auto),
+            exponential(1.0),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap()
@@ -2135,7 +2146,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            exponential(1.0, DmaxSource::Auto),
+            exponential(1.0),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap()
@@ -2153,7 +2165,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            exponential(1.0, DmaxSource::Explicit(1.25)),
+            exponential(1.0),
+            DmaxSource::Explicit(1.25),
             PrintParams::default(),
         )
         .unwrap();
@@ -2166,7 +2179,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            exponential(1.0, DmaxSource::None),
+            exponential(1.0),
+            DmaxSource::None,
             PrintParams::default(),
         )
         .unwrap();
@@ -2177,7 +2191,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            exponential(1.0, DmaxSource::Auto),
+            exponential(1.0),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap();
@@ -2189,6 +2204,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams::default(),
         )
         .unwrap();
@@ -2208,7 +2224,7 @@ mod tests {
         let base = FilmBase::from([0.8, 0.8, 0.8]);
         let img = LinearImage::new(4, 1, vec![0.2f32; 12], None).unwrap(); // scan < base ⇒ D > 0
         let dimg = to_density(&img, &base, &identity_gain());
-        let resolved = resolve_dmax(&dimg, DmaxSource::Auto, None);
+        let resolved = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto));
         let out = render(dimg, gamma, resolved, [1.0; 3], &PrintParams::default());
         let dmax = resolved.unwrap();
         assert!(
@@ -2258,7 +2274,7 @@ mod tests {
             ir: None,
         };
         let gamma = 1.0f32;
-        let resolved = resolve_dmax(&dimg, DmaxSource::Auto, None);
+        let resolved = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto));
         let out = render(
             dimg.clone(),
             gamma,
@@ -2323,14 +2339,21 @@ mod tests {
         // (`algo/auto-anchor-interior-measurement`).
         let dimg = frame_with_opaque_border(200, 200, 20);
 
-        let whole = resolve_dmax(&dimg, DmaxSource::Auto, None).unwrap();
+        let whole = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto)).unwrap();
         assert!(
             whole > 2.0,
             "falsifiability: the whole-frame read must still be contaminated, got {whole}"
         );
 
         // The same frame measured over its interior lands in the picture.
-        let inside = resolve_dmax(&dimg, DmaxSource::Auto, Some([20, 20, 160, 160])).unwrap();
+        let inside = resolve_dmax(
+            &dimg,
+            DmaxInput {
+                source: DmaxSource::Auto,
+                region: Some([20, 20, 160, 160]),
+            },
+        )
+        .unwrap();
         assert!(
             (inside - 0.9).abs() < 1e-6,
             "the interior read must be the picture density, got {inside}"
@@ -2351,7 +2374,7 @@ mod tests {
         // no transcendental in the chain and the bits are the same on every target.
         let dimg = frame_with_opaque_border(64, 48, 5);
         assert_eq!(
-            resolve_dmax(&dimg, DmaxSource::Auto, None)
+            resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto))
                 .unwrap()
                 .to_bits(),
             2.4f32.to_bits(),
@@ -2361,9 +2384,15 @@ mod tests {
         // And the full-frame *rectangle* agrees, which is the invariant that makes
         // the separate arm an optimization rather than a second behaviour.
         assert_eq!(
-            resolve_dmax(&dimg, DmaxSource::Auto, Some([0, 0, 64, 48]))
-                .unwrap()
-                .to_bits(),
+            resolve_dmax(
+                &dimg,
+                DmaxInput {
+                    source: DmaxSource::Auto,
+                    region: Some([0, 0, 64, 48])
+                }
+            )
+            .unwrap()
+            .to_bits(),
             2.4f32.to_bits()
         );
     }
@@ -2378,7 +2407,13 @@ mod tests {
             [10_000, 10_000, 5, 5],
             [0, 0, 0, 0],
         ] {
-            let got = resolve_dmax(&dimg, DmaxSource::Auto, Some(rect));
+            let got = resolve_dmax(
+                &dimg,
+                DmaxInput {
+                    source: DmaxSource::Auto,
+                    region: Some(rect),
+                },
+            );
             assert!(got.is_some(), "no panic and an anchor for {rect:?}");
         }
     }
@@ -2401,13 +2436,19 @@ mod tests {
         // and always resolves to NOMINAL_DMAX, so it is roll-fixed (every frame
         // gets the same anchor), unlike `Auto`.
         assert_eq!(
-            resolve_dmax(&one_row(&[]), DmaxSource::Fixed, None),
+            resolve_dmax(&one_row(&[]), DmaxInput::new(DmaxSource::Fixed)),
             Some(NOMINAL_DMAX)
         );
         // A wildly different density distribution resolves to the same value.
         assert_eq!(
-            resolve_dmax(&one_row(&[0.1, 0.2, 0.3]), DmaxSource::Fixed, None),
-            resolve_dmax(&one_row(&[5.0, 6.0, 7.0]), DmaxSource::Fixed, None)
+            resolve_dmax(
+                &one_row(&[0.1, 0.2, 0.3]),
+                DmaxInput::new(DmaxSource::Fixed)
+            ),
+            resolve_dmax(
+                &one_row(&[5.0, 6.0, 7.0]),
+                DmaxInput::new(DmaxSource::Fixed)
+            )
         );
     }
 
@@ -2715,6 +2756,7 @@ mod tests {
                 // the estimator is unchanged — and it does not arise when the base
                 // is right, since then there is no constant cast to cancel.
                 DensityCurve::Exponential(ExponentialParams::default()),
+                DmaxSource::Fixed,
                 PrintParams {
                     white_balance: mode,
                     ..PrintParams::default()
@@ -2741,6 +2783,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams {
                 white_balance: WbSource::Percentile,
                 ..PrintParams::default()
@@ -2782,6 +2825,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             print.clone(),
         )
         .unwrap();
@@ -2792,6 +2836,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             PrintParams {
                 white_balance: WbSource::Explicit(gains),
                 ..print
@@ -2829,7 +2874,8 @@ mod tests {
                 &img,
                 &base,
                 identity_gain(),
-                exponential(1.0, DmaxSource::None),
+                exponential(1.0),
+                DmaxSource::None,
                 PrintParams {
                     white_balance: mode,
                     ..PrintParams::default()
@@ -2876,6 +2922,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             print.clone(),
         )
         .unwrap();
@@ -2884,6 +2931,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             print,
         )
         .unwrap();
@@ -2930,10 +2978,19 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
+            DmaxSource::Fixed,
             print.clone(),
         )
         .unwrap();
-        let rep_balanced = run(&img, &base, balance, DensityCurve::default(), print).unwrap();
+        let rep_balanced = run(
+            &img,
+            &base,
+            balance,
+            DensityCurve::default(),
+            DmaxSource::Fixed,
+            print,
+        )
+        .unwrap();
 
         // (a) The ordering guard: WB estimated on the post-balance density must
         // differ from WB estimated with no balance applied.

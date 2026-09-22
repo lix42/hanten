@@ -308,7 +308,7 @@ pub struct RebateCandidate {
 /// guard the film-base gotcha in `CLAUDE.md` called for; the per-algo guards in
 /// `algo/*` remain as defense-in-depth.
 /// Takes an already-**resolved** [`FilmBaseSource`], not the params object: since
-/// `film_base.source` has no default, "unset" is an orchestration state the CLI
+/// `calibration.film_base` has no default, "unset" is an orchestration state the CLI
 /// resolves (reject for `convert`/`roll`, `Auto` for the measurement commands),
 /// and a pure stage should only ever receive a decision.
 pub fn estimate(image: &LinearImage, source: &FilmBaseSource) -> Result<BaseEstimate> {
@@ -1850,10 +1850,11 @@ fn percentile(values: &mut Vec<f32>, p: f32) -> f32 {
 /// The **frozen** synthetic scan the `pipeline_version` drift gate fingerprints
 /// stage 2 over (`crate::version`).
 ///
-/// `film_base.source` defaults to [`FilmBaseSource::Auto`], so every default
-/// `hanten convert` runs the inward-scan rebate detector over real pixels — a stage the
-/// render fingerprint (which is handed a hardcoded base) cannot see, and the recipe
-/// fingerprint sees only as the string `"auto"`. Retuning [`SAMPLE_PERCENTILE`],
+/// `calibration.film_base` has **no** default — `convert` refuses an unstated one — so
+/// the gate fingerprints the source a user most often states, [`FilmBaseSource::Auto`].
+/// Every `--auto-base` conversion runs the inward-scan rebate detector over real pixels:
+/// a stage the render fingerprint (which is handed a hardcoded base) cannot see, and
+/// which the recipe fingerprint sees only as `"auto"` when it is stated at all. Retuning [`SAMPLE_PERCENTILE`],
 /// [`REBATE_SCAN_FRAC`], or the band gates changes every default conversion, so it
 /// needs a fingerprint of its own.
 ///

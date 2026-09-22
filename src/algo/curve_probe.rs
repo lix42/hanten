@@ -80,9 +80,14 @@ fn frozen_base(recipe: &Path) -> FilmBase {
         std::fs::read_to_string(recipe).unwrap_or_else(|e| panic!("{}: {e}", recipe.display()));
     let v: serde_json::Value =
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", recipe.display()));
-    let base = v["film_base"]["source"]["explicit"]
+    let base = v["calibration"]["film_base"]["explicit"]
         .as_array()
-        .unwrap_or_else(|| panic!("{}: film_base.source.explicit missing", recipe.display()));
+        .unwrap_or_else(|| {
+            panic!(
+                "{}: calibration.film_base.explicit missing",
+                recipe.display()
+            )
+        });
     let rgb: Vec<f32> = base.iter().map(|x| x.as_f64().unwrap() as f32).collect();
     assert_eq!(rgb.len(), 3, "{}: film base is not RGB", recipe.display());
     FilmBase {

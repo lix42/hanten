@@ -157,7 +157,7 @@ pre-decode gate is a defensible first cut — but say so in the task's outcome.
   intended scene-referred mode for HDR f32 workflows, so the black rule must not
   fire. On **sigmoid it is already a hard usage error** and must stay one:
   > `usage: the sigmoid curve needs a display-white anchor (the default fixed
-  > anchor, --d-max <d>, or --auto-d-max); --no-d-max / curve.dmax = none is only
+  > anchor, --d-max <d>, or --auto-d-max); --no-d-max / calibration.dmax = none is only
   > supported by the exponential curve`
 
   Do not turn that existing hard failure into a soft exemption.

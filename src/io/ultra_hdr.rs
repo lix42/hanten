@@ -1051,7 +1051,7 @@ mod tests {
             &image,
             &FilmBase::from([1.0; 3]),
             &Reconstruction::Simple,
-            None,
+            crate::types::DmaxInput::default(),
         )
         .unwrap();
         let print = PrintParams::default();
@@ -1140,7 +1140,7 @@ mod tests {
             crate::io::decode::decode_within(std::path::Path::new(&input), u64::MAX).unwrap();
         let reconstruction = serde_json::from_value(serde_json::json!({
             "type": "density",
-            "curve": { "type": "exponential", "dmax": { "explicit": dmax } },
+            "curve": { "type": "exponential" },
         }))
         .expect("reconstruction recipe");
         let reconstruction: Reconstruction = reconstruction;
@@ -1148,9 +1148,14 @@ mod tests {
             print_exposure: ev,
             ..PrintParams::default()
         };
-        let source =
-            stages::render_display_source(&image, &film_base, &reconstruction, &print, None)
-                .expect("display source");
+        let source = stages::render_display_source(
+            &image,
+            &film_base,
+            &reconstruction,
+            &print,
+            crate::types::DmaxInput::new(crate::types::DmaxSource::Explicit(dmax)),
+        )
+        .expect("display source");
         println!("oracle render: {input} at {ev:+} EV, dmax {dmax}");
         gain_map::render(
             &source.shared,

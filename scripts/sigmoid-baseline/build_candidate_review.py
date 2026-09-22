@@ -7,7 +7,7 @@ can never disagree:
     --plan  fixtures.json                 -> one "mark|id|anchor|contrast|roll|recipe|file" row per render
     --page  fixtures.json  out.html       -> the comparison page
 
-**Every anchoring form reduces to one number** — the sigmoid anchor `A` (`curve.dmax`) plus
+**Every anchoring form reduces to one number** — the sigmoid anchor `A` (`calibration.dmax`) plus
 a contrast — because `t = contrast·(D′ − A)` is unchanged and only the rule for choosing `A`
 differs:
 

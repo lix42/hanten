@@ -1232,7 +1232,7 @@ fn hdr_avif_presets_reject_a_non_avif_suffix_and_roll_with_an_avif_name() {
     let recipe = tmp.path("roll.json");
     std::fs::write(
         &recipe,
-        r#"{"output":{"preset":"hdr-pq"},"film_base":{"source":{"explicit":[1,1,1]}}}"#,
+        r#"{"output":{"preset":"hdr-pq"},"calibration":{"film_base":{"explicit":[1,1,1]}}}"#,
     )
     .unwrap();
     let (code, _stdout, err) = run(&[
@@ -1734,13 +1734,20 @@ fn estimate_emits_reuse_ready_output_that_round_trips() {
     // The flag string is `--film-base R,G,B` with the measured values.
     let flag = report["film_base_flag"].as_str().expect("flag emitted");
     let value = flag.strip_prefix("--film-base ").expect("flag prefix");
-    // The recipe fragment is the documented `{"source":{"explicit":[…]}}` shape,
-    // carrying exactly the same numbers as the measurement.
-    let fragment = &report["film_base_recipe"];
+    // The recipe handoff is the `calibration` object, in the documented
+    // `{"film_base":{"explicit":[…]}}` shape, carrying exactly the same numbers as
+    // the measurement.
+    let calibration = &report["calibration"];
     assert_eq!(
-        fragment["source"]["explicit"],
+        calibration["film_base"]["explicit"],
         serde_json::json!([base["r"], base["g"], base["b"]]),
-        "fragment must carry the measured base: {report}"
+        "the calibration must carry the measured base: {report}"
+    );
+    // Nothing else was measured, so nothing else is claimed — piping this into
+    // `--params` must not pin a reference the run never resolved.
+    assert!(
+        calibration.get("dmax").is_none(),
+        "an unmeasured reference must not appear: {report}"
     );
 
     // Round-trip A: the flag value fed to `convert` reproduces the base.
@@ -1765,9 +1772,10 @@ fn estimate_emits_reuse_ready_output_that_round_trips() {
     // Round-trip B: the fragment pasted into a recipe reproduces the base and
     // a byte-identical output (determinism across the two reuse forms).
     let recipe = tmp.path("roll.json");
+    // No hand editing: exactly what `jq '{calibration}'` hands `--params`.
     std::fs::write(
         &recipe,
-        serde_json::json!({ "film_base": fragment }).to_string(),
+        serde_json::json!({ "calibration": calibration }).to_string(),
     )
     .unwrap();
     let out_recipe = tmp.path("recipe.tiff");
@@ -1838,8 +1846,17 @@ fn estimate_measures_roll_fixed_dmax_from_a_reference_region_and_it_round_trips(
     let flag = report["d_max_flag"].as_str().expect("d_max_flag emitted");
     let value = flag.strip_prefix("--d-max ").expect("flag prefix");
     assert_eq!(
-        report["d_max_recipe"]["dmax"]["explicit"], report["dmax"],
-        "the recipe fragment must carry the measured scalar: {report}"
+        report["calibration"]["dmax"]["explicit"], report["dmax"],
+        "the calibration must carry the measured scalar: {report}"
+    );
+    // The base half is present too — it was supplied rather than measured, and
+    // `estimate` echoes a usable base into the reuse forms either way. So this one
+    // report carries a complete calibration, which is the copy-paste the workflow
+    // wants; the *omission* case is covered by the base-only estimate above.
+    assert_eq!(
+        report["calibration"]["film_base"]["explicit"],
+        serde_json::json!([0.9, 0.55, 0.42]),
+        "{report}"
     );
 
     // Freeze A: the `--d-max` flag value fed to `convert` reproduces the anchor.
@@ -1866,14 +1883,16 @@ fn estimate_measures_roll_fixed_dmax_from_a_reference_region_and_it_round_trips(
         "the frozen --d-max scalar must reproduce the measured anchor"
     );
 
-    // Freeze B: the curve fragment pasted into a roll recipe's tagged
-    // `reconstruction.curve` loads and reproduces the same anchor (deterministic
-    // apply from the frozen recipe).
+    // Freeze B: the reported `calibration` object, pasted into a roll recipe
+    // unedited, loads and reproduces the same anchor (deterministic apply from the
+    // frozen recipe). The look is named separately — that is the split.
     let recipe = tmp.path("roll.json");
     std::fs::write(
         &recipe,
-        serde_json::json!({ "reconstruction": { "curve": {
-            "type": "exponential", "dmax": report["d_max_recipe"]["dmax"] } } })
+        serde_json::json!({
+            "calibration": report["calibration"],
+            "reconstruction": { "curve": { "type": "exponential" } },
+        })
         .to_string(),
     )
     .unwrap();
@@ -1898,7 +1917,7 @@ fn estimate_measures_roll_fixed_dmax_from_a_reference_region_and_it_round_trips(
     assert_eq!(
         json(&stdout)["dmax"],
         report["dmax"],
-        "the frozen reconstruction.curve.dmax must reproduce the measured anchor"
+        "the frozen calibration.dmax must reproduce the measured anchor"
     );
     assert_eq!(
         std::fs::read(&out).unwrap(),
@@ -2243,6 +2262,320 @@ fn bad_params_are_usage_errors() {
     assert!(!out.exists(), "no output on a usage error");
 }
 
+/// The old calibration spellings are **migration errors**, on every path that loads a
+/// recipe, naming the key they moved to.
+///
+/// Project policy is a migration error rather than an alias (the removed `algorithm`
+/// selector is the precedent), and nc is unreleased. Driven through the binary because
+/// ordering is the half a direct call cannot test: the `reconstruction.curve.dmax` rule
+/// has to out-rank both "unknown field `dmax`" and the characteristic curve's
+/// cross-variant message, either of which is true and neither of which tells the user
+/// where the value went.
+#[test]
+fn the_old_calibration_spellings_are_migration_errors() {
+    let tmp = TempDir::new("calibration-migration");
+    let out = tmp.path("out.tif");
+    let scan = fixture("hdr-48bit.tif");
+
+    // (a) the top-level `film_base` section, in all three spellings a recipe can use.
+    for body in [
+        r#"{"film_base":{"source":"auto"}}"#,
+        r#"{"film_base":{"source":{"region":[0,0,8,8]}}}"#,
+        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}}}"#,
+    ] {
+        let recipe = write_file(&tmp.path("base.json"), body);
+        let (code, _, err) = run(&[
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--params",
+            recipe.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 2, "{body} must be a migration error: {err}");
+        assert!(err.contains("calibration"), "{body}: {err}");
+        assert!(
+            err.contains(r#""calibration": {"film_base": {"explicit": [r, g, b]}}"#),
+            "the remedy must name the flattened spelling: {err}"
+        );
+        assert!(!out.exists(), "no output on a usage error");
+    }
+
+    // (b) `reconstruction.curve.dmax`, on each curve type. On `characteristic` the
+    // cross-variant rule also matches — it must not win, or the user is told `dmax` is
+    // "a parametric-curve key" and never learns it became a calibration.
+    for curve in ["exponential", "sigmoid", "characteristic"] {
+        let recipe = write_file(
+            &tmp.path("curve.json"),
+            &format!(
+                r#"{{"calibration":{{"film_base":{{"explicit":[0.9,0.55,0.42]}}}},
+                    "reconstruction":{{"curve":{{"type":"{curve}","dmax":{{"explicit":1.4}}}}}}}}"#
+            ),
+        );
+        let (code, _, err) = run(&[
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--params",
+            recipe.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 2, "{curve}: {err}");
+        assert!(
+            err.contains(r#""calibration": {"dmax": {"explicit": <d>}}"#),
+            "{curve}: the remedy must name the new path: {err}"
+        );
+        // The losing rules, asserted absent: naming the key is not enough to tell two
+        // rules apart when both mention it.
+        assert!(
+            !err.contains("unknown field `dmax`"),
+            "{curve}: the generic unknown-field error won: {err}"
+        );
+        assert!(
+            !err.contains("parametric-curve key"),
+            "{curve}: the cross-variant rule won: {err}"
+        );
+    }
+
+    // (c) both old spellings reach the same guidance through a **roll per-frame
+    // override**, which is a separate load path.
+    let shared = write_file(&tmp.path("shared.json"), ROLL_RECIPE);
+    for (body, expect) in [
+        (
+            r#"{"film_base":{"source":{"explicit":[0.8,0.5,0.4]}}}"#,
+            "calibration",
+        ),
+        (
+            r#"{"reconstruction":{"curve":{"dmax":{"explicit":2.4}}}}"#,
+            r#""calibration": {"dmax": {"explicit": <d>}}"#,
+        ),
+    ] {
+        let manifest = write_file(
+            &tmp.path("frames.json"),
+            &format!(
+                r#"{{ "frames": [ {{ "input": {scan:?}, "params": {body} }} ] }}"#,
+                scan = scan.to_str().unwrap()
+            ),
+        );
+        let (code, _, err) = run(&[
+            "roll",
+            "--frames",
+            manifest.to_str().unwrap(),
+            "--out-dir",
+            tmp.path("out").to_str().unwrap(),
+            "--params",
+            shared.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 2, "{body} must fail up front: {err}");
+        assert!(err.contains(expect), "{body}: {err}");
+    }
+}
+
+/// A recipe carrying **only** a calibration renders exactly what the same values render
+/// as flags, and a recipe carrying **no** calibration renders with the base from a flag.
+///
+/// The two halves of the split, asserted as bytes: a roll calibration and a pipeline
+/// profile are separable files, which is what `core/recipe-composition` layers.
+#[test]
+fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
+    let tmp = TempDir::new("calibration-split");
+    let scan = fixture("hdr-48bit.tif");
+    let common = ["--output-preset", "legacy", "--density-curve", "sigmoid"];
+
+    // A calibration is "a recipe with nothing else".
+    let calibration = write_file(
+        &tmp.path("roll-cal.json"),
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]},
+                           "dmax":{"explicit":1.45}}}"#,
+    );
+    let from_recipe = tmp.path("recipe.tif");
+    let (code, _, err) = {
+        let mut a = vec!["convert", scan.to_str().unwrap(), "-o"];
+        a.push(from_recipe.to_str().unwrap());
+        a.extend_from_slice(&common);
+        a.extend_from_slice(&["--params", calibration.to_str().unwrap()]);
+        run(&a)
+    };
+    assert_eq!(code, 0, "a calibration-only recipe must convert: {err}");
+
+    let from_flags = tmp.path("flags.tif");
+    let (code, _, err) = {
+        let mut a = vec!["convert", scan.to_str().unwrap(), "-o"];
+        a.push(from_flags.to_str().unwrap());
+        a.extend_from_slice(&common);
+        a.extend_from_slice(&["--film-base", "0.9,0.55,0.42", "--d-max", "1.45"]);
+        run(&a)
+    };
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&from_recipe).unwrap(),
+        std::fs::read(&from_flags).unwrap(),
+        "a calibration file and the same values as flags must render identically"
+    );
+
+    // A profile is "a recipe with no `calibration` section" — it needs a base from
+    // somewhere, which is exactly why `calibration.film_base` has no default.
+    // Pins every look value this build writes — anchor and `density.scale` included —
+    // so the `--strict` assertion below is about the *absent calibration*, not about a
+    // half-written curve.
+    let profile = write_file(
+        &tmp.path("look.json"),
+        r#"{"reconstruction":{"type":"density",
+              "curve":{"type":"sigmoid","contrast":2.0,"toe":0.1,"shoulder":0.5,
+                       "anchor":{"mid-at-dmax-fraction":0.5}},
+              "density":{"scale":[1.0,0.84,0.73]}},
+            "output":{"preset":"legacy"}}"#,
+    );
+    let (code, _, err) = run(&[
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        tmp.path("profile.tif").to_str().unwrap(),
+        "--params",
+        profile.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+    ]);
+    assert_eq!(code, 0, "a profile plus a base flag must convert: {err}");
+
+    // **…and under `--strict`.** A profile has no `calibration` section by definition,
+    // so anything that treats an absent reference as "floating" makes the documented
+    // look shape fail its own guide (`docs/using-nc.md` §4). `unpinned_curve` did,
+    // briefly, after the reference moved: the recipe below pins every look value this
+    // build would otherwise supply, which is the exact shape that must stay silent.
+    let (code, _, err) = run(&[
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        tmp.path("profile-strict.tif").to_str().unwrap(),
+        "--params",
+        profile.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--strict",
+    ]);
+    assert_eq!(code, 0, "a profile must be --strict clean: {err}");
+    assert!(
+        !err.contains("leaves a value to this build's default"),
+        "an absent `calibration` is a profile, not a floating reference: {err}"
+    );
+
+    // …and without the base it is refused, not guessed.
+    let (code, _, err) = run(&[
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        tmp.path("unstated.tif").to_str().unwrap(),
+        "--params",
+        profile.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "an unstated base must still be refused: {err}");
+    assert!(err.contains("no film base selected"), "{err}");
+}
+
+/// A stated reference that `simple` will never read is carried and warned about, and
+/// `--strict` promotes the warning.
+#[test]
+fn a_reference_simple_cannot_read_is_warned_not_dropped() {
+    let tmp = TempDir::new("unconsumed-dmax");
+    let scan = fixture("hdr-48bit.tif");
+    let args = |out: &str, strict: bool| {
+        let mut a = vec![
+            "convert".to_string(),
+            scan.to_str().unwrap().to_string(),
+            "-o".to_string(),
+            tmp.path(out).to_str().unwrap().to_string(),
+            "--output-preset".to_string(),
+            "legacy".to_string(),
+            "--film-base".to_string(),
+            "0.9,0.55,0.42".to_string(),
+            "--reconstruction".to_string(),
+            "simple".to_string(),
+            "--d-max".to_string(),
+            "1.45".to_string(),
+        ];
+        if strict {
+            a.push("--strict".to_string());
+        }
+        a
+    };
+    let owned = args("a.tif", false);
+    let argv: Vec<&str> = owned.iter().map(|s| &**s).collect();
+    let (code, stdout, err) = run(&argv);
+    assert_eq!(code, 0, "a reference simple cannot read is accepted: {err}");
+    assert!(err.contains("does not read it"), "{err}");
+    assert!(
+        err.contains("`simple`"),
+        "the reason must name the branch: {err}"
+    );
+    // Carried, so the same file still applies to a profile that does read one.
+    assert_eq!(
+        json(&stdout)["recipe"]["calibration"]["dmax"]["explicit"]
+            .as_f64()
+            .expect("the reference is echoed"),
+        1.45
+    );
+
+    let owned = args("b.tif", true);
+    let argv: Vec<&str> = owned.iter().map(|s| &**s).collect();
+    let (code, _, err) = run(&argv);
+    assert_ne!(code, 0, "--strict must promote it: {err}");
+
+    // **The remedy must be a route this branch accepts.** `--density-curve` is refused
+    // outright beside `simple`, so offering it here would hand the user a flag that
+    // exits 2 — the circular-advice defect CLAUDE.md records four instances of. Assert
+    // the working remedy is named *and* that the refused one is not.
+    assert!(
+        err.contains("--reconstruction density"),
+        "the `simple` remedy must name a flag this branch accepts: {err}"
+    );
+    assert!(
+        !err.contains("--density-curve"),
+        "`--density-curve` exits 2 beside `simple`; it must not be advised: {err}"
+    );
+    // …and following it really does work: the flag is accepted, and *this* warning is
+    // gone. Not asserted under `--strict`, deliberately — the remedied config trips the
+    // separate `explicit_dmax_domain_warning` (a measured reference under the
+    // non-identity default gain), which is a different, correct complaint. Asserting
+    // exit 0 under `--strict` here would be asserting that unrelated warning away.
+    let (code, _, err) = run(&[
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        tmp.path("remedy.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--reconstruction",
+        "density",
+        "--d-max",
+        "1.45",
+    ]);
+    assert_eq!(code, 0, "the advised remedy must be accepted: {err}");
+    assert!(
+        !err.contains("does not read it"),
+        "the advised remedy must resolve the warning it was given for: {err}"
+    );
+
+    // Falsifiable control: no reference stated, no warning.
+    let (code, _, err) = run(&[
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        tmp.path("c.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--reconstruction",
+        "simple",
+        "--strict",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!err.contains("does not read it"), "{err}");
+}
+
 /// An array-shaped `reconstruction.density` in a recipe is a usage error, and the object
 /// spelling's stated gain reaches the report.
 ///
@@ -2262,7 +2595,7 @@ fn an_array_shaped_density_section_is_a_usage_error() {
             &format!(
                 r#"{{"reconstruction":{{"type":"density","density":{density},
                      "curve":{{"type":"characteristic"}}}},
-                   "film_base":{{"source":{{"explicit":[0.9,0.55,0.42]}}}},
+                   "calibration":{{"film_base":{{"explicit":[0.9,0.55,0.42]}}}},
                    "output":{{"preset":"legacy"}}}}"#
             ),
         )
@@ -2854,7 +3187,7 @@ fn input_assertion_provenance_distinguishes_cli_from_recipe() {
     std::fs::write(
         &recipe,
         r#"{"input":{"transfer":"linear","meaning":"scanner-device"},
-            "film_base":{"source":{"explicit":[0.9,0.55,0.42]}},
+            "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "output":{"preset":"legacy"}}"#,
     )
     .unwrap();
@@ -2983,7 +3316,7 @@ fn roll_frame_report_includes_resolved_input_color() {
     let recipe = tmp.path("recipe.json");
     std::fs::write(
         &recipe,
-        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}}}"#,
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
     )
     .unwrap();
     let (code, stdout, err) = run(&[
@@ -3011,7 +3344,7 @@ fn roll_frame_report_makes_the_measurement_area_observable() {
     let recipe = tmp.path("recipe.json");
     std::fs::write(
         &recipe,
-        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}}}"#,
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
     )
     .unwrap();
     let frames = tmp.path("frames.json");
@@ -3061,7 +3394,7 @@ fn roll_rejects_colorimetric_shared_recipe_before_decode() {
     // is the colorimetric one, not the missing-base usage error.
     std::fs::write(
         &recipe,
-        r#"{"input":{"meaning":"colorimetric"},"film_base":{"source":{"explicit":[0.9,0.6,0.5]}}}"#,
+        r#"{"input":{"meaning":"colorimetric"},"calibration":{"film_base":{"explicit":[0.9,0.6,0.5]}}}"#,
     )
     .unwrap();
     let (code, _stdout, err) = run(&[
@@ -4377,11 +4710,14 @@ fn write_file(path: &Path, contents: &str) -> PathBuf {
 /// would otherwise be silently retesting has its own coverage in
 /// `roll_checks_explicit_manifest_suffixes_and_derives_per_frame_preset_names`.
 const ROLL_RECIPE: &str = r#"{
+  "calibration": {
+    "film_base": { "explicit": [0.9, 0.55, 0.42] },
+    "dmax": { "explicit": 1.6 }
+  },
   "reconstruction": {
     "type": "density",
-    "curve": { "type": "exponential", "dmax": { "explicit": 1.6 } }
+    "curve": { "type": "exponential" }
   },
-  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
   "output": { "preset": "legacy" }
 }"#;
 
@@ -4413,7 +4749,7 @@ fn roll_converts_a_batch_from_a_shared_frozen_recipe() {
     assert_eq!(report["command"], "roll");
     // The shared frozen recipe (roll-fixed Dmin/Dmax) appears once, at the top.
     // f32 round-trips through JSON as f64, so compare the anchors approximately.
-    let fb: Vec<f64> = report["recipe"]["film_base"]["source"]["explicit"]
+    let fb: Vec<f64> = report["recipe"]["calibration"]["film_base"]["explicit"]
         .as_array()
         .unwrap()
         .iter()
@@ -4424,7 +4760,7 @@ fn roll_converts_a_batch_from_a_shared_frozen_recipe() {
         "recipe film base: {fb:?}"
     );
     assert!(
-        (report["recipe"]["reconstruction"]["curve"]["dmax"]["explicit"]
+        (report["recipe"]["calibration"]["dmax"]["explicit"]
             .as_f64()
             .unwrap()
             - 1.6)
@@ -4702,7 +5038,7 @@ fn roll_empty_batch_errors_loudly_on_both_paths() {
 /// re-estimates its own Dmin, so the roll is not truly frozen.
 const ROLL_RECIPE_REGION: &str = r#"{
   "reconstruction": { "type": "density" },
-  "film_base": { "source": { "region": [0, 0, 502, 462] } },
+  "calibration": { "film_base": { "region": [0, 0, 502, 462] } },
   "output": { "preset": "legacy" }
 }"#;
 
@@ -4753,8 +5089,9 @@ fn roll_does_not_call_dmax_unfrozen_when_the_placement_reads_no_reference() {
             &format!(
                 r#"{{ "reconstruction": {{ "type": "density",
                        "curve": {{ "type": "exponential", "gamma": 2.0,
-                                   "dmax": "auto", "anchor": {anchor} }} }},
-                     "film_base": {{ "source": {{ "explicit": [0.9, 0.55, 0.42] }} }},
+                                   "anchor": {anchor} }} }},
+                     "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }},
+                                       "dmax": "auto" }},
                      "output": {{ "preset": "legacy" }} }}"#
             ),
         )
@@ -4840,10 +5177,13 @@ fn roll_strict_promotes_a_warning_while_still_emitting_the_report() {
 ///    `characteristic` kept the parametric curves' calibration `[1, 0.90, 0.86]` — applied
 ///    on top of a curve that already carries each stock's per-channel response, which
 ///    measured `|G/R − 1| + |B/R − 1|` rising from 0.039 to 0.185 on real frames.
-/// 2. The variant switch carried the roll's `dmax` into the new curve object, and
-///    `characteristic` has no `dmax` key — so the frame failed with "`dmax` is a
+/// 2. The variant switch used to carry the roll's `dmax` into the new curve object, and
+///    `characteristic` had no `dmax` key — so the frame failed with "`dmax` is a
 ///    parametric-curve key", naming a key the *merge* had inserted. There was no override
 ///    text that worked, which made the curve unreachable from a roll manifest entirely.
+///    `core/calibration-recipe-section` removed the carry outright by moving the value to
+///    `calibration.dmax`; `merge_json_switches_internally_tagged_type_and_carries_nothing`
+///    pins that, and this test keeps the end-to-end half.
 ///
 /// End-to-end rather than as a unit test because both bugs live in the seam between the
 /// JSON overlay and the typed config, which is exactly what a unit test on either side
@@ -4926,7 +5266,7 @@ fn roll_warns_on_per_frame_film_base_override() {
     let manifest_txt = format!(
         r#"{{ "frames": [
              {{ "input": {hdr:?},
-                "params": {{ "film_base": {{ "source": {{ "explicit": [0.8, 0.5, 0.4] }} }}, "output": {{ "preset": "legacy" }} }} }}
+                "params": {{ "calibration": {{ "film_base": {{ "explicit": [0.8, 0.5, 0.4] }} }}, "output": {{ "preset": "legacy" }} }} }}
            ] }}"#,
         hdr = hdr.to_str().unwrap(),
     );
@@ -5002,7 +5342,7 @@ fn roll_warns_on_per_frame_dmax_override() {
     let manifest_txt = format!(
         r#"{{ "frames": [
              {{ "input": {hdr:?},
-                "params": {{ "reconstruction": {{ "curve": {{ "dmax": {{ "explicit": 2.4 }} }} }} }} }}
+                "params": {{ "calibration": {{ "dmax": {{ "explicit": 2.4 }} }} }} }}
            ] }}"#,
         hdr = hdr.to_str().unwrap(),
     );
@@ -5106,9 +5446,10 @@ fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
         &tmp.path("stated.json"),
         r#"{ "reconstruction": {
                "type": "density",
-               "curve": { "type": "sigmoid", "dmax": { "explicit": 1.3 },
+               "curve": { "type": "sigmoid",
                           "anchor": { "black-at-base": 0.005 } } },
-             "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
+                              "dmax": { "explicit": 1.3 } },
              "output": { "preset": "legacy" } }"#,
     );
     let args = roll_args(&stated, "out", false);
@@ -5137,9 +5478,10 @@ fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
         &tmp.path("defaulted.json"),
         r#"{ "reconstruction": {
                "type": "density",
-               "curve": { "type": "sigmoid", "dmax": { "explicit": 1.3 },
+               "curve": { "type": "sigmoid",
                           "anchor": { "mid-at-dmax-fraction": 0.5 } } },
-             "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
+                              "dmax": { "explicit": 1.3 } },
              "output": { "preset": "legacy" } }"#,
     );
     let args = roll_args(&defaulted, "out-control", false);
@@ -5166,8 +5508,9 @@ fn roll_failed_frame_keeps_a_warning_raised_before_the_failure() {
         r#"{ "reconstruction": {
                "type": "density",
                "density": { "scale": [1.1, 1.0, 0.9] },
-               "curve": { "type": "exponential", "dmax": { "explicit": 1.6 } } },
-             "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } } }"#,
+               "curve": { "type": "exponential" } },
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
+                              "dmax": { "explicit": 1.6 } } }"#,
     );
     let missing = tmp.path("does-not-exist.tif");
     let (code, stdout, _err) = run(&[
@@ -5632,16 +5975,16 @@ fn film_master_never_silently_ignores_a_requested_adjustment() {
     // depth.
     let hdr_recipe = write_file(
         &tmp.path("hdr-recipe.json"),
-        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}},"output":{"preset":"legacy","depth":"f32"}}"#,
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},"output":{"preset":"legacy","depth":"f32"}}"#,
     );
     let preset_recipe = write_file(
         &tmp.path("preset-recipe.json"),
-        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}},
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "output":{"preset":"film-master"}}"#,
     );
     let master_hdr_recipe = write_file(
         &tmp.path("preset-hdr-recipe.json"),
-        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}},
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "output":{"preset":"film-master","depth":"f32"}}"#,
     );
     for (name, args) in [
@@ -5730,7 +6073,7 @@ fn film_master_never_silently_ignores_a_requested_adjustment() {
     let ok_false = tmp.path("ok-depth-u16.tiff");
     let hdr_false = write_file(
         &tmp.path("preset-depth-u16.json"),
-        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}},
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "output":{"preset":"film-master","depth":"u16"}}"#,
     );
     let (code, _stdout, err) = run(&[
@@ -6183,7 +6526,7 @@ fn roll_accepts_a_film_master_recipe() {
     let tmp = TempDir::new("roll-film-master");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}},
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "output":{"preset":"film-master"}}"#,
     );
     let out_dir = tmp.path("out");
@@ -6234,7 +6577,7 @@ fn roll_frame_override_of_output_preset_warns_and_is_strict_promotable() {
     let input = fixture("hdr-48bit.tif");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"film_base":{"source":{"explicit":[0.9,0.55,0.42]}},
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "output":{"preset":"film-master"}}"#,
     );
     let manifest_for = |name: &str, body: &str| -> PathBuf { write_file(&tmp.path(name), body) };
@@ -6820,7 +7163,7 @@ fn an_unreadable_meta_pipeline_version_is_loud_not_silently_ignored() {
             &tmp.path(&format!("{tag}.json")),
             &format!(
                 r#"{{ "meta": {{ "pipeline_version": {value} }},
-                      "params": {{ "film_base": {{ "source": {{ "explicit": [0.9, 0.55, 0.42] }} }}, "output": {{ "preset": "legacy" }} }} }}"#
+                      "params": {{ "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }}, "output": {{ "preset": "legacy" }} }} }}"#
             ),
         );
         let (code, _, err) = run(&[
@@ -6858,7 +7201,7 @@ fn a_malformed_meta_container_is_refused_like_a_malformed_field() {
             &tmp.path(&format!("{tag}.json")),
             &format!(
                 r#"{{ "meta": {meta},
-                      "params": {{ "film_base": {{ "source": {{ "explicit": [0.9, 0.55, 0.42] }} }}, "output": {{ "preset": "legacy" }} }} }}"#
+                      "params": {{ "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }}, "output": {{ "preset": "legacy" }} }} }}"#
             ),
         );
         let (code, _, err) = run(&[
@@ -7028,8 +7371,9 @@ fn roll_warns_about_a_version_skewed_shared_recipe() {
         &tmp.path("stale.json"),
         r#"{ "meta": { "pipeline_version": 9999 },
              "params": { "reconstruction": { "type": "density",
-                            "curve": { "type": "exponential", "dmax": { "explicit": 1.6 } } },
-                         "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } } } }"#,
+                            "curve": { "type": "exponential" } },
+                         "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
+                                          "dmax": { "explicit": 1.6 } } } }"#,
     );
     let out_dir = tmp.path("out");
     let (code, stdout, err) = run(&[
@@ -7075,7 +7419,7 @@ fn replaying_another_pipeline_versions_recipe_warns_and_strict_promotes_it() {
     let stale = write_file(
         &tmp.path("stale.json"),
         r#"{ "meta": { "pipeline_version": 9999 },
-             "params": { "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+             "params": { "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
                           "output": { "preset": "legacy" } } }"#,
     );
     let out = tmp.path("out.tiff");
@@ -7129,7 +7473,7 @@ fn replaying_another_pipeline_versions_recipe_warns_and_strict_promotes_it() {
         &tmp.path("matching.json"),
         &format!(
             r#"{{ "meta": {{ "pipeline_version": {current} }},
-                  "params": {{ "film_base": {{ "source": {{ "explicit": [0.9, 0.55, 0.42] }} }}, "output": {{ "preset": "legacy" }} }} }}"#
+                  "params": {{ "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }}, "output": {{ "preset": "legacy" }} }} }}"#
         ),
     );
     // No `--strict` here: this HDRi fixture legitimately warns about its unconsumed
@@ -7740,7 +8084,7 @@ fn max_memory_is_operational_not_a_recipe_key() {
     // …and it is not accepted as a recipe key.
     let recipe = write_file(
         &tmp.path("bad.json"),
-        r#"{"max_memory": 4294967296, "film_base": {"source": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+        r#"{"max_memory": 4294967296, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
     );
     let out = tmp.path("nope.tiff");
     let (code, _stdout, err) = run(&[
@@ -7853,7 +8197,7 @@ fn roll_requires_a_stated_film_base_and_says_so_in_roll_terms() {
     );
     assert!(err.contains("no film base selected"), "stderr: {err}");
     assert!(
-        err.contains("--params") && err.contains("film_base.source"),
+        err.contains("--params") && err.contains("calibration.film_base"),
         "roll's message must send the user to the shared recipe: {err}"
     );
     // The flags it does not have must not be offered as the way out. (`--base-region`
@@ -7872,7 +8216,7 @@ fn roll_requires_a_stated_film_base_and_says_so_in_roll_terms() {
     // `film_base.source` gets past the gate and converts.
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"film_base": {"source": {"explicit": [0.9, 0.6, 0.5]}},
+        r#"{"calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
             "output": {"preset": "legacy"}}"#,
     );
     let (code, stdout, err) = run(&[
@@ -8132,7 +8476,7 @@ fn roll_warns_when_a_per_frame_tone_switch_drops_the_shared_headroom() {
     let recipe = tmp.path("roll.json");
     std::fs::write(
         &recipe,
-        r#"{ "film_base": { "source": { "explicit": [0.9,0.55,0.42] } },
+        r#"{ "calibration": { "film_base": { "explicit": [0.9,0.55,0.42] } },
              "output": { "preset": "display-p3" },
              "print": { "display_tone": { "reinhard": { "headroom_stops": 10.0 } } } }"#,
     )
@@ -8337,7 +8681,7 @@ fn a_tone_switch_that_drops_a_stated_headroom_warns_and_is_strict_promotable() {
     let recipe = write_file(
         &tmp.path("r.json"),
         r#"{
-  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+  "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
   "output": { "preset": "display-p3" },
   "print": { "display_tone": { "reinhard": { "headroom_stops": 10.0 } } }
 }"#,
@@ -8406,7 +8750,7 @@ fn a_recipe_may_name_the_reinhard_operator_without_its_parameter() {
             &tmp.path(&format!("{label}.json")),
             &format!(
                 r#"{{
-  "film_base": {{ "source": {{ "explicit": [0.9, 0.6, 0.5] }} }},
+  "calibration": {{ "film_base": {{ "explicit": [0.9, 0.6, 0.5] }} }},
   "output": {{ "preset": "display-p3" }},
   "print": {{ "display_tone": {tone} }}
 }}"#
@@ -8444,11 +8788,14 @@ fn roll_refuses_an_out_of_range_headroom_in_the_shared_recipe() {
     let recipe = write_file(
         &tmp.path("roll.json"),
         r#"{
+  "calibration": {
+    "film_base": { "explicit": [0.9, 0.55, 0.42] },
+    "dmax": { "explicit": 1.6 }
+  },
   "reconstruction": {
     "type": "density",
-    "curve": { "type": "exponential", "dmax": { "explicit": 1.6 } }
+    "curve": { "type": "exponential" }
   },
-  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
   "output": { "preset": "display-p3" },
   "print": { "display_tone": { "reinhard": { "headroom_stops": 60.0 } } }
 }"#,
@@ -8743,7 +9090,7 @@ fn gain_map_hdr_rejects_a_non_jpeg_suffix_and_rolls_with_a_jpg_name() {
     std::fs::create_dir_all(&out_dir).unwrap();
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"output":{"preset":"gain-map-hdr"},"film_base":{"source":{"explicit":[1,1,1]}}}"#,
+        r#"{"output":{"preset":"gain-map-hdr"},"calibration":{"film_base":{"explicit":[1,1,1]}}}"#,
     );
     let (code, _stdout, err) = run(&[
         "roll",
@@ -8794,7 +9141,7 @@ fn roll_checks_explicit_manifest_suffixes_and_derives_per_frame_preset_names() {
     };
     write_file(
         &tmp.path("shared.json"),
-        r#"{"output":{"preset":"gain-map-hdr"},"film_base":{"source":{"explicit":[1,1,1]}}}"#,
+        r#"{"output":{"preset":"gain-map-hdr"},"calibration":{"film_base":{"explicit":[1,1,1]}}}"#,
     );
 
     // An explicit path whose suffix contradicts the resolved container fails up
@@ -9612,7 +9959,7 @@ fn roll_renders_every_spelling_of_one_tone_identically() {
     let recipe = tmp.path("roll.json");
     std::fs::write(
         &recipe,
-        r#"{ "film_base": { "source": { "explicit": [0.9,0.55,0.42] } },
+        r#"{ "calibration": { "film_base": { "explicit": [0.9,0.55,0.42] } },
              "output": { "preset": "display-p3" },
              "print": { "display_tone": { "reinhard": { "headroom_stops": 10.0 } } } }"#,
     )
@@ -10546,11 +10893,6 @@ fn the_characteristic_curve_refuses_parametric_knobs() {
     let base = ["--film-base", "0.5,0.25,0.15"];
     for (extra, expect) in [
         (
-            vec!["--d-max", "1.3"],
-            "there is no reference for this flag",
-        ),
-        (vec!["--auto-d-max"], "there is no reference for this flag"),
-        (
             vec!["--sigmoid-contrast", "2.0"],
             "its shape is the film's own",
         ),
@@ -10587,6 +10929,58 @@ fn the_characteristic_curve_refuses_parametric_knobs() {
             "{extra:?} gave no usable remedy: {err}"
         );
     }
+
+    // **The reference is the exception, and deliberately so.** `calibration.dmax` is a
+    // roll measurement rather than a curve knob, so it is *accepted* beside this curve —
+    // that is what lets one calibration compose with a stock-curve profile — and warned
+    // about rather than silently dropped. Refusing it would break the composition the
+    // `calibration` section exists for.
+    for extra in [vec!["--d-max", "1.3"], vec!["--auto-d-max"]] {
+        let mut args = vec![
+            "convert",
+            "tests/fixtures/hdr-48bit.tif",
+            "-o",
+            out.to_str().unwrap(),
+            "--density-curve",
+            "characteristic",
+        ];
+        args.extend_from_slice(&base);
+        args.extend_from_slice(&extra);
+        let (code, stdout, err) = run(&args);
+        assert_eq!(code, 0, "{extra:?} must be accepted: {err}");
+        assert!(
+            err.contains("does not read it"),
+            "{extra:?} must warn that the reference was not consumed: {err}"
+        );
+        // The report says the same thing structurally: no anchor was placed.
+        let curve = &json(&stdout)["reconstruction_result"]["curve"];
+        assert_eq!(curve["dmax"]["policy"], "none", "{curve}");
+        assert!(curve["dmax"]["value"].is_null(), "{curve}");
+        // …and the stated value survives in the echoed recipe, so the same file still
+        // applies to a profile that does read one.
+        assert!(
+            json(&stdout)["recipe"]["calibration"].get("dmax").is_some(),
+            "the calibration must be carried, not dropped"
+        );
+    }
+
+    // Falsifiable control: with no reference stated, the same command is silent. Without
+    // this the warning could be firing on every characteristic render.
+    let mut args = vec![
+        "convert",
+        "tests/fixtures/hdr-48bit.tif",
+        "-o",
+        out.to_str().unwrap(),
+        "--density-curve",
+        "characteristic",
+    ];
+    args.extend_from_slice(&base);
+    let (code, _, err) = run(&args);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        !err.contains("does not read it"),
+        "an unstated reference must not warn: {err}"
+    );
 }
 
 /// A named-but-unknown stock fails loudly and lists what is accepted. Falling back to the
@@ -10685,7 +11079,7 @@ fn roll_warns_on_a_per_frame_film_stock_override() {
     "type": "density",
     "curve": { "type": "characteristic", "stock": "gold-200" }
   },
-  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+  "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
   "print": { "print_exposure": -4 },
   "output": { "preset": "legacy" }
 }"#,
@@ -10799,7 +11193,7 @@ fn a_preset_does_not_warn_about_the_curve_switch_it_was_asked_to_make() {
         &recipe,
         r#"{"reconstruction":{"schema_version":1,"type":"density",
             "density":{"scale":[1.0,0.8,0.7]},"curve":{"type":"sigmoid"}},
-            "film_base":{"source":{"explicit":[0.9,0.55,0.42]}}}"#,
+            "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
     )
     .unwrap();
     let out = tmp.path("out.jpg");
@@ -11821,6 +12215,111 @@ fn the_fixed_decodes_own_knobs_stay_reachable_under_the_new_flow() {
     );
 }
 
+/// `--new-flow` refuses a recipe-stated `calibration.dmax` exactly as it refuses the
+/// `--d-max` flag — and still accepts `calibration.film_base`.
+///
+/// **A hole the schema move opened in the section rule above.** The reference used to
+/// live at `reconstruction.curve.dmax`, so a recipe stating one was already covered by
+/// the `reconstruction`-section refusal; moving it to its own top-level section put it
+/// out of that witness's reach, and the flag would have been refused while the recipe
+/// key saying the same thing was parsed and read by nothing.
+///
+/// It is closed the way `nf-core/knob-availability-audit` already closed the identical
+/// case for `input.export_ir`: the section stays in `READ_RECIPE_SECTIONS` and the one
+/// unread key gets a `VALUE_ENTRIES` row. That asymmetry is the point — the fixed decode
+/// divides by `calibration.film_base` like any other, so refusing the section whole
+/// would reject the base with the reference. Being a *value* rule also covers `roll`'s
+/// per-frame overrides, which a section witness on the shared recipe cannot see.
+#[test]
+fn convert_under_the_new_flow_refuses_a_recipe_calibration_dmax() {
+    let tmp = TempDir::new("new-flow-calibration");
+    let run_with = |body: &str, name: &str| -> (i32, String) {
+        let recipe = write_file(&tmp.path(name), body);
+        let (code, _out, err) = run_exact(&[
+            "convert",
+            fixture("hdr-48bit.tif").to_str().unwrap(),
+            "-o",
+            tmp.path("out.jpg").to_str().unwrap(),
+            "--params",
+            recipe.to_str().unwrap(),
+            "--report",
+            "none",
+            "--new-flow",
+        ]);
+        (code, err)
+    };
+
+    let (code, err) = run_with(
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]},
+                           "dmax":{"explicit":1.45}}}"#,
+        "with-dmax.json",
+    );
+    assert_eq!(code, 2, "a recipe-stated reference must be refused: {err}");
+    assert!(err.contains("`calibration.dmax`"), "{err}");
+    // The same reason the flag gives, so the two cannot drift into different stories.
+    assert!(err.contains("never reads a reference density"), "{err}");
+    assert!(
+        !err.contains("cannot render yet"),
+        "the seam must not be what answered: {err}"
+    );
+
+    // Falsifiable both ways. The base half is still read, so it reaches the seam…
+    let (code, err) = run_with(
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
+        "base-only.json",
+    );
+    assert_eq!(code, 4, "the base half must still be accepted: {err}");
+    assert!(err.contains("cannot render yet"), "{err}");
+    // A `roll` **per-frame** override states it too, and a value rule is what reaches
+    // there: the shared-recipe section witness cannot see an overlay at all.
+    let shared = write_file(
+        &tmp.path("shared.json"),
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
+            "measure":{"inset":0.05}}"#,
+    );
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{ "frames": [ {{ "input": {scan:?},
+                    "params": {{ "calibration": {{ "dmax": {{ "explicit": 2.4 }} }} }} }} ] }}"#,
+            scan = fixture("hdr-48bit.tif").to_str().unwrap()
+        ),
+    );
+    let (code, _out, err) = run_exact(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("roll-out").to_str().unwrap(),
+        "--params",
+        shared.to_str().unwrap(),
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "a per-frame override must be refused too: {err}");
+    assert!(err.contains("`calibration.dmax`"), "{err}");
+
+    // …and the same reference is perfectly fine without the flag.
+    let recipe = write_file(
+        &tmp.path("legacy.json"),
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]},
+                           "dmax":{"explicit":1.45}},
+            "output":{"preset":"legacy"}}"#,
+    );
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("legacy.tif").to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 0, "{err}");
+}
+
 #[test]
 fn convert_under_the_new_flow_refuses_a_recipe_reconstruction() {
     // The provenance neither availability table can see. The new flow decodes through
@@ -11832,7 +12331,7 @@ fn convert_under_the_new_flow_refuses_a_recipe_reconstruction() {
         &tmp.path("r.json"),
         r#"{
   "reconstruction": { "type": "density" },
-  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+  "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
   "output": { "preset": "legacy" }
 }"#,
     );
@@ -11869,7 +12368,7 @@ fn convert_under_the_new_flow_refuses_a_recipe_reconstruction() {
     let clean = write_file(
         &tmp.path("clean.json"),
         r#"{
-  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+  "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
   "measure": { "inset": 0.05 }
 }"#,
     );
@@ -12312,7 +12811,7 @@ fn roll_stands_the_suffix_rule_down_under_the_new_flow_too() {
     );
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{ "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } } }"#,
+        r#"{ "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
     );
     let argv = |flow: &[&str]| -> Vec<String> {
         let mut v: Vec<String> = vec![
@@ -12357,7 +12856,7 @@ fn roll_under_the_new_flow_refuses_once_before_any_decode() {
     let recipe = write_file(
         &tmp.path("roll.json"),
         r#"{
-  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+  "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
   "measure": { "inset": 0.05 }
 }"#,
     );
@@ -12440,7 +12939,7 @@ fn roll_refuses_an_unavailable_knob_from_either_recipe_site() {
         &tmp.path("shared.json"),
         r#"{
              "reconstruction": { "type": "simple" },
-             "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
              "output": { "preset": "legacy" }
            }"#,
     );

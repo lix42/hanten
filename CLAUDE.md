@@ -186,8 +186,9 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `exponential`, or a `characteristic` curve — the last inverts a named film stock's
   *published* per-channel curve instead of modelling it (`--film-stock`, ten digitized
   stocks in `algo/film_stock`, sheets in `docs/datasheets/`) and therefore resolves
-  **no reference density and no anchor**, so `dmax()` reports `None` and `anchor()`
-  returns `Option`);
+  **no reference density and no anchor**, so `consumes_reference()` is `false` and
+  `anchor()` returns `Option` — a `calibration.dmax` stated beside it is carried and
+  warned about, never refused);
   `algo::finish_print` is the stage-4 print bridge. The old `Converter` trait and
   `AlgoParams` are gone.
   **`density.scale`'s default is per-curve, and constructing one by hand is a trap.**
@@ -1009,12 +1010,15 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   **`--preset` is the one conversion flag with no recipe key** — it is not a knob, it
   only *sets* knobs (curve, `density.scale`, `print_exposure`, `display_tone`), all of
   which are both already, so `--dump-params` writes the **expanded** values and a recipe
-  naming a preset is rejected. Two traps it left, both general: **`reconstruction.curve`
-  is one recipe path but six knobs**, and `curve.dmax` is a *roll calibration* rather
-  than a look — so anything replacing that object wholesale must carry `dmax` across
-  (`cli::preset_curve`, on the same `takes_dmax()` condition the `--density-curve` arm
-  uses); replacing it silently reset a measured reference on every frame of a roll at
-  exit 0. And a report field computed as a **diff against an expansion is empty exactly
+  naming a preset is rejected. Two traps it left, both general: **a recipe path can be
+  one object but several knobs, and they need not all have the same lifetime** —
+  `reconstruction.curve` held the roll's reference density until
+  `core/calibration-recipe-section` moved it to `calibration.dmax`, and while it did,
+  replacing the object wholesale silently reset a measured reference on every frame of a
+  roll at exit 0. The patch for that was a carry, which could not cross a
+  `characteristic` switch and so *dropped* the value there instead; separating the
+  lifetimes is what actually fixed it, and a preset now writes no `calibration` key at
+  all. And a report field computed as a **diff against an expansion is empty exactly
   when the expansion won**, so `conversion_preset.overridden` (resolved vs the preset)
   could never report what the *preset* replaced — that needs its own `replaced` field.
   **`--new-flow` is CLI-only for a third reason again, and it is the one flag that
@@ -1039,7 +1043,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   third — its shared recipe is the only way it can state one of those sections — but not
   the first, since it accepts no conversion flags; the value half runs at **two**
   validate sites composed into `cli::validate_with_flow`.
-  **`film_base.source` is the first knob with no default at all** (`Option`, no
+  **`calibration.film_base` is the first knob with no default at all** (`Option`, no
   `Default` on `FilmBaseSource`): `convert`/`roll` refuse an unstated one rather
   than choosing. A defaultless knob adds two obligations — every `ResolvedConfig`
   in a test that is not *about* it must state it (`cli::tests::base_cfg`), and its
@@ -1123,7 +1127,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     holder → zero channel now errors loudly there, not silently downstream). The
     per-algo guards (`algo/simple.rs`, `algo/density.rs`) remain as
     defense-in-depth for any base reaching a converter directly. **There is no
-    default source**: `cli::validate` refuses an unstated `film_base.source` for
+    default source**: `cli::validate` refuses an unstated `calibration.film_base` for
     `convert`/`roll` (exit 2), and `film_base::estimate` therefore takes a
     *resolved* `&FilmBaseSource`, never the params object — "unset" is an
     orchestration state, not a stage input. The message is command-aware

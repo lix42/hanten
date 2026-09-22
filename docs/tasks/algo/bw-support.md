@@ -35,7 +35,7 @@ do not pull input-format work into this task.
   needed in B&W mode".
 - **Knob shape — one enum** (house rule for mutually-exclusive knobs):
   `ColorModel { Color (default) | Mono([f32; 3] weights) }`. Recipe shape like
-  `film_base.source`: `"color"` or `{ "mono": [r, g, b] }`. CLI:
+  `calibration.film_base`: `"color"` or `{ "mono": [r, g, b] }`. CLI:
   `--color-model color|mono` plus an optional `--mono-weights R,G,B`.
   Validation is against the **post-merge resolved model**, not flag presence:
   `--color-model mono --mono-weights …` sets the weights; `--mono-weights`

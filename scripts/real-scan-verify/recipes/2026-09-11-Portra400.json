@@ -1,20 +1,20 @@
 {
-  "film_base": {
-    "source": {
+  "calibration": {
+    "film_base": {
       "explicit": [
         0.350927,
         0.16437018,
         0.09372091
       ]
+    },
+    "dmax": {
+      "explicit": 1.2665207
     }
   },
   "reconstruction": {
     "type": "density",
     "curve": {
-      "type": "exponential",
-      "dmax": {
-        "explicit": 1.2665207
-      }
+      "type": "exponential"
     }
   },
   "output": {

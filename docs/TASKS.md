@@ -1117,7 +1117,7 @@ the design in `docs/design-update.md`:
 - [x] [Pipeline orchestration](tasks/core/pipeline-orchestration.md)
 - [x] [Roll conversion (batch + frozen recipe)](tasks/core/roll-conversion.md)
 - [ ] [Base-acquisition planner (the cascade)](tasks/core/base-acquisition-planner.md) — the roll-level `Dmin`/`Dmax` acquisition cascade: frozen recipe with provenance + confidence, and the roll→single fallback decision
-- [ ] [The `calibration` recipe section](tasks/core/calibration-recipe-section.md) — `film_base` and `dmax` move into their own top-level section; no pixel change
+- [x] [The `calibration` recipe section](tasks/core/calibration-recipe-section.md) — `film_base` and `dmax` move into their own top-level section; no pixel change
 - [ ] [Layered recipe composition](tasks/core/recipe-composition.md) — repeatable `--params`
   (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain
   `defaults < params A < params B < … < flags`. Enables the pipeline-profile / roll-calibration

@@ -33,8 +33,8 @@ Extends design-spec §12 roadmap item 6 ("Roll-level presets & batch mode").
 
 - Batch input: multiple files / a directory / a glob → per-frame outputs (a naming
   scheme), plus a roll-level JSON report (per-frame status + the shared recipe).
-- One **frozen shared recipe** carries the roll-fixed params (`film_base`,
-  `density.dmax`); frame-local params may be overridden per frame.
+- One **frozen shared recipe** carries the roll-fixed params (the `calibration`
+  section); frame-local params may be overridden per frame.
 - Architecture: **plan → recipe → apply.** This task owns **apply**: deterministic
   replay of a *given* frozen recipe over N frames. The **plan** step (resolving the
   roll-fixed params — the messy, heuristic part) is the separate

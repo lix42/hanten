@@ -30,7 +30,7 @@ Two facts shape the design:
 
 **Ownership / superseding note (authoritative).** `auto-base-redesign` still
 lists a "content-based source" sub-item **and includes it in its verification**;
-that scope is **reassigned here**. The `film_base.source = "content"` enum
+that scope is **reassigned here**. The `calibration.film_base = "content"` enum
 variant, the `--base-content` flag, its report wiring, and its tests are owned
 **solely by this task** — so the two tasks do not both implement the same surface.
 The `auto-base-redesign` owner must treat content mode as **out of scope** there,
@@ -38,12 +38,12 @@ and only *suggest* `--base-content` in the auto-refusal message. `auto-base-rede
 
 ## Design
 
-- New `film_base.source = "content"` (flag `--base-content`). Per-channel high
+- New `calibration.film_base = "content"` (flag `--base-content`). Per-channel high
   percentile (reuse `film_base::percentile`, ~p99; tune on real scans) over the
   whole image, or an optional sub-region.
 - **Explicit opt-in only.** `--auto-base` failing must *not* silently fall through
   to content; it errors with a message naming `--base-content` (fail-loud, §11).
-- **Report provenance.** The JSON report records `film_base.source = "content"`
+- **Report provenance.** The JSON report records `calibration.film_base = "content"`
   plus the resolved base, so content-derived rolls are auditable.
 - **Guard the over-bright failure.** A high percentile resists dust specks but not
   a large clear region brighter than the base; where detectable (base near/above a

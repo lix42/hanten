@@ -55,9 +55,20 @@ What other epics need to know about `core`:
   for *config* values. `validate` reads only the resolved config and is shared
   verbatim by `convert`, `roll` and every per-frame override; `convert` must
   call **`validate_convert`**, which adds the flag-presence rules on top.
-  `film_base.source` has **no default** — `convert`/`roll` refuse an unstated
-  one (exit 2). Runtime-derived values (an estimated film base, a measured
-  anchor) are guarded where they're consumed.
+  `calibration.film_base` has **no default** — `convert`/`roll` refuse an unstated
+  one (exit 2), and that rule runs **last**, being the least specific diagnosis.
+  Runtime-derived values (an estimated film base, a measured anchor) are guarded
+  where they're consumed.
+- **The roll's measured values live in `calibration`** (`core/calibration-recipe-section`,
+  2026-09-22): `calibration.film_base` and `calibration.dmax`, replacing the top-level
+  `film_base` section and `reconstruction.curve.dmax`, both of which are now migration
+  errors. A pipeline profile is a recipe with no `calibration`; a roll calibration is a
+  recipe with nothing else. **The section is open** — a roll content white is expected to
+  join it (`docs/spike/white-placement.md`), so nothing may treat it as a closed pair. The
+  inclusion test is *measured from the film + fixed across the roll + consumed by a rule
+  that lives elsewhere*, which is why `curve.anchor` stayed in the curve. A stated value a
+  resolved look will not read (`characteristic`, `simple`) is **carried and warned about**,
+  never refused — that is what lets one calibration compose with any profile.
 - **Exit codes (design-spec §11):** Usage=2, Decode=3, Unsupported=4, Write=5,
   Resource=6, Other=1. `NcError::exit_code()` is the single mapping.
 - **stdout is report-only**; logs and warnings go to stderr. Reports emit
@@ -665,8 +676,8 @@ heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`
 
 ## calibration-recipe-section
 
-**Status:** not started
-**Updated:** 2026-09-13
+**Status:** done (2026-09-22)
+**Updated:** 2026-09-22
 
 - Goal: a top-level `calibration` recipe section holding `film_base` and `dmax`;
   `dmax` leaves `reconstruction.curve`. Schema change with a migration error, no pixel
@@ -674,3 +685,155 @@ heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`
 - Filed 2026-09-13 because three workflow tasks (planner, profile authoring, layered
   composition) assumed the section and none owned it; absorbs
   `value-domain-terminology`'s item 3.
+
+### 2026-09-22 — executed
+
+**Status:** done. The recipe's sixth section is now `calibration`, holding
+`film_base` and `dmax`; the top-level `film_base` section and
+`reconstruction.curve.dmax` are gone, each rejected with a migration error naming the
+new path. No pixel moved.
+
+- **The section is designed open, not as a closed pair** (user decision, 2026-09-22,
+  relayed through the main session). A third measured roll value is expected — the
+  roll's **content white** (red p97 toward the roll's upper end,
+  `docs/spike/white-placement.md`), which `nf-reconstruction/anchor-rule` needs if it
+  adopts candidate B/C/D, and possibly a fourth for its per-frame spread (within-roll
+  spread of per-frame p97 is 0.40, which is why the spread cannot be derived). So:
+  per-key optionality rather than a section-level default, no closed-pair constructs,
+  and a report fragment built key-by-key. The inclusion test written into
+  `CalibrationParams`' rustdoc is **measured from the film + fixed across the roll +
+  consumed by a rule that lives elsewhere** — which is exactly why `curve.anchor`
+  stayed in the curve (the *rule* is a look; only the measurement moved), and why a
+  future holder-polarity knob does not qualify (design-spec §14 item 9 retargeted from
+  `film_base.holder` to `measure.holder`).
+- **`calibration.film_base` is the bare `FilmBaseSource`** — the `{"source": …}`
+  wrapper went with the section, per design-spec §8's own example. It keeps no default,
+  so `validate`'s "you have not chosen a base" rule is unchanged and still runs **last**.
+- **Four decisions taken while implementing**, all confirmed with the user first:
+  1. Flatten the wrapper (above).
+  2. **`--d-max` beside a curve that reads no reference is accepted, not refused.** The
+     old flag-presence rejection for `characteristic` is deleted, and the four
+     `--*d-max` flags left `active_density_domain_flag` so `simple` no longer refuses
+     them either. Under the project's presence-rule tiebreaker they force nothing a
+     branch cannot produce — the value is a roll measurement every branch can hold —
+     and refusing them would break the composition the section exists for
+     (`--params roll-cal.json --params characteristic-look.json`). Not silently
+     ignored: `cli::unconsumed_dmax_warning` names the branch and is
+     `--strict`-promotable, and the report still says `dmax.policy = "none"` for a
+     curve that read nothing.
+  3. **The report's `calibration` key is the section *body***, so the pipe is
+     `jq '{calibration}'`, not `jq .calibration`; design-spec §8's target block was
+     corrected to match. It replaces `film_base_recipe` and `d_max_recipe`; the two
+     `*_flag` keys stay, since the flags did not move.
+  4. **The structured `dmax` resolution stays under `reconstruction_result.curve`.**
+     That block records what the *render* resolved and is paired with `anchor_value`;
+     the recipe path it came from is `dmax.provenance`'s job.
+- **The `recipe` fingerprint was refreshed in place on the v5 row, with no
+  `pipeline_version` bump** — the case the task file sanctioned in advance. The default
+  document changed *shape* while every default **value** stayed put (`film_base` still
+  `null`, the reference still `"fixed"`), so `render` and `base` did not move; the drift
+  gate asserts those two before `recipe`, and they held. This is not the version-identity
+  worry recorded on that row for `--auto-d-max`: a recipe written against the old shape
+  does not render differently, it is *rejected* with a migration error.
+- **Byte-identity verified by same-machine before/after**, `2664a0d` against this branch,
+  on `tests/fixtures/hdr-48bit.tif`: `legacy`, `film-master`, `gain-map-hdr`,
+  `display-p3`, `hdr-pq`, plus `characteristic`, `--auto-d-max` and `simple` — eight
+  configurations, all `cmp`-identical.
+- **What the move deleted, and why that is the point.** `cli::preset_curve`,
+  `DensityCurve::{dmax, dmax_mut}`, `DensityCurveType::takes_dmax` and
+  `internally_tagged_switch`'s carry are all gone. Each existed to move the roll's
+  reference across an object that was being replaced, and **none of them could cross a
+  `characteristic` boundary**: gating the carry on the target (the fix for "the merge
+  inserted a key the deserializer then rejected") silently *dropped* the calibration
+  instead. A frame switched to a stock curve and back lost it, at exit 0. With the value
+  outside the switched object there is nothing to carry and nothing to drop —
+  `a_curve_switch_never_touches_the_roll_reference` pins the round trip the carry could
+  never serve.
+- **Two predicates needed a second condition, not just a new path.**
+  `measures_over_region` now asks `calibration.dmax == Auto` **and**
+  `curve.consumes_reference()`: a `characteristic` render never calls `resolve_dmax`, so
+  the source alone would have resolved a measurement region for a run that measures
+  nothing and reported an `effective_area` for it. `region_reaches_a_rendered_pixel` is
+  written as "measured, *and* the placement reads it", so a condition added to the first
+  cannot be forgotten in the second.
+- **Threading.** `DmaxSource` reaches the stage as `types::DmaxInput { source, region }`.
+  The region was already threaded through six `stages::` functions *only* for
+  `resolve_dmax`, so pairing them keeps arity flat and makes "a region beside a non-`Auto`
+  source" unrepresentable. The two calibration members arrive differently on purpose:
+  the base is resolved *before* the stage (`film_base::estimate`), while `Auto` here needs
+  the post-regional-balance densities and so cannot be.
+- **Outside `src/`:** 18 `scripts/real-scan-verify/recipes/*.json` rewritten (and the
+  `harness.sh` `jq` that generates them), `nctool roll`'s `_freeze_recipe`,
+  `scripts/render-defaults-v3/measure.py` and `algo::curve_probe::frozen_base` — the last
+  two read a frozen recipe by path and would otherwise have rotted silently, the probe
+  behind `#[ignore]` where no gate looks.
+- **Code review found seven real defects, five of them prose-versus-code** — the class
+  no gate reads. Two were behavioural and worth recording:
+  - **`unpinned_curve`'s floating-reference term had to go, not just change path.**
+    Repointing `dmax_floats` at `calibration.dmax` made *every* pipeline profile warn —
+    a look has no `calibration` section by definition — and fail under `--strict`, so
+    the guide's own §4 shape contradicted the binary. It also warned on a calibration
+    that measured only a base, which is exactly what `estimate` emits without
+    `--d-max-region`. The term is now deleted: the population it served (recipes
+    spelling `reconstruction.curve.dmax`) is rejected outright by the migration error,
+    the more specific diagnosis, and post-move an absent reference is a legitimate
+    composition rather than evidence of an older build. The three warning messages also
+    told the user to pin `dmax` *inside the curve*, which now exits 2 — a remedy that
+    does not work, the rule this project has broken five times.
+  - **`unconsumed_dmax_warning`'s `simple` branch advised `--density-curve`, which
+    `merge` refuses beside `simple`.** The remedy is per branch now, and the test
+    asserts both that the working flag is named and that the refused one is absent.
+  - The other five: a probe rendering its benchmark at `DmaxInput::default()` instead
+    of its own stated reference (fixed by *deleting* `benchmark_sigmoid`'s vestigial
+    `_dmax` parameter, so a site that forgets the reference cannot compile silently);
+    two comments claiming a `validate` rule that D2 had just removed; and two rustdoc
+    clusters still naming the moved paths. The sweep CLAUDE.md prescribes —
+    `grep -rn 'curve\.dmax\|film_base\.source\|density\.dmax' src/` — found the rest
+    in one pass, and caught one *pre-existing* false claim while there
+    (`film_base::golden` said the base source "defaults to Auto"; it has no default).
+- **Rebased again onto `9dbc8bb` (`nf-core/knob-availability-audit`, #139), and its model
+  replaced the point fix below.** That commit generalised the new-flow refusals into a
+  section inventory: `UNREAD_RECIPE_SECTIONS` refused whole, `READ_RECIPE_SECTIONS` read,
+  and — decisively — a documented pattern for a section read only *in part*
+  (`input` minus `export_ir`, refused by a `VALUE_ENTRIES` row rather than by widening
+  the list). `calibration` is exactly that shape: the fixed decode divides by
+  `film_base`, and reads no `dmax` at all. So `reject_recipe_calibration_dmax` was
+  deleted and the key became a value row, per CLAUDE.md's rule to take *their* design
+  rather than resolve line-by-line. **It closes strictly more:** a value rule is what
+  `roll` reaches, so a per-frame override stating `calibration.dmax` is now refused too
+  — the gap the ship review could only record as unfixed. One more of #139's test
+  recipes spelled the old `film_base` shape; auto-merge was silent about that as before.
+- **Rebased onto `f169fac`, and the rebase opened a hole a clean auto-merge hid.**
+  `nf-core/fixed-decode` (#137) landed `flow::reject_recipe_reconstruction`, which
+  refuses a recipe `reconstruction` section under `--new-flow` because the fixed decode
+  reads its own `DecodeParams` and would parse that section and never read it. The
+  reference density *was* inside that section, so a recipe stating one was already
+  covered. Moving it to `calibration.dmax` put it out of that witness's reach — leaving
+  `--d-max` refused by flag while the recipe key saying the same thing was accepted and
+  ignored, the exact class the table exists to prevent. Closed with
+  `flow::reject_recipe_calibration_dmax`, sharing `DMAX_REASON` so the two cannot drift
+  into different stories. **`calibration.film_base` stays accepted** — the fixed decode
+  still divides by the base — and that asymmetry is the assertion the new test makes.
+  Also ported: three of #137's own test recipes arrived spelling the old `film_base`
+  shape (auto-merge is silent about that), and `algo::fixed`'s `equivalent_legacy`
+  helper took `dmax` only to bury it in the curve.
+- **A second review (ship's diff-reviewer) found six more, two of them mutation-proved.**
+  The one worth carrying forward: it replaced `measures_over_region`'s new
+  `&& curve.consumes_reference()` with `true` and the whole suite — 823 + 223 — still
+  passed, so the condition the commit message singles out could have been deleted by a
+  later refactor with every gate green. The predicate test now covers
+  `--density-curve characteristic --auto-d-max`, checked falsifiable. Also: the
+  `base_level` probe in `shadow_metrics` had lost its per-candidate anchor to
+  `DmaxInput::default()` (the nominal), so candidates differing only in anchor printed
+  the same number behind `#[ignore]`; and `unconsumed_dmax_warning`'s characteristic
+  remedy exited 2 whenever `--film-stock` was on the line — the same circular-advice
+  class as the `simple` arm fixed one round earlier, which is now five instances, so
+  the remedy names the stock too. Two comments stated inverted reasons and were
+  rewritten to the honest trade: dropping `unpinned_curve`'s floating-reference term
+  leaves a pre-move recipe silent on the reference unwarned (the migration error catches
+  the key *present*, the term fired on it *absent* — disjoint populations), and that
+  residual gap is `core/conversion-versioning`'s, beside the `"fixed"` one.
+- `docs/using-nc.md` re-verified by running the binary (§2 estimate output, §3 the
+  `--d-max-region` example, §4 the workflow recipe, §5 the default document and the
+  "minimal recipe is byte-identical to the flag form" claim — re-run and still
+  byte-identical, plus the new migration-error text). Header pin refreshed.

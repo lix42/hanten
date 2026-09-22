@@ -9,7 +9,7 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 5`, built at commit
-> `5b77603193f2` plus the `nc` → `hanten` binary rename (§2). The staleness signal
+> `2664a0ddbdd5` plus the `calibration` recipe section (§4/§5). The staleness signal
 > is `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -226,15 +226,15 @@ Either way, `estimate` hands you the result in **reuse-ready form**:
 {
   "film_base": { "r": 0.16311894, "g": 0.080109864, "b": 0.037720304 },
   "film_base_flag": "--film-base 0.16311894,0.080109864,0.037720304",
-  "film_base_recipe": {
-    "source": { "explicit": [0.16311894, 0.080109864, 0.037720304] }
+  "calibration": {
+    "film_base": { "explicit": [0.16311894, 0.080109864, 0.037720304] }
   }
 }
 ```
 
-Copy `film_base_flag` straight onto a command line, or splice `film_base_recipe`
-into a recipe under the `film_base` key. That is the intended handoff — no manual
-transcription of floats.
+Copy `film_base_flag` straight onto a command line, or take the whole
+`calibration` object as a recipe — `jq '{calibration}'` writes one directly. That
+is the intended handoff — no manual transcription of floats.
 
 Add `--strict` when scripting: it turns "plausible-looking but bad" into a hard
 failure instead of a value your pipeline silently bakes in.
@@ -257,10 +257,14 @@ which reports:
 ```json
 { "dmax": 0.39084455,
   "d_max_flag": "--d-max 0.39084455",
-  "d_max_recipe": { "dmax": { "explicit": 0.39084455 } } }
+  "calibration": { "film_base": { "explicit": [0.163, 0.08, 0.0377] },
+                   "dmax": { "explicit": 0.39084455 } } }
 ```
 
-The `d_max_recipe` fragment nests under **`reconstruction.curve`**.
+`calibration` carries whatever this run resolved — here both halves, because the
+base was supplied and the reference measured. It is already in recipe shape, so
+`hanten estimate … | jq '{calibration}' > roll-cal.json` writes a reusable roll
+calibration with nothing to edit.
 
 > **Reusing it on a parametric curve mis-anchors the render.** The measured value is
 > a *raw* density; `sigmoid` / `exponential` subtract the anchor from the corrected
@@ -283,16 +287,22 @@ The `d_max_recipe` fragment nests under **`reconstruction.curve`**.
 ### Step 4 — Write the recipe
 
 `roll` is configured **only** by recipe — it has no `--film-base` — so a roll needs
-a recipe file. Splice `estimate`'s reuse-ready fragments together with your
-parameter choices:
+a recipe file. `estimate`'s `calibration` object *is* the measured half; add your
+parameter choices beside it:
 
 ```jsonc
 {
-  "film_base": { "source": { "explicit": [0.163, 0.080, 0.0377] } },
-  "reconstruction": { "curve": { "type": "sigmoid",
-                                 "dmax": { "explicit": 0.391 } } }
+  "calibration": { "film_base": { "explicit": [0.163, 0.080, 0.0377] },
+                   "dmax": { "explicit": 0.391 } },
+  "reconstruction": { "curve": { "type": "sigmoid" } }
 }
 ```
+
+**The two halves have different lifetimes, and the schema keeps them apart.**
+`calibration` is what you measured off *this* roll; everything else is the look,
+which you reuse across rolls. So a roll calibration is a recipe with nothing but
+`calibration`, and a look is a recipe with no `calibration` at all — the second
+needs a base from a flag, since `calibration.film_base` has no default.
 
 Omitted sections take their defaults, so a recipe only needs to carry what you
 decided. `hanten params` prints the full default document if you want a scaffold to
@@ -343,13 +353,13 @@ hanten params
       "balance_range": "auto"
     },
     "curve": { "type": "sigmoid", "contrast": 2.0686874, "toe": 0.2,
-               "shoulder": 0.6, "dmax": "fixed",
+               "shoulder": 0.6,
                "anchor": { "mid-at-dmax-fraction": 0.5 } }
   },
-  "input":     { "transfer": "auto", "meaning": "auto",
-                 "film_type": "unknown", "export_ir": null },
-  "film_base": { "source": null },
-  "measure":   { "inset": 0.05 },
+  "input":       { "transfer": "auto", "meaning": "auto",
+                   "film_type": "unknown", "export_ir": null },
+  "calibration": { "film_base": null, "dmax": "fixed" },
+  "measure":     { "inset": 0.05 },
   "print":     { "print_exposure": 0.0, "black_point": 0.0,
                  "white_balance": { "explicit": [1.0, 1.0, 1.0] },
                  "display_tone": "shoulder",
@@ -359,9 +369,9 @@ hanten params
 }
 ```
 
-`film_base.source` prints as `null` because it has **no default** — this document
-is a template to edit, not a runnable recipe. `convert` and `roll` reject an
-unstated base.
+`calibration.film_base` prints as `null` because it has **no default** — this
+document is a template to edit, not a runnable recipe. `convert` and `roll` reject
+an unstated base.
 
 ### Partial recipes are fine
 
@@ -370,9 +380,9 @@ Omit any section and serde defaults fill the gap. This minimal recipe produces a
 
 ```json
 {
-  "film_base": { "source": { "explicit": [0.163, 0.080, 0.0377] } },
-  "reconstruction": { "curve": { "type": "sigmoid",
-                                 "dmax": { "explicit": 0.391 } } }
+  "calibration": { "film_base": { "explicit": [0.163, 0.080, 0.0377] },
+                   "dmax": { "explicit": 0.391 } },
+  "reconstruction": { "curve": { "type": "sigmoid" } }
 }
 ```
 
@@ -385,8 +395,13 @@ The `curve` object above is the **sigmoid** shape. Selecting the exponential cur
 resolves a different, smaller set of keys:
 
 ```json
-{ "type": "exponential", "gamma": 2.0, "dmax": "fixed", "anchor": "white-at-dmax" }
+{ "type": "exponential", "gamma": 2.0, "anchor": "white-at-dmax" }
 ```
+
+The reference density is **not** a curve key: it is a measurement of the roll, so
+it lives at `calibration.dmax` (`"fixed"` | `"auto"` | `"none"` |
+`{"explicit": <d>}`). A recipe that still spells it `reconstruction.curve.dmax`
+is rejected with a migration error naming the new path.
 
 ### Strictness
 
@@ -402,9 +417,17 @@ usage: invalid recipe t.json: unknown field `exposure`,
 This means a **misplaced** key fails too — a key must live under the stage section
 that owns it (`--export-ir` ⇒ `input.export_ir`, not top level).
 
-Removed legacy forms (a top-level `algorithm`, or sibling
-`density`/`sigmoid`/`simple` sections) produce a **migration error** explaining the
-replacement. They are not accepted as aliases.
+Removed legacy forms produce a **migration error** explaining the replacement, never
+a silent alias. Those are a top-level `algorithm` or sibling
+`density`/`sigmoid`/`simple` sections, and the two paths the roll measurements moved
+from — a top-level `film_base` section, and `reconstruction.curve.dmax`:
+
+```
+usage: recipe roll.json: top-level `film_base` is no longer supported — the roll's
+       measured values moved into their own `calibration` section, and the `source`
+       wrapper went with them. Replace `"film_base": {"source": {"explicit": [r, g, b]}}`
+       with `"calibration": {"film_base": {"explicit": [r, g, b]}}` …
+```
 
 ### Precedence
 
@@ -467,18 +490,17 @@ default, `.tiff` under `legacy`/`display-p3`/`film-master`, `.avif` under
 `hdr-pq`/`hdr-hlg` — and one it omits is completed from that container, so
 `"output": "chosen"` writes `chosen.jpg` on a default roll.
 
-Some keys describe the *roll*, not the frame: the film base, `curve.dmax`, the anchor
-placement, `curve.stock` and `output.preset`. Overriding one per frame is applied but
-warns loudly (and `--strict` turns the warning into a failing exit), because the frame
-then renders on a different rule from its siblings — a roll is one piece of film through
-one process.
+Some keys describe the *roll*, not the frame: the whole `calibration` section, the
+anchor placement, `curve.stock` and `output.preset`. Overriding one per frame is applied
+but warns loudly (and `--strict` turns the warning into a failing exit), because the
+frame then renders on a different rule from its siblings — a roll is one piece of film
+through one process.
 
 An override that changes `curve.type` **re-resolves the two knobs whose right value is
 per-curve**: the anchor placement and the per-channel `density.scale` both take the new
-curve's default. The roll's `curve.dmax` is carried across (it is a measured calibration,
-not a curve knob) — except onto `characteristic`, which has no `dmax` key at all. Each
-reset warns if it discarded a value the recipe had stated; restate it inside the override
-to keep it.
+curve's default. The roll's measured `calibration` is untouched by a curve switch, in
+either direction — it is a separate section, not a curve knob. Each reset warns if it
+discarded a value the recipe had stated; restate it inside the override to keep it.
 
 ---
 
@@ -527,11 +549,10 @@ underneath one would have nothing left to set. The report separates the two dire
 }
 ```
 
-**One thing a preset never replaces: the roll's measured `Dmax`.** A preset names a
-*look*; `reconstruction.curve.dmax` is the reference `hanten estimate --d-max-region`
-measures once for a roll, so it is carried across and does not appear in `replaced`. An
-explicit `--d-max` still wins. Everything else in `curve` — contrast, knees, anchor,
-stock — is the look, and the preset does replace it.
+**A preset never touches the roll's measured `calibration`.** A preset names a *look*,
+and writes no `calibration` key at all, so a measured film base and `Dmax` survive it
+untouched and never appear in `replaced`. Everything in `curve` — contrast, knees,
+anchor, stock — is the look, and the preset does replace it.
 
 **It is a command-line shorthand, not a recipe key.** `--dump-params` writes the
 *expanded* values, so a recipe replays identically on any build — including one whose
@@ -647,7 +668,9 @@ checkable:
 ```
 
 `anchor` and `dmax` are `null` on purpose: this curve resolves no reference density and
-follows no placement rule, and reporting one would name a knob the render never read.
+follows no placement rule, and reporting one would name a knob the render never read. A
+`calibration.dmax` stated beside it is accepted and carried — so one roll calibration
+still composes with a stock-curve look — and a warning says it was not read.
 `aims` are the sheet's published *Judging Negative Exposures* densities, `[grey card,
 paper white]` (Status M, red channel) — the most directly checkable numbers on it if you
 own a densitometer. `out_of_table` is the fraction of the frame that fell past either end
@@ -725,7 +748,8 @@ Raising `F` renders the roll **darker**; lowering it renders **brighter**.
 the first two and still work.
 
 **Switching curves resets the placement.** `--density-curve` (and a `roll` per-frame
-override that sets `curve.type`) carries the roll-fixed `dmax` across but takes the new
+override that sets `curve.type`) leaves the roll's `calibration` untouched — it is a
+separate section — but takes the new
 curve's *default* anchor, because the right placement differs per curve — the two
 defaults in the table are deliberately different, and `white-at-dmax` on the sigmoid is
 the diagnostic described below. If your recipe pinned a non-default placement, that is a
@@ -861,11 +885,6 @@ hanten convert … --reconstruction simple --density-gamma 1.8
 # usage: --density-gamma configures density reconstruction, but the resolved
 #        reconstruction is `simple`
 
-hanten convert … --density-curve characteristic --d-max 1.3
-# usage: --d-max sets the display-white reference density, but the resolved curve
-#        is characteristic — it reads its slope and its mid-grey placement off the
-#        stock's published response, so there is no reference for this flag to set.
-
 hanten convert … --film-stock ektar-100
 # usage: --film-stock ektar-100 selects a published film response, but the resolved
 #        curve is sigmoid — a stock has nothing to configure there.
@@ -874,8 +893,24 @@ hanten convert … --film-stock ektar-100
 hanten convert … --reconstruction simple --film-stock portra-400
 # usage: --film-stock configures density reconstruction, but the resolved
 #        reconstruction is `simple` (the direct inversion has no density
-#        correction, curve, or Dmax); pass --reconstruction density
+#        correction and no curve); pass --reconstruction density
 ```
+
+**A `--*d-max` flag is not in that family.** It sets `calibration.dmax`, a roll
+measurement rather than a curve knob, so every reconstruction accepts one — and a
+look that will not read it (`characteristic`, `simple`) says so instead of failing:
+
+```sh
+hanten convert … --density-curve characteristic --d-max 1.3
+# hanten: warning: calibration.dmax is set, but this conversion does not read it:
+#         the resolved curve is characteristic — it reads its slope and its
+#         mid-grey placement off the stock's published response, so it consults no
+#         reference. The value is carried in the recipe … and it did not affect
+#         these pixels.
+```
+
+That is what lets one roll calibration compose with any look; `--strict` promotes
+the warning if you want the stricter contract.
 
 This is deliberate: a flag that quietly did nothing would be worse than a failure.
 
@@ -1732,7 +1767,7 @@ frame, at exit 2.
 Neither `convert` nor `roll` has a default film base — but they take it from
 different places. On **`convert`**, pass `--film-base R,G,B` (measured once per
 roll), `--base-region X,Y,W,H`, or `--auto-base`. **`roll` accepts none of those
-flags**: set `film_base.source` in the shared `--params` recipe instead.
+flags**: set `calibration.film_base` in the shared `--params` recipe instead.
 `estimate` still defaults to auto, so `hanten estimate scan.tif` remains the way to
 get a value in the first place.
 

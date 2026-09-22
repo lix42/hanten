@@ -83,7 +83,7 @@ ordering, selection, cross-frame agreement, and provenance live here.
 ## Design
 
 - A planner that runs the ladder over a batch and emits the frozen roll recipe
-  (`film_base.source` resolved to explicit; `density.dmax` resolved), plus a
+  (`calibration.film_base` resolved to explicit; `calibration.dmax` resolved), plus a
   provenance block (rung, source frame / region, confidence, agreement spread).
 - Reference-frame auto-detection (unexposed → `Dmin`; fully-exposed → `Dmax`),
   confidence-gated with a `--reference` / `--dmax-reference` override.

@@ -20,7 +20,7 @@ input exists and is refused today.
 - The detection and the rejection are in place; this task turns the rejection into a
   path. The provenance rule stands: the file's own metadata decides, never a flag.
 - A positive has no film base to divide by and no density curve to invert, so
-  `film_base.source` (required today for `convert`) and the whole `reconstruction`
+  `calibration.film_base` (required today for `convert`) and the whole `reconstruction`
   object do not apply. The pipeline would enter at the working space: the embedded
   ICC (or a declared `--input-meaning colorimetric` reference) gives the pixels
   colorimetric meaning, which `input_semantics` already models as

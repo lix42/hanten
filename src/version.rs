@@ -275,7 +275,17 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         //
         // So the `--auto-d-max` change that *did* happen is verified by
         // same-machine before/after, not here.
-        recipe: "fc8f9c58acc360e6",
+        //
+        // **Refreshed in place a second time** by `core/calibration-recipe-section`,
+        // which moved `film_base.source` and `reconstruction.curve.dmax` into one
+        // top-level `calibration` section. The default document changed *shape* while
+        // every default **value** stayed put (`film_base` still `null`, the reference
+        // still `"fixed"`), so this hash moved and `render`/`base` did not — the gate
+        // asserts those two first, and they held. Sanctioned in the task file, which
+        // named this case in advance. It is not the kind of change the paragraph above
+        // worries about: a recipe written against the old shape does not render
+        // differently, it is *rejected* with a migration error naming the new path.
+        recipe: "128cdee1d98587ef",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -302,12 +312,12 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 /// - `recipe` — [`stable_hash`] over the canonical JSON of
 ///   `cli::ResolvedConfig::default()`. This is the default *configuration*: it
 ///   covers default **values** the other two cannot see (`output.preset`,
-///   `output.depth`, `output.output_profile`, `film_base.source`, the `input`
+///   `output.depth`, `output.output_profile`, `calibration.film_base`, the `input`
 ///   defaults). It is also the *only* fingerprint that moves when the default
 ///   **preset** changes: `render` and `base` measure `reconstruct_and_print` and
 ///   `film_base::estimate`, which the preset does not select — the v3 row is exactly
 ///   that case, and its evidence is `docs/reports/render-defaults-v3.md`. Note it
-///   covers the *values*, never the code implementing them — `film_base.source`
+///   covers the *values*, never the code implementing them — `calibration.film_base`
 ///   appears in it only as `null` (it has no default and must be chosen), which
 ///   is why `base` exists.
 ///
@@ -578,7 +588,8 @@ mod drift_gate {
     use crate::pipeline::film_base;
     use crate::pipeline::stages::{golden, reconstruct_and_print};
     use crate::types::{
-        DensityCurve, DensityParams, ExponentialParams, FilmBaseSource, PrintParams, Reconstruction,
+        DensityCurve, DensityParams, DmaxInput, DmaxSource, ExponentialParams, FilmBaseSource,
+        PrintParams, Reconstruction,
     };
 
     /// Format an `f32` as its raw bit pattern in hex — no decimal formatting, so
@@ -599,14 +610,23 @@ mod drift_gate {
     /// print it and a developer can *see* which pixel or diagnostic moved instead of
     /// only that a hash differs.
     fn render_fingerprint_text(recon: &Reconstruction, print: &PrintParams) -> String {
-        // `None` region: the gate fingerprints the *default* render, and the default
-        // anchor is `DmaxSource::Fixed`, which measures nothing off the frame. So
-        // this pins the render as it always has — and note what that means: the gate
-        // cannot see the effective-area path at all, because no curated vector
-        // resolves `Auto`.
-        let (out, report) =
-            reconstruct_and_print(&golden::pixels(), &golden::base(), recon, print, None)
-                .expect("the render must succeed on the curated vectors");
+        // The default reference, stated rather than inherited: `DmaxSource::Fixed`
+        // with no region, which measures nothing off the frame. So this pins the
+        // render as it always has — and note what that means: the gate cannot see the
+        // effective-area path at all, because no curated vector resolves `Auto`.
+        //
+        // **`calibration.dmax` reaches the render through this argument, not through
+        // `recon`**, since `core/calibration-recipe-section`. The `recipe` fingerprint
+        // still covers the default *value* (it hashes the whole default document); what
+        // this one covers is the arithmetic that value drives.
+        let (out, report) = reconstruct_and_print(
+            &golden::pixels(),
+            &golden::base(),
+            recon,
+            print,
+            DmaxInput::new(DmaxSource::Fixed),
+        )
+        .expect("the render must succeed on the curated vectors");
         let rgb: Vec<String> = out.rgb.iter().copied().map(hex).collect();
         let opt = |v: Option<f32>| v.map_or_else(|| "-".to_string(), hex);
         let triple = |v: Option<[f32; 3]>| {
@@ -636,7 +656,7 @@ mod drift_gate {
     ///
     /// It pins `Auto` **explicitly** rather than "whatever the default is",
     /// because this fingerprint exists to catch drift in the *detector*. Since
-    /// `film_base.source` lost its default, tying the gate to the default would
+    /// `calibration.film_base` lost its default, tying the gate to the default would
     /// have meant the estimator's fingerprint moving for a reason that has
     /// nothing to do with the estimator. (`Auto` was that default, so the
     /// recorded hash is unchanged by the switch.)
@@ -721,7 +741,7 @@ mod drift_gate {
             row.base,
             "the DEFAULT FILM-BASE ESTIMATE changed but PIPELINE_VERSION is still \
              {PIPELINE_VERSION}.\n\n\
-             `film_base.source` has NO default, so this stage runs only on runs that asked for \
+             `calibration.film_base` has NO default, so this stage runs only on runs that asked for \
              `auto` — but for those it resolves the divisor of the density conversion, and a \
              detector change moves every one of their outputs: raise PIPELINE_VERSION, update \
              PIPELINE_BEHAVIOR, add a history-table row, and ADD a new row with base: \

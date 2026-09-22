@@ -95,7 +95,7 @@ an untrusted user rectangle is the one remaining candidate.
 5. **What do the film-base *sources* collapse to?** With no rebate search, `Auto`
    and `Region` differ only in where the area came from, which is the "area" input.
    Whether `FilmBaseSource` keeps three variants, or becomes an area plus a method,
-   is a CLI/recipe surface question — and `film_base.source` is the one knob with no
+   is a CLI/recipe surface question — and `calibration.film_base` is the one knob with no
    default, so whatever replaces it inherits that rule.
 
 ## How to Verify

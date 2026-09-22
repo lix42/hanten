@@ -26,7 +26,7 @@ source should say so up front instead of failing after a full decode.
 
 ## What is known
 
-- `--auto-base` is the default `film_base.source` mode for `estimate`, and the detector
+- `--auto-base` is the default `calibration.film_base` mode for `estimate`, and the detector
   was redesigned for exactly the real layout (`dark holder → thin inset rebate →
   picture`) in `film-base/auto-base-redesign` (#23, 2026-07-16).
 - It has refused on **every real frame ever tried**: real-scan verification a week

@@ -18,7 +18,7 @@
 //!   `nf-core/minimal-end-to-end` wires the decode (`algo::fixed`) to that chain and a
 //!   destination behind it.
 //!
-//! `Flow` is *orchestration state*, like an unresolved `film_base.source`: it
+//! `Flow` is *orchestration state*, like an unresolved `calibration.film_base`: it
 //! never reaches a stage, and it is never a recipe key (`--new-flow` selects which
 //! knobs exist; it does not set one). Unlike `--report` / `--telemetry` /
 //! `--max-memory`, though, it is **not** in the "can never change a pixel" class —
@@ -26,7 +26,7 @@
 //! of the recipe rather than merely out of the image.
 
 use crate::cli::{ConvertArgs, ResolvedConfig};
-use crate::types::{NcError, Reconstruction, Result};
+use crate::types::{DmaxSource, NcError, Reconstruction, Result};
 
 /// The rendering chain a run resolves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -658,6 +658,30 @@ const VALUE_ENTRIES: &[ValueEntry] = &[
                             (`nf-core/minimal-end-to-end`)",
         },
     },
+    // The other half-read section, and the row is what keeps `calibration` in
+    // `READ_RECIPE_SECTIONS` honest: the base is read, the reference is not.
+    //
+    // **A value row rather than a section refusal, and rather than flag rows alone.**
+    // The four `--*d-max` flags above already cover what the user *types*; this covers
+    // what a *recipe* states, which before `core/calibration-recipe-section` was inside
+    // `reconstruction` and so already refused whole. Moving the key to its own section
+    // put it beyond that witness — the flag would have stayed refused while the recipe
+    // key saying the same thing was parsed and read by nothing.
+    //
+    // Matching a **non-default** resolved value is what makes it a value rule rather
+    // than a second presence rule: `"fixed"` is what an unstated reference resolves to,
+    // so refusing it would refuse every `--new-flow` run that states a base.
+    ValueEntry {
+        knob: "recipe `calibration.dmax`",
+        // The flag rows above own the flag spellings; this row exists for the recipe
+        // provenance they cannot see.
+        covers: &[],
+        matches: |cfg| cfg.calibration.dmax != DmaxSource::default(),
+        availability: Availability::Never {
+            reason: DMAX_REASON,
+            instead: None,
+        },
+    },
 ];
 
 /// A knob the new flow **reads** — the other half of the inventory.
@@ -750,17 +774,20 @@ pub const UNREAD_RECIPE_SECTIONS: &[&str] = &["reconstruction", "print", "output
 
 /// The recipe sections the new flow **does** read.
 ///
-/// `film_base` and `measure` are read in full. `input` is read apart from
-/// `export_ir`, whose export is staged after the render and so cannot be honoured
-/// yet — that one key is refused by a [`VALUE_ENTRIES`] row rather than by widening
-/// this list, because the rest of the section genuinely is read and refusing it
-/// whole would reject `--input-transfer` with it.
+/// `measure` is read in full. Two are read in part, and both take the same shape:
+/// the section stays here and the unread key is refused by a [`VALUE_ENTRIES`] row,
+/// because widening this list would reject the rest of the section with it.
+/// `input` is read apart from `export_ir`, whose export is staged after the render
+/// and so cannot be honoured yet. `calibration` is read apart from `dmax`: the fixed
+/// decode divides by `calibration.film_base` like any other, but its anchor rule
+/// reads no reference density at all, so refusing the section whole would reject the
+/// base with it.
 ///
 /// The complement of [`UNREAD_RECIPE_SECTIONS`], stated rather than inferred so that
 /// `every_recipe_section_is_classified` can fail on a section added to the schema
 /// and classified nowhere.
 #[cfg(test)]
-const READ_RECIPE_SECTIONS: &[&str] = &["input", "film_base", "measure"];
+const READ_RECIPE_SECTIONS: &[&str] = &["input", "calibration", "measure"];
 
 /// Refuse a **flag** the new flow has no meaning for.
 ///
@@ -816,7 +843,7 @@ pub fn reject_unavailable_values(flow: Flow, cfg: &ResolvedConfig) -> Result<()>
 /// `stated` comes from a raw-JSON witness, not from a comparison against the
 /// defaults: a recipe that *writes* the defaults it would otherwise inherit is
 /// indistinguishable from one that omitted them once serde has filled the gaps — the
-/// same reason `curve_dmax_present` exists.
+/// same reason `calibration_dmax_present` exists.
 ///
 /// One section per call is deliberate — the first stated one is named rather than
 /// all of them, because a user fixing a recipe removes them one at a time and a list

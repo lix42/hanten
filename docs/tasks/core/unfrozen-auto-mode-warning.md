@@ -14,7 +14,7 @@ warns.
 
 ```text
 report:   film_base {0.16312, 0.08011, 0.03772}   dmax 0.58147   wb [1.22832, 1.0, 0.72115]
-recipe:   film_base.source {"region": […]}        dmax "auto"    white_balance "percentile"
+recipe:   calibration.film_base {"region": […]}   calibration.dmax "auto"   white_balance "percentile"
 ```
 
 The report holds measurements; the recipe holds *modes*. Applying that recipe to a
