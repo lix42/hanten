@@ -23,6 +23,15 @@ whatever compensates it. Its strength must key on **distance from the neutral ax
 well as brightness**, or a bright coloured surface is neutralised as hard as a bright
 white one. It is a highlight operator and cannot reach cast below about L\* 70.
 
+**`path-to-white` is built against a hand-set contrast (user decision 2026-09-22).**
+Under the base-referenced anchor at contrast 2.0 the operator is **inert** — all three
+measured rolls land 0.55–1.28 stops below white — so the task is developed with a
+per-roll `--density-gamma` computed from that roll's base and red p97 (candidate C/D in
+`docs/spike/white-placement.md`), and its band values are provisional until
+`nf-reconstruction/anchor-rule` chooses the rule. Two tasks split out of it so they can
+run now against today's binary: `desaturation-band-fit` here, and
+`nf-display-stages/gamut-map-share`.
+
 ## stage
 
 **Status:** not started
@@ -228,7 +237,7 @@ white one. It is a highlight operator and cannot reach cast below about L\* 70.
 ## path-to-white
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-09-22
 
 - 2026-09-19: created with the new-flow plan. Goal: highlight desaturation.
 - 2026-09-19: the gating spike moved to `nf-calibration/scale-ladder` and was
@@ -237,6 +246,44 @@ white one. It is a highlight operator and cannot reach cast below about L\* 70.
   from the anchor (0.28 vs 0.5 mid-fraction) or the display tone (`none` vs
   reinhard), which the two presets also differ in. Whether any `density.scale`
   reaches those whites now decides if this task is load-bearing or an optional look.
+- 2026-09-22: **decided how this task gets built, before it can start.** The anchor
+  spike's number changes the premise: under the base-referenced `mid-at-base-offset`
+  anchor at contrast 2.0, all three measured rolls land **0.55–1.28 stops below white**
+  ([`docs/spike/white-placement.md`](../spike/white-placement.md)), so this operator would
+  be inert in a shipped render whatever form it takes. The lift comes from letting the
+  roll's own content drive **contrast** rather than moving a level — candidates **C**
+  (pin mid and solve `gamma = MID_GREY_OUTPUT_DECADES / (W - d)`; 4.15 / 2.57 / 3.11 on
+  the three rolls) and **D** (C with a gamma ceiling, so the noise budget is explicit
+  rather than accidental).
+
+  That rule belongs to `nf-reconstruction/anchor-rule`, which is expected to land
+  **after** this task. **User decision (option a):** build and verify this task against a
+  **hand-set per-roll contrast** — flags only, no new code — and treat the band's values
+  as provisional, re-fitted once the anchor rule is chosen. The control is
+  `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>` with `g`
+  computed per roll from that roll's measured base and its red p97.
+
+  Two things this changes about the tuning, both recorded on the task file:
+
+  **(1) Do not carry the spike's band values over.** The spike pinned white per frame at
+  p97, which is a *level* move; a contrast move steepens everything below white too, so a
+  different population of pixels lands in the operator's range. Re-placing the band under
+  the wrong white is the same work twice.
+
+  **(2) The threshold must become scene-referred.** The throwaway operator started at
+  *rendered* linear luminance 0.5 (~L\* 76), i.e. after fit range, while the design
+  requires the trigger at diffuse white, pre-branch. Once the decode pins mid — and on a
+  straight line a mid anchor and a white anchor are one rule — diffuse white is a known
+  value at the decode's output, so the threshold is expressed against that. The
+  operator's anchor *is* the decode's anchor.
+
+  Also noted: `nf-calibration/anchor-comparison` depends on this task while this task
+  needs an anchor that reaches white. The task graph stays acyclic and nothing records
+  that second direction as an edge — the coupling is the hand-set contrast.
+- 2026-09-22: two pieces split out so they can run now, against today's binary, instead
+  of waiting three tasks for the look stage: `nf-look/desaturation-band-fit` (the band's
+  numbers, fitted to one patch on one roll) and `nf-display-stages/gamut-map-share` (how
+  much of the convergence is the gamut map already). Both are now dependencies.
 
 ## contrast
 
@@ -266,3 +313,15 @@ white one. It is a highlight operator and cannot reach cast below about L\* 70.
 
 - 2026-09-19: created with the new-flow plan. Goal: spike: opt-in bounded scene-range mapping.
 
+## desaturation-band-fit
+
+**Status:** not started
+**Updated:** 2026-09-22
+
+- 2026-09-22: filed. Goal: place the saturation band from a distribution of marked
+  patches rather than from the single "sand beach" example on `2026-09-18-Gold200`. The
+  spike itself says the shape carries and the parameters do not, and names more marked
+  saturated patches on more rolls as the cheapest way to advance it. Runs against today's
+  binary — throwaway operator, anchor set by flag, patches marked in the review app — so
+  it does not wait for the look stage. Measure under the hand-set candidate C/D contrast
+  `path-to-white` will use, not the spike's per-frame p97 white.

@@ -31,7 +31,9 @@ luminance alone — that is the spike's main result. The cost on saturated colou
 the guard exists to remove. How much cast it hides was not measured and remains open for
 `path-to-white`. The gamut map's share is still unseparated: nothing reachable by flag
 turns it off, and `--display-tone shoulder` failed as a separator because it flattens
-rather than shapes.
+rather than shapes — now owned by
+[`nf-display-stages/gamut-map-share`](../nf-display-stages/gamut-map-share.md), filed
+2026-09-22.
 
 ## How to Verify
 

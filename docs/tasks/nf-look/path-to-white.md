@@ -44,16 +44,68 @@ white.
   decode (Part 3 makes the same point about comparing decodes).
 - **It must not double up with the gamut map** — which is also one of the two live
   candidates for the knee'd render's whites (`sdr.rs:249-266`, radial near luminance
-  1.0, with a ceiling that follows the rendered luminance). The spike separates their
-  shares; this task then makes the deliberate half deliberate.
+  1.0, with a ceiling that follows the rendered luminance). Separating their shares is
+  [its own task](../nf-display-stages/gamut-map-share.md); this task then makes the
+  deliberate half deliberate.
+- **Build it under a hand-set contrast, and treat the band's numbers as provisional
+  (decided 2026-09-22).** Under the base-referenced anchor the operator is inert — all
+  three measured rolls land 0.55–1.28 stops below white
+  ([`docs/spike/white-placement.md`](../../spike/white-placement.md)), so nothing enters
+  the range it acts in. The lift comes from letting the roll's own content drive
+  **contrast** rather than moving a level: candidates **C** (pin mid *and* solve
+  `gamma = MID_GREY_OUTPUT_DECADES / (W − d)`, reaching white by construction) and **D**
+  (C with a gamma ceiling, sliding toward B when it binds, so the noise budget is an
+  explicit parameter rather than an accident — C asks Gold200 for 4.15 where the outside
+  converters measured 3.07–3.18, and `corr(slope, noise) = 0.89`).
+
+  That rule is [`nf-reconstruction/anchor-rule`](../nf-reconstruction/anchor-rule.md)'s
+  to choose, and it is expected to land **after** this task. So this task is built and
+  verified against a **hand-set per-roll contrast** — flags only, no new code:
+  `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>`, with `g`
+  computed per roll from that roll's measured base and its red p97 (the arithmetic and
+  the raw data are in the anchor spike's working directory). That reaches candidate C
+  **exactly**, not approximately: `mid-at-base-offset` resolves
+  `A = d + MID_GREY_OUTPUT_DECADES / gamma`, and C's `gamma = MID_GREY_OUTPUT_DECADES /
+  (W − d)` substitutes into it to give `A = W`. The mid-anchored and content-anchored
+  spellings are the same placement — `white-placement.md`'s framing correction arriving a
+  second time. Solved the other way (`d = W − M/gamma`, giving 0.428 / 0.538 / 0.488 on
+  the three rolls — the spike's own table) the same two knobs reach **B** as well, so this
+  task can be tuned under more than one candidate white if that turns out to matter.
+
+  **A caution about tuning only there.** The exponential is the right control because `A`
+  is the density mapping to white *on the straight line*, so a knee'd curve's shoulder
+  compresses above it and `A = W` would not put rendered white at 1.0. But that means the
+  band is fitted on a render with **no per-channel shoulder** — one of the only two
+  surviving candidates for the knee'd render's clean whites (design-update Appendix F).
+  Check the fitted band under a knee'd render before shipping it, or record why not.
+  (The sigmoid carries the same `AnchorPlacement`, and `--sigmoid-contrast` is the
+  `--density-gamma` analogue, so the equivalent line exists.) The **shape** of the
+  operator is what this task ships; its parameters are re-fitted once the anchor rule is
+  chosen. Do not bank the band values against the spike's per-frame p97 white, which is
+  a *level* move: a contrast move steepens everything below white too, so a different
+  population of pixels lands in the operator's range.
+- **The threshold is scene-referred, and the spike's was not.** The throwaway operator
+  started at *rendered* linear luminance 0.5 (≈ L\* 76), i.e. after fit range. The design
+  requires the trigger at **diffuse white, pre-branch**. Once the decode pins mid — and
+  on a straight line a mid anchor and a white anchor are one rule, which is
+  `white-placement.md`'s framing correction — diffuse white is a known value at the
+  decode's output, so express the threshold against that. The operator's anchor *is* the
+  decode's anchor.
+- **Near-cycle worth knowing about.**
+  [`nf-calibration/anchor-comparison`](../nf-calibration/anchor-comparison.md) depends on
+  this task (only a render with a real highlight operator can rank the white placements),
+  while this task needs an anchor that reaches white. The task graph stays acyclic and no
+  edge records that second direction — the coupling is the hand-set contrast above. (The
+  executability answer is otherwise unremarkable: this task now needs three `[x]` deps,
+  not just the look stage — `desaturation-band-fit` and `gamut-map-share` were added the
+  same day and both can run immediately.)
 
 ## Open questions
 
-- **The functional form and its parameters.** The spike used a linear band over
-  linear-RGB `(max−min)/max`, full pull below `s0` and off above `s1`, placed at
-  0.30 → 0.45 — but that band was fitted to **one** saturated patch on one roll, so the
-  shape carries and the numbers do not. A perceptual saturation measure may separate the
-  cases better than a linear-RGB one.
+- **The functional form.** The spike used a linear band over linear-RGB `(max−min)/max`,
+  full pull below `s0` and off above `s1`. Its **numbers** are
+  [their own task](desaturation-band-fit.md) — 0.30 → 0.45 was fitted to one saturated
+  patch on one roll, so the shape carries and the values do not.
 - **Whether the pull should preserve hue exactly.** The spike's lerp toward `(Y, Y, Y)`
   holds luminance to 3e-3 but still rotates hue 4.3°, because a straight line to the
   achromatic point in linear ACEScg is not a constant-hue path in CIELAB. Nothing
@@ -89,5 +141,11 @@ white.
   — **done 2026-09-21.** Settled the form (a chroma pull, keyed on brightness and
   saturation) and left the gamut map's share unseparated; see Design
 - [Spike: does a diffuse-white anchor earn its place?](../nf-reconstruction/anchor-spike.md)
-  — if the anchor produces the whites, this task is an optional look rather than a
-  remedy for cast
+  — **done 2026-09-21**, and it moved this task's premise: under the base-referenced
+  anchor the operator is **inert**, so this task is built against a hand-set contrast
+  (see Design). Whether the anchor also produces the whites is
+  `nf-calibration/anchor-comparison`'s, and it depends on this task
+- [Fit the desaturation band on more than one patch](desaturation-band-fit.md)
+  — the values this task ships
+- [Separate the gamut map's share](../nf-display-stages/gamut-map-share.md)
+  — how much of the convergence is already happening before this operator exists
