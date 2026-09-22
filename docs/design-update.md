@@ -969,8 +969,11 @@ why.
   invariant. What remains is the **per-channel shoulder** and the **gamut map**,
   which converges radially near luminance 1.0 (`sdr.rs:249-266`) with a ceiling
   that follows the rendered luminance — so the tone choice reaches it indirectly
-  even though the tone itself cannot. Separating those two is what
-  `nf-reconstruction/anchor-spike` now exists for.
+  even though the tone itself cannot. Separating those two is
+  `nf-display-stages/gamut-map-share`'s (filed 2026-09-22). It was pointed at
+  `nf-reconstruction/anchor-spike`, which is done and did not separate them — nothing
+  turns the gamut map off by flag, so every desaturation measurement so far reads
+  shoulder-plus-gamut-map jointly.
 - **"The Ektar green cast is a drift, not a hue."** The argument used
   `curve_probe::channel_drift`, which groups **ordinary picture pixels** by red
   density and reads the green/red ratio across the groups, with no grey patch. A

@@ -34,6 +34,74 @@ recorded beside it. Hand-freezing keeps the constraint intact; lifting it makes 
 datasheet a runtime input for a value that must not vary per stock. Resolve that
 tension rather than finesse it.
 
+**If the rule ends up reading content, the rule and the measurement split (agreed
+2026-09-22).** Every candidate other than the fixed one needs the roll's own bright end
+([`docs/spike/white-placement.md`](../../spike/white-placement.md)), and nc already has
+the pattern for that: the **rule** is a look knob and the **measurement** it consumes is
+a calibration. That is `AnchorPlacement` today — design-spec §8 keeps `curve.anchor` in
+the curve precisely because "the anchor is the rule for what the reference places", while
+only the measured value leaves. So a content-referenced rule does not move the rule into
+`calibration`; it adds a **third measured key** beside `film_base` and `dmax`.
+`core/calibration-recipe-section` has been asked to keep that section open rather than
+model it as a closed pair. Four consequences:
+
+- **Record what was measured, not a distilled "white".** The headroom table below shows
+  p95 / p97 / p99 medians spanning 1.23 → 0.67 on one roll — more than half a stop — so a
+  bare scalar loses the definition. Store the percentile with its value — and probably the
+  per-frame spread,
+  since telling a genuinely flat roll from a wrong `d` is the whole reason candidate D
+  exists, and candidate C provably cannot do it.
+- **Nothing measures it today.** `estimate` reads one frame; a roll-level percentile
+  means reading the roll, with provenance and confidence. That is
+  `core/base-acquisition-planner`'s cascade, not a field — so a content-referenced rule
+  is a materially bigger change than a reference-free one, and that cost belongs in the
+  comparison.
+- **It is content-derived, not reference-derived.** `film_base` comes from the unexposed
+  rebate and `dmax` from the light-struck leader; a roll white comes from pictures. That
+  is a weaker kind of measurement and it is what the two guards below exist for.
+- **Keep the placement an enum** whatever this task picks.
+  [`nf-calibration/anchor-comparison`](../nf-calibration/anchor-comparison.md)
+  has to *render* the candidates to rank them, so collapsing to one rule before that
+  comparison runs would remove the thing it measures. Collapsing afterwards is a
+  retirement, not a decision to pre-empt here.
+
+**The candidates are cheaper to compare than they look, and the reason says what they
+really cost.** `mid-at-base-offset` resolves `A = d + MID_GREY_OUTPUT_DECADES / gamma`,
+so the placement is a two-parameter family `(d, gamma)` and every candidate is a point in
+it — solve either way. The hybrid fixes `d` and solves `gamma = M / (W − d)` to reach
+`A = W`; the level move fixes `gamma` and solves `d = W − M/gamma`, which at gamma 2.0 on
+Gold200's `W = 0.800` is 0.4276 — and `white-placement.md`'s own table already prints
+`d = 0.428 / 0.538 / 0.488` for the three rolls. So **all four are reachable on today's
+binary** as `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>`,
+which is also how
+[`nf-look/path-to-white`](../nf-look/path-to-white.md) is being built while this task is
+open, and why `--density-gamma` must stay reachable on the new flow.
+
+**Why the exponential rather than the sigmoid, stated properly.** It is *not* that `merge`
+refuses `--density-gamma` beside a resolved sigmoid — that rule is real, but you only need
+`--density-gamma` because you chose the exponential, and `--density-curve sigmoid
+--anchor-mid-offset <d> --sigmoid-contrast <g>` resolves the identical `A`: both curves
+carry the same `AnchorPlacement` (`DensityCurve::anchor`), and `--sigmoid-contrast` is
+documented as the `--density-gamma` analogue. The real reason is that `A` is the density
+mapping to white **on the straight line**, so on a knee'd curve the shoulder compresses
+above it and `A = W` does not put rendered white at 1.0 — the same extrapolation caveat
+`BlackAtBase`'s rustdoc already records for that curve. Worth knowing, because it means a
+highlight operator tuned only under the exponential is tuned on a render with **no
+per-channel shoulder** — one of the only two surviving candidates for the knee'd render's
+clean whites (design-update Appendix F). Whether the band must also be checked under a
+knee'd render is [`nf-display-stages/gamut-map-share`](../nf-display-stages/gamut-map-share.md)'s
+to inform.
+
+**So B/C/D need no decode change — they need a measurement of `W` and somewhere to put
+it.** The placement only grows a variant if it is to *consume* that measurement rather
+than take a hand-set number, which is the same distinction `film_base::estimate` draws by
+taking a **resolved** `&FilmBaseSource` rather than the params object. The shape to
+prefer, agreed with the `nf-reconstruction/fixed-decode` work: an enum whose **variant
+carries its own value**, rather than a positional `reference` that most rules ignore —
+today's `AnchorPlacement::anchor(reference, contrast)` ignores that argument in two of
+four variants, which is precisely what forced `reads_reference()` to exist as a separate
+predicate. A content-referenced variant should carry the measured density.
+
 ## Open questions
 
 - **The value itself.** ≈0.62 is today's pick and is expected to move — by visual

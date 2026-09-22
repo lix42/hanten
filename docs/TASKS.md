@@ -152,6 +152,7 @@ graph TD
   nf-scene-correction --> nf-look
   nf-reconstruction --> nf-look
   nf-look --> nf-display-stages
+  nf-display-stages --> nf-look
   nf-display-stages --> nf-destinations
   output --> nf-destinations
   nf-destinations --> nf-calibration
@@ -330,12 +331,14 @@ graph TD
     nf-look/look-presets
     nf-look/stock-data-home
     nf-look/scene-range-mapping
+    nf-look/desaturation-band-fit
   end
   subgraph nf-display-stages
     nf-display-stages/fit-range
     nf-display-stages/fit-gamut
     nf-display-stages/parametric-operator
     nf-display-stages/branch-contract
+    nf-display-stages/gamut-map-share
   end
   subgraph nf-destinations
     nf-destinations/preset-set
@@ -554,6 +557,10 @@ graph TD
   nf-reconstruction/anchor-spike --> nf-reconstruction/anchor-rule
   nf-reconstruction/anchor-spike --> nf-look/path-to-white
   nf-look/desaturation-spike --> nf-look/path-to-white
+  nf-look/desaturation-spike --> nf-look/desaturation-band-fit
+  nf-look/desaturation-band-fit --> nf-look/path-to-white
+  nf-look/desaturation-spike --> nf-display-stages/gamut-map-share
+  nf-display-stages/gamut-map-share --> nf-look/path-to-white
   nf-look/path-to-white --> nf-calibration/anchor-comparison
   nf-reconstruction/anchor-spike --> nf-calibration/anchor-comparison
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
@@ -959,9 +966,12 @@ the design in `docs/design-update.md`:
 - `nf-look/per-channel-grade` (new flow): `nf-look/stage`
   — the tunable counterpart of the decode's `scale`; subsumes the regional
   balance
-- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`, `nf-reconstruction/anchor-spike`, `nf-look/desaturation-spike`
+- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`, `nf-reconstruction/anchor-spike`, `nf-look/desaturation-spike`, `nf-look/desaturation-band-fit`, `nf-display-stages/gamut-map-share`
   — what makes whites read clean, made a deliberate control instead of a
-  gamut-map side effect
+  gamut-map side effect. Built against a **hand-set** per-roll contrast (decided
+  2026-09-22): under the base-referenced anchor the operator is inert, and the
+  rule that lifts white is `nf-reconstruction/anchor-rule`'s, expected after this
+  task — so the shape ships here and the values are re-fitted later
 - `nf-look/contrast` (new flow): `nf-look/stage`, `nf-reconstruction/gamma-split`
   — the look half of `gamma`; supersedes `algo/contrast-latitude-spike`
 - `nf-look/look-presets` (new flow): `nf-look/contrast`, `nf-look/per-channel-grade`
@@ -1068,6 +1078,15 @@ the design in `docs/design-update.md`:
 - `nf-look/desaturation-spike` (new flow): none
   — the per-channel half runs against today's binary and the hue-preserving half is a
   throwaway patch, so it settles the operator's form before the look stage exists
+- `nf-look/desaturation-band-fit` (new flow): `nf-look/desaturation-spike`
+  — filed 2026-09-22. The spike placed the saturation band from **one** saturated
+  patch on one roll, and said so: the shape carries, the numbers do not. Runs
+  against today's binary, so it can produce real values before the look stage exists
+- `nf-display-stages/gamut-map-share` (new flow): `nf-look/desaturation-spike`
+  — filed 2026-09-22. Nothing turns the gamut map off by flag, so every
+  desaturation measurement so far reads shoulder-plus-gamut-map jointly; it is also
+  one of the two surviving candidates for the knee'd render's whites. Runs against
+  today's binary
 - `nf-calibration/anchor-comparison` (new flow): `nf-look/path-to-white`, `nf-reconstruction/anchor-spike`
   — the spike costs the four white placements from the scans; only a render with a real
   highlight operator in the chain can rank them, and under the fixed anchor that
@@ -1575,9 +1594,13 @@ the design in `docs/design-update.md`:
 - [ ] [A per-channel grade with a mid-grey
   pivot](tasks/nf-look/per-channel-grade.md) — the tunable counterpart of the
   decode's `scale`; subsumes the regional balance
+- [ ] [Fit the desaturation band on more than one
+  patch](tasks/nf-look/desaturation-band-fit.md) — the spike placed it from a
+  single saturated patch on a single roll; runs against today's binary
 - [ ] [Highlight desaturation](tasks/nf-look/path-to-white.md) — what makes
   whites read clean, made a deliberate control instead of a gamut-map side
-  effect
+  effect; built against a hand-set per-roll contrast, because under the
+  base-referenced anchor the operator is inert
 - [ ] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
   `gamma`; supersedes `algo/contrast-latitude-spike`
 - [ ] [Re-express the `--preset` bundles](tasks/nf-look/look-presets.md) —
@@ -1605,6 +1628,9 @@ the design in `docs/design-update.md`:
 - [ ] [The SDR/HDR branch
   contract](tasks/nf-display-stages/branch-contract.md) — where the branch
   happens and what each side may differ in
+- [ ] [Separate the gamut map's
+  share](tasks/nf-display-stages/gamut-map-share.md) — how much of the highlight
+  convergence is the gamut map already; nothing turns it off by flag
 
 ### nf-destinations — [progress](progress/nf-destinations.md)
 > Where a render can go: the destination set, the direct Adobe RGB combination,

@@ -99,9 +99,44 @@ and `nf-calibration/anchor-comparison` in particular, needs that before they sta
 ## anchor-rule
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-09-22
 
 - 2026-09-19: created with the new-flow plan. Goal: one anchor rule, with a value for `d`.
+- 2026-09-22: **how a content-referenced rule would be spelled, decided before the task
+  starts.** Not which rule — that is still this task's call — but where its parts live if
+  it reads content. The **rule** stays a look knob and the **measurement** it consumes
+  becomes a third `calibration` key beside `film_base` and `dmax`; that is the
+  `AnchorPlacement` pattern already in the tree, which design-spec §8 states as "the
+  anchor is the rule for what the reference places" with only the measured value leaving.
+  `core/calibration-recipe-section` has been asked to keep that section open rather than
+  model it as a closed pair.
+
+  Four things that follow, now in the task file: record the **percentile with its value**
+  (p95/p97/p99 differ by about a stop on one roll, so a bare scalar loses the definition)
+  plus probably the per-frame spread, since telling a flat roll from a wrong `d` is
+  exactly what candidate D exists for and candidate C cannot do; **nothing measures it
+  today** — `estimate` reads one frame, a roll percentile means reading the roll with
+  provenance and confidence, i.e. `core/base-acquisition-planner`'s cascade; it is
+  **content-derived, not reference-derived**, unlike the rebate and the leader; and the
+  placement **stays an enum** whatever is picked, because `nf-calibration/anchor-comparison`
+  has to render the candidates to rank them.
+
+  **What the candidates actually cost, sharpened by the `fixed-decode` session the same
+  day.** The placement is a two-parameter family `(d, gamma)` and all four candidates are
+  points in it, because `A = d + MID_GREY_OUTPUT_DECADES / gamma` can be solved either
+  way: the hybrid fixes `d` and solves `gamma = M / (W - d)` to get `A = W`; the level
+  move fixes `gamma` and solves `d = W - M/gamma`, which at gamma 2.0 on Gold200's
+  `W = 0.800` is **0.4276** — and `white-placement.md`'s own table already prints
+  `d = 0.428 / 0.538 / 0.488` for the three rolls. So **every candidate is reachable on
+  today's binary** with `--density-curve exponential --anchor-mid-offset <d>
+  --density-gamma <g>` (the curve selector is required: `merge` refuses `--density-gamma`
+  beside the resolved sigmoid default). B and C were rendered at exit 0 to confirm.
+
+  **The consequence is the point of this entry.** B/C/D do not need a decode change —
+  they need a *measurement* of `W` and somewhere to put it. The anchor grows a variant
+  only if it is to **consume** that measurement rather than take a hand-set number, which
+  is the same distinction `film_base::estimate` draws by taking a *resolved*
+  `&FilmBaseSource` rather than the params object.
 
 ## gamma-split
 
