@@ -1055,6 +1055,17 @@ the design in `docs/design-update.md`:
 - `nf-docs/reference-sweep` (new flow): none
   — about a dozen `src/` and doc pointers still assert an inactive task is
   live or owns a decision
+- `nf-reconstruction/anchor-spike` (new flow): none
+  — runs against today's binary so it can run before the rule has to be chosen;
+  every converter measured anchors the bright end, and whether nc should is
+  currently argued rather than measured
+- `nf-look/desaturation-spike` (new flow): none
+  — the per-channel half runs against today's binary and the hue-preserving half is a
+  throwaway patch, so it settles the operator's form before the look stage exists
+- `nf-calibration/anchor-comparison` (new flow): `nf-look/path-to-white`, `nf-reconstruction/anchor-spike`
+  — the spike costs the four white placements from the scans; only a render with a real
+  highlight operator in the chain can rank them, and under the fixed anchor that
+  operator has nothing to act on
 
 ## Tasks
 
@@ -1680,15 +1691,3 @@ the design in `docs/design-update.md`:
 - [ ] [Re-point references to retired and superseded
   tasks](tasks/nf-docs/reference-sweep.md) — about a dozen `src/` and doc
   pointers still assert an inactive task is live or owns a decision
-
-- `nf-reconstruction/anchor-spike` (new flow): none
-  — runs against today's binary so it can run before the rule has to be chosen;
-  every converter measured anchors the bright end, and whether nc should is
-  currently argued rather than measured
-- `nf-look/desaturation-spike` (new flow): none
-  — the per-channel half runs against today's binary and the hue-preserving half is a
-  throwaway patch, so it settles the operator's form before the look stage exists
-- `nf-calibration/anchor-comparison` (new flow): `nf-look/path-to-white`, `nf-reconstruction/anchor-spike`
-  — the spike costs the four white placements from the scans; only a render with a real
-  highlight operator in the chain can rank them, and under the fixed anchor that
-  operator has nothing to act on

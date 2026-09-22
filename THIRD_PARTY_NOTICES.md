@@ -98,7 +98,7 @@ per-unit royalty to participating licensors.
 This is a **factual summary of the shipped license text, not legal advice, and not
 a completed legal review.** The HDR output spike deliberately re-homed the
 "licensed normative text / legal review" gate to the encoder tasks rather than
-treating it as satisfied (see `docs/hdr-output-spike.md`). What is discharged here
+treating it as satisfied (see `docs/spike/hdr-output-spike.md`). What is discharged here
 is the *standards* half — the AVIF v1.2 and AV1 specifications are public, so the
 profile, brand and CICP conformance claims were verified against their normative
 text. Counsel review of the AOM patent grant before a binary release remains

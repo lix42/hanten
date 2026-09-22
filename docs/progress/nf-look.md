@@ -13,8 +13,15 @@ ones.
 
 The creative stage the old chain never had: per-channel grade, path to white, contrast, look presets, and the stock data that survives `characteristic` leaving the decode.
 
-Nothing has landed yet: the epic was created on 2026-09-19 as part of the new-flow
-migration plan (`docs/nf-migration.md`).
+No code has landed yet — the epic was created on 2026-09-19 with the new-flow plan
+(`docs/nf-migration.md`) — but **one spike is done and it settles what `path-to-white`
+ships**. `desaturation-spike`
+([`docs/spike/highlight-desaturation.md`](../spike/highlight-desaturation.md)) chose a
+**chroma pull** over a per-channel curve — not on appearance, which is equivalent
+(ΔE ≈ 0.7), but because the curve moves luminance too and the fit range downstream eats
+whatever compensates it. Its strength must key on **distance from the neutral axis as
+well as brightness**, or a bright coloured surface is neutralised as hard as a bright
+white one. It is a highlight operator and cannot reach cast below about L\* 70.
 
 ## stage
 

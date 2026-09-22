@@ -33,7 +33,7 @@ and hardening work tracked in the task roadmap.
 - [`docs/TASKS.md`](docs/TASKS.md) — the build plan and dependency graph.
 - [`docs/negative-convertor-research-report.md`](docs/negative-convertor-research-report.md)
   — background research.
-- [`docs/gpu-rendering-spike.md`](docs/gpu-rendering-spike.md) — where `nc` spends
+- [`docs/spike/gpu-rendering-spike.md`](docs/spike/gpu-rendering-spike.md) — where `nc` spends
   its time, and why it multithreads every per-pixel stage and the AV1 encoder on the
   CPU rather than rendering on a GPU; revisit for an interactive or browser app.
 

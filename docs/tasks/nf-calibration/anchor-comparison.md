@@ -12,7 +12,7 @@ real highlight operator in the chain and judging the result.
 The spike settled what each option does to the *scale*; only a render settles which one
 looks right. It deliberately stopped there, because under option **A** nothing reaches
 the region a per-channel operator acts in — measured 0.55–1.28 stops short of white on
-three rolls — so a render before the operator exists would compare three configurations
+three rolls — so a render before the operator exists would compare four configurations
 of which one is inert.
 
 The shortlist, from [the report](../../spike/white-placement.md):

@@ -963,7 +963,7 @@ why.
   render.** Of the four differences, three cannot move a channel ratio at all:
   `print_exposure` is a scalar gain after the curve; the anchor factors out of
   `out_c = 10^(gamma·(scale_c·D_c − A))` as `10^(−gamma·A)`, identical on every
-  channel; and **every nc display tone is luminance-preserving** — `sdr.rs:248`
+  channel; and **every nc display tone is luminance-preserving** — `sdr.rs:244-247`
   and `hdr.rs:550` curve one luminance and multiply all three channels by the
   resulting ratio, so `shoulder`, `reinhard` and `none` alike leave every ratio
   invariant. What remains is the **per-channel shoulder** and the **gamut map**,

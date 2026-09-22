@@ -310,10 +310,14 @@ Their whites converge because their shoulder runs **per channel** against a comm
 ceiling: each channel asymptotes to the same value, so one arriving higher is
 compressed more (SF measured 1.13× apart at p97 and 1.05× at p99.5).
 
-**No nc display tone can do this.** `sdr.rs:248` and `hdr.rs:550` both curve one
+**No nc display *tone* can do this.** `sdr.rs:244-247` and `hdr.rs:550` both curve one
 luminance and multiply all three channels by the resulting ratio, so `shoulder`,
-`reinhard` and `none` alike leave every channel ratio invariant — a cast is carried
-untouched to display white however hard they compress. It is deliberate: the SDR test
+`reinhard` and `none` alike leave every channel ratio invariant, however hard they
+compress. What follows them is not ratio-invariant: `gamut_map` runs *after* that
+multiply (`sdr.rs:266`) and converges radially as luminance approaches 1, with a ceiling
+that follows the rendered luminance — so the tone choice reaches it indirectly. How much
+of the convergence is the gamut map's is unseparated; nothing reachable by flag turns it
+off. It is deliberate: the SDR test
 is named `shoulder_rolls_highlights_without_a_channel_clip_kink`. The only per-channel
 nonlinearity nc has above diffuse white is the sigmoid's shoulder, in reconstruction,
 which the new design removes.

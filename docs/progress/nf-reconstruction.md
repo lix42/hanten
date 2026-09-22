@@ -13,8 +13,13 @@ ones.
 
 The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`, `gamma` split into a calibration half and a look half.
 
-Nothing has landed yet: the epic was created on 2026-09-19 as part of the new-flow
-migration plan (`docs/nf-migration.md`).
+No code has landed yet — the epic was created on 2026-09-19 with the new-flow plan
+(`docs/nf-migration.md`) — but **one spike is done and its result is an input to other
+epics**. `anchor-spike` costed four ways to place the decode's white
+([`docs/spike/white-placement.md`](../spike/white-placement.md)) and found that under
+today's proposed anchor all three rolls measured land **0.55–1.28 stops short of white**,
+so a per-channel highlight operator has nothing to act on. Anyone building on this epic,
+and `nf-calibration/anchor-comparison` in particular, needs that before they start.
 
 ## fixed-decode
 

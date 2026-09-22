@@ -157,9 +157,10 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `algo::finish_print` is the stage-4 print bridge. The old `Converter` trait and
   `AlgoParams` are gone.
   **`density.scale`'s default is per-curve, and constructing one by hand is a trap.**
-  `DensityParams::default_scale_for` is the single definition: `[1, 0.90, 0.86]` for the
-  parametric curves (a scanner calibration — green and blue density rise ~11-18% faster
-  than red in a scan) and `[1, 1, 1]` for `characteristic`, which already carries each
+  `DensityParams::default_scale_for` is the single definition: `[1, 0.84, 0.73]` for the
+  parametric curves (a scanner calibration — green and blue density rise ~19-37% faster
+  than red in a scan; re-calibrated from 31 neutral patches on 2026-09-16, and the
+  earlier `[1, 0.90, 0.86]` stood here long after the code moved) and `[1, 1, 1]` for `characteristic`, which already carries each
   stock's per-channel structure and would otherwise be corrected twice (measured: channel
   means move 0.039 → 0.185 off neutral). It is resolved in **three** places — the recipe's
   `Deserialize` (reading key *presence* off the raw JSON, since the field is a concrete
