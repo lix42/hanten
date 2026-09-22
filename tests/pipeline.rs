@@ -11196,11 +11196,14 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
 
 #[test]
 fn without_new_flow_nothing_moves() {
-    // The flag's first contract: absent, it changes nothing — and present, it still
-    // resolves the *same* recipe, because it is not a knob. Asserted on the resolved
-    // params rather than on pixels: `--dump-params` is written before the render, so
-    // it is the one artifact both paths produce, and a `new_flow` key leaking into
-    // `ResolvedConfig` would show up here as a diff.
+    // The flag's first contract: absent, it changes nothing, and it never becomes a
+    // recipe key. The *parity* half of this test is gone and deliberately so — since
+    // `nf-reconstruction/fixed-decode` the new flow decodes through its own params,
+    // so the resolved legacy recipe no longer describes what it would render, and
+    // `--dump-params` is refused under the flag rather than writing a recipe that
+    // replays as a different picture. What is still assertable: the no-flag path
+    // dumps and converts exactly as before, and nothing named `new_flow` reaches the
+    // recipe.
     let tmp = TempDir::new("new-flow-params");
     let dump_off = tmp.path("off.json");
     let dump_on = tmp.path("on.json");
@@ -11230,15 +11233,29 @@ fn without_new_flow_nothing_moves() {
     let (code, _out, err) = run_exact(&borrow(&off));
     assert_eq!(code, 0, "the no-flag path still converts: {err}");
 
-    let on = args(&dump_on, &tmp.path("on.tif"), &["--new-flow"]);
-    let (code, _out, _err) = run_exact(&borrow(&on));
-    assert_eq!(code, 4, "the new flow has no output to render into yet");
-
-    assert_eq!(
-        std::fs::read_to_string(&dump_off).unwrap(),
-        std::fs::read_to_string(&dump_on).unwrap(),
-        "`--new-flow` must not perturb the resolved recipe — it is not a recipe key"
+    let dumped = std::fs::read_to_string(&dump_off).unwrap();
+    assert!(
+        !dumped.contains("new_flow"),
+        "`--new-flow` must not leak into the recipe — it is not a recipe key: {dumped}"
     );
+
+    // With the flag, the dump is refused rather than written: it is produced before
+    // the render, from the resolved *legacy* config, so under `--new-flow` it would
+    // hand back a recipe describing a chain this run did not select.
+    let on = args(&dump_on, &tmp.path("on.tif"), &["--new-flow"]);
+    let (code, _out, err) = run_exact(&borrow(&on));
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--dump-params"), "{err}");
+    assert!(err.contains("nf-core/recipe-schema"), "{err}");
+    assert!(!dump_on.exists(), "a refused dump must write nothing");
+
+    // Falsifiability: without the dump the same command line still reaches the seam,
+    // so the refusal above keys on `--dump-params` and not on the flag alone.
+    let mut bare: Vec<String> = args(&dump_on, &tmp.path("bare.tif"), &["--new-flow"]);
+    let at = bare.iter().position(|a| a == "--dump-params").unwrap();
+    bare.drain(at..=at + 1);
+    let (code, _out, err) = run_exact(&borrow(&bare));
+    assert_eq!(code, 4, "{err}");
 }
 
 #[test]
@@ -11506,6 +11523,385 @@ fn the_availability_gate_outranks_a_merge_refusal_too() {
 }
 
 #[test]
+fn a_knee_flag_beside_a_knee_less_curve_is_refused_before_merge_can_loop() {
+    // Regression: the `--density-curve` availability row and `merge`'s knee rule
+    // closed a two-step advice loop. `--density-curve exponential --sigmoid-toe 0`
+    // got merge's "pass `--density-curve sigmoid`"; following it hit the flow row's
+    // "use `--density-curve exponential`"; and *neither* message ever stated the one
+    // action that works — drop the knee flag. A zero knee is accepted on its own (it
+    // asks for the straight line this flow already decodes with), so the pair is what
+    // has to be refused, pre-`merge`, where the remedy is "drop it".
+    let tmp = TempDir::new("new-flow-knee-pair");
+    let refuse = |extra: &[&str]| -> String {
+        let out = tmp.path("out.tif");
+        let fixture_path = fixture("hdr-48bit.tif").display().to_string();
+        let mut argv: Vec<&str> = vec![
+            "convert",
+            &fixture_path,
+            "-o",
+            out.to_str().unwrap(),
+            "--output-preset",
+            "legacy",
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--new-flow",
+            "--report",
+            "none",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, _out, err) = run_exact(&argv);
+        assert_eq!(code, 2, "{extra:?} must be refused: {err}");
+        err
+    };
+
+    for knee in ["--sigmoid-toe", "--sigmoid-shoulder"] {
+        let err = refuse(&["--density-curve", "exponential", knee, "0"]);
+        assert!(err.contains(knee), "names the knob typed: {err}");
+        assert!(err.contains("Drop it for now"), "{err}");
+        // The loop's other half: merge's remedy must never be what the user sees
+        // here, because following it lands on a curve this flow refuses.
+        assert!(
+            !err.contains("--density-curve sigmoid"),
+            "merge's looping remedy must not win: {err}"
+        );
+    }
+
+    // Falsifiability, both directions. A zero knee *alone* is still the accepted
+    // identity value — that is the flags-win reset the rows exist to preserve — and
+    // the pair is still perfectly legal on the current chain.
+    let tmp2 = TempDir::new("new-flow-knee-pair-controls");
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp2.path("bare.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--sigmoid-toe",
+        "0",
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 4, "a zero knee alone stays accepted: {err}");
+
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp2.path("legacy.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--density-curve",
+        "exponential",
+        "--sigmoid-toe",
+        "0",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--density-curve sigmoid"),
+        "on the current chain merge's rule is exactly what fires: {err}"
+    );
+}
+
+#[test]
+fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
+    // The reconstruction half of the availability inventory, driven through the
+    // binary. Each row is asserted to name the knob the user typed **and** to carry
+    // the verdict its design earns: the reference density and the other anchor
+    // placements are gone for good, the per-stock curve and the regional balance are
+    // waiting for a rendering stage. Asserting the losing verdict's wording is absent
+    // is the only thing that tells two rules apart when both name the knob.
+    let tmp = TempDir::new("new-flow-stranded");
+    let refuse = |extra: &[&str]| -> String {
+        let out = tmp.path("out.tif");
+        let mut argv: Vec<&str> = vec![
+            "convert",
+            "FIXTURE",
+            "-o",
+            out.to_str().unwrap(),
+            "--output-preset",
+            "legacy",
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--new-flow",
+            "--report",
+            "none",
+        ];
+        let fixture_path = fixture("hdr-48bit.tif").display().to_string();
+        argv[1] = &fixture_path;
+        argv.extend_from_slice(extra);
+        let (code, _out, err) = run_exact(&argv);
+        assert_eq!(code, 2, "{extra:?} must be refused: {err}");
+        err
+    };
+
+    // Gone for good — a leader `Dmax` is film saturation, which is neither diffuse
+    // white nor the density this decode pins. All four spellings, `--no-d-max`
+    // included: "resolve the reference from nowhere" is a statement about a quantity
+    // the fixed decode does not have, not an identity value of one it does.
+    for knob in [
+        vec!["--d-max", "1.6"],
+        vec!["--fixed-d-max"],
+        vec!["--auto-d-max"],
+        vec!["--no-d-max"],
+        vec!["--anchor-white-at-reference"],
+        vec!["--anchor-mid-fraction", "0.5"],
+        vec!["--anchor-black-floor", "0.005"],
+        vec!["--sigmoid-contrast", "2.0"],
+        vec!["--density-curve", "sigmoid"],
+    ] {
+        let err = refuse(&knob);
+        assert!(err.contains(knob[0]), "names the knob typed: {err}");
+        assert!(err.contains("will not gain one"), "{knob:?}: {err}");
+        assert!(
+            !err.contains("no counterpart for it yet"),
+            "the losing verdict's wording must be absent: {err}"
+        );
+    }
+
+    // Waiting for a rendering stage, and each remedy must name the stage that carries
+    // it rather than a knob this flow also refuses.
+    for (knob, arriving) in [
+        (vec!["--film-stock", "ektar-100"], "nf-look/stock-data-home"),
+        (
+            vec!["--shadow-balance", "0.1,0,0"],
+            "nf-look/per-channel-grade",
+        ),
+        (
+            vec!["--highlight-balance", "0,0,0.1"],
+            "nf-look/per-channel-grade",
+        ),
+        (vec!["--preset", "sigmoid-knees"], "nf-look/look-presets"),
+    ] {
+        let err = refuse(&knob);
+        assert!(err.contains(knob[0]), "names the knob typed: {err}");
+        assert!(err.contains("no counterpart for it yet"), "{knob:?}: {err}");
+        assert!(err.contains(arriving), "{knob:?}: {err}");
+        assert!(
+            !err.contains("will not gain one"),
+            "the losing verdict's wording must be absent: {err}"
+        );
+    }
+}
+
+#[test]
+fn the_new_flow_refusal_outranks_the_merge_rule_for_the_same_command_line() {
+    // The ordering discipline, and the one case in this table where it bites: `merge`
+    // refuses `--film-stock` without `--density-curve characteristic`, and its remedy
+    // is "pass `--density-curve characteristic`" — a curve `--new-flow` itself
+    // rejects. A rule must run before anything *coarser* can refuse, not merely early
+    // within its own gate, so the availability row runs pre-`merge` and this asserts
+    // the losing remedy never reaches the user.
+    let tmp = TempDir::new("new-flow-ordering");
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("out.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--film-stock",
+        "ektar-100",
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--film-stock"), "{err}");
+    assert!(
+        !err.contains("--density-curve characteristic"),
+        "merge's remedy names a curve this flow refuses; it must not win: {err}"
+    );
+
+    // Falsifiability: without the flag, merge's rule is exactly what fires.
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("legacy.tif").to_str().unwrap(),
+        "--output-preset",
+        "legacy",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--film-stock",
+        "ektar-100",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--density-curve characteristic"), "{err}");
+}
+
+#[test]
+fn the_fixed_decodes_own_knobs_stay_reachable_under_the_new_flow() {
+    // The falsifiable control for the table above: everything the fixed decode
+    // actually reads must still be accepted, or the inventory has over-reached.
+    // Reaching the seam (exit 4) is what "accepted" looks like while the chain has no
+    // output to render into. The identity values are here too — naming the curve the
+    // flow already decodes with, or a zero balance — because refusing those would
+    // kill the flags-win reset that lets one recipe be re-used on the new chain.
+    let tmp = TempDir::new("new-flow-surviving");
+    for (i, extra) in [
+        vec!["--density-scale", "1,0.9,0.8"],
+        vec!["--density-offset", "0,-0.03,-0.05"],
+        vec!["--density-gamma", "1.8"],
+        vec!["--anchor-mid-offset", "0.62"],
+        vec!["--density-curve", "exponential"],
+        vec!["--shadow-balance", "0,0,0"],
+        vec!["--highlight-balance", "0,0,0"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let out = tmp.path(&format!("out{i}.tif"));
+        let mut argv: Vec<&str> = vec![
+            "convert",
+            "FIXTURE",
+            "-o",
+            out.to_str().unwrap(),
+            "--output-preset",
+            "legacy",
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--density-curve",
+            "exponential",
+            "--new-flow",
+            "--report",
+            "none",
+        ];
+        let fixture_path = fixture("hdr-48bit.tif").display().to_string();
+        argv[1] = &fixture_path;
+        // `--density-curve exponential` is already in the list; don't repeat it.
+        if extra != ["--density-curve", "exponential"] {
+            argv.extend_from_slice(&extra);
+        }
+        let (code, _out, err) = run_exact(&argv);
+        assert_eq!(code, 4, "{extra:?} must be accepted: {err}");
+        assert!(err.contains("cannot render yet"), "{extra:?}: {err}");
+    }
+
+    // The same knobs **bare**, which the loop above cannot see: it injects
+    // `--density-curve exponential` into every case, so its `--density-gamma` row
+    // asserts strictly less than `docs/using-nc.md` claims for these four.
+    let bare = |extra: &[&str], out: &Path| -> (i32, String) {
+        let mut argv: Vec<String> = vec![
+            "convert".into(),
+            fixture("hdr-48bit.tif").display().to_string(),
+            "-o".into(),
+            out.display().to_string(),
+            "--output-preset".into(),
+            "legacy".into(),
+            "--film-base".into(),
+            "0.9,0.55,0.42".into(),
+            "--new-flow".into(),
+            "--report".into(),
+            "none".into(),
+        ];
+        argv.extend(extra.iter().map(|s| (*s).to_string()));
+        let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let (code, _out, err) = run_exact(&borrowed);
+        (code, err)
+    };
+    for (i, extra) in [
+        vec!["--density-scale", "1,0.9,0.8"],
+        vec!["--density-offset", "0,-0.03,-0.05"],
+        vec!["--anchor-mid-offset", "0.62"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (code, err) = bare(&extra, &tmp.path(&format!("bare{i}.tif")));
+        assert_eq!(code, 4, "{extra:?} must be accepted bare: {err}");
+        assert!(err.contains("cannot render yet"), "{extra:?}: {err}");
+    }
+
+    // And the one exception the guide has to state: bare `--density-gamma` never
+    // reaches `--new-flow`'s rules at all. `merge` refuses it first (exit 2) because
+    // the resolved default curve is still the sigmoid, so the flag is reachable only
+    // with `--density-curve exponential` named alongside — which is why
+    // `--sigmoid-contrast`'s new-flow refusal names the pair rather than the flag.
+    let (code, err) = bare(&["--density-gamma", "1.8"], &tmp.path("bare-gamma.tif"));
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("the resolved curve is sigmoid"), "{err}");
+    assert!(
+        !err.contains("cannot render yet"),
+        "the new flow's seam must not be what answered here: {err}"
+    );
+}
+
+#[test]
+fn convert_under_the_new_flow_refuses_a_recipe_reconstruction() {
+    // The provenance neither availability table can see. The new flow decodes through
+    // its own params, so this section would parse, validate, and then be read by
+    // nothing — `deny_unknown_fields` catches an unknown key and is blind to a known
+    // but meaningless one.
+    let tmp = TempDir::new("new-flow-recipe");
+    let recipe = write_file(
+        &tmp.path("r.json"),
+        r#"{
+  "reconstruction": { "type": "density" },
+  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+  "output": { "preset": "legacy" }
+}"#,
+    );
+    let argv = |flow: &[&str], out: &Path| -> (i32, String) {
+        let mut v: Vec<String> = vec![
+            "convert".into(),
+            fixture("hdr-48bit.tif").display().to_string(),
+            "-o".into(),
+            out.display().to_string(),
+            "--params".into(),
+            recipe.display().to_string(),
+            "--report".into(),
+            "none".into(),
+        ];
+        v.extend(flow.iter().map(|s| (*s).to_string()));
+        let borrowed: Vec<&str> = v.iter().map(String::as_str).collect();
+        let (code, _out, err) = run_exact(&borrowed);
+        (code, err)
+    };
+
+    let (code, err) = argv(&["--new-flow"], &tmp.path("out.tif"));
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`reconstruction` section"), "{err}");
+    assert!(err.contains("nf-core/recipe-schema"), "{err}");
+
+    // Falsifiability, both directions: the same recipe converts without the flag, and
+    // a recipe *without* the section reaches the seam rather than being refused.
+    let (code, err) = argv(&[], &tmp.path("legacy.tif"));
+    assert_eq!(code, 0, "{err}");
+
+    let clean = write_file(
+        &tmp.path("clean.json"),
+        r#"{
+  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+  "output": { "preset": "legacy" }
+}"#,
+    );
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("clean.tif").to_str().unwrap(),
+        "--params",
+        clean.to_str().unwrap(),
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 4, "{err}");
+}
+
+#[test]
 fn roll_under_the_new_flow_refuses_once_before_any_decode() {
     // `roll` takes the flag too, and refuses **once**, after the plan resolves and
     // before the first decode. Not per frame: unlike the memory gate — whose verdict
@@ -11513,9 +11909,17 @@ fn roll_under_the_new_flow_refuses_once_before_any_decode() {
     // already known, so per-frame handling would decode every frame of a real roll to
     // print one identical error N times. Pinned by counting what was written.
     let tmp = TempDir::new("new-flow-roll");
-    // `ROLL_RECIPE` carries nothing new-flow-specific, so a refusal can only come
-    // from the flag.
-    let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
+    // A shared recipe with **no** `reconstruction` section, so the refusal can only
+    // come from the flag. `ROLL_RECIPE` states one and is therefore refused a step
+    // earlier — which is what `roll_under_the_new_flow_refuses_a_recipe_reconstruction`
+    // covers.
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{
+  "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
+  "output": { "preset": "legacy" }
+}"#,
+    );
     let out_dir = tmp.path("out");
     let (code, _stdout, err) = run_exact(&[
         "roll",
@@ -11538,6 +11942,47 @@ fn roll_under_the_new_flow_refuses_once_before_any_decode() {
         !out_dir.exists(),
         "roll must refuse before it creates --out-dir, let alone decodes a frame"
     );
+}
+
+#[test]
+fn roll_under_the_new_flow_refuses_a_recipe_reconstruction() {
+    // `roll` accepts no conversion flags, so its shared recipe is the *only* way it
+    // can state a reconstruction — and therefore the only place the
+    // accepted-and-ignored hole could open, since the new flow decodes through its
+    // own params and would never read that section. Refused at exit 2 (a usage
+    // problem the user can fix) rather than the seam's exit 4.
+    let tmp = TempDir::new("new-flow-roll-recipe");
+    let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
+    let out_dir = tmp.path("out");
+    let (code, _stdout, err) = run_exact(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--new-flow",
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`reconstruction` section"), "{err}");
+    assert!(err.contains("nf-core/recipe-schema"), "{err}");
+    assert!(!out_dir.exists(), "refused before anything is created");
+
+    // Falsifiability, both directions: the same recipe converts without the flag,
+    // and the refusal is about the section rather than about `--params`.
+    let (code, _stdout, err) = run_exact(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--out-dir",
+        tmp.path("legacy-out").to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--report",
+        "none",
+    ]);
+    assert_eq!(code, 0, "{err}");
 }
 
 #[test]

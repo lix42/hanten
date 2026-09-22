@@ -26,6 +26,7 @@
 
 pub mod density;
 pub mod film_stock;
+pub mod fixed;
 pub mod sigmoid;
 pub mod simple;
 

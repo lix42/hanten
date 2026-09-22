@@ -2849,6 +2849,7 @@ nc/
     │   ├── simple.rs     # baseline inversion
     │   ├── density.rs    # density reconstruction + exponential curve
     │   ├── sigmoid.rs    # sigmoid density curve
+    │   ├── fixed.rs      # the new flow's fixed, stock-agnostic decode
     │   └── film_stock/   # the digitized per-stock curves `--film-stock` inverts
     ├── flow.rs           # the transitional --new-flow selector (deleted by the flip)
     ├── telemetry.rs      # opt-in JSONL perf/context record (never perturbs output)

@@ -1620,26 +1620,62 @@ no counterpart for it, and will not gain one: … Use `--reconstruction density`
 ```
 
 A knob can be refused by the **flag** you typed or by the **resolved value**, and
-`simple` is both — so the same refusal reaches you from a recipe, with no flag on
-the command line, worded for that spelling:
+`simple` is both, so the refusal also reaches a spelling with no flag on the command
+line — a `roll` per-frame override, for instance.
+
+**The reconstruction knobs are fully classified**, because the fixed decode that
+strands them has landed. It is one decode for every negative: a straight line in
+density against log exposure, with one reference-free anchor rule. So these are
+refused:
+
+| Refused | Why |
+|---|---|
+| `--d-max`, `--fixed-d-max`, `--auto-d-max`, `--no-d-max` | the anchor rule never reads a reference density, so nothing resolves one. A `Dmax` measured from a leader is film *saturation* — neither diffuse white nor the density this decode pins |
+| `--anchor-white-at-reference`, `--anchor-mid-fraction`, `--anchor-black-floor` | the decode has one anchor rule |
+| `--density-curve sigmoid`, `--density-curve characteristic`, `--sigmoid-contrast` | the curve is no longer a choice the decode offers |
+| `--film-stock` | per-stock normalization becomes an optional **rendering** step |
+| `--shadow-balance`, `--highlight-balance` (non-zero) | a grade; it moves to the look stage's per-channel control |
+| `--preset` | a preset sets knobs on both sides of the decode/rendering boundary |
+| `--dump-params` | it writes the resolved *current-chain* recipe, before the render — under `--new-flow` that would hand you a recipe describing a chain the run did not select |
+
+And these still work, because they *are* the fixed decode's own calibration and
+anchor: `--density-scale`, `--density-offset` and `--anchor-mid-offset`. So does
+`--density-curve exponential`, which names what the new flow already decodes
+with, and a zero `--shadow-balance` / `--highlight-balance`
+/ `--sigmoid-toe` / `--sigmoid-shoulder` — an identity value asks for nothing, which
+is what lets one recipe be re-used on either chain.
+
+`--density-gamma` is the fixed decode's own contrast and reaches it too, but **not on
+its own**: pass `--density-curve exponential --density-gamma <value>`. Bare, it is
+refused with exit 2 before `--new-flow`'s rules are consulted at all, because the
+resolved default curve is still the sigmoid and gamma is the *exponential* curve's
+knob. The qualification goes away when the new flow's default curve moves.
+
+A **recipe** is handled differently from a flag here. The new flow decodes through
+its own parameters rather than the `reconstruction` section, so a recipe carrying
+that section would be parsed and then read by nobody — refused whole rather than
+accepted and ignored:
 
 ```console
-$ hanten convert … --new-flow --params recipe.json     # {"reconstruction": {"schema_version": 1, "type": "simple"}}
-usage: `simple` reconstruction (`--reconstruction simple`, recipe
-`reconstruction.type`) has no meaning under `--new-flow`: the new flow has no
-counterpart for it, and will not gain one: … Use `--reconstruction density`, …
+$ hanten convert … --new-flow --params recipe.json     # {"reconstruction": {…}}
+usage: a recipe `reconstruction` section has no meaning under `--new-flow`: the
+new flow has no counterpart for it yet — one arrives with the new chain's recipe
+schema, which decides how a recipe describes these stages at all — until then the
+new flow would parse this section and never read it (`nf-core/recipe-schema`). …
 ```
 
-The inventory is still being assembled (`nf-core/knob-availability-audit`), so
-today only a few knobs are classified — most notably, a knee stated by a *recipe*
-rather than by `--sigmoid-toe` / `--sigmoid-shoulder` is not yet refused.
+That is blunt and temporary: `nf-core/recipe-schema` decides how a recipe describes
+the new stages, and until it does, state the decode's knobs as flags. The rest of
+the inventory — `print.*`, `output.*`, `measure.*` — is still being assembled
+(`nf-core/knob-availability-audit`).
 
 On `roll` the flag applies to every frame, and the "cannot render yet" refusal comes
 **once**, after the plan is resolved and before the first frame is decoded — so a
 roll fails in a second rather than decoding every frame to print the same error N
-times. `roll` takes no conversion flags, so the knobs it can trip are resolved
-values, from the shared recipe or a per-frame override; those are still diagnosed
-first, per frame, at exit 2.
+times. `roll` takes no conversion flags, so the knobs it can trip come from the
+shared recipe or a per-frame override; a shared recipe stating `reconstruction` is
+refused up front, and a per-frame override's resolved values are diagnosed per
+frame, at exit 2.
 
 ---
 

@@ -447,7 +447,8 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   anchor factors out of the toe but *not* the shoulder's fixed-ceiling soft-min (69-81% off
   at the default 0.6); `algo::sigmoid`'s `anchor_is_a_pure_gain_only_without_the_shoulder`
   pins both directions),
-  `algo/{mod,simple,density,sigmoid}.rs`, `telemetry.rs`, `version.rs`
+  `algo/{mod,simple,density,sigmoid,fixed}.rs`, `algo/film_stock/`, `telemetry.rs`,
+  `version.rs`
   (build/pipeline identity + `stable_hash`, the crate's only params-hash
   implementation — `telemetry::params_hash` delegates to it so the core report
   never depends on the opt-in telemetry module), `cli.rs`, `main.rs`, plus
@@ -825,7 +826,20 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   - **Model the stage exactly as written.** Its f32 division must happen in f32
     before the f64 `log10` (dividing in f64 put the reference 5 ULPs out), and an
     identity gain/offset still cannot be dropped — `+ offset` is what turns the
-    film-base pixel's `-0.0` into the `+0.0` actually stored.
+    film-base pixel's `-0.0` into the `+0.0` actually stored. (That `-0.0` is a fact
+    about the *staged* path's stored density; fused into one pass it is consumed by
+    the anchor subtraction and never reaches a pixel, so the rule survives only as a
+    convention there — see the next bullet.)
+  - **Mutation-test the guarantee, and witness it at the stage *output*.** A rule can
+    be documented, believed and vacuous: two of the fixed decode's four bit-identity
+    rules moved **0 of 12** samples, because the `density.offset` default is
+    `[0, 0, 0]`. Two traps beyond that. A witness found in the *intermediate*
+    arithmetic may not survive to the output — an FMA witness 2 ULPs wide at `D′` was
+    absorbed by the following `10^` and was bit-identical at the pixel — so search the
+    stage's output, not its middle. And one parameterisation rarely covers every rule:
+    adding a non-zero offset made the offset rule live and the f64-division rule
+    vacuous, so keep both. Prefer sweeping a band with a `witnesses > 0` assertion
+    over pinning one sample a 1-ULP-different libm may not reproduce.
   The **drift gate cannot use any of this**: it hashes raw f32 bits, so it has no
   window at all and a sample whose render differs across targets must be designed
   out of the vector before it enters `PIPELINE_FINGERPRINTS`.
@@ -1007,11 +1021,16 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   out of the image. Do **not** describe it with the operational trio's "never affects
   the output" wording. It is migration scaffolding with a written expiry
   (`nf-core/default-flip` deletes the flag and the module), and its availability
-  refusals key on **presence before `merge`** and on **resolved value first inside
-  `validate_convert`** — a presence rule placed after `merge` is unreachable on every
-  command line `merge` refuses first. `roll` takes the flag too and reaches only the
-  value half (it accepts no conversion flags), at **two** validate sites composed into
-  `cli::validate_with_flow`.
+  refusals key on **three** provenances, in the order they run: flag **presence before
+  `merge`** — a presence rule placed after it is unreachable on every command line
+  `merge` refuses first; raw-JSON **recipe-section presence** right after `load_recipe`
+  (`flow::reject_recipe_reconstruction`), which exists because the new flow decodes
+  through its own `DecodeParams` rather than the resolved `reconstruction`, so that
+  section would otherwise be parsed and read by nobody; and **resolved value first
+  inside `validate_convert`**. `roll` takes the flag too and reaches the second and
+  third — its shared recipe is the only way it can state a reconstruction — but not
+  the first, since it accepts no conversion flags; the value half runs at **two**
+  validate sites composed into `cli::validate_with_flow`.
   **`film_base.source` is the first knob with no default at all** (`Option`, no
   `Default` on `FilmBaseSource`): `convert`/`roll` refuse an unstated one rather
   than choosing. A defaultless knob adds two obligations — every `ResolvedConfig`
@@ -1061,6 +1080,14 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     independently invalid there (`--density-curve exponential --sigmoid-toe 0.3`, a
     non-finite knee). Word the escape hatch so it survives the branch you did not
     look at.
+    **Bound by reachable *values*, not by knobs — a sixth instance, and the first that
+    is a genuine cycle.** Two individually-correct rules can close one: under
+    `--new-flow`, `merge` sent `--density-curve exponential --sigmoid-toe 0` to "pass
+    `--density-curve sigmoid`", the availability table refused that back to
+    `exponential`, and neither message ever named the action that works (drop the
+    knee). It survived a remedy audit because the reachable set was walked as a list of
+    accepted **knobs** — but a refused knob's deliberately-accepted *identity value* is
+    reachable too, and that is exactly where the pair lived.
   - *Validate the resolved value, never a stand-in for it.* The anchor guard once
     tested a proxy (`MID_GREY_OUTPUT_DECADES / slope`), correct for the placements
     that existed then; `black-at-base` divides the unbounded `−log10(floor)`, so a

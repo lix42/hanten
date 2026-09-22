@@ -367,8 +367,9 @@ pub struct RollArgs {
     pub strict: bool,
     /// Transitional: resolve the new rendering chain for every frame — see
     /// `convert --new-flow`. Roll accepts no conversion flags, so a knob the new
-    /// chain refuses reaches it only as a resolved value, from the shared recipe or
-    /// a per-frame override.
+    /// chain refuses reaches it as a resolved value from the shared recipe or a
+    /// per-frame override — or, for a `reconstruction` section, by its presence in
+    /// the shared recipe.
     #[arg(long = "new-flow")]
     pub new_flow: bool,
     #[command(flatten)]
@@ -2436,6 +2437,10 @@ struct LoadedRecipe {
     /// a resolved `gain-map-hdr` no longer says whether anyone chose it. The suffix
     /// diagnosis varies on that (see [`SuffixContext`]).
     output_preset_present: bool,
+    /// Whether the file carries a `reconstruction` section at all. Not a value
+    /// question like the two above — the new flow never reads that section, so the
+    /// key's mere presence is what makes a recipe describe the wrong chain.
+    reconstruction_present: bool,
     /// `meta.pipeline_version` from a sidecar envelope, when the loaded file
     /// carried one. Provenance only — never applied, only compared (see
     /// [`pipeline_version_warning`]).
@@ -2524,6 +2529,7 @@ fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
             cfg: ResolvedConfig::default(),
             curve_dmax_present: false,
             output_preset_present: false,
+            reconstruction_present: false,
             meta_pipeline_version: None,
             // No recipe file means nothing was archived and nothing is being
             // reinterpreted — the run simply *is* this build's defaults. Only a
@@ -2573,10 +2579,12 @@ fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
             };
             let curve_dmax_present = body.is_some_and(sets_curve_dmax);
             let output_preset_present = body.is_some_and(sets_output_preset);
+            let reconstruction_present = body.is_some_and(sets_reconstruction);
             Ok(LoadedRecipe {
                 cfg,
                 curve_dmax_present,
                 output_preset_present,
+                reconstruction_present,
                 meta_pipeline_version,
                 unpinned_curve: body.and_then(unpinned_curve),
             })
@@ -3025,6 +3033,18 @@ fn sets_curve_dmax(v: &serde_json::Value) -> bool {
         .and_then(|r| r.get("curve"))
         .and_then(|c| c.get("dmax"))
         .is_some()
+}
+
+/// Whether the recipe body carries a `reconstruction` section at all — the witness
+/// behind [`flow::reject_recipe_reconstruction`].
+///
+/// A raw-JSON probe like [`sets_curve_dmax`], and for the sharper version of the same
+/// reason: the new flow decodes through its own params, so a *resolved*
+/// `reconstruction` cannot say whether anyone asked for it. Presence of the key is the
+/// only thing that distinguishes "this recipe describes the old chain" from "serde
+/// filled a default nobody wrote".
+fn sets_reconstruction(v: &serde_json::Value) -> bool {
+    v.get("reconstruction").is_some()
 }
 
 /// Whether an override object explicitly carries `reconstruction.curve.stock` — the
@@ -7042,6 +7062,11 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // rejects (CLAUDE.md, ordering across gates).
     flow::reject_unavailable_flags(flow, &args)?;
     let loaded = load_recipe(args.recipe_in.as_deref())?;
+    // The third provenance the two availability tables cannot see: a recipe
+    // describing the chain the new flow does not run. Refused here, right after the
+    // load, so it is diagnosed before `merge` reasons about values the new flow
+    // never reads.
+    flow::reject_recipe_reconstruction(flow, loaded.reconstruction_present)?;
     // Dmax provenance for the report: a CLI flag beats the recipe key beats the
     // default — the same precedence the merge applies to the value itself.
     let dmax_setting = if dmax_flag_given(&args.dmax) {
@@ -8230,7 +8255,12 @@ fn run_roll(args: RollArgs) -> Result<()> {
         // (Roll's *per-frame* `output.preset` witness is probed separately, at the
         // override, for the roll-consistency warning.)
         output_preset_present: _,
+        reconstruction_present,
     } = load_recipe(args.recipe_in.as_deref())?;
+    // Same rule as `convert`: the shared recipe is `roll`'s only way to state a
+    // reconstruction, so it is also the only place the accepted-and-ignored hole
+    // could open. (A *per-frame* overlay stating one is `nf-core/subcommands`'.)
+    flow::reject_recipe_reconstruction(Flow::from_flag(args.new_flow), reconstruction_present)?;
     // Roll-specific rejections run **before** the shared `validate`, and the order
     // is the same least-specific-diagnosis-last policy `validate` itself now
     // follows: "this setting cannot work in roll mode" names the offending key,
@@ -8357,7 +8387,8 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // decode all 25 frames of a real roll to print one identical error 25 times.
     // Deleted by `nf-core/minimal-end-to-end`, which gives the new flow something to
     // render into. The chain itself already exists (`pipeline::chain`, identity
-    // stages); what is missing is a decode in front of it and a destination behind.
+    // stages); the decode exists too (`algo::fixed`), so what is missing is a
+    // destination behind it and the wiring that joins the three.
     if Flow::from_flag(args.new_flow) == Flow::New {
         return Err(flow::render_not_implemented());
     }
