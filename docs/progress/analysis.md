@@ -1,4 +1,4 @@
-# Negative Converter — analysis Progress Log
+# Hanten — analysis Progress Log
 
 Execution log for the `analysis` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status (the checkboxes);

@@ -1176,7 +1176,7 @@ mod tests {
     /// dispatch is *not* exercised by anything the oracle reads, and is covered
     /// instead by `encode_with_writes_both_dialects_end_to_end`.
     ///
-    /// `NC_ISO_SAMPLE_DIR=/some/dir cargo test --bin nc -- --ignored iso_oracle_samples`
+    /// `NC_ISO_SAMPLE_DIR=/some/dir cargo test --bin hanten -- --ignored iso_oracle_samples`
     ///
     /// Set `NC_ISO_SAMPLE_INPUT` to a real scan to render *that* instead of the
     /// toy fixture, with `NC_ISO_SAMPLE_BASE` (`r,g,b`), `NC_ISO_SAMPLE_DMAX`,

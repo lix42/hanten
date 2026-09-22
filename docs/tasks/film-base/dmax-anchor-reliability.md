@@ -5,7 +5,7 @@
 > references resolve; see `docs/nf-migration.md` for the migration plan.
 
 > **Parametric curves only (noted 2026-09-13).** The `characteristic` curve resolves no
-> `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`nc convert`
+> `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`hanten convert`
 > default. Once that lands, this task serves `sigmoid`/`exponential` users only. Re-rank
 > accordingly before picking it up.
 

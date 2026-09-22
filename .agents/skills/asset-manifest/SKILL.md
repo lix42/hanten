@@ -7,7 +7,7 @@ description: >-
   moves the assets folder, asks to "regenerate/update the manifest", "re-scan
   nc-assets", "rebuild the asset inventory", check what assets exist, or find
   stale/orphaned files. Runs a stdlib Python generator that reads only derived
-  numbers (nc inspect) + checksums — never sample pixels.
+  numbers (hanten inspect) + checksums — never sample pixels.
 ---
 
 # asset-manifest
@@ -25,7 +25,7 @@ at [`scripts/analysis/manifest.sample.json`](../../../scripts/analysis/manifest.
 ## Invariants (do not break)
 
 - **Never read sample pixels into an agent context.** The generator shells out to
-  `nc inspect` for metadata and streams bytes only to hash them; it emits derived
+  `hanten inspect` for metadata and streams bytes only to hash them; it emits derived
   numbers only. Keep it that way.
 - **Roles and other human fields are data, preserved across updates** — never
   overwrite them from a re-scan.
@@ -48,10 +48,13 @@ is a thin backward-compat shim that forwards to the same code (needs no
 - `--asset-root` (shim: positional `ASSET_ROOT`) defaults to `$NC_ASSET_ROOT`, else
   `../nc-assets` (the machine-local symlink to the Drive folder). Point it elsewhere
   to scan a different copy.
-- The `nc` binary is found via `--nc`, `$NC`, `./target/release/nc`,
-  `./target/debug/nc`, or `nc` on `PATH` — each candidate is **verified** to be
-  this project's CLI (`--version` prints `nc <ver>`), so the system netcat
-  (`/usr/bin/nc`) is never mistaken for it. An **explicit** `--nc`/`$NC` that is
+- The binary is found via `--nc`, `$NC`, `./target/release/hanten`,
+  `./target/debug/hanten`, or `hanten` on `PATH` — each candidate is **verified**
+  to be this project's CLI (`--version` prints `hanten <ver>`, or the pre-rename
+  `nc <ver>`), so the system netcat (`/usr/bin/nc`) is never mistaken for it.
+  Auto-discovery is `hanten`-only, so a stale pre-rename `target/debug/nc` is
+  never picked up silently; name it with `--nc`/`$NC` to use one deliberately.
+  An **explicit** `--nc`/`$NC` that is
   missing or not this CLI is a **hard error** (exit 2), not a silent fallback;
   only failed *auto-discovery* falls back to `exiftool` (losing authoritative
   `format`/`ir_present`) with a warning. Build it if missing: `cargo build --release`.
@@ -98,17 +101,17 @@ warm updates, but a same-size edit would go undetected).
 
 ## Metadata source & fallback
 
-`format`/`ir_present` are authoritative only from `nc inspect`. When `nc` can't
-decode a file (e.g. 32-bit float outputs — nc's `_positive_hdr` floats and NLP
+`format`/`ir_present` are authoritative only from `hanten inspect`. When `hanten` can't
+decode a file (e.g. 32-bit float outputs — Hanten's `_positive_hdr` floats and NLP
 positives — which it rejects as unsupported), the generator falls back to
 `exiftool` and tags that entry `metadata_source: "exiftool"` with best-effort
 `format: "tiff"` / `ir_present: false`. Absence of the tag means the values are
-nc-authoritative. If `nc` is missing/fails on a file that previously had
+nc-authoritative. If `hanten` is missing/fails on a file that previously had
 authoritative values, the generator **carries the prior values forward** (and
 says so) — but only when the current bytes still match the prior `sha256`, so a
 file replaced at the same path is never paired with stale metadata. Carry-forward
 is therefore **checksum-gated**: `regenerable` outputs skip checksums, so they are
-not carried (they are reproducible — just re-run with `nc` present). The run exits
+not carried (they are reproducible — just re-run with `hanten` present). The run exits
 non-zero when any file fails *all* inspection (an `error` entry, exit 1), and
 fails **loudly up front (exit 2)** on operational problems: a missing asset root,
 an unreadable/unsupported-schema existing manifest, an invalid explicit `--nc`,

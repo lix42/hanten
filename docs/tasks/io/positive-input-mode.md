@@ -41,7 +41,7 @@ input exists and is refused today.
    related question for negatives; do not conflate the two.
 3. Memory: the decode and film-base phases change shape (no film-base pass, one lcms2
    transform on the whole frame). `pipeline::memory` needs its own `RunProfile` row.
-4. What `nc inspect` and `estimate` do on a positive.
+4. What `hanten inspect` and `estimate` do on a positive.
 
 ## How to Verify
 

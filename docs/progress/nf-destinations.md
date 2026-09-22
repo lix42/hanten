@@ -1,4 +1,4 @@
-# nc — nf-destinations Progress Log
+# Hanten — nf-destinations Progress Log
 
 Execution log for the `nf-destinations` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status; this file is the

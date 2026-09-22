@@ -41,7 +41,7 @@ degenerate (e.g. finite all-black) image. Two complementary mechanisms:
 > renders black.
 >
 > Measured on the committed IR-free fixture (chosen so no unrelated IR warning muddies
-> the signal): `nc convert tests/fixtures/hdr-48bit.tif -o out.tiff --film-base
+> the signal): `hanten convert tests/fixtures/hdr-48bit.tif -o out.tiff --film-base
 > 0.9,0.55,0.42 <extra>`
 >
 > | extra | rc | `loss` counters | report `warnings` | zero samples |

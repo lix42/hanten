@@ -21,14 +21,14 @@ default move flips them for users who typed only the flag on the left:
 
 | command | today | under a characteristic default |
 |---|---|---|
-| `nc convert --d-max 1.3` | exit 0 | exit 2 |
-| `nc convert --auto-d-max` | exit 0 | exit 2 |
-| `nc convert --sigmoid-toe 0.2` | exit 0 | exit 2 |
+| `hanten convert --d-max 1.3` | exit 0 | exit 2 |
+| `hanten convert --auto-d-max` | exit 0 | exit 2 |
+| `hanten convert --sigmoid-toe 0.2` | exit 0 | exit 2 |
 
 All three say some form of *"the resolved curve is characteristic … Drop the flag, or
 pass `--density-curve sigmoid`"* — a remedy that names a curve the user never asked
 about, for a default they never chose. `--d-max` is the documented roll-calibration
-workflow (`nc estimate --d-max-region`, design-spec §8), so this is not a corner.
+workflow (`hanten estimate --d-max-region`, design-spec §8), so this is not a corner.
 
 The mirror image also exists: `--film-stock portra-400` alone currently fails with
 *"the resolved curve is sigmoid — a stock has nothing to configure there"*. After the

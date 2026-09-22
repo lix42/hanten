@@ -758,7 +758,7 @@ fn synth_coded_hdr(spec: &CodedHdrProfile) -> Result<Vec<u8>> {
         if sys::cmsSaveProfileToMem(profile.0, bytes.as_mut_ptr().cast(), &raw mut length) == 0 {
             fail!("serialized profile");
         }
-        // Same determinism rule as every other nc profile: Little CMS stamps the
+        // Same determinism rule as every other ICC profile Hanten writes: Little CMS stamps the
         // wall-clock creation time, so zero it or two runs seconds apart embed
         // different bytes.
         if let Some(datetime) = bytes.get_mut(ICC_HEADER_DATETIME) {

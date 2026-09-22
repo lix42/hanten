@@ -43,10 +43,10 @@ On 2026-09-13 the user set the product shape: **SDR lossless is the default**
 
 ## How to Verify
 
-- `nc convert --output-preset <name> -o out.jpg` writes an 8-bit JPEG whose decoded
+- `hanten convert --output-preset <name> -o out.jpg` writes an 8-bit JPEG whose decoded
   pixels match the `display-p3` TIFF's within the codec's pinned error bounds, with
   the Display P3 ICC embedded and no MPF, XMP gain-map or ISO 21496-1 segment present.
-- `nc roll` derives `<stem>_positive.jpg`; a mismatched suffix is refused.
+- `hanten roll` derives `<stem>_positive.jpg`; a mismatched suffix is refused.
 - `RunProfile` calibrated on two frame sizes; `docs/using-nc.md` updated by running the
   binary.
 

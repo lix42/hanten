@@ -5,7 +5,7 @@ and the flags each one passes, so changing what is compared never means editing
 code. It replaces `scripts/preset-review/generate.py`, which stated its matrix as
 a Python list.
 
-Each cell of the matrix is one `nc convert` of one frame with one configuration.
+Each cell of the matrix is one `hanten convert` of one frame with one configuration.
 Beside the rendered image the generator writes that image's **metric record**
 (`nctool metrics`), so the review app can draw the tone and cast charts next to
 the picture instead of only showing the picture. The record is derived numbers
@@ -531,7 +531,7 @@ def cmd_generate(args) -> int:
         # `is_file()` accepts and `subprocess` then looks up on PATH instead.
         nc = Path(args.nc).resolve()
         if not nc.is_file():
-            raise ReviewError(f"no nc binary at {nc}; `cargo build --release` first")
+            raise ReviewError(f"no hanten binary at {nc}; `cargo build --release` first")
         assets = Path(args.asset_root).resolve()
         if not (assets / "manifest.json").is_file():
             raise ReviewError(f"no assets at {assets}")

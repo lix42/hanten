@@ -1,6 +1,6 @@
-# Using `nc`
+# Using Hanten
 
-A practical guide to converting film negative scans to positives with `nc`.
+A practical guide to converting film negative scans to positives with `hanten`.
 
 > **Scope.** This is the *user-facing* guide: what to run, in what order, and why.
 > For the authoritative design rationale and the full parameter semantics, see
@@ -8,11 +8,10 @@ A practical guide to converting film negative scans to positives with `nc`.
 > *intent* — but this document is verified against the binary, so it wins on
 > *what the CLI currently accepts*.
 >
-> **Verified against:** `nc 0.1.0`, `pipeline_version 5`, built at commit
-> `e204b74d319f` plus the `characteristic` curve (§6), the mid-grey-preserving
-> extended Reinhard (§7), the neutral-patch-calibrated `--density-scale` default (§6)
-> and the transitional `--new-flow` selector (§11). The staleness signal is `pipeline_version`: if `nc --version`
-> reports a different one, treat this document as suspect and re-verify.
+> **Verified against:** `hanten 0.1.0`, `pipeline_version 5`, built at commit
+> `5b77603193f2` plus the `nc` → `hanten` binary rename (§2). The staleness signal
+> is `pipeline_version`: if `hanten --version` reports a different one, treat this
+> document as suspect and re-verify.
 >
 > **Known issue:** under the default render the gain map is inert (no HDR
 > headroom) — see the callout in §8.
@@ -21,7 +20,7 @@ A practical guide to converting film negative scans to positives with `nc`.
 
 ## 1. The mental model
 
-`nc` converts a **negative** scan into a **positive** image. Three properties
+Hanten converts a **negative** scan into a **positive** image. Three properties
 shape every workflow below:
 
 - **Deterministic.** Same input + same parameters ⇒ byte-identical output (on one
@@ -50,14 +49,14 @@ shape every workflow below:
 That last point is the whole workflow:
 
 ```
-   plan                        freeze                    apply
-┌──────────────┐          ┌───────────────┐        ┌──────────────────┐
-│ nc inspect   │  ──────► │ recipe.json   │ ─────► │ nc convert       │
-│ nc estimate  │          │ (Dmin, Dmax,  │        │ nc roll          │
-│              │          │  print knobs) │        │                  │
-└──────────────┘          └───────────────┘        └──────────────────┘
-  measure from a            reuse-ready forms         one shared recipe
-  reference frame           printed by estimate       across every frame
+   plan                            freeze                    apply
+┌──────────────────┐          ┌───────────────┐        ┌──────────────────────┐
+│ hanten inspect   │  ──────► │ recipe.json   │ ─────► │ hanten convert       │
+│ hanten estimate  │          │ (Dmin, Dmax,  │        │ hanten roll          │
+│                  │          │  print knobs) │        │                      │
+└──────────────────┘          └───────────────┘        └──────────────────────┘
+  measure from a                reuse-ready forms         one shared recipe
+  reference frame               printed by estimate       across every frame
 ```
 
 ### Value terms (read this once)
@@ -98,7 +97,7 @@ They are not two ends of one scale; don't conflate them.
 ## 2. Getting a binary
 
 ```sh
-cargo build --release      # → target/release/nc
+cargo build --release      # → target/release/hanten
 ```
 
 A fresh machine needs CMake, C and C++ compilers, libclang (bindgen), and NASM —
@@ -107,16 +106,17 @@ source. Only those **native** libraries are vendored: cargo still fetches the Ru
 crates from crates.io, so the build needs network access (or a warm cargo cache).
 
 ```sh
-target/release/nc --version
+target/release/hanten --version
 ```
 
 prints the version, the **`pipeline_version`** (the render-behavior identity), the
 git commit, and the target triple. Quote it in bug reports — output is only
 guaranteed byte-identical within one build and architecture.
 
-> `cargo build` neither installs the binary nor changes `PATH`, and on most
-> systems a bare **`nc` is netcat**. Examples below write `nc` for brevity; run
-> `target/release/nc`, or put it on your `PATH` under a name you choose.
+> `cargo build` neither installs the binary nor changes `PATH`. Examples below
+> write `hanten` for brevity; run `target/release/hanten`, or put it on your
+> `PATH`. (The binary was called `nc` until 2026-09-21, which collided with
+> netcat; `hanten` does not.)
 
 ---
 
@@ -124,11 +124,11 @@ guaranteed byte-identical within one build and architecture.
 
 | Command | Purpose | Writes an image? |
 |---|---|---|
-| `nc inspect` | **"What is this file?"** — format, dimensions, IR presence, scanner metadata, resolved input semantics, candidate rebate regions. | No |
-| `nc estimate` | **"What number do I freeze?"** — measure the film base (`Dmin`), and optionally `Dmax`. Prints **reuse-ready** flag and recipe forms. | No |
-| `nc params` | Print the full default recipe as JSON — the scaffolding starting point. | No |
-| `nc convert` | Convert one frame. The full parameter surface. | Yes |
-| `nc roll` | Convert many frames from **one shared frozen recipe**. | Yes |
+| `hanten inspect` | **"What is this file?"** — format, dimensions, IR presence, scanner metadata, resolved input semantics, candidate rebate regions. | No |
+| `hanten estimate` | **"What number do I freeze?"** — measure the film base (`Dmin`), and optionally `Dmax`. Prints **reuse-ready** flag and recipe forms. | No |
+| `hanten params` | Print the full default recipe as JSON — the scaffolding starting point. | No |
+| `hanten convert` | Convert one frame. The full parameter surface. | Yes |
+| `hanten roll` | Convert many frames from **one shared frozen recipe**. | Yes |
 
 Every command except `params` emits a **JSON report on stdout** on success
 (`--report none` to suppress, `--report-file PATH` to redirect); `params` takes no
@@ -148,12 +148,12 @@ flags at all and just prints the default recipe. Logs and warnings go to
 ### Step 1 — Inspect the scan
 
 ```sh
-nc inspect scan.tif | jq '{decode, input_color, warnings}'
+hanten inspect scan.tif | jq '{decode, input_color, warnings}'
 ```
 
 Tells you what you actually have: dimensions, bit depth, whether an **IR plane** is
 present (HDRi 64-bit input), the scanner make/model/software, the SilverFast XMP
-mode metadata, and — importantly — how `nc` **resolved the input semantics**
+mode metadata, and — importantly — how `hanten` **resolved the input semantics**
 (`transfer` and `meaning`) with the evidence behind each.
 
 `inspect` is non-fatal by design: if a rebate band is detectable it suggests a
@@ -161,13 +161,13 @@ mode metadata, and — importantly — how `nc` **resolved the input semantics**
 found:
 
 ```sh
-nc inspect scan.tif | jq '.base_candidates'
+hanten inspect scan.tif | jq '.base_candidates'
 ```
 
 Confirm one of those rectangles and pass it to step 2 as `--base-region` — that
 saves measuring coordinates by hand on a scan where auto-detection won't commit.
 
-`inspect` also reports the **effective area** — the region nc reads measurements
+`inspect` also reports the **effective area** — the region `hanten` reads measurements
 over, after the film holder and a border inset are removed. Worth a look on any
 uncropped scan; see [The measurement region](#the-measurement-region-the-effective-area).
 
@@ -179,7 +179,7 @@ conversion and sets the black point and the colour balance together:
 
 ```
 usage: no film base selected: pass --film-base R,G,B (a Dmin measured once per
-       roll, e.g. with `nc estimate`), --base-region X,Y,W,H to sample an
+       roll, e.g. with `hanten estimate`), --base-region X,Y,W,H to sample an
        unexposed border, or --auto-base to detect the rebate band …
 ```
 
@@ -194,7 +194,7 @@ Three sources, in descending order of reliability:
 cells (corners + center) and cross-check them:
 
 ```sh
-nc estimate unexposed-leader.tif --grid
+hanten estimate unexposed-leader.tif --grid
 ```
 
 Disagreement between cells warns loudly — that diagnoses light leaks, illumination
@@ -203,17 +203,17 @@ falloff, or dust *before* it silently poisons a whole roll.
 **(b) A known border region** on a normal frame:
 
 ```sh
-nc estimate scan.tif --base-region 0,0,24,24
+hanten estimate scan.tif --base-region 0,0,24,24
 ```
 
-`nc` checks the rectangle for uniformity and warns if it looks like it mixes rebate
+`hanten` checks the rectangle for uniformity and warns if it looks like it mixes rebate
 with image content.
 
 **(c) Auto-detection** — scans inward for the unexposed rebate band behind the
 film holder. Still one flag; what's gone is arriving there by omission:
 
 ```sh
-nc estimate scan.tif --auto-base
+hanten estimate scan.tif --auto-base
 ```
 
 > **Real scans are laid out `dark holder → thin inset rebate → picture`** — the
@@ -247,7 +247,7 @@ scene-independent and reused across the roll. You can instead measure it from a
 reliability caveat in §6 before relying on the result:
 
 ```sh
-nc estimate leader.tif \
+hanten estimate leader.tif \
   --film-base 0.163,0.080,0.0377 \
   --d-max-region 100,100,80,80
 ```
@@ -273,7 +273,7 @@ The `d_max_recipe` fragment nests under **`reconstruction.curve`**.
 > so it would become a bright scene value after conversion. This can be a valid
 > leader whose density exceeds what the scanner recorded, not necessarily a
 > holder-selection mistake. The exact `Dmax` is then unknown—zero transmission
-> establishes only a lower bound—so the current `nc estimate` exits **1** and
+> establishes only a lower bound—so the current `hanten estimate` exits **1** and
 > emits no reuse-ready value. To convert today, either retain the fixed nominal
 > reference (omit `--d-max`, or use `--fixed-d-max`) or supply a deliberately
 > chosen positive `--d-max`; do not pass transmission `0` as a density. A
@@ -295,7 +295,7 @@ parameter choices:
 ```
 
 Omitted sections take their defaults, so a recipe only needs to carry what you
-decided. `nc params` prints the full default document if you want a scaffold to
+decided. `hanten params` prints the full default document if you want a scaffold to
 edit.
 
 > **`--dump-params` does not freeze your measurements.** It writes the resolved
@@ -310,7 +310,7 @@ edit.
 ### Step 5 — Apply to the whole roll
 
 ```sh
-nc roll frames/*.tif --out-dir positives/ --params roll-recipe.json
+hanten roll frames/*.tif --out-dir positives/ --params roll-recipe.json
 ```
 
 Every frame gets the identical film base, `Dmax`, and print controls, so the roll
@@ -327,7 +327,7 @@ JSON report lands on stdout.
 The recipe *is* the resolved config. Get the current default with:
 
 ```sh
-nc params
+hanten params
 ```
 
 ```json
@@ -414,7 +414,7 @@ not re-estimation. With a [`--preset`](#-preset--pick-a-look-by-name) the full c
 `defaults < --params recipe < --preset < flags`.
 
 ```sh
-nc convert scan.tif -o out.jpg --params roll-recipe.json --d-max 0.5
+hanten convert scan.tif -o out.jpg --params roll-recipe.json --d-max 0.5
 #                                                          ^ overrides the recipe
 ```
 
@@ -440,7 +440,7 @@ archived replay tells you the render may have moved.
 Feed the sidecar straight back to reproduce the conversion exactly:
 
 ```sh
-nc convert scan.tif -o repro.jpg --params out.jpg.json
+hanten convert scan.tif -o repro.jpg --params out.jpg.json
 # → byte-identical to out.jpg
 ```
 
@@ -458,7 +458,7 @@ a tweak on top of the shared recipe:
 ```
 
 ```sh
-nc roll --frames frames.json --out-dir positives/ --params roll-recipe.json
+hanten roll --frames frames.json --out-dir positives/ --params roll-recipe.json
 ```
 
 An explicit manifest `output` goes through the same suffix rule as `convert`, so
@@ -506,8 +506,8 @@ offer, not something to correct.
 | `sigmoid-flat` | `sigmoid` with neither knee | `reinhard` | — |
 
 ```sh
-nc convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --preset characteristic-generic
-nc convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --preset characteristic-stock --film-stock portra-400
+hanten convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --preset characteristic-generic
+hanten convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --preset characteristic-stock --film-stock portra-400
 ```
 
 All five render scene mid-grey at the same brightness, so what you are comparing
@@ -515,7 +515,7 @@ between them is the reconstruction and the tone, not "one is brighter".
 
 **A preset is a set of starting values, and individual flags still win over it.** The
 precedence chain is `defaults < --params recipe < --preset < flags` — the preset sits
-*above* the recipe, because `nc params` writes every key explicitly and a preset
+*above* the recipe, because `hanten params` writes every key explicitly and a preset
 underneath one would have nothing left to set. The report separates the two directions:
 
 ```json
@@ -527,7 +527,7 @@ underneath one would have nothing left to set. The report separates the two dire
 ```
 
 **One thing a preset never replaces: the roll's measured `Dmax`.** A preset names a
-*look*; `reconstruction.curve.dmax` is the reference `nc estimate --d-max-region`
+*look*; `reconstruction.curve.dmax` is the reference `hanten estimate --d-max-region`
 measures once for a roll, so it is carried across and does not appear in `replaced`. An
 explicit `--d-max` still wins. Everything else in `curve` — contrast, knees, anchor,
 stock — is the look, and the preset does replace it.
@@ -535,12 +535,12 @@ stock — is the look, and the preset does replace it.
 **It is a command-line shorthand, not a recipe key.** `--dump-params` writes the
 *expanded* values, so a recipe replays identically on any build — including one whose
 preset definitions have since moved. A recipe that names a preset is rejected as an
-unknown field, and `nc roll` takes the dumped recipe rather than a preset name:
+unknown field, and `hanten roll` takes the dumped recipe rather than a preset name:
 
 ```sh
-nc convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 \
+hanten convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 \
    --preset characteristic-stock --film-stock ektar-100 --dump-params roll.json
-nc roll frames/ --out-dir out/ --params roll.json
+hanten roll frames/ --out-dir out/ --params roll.json
 ```
 
 Six combinations are refused rather than quietly doing something else:
@@ -571,7 +571,7 @@ any `--preset` with a single message. For a film master, set the reconstruction 
 directly instead:
 
 ```sh
-nc convert scan.tif -o master.tif --film-base 0.9,0.55,0.42 \
+hanten convert scan.tif -o master.tif --film-base 0.9,0.55,0.42 \
    --output-preset film-master --density-curve characteristic --film-stock ektar-100
 ```
 
@@ -618,7 +618,7 @@ the manufacturer's characteristic curve, inverted per channel. Mid-grey lands at
 construction, so there is nothing to anchor and no contrast to pick.
 
 ```sh
-nc convert scan.tif -o out.tif --output-preset legacy \
+hanten convert scan.tif -o out.tif --output-preset legacy \
   --film-base 0.5,0.25,0.15 --density-curve characteristic --film-stock portra-400
 ```
 
@@ -668,7 +668,7 @@ one remains, and its size depends on the stock: +0.08 for `gold-200`, +0.18 `por
 +0.48 `portra-160`, +1.00 `ektar-100`. On the badly-affected stocks `--film-stock
 generic-c41` currently looks *better* than naming the stock, because averaging nine curves
 dilutes any one sheet's error. The cause is most likely a missing cross-channel term (ACES
-applies a 3×3 before its curves; nc does not yet) and it is tracked by
+applies a 3×3 before its curves; Hanten does not yet) and it is tracked by
 `io/scanner-density-calibration`. Ektar's own sheet also disagrees with itself by 11 %
 between its aim table and its curve, which is a second, smaller factor for that stock.
 
@@ -751,7 +751,7 @@ is to be the predictable straight-line reference.
 > α ≈ 0.48–0.57 across three stocks). The per-stock datasheet anchor — the better form
 > on the evidence — now ships as the `characteristic` curve above, but it is **opt-in**:
 > the sigmoid's own `contrast`/`toe`/`shoulder`/`anchor` still describe what a bare
-> `nc convert` does. What *has* moved is the per-channel density gain beside them
+> `hanten convert` does. What *has* moved is the per-channel density gain beside them
 > (`--density-scale`, `pipeline_version` 4 and again 5 — see below); the curve shape has not.
 > Expect further movement, with a `pipeline_version` bump when it happens.
 
@@ -805,7 +805,7 @@ For **roll consistency**, measure the range once and freeze it. The range is onl
 — so set them first:
 
 ```sh
-nc convert scan.tif -o out.jpg --film-base … \
+hanten convert scan.tif -o out.jpg --film-base … \
   --shadow-balance=-0.05,0,0 --highlight-balance 0.05,0,0
 ```
 
@@ -839,7 +839,7 @@ Where the reference density comes from. (What it *places* is the anchor, above.)
 > *corrected* density `D' = scale·D + offset`, and their default `density.scale` is
 > the non-identity scanner calibration `1,0.84,0.73`. So a measured value reused as
 > `--d-max` is systematically high — about 14% at that gain, roughly 0.62 stop darker
-> on every frame at the default anchor placement. `nc convert` warns
+> on every frame at the default anchor placement. `hanten convert` warns
 > (`--strict`-promotable) whenever an explicit `--d-max` is combined with a
 > non-identity scale/offset or a non-neutral regional balance. Your options: keep the
 > default `--fixed-d-max` (a nominal already defined in the corrected domain), render
@@ -852,25 +852,25 @@ Where the reference density comes from. (What it *places* is the anchor, above.)
 Cross-curve and cross-type flags are **usage errors**:
 
 ```sh
-nc convert … --density-curve sigmoid --density-gamma 1.8
+hanten convert … --density-curve sigmoid --density-gamma 1.8
 # usage: --density-gamma sets the exponential curve's gamma, but the resolved
 #        curve is sigmoid — its mid-density slope is --sigmoid-contrast
 
-nc convert … --reconstruction simple --density-gamma 1.8
+hanten convert … --reconstruction simple --density-gamma 1.8
 # usage: --density-gamma configures density reconstruction, but the resolved
 #        reconstruction is `simple`
 
-nc convert … --density-curve characteristic --d-max 1.3
+hanten convert … --density-curve characteristic --d-max 1.3
 # usage: --d-max sets the display-white reference density, but the resolved curve
 #        is characteristic — it reads its slope and its mid-grey placement off the
 #        stock's published response, so there is no reference for this flag to set.
 
-nc convert … --film-stock ektar-100
+hanten convert … --film-stock ektar-100
 # usage: --film-stock ektar-100 selects a published film response, but the resolved
 #        curve is sigmoid — a stock has nothing to configure there.
 #        Pass --density-curve characteristic
 
-nc convert … --reconstruction simple --film-stock portra-400
+hanten convert … --reconstruction simple --film-stock portra-400
 # usage: --film-stock configures density reconstruction, but the resolved
 #        reconstruction is `simple` (the direct inversion has no density
 #        correction, curve, or Dmax); pass --reconstruction density
@@ -897,7 +897,7 @@ This is deliberate: a flag that quietly did nothing would be worse than a failur
 exclusive. The report tells you what was actually used:
 
 ```sh
-nc convert scan.tif -o out.jpg --film-base … --auto-wb percentile \
+hanten convert scan.tif -o out.jpg --film-base … --auto-wb percentile \
   | jq '.white_balance'
 # [1.2501934, 1.0, 0.6589681]
 ```
@@ -912,7 +912,7 @@ sigmoid *already* places every tone below reference white, so that shoulder
 compresses highlights a second time. `--display-tone none` skips it:
 
 ```sh
-nc convert scan.tif -o out.tiff --output-preset display-p3 \
+hanten convert scan.tif -o out.tiff --output-preset display-p3 \
   --film-base … --display-tone none
 ```
 
@@ -931,7 +931,7 @@ to the luminance anchors no container can carry — `.avif.rendering` for
 `hdr-pq`/`hdr-hlg`, `.hdr_coded_tiff` and `.hdr_linear_tiff` for the TIFF pair:
 
 ```console
-$ nc convert scan.tif -o out.avif --output-preset hdr-pq --film-base … \
+$ hanten convert scan.tif -o out.avif --output-preset hdr-pq --film-base … \
     --display-tone reinhard --report json | jq .avif.rendering
 {
   "reference_white_nits": 203.0,
@@ -973,7 +973,7 @@ non-neutral one can lift samples past reference white even under a bounded sigmo
 `--print-exposure 0.3`, `--white-balance 1.3,1,1`, `--auto-wb percentile` and
 `--linear-range 0,0.5` each trip the error above on the same frame that renders
 cleanly with neutral gains. Nothing is rejected up front, because the real condition
-is a pixel value rather than a flag combination — so nc renders the whole frame
+is a pixel value rather than a flag combination — so `hanten` renders the whole frame
 first and *then* exits 1, writing no file. On a large scan, prove `--display-tone
 none` out with neutral print controls before adding grading on top.
 
@@ -991,7 +991,7 @@ content several stops above diffuse white stays distinguishable instead of landi
 flat on the ceiling.
 
 ```sh
-nc convert scan.tif -o out.tiff --output-preset display-p3 \
+hanten convert scan.tif -o out.tiff --output-preset display-p3 \
   --film-base … --display-tone reinhard --display-tone-headroom 6
 ```
 
@@ -1060,7 +1060,7 @@ for the same reason it is beside `none`: there is no knee to place.
 **On the default `gain-map-hdr` preset, `none` makes the gain map inert by
 construction.** The examples above use `display-p3`, but the default renders *both*
 branches: skipping the shoulder makes the SDR and HDR renditions carry the same
-luminance, so their ratio is exactly 1.0 everywhere. nc still writes a valid
+luminance, so their ratio is exactly 1.0 everywhere. Hanten still writes a valid
 gain-map JPEG and exits 0 without a warning. That is the §8 known issue in its
 sharpest form — the shipped default already decodes at 1.0x — so it costs nothing
 today, but if you are reaching for `--display-tone none` *because* you want HDR
@@ -1161,8 +1161,8 @@ planned-but-unaccepted tier left, so an unknown name always means a typo:
 | `hdr-pq-tiff` | TIFF | `.tif` / `.tiff` | u16 | The same signal as `hdr-pq`, as losslessly stored Rec.2100 **PQ** codes. |
 | `hdr-hlg-tiff` | TIFF | `.tif` / `.tiff` | u16 | The same signal as `hdr-hlg`, as losslessly stored Rec.2100 **HLG** codes. |
 
-> **The default writes a JPEG.** `nc convert scan.tif -o out.tiff` now *fails* —
-> with no `--output-preset`, nc resolves `gain-map-hdr` and wants `.jpg`. For a
+> **The default writes a JPEG.** `hanten convert scan.tif -o out.tiff` now *fails* —
+> with no `--output-preset`, `hanten` resolves `gain-map-hdr` and wants `.jpg`. For a
 > TIFF, name the preset: `--output-preset legacy` (or `display-p3`,
 > `compatibility`, `film-master`, …).
 
@@ -1226,7 +1226,7 @@ These are consulted by `legacy` and `custom` only.
 
 ## 9. Input semantics and the IR channel
 
-`nc` resolves two **independent** axes from the container's evidence, and you can
+`hanten` resolves two **independent** axes from the container's evidence, and you can
 assert either one:
 
 | Flag | Values | Meaning |
@@ -1250,7 +1250,7 @@ exception that needs nothing from you:
   rejects `input.export_ir`, because one path cannot serve every frame, so IR
   planes have to be exported frame by frame.
 - **IR-assisted film-holder detection** runs by itself when the plane can do the
-  job. nc measures the interior IR transmission and, if the film reads
+  job. Hanten measures the interior IR transmission and, if the film reads
   IR-transparent, masks the opaque holder off before the auto rebate search.
   There is nothing to declare — `--film-type` does **not** gate it.
 
@@ -1261,18 +1261,18 @@ exception that needs nothing from you:
   output; leave it out otherwise. Planned IR dust removal will need the same
   declaration, which is why it stays.
 
-  `nc inspect` and `nc estimate` report the verdict, and `inspect` adds the
+  `hanten inspect` and `hanten estimate` report the verdict, and `inspect` adds the
   per-edge mask when it passes:
 
   ```sh
-  nc inspect scan.tif | jq -c '.ir_separability'
+  hanten inspect scan.tif | jq -c '.ir_separability'
   ```
   ```json
   {"interior_median":0.67963684,"usable":true}
   ```
 
   ```sh
-  nc inspect scan.tif | jq -c '.holder_mask[0].segments[0]'
+  hanten inspect scan.tif | jq -c '.holder_mask[0].segments[0]'
   ```
   ```json
   {"span":[0,20],"class":"film","ir":0.6301823}
@@ -1295,7 +1295,7 @@ IR-based dust removal is not implemented.
 
 ### The measurement region (the "effective area")
 
-A region nc resolves on every frame it decodes, so that a measurement reads the
+A region `hanten` resolves on every frame it decodes, so that a measurement reads the
 picture rather than the film holder: on an uncropped scan the holder is maximum
 density, so a whole-frame statistic measures the holder instead. Today one
 measurement is taken over it (`--auto-d-max`; see the end of this section) —
@@ -1319,7 +1319,7 @@ an 18 px step — and `inset` is the **applied** value, so `--measure-inset 0` o
 measured frame reads back as the step, not as 0:
 
 ```sh
-nc inspect --measure-inset 0 scan.tif | jq -c '.effective_area | {region, inset}'
+hanten inspect --measure-inset 0 scan.tif | jq -c '.effective_area | {region, inset}'
 ```
 ```json
 {"region":[90,108,5040,3402],"inset":18}
@@ -1334,7 +1334,7 @@ and each frame of a `roll` (under its own `effective_area` key, beside that fram
 recipe key are never silently ignored:
 
 ```sh
-nc inspect scan.tif | jq -c '.effective_area'
+hanten inspect scan.tif | jq -c '.effective_area'
 ```
 ```json
 {"region":[306,270,4662,3078],"holder":{"top":90,"bottom":72,"left":126,"right":36,"capped":{"top":false,"bottom":false,"left":false,"right":false},"converged":true},"holder_applied":true,"inset":180}
@@ -1362,13 +1362,13 @@ can see the arithmetic (the holder cut is unchanged and the inset goes from 180 
 to 432):
 
 ```sh
-nc inspect --measure-inset 0.12 scan.tif | jq -c '.effective_area'
+hanten inspect --measure-inset 0.12 scan.tif | jq -c '.effective_area'
 ```
 ```json
 {"region":[558,522,4158,2574],"holder":{"top":90,"bottom":72,"left":126,"right":36,"capped":{"top":false,"bottom":false,"left":false,"right":false},"converged":true},"holder_applied":true,"inset":432}
 ```
 
-nc will not guess that number for you — it reports which case the run was in and
+Hanten will not guess that number for you — it reports which case the run was in and
 leaves the blind cut to you. Values outside `[0, 0.4]` are a usage error (exit 2)
 from every command, before the file is read.
 
@@ -1377,7 +1377,7 @@ warning, which `--strict` promotes to a failure** — the fields alone are not t
 channel, because a silent field is exactly what let a tenfold over-cut through at
 exit 0 while it was being built.
 
-- `capped` — one flag per edge. A capped edge marched as deep as nc looks (25% of
+- `capped` — one flag per edge. A capped edge marched as deep as `hanten` looks (25% of
   the shorter edge) without finding film, so its depth is a **floor**, not a
   measurement. The consequence does not stop at that edge: each edge is measured
   over what the *perpendicular* edges' cuts leave, so a truncated depth truncates
@@ -1389,7 +1389,7 @@ exit 0 while it was being built.
   depth on the frame as measured; without one (a single edge exactly at the cap) the
   other three stand. The warning says which case you are in. No real scan has capped
   — 31 measured IR frames, zero caps, a 6–10× margin.
-- `converged: false` — the per-edge march did not settle (the iteration above). nc
+- `converged: false` — the per-edge march did not settle (the iteration above). Hanten
   then reports the deeper of the last two rounds, which over-cuts rather than leaving
   holder inside the region for a two-round oscillation or a run still settling
   downward; a longer cycle, or one settling upward, could still under-cut. A far
@@ -1463,7 +1463,7 @@ resolved film base and `Dmax`, the white balance actually used, encode loss
 statistics, and warnings:
 
 ```sh
-nc convert scan.tif -o out.jpg --film-base … | jq '.loss, .warnings'
+hanten convert scan.tif -o out.jpg --film-base … | jq '.loss, .warnings'
 ```
 
 Clipping is reported, never silent:
@@ -1486,7 +1486,7 @@ controls before reaching for the curve or `Dmax`.
 (exit 1), after the report is emitted — the right default for scripts and CI.
 
 > One deliberate exception: a failure to write an opted-in **telemetry**
-> destination prints `nc: warning:` on stderr but is kept out of the report set, so
+> destination prints `hanten: warning:` on stderr but is kept out of the report set, so
 > it stays fail-soft even under `--strict`. Telemetry must never change a
 > conversion's outcome. A script that needs to know telemetry landed has to check
 > the file, not the exit code.
@@ -1539,7 +1539,7 @@ its siblings are still written, and the roll exits **1**, not 6.
 
 ### `--new-flow` — the migration selector (transitional)
 
-`nc` is migrating to the design in [`design-update.md`](design-update.md): a fixed
+Hanten is migrating to the design in [`design-update.md`](design-update.md): a fixed
 decode followed by named rendering stages. `--new-flow` (on `convert` and `roll`)
 selects that chain. It is **scaffolding with an expiry** — when the new chain
 becomes the default the flag is removed, and passing it will be a migration error.
@@ -1553,7 +1553,7 @@ The new chain's stages now exist, but nothing connects them to an output yet, so
 selecting it resolves everything and then stops at the render, with **exit 4**:
 
 ```console
-$ nc convert scan.tif -o out.tif --output-preset legacy --film-base 0.9,0.55,0.42 --new-flow
+$ hanten convert scan.tif -o out.tif --output-preset legacy --film-base 0.9,0.55,0.42 --new-flow
 unsupported: --new-flow selected the new rendering chain, which cannot render yet
 — its stages exist but nothing connects them to an output
 (`nf-core/minimal-end-to-end`). Every other part of the run resolved under
@@ -1570,11 +1570,11 @@ refused (exit 2) rather than accepted and ignored, and the message says whether 
 counterpart is missing **yet** or for good:
 
 ```console
-$ nc convert … --new-flow --sigmoid-shoulder 0.4
+$ hanten convert … --new-flow --sigmoid-shoulder 0.4
 usage: --sigmoid-shoulder has no meaning under `--new-flow`: the new flow has no
 counterpart for it yet — one arrives with the fit-range stage: …
 
-$ nc convert … --new-flow --reconstruction simple
+$ hanten convert … --new-flow --reconstruction simple
 usage: --reconstruction simple has no meaning under `--new-flow`: the new flow has
 no counterpart for it, and will not gain one: … Use `--reconstruction density`, …
 ```
@@ -1584,7 +1584,7 @@ A knob can be refused by the **flag** you typed or by the **resolved value**, an
 the command line, worded for that spelling:
 
 ```console
-$ nc convert … --new-flow --params recipe.json     # {"reconstruction": {"schema_version": 1, "type": "simple"}}
+$ hanten convert … --new-flow --params recipe.json     # {"reconstruction": {"schema_version": 1, "type": "simple"}}
 usage: `simple` reconstruction (`--reconstruction simple`, recipe
 `reconstruction.type`) has no meaning under `--new-flow`: the new flow has no
 counterpart for it, and will not gain one: … Use `--reconstruction density`, …
@@ -1610,7 +1610,7 @@ Neither `convert` nor `roll` has a default film base — but they take it from
 different places. On **`convert`**, pass `--film-base R,G,B` (measured once per
 roll), `--base-region X,Y,W,H`, or `--auto-base`. **`roll` accepts none of those
 flags**: set `film_base.source` in the shared `--params` recipe instead.
-`estimate` still defaults to auto, so `nc estimate scan.tif` remains the way to
+`estimate` still defaults to auto, so `hanten estimate scan.tif` remains the way to
 get a value in the first place.
 
 **"auto film-base detection found no uniform unexposed rebate band"**
@@ -1620,7 +1620,7 @@ with `--base-region`. Content-based estimation is planned but not shipped.
 
 **"base-region … is not uniform (worst per-channel relative spread …)"**
 Your rectangle mixes rebate with image content. Check the coordinates against
-`nc inspect`, or use `estimate --grid` on a genuinely unexposed frame.
+`hanten inspect`, or use `estimate --grid` on a genuinely unexposed frame.
 
 **Heavy clipping in the report**
 You are on the `exponential` curve — the default sigmoid cannot clip highlights. Display
@@ -1648,7 +1648,7 @@ those runs, or use `--export-ir` so the plane is consumed.
 **Output differs between two machines**
 Determinism is scoped to one build and architecture. Transcendental FP and the
 lcms2 colour transform differ by ~1 ULP across platforms. Compare
-`nc --version` output — `pipeline_version`, commit, and target must all match.
+`hanten --version` output — `pipeline_version`, commit, and target must all match.
 
 ---
 

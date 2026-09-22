@@ -3,68 +3,43 @@
 ## Goal
 
 Give the product its own name — **Hanten** — while `nc` stays the internal name of the
-crate, the binary and the identifiers, and **write the boundary down** so it is not
+crate and of the identifiers, and **write the boundary down** so it is not
 re-litigated every time someone notices the two names disagree.
 
 ## Design
 
-**Almost every `nc` in the tree is an identifier, not branding.** That is the whole
-reason this is a small change, and the reason the boundary needs recording: without it,
-a later pass "tidies up" a version string.
+**The boundary lives in CLAUDE.md**, in the "Hanten outside, `nc` inside" section
+under "What this project is". It is the authoritative list of what is branding and
+what is an identifier; this file deliberately does not restate it.
 
-| Stays `nc` | Why |
-|---|---|
-| `nc-film-rgb-v1` (`working_mapping` in every report) | a **versioned** colour-space identifier. Renaming it means a v2, with pixel-identity questions attached — see CLAUDE.md's colorimetry notes |
-| `nc_version`, telemetry `schema_version` 4 | snapshot tests assert the exact JSON; a rename costs a schema bump for nothing |
-| `NC_*` environment variables (~16) | diagnostic and test surface |
-| recipe keys, report fields, exit codes | the scripting contract |
-| the crate, the binary, `nc <subcommand>` | see the open question below |
-| `nctool`, `../nc-assets` | tooling and the machine-local asset symlink |
+## Decisions taken
 
-| Becomes Hanten | |
-|---|---|
-| the GitHub repository | GitHub redirects the old URL, but every worktree's remote needs updating by hand |
-| `README.md` title and opening | |
-| CLAUDE.md's "What this project is" | |
-| `docs/design-spec.md` title and intro | |
-
-**The boundary's home is CLAUDE.md, not this file.** Executing this task moves the two
-tables into the "What this project is" section, beside the existing "AI-friendly means
-every knob is a flag, not ML" note — which exists for exactly this reason and records
-that it "has been explicitly corrected once already". A naming rule with no written home
-is a rule that gets undone.
-
-**Not a dependency, but a scheduling constraint.** This touches `README.md`, `CLAUDE.md`
-and `docs/design-spec.md` — files nearly every other branch also edits. It has no
-dependencies and could run at any time, but it should run **alone**, between merges,
-rather than beside the `nf-*` migration, where 50-odd open tasks would each conflict.
-
-## Open questions
-
-- **Should the binary become `hanten`?** Today's answer is no — it is short, typed
-  constantly, and an internal command name is ordinary. But the window matters: nc is
-  unreleased, so there are no external users of the CLI surface and this is the cheapest
-  it will ever be. After a release it is a breaking change forever. The cost if taken:
-  every example in `using-nc.md` (which is *verified against the binary*, so it needs
-  re-running rather than editing), every skill, `scripts/real-scan-verify/harness.sh`,
-  `nctool --nc <binary>`, and every review-set matrix. **Decide it deliberately rather
-  than inherit it.**
-- Whether `--help`'s preamble and `--version` should name the product. Nothing asserts
-  either string today, so it is free; the question is only whether it reads better.
-- Whether the repository going private happens with this or separately. It is
-  independent — nothing in the tree depends on public access, no badges, no Pages, no
-  raw URLs — so it need not wait.
+- **The binary *is* `hanten`.** The task originally leaned the other way, but nc is
+  unreleased, so the window where this is free closes at the first release. Done with
+  a Cargo `[[bin]]` section, which leaves the package — and therefore `NC_VERSION`
+  and the `nc_version` report field — untouched.
+- **`--help` and `--version` name the product.** `about` reads "Hanten — …"; the
+  `--version` banner gets the name from the binary, so `version_string()` was left
+  alone (prefixing it too prints `hanten Hanten 0.1.0`).
+- **Diagnostics are prefixed `hanten:`.** Nothing parses the prefix —
+  `scripts/real-scan-verify/harness.sh` greps the message text.
+- **The repository is `lix42/hanten`**, private. The linked worktrees share one
+  config, so `origin` was repointed once rather than per worktree.
+- **History keeps the old spelling.** Command lines in `docs/progress/`,
+  `docs/reports/`, `docs/spike/` and closed task files record what was *run*. Two
+  exceptions: `cargo --bin nc` is build machinery that would simply fail, and it was
+  fixed everywhere.
 
 ## How to Verify
 
-- `grep -rn "Hanten" --include=* .` finds it only in the four branding locations above
-  and in CLAUDE.md's boundary section; **no identifier acquired it**.
-- `cargo test --all-features` and the `nctool` suite pass untouched — if either moved,
-  something crossed the line.
-- The report's `working_mapping` still reads `nc-film-rgb-v1` and the telemetry snapshot
-  tests are unmodified.
-- Every worktree's `origin` points at the renamed repository.
-- CLAUDE.md carries the boundary, and this task file stops being its home.
+- `grep -rn "Hanten"` finds it only in branding, CLAUDE.md's boundary, and
+  user-facing strings; **no identifier acquired it**. Grepping the old product name
+  returns only the historical research report (and this file's own mention of it).
+- All six CI gates pass, and the report's `working_mapping` still reads
+  `nc-film-rgb-v1` with the telemetry schema unmodified.
+- `nctool` still recognises a pre-rename binary by its `--version` banner, which the
+  reference-rendition workflow depends on
+  (`nctool.test_manifest.TestBinaryResolution`).
 
 ## Dependencies
 

@@ -1,4 +1,4 @@
-# nc — nf-retire Progress Log
+# Hanten — nf-retire Progress Log
 
 Execution log for the `nf-retire` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status; this file is the

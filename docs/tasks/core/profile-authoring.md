@@ -2,7 +2,7 @@
 
 ## Goal
 
-Rename `nc params` to **`nc profile`** and make it author a reusable look: accept
+Rename `hanten params` to **`hanten profile`** and make it author a reusable look: accept
 the same override flags `convert` takes — including `--preset` and `--film-stock`,
 since a preset's expansion is exactly what a profile records — validate them, and
 write an annotated, hand-editable file — with no scan involved.
@@ -21,7 +21,7 @@ Measured 2026-08-11:
 - So "freeze a recipe" ran a full decode → render → encode to emit an echo of
   flags the user had just typed, and the result still re-measures per frame.
 
-Meanwhile `nc params` prints only defaults and accepts **no flags at all**, so
+Meanwhile `hanten params` prints only defaults and accepts **no flags at all**, so
 composing a real recipe means splicing `calibrate`'s fragments in by hand.
 
 ## What is known
@@ -53,9 +53,9 @@ composing a real recipe means splicing `calibrate`'s fragments in by hand.
 
 ## How to Verify
 
-- `nc profile <overrides> --out look.jsonc` writes a file with no scan present,
+- `hanten profile <overrides> --out look.jsonc` writes a file with no scan present,
   and that file is accepted by `--params` unchanged.
-- `nc profile --preset characteristic-stock --film-stock ektar-100 --out look.jsonc`
+- `hanten profile --preset characteristic-stock --film-stock ektar-100 --out look.jsonc`
   writes the same expansion `convert --dump-params` writes today, so a roll can still
   take a named bundle after `--dump-params` is gone.
 - The emitted comments survive a round trip *as comments in the file*, and the
@@ -65,7 +65,7 @@ composing a real recipe means splicing `calibrate`'s fragments in by hand.
 - `--out` refuses to clobber an existing file.
 - `--dump-params` is gone from `convert` and `roll`, and no path silently accepts
   it.
-- `nc params` is gone; nothing in docs, tests or scripts still invokes it.
+- `hanten params` is gone; nothing in docs, tests or scripts still invokes it.
 
 ## Dependencies
 

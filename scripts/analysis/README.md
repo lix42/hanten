@@ -48,7 +48,7 @@ The default asset root is `../nc-assets`. Override it with `--asset-root` or the
 
 ```sh
 PYTHONPATH=scripts/analysis python3 -m nctool manifest generate \
-  --asset-root ../nc-assets --nc target/release/nc
+  --asset-root ../nc-assets --nc target/release/hanten
 PYTHONPATH=scripts/analysis python3 -m nctool manifest validate \
   --asset-root ../nc-assets
 PYTHONPATH=scripts/analysis python3 -m nctool manifest roles \
@@ -56,7 +56,7 @@ PYTHONPATH=scripts/analysis python3 -m nctool manifest roles \
 ```
 
 - `generate` inventories source rolls, samples, and converted outputs; obtains
-  derived metadata from `nc inspect`; and streams files through SHA-256. Existing
+  derived metadata from `hanten inspect`; and streams files through SHA-256. Existing
   human fields such as roles, stock names, and notes are preserved.
 - `validate` reports checksum drift, missing files, misplaced/orphaned TIFFs, and
   integrity gaps. It never deletes or moves anything.
@@ -74,7 +74,7 @@ This command automates the calibrate-once/apply-many workflow from
 
 ```sh
 PYTHONPATH=scripts/analysis python3 -m nctool roll convert Ektar \
-  --nc target/release/nc \
+  --nc target/release/hanten \
   --config sigmoid-p3 \
   --output-preset display-p3 \
   --strict-estimate
@@ -94,11 +94,11 @@ It performs these operations:
    If the leader is clipped beyond the scanner boundary, pass a deliberately
    chosen positive `--d-max D` to skip leader estimation; calibration and tags
    record it as an `explicit-override`, not a measured reference.
-4. Reads the tested binary's complete `nc params` document, overlays the optional
+4. Reads the tested binary's complete `hanten params` document, overlays the optional
    partial recipe, then freezes both measurements. This pins defaults such as the
    sigmoid anchor instead of letting a later build reinterpret an underspecified
    recipe.
-5. Runs `nc roll` over the real frames with that shared recipe.
+5. Runs `hanten roll` over the real frames with that shared recipe.
 6. Writes `recipe.json`, `calibration.json`, `roll-report.json`, and `tags.json`
    beside the converted images.
 
@@ -123,7 +123,7 @@ scan can legitimately emit the documented unused-IR warning.
 
 `tags.json` is a small index for the run. It records the configuration ID, source
 roll, source-frame checksums, frozen recipe, calibration frames/regions/values, build identity, report
-path, and roll summary. `calibration.json` retains the complete `nc estimate`
+path, and roll summary. `calibration.json` retains the complete `hanten estimate`
 reports. Individual image sidecars remain the authoritative per-output recipe
 and identity record.
 
@@ -132,7 +132,7 @@ its converted bucket includes the new TIFFs:
 
 ```sh
 PYTHONPATH=scripts/analysis python3 -m nctool manifest generate \
-  --asset-root ../nc-assets --nc target/release/nc
+  --asset-root ../nc-assets --nc target/release/hanten
 ```
 
 The current manifest schema inventories TIFF artifacts only. A default
@@ -245,7 +245,7 @@ in both L\* and stops, inside every record it applies to.
 Lightness rather than stops because equal steps of lightness are unequal steps of
 exposure, and a cut even in stops is even in nothing a viewer sees. Until schema
 2 the edges were -4 / -2 / +2 stops and diffuse white, after Zones III and VII;
-across 33 real renders (six frames x five `nc convert --preset` bundles plus
+across 33 real renders (six frames x five `hanten convert --preset` bundles plus
 three Negative Lab Pro references) that put a median 83% of the frame — 95% at
 worst — in `mid` alone, while `highlight` spanned 0.47 stops and read 0.00 on
 four of the five renders of one frame. The lightness cut's largest band holds a
@@ -411,7 +411,7 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
 
 The matrix is **data** (`scripts/preset-review/presets.matrix.json` is the worked
 example): it names the configurations, the flags each one passes, and the
-per-roll values those flags need. Every cell is one `nc convert`; beside each
+per-roll values those flags need. Every cell is one `hanten convert`; beside each
 rendition the command writes that image's metric record, so the app can draw the
 tone and cast charts next to the picture. Frames and per-roll `Dmin` come from
 `scripts/sigmoid-baseline/fixtures.json` — the same declaration the metrics read,
@@ -485,4 +485,4 @@ fixtures, and images synthesized in the test itself, rather than the Drive-hoste
 scans. `NCTOOL_REQUIRE_DEPS=1` makes a missing `numpy`/`tifffile` a failure
 instead of letting the metrics tests skip while the run still prints `ok`; leave
 it unset locally if you have not made the venv. The harness tests additionally
-need `cargo build` to have produced `target/debug/nc`.
+need `cargo build` to have produced `target/debug/hanten`.

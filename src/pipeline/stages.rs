@@ -1408,7 +1408,7 @@ mod midtone_placement {
     /// How much per-channel *level* does the default gain move, on each curve?
     ///
     /// Checked because an earlier write-up claimed "≤0.06 stop, the anchoring absorbs it",
-    /// measured from whole-image means through `nc convert`. That measurement was bad: two
+    /// measured from whole-image means through `hanten convert`. That measurement was bad: two
     /// of the three frames sat near clipping, where the mean cannot move. On a mid-grey
     /// patch the shift is an order of magnitude larger, and it is a **level**, not the
     /// tilt the drift probes measure — so it is what actually decides whether the render

@@ -2298,7 +2298,7 @@ pub enum OutputPreset {
     /// claim.
     ///
     /// **The product default** since `pipeline_version` 3. Being a named preset it is
-    /// atomic and requires a `.jpg`/`.jpeg` output path — so `nc convert -o out.tif`
+    /// atomic and requires a `.jpg`/`.jpeg` output path — so `hanten convert -o out.tif`
     /// with no preset is now a usage error naming the accepted suffixes, where it
     /// previously wrote a 16-bit TIFF. That is the documented cost of the migration,
     /// not an oversight: an unnamed output policy silently changing container would
@@ -3804,7 +3804,7 @@ mod tests {
         let err = serde_json::from_str::<OutputParams>(r#"{"preset":"scene-master"}"#).unwrap_err();
         assert!(err.to_string().contains("renamed"), "{err}");
         // Every name the flag accepts, the recipe key accepts too — a preset reachable
-        // from one but not the other would be unusable in `nc roll`, which has no
+        // from one but not the other would be unusable in `hanten roll`, which has no
         // output flags at all.
         for preset in OutputPreset::ALL {
             let json = format!(r#"{{"preset":"{}"}}"#, preset.name());

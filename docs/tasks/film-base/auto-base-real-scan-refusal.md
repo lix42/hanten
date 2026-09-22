@@ -56,7 +56,7 @@ source should say so up front instead of failing after a full decode.
 
 1. **Is there a rebate to find?** Per real frame, does a visible unexposed band exist
    inside the holder at all, and at what depth? Measure it (IR plane, or a manual
-   strip profile via `nc inspect` / a throwaway `#[ignore]` test printing derived
+   strip profile via `hanten inspect` / a throwaway `#[ignore]` test printing derived
    numbers) before touching the detector. If the holder covers the rebate on every
    scan, no detector can succeed and the right fix is in the refusal, not the search.
 2. **Which gate refuses?** For frames that do carry a rebate, instrument the walk:

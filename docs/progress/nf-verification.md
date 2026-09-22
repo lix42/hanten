@@ -1,4 +1,4 @@
-# nc — nf-verification Progress Log
+# Hanten — nf-verification Progress Log
 
 Execution log for the `nf-verification` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status; this file is the

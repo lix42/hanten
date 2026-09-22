@@ -1,13 +1,13 @@
-# Negative Converter — High-Level Design Spec (Step 1)
+# Hanten — High-Level Design Spec (Step 1)
 
 > Target: Step 1 (MVP) · Language: Rust
 
 ## 1. Purpose
 
-A command-line tool that reads a **film negative scan** (SilverFast HDR/HDRi
-format first) and produces a **positive image** as a TIFF file. Every step of the
-conversion is controlled by explicit CLI parameters so that an automated agent —
-or a human — can drive the full pipeline reproducibly.
+**Hanten** (the binary is `hanten`) is a command-line tool that reads a **film
+negative scan** (SilverFast HDR/HDRi format first) and produces a **positive
+image**. Every step of the conversion is controlled by explicit CLI parameters so
+that an automated agent — or a human — can drive the full pipeline reproducibly.
 
 ### What "AI-friendly" means here
 
@@ -91,12 +91,12 @@ The deterministic core owns the image science. Any future ML assistance (see
    parameters produce explicit errors/warnings with non-zero exit codes — never
    a quietly wrong image.
 8. **One recipe per roll, not per frame.** Calibration (`Dmin`, `Dmax`, the
-   stock's response) is measured per roll and then *frozen*: nc does not
+   stock's response) is measured per roll and then *frozen*: Hanten does not
    auto-optimize each frame to its own content. Frames from one roll stay
    comparable, and a difference between two of them is a difference in the
    scene rather than in the tool's reaction to it. This is deliberate and it is
    the largest behavioural difference from per-frame converters — measured
-   against Negative Lab Pro on three frames of one roll, nc's `p95 − p5` moves
+   against Negative Lab Pro on three frames of one roll, Hanten's `p95 − p5` moves
    **0.96 stops** where NLP's moves **4.3–4.5** (see
    `docs/progress/analysis.md`, `analysis/nlp-comparison`). Per-frame adaptation
    is a possible **opt-in** later, never the default, and at low priority. The
@@ -195,7 +195,7 @@ why `D` can dip `< 0` and why the `SCAN_EPSILON` floor exists),
 Ektar base ≈ `[0.53, 0.26, 0.16]`, blue near the bottom). Named for minimum
 *density* but stored as a transmission.
 
-**`Dmax`** is named for nc's shipped **legacy display-white density anchor**: in
+**`Dmax`** is named for Hanten's shipped **legacy display-white density anchor**: in
 the current density render, corrected density `D′ = Dmax` maps to positive
 `1.0`. It lives in **density space** (a `D′` value,
 where the base is `0`) and is a **scalar** pooled across channels — a per-channel
@@ -237,7 +237,7 @@ detector proposes as possible rebate.
   presets, staying compatible with the depth/profile/container selectors; every other
   name is atomic and resolves them itself. Since the default is `gain-map-hdr`,
   reaching the legacy TIFF path takes an explicit `--output-preset legacy` (or
-  `custom`), and `nc convert -o out.tif` with no preset is a usage error naming the
+  `custom`), and `hanten convert -o out.tif` with no preset is a usage error naming the
   accepted suffixes.
 - **Current implemented bit depth:**
   - default (no preset) → the `gain-map-hdr` JPEG; `output.depth` is not consulted.
@@ -380,27 +380,27 @@ detector proposes as possible rebate.
   for `gain-map-hdr` and `ultra-hdr-v1`, `.avif` for `hdr-pq`/`hdr-hlg`, and `.tif`/`.tiff` for
   `hdr-linear-tiff`, `hdr-pq-tiff`, `hdr-hlg-tiff`, `display-p3`,
   `compatibility`, **`film-master` and `legacy`**. The last two previously pinned
-  no row, so `nc convert -o out.jpg` wrote a TIFF named `.jpg` with exit 0 and no
+  no row, so `hanten convert -o out.jpg` wrote a TIFF named `.jpg` with exit 0 and no
   warning — the silently-misnamed-file mistake every newer preset was already
   guarded against.
 
   Since every preset now states a rule, an **extensionless** output path
   (`-o positive`) is a usage error too — a decision, not a side effect: a file with
   no extension misleads about its contents exactly as a wrongly-named one does, and
-  nc is unreleased, so the strict rule costs nothing now. `nc convert -o positive`
+  Hanten is unreleased, so the strict rule costs nothing now. `hanten convert -o positive`
   previously exited 0. The **diagnosis varies on where the preset came from, not on
   which preset it is**: that stopped being derivable from the value once the default
   became a *named* preset, since `gain-map-hdr` now arrives both ways. A preset the
   user selected — by `--output-preset` **or** by `output.preset` in a `--params`
   recipe — is blamed by name. With neither, the message names the default explicitly
-  ("with no `--output-preset`, nc writes `gain-map-hdr`") rather than pointing at a
+  ("with no `--output-preset`, Hanten writes `gain-map-hdr`") rather than pointing at a
   flag that is not in the command line. Both halves matter: reporting a
   recipe-selected `legacy` as the no-preset default states something false and sends
   the reader hunting for a default that does not exist.
 
   **Roll capability is a separate axis**, not derived from that table. It used to
   be ("pins a suffix" ⇒ `convert`-only), and that inference died when the table
-  was completed — deriving it would refuse every preset and leave `nc roll` with
+  was completed — deriving it would refuse every preset and leave `hanten roll` with
   nothing to run. **Every preset is roll-capable now:** roll derives
   `<stem>_positive.<ext>` from the frame's own resolved preset, and an explicit
   manifest `output` goes through the same suffix rule `convert` uses. The derived
@@ -471,7 +471,7 @@ curve) and owns the resulting `FilmRgbImage` boundary:
 - `hdr-pq` / `hdr-hlg` — the same `pipeline::stages::render_display_source` shared
   source, then **one** rendition: `pipeline::hdr` renders display-linear BT.2020 and
   encodes Rec.2100 PQ or HLG in place, and `io::avif` codes it as 10-bit full-range
-  4:4:4 AV1 (High Profile) inside an nc-written MIAF container. `av1C` is filled from
+  4:4:4 AV1 (High Profile) inside a Hanten-written MIAF container. `av1C` is filled from
   the encoded sequence header, and the `MA1A` brand is written only inside the AVIF
   v1.2 Advanced Profile's published limits — otherwise the file is a valid
   general-brand AVIF and the report says which limit it exceeded.
@@ -730,7 +730,7 @@ mapper (`pipeline::working_space`) can construct `AcesCgImage`. It is wired into
 the `film-master` render branch; the legacy TIFF path does not cross it. The pre-reconstruction
 `--algorithm simple|density|sigmoid` selector (a boxed `Converter` returning an
 untyped `LinearImage`) is **removed** — the flag and the old recipe forms are
-rejected with a migration error (nc is unreleased; no aliases).
+rejected with a migration error (Hanten is unreleased; no aliases).
 
 ### 7.1 `simple` — inversion baseline
 
@@ -1080,7 +1080,7 @@ pub fn display_source(aces: AcesCgImage, print: &PrintParams)
 
 ## 8. CLI design
 
-A single binary (working name `nc`) with subcommands. The agent-facing surface is
+A single binary (`hanten`) with subcommands. The agent-facing surface is
 optimized for scripting: flags for everything, JSON in/out, stable exit codes,
 no interactive prompts.
 
@@ -1088,11 +1088,11 @@ no interactive prompts.
 
 | Command | Purpose |
 |---|---|
-| `nc convert` | The main pipeline: negative file → positive image in the resolved preset's container (a gain-map JPEG by default; a TIFF or AVIF under the presets that say so). |
-| `nc roll` | Convert a batch of frames from one shared, frozen recipe (the batch-**apply** scaffold). Per-frame outputs into `--out-dir` + a roll-level JSON report. Single-frame `convert` is unchanged; roll is additive. |
-| `nc inspect` | Read a scan and emit a JSON report of format, channels, bit depth, candidate rebate regions (coordinates + spread, ready for `--base-region`), suggested `Dmin`. No output image. |
-| `nc estimate` | Run only film-base/`Dmin` estimation; emit JSON with reuse-ready `--film-base` / recipe-fragment forms. `--grid` adds 5-cell agreement-checked sampling for blank reference frames. `--d-max-region` additionally measures the roll-fixed display-white anchor `Dmax` from a fully-exposed reference frame, emitting reuse-ready `--d-max` / `reconstruction.curve.dmax` forms. |
-| `nc params`  | Print the full default/effective parameter set as JSON (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `film_base.source` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
+| `hanten convert` | The main pipeline: negative file → positive image in the resolved preset's container (a gain-map JPEG by default; a TIFF or AVIF under the presets that say so). |
+| `hanten roll` | Convert a batch of frames from one shared, frozen recipe (the batch-**apply** scaffold). Per-frame outputs into `--out-dir` + a roll-level JSON report. Single-frame `convert` is unchanged; roll is additive. |
+| `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, candidate rebate regions (coordinates + spread, ready for `--base-region`), suggested `Dmin`. No output image. |
+| `hanten estimate` | Run only film-base/`Dmin` estimation; emit JSON with reuse-ready `--film-base` / recipe-fragment forms. `--grid` adds 5-cell agreement-checked sampling for blank reference frames. `--d-max-region` additionally measures the roll-fixed display-white anchor `Dmax` from a fully-exposed reference frame, emitting reuse-ready `--d-max` / `reconstruction.curve.dmax` forms. |
+| `hanten params`  | Print the full default/effective parameter set as JSON (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `film_base.source` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
 ### Recipes (JSON in/out)
 
@@ -1265,26 +1265,26 @@ needs no file at all. Per-frame overrides stay in the `--frames` manifest.
 **The workflow.** Freezing no longer runs a conversion:
 
 ```sh
-nc inspect scan.tif                                       # optional: what is this file
-nc calibrate --unexposed blank.tif --leader exposed.tif              --out roll-cal.jsonc                          # measure the roll, once
-nc profile --density-curve sigmoid --sigmoid-contrast 2.4            --output-preset display-p3 --out my-look.jsonc  # author a look, no image
-nc roll frames/*.tif --out-dir positives/         --params my-look.jsonc --params roll-cal.jsonc     # apply
+hanten inspect scan.tif                                       # optional: what is this file
+hanten calibrate --unexposed blank.tif --leader exposed.tif              --out roll-cal.jsonc                          # measure the roll, once
+hanten profile --density-curve sigmoid --sigmoid-contrast 2.4            --output-preset display-p3 --out my-look.jsonc  # author a look, no image
+hanten roll frames/*.tif --out-dir positives/         --params my-look.jsonc --params roll-cal.jsonc     # apply
 ```
 
 Both `--unexposed` and `--leader` are independently optional: either alone
 resolves its own half and leaves the other at its default. Agents can skip the
 files entirely — the report stays on stdout, so
-`nc calibrate … | jq .calibration | nc roll … --params -` composes.
+`hanten calibrate … | jq .calibration | hanten roll … --params -` composes.
 
 **Authored files are JSONC** (JSON plus comments). It is a superset, so every
 existing recipe, sidecar and `--params` file stays valid, the tagged enums the
 schema leans on keep working, and the machine contracts — report on stdout, the
 output sidecar — remain plain JSON. Comments are **generated from the schema, not
-preserved**: serde round-trips discard them, so nc writes an annotated file once
+preserved**: serde round-trips discard them, so Hanten writes an annotated file once
 and never rewrites a user's file in place.
 
-**Renames and removals.** `nc estimate` becomes **`nc calibrate`** (it resolves a
-roll, not one value) and `nc params` becomes **`nc profile`** (it authors a
+**Renames and removals.** `hanten estimate` becomes **`hanten calibrate`** (it resolves a
+roll, not one value) and `hanten params` becomes **`hanten profile`** (it authors a
 reusable look, not a parameter dump). `--dump-params` is **deleted** rather than
 aliased: it is byte-identical to the sidecar every conversion already writes, and
 it captures none of the measured values, so a "frozen" recipe produced by it still
@@ -1353,12 +1353,12 @@ changed output pixel.
   `scripts/real-scan-verify/` and `nctool compare` are the tools for that half.
 - `params_hash` — a stable 64-bit FNV-1a hash of the canonical resolved-recipe
   JSON: **the exact bytes `--dump-params` writes**, so an agent can reproduce it
-  (`nc convert --dump-params f.json …` then hash `f.json`) and identical
+  (`hanten convert --dump-params f.json …` then hash `f.json`) and identical
   configurations are detectable across frames and versions. The sidecar's `params`
   body is the same **document** but not the same bytes — nesting it under `params`
   indents every line two extra spaces — so reproduce the hash from a
   `--dump-params` file, and compare the sidecar as parsed JSON. Omitted for
-  `inspect`/`estimate`, which resolve no full recipe. `nc roll` stamps one
+  `inspect`/`estimate`, which resolve no full recipe. `hanten roll` stamps one
   `identity` for the **shared** frozen recipe; a per-frame override changes that
   frame's own hash, which is why each roll frame also reports its own `identity`.
 
@@ -1381,7 +1381,7 @@ mean and an f32 mean are therefore not comparable, and `compare` refuses to subt
 them. Only the mean is recorded; ΔE2000 / SSIM need real pixel access and belong to
 §12 item 7's QA harness.
 
-`nc --version` prints the same build identity (semver, `pipeline_version` with a
+`hanten --version` prints the same build identity (semver, `pipeline_version` with a
 one-line description of its default render, commit with a `-dirty` marker — or
 `(dirty unknown)` when cleanliness could not be read, target) so an output can be
 attributed without running a conversion.
@@ -1583,7 +1583,7 @@ explicit `--film-base` samples nothing and the phase is the decoded image alone.
 no report at all), and `detected_total_ram_bytes` is omitted when the platform
 can't report it (which also disables the warn tier). `render_bytes`/`encode_bytes`
 are `0` on `inspect`/`estimate`, which decode, sample, and stop — so for them the
-**film-base** phase, not decode, is usually the peak. `nc roll` reports the same
+**film-base** phase, not decode, is usually the peak. `hanten roll` reports the same
 block **per frame** (frames may differ in dimensions, and the gate runs per
 frame), not once for the roll — including for a frame that passed the gate and then
 failed for another reason, whose entry carries both its `memory` block and its
@@ -1598,14 +1598,14 @@ failed for another reason, whose entry carries both its `memory` block and its
 # one of `--film-base` / `--base-region` / `--auto-base`. The `.jpg` suffix is not
 # optional either: the default preset is `gain-map-hdr`, and nc never renames the
 # path you give it (add `--output-preset legacy` for the transitional TIFF).
-nc convert in.tiff -o out.jpg --reconstruction density \
+hanten convert in.tiff -o out.jpg --reconstruction density \
   --density-curve exponential --auto-base --report json
 
 # Transitional rendered float TIFF: --no-d-max selects the exponential curve's
 # unity placement (base → 1.0, detail above), then the current print controls
 # still run and the depth-aware default profile (acescg for f32) applies. This
 # is NOT film-master.
-nc convert in.tiff -o out.tiff \
+hanten convert in.tiff -o out.tiff \
   --output-preset legacy --out-depth f32 --density-curve exponential --no-d-max \
   --film-base 0.92,0.55,0.42 \
   --density-gamma 1.8 --print-exposure 0.0 --black-point 0.002 \
@@ -1621,7 +1621,7 @@ nc convert in.tiff -o out.tiff \
 # since `u16` resolves the default while forcing a container the master cannot
 # produce) — as is a print control,
 # --auto-d-max, or a measured --auto-balance-range. Never silently dropped.
-nc convert frame12.tiff -o frame12_master.tiff \
+hanten convert frame12.tiff -o frame12_master.tiff \
   --output-preset film-master \
   --film-base 0.92,0.55,0.42 --d-max 1.64
 # → report.output_render = { "preset": "film-master", "print_controls": false,
@@ -1629,11 +1629,11 @@ nc convert frame12.tiff -o frame12_master.tiff \
 #     "working_mapping": "nc-film-rgb-v1", … }
 # Re-exporting a graded roll recipe as a master: reset its print controls on the
 # command line (flags win, and the rejection is on the RESOLVED value).
-nc convert frame12.tiff -o frame12_master.tiff --params roll-A.json \
+hanten convert frame12.tiff -o frame12_master.tiff --params roll-A.json \
   --output-preset film-master --print-exposure 0 --white-balance 1,1,1
 
 # Reuse a roll recipe but override one knob for this frame.
-nc convert frame12.tiff -o frame12_pos.jpg \
+hanten convert frame12.tiff -o frame12_pos.jpg \
   --params roll-A.json --print-exposure 0.15
 
 # Convert a whole roll from ONE shared, frozen recipe (batch-apply). The shared
@@ -1641,8 +1641,8 @@ nc convert frame12.tiff -o frame12_pos.jpg \
 # once at the top of the roll report; each frame additionally echoes the resolved
 # base/Dmax it used. Per-frame outputs go to out/ as <stem>_positive.<ext>, the
 # suffix following the resolved output preset.
-nc roll frame01.tiff frame02.tiff frame03.tiff --out-dir out/ --params roll-A.json
-nc roll scans/ --out-dir out/ --params roll-A.json   # a directory expands to its .tif/.tiff
+hanten roll frame01.tiff frame02.tiff frame03.tiff --out-dir out/ --params roll-A.json
+hanten roll scans/ --out-dir out/ --params roll-A.json   # a directory expands to its .tif/.tiff
 # Per-frame overrides via a manifest: each frame may carry its own output path
 # and a partial-recipe `params` deep-merged onto the shared recipe for that frame
 # only (the "frame-local" knobs, e.g. print exposure). The manifest is the shape
@@ -1650,7 +1650,7 @@ nc roll scans/ --out-dir out/ --params roll-A.json   # a directory expands to it
 #   frames.json: { "frames": [
 #     { "input": "frame01.tiff" },
 #     { "input": "frame02.tiff", "params": { "print": { "print_exposure": 0.15 } } } ] }
-nc roll --frames frames.json --out-dir out/ --params roll-A.json
+hanten roll --frames frames.json --out-dir out/ --params roll-A.json
 # The roll report: { "command": "roll", "recipe": { …shared frozen recipe… },
 #   "warnings": [ …roll-level, e.g. base-not-frozen… ],
 #   "frames": [ { "input": …, "output": …, "status": "ok", "film_base": …,
@@ -1663,7 +1663,7 @@ nc roll --frames frames.json --out-dir out/ --params roll-A.json
 # byte-identical output per frame (each frame runs the same core as `convert`).
 
 # Inspect only; let an agent read the JSON and decide parameters.
-nc inspect in.tiff --report json
+hanten inspect in.tiff --report json
 
 # Calibrate once from an unexposed reference frame, then reuse for the roll.
 # (Product tip: wind past the light-struck leader, shoot a lens-cap frame, and
@@ -1673,12 +1673,12 @@ nc inspect in.tiff --report json
 # directly reusable forms: a paste-ready --film-base flag string and a
 # `film_base` recipe fragment (emitted only when the measurement is a valid
 # explicit base — each channel in (0, 1] — else a warning explains why not).
-nc estimate reference.tiff --base-region 200,0,300,3600 --report json
+hanten estimate reference.tiff --base-region 200,0,300,3600 --report json
 # → { "film_base": { "r": 0.553, "g": 0.271, "b": 0.159 },
 #     "film_base_source": { "region": [200, 0, 300, 3600] },
 #     "film_base_flag": "--film-base 0.553,0.271,0.159",
 #     "film_base_recipe": { "source": { "explicit": [0.553, 0.271, 0.159] } }, … }
-nc convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159
+hanten convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159
 # …or paste film_base_recipe into roll-A.json as its "film_base" section and batch it.
 
 # Calibrate the roll-fixed display-white anchor `Dmax` the same way: point
@@ -1690,12 +1690,12 @@ nc convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159
 # `reconstruction.curve` recipe fragment. The region is recorded as provenance (dmax_region), NOT as a
 # re-read directive — the frozen recipe carries the scalar so the apply phase is
 # deterministic. `Dmax` is roll-fixed like `Dmin` (see §7.2/§9).
-nc estimate leader.tiff --film-base 0.553,0.271,0.159 --d-max-region 200,0,300,3600 --report json
+hanten estimate leader.tiff --film-base 0.553,0.271,0.159 --d-max-region 200,0,300,3600 --report json
 # → { "film_base": { … },
 #     "dmax": 1.6428, "dmax_region": [200, 0, 300, 3600],
 #     "d_max_flag": "--d-max 1.6428",
 #     "d_max_recipe": { "dmax": { "explicit": 1.6428 } }, … }
-nc convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159 --d-max 1.6428
+hanten convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159 --d-max 1.6428
 # …or paste d_max_recipe's "dmax" key into roll-A.json's tagged
 # "reconstruction"."curve" object. With no reference frame, omit it: the default
 # `reconstruction.curve.dmax = fixed` nominal anchor still renders a viewable
@@ -1721,16 +1721,16 @@ nc convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159 --d-max
 # guard.
 # --grid conflicts with --film-base (nothing to sample) and --auto-base (the
 # grid replaces border detection). Deterministic: fixed layout, fixed percentile.
-nc estimate blank.tiff --grid --report json
+hanten estimate blank.tiff --grid --report json
 
 # Auto neutral white balance: estimate per-frame gains (percentile ≈ NLP
 # Auto-Neutral; gray-world ≈ Auto-AVG), read the resolved gains back from the
 # report, and freeze them into --white-balance / the roll recipe
 # (print.white_balance = {"explicit": [...]}) — the reuse run is bit-identical.
-nc convert frame01.tiff -o frame01_pos.jpg --film-base 0.92,0.55,0.42 \
+hanten convert frame01.tiff -o frame01_pos.jpg --film-base 0.92,0.55,0.42 \
   --auto-wb percentile --report json
 # → { "white_balance": [1.083, 1.0, 0.941], ... }
-nc convert frame02.tiff -o frame02_pos.jpg --film-base 0.92,0.55,0.42 \
+hanten convert frame02.tiff -o frame02_pos.jpg --film-base 0.92,0.55,0.42 \
   --white-balance 1.083,1.0,0.941
 ```
 
@@ -1774,7 +1774,7 @@ not specified here.
   dust-removal stage (§12 item 1) and `bw-support`; accepted on `convert`,
   `estimate`, and `inspect`, which echo it back as the report's `film_type` — those
   two resolve no recipe, so echoing is what keeps a declaration from being parsed
-  and dropped. `nc inspect` and `nc estimate` report `ir_separability` (the measured
+  and dropped. `hanten inspect` and `hanten estimate` report `ir_separability` (the measured
   interior IR transmission and the verdict) on any scan carrying an IR plane, and
   on a usable one additionally reports a `holder_mask`: the per-edge along-edge
   segments, each with its span `[start, end)`, holder/film class, and
@@ -1798,7 +1798,7 @@ not specified here.
     asserted (an override cannot make it supported).
   - `auto` on either axis resolves from container evidence and **fails loudly in
     `convert`** when it stays ambiguous — nothing is silently labelled linear
-    Rec.709 for lacking an ICC. `nc inspect` still reports the evidence so the
+    Rec.709 for lacking an ICC. `hanten inspect` still reports the evidence so the
     file is diagnosable.
   Resolution and precedence (deterministic, `pipeline::input_semantics`):
   an explicit assertion outranks a descriptive tag which outranks the
@@ -1850,7 +1850,7 @@ not specified here.
     it as a negative would be silently wrong, so `convert` **rejects it loudly**
     (exit 4) with a distinct "positive-mode not yet supported" message.
     Positive-mode support (and embedded-ICC handling) is a follow-up.
-  `nc inspect`, the `convert` report, **and each `nc roll` frame report** expose
+  `hanten inspect`, the `convert` report, **and each `hanten roll` frame report** expose
   the resolved `input_color`: both axes with per-axis evidence, whether an ICC is
   embedded plus the safe summary, and `transfer_decoded` (whether any
   inverse-transfer decoding was performed — always `false` in Step 1, which
@@ -1973,12 +1973,12 @@ keeping the roll color-consistent. The sources, in decreasing reliability:
    open, so it is fogged film, denser than clean base, and would bake a wrong
    `Dmin` into the whole roll. A true cap-on frame provides a full frame of
    clean base — far more area than the rebate
-   — measured with `nc estimate` and frozen into the roll recipe (§8 example).
+   — measured with `hanten estimate` and frozen into the roll recipe (§8 example).
    The large area also enables multi-region sampling with an agreement check
-   (`nc estimate --grid`, §8), which doubles as a light-leak /
+   (`hanten estimate --grid`, §8), which doubles as a light-leak /
    illumination-falloff diagnostic.
 2. **The rebate (the unexposed strip around each frame).** Reliable form: point
-   `--base-region` at a visible rebate patch manually — `nc inspect` reports the
+   `--base-region` at a visible rebate patch manually — `hanten inspect` reports the
    detector's candidate rectangles (edge, coordinates, value, spread) so you can
    confirm one instead of measuring it in an image viewer (UI-assisted picking
    is a roadmap item, §12). Convenience form: `--auto-base` — real
@@ -2026,8 +2026,8 @@ recovery flags — an agent can catch the exit code and re-run with an explicit
 choice. Estimator selection is never silent. **A degenerate resolved base** (a
 zero / negative / non-finite channel — e.g. a `--base-region` on the dark holder)
 is likewise rejected at the estimation stage rather than left to poison the
-density divide or be echoed back by `nc estimate` as a trustworthy `Dmin`. This
-holds for the `nc estimate --grid` combined base too: it emits the diagnostic
+density divide or be echoed back by `hanten estimate` as a trustworthy `Dmin`. This
+holds for the `hanten estimate --grid` combined base too: it emits the diagnostic
 report (with `grid.cells`) and then fails loudly on a degenerate combined base
 regardless of `--strict` (exit 1), the same code the single-measurement guard
 returns. A
@@ -2064,7 +2064,7 @@ crossover.
   *above* the recipe because nc writes every key explicitly, so one layered beneath a
   recipe nc produced would have nothing left to set.
 - **A preset never sets `output.preset`.** The two are independent axes; pinning an
-  output branch here would make a bare `nc convert --output-preset film-master` fail,
+  output branch here would make a bare `hanten convert --output-preset film-master` fail,
   since that branch refuses `reinhard` and any non-default `print_exposure`.
 - Refused combinations (usage errors, exit 2): `--film-stock` beside a preset with no
   stock; `--film-stock generic-c41` under `characteristic-stock` / `-aim`;
@@ -2633,7 +2633,7 @@ corrected output remains `film-master` and records mandatory profile
 identity/hash/scope provenance. **The migration list is complete**: all twelve
 presets are live and `gain-map-hdr` is the default as of `pipeline_version` 3
 (measured in [reports/render-defaults-v3.md](reports/render-defaults-v3.md)).
-`nc roll` migration is part of the preset task: automatic names use
+`hanten roll` migration is part of the preset task: automatic names use
 each resolved container suffix, manifest/per-frame overrides validate
 independently, and each sidecar derives from its final image path. The single roll
 report remains on stdout or the explicit `--report-file`; that destination is
@@ -2667,7 +2667,7 @@ collision-checked against all inputs, outputs, and sidecars before writing.
   operational flag changes an outcome other than the gate's own verdict.
 - `-v/--verbose`, `--quiet`
 
-**Roll (batch, `nc roll` only — orchestration flags, NOT recipe keys).** `nc roll`
+**Roll (batch, `hanten roll` only — orchestration flags, NOT recipe keys).** `hanten roll`
 converts many frames from one shared `--params` recipe; it reuses the exact recipe
 shape above and adds no new conversion knobs. Its flags are operational (like
 `--report`): `--out-dir <dir>` (per-frame outputs `<stem>_positive.<ext>`, the
@@ -2681,7 +2681,7 @@ converts and `film_base.source` has no default while `RollArgs` accepts none of
 the three film-base flags — the recipe is the only place a roll can state its
 base, and a roll with no recipe (or one omitting `film_base.source`) exits 2 with
 a message that says so. That is the intended workflow rather than a limitation:
-`Dmin` is measured once for the roll (`nc estimate`) and frozen into the shared
+`Dmin` is measured once for the roll (`hanten estimate`) and frozen into the shared
 recipe as `film_base.source.explicit`, which is also the only source that keeps
 every frame on one base — see the roll-fixed invariant warnings below.
 The shipped schema stores roll-fixed Dmax at `density.dmax`; the target schema
@@ -2871,7 +2871,7 @@ linear + scanner-device resolution — including an asserted `colorimetric`
 meaning) is an **unsupported** input, exit 4; an explicit assertion that
 contradicts authoritative container structure, the removed combined `input.color`
 recipe key, and the deprecated `--assume-linear` flag are **usage** errors, exit
-2; `--input-profile` (reserved, not applied) is unsupported, exit 4. `nc inspect`
+2; `--input-profile` (reserved, not applied) is unsupported, exit 4. `hanten inspect`
 never fails on ambiguity — it reports the per-axis evidence so the file stays
 diagnosable.
 
@@ -2907,7 +2907,7 @@ machine than on a large one.
 
 A **degenerate resolved film base** (a zero / negative / non-finite channel)
 maps to exit 1 (generic error) on both estimate paths: the single-measurement
-path via `film_base::estimate`'s finite-and-positive guard, and `nc estimate
+path via `film_base::estimate`'s finite-and-positive guard, and `hanten estimate
 --grid` via a post-report guard on the combined base — the latter emits the
 diagnostic report (with `grid.cells`) first, then fails regardless of `--strict`
 (see §8). This is unconditional, distinct from the `--strict`-only promotion of
@@ -2943,7 +2943,7 @@ the NLP feature comparison, Phase 6).
    to support camera-scanning workflows.
 5. **More output formats.** JPEG/PNG for proofs, EXR for HDR interchange.
 6. **Roll-level presets & batch mode.** The **batch-apply scaffold has shipped**
-   as `nc roll` (task `roll-conversion`): convert N frames from one shared, frozen
+   as `hanten roll` (task `roll-conversion`): convert N frames from one shared, frozen
    recipe (`--params`), with per-frame overrides via a `--frames` manifest and a
    roll-level JSON report (per-frame status + the shared recipe once). See §8.
    What remains: the auto-cascade that *generates* the shared recipe (detect the
@@ -2960,7 +2960,7 @@ the NLP feature comparison, Phase 6).
    for the real `holder → thin rebate → picture` layout (deterministic,
    fail-loud), the **uniformity warning on `--base-region`** (a mixed
    rebate/image rectangle otherwise yields a plausible-looking bad base
-   silently), and `nc inspect` reporting **candidate rebate regions**
+   silently), and `hanten inspect` reporting **candidate rebate regions**
    (coordinates + spread) so CLI users confirm instead of measuring — the same
    data a future UI would highlight. The opt-in **content-based source**
    (`film_base.source = "content"` / `--base-content`, §9 ladder tier 3) is
@@ -2971,7 +2971,7 @@ the NLP feature comparison, Phase 6).
 9. **Light film holders.** Auto/border logic assumes a dark holder surround; some
    holders are white. Add a `--holder white|black` control (recipe key
    `film_base.holder`) so detection knows the surround polarity.
-10. **Reuse-ready `nc estimate` output — shipped** (`estimate-reuse-output`).
+10. **Reuse-ready `hanten estimate` output — shipped** (`estimate-reuse-output`).
     The estimate report now carries the measured base in directly reusable
     forms (`film_base_flag`, `film_base_recipe`) and `--grid` provides the
     5-cell agreement-checked sampling for unexposed-frame calibration (§9
@@ -2984,14 +2984,14 @@ the NLP feature comparison, Phase 6).
     building blocks).
 12. **Crash reporting & opt-in telemetry.** The **local, opt-in telemetry
     record** has **shipped** as the `perf-telemetry` task: an embedded, opt-in
-    JSON record per `nc convert` (image + per-stage timing + run context) written
+    JSON record per `hanten convert` (image + per-stage timing + run context) written
     to a local JSONL log and/or one-off file (`--telemetry` / `--telemetry-file`,
     `NC_TELEMETRY_LOG`; see §9), best-effort and byte-identical-output-preserving.
     The `telemetry/strategy` spike is **complete**; its approved
     [design note](telemetry-strategy.md) fixes the remaining shape. The client
     keeps custom JSON (no embedded OTel SDK/Collector) and sends a separately
     versioned, allowlisted upload projection to an nc-owned Cloudflare Worker +
-    D1 service. Persistent `nc telemetry enable` consent opts into automatic
+    D1 service. Persistent `hanten telemetry enable` consent opts into automatic
     `convert` success/failure/panic collection and detached, crash-safe queue
     draining from exactly one consent-stored active JSONL plus its derived private
     sibling spool and immutable generation. Collection consent is an
@@ -3018,14 +3018,14 @@ the NLP feature comparison, Phase 6).
     `prototype/perf-bench-instrumentation`); `perf-telemetry` is the real-world
     successor.
 13. **Roll workflow & base-acquisition planner** (extends item 6). The
-    deterministic **apply** half has shipped as `nc roll`: it converts a batch
+    deterministic **apply** half has shipped as `hanten roll`: it converts a batch
     from one shared recipe, supports per-frame manifest overrides, and emits one
     roll report while preserving the single-frame conversion core. Roll-fixed
     parameters (`Dmin`, `Dmax`) versus frame-local print controls remain the
     model. The open `base-acquisition-planner` owns the automatic **plan** half:
     an acquisition cascade (unexposed reference → rebate region → `--auto-base`
     → cross-frame agreement → drop-to-single; content estimation only on explicit
-    opt-in) emits the frozen recipe and provenance that `nc roll` replays.
+    opt-in) emits the frozen recipe and provenance that `hanten roll` replays.
     Tracked: shipped `roll-conversion`; open `base-acquisition-planner` and
     `film-base/content-fallback`.
 14. **Roll-fixed `Dmax` from a fully-exposed reference frame.** *(Implemented —
@@ -3075,8 +3075,8 @@ the NLP feature comparison, Phase 6).
     extend via item 7's QA harness; timings reuse the telemetry record. `v0` is
     recorded in `docs/reports/v0-baseline.md`. Tracked: `conversion-versioning`.
 17. **Stdout broken-pipe safety.** Every stdout JSON write — `emit_report`
-    (convert/inspect/estimate) and `nc params` — uses `println!`, which
-    panics on a closed pipe — the `nc … | head` / `… | jq 'first'` case, where the
+    (convert/inspect/estimate) and `hanten params` — uses `println!`, which
+    panics on a closed pipe — the `hanten … | head` / `… | jq 'first'` case, where the
     reader exits after
     enough bytes — printing a backtrace and returning failure though the conversion
     already succeeded. Route all stdout writes through a broken-pipe-tolerant helper
@@ -3180,7 +3180,7 @@ the NLP feature comparison, Phase 6).
     `gain-map-hdr` becomes the default; explicit presets retain 16-bit TIFF
     Display P3 SDR and sRGB compatibility, linear ACEScg film master, PQ/HLG
     AVIF, linear/PQ/HLG HDR TIFF interchange, and custom workflows.
-    `nc roll` naming/manifests migrate with presets so suffixes derive from each
+    `hanten roll` naming/manifests migrate with presets so suffixes derive from each
     resolved container and per-image sidecars derive from final image paths. One
     roll report remains on stdout or explicit `--report-file`, collision-checked
     against all batch inputs/outputs/sidecars. Core full-size TIFF/resource verification remains independently runnable;

@@ -19,7 +19,7 @@ Results write-up: [`docs/reports/real-scan-verification.md`](../../docs/reports/
 ## Prerequisites
 
 - A release build of `nc`: `cargo build --release` (the harness auto-locates
-  `target/release/nc` at the repo root).
+  `target/release/hanten` at the repo root).
 - The real scans at `../nc-assets/` (sibling of the repo, per CLAUDE.md), with a
   generated `manifest.json` at the assets root — the harness reads its roll list
   from the manifest via `nctool` (see Notes). Generate it with
@@ -48,7 +48,7 @@ Stages (no argument runs `freeze → convert → ir → determinism → resource
 
 | Var | Default | Meaning |
 |---|---|---|
-| `NC` | `<repo>/target/release/nc` | the binary under test |
+| `NC` | `<repo>/target/release/hanten` | the binary under test |
 | `A` | `<repo>/../nc-assets` | assets root (rolls live under `$A/rolls/<roll>/`) |
 | `OUTDIR` | `$A/converted/nc/2026-07-22` | converted-image output dir |
 | `ART` | `/private/tmp/rsv-artifacts` | per-run JSON reports (not committed) |
@@ -57,7 +57,7 @@ Stages (no argument runs `freeze → convert → ir → determinism → resource
 Example — verify a debug build against a scratch output dir:
 
 ```bash
-NC=target/debug/nc OUTDIR=/tmp/out bash scripts/real-scan-verify/harness.sh convert
+NC=target/debug/hanten OUTDIR=/tmp/out bash scripts/real-scan-verify/harness.sh convert
 ```
 
 ## Automated coverage

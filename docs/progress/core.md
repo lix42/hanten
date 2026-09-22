@@ -1,4 +1,4 @@
-# Negative Converter — core Progress Log
+# Hanten — core Progress Log
 
 Execution log for the `core` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status (the checkboxes);
@@ -21,6 +21,17 @@ entries — don't rewrite earlier ones.
 
 What other epics need to know about `core`:
 
+- **The product is Hanten; the binary is `hanten`.** The crate/package stays `nc`,
+  and so does every identifier — `nc-film-rgb-v1`, `nc_version`, the telemetry
+  schema, recipe keys, report fields, exit codes, `NC_*`, `nctool`'s `--nc`/`$NC`,
+  `../nc-assets`. **The authoritative boundary is in CLAUDE.md** ("Hanten outside,
+  `nc` inside"); read it before renaming anything. Practical fallout for other
+  epics: it is `cargo test --bin hanten` (not `--bin nc`), `target/debug/hanten`,
+  and the stderr diagnostic prefix is now `hanten:`. Command lines in
+  `docs/progress/`, `docs/reports/`, `docs/spike/` and closed task files keep the
+  old spelling deliberately — they record what was *run* — but this `Epic summary`
+  does not, because it is curated current guidance rather than history.
+
 - **`cli` is the only orchestrator; stages stay pure.** Decode (stage 1) and
   encode (stage 5) are I/O — they live in `src/io/` and are driven from `cli`;
   `pipeline::stages::render` is the pure reconstruction→named-output core.
@@ -29,7 +40,7 @@ What other epics need to know about `core`:
   takes an already-resolved `&FilmBase`. Every command that decodes runs the
   stage-0 memory preflight first (`io/memory-preflight`, exit 6 over budget).
 - **`ResolvedConfig` is the recipe.** One nested per-stage struct doubles as the
-  recipe, `--dump-params`, and `nc params` output, so the three can't drift.
+  recipe, `--dump-params`, and `hanten params` output, so the three can't drift.
   Merge model is `defaults ← recipe ← CLI` (flags win, **by source rather than by
   value**); an absent presence flag never clobbers a recipe value. Every recipe
   struct uses `deny_unknown_fields`, so a misplaced key is a loud error — keep
@@ -51,7 +62,7 @@ What other epics need to know about `core`:
   Resource=6, Other=1. `NcError::exit_code()` is the single mapping.
 - **stdout is report-only**; logs and warnings go to stderr. Reports emit
   *before* any `--strict` gate, so the machine-readable record always lands and
-  the signal is the exit code. Known gap: the report and `nc params` writes still
+  the signal is the exit code. Known gap: the report and `hanten params` writes still
   use `println!` and panic on a closed pipe (`core/stdout-broken-pipe-safety`).
 - **lcms2 gotcha:** `transform_in_place` is infallible and Little CMS's default
   error handler silently swallows faults, so `cli` installs the *process-global*
@@ -97,7 +108,7 @@ What other epics need to know about `core`:
 
 ## product-naming
 
-**Status:** not started
+**Status:** done (2026-09-21)
 **Updated:** 2026-09-21
 
 - 2026-09-21: filed after deciding the product should be called Hanten while `nc` stays
@@ -106,6 +117,79 @@ What other epics need to know about `core`:
   every report, `nc_version` sits in a snapshot-tested telemetry schema, and the recipe
   keys are the scripting contract. The branding surface is four files. The task carries
   the boundary until it is executed, at which point CLAUDE.md becomes its home.
+
+- 2026-09-21: executed. The boundary now lives in CLAUDE.md ("Hanten outside, `nc`
+  inside"); the task file points at it and no longer restates it.
+  **The binary became `hanten`** — a user decision against the task file's own
+  lean, on the grounds that nc is unreleased so the window closes at first release.
+  Done with a Cargo `[[bin]]` section so the *package* stays `nc` and `NC_VERSION` /
+  the `nc_version` report field never move.
+- 2026-09-21: what the rename actually cost, against the task file's "small change"
+  framing: **362** `nc <subcommand>` occurrences across ~100 files. 195 were rewritten
+  in live docs, skills and open task files; 24 closed task files plus `docs/progress`,
+  `docs/reports` and `docs/spike` keep the old spelling because they record what was
+  *run*. `cargo --bin nc` was the one exception fixed everywhere — it is build
+  machinery and would simply fail.
+- 2026-09-21: three couplings the task file did not name, each a silent failure.
+  (a) **`nctool`'s `is_nc` identifies a binary by its `--version` banner** (it was
+  `startswith("nc ")`, which came from clap's `name`). Renaming clap's name alone
+  would make `find_nc()` return `None` with *no error* and degrade every manifest,
+  metrics and review command to exiftool. It now accepts both banners — the
+  pre-rename one must stay, because the reference rendition is produced by building
+  the **git-tagged** binary. Auto-discovery is deliberately `hanten`-only, so a stale
+  `target/debug/nc` is never picked up silently; `TestBinaryResolution` pins both
+  halves and both were checked falsifiable.
+  (b) **Naming the product in `--version` would double it** — clap prints
+  `{name} {version}`, so the binary name already carries it and prefixing
+  `version_string()` prints `hanten Hanten 0.1.0`. Only `about` was changed.
+  (c) **The stderr prefix was a hardcoded `"nc: "`** in five `eprintln!`s. It moved
+  to `hanten:`; safe only because `scripts/real-scan-verify/harness.sh` greps the
+  *message* ('input carries an IR plane'), never the prefix. A negative assertion in
+  `tests/pipeline.rs` (`!stdout.contains("nc: decoded")`) would have gone vacuous and
+  was moved with it.
+- 2026-09-21: two things deliberately **not** renamed, both because the rename would
+  change bytes rather than prose — recorded as boundary rows so they are not "tidied
+  up" later: the `(nc)` suffix in `pipeline::color`'s synthesized coded-HDR ICC
+  descriptions (written into the profile bytes of every `hdr-pq-tiff` /
+  `hdr-hlg-tiff`; the only test on them asserts self-stability, so nothing would have
+  caught it), and the telemetry log directory `<data-dir>/nc/telemetry.jsonl` (moving
+  it orphans existing logs).
+- 2026-09-21: the mechanical sweep is not sufficient, and running the binary is what
+  caught it. A `\bnc (convert|inspect|…)` regex misses: `--bin nc`, paths built from
+  components (`ROOT / "target" / "debug" / "nc"`, which red the harness test), a
+  remedy broken across a line continuation (`` `nc \`` + `convert` `), and prose
+  verbs — the default-preset suffix error still read "**nc writes** `gain-map-hdr`"
+  with all six gates green. Eight more such strings were found only by grepping
+  `\bnc\b` in non-comment lines and reading each.
+- 2026-09-21: the repository is now **`lix42/hanten`** and private. Two task-file
+  claims corrected while executing: renaming is *possible* and cheap (GitHub redirects
+  the old URL permanently), and `origin` is repointed **once** — the linked worktrees
+  share `main/.git/config`, they do not each need it by hand.
+- 2026-09-21: `docs/using-nc.md` re-verified by running the binary per
+  `update-usingnc-doc`, not by reading the diff. §2's caveat that "a bare `nc` is
+  netcat" was **deleted**: the clash was caused by the old name and the rename removes
+  it. Exit 2 for a missing film base, `--strict` promotion to exit 1, the
+  default-preset suffix rule and the `hanten: warning:` prefix were each re-run.
+- 2026-09-21: three independent reviews (Codex, `ship:diff-reviewer`, `/code-review`)
+  found what the gates could not, all of it prose or examples:
+  the §1 workflow **diagram in `using-nc.md` was visibly broken** — `nc` → `hanten`
+  grew the box contents by 4 columns while the `┌──┐` borders stayed, so two rows
+  pushed the arrows and the later boxes right; **both README quickstart examples
+  exited 2** (the default `gain-map-hdr` wants `.jpg`, and `--out-depth f32` is
+  refused by flag presence against an atomic preset) — pre-existing, but rewritten
+  here without being run, which is the exact failure `update-usingnc-doc` exists to
+  prevent; and seventeen live command lines in five files still said `nc`, because
+  the sweep regex covered the *subcommands* but not `nc --version`, `nc telemetry …`
+  or the `nc … | head` pipe form. Also repaired: this task's own filing commit had
+  orphaned `core/unfrozen-auto-mode-warning`'s rationale body in the dependency list
+  by inserting a new entry between a header and its `—` body — the trap CLAUDE.md
+  documents, committed by the commit that documents it.
+- 2026-09-21: `find_nc`'s **positive** half had no test — every assertion was
+  negative, so a typo in a candidate path would have passed all four. Added and
+  falsified. Finding it cost a round to a **stale `__pycache__`**: the falsification
+  edit was a same-length transposition restored within the same mtime second, so
+  CPython kept the old bytecode and produced a failure whose traceback quoted the
+  *corrected* source. Recorded in CLAUDE.md.
 
 ## project-foundation
 **Status:** done (2026-06-13)

@@ -1,7 +1,7 @@
 """Black-box regression tests for ``real-scan-verify/harness.sh``.
 
 Hermetic: a temporary one-roll asset tree is populated from the committed TIFF
-fixtures. The happy path invokes the real debug ``nc`` binary; the failure path
+fixtures. The happy path invokes the real debug ``hanten`` binary; the failure path
 uses a fake binary that exits successfully while writing the wrong container,
 reproducing the silent 2026-08-09 regression without reading Drive assets.
 """
@@ -86,7 +86,7 @@ class HarnessTest(unittest.TestCase):
         )
 
     def test_fixture_freeze_and_convert_match_the_recipe_and_suffix_contract(self):
-        nc = ROOT / "target" / "debug" / "nc"
+        nc = ROOT / "target" / "debug" / "hanten"
         self.assertTrue(nc.is_file(), "run `cargo build` before the harness tests")
         self.assertIsNotNone(shutil.which("jq"), "the harness requires jq")
 
@@ -312,9 +312,9 @@ for arg in "$@"; do
 done
 if [ "$strict" = true ]; then
   if [ "${FAKE_STRICT_DIAGNOSTIC:-expected}" = expected ]; then
-    echo 'nc: warning: input carries an IR plane; it is preserved but not used in the conversion' >&2
+    echo 'hanten: warning: input carries an IR plane; it is preserved but not used in the conversion' >&2
   else
-    echo 'nc: warning: an unrelated warning' >&2
+    echo 'hanten: warning: an unrelated warning' >&2
   fi
   echo 'error: --strict: simulated usage failure' >&2
   exit "${FAKE_STRICT_RC:-2}"

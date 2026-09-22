@@ -24,7 +24,7 @@ import json, os, pathlib, subprocess, sys
 # script operate on whatever repo you happen to be standing in, and raise CalledProcessError
 # outside one. The layout is scripts/hdr-tone-review/generate.py, so the root is two up.
 REPO = pathlib.Path(__file__).resolve().parents[2]
-NC = REPO/"target/release/nc"
+NC = REPO/"target/release/hanten"
 ASSETS = (REPO/"../nc-assets").resolve()
 OUT = pathlib.Path(os.environ.get(
     "NC_TONEMAP_OUT", REPO/"../temp/tonemap-hdr-review")).resolve()

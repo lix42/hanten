@@ -1,4 +1,4 @@
-# Make `characteristic-generic` what a bare `nc convert` resolves
+# Make `characteristic-generic` what a bare `hanten convert` resolves
 
 > **Superseded 2026-09-19 by `nf-core/default-flip` and
 > `nf-calibration/neutrality-gate`** — the default now flips to the new chain
@@ -12,7 +12,7 @@ Make the reconstruction / render split the shipped default: reconstruction stops
 shaping tone, the display operator carries the character.
 
 Since `algo/conversion-presets` shipped, that is a narrow and concrete change —
-**what a bare `nc convert` with no flags resolves**. `--preset characteristic-generic`
+**what a bare `hanten convert` with no flags resolves**. `--preset characteristic-generic`
 already expands to the target rendition (`cli::ConversionPreset::expand`); this task
 makes it the no-flag state, with the `pipeline_version` bump, drift-gate row,
 measured report and guide update that a default move owes.
@@ -32,7 +32,7 @@ The default has already moved along several axes, and none of them is this one:
   their own tone and exposure.
 
 What has *not* moved is the no-flag resolution: `--preset` is `Option<String>` with
-no default, so a bare `nc convert` still resolves the knee'd sigmoid into
+no default, so a bare `hanten convert` still resolves the knee'd sigmoid into
 `gain-map-hdr` — the configuration that writes the structurally valid but inert
 1.0x gain map.
 
@@ -106,7 +106,7 @@ improves 10–25x; a historical `PIPELINE_FINGERPRINTS` row must never be edited
 **A preset must not set `output.preset`.** The non-display presets (`legacy` / `custom`
 / `film-master`) resolve their own tone and exposure and refuse `reinhard`; `film-master`
 refuses any non-default `print_exposure`. A global default move that ignored this would
-break a bare `nc convert --output-preset film-master`.
+break a bare `hanten convert --output-preset film-master`.
 
 **The new fingerprint row may not be portable.** The problem and its evidence belong to
 `algo/characteristic-fingerprint-vector` (split out 2026-09-13), which delivers the
@@ -129,7 +129,7 @@ vector this row hashes; do not write the row from `golden::pixels()` as it stand
   removes blue's part of it by construction (+1.26 → +0.09).
   **The threshold is unset and this task owns setting it.** Today's numbers are the only
   anchor: green +0.40 mean, +1.00 on the Ektar roll, per-roll spread ±0.5 stop/density.
-- A bare `nc convert --output-preset film-master` still succeeds, and every named
+- A bare `hanten convert --output-preset film-master` still succeeds, and every named
   output preset still resolves.
 - Regenerating the preset review set through the new default produces byte-identical
   files to `--preset characteristic-generic` — the expansion acceptance test.

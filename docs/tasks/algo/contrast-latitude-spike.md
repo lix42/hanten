@@ -63,7 +63,7 @@ million pixels anyway.
 ## Open questions
 
 - **Measure the scene range first.** The negative's own density distribution, per
-  frame, from `nc inspect` — a distribution, not patches. Everything below is
+  frame, from `hanten inspect` — a distribution, not patches. Everything below is
   guesswork until this exists. Regressing output range against scene range for both
   converters is what actually separates "nc compresses" from "nc carries a narrower
   scene": a slope near 1 means it carries, near 0 means it compresses. Note the sample

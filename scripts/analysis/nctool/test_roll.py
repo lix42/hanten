@@ -202,7 +202,7 @@ class TestConvert(unittest.TestCase):
         with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run) as run_mock:
             code = roll.cmd_convert(self.args())
         # Calibration precedes config hashing/output resolution, but the existing
-        # directory is still refused before nc roll can overwrite an artifact.
+        # directory is still refused before hanten roll can overwrite an artifact.
         self.assertEqual(code, 2)
         self.assertEqual(run_mock.call_count, 3)
 

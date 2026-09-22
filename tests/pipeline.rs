@@ -15,7 +15,7 @@ use tiff::encoder::{TiffEncoder, colortype};
 use ultrahdr_sys as uhdr;
 
 /// The binary under test, provided by Cargo for integration tests.
-const NC: &str = env!("CARGO_BIN_EXE_nc");
+const NC: &str = env!("CARGO_BIN_EXE_hanten");
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2477,10 +2477,10 @@ fn verbose_keeps_stdout_clean_json_and_logs_to_stderr() {
         stderr.contains("decoded"),
         "progress log should be on stderr: {stderr}"
     );
-    // Check the actual stderr log marker (`nc: decoded …`), not a bare "decoded"
+    // Check the actual stderr log marker (`hanten: decoded …`), not a bare "decoded"
     // substring — the JSON report legitimately carries a `transfer_decoded` field.
     assert!(
-        !stdout.contains("nc: decoded"),
+        !stdout.contains("hanten: decoded"),
         "stdout must not carry log lines"
     );
 }
@@ -4430,7 +4430,7 @@ fn roll_is_byte_identical_on_rerun() {
 fn roll_frame_local_override_applies_to_just_that_frame() {
     // A manifest gives frame 2 a per-frame print-exposure override; frame 1 runs
     // the shared recipe unchanged. Prove per-frame isolation by matching each
-    // roll output byte-for-byte against the equivalent single `nc convert`.
+    // roll output byte-for-byte against the equivalent single `hanten convert`.
     let tmp = TempDir::new("roll-override");
     let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
     let hdr = fixture("hdr-48bit.tif");
@@ -4694,7 +4694,7 @@ fn roll_warns_when_film_base_is_not_frozen() {
         .expect("roll-level warnings array");
     assert!(
         w.iter().any(|m| m.as_str().unwrap().contains("NOT frozen")
-            && m.as_str().unwrap().contains("nc estimate")),
+            && m.as_str().unwrap().contains("hanten estimate")),
         "roll-level not-frozen warning present: {report}"
     );
     assert!(
@@ -6073,7 +6073,7 @@ fn legacy_no_preset_output_is_unchanged_by_the_preset_machinery() {
 
 #[test]
 fn roll_accepts_a_film_master_recipe() {
-    // `nc roll` has no output flags at all — its output policy comes only from the
+    // `hanten roll` has no output flags at all — its output policy comes only from the
     // shared recipe — so `output.preset` must be honoured there too, and the
     // automatic `<stem>_positive.tiff` name is already correct for the master's TIFF
     // container. (Preset-aware suffix resolution stays with `output/presets`.)
@@ -7754,7 +7754,7 @@ fn roll_requires_a_stated_film_base_and_says_so_in_roll_terms() {
         "roll's message must send the user to the shared recipe: {err}"
     );
     // The flags it does not have must not be offered as the way out. (`--base-region`
-    // does appear, but only inside the recommended `nc estimate` invocation — a
+    // does appear, but only inside the recommended `hanten estimate` invocation — a
     // different command, which accepts it.)
     assert!(
         !err.contains("--auto-base") && !err.contains("--film-base"),
@@ -8455,7 +8455,7 @@ fn the_two_sdr_presets_differ_only_in_gamut() {
 #[test]
 fn every_tiff_preset_now_states_its_suffix_including_the_oldest_two() {
     // Before the SDR presets landed, `legacy` and `film-master` pinned no suffix,
-    // so `nc convert -o out.jpg` wrote a TIFF named `.jpg` with exit 0 and no
+    // so `hanten convert -o out.jpg` wrote a TIFF named `.jpg` with exit 0 and no
     // warning — the silently-misnamed-file mistake every newer preset guards.
     // An **extensionless** path is refused too, deliberately (design-spec §5): a file
     // called `positive` is as misleading about its contents as `positive.jpg`, and the

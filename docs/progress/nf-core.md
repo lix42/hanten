@@ -1,4 +1,4 @@
-# nc — nf-core Progress Log
+# Hanten — nf-core Progress Log
 
 Execution log for the `nf-core` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status; this file is the

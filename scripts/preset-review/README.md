@@ -31,7 +31,7 @@ anything renders, that it will have no charts, and writes a `review.json` with n
 keys, which the app shows as pictures with "no measurement" under each. `--no-metrics` is the
 same thing asked for on purpose.
 
-**Each button is `nc convert --preset <name>` and nothing else.** The generator used to
+**Each button is `hanten convert --preset <name>` and nothing else.** The generator used to
 state the expansion by hand, which made it the mechanism's acceptance test — and the test
 passed on 2026-09-10: 12 of 15 renditions byte-identical, the three that differed being
 `chr-aim`, where the script's constants were rounded to three decimals and `nc` derives the

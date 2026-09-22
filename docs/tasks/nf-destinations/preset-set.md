@@ -42,7 +42,7 @@ Open:
 - Every destination in the list resolves end to end, states its suffixes, and is
   covered by a parse diagnostic generated from the same list (the `OutputPreset::ALL`
   precedent, so the name list and the help text cannot desynchronize).
-- `nc roll` derives a name for each; `docs/using-nc.md` updated by running the binary.
+- `hanten roll` derives a name for each; `docs/using-nc.md` updated by running the binary.
 
 ## Dependencies
 

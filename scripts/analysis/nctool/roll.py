@@ -2,7 +2,7 @@
 
 This module turns the manual workflow in ``docs/using-nc.md`` into one command:
 measure Dmin from the manifest's unexposed frame, measure Dmax from its leader,
-freeze both into a partial recipe, and run ``nc roll`` over every real frame.
+freeze both into a partial recipe, and run ``hanten roll`` over every real frame.
 The durable ``tags.json`` and ``roll-report.json`` can be normalized into a
 deterministic ``analysis.json`` artifact. Ordinary diff tools can then compare
 configurations without opening their image pixels again.
@@ -398,7 +398,7 @@ def cmd_convert(args) -> int:
     tags["calibration"]["dmax"].pop("report")
     _write_json(tags_path, tags)
     if proc.returncode != 0:
-        print(f"error: nc roll exited {proc.returncode}; tags preserve the failed run",
+        print(f"error: hanten roll exited {proc.returncode}; tags preserve the failed run",
               file=sys.stderr)
         return 1
     print(json.dumps(tags, indent=2, sort_keys=True))

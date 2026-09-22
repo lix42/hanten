@@ -2,7 +2,7 @@
 
 ## Goal
 
-`nc convert --new-flow` reads a scan and writes a file: reconstruction → the new
+`hanten convert --new-flow` reads a scan and writes a file: reconstruction → the new
 stage chain → one destination. This is the milestone the whole migration is
 sequenced around — it is what `nf-retire`
 waits on, so it should be the *thinnest* thing that genuinely runs end to end, not the
@@ -39,7 +39,7 @@ first good-looking render.
 
 ## How to Verify
 
-- `nc convert --new-flow` on a committed fixture exits 0 and writes a file that
+- `hanten convert --new-flow` on a committed fixture exits 0 and writes a file that
   decodes, with the declared profile matching the pixels.
 - A run without `--new-flow` is byte-identical to before — the old flow is untouched.
 - Determinism: the same inputs twice produce identical bytes.

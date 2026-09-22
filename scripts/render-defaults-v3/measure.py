@@ -1,5 +1,5 @@
 import json, subprocess, sys, os, pathlib
-NC = "./target/debug/nc"
+NC = "./target/debug/hanten"
 ROOT = pathlib.Path("../nc-assets")
 recipes = pathlib.Path("scripts/real-scan-verify/recipes")
 man = json.load(open(ROOT/"manifest.json"))

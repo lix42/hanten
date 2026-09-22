@@ -1,4 +1,4 @@
-# Negative Converter — color Progress Log
+# Hanten — color Progress Log
 
 Execution log for the `color` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status (the checkboxes);

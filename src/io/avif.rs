@@ -858,7 +858,7 @@ fn parse_sequence_header_payload(payload: &[u8]) -> Result<SequenceHeader> {
         // decoder-model and frame-id syntax that would have to be parsed before
         // `color_config`, so rather than half-parse it, this is a loud refusal.
         return Err(NcError::Other(
-            "AV1 sequence header is not a reduced still-picture header; nc cannot verify its \
+            "AV1 sequence header is not a reduced still-picture header; Hanten cannot verify its \
              signalling"
                 .to_string(),
         ));

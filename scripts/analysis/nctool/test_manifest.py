@@ -394,6 +394,48 @@ def _completed(cmd, returncode, stdout=""):
     return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="")
 
 
+class TestBinaryResolution(unittest.TestCase):
+    """`is_nc` keys on the `--version` banner, and getting it wrong fails *silently*:
+    find_nc() returns None with no error and every caller degrades to exiftool. The
+    pre-rename `nc ` banner must keep being accepted, because the reference rendition
+    is produced by building the git-tagged binary (`--nc <that binary>`)."""
+
+    def _is(self, stdout, rc=0):
+        with mock.patch.object(manifest.subprocess, "run",
+                               lambda cmd, **kw: _completed(cmd, rc, stdout)):
+            return manifest.is_nc("/some/bin")
+
+    def test_current_banner_accepted(self):
+        self.assertTrue(self._is("hanten 0.1.0\npipeline_version: 5 (x)\n"))
+
+    def test_pre_rename_banner_still_accepted(self):
+        # The tagged binary predates the rename; refusing it breaks the
+        # reference-rendition workflow.
+        self.assertTrue(self._is("nc 0.1.0\npipeline_version: 3 (x)\n"))
+
+    def test_netcat_and_nonzero_exit_rejected(self):
+        self.assertFalse(self._is(""))                    # netcat: empty stdout
+        self.assertFalse(self._is("hanten 0.1.0", rc=1))  # failed invocation
+        self.assertFalse(self._is("hanten no-digits"))    # no version number
+
+    def test_auto_discovery_finds_a_real_build(self):
+        """The positive half. Without it, a typo in a candidate path still passes
+        every negative test here — discovery would just always return None."""
+        for present in ("target/release/hanten", "target/debug/hanten"):
+            with mock.patch.object(manifest.os.path, "exists", lambda p, w=present: p == w), \
+                 mock.patch.object(manifest.shutil, "which", lambda n: None), \
+                 mock.patch.object(manifest, "is_nc", lambda c: True):
+                self.assertEqual(manifest.find_nc(), os.path.abspath(present))
+
+    def test_auto_discovery_ignores_a_stale_pre_rename_build(self):
+        """hanten-only on purpose: a leftover `target/debug/nc` beside a fresh build
+        would otherwise be picked up silently and measure old behaviour."""
+        with mock.patch.object(manifest.os.path, "exists", lambda p: p.endswith("/nc")), \
+             mock.patch.object(manifest.shutil, "which", lambda n: None), \
+             mock.patch.object(manifest, "is_nc", lambda c: True):
+            self.assertIsNone(manifest.find_nc())
+
+
 class TestInspect(unittest.TestCase):
     """Item 3: exit-0-but-unparseable is a loud error, distinct from rejection."""
 

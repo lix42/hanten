@@ -1,4 +1,4 @@
-# nc — nf-calibration Progress Log
+# Hanten — nf-calibration Progress Log
 
 Execution log for the `nf-calibration` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status; this file is the

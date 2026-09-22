@@ -1,6 +1,6 @@
 # The new-flow migration — epics
 
-The plan for moving nc to the design in [design-update.md](design-update.md). This
+The plan for moving Hanten to the design in [design-update.md](design-update.md). This
 file is the **high-level** record: the strategy, the epic list, and the ordering
 constraints. Tasks, dependencies and status live in `docs/TASKS.md` as usual; each
 epic below is a `docs/tasks/nf-*/` directory with a `docs/progress/nf-*.md` log.

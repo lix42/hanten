@@ -13,7 +13,7 @@ leaves both rendered files in a caller-selected directory for inspection.
 ## Run
 
 The script currently assumes it is launched from the repository root, uses
-`target/debug/nc`, reads `../nc-assets/manifest.json`, and requests a 16 GiB
+`target/debug/hanten`, reads `../nc-assets/manifest.json`, and requests a 16 GiB
 memory budget:
 
 ```sh

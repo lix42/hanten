@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     gen = msub.add_parser("generate", help="scan the asset root and write manifest.json")
     _add_root(gen)
-    gen.add_argument("--nc", help="path to the nc binary (else auto-discovered)")
+    gen.add_argument("--nc", help="path to the hanten binary (else auto-discovered)")
     gen.add_argument("--reuse-hash", action="store_true",
                      help="reuse an existing sha256 when the byte size is unchanged "
                           "(faster, but misses same-size edits; default recomputes all)")
@@ -79,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 "its run record")
     _add_root(crun)
     crun.add_argument("--nc", required=True,
-                     help="path to the nc binary to benchmark (required and explicit: "
+                     help="path to the hanten binary to benchmark (required and explicit: "
                           "a comparison of two builds must never auto-discover one)")
     crun.add_argument("--set", dest="set_name", default="fixtures",
                       help="benchmark set from benchmark.json (default: fixtures — the "
@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
         "convert", help="measure Dmin/Dmax, freeze a recipe, and convert one roll")
     rconvert.add_argument("roll", help="source roll name from manifest.json")
     _add_root(rconvert)
-    rconvert.add_argument("--nc", required=True, help="path to the nc binary to run")
+    rconvert.add_argument("--nc", required=True, help="path to the hanten binary to run")
     rconvert.add_argument("--config", help="configuration ID (default: hash of frozen recipe)")
     rconvert.add_argument("--out-dir", help="output directory (default: converted/nc/CONFIG/ROLL)")
     rconvert.add_argument("--recipe", help="partial recipe or conversion sidecar to extend")
@@ -231,8 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
     rgen.add_argument("--out", help="output directory (default: the matrix's "
                                     "output_dir). Keep it OUTSIDE the repo — the "
                                     "frames are personal photographs")
-    rgen.add_argument("--nc", default="target/release/nc",
-                      help="path to the nc binary (default: target/release/nc)")
+    rgen.add_argument("--nc", default="target/release/hanten",
+                      help="path to the hanten binary (default: target/release/hanten)")
     rgen.add_argument("--fixtures", default="scripts/sigmoid-baseline/fixtures.json",
                       help="frame and per-roll Dmin declaration; the same file the "
                            "metrics use, so the two cannot drift")

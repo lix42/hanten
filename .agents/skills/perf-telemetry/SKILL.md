@@ -1,18 +1,18 @@
 ---
 name: perf-telemetry
 description: >-
-  How nc's embedded performance + context telemetry works — collecting, reading,
+  How Hanten's embedded performance + context telemetry works — collecting, reading,
   and extending it. Use when adding a telemetry field or event to a new feature,
-  turning on / collecting perf logs from `nc convert` (`--telemetry`,
+  turning on / collecting perf logs from `hanten convert` (`--telemetry`,
   `--telemetry-file`, `NC_TELEMETRY_LOG`), reading or analyzing the telemetry JSONL
   log (jq over timing / algorithm / megapixels), bumping the record
   `schema_version`, or reasoning about the determinism and fail-soft invariants the
   telemetry code must preserve.
 ---
 
-# nc perf telemetry
+# Hanten perf telemetry
 
-`nc convert` can emit one JSON **telemetry record** per **successful** run — image
+`hanten convert` can emit one JSON **telemetry record** per **successful** run — image
 facts, per-stage timings, a compact conversion summary, and the outcome — to a
 local append-only JSONL log and/or a one-off file. It is **opt-in**,
 **best-effort**, and never perturbs the converted image. A record's existence is
@@ -73,14 +73,14 @@ both may be combined.
 
 ```bash
 # Append one record (one line) to the persistent JSONL log.
-nc convert in.tiff -o out.tiff --film-base 0.9,0.55,0.42 --telemetry
+hanten convert in.tiff -o out.tiff --film-base 0.9,0.55,0.42 --telemetry
 
 # Also write this run's record to a one-off file (overwrites). `-` = stdout.
-nc convert in.tiff -o out.tiff --film-base 0.9,0.55,0.42 --telemetry-file run.json
+hanten convert in.tiff -o out.tiff --film-base 0.9,0.55,0.42 --telemetry-file run.json
 
 # Both sinks at once; send the one-off to stdout (pair with --report none so
 # stdout carries only the telemetry line, since the report is on stdout by default).
-nc convert in.tiff -o out.tiff --film-base 0.9,0.55,0.42 \
+hanten convert in.tiff -o out.tiff --film-base 0.9,0.55,0.42 \
   --telemetry --telemetry-file - --report none
 ```
 

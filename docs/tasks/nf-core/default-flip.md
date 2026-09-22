@@ -45,7 +45,7 @@ still accurate about what a default move owes.
 
 ## How to Verify
 
-- A bare `nc convert` resolves the new chain; `--new-flow` exits 2 with a migration
+- A bare `hanten convert` resolves the new chain; `--new-flow` exits 2 with a migration
   message naming what replaced it, and a recipe carrying it fails to load.
 - The new fingerprint row exists and the gate is green; no historical row changed.
 - The release gate's recorded decision exists — the measured residual *and* the

@@ -89,7 +89,7 @@ per-channel constant gain:
                         └── scalar anchor ──┘   └── constant per-channel gain ──┘
 ```
 
-nc already exposes two per-channel knobs that span that space —
+Hanten already exposes two per-channel knobs that span that space —
 `print.white_balance` (gain, downstream) and `reconstruction.density.offset`
 (density, upstream). So under the exponential curve, scalar `Dmax` + WB loses no
 expressive power; the information is relocated, not destroyed.
@@ -135,7 +135,7 @@ compressing.
   dropped. A temporary `#[ignore]` test that prints the derived numbers is enough
   for the investigation — do not read sample pixels into an agent context.
 - Reproduce the fixture measurements with the committed harness:
-  `cargo test --release --bin nc shadow_metrics::measure_candidates -- --ignored --nocapture --test-threads=1`
+  `cargo test --release --bin hanten shadow_metrics::measure_candidates -- --ignored --nocapture --test-threads=1`
   (fixtures: `scripts/sigmoid-baseline/fixtures.json`).
 - Watch the confound: the leader is a *uniform field at an uncontrolled level*. If
   the three layers have different contrast, the per-channel ratio measured at an
@@ -305,7 +305,7 @@ an NLP reference. The park stands for the **slope method** this task was pursuin
 measurement is still suspended on the same confound — but "the shipped value stands" and
 "route 1: nothing to do" above are both superseded. The record is under
 `io/scanner-density-calibration` in `docs/progress/io.md`; read it before treating the 2026-09-13
-text as a statement about what nc ships. Note it changes what remains here: the parametric
+text as a statement about what Hanten ships. Note it changes what remains here: the parametric
 `scale` half is now calibrated against neutral patches rather than datasheets, so this task's
 open question narrows to the `offset` half and to whether a roll-scoped measurement can source
 either.
@@ -314,10 +314,10 @@ either.
 written and used to sanity-check the Ektar numbers, but `analysis/comparison-review-tooling`
 (#114) has since replaced bespoke per-study generators with a **matrix** rendered by
 `python -m nctool review generate`. A scale review cannot be expressed as one today: every
-cell of that matrix is an `nc convert`, and this study's whole point is comparing nc against
+cell of that matrix is a `hanten convert`, and this study's whole point is comparing nc against
 an **outside reference** — Negative Lab Pro's own conversions, which are existing TIFFs, not
 renders. It also needs those cells brought to a common SDR sRGB JPEG so the comparison is not
-confounded by nc decoding as HDR beside NLP's SDR. Adding a reference-cell kind to
+confounded by Hanten decoding as HDR beside NLP's SDR. Adding a reference-cell kind to
 `nctool review` is the right home for both; do that rather than re-adding a bespoke script.
 
 Everything else needed to resume is in place: `algo::curve_probe::whole_roll_scale` and

@@ -760,7 +760,7 @@ fn channel_drift() {
 
     println!(
         "\nBlue−red exposure drift across the tone scale, normalised at the middle bin.\n\
-         Units are stops. 'scalar' = one contrast for all channels (what nc does today);\n\
+         Units are stops. 'scalar' = one contrast for all channels (what Hanten does today);\n\
          'curve' = each channel through its own published inverse. Lower swing is better.\n"
     );
     struct Row {
@@ -1057,7 +1057,7 @@ fn sigmoid_scale() {
     assert!(
         worst_model_err < 0.02,
         "the closed form disagreed with a real render by {worst_model_err:.3} stops/density; \
-         the table below would be modelling something nc does not do"
+         the table below would be modelling something Hanten does not do"
     );
 
     let drift = |s: f32, r: f32| k * (s * r - 1.0);

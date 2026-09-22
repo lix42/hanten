@@ -1,6 +1,6 @@
-# Negative Converter — Tasks
+# Hanten — Tasks
 
-Step-1 (MVP) plan for the `nc` CLI negative→positive converter. See
+Step-1 (MVP) plan for the `hanten` CLI negative→positive converter. See
 [design-spec.md](design-spec.md) for the full design.
 
 > **Progress log:** one file per epic under [progress/](progress/) records *how*
@@ -715,19 +715,19 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   already valid partial recipes (verified 2026-08-11); only repeatability is missing.
   Implements the design-spec §8 target
 - `core/profile-authoring` (post-MVP): `core/recipe-composition`, `core/cli-framework`, `core/calibration-recipe-section`
-  — `nc params` becomes `nc profile`: takes the override flags, validates config-only, writes an
+  — `hanten params` becomes `hanten profile`: takes the override flags, validates config-only, writes an
   annotated JSONC look with `--out`, no image. **Deletes `--dump-params`**, which is
   byte-identical to the sidecar and carries nothing the image produced — the same flags over two
   different scans emit identical files
 - `core/unfrozen-auto-mode-warning` (post-MVP): `core/roll-conversion`
-- `core/product-naming` (cross-cutting): none
-  — name the product Hanten while `nc` stays the internal name for the crate, binary
-  and identifiers; the boundary's home is CLAUDE.md. No dependencies, but it touches
-  README/CLAUDE.md/design-spec and should run **alone between merges**, not beside the
-  `nf-*` migration
   — a recipe carrying `dmax: "auto"` or an auto white balance re-measures every frame, defeating
   the roll, and nothing warns today. Roll already warns on a non-explicit base; same hazard,
   same plumbing
+- `core/product-naming` (cross-cutting): none
+  — name the product Hanten; the **binary is `hanten`** while `nc` stays the crate and
+  every identifier. The boundary's home is CLAUDE.md. No dependencies, but it touches
+  README/CLAUDE.md/design-spec and should run **alone between merges**, not beside the
+  `nf-*` migration
 - `film-base/half-frame-calibration` (post-MVP, **deferred**, blocks nothing): `core/base-acquisition-planner`
   — one frame that is part unexposed and part leader serving as both references (HP5 frame 1330).
   Convenience over the planner's one-reference-per-frame path
@@ -882,7 +882,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `analysis/drive-asset-migration` (post-MVP, in progress — move+reorg+manifest done): `analysis/asset-manifest`
 - `analysis/harness-regression-tests` (post-MVP): `analysis/real-scan-verification`
   — filed 2026-08-09 after the `output/presets` default flip broke `harness.sh` in three
-  places with all four gates green, one of them **silently** (`nc roll` succeeded, wrote
+  places with all four gates green, one of them **silently** (`hanten roll` succeeded, wrote
   `_positive.jpg`, and the `*_positive.tiff` rename glob stranded the outputs while the
   stage printed success). The harness has no automated coverage at all
 - `analysis/calibration-frame-capture` (post-MVP, **asset acquisition — mostly photographic**): `analysis/asset-manifest`
@@ -1085,10 +1085,13 @@ the design in `docs/design-update.md`:
 > drives — the roll/batch workflow, and the cross-cutting cleanup and release
 > work that lands in those files.
 
-- [ ] [Name the product Hanten, and fix the
+- [x] [Name the product Hanten, and fix the
   boundary](tasks/core/product-naming.md) — Hanten as the product, `nc` as the
   internal name; almost every `nc` in the tree is a versioned identifier rather
-  than branding, and the boundary goes into CLAUDE.md so it is not re-litigated
+  than branding, and the boundary goes into CLAUDE.md so it is not re-litigated.
+  **Done 2026-09-21**: the boundary lives in CLAUDE.md ("Hanten outside, `nc`
+  inside"); the binary **is** `hanten` (a Cargo `[[bin]]`, so the package and
+  `nc_version` never moved) and the repo is `lix42/hanten`
 - [x] [Project foundation and core types](tasks/core/project-foundation.md)
 - [x] [CLI framework](tasks/core/cli-framework.md)
 - [x] [Pipeline orchestration](tasks/core/pipeline-orchestration.md)
@@ -1099,8 +1102,8 @@ the design in `docs/design-update.md`:
   (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain
   `defaults < params A < params B < … < flags`. Enables the pipeline-profile / roll-calibration
   split with **no schema change** — both halves already parse as partial recipes
-- [ ] [Author a reusable pipeline profile](tasks/core/profile-authoring.md) — `nc params` becomes
-  `nc profile`: takes the override flags, validates config-only, writes annotated JSONC via
+- [ ] [Author a reusable pipeline profile](tasks/core/profile-authoring.md) — `hanten params` becomes
+  `hanten profile`: takes the override flags, validates config-only, writes annotated JSONC via
   `--out`, needs no image. **Deletes `--dump-params`** — byte-identical to the sidecar, and it
   captures nothing measured, so the "frozen" recipe it produced still re-measures per frame
 - [ ] [Warn when auto modes defeat a roll](tasks/core/unfrozen-auto-mode-warning.md) — a recipe
@@ -1109,8 +1112,8 @@ the design in `docs/design-update.md`:
 - [x] [Conversion versioning & baseline comparison](tasks/core/conversion-versioning.md) — report `identity`, `pipeline_version` **1** (not 0 — `film-base/dmax-reference` already moved the default render) + the golden drift gate, `{meta,params}` sidecar envelope with bare legacy recipes still loading, and `nctool compare run|diff`; `v0` history in [reports/v0-baseline.md](reports/v0-baseline.md).
 - [ ] [Recipe replay fidelity for non-default behavior changes](tasks/core/recipe-replay-fidelity.md) — `pipeline_version` covers the **default** path only, so a recipe opting into a non-default curve replays under a new build with the same label and different pixels (first instance: the 2026-08-03 sigmoid defaults). Decide the policy — widen the label, add a second one, generalize the drift warning, or keep historical defaults — then retrofit that instance and retire its bespoke warning.
 - [ ] [Stdout broken-pipe safety](tasks/core/stdout-broken-pipe-safety.md) — make every
-  stdout JSON write (the report via `emit_report`, `nc params`) tolerate a closed
-  pipe (e.g. `nc … | head`) without a panic/backtrace. Pre-existing on `main`, not
+  stdout JSON write (the report via `emit_report`, `hanten params`) tolerate a closed
+  pipe (e.g. `hanten … | head`) without a panic/backtrace. Pre-existing on `main`, not
   caused by the telemetry work.
 - [ ] [Value-domain terminology & Dmin/Dmax clarity](tasks/core/value-domain-terminology.md) — extract design-spec §4 terminology into a standalone doc + an agent skill, and make `Dmin`/`Dmax` human-clear. Preserves the data flow; details at execution.
 - [ ] [Dependency & module hygiene](tasks/core/dependency-hygiene.md) — from the
@@ -1166,7 +1169,7 @@ the design in `docs/design-update.md`:
   is insufficient, collect it first; proceed only if real scans exceed the budget.
 
 ### film-base — [progress](progress/film-base.md)
-> `pipeline/film_base.rs` and the `nc estimate` measurement surface: locating
+> `pipeline/film_base.rs` and the `hanten estimate` measurement surface: locating
 > unexposed film, deriving the `Dmin` transmission anchor, and measuring the
 > roll-fixed `Dmax` density anchor. `Dmin` and `Dmax` are **different quantities**
 > (design-spec §4) that happen to share this code.
@@ -1175,7 +1178,7 @@ the design in `docs/design-update.md`:
 - [x] [Robust auto film-base detection](tasks/film-base/auto-base-redesign.md)
 - [x] [IR-assisted film-holder detection](tasks/film-base/ir-holder-detection.md)
 - [ ] [Content-based film-base fallback (Tier 3)](tasks/film-base/content-fallback.md) — owns `--base-content`; supersedes the content-source sub-item in `film-base/auto-base-redesign`
-- [x] [Reuse-ready `nc estimate` output](tasks/film-base/estimate-reuse-output.md)
+- [x] [Reuse-ready `hanten estimate` output](tasks/film-base/estimate-reuse-output.md)
 - [x] [Roll-fixed Dmax from a fully-exposed reference frame](tasks/film-base/dmax-reference.md) — shipped roll-fixed acquisition/default policy; the replacement density-curve stage preserves scalar exponential placement and sigmoid curve shaping
 
 - [x] [Decide IR usability by measurement](tasks/film-base/ir-usability-detection.md) — key IR holder
@@ -1394,7 +1397,7 @@ the design in `docs/design-update.md`:
   shipped as `telemetry/perf-telemetry` below.
 - [x] [Embedded performance + context telemetry](tasks/telemetry/perf-telemetry.md) — the
   real-world successor to `telemetry/perf-instrumentation`: an opt-in JSON telemetry record
-  per `nc convert` run (image + timing + context) to a local JSONL log / one-off
+  per `hanten convert` run (image + timing + context) to a local JSONL log / one-off
   file, no new entrypoint. Lifts the prototype's per-stage timing.
 - [x] [Telemetry strategy spike](tasks/telemetry/strategy.md) — approved
   [strategy](telemetry-strategy.md): custom JSON to Cloudflare Worker + D1,
@@ -1458,7 +1461,7 @@ the design in `docs/design-update.md`:
   Vite+ / Solid / Panda CSS): every rendition of a frame shares one grid cell, so switching
   config cannot move the picture, and the server takes the set by path and watches it.
   **Generator** shipped 2026-09-12 as `nctool review generate <matrix.json>` — the matrix is
-  data, each cell is one `nc convert`, and each rendition gets its `nctool metrics` record
+  data, each cell is one `hanten convert`, and each rendition gets its `nctool metrics` record
   written beside it. HDR review and build-vs-build are deferred with reasons in the task
   file: nothing downscales a gain map, and a build axis needs render provenance rather than a
   typed label.

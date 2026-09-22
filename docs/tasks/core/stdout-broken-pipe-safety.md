@@ -5,13 +5,13 @@
 Make every stdout write in `nc` tolerate a **closed pipe** without a panic or
 backtrace, exiting cleanly instead. Today the JSON report and the other stdout
 emitters use `println!`, which panics (`failed printing to stdout: Broken pipe`)
-when the reader goes away — the classic `nc … | head` / `nc … | jq 'first'` case,
+when the reader goes away — the classic `hanten … | head` / `hanten … | jq 'first'` case,
 where the downstream consumer exits after reading enough. A panic there prints an
 ugly backtrace to stderr and returns a failure code even though the conversion
 itself fully succeeded.
 
 > **Pre-existing on `main`, not introduced by the telemetry work.** `emit_report`
-> (convert/inspect/estimate reports) and `nc params` already used `println!` before
+> (convert/inspect/estimate reports) and `hanten params` already used `println!` before
 > `perf-telemetry`. (`--dump-params` is *not* a stdout writer — it serializes to a
 > file via `fs::write`, so it's out of scope here.) The telemetry `--telemetry-file -`
 > path *already* fixed this
@@ -25,7 +25,7 @@ itself fully succeeded.
 
 - **Inventory the stdout writers.** All go through `cli.rs`: `emit_report` (the
   `println!("{json}")` branch, shared by convert/inspect/estimate) and `run_params`
-  (`nc params`). (`--dump-params` writes to a *file*, not stdout, so it's not in
+  (`hanten params`). (`--dump-params` writes to a *file*, not stdout, so it's not in
   scope.) Route every one through a single helper that writes to
   `std::io::stdout()` and maps a `BrokenPipe` error to a clean, silent exit
   (`ErrorKind::BrokenPipe` ⇒ no backtrace, no stderr spew), while other I/O errors
@@ -54,10 +54,10 @@ itself fully succeeded.
 
 ## How to Verify
 
-- E2E: `nc convert … --report json | head -c 1` (or pipe into a reader that closes
+- E2E: `hanten convert … --report json | head -c 1` (or pipe into a reader that closes
   early) exits without a panic/backtrace and with a clean status; the output TIFF +
-  sidecar are still written. Same for `nc params | head -1` and
-  `nc inspect … | head -1`.
+  sidecar are still written. Same for `hanten params | head -1` and
+  `hanten inspect … | head -1`.
 - Regression: normal (unpiped, or fully-consumed) runs still print the complete
   JSON to stdout unchanged.
 - No stray backtrace text on stderr for the broken-pipe case.
