@@ -27,10 +27,16 @@ What other epics need to know about `output`:
   derives `<stem>_positive.<ext>` from the frame's own resolved preset via
   `cli::derived_extension` (not the head of `required_extensions`, which lists
   `tif` first and would rename every existing `_positive.tiff`), and an explicit
-  manifest `output` goes through the same `reject_suffix_mismatch` rule `convert`
-  uses. A bare `nc convert -o out.tif` with no preset is exit 2 by design, and an
-  extensionless `-o` is rejected too (`output/output-path-suffix` proposes to relax
-  the latter). Measured in
+  manifest `output` goes through the same `resolve_output_path` rule `convert`
+  uses. A bare `hanten convert -o out.tif` with no preset is exit 2 by design.
+- **The output suffix is optional (2026-09-22, `output/output-path-suffix`).**
+  `-o out` takes its container from the resolved preset (`out.jpg` by default);
+  a suffix that *is* stated is honoured verbatim or refused exactly as before, so
+  "never silently renamed" now means "never **rewritten**" — completing is
+  appending. `cli::container_for` is the one preset-shaped step both the accepted
+  set and the supplied spelling hang off; `report.output` names what was written,
+  which is the field to read rather than mapping a preset name to a container.
+  Measured in
   [reports/render-defaults-v3.md](../reports/render-defaults-v3.md).
 - **The HDR spike is closed and its numbers are binding.** ISO 22028-5:2026 and
   ISO 21496-1:2025; **203 cd/m² reference white**, **1000 cd/m² target peak**,
@@ -925,8 +931,8 @@ enough to blow highlights when borrowed.
 
 ## output-path-suffix
 
-**Status:** not started
-**Updated:** 2026-08-09
+**Status:** done
+**Updated:** 2026-09-22
 
 - Goal: `-o` names the output, the resolved preset supplies the container. An
   explicit suffix is still validated, and honoured verbatim when it matches.
@@ -939,6 +945,123 @@ enough to blow highlights when borrowed.
   roll naming. Completing an absent suffix is arguably not renaming, but that
   wording is the governing statement and presets is `[~]` in progress — agree the
   boundary with it rather than around it.
+
+- **2026-09-22 — shipped.** `-o out` now takes its container from the resolved
+  preset. All six open questions answered below; no pixel, recipe or fingerprint
+  change (`PIPELINE_FINGERPRINTS` untouched — this is path policy only).
+
+  **Q3, the governing statement, first, because everything else follows from it.**
+  `output/presets`' "the output path … is never silently renamed" is *refined, not
+  overturned*: **renaming** means changing bytes the user typed, and nc still never
+  does it — a stated suffix is honoured verbatim or refused. **Completing** appends
+  to what they typed and is a different act. `docs/tasks/output/presets.md` carries
+  the refinement as a dated block under its own sentence (that task shipped
+  2026-08-09, so its history is not rewritten); `design-spec.md` §5 is the
+  authoritative wording.
+
+  **Q1 — canonical spelling: reused, not re-decided.** `derived_extension` already
+  picked `tiff`/`jpg`/`avif`; `convert` completion and `roll` derivation now share
+  it. Nothing user-visible moved.
+
+  **Q2 — a trailing dot-segment is a suffix iff *some* preset accepts that
+  spelling** (`is_container_suffix`, the union over `OutputPreset::ALL`, computed
+  rather than restated). So `out.tiff` under a JPEG preset is still the old
+  mismatch error, while `out.v2` / `roll-1.2` are stems and become `out.v2.jpg` /
+  `roll-1.2.jpg`. Known wart, accepted deliberately: `-o out.png` writes
+  `out.png.jpg` rather than "nc cannot write PNG". The alternative needs a denylist
+  of foreign image formats — a table that goes stale — for a case `report.output`
+  already discloses. `out.` becomes `out..jpg` and `.`/`..`/`/` are refused ("names
+  no file"); the rule is "never alter typed bytes", carried through the degenerate
+  cases rather than special-cased.
+
+  **Q4 — `roll` shares the resolver, and its derived names did not change.**
+  `<stem>_positive.<ext>` is untouched. What changed is the *explicit* manifest
+  `output`: it goes through `resolve_output_path` whole, so `"output": "chosen"`
+  writes `chosen.jpg` on a default roll instead of failing. `output/presets`' roll
+  scope was not re-entered.
+
+  **Q5 — the report already named it.** `Report.output` existed and is set from the
+  path handed to `convert_frame`; the work was *ordering*, not a new field. An
+  agent reads `.output` and never maps a preset name to a container — which is the
+  durable answer for `nf-destinations/default-destination`, since the default
+  destination will move again.
+
+  **Q6 — resolution happens before anything derives from the path.**
+  `run_convert` resolves immediately after `validate_convert`, so the sidecar,
+  `ensure_write_targets_distinct`, `report.output` and telemetry's `output_bytes`
+  all see the completed path. `the_write_target_guard_sees_the_completed_path` pins
+  the ordering with a collision that only exists *after* completion, plus the
+  falsifiable control that the stem itself is not a write target.
+
+- **2026-09-22 — the shape, for whoever carries it into the new flow.**
+  `cli::container_for` is now the **only** preset-shaped step: preset → `Container`
+  (Tiff/Jpeg/Avif), with `required_extensions` (what a stated path may spell) and
+  `derived_extension` (what nc spells when it supplies one) hanging off it. Both
+  stay **exhaustive matches** so a moved `OutputPreset` fails to compile rather
+  than inheriting a container — do not refactor either into a map or a `_` arm.
+  `nf-destinations/preset-set` asks whether a destination is a name or a product of
+  selectors; under this shape either answer changes `container_for` alone, because
+  container → spelling never mentions a preset.
+
+  `required_extensions` **lost its `Option`**. It existed so a future preset could
+  decline a suffix rule; once nc derives names, a preset with no container could
+  not be given one either, so the `None` branch became unrepresentable rather than
+  merely unused. `reject_suffix_mismatch` is gone with it — `resolve_output_path`
+  is the single rule, and `suffix_mismatch_error` is its diagnosis half.
+
+- **2026-09-22 — message wording moved, and the wrong-suffix messages teach the new
+  rule.** Both `convert` arms now end with the way out (`Chosen`: "or no suffix at
+  all, which Hanten completes for you"; `Default`: "drop it and the path is
+  completed for you"), and the roll-frame arm offers both escapes (drop the suffix,
+  or drop the `output` key). The `Default` arm also names the offending path, since
+  it no longer covers the extensionless case. Under `-v`, completion prints one
+  `log.info` line — deliberately **not** a warning, because `--strict` must not
+  fail a legitimate `-o roll-1.2`.
+
+- **2026-09-22 — landed, after two review rounds that both found the same class of
+  bug. The one thing a dependent task must know: completing a path needs a
+  *refusal* beside it.** The first implementation completed any path whose trailing
+  dot-segment nc did not recognise. That is right for `out.v2`, and wrong for a path
+  whose last component is not a file name at all — `Path::file_name()` normalises a
+  trailing `/` and an interior `.` away, and `with_file_name()` then re-joins onto
+  the **parent**, so `-o positives/` and `-o positives/.` both wrote `positives.jpg`
+  *beside* the directory at exit 0. Both spellings had been exit 2 before the change.
+
+  The `roll` spelling is what makes this more than a curiosity: a manifest entry
+  meaning "put it in the out-dir" is naturally written `"output": "."`, and
+  `out_dir.join(".")` yields `<out_dir>/.` — so a roll wrote its frames **outside**
+  the `--out-dir` the user named, left that directory empty, and reported the wrong
+  location, with `ensure_roll_targets_distinct` blind to it (it only compares
+  targets against each other and the inputs).
+
+  Now `Unappendable::of` classifies a path with nothing to append *to* before any
+  completion happens: `NamesNoFile` (`.`, `..`, `/`, `dir/..` — `file_name()` is
+  `None`) and `NamesADirectory` (trailing separator, or trailing separator + `.`).
+  The check is **syntactic and pure on purpose** — no `is_dir()` probe may enter it,
+  because `resolve_output_path` is reached from `validate_convert` *and* roll's
+  planner, and a filesystem stat would make resolution timing- and
+  platform-dependent. The falsifiable control that keeps the predicate honest is
+  `out.` → `out..jpg`: the rule is "separator then `.`", never `ends_with('.')`.
+
+  Two general lessons worth carrying:
+  - **A completion rule needs its refusal designed at the same time.** The invariant
+    "nothing typed is altered or dropped" is only true once the shapes that *cannot*
+    be completed are refused; it shipped as an absolute claim in five docs while a
+    counterexample was live. It is now stated as "no byte that decides **which file**
+    is named is altered or dropped", with `with_file_name`'s interior-separator
+    normalisation (`out//x` → `out/x.jpg`) named as the deliberate, cosmetic gap.
+  - **A refusal raised inside a shared helper loses its caller's context**, and that
+    is the "a remedy must actually work" rule again (sixth instance in this file).
+    `append_suffix` first returned a bare `Usage` error, so a `roll` user was told to
+    "use `hanten roll --out-dir`" while running exactly that, with no frame
+    attribution. `SuffixContext` is now threaded into it and `unappendable_error`
+    mirrors `suffix_mismatch_error`'s per-arm shape. Tests assert the **losing**
+    wording is absent and drive it through the real path, per CLAUDE.md.
+
+  Verified: both engines (Codex and `nc-reviewer`) independently found the `dir/.`
+  hole; the final round of both is clean. All six CI gates green (810 unit + 213
+  integration), `cargo doc` at the 16-link baseline, no pixel/recipe/fingerprint
+  change.
 
 ## sdr-preset-followups (default decided)
 

@@ -305,18 +305,56 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   contract. `output/presets` still owns the remaining presets, roll integration,
   and future default activation — the boundary is recorded in
   `docs/tasks/output/hdr-avif-output.md`: whichever task ships an explicit
-  `convert`-only preset also calibrates that preset's `memory::RunProfile`. `cli::required_extensions` is now **complete** (every preset states a
-  suffix, including `legacy` and `film-master`, which previously let
-  `hanten convert -o out.jpg` write a TIFF named `.jpg`). It never drove the roll
+  `convert`-only preset also calibrates that preset's `memory::RunProfile`.
+  **`cli::container_for` is the only preset-shaped step in output-path *handling*** —
+  it maps a preset to a `Container` (Tiff/Jpeg/Avif) with an exhaustive match that
+  must *fail to compile* when the enum moves (never a `_` arm or a map), and both
+  `required_extensions` (what a stated path may spell) and `derived_extension`
+  (what nc spells when it supplies one) hang off it, so a destination set built
+  from a product of selectors changes one function. **It is not the only preset
+  match a new preset must touch**: the render dispatch in `convert_frame` picks the
+  encoder that writes the *bytes*, and nothing in the type system makes the two
+  agree — a preset named `.tiff` while dispatched to the AVIF encoder compiles.
+  What pins name to bytes is `tests/pipeline.rs`'s
+  `a_bare_output_stem_takes_the_presets_container_and_everything_names_it`, which
+  sniffs the written file's magic per preset; extend it when you add one. And **a
+  path is completed, never invented**: `cli::Unappendable` refuses every path whose
+  trailing component names no file — `.`/`..`/`/`, which `file_name()` declines
+  outright, *and* `dir/`, `dir//`, `dir/.`, `dir/./`, which it silently normalises
+  into the directory's own name so that completing writes the directory's
+  **sibling**. The two spellings are one hole and a trailing-separator test alone
+  misses the second: on `roll` a manifest's natural `"output": "."` becomes
+  `<out-dir>/.` and put the whole roll *outside* `--out-dir` at exit 0, with the
+  report agreeing and `ensure_roll_targets_distinct` blind to it. The check is
+  syntactic on purpose — `resolve_output_path` is pure and reached from both
+  `validate_convert` and roll's planner, so no `is_dir()` probe may enter it — and
+  both refusals carry a `SuffixContext`, because the bare form handed a `roll` user
+  "use `hanten roll --out-dir`" while they were running it, with no frame named. `required_extensions` is
+  **complete and no longer optional**: every preset resolves a container, which is
+  what let `legacy` and `film-master` stop letting `hanten convert -o out.jpg`
+  write a TIFF named `.jpg`. It never drove the roll
   refusal — deriving "convert-only" from "pins a suffix" refused *every* preset
   once the table was completed and broke `hanten roll` outright — and **there is no
   roll refusal left**: every preset is roll-capable, because `default_output_name`
   derives `<stem>_positive.<ext>` from the frame's own resolved preset and an
-  explicit manifest `output` goes through the same `reject_suffix_mismatch` rule
-  `convert` uses. The derived spelling comes from `cli::derived_extension`, **not**
+  explicit manifest `output` goes through the same `resolve_output_path` rule
+  `convert` uses. **That rule completes an absent suffix and never rewrites a
+  stated one** — `-o out` writes `out.jpg` under the default, `-o out.jpeg` keeps
+  its spelling and case, and a dot-segment is a suffix only when
+  `is_container_suffix` (the union over `OutputPreset::ALL`, never a second list)
+  claims it, so `out.v2` is a stem and becomes `out.v2.jpg`. Completing is not
+  renaming: **no byte that decides which *file* is named is altered or dropped**,
+  which is how this meets `output/presets`' "never silently renamed". State it that
+  way and not as "verbatim" — `with_file_name` normalises `out//x` to `out/x.jpg`,
+  same file, different bytes. **The completed path must be resolved
+  before anything derives from it** — `run_convert` resolves it right after
+  `validate_convert`, because the sidecar, `ensure_write_targets_distinct`,
+  `report.output` and telemetry's `output_bytes` all have to name the file actually
+  written; the gate runs the same rule and discards the value. The supplied
+  spelling comes from `cli::derived_extension`, **not**
   from the head of `required_extensions` — that lists `tif` first, so taking it
   renames every existing `_positive.tiff`; the two are tied by a test asserting the
-  derived spelling is a member of the accepted set;
+  supplied spelling is a member of the accepted set;
   `input_semantics::resolve` is the pure stage-1b transfer/meaning resolver,
   keyed on SilverFast XMP mode metadata — see the input-semantics note below;
   `working_space::map_nc_film_rgb_v1` is the typed NC film RGB v1 → linear

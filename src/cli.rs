@@ -11,6 +11,7 @@
 //! Determinism rule: stdout carries *only* the JSON report / params; all logs and
 //! warnings go to stderr, so an agent can pipe stdout straight into a parser.
 
+use std::ffi::OsStr;
 use std::fmt::Display;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -230,7 +231,9 @@ pub struct EstimateArgs {
 pub struct ConvertArgs {
     /// Input negative scan (SilverFast HDR/HDRi TIFF).
     pub input: PathBuf,
-    /// Output positive path (TIFF for legacy/master, JPEG for Ultra HDR v1).
+    /// Output positive path. The suffix is optional: leave it off and Hanten
+    /// appends the resolved preset's container (see --output-preset). A stated
+    /// suffix is never rewritten, so it must be one that preset accepts.
     #[arg(short = 'o', long, value_name = "PATH")]
     pub output: PathBuf,
     /// Reconstruction type (default `density`).
@@ -4144,33 +4147,46 @@ pub enum RecipePreset {
     Unstated,
 }
 
-/// The resolved container's suffix rule: the output path is never rewritten, so a
-/// mismatch is a usage error naming what the container accepts (design-spec §5).
+/// The resolved container's suffix rule, as `convert`'s gate takes it: a stated
+/// suffix is honoured verbatim or refused, an absent one is completed
+/// (design-spec §5).
+///
+/// The gate discards the resolved path — [`run_convert`] calls
+/// [`resolve_output_path`] itself for the value, because the completed path is
+/// what the sidecar, the write-target guard and the report must all see.
 fn reject_output_suffix_mismatch(
     cfg: &ResolvedConfig,
     args: &ConvertArgs,
     recipe_preset: RecipePreset,
 ) -> Result<()> {
-    reject_suffix_mismatch(
-        cfg.output.preset,
+    resolve_output_path(
         &args.output,
-        // Blame the preset only when the user actually chose one — from *either*
-        // provenance. Since the default became `gain-map-hdr`, "a named preset" no
-        // longer implies "a preset was stated": pointing at one nobody selected sends
-        // the user looking for a flag that is not in their command line, and telling
-        // someone whose recipe says `legacy` that "with no --output-preset, nc writes
-        // `legacy`" is simply false.
-        if args.output_opts.output_preset.is_some() || recipe_preset == RecipePreset::Stated {
-            SuffixContext::Chosen
-        } else {
-            SuffixContext::Default
-        },
+        cfg.output.preset,
+        convert_suffix_context(args, recipe_preset),
     )
+    .map(|_| ())
+}
+
+/// Which diagnosis a `convert` suffix failure gets. One spelling, because the
+/// gate and [`run_convert`] both need it and a second copy could disagree.
+///
+/// Blame the preset only when the user actually chose one — from *either*
+/// provenance. Since the default became `gain-map-hdr`, "a named preset" no longer
+/// implies "a preset was stated": pointing at one nobody selected sends the user
+/// looking for a flag that is not in their command line, and telling someone whose
+/// recipe says `legacy` that "with no --output-preset, nc writes `legacy`" is
+/// simply false.
+fn convert_suffix_context(args: &ConvertArgs, recipe_preset: RecipePreset) -> SuffixContext<'_> {
+    if args.output_opts.output_preset.is_some() || recipe_preset == RecipePreset::Stated {
+        SuffixContext::Chosen
+    } else {
+        SuffixContext::Default
+    }
 }
 
 /// Where the resolved preset came from, which is what the suffix diagnosis must
 /// vary on. Not derivable from the preset value since the default became a *named*
-/// one: `gain-map-hdr` reaches `reject_suffix_mismatch` both ways.
+/// one: `gain-map-hdr` reaches [`resolve_output_path`] both ways.
 #[derive(Clone, Copy, Debug)]
 enum SuffixContext<'a> {
     /// `convert` with an explicit `--output-preset`, or a recipe that set one.
@@ -4181,41 +4197,203 @@ enum SuffixContext<'a> {
     RollFrame(&'a Path),
 }
 
-/// The same rule against an arbitrary path, so `roll` shares it instead of growing
-/// a parallel check — which is exactly how the suffix rule and the convert-only
-/// refusal drifted apart once before.
+/// The path nc will actually write: the path as given when it states a suffix the
+/// resolved container accepts, or that path with the container's canonical suffix
+/// appended when it states none.
 ///
-/// `frame` names the roll frame whose *manifest entry* supplied the path, so the
-/// diagnosis says which entry to fix. Roll's **derived** names never reach here:
-/// they are built from this same table, so a mismatch would be an nc bug rather
-/// than a user error.
-fn reject_suffix_mismatch(
+/// The rule in one line: **a suffix is never rewritten, only completed.** A
+/// trailing dot-segment counts as a suffix only when it is a spelling *some*
+/// preset accepts, so `out.tiff` under a JPEG preset is still the usage error it
+/// has always been, while `out.v2` and `roll-1.2` are stems and keep their dot
+/// (`out.v2.jpg`). **No byte that decides *which file* is named is ever altered or
+/// dropped** — which is what keeps `output/presets`' "the output path is never
+/// silently renamed" true after this change: nc *completes* a path, it never
+/// renames one. Not quite byte-for-byte, and the gap is deliberate: [`Path::with_file_name`]
+/// normalises redundant separators and interior `.` segments, so `out//x` resolves
+/// to `out/x.jpg`. Those denote the same file, so the claim is about the file, not
+/// the spelling. Where a dropped byte *would* change the file — a path naming a
+/// directory — the answer is a refusal, never a quiet rewrite; see
+/// [`Unappendable`].
+///
+/// Shared by `convert` and by `roll`'s **explicit** manifest paths, so the two
+/// cannot grow parallel rules — which is exactly how the suffix rule and the
+/// convert-only refusal drifted apart once before. Roll's **derived** names do not
+/// come through here: they are built from [`Container::canonical`] and are correct
+/// by construction.
+fn resolve_output_path(
+    given: &Path,
+    preset: OutputPreset,
+    context: SuffixContext<'_>,
+) -> Result<PathBuf> {
+    let container = container_for(preset);
+    match given.extension() {
+        // A spelling some preset claims is a container request, so it is judged.
+        Some(ext) if is_container_suffix(ext) => {
+            if accepts(container, ext) {
+                // Honoured exactly as typed, including a non-canonical spelling and
+                // its case: `out.jpeg` stays `.jpeg`, `out.TIF` stays `.TIF`.
+                Ok(given.to_path_buf())
+            } else {
+                Err(suffix_mismatch_error(preset, given, context))
+            }
+        }
+        // No dot-segment, or one no preset claims: the whole path is the stem.
+        _ => append_suffix(given, container.canonical(), context),
+    }
+}
+
+/// Whether `container` accepts this spelling, in any case.
+fn accepts(container: Container, ext: &OsStr) -> bool {
+    container
+        .accepted()
+        .iter()
+        .any(|want| ext.eq_ignore_ascii_case(want))
+}
+
+/// Whether `ext` is an output-container spelling **any** preset accepts — the test
+/// that tells a suffix from a dotted stem.
+///
+/// Derived from [`OutputPreset::ALL`] rather than restated: a second list of the
+/// same spellings is the thing that would go stale when a container is added.
+fn is_container_suffix(ext: &OsStr) -> bool {
+    OutputPreset::ALL
+        .iter()
+        .any(|preset| accepts(container_for(*preset), ext))
+}
+
+/// Why a path has no file name to append a suffix to. Two shapes, because the
+/// path helpers hide them in *different* ways and only one is self-announcing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unappendable {
+    /// `.`, `..`, `/`, `dir/..` — [`Path::file_name`] itself returns `None`.
+    NamesNoFile,
+    /// `dir/`, `dir//`, `dir/.`, `dir/./` — the path's last *meaningful* component
+    /// is a directory, but `file_name()` normalises the trailing separator or `.`
+    /// away and hands back the directory's own name, so appending would silently
+    /// write that directory's **sibling**.
+    NamesADirectory,
+}
+
+impl Unappendable {
+    /// The clause naming the fault, shared by every context's message.
+    fn what(self) -> &'static str {
+        match self {
+            Self::NamesNoFile => "names no file",
+            Self::NamesADirectory => "names a directory rather than a file",
+        }
+    }
+
+    /// Which shape `given` is, or `None` when it has a file name to append to.
+    ///
+    /// **Syntactic and pure on purpose** — no `is_dir()` probe, because this runs
+    /// inside `validate_convert` *and* roll's planner, where a filesystem stat would
+    /// make the answer timing- and platform-dependent. A path that merely *happens*
+    /// to name an existing directory (`-o positives`) is therefore still a stem:
+    /// `positives.jpg` is unambiguous.
+    ///
+    /// The directory test reads the string form because `Path` has already thrown
+    /// the evidence away by the time `file_name()` answers. Lossy conversion can
+    /// neither add nor remove a trailing ASCII separator or `.`, so it is exact for
+    /// non-UTF-8 paths too, and `is_separator` covers `\` on Windows. It must match
+    /// a trailing `.` **only** when a separator precedes it: `out.` is the
+    /// documented degenerate stem (`out..jpg`), not a directory.
+    fn of(given: &Path) -> Option<Self> {
+        if given.file_name().is_none() {
+            return Some(Self::NamesNoFile);
+        }
+        let shown = given.to_string_lossy();
+        let names_dir = shown.ends_with(std::path::is_separator)
+            || shown
+                .strip_suffix('.')
+                .is_some_and(|head| head.ends_with(std::path::is_separator));
+        names_dir.then_some(Self::NamesADirectory)
+    }
+}
+
+/// The diagnosis for a path with nothing to append a suffix to. Like
+/// [`suffix_mismatch_error`], every arm names a remedy the *reader's* command line
+/// can actually reach — a bare message told a `roll` user to "use `hanten roll
+/// --out-dir`" while they were running exactly that, and never said which of 40
+/// manifest entries to fix.
+fn unappendable_error(
+    reason: Unappendable,
+    given: &Path,
+    ext: &str,
+    context: SuffixContext<'_>,
+) -> NcError {
+    NcError::Usage(match context {
+        // A manifest entry named this path, so attribute the frame and name the two
+        // remedies *that entry* has. Never `--out-dir`: it is a whole-roll flag the
+        // reader has already passed, and it cannot fix one entry.
+        SuffixContext::RollFrame(input) => format!(
+            "frame {}: the manifest's explicit output {} {}, so Hanten has nothing to \
+             append a `.{ext}` suffix to — give the entry's `output` a file name, or drop \
+             its `output` key to take the derived name inside the out-dir",
+            input.display(),
+            given.display(),
+            reason.what()
+        ),
+        // `convert`, either provenance: the remedy is the path in `-o`. The directory
+        // case also points at roll, because `--out-dir positives/` is where the
+        // trailing separator comes from in the first place.
+        _ => {
+            let mut msg = format!(
+                "the output path {} {}, so Hanten has nothing to append a `.{ext}` \
+                 suffix to — give a path ending in a file name",
+                given.display(),
+                reason.what()
+            );
+            if reason == Unappendable::NamesADirectory {
+                msg.push_str(
+                    ", or use `hanten roll --out-dir` to write a whole roll into a directory",
+                );
+            }
+            msg
+        }
+    })
+}
+
+/// `given` with `.<ext>` appended to its file name.
+///
+/// Appended, never [`PathBuf::set_extension`]: that *replaces*, so it would turn
+/// `out.v2` into `out.jpg` and eat a stem the user typed.
+///
+/// Refused for either [`Unappendable`] shape rather than completed — completing a
+/// directory path writes its sibling, which on `roll` puts the whole roll outside
+/// the `--out-dir` the user named, at exit 0, with the report agreeing.
+fn append_suffix(given: &Path, ext: &str, context: SuffixContext<'_>) -> Result<PathBuf> {
+    if let Some(reason) = Unappendable::of(given) {
+        return Err(unappendable_error(reason, given, ext, context));
+    }
+    let mut completed = given
+        .file_name()
+        .expect("Unappendable::of rejects a path with no file name")
+        .to_os_string();
+    completed.push(".");
+    completed.push(ext);
+    Ok(given.with_file_name(completed))
+}
+
+/// The diagnosis for a stated suffix the resolved container does not accept.
+/// Every arm names a remedy the *reader's* command line can actually reach.
+fn suffix_mismatch_error(
     preset: OutputPreset,
     output: &Path,
     context: SuffixContext<'_>,
-) -> Result<()> {
-    let Some(extensions) = required_extensions(preset) else {
-        return Ok(());
-    };
-    if extensions.iter().any(|want| {
-        output
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case(want))
-    }) {
-        return Ok(());
-    }
-    let list = extensions
+) -> NcError {
+    let list = required_extensions(preset)
         .iter()
         .map(|e| format!(".{e}"))
         .collect::<Vec<_>>()
         .join(" or ");
-    Err(NcError::Usage(match context {
-        // A manifest named this path, so point at the entry to fix and at the way
+    NcError::Usage(match context {
+        // A manifest named this path, so point at the entry to fix and at both ways
         // out (the derived name always matches by construction).
         SuffixContext::RollFrame(input) => format!(
             "frame {}: the manifest's explicit output {} does not match output preset \
              `{}`, which requires {list} — Hanten never renames the path you gave it (drop \
-             the entry's `output` key to take the derived name instead)",
+             the entry's suffix to have it completed, or its `output` key to take the \
+             derived name instead)",
             input.display(),
             output.display(),
             preset.name()
@@ -4223,52 +4401,95 @@ fn reject_suffix_mismatch(
         // A preset the user selected — by flag or in the recipe — can be blamed by
         // name; neither wording points at a flag they may not have passed.
         SuffixContext::Chosen => format!(
-            "output preset `{}` requires an output path ending in {list}",
+            "output preset `{}` requires an output path ending in {list} — or no suffix \
+             at all, which Hanten completes for you",
             preset.name()
         ),
         // Nothing was typed, so name the *default* explicitly rather than a flag the
-        // user never passed — and say how to get a different container, since this
-        // is the message someone meets the first time the new default surprises
-        // them. An **extensionless** path fails the same way and deliberately so: a
-        // file called `positive` is as misleading about its contents as one called
-        // `positive.jpg`, and nc is unreleased, so the strict rule is cheap now
-        // (design-spec §5).
+        // user never passed — and say how to get a different container, since this is
+        // the message someone meets the first time the new default surprises them.
+        // An **extensionless** path no longer reaches here at all: it is completed
+        // from the resolved container (design-spec §5).
         SuffixContext::Default => format!(
-            "the output path must end in {list}: with no --output-preset, Hanten writes \
-             `{}` (see --help for the other presets, e.g. `display-p3` for a 16-bit \
-             TIFF), and it never renames the path you gave it",
+            "the output path {} does not end in {list}: with no --output-preset, Hanten \
+             writes `{}` (see --help for the other presets, e.g. `display-p3` for a \
+             16-bit TIFF). Hanten never renames a suffix you state — drop it and the path \
+             is completed for you",
+            output.display(),
             preset.name()
         ),
-    }))
+    })
 }
 
-/// Output-path extensions a preset's resolved container accepts. Every shipped
-/// preset states a rule; the `Option` remains so a future preset can decline one.
+/// The set of file containers nc writes. Which spellings a path may state, and
+/// which one nc supplies when it completes or derives a name, both hang off this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Container {
+    Tiff,
+    Jpeg,
+    Avif,
+}
+
+/// The file container a preset's encoder writes.
 ///
-/// One table so a new container cannot acquire a suffix rule in one place and miss
-/// it in another. `output/presets` extends this with the remaining presets and is
-/// what makes it roll-aware.
-fn required_extensions(preset: OutputPreset) -> Option<&'static [&'static str]> {
+/// **The only preset-shaped step in output-path handling** — but *not* the only
+/// preset match that decides the file: the render dispatch in [`convert_frame`]
+/// separately picks the encoder that writes the bytes, and the two must agree.
+/// Nothing in the type system couples them; the magic-byte assertions in
+/// `tests/pipeline.rs`'s `a_bare_output_stem_takes_the_presets_container_and_everything_names_it`
+/// are what pin name to bytes.
+///
+/// Exhaustive on purpose, and it must stay that way: a new preset has to *fail to
+/// compile* here rather than inherit a container from a `_` arm or a lookup map.
+/// Both [`required_extensions`] and [`derived_extension`] hang off this, so a
+/// future destination set that resolves a container from a product of selectors
+/// changes this function and nothing under it (`nf-destinations/preset-set`).
+fn container_for(preset: OutputPreset) -> Container {
     match preset {
-        OutputPreset::UltraHdrV1 | OutputPreset::GainMapHdr => Some(&["jpg", "jpeg"]),
-        OutputPreset::HdrPq | OutputPreset::HdrHlg => Some(&["avif"]),
-        // A TIFF like the legacy path and `film-master` — but unlike them this
-        // preset states the rule, because a `.jpg` path under an f32 BT.2020 master
-        // is a mistake worth catching at the CLI boundary rather than writing a
-        // TIFF with a misleading name.
-        OutputPreset::HdrLinearTiff | OutputPreset::HdrPqTiff | OutputPreset::HdrHlgTiff => {
-            Some(&["tif", "tiff"])
-        }
-        // Every TIFF preset states the rule, including the two oldest. Until now
-        // `legacy` and `film-master` returned `None`, so `hanten convert -o out.jpg`
-        // wrote a TIFF named `.jpg`, exit 0, no warning — the exact
-        // silently-misnamed-file mistake the newer presets are guarded against.
-        OutputPreset::DisplayP3
+        OutputPreset::UltraHdrV1 | OutputPreset::GainMapHdr => Container::Jpeg,
+        OutputPreset::HdrPq | OutputPreset::HdrHlg => Container::Avif,
+        OutputPreset::HdrLinearTiff
+        | OutputPreset::HdrPqTiff
+        | OutputPreset::HdrHlgTiff
+        | OutputPreset::DisplayP3
         | OutputPreset::Compatibility
         | OutputPreset::Legacy
         | OutputPreset::Custom
-        | OutputPreset::FilmMaster => Some(&["tif", "tiff"]),
+        | OutputPreset::FilmMaster => Container::Tiff,
     }
+}
+
+impl Container {
+    /// Every spelling accepted on a *stated* output path, in any case.
+    fn accepted(self) -> &'static [&'static str] {
+        match self {
+            Self::Tiff => &["tif", "tiff"],
+            Self::Jpeg => &["jpg", "jpeg"],
+            Self::Avif => &["avif"],
+        }
+    }
+
+    /// The one spelling nc writes when it supplies the suffix itself — a completed
+    /// `convert` path or a derived `roll` name.
+    ///
+    /// Deliberately **not** `accepted()[0]`: that lists `tif` first, and taking the
+    /// head would have renamed every existing roll output from `_positive.tiff`.
+    fn canonical(self) -> &'static str {
+        match self {
+            Self::Tiff => "tiff",
+            Self::Jpeg => "jpg",
+            Self::Avif => "avif",
+        }
+    }
+}
+
+/// Output-path extensions a preset's resolved container accepts.
+///
+/// Every preset states a rule — there is no "declines a suffix" case left, and the
+/// `Option` this returned before is gone with it: since nc now *derives* a suffix,
+/// a preset with no container could not be given a name at all.
+fn required_extensions(preset: OutputPreset) -> &'static [&'static str] {
+    container_for(preset).accepted()
 }
 
 /// How the calling command can state a film base — the one thing the
@@ -6847,9 +7068,27 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // provenance-sensitive rules that cannot live there (see `validate_convert`).
     validate_convert(&cfg, &args, recipe_preset)?;
 
+    // The path nc actually writes: `-o out` under the default becomes `out.jpg`.
+    // Resolved **here**, before anything derives from it — the write-target guard,
+    // the sidecar, the report's `output` and telemetry's `output_bytes` must all
+    // see the completed path, never the stem. (`validate_convert` ran the same rule
+    // and discarded the value; this is the one call that keeps it.)
+    let output = resolve_output_path(
+        &args.output,
+        cfg.output.preset,
+        convert_suffix_context(&args, recipe_preset),
+    )?;
+    if output != args.output {
+        log.info(format!(
+            "output path completed from the resolved preset `{}`: writing {}",
+            cfg.output.preset.name(),
+            output.display()
+        ));
+    }
+
     // Guard every write target against the input and against each other before
     // anything is decoded or written.
-    let sidecar = encode::sidecar_path(&args.output);
+    let sidecar = encode::sidecar_path(&output);
     // The persistent `--telemetry` log is also a write target: a
     // `NC_TELEMETRY_LOG` / default path that collides with the input or an
     // artifact is rejected up front like `--telemetry-file`, so an odd log path
@@ -6860,8 +7099,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     } else {
         None
     };
-    let mut targets: Vec<(&str, &Path)> =
-        vec![("--output", &args.output), ("the sidecar", &sidecar)];
+    let mut targets: Vec<(&str, &Path)> = vec![("--output", &output), ("the sidecar", &sidecar)];
     if let Some(p) = &args.dump_params {
         targets.push(("--dump-params", p));
     }
@@ -6954,7 +7192,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     let frame = convert_frame(
         "convert",
         &args.input,
-        &args.output,
+        &output,
         &cfg,
         flow,
         InputFromCli {
@@ -7034,6 +7272,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         timings.total = total_ms;
         emit_telemetry(
             &args,
+            &output,
             &cfg,
             &info,
             timings,
@@ -7287,9 +7526,9 @@ fn expand_input(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 /// actually written.
 ///
 /// The spelling comes from [`derived_extension`], **not** from the first entry of
-/// [`required_extensions`] — that table lists `tif` before `tiff`, so taking its
-/// head would have silently renamed every existing roll output from
-/// `_positive.tiff` to `_positive.tif`.
+/// [`required_extensions`] — that lists `tif` before `tiff`, so taking its head
+/// would have silently renamed every existing roll output from `_positive.tiff` to
+/// `_positive.tif`.
 fn default_output_name(input: &Path, out_dir: &Path, preset: OutputPreset) -> PathBuf {
     let stem = input
         .file_stem()
@@ -7298,39 +7537,30 @@ fn default_output_name(input: &Path, out_dir: &Path, preset: OutputPreset) -> Pa
     out_dir.join(format!("{stem}_positive.{}", derived_extension(preset)))
 }
 
-/// The extension roll writes when it derives a frame's name.
+/// The extension nc writes when it supplies the suffix itself — a `roll` frame's
+/// derived name, or a `convert` path the user left uncompleted.
 ///
-/// Separate from [`required_extensions`], which says what nc *accepts* — several
-/// presets accept two spellings and a derived name must pick exactly one. The
+/// Separate from [`required_extensions`], which says what nc *accepts*: several
+/// containers accept two spellings and a supplied one must pick exactly one. The
 /// invariant tying them together is that this value is always **a member of** that
-/// preset's accepted set, so a derived name can never fail
-/// [`reject_suffix_mismatch`]; a test asserts it for every preset in
+/// preset's accepted set, so a supplied suffix can never fail
+/// [`resolve_output_path`]; a test asserts it for every preset in
 /// `OutputPreset::ALL`, which is what keeps the two from drifting.
 ///
 /// TIFF presets keep `tiff` because that is what roll wrote before containers
 /// existed; changing it would rename every output of an unchanged recipe.
 fn derived_extension(preset: OutputPreset) -> &'static str {
-    match preset {
-        OutputPreset::GainMapHdr | OutputPreset::UltraHdrV1 => "jpg",
-        OutputPreset::HdrPq | OutputPreset::HdrHlg => "avif",
-        OutputPreset::Legacy
-        | OutputPreset::Custom
-        | OutputPreset::FilmMaster
-        | OutputPreset::DisplayP3
-        | OutputPreset::Compatibility
-        | OutputPreset::HdrLinearTiff
-        | OutputPreset::HdrPqTiff
-        | OutputPreset::HdrHlgTiff => "tiff",
-    }
+    container_for(preset).canonical()
 }
 
 /// Resolve a frame's output path: a manifest's explicit path (absolute used
 /// verbatim, relative joined onto the out-dir) or the derived
 /// `<stem>_positive.<ext>`.
 ///
-/// An explicit manifest path is checked against the frame's resolved container
-/// through the **same** rule `convert` uses; a derived one is correct by
-/// construction and is not re-checked.
+/// An explicit manifest path goes through the **same** rule `convert` uses, so it
+/// is judged when it states a suffix and *completed* when it does not (an entry
+/// naming `chosen` under the default preset writes `chosen.jpg`). A derived name is
+/// correct by construction and is not re-checked.
 fn resolve_frame_output(
     explicit: Option<&Path>,
     input: &Path,
@@ -7342,8 +7572,7 @@ fn resolve_frame_output(
         Some(o) => out_dir.join(o),
         None => return Ok(default_output_name(input, out_dir, preset)),
     };
-    reject_suffix_mismatch(preset, &path, SuffixContext::RollFrame(input))?;
-    Ok(path)
+    resolve_output_path(&path, preset, SuffixContext::RollFrame(input))
 }
 
 /// Deep-merge `overlay` into `base`: JSON objects merge key-by-key (recursively),
@@ -7552,7 +7781,7 @@ fn reject_roll_unsupported(cfg: &ResolvedConfig) -> Result<()> {
     // `default_output_name` now takes the suffix from `derived_extension` — **not**
     // from `required_extensions`, whose head is `tif` and would have renamed every
     // roll output; see that function for why the two are separate — and an explicit
-    // manifest path goes through the same `reject_suffix_mismatch` rule `convert`
+    // manifest path goes through the same `resolve_output_path` rule `convert`
     // uses, so the gap is closed rather than guarded.
     //
     // Do not reintroduce a preset list here. Roll capability was once *derived* from
@@ -8862,6 +9091,9 @@ fn telemetry_file_target(args: &ConvertArgs) -> Option<&Path> {
 #[allow(clippy::too_many_arguments)]
 fn emit_telemetry(
     args: &ConvertArgs,
+    // The **resolved** output path, not `args.output`: `output_bytes` must stat the
+    // file that was written, which a completed suffix makes a different path.
+    output: &Path,
     cfg: &ResolvedConfig,
     info: &DecodeInfo,
     timings: telemetry::TimingInfo,
@@ -8890,7 +9122,7 @@ fn emit_telemetry(
         timings,
         loss,
         input_bytes: file_len(&args.input),
-        output_bytes: file_len(&args.output),
+        output_bytes: file_len(output),
         reconstruction: cfg.reconstruction.reconstruction_type(),
         curve: cfg.reconstruction.curve_type(),
         params_hash: telemetry::params_hash(recipe_json),
@@ -12760,13 +12992,10 @@ mod tests {
             hdr::transfer_for(OutputPreset::HdrPq),
             hdr::transfer_for(OutputPreset::HdrPqTiff)
         );
-        assert_eq!(
-            required_extensions(OutputPreset::HdrPq),
-            Some(&["avif"][..])
-        );
+        assert_eq!(required_extensions(OutputPreset::HdrPq), &["avif"]);
         assert_eq!(
             required_extensions(OutputPreset::HdrPqTiff),
-            Some(&["tif", "tiff"][..])
+            &["tif", "tiff"]
         );
     }
 
@@ -13014,16 +13243,43 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_extension_is_rejected_and_blames_the_path_not_an_unpassed_preset() {
-        // Extensionless is rejected on purpose (design-spec §5): a file called
-        // `positive` misleads about its contents exactly as `positive.jpg` does.
-        // With no `--output-preset` typed, the message must not blame a flag the
-        // user never passed — it names the *default* preset instead. That distinction
-        // stopped being derivable from the preset value when the default became a
-        // named one, which is why `SuffixContext` exists.
+    fn a_missing_extension_is_completed_from_the_resolved_container() {
+        // An extensionless path used to be a usage error; it is now completed from
+        // whatever container the preset resolved. This is the behaviour swap, pinned
+        // under each provenance so neither arm can quietly go back to refusing.
         let cfg = base_cfg();
         let mut args = parse_convert(&[]);
         args.output = PathBuf::from("positive");
+        validate_convert(&cfg, &args, RecipePreset::Unstated).unwrap();
+        assert_eq!(
+            resolve_output_path(&args.output, cfg.output.preset, SuffixContext::Default).unwrap(),
+            PathBuf::from("positive.jpg")
+        );
+        let named = ResolvedConfig {
+            output: OutputParams {
+                preset: OutputPreset::FilmMaster,
+                ..OutputParams::default()
+            },
+            ..base_cfg()
+        };
+        assert_eq!(
+            resolve_output_path(&args.output, named.output.preset, SuffixContext::Chosen).unwrap(),
+            PathBuf::from("positive.tiff"),
+            "a TIFF preset completes the same stem to its own container"
+        );
+    }
+
+    #[test]
+    fn a_mismatched_suffix_blames_the_path_not_an_unpassed_preset() {
+        // A suffix nc's containers know but this preset does not is still the usage
+        // error it has always been — completion never rescues a *stated* one. With no
+        // `--output-preset` typed the message must not blame a flag the user never
+        // passed; it names the *default* preset instead. That distinction stopped
+        // being derivable from the preset value when the default became a named one,
+        // which is why `SuffixContext` exists.
+        let cfg = base_cfg();
+        let mut args = parse_convert(&[]);
+        args.output = PathBuf::from("positive.tiff");
         let err = validate_convert(&cfg, &args, RecipePreset::Unstated)
             .unwrap_err()
             .to_string();
@@ -13033,15 +13289,19 @@ mod tests {
             !err.contains("--output-preset gain-map-hdr"),
             "the default path must not blame a flag the user never passed: {err}"
         );
+        // The remedy the new rule adds has to be in the message someone actually
+        // meets, or nobody learns that dropping the suffix works.
+        assert!(err.contains("drop it"), "{err}");
         // The same mismatch *with* the flag blames the preset by name.
         let mut chosen = parse_convert(&["--output-preset", "gain-map-hdr"]);
-        chosen.output = PathBuf::from("positive");
+        chosen.output = PathBuf::from("positive.tiff");
         let err = validate_convert(&cfg, &chosen, RecipePreset::Unstated)
             .unwrap_err()
             .to_string();
         assert!(err.contains("output preset `gain-map-hdr`"), "{err}");
-        // Control: the same path under a *named* preset names it, and a `.tiff` path
-        // under the default is of course accepted.
+        assert!(err.contains("no suffix at all"), "{err}");
+        // Control: a named TIFF preset refuses the converse path and names itself,
+        // and a `.jpg` path under the default is of course accepted.
         let named = ResolvedConfig {
             output: OutputParams {
                 preset: OutputPreset::FilmMaster,
@@ -13049,12 +13309,169 @@ mod tests {
             },
             ..base_cfg()
         };
+        args.output = PathBuf::from("positive.jpg");
         let err = validate_convert(&named, &args, RecipePreset::Unstated)
             .unwrap_err()
             .to_string();
         assert!(err.contains("film-master"), "{err}");
-        args.output = PathBuf::from("positive.jpg");
         validate_convert(&cfg, &args, RecipePreset::Unstated).unwrap();
+    }
+
+    #[test]
+    fn a_dotted_stem_is_completed_and_a_known_spelling_is_judged() {
+        // The rule that tells a suffix from a stem: a dot-segment is a container
+        // request only when *some* preset accepts that spelling. `-o out.v2` and
+        // `-o roll-1.2` are stems and keep their dot; `.tif` is a spelling nc knows,
+        // so under a JPEG preset it is the mismatch error rather than a stem.
+        let jpeg = OutputPreset::GainMapHdr;
+        for (given, want) in [
+            ("out.v2", "out.v2.jpg"),
+            ("roll-1.2", "roll-1.2.jpg"),
+            ("scan.2026-09-22", "scan.2026-09-22.jpg"),
+            // Degenerate but consistent: an empty dot-segment is not a spelling nc
+            // knows, and nothing the user typed is ever dropped.
+            ("out.", "out..jpg"),
+            // A leading dot with nothing after it is a stem, not an extension.
+            (".hidden", ".hidden.jpg"),
+            ("dir/out", "dir/out.jpg"),
+        ] {
+            assert_eq!(
+                resolve_output_path(Path::new(given), jpeg, SuffixContext::Default).unwrap(),
+                PathBuf::from(want),
+                "{given}"
+            );
+        }
+        // The falsifiable half: a *known* spelling is judged, never appended to.
+        let err = resolve_output_path(Path::new("out.tif"), jpeg, SuffixContext::Chosen)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(".jpg"), "{err}");
+        // …and one this container accepts survives byte for byte, spelling and case
+        // included.
+        for keep in ["out.jpeg", "out.JPG", "out.v2.jpeg"] {
+            assert_eq!(
+                resolve_output_path(Path::new(keep), jpeg, SuffixContext::Chosen).unwrap(),
+                PathBuf::from(keep),
+                "{keep}"
+            );
+        }
+        // A path that names no file has nothing to append to, and says so.
+        for bad in [".", "..", "/"] {
+            let err = resolve_output_path(Path::new(bad), jpeg, SuffixContext::Default)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("names no file"), "{bad}: {err}");
+        }
+        // A path whose last meaningful component is a *directory*. `file_name()`
+        // normalises the trailing separator — and an interior `.` — away, so
+        // appending would quietly write a sibling (`dir/` and `dir/.` both →
+        // `dir.jpg`) instead of the file inside it the user meant. That is the
+        // muscle-memory mistake (roll's sibling flag is spelled `--out-dir
+        // positives/`), and `dir/.` is the spelling a manifest writes as `"."`.
+        // Refused, not completed.
+        for bad in ["dir/", "dir//", "dir/./", "dir/.", "a/b/.", "./out/"] {
+            let err = resolve_output_path(Path::new(bad), jpeg, SuffixContext::Default)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("names a directory"), "{bad}: {err}");
+            assert!(err.contains(bad), "{bad} must be named back: {err}");
+        }
+        // The two shapes stay distinct: a path `file_name()` itself declines keeps
+        // the "names no file" wording, including `dir/..`, which the directory arm's
+        // string test would never see.
+        for bad in [".", "..", "/", "dir/.."] {
+            let err = resolve_output_path(Path::new(bad), jpeg, SuffixContext::Default)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("names no file"), "{bad}: {err}");
+            assert!(!err.contains("names a directory"), "{bad}: {err}");
+        }
+        // The falsifiable controls. Same paths *without* the trailing directory
+        // component still complete — including a **leading** `./`, which is not a
+        // trailing one — and `out.` is the documented degenerate stem, which pins
+        // that the new rule is "separator then `.`" and not merely `ends_with('.')`.
+        for (stem, want) in [
+            ("dir", "dir.jpg"),
+            ("a/b", "a/b.jpg"),
+            ("./out", "./out.jpg"),
+            ("out.", "out..jpg"),
+            (".hidden", ".hidden.jpg"),
+        ] {
+            assert_eq!(
+                resolve_output_path(Path::new(stem), jpeg, SuffixContext::Default).unwrap(),
+                PathBuf::from(want),
+                "{stem}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_roll_frames_unappendable_output_is_attributed_and_gets_a_remedy_it_can_reach() {
+        // The rule `suffix_mismatch_error`'s arms already follow: a remedy must be
+        // one the *reader's* command line can reach. A roll user meeting this is
+        // running `hanten roll --out-dir` at that moment, so telling them to use it
+        // is advice they are already taking — and with 40 manifest entries, a message
+        // that does not say which frame is unactionable.
+        let jpeg = OutputPreset::GainMapHdr;
+        let frame = Path::new("/scans/f12.tif");
+        for bad in ["/out/.", "/out/", "/out/sub/"] {
+            let err = resolve_output_path(Path::new(bad), jpeg, SuffixContext::RollFrame(frame))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("frame /scans/f12.tif"), "{bad}: {err}");
+            assert!(err.contains("`output`"), "{bad}: {err}");
+            // The losing wording must be *absent*, not merely out-ranked — asserting
+            // only that the right words appear cannot tell the two arms apart.
+            assert!(!err.contains("hanten roll --out-dir"), "{bad}: {err}");
+        }
+        // …and `convert` keeps the wording that fits *its* reader, which is what
+        // makes the assertion above falsifiable rather than vacuous.
+        let err = resolve_output_path(Path::new("/out/."), jpeg, SuffixContext::Default)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("hanten roll --out-dir"), "{err}");
+        assert!(!err.contains("frame "), "{err}");
+    }
+
+    #[test]
+    fn the_known_suffix_set_is_the_union_of_every_presets_own_table() {
+        // `is_container_suffix` is what separates a mismatch from a stem. The first
+        // loop is true **by construction** today — `required_extensions` *is*
+        // `container_for(preset).accepted()` and the union folds over the same
+        // function — so it cannot fail as written; it is kept as a guard against
+        // someone reimplementing either side independently, not as coverage.
+        //
+        // The falsifiable parts are below and in the second assertion: the foreign
+        // spellings that must *not* read as containers, the `derived_extension ∈
+        // accepted` check (two different tables could disagree), and the three
+        // pinned canonical spellings.
+        for preset in OutputPreset::ALL {
+            for spelling in required_extensions(preset) {
+                assert!(
+                    is_container_suffix(OsStr::new(spelling)),
+                    "{} accepts .{spelling} but the union does not know it",
+                    preset.name()
+                );
+                // Case-insensitively too, which is how the accept check reads it.
+                assert!(is_container_suffix(OsStr::new(&spelling.to_uppercase())));
+            }
+            // Every preset's *supplied* spelling is one its own table accepts — the
+            // invariant that lets a completed or derived path skip re-checking.
+            assert!(
+                accepts(container_for(preset), OsStr::new(derived_extension(preset))),
+                "{}",
+                preset.name()
+            );
+        }
+        // Falsifiable: a format nc does not write is a stem, not a suffix.
+        for foreign in ["png", "webp", "exr", "v2"] {
+            assert!(!is_container_suffix(OsStr::new(foreign)), "{foreign}");
+        }
+        // The spellings themselves, pinned so they cannot drift silently: `tiff` over
+        // the `tif` that heads the accepted list, `jpg` over `jpeg`.
+        assert_eq!(derived_extension(OutputPreset::Legacy), "tiff");
+        assert_eq!(derived_extension(OutputPreset::GainMapHdr), "jpg");
+        assert_eq!(derived_extension(OutputPreset::HdrPq), "avif");
     }
 
     #[test]
@@ -13117,10 +13534,10 @@ mod tests {
         // made every preset "pin a suffix", and roll refused all of them. The two
         // properties must be independently true for `film-master` — it states a
         // suffix *and* is roll-capable.
-        assert!(required_extensions(OutputPreset::FilmMaster).is_some());
+        assert!(!required_extensions(OutputPreset::FilmMaster).is_empty());
         reject_roll_unsupported(&film_master_cfg()).unwrap();
         // `legacy` is the other roll-capable preset, and it too states a suffix now.
-        assert!(required_extensions(OutputPreset::Legacy).is_some());
+        assert!(!required_extensions(OutputPreset::Legacy).is_empty());
         reject_roll_unsupported(&base_cfg()).unwrap();
     }
 
@@ -15359,18 +15776,21 @@ mod tests {
             );
         }
         // The invariant that lets roll skip re-checking a derived name: every
-        // preset's derived spelling is one the suffix rule accepts. Looped over
-        // `ALL`, so a new preset cannot pick an extension its own table rejects.
+        // preset's derived spelling is one the suffix rule accepts, and passing it
+        // back through the resolver returns it **unchanged** rather than completing
+        // it a second time. Looped over `ALL`, so a new preset cannot pick an
+        // extension its own table rejects.
         for preset in OutputPreset::ALL {
             let derived = default_output_name(Path::new("/s/f.tif"), Path::new("/out"), preset);
-            assert!(
-                reject_suffix_mismatch(
-                    preset,
+            assert_eq!(
+                resolve_output_path(
                     &derived,
+                    preset,
                     SuffixContext::RollFrame(Path::new("/s/f.tif"))
                 )
-                .is_ok(),
-                "{} derives {} which its own suffix rule rejects",
+                .unwrap_or_else(|e| panic!("{} derives a name it rejects: {e}", preset.name())),
+                derived,
+                "{} derives {} and the resolver then changed it",
                 preset.name(),
                 derived.display()
             );
@@ -15391,6 +15811,26 @@ mod tests {
         assert!(err.contains("frame /s/f.tif"), "{err}");
         assert!(err.contains(".jpg"), "{err}");
         assert!(err.contains("gain-map-hdr"), "{err}");
+        // An explicit manifest path shares the whole rule, so one stating no suffix
+        // is *completed* like a `convert` path rather than refused — and the
+        // relative-to-out-dir join still happens first.
+        for (preset, want) in [
+            (OutputPreset::GainMapHdr, "/out/chosen.jpg"),
+            (OutputPreset::Legacy, "/out/chosen.tiff"),
+        ] {
+            assert_eq!(
+                resolve_frame_output(
+                    Some(Path::new("chosen")),
+                    Path::new("/s/f.tif"),
+                    Path::new("/out"),
+                    preset,
+                )
+                .unwrap(),
+                PathBuf::from(want),
+                "{}",
+                preset.name()
+            );
+        }
     }
 
     #[test]

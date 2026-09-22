@@ -461,10 +461,11 @@ a tweak on top of the shared recipe:
 hanten roll --frames frames.json --out-dir positives/ --params roll-recipe.json
 ```
 
-An explicit manifest `output` goes through the same suffix rule as `convert`, so
-its extension must match the resolved preset's container — `.jpg` under the
+An explicit manifest `output` goes through the same suffix rule as `convert`: an
+extension it states must match the resolved preset's container — `.jpg` under the
 default, `.tiff` under `legacy`/`display-p3`/`film-master`, `.avif` under
-`hdr-pq`/`hdr-hlg`.
+`hdr-pq`/`hdr-hlg` — and one it omits is completed from that container, so
+`"output": "chosen"` writes `chosen.jpg` on a default roll.
 
 Some keys describe the *roll*, not the frame: the film base, `curve.dmax`, the anchor
 placement, `curve.stock` and `output.preset`. Overriding one per frame is applied but
@@ -1143,25 +1144,27 @@ reference white exists to fill it.
 named preset resolves container, bit depth, and colour profile itself. `custom` is
 the deliberate exception — see below.
 
-Twelve names are accepted, **every one pins a required suffix**, and there is no
-planned-but-unaccepted tier left, so an unknown name always means a typo:
+Twelve names are accepted, **every one resolves a container**, and there is no
+planned-but-unaccepted tier left, so an unknown name always means a typo. The
+"Suffix" column is what a path may *state*; the **bold** spelling is the one
+`hanten` writes when you leave the suffix off:
 
 | Preset | Container | Suffix | Depth | Contents |
 |---|---|---|---|---|
-| `gain-map-hdr` *(default)* | JPEG | `.jpg` / `.jpeg` | u8 base | SDR base + gain map, packaged **dual-dialect**: ISO 21496-1 segments *and* the legacy Ultra HDR v1 XMP/MPF. |
-| `ultra-hdr-v1` | JPEG | `.jpg` / `.jpeg` | u8 base | The **same pixels** as `gain-map-hdr`, legacy XMP/MPF only — no ISO claim. |
-| `legacy` | TIFF | `.tif` / `.tiff` | u16 / f32 | The transitional path: print controls run before the output ICC transform. |
-| `custom` | TIFF | `.tif` / `.tiff` | u16 / f32 | Same bytes as `legacy`; the difference is **provenance** — it says the combination was chosen. |
-| `film-master` | TIFF | `.tif` / `.tiff` | f32 | Unclamped **linear ACEScg**, straight from the NC film RGB v1 mapping. Bypasses every print/display control. |
-| `display-p3` | TIFF | `.tif` / `.tiff` | u16 | Modern-pipeline SDR render, losslessly stored in **Display P3**. |
-| `compatibility` | TIFF | `.tif` / `.tiff` | u16 | The same SDR render in **sRGB**, for broad compatibility. |
-| `hdr-pq` | AVIF | `.avif` | 10-bit | 4:4:4 Rec.2100 **PQ**. |
-| `hdr-hlg` | AVIF | `.avif` | 10-bit | 4:4:4 Rec.2100 **HLG**. |
-| `hdr-linear-tiff` | TIFF | `.tif` / `.tiff` | f32 | Display-linear **BT.2020**, no transfer applied — HDR interchange. |
-| `hdr-pq-tiff` | TIFF | `.tif` / `.tiff` | u16 | The same signal as `hdr-pq`, as losslessly stored Rec.2100 **PQ** codes. |
-| `hdr-hlg-tiff` | TIFF | `.tif` / `.tiff` | u16 | The same signal as `hdr-hlg`, as losslessly stored Rec.2100 **HLG** codes. |
+| `gain-map-hdr` *(default)* | JPEG | **`.jpg`** / `.jpeg` | u8 base | SDR base + gain map, packaged **dual-dialect**: ISO 21496-1 segments *and* the legacy Ultra HDR v1 XMP/MPF. |
+| `ultra-hdr-v1` | JPEG | **`.jpg`** / `.jpeg` | u8 base | The **same pixels** as `gain-map-hdr`, legacy XMP/MPF only — no ISO claim. |
+| `legacy` | TIFF | `.tif` / **`.tiff`** | u16 / f32 | The transitional path: print controls run before the output ICC transform. |
+| `custom` | TIFF | `.tif` / **`.tiff`** | u16 / f32 | Same bytes as `legacy`; the difference is **provenance** — it says the combination was chosen. |
+| `film-master` | TIFF | `.tif` / **`.tiff`** | f32 | Unclamped **linear ACEScg**, straight from the NC film RGB v1 mapping. Bypasses every print/display control. |
+| `display-p3` | TIFF | `.tif` / **`.tiff`** | u16 | Modern-pipeline SDR render, losslessly stored in **Display P3**. |
+| `compatibility` | TIFF | `.tif` / **`.tiff`** | u16 | The same SDR render in **sRGB**, for broad compatibility. |
+| `hdr-pq` | AVIF | **`.avif`** | 10-bit | 4:4:4 Rec.2100 **PQ**. |
+| `hdr-hlg` | AVIF | **`.avif`** | 10-bit | 4:4:4 Rec.2100 **HLG**. |
+| `hdr-linear-tiff` | TIFF | `.tif` / **`.tiff`** | f32 | Display-linear **BT.2020**, no transfer applied — HDR interchange. |
+| `hdr-pq-tiff` | TIFF | `.tif` / **`.tiff`** | u16 | The same signal as `hdr-pq`, as losslessly stored Rec.2100 **PQ** codes. |
+| `hdr-hlg-tiff` | TIFF | `.tif` / **`.tiff`** | u16 | The same signal as `hdr-hlg`, as losslessly stored Rec.2100 **HLG** codes. |
 
-> **The default writes a JPEG.** `hanten convert scan.tif -o out.tiff` now *fails* —
+> **The default writes a JPEG.** `hanten convert scan.tif -o out.tiff` *fails* —
 > with no `--output-preset`, `hanten` resolves `gain-map-hdr` and wants `.jpg`. For a
 > TIFF, name the preset: `--output-preset legacy` (or `display-p3`,
 > `compatibility`, `film-master`, …).
@@ -1171,11 +1174,48 @@ pixels, differing only in metadata dialect. Only the dual-dialect default decode
 as HDR on Apple platforms; `ultra-hdr-v1` exists for readers that predate ISO
 21496-1.
 
-The wrong suffix is a usage error, not a silent rename:
+### You do not have to name the container
 
+Leave the suffix off and `hanten` supplies it from the resolved preset — that is
+what the preset is *for*:
+
+```console
+$ hanten convert scan.tif -o out --film-base 1,1,1 | jq -r .output
+out.jpg
+
+$ hanten convert scan.tif -o out --output-preset display-p3 --film-base 1,1,1 | jq -r .output
+out.tiff
 ```
-usage: output preset `hdr-pq` requires an output path ending in .avif
+
+The report's `output` field always names what was actually written, so a script
+never has to map a preset name to a container. The sidecar follows the completed
+path too (`out.jpg.json`).
+
+Four rules make this predictable:
+
+- **A suffix you state is never rewritten.** `-o out.jpeg` writes `out.jpeg`, not
+  `out.jpg`; case is preserved as typed.
+- **A dot-segment is only a suffix if `hanten` recognises the container.**
+  `-o out.v2` and `-o roll-1.2` are stems, so they get `out.v2.jpg` and
+  `roll-1.2.jpg`. Only `.tif`, `.tiff`, `.jpg`, `.jpeg` and `.avif` are read as a
+  container request.
+- **A path that names a directory is refused.** There is nothing to append to, so
+  `-o positives/` and `-o positives/.` both exit 2 rather than writing
+  `positives.jpg` beside the directory. Name the file inside it
+  (`-o positives/out`), or use `hanten roll --out-dir positives/` for a whole roll.
+  In a `roll` manifest the same applies to an `"output"` of `"."` — drop the
+  `output` key instead and the frame takes its derived name inside `--out-dir`.
+- **A stated suffix the preset refuses is still an error**, never a silent rename:
+
+```console
+$ hanten convert scan.tif -o out.tiff --output-preset hdr-pq --film-base 1,1,1
+usage: output preset `hdr-pq` requires an output path ending in .avif — or no suffix at all, which Hanten completes for you
+
+$ hanten convert scan.tif -o out.tiff --film-base 1,1,1
+usage: the output path out.tiff does not end in .jpg or .jpeg: with no --output-preset, Hanten writes `gain-map-hdr` (see --help for the other presets, e.g. `display-p3` for a 16-bit TIFF). Hanten never renames a suffix you state — drop it and the path is completed for you
 ```
+
+With `-v`, `hanten` says on stderr when it completed a path.
 
 ### Preset interaction rules
 
@@ -1209,8 +1249,8 @@ usage: output preset `hdr-pq` requires an output path ending in .avif
 The old `convert`-only restriction is gone. `roll` derives
 `<stem>_positive.<ext>` from each frame's own resolved preset, so a
 `gain-map-hdr` roll writes `_positive.jpg` and an `hdr-pq` roll writes
-`_positive.avif`. An explicit manifest `output` path goes through the same
-suffix-mismatch rule `convert` uses.
+`_positive.avif`. An explicit manifest `output` path goes through the same rule
+`convert` uses — checked when it states a suffix, completed when it does not.
 
 ### Depth, profile and container knobs
 
@@ -1658,7 +1698,6 @@ So you don't go looking:
 
 | Missing | Owning task |
 |---|---|
-| **A bare `-o out`** — the suffix must currently match the preset's container; deriving it is proposed | [`output/output-path-suffix`](tasks/output/output-path-suffix.md) |
 | **Auto-cascade recipe generation** — a planner that produces a roll recipe for you, instead of you measuring and freezing it by hand | [`core/base-acquisition-planner`](tasks/core/base-acquisition-planner.md) |
 | **Content-based film-base fallback** (`--base-content`) for cropped scans with no visible rebate | [`film-base/content-fallback`](tasks/film-base/content-fallback.md) |
 | **Named conversion presets** (`--preset`) — selecting a whole reconstruction + display bundle by name instead of assembling the flags. Today each configuration is 3–5 coupled flags whose values only make sense together | [`algo/conversion-presets`](tasks/algo/conversion-presets.md) |

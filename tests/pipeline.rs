@@ -323,6 +323,44 @@ fn sidecar_params(output: &Path) -> serde_json::Value {
     doc["params"].clone()
 }
 
+/// The container a written file's *bytes* actually are, sniffed from its magic.
+///
+/// `cli::container_for` decides the container an output path is **named** for; a
+/// separate exhaustive preset match in `convert_frame` decides which encoder
+/// writes it. Both are exhaustive, so a new preset fails to compile in both — but
+/// nothing makes them *agree*, and a preset named `.tiff` while dispatched to the
+/// AVIF encoder would compile and ship a misnamed file. This is what pins the two
+/// together, at the only level that matters: the bytes on disk.
+fn sniff_container(path: &Path) -> &'static str {
+    let bytes = std::fs::read(path).unwrap();
+    assert!(bytes.len() > 12, "{} is too short to sniff", path.display());
+    if bytes[0..2] == [0xff, 0xd8] {
+        "jpeg"
+    } else if (&bytes[0..2] == b"II" || &bytes[0..2] == b"MM")
+        && matches!(
+            u16::from_le_bytes([bytes[2], bytes[3]]),
+            42 | 43 | 0x2a00 | 0x2b00
+        )
+    {
+        "tiff"
+    } else if &bytes[4..8] == b"ftyp" {
+        // An ISOBMFF file; AVIF says so in the major brand or the compatible list.
+        let end = bytes.len().min(64);
+        assert!(
+            bytes[8..end].windows(4).any(|b| b == b"avif"),
+            "{}: ftyp box names no avif brand",
+            path.display()
+        );
+        "avif"
+    } else {
+        panic!(
+            "{}: unrecognised container magic {:?}",
+            path.display(),
+            &bytes[0..12]
+        );
+    }
+}
+
 /// A file that starts with the little-endian TIFF magic ("II", 42 or 43).
 fn is_tiff(path: &Path) -> bool {
     let bytes = std::fs::read(path).unwrap();
@@ -5264,6 +5302,71 @@ fn roll_manifest_output_into_subdirectory_is_created() {
     );
 }
 
+#[test]
+fn a_roll_manifest_output_naming_the_out_dir_is_refused_not_written_beside_it() {
+    // `"output": "."` is the natural manifest spelling for "put it in the
+    // --out-dir", and `out_dir.join(".")` makes `<out-dir>/.`. `Path::file_name()`
+    // normalises the `.` away, so completing it wrote `<out-dir>.jpg` — every frame
+    // of the roll *outside* the directory the user named, at exit 0, with the report
+    // agreeing and `ensure_roll_targets_distinct` unable to see it (it only compares
+    // targets against each other). Refused at exit 2 instead.
+    let tmp = TempDir::new("roll-out-dir-dot");
+    let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
+    let hdr = fixture("hdr-48bit.tif");
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{ "frames": [ {{ "input": {hdr:?}, "output": "." }} ] }}"#,
+            hdr = hdr.to_str().unwrap(),
+        ),
+    );
+    let out_dir = tmp.path("out");
+    let (code, stdout, err) = run(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{stdout}\n{err}");
+    assert!(err.contains("names a directory"), "{err}");
+    // Attributed to the frame, with a remedy the manifest can act on — and *not*
+    // the convert-shaped one, which would tell a reader already running
+    // `hanten roll --out-dir` to use it. Asserting the losing wording is absent is
+    // the only check that can tell the two arms apart.
+    assert!(err.contains("frame "), "{err}");
+    assert!(err.contains(hdr.to_str().unwrap()), "{err}");
+    assert!(!err.contains("hanten roll --out-dir"), "{err}");
+    // The file that used to appear beside the out-dir must not exist.
+    assert!(
+        !tmp.path("out.tiff").exists() && !tmp.path("out.jpg").exists(),
+        "a sibling of the --out-dir was written: {err}"
+    );
+
+    // Falsifiable control: the same manifest with a file name works, and lands
+    // *inside* the out-dir.
+    let ok_manifest = write_file(
+        &tmp.path("frames-ok.json"),
+        &format!(
+            r#"{{ "frames": [ {{ "input": {hdr:?}, "output": "frame" }} ] }}"#,
+            hdr = hdr.to_str().unwrap(),
+        ),
+    );
+    let (code, stdout, err) = run(&[
+        "roll",
+        "--frames",
+        ok_manifest.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stdout}\n{err}");
+    assert!(is_tiff(&out_dir.join("frame.tiff")), "{err}");
+}
+
 // --- named output presets: film-master ---------------------------------------
 
 /// Read the interleaved f32 samples out of a float TIFF, together with the
@@ -8457,10 +8560,10 @@ fn every_tiff_preset_now_states_its_suffix_including_the_oldest_two() {
     // Before the SDR presets landed, `legacy` and `film-master` pinned no suffix,
     // so `hanten convert -o out.jpg` wrote a TIFF named `.jpg` with exit 0 and no
     // warning — the silently-misnamed-file mistake every newer preset guards.
-    // An **extensionless** path is refused too, deliberately (design-spec §5): a file
-    // called `positive` is as misleading about its contents as `positive.jpg`, and the
-    // diagnosis must be about the path rather than about `--output-preset legacy`,
-    // which the user need never have typed.
+    // An **extensionless** path is a different case and is *completed* rather than
+    // refused (design-spec §5); the diagnosis for a stated-but-wrong one must be
+    // about the path rather than about `--output-preset legacy`, which the user need
+    // never have typed.
     let tmp = TempDir::new("suffix-symmetry");
     let scan = fixture("hdr-48bit.tif");
     let convert = |out: &std::path::Path, argv: &[&str]| {
@@ -8479,12 +8582,28 @@ fn every_tiff_preset_now_states_its_suffix_including_the_oldest_two() {
         vec!["--output-preset", "legacy"],
         vec!["--output-preset", "film-master"],
     ] {
-        for name in ["out.jpg", "out"] {
-            let bad = tmp.path(name);
-            let (code, _stdout, err) = convert(&bad, &argv);
-            assert_eq!(code, 2, "{argv:?} must reject `{name}`: {err}");
-            assert!(!bad.exists(), "{argv:?} must write nothing for `{name}`");
-        }
+        let bad = tmp.path("out.jpg");
+        let (code, _stdout, err) = convert(&bad, &argv);
+        assert_eq!(code, 2, "{argv:?} must reject `out.jpg`: {err}");
+        assert!(!bad.exists(), "{argv:?} must write nothing for `out.jpg`");
+        // The extensionless path is the *other* half of the same table: it is
+        // completed to this preset's own container rather than refused.
+        let stem = tmp.path(if argv[1] == "legacy" {
+            "legacy-stem"
+        } else {
+            "master-stem"
+        });
+        let (code, _stdout, err) = convert(&stem, &argv);
+        assert_eq!(
+            code,
+            0,
+            "{argv:?} must complete `{}`: {err}",
+            stem.display()
+        );
+        assert!(
+            PathBuf::from(format!("{}.tiff", stem.display())).exists(),
+            "{argv:?} must complete to its own container: {err}"
+        );
         // The positive control: without it, a rule that rejected *every* path would
         // pass the assertions above.
         let good = tmp.path(if argv[1] == "legacy" {
@@ -8497,8 +8616,17 @@ fn every_tiff_preset_now_states_its_suffix_including_the_oldest_two() {
         assert!(good.exists(), "{argv:?} must write the file");
     }
     // The default path's diagnosis names the *default preset* and the requirement,
-    // never a flag nobody passed.
-    let (_code, _stdout, err) = convert(&tmp.path("out"), &[]);
+    // never a flag nobody passed. `run_exact`, because this is about what a bare
+    // invocation resolves — `run` would inject `--output-preset legacy` on a `.tiff`
+    // path and accept it.
+    let (_code, _stdout, err) = run_exact(&[
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        tmp.path("out.tiff").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.6,0.5",
+    ]);
     assert!(err.contains(".jpg"), "{err}");
     assert!(err.contains("gain-map-hdr"), "{err}");
     assert!(
@@ -8713,6 +8841,213 @@ fn roll_checks_explicit_manifest_suffixes_and_derives_per_frame_preset_names() {
             .any(|w| w.as_str().unwrap_or_default().contains("output.preset")),
         "a per-frame preset override must still warn: {report}"
     );
+
+    // An explicit path stating **no** suffix is completed from the frame's own
+    // resolved container, exactly as a `convert` path is — the manifest shares the
+    // whole rule, not just its refusing half.
+    let bare = manifest(&format!(
+        r#"{{"frames":[{{"input":"{}","output":"stem-only"}}]}}"#,
+        input.display()
+    ));
+    let (code, stdout, err) = roll(&bare);
+    assert_eq!(code, 0, "{err}");
+    assert!(out_dir.join("stem-only.jpg").exists(), "{err}");
+    assert!(!out_dir.join("stem-only").exists(), "{err}");
+    let report = json(&stdout);
+    assert_eq!(
+        report["frames"][0]["output"],
+        out_dir.join("stem-only.jpg").to_str().unwrap(),
+        "the roll report must name the completed path: {report}"
+    );
+}
+
+#[test]
+fn a_bare_output_stem_takes_the_presets_container_and_everything_names_it() {
+    // The change this task ships: `-o out` no longer has to know the container.
+    // Asserted per container, and on *all four* things that derive from the path —
+    // the file written, the sidecar, the report, and what is left absent.
+    let tmp = TempDir::new("bare-output-stem");
+    let input = fixture("hdr-48bit.tif");
+    for (preset, ext, container) in [
+        // `run_exact` for the no-preset case: this is a test *about* the default, so
+        // it must not get the harness's `--output-preset legacy` injection.
+        (None, "jpg", "jpeg"),
+        (Some("display-p3"), "tiff", "tiff"),
+        (Some("hdr-pq"), "avif", "avif"),
+        (Some("film-master"), "tiff", "tiff"),
+    ] {
+        let stem = tmp.path(preset.unwrap_or("default"));
+        let mut argv: Vec<&str> = vec![
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            stem.to_str().unwrap(),
+            "--film-base",
+            "1,1,1",
+        ];
+        if let Some(name) = preset {
+            argv.extend_from_slice(&["--output-preset", name]);
+        }
+        let (code, stdout, err) = run_exact(&argv);
+        assert_eq!(code, 0, "{preset:?}: {err}");
+        let written = PathBuf::from(format!("{}.{ext}", stem.display()));
+        assert!(
+            written.exists(),
+            "{preset:?}: {} missing",
+            written.display()
+        );
+        assert!(
+            !stem.exists(),
+            "{preset:?}: the stem itself must not be written"
+        );
+        assert!(
+            sidecar_of(&written).exists(),
+            "{preset:?}: the sidecar must sit beside the completed path, not the stem"
+        );
+        assert!(
+            !sidecar_of(&stem).exists(),
+            "{preset:?}: no sidecar may be written for the stem"
+        );
+        // The name is only half of it: the bytes must be the container the name
+        // claims. Nothing in the type system couples `cli::container_for` to the
+        // render dispatch in `convert_frame`, so this is the coupling.
+        assert_eq!(
+            sniff_container(&written),
+            container,
+            "{preset:?}: {} is named .{ext} but its bytes are not {container}",
+            written.display()
+        );
+        let report = json(&stdout);
+        assert_eq!(
+            report["output"],
+            written.to_str().unwrap(),
+            "{preset:?}: the report must name what was written"
+        );
+    }
+}
+
+#[test]
+fn an_output_path_naming_a_directory_is_refused_not_completed_to_a_sibling() {
+    // `-o positives/` is the muscle-memory mistake — roll's sibling flag is spelled
+    // `--out-dir positives/`. `Path::file_name()` normalises the trailing separator
+    // away, so completing it would write `positives.jpg` *next to* the directory.
+    // Refused at exit 2 instead; no byte that decides *which file* is named may be
+    // altered or dropped.
+    //
+    // Both spellings, because they are one hole: `dir/.` escapes a trailing-separator
+    // test but `file_name()` normalises its `.` away just the same.
+    let tmp = TempDir::new("names-a-directory");
+    let input = fixture("hdr-48bit.tif");
+    let dir = tmp.path("dir");
+    std::fs::create_dir_all(&dir).unwrap();
+    for given in [
+        format!("{}/", dir.display()),
+        format!("{}/.", dir.display()),
+    ] {
+        let (code, _stdout, err) = run_exact(&[
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            &given,
+            "--film-base",
+            "1,1,1",
+        ]);
+        assert_eq!(code, 2, "{given}: {err}");
+        assert!(err.contains("names a directory"), "{given}: {err}");
+        assert!(
+            !tmp.path("dir.jpg").exists(),
+            "{given}: a sibling of the directory was written: {err}"
+        );
+    }
+
+    // Falsifiable control: the same path without the separator is a stem and works.
+    let stem = tmp.path("stem");
+    let (code, _stdout, err) = run_exact(&[
+        "convert",
+        input.to_str().unwrap(),
+        "-o",
+        stem.to_str().unwrap(),
+        "--film-base",
+        "1,1,1",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(tmp.path("stem.jpg").exists(), "{err}");
+}
+
+#[test]
+fn a_stated_suffix_survives_verbatim_and_a_dotted_stem_keeps_its_dot() {
+    // The two halves completion must not disturb: a spelling the container accepts
+    // is never normalised, and a dot-segment no preset claims is a stem.
+    let tmp = TempDir::new("stated-suffix");
+    let input = fixture("hdr-48bit.tif");
+    let convert = |given: &Path| -> (i32, String, String) {
+        run_exact(&[
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            given.to_str().unwrap(),
+            "--film-base",
+            "1,1,1",
+        ])
+    };
+
+    // `.jpeg` is the non-canonical spelling: nc writes `.jpg` when it chooses, and
+    // must not rewrite the user's choice to match.
+    let stated = tmp.path("stated.jpeg");
+    let (code, stdout, err) = convert(&stated);
+    assert_eq!(code, 0, "{err}");
+    assert!(stated.exists(), "{err}");
+    assert!(
+        !tmp.path("stated.jpg").exists(),
+        "the spelling was rewritten"
+    );
+    assert_eq!(json(&stdout)["output"], stated.to_str().unwrap());
+
+    // `.v2` is not a container nc knows, so the whole thing is the stem.
+    let dotted = tmp.path("scan.v2");
+    let (code, stdout, err) = convert(&dotted);
+    assert_eq!(code, 0, "{err}");
+    let written = tmp.path("scan.v2.jpg");
+    assert!(written.exists(), "{err}");
+    assert!(!tmp.path("scan.jpg").exists(), "the stem's dot was eaten");
+    assert_eq!(json(&stdout)["output"], written.to_str().unwrap());
+
+    // And a *known* spelling the container refuses is still the usage error it has
+    // always been — completion never rescues a stated suffix.
+    let (code, _stdout, err) = convert(&tmp.path("wrong.tiff"));
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("gain-map-hdr"), "{err}");
+}
+
+#[test]
+fn the_write_target_guard_sees_the_completed_path() {
+    // Ordering: the path is resolved *before* the collision check, so a
+    // `--report-file` that only clashes once the suffix is completed is still
+    // caught. Resolving after the guard would let the report be overwritten by the
+    // image (or vice versa) with every check green.
+    let tmp = TempDir::new("completed-target-guard");
+    let input = fixture("hdr-48bit.tif");
+    let stem = tmp.path("clash");
+    let convert = |report_file: &Path| -> (i32, String, String) {
+        run_exact(&[
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            stem.to_str().unwrap(),
+            "--film-base",
+            "1,1,1",
+            "--report-file",
+            report_file.to_str().unwrap(),
+        ])
+    };
+    let (code, _stdout, err) = convert(&tmp.path("clash.jpg"));
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--report-file"), "{err}");
+    // Falsifiable: the *stem* is not a write target, so pointing the report there
+    // is fine — the guard is reacting to the completed path, not to any overlap.
+    let (code, _stdout, err) = convert(&stem);
+    assert_eq!(code, 0, "{err}");
+    assert!(tmp.path("clash.jpg").exists(), "{err}");
 }
 
 #[test]
