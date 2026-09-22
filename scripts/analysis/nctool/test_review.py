@@ -288,7 +288,8 @@ class TestOutputDirectory(unittest.TestCase):
             # check reported "build the binary first" there instead.
             args = argparse.Namespace(
                 matrix=str(write(MATRIX)), fixtures="scripts/sigmoid-baseline/fixtures.json",
-                frames=None, nc="/nonexistent/nc", asset_root="../nc-assets",
+                frames=None, nc="/nonexistent/nc", build=None,
+                asset_root="../nc-assets",
                 out=str(target), no_metrics=True, force=False)
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
@@ -426,3 +427,847 @@ class TestShippedMatrix(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+BUILDS = [
+    {"id": "before", "label": "shipped", "nc": "/bin/before"},
+    {"id": "after", "label": "candidate", "nc": "/bin/after"},
+]
+
+
+class TestBuildDeclaration(unittest.TestCase):
+    def test_reads_the_builds_in_order(self):
+        matrix = load(builds=BUILDS)
+        self.assertEqual([b["id"] for b in matrix["builds"]], ["before", "after"])
+        self.assertEqual(matrix["builds"][0]["label"], "shipped")
+
+    def test_a_build_falls_back_to_its_id_for_a_label(self):
+        self.assertEqual(load(builds=[{"id": "b", "nc": "/x"}])["builds"][0]["label"], "b")
+
+    def test_refuses_two_builds_with_one_id(self):
+        with self.assertRaisesRegex(review.ReviewError, "two entries with id"):
+            load(builds=[{"id": "b", "nc": "/x"}, {"id": "b", "nc": "/y"}])
+
+    def test_refuses_an_empty_build_list(self):
+        with self.assertRaisesRegex(review.ReviewError, "at least one build"):
+            load(builds=[])
+
+    # The path is the whole point of declaring a build; a build without one names
+    # nothing, and defaulting it to `--nc` would make both arms the same binary.
+    def test_refuses_a_build_that_names_no_binary(self):
+        with self.assertRaisesRegex(review.ReviewError, r"builds\[0\].nc"):
+            load(builds=[{"id": "b"}])
+
+    def test_refuses_a_build_id_that_would_escape_the_output_directory(self):
+        with self.assertRaisesRegex(review.ReviewError, "not filename-safe"):
+            load(builds=[{"id": "../b", "nc": "/x"}])
+
+    def test_refuses_a_mistyped_build_key(self):
+        with self.assertRaisesRegex(review.ReviewError, "unknown key binary"):
+            load(builds=[{"id": "b", "binary": "/x"}])
+
+    def test_a_matrix_without_builds_declares_none(self):
+        self.assertEqual(load()["builds"], [])
+
+
+class TestConfigBuildSubset(unittest.TestCase):
+    def one(self, builds):
+        return load(builds=BUILDS,
+                    configs=[{"id": "a", "args": [], "builds": builds}])
+
+    def test_a_config_may_name_a_subset(self):
+        self.assertEqual([c["id"] for c in self.one(["before"])["configs"]],
+                         ["a@before"])
+
+    def test_refuses_a_build_the_matrix_does_not_declare(self):
+        with self.assertRaisesRegex(review.ReviewError, "no such build: durring"):
+            self.one(["durring"])
+
+    def test_refuses_an_empty_subset(self):
+        with self.assertRaisesRegex(review.ReviewError, "at least one build"):
+            self.one([])
+
+    def test_refuses_a_build_named_twice(self):
+        with self.assertRaisesRegex(review.ReviewError, "more than once"):
+            self.one(["before", "before"])
+
+    # Naming a build in a matrix that declares none is a half-finished edit: the
+    # config would otherwise render once, under a name nothing defines.
+    def test_refuses_a_subset_when_the_matrix_declares_no_builds(self):
+        with self.assertRaisesRegex(review.ReviewError, "declares no `builds`"):
+            load(configs=[{"id": "a", "args": [], "builds": ["before"]}])
+
+
+class TestBuildAxis(unittest.TestCase):
+    """The expansion of builds x configs into the flat list the app renders."""
+
+    def test_a_matrix_with_no_builds_passes_through_untouched(self):
+        configs = load()["configs"]
+        self.assertEqual([c["id"] for c in configs], ["generic", "stock"])
+        self.assertEqual([c["label"] for c in configs], ["generic", "stock"])
+        self.assertEqual([c["build"] for c in configs], [None, None])
+
+    # Builds nest *inside* configs so the two arms of a before/after are adjacent:
+    # `h`/`l` in the app then steps between the cells being compared, which is the
+    # gesture the comparison is made of.
+    def test_builds_nest_inside_configs(self):
+        self.assertEqual(
+            [c["id"] for c in load(builds=BUILDS)["configs"]],
+            ["generic@before", "generic@after", "stock@before", "stock@after"])
+
+    def test_composes_the_label_from_both_names(self):
+        self.assertEqual(load(builds=BUILDS)["configs"][0]["label"],
+                         "generic · shipped")
+
+    def test_carries_the_build_each_cell_renders_through(self):
+        cell = load(builds=BUILDS)["configs"][1]
+        self.assertEqual(cell["build"]["id"], "after")
+        self.assertEqual(cell["build"]["nc"], "/bin/after")
+
+    def test_the_args_come_from_the_config_not_the_build(self):
+        for cell in load(builds=BUILDS)["configs"][:2]:
+            self.assertEqual(cell["args"], ["--preset", "characteristic-generic"])
+
+    # The join is injective because `@` is outside `SAFE_ID`: an author's id can
+    # never contain one, so a composed id splits exactly one way. That is what
+    # keeps `<config>@<build>` from reproducing the `<frame>-<config>` ambiguity
+    # `colliding_stems` exists to refuse.
+    def test_an_author_id_can_never_contain_the_join(self):
+        self.assertNotRegex(review.BUILD_JOIN, review.SAFE_ID.pattern)
+        with self.assertRaisesRegex(review.ReviewError, "not filename-safe"):
+            load(configs=[{"id": "a@before", "args": []}])
+
+    # The join removes the config/build ambiguity but not the frame/config one, so
+    # the check still has work to do on the composed ids.
+    def test_the_collision_check_sees_the_composed_ids(self):
+        self.assertEqual(
+            review.colliding_stems(["F1"], [c["id"] for c in load(builds=BUILDS)["configs"]]),
+            [])
+        self.assertEqual(
+            review.colliding_stems(["F1", "F1-generic"], ["generic-x@before", "x@before"]),
+            ["F1/generic-x@before and F1-generic/x@before would both write "
+             "F1-generic-x@before"])
+
+
+class TestBuildOverrides(unittest.TestCase):
+    def test_reads_an_id_and_a_path(self):
+        self.assertEqual(review.parse_build_overrides(["after=/bin/x"]),
+                         {"after": "/bin/x"})
+
+    def test_no_overrides_at_all(self):
+        self.assertEqual(review.parse_build_overrides(None), {})
+
+    def test_refuses_a_form_with_no_path(self):
+        for bad in ("after", "after=", "=/bin/x"):
+            with self.assertRaisesRegex(review.ReviewError, "must be <build id>="):
+                review.parse_build_overrides([bad])
+
+    def test_refuses_one_id_named_twice(self):
+        with self.assertRaisesRegex(review.ReviewError, "twice"):
+            review.parse_build_overrides(["a=/x", "a=/y"])
+
+
+class TestResolveBinaries(unittest.TestCase):
+    """The pre-flight: every binary is checked before a single cell renders."""
+
+    def fake(self, banner: str = "hanten 0.1.0", name: str = "fake") -> str:
+        directory = Path(tempfile.mkdtemp(prefix="nc-review-bin-"))
+        path = directory / name
+        path.write_text(f"#!/bin/sh\necho '{banner}'\n", encoding="utf-8")
+        path.chmod(0o755)
+        return str(path)
+
+    def test_resolves_one_unnamed_build_when_the_matrix_declares_none(self):
+        binary = self.fake()
+        resolved = review.resolve_binaries([], {}, binary)
+        self.assertEqual(len(resolved), 1)
+        self.assertIsNone(resolved[0]["id"])
+        self.assertEqual(resolved[0]["nc"], str(Path(binary).resolve()))
+
+    def test_falls_back_to_the_default_binary(self):
+        with self.assertRaisesRegex(review.ReviewError, review.DEFAULT_NC):
+            review.resolve_binaries([], {}, None)
+
+    # The reference build this axis exists to compare against is a git-tagged
+    # binary, and a tag old enough to be worth comparing prints `nc`. A pre-flight
+    # that demanded `hanten` would reject exactly that binary.
+    def test_accepts_the_pre_rename_banner(self):
+        binary = self.fake(banner="nc 0.1.0")
+        self.assertEqual(len(review.resolve_binaries(
+            [{"id": "old", "label": "old", "note": None, "nc": binary}], {}, None)), 1)
+
+    def test_refuses_something_that_is_not_this_projects_cli(self):
+        binary = self.fake(banner="netcat")
+        with self.assertRaisesRegex(review.ReviewError, "not this project's CLI"):
+            review.resolve_binaries(
+                [{"id": "old", "label": "old", "note": None, "nc": binary}], {}, None)
+
+    def test_names_the_build_whose_binary_is_missing(self):
+        with self.assertRaisesRegex(review.ReviewError, "build 'after'"):
+            review.resolve_binaries(
+                [{"id": "after", "label": "a", "note": None, "nc": "/nonexistent/x"}],
+                {}, None)
+
+    def test_an_override_repoints_one_build(self):
+        binary, other = self.fake(name="a"), self.fake(name="b")
+        resolved = review.resolve_binaries(
+            [{"id": "after", "label": "a", "note": None, "nc": binary}],
+            {"after": other}, None)
+        self.assertEqual(resolved[0]["nc"], str(Path(other).resolve()))
+
+    def test_records_each_binarys_digest(self):
+        binary = self.fake()
+        resolved = review.resolve_binaries([], {}, binary)
+        self.assertRegex(resolved[0]["digest"], r"^[0-9a-f]{64}$")
+
+
+class TestIndexedSources(unittest.TestCase):
+    """Where an earlier set points, read back off a document this run did not write.
+
+    That is the whole difficulty: every other consumer here reads `build_review`'s
+    own output, so a compare written against *that* shape silently ignores half the
+    schema. The cost of a miss is one-sided — it lands on the branch that spares the
+    stale set and tells the user it still describes its own pixels.
+    """
+
+    def setUp(self):
+        self.base = Path(tempfile.mkdtemp(prefix="nc-review-index-")).resolve()
+
+    def index(self, doc) -> tuple[set[str], bool]:
+        return review.indexed_sources(doc, self.base)
+
+    def doc(self, renditions) -> dict:
+        return {"images": [{"id": "F1", "renditions": renditions}]}
+
+    def key(self, name: str) -> str:
+        return review.dest_key((self.base / name).resolve())
+
+    def test_reads_the_object_shape(self):
+        found, complete = self.index(self.doc({"a": {"src": "F1-a.jpg"}}))
+        self.assertEqual(found, {self.key("F1-a.jpg")})
+        self.assertTrue(complete)
+
+    # SCHEMA.md calls the bare string the common case. Reading only the object form
+    # made the headline spelling invisible to the whole check.
+    def test_reads_the_string_shorthand(self):
+        found, complete = self.index(self.doc({"a": "F1-a.jpg"}))
+        self.assertEqual(found, {self.key("F1-a.jpg")})
+        self.assertTrue(complete)
+
+    # `src` is relative to `review.json`, not a bare filename, and a merged set
+    # legitimately points at a sibling folder.
+    def test_a_path_qualified_src_resolves_to_the_same_destination(self):
+        plain = self.index(self.doc({"a": "F1-a.jpg"}))[0]
+        for spelling in ("./F1-a.jpg", "renders/../F1-a.jpg",
+                         str(self.base / "F1-a.jpg")):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(self.index(self.doc({"a": spelling}))[0], plain)
+
+    def test_a_sibling_folder_is_not_the_same_destination(self):
+        self.assertNotEqual(self.index(self.doc({"a": "renders/F1-a.jpg"}))[0],
+                            self.index(self.doc({"a": "F1-a.jpg"}))[0])
+
+    # `colliding_stems` already casefolds and says why; this is the second place two
+    # spellings denote one file, and it reaches the plain rebuild loop rather than a
+    # hand-authored set.
+    def test_two_spellings_of_one_file_are_one_destination(self):
+        self.assertEqual(self.index(self.doc({"a": "F1-Dflt.jpg"}))[0],
+                         self.index(self.doc({"a": "F1-dflt.jpg"}))[0])
+
+    def test_an_empty_but_well_formed_set_is_read_completely(self):
+        self.assertEqual(self.index({"images": []}), (set(), True))
+        self.assertEqual(self.index(self.doc({})), (set(), True))
+
+    # Everything below says "I recognised nothing", which is not "there was
+    # nothing" — the caller may not vouch for the set on any of them.
+    def test_a_file_that_could_not_be_parsed_is_not_read_completely(self):
+        self.assertEqual(self.index({}), (set(), False))
+
+    def test_a_shape_the_schema_does_not_have_is_not_read_completely(self):
+        self.assertFalse(self.index({"images": "F1"})[1])
+        self.assertFalse(self.index({"images": [{"id": "F1", "renditions": []}]})[1])
+        self.assertFalse(self.index(self.doc({"a": 7}))[1])
+        self.assertFalse(self.index(self.doc({"a": {"metrics": "x.json"}}))[1])
+
+    def test_one_unreadable_rendition_does_not_hide_the_readable_ones(self):
+        found, complete = self.index(self.doc({"a": "F1-a.jpg", "b": 7}))
+        self.assertEqual(found, {self.key("F1-a.jpg")})
+        self.assertFalse(complete)
+
+
+class TestNameSome(unittest.TestCase):
+    def test_states_them_all_while_there_are_few(self):
+        self.assertEqual(review.name_some(["a", "b"]), "a, b")
+
+    # Five configs over fourteen frames is seventy destinations on one error line.
+    def test_caps_a_long_list_and_says_how_many_it_left_out(self):
+        self.assertEqual(review.name_some([str(n) for n in range(8)]),
+                         "0, 1, 2, 3, 4, and 3 more")
+
+
+class TestBuildArguments(unittest.TestCase):
+    """The pure-argument half: faults in what was asked, before any filesystem.
+
+    Exercised end to end as well (`TestBuildAxisEndToEnd`), because these rules
+    only work if they run before the coarser gates — and a test calling them
+    directly never sees the ordering.
+    """
+
+    BUILDS = [{"id": "after", "label": "a", "note": None, "nc": "/x"}]
+
+    def test_refuses_an_override_for_a_build_that_does_not_exist(self):
+        with self.assertRaisesRegex(review.ReviewError, "no such build: durring"):
+            review.check_build_arguments(self.BUILDS, {"durring": "/x"}, None)
+
+    def test_says_so_when_the_matrix_declares_no_builds_at_all(self):
+        with self.assertRaisesRegex(review.ReviewError, "declares no `builds`"):
+            review.check_build_arguments([], {"durring": "/x"}, None)
+
+    # `--nc` names one binary for the whole run, which is exactly what a build axis
+    # replaces; accepting both would leave it ambiguous which one a cell used.
+    def test_refuses_nc_beside_a_declared_build_axis(self):
+        with self.assertRaisesRegex(review.ReviewError, "--build <id>=<path>"):
+            review.check_build_arguments(self.BUILDS, {}, "/some/hanten")
+
+    # The contradiction is the more specific fault, so it must not be pre-empted by
+    # an override that happens to be wrong on the same line.
+    def test_the_nc_contradiction_is_diagnosed_before_a_bad_override(self):
+        with self.assertRaisesRegex(review.ReviewError, "--build <id>=<path>"):
+            review.check_build_arguments(self.BUILDS, {"durring": "/x"}, "/some/hanten")
+
+    def test_says_nothing_about_a_command_line_that_asked_for_nothing(self):
+        self.assertIsNone(review.check_build_arguments([], {}, "/some/hanten"))
+        self.assertIsNone(review.check_build_arguments(self.BUILDS, {"after": "/y"}, None))
+
+
+class TestIdentity(unittest.TestCase):
+    IDENTITY = {"nc_version": "0.1.0", "git_commit": "abc123", "git_dirty": False,
+                "pipeline_version": 5, "target": "aarch64-apple-darwin",
+                "params_hash": "deadbeef"}
+
+    # `params_hash` identifies the recipe, which differs from config to config by
+    # design — keeping it would make every second cell of a build look like a
+    # different binary.
+    def test_the_recipe_hash_is_not_part_of_the_build(self):
+        self.assertNotIn("params_hash", review.build_identity(self.IDENTITY))
+        self.assertEqual(review.build_identity(self.IDENTITY)["git_commit"], "abc123")
+
+    def test_a_report_that_identifies_nothing(self):
+        self.assertIsNone(review.build_identity(None))
+        self.assertIsNone(review.build_identity({}))
+        self.assertIsNone(review.build_identity("2664a0d"))
+
+    def test_reads_the_report_first(self):
+        directory = Path(tempfile.mkdtemp(prefix="nc-review-cell-"))
+        dest = directory / "F1-a.tiff"
+        dest.with_name(dest.name + ".json").write_text(
+            json.dumps({"meta": {"git_commit": "sidecar"}}), encoding="utf-8")
+        self.assertEqual(
+            review.cell_identity({"identity": {"git_commit": "report"}}, dest),
+            {"git_commit": "report"})
+
+    # The two are the same value by construction, and no binary is known to write
+    # one without the other — the fallback is kept because it costs a line, not
+    # because a version needing it was established (`cell_identity`).
+    def test_falls_back_to_the_sidecar(self):
+        directory = Path(tempfile.mkdtemp(prefix="nc-review-cell-"))
+        dest = directory / "F1-a.tiff"
+        dest.with_name(dest.name + ".json").write_text(
+            json.dumps({"meta": {"git_commit": "sidecar"}, "params": {}}),
+            encoding="utf-8")
+        self.assertEqual(review.cell_identity({}, dest), {"git_commit": "sidecar"})
+
+    def test_a_cell_that_identifies_itself_nowhere(self):
+        directory = Path(tempfile.mkdtemp(prefix="nc-review-cell-"))
+        self.assertIsNone(review.cell_identity({}, directory / "F1-a.tiff"))
+
+
+class TestRecordIdentity(unittest.TestCase):
+    BUILD = {"id": "after", "label": "a", "nc": "/bin/after"}
+
+    def record(self, identities, identity):
+        directory = Path(tempfile.mkdtemp(prefix="nc-review-cell-"))
+        return review.record_identity(identities, self.BUILD, "F1/a",
+                                      {"identity": identity},
+                                      directory / "F1-a.tiff")
+
+    def test_the_first_cell_establishes_the_build(self):
+        identities: dict = {}
+        self.assertIsNone(self.record(identities, {"git_commit": "aaa"}))
+        self.assertEqual(identities["after"], {"git_commit": "aaa"})
+
+    def test_a_later_cell_that_agrees_says_nothing(self):
+        identities = {"after": {"git_commit": "aaa"}}
+        self.assertIsNone(self.record(identities, {"git_commit": "aaa"}))
+
+    # A run fault, not a cell fault: the binary changed under the run, so every
+    # cell already rendered under that name is suspect too.
+    def test_a_later_cell_that_disagrees_is_reported(self):
+        identities = {"after": {"git_commit": "aaa"}}
+        message = self.record(identities, {"git_commit": "bbb"})
+        self.assertIn("'after'", message)
+        self.assertIn("F1/a", message)
+        self.assertIn("aaa", message)
+        self.assertIn("bbb", message)
+
+    def test_a_cell_that_identifies_itself_nowhere_is_not_drift(self):
+        identities = {"after": {"git_commit": "aaa"}}
+        self.assertIsNone(self.record(identities, None))
+
+
+class TestDistinctnessWarnings(unittest.TestCase):
+    # A warning and not an error: the task's own acceptance check is that the same
+    # binary declared twice yields byte-identical cells, which a generator that
+    # refused it could not perform.
+    def test_two_builds_that_are_one_file(self):
+        warnings = review.duplicate_binary_warnings(
+            [{"id": "before", "digest": "a" * 64}, {"id": "after", "digest": "a" * 64}])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("byte-identical", warnings[0])
+
+    def test_two_builds_that_are_two_files(self):
+        self.assertEqual(review.duplicate_binary_warnings(
+            [{"id": "before", "digest": "a" * 64}, {"id": "after", "digest": "b" * 64}]), [])
+
+    # The realistic case is two dirty builds of one commit — the shape a
+    # patched-versus-shipped spike takes.
+    def test_different_binaries_describing_themselves_identically(self):
+        warnings = review.indistinguishable_identity_warnings([
+            {"id": "before", "digest": "a" * 64, "identity": {"git_commit": "aaa"}},
+            {"id": "after", "digest": "b" * 64, "identity": {"git_commit": "aaa"}}])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("cannot tell them apart", warnings[0])
+
+    # Already reported as one file by `duplicate_binary_warnings`; saying they are
+    # "different binaries" here too would be both noise and false.
+    def test_says_nothing_about_two_builds_that_are_one_file(self):
+        self.assertEqual(review.indistinguishable_identity_warnings([
+            {"id": "before", "digest": "a" * 64, "identity": {"git_commit": "aaa"}},
+            {"id": "after", "digest": "a" * 64, "identity": {"git_commit": "aaa"}}]), [])
+
+    def test_says_nothing_when_the_identities_differ(self):
+        self.assertEqual(review.indistinguishable_identity_warnings([
+            {"id": "before", "digest": "a" * 64, "identity": {"git_commit": "aaa"}},
+            {"id": "after", "digest": "b" * 64, "identity": {"git_commit": "bbb"}}]), [])
+
+    def test_says_nothing_about_a_build_that_identified_itself_nowhere(self):
+        self.assertEqual(review.indistinguishable_identity_warnings([
+            {"id": "before", "digest": "a" * 64, "identity": None},
+            {"id": "after", "digest": "b" * 64, "identity": None}]), [])
+
+
+class TestProducer(unittest.TestCase):
+    IDENTITY = {"nc_version": "0.1.0", "git_commit": "abc123", "pipeline_version": 5}
+
+    def test_a_cell_with_no_build_carries_no_producer(self):
+        self.assertIsNone(review.producer_block(None, self.IDENTITY))
+        self.assertIsNone(review.producer_block(
+            {"id": None, "label": None, "note": None}, self.IDENTITY))
+
+    # Tagged so `analysis/review-reference-cells` adds a variant rather than a
+    # second block.
+    def test_states_its_kind(self):
+        block = review.producer_block(
+            {"id": "after", "label": "candidate", "note": None}, self.IDENTITY)
+        self.assertEqual(block["kind"], "hanten")
+        self.assertEqual(block["label"], "candidate")
+        self.assertNotIn("note", block)
+
+    # Derived from what the binary reported. The matrix names a build; it does not
+    # get to say what that build is.
+    def test_carries_the_identity_the_binary_reported(self):
+        block = review.producer_block(
+            {"id": "after", "label": "c", "note": "n"}, self.IDENTITY)
+        self.assertEqual(block["git_commit"], "abc123")
+        self.assertEqual(block["note"], "n")
+
+    def test_a_build_that_rendered_nothing_still_declares_itself(self):
+        block = review.producer_block({"id": "after", "label": "c", "note": None}, None)
+        self.assertEqual(block, {"kind": "hanten", "label": "c"})
+
+    # The block spreads the identity into `review.json`, so the key set is filtered
+    # *here* rather than only by whoever calls it. `params_hash` is the realistic
+    # one — it differs per cell, so a leak would make every second cell of a build
+    # look like a different binary.
+    def test_nothing_the_key_set_does_not_name_reaches_review_json(self):
+        block = review.producer_block(
+            {"id": "after", "label": "c", "note": None},
+            {**self.IDENTITY, "params_hash": "h0", "surprise": "leak"})
+        self.assertNotIn("params_hash", block)
+        self.assertNotIn("surprise", block)
+        self.assertEqual(block["git_commit"], "abc123")
+
+    def test_filtering_twice_is_the_same_as_filtering_once(self):
+        raw = {**self.IDENTITY, "params_hash": "h0"}
+        build = {"id": "after", "label": "c", "note": None}
+        self.assertEqual(review.producer_block(build, raw),
+                         review.producer_block(build, review.build_identity(raw)))
+
+
+class TestReviewDocumentBuilds(unittest.TestCase):
+    IMAGES = [{"id": "E1", "label": "E1", "renditions": {}}]
+
+    # The whole point of the additive shape: every set rendered before this existed
+    # re-renders byte-identically, which is why `REVIEW_SCHEMA` stays 1.
+    def test_a_matrix_with_no_builds_produces_the_document_it_always_did(self):
+        doc = review.build_review(load(), self.IMAGES)
+        self.assertEqual(doc["configs"],
+                         [{"id": "generic", "label": "generic"},
+                          {"id": "stock", "label": "stock"}])
+
+    def test_each_config_carries_its_builds_provenance(self):
+        doc = review.build_review(load(builds=BUILDS), self.IMAGES,
+                                  {"before": {"git_commit": "aaa"},
+                                   "after": {"git_commit": "bbb"}})
+        self.assertEqual([c["id"] for c in doc["configs"]],
+                         ["generic@before", "generic@after",
+                          "stock@before", "stock@after"])
+        self.assertEqual(doc["configs"][0]["producer"]["git_commit"], "aaa")
+        self.assertEqual(doc["configs"][1]["producer"]["git_commit"], "bbb")
+
+
+#: A stand-in for `hanten` that identifies itself however the test asks.
+#:
+#: Driven through `cmd_generate` rather than through the helpers, because the
+#: ordering is half of what is being tested: the pre-flight runs before any render,
+#: and drift is detected between two renders of one build.
+FAKE_NC = '''#!{python}
+import json, pathlib, sys
+here = pathlib.Path(__file__).resolve().parent
+if "--version" in sys.argv:
+    print("hanten 0.1.0")
+    raise SystemExit(0)
+if "--strict" in sys.argv:
+    # The shape measured off the release binary: `--strict` gates *after*
+    # encoding, so the image and its sidecar are on disk and the exit is still 1.
+    # The counter is deliberately untouched — this call renders no identity.
+    failed = pathlib.Path(sys.argv[sys.argv.index("-o") + 1])
+    failed.write_bytes(b"II*\\x00")
+    failed.with_name(failed.name + ".json").write_text(
+        json.dumps({{"meta": {{}}, "params": {{}}}}))
+    print("error: --strict: 1 warning(s) present (see report)", file=sys.stderr)
+    raise SystemExit(1)
+commits = {commits!r}
+counter = here / "{name}.count"
+index = int(counter.read_text()) if counter.exists() else 0
+counter.write_text(str(index + 1))
+dest = pathlib.Path(sys.argv[sys.argv.index("-o") + 1])
+dest.write_bytes(b"II*\\x00")
+identity = {{"nc_version": "0.1.0", "git_dirty": False, "pipeline_version": 5,
+            "target": "t", "git_commit": commits[min(index, len(commits) - 1)],
+            "params_hash": "h%d" % index}}
+dest.with_name(dest.name + ".json").write_text(
+    json.dumps({{"meta": identity, "params": {{}}}}))
+print(json.dumps({{"identity": identity, "output_stats": {{"mean": [1.0, 1.0, 1.0]}}}}))
+'''
+
+
+class TestBuildAxisEndToEnd(unittest.TestCase):
+    """`cmd_generate` over fake binaries: no assets, no real nc, no venv."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="nc-review-e2e-"))
+        (self.root / "assets" / "rolls" / "R").mkdir(parents=True)
+        (self.root / "assets" / "manifest.json").write_text("{}", encoding="utf-8")
+        (self.root / "assets" / "rolls" / "R" / "f1.tif").write_bytes(b"II*\x00")
+        (self.root / "fixtures.json").write_text(json.dumps(
+            {"rolls": {"R": {"dmin": [0.9, 0.9, 0.9]}},
+             "frames": {"F1": {"roll": "R", "file": "f1.tif"},
+                        "F2": {"roll": "R", "file": "f1.tif"}}}), encoding="utf-8")
+
+    def binary(self, name: str, *commits: str) -> str:
+        path = self.root / name
+        path.write_text(FAKE_NC.format(python=sys.executable, commits=list(commits),
+                                       name=name), encoding="utf-8")
+        path.chmod(0o755)
+        return str(path)
+
+    def run_generate(self, builds, nc=None, build=None, frames=None, out=None,
+                     **matrix) -> tuple[int, str]:
+        """One `cmd_generate` run. `builds=None` is the matrix with no build axis."""
+        path = write({**MATRIX, "output_preset": "legacy", "common_args": [],
+                      "rolls": {"R": {}},
+                      "configs": [{"id": "dflt", "args": []}],
+                      "builds": builds, **matrix})
+        args = argparse.Namespace(
+            matrix=str(path), fixtures=str(self.root / "fixtures.json"),
+            frames=frames, nc=nc, build=build,
+            asset_root=str(self.root / "assets"),
+            out=out or str(self.root / "out"),
+            no_metrics=True, force=False)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = review.cmd_generate(args)
+        return code, err.getvalue()
+
+    def review_json(self) -> dict:
+        return json.loads((self.root / "out" / "review.json").read_text(encoding="utf-8"))
+
+    def test_two_builds_yield_two_cells_labelled_from_their_own_identity(self):
+        code, _err = self.run_generate([
+            {"id": "before", "label": "shipped", "nc": self.binary("a", "aaa")},
+            {"id": "after", "label": "candidate", "nc": self.binary("b", "bbb")}])
+        self.assertEqual(code, 0)
+        doc = self.review_json()
+        self.assertEqual([c["id"] for c in doc["configs"]],
+                         ["dflt@before", "dflt@after"])
+        self.assertEqual([c["producer"]["git_commit"] for c in doc["configs"]],
+                         ["aaa", "bbb"])
+        self.assertEqual([c["label"] for c in doc["configs"]],
+                         ["dflt · shipped", "dflt · candidate"])
+        self.assertEqual(sorted(doc["images"][0]["renditions"]),
+                         ["dflt@after", "dflt@before"])
+
+    # The recipe hash differs per cell by design; treating it as build identity
+    # would make the second frame of every build look like a different binary.
+    def test_a_build_rendering_many_frames_is_one_build(self):
+        code, err = self.run_generate(
+            [{"id": "only", "label": "only", "nc": self.binary("a", "aaa")}])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.review_json()["images"]), 2)
+
+    # The task's flag: the matrix claims no identity, so the only thing a cell can
+    # disagree with is the rest of its own build.
+    def test_a_build_that_changes_identity_mid_run_writes_nothing(self):
+        code, err = self.run_generate(
+            [{"id": "only", "label": "only", "nc": self.binary("a", "aaa", "bbb")}])
+        self.assertEqual(code, 1)
+        self.assertIn("reported one identity and then another", err)
+        self.assertIn("aaa", err)
+        self.assertIn("bbb", err)
+        self.assertIn("No review.json was written", err)
+        self.assertFalse((self.root / "out" / "review.json").exists())
+
+    # The cells this run had already re-rendered were overwritten in place, so a
+    # `review.json` left by an earlier run now names new pixels under the old
+    # build's identity — and the app watches the set, so a page already open
+    # refreshes straight onto it.
+    def test_drift_takes_an_earlier_runs_review_set_with_it(self):
+        stable = self.binary("a", "aaa")
+        code, err = self.run_generate([{"id": "only", "label": "only", "nc": stable}])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.review_json()["configs"][0]["producer"]["git_commit"],
+                         "aaa")
+
+        drifting = self.binary("b", "bbb", "ccc")
+        code, err = self.run_generate([{"id": "only", "label": "only", "nc": drifting}])
+        self.assertEqual(code, 1)
+        self.assertIn("No review.json was written", err)
+        self.assertIn("removed the stale", err)
+        # Named, not asserted in the abstract: the deletion is justified only by the
+        # cells this run actually put new bytes into.
+        self.assertIn("F1-dflt@only.tiff", err)
+        self.assertFalse((self.root / "out" / "review.json").exists())
+
+    # **The drift rule is not build-axis-only.** A matrix with no `builds` renders
+    # through one *unnamed* build — the `--nc` binary — and a binary that changes
+    # underneath it is the same fault, with the same abort. This is the path most
+    # runs take, and nothing covered it.
+    def test_a_run_with_no_build_axis_aborts_on_drift_too(self):
+        drifting = self.binary("solo", "aaa", "bbb")
+        code, err = self.run_generate(None, nc=drifting)
+        self.assertEqual(code, 1)
+        self.assertIn("reported one identity and then another", err)
+        self.assertIn("No review.json was written", err)
+        self.assertFalse((self.root / "out" / "review.json").exists())
+        # There is no build id to print, so it must name the binary instead.
+        self.assertIn(drifting, err)
+        self.assertNotIn("build None", err)
+
+    # A run that landed on none of the cells the earlier set names told it no lie,
+    # so the set is still true and is left where it is. Deleting it — and saying it
+    # held cells this run overwrote — was both destructive and false.
+    def test_drift_leaves_an_earlier_set_alone_when_it_overwrote_none_of_it(self):
+        code, err = self.run_generate(None, nc=self.binary("stable", "aaa"))
+        self.assertEqual(code, 0, err)
+        before = self.review_json()
+        self.assertEqual(sorted(i["id"] for i in before["images"]), ["F1", "F2"])
+
+        code, err = self.run_generate(
+            None, nc=self.binary("wobble", "bbb", "ccc"), frames="F2",
+            configs=[{"id": "a", "args": []}, {"id": "b", "args": []}])
+        self.assertEqual(code, 1)
+        self.assertIn("reported one identity and then another", err)
+        self.assertIn("left the earlier", err)
+        self.assertNotIn("removed the stale", err)
+        self.assertTrue((self.root / "out" / "review.json").exists())
+        self.assertEqual(self.review_json(), before)
+
+    def rewrite_renditions(self, transform) -> None:
+        """Re-author the set on disk the way a merge or another tool would."""
+        path = self.root / "out" / "review.json"
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        for image in doc["images"]:
+            image["renditions"] = {config: transform(rendition)
+                                   for config, rendition in image["renditions"].items()}
+        path.write_text(json.dumps(doc), encoding="utf-8")
+
+    def drift_over_the_same_cells(self, name: str) -> str:
+        """A second run of the same matrix, on a binary that changes its mind."""
+        code, err = self.run_generate(None, nc=self.binary(name, "bbb", "ccc"))
+        self.assertEqual(code, 1, err)
+        return err
+
+    # Every axis below is one spelling this run does not itself produce, landing on
+    # the branch that *spares* the set — which then asserts it still describes its
+    # own pixels. Over-deleting was the old behaviour and was never wrong in this
+    # direction; a spared lie is.
+    def test_drift_sees_a_rendition_written_in_the_string_shorthand(self):
+        code, err = self.run_generate(None, nc=self.binary("stable", "aaa"))
+        self.assertEqual(code, 0, err)
+        # SCHEMA.md's headline form, and nothing the app would refuse.
+        self.rewrite_renditions(lambda rendition: rendition["src"])
+
+        err = self.drift_over_the_same_cells("wobble")
+        self.assertIn("removed the stale", err)
+        self.assertNotIn("still describes its own pixels", err)
+        self.assertFalse((self.root / "out" / "review.json").exists())
+
+    # `src` is a path relative to `review.json`, not a bare filename. The spelling
+    # here keeps a `..` on purpose: `pathlib` folds a leading `./` away by itself,
+    # so only a segment it will not normalise proves the resolution is happening.
+    def test_drift_sees_a_path_qualified_src(self):
+        code, err = self.run_generate(None, nc=self.binary("stable", "aaa"))
+        self.assertEqual(code, 0, err)
+        self.rewrite_renditions(
+            lambda rendition: {**rendition, "src": "renders/../" + rendition["src"]})
+
+        err = self.drift_over_the_same_cells("wobble")
+        self.assertIn("removed the stale", err)
+        self.assertNotIn("still describes its own pixels", err)
+        self.assertFalse((self.root / "out" / "review.json").exists())
+
+    # The axis that needs no hand-authored set: two ordinary runs in the
+    # rebuild-into-the-same-directory loop `--build` was added to invite. On this
+    # volume `F1-Dflt.tiff` and `F1-dflt.tiff` are one file, so run 2 really does
+    # sit on run 1's pixels. `colliding_stems` only ever sees one matrix, so it
+    # cannot catch a spelling that changed *between* runs.
+    def test_drift_sees_a_cell_respelled_in_another_case(self):
+        code, err = self.run_generate(None, nc=self.binary("stable", "aaa"),
+                                      configs=[{"id": "Dflt", "args": []}])
+        self.assertEqual(code, 0, err)
+
+        code, err = self.run_generate(None, nc=self.binary("wobble", "bbb", "ccc"),
+                                      configs=[{"id": "dflt", "args": []}])
+        self.assertEqual(code, 1)
+        self.assertIn("removed the stale", err)
+        self.assertNotIn("still describes its own pixels", err)
+        self.assertFalse((self.root / "out" / "review.json").exists())
+
+    # **A render that fails can still have written its output.** `--strict` gates
+    # after encoding, so the real binary writes the image and the sidecar and then
+    # exits 1 — checked against it, not assumed — and `--strict` is not an owned
+    # flag, so an ordinary config may pass it. Booking the destination only on
+    # success left exactly those cells unaccounted for, and the stale set naming
+    # only them then got the vouching sentence over pixels this run replaced.
+    def test_drift_accounts_for_a_cell_whose_render_failed_after_writing(self):
+        code, err = self.run_generate(None, nc=self.binary("stable", "aaa"))
+        self.assertEqual(code, 0, err)
+        # The earlier set names the `dflt` cells and nothing else — and those are
+        # precisely the ones run 2 writes through its *failing* path.
+        indexed = sorted(r["src"] for image in self.review_json()["images"]
+                         for r in image["renditions"].values())
+        self.assertEqual(indexed, ["F1-dflt.tiff", "F2-dflt.tiff"])
+
+        code, err = self.run_generate(
+            None, nc=self.binary("wobble", "bbb", "ccc"),
+            configs=[{"id": "dflt", "args": ["--strict"]}, {"id": "x", "args": []}])
+        self.assertEqual(code, 1)
+        self.assertIn("reported one identity and then another", err)
+        # The failing cells were reported as failures, so the run really did take
+        # the `except` path for them.
+        self.assertIn("--strict: 1 warning(s) present", err)
+        self.assertIn("removed the stale", err)
+        self.assertIn("F1-dflt.tiff", err)
+        self.assertNotIn("still describes its own pixels", err)
+        self.assertFalse((self.root / "out" / "review.json").exists())
+
+    # A set this cannot parse indexes nothing *as far as the compare knows*, which
+    # is not the same fact. Leaving it is right — the app refuses it loudly — but
+    # the run must not vouch for it.
+    def test_drift_does_not_vouch_for_a_set_it_could_not_read(self):
+        code, err = self.run_generate(None, nc=self.binary("stable", "aaa"))
+        self.assertEqual(code, 0, err)
+        stale = self.root / "out" / "review.json"
+        stale.write_text("{ this is not json", encoding="utf-8")
+
+        err = self.drift_over_the_same_cells("wobble")
+        self.assertIn("could not read every rendition it names", err)
+        self.assertNotIn("still describes its own pixels", err)
+        self.assertTrue(stale.is_file())
+
+    def test_the_same_binary_under_two_names_is_a_note_not_a_refusal(self):
+        binary = self.binary("a", "aaa")
+        code, err = self.run_generate([
+            {"id": "before", "label": "before", "nc": binary},
+            {"id": "after", "label": "after", "nc": binary}])
+        self.assertEqual(code, 0, err)
+        self.assertIn("are the same binary", err)
+        out = self.root / "out"
+        self.assertEqual((out / "F1-dflt@before.tiff").read_bytes(),
+                         (out / "F1-dflt@after.tiff").read_bytes())
+
+    def test_a_config_may_opt_out_of_a_build(self):
+        code, err = self.run_generate(
+            [{"id": "before", "label": "b", "nc": self.binary("a", "aaa")},
+             {"id": "after", "label": "a", "nc": self.binary("b", "bbb")}],
+            configs=[{"id": "both", "args": []},
+                     {"id": "new", "args": [], "builds": ["after"]}])
+        self.assertEqual(code, 0, err)
+        self.assertEqual([c["id"] for c in self.review_json()["configs"]],
+                         ["both@before", "both@after", "new@after"])
+
+    # Driven through `cmd_generate`, because the rule is only useful if it runs
+    # before the coarser gates — and a test calling it directly never sees that.
+    def test_refuses_nc_beside_a_build_axis(self):
+        code, err = self.run_generate(
+            [{"id": "after", "label": "a", "nc": self.binary("b", "bbb")}],
+            nc=self.binary("a", "aaa"))
+        self.assertEqual(code, 2)
+        self.assertIn("--build <id>=<path>", err)
+
+    # The ordering case: a frame fault on the same command line used to hide it.
+    # Asserting the losing rule's wording is *absent* is the only way to tell the
+    # two apart — both mention the matrix.
+    def test_the_nc_contradiction_beats_an_unknown_frame(self):
+        code, err = self.run_generate(
+            [{"id": "after", "label": "a", "nc": self.binary("b", "bbb")}],
+            nc=self.binary("a", "aaa"), frames="NOPE")
+        self.assertEqual(code, 2)
+        self.assertIn("--build <id>=<path>", err)
+        self.assertNotIn("no such frame", err)
+
+    def test_refuses_an_override_naming_a_build_the_matrix_does_not_declare(self):
+        code, err = self.run_generate(
+            [{"id": "after", "label": "a", "nc": self.binary("b", "bbb")}],
+            build=["durring=/x"])
+        self.assertEqual(code, 2)
+        self.assertIn("no such build: durring", err)
+        self.assertNotIn("no hanten binary", err)
+
+    # Deliberate priority, kept: where the pictures land outranks which binary
+    # makes them, so a bad `--build` must not pre-empt the repo refusal.
+    def test_rendering_into_the_repository_is_refused_before_a_bad_override(self):
+        repo = Path(review.__file__).resolve().parents[3]
+        code, err = self.run_generate(
+            [{"id": "after", "label": "a", "nc": self.binary("b", "bbb")}],
+            build=["durring=/x"], out=str(repo / "tools"))
+        self.assertEqual(code, 2)
+        self.assertIn("inside the repository", err)
+        self.assertNotIn("no such build", err)
+
+    def test_an_override_repoints_a_build_without_editing_the_matrix(self):
+        path = write({**MATRIX, "output_preset": "legacy", "common_args": [],
+                      "rolls": {"R": {}}, "configs": [{"id": "dflt", "args": []}],
+                      "builds": [{"id": "after", "label": "a",
+                                  "nc": "/nonexistent/x"}]})
+        args = argparse.Namespace(
+            matrix=str(path), fixtures=str(self.root / "fixtures.json"),
+            frames="F1", nc=None, build=[f"after={self.binary('b', 'bbb')}"],
+            asset_root=str(self.root / "assets"), out=str(self.root / "out"),
+            no_metrics=True, force=False)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(review.cmd_generate(args), 0, err.getvalue())
+        self.assertEqual(self.review_json()["configs"][0]["producer"]["git_commit"],
+                         "bbb")

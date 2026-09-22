@@ -231,8 +231,17 @@ def build_parser() -> argparse.ArgumentParser:
     rgen.add_argument("--out", help="output directory (default: the matrix's "
                                     "output_dir). Keep it OUTSIDE the repo — the "
                                     "frames are personal photographs")
-    rgen.add_argument("--nc", default="target/release/hanten",
-                      help="path to the hanten binary (default: target/release/hanten)")
+    # No argparse default: the flag has to be able to say "unset", because it is
+    # refused beside a matrix that declares `builds`. The fallback is
+    # `review.DEFAULT_NC`.
+    rgen.add_argument("--nc",
+                      help="path to the hanten binary for a matrix with no build "
+                           f"axis (default: {_review.DEFAULT_NC}). Refused when the "
+                           "matrix declares `builds` — use --build there")
+    rgen.add_argument("--build", action="append", metavar="ID=PATH",
+                      help="repoint one of the matrix's builds at another binary, "
+                           "e.g. --build after=target/release/hanten. Repeatable; "
+                           "the build's name stays the matrix's, only its path moves")
     rgen.add_argument("--fixtures", default="scripts/sigmoid-baseline/fixtures.json",
                       help="frame and per-roll Dmin declaration; the same file the "
                            "metrics use, so the two cannot drift")

@@ -90,6 +90,13 @@ every cell whose `common_args` reference `{dmin}`.
   otherwise), `output_dir`, `output_preset`, `common_args` (usually `["--film-base",
   "{dmin}"]`), `metrics.inset`, a `rolls` block mapping roll → `film_stock` if any config uses
   `{film_stock}`, and one entry per configuration under `configs`.
+- **a build axis, when comparing two binaries** — an optional top-level `builds`, one
+  `{"id", "label", "nc"}` per binary (`note` optional). Every config is then rendered by
+  every build, as cells with the composed id `<config>@<build>` and the label
+  `<config> · <build>`; a config may state its own `"builds": ["after"]` to opt out of one,
+  which is what to do when a flag only the new binary accepts would otherwise fail on every
+  frame. `--nc` is refused beside a `builds` block — repoint one arm with
+  `--build <id>=<path>` instead, which is the flag for the rebuild loop.
 
 Rules, each with a reason:
 
@@ -113,6 +120,30 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
 
 `--no-metrics` renders without charts; `--force` re-measures. Budget ~3 s per cell on
 17–50 MP frames, so a few hundred cells is tens of minutes — run it in the background.
+
+**With a build axis, keep the config list short.** The cells are the product, and only ten
+have a number key: two builds over five configs already spends all of them.
+
+Three things the generator checks for you, none of which needs a flag. **The first two are
+not build-axis features** — a matrix with no `builds` is one unnamed build, the `--nc`
+binary, and both rules apply to it verbatim:
+
+- Every binary is verified **before anything renders** — it exists, and its `--version`
+  really is this project's CLI. That includes a plain `--nc` binary, which used to fail at
+  the first render instead. The **pre-rename `nc` banner is accepted**, which matters because
+  the reference arm of a before/after is usually a git-tagged binary old enough to print it.
+- A binary that reports **one identity and then another** aborts the run — a build by name,
+  or the `--nc` binary by path. It writes no `review.json`, and it *deletes* an earlier run's
+  `review.json` from the output directory **when this run overwrote a cell that file names**
+  (otherwise it leaves it and says so). The binary changed underneath, so every cell already
+  rendered under it is suspect too — including the ones overwritten in place, which a stale
+  set would go on attributing to the previous binary while the app refreshed onto the new
+  pixels.
+- Two builds that are the **same file** are a note, not a refusal — that is how you check the
+  set is honest, since their cells must come out byte-identical. Two *different* files that
+  report the same identity (two dirty builds of one commit) are also a note: the labels
+  cannot tell them apart, and nothing can. (This one *is* build-axis-only; one binary cannot
+  collide with itself.)
 
 **Smoke-test unusual flag combinations on one frame first.** A configuration Hanten refuses
 (`--print-exposure` on `sigmoid-knees`, say) is worth finding in 15 seconds rather than after
@@ -202,8 +233,16 @@ generator builds `configs` from the matrix, so it names only the Hanten configur
 rendition keyed by an id that is not declared there makes the app refuse the **whole set**
 (`… not one of the declared configs`), and quietly reusing an existing id is worse than the
 error — it replaces that Hanten rendition rather than sitting beside it, so the cell you wanted
-to compare against is the one you lose. Add `{"id": "nlp", "label": "NLP"}` first; the order
-of `configs` sets the `1`–`9` keys.
+to compare against is the one you lose. Add `{"id": "nlp", "label": "NLP"}` first.
+
+**With a build axis the generator's ids are composed**, `<config>@<build>` — so a merged
+rendition sits beside `chr-generic@after`, not beside `chr-generic`, which names no cell in
+that set. Key the merged entry against the composed id it belongs with, or give it an id of
+its own; a bare config name there declares a cell nothing renders.
+
+The order of `configs` sets the `1`–`9` keys, and only ten cells have one — the same ceiling
+step 4 warns about, counted over the **merged** list rather than the matrix's, so a merge is
+what spends the last of them.
 
 Split large sets per roll (`review-<roll>.json`) alongside the combined one: a reviewer works
 through one roll at a time.
@@ -256,11 +295,12 @@ weeks later.
   every flag pins those *values*, not the omitted defaults and not the algorithm inside the
   `--nc` binary, so the same matrix re-run after a pipeline change can produce different
   pixels. A matrix naming only `--preset` is looser still: it renders what that preset means
-  *today*. **Nothing in the set records which binary made it**: the generator reads Hanten's report
-  off stdout for the per-frame cast note and then discards it, `review.json` carries only the
-  title, the config list and the image paths, and `--report-file` is generator-owned so a
-  config cannot ask for one. The matrix has no build axis either. So for a build comparison —
-  or for a set meant to be trusted months later — write the commit and `hanten --version` into the
-  set's own `scripts/` folder yourself; that is the only place the provenance can live.
+  *today*. **A set records which binary made it only when it declares `builds`**: each config
+  then carries a `producer` block, derived from what that binary reported rather than typed
+  into the matrix, and the app shows it under the picture and in the button's tooltip. A
+  matrix with no build axis still carries none — every cell writes its own `<image>.json`
+  sidecar beside it, which is where the commit is in that case, but `review.json` does not
+  name it. So for a set meant to be trusted months later, either give it a `builds` block or
+  write the commit and `hanten --version` into the set's own `scripts/` folder yourself.
 - **Deleting source frames breaks later reruns, not the existing set.** Rendered JPEGs and
   their records survive; the generator simply skips the missing sources.

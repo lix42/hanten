@@ -955,6 +955,7 @@ export function ImageSection(props: Props) {
             id={domId(props.image.id, charted() ?? "none")}
             rendition={chartedRendition()}
             configLabel={props.configs.find((config) => config.id === charted())?.label ?? "?"}
+            producer={props.configs.find((config) => config.id === charted())?.producer}
           />
         </div>
       </Show>

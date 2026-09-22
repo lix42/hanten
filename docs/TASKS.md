@@ -1482,9 +1482,9 @@ the design in `docs/design-update.md`:
   config cannot move the picture, and the server takes the set by path and watches it.
   **Generator** shipped 2026-09-12 as `nctool review generate <matrix.json>` — the matrix is
   data, each cell is one `hanten convert`, and each rendition gets its `nctool metrics` record
-  written beside it. HDR review and build-vs-build are deferred with reasons in the task
-  file: nothing downscales a gain map, and a build axis needs render provenance rather than a
-  typed label.
+  written beside it. HDR review is deferred with a reason in the task file (nothing
+  downscales a gain map); build-vs-build was deferred there too and has since shipped as
+  `analysis/review-build-axis`.
 - [x] [Metrics chart design](tasks/analysis/metrics-chart-design.md) — *what the charts are*,
   settled independently of the app and accepted as v1 on 2026-09-12: a luminance histogram, a
   per-channel histogram, and cast-over-tone as two axis-coloured curves, in hand-rolled SVG,
@@ -1500,7 +1500,12 @@ the design in `docs/design-update.md`:
   rendition with no measurement renders its picture and says so, and an unreadable record
   costs only its own charts.
 - [ ] [Reference cells in the review set](tasks/analysis/review-reference-cells.md) — an NLP export or hand-tweaked target as a grid cell beside nc's renders
-- [ ] [A build axis in the review set](tasks/analysis/review-build-axis.md) — the same frame and config across two builds, labelled from sidecar provenance
+- [x] [A build axis in the review set](tasks/analysis/review-build-axis.md) — done
+  2026-09-22. A matrix may declare `builds`, each naming a pre-built binary; the generator
+  expands builds x configs into cells `<config>@<build>`, so the app keeps one toggle and one
+  grid cell. Each config carries a `producer` block **derived** from what that binary reported
+  about itself, never typed into the matrix — and a build that reports two identities in one
+  run aborts it.
 
 
 

@@ -1276,7 +1276,21 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   one. It renders
   every configuration of a frame into **one grid cell**, so switching between them
   cannot move the picture by a pixel; toggling in place is what makes highlight
-  differences visible at all, and side-by-side hides them. Feed it a `review.json`
+  differences visible at all, and side-by-side hides them.
+  **A matrix may also declare `builds`** (one entry per *pre-built* binary), and the
+  generator expands builds x configs into cells `<config>@<build>` — which is how a
+  build comparison keeps that one toggle and one grid cell. Each config's `producer`
+  block is **derived from what the binary reported in its own run, never declared in
+  the matrix**: a typed name is a claim, and a wrong claim about which binary made a
+  cell is the failure the axis exists to prevent. Keep the pre-flight accepting the
+  **pre-rename `nc` banner** (`manifest.is_nc`) — the reference arm of a before/after
+  is a git-tagged binary that prints it. Two gotchas paid for in review: the
+  stale-index check compares **casefolded resolved** paths and reads both rendition
+  spellings, because a raw-filename compare silently spared a lying index on a
+  case-insensitive volume; and **"a failed convert leaves nothing on disk" is
+  false** — `--strict` gates *after* encoding, so it writes the image and its sidecar
+  and then exits 1 (measured against the release binary; don't re-derive it).
+  Feed it a `review.json`
   (`tools/review-app/SCHEMA.md`) naming the configs and the images, and start it with
   `pnpm dev <path to review.json>` (a directory works too, meaning the `review.json`
   inside it); image paths resolve next to that file, so a review set is a movable
