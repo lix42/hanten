@@ -329,8 +329,16 @@ detector proposes as possible rebate.
   tone/gamut mapping, and metadata together. The old `--output-hdr` name was
   therefore temporary/ambiguous and will not be used to mean both float master
   data and display HDR. The output path remains required and is never silently
-  renamed: its suffix must match the preset's resolved container or conversion
-  fails with the accepted suffixes. Named presets are atomic and cannot be mixed
+  renamed: a suffix it states must match the preset's resolved container or
+  conversion fails with the accepted suffixes. A suffix it *omits* is **completed**
+  from that container — appended, never substituted, so no byte that decides *which
+  file* is named is altered or dropped. (Redundant separators and interior `.`
+  segments still normalise, as the platform's path rules do; they denote the same
+  file.) The rule that follows from this: a path with **nothing to append to** is
+  refused rather than completed — whenever the trailing component does not name a
+  file, whether because there is no file name at all or because it names a
+  directory, since completing would silently write that directory's sibling.
+  Named presets are atomic and cannot be mixed
   with legacy depth/profile/container flags; advanced explicit combinations use
   `custom`. Legacy output flags without a preset retain the transitional TIFF
   behavior until migration is complete. `film-master` branches directly from NC
@@ -384,11 +392,27 @@ detector proposes as possible rebate.
   warning — the silently-misnamed-file mistake every newer preset was already
   guarded against.
 
-  Since every preset now states a rule, an **extensionless** output path
-  (`-o positive`) is a usage error too — a decision, not a side effect: a file with
-  no extension misleads about its contents exactly as a wrongly-named one does, and
-  Hanten is unreleased, so the strict rule costs nothing now. `hanten convert -o positive`
-  previously exited 0. The **diagnosis varies on where the preset came from, not on
+  Since every preset states a container, an **extensionless** output path
+  (`-o positive`) does not need one: Hanten **completes** it, writing
+  `positive.jpg` under the default and `positive.tiff` under a TIFF preset. The
+  preset exists to encapsulate the container, so requiring the user to restate it
+  was the requirement backwards. (It was an exit-2 usage error between the suffix
+  table's completion and this change.) The spelling Hanten supplies is one
+  canonical choice per container — `tiff`, `jpg`, `avif` — deliberately separate
+  from what it *accepts*, whose TIFF list heads with `tif`.
+
+  Completing is not renaming, and the distinction is the rule: **a stated suffix is
+  never rewritten, only an absent one is supplied.** A trailing dot-segment counts
+  as a suffix only when it is a spelling *some* preset accepts, so `-o out.tiff`
+  under a JPEG preset is still the usage error below, while `-o out.v2` and
+  `-o roll-1.2` are stems and keep their dot (`out.v2.jpg`). A stated spelling the
+  container accepts survives byte for byte, case included: `-o out.jpeg` writes
+  `out.jpeg`, never `out.jpg`. The completed path is what the report's `output`
+  field, the sidecar, and the write-target collision guard all name — an agent
+  reads the container from the report and never infers it from the preset name.
+
+  For a **stated** suffix the container refuses, the **diagnosis varies on where
+  the preset came from, not on
   which preset it is**: that stopped being derivable from the value once the default
   became a *named* preset, since `gain-map-hdr` now arrives both ways. A preset the
   user selected — by `--output-preset` **or** by `output.preset` in a `--params`
@@ -1595,9 +1619,10 @@ failed for another reason, whose entry carries both its `memory` block and its
 # Default density conversion: fixed/roll nominal Dmax, gain-map JPEG, JSON report.
 # The two selector flags are optional (both are the defaults); the film-base flag
 # is **not** — `film_base.source` has no default, so every `convert` must state
-# one of `--film-base` / `--base-region` / `--auto-base`. The `.jpg` suffix is not
-# optional either: the default preset is `gain-map-hdr`, and nc never renames the
-# path you give it (add `--output-preset legacy` for the transitional TIFF).
+# one of `--film-base` / `--base-region` / `--auto-base`. The `.jpg` suffix *is*
+# optional: `-o out` writes `out.jpg`, because the default preset is
+# `gain-map-hdr`. Stating it is still checked — nc never renames a suffix you give
+# it (add `--output-preset legacy` for the transitional TIFF).
 hanten convert in.tiff -o out.jpg --reconstruction density \
   --density-curve exponential --auto-base --report json
 
@@ -2619,8 +2644,9 @@ film RGB v1 mapped unclamped linear ACEScg before print/display controls and
 rejects frame-local auto Dmax.
 Exponential accepts supported `none` or fixed/roll placement, sigmoid uses fixed
 Dmax for curve shaping, and simple has none. Named display presets use the SDR/HDR render
-branches. The output path stays required; its suffix must match the
-resolved container and is never rewritten silently. A named non-`custom` preset
+branches. The output path stays required; a suffix it states must match the
+resolved container and is never rewritten silently, and one it omits is completed
+from that container. A named non-`custom` preset
 conflicts with legacy output-selection flags (`--out-depth`,
 `--output-profile`, `--bigtiff`); legacy flag-only invocations retain their
 transitional TIFF behavior. After merge, `film-master` also rejects every

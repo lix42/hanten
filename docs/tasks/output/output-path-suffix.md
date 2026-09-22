@@ -35,8 +35,29 @@ optional.
   `out.tiff`. Extensionless paths are currently rejected outright (exit 2) — that
   rejection is precisely what this task proposes to replace, so re-read
   `reject_suffix_mismatch`'s `SuffixContext::Default` arm before changing it.
+  (Shipped: that rejection is gone, and `reject_suffix_mismatch` with it —
+  `resolve_output_path` is the single rule and `suffix_mismatch_error` its
+  diagnosis half.)
 
 ## Open questions
+
+**All six are answered by what shipped (2026-09-22); the reasoning is in
+[`docs/progress/output.md`](../../progress/output.md) under `output-path-suffix`.**
+
+1. `tiff` / `jpg` / `avif` — `derived_extension`'s existing choice, reused.
+2. A dot-segment is a suffix **iff some preset accepts that spelling**; anything
+   else is a stem (`out.v2` → `out.v2.jpg`), and a spelling belonging to another
+   preset is the existing mismatch error.
+3. Refined, not overturned: renaming rewrites typed bytes, completing appends to
+   them. `presets.md` carries the refinement beside its own sentence.
+4. Yes — one resolver. Roll's *derived* names are unchanged; its *explicit*
+   manifest paths are now completed as well as checked.
+5. It already did — `Report.output`. The work was resolving the path before
+   `convert_frame`, not adding a field.
+6. Both see the completed path: resolution happens before the sidecar and the
+   write-target guard, pinned by a test.
+
+The original questions, for the record:
 
 1. **Which spelling is canonical when deriving?** `.tif` or `.tiff`; `.jpg` or
    `.jpeg`. One choice per container, and it becomes visible in every report.

@@ -21,8 +21,13 @@ What is known:
   never a recipe key, and it dies when the default flips — so destination selection
   must not be built on it.
 - **Suffix derivation is carried, not redesigned.**
-  [`output/output-path-suffix`](../output/output-path-suffix.md) owns deriving it
-  from the resolved preset; this task states each destination's accepted spellings.
+  [`output/output-path-suffix`](../output/output-path-suffix.md) shipped it
+  (2026-09-22); this task states each destination's accepted spellings. The seam it
+  left is `cli::container_for` — the **only** preset-shaped step, with the accepted
+  set and the supplied spelling both hanging off `Container`. So the open question
+  below (name vs product of selectors) changes that one function under either
+  answer, and nothing about suffixes needs re-deciding. Keep it an exhaustive match
+  so a moved `OutputPreset` fails to compile.
 - **`nctool` needs one row per destination in two lookup tables** — the only
   tooling change the migration owes.
 

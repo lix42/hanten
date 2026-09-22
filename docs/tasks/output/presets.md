@@ -126,7 +126,18 @@ must match the preset's resolved container: `gain-map-hdr` and
 `ultra-hdr-v1` accept `.jpg` and `.jpeg`; `hdr-pq` and `hdr-hlg` accept `.avif`; and `display-p3`,
 `compatibility`, `film-master`, `hdr-linear-tiff`, `hdr-pq-tiff`, and
 `hdr-hlg-tiff` accept `.tif`/`.tiff`. A mismatch is a usage error that reports
-the expected extensions. Named presets other than `custom` are atomic: legacy
+the expected extensions.
+
+> **Refined by [output-path-suffix](output-path-suffix.md) (2026-09-22).** "Never
+> silently renamed" governs a suffix the user **states** — it is honoured verbatim
+> or refused, as above. A suffix the user **omits** is now *completed* from the
+> resolved container (`-o out` writes `out.jpg` under the default), which appends
+> and never substitutes, so no byte that decides *which file* is named is altered
+> or dropped. A path whose trailing component names no file — `.`, `dir/`, `dir/.`
+> — has nothing to append to and is refused rather than completed to that
+> directory's sibling. The path is still required.
+
+Named presets other than `custom` are atomic: legacy
 depth/profile/container controls such as `--output-hdr`, `--output-sdr`,
 `--output-profile`, and `--bigtiff` cannot accompany them, even when they appear
 equivalent. Existing legacy flags without `--output-preset` continue to resolve
