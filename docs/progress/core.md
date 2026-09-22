@@ -95,6 +95,18 @@ What other epics need to know about `core`:
   `unpinned_curve`), and the policy is `core/recipe-replay-fidelity`.
 
 
+## product-naming
+
+**Status:** not started
+**Updated:** 2026-09-21
+
+- 2026-09-21: filed after deciding the product should be called Hanten while `nc` stays
+  the internal name. The survey that motivated it: almost every `nc` in the tree is an
+  identifier rather than branding — `nc-film-rgb-v1` is a *versioned* colour-space id in
+  every report, `nc_version` sits in a snapshot-tested telemetry schema, and the recipe
+  keys are the scripting contract. The branding surface is four files. The task carries
+  the boundary until it is executed, at which point CLAUDE.md becomes its home.
+
 ## project-foundation
 **Status:** done (2026-06-13)
 

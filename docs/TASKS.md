@@ -177,6 +177,7 @@ graph TD
 ```mermaid
 graph TD
   subgraph core
+    core/product-naming
     core/project-foundation
     core/cli-framework
     core/pipeline-orchestration
@@ -719,6 +720,11 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   byte-identical to the sidecar and carries nothing the image produced — the same flags over two
   different scans emit identical files
 - `core/unfrozen-auto-mode-warning` (post-MVP): `core/roll-conversion`
+- `core/product-naming` (cross-cutting): none
+  — name the product Hanten while `nc` stays the internal name for the crate, binary
+  and identifiers; the boundary's home is CLAUDE.md. No dependencies, but it touches
+  README/CLAUDE.md/design-spec and should run **alone between merges**, not beside the
+  `nf-*` migration
   — a recipe carrying `dmax: "auto"` or an auto white balance re-measures every frame, defeating
   the roll, and nothing warns today. Roll already warns on a non-explicit base; same hazard,
   same plumbing
@@ -1079,6 +1085,10 @@ the design in `docs/design-update.md`:
 > drives — the roll/batch workflow, and the cross-cutting cleanup and release
 > work that lands in those files.
 
+- [ ] [Name the product Hanten, and fix the
+  boundary](tasks/core/product-naming.md) — Hanten as the product, `nc` as the
+  internal name; almost every `nc` in the tree is a versioned identifier rather
+  than branding, and the boundary goes into CLAUDE.md so it is not re-litigated
 - [x] [Project foundation and core types](tasks/core/project-foundation.md)
 - [x] [CLI framework](tasks/core/cli-framework.md)
 - [x] [Pipeline orchestration](tasks/core/pipeline-orchestration.md)
