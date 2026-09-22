@@ -130,10 +130,12 @@ impl AcesCgImage {
     }
 
     /// Unwrap into the plain working-space image — the **read** direction of the
-    /// boundary, for the named-output split (`pipeline::render_split`): the
-    /// `film-master` encode and the shared display stage both consume an
-    /// `AcesCgImage` this way. Constructing one stays restricted to the mapper;
-    /// reading one out is not the invariant the type protects.
+    /// boundary, for whichever chain consumes this image. Today that is the
+    /// named-output split (`pipeline::render_split`), where the `film-master`
+    /// encode and the shared display stage both take an `AcesCgImage` this way, and
+    /// the new flow's entry point (`pipeline::working_image::WorkingBuffer::from_aces`),
+    /// which moves the buffers into the chain. Constructing one stays restricted to
+    /// the mapper; reading one out is not the invariant the type protects.
     pub(crate) fn into_linear(self) -> LinearImage {
         // The fields came from a validated LinearImage and are never resized, so
         // the invariants hold; route through the validated constructor anyway

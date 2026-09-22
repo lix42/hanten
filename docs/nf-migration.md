@@ -37,10 +37,10 @@ authoritative for status and dependencies.
 - **The flag's life is short.** `--new-flow` ships with `nf-core/new-flow-flag` (on
   `convert` and `roll`) and lasts until the retirements have removed the old chain;
   after that there is nothing to select. `nf-core/default-flip` is the last of those
-  changes plus the flag's removal. Until `nf-core/stage-skeleton` and
-  `nf-core/minimal-end-to-end` it selects a chain with no stages, so it resolves the
-  run and then stops at the render seam with exit 4 — the availability refusals are
-  live before the renders are.
+  changes plus the flag's removal. `nf-core/stage-skeleton` built the chain it
+  selects (identity stages); until `nf-core/minimal-end-to-end` connects a decode and
+  a destination it still resolves the run and then stops at the render seam with
+  exit 4 — the availability refusals are live before the renders are.
 - **The container default is untouched by all of this**, so it moves once, when
   `nf-destinations/default-destination` says so.
 - **New stages are written fresh.** See CLAUDE.md's migration rule: structure for

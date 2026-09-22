@@ -13,8 +13,10 @@
 //!   a variant rather than inverting a flag.
 //! - The **availability tables** — the knobs the new flow refuses, and the two
 //!   different sentences it refuses them with ([`Availability`]).
-//! - [`render_not_implemented`] — the seam itself, until `nf-core/stage-skeleton`
-//!   puts stages behind it.
+//! - [`render_not_implemented`] — the seam itself. `nf-core/stage-skeleton` built
+//!   the chain behind it (`pipeline::chain`); it stays closed until
+//!   `nf-core/minimal-end-to-end` puts a decode in front of that chain and a
+//!   destination behind it.
 //!
 //! `Flow` is *orchestration state*, like an unresolved `film_base.source`: it
 //! never reaches a stage, and it is never a recipe key (`--new-flow` selects which
@@ -249,17 +251,32 @@ fn refusal(knob: &str, availability: Availability) -> NcError {
     ))
 }
 
-/// The migration seam: `--new-flow` selected a chain whose stages do not exist yet.
+/// The migration seam: `--new-flow` selected a chain that cannot yet render.
 ///
 /// Exit 4 (`Unsupported`), not a usage error: the command line is well-formed and
 /// the config resolved: it is *this build* that cannot serve it, which is the same
-/// distinction `Resource` draws for the memory gate. `nf-core/stage-skeleton`
-/// replaces this call with the identity chain.
+/// distinction `Resource` draws for the memory gate.
+///
+/// The chain itself exists as of `nf-core/stage-skeleton` (`pipeline::chain`, every
+/// stage an identity pass). What is missing either side of it is the fixed decode
+/// that feeds it (`nf-reconstruction/fixed-decode`) and a destination to write
+/// (`nf-core/minimal-end-to-end`), which is the task that opens this seam. It stays
+/// shut until then rather than composing an identity chain and refusing at the
+/// encode: on a real 5000 dpi scan that is a full render thrown away to reach the
+/// same message.
 pub fn render_not_implemented() -> NcError {
+    // The tail says only what this rule inspected — the same discipline as
+    // `refusal`. "Drop `--new-flow` to convert through the current chain" asserted
+    // that the legacy path *accepts* this command line, from a rule that never
+    // looked at it, and it is false whenever the same line is independently invalid
+    // there (`--display-tone none --print-exposure 3`, which the SDR range check
+    // refuses).
     NcError::Unsupported(
-        "--new-flow selected the new rendering chain, which has no stages yet \
-         (`nf-core/stage-skeleton` fills them). Every other part of the run resolved: \
-         drop `--new-flow` to convert through the current chain."
+        "--new-flow selected the new rendering chain, which cannot render yet — its \
+         stages exist but nothing connects them to an output \
+         (`nf-core/minimal-end-to-end`). Every other part of the run resolved under \
+         `--new-flow`'s own rules: re-run without it to take the current chain, \
+         which checks these settings itself."
             .into(),
     )
 }

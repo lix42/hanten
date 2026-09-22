@@ -2808,21 +2808,33 @@ nc/
     │   ├── display_tone.rs    # resolves which display tone curve runs + its parameter
     │   ├── sdr.rs        # SDR display render (P3/sRGB, tone + gamut mapping)
     │   ├── hdr.rs        # Rec.2100 PQ/HLG display render
-    │   ├── gain_map.rs   # SDR+HDR → canonical gain map
+    │   ├── gain_map/     # SDR+HDR → canonical gain map; `iso.rs` owns the ISO 21496-1 bytes
+    │   ├── pixels.rs     # the parallel per-pixel map drivers (byte-identical to a loop)
     │   ├── memory.rs     # peak-memory sizing model + budget preflight
-    │   └── stages.rs     # stage wiring as pure functions
+    │   ├── stages.rs     # stage wiring as pure functions
+    │   ├── chain.rs           # the --new-flow chain, composed (identity stages today)
+    │   ├── working_image.rs   # the buffer every new-flow stage boundary carries
+    │   ├── scene_correction.rs # new flow stage 1: WB, exposure, flare (scene-referred)
+    │   ├── look.rs            # new flow stage 2: contrast, grade, highlight desaturation
+    │   ├── fit_range.rs       # new flow stage 3: scene range → display range
+    │   └── fit_gamut.rs       # new flow stage 4: out-of-gamut colour → display boundary
     ├── algo/
     │   ├── mod.rs        # FilmRgbImage + reconstruct/finish_print
     │   ├── simple.rs     # baseline inversion
     │   ├── density.rs    # density reconstruction + exponential curve
-    │   └── sigmoid.rs    # sigmoid density curve
+    │   ├── sigmoid.rs    # sigmoid density curve
+    │   └── film_stock/   # the digitized per-stock curves `--film-stock` inverts
+    ├── flow.rs           # the transitional --new-flow selector (deleted by the flip)
     ├── telemetry.rs      # opt-in JSONL perf/context record (never perturbs output)
     ├── version.rs        # build identity, pipeline_version, params hash
     └── types.rs          # LinearImage, FilmBase, Reconstruction, params, errors
 ```
 
 The tree is the shipped module set, not a proposal — it had drifted by nine modules
-and is worth re-checking whenever one is added.
+and is worth re-checking whenever one is added. The six new-flow modules are the
+migration's chain (`docs/design-update.md`, `docs/nf-migration.md`); they ship as
+identity stages behind a seam that still refuses, so nothing in this spec's pipeline
+runs through them yet.
 
 ### Candidate crates
 
