@@ -304,6 +304,37 @@ The S-shape has to come from somewhere in the new chain, and the design already 
 where: a straight decode plus a fit-range operator with a toe and a shoulder composes to
 exactly this shape.
 
+### Why nc cannot reproduce their whites by compressing harder
+
+Their whites converge because their shoulder runs **per channel** against a common
+ceiling: each channel asymptotes to the same value, so one arriving higher is
+compressed more (SF measured 1.13× apart at p97 and 1.05× at p99.5).
+
+**No nc display *tone* can do this.** `sdr.rs:244-247` and `hdr.rs:550` both curve one
+luminance and multiply all three channels by the resulting ratio, so `shoulder`,
+`reinhard` and `none` alike leave every channel ratio invariant, however hard they
+compress. What follows them is not ratio-invariant: `gamut_map` runs *after* that
+multiply (`sdr.rs:266`) and converges radially as luminance approaches 1, with a ceiling
+that follows the rendered luminance — so the tone choice reaches it indirectly. How much
+of the convergence is the gamut map's is unseparated; nothing reachable by flag turns it
+off. It is deliberate: the SDR test
+is named `shoulder_rolls_highlights_without_a_channel_clip_kink`. The only per-channel
+nonlinearity nc has above diffuse white is the sigmoid's shoulder, in reconstruction,
+which the new design removes.
+
+**And such an operator cannot live in fit range.** The branches compress against
+different ceilings — 1.0 for SDR, `LINEAR_HEADROOM` ≈ 4.93 for HDR — so a per-channel
+compressor there converges hard on SDR and barely at all on HDR, where a typical
+frame's ~1 stop above diffuse white never approaches the ceiling. The same frame would
+read neutral on one display and cast on the other, and a gain map would not complain,
+since it requires agreement only *below* diffuse white.
+
+Referenced to **diffuse white** and run once before the branch, both renditions inherit
+the same converged highlights. The two operators are then orthogonal, and separated for
+opposite reasons: **chroma convergence must be pre-branch** so the branches agree on
+white, while **luminance compression must stay per-branch** so HDR can carry more than
+SDR. One per-channel fit-range operator gives up the second to get the first.
+
 ### How much headroom a white anchor would leave
 
 If nc anchors diffuse white, everything above it is what an HDR rendition carries and an

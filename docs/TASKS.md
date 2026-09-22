@@ -158,6 +158,8 @@ graph TD
   nf-verification --> nf-calibration
   analysis --> nf-calibration
   io --> nf-calibration
+  nf-look --> nf-calibration
+  nf-reconstruction --> nf-calibration
   nf-calibration --> nf-look
   analysis --> nf-verification
   nf-core --> nf-verification
@@ -306,6 +308,7 @@ graph TD
     nf-core/default-flip
   end
   subgraph nf-reconstruction
+    nf-reconstruction/anchor-spike
     nf-reconstruction/fixed-decode
     nf-reconstruction/anchor-rule
     nf-reconstruction/gamma-split
@@ -318,6 +321,7 @@ graph TD
     nf-scene-correction/levels-knob
   end
   subgraph nf-look
+    nf-look/desaturation-spike
     nf-look/stage
     nf-look/per-channel-grade
     nf-look/path-to-white
@@ -339,6 +343,7 @@ graph TD
     nf-destinations/default-destination
   end
   subgraph nf-calibration
+    nf-calibration/anchor-comparison
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -545,6 +550,11 @@ graph TD
   nf-retire/dmax-machinery --> nf-core/default-flip
   nf-core/stage-skeleton --> nf-reconstruction/fixed-decode
   nf-reconstruction/fixed-decode --> nf-reconstruction/anchor-rule
+  nf-reconstruction/anchor-spike --> nf-reconstruction/anchor-rule
+  nf-reconstruction/anchor-spike --> nf-look/path-to-white
+  nf-look/desaturation-spike --> nf-look/path-to-white
+  nf-look/path-to-white --> nf-calibration/anchor-comparison
+  nf-reconstruction/anchor-spike --> nf-calibration/anchor-comparison
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
   nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
@@ -842,7 +852,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   Coordinate with `output/presets`, which owns the "never silently renamed" wording and
   container-aware roll naming — deliberately *not* a dependency, since the suffix table already
   shipped and this stands alone for `convert`
-- `output/parallel-display-stages` (post-MVP): `output/sdr-display-rendering`, `color/film-master-render-pipeline` — byte-identical rayon drivers for the lcms2 transform, SDR render, ACEScg mapping and print controls, plus the small `pipeline::pixels` helper; decided in [gpu-rendering-spike](gpu-rendering-spike.md)
+- `output/parallel-display-stages` (post-MVP): `output/sdr-display-rendering`, `color/film-master-render-pipeline` — byte-identical rayon drivers for the lcms2 transform, SDR render, ACEScg mapping and print controls, plus the small `pipeline::pixels` helper; decided in [gpu-rendering-spike](spike/gpu-rendering-spike.md)
 - `output/parallel-hdr-stages` (post-MVP): `output/parallel-display-stages`, `output/hdr-display-rendering`, `output/gain-map-hdr-output` — the HDR render (MaxFALL sum kept sequential), transfer encode, gain-map build and quantize on the same helper
 - `output/avif-row-multithreading` (post-MVP): `output/hdr-avif-output`, `core/conversion-versioning` — libaom row-mt with a pinned thread count ≥ 2; changes shipped `hdr-pq`/`hdr-hlg` bytes, so it rides the versioning rules
 - `output/post-fanout-encode-slowdown` (post-MVP): `output/parallel-hdr-stages` — investigate the single-threaded encode running 30–90 ms slower right after a wide rayon section (`film-master` still carries it); cause unknown, byte-identical fix or documented non-issue
@@ -918,7 +928,7 @@ the design in `docs/design-update.md`:
 - `nf-reconstruction/fixed-decode` (new flow): `nf-core/stage-skeleton`
   — exponential, toe passed through as recorded — defaults and wiring, not new
   arithmetic
-- `nf-reconstruction/anchor-rule` (new flow): `nf-reconstruction/fixed-decode`
+- `nf-reconstruction/anchor-rule` (new flow): `nf-reconstruction/fixed-decode`, `nf-reconstruction/anchor-spike`
   — `mid-at-base-offset` as the only rule, and a runtime `d` the render path
   is currently forbidden to read
 - `nf-reconstruction/gamma-split` (new flow): `nf-reconstruction/fixed-decode`
@@ -943,7 +953,7 @@ the design in `docs/design-update.md`:
 - `nf-look/per-channel-grade` (new flow): `nf-look/stage`
   — the tunable counterpart of the decode's `scale`; subsumes the regional
   balance
-- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`
+- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`, `nf-reconstruction/anchor-spike`, `nf-look/desaturation-spike`
   — what makes whites read clean, made a deliberate control instead of a
   gamut-map side effect
 - `nf-look/contrast` (new flow): `nf-look/stage`, `nf-reconstruction/gamma-split`
@@ -1045,6 +1055,17 @@ the design in `docs/design-update.md`:
 - `nf-docs/reference-sweep` (new flow): none
   — about a dozen `src/` and doc pointers still assert an inactive task is
   live or owns a decision
+- `nf-reconstruction/anchor-spike` (new flow): none
+  — runs against today's binary so it can run before the rule has to be chosen;
+  every converter measured anchors the bright end, and whether nc should is
+  currently argued rather than measured
+- `nf-look/desaturation-spike` (new flow): none
+  — the per-channel half runs against today's binary and the hue-preserving half is a
+  throwaway patch, so it settles the operator's form before the look stage exists
+- `nf-calibration/anchor-comparison` (new flow): `nf-look/path-to-white`, `nf-reconstruction/anchor-spike`
+  — the spike costs the four white placements from the scans; only a render with a real
+  highlight operator in the chain can rank them, and under the fixed anchor that
+  operator has nothing to act on
 
 ## Tasks
 
@@ -1337,7 +1358,7 @@ the design in `docs/design-update.md`:
   gap, tracked for the follow-on tuning work and recorded in the v3 report
 - [x] [Parallel display stages](tasks/output/parallel-display-stages.md) — rayon drivers for
   the lcms2 transform, SDR render, ACEScg mapping and print controls, byte-identical;
-  measured 3–4x on `legacy`/`display-p3` in [gpu-rendering-spike](gpu-rendering-spike.md)
+  measured 3–4x on `legacy`/`display-p3` in [gpu-rendering-spike](spike/gpu-rendering-spike.md)
 - [x] [Parallel HDR stages](tasks/output/parallel-hdr-stages.md) — HDR render with the
   MaxFALL reduction split out, transfer encode, gain-map build, quantize; memory model re-checked
 - [x] [AVIF row multithreading](tasks/output/avif-row-multithreading.md) — libaom row-mt at a
@@ -1489,6 +1510,10 @@ the design in `docs/design-update.md`:
 > The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`,
 > and `gamma` split into a calibration half and a look half.
 
+- [x] [Spike: does a diffuse-white anchor earn its
+  place?](tasks/nf-reconstruction/anchor-spike.md) — runs against today's binary
+  so it can run first; every converter measured anchors the bright end, and the
+  rule currently has to choose on argument alone
 - [ ] [The fixed, stock-agnostic
   decode](tasks/nf-reconstruction/fixed-decode.md) — exponential, toe passed
   through as recorded — defaults and wiring, not new arithmetic
@@ -1525,6 +1550,10 @@ the design in `docs/design-update.md`:
 > white, contrast, look presets, and the film-stock data that outlives the decode's
 > `characteristic` curve.
 
+- [x] [Spike: what form should highlight desaturation
+  take?](tasks/nf-look/desaturation-spike.md) — per-channel curve against a
+  hue-preserving chroma pull; the design's prose describes one and every measured
+  reference does the other
 - [ ] [The look stage](tasks/nf-look/stage.md) — scene-referred and before the
   SDR/HDR branch, because a gain map needs agreement below diffuse white
 - [ ] [A per-channel grade with a mid-grey
@@ -1586,6 +1615,9 @@ the design in `docs/design-update.md`:
   exist](tasks/nf-calibration/scale-ladder.md) — runs against today's binary so
   it can run first; the decode would otherwise inherit a sigmoid-era value whose
   green half is documented as unresolved
+- [ ] [Choose the white placement by
+  rendering](tasks/nf-calibration/anchor-comparison.md) — rank the four options the
+  spike costed, once a highlight operator exists to make the differences visible
 - [ ] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering. Supersedes

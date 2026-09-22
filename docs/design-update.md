@@ -957,13 +957,20 @@ why.
   `print_exposure` (0 against 2.17) and `display_tone` (`none` against reinhard) —
   so nothing in that round isolates the shoulder, and the ranking that anointed
   the knee'd render was made by eye on an axis the reviewer reports being
-  insensitive to. Measurements on 2026-09-20 point at the anchor instead: three
-  commercial converters reach neutral whites with no highlight-desaturation
-  operator at all, their channels converging because the anchor sits high in
-  density with a shoulder and a ceiling above it
-  (`docs/reports/three-way-gold200.md`). What survives unchanged is the negative
-  half — a luminance-preserving operator scales all three channels by one factor,
-  so it cannot converge them at all.
+  insensitive to.
+
+  **Narrowed to two candidates on 2026-09-20, by structure rather than by a
+  render.** Of the four differences, three cannot move a channel ratio at all:
+  `print_exposure` is a scalar gain after the curve; the anchor factors out of
+  `out_c = 10^(gamma·(scale_c·D_c − A))` as `10^(−gamma·A)`, identical on every
+  channel; and **every nc display tone is luminance-preserving** — `sdr.rs:244-247`
+  and `hdr.rs:550` curve one luminance and multiply all three channels by the
+  resulting ratio, so `shoulder`, `reinhard` and `none` alike leave every ratio
+  invariant. What remains is the **per-channel shoulder** and the **gamut map**,
+  which converges radially near luminance 1.0 (`sdr.rs:249-266`) with a ceiling
+  that follows the rendered luminance — so the tone choice reaches it indirectly
+  even though the tone itself cannot. Separating those two is what
+  `nf-reconstruction/anchor-spike` now exists for.
 - **"The Ektar green cast is a drift, not a hue."** The argument used
   `curve_probe::channel_drift`, which groups **ordinary picture pixels** by red
   density and reads the green/red ratio across the groups, with no grey patch. A

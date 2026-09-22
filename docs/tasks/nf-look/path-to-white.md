@@ -8,55 +8,72 @@ white.
 
 ## Design
 
-- **Why it *might* have to be explicit — the premise is weaker than it looks.** The
-  2026-09-17 round (design-update Appendix E) measured the knee'd sigmoid's channels
-  converging as lightness rises, B/R 1.65 → 1.27 against 1.76 → 1.48 for the
-  shoulder-less render. It did **not** establish the shoulder as the cause: the two
-  presets differ in four ways at once (shoulder, anchor 0.28 vs 0.5 mid-fraction,
-  `print_exposure`, `display_tone`). What is settled is only the negative half — a
-  luminance-preserving operator scales all three channels by one factor, so it cannot
-  converge them at all and a cast survives to display white.
-- **And the 2026-09-20 measurements point at the anchor instead.** All three outside
-  converters produce neutral whites without any highlight-desaturation operator
-  (`docs/reports/three-way-gold200.md`): their channels converge because the anchor
-  sits high in density with a shoulder and a ceiling above it. SilverFast reaches a
-  near-neutral white with a *fixed* per-channel calibration and no colour step at all.
-  If that mechanism is what the eye was responding to, it belongs to
-  [`nf-reconstruction/anchor-rule`](../nf-reconstruction/anchor-rule.md) and this task
-  is an **optional look**, not a remedy for cast — which is the reading the design's
-  own "off must stay available" clause already implies, since an operator that hides
-  residual cast cannot also be the fix for it.
-- **A cost to weigh that was not previously recorded.** Per-channel highlight
-  compression pulls *saturated* highlights toward white, and a sunset is saturated
-  highlights. Whatever makes whites clean is the same mechanism that flattens a
-  sunset, which is a second, independent argument for the parameterisation below.
-- **Anchored at diffuse white.** Display white differs between SDR and HDR, so a
-  single pre-branch operator cannot be defined against it. Diffuse white is
-  scene-referred and common to both, and a gain map only requires the renditions
-  to agree *below* it — the same crossover the HDR highlight lift already uses. So
-  the trigger point is shared even where the pull above it ends up applied per
-  branch.
+- **The form is settled: a chroma pull, keyed on brightness *and* saturation.**
+  [The spike](desaturation-spike.md) (report: [`docs/spike/highlight-desaturation.md`](../../spike/highlight-desaturation.md)) compared it against a per-channel curve — what film,
+  paper and all three outside converters do — and found them perceptually equivalent at
+  matched cleanup and matched brightness (ΔE ≈ 0.7). The pull wins on **separability**:
+  a per-channel curve moves luminance as well as chroma, and the fit range downstream
+  eats whatever exposure compensates it, so the two jobs cannot be tuned apart.
+- **Strength must key on distance from the neutral axis, not on brightness alone.** With
+  brightness alone the operator neutralises a bright *coloured* surface as hard as a
+  bright *white* one — measured on a sand beach at C\* 27.5 → 1.1. A saturation band
+  multiplying the brightness term left the whites identical (C\* 6.1 either way) and kept
+  the sand at 22.3, confirmed by eye. **This is the spike's main result**, and no
+  aggregate found it: one marked patch did.
+- **It is a highlight operator and cannot be more.** Its reach is its threshold —
+  surfaces at L\* 64–68 were untouched at every setting tried. Cast there belongs to
+  [the per-channel grade](per-channel-grade.md) or to the decode's `scale`, and judging
+  "are the whites clean" on a frame whose white sits at L\* 64 measures the decode rather
+  than this stage.
+- **Anchored at diffuse white, and that is forced rather than preferred.** The branches
+  compress against different ceilings — 1.0 for SDR against `LINEAR_HEADROOM` ≈ 4.93
+  for HDR — so the same operator placed *per branch* converges hard on SDR and barely
+  at all on HDR, where a typical frame's ~1 stop above diffuse white never approaches
+  the ceiling. The same frame would read neutral on one display and cast on the other,
+  and a gain map would not complain, since it requires agreement only *below* diffuse
+  white. Diffuse white is scene-referred and common to both, so run once before the
+  branch both renditions inherit the same convergence.
+- **It does not replace fit range.** The two are orthogonal and separated for opposite
+  reasons: **chroma** convergence must be pre-branch so the branches agree on white,
+  while **luminance** compression must stay per-branch so HDR can carry more than SDR.
+  Collapsing them into one per-channel fit-range operator gives up the second to get the
+  first. What should shrink instead is the gamut map's incidental share.
 - **Parameterised, with "off" available.** How early it starts and how hard it
   pulls are look choices; off matters because desaturation *hides* residual cast,
   which is right for a print and wrong for a diagnostic render or for judging a
   decode (Part 3 makes the same point about comparing decodes).
-- **It must not double up with the gamut map.** The SDR renderer already does
-  something like this at the cube boundary as a side effect; this makes it
-  deliberate, and the display stages need to know which of the two is acting.
+- **It must not double up with the gamut map** — which is also one of the two live
+  candidates for the knee'd render's whites (`sdr.rs:249-266`, radial near luminance
+  1.0, with a ceiling that follows the rendered luminance). The spike separates their
+  shares; this task then makes the deliberate half deliberate.
 
 ## Open questions
 
-- What "approaches white" is measured on — luminance, max channel, or a
-  saturation measure — and whether the pull preserves hue.
+- **The functional form and its parameters.** The spike used a linear band over
+  linear-RGB `(max−min)/max`, full pull below `s0` and off above `s1`, placed at
+  0.30 → 0.45 — but that band was fitted to **one** saturated patch on one roll, so the
+  shape carries and the numbers do not. A perceptual saturation measure may separate the
+  cases better than a linear-RGB one.
+- **Whether the pull should preserve hue exactly.** The spike's lerp toward `(Y, Y, Y)`
+  holds luminance to 3e-3 but still rotates hue 4.3°, because a straight line to the
+  achromatic point in linear ACEScg is not a constant-hue path in CIELAB. Nothing
+  suggests that rotation was visible; a perceptual construction would cost more.
 - Whether anything is applied above diffuse white per branch, or the operator
   stops there entirely.
+- **Whether the "direct" preset should get it.** Part 2 wants that preset minimal and
+  continuing in Lightroom, but an operator that hides residual cast is the wrong default
+  where the cast is what a user is about to correct. A switch makes this a choice; had
+  it lived in fit range it would not have been one.
 
 ## How to Verify
 
 - Off is a bit-exact identity.
 - A saturated near-white patch desaturates monotonically as the parameter rises.
-- On a real frame, `nctool metrics` reproduces a decile B/R trend in the direction
-  Appendix E measured.
+- On a real frame, top-end chroma on **marked neutral patches** falls as the parameter
+  rises (the review app measures them natively since #128), **while a marked saturated
+  patch does not** — that pair is the check, and either alone passes a broken operator.
+  Appendix E's decile columns are not the check: they carry one frame's own scene colour,
+  so only their trend is comparable, and the causal reading attached to them was retired.
 - The SDR and HDR renditions still agree below diffuse white.
 
 ## Dependencies
@@ -68,3 +85,9 @@ white.
   to reach the knee'd render's whites by itself. The evidence moved to the anchor
   instead (see Design), which is why this task's premise needs re-reading before it is
   picked up.
+- [Spike: what form should highlight desaturation take?](desaturation-spike.md)
+  — **done 2026-09-21.** Settled the form (a chroma pull, keyed on brightness and
+  saturation) and left the gamut map's share unseparated; see Design
+- [Spike: does a diffuse-white anchor earn its place?](../nf-reconstruction/anchor-spike.md)
+  — if the anchor produces the whites, this task is an optional look rather than a
+  remedy for cast

@@ -193,7 +193,7 @@ pub(crate) struct IsoEncodedGainMap {
 ///
 /// Takes `log2` where the dialect stores logarithmic units, so the caller never
 /// has to remember which fields are linear — the confusion
-/// `docs/hdr-output-spike.md` warns about under "Do not confuse linear API
+/// `docs/spike/hdr-output-spike.md` warns about under "Do not confuse linear API
 /// values with serialized logarithmic values".
 pub(crate) fn project(metadata: &GainMapMetadata) -> Result<IsoGainMapFields> {
     let mut gain_map_min_log2 = [Rational {

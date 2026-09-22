@@ -33,7 +33,7 @@ Ultra HDR. ISO 21496-1 defines the gain-map model; container conformance must be
 specified separately.
 
 The provisional decision and prototype evidence are recorded in
-[the HDR still-output decision note](../../hdr-output-spike.md). The spike
+[the HDR still-output decision note](../../spike/hdr-output-spike.md). The spike
 closed 2026-07-24; the normative-text review was waived at spike level and re-homed to
 the encoder tasks as a pre-merge gate. Encoder
 conformance, physical-device interoperability, and final codec thresholds are

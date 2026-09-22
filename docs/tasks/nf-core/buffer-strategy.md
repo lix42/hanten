@@ -8,7 +8,7 @@ memory decision as much as a structural one.
 
 ## Design
 
-- **Two positions have to be reconciled.** `docs/gpu-rendering-spike.md` measured the
+- **Two positions have to be reconciled.** `docs/spike/gpu-rendering-spike.md` measured the
   pipeline and concluded the seams are the *existing typed boundaries*
   (`FilmRgbImage`, `AcesCgImage`, `SharedDisplaySource`), "not a new one per stage";
   [the stage skeleton](stage-skeleton.md) proposes a pure function per stage. Those

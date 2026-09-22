@@ -50,12 +50,20 @@ beats reusing what is there**. Concretely:
 - `docs/using-nc.md` — the **user-facing** guide: what to run, in what order,
   and why. Verified against the **binary**, so it wins on what the CLI currently
   accepts; the design spec wins on intent. Keep it current — see Conventions.
-- `docs/reports/<name>.md` — versioned conversion baselines / comparisons.
+- `docs/reports/<name>.md` — verification, validation and measurement of things that
+  **exist**: conversion baselines, comparisons against other converters.
   `v0-baseline.md` records the current default-output behavior (the reference point
   future versions are measured against; see the `conversion-versioning` task).
+- `docs/spike/<name>.md` — the **result** of a spike: a question answered before the
+  thing exists. Its task is in `docs/tasks/`, its execution trail in `docs/progress/`,
+  and the result here because several tasks usually cite it and a closed task is a bad
+  home for reference material. `docs/design/` is where a *new* design document goes;
+  `design-spec.md` and `design-update.md` stay at `docs/` because they are cited from
+  `src/`, CLAUDE.md and many task files. Each new directory carries a `README.md`
+  stating the distinction.
 - `docs/negative-convertor-research-report.md` — background research (image
   science, library survey). Context, not spec.
-- `docs/gpu-rendering-spike.md` — measured stage timings per preset and the
+- `docs/spike/gpu-rendering-spike.md` — measured stage timings per preset and the
   decision to multithread on the CPU rather than port to a GPU; revisit for an
   interactive native app or a browser build.
 
@@ -149,9 +157,10 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `algo::finish_print` is the stage-4 print bridge. The old `Converter` trait and
   `AlgoParams` are gone.
   **`density.scale`'s default is per-curve, and constructing one by hand is a trap.**
-  `DensityParams::default_scale_for` is the single definition: `[1, 0.90, 0.86]` for the
-  parametric curves (a scanner calibration — green and blue density rise ~11-18% faster
-  than red in a scan) and `[1, 1, 1]` for `characteristic`, which already carries each
+  `DensityParams::default_scale_for` is the single definition: `[1, 0.84, 0.73]` for the
+  parametric curves (a scanner calibration — green and blue density rise ~19-37% faster
+  than red in a scan; re-calibrated from 31 neutral patches on 2026-09-16, and the
+  earlier `[1, 0.90, 0.86]` stood here long after the code moved) and `[1, 1, 1]` for `characteristic`, which already carries each
   stock's per-channel structure and would otherwise be corrected twice (measured: channel
   means move 0.039 → 0.185 off neutral). It is resolved in **three** places — the recipe's
   `Deserialize` (reading key *presence* off the raw JSON, since the field is a concrete
@@ -382,7 +391,7 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `GlobalContext` shortcut constructors (`new`, `new_flags`) erase the flag from the
   type; no `unsafe` is involved, and the global context keeps Little CMS reporting
   faults to the handler `cli` installs. Rationale and measurements in
-  `docs/gpu-rendering-spike.md`.
+  `docs/spike/gpu-rendering-spike.md`.
 - **Telemetry is operational, not a conversion knob.** `src/telemetry.rs` emits
   an opt-in, fail-soft, schema-versioned JSON record per `nc convert` run (image
   facts, per-stage timings, conversion summary) to a JSONL log / one-off file.

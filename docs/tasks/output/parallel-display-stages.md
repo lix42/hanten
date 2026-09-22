@@ -8,7 +8,7 @@ Run every per-pixel stage between reconstruction and the u16 encode on all cores
 with **byte-identical output**. Today only reconstruction uses rayon; the lcms2
 transform, the SDR render, the ACEScg mapping and the print controls are
 sequential and cost ~1.1–1.3 s of a 1.4–1.6 s `legacy`/`display-p3` run on a
-16.4 MP scan ([gpu-rendering-spike](../../gpu-rendering-spike.md), Experiment 1).
+16.4 MP scan ([gpu-rendering-spike](../../spike/gpu-rendering-spike.md), Experiment 1).
 
 ## Design
 

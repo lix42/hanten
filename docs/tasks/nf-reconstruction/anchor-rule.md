@@ -105,3 +105,9 @@ tension rather than finesse it.
 ## Dependencies
 
 - [The fixed, stock-agnostic decode](fixed-decode.md)
+- [Spike: does a diffuse-white anchor earn its place?](anchor-spike.md)
+  — **done 2026-09-21.** Costed four white placements instead of choosing one; the
+  ranking needs a highlight operator and moved to
+  [`nf-calibration/anchor-comparison`](../nf-calibration/anchor-comparison.md). This task
+  ships a rule with today's pick and that comparison may move it, which is the
+  value-versus-rule split the Decisions section already describes.

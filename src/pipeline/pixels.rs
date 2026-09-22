@@ -3,7 +3,7 @@
 //!
 //! Each stage keeps its own per-pixel kernel; this module owns only the loop that
 //! applies it across interleaved RGB buffers on every core. Two rules, decided in
-//! `docs/gpu-rendering-spike.md`:
+//! `docs/spike/gpu-rendering-spike.md`:
 //!
 //! - A driver here is a pure map, so its output is byte-identical to the sequential
 //!   loop it replaced. Stage errors quote the offending pixel's index, so which
