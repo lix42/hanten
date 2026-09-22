@@ -166,6 +166,36 @@ migration plan (`docs/nf-migration.md`).
   distance from the neutral axis as well as on luminance would protect the sand beach
   while still cleaning the cloth. **What "approaches white" is measured on is now the
   live design question, not the family.**
+- 2026-09-21: **the saturation guard works, and is strictly better than either family
+  on this evidence.** Added a third and fourth parameter to the throwaway operator: a
+  band over linear-RGB saturation `(max−min)/max`, full pull below `s0`, off above `s1`,
+  linear between. Placed at **0.30 → 0.45** from the patches themselves — the
+  whites-with-cast run 0.137–0.279 and the sand beach sits at **0.463**, 1.7× the next
+  highest, so a band rather than a single knee is what separates them.
+
+  | | whites with cast | genuinely coloured |
+  |---|---|---|
+  | control | 12.9 | 27.5 |
+  | per-channel, brightness-matched | 5.7 | 7.6 |
+  | chroma pull, unguarded | **6.1** | **1.1** |
+  | **chroma pull + guard** | **6.1** | **22.3** |
+
+  Identical cleanup on the whites (6.1 either way, and every other patch unchanged to
+  0.1), and the sand beach keeps **22.3 against 1.1**. The per-channel curve's 7.6 was
+  the best of the two families; the guard beats it threefold without giving up any
+  cleaning.
+
+  **So the answer to "what does approaching white get measured on" is: not luminance
+  alone.** Keying strength on brightness *and* on how far the pixel already is from the
+  neutral axis is what lets one operator clean a cast without flattening a sunset —
+  which was the objection that made "off must stay available" feel mandatory. It may
+  still be wanted, but for less.
+
+  **Caveat, and it is not small.** The band was placed from 12 patches on one roll, and
+  the sand beach is the only one above it. The *mechanism* is demonstrated; the
+  *parameters* are fitted to a single example and should not be carried into
+  `path-to-white` as values. What carries is the shape: two thresholds, on saturation,
+  multiplying the brightness term.
 
 ## path-to-white
 
