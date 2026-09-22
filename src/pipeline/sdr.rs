@@ -355,7 +355,7 @@ mod tests {
             &image,
             &FilmBase::from([1.0; 3]),
             &Reconstruction::Simple,
-            None,
+            crate::types::DmaxInput::default(),
         )
         .unwrap();
         display_source(map_nc_film_rgb_v1(film), print).unwrap()

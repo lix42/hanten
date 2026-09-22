@@ -36,7 +36,9 @@ pub mod simple;
 #[cfg(test)]
 mod curve_probe;
 
-use crate::types::{FilmBase, LinearImage, PrintParams, Reconstruction, Result, WbSource};
+use crate::types::{
+    DmaxInput, FilmBase, LinearImage, PrintParams, Reconstruction, Result, WbSource,
+};
 
 /// The typed film-rendering RGB boundary every reconstruction path produces:
 /// the unclamped linear positive in NC's film-rendering interpretation, plus
@@ -129,7 +131,7 @@ impl std::fmt::Debug for FilmRgbImage {
 /// resolved values, not new knobs (controls live in [`Reconstruction`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReconstructionReport {
-    /// The resolved **reference** density (`curve.dmax`) — the roll calibration, and
+    /// The resolved **reference** density (`calibration.dmax`) — the roll calibration, and
     /// the value to freeze back into a recipe. `None` for `simple` (no curve stage) and
     /// for the exponential curve with `dmax = none` (unity placement).
     ///
@@ -173,15 +175,19 @@ pub fn reconstruct(
     image: &LinearImage,
     base: &FilmBase,
     config: &Reconstruction,
-    measure_region: Option<[u32; 4]>,
+    dmax: DmaxInput,
 ) -> Result<(FilmRgbImage, ReconstructionReport)> {
     match config {
+        // `simple` has no curve stage, so it reads no reference at all — `dmax` simply
+        // goes unread here. It is **not** refused at the CLI boundary: a roll calibration
+        // must compose with any profile, so `cli::unconsumed_dmax_warning` reports it
+        // (`--strict`-promotable) instead.
         Reconstruction::Simple => Ok((
             simple::reconstruct(image, base)?,
             ReconstructionReport::default(),
         )),
         Reconstruction::Density { density, curve } => {
-            density::reconstruct(image, base, density, curve, measure_region)
+            density::reconstruct(image, base, density, curve, dmax)
         }
     }
 }
@@ -266,7 +272,7 @@ mod tests {
         // `FilmRgbImage` (enforced by `reconstruct`'s signature — this test
         // exercises all paths) with the dimensions and IR plane intact.
         for config in all_configs() {
-            let (film, _) = reconstruct(&image(), &base(), &config, None).unwrap();
+            let (film, _) = reconstruct(&image(), &base(), &config, DmaxInput::default()).unwrap();
             assert_eq!((film.width(), film.height()), (2, 1), "{config:?}");
             assert_eq!(film.rgb().len(), 6, "{config:?}");
             assert_eq!(film.ir(), Some(&[0.25_f32, 0.75][..]), "{config:?}");
@@ -285,14 +291,20 @@ mod tests {
 
     #[test]
     fn simple_reports_no_curve_diagnostics() {
-        let (_, report) = reconstruct(&image(), &base(), &Reconstruction::Simple, None).unwrap();
+        let (_, report) = reconstruct(
+            &image(),
+            &base(),
+            &Reconstruction::Simple,
+            DmaxInput::default(),
+        )
+        .unwrap();
         assert_eq!(report, ReconstructionReport::default());
     }
 
     #[test]
     fn density_paths_report_their_resolved_anchor() {
         for config in &all_configs()[1..] {
-            let (_, report) = reconstruct(&image(), &base(), config, None).unwrap();
+            let (_, report) = reconstruct(&image(), &base(), config, DmaxInput::default()).unwrap();
             // Both curves default to the fixed nominal anchor.
             assert_eq!(report.dmax, Some(density::NOMINAL_DMAX), "{config:?}");
             assert_eq!(report.balance_range, None, "{config:?}");
@@ -303,7 +315,13 @@ mod tests {
     fn finish_print_passes_simple_through_and_prints_density() {
         // Simple: no print stage — the positive passes through bit-identically
         // and no gains are reported, even with non-default print params.
-        let (film, _) = reconstruct(&image(), &base(), &Reconstruction::Simple, None).unwrap();
+        let (film, _) = reconstruct(
+            &image(),
+            &base(),
+            &Reconstruction::Simple,
+            DmaxInput::default(),
+        )
+        .unwrap();
         let expected = film.rgb().to_vec();
         let print = PrintParams {
             print_exposure: 1.0,
@@ -316,7 +334,7 @@ mod tests {
         // Density: the print stage runs (2^1 exposure doubles every sample)
         // and the resolved (explicit, neutral) gains are reported.
         let config = all_configs()[1].clone();
-        let (film, _) = reconstruct(&image(), &base(), &config, None).unwrap();
+        let (film, _) = reconstruct(&image(), &base(), &config, DmaxInput::default()).unwrap();
         let expected: Vec<f32> = film.rgb().iter().map(|v| v * 2.0).collect();
         let (out, wb) = finish_print(film, &config, &print).unwrap();
         assert_eq!(out.rgb, expected);

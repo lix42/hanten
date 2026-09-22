@@ -27,10 +27,12 @@ actually true.
   tables, the registry and `docs/datasheets/` — and Part 1 quotes those tables as
   the evidence for the decode's fixed constants. This task removes the inversion
   *path*; the two must agree on `--film-stock`'s fate before either lands.
-- **Retiring a curve is mostly deleting conditions.** `takes_dmax()`,
-  `cli::preset_curve`'s carry-`dmax`-across rule and the `--film-stock`
-  required-here/refused-there pair all exist to tell this curve from the parametric
-  ones; each deletion is a rule that can no longer be ordered wrongly.
+- **Retiring a curve is mostly deleting conditions.** `DensityCurve::consumes_reference`,
+  `cli::unconsumed_dmax_warning` and the `--film-stock` required-here/refused-there pair
+  all exist to tell this curve from the parametric ones; each deletion is a rule that can
+  no longer be ordered wrongly. (`takes_dmax()` and `cli::preset_curve`'s
+  carry-`dmax`-across rule were the same shape and went in
+  `core/calibration-recipe-section`, which moved the reference out of the curve.)
 - Removed preset names and the removed curve value get migration errors on the
   `--algorithm` precedent — no aliases. Note `characteristic-generic` was
   `algo/split-default-migration`'s target, so any doc calling it the next default is

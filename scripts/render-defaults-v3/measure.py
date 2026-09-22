@@ -11,7 +11,7 @@ for roll, data in sorted(man["rolls"].items()):
     frames=[f for f in data["frames"] if f["role"]=="real"]
     if not frames: continue
     scan = ROOT/frames[0]["file"]
-    base = json.load(open(rp))["film_base"]["source"]["explicit"]
+    base = json.load(open(rp))["calibration"]["film_base"]["explicit"]
     for label, argv, ext in (
         ("v2 (legacy TIFF)", ["--output-preset","legacy"], "tiff"),
         ("v3 (gain-map-hdr)", [], "jpg"),

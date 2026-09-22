@@ -35,13 +35,13 @@ target subsection in design-spec §8, which this task implements.
 ## Open questions
 
 1. **How does a later layer override a *tagged* value?** Replacing
-   `film_base.source` wholesale is obvious. Less obvious is a layer that sets
+   `calibration.film_base` wholesale is obvious. Less obvious is a layer that sets
    `reconstruction.curve.contrast` when an earlier layer chose a different
    `curve.type` — a deep merge would produce a curve that no layer asked for.
    Whole-object replacement per tagged node is the safer default; say so
    explicitly either way.
 2. **Does an empty or all-defaults layer differ from an absent one?** It should
-   not, but `film_base.source` has no default, so "absent" and "explicitly null"
+   not, but `calibration.film_base` has no default, so "absent" and "explicitly null"
    are distinguishable and probably must stay so.
 3. **Should `--params -` be allowed more than once?** Reading stdin twice cannot
    work; refuse the second rather than silently reusing the buffer.

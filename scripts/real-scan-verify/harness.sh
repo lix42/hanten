@@ -183,9 +183,9 @@ stage_freeze() {
     # throughout. `output.depth` replaced the removed `output.hdr` bool, and is
     # consulted only by the non-atomic presets — hence `legacy` on both.
     jq -n --argjson b "$dmin" --argjson d "$dmax" \
-      '{film_base:{source:{explicit:[$b.r,$b.g,$b.b]}},reconstruction:{type:"density",curve:{type:"exponential",dmax:{explicit:$d}}},output:{preset:"legacy"}}' > "$REC/$roll.json"
+      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]},dmax:{explicit:$d}},reconstruction:{type:"density",curve:{type:"exponential"}},output:{preset:"legacy"}}' > "$REC/$roll.json"
     jq -n --argjson b "$dmin" --argjson d "$dmax" \
-      '{film_base:{source:{explicit:[$b.r,$b.g,$b.b]}},reconstruction:{type:"density",curve:{type:"exponential",dmax:{explicit:$d}}},output:{preset:"legacy",depth:"f32"}}' > "$REC/$roll.hdr.json"
+      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]},dmax:{explicit:$d}},reconstruction:{type:"density",curve:{type:"exponential"}},output:{preset:"legacy",depth:"f32"}}' > "$REC/$roll.hdr.json"
     jq -n --arg roll "$roll" --arg uf "$uf" --arg ureg "$ureg" --arg ff "$ff" --arg freg "$freg" \
       --argjson b "$dmin" --argjson d "$dmax" \
       --arg mw "$(tr '\n' ' ' <"$ART/$roll.dmin.warn")" --arg xw "$(tr '\n' ' ' <"$ART/$roll.dmax.warn")" '{

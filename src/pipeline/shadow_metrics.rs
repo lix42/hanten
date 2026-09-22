@@ -118,15 +118,20 @@ fn frozen_reference(recipe: &Path) -> (FilmBase, f32) {
     let v: serde_json::Value =
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", recipe.display()));
 
-    let base = v["film_base"]["source"]["explicit"]
+    let base = v["calibration"]["film_base"]["explicit"]
         .as_array()
-        .unwrap_or_else(|| panic!("{}: film_base.source.explicit missing", recipe.display()));
+        .unwrap_or_else(|| {
+            panic!(
+                "{}: calibration.film_base.explicit missing",
+                recipe.display()
+            )
+        });
     let rgb: Vec<f32> = base.iter().map(|x| x.as_f64().unwrap() as f32).collect();
     assert_eq!(rgb.len(), 3, "{}: film base is not RGB", recipe.display());
 
-    let dmax = v["reconstruction"]["curve"]["dmax"]["explicit"]
+    let dmax = v["calibration"]["dmax"]["explicit"]
         .as_f64()
-        .unwrap_or_else(|| panic!("{}: curve.dmax.explicit missing", recipe.display()))
+        .unwrap_or_else(|| panic!("{}: calibration.dmax.explicit missing", recipe.display()))
         as f32;
 
     (
@@ -623,7 +628,7 @@ mod tests {
 // Phase 3: measure the candidate anchoring forms against the frozen fixtures.
 // ---------------------------------------------------------------------------
 
-/// Every candidate reduces to **one number**: the sigmoid's anchor `A` (the `curve.dmax`
+/// Every candidate reduces to **one number**: the sigmoid's anchor `A` (the `calibration.dmax`
 /// value), plus a contrast. That is the whole reason no new curve code is needed here —
 /// `t = contrast·(D′ − A)` is unchanged and only the rule for choosing `A` differs.
 ///
@@ -990,14 +995,9 @@ fn med3(v: &[f32]) -> f32 {
 /// literally (`WhiteAtDmax` over an explicit reference) rather than re-derived by a
 /// placement rule — otherwise every measurement in the report would shift.
 fn curve_for(cand: &Candidate, contrast: f32) -> DensityCurve {
-    let dmax = match cand.anchor {
-        AnchorRule::Explicit(a) => DmaxSource::Explicit(a),
-        AnchorRule::Auto => DmaxSource::Auto,
-    };
     if cand.exponential {
         DensityCurve::Exponential(crate::types::ExponentialParams {
             gamma: contrast,
-            dmax,
             anchor: crate::types::AnchorPlacement::WhiteAtDmax,
         })
     } else {
@@ -1005,9 +1005,22 @@ fn curve_for(cand: &Candidate, contrast: f32) -> DensityCurve {
             contrast,
             toe: cand.toe,
             shoulder: cand.shoulder,
-            dmax,
             anchor: crate::types::AnchorPlacement::WhiteAtDmax,
         })
+    }
+}
+
+/// The candidate's reference as the reconstruction stage takes it. The region is
+/// handed over exactly where shipped hands it over — the content-driven `Auto` form
+/// — so the other rows keep their meaning (they resolve a constant and read no
+/// pixels for the anchor).
+fn dmax_for(cand: &Candidate, measure_region: Option<[u32; 4]>) -> crate::types::DmaxInput {
+    match cand.anchor {
+        AnchorRule::Explicit(a) => crate::types::DmaxInput::new(DmaxSource::Explicit(a)),
+        AnchorRule::Auto => crate::types::DmaxInput {
+            source: DmaxSource::Auto,
+            region: measure_region,
+        },
     }
 }
 
@@ -1204,14 +1217,9 @@ fn measure_candidates() {
                 highlight_compress: cand.hc,
                 ..PrintParams::default()
             };
-            // The region is handed over exactly where shipped hands it over — the
-            // content-driven `Auto` forms — so the other rows keep their meaning
-            // (they resolve a constant and read no pixels for the anchor).
-            let region = match cand.anchor {
-                AnchorRule::Auto => measure_region,
-                AnchorRule::Explicit(_) => None,
-            };
-            let (film, report) = crate::algo::reconstruct(&image, &base, &recon, region).unwrap();
+            let (film, report) =
+                crate::algo::reconstruct(&image, &base, &recon, dmax_for(&cand, measure_region))
+                    .unwrap();
             // For `Auto` the anchor is measured inside `reconstruct`; read it back so the
             // printed value is the one actually used rather than a guess.
             let anchor = report.dmax.unwrap_or(f32::NAN);
@@ -1301,7 +1309,14 @@ fn measure_candidates() {
                     density: DensityParams::default(),
                     curve: curve_for(&pinned, contrast),
                 };
-                let (bf, _) = crate::algo::reconstruct(&probe, &base, &probe_recon, None).unwrap();
+                // …and hand that pinned anchor to the *stage*, which is where the
+                // reference lives now. `DmaxInput::default()` here would silently render
+                // every candidate at the nominal instead, so candidates differing only in
+                // anchor would print the same `base_level` while the comment above claimed
+                // otherwise — a probe that stopped measuring, at exit 0, behind `#[ignore]`.
+                let (bf, _) =
+                    crate::algo::reconstruct(&probe, &base, &probe_recon, dmax_for(&pinned, None))
+                        .unwrap();
                 let ba = crate::pipeline::working_space::map_nc_film_rgb_v1(bf);
                 let bs = crate::pipeline::render_split::display_source(ba, &print).unwrap();
                 let br = crate::pipeline::sdr::render(
@@ -1625,13 +1640,18 @@ fn tone_map_probe() {
                 contrast: crate::types::REFERENCE_CONTRAST,
                 toe: 0.2,
                 shoulder: 0.6,
-                dmax: DmaxSource::Explicit(
-                    0.5 * dmax + MID_OUTPUT_DECADES / crate::types::REFERENCE_CONTRAST,
-                ),
                 anchor: crate::types::AnchorPlacement::WhiteAtDmax,
             }),
         };
-        let (film, _) = crate::algo::reconstruct(&image, &base, &recon, None).unwrap();
+        let (film, _) = crate::algo::reconstruct(
+            &image,
+            &base,
+            &recon,
+            crate::types::DmaxInput::new(DmaxSource::Explicit(
+                0.5 * dmax + MID_OUTPUT_DECADES / crate::types::REFERENCE_CONTRAST,
+            )),
+        )
+        .unwrap();
         let aces = crate::pipeline::working_space::map_nc_film_rgb_v1(film);
         let shared =
             crate::pipeline::render_split::display_source(aces, &PrintParams::default()).unwrap();
@@ -1767,12 +1787,19 @@ fn linear_render_probe() {
         let recon = Reconstruction::Density {
             density: DensityParams::default(),
             curve: DensityCurve::Sigmoid(SigmoidParams {
-                dmax: DmaxSource::Explicit(f["roll_dmax"].as_f64().unwrap() as f32),
                 ..SigmoidParams::default()
             }),
         };
         let print = PrintParams::default();
-        let (film, _) = crate::algo::reconstruct(&image, &base, &recon, None).unwrap();
+        let (film, _) = crate::algo::reconstruct(
+            &image,
+            &base,
+            &recon,
+            crate::types::DmaxInput::new(DmaxSource::Explicit(
+                f["roll_dmax"].as_f64().unwrap() as f32
+            )),
+        )
+        .unwrap();
         let aces = crate::pipeline::working_space::map_nc_film_rgb_v1(film);
         let shared = crate::pipeline::render_split::display_source(aces, &print).unwrap();
 
@@ -1965,13 +1992,18 @@ fn tone_map_stage_probe() {
                 contrast: crate::types::REFERENCE_CONTRAST,
                 toe: 0.2,
                 shoulder: 0.6,
-                dmax: DmaxSource::Explicit(
-                    0.5 * dmax + MID_OUTPUT_DECADES / crate::types::REFERENCE_CONTRAST,
-                ),
                 anchor: crate::types::AnchorPlacement::WhiteAtDmax,
             }),
         };
-        let (film, _) = crate::algo::reconstruct(&image, &base, &recon, None).unwrap();
+        let (film, _) = crate::algo::reconstruct(
+            &image,
+            &base,
+            &recon,
+            crate::types::DmaxInput::new(DmaxSource::Explicit(
+                0.5 * dmax + MID_OUTPUT_DECADES / crate::types::REFERENCE_CONTRAST,
+            )),
+        )
+        .unwrap();
         let aces = crate::pipeline::working_space::map_nc_film_rgb_v1(film);
         let shared =
             crate::pipeline::render_split::display_source(aces, &PrintParams::default()).unwrap();
@@ -2093,8 +2125,9 @@ fn tone_map_matched_probe() {
 
         // The benchmark: the shipped sigmoid at its own defaults. Its mid is the target.
         let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
-        let sigmoid = benchmark_sigmoid(dmax);
-        let (film, _) = crate::algo::reconstruct(&image, &base, &sigmoid, None).unwrap();
+        let sigmoid = benchmark_sigmoid();
+        let (film, _) =
+            crate::algo::reconstruct(&image, &base, &sigmoid, benchmark_reference(dmax)).unwrap();
         let shared = crate::pipeline::render_split::display_source(
             crate::pipeline::working_space::map_nc_film_rgb_v1(film),
             &PrintParams::default(),
@@ -2249,8 +2282,13 @@ fn tone_map_match_point_probe() {
         };
 
         let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
-        let (film, _) =
-            crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax), None).unwrap();
+        let (film, _) = crate::algo::reconstruct(
+            &image,
+            &base,
+            &benchmark_sigmoid(),
+            benchmark_reference(dmax),
+        )
+        .unwrap();
         let shared = crate::pipeline::render_split::display_source(
             crate::pipeline::working_space::map_nc_film_rgb_v1(film),
             &PrintParams::default(),
@@ -2508,17 +2546,20 @@ fn reconstruction_shape_probe() {
             )
         };
 
-        let shared_for = |recon: &Reconstruction, print: &PrintParams| {
-            let (film, _) = crate::algo::reconstruct(&image, &base, recon, None).unwrap();
+        let shared_for = |recon: &Reconstruction, dmax_in, print: &PrintParams| {
+            let (film, _) = crate::algo::reconstruct(&image, &base, recon, dmax_in).unwrap();
             crate::pipeline::render_split::display_source(
                 crate::pipeline::working_space::map_nc_film_rgb_v1(film),
                 print,
             )
             .unwrap()
         };
-        let render = |recon: &Reconstruction, print: &PrintParams, tone: DisplayTone| {
+        let render = |recon: &Reconstruction,
+                      dmax_in: crate::types::DmaxInput,
+                      print: &PrintParams,
+                      tone: DisplayTone| {
             crate::pipeline::sdr::render(
-                &shared_for(recon, print),
+                &shared_for(recon, dmax_in, print),
                 crate::pipeline::sdr::SdrGamut::DisplayP3,
                 tone,
             )
@@ -2526,7 +2567,8 @@ fn reconstruction_shape_probe() {
         };
 
         let bench = render(
-            &benchmark_sigmoid(dmax),
+            &benchmark_sigmoid(),
+            benchmark_reference(dmax),
             &PrintParams::default(),
             DisplayTone::DEFAULT,
         );
@@ -2561,7 +2603,11 @@ fn reconstruction_shape_probe() {
         // pixel can round over 1.0 even with the shoulder holding film RGB at <= 1.0. That
         // is a legitimate result for this row, not a reason to abandon six other frames.
         {
-            let shared = shared_for(&benchmark_sigmoid(dmax), &PrintParams::default());
+            let shared = shared_for(
+                &benchmark_sigmoid(),
+                benchmark_reference(dmax),
+                &PrintParams::default(),
+            );
             match crate::pipeline::sdr::render(
                 &shared,
                 crate::pipeline::sdr::SdrGamut::DisplayP3,
@@ -2584,16 +2630,16 @@ fn reconstruction_shape_probe() {
             // Any starting anchor reaches the same solved one (it is a pure gain), so this
             // is a starting point for the bisection, not a choice under test.
             let reference = 0.5 * dmax + MID_OUTPUT_DECADES / contrast;
-            let sigmoid = |anchor: f32| Reconstruction::Density {
+            let sigmoid_look = Reconstruction::Density {
                 density: DensityParams::default(),
                 curve: DensityCurve::Sigmoid(SigmoidParams {
                     contrast,
                     toe: shape.toe,
                     shoulder: 0.0,
-                    dmax: DmaxSource::Explicit(anchor),
                     anchor: crate::types::AnchorPlacement::WhiteAtDmax,
                 }),
             };
+            let at = |anchor: f32| crate::types::DmaxInput::new(DmaxSource::Explicit(anchor));
             let print = PrintParams {
                 black_point: shape.black_point,
                 ..PrintParams::default()
@@ -2621,7 +2667,7 @@ fn reconstruction_shape_probe() {
             // in eight rather than a uniform 1-in-8 sample. Left as is: the target is a mean
             // over the whole frame and the `light` assert below bounds the consequence.
             let samples = pre_operator_luma_samples(
-                &shared_for(&sigmoid(reference), &PrintParams::default()),
+                &shared_for(&sigmoid_look, at(reference), &PrintParams::default()),
                 SUBSAMPLE,
             );
             let lift = shape.black_point * acescg_white_luma();
@@ -2639,7 +2685,7 @@ fn reconstruction_shape_probe() {
             let gain = 0.5 * (lo + hi);
             let anchor = reference - gain.log10() / contrast;
 
-            let out = render(&sigmoid(anchor), &print, reinhard);
+            let out = render(&sigmoid_look, at(anchor), &print, reinhard);
             let (blown, sep, floor, crush, light) = measure(out.image());
             let flag = match (blown < b_blown, sep > b_sep) {
                 (true, true) => "both",
@@ -2833,8 +2879,13 @@ fn hdr_gain_probe() {
         // Match the shipped sigmoid's mean lightness, per chunk 4: comparing at equal
         // brightness is the only way these numbers mean anything.
         let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
-        let (film, _) =
-            crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax), None).unwrap();
+        let (film, _) = crate::algo::reconstruct(
+            &image,
+            &base,
+            &benchmark_sigmoid(),
+            benchmark_reference(dmax),
+        )
+        .unwrap();
         let bench = crate::pipeline::sdr::render(
             &crate::pipeline::render_split::display_source(
                 crate::pipeline::working_space::map_nc_film_rgb_v1(film),
@@ -3176,8 +3227,13 @@ fn curve_colour_probe() {
     );
 
     let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
-    let (film, _) =
-        crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax), None).unwrap();
+    let (film, _) = crate::algo::reconstruct(
+        &image,
+        &base,
+        &benchmark_sigmoid(),
+        benchmark_reference(dmax),
+    )
+    .unwrap();
     let shared = crate::pipeline::render_split::display_source(
         crate::pipeline::working_space::map_nc_film_rgb_v1(film),
         &PrintParams::default(),
@@ -3354,8 +3410,13 @@ fn tone_map_visual_review() {
         // Benchmark: the shipped sigmoid at its defaults. Sets the midtone target and the
         // crop window every other config reuses.
         let dmax = f["roll_dmax"].as_f64().unwrap() as f32;
-        let (film, _) =
-            crate::algo::reconstruct(&image, &base, &benchmark_sigmoid(dmax), None).unwrap();
+        let (film, _) = crate::algo::reconstruct(
+            &image,
+            &base,
+            &benchmark_sigmoid(),
+            benchmark_reference(dmax),
+        )
+        .unwrap();
         let shared = crate::pipeline::render_split::display_source(
             crate::pipeline::working_space::map_nc_film_rgb_v1(film),
             &PrintParams::default(),
@@ -3619,19 +3680,37 @@ fn x3_reference_anchor() -> f32 {
 
 /// The shipped sigmoid at its defaults, for the roll's `Dmax`. The benchmark every
 /// comparison is measured against.
-fn benchmark_sigmoid(dmax: f32) -> Reconstruction {
+/// The shipped sigmoid at its own defaults — the *look* half of the benchmark.
+///
+/// **Takes no reference.** It used to take `dmax` and bury it in the curve; the reference
+/// is now [`benchmark_reference`], a separate argument to the stage. Dropping the
+/// parameter is deliberate: while it lingered as `_dmax`, a call site could keep passing
+/// `dmax` here and hand the stage `DmaxInput::default()`, rendering the benchmark at the
+/// nominal instead — which is exactly what happened at one site, invisibly, because a
+/// probe only prints.
+fn benchmark_sigmoid() -> Reconstruction {
     Reconstruction::Density {
         density: DensityParams::default(),
         curve: DensityCurve::Sigmoid(SigmoidParams {
             contrast: crate::types::REFERENCE_CONTRAST,
             toe: 0.2,
             shoulder: 0.6,
-            dmax: DmaxSource::Explicit(
-                0.5 * dmax + MID_OUTPUT_DECADES / crate::types::REFERENCE_CONTRAST,
-            ),
             anchor: crate::types::AnchorPlacement::WhiteAtDmax,
         }),
     }
+}
+
+/// The reference [`benchmark_sigmoid`] is rendered against.
+///
+/// Its own function because the reference left `reconstruction.curve` for
+/// `calibration.dmax`: it is a roll measurement, so the stage takes it beside the
+/// look rather than inside it. **Stated here, not inherited from a shipped default**
+/// — a probe that borrows a default stops measuring what it says it measures the
+/// moment that default moves (CLAUDE.md).
+fn benchmark_reference(dmax: f32) -> crate::types::DmaxInput {
+    crate::types::DmaxInput::new(DmaxSource::Explicit(
+        0.5 * dmax + MID_OUTPUT_DECADES / crate::types::REFERENCE_CONTRAST,
+    ))
 }
 
 /// X3 at `anchor`, taken to the shared display source. `density` is cloned because

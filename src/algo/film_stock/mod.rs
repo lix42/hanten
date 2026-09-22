@@ -849,8 +849,13 @@ mod tests {
             density: density.clone(),
             curve: DensityCurve::Characteristic(CharacteristicParams { stock }),
         };
-        let (film, report) = crate::algo::reconstruct(&image, &test_base(), &config, None)
-            .expect("the characteristic reconstruction must succeed");
+        let (film, report) = crate::algo::reconstruct(
+            &image,
+            &test_base(),
+            &config,
+            crate::types::DmaxInput::default(),
+        )
+        .expect("the characteristic reconstruction must succeed");
         let (pixels, rest) = film.rgb().as_chunks::<3>();
         debug_assert!(rest.is_empty(), "an RGB buffer is a whole number of pixels");
         (pixels.to_vec(), report)

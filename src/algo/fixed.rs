@@ -372,7 +372,7 @@ mod tests {
     use super::*;
     use crate::algo::reconstruct;
     use crate::types::{
-        AnchorPlacement, DensityCurve, DensityParams, DmaxSource, ExponentialParams,
+        AnchorPlacement, DensityCurve, DensityParams, DmaxInput, DmaxSource, ExponentialParams,
         REFERENCE_MID_TO_WHITE_DELTA, Reconstruction,
     };
 
@@ -427,7 +427,7 @@ mod tests {
     /// The legacy configuration this decode reproduces: the exponential curve (the
     /// sigmoid with both knees off, bit-exactly) at the same contrast, the same
     /// calibration, and the same reference-free placement.
-    fn equivalent_legacy(offset: [f32; 3], dmax: DmaxSource) -> Reconstruction {
+    fn equivalent_legacy(offset: [f32; 3]) -> Reconstruction {
         Reconstruction::Density {
             density: DensityParams {
                 scale: DENSITY_SCALE,
@@ -436,7 +436,6 @@ mod tests {
             },
             curve: DensityCurve::Exponential(ExponentialParams {
                 gamma: CONTRAST,
-                dmax,
                 anchor: AnchorPlacement::MidAtBaseOffset(MID_ABOVE_BASE),
             }),
         }
@@ -466,8 +465,8 @@ mod tests {
             let (legacy, _) = reconstruct(
                 &img,
                 &b,
-                &equivalent_legacy(offset, DmaxSource::Fixed),
-                None,
+                &equivalent_legacy(offset),
+                DmaxInput::new(DmaxSource::Fixed),
             )
             .unwrap();
             assert_eq!(
@@ -548,8 +547,13 @@ mod tests {
             DmaxSource::Auto,
             DmaxSource::None,
         ] {
-            let (legacy, _) =
-                reconstruct(&img, &b, &equivalent_legacy(DENSITY_OFFSET, dmax), None).unwrap();
+            let (legacy, _) = reconstruct(
+                &img,
+                &b,
+                &equivalent_legacy(DENSITY_OFFSET),
+                DmaxInput::new(dmax),
+            )
+            .unwrap();
             assert_eq!(
                 bits(fresh.rgb()),
                 bits(legacy.rgb()),
@@ -594,11 +598,10 @@ mod tests {
             },
             curve: DensityCurve::Exponential(ExponentialParams {
                 gamma: CONTRAST,
-                dmax: DmaxSource::Fixed,
                 anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
             }),
         };
-        let (legacy, _) = reconstruct(&img, &b, &other, None).unwrap();
+        let (legacy, _) = reconstruct(&img, &b, &other, DmaxInput::new(DmaxSource::Fixed)).unwrap();
         assert_ne!(bits(fresh.rgb()), bits(legacy.rgb()));
     }
 

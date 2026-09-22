@@ -73,7 +73,7 @@
 //! - **Monotonic:** a composition of two monotone-increasing soft knees.
 //!
 //! **A positive anchor is required.** Both the white knee and the black floor
-//! (`F = −contrast·A`) derive from a *positive* anchor — so `curve.dmax = none`
+//! (`F = −contrast·A`) derive from a *positive* anchor — so `calibration.dmax = none`
 //! (unity placement, no reference) and a
 //! degenerate non-positive `Auto` anchor (an all-non-finite buffer, or a wrong
 //! film base that pushes most corrected densities negative) are both unusable:
@@ -125,7 +125,7 @@
 
 use crate::algo::FilmRgbImage;
 use crate::algo::density::{DensityImage, resolve_dmax};
-use crate::types::{DmaxSource, NcError, Result, SigmoidParams};
+use crate::types::{DmaxInput, DmaxSource, NcError, Result, SigmoidParams};
 
 /// Upper bound on `curve.contrast` (mid-density slope), enforced by the CLI
 /// `validate`. Beyond this the S-curve degenerates into a near-vertical hard
@@ -227,7 +227,7 @@ fn s_curve(d: f32, contrast: f32, toe: f32, shoulder: f32, anchor: f32) -> f32 {
 /// Actionable message for a missing / non-positive resolved anchor, pointing at
 /// the *actual* cause. Distinguishable cases (only reached on the error path, so
 /// the extra finite-scan is fine):
-/// - `None` → the anchor is disabled (`curve.dmax = none` / `--no-d-max`).
+/// - `None` → the anchor is disabled (`calibration.dmax = none` / `--no-d-max`).
 /// - `Some(≤0)` with **no finite densities** → corrupt / all-non-finite input
 ///   made `Auto` fall back to `0.0`; the base is a red herring.
 /// - `Some(≤0)`, `Explicit` source → a non-positive explicit `--d-max` (only
@@ -237,7 +237,7 @@ fn s_curve(d: f32, contrast: f32, toe: f32, shoulder: f32, anchor: f32) -> f32 {
 fn anchor_error(resolved: Option<f32>, source: DmaxSource, densities: &[f32]) -> String {
     match resolved {
         None => {
-            // The `None` message names `curve.dmax = none`, which is sound only
+            // The `None` message names `calibration.dmax = none`, which is sound only
             // because `resolve_dmax` returns `None` *iff* the source is `None`
             // (`Auto`/`Explicit` always return `Some`). Pin that so a future
             // `resolve_dmax` change can't silently misattribute this arm.
@@ -246,7 +246,7 @@ fn anchor_error(resolved: Option<f32>, source: DmaxSource, densities: &[f32]) ->
                 "anchor_error None arm assumes source == None, got {source:?}"
             );
             "the sigmoid curve needs a display-white anchor (it is anchored on \
-             [0, Dmax]) but curve.dmax is `none`; use --auto-d-max / --d-max <d>, \
+             [0, Dmax]) but calibration.dmax is `none`; use --auto-d-max / --d-max <d>, \
              or --density-curve exponential for scene-referred output"
                 .to_string()
         }
@@ -283,7 +283,7 @@ fn anchor_error(resolved: Option<f32>, source: DmaxSource, densities: &[f32]) ->
 pub(super) fn apply_curve(
     density: DensityImage,
     params: &SigmoidParams,
-    measure_region: Option<[u32; 4]>,
+    dmax: DmaxInput,
 ) -> Result<(FilmRgbImage, Option<f32>, Option<f32>)> {
     // One anchor measurement, shared semantics with the exponential curve. The
     // S-curve is anchored on `[0, Dmax]` — its white knee and its black floor
@@ -294,11 +294,11 @@ pub(super) fn apply_curve(
     // fail loudly (the CLAUDE.md film-base gotcha pattern, mirroring
     // `simple.rs`). `Explicit` is CLI-validated positive, so this only fires
     // on `none` (config/programmatic) or a degenerate `Auto` measurement.
-    let resolved = resolve_dmax(&density, params.dmax, measure_region);
+    let resolved = resolve_dmax(&density, dmax);
     let Some(reference) = resolved.filter(|a| a.is_finite() && *a > 0.0) else {
         return Err(NcError::Other(anchor_error(
             resolved,
-            params.dmax,
+            dmax.source,
             &density.density,
         )));
     };
@@ -306,7 +306,6 @@ pub(super) fn apply_curve(
         contrast,
         toe,
         shoulder,
-        dmax: _,
         anchor: placement,
     } = *params;
     // The reference is not necessarily the anchor: `AnchorPlacement` decides which tone is
@@ -336,7 +335,7 @@ pub(super) fn apply_curve(
         s_curve(d, contrast, toe, shoulder, anchor)
     });
     // Both numbers, because they are no longer the same one: `resolved` is the roll's
-    // reference density (what a recipe freezes back as `curve.dmax`), `anchor` is the
+    // reference density (what a recipe freezes back as `calibration.dmax`), `anchor` is the
     // density this render actually mapped to 1.0 and therefore what sets the black floor
     // at `10^(-contrast*anchor)`. Reporting only the reference would document a value the
     // curve did not use.
@@ -381,10 +380,11 @@ mod tests {
         base: &FilmBase,
         density: DensityParams,
         curve: DensityCurve,
+        dmax: DmaxSource,
         print: PrintParams,
     ) -> crate::types::Result<Converted> {
         let config = Reconstruction::Density { density, curve };
-        let (film, rep) = reconstruct(img, base, &config, None)?;
+        let (film, rep) = reconstruct(img, base, &config, DmaxInput::new(dmax))?;
         let (out, white_balance) = finish_print(film, &config, &print)?;
         Ok(Converted {
             out,
@@ -394,9 +394,9 @@ mod tests {
         })
     }
 
-    /// The sigmoid curve with the given anchor source and knobs.
-    fn sigmoid_curve(dmax: DmaxSource, params: SigmoidParams) -> DensityCurve {
-        DensityCurve::Sigmoid(SigmoidParams { dmax, ..params })
+    /// The sigmoid curve with the given knobs.
+    fn sigmoid_curve(params: SigmoidParams) -> DensityCurve {
+        DensityCurve::Sigmoid(params)
     }
 
     // --- the curve ---------------------------------------------------------
@@ -614,11 +614,11 @@ mod tests {
                 contrast: gamma,
                 toe: 0.0,
                 shoulder: 0.0,
-                dmax,
                 // WhiteAtDmax preserves this test's meaning: the given `dmax` IS the
                 // anchor, which is what its pinned curve values were captured against.
                 anchor: AnchorPlacement::WhiteAtDmax,
             }),
+            dmax,
             PrintParams::default(),
         )
         .unwrap()
@@ -629,9 +629,9 @@ mod tests {
             DensityParams::default(),
             DensityCurve::Exponential(ExponentialParams {
                 gamma,
-                dmax,
                 anchor: AnchorPlacement::WhiteAtDmax,
             }),
+            dmax,
             PrintParams::default(),
         )
         .unwrap()
@@ -663,7 +663,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            sigmoid_curve(dmax, params),
+            sigmoid_curve(params),
+            dmax,
             PrintParams::default(),
         )
         .unwrap();
@@ -675,7 +676,8 @@ mod tests {
                 highlight_balance: [-0.1, 0.05, 0.0],
                 ..DensityParams::default()
             },
-            sigmoid_curve(dmax, params),
+            sigmoid_curve(params),
+            dmax,
             PrintParams::default(),
         )
         .unwrap();
@@ -715,9 +717,9 @@ mod tests {
                 contrast: gamma,
                 toe: 0.0,
                 shoulder: 0.0,
-                dmax,
                 anchor: AnchorPlacement::WhiteAtDmax,
             }),
+            dmax,
             PrintParams::default(),
         )
         .unwrap()
@@ -728,9 +730,9 @@ mod tests {
             density,
             DensityCurve::Exponential(ExponentialParams {
                 gamma,
-                dmax,
                 anchor: AnchorPlacement::WhiteAtDmax,
             }),
+            dmax,
             PrintParams::default(),
         )
         .unwrap()
@@ -749,7 +751,8 @@ mod tests {
             &pixel([0.2, 0.2, 0.2], None),
             &FilmBase::from([0.6, 0.6, 0.6]),
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::None, SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::None,
             PrintParams::default(),
         )
         .unwrap_err();
@@ -774,7 +777,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::Auto, SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap_err();
@@ -791,7 +795,8 @@ mod tests {
             &pixel([0.2, 0.2, 0.2], None),
             &FilmBase::from([0.6, 0.6, 0.6]),
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::Explicit(-0.5), SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::Explicit(-0.5),
             PrintParams::default(),
         )
         .unwrap_err()
@@ -814,7 +819,8 @@ mod tests {
                 &img,
                 &base,
                 DensityParams::default(),
-                sigmoid_curve(DmaxSource::Auto, SigmoidParams::default()),
+                sigmoid_curve(SigmoidParams::default()),
+                DmaxSource::Auto,
                 PrintParams::default(),
             )
         };
@@ -847,7 +853,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::Explicit(1.2), SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::Explicit(1.2),
             PrintParams::default(),
         )
         .unwrap()
@@ -870,7 +877,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::Explicit(1.25), SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::Explicit(1.25),
             PrintParams::default(),
         )
         .unwrap();
@@ -882,7 +890,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::Auto, SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap();
@@ -926,6 +935,7 @@ mod tests {
                 &base,
                 identity_gain.clone(),
                 DensityCurve::Sigmoid(straight),
+                DmaxSource::Fixed,
                 PrintParams {
                     white_balance: mode,
                     ..PrintParams::default()
@@ -972,7 +982,15 @@ mod tests {
             shoulder: 0.3,
             ..SigmoidParams::default()
         });
-        let auto = run(&img, &base, DensityParams::default(), curve, print.clone()).unwrap();
+        let auto = run(
+            &img,
+            &base,
+            DensityParams::default(),
+            curve,
+            DmaxSource::Fixed,
+            print.clone(),
+        )
+        .unwrap();
         let gains = auto.white_balance.expect("auto gains reported");
 
         let explicit = run(
@@ -980,6 +998,7 @@ mod tests {
             &base,
             DensityParams::default(),
             curve,
+            DmaxSource::Fixed,
             PrintParams {
                 white_balance: WbSource::Explicit(gains),
                 ..print
@@ -1002,6 +1021,7 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::Sigmoid(SigmoidParams::default()),
+            DmaxSource::Fixed,
             PrintParams {
                 white_balance: WbSource::Percentile,
                 ..PrintParams::default()
@@ -1019,7 +1039,8 @@ mod tests {
             &img,
             &FilmBase::from([0.6, 0.6, 0.6]),
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::Auto, SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap()
@@ -1030,7 +1051,8 @@ mod tests {
             &img,
             &FilmBase::from([0.6, 0.0, 0.6]),
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::Auto, SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap_err();
@@ -1047,7 +1069,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::Auto, SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap()
@@ -1077,7 +1100,8 @@ mod tests {
             &img,
             &base,
             DensityParams::default(),
-            sigmoid_curve(DmaxSource::Auto, SigmoidParams::default()),
+            sigmoid_curve(SigmoidParams::default()),
+            DmaxSource::Auto,
             PrintParams::default(),
         )
         .unwrap()
@@ -1127,10 +1151,11 @@ mod tests {
             &base,
             DensityParams::default(),
             straight,
+            DmaxSource::Fixed,
             print.clone(),
         )
         .unwrap();
-        let rep_balanced = run(&img, &base, balance, straight, print).unwrap();
+        let rep_balanced = run(&img, &base, balance, straight, DmaxSource::Fixed, print).unwrap();
 
         // (a) WB measured post-balance differs from WB with no balance applied.
         let wb_neutral = rep_neutral.white_balance.expect("neutral gains reported");

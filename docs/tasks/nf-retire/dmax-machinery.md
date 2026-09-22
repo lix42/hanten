@@ -37,7 +37,7 @@ leader or reference frame, now that the only anchor rule is reference-free.
 
 ## How to Verify
 
-- No flag or recipe key resolves an anchor; a recipe stating `density.dmax`
+- No flag or recipe key resolves an anchor; a recipe stating `calibration.dmax`
   fails with a migration error.
 - `estimate --help` and the guide no longer name the region, and no error
   message recommends a flag that does not exist.

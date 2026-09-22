@@ -42,7 +42,8 @@ use crate::pipeline::color::{self, OutputSpace};
 use crate::pipeline::display_tone::DisplayTone;
 use crate::pipeline::{render_split, sdr, working_space};
 use crate::types::{
-    FilmBase, LinearImage, OutputParams, OutputPreset, PrintParams, Reconstruction, Result,
+    DmaxInput, FilmBase, LinearImage, OutputParams, OutputPreset, PrintParams, Reconstruction,
+    Result,
 };
 
 /// The in-memory pipeline result the orchestrator hands to the encoder: the
@@ -75,7 +76,7 @@ pub struct DisplaySource {
 /// the recipe structs).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ConvertReport {
-    /// The resolved **reference** density (`curve.dmax`) — the roll calibration, and the
+    /// The resolved **reference** density (`calibration.dmax`) — the roll calibration, and the
     /// value to freeze back into a recipe. `None` for `simple` (no curve stage) and for
     /// the exponential curve with `dmax = none`.
     ///
@@ -118,9 +119,9 @@ pub(crate) fn reconstruct_and_print(
     film_base: &FilmBase,
     reconstruction: &Reconstruction,
     print: &PrintParams,
-    measure_region: Option<[u32; 4]>,
+    dmax: DmaxInput,
 ) -> Result<(LinearImage, ConvertReport)> {
-    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, measure_region)?;
+    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, dmax)?;
     let (positive, white_balance) = algo::finish_print(film, reconstruction, print)?;
     Ok((
         positive,
@@ -162,22 +163,15 @@ pub fn render(
     reconstruction: &Reconstruction,
     print: &PrintParams,
     output_params: &OutputParams,
-    measure_region: Option<[u32; 4]>,
+    dmax: DmaxInput,
 ) -> Result<Rendered> {
     match output_params.preset {
         // `custom` is the same legacy branch, explicitly chosen rather than
         // inherited from the default — same bytes, different provenance.
-        OutputPreset::Legacy | OutputPreset::Custom => render_legacy(
-            image,
-            film_base,
-            reconstruction,
-            print,
-            output_params,
-            measure_region,
-        ),
-        OutputPreset::FilmMaster => {
-            render_film_master(image, film_base, reconstruction, measure_region)
+        OutputPreset::Legacy | OutputPreset::Custom => {
+            render_legacy(image, film_base, reconstruction, print, output_params, dmax)
         }
+        OutputPreset::FilmMaster => render_film_master(image, film_base, reconstruction, dmax),
         // Every display preset renders from the shared source instead, so that
         // reconstruction and the print controls resolve exactly once for whichever
         // rendition(s) the preset needs.
@@ -212,12 +206,12 @@ pub fn render_sdr_preset(
     reconstruction: &Reconstruction,
     print: &PrintParams,
     gamut: sdr::SdrGamut,
-    measure_region: Option<[u32; 4]>,
+    dmax: DmaxInput,
 ) -> Result<Rendered> {
     // Before the source render, so an unusable knee width fails without having paid
     // for reconstruction and the print stage.
     let tone = DisplayTone::resolve(print)?;
-    let source = render_display_source(image, film_base, reconstruction, print, measure_region)?;
+    let source = render_display_source(image, film_base, reconstruction, print, dmax)?;
     let mut timings = source.timings;
     let started = Instant::now();
     let rendered = sdr::render(&source.shared, gamut, tone)?;
@@ -240,10 +234,10 @@ pub fn render_display_source(
     film_base: &FilmBase,
     reconstruction: &Reconstruction,
     print: &PrintParams,
-    measure_region: Option<[u32; 4]>,
+    dmax: DmaxInput,
 ) -> Result<DisplaySource> {
     let started = Instant::now();
-    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, measure_region)?;
+    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, dmax)?;
     let shared = render_split::display_source(working_space::map_nc_film_rgb_v1(film), print)?;
     let algorithm_ms = ms_since(started);
 
@@ -274,11 +268,10 @@ fn render_legacy(
     reconstruction: &Reconstruction,
     print: &PrintParams,
     output_params: &OutputParams,
-    measure_region: Option<[u32; 4]>,
+    dmax: DmaxInput,
 ) -> Result<Rendered> {
     let started = Instant::now();
-    let (positive, convert) =
-        reconstruct_and_print(image, film_base, reconstruction, print, measure_region)?;
+    let (positive, convert) = reconstruct_and_print(image, film_base, reconstruction, print, dmax)?;
     let algorithm_ms = ms_since(started);
 
     // No copy here (`io/memory-preflight`): the pre-transform positive has no
@@ -318,10 +311,10 @@ fn render_film_master(
     image: &LinearImage,
     film_base: &FilmBase,
     reconstruction: &Reconstruction,
-    measure_region: Option<[u32; 4]>,
+    dmax: DmaxInput,
 ) -> Result<Rendered> {
     let started = Instant::now();
-    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, measure_region)?;
+    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, dmax)?;
     let master = render_split::film_master(working_space::map_nc_film_rgb_v1(film));
     let algorithm_ms = ms_since(started);
 
@@ -381,7 +374,7 @@ mod tests {
     use super::*;
     use crate::pipeline::film_base;
     use crate::types::{
-        DensityCurve, DensityParams, DmaxSource, ExponentialParams, FilmBaseSource, SigmoidParams,
+        DensityCurve, DensityParams, ExponentialParams, FilmBaseSource, SigmoidParams,
     };
 
     /// A small synthetic negative with the real scan layout — a near-black
@@ -426,10 +419,16 @@ mod tests {
             density: DensityParams::default(),
             curve: DensityCurve::Exponential(ExponentialParams {
                 gamma: 1.0,
-                dmax: DmaxSource::Explicit(2.0),
                 anchor: crate::types::AnchorPlacement::WhiteAtDmax,
             }),
         }
+    }
+
+    /// The reference [`midtone_reconstruction`] places, stated rather than inherited:
+    /// these tests compare rendered values, so a moving default would move both sides
+    /// and quietly change what is being compared.
+    fn midtone_dmax() -> DmaxInput {
+        DmaxInput::new(crate::types::DmaxSource::Explicit(2.0))
     }
 
     fn sigmoid_default() -> Reconstruction {
@@ -466,7 +465,7 @@ mod tests {
             &Reconstruction::Simple,
             &PrintParams::default(),
             &legacy_output(),
-            None,
+            crate::types::DmaxInput::default(),
         )
         .unwrap();
         assert_eq!((out.image.width, out.image.height), (40, 40));
@@ -489,7 +488,7 @@ mod tests {
                 depth: OutDepth::F32,
                 ..OutputParams::default()
             },
-            None,
+            crate::types::DmaxInput::default(),
         )
         .unwrap();
         assert_eq!(out.image.rgb.len(), 16 * 16 * 3);
@@ -509,7 +508,7 @@ mod tests {
                 depth: OutDepth::F32,
                 ..OutputParams::default()
             },
-            None,
+            DmaxInput::default(),
         )
         .unwrap();
         assert_eq!(out.image.rgb.len(), 16 * 16 * 3);
@@ -555,9 +554,23 @@ mod tests {
                     ..OutputParams::default()
                 },
             ] {
-                let got = render(&img, &base, &reconstruction, &print, &output, None).unwrap();
-                let (positive, convert) =
-                    reconstruct_and_print(&img, &base, &reconstruction, &print, None).unwrap();
+                let got = render(
+                    &img,
+                    &base,
+                    &reconstruction,
+                    &print,
+                    &output,
+                    DmaxInput::default(),
+                )
+                .unwrap();
+                let (positive, convert) = reconstruct_and_print(
+                    &img,
+                    &base,
+                    &reconstruction,
+                    &print,
+                    DmaxInput::default(),
+                )
+                .unwrap();
                 let (want_image, want_icc) = color::to_output(positive, &output).unwrap();
                 let bits = |v: &[f32]| -> Vec<u32> { v.iter().map(|x| x.to_bits()).collect() };
                 assert_eq!(
@@ -595,11 +608,12 @@ mod tests {
                 preset: OutputPreset::FilmMaster,
                 ..OutputParams::default()
             },
-            None,
+            DmaxInput::default(),
         )
         .unwrap();
 
-        let (film, _) = algo::reconstruct(&img, &base, &density_default(), None).unwrap();
+        let (film, _) =
+            algo::reconstruct(&img, &base, &density_default(), DmaxInput::default()).unwrap();
         let want = working_space::map_nc_film_rgb_v1(film).into_linear();
         let bits = |v: &[f32]| -> Vec<u32> { v.iter().map(|x| x.to_bits()).collect() };
         assert_eq!(bits(&out.image.rgb), bits(&want.rgb));
@@ -626,7 +640,8 @@ mod tests {
             preset: OutputPreset::FilmMaster,
             ..OutputParams::default()
         };
-        let (film, _) = algo::reconstruct(&img, &base, &midtone_reconstruction(), None).unwrap();
+        let (film, _) =
+            algo::reconstruct(&img, &base, &midtone_reconstruction(), midtone_dmax()).unwrap();
         let mapped = working_space::map_nc_film_rgb_v1(film).into_linear();
 
         // (a) A print control the legacy branch honours (2^1 exposure doubles every
@@ -643,7 +658,7 @@ mod tests {
             &midtone_reconstruction(),
             &hot,
             &master_params,
-            None,
+            midtone_dmax(),
         )
         .unwrap();
         let bits = |v: &[f32]| -> Vec<u32> { v.iter().map(|x| x.to_bits()).collect() };
@@ -662,7 +677,7 @@ mod tests {
                 depth: OutDepth::F32,
                 ..OutputParams::default()
             },
-            None,
+            midtone_dmax(),
         )
         .unwrap();
         // `master * 1.5` is only a meaningful bar if the master sample is positive —
@@ -696,7 +711,7 @@ mod tests {
                 output_profile: Some("srgb".into()),
                 ..OutputParams::default()
             },
-            None,
+            midtone_dmax(),
         )
         .unwrap();
         let master_plain = render(
@@ -705,7 +720,7 @@ mod tests {
             &midtone_reconstruction(),
             &PrintParams::default(),
             &master_params,
-            None,
+            midtone_dmax(),
         )
         .unwrap();
         assert!(
@@ -738,7 +753,7 @@ mod tests {
                     depth,
                     ..OutputParams::default()
                 },
-                None,
+                DmaxInput::default(),
             )
             .unwrap()
         };
@@ -777,7 +792,7 @@ mod tests {
                 &reconstruction,
                 &PrintParams::default(),
                 &params,
-                None,
+                DmaxInput::default(),
             )
             .unwrap();
             assert_eq!(out.image.rgb.len(), 8 * 8 * 3, "{reconstruction:?}");
@@ -798,7 +813,7 @@ mod tests {
             &density_default(),
             &PrintParams::default(),
             &legacy_output(),
-            None,
+            DmaxInput::default(),
         ) {
             Err(e) => assert_eq!(e.exit_code(), 1),
             Ok(_) => panic!("expected a degenerate-base error"),
@@ -874,7 +889,9 @@ mod midtone_placement {
         print: &PrintParams,
     ) -> Option<[f32; 3]> {
         let (image, base) = mid_grey_patch(stock);
-        let shared = render_display_source(&image, &base, reconstruction, print, None).ok()?;
+        let shared =
+            render_display_source(&image, &base, reconstruction, print, DmaxInput::default())
+                .ok()?;
         let out = sdr::render(&shared.shared, SdrGamut::DisplayP3, tone).ok()?;
         let rgb = &out.image().rgb;
         Some([rgb[0], rgb[1], rgb[2]])
@@ -1042,7 +1059,9 @@ mod midtone_placement {
             },
             curve: crate::types::DensityCurve::Characteristic(CharacteristicParams { stock }),
         };
-        let shared = render_display_source(&image, &base, &reconstruction, print, None).unwrap();
+        let shared =
+            render_display_source(&image, &base, &reconstruction, print, DmaxInput::default())
+                .unwrap();
         let out = sdr::render(&shared.shared, SdrGamut::DisplayP3, tone).unwrap();
         // **Red, not green.** The patch is uniform, so any channel reads the same *tone* —
         // but only red's `density.scale` gain is 1, so only red measures the tone question
@@ -1600,6 +1619,7 @@ pub(crate) mod golden {
     /// match the captured pre-refactor bits exactly.
     fn assert_golden(
         reconstruction: Reconstruction,
+        dmax: DmaxInput,
         print: PrintParams,
         expected_rgb_bits: &[u32],
         expected_dmax_bits: Option<u32>,
@@ -1607,7 +1627,7 @@ pub(crate) mod golden {
         expected_range_bits: Option<[u32; 2]>,
     ) {
         let (out, report) =
-            reconstruct_and_print(&pixels(), &base(), &reconstruction, &print, None).unwrap();
+            reconstruct_and_print(&pixels(), &base(), &reconstruction, &print, dmax).unwrap();
         let got: Vec<u32> = out.rgb.iter().map(|v| v.to_bits()).collect();
         assert_eq!(got, expected_rgb_bits, "pixel bits drifted");
         assert_eq!(report.dmax.map(f32::to_bits), expected_dmax_bits, "dmax");
@@ -1662,9 +1682,20 @@ pub(crate) mod golden {
     fn frozen_reference_curve() -> DensityCurve {
         DensityCurve::Exponential(ExponentialParams {
             gamma: 1.0,
-            dmax: DmaxSource::Explicit(2.0),
             anchor: AnchorPlacement::WhiteAtDmax,
         })
+    }
+
+    /// The reference [`frozen_reference_curve`] is rendered against, which left the
+    /// curve for `calibration.dmax` in `core/calibration-recipe-section`.
+    ///
+    /// **Stated as a literal, never inherited from a default.** These vectors pin bit
+    /// patterns; taking the value from `DmaxSource::default()` would silently rebase
+    /// them the next time that default moves, which is exactly how a probe stops
+    /// measuring what it claims to (CLAUDE.md). `Explicit(2.0)` is arithmetically
+    /// identical to the `Fixed` these captures were taken under.
+    pub(crate) fn frozen_reference_dmax() -> DmaxInput {
+        DmaxInput::new(DmaxSource::Explicit(2.0))
     }
 
     /// `Reconstruction::default()`'s density knobs with [`frozen_reference_curve`].
@@ -1691,7 +1722,6 @@ pub(crate) mod golden {
                     density: DensityParams::default(),
                     curve: DensityCurve::Exponential(ExponentialParams {
                         gamma,
-                        dmax: DmaxSource::Fixed,
                         anchor: AnchorPlacement::BlackAtBase(floor),
                     }),
                 };
@@ -1700,7 +1730,7 @@ pub(crate) mod golden {
                     &base(),
                     &reconstruction,
                     &PrintParams::default(),
-                    None,
+                    crate::types::DmaxInput::default(),
                 )
                 .unwrap();
                 // Pixel 5 (rgb offsets 12..15) is exactly the base.
@@ -1729,22 +1759,24 @@ pub(crate) mod golden {
             let render = |anchor| {
                 let reconstruction = Reconstruction::Density {
                     density: DensityParams::default(),
-                    curve: DensityCurve::Exponential(ExponentialParams {
-                        gamma,
-                        dmax: if matches!(anchor, AnchorPlacement::WhiteAtDmax) {
-                            DmaxSource::Explicit(derived)
-                        } else {
-                            DmaxSource::Fixed
-                        },
-                        anchor,
-                    }),
+                    curve: DensityCurve::Exponential(ExponentialParams { gamma, anchor }),
                 };
+                // The reference is only read under `WhiteAtDmax`; `BlackAtBase` derives
+                // its anchor from the floor and ignores it. Stating the derived value
+                // here is what makes the two sides comparable.
+                let dmax = crate::types::DmaxInput::new(
+                    if matches!(anchor, AnchorPlacement::WhiteAtDmax) {
+                        DmaxSource::Explicit(derived)
+                    } else {
+                        DmaxSource::Fixed
+                    },
+                );
                 let (out, _) = reconstruct_and_print(
                     &pixels(),
                     &base(),
                     &reconstruction,
                     &PrintParams::default(),
-                    None,
+                    dmax,
                 )
                 .unwrap();
                 out.rgb.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
@@ -1782,6 +1814,7 @@ pub(crate) mod golden {
         // with the same red-unchanged signature.)
         assert_golden(
             Reconstruction::default(),
+            DmaxInput::default(),
             PrintParams::default(),
             &[
                 0x3c23e35f, 0x3c292c32, 0x3c277eef, 0x3da066cb, 0x3d67141a, 0x3d5c186e, 0x3f7f12f0,
@@ -1802,6 +1835,7 @@ pub(crate) mod golden {
         // `frozen_reference_curve`), so it is named here instead.
         assert_golden(
             frozen_reference_config(),
+            frozen_reference_dmax(),
             PrintParams::default(),
             &[
                 0x3c2d7a46, 0x3c343958, 0x3c35161a, 0x3cf5c28f, 0x3cfa4fa3, 0x3d0f5c2a, 0x3ee66668,
@@ -1824,10 +1858,10 @@ pub(crate) mod golden {
                 density: custom_density(),
                 curve: DensityCurve::Exponential(ExponentialParams {
                     gamma: 1.4,
-                    dmax: DmaxSource::Explicit(1.8),
                     anchor: AnchorPlacement::WhiteAtDmax,
                 }),
             },
+            DmaxInput::new(DmaxSource::Explicit(1.8)),
             custom_print(),
             &[
                 0xbbfd1875, 0xbc0627d2, 0xbc0b3486, 0x3a6a9290, 0xbb1d24fc, 0xbb670fb4, 0x3f055214,
@@ -1848,10 +1882,10 @@ pub(crate) mod golden {
                 density: frozen_density(),
                 curve: DensityCurve::Exponential(ExponentialParams {
                     gamma: 1.0,
-                    dmax: DmaxSource::None,
                     anchor: AnchorPlacement::WhiteAtDmax,
                 }),
             },
+            DmaxInput::new(DmaxSource::None),
             PrintParams::default(),
             &[
                 0x3f878787, 0x3f8ccccd, 0x3f8d7943, 0x403fffff, 0x40438e38, 0x40600000, 0x42340001,
@@ -1872,10 +1906,10 @@ pub(crate) mod golden {
                 density: frozen_density(),
                 curve: DensityCurve::Exponential(ExponentialParams {
                     gamma: 1.0,
-                    dmax: DmaxSource::Auto,
                     anchor: AnchorPlacement::WhiteAtDmax,
                 }),
             },
+            DmaxInput::new(DmaxSource::Auto),
             PrintParams::default(),
             &[
                 0x3601318e, 0x360637c0, 0x3606dc23, 0x36b70634, 0x36ba69df, 0x36d58734, 0x38ab95cf,
@@ -1894,11 +1928,14 @@ pub(crate) mod golden {
     fn sigmoid_at_reference_anchor_2_0() -> Reconstruction {
         Reconstruction::Density {
             density: frozen_density(),
-            curve: DensityCurve::Sigmoid(SigmoidParams {
-                dmax: DmaxSource::Explicit(2.0),
-                ..SigmoidParams::default()
-            }),
+            curve: DensityCurve::Sigmoid(SigmoidParams::default()),
         }
+    }
+
+    /// The reference [`sigmoid_at_reference_anchor_2_0`] is captured against. Stated,
+    /// never inherited — see [`frozen_reference_dmax`].
+    fn reference_anchor_2_0() -> DmaxInput {
+        DmaxInput::new(DmaxSource::Explicit(2.0))
     }
 
     #[test]
@@ -1926,6 +1963,7 @@ pub(crate) mod golden {
         // change — not, as this note used to predict, deferred to `output/presets`.
         assert_golden(
             sigmoid_at_reference_anchor_2_0(),
+            reference_anchor_2_0(),
             PrintParams::default(),
             &[
                 0x3af793c5, 0x3b02af7d, 0x3b03a290, 0x3c7438ec, 0x3c7da965, 0x3ca7e975, 0x3f72198a,
@@ -1948,11 +1986,11 @@ pub(crate) mod golden {
                     contrast: 1.7,
                     toe: 0.1,
                     shoulder: 0.4,
-                    dmax: DmaxSource::Explicit(1.5),
-                    // The golden vectors were captured with the anchor == dmax.
+                    // The golden vectors were captured with the anchor == the reference.
                     anchor: AnchorPlacement::WhiteAtDmax,
                 }),
             },
+            DmaxInput::new(DmaxSource::Explicit(1.5)),
             custom_print(),
             &[
                 0xbbfb9f9b, 0xbc06d065, 0xbc09c550, 0x3bb51ff2, 0xb8997d80, 0xbafaba00, 0x3ef67b34,
@@ -2139,7 +2177,7 @@ pub(crate) mod golden {
             &base(),
             &characteristic_config(),
             &PrintParams::default(),
-            None,
+            crate::types::DmaxInput::default(),
         )
         .unwrap();
         // `zip` below truncates, so the length is asserted rather than assumed.
@@ -2250,6 +2288,7 @@ pub(crate) mod golden {
         // the pure `1 − scan/Dmin` inversion must reproduce it exactly.
         assert_golden(
             Reconstruction::Simple,
+            DmaxInput::default(),
             PrintParams::default(),
             &[
                 0x3d638e30, 0x3dba2e90, 0x3dc30c30, 0x3f2aaaaa, 0x3f2c37da, 0x3f36db6e, 0x3f7a4fa5,
@@ -2269,6 +2308,7 @@ pub(crate) mod golden {
         // with striding. Pin both estimators' gains AND output pixels.
         assert_golden(
             frozen_reference_config(),
+            frozen_reference_dmax(),
             PrintParams {
                 white_balance: WbSource::Percentile,
                 ..PrintParams::default()
@@ -2284,6 +2324,7 @@ pub(crate) mod golden {
         );
         assert_golden(
             frozen_reference_config(),
+            frozen_reference_dmax(),
             PrintParams {
                 white_balance: WbSource::GrayWorld,
                 ..PrintParams::default()
@@ -2309,6 +2350,7 @@ pub(crate) mod golden {
                 density: balanced_density(),
                 curve: frozen_reference_curve(),
             },
+            frozen_reference_dmax(),
             PrintParams {
                 white_balance: WbSource::Percentile,
                 ..PrintParams::default()
@@ -2331,6 +2373,7 @@ pub(crate) mod golden {
         // the same stage-4 slot.
         assert_golden(
             sigmoid_at_reference_anchor_2_0(),
+            reference_anchor_2_0(),
             PrintParams {
                 white_balance: WbSource::Percentile,
                 ..PrintParams::default()
@@ -2365,6 +2408,7 @@ pub(crate) mod golden {
                 },
                 curve: frozen_reference_curve(),
             },
+            frozen_reference_dmax(),
             PrintParams::default(),
             &[
                 0x3c42a1d5, 0x3c3439a6, 0x3c2cf03a, 0x3d084c85, 0x3cfa994a, 0x3d093901, 0x3eea9e5a,

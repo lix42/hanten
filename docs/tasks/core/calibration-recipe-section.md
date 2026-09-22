@@ -1,5 +1,16 @@
 # The `calibration` recipe section
 
+> **Done, 2026-09-22.** `docs/progress/core.md` carries what was decided and why;
+> design-spec §8's "The `calibration` section" is the shipped schema. Everything
+> below is the filing note, so it describes the *pre-move* state — in particular
+> `cli::preset_curve` and `takes_dmax()`, which the move deleted. The three open
+> questions were answered: `curve.anchor` stays in the curve; `estimate` emits a
+> recipe-shaped `calibration` object in place of `film_base_recipe` /
+> `d_max_recipe`; and a `calibration.dmax` beside a curve that reads none is
+> carried, warned about, and reported as `dmax.policy = "none"`. The section was
+> also designed **open** rather than as a fixed pair, for a roll content white
+> (`docs/spike/white-placement.md`).
+
 ## Goal
 
 Give the roll measurements their own top-level recipe section, `calibration`, holding

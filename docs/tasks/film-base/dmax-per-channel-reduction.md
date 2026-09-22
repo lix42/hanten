@@ -122,7 +122,7 @@ compressing.
    - *Stable per stock* — belongs with the per-stock constants in
      `algo/film-stock-profiles`, not in the measurement.
    - *Per-roll* — needs a measured per-channel anchor, which is a **schema change**
-     (`reconstruction.curve.dmax` scalar → per-channel) plus a
+     (`calibration.dmax` scalar → per-channel) plus a
      `pipeline_version` bump owned by `core/conversion-versioning`. File that as a
      follow-up task; do not ship it here.
 

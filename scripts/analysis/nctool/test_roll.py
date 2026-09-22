@@ -38,16 +38,18 @@ class TestRecipe(unittest.TestCase):
 
     def test_measured_values_override_recipe_calibration(self):
         base = {
-            "film_base": {"source": {"explicit": [9, 9, 9]}},
-            "reconstruction": {"curve": {"type": "exponential", "gamma": 1.5,
-                                           "dmax": "fixed"}},
+            "calibration": {"film_base": {"explicit": [9, 9, 9]}, "dmax": "fixed"},
+            "reconstruction": {"curve": {"type": "exponential", "gamma": 1.5}},
         }
         recipe, error = roll._freeze_recipe(base, [.1, .2, .3], 1.25,
                                              "chromogenic", "display-p3", .5)
         self.assertIsNone(error)
-        self.assertEqual(recipe["film_base"]["source"]["explicit"], [.1, .2, .3])
+        self.assertEqual(recipe["calibration"]["film_base"], {"explicit": [.1, .2, .3]})
         self.assertEqual(recipe["reconstruction"]["curve"]["type"], "exponential")
-        self.assertEqual(recipe["reconstruction"]["curve"]["dmax"], {"explicit": 1.25})
+        self.assertEqual(recipe["calibration"]["dmax"], {"explicit": 1.25})
+        # The reference is not a curve knob any more; leaving one there would be
+        # rejected by the binary with a migration error.
+        self.assertNotIn("dmax", recipe["reconstruction"]["curve"])
         self.assertEqual(recipe["input"]["film_type"], "chromogenic")
         self.assertEqual(recipe["output"]["preset"], "display-p3")
         self.assertEqual(recipe["print"]["print_exposure"], .5)
@@ -105,7 +107,7 @@ class TestConvert(unittest.TestCase):
                 "reconstruction": {"schema_version": 1, "type": "density",
                                    "curve": {"type": "sigmoid",
                                              "anchor": {"mid-at-dmax-fraction": .5}}},
-                "film_base": {"source": None},
+                "calibration": {"film_base": None, "dmax": "fixed"},
                 "print": {"print_exposure": 0},
                 "output": {"preset": "gain-map-hdr", "depth": "u16"},
             }), stderr="")
@@ -144,8 +146,8 @@ class TestConvert(unittest.TestCase):
         calibration = json.loads((run / "calibration.json").read_text())
         self.assertEqual(tags["roll"], "R")
         self.assertEqual(tags["summary"]["succeeded"], 2)
-        self.assertEqual(recipe["film_base"]["source"]["explicit"], [.1, .2, .3])
-        self.assertEqual(recipe["reconstruction"]["curve"]["dmax"], {"explicit": 1.4})
+        self.assertEqual(recipe["calibration"]["film_base"], {"explicit": [.1, .2, .3]})
+        self.assertEqual(recipe["calibration"]["dmax"], {"explicit": 1.4})
         self.assertEqual(calibration["dmin"]["region"], "10,8,80,64")
         self.assertEqual(calibration["dmin"]["mode"], "grid")
         self.assertEqual(calibration["dmax"]["region"], "10,8,80,64")
@@ -168,7 +170,7 @@ class TestConvert(unittest.TestCase):
         run = self.root / "converted/nc/explicit/R"
         recipe = json.loads((run / "recipe.json").read_text())
         calibration = json.loads((run / "calibration.json").read_text())
-        self.assertEqual(recipe["reconstruction"]["curve"]["dmax"], {"explicit": 5.4})
+        self.assertEqual(recipe["calibration"]["dmax"], {"explicit": 5.4})
         self.assertEqual(calibration["dmax"]["source"], "explicit-override")
         self.assertIsNone(calibration["dmax"]["report"])
 

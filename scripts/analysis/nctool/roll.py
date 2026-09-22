@@ -161,10 +161,14 @@ def _freeze_recipe(base: dict, dmin: list[float], dmax: float,
                    exposure: float | None) -> tuple[dict | None, str | None]:
     """Overlay measured calibration and the convenience flags on a partial recipe."""
     recipe = json.loads(json.dumps(base))
-    film_base = recipe.setdefault("film_base", {})
-    if not isinstance(film_base, dict):
-        return None, "recipe `film_base` must be an object"
-    film_base["source"] = {"explicit": dmin}
+    # Both measurements live in one `calibration` section (design-spec §8): a roll
+    # calibration is a recipe with nothing else, a pipeline profile is a recipe with
+    # no `calibration` at all.
+    calibration = recipe.setdefault("calibration", {})
+    if not isinstance(calibration, dict):
+        return None, "recipe `calibration` must be an object"
+    calibration["film_base"] = {"explicit": dmin}
+    calibration["dmax"] = {"explicit": dmax}
 
     reconstruction = recipe.setdefault("reconstruction", {})
     if not isinstance(reconstruction, dict):
@@ -175,7 +179,6 @@ def _freeze_recipe(base: dict, dmin: list[float], dmax: float,
     if not isinstance(curve, dict):
         return None, "recipe `reconstruction.curve` must be an object"
     curve.setdefault("type", "sigmoid")
-    curve["dmax"] = {"explicit": dmax}
 
     if film_type:
         input_cfg = recipe.setdefault("input", {})
