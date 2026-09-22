@@ -1524,9 +1524,11 @@ the design in `docs/design-update.md`:
   until `minimal-end-to-end`
 - [ ] [A minimal end-to-end render](tasks/nf-core/minimal-end-to-end.md) — the
   milestone that expires the flag and unblocks retirement
-- [ ] [Audit every knob against the new
-  flow](tasks/nf-core/knob-availability-audit.md) — classify every knob
-  value-rejected vs flag-rejected before the default moves
+- [x] [Audit every knob against the new
+  flow](tasks/nf-core/knob-availability-audit.md) — every conversion flag
+  classified (refused by presence, refused by resolved value, or kept) and every
+  recipe section read-or-refused-whole, held complete by an exhaustiveness test;
+  three remedies that named a knob this flow refuses are fixed
 - [ ] [Flip the default to the new flow](tasks/nf-core/default-flip.md) — the
   default resolves the new chain; version bump, drift row, before/after
   report. Supersedes the flip half of `algo/split-default-migration`

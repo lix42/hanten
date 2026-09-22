@@ -16,9 +16,38 @@ The new flow exists and can be selected: the `--new-flow` selector, the stage mo
 The epic was created on 2026-09-19 as part of the new-flow migration plan
 (`docs/nf-migration.md`). Landed so far: **`new-flow-flag`** (2026-09-20) — the
 `--new-flow` selector on `convert` and `roll`, the availability refusal
-(`src/flow.rs`), and the render seam — and **`stage-skeleton`** (2026-09-21) — the
+(`src/flow.rs`), and the render seam — **`stage-skeleton`** (2026-09-21) — the
 chain that seam guards: `pipeline::chain` composing `scene_correction` -> `look` ->
-`fit_range` -> `fit_gamut` over `working_image::WorkingBuffer`.
+`fit_range` -> `fit_gamut` over `working_image::WorkingBuffer` — and
+**`knob-availability-audit`** (2026-09-22), which closed the availability surface.
+
+**What the audit means for every other epic.** Under `--new-flow` the old knobs are
+now *refused*, not accepted-and-ignored, so the epic that builds a stage also owns
+un-refusing its knobs. Three mechanisms, and which one a knob uses is the thing to
+check before adding one back:
+
+- **`flow::UNREAD_RECIPE_SECTIONS`** (`reconstruction`, `print`, `output`) refuses
+  those recipe sections *whole*, because each stage carries its own params and the
+  chain resolves no destination. A stage that starts reading a section moves it to
+  `READ_RECIPE_SECTIONS`; `nf-core/recipe-schema` decides the sections' real shape.
+- **A flag row per knob** in `FLAG_ENTRIES`, keyed on presence, naming the task that
+  will carry it — never a replacement flag spelling, since that belongs to the task
+  that builds the stage. There is deliberately **no renamed-knob mapping table**.
+- **`every_convert_flag_is_classified`** reads the flag surface back out of `cli.rs`,
+  so a knob added to `ConvertArgs` with no verdict reds the gate. Adding a flag now
+  means adding a row (refused or kept) or an allowlist line.
+
+**One corollary that will bite whoever adds a knob back:** once a section is refused
+whole, an identity value earns **no** exemption from the presence-vs-value tiebreaker
+— the exemption exists so a flag can clear what a recipe pinned, and there is nothing
+left to clear. `--white-balance 1,1,1` and `--highlight-compress 0` are refused.
+
+**What `nf-core/minimal-end-to-end` inherits**, beyond the render itself: the output
+suffix rule and the write-target guard's sidecar entry both stand down under the flag
+(no destination is resolved, and a sidecar derived from an uncompleted path invents a
+collision), `--export-ir` is refused because it is staged *after* the render at the
+destination's depth, and `--density-gamma` still needs `--density-curve exponential`
+beside it until the new flow's default curve moves.
 
 **What a dependent epic needs to know.** Every stage is
 `apply(input, &Params) -> Result<Output>`, pure, and an **identity pass** until its
@@ -441,10 +470,364 @@ the no-flag path moved.
 
 ## knob-availability-audit
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-22
 
 - 2026-09-19: created with the new-flow plan. Goal: audit every knob against the new flow.
+- 2026-09-22: scope settled with the user, and the remedy sweep run. No code yet —
+  the table half waits on `nf-reconstruction/fixed-decode`, which is finished but
+  unmerged (see below).
+
+  **What this task decides: availability, not values.** Which knob the new flow
+  accepts, refuses by resolved value, or refuses by flag presence — and whether each
+  surviving remedy is still followable. `d`, `scale` and `gamma` belong to
+  `nf-reconstruction/anchor-rule` and `nf-calibration/*`; nothing here picks a number.
+
+  **The inventory lives in the tables, not in a document** (user's call, 2026-09-22).
+  A hand-kept markdown table of the knob surface, sitting beside a code table that
+  lists only the refusals, rots with every gate green; and a generated-and-diffed
+  report (the `colorimetry::audit` precedent) was judged more machinery than this
+  earns. What makes the code table an *inventory*
+  rather than a list of refusals is the part still to land: rows for the **accepted**
+  knobs too, plus an exhaustiveness test that reads the flag surface back out of
+  `cli.rs` and the recipe surface out of a serialized `ResolvedConfig`, so a knob with
+  no verdict reds the gate. Without accepted rows, "considered and kept" and "nobody
+  looked" are the same state — which is the silent failure the goal names.
+
+  **This task will build on `fixed-decode`'s model rather than the other way round**
+  (CLAUDE.md's rule for concurrent work). That task finished the reconstruction half
+  in a parallel session while this one was being planned — finished, not merged, so
+  nothing is rebased yet; its diff was read in its worktree. Two of its calls are
+  better than the ones drafted here:
+  - *`--no-d-max` is refused, not accepted.* The draft had it accepted as an identity
+    value — it resolves `DmaxSource::None`, which is what the new flow wants. But an
+    identity value is one that asks nothing **of a knob this flow has**, and the fixed
+    decode has no reference density at all, so "resolve it from nowhere" is a
+    statement about a quantity that does not exist here.
+
+    **Two readings of "no Dmax" land on two different flags, and the refusal wording
+    must not conflate them** (raised by the user, 2026-09-22). "I have no leader data,
+    use a sensible constant" is `DmaxSource::Fixed` — `NOMINAL_DMAX` 1.3, and the
+    *default*, so it is not a flag anyone types. "Use no anchor at all" is
+    `DmaxSource::None` / `--no-d-max`, scene-referred output with the base at 1.0.
+    Only the second is what `--no-d-max` spells. Neither survives the new flow, and
+    neither needs to: `mid-at-base-offset` pins mid-grey a fixed density above the
+    **film base**, which every scan carries, so the no-leader case is not a state the
+    decode has to be told about — it is the state it is always in. The `--no-d-max`
+    capability is not lost either: on a straight line the anchor factors out as a pure
+    gain, so the scene-referred *shape* is unchanged.
+
+    **What this does change is the remedy.** `fixed-decode`'s shared `DMAX_REASON`
+    reads "nothing in the new flow resolves one; a `Dmax` measured from a leader is
+    film saturation…", which a user *without* a leader can read as "you need leader
+    data to proceed". Every clause is correct and the conclusion it invites is not.
+    The fix is one added fact, which also keeps `instead: None` honest: nothing needs
+    stating, because `mid-at-base-offset` measures from the **film base**, which every
+    scan carries.
+
+    **Ownership asked, not assumed, and settled** (2026-09-22). The string is
+    `fixed-decode`'s, in a tree that has not merged, so editing it here would have
+    risked two sessions reasoning about one sentence separately and meeting in a
+    conflict. That session took it: the clause ships in its PR, and this task does not
+    touch the string. The reasoning is recorded here because it came from this side.
+  - *The recipe half closes from the stage, not from a value rule.* A stage that owns
+    its parameters reads no resolved section, so the section is refused whole and the
+    question "what does a knob the user never typed earn?" does not arise. That
+    generalises to this task's half: the four new-flow stages carry their own
+    `Params`, so the new flow reads nothing from `print.*` either.
+
+  **Two remedies are reachable under `--new-flow` with only accepted flags, and both
+  name a knob it refuses.** Reproduced against the binary (both with
+  `--film-base 0.9,0.55,0.42`, which is accepted):
+  - `--new-flow --density-gamma 2.5` -> `merge` refuses with "its mid-density slope is
+    `--sigmoid-contrast` (or pass `--density-curve exponential`)". The first remedy is
+    refused by the flow gate, the second works — followable but half dead.
+
+    **Fixed by symmetry, not by reordering, and not flow-conditionally.** A
+    flow-conditional message was rejected: the window closes when the new flow's
+    default curve moves, and a message that has to know the flow to be right is the
+    coupling this module exists to avoid. Reordering so the always-working option
+    leads was proposed and is *not* free either — on the legacy flow it promotes the
+    more invasive remedy (switch your curve) over the one that keeps the user where
+    they are (`--sigmoid-contrast`), so it trades a dead lead on one flow for a worse
+    lead on the other. What costs nothing on both is dropping the ranking: today the
+    sentence presents `--sigmoid-contrast` as *the* answer and parenthesises the
+    alternative. Stating the two as equals needs no knowledge of the flow, reads the
+    same on legacy, and leaves neither flow with a dead lead.
+
+    **Closing condition, stated so it cannot outlive its window silently:** the dead
+    half disappears when the new flow's resolved default curve stops being the
+    sigmoid, which is `nf-core/minimal-end-to-end`'s wiring of
+    `algo::fixed::DecodeParams`. After that the arm is unreachable under `--new-flow`
+    and the symmetry is simply better prose.
+  - `--new-flow --density-curve exponential --density-gamma 2e-39 --anchor-mid-offset
+    0.62` -> the anchor guard refuses with "Use a photographic slope, or
+    `--anchor-white-at-reference`, which needs no such division". Every flag in that
+    line is one the new flow accepts, and the remedy names one of the three
+    placements it refuses. This is the fifth-instance shape CLAUDE.md records: a
+    remedy asserting something its own rule never inspected. Independently reproduced
+    by the `fixed-decode` session, which left it here.
+
+    **It is the one finding that gets *worse* with time**, which is why it earns the
+    care. The other two dissolve when the new flow's default curve moves; this one
+    survives `nf-core/default-flip`, after which `nf-retire/dmax-machinery` deletes
+    the placement outright and the remedy names a flag that no longer exists.
+
+    **Fixed by saying only what the rule inspected — not by threading `Flow` into
+    it.** A flow-aware guard was proposed and declined: no other rule in `validate`
+    carries the flow, and gating the clause would leave `nf-retire/dmax-machinery` a
+    conditional to unpick. The message has two halves and only one is faulty. The
+    *explanation* ("Every placement but `--anchor-white-at-reference` divides by the
+    slope, and that quotient overflows f32 for a very small slope") is a fact about
+    the arithmetic — true on both flows and after the retirement — and tells a user
+    which placements skip the division, so it stays verbatim. The *advice* is where
+    the rule recommends a flag whose availability it never checked; dropping that
+    clause leaves "Use a photographic slope", correct on every flow and at every
+    point in the migration. `flow.rs`'s own `refusal()` learned the same lesson one
+    function above: word the escape hatch so it survives the branch you did not look
+    at, rather than teaching the rule which branch it is on.
+
+  **A third one this task will *create*, found while classifying `output.*`.**
+  `--new-flow -o out.tif` with no preset is refused by the suffix rule with "with no
+  `--output-preset`, Hanten writes `gain-map-hdr`" — advice to pass a flag this task
+  is about to refuse. The fix is not a rewording: under `--new-flow` there is no
+  resolved destination to check a suffix against, so the rule should not run at all
+  there. `nf-core/minimal-end-to-end` owns what replaces it.
+
+  **The classification that follows for this task's half**, to be landed as rows:
+  `input.*`, `film_base.*` and `measure.*` are **accepted** — decode, film base and
+  the measurement region are shared by both flows, and the seam is taken after them.
+  Every `print.*` flag is refused by presence and the recipe `print` section whole,
+  each naming the stage that will carry it (`nf-scene-correction/stage` for exposure,
+  white balance and the flare half of the black point;
+  `nf-scene-correction/levels-knob` for `linear_range`; `nf-display-stages/fit-range`
+  for the display tone and its headroom). `output.*` is refused the same way, with
+  `legacy` and `custom` earning `Never` (they are the print path) where the rest earn
+  `NotYet` (`nf-destinations/preset-set`).
+
+  **A fourth, found by `fixed-decode` and verified here — and it is the worst of
+  them.** `--new-flow --density-curve exponential --sigmoid-toe 0` (and the same with
+  `--sigmoid-shoulder 0`) is refused by `merge` with "…the resolved curve is
+  exponential; pass `--density-curve sigmoid` (its slope analogue for exponential is
+  `--density-gamma`)". Both flags on that line are accepted — the knee rows key on a
+  **non-zero** value, deliberately, so that a zeroed knee stays a usable flags-win
+  reset. Unlike the other three this remedy is not half dead but **wholly** dead: the
+  parenthetical is an aside about slopes, not a second remedy, and adding
+  `--density-gamma 2` leaves the error unchanged (verified). The only action that
+  works under `--new-flow` — drop the knee flag — is the one action the message never
+  states, while the one it does state is refused. On the legacy flow the named remedy
+  works (verified), so this is a `--new-flow`-only defect and the fix is to state the
+  escape rather than to gate on the flow.
+
+  **So the sweep's bound was right and its walk was not.** The bound — "only rules
+  keyed on an **accepted** knob's value can fire" — holds. What the first pass missed
+  is that the accepted set contains more than the accepted *knobs*: a refused knob's
+  **accepted identity value** is in it too, and `--sigmoid-toe 0` is exactly that.
+  Enumerating knobs rather than reachable values is how a bound that is correct
+  produces a list that is short. Corrected walk, adding the identity values the
+  refusal rows leave accepted (`--sigmoid-toe 0`, `--sigmoid-shoulder 0`,
+  `--balance-range` / `--auto-balance-range` with both balances zero): four findings.
+
+  **Under `--new-flow` every rule whose condition needs a refused flag is
+  unreachable** (the presence gate runs before `merge`), and a recipe
+  `reconstruction` section is refused whole — so the rules that can fire are those
+  keyed on the accepted set above, plus the output path. Checked and found
+  unreachable once this task's `print.*` / `output.*` rows land: the
+  display-tone-headroom presence rule, `--linear-range`'s span-overflow check, the
+  `--display-tone none` combination rule, the atomicity rule and the `--out-depth`
+  presence rule — each needs a print or output flag the presence gate refuses, or a
+  recipe `print` / `output` section the section refusal blocks. The control: a
+  `--new-flow` run using only accepted flags and a `.jpg` path reaches the seam at
+  exit 4, so no rule fires on the default config.
+  Checked and found unreachable rather than wrong: the characteristic-curve arms for
+  the `--anchor-*` and `--film-stock` families, `--sigmoid-contrast`'s upper bound,
+  the `film-master` auto-anchor refusal and the `--auto-d-max` warning — each needs a
+  flag the gate refuses first, or a recipe value the section refusal blocks.
+
+  **Ownership split with `fixed-decode`, agreed both ways** (2026-09-22): the
+  `DMAX_REASON` clause and the `flow.rs` end of the `--sigmoid-contrast` loop ship in
+  its PR; `merge`'s `--density-gamma` arm, the knee arms, the anchor guard and the
+  suffix rule are this task's. That session also owns the loop it found in the other
+  direction — `--sigmoid-contrast`'s refusal points at `--density-gamma`, which
+  `merge` then refuses by naming `--sigmoid-contrast` again.
+
+  **One claim not to inherit.** That session's first edit to this task's file said the
+  `new-flow-flag` worked instance was *closed*; its own review round found a `roll`
+  **per-frame overlay** stating `reconstruction` is still not refused — the raw-JSON
+  witness runs on `convert` and on roll's *shared* recipe only, while overlays are
+  JSON-merged with no probe. Unreachable while `roll` refuses at the seam, and live
+  the moment `nf-core/minimal-end-to-end` removes that guard; `nf-core/subcommands`
+  owns it. The qualified wording ships in its PR, so this task should read that file
+  after the merge rather than the version drafted before it.
+
+  **Blocked, and deliberately not worked around.** `fixed-decode` is finished but
+  uncommitted in a sibling worktree, so there is no base to build the table on;
+  writing this half against `main` would mean re-deriving a competing classification
+  of the reconstruction knobs and resolving it as a conflict later, which is exactly
+  how a re-port drops what nothing references. Waiting for that PR to merge (user's
+  call). The sweep above needed none of it.
+
+- 2026-09-22 (shipped, on `fixed-decode`'s merged base): the inventory is complete,
+  and three remedies that named a knob this flow refuses are fixed.
+
+  **The tables became an inventory.** `FlagEntry` gained `covers` (the flags a row
+  classifies), a `#[cfg(test)]` `KEPT_FLAGS` table records every flag the new flow
+  *accepts* and why, and `every_convert_flag_is_classified` reads the flag surface
+  back out of `cli.rs` — parsing the `#[arg(...)]` declarations of `ConvertArgs` and
+  each group it flattens, the way `stage-skeleton`'s minting test reads the boundary
+  types with `include_str!`. Both directions are checked: a flag no row covers, and a
+  row covering a flag that no longer exists. Falsified both ways before being trusted
+  (blanking one row's `covers`; adding a `--probe-knob` to `cli.rs`), because it
+  passed on the first run, which is when a test is most likely vacuous.
+  `every_recipe_section_is_classified` does the same for sections, off a serialized
+  `ResolvedConfig`.
+
+  **`print.*` and `output.*` are refused the way the decode's section is**, which is
+  `fixed-decode`'s pattern rather than the value rules this task had planned: the four
+  new-flow stages carry their own params and the chain resolves no destination, so
+  both sections joined `reconstruction` in `flow::UNREAD_RECIPE_SECTIONS` and
+  `reject_recipe_reconstruction` generalised to `reject_recipe_sections`. Twelve flag
+  rows cover the other provenance.
+
+  **The corollary that decided every print verdict.** Once a section is refused whole,
+  an **identity value earns no exemption**: the tiebreaker spares one so a flag can
+  clear what a recipe pinned, and there is no longer a recipe value to clear. So
+  `--white-balance 1,1,1` and `--highlight-compress 0` are refused although they
+  resolve the documented defaults and render byte-identically. This also falsified two
+  rationales that shipped with the decode — the knee row's "clearing a recipe's knee is
+  how one recipe gets re-used on the new chain" and `--density-curve`'s "keeps the
+  flags-win reset usable on a recipe that pinned a sigmoid" — both citing a reset the
+  section refusal in the same PR had already made impossible. The *behaviour* is
+  right for an independent reason (each names what the flow already does), so only the
+  prose changed. **A rationale can be falsified by a change that leaves its code
+  correct**, and no gate reads prose.
+
+  **Three remedies fixed, each verified by running the binary before and after.**
+  - The **anchor guard** (`cli.rs`) ended "Use a photographic slope, or
+    `--anchor-white-at-reference`, which needs no such division" — a placement the
+    rule never checked was available, reachable on a line built entirely from accepted
+    flags (`--density-curve exponential --density-gamma 2e-39 --anchor-mid-offset
+    0.62`). Fixed by splitting the message: the *explanation* still names the flag,
+    which is a fact about the arithmetic, and the *advice* stops recommending it. A
+    `Flow`-aware guard was proposed and declined — no other `validate` rule carries the
+    flow, and the flag is **deleted** at `nf-retire/dmax-machinery`, so it should not be
+    recommended on any flow rather than hidden under one.
+  - `merge`'s **`--density-gamma`** arm ranked `--sigmoid-contrast` as the answer and
+    parenthesised `--density-curve exponential`; under `--new-flow` the ranked one is
+    refused. Reordering was considered and rejected — on the legacy chain
+    `--sigmoid-contrast` keeps the user on the curve they resolved, so promoting the
+    switch trades a dead lead on one flow for a more invasive one on the other. The
+    *ranking* is dropped instead, which costs neither and needs no knowledge of the
+    flow. Closes when the new flow's default curve moves
+    (`nf-core/minimal-end-to-end`).
+  - The **output suffix rule** stands down under `--new-flow` entirely. It blamed a
+    preset nobody selected and pointed at `--output-preset`, which this task refuses.
+    Not a rewording: with no destination resolved there is nothing for a suffix to
+    match, so `-o` is taken as typed at both sites that judged it (`validate_convert`
+    and `run_convert`'s own resolution). A legacy control pins that the rule still
+    fires there.
+
+  **The fourth finding was closed by `fixed-decode` instead**, in its review round:
+  `--sigmoid-toe 0` beside a knee-less curve now trips the flag row rather than
+  `merge`'s dead remedy, via a narrow conjunction that keeps the zero knee accepted
+  on its own. Verified both branches here rather than taking the report.
+
+  **What tripped the tests, and why it is the right kind of breakage.** Seven
+  integration tests failed the moment `--output-preset` became refused — every
+  `--new-flow` test passed `--output-preset legacy` so its `.tif` path would be
+  accepted. Two of them (`new_flow_refuses_every_knob_the_fixed_decode_strands` and
+  its sibling) were passing only because the reconstruction rows sit above the output
+  rows, so the refusal they asserted arrived first: a test asserting "X is refused"
+  whose command line also carries a refused Y is correct only by row order. Dropping
+  the preset from every `--new-flow` invocation made them assert what they mean.
+
+  **Process note.** Reverting a temporary falsification probe with
+  `git checkout src/cli.rs` also discarded unrelated uncommitted work in that file.
+  Back up the file instead; `git checkout <path>` has no notion of "just my probe".
+
+  **Docs.** `using-nc.md` §11 re-verified by running the binary (its seam example
+  carried the now-refused preset), gaining the print/output table, the
+  no-identity-exemption note and the suffix-rule change; `--new-flow`'s `--help` text,
+  which claimed the inventory was "still being assembled"; CLAUDE.md's three-provenance
+  paragraph, which named the renamed function. `cargo doc` is back at the documented
+  16-link baseline — the rename left one stale intra-doc link and two more pointed at
+  `#[cfg(test)]` items, which rustdoc cannot resolve.
+
+- 2026-09-22 (review round): eight findings from the two-engine loop, all real, all
+  fixed. Codex found nothing; every one below came from the local reviewer.
+
+  **Two of the eight were defects this change itself introduced**, which is the part
+  worth remembering.
+  - *The suffix stand-down invented a collision.* With the output path taken verbatim,
+    `encode::sidecar_path` appends `.json` to the **stem**, so `-o out --report-file
+    out.json --new-flow` was refused for colliding with a sidecar that exists on
+    neither chain — and the refusal pre-empted the seam, replacing "cannot render yet"
+    with a wrong diagnosis. Only the *sidecar* entry stands down now; every other
+    write target is a real path on both chains, so an input-clobbering `--report-file`
+    is still refused (pinned, with the input's size read back).
+  - *The stand-down was applied to `convert` only.* `roll`'s planner still judged a
+    manifest's explicit `output` against `gain-map-hdr` — and on `roll` that is
+    sharper than on `convert`, because its only way to change the preset is the
+    recipe `output` section this same change refuses whole. Stood down in
+    `resolve_frame_output` too; the *derived* name needs no guard, being correct by
+    construction and never judged.
+
+  **`--export-ir` was classified "kept" on a claim the code contradicts.** The row
+  said it is "written from the decoded image before any render, so it is indifferent
+  to which chain follows". It reads the decoded image, but it is **staged after**
+  `stages::render` — past the seam — and takes its bit depth from
+  `cfg.output.depth()`, i.e. from `output.preset`, a section this change refuses. So
+  `--export-ir --new-flow` was accepted and wrote nothing: the accepted-and-ignored
+  state the audit exists to eliminate, recorded by the inventory as its opposite.
+  Now a `VALUE_ENTRIES` row, which covers the recipe key in the same rule — and
+  `input` is documented as read *apart from* `export_ir`, rather than widening the
+  section refusal and taking `--input-transfer` down with it. **The lesson: "reads the
+  decoded image" and "runs before the render" are different claims, and the memory
+  model already said which one holds** (`RunProfile::Convert` peaks at encode
+  *because* both images are live).
+
+  **`--highlight-compress` was attributed to the wrong tone.** The refusal called it
+  the knee width of "`shoulder` and `none`"; `DisplayTone::resolve` *refuses* a
+  non-default value under `none` ("applies no shoulder to place"), so the knee is
+  `shoulder`'s alone. The pairing is `bounds_sdr_output`'s grouping, not knee
+  ownership.
+
+  **Three more stale rationales, and the grep lesson repeated.** `FLAG_ENTRIES`'
+  rustdoc still said "the rest of the surface is not closed — `print.*`, `output.*`
+  and `measure.*` are still accepted"; the block comment above the decode rows still
+  said "the audit still owns the rest"; and `--measure-inset`'s row called `measure`
+  "the one section the new flow still reads" while `READ_RECIPE_SECTIONS` lists three.
+  The first two sat ten lines from the new paragraph asserting the opposite. **The
+  earlier negation grep missed them because it searched for phrasings** ("still being
+  assembled", "the rest is not") **rather than for the claim's meaning** — the exact
+  failure CLAUDE.md records for this check, committed while quoting the rule. The
+  re-run grepped the *meaning* across every path and is clean.
+
+  **And the falsified-reset argument came back in a newly written row.** This change
+  rewrote that argument out of the knee row and `--density-curve`'s, then reproduced
+  it in `--balance-range`'s: `balance_range` serializes under
+  `reconstruction.density`, so a recipe stating it is refused whole and there is no
+  reset to protect. The behaviour was right on its other clause; only the sentence
+  was wrong. Two comments justifying an `instead` against merge's *ranked* remedies
+  were stale for the same reason — this change dropped that ranking — and
+  `render_not_implemented`'s doc cited `--display-tone none --print-exposure 3` as a
+  line that reaches the seam, which both new rows now refuse by presence.
+
+  **CLAUDE.md's tiebreaker paragraph now carries the exception.** It named
+  `--bigtiff auto`, `--highlight-compress 0` and `--display-tone shoulder` as
+  identity values that must not be rejected, and `--new-flow` rejects all three. The
+  rule reads "spare an identity value where a recipe could have set the knob"; the
+  paragraph says so, so a reader landing there does not read the new rows as a
+  violation.
+
+  **Two soft spots the reviewer raised and I left.** `every_convert_flag_is_classified`
+  scans only `ConvertArgs`' own body for `#[command(flatten)]`, so a *nested* flatten
+  inside one of the ten groups would go unscanned — none exists, and recursing would
+  add a parser branch with no caller. And `!entry.why.is_empty()` is a weak
+  assertion; it exists to stop a row being added with no recorded reason, which is
+  all it claims.
+
+  Three regression tests added, each falsified by reverting its fix.
 
 ## default-flip
 
