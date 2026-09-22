@@ -32,7 +32,7 @@ migration plan (`docs/nf-migration.md`).
 
 ## desaturation-spike
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-09-21
 
 - 2026-09-21: filed once the three-way measurements had settled the structural half —
@@ -196,6 +196,26 @@ migration plan (`docs/nf-migration.md`).
   *parameters* are fitted to a single example and should not be carried into
   `path-to-white` as values. What carries is the shape: two thresholds, on saturation,
   multiplying the brightness term.
+- 2026-09-21: **confirmed by eye — "I can see the diff between 3 and 4. 4 keeps the
+  color."** The guard is visible, not just measurable, on 1820's sand beach at the
+  strength that cleans the whites. Spike **done**; the throwaway operator is reverted and
+  never merged.
+
+  **Verdict for [path to white](../tasks/nf-look/path-to-white.md):**
+
+  1. **A chroma pull, not a per-channel curve** — chosen for **separability**, since the
+     per-channel curve moves luminance too and the fit range downstream eats whatever
+     compensates it. The two are perceptually equivalent otherwise (ΔE ≈ 0.7 matched).
+  2. **Strength keys on brightness *and* on distance from the neutral axis.** Brightness
+     alone neutralises a bright coloured surface as hard as a bright white one. This is
+     the spike's main result and it was invisible to every aggregate — one marked patch
+     found it.
+  3. **It is a highlight operator and cannot be more.** Its reach is its threshold:
+     surfaces at L\* 64–68 are untouched at any setting, so midtone cast belongs to the
+     per-channel grade or the decode. The user confirmed those read fine, consistent with
+     the eye being less sensitive to cast in shade.
+  4. **"Off" is still wanted but for less** than the design assumed — the guard removes
+     the flatten-a-sunset objection rather than the hide-a-cast one.
 
 ## path-to-white
 

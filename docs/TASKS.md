@@ -1539,7 +1539,7 @@ the design in `docs/design-update.md`:
 > white, contrast, look presets, and the film-stock data that outlives the decode's
 > `characteristic` curve.
 
-- [ ] [Spike: what form should highlight desaturation
+- [x] [Spike: what form should highlight desaturation
   take?](tasks/nf-look/desaturation-spike.md) — per-channel curve against a
   hue-preserving chroma pull; the design's prose describes one and every measured
   reference does the other
