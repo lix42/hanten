@@ -18,8 +18,9 @@ rather than accuracy questions.
 **Everything this needs already exists as a reachable configuration.** The
 exponential curve *is* the sigmoid with both knees off, bit-exactly; the
 `mid-at-base-offset` placement ships (`--anchor-mid-offset`); the calibration gain is
-`density.scale`. The work here is **defaults and wiring, not new arithmetic** — which
-is also the strongest acceptance test available (see below).
+`density.scale`. That equivalent configuration is not what ships — the decode is written
+fresh — but it is what the fresh code is measured against, which is the strongest
+acceptance test available (see below).
 
 Three consequences worth stating up front:
 
@@ -40,19 +41,18 @@ Three consequences worth stating up front:
   the two target different densitometries so a clean comparison needs a deferred
   calibration. A toe-limited form is the third candidate. Exponential is this task's
   default; changing it is a design change, not a tuning one.
-- **Fresh module or the kept one?** The migration rule says write new stages fresh —
-  but the decode is the one stage the redesign *keeps*, and its arithmetic is pinned by
-  goldens. Decide explicitly.
 - **Where the NC film RGB v1 3×3 belongs** — still at reconstruction's output, or
   moved into scene correction? That changes what `film-master` holds (Part 1, open).
 
 ## How to Verify
 
-- Under `--new-flow` with no other flags, the pixels are **identical** to the old flow
-  driven by the equivalent explicit flags. That equality is the claim that this is
-  wiring; if it fails, something new was introduced and must be named.
-- `film-master` exports the decode unchanged, and nothing on the new-flow path
-  resolves a reference density.
+- The decode's pixels are **bit-identical** to `algo::reconstruct` driven by the
+  equivalent explicit configuration. Two implementations compared on one host, so the
+  check is cross-target safe; if it fails, something new was introduced and must be
+  named.
+- Nothing on the new-flow path resolves a reference density — run that equality across
+  several `curve.dmax` values and it must hold for all of them. (`film-master` under the
+  new flow waits on a destination: `nf-core/minimal-end-to-end`.)
 - The four CI gates pass.
 
 ## Dependencies

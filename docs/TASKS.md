@@ -932,8 +932,8 @@ the design in `docs/design-update.md`:
   — the default resolves the new chain; version bump, drift row, before/after
   report. Supersedes the flip half of `algo/split-default-migration`
 - `nf-reconstruction/fixed-decode` (new flow): `nf-core/stage-skeleton`
-  — exponential, toe passed through as recorded — defaults and wiring, not new
-  arithmetic
+  — exponential, toe passed through as recorded — written fresh, and measured
+  bit-identical to the equivalent legacy configuration
 - `nf-reconstruction/anchor-rule` (new flow): `nf-reconstruction/fixed-decode`, `nf-reconstruction/anchor-spike`
   — `mid-at-base-offset` as the only rule, and a runtime `d` the render path
   is currently forbidden to read
@@ -1530,9 +1530,10 @@ the design in `docs/design-update.md`:
   place?](tasks/nf-reconstruction/anchor-spike.md) — runs against today's binary
   so it can run first; every converter measured anchors the bright end, and the
   rule currently has to choose on argument alone
-- [ ] [The fixed, stock-agnostic
+- [x] [The fixed, stock-agnostic
   decode](tasks/nf-reconstruction/fixed-decode.md) — exponential, toe passed
-  through as recorded — defaults and wiring, not new arithmetic
+  through as recorded — written fresh, and measured bit-identical to the
+  equivalent legacy configuration
 - [ ] [One anchor rule, with a value for
   `d`](tasks/nf-reconstruction/anchor-rule.md) — `mid-at-base-offset` as the
   only rule, and a runtime `d` the render path is currently forbidden to read

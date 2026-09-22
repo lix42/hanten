@@ -41,15 +41,25 @@ one message, not a second matrix to keep in step.
 - **A knob the user never typed.** Refusing a flag someone passed is right; refusing
   because a default put them somewhere with no counterpart is not obviously right.
   Accepted-and-ignored is not an option, so each such knob needs a decision.
-  **A worked instance is already open**, left by `nf-core/new-flow-flag`: the sigmoid
-  knees are refused only through `--sigmoid-toe` / `--sigmoid-shoulder`, so the same
-  knee stated by a recipe or expanded from `--preset sigmoid-knees` is not refused.
-  A value rule cannot simply be added beside the flag rule — the shipped default
-  sigmoid *has* knees (`toe: 0.2`), so "refuse a non-zero resolved knee" would refuse
-  every `--new-flow` run. The asymmetry runs both ways: typing `--sigmoid-toe 0.2`,
-  which resolves today's default, is refused while the identical resolved config with
-  no flag reaches the render. Whatever resolves this has to wait for, or move with,
-  `nf-reconstruction/fixed-decode`.
+  **The worked instance left by `nf-core/new-flow-flag` is closed**, and how it closed
+  is the pattern to reuse: a value rule could not be added beside the flag rule — the
+  shipped default sigmoid *has* knees (`toe: 0.2`), so "refuse a non-zero resolved
+  knee" would have refused every `--new-flow` run. `nf-reconstruction/fixed-decode`
+  closed it from the other end instead, by giving the new flow its own decode
+  parameters so that it reads no resolved `reconstruction` at all; a recipe stating
+  that section is then refused whole, and `--preset` by presence. Where a stage owns
+  its parameters, "what does a knob the user never typed earn?" stops being a
+  question. Where it does not — `print.*`, `output.*`, `measure.*` — it remains this
+  task's.
+
+  **One hole is left, and it is a `roll` one.** `flow::reject_recipe_reconstruction`
+  runs on `convert`'s recipe and on `roll`'s *shared* one, but a **per-frame overlay**
+  is JSON-merged onto that shared config with no such witness, and the value table
+  matches only `Reconstruction::Simple` — so a frame whose overlay states
+  `reconstruction` is accepted and then read by nothing. It is unreachable today
+  (`roll` refuses at the render seam before the per-frame loop runs) and goes live
+  exactly when `nf-core/minimal-end-to-end` lifts that guard. Owner:
+  `nf-core/subcommands`.
 - **A value rule cannot outrank `merge`.** It has nothing to read until `merge` has
   resolved a value, so any command line `merge` itself refuses is diagnosed by the
   legacy chain first. `simple` is listed in *both* tables for that reason (the

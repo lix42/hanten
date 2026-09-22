@@ -15,7 +15,7 @@
 //!   different sentences it refuses them with ([`Availability`]).
 //! - [`render_not_implemented`] — the seam itself. `nf-core/stage-skeleton` built
 //!   the chain behind it (`pipeline::chain`); it stays closed until
-//!   `nf-core/minimal-end-to-end` puts a decode in front of that chain and a
+//!   `nf-core/minimal-end-to-end` wires the decode (`algo::fixed`) to that chain and a
 //!   destination behind it.
 //!
 //! `Flow` is *orchestration state*, like an unresolved `film_base.source`: it
@@ -66,6 +66,24 @@ enum Availability {
     },
 }
 
+/// Whether the command line *names* a curve that has no knees.
+///
+/// The knee rows below accept a **zero** knee as an identity value, which is what
+/// keeps the flags-win reset usable. Beside a typed non-sigmoid curve that reading
+/// stops holding: the pair is a contradiction, and `merge` refuses it with "pass
+/// `--density-curve sigmoid`" — a curve this flow then refuses, closing a loop in
+/// which *neither* message states the action that works (drop the knee flag). So the
+/// rows fire on the pair too, pre-`merge`, where the generic "Drop it for now"
+/// remedy is the working one. Reads only flags the user typed, never a resolved
+/// value, so a recipe-pinned curve cannot trip it.
+fn a_curve_without_knees_is_typed(args: &ConvertArgs) -> bool {
+    matches!(
+        args.density_curve,
+        Some(crate::types::DensityCurveType::Exponential)
+            | Some(crate::types::DensityCurveType::Characteristic)
+    )
+}
+
 /// A knob refused by **flag presence**, checked before `merge`.
 struct FlagEntry {
     /// The knob as the user typed it.
@@ -83,6 +101,29 @@ struct ValueEntry {
     availability: Availability,
 }
 
+/// Shared refusal reasons, so rows that say the same thing cannot drift apart.
+///
+/// The anchor family needs **two** of them, because "reference-free" does not
+/// discriminate all three placements it refuses:
+/// [`AnchorPlacement::reads_reference`](crate::types::AnchorPlacement::reads_reference)
+/// is `false` for `BlackAtBase` too, so telling a `--anchor-black-floor` user that the
+/// decode's rule was chosen for being reference-free names a property their own rule
+/// has. For that row the reason is simply that there is one rule.
+const ANCHOR_RULE_REASON: &str = "the decode has one anchor rule — mid-grey pinned a fixed density above the film \
+     base — so which tone the decode pins is no longer a choice it offers";
+const ANCHOR_REFERENCE_REASON: &str = "the decode has one anchor rule — mid-grey pinned a fixed density above the film \
+     base — and it is reference-free, so a leader measurement's roll-to-roll error \
+     cannot reach the render";
+const DMAX_REASON: &str = "the anchor rule never reads a reference density, so nothing in the new flow \
+     resolves one; a `Dmax` measured from a leader is film saturation, which is \
+     neither diffuse white nor the density this decode pins — it pins mid-grey a fixed \
+     density above the film base, which every scan carries, so nothing has to be \
+     stated in the reference's place";
+const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which subsumes it: adjusting channels by tone \
+     region is a grade, and it is also the one term in the old chain that could be \
+     non-monotone, so it cannot sit in a decode that loses nothing by construction \
+     (`nf-look/per-channel-grade`)";
+
 /// Knobs with no new-flow meaning, keyed on the **flag the user typed**.
 ///
 /// Per CLAUDE.md's recorded tiebreaker: reject a flag when it *forces something the
@@ -95,29 +136,38 @@ struct ValueEntry {
 /// keeps the flags-win reset usable — clearing a recipe's knee is how one recipe gets
 /// re-used on the new chain.
 ///
-/// **Known hole, and it is the audit's to close.** This half sees only the flag, so
-/// the same knee stated by a *recipe* or expanded from `--preset sigmoid-knees` is
-/// not refused here — and the asymmetry runs the other way too: typing
-/// `--sigmoid-toe 0.2`, which resolves today's default, is refused while the
-/// identical resolved config with no flag reaches the seam.
+/// **How a knob the user never typed is handled**, which this table alone cannot do.
+/// It sees only the flag, so the same knee stated by a *recipe* or expanded from
+/// `--preset sigmoid-knees` is invisible here — and a value rule cannot be added
+/// beside it, because the shipped default sigmoid *has* knees (`toe: 0.2`), so
+/// "refuse a non-zero resolved knee" would refuse every `--new-flow` run. The fixed
+/// decode closes that from the other end: it reads its own [`DecodeParams`] rather
+/// than the resolved `reconstruction`, so a recipe stating that section is refused
+/// whole ([`reject_recipe_reconstruction`]) and `--preset` is refused by presence.
+/// Nothing the user *asks for* in the new flow's **reconstruction** is silently
+/// dropped. (Knobs that merely resolve to a default still land in that section and
+/// are read by nothing — a zero knee, `--balance-range`, `reconstruction.type` — which
+/// is why the paragraph below says nothing *maps* them yet.)
+/// The rest of the surface is not closed — `print.*`, `output.*` and `measure.*` are
+/// still accepted under `--new-flow` and read by nothing, which stays
+/// `nf-core/knob-availability-audit`'s (see below). The asymmetry that remains here is benign and deliberate: typing
+/// `--sigmoid-toe 0.2`, which resolves
+/// today's default, is refused while the same resolved config with no flag is simply
+/// not consulted.
 ///
-/// The same gap has an *ordering* face, which is why `simple` is listed here as
-/// well as in [`VALUE_ENTRIES`]: a value rule cannot run until `merge` has resolved
-/// a value, so any command line `merge` itself refuses is diagnosed by the legacy
-/// chain first. A flag row pre-empts that; a knob reaching the new flow **only**
-/// through a recipe cannot be pre-empted, since the recipe's value is not the
-/// resolved one until the flags have won. A value rule cannot simply be added beside it: the shipped
-/// default sigmoid *has* knees (`toe: 0.2`), so "refuse a non-zero resolved knee"
-/// would refuse every `--new-flow` run before it reached the seam. Deciding what a
-/// knob the user never typed earns is exactly
-/// `nf-core/knob-availability-audit`'s open question, and it cannot land before
-/// `nf-reconstruction/fixed-decode` moves the default.
+/// [`DecodeParams`]: crate::algo::fixed::DecodeParams
 ///
-/// **Provisional, and deliberately short.** The real inventory is that audit's
-/// product; these exist so the mechanism is exercised through the binary rather
-/// than only unit-tested, and their verdicts are ones `docs/design-update.md`
-/// already settled ("sigmoid with toe/shoulder — leaves reconstruction"). Adding a
-/// row changes no message, ordering or call site.
+/// The ordering face of the same gap is why `simple` is listed here as well as in
+/// [`VALUE_ENTRIES`]: a value rule cannot run until `merge` has resolved a value, so
+/// any command line `merge` itself refuses is diagnosed by the legacy chain first. A
+/// flag row pre-empts that.
+///
+/// **The reconstruction half of the inventory is complete; the rest is not.** These
+/// rows are `nf-reconstruction/fixed-decode`'s, landed with the decode that strands
+/// them rather than left accepted-and-ignored until the audit runs.
+/// `nf-core/knob-availability-audit` still owns `print.*`, `output.*`, `measure.*`
+/// and the renamed-knob mapping table. Adding a row changes no message, ordering or
+/// call site.
 const FLAG_ENTRIES: &[FlagEntry] = &[
     // Paired with the `simple` row in [`VALUE_ENTRIES`], which is the same dual-rule
     // shape CLAUDE.md records for `OutputPreset::is_atomic` — a value rule for either
@@ -143,7 +193,11 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     },
     FlagEntry {
         knob: "--sigmoid-toe",
-        present: |args| args.sigmoid.sigmoid_toe.is_some_and(|w| w != 0.0),
+        present: |args| {
+            args.sigmoid
+                .sigmoid_toe
+                .is_some_and(|w| w != 0.0 || a_curve_without_knees_is_typed(args))
+        },
         availability: Availability::NotYet {
             arriving_with: "the fit-range stage, which is where a toe belongs: shaping \
                             the approach to black needs the display's range, and \
@@ -154,11 +208,191 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     },
     FlagEntry {
         knob: "--sigmoid-shoulder",
-        present: |args| args.sigmoid.sigmoid_shoulder.is_some_and(|w| w != 0.0),
+        present: |args| {
+            args.sigmoid
+                .sigmoid_shoulder
+                .is_some_and(|w| w != 0.0 || a_curve_without_knees_is_typed(args))
+        },
         availability: Availability::NotYet {
             arriving_with: "the fit-range stage: compressing highlights inside \
                             reconstruction is what discards the range an HDR rendition \
                             exists to carry (`nf-display-stages/fit-range`)",
+        },
+    },
+    // --- what the fixed decode strands (`nf-reconstruction/fixed-decode`) ----------
+    //
+    // These rows are the reconstruction half of `nf-core/knob-availability-audit`,
+    // landed with the decode that strands them rather than left accepted-and-ignored
+    // in the meantime. The audit still owns the rest (`print.*`, `output.*`,
+    // `measure.*`) and the renamed-knob mapping table.
+    //
+    // The decode's *surviving* knobs are deliberately absent from this table and stay
+    // reachable: `--density-scale`, `--density-offset`, `--density-gamma` and
+    // `--anchor-mid-offset` are exactly the calibration and the anchor
+    // `algo::fixed::DecodeParams` carries. Nothing **maps** them onto it yet —
+    // `nf-core/minimal-end-to-end` owns the wiring, and until it lands the seam
+    // refuses before any of them could be ignored. One wrinkle for that task:
+    // `--density-gamma` beside the resolved *sigmoid* default is refused by `merge`
+    // (exit 2) before this flow ever sees it, and merge's **first** remedy is
+    // `--sigmoid-contrast` — which the row below refuses. The two messages would
+    // therefore close a loop, which is why that row's remedy names
+    // `--density-curve exponential --density-gamma` together rather than the flag
+    // alone: following it works in one step. So the fixed decode's own contrast
+    // currently needs the curve named beside it; that dissolves when the new flow's
+    // default curve moves (`nf-core/minimal-end-to-end` / `nf-core/default-flip`).
+    FlagEntry {
+        knob: "--density-curve",
+        // `--density-curve exponential` names the curve this flow already decodes
+        // with, so it forces nothing and stays accepted — the tiebreaker's identity
+        // value, and what keeps the flags-win reset usable on a recipe that pinned a
+        // sigmoid. The other two select a curve the fixed decode does not have.
+        present: |args| {
+            matches!(
+                args.density_curve,
+                Some(crate::types::DensityCurveType::Sigmoid)
+                    | Some(crate::types::DensityCurveType::Characteristic)
+            )
+        },
+        availability: Availability::Never {
+            reason: "reconstruction is one fixed decode for every negative — a straight \
+                     line in density against log exposure — so which curve to use is no \
+                     longer a choice the decode offers",
+            instead: Some("`--density-curve exponential`, which names what it already does"),
+        },
+    },
+    FlagEntry {
+        knob: "--film-stock",
+        present: |args| args.density.film_stock.is_some(),
+        availability: Availability::NotYet {
+            arriving_with: "the look stage, as an optional per-stock normalization on top \
+                            of the fixed decode: inverting each stock's own curve returns \
+                            every stock to the same scene contrast, which is a choice about \
+                            how the picture should look rather than a decode of what the \
+                            negative holds (`nf-look/stock-data-home`)",
+        },
+    },
+    FlagEntry {
+        knob: "--sigmoid-contrast",
+        present: |args| args.sigmoid.sigmoid_contrast.is_some(),
+        availability: Availability::Never {
+            reason: "it is the sigmoid's slope, and the fixed decode is the straight line",
+            // The curve is named alongside the flag on purpose: bare `--density-gamma`
+            // beside the resolved sigmoid default is refused by `merge`, whose first
+            // remedy is `--sigmoid-contrast` — the flag being refused here. See the
+            // note above the surviving knobs.
+            instead: Some(
+                "`--density-curve exponential --density-gamma`, this decode's own contrast",
+            ),
+        },
+    },
+    // The three placements the one anchor rule replaces. `--anchor-mid-offset` is
+    // absent from this table on purpose: it *is* the rule's `d`.
+    FlagEntry {
+        knob: "--anchor-white-at-reference",
+        present: |args| args.anchor.anchor_white_at_reference,
+        availability: Availability::Never {
+            reason: ANCHOR_REFERENCE_REASON,
+            instead: Some("`--anchor-mid-offset`, the one rule the decode has"),
+        },
+    },
+    FlagEntry {
+        knob: "--anchor-mid-fraction",
+        present: |args| args.anchor.anchor_mid_fraction.is_some(),
+        availability: Availability::Never {
+            reason: ANCHOR_REFERENCE_REASON,
+            instead: Some("`--anchor-mid-offset`, the one rule the decode has"),
+        },
+    },
+    FlagEntry {
+        knob: "--anchor-black-floor",
+        present: |args| args.anchor.anchor_black_floor.is_some(),
+        availability: Availability::Never {
+            reason: ANCHOR_RULE_REASON,
+            instead: Some("`--anchor-mid-offset`, the one rule the decode has"),
+        },
+    },
+    // The reference-density family. **All four**, including `--no-d-max`, and that is
+    // the tiebreaker applied rather than waived: an identity value is one that asks
+    // for nothing *of a knob this flow has*, and the fixed decode has no reference
+    // density at all — so "resolve it from nowhere" is a statement about a quantity
+    // that does not exist here, not a reset of one. Nothing in the new flow would
+    // read what any of them resolved.
+    FlagEntry {
+        knob: "--d-max",
+        present: |args| args.dmax.d_max.is_some(),
+        availability: Availability::Never {
+            reason: DMAX_REASON,
+            instead: None,
+        },
+    },
+    FlagEntry {
+        knob: "--fixed-d-max",
+        present: |args| args.dmax.fixed_d_max,
+        availability: Availability::Never {
+            reason: DMAX_REASON,
+            instead: None,
+        },
+    },
+    FlagEntry {
+        knob: "--auto-d-max",
+        present: |args| args.dmax.auto_d_max,
+        availability: Availability::Never {
+            reason: DMAX_REASON,
+            instead: None,
+        },
+    },
+    FlagEntry {
+        knob: "--no-d-max",
+        present: |args| args.dmax.no_d_max,
+        availability: Availability::Never {
+            reason: DMAX_REASON,
+            instead: None,
+        },
+    },
+    // The regional balance. Zero is identity and stays accepted; the range flags are
+    // consulted only when a balance is non-zero, so alone they force nothing and are
+    // deliberately not listed.
+    FlagEntry {
+        knob: "--shadow-balance",
+        present: |args| args.density.shadow_balance.is_some_and(|b| b != [0.0; 3]),
+        availability: Availability::NotYet {
+            arriving_with: BALANCE_ARRIVES_WITH,
+        },
+    },
+    FlagEntry {
+        knob: "--highlight-balance",
+        present: |args| {
+            args.density
+                .highlight_balance
+                .is_some_and(|b| b != [0.0; 3])
+        },
+        availability: Availability::NotYet {
+            arriving_with: BALANCE_ARRIVES_WITH,
+        },
+    },
+    // A preset sets knobs on **both** sides of the decode/rendering boundary — the
+    // curve, `density.scale`, `print_exposure`, `display_tone` — so it cannot be
+    // resolved against a chain whose rendering knobs do not exist yet. It is also the
+    // one conversion flag with no recipe key, which is why it needs a presence row
+    // rather than a value one.
+    FlagEntry {
+        knob: "--preset",
+        present: |args| args.preset.is_some(),
+        availability: Availability::NotYet {
+            arriving_with: "the look stage's presets, which is where a bundle spanning \
+                            decode and rendering can be defined again (`nf-look/look-presets`)",
+        },
+    },
+    // Operational, and refused for a reason none of the others share: it writes the
+    // resolved *legacy* config, and it writes it before the render seam — so under
+    // `--new-flow` it would hand the user a recipe describing a chain the run did not
+    // select. Refusing beats emitting a plausible lie.
+    FlagEntry {
+        knob: "--dump-params",
+        present: |args| args.dump_params.is_some(),
+        availability: Availability::NotYet {
+            arriving_with: "the new chain's recipe schema, which decides how a recipe \
+                            describes these stages at all (`nf-core/recipe-schema`)",
         },
     },
 ];
@@ -216,6 +450,37 @@ pub fn reject_unavailable_values(flow: Flow, cfg: &ResolvedConfig) -> Result<()>
     Ok(())
 }
 
+/// Refuse a **recipe** that describes the chain the new flow does not run.
+///
+/// The third provenance, and the one neither table can see. The new flow decodes
+/// through [`DecodeParams`](crate::algo::fixed::DecodeParams), not through the
+/// resolved `reconstruction` object, so a recipe stating that section would parse,
+/// validate and then do nothing — `deny_unknown_fields` catches an *unknown* key and
+/// is blind to a **known but meaningless** one, which is the bug class the project
+/// forbids. Refusing the section whole is blunt and temporary: `nf-core/recipe-schema`
+/// decides how a recipe describes these stages, and until it does the decode's own
+/// knobs stay reachable by flag (`--density-scale`, `--density-offset`,
+/// `--density-gamma`, `--anchor-mid-offset`).
+///
+/// `stated` is a raw-JSON witness, not a comparison against the default: a recipe
+/// that *writes* the defaults it would otherwise inherit is indistinguishable from
+/// one that omitted them once serde has filled the gaps — the same reason
+/// `curve_dmax_present` exists.
+pub fn reject_recipe_reconstruction(flow: Flow, stated: bool) -> Result<()> {
+    if flow == Flow::New && stated {
+        return Err(refusal(
+            "a recipe `reconstruction` section",
+            Availability::NotYet {
+                arriving_with: "the new chain's recipe schema, which decides how a recipe \
+                                describes these stages at all — until then the new flow \
+                                would parse this section and never read it \
+                                (`nf-core/recipe-schema`)",
+            },
+        ));
+    }
+    Ok(())
+}
+
 /// The one generic rejection, built in one place so a new table row needs no
 /// wording of its own.
 fn refusal(knob: &str, availability: Availability) -> NcError {
@@ -258,8 +523,9 @@ fn refusal(knob: &str, availability: Availability) -> NcError {
 /// distinction `Resource` draws for the memory gate.
 ///
 /// The chain itself exists as of `nf-core/stage-skeleton` (`pipeline::chain`, every
-/// stage an identity pass). What is missing either side of it is the fixed decode
-/// that feeds it (`nf-reconstruction/fixed-decode`) and a destination to write
+/// stage an identity pass), and so does the fixed decode that feeds it
+/// (`algo::fixed`, `nf-reconstruction/fixed-decode`). What is missing is a
+/// destination to write to, and the wiring between the two
 /// (`nf-core/minimal-end-to-end`), which is the task that opens this seam. It stays
 /// shut until then rather than composing an identity chain and refusing at the
 /// encode: on a real 5000 dpi scan that is a full render thrown away to reach the

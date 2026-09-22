@@ -5,9 +5,10 @@
 //! `docs/nf-migration.md`). Every stage is an **identity pass** today —
 //! `nf-core/stage-skeleton` builds the boundaries; the stage epics fill them —
 //! and it is deliberately not reachable from the CLI yet: the seam in
-//! `cli::convert_frame` still refuses, because there is no fixed decode ahead of
-//! it (`nf-reconstruction/fixed-decode`) and no destination behind it
-//! (`nf-core/minimal-end-to-end`, which wires both).
+//! `cli::convert_frame` still refuses, because there is no destination behind it.
+//! The decode ahead of it exists (`algo::fixed`,
+//! `nf-reconstruction/fixed-decode`); `nf-core/minimal-end-to-end` wires that to
+//! this chain and this chain to an output.
 //!
 //! **The order is carried by the types, not by this function.** Each stage's
 //! input is the previous stage's output type, and each of those can be minted
@@ -213,8 +214,10 @@ mod tests {
     #[test]
     fn the_chain_is_producer_agnostic() {
         // The chain's input is an `AcesCgImage` regardless of which reconstruction
-        // produced it — including the density curves a real `--new-flow` run will
-        // take once `nf-reconstruction/fixed-decode` lands.
+        // produced it — and deliberately *not* only the one a real `--new-flow` run
+        // takes: that is `algo::fixed::DecodeParams`, and a recipe stating
+        // `reconstruction` is refused outright. These legacy configurations are here
+        // because the boundary is the type, so what produces it stays free to change.
         let configs = [
             Reconstruction::Simple,
             Reconstruction::Density {

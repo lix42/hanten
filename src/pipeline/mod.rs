@@ -10,7 +10,7 @@
 //!
 //! The new chain is **not reachable from the CLI yet**: every stage is an identity
 //! pass and the `--new-flow` seam still refuses with exit 4 until
-//! `nf-core/minimal-end-to-end` puts a decode in front of it and a destination
+//! `nf-core/minimal-end-to-end` wires the decode (`algo::fixed`) to it and a destination
 //! behind it. Nothing about the no-flag path moved.
 
 pub mod chain;

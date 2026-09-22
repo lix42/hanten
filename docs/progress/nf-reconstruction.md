@@ -13,9 +13,22 @@ ones.
 
 The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`, `gamma` split into a calibration half and a look half.
 
-No code has landed yet — the epic was created on 2026-09-19 with the new-flow plan
-(`docs/nf-migration.md`) — but **one spike is done and its result is an input to other
-epics**. `anchor-spike` costed four ways to place the decode's white
+The fixed decode has landed (`src/algo/fixed.rs`, 2026-09-22): fresh arithmetic,
+bit-identical to the equivalent legacy configuration, reading no reference density,
+with the reconstruction half of the knob-availability inventory beside it. It is not
+yet reachable from the CLI — `nf-core/minimal-end-to-end` wires it to a destination.
+
+**Three things other epics need from it.** The decode's parameters are
+`algo::fixed::DecodeParams`, **not** the resolved `reconstruction` object: under
+`--new-flow` a recipe stating that section is refused whole, which is blunt and
+temporary until `nf-core/recipe-schema` gives the new stages a spelling, and which
+means `roll --new-flow` can state no decode knob today. The surviving knobs
+(`--density-scale`, `--density-offset`, `--density-gamma`, `--anchor-mid-offset`) are
+accepted but nothing maps them yet — `nf-core/minimal-end-to-end`'s, along with a
+`RunProfile` that must be *measured*, since the fused decode holds one buffer fewer
+than the legacy staged path. And the remaining `--new-flow` remedy defects in
+`cli.rs` belong to `nf-core/knob-availability-audit`.
+**One spike is also done and its result is an input to other epics**. `anchor-spike` costed four ways to place the decode's white
 ([`docs/spike/white-placement.md`](../spike/white-placement.md)) and found that under
 today's proposed anchor all three rolls measured land **0.55–1.28 stops short of white**,
 so a per-channel highlight operator has nothing to act on. Anyone building on this epic,
@@ -23,10 +36,294 @@ and `nf-calibration/anchor-comparison` in particular, needs that before they sta
 
 ## fixed-decode
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-22
 
 - 2026-09-19: created with the new-flow plan. Goal: the fixed, stock-agnostic decode.
+- 2026-09-22: **planned — four decisions taken before any code, plus two forced by the
+  tree.** The task file is not the record: these are here.
+
+  **(1) A fresh module with its own parameter type — and it has to live inside
+  `src/algo/`.** The migration rule's strong form was chosen over reusing
+  `Reconstruction` with flow-conditional defaults: `algo/fixed.rs` owns `DecodeParams`
+  (`scale`, `offset`, `contrast`, `anchor`) and writes the arithmetic fresh. *Where* it
+  lives is not a preference — `FilmRgbImage::from_linear` is `pub(in crate::algo)` and
+  `AcesCgImage::new` is private to `working_space`, so a `pipeline/decode.rs` could mint
+  neither without widening a boundary the project closed deliberately, and
+  `nf-verification/film-rgb-export` (which depends on this task) is specified as
+  consuming a `FilmRgbImage` where `map_nc_film_rgb_v1` would. So the decode mints the
+  one existing typed boundary and the `→ AcesCgImage` step stays `working_space`'s.
+
+  The cost is that the acceptance test stops being a tautology and becomes real: fresh
+  arithmetic must come out **bit-identical** to `algo::reconstruct` driven by the
+  equivalent explicit flags. Fusing the two passes (no `DensityImage` intermediate) is
+  allowed because every step already rounds to f32 at the same points and Rust does not
+  contract to FMA — so `mul_add` is banned here, along with dropping `+ offset` at zero
+  and factoring the anchor out of the exponent.
+
+  **(2) Placement A ships, provisionally.** `mid-at-base-offset(d = 0.62)`, contrast
+  2.0, `scale [1, 0.84, 0.73]`, `offset [0, 0, 0]`; anchor `A = 0.99236375`. No
+  reference density is resolved or read. `d`'s provenance is `anchor-rule`'s, the
+  contrast split is `gamma-split`'s, and both values are expected to move.
+
+  **(3) The new flow reads `DecodeParams`, not `ResolvedConfig.reconstruction` — which
+  is why the recipe is refused wholesale for now.** Not reading the legacy object
+  creates the accepted-and-ignored hole by construction, so under `--new-flow` a
+  `--params` recipe carrying a `reconstruction` section, `--preset`, and `--dump-params`
+  are all refused, naming `nf-core/recipe-schema` as where the new spelling arrives
+  (`--dump-params` writes the resolved config *before* the render seam, so it would
+  describe a chain the run did not select). Blunt and temporary, but it closes the exact
+  hole `flow.rs` records as the audit's open question — the knee stated by a recipe or
+  expanded from `--preset sigmoid-knees` — which only became decidable once the decode
+  owned its own params. The decode's *surviving* knobs stay reachable by flag:
+  `--density-scale`, `--density-offset`, `--density-gamma`, `--anchor-mid-offset`.
+
+  Consequence for later: `roll` takes no conversion flags, so `roll --new-flow` can
+  state no decode knob at all until the recipe spelling exists. Nothing regresses (it
+  cannot render either), but `nf-core/subcommands` inherits the spelling, not just the
+  plumbing — and `nf-calibration/scale-gamma-loop` should not assume it can drive a roll.
+
+  **(4) Five quantities, named once, in the module rustdoc where the conflation would
+  happen.** They are routinely collapsed into "dmax" or "white" and they are not
+  interchangeable:
+
+  | name | what it is | source | status |
+  |---|---|---|---|
+  | film base / `Dmin` | per-roll transmission of unexposed film | measured from the rebate | shipped; `D′ = 0` by construction |
+  | leader `Dmax` | film **saturation** density | `--d-max`, `estimate --d-max-region` | today's `curve.dmax`; **not read** by this decode |
+  | anchor `A` | the corrected density that renders to `1.0` | derived, `d + 0.7447/contrast` | **0.99236375**, reported |
+  | diffuse white | scene white on a correctly exposed negative | datasheet, `d + 0.36` | **0.98** — a reference number, not an input |
+  | content white `W` | a roll's bright end (red p97 of picture density) | `docs/spike/white-placement.md` | **not measured, not shipped** |
+  | specular headroom | ~1 stop above diffuse white | where an HDR rendition lives | a consequence, not a knob |
+
+  **What the white-placement shortlist needs from the decode, and what it does not.**
+  Option **C** — the one the spike found pins both ends — needs *nothing* here: it
+  solves `gamma = MID_GREY_OUTPUT_DECADES / (W − d)` from a **content** white and the
+  spike puts that per-roll contrast in the look stage, so the decode stays fixed.
+  Options **B** and **D** are the ones that would re-open an input to the decode's
+  anchor. So `DecodeParams`'s anchor is a named type (`AnchorRule::MidAboveBase(d)`),
+  not a bare `f32` — B and D add a variant instead of silently changing what a field
+  means. That is naming, not mechanism: no white-reference field, no solved contrast, no
+  measurement.
+
+  **The leader `Dmax` has a third role nobody has retired.**
+  `docs/spike/white-placement.md` wants a **guard** — white staying a measured margin
+  below the leader's saturation, and below the ~1 stop of specular headroom. That is
+  neither an anchor nor a content white, and `nf-retire/dmax-machinery` as written
+  retires `estimate --d-max-region` wholesale. Recorded rather than acted on here: it is
+  a reason the *measurement* may outlive the *anchor*.
+
+- 2026-09-22: **landed — `src/algo/fixed.rs`, the refusal inventory, and the guide.**
+  All five CI gates green (including the `nctool` suite); `cargo doc` unresolved links
+  back at the 16-link baseline after two `#[cfg(test)]` intra-doc links were spelled
+  as prose instead.
+
+  **The equality holds, bit-exactly, and it was worth writing fresh to find out.** The
+  fused single pass reproduces `algo::reconstruct` under the equivalent explicit
+  configuration bit-for-bit over a vector covering the film base itself (`D = 0`, the
+  `−0.0` case), a dead pixel, a negative sample, a denormal and the non-finite trio.
+  Because it compares two implementations **on one host** it is cross-target safe with
+  no `reachable_window` machinery — the usual libm caution applies to checked-in
+  constants, not to this shape. Falsifiability both ways: a one-ULP move in `d` reds
+  it, and a reference-derived placement on the same curve is distinguishable.
+
+  It also allocates **one buffer where the legacy path allocates one and transforms it
+  again** (no `DensityImage` intermediate). `nf-core/minimal-end-to-end` should read
+  that off the code rather than inherit `RunProfile::Convert`'s arithmetic — nothing
+  tests the memory model against the code.
+
+  **The `Dmax` refusal covers all four spellings, `--no-d-max` included, and that is
+  the tiebreaker applied rather than waived.** An identity value is one that asks for
+  nothing *of a knob the branch has*; the fixed decode has no reference density at
+  all, so "resolve it from nowhere" is a statement about a quantity that does not
+  exist here. The knobs the decode genuinely reads stay reachable and have a
+  falsifiable control test that they reach the seam.
+
+  **The audit's worked instance is closed, and by a mechanism worth reusing.** The
+  recipe/`--preset` hole could not be closed with a value rule (the default sigmoid
+  *has* knees, so refusing a non-zero resolved knee would refuse every `--new-flow`
+  run). Giving the stage its own params closes it from the other end: the new flow
+  reads no resolved `reconstruction`, so the section is refused whole and `--preset`
+  by presence. `docs/tasks/nf-core/knob-availability-audit.md` now records that.
+
+  **Three things the next task inherits.**
+  - Nothing **maps** the surviving flags onto `DecodeParams` yet. It cannot be
+    accepted-and-ignored today (the seam refuses first), but
+    `nf-core/minimal-end-to-end` owns the mapping and must not leave it.
+  - `--density-gamma` beside the resolved *sigmoid* default is refused by `merge`,
+    whose remedy is `--density-curve exponential` — which this flow accepts, so the
+    advice is followable rather than circular. It does mean the decode's own contrast
+    currently needs the curve named alongside it.
+  - `--dump-params` is refused under `--new-flow`, because it writes the resolved
+    legacy config *before* the render seam and would hand back a recipe that replays
+    as a different picture. That removed the premise of `without_new_flow_nothing_moves`'s
+    parity assertion; what survives is that the no-flag path is untouched and nothing
+    named `new_flow` reaches the recipe.
+
+  **A small trap, found by a test failure.** `--film-stock` is validated for *value*
+  in `merge`, so under `--new-flow` an unknown stock now reports the availability
+  refusal rather than "unknown film stock" — the availability row runs first, by
+  design. Correct, but it means a test asserting merge's wording must use a valid
+  stock name or it silently exercises the wrong rule.
+
+- 2026-09-22: **two corrections and one number, after `nf-look/path-to-white`'s session
+  flagged the anchor's edges.** Appended rather than edited into the entries above, per
+  the append-only rule.
+
+  **What this decode ships, stated as a number.** Under `mid-at-base-offset(0.62)` at
+  contrast 2.0 — exactly what landed — all three rolls measured in
+  `docs/spike/white-placement.md` land **0.55–1.28 stops below white** (Gold200 −1.28,
+  Portra400 −0.88, Ektar100 −0.55). That is the intended shipped state, not a defect:
+  `nf-reconstruction/anchor-rule` owns the rule and may move it. Recorded here because
+  it is a property of *this* task's output, and because a per-channel highlight
+  operator has nothing to act on under it (`nf-look/path-to-white`).
+
+  **Correction to the entry above: all four white placements are reachable today, not
+  just C.** The claim that "B and D would re-open an input to the decode's anchor" is
+  too strong. `mid-at-base-offset` resolves `A = d + M/gamma` (`M` =
+  `MID_GREY_OUTPUT_DECADES`), so:
+
+  - **C** solves `gamma = M / (W − d)`, which substitutes in to give `A = W` **exactly**
+    — the mid-anchored and content-anchored spellings are one placement.
+  - **B** (`A = W` at the shipped contrast) is the same identity read the other way:
+    `d = W − M/2`. On Gold200's `W = 0.800` that is 0.4276 — and the spike's own table
+    already prints `d = 0.428 / 0.538 / 0.488` for the three rolls, so it had computed
+    this without naming it.
+
+  Both verified against the binary: `--density-curve exponential --anchor-mid-offset
+  0.4276 --density-gamma 2.0` and `--anchor-mid-offset 0.62 --density-gamma 4.1374`
+  both render at exit 0 on the legacy flow. So what B/C/D actually need is **a
+  measurement of `W` and somewhere to put it**, not a decode change. The decode's
+  anchor only has to grow a variant if it is to *consume* that measurement itself
+  rather than take a hand-set number — which is a smaller claim than the one above,
+  and leaves `AnchorRule` correctly sized either way.
+
+  **A wrinkle for that tuning method.** `--density-gamma` is on the surviving list and
+  stays reachable, but beside the *resolved sigmoid default* `merge` refuses it with
+  "its mid-density slope is `--sigmoid-contrast` (or pass `--density-curve
+  exponential`)". Under `--new-flow` the first remedy is itself refused and the second
+  works, so the advice is followable but half dead. It dissolves when the new flow's
+  default curve moves (`nf-core/minimal-end-to-end` / `default-flip`); until then the
+  tuning line needs `--density-curve exponential` named alongside.
+
+  **No `DmaxSource` was flipped, so the `Auto`-keyed predicates have not moved.**
+  `src/types.rs` is untouched by this task: the new flow still *resolves* the legacy
+  config exactly as before and simply does not read it. So `measures_over_region` and
+  `region_reaches_a_rendered_pixel` — and the "IR preserved but not used" warning the
+  second one suppresses, with `--strict` behind it — behave identically on both flows
+  today. Whoever moves the default owns that change. One pre-existing detail they
+  should know: that warning is emitted *before* the render seam, so a `--new-flow` run
+  can already print it and then exit 4.
+- 2026-09-22: **review round applied** — fixes only, no commits. What the two engines
+  found that was real, and what changed.
+
+  **Two of the four bit-identity rules were vacuous, and the module docs claimed one
+  test held all four.** Measured by breaking each rule and bit-comparing over the
+  12-sample vector: dropping `+ offset` moves **0 of 12** at the shipped `[0, 0, 0]` and
+  9 of 12 at a non-zero offset; an FMA moves **0 of 12 at either**; the density's f32
+  rounding moves 1 of 12 at the shipped offset and 0 at a non-zero one; the factored
+  anchor moves 6 and 9. So the equality test now runs at **two** offsets (`DENSITY_OFFSET`
+  plus a non-zero `PROBE_OFFSET`, because neither alone holds both of the first two
+  rules), the FMA has a test of its own sweeping the band just under the film base where
+  the plain and fused forms part, and the docs state the measured split instead of the
+  claim. Each of the four mutants was confirmed to red the suite.
+
+  Three things worth keeping from that. The FMA test **sweeps** rather than pinning a
+  sample: the witness is reached through `log10f`, which may differ by a ULP across
+  targets, so a hard-coded one could witness here and not in CI — it asserts every swept
+  sample equals the plain form and that the band distinguishes the two at all, so it
+  cannot go vacuous silently. The rule-1 witness is a **single** sample (`0.5 / 0.9`),
+  now noted on `scan()` so an edit to that vector cannot retire it unnoticed. And one
+  mutation stays invisible on purpose: skipping `+ offset` *only* when the constant is
+  zero is unobservable in the **output** — the `−0.0` it normalizes cannot survive the
+  anchor subtraction — so that rule is carried by the non-zero pass and goes live when
+  `nf-calibration/offset-question` moves the constant. The older `−0.0 → +0.0` wording
+  described the staged path's stored density, not this decode's pixels.
+
+  **`scale` is now guarded positive, not merely finite** (`check_params`), matching
+  `cli::validate`'s `positive("--density-scale", …)`. Zero rendered that channel flat —
+  finite, in range, tripping no counter — and negative reversed its density ordering,
+  against the strictly-increasing contract. `offset` stays finite-only: it is signed.
+
+  **Four refusal messages under `--new-flow` were wrong and are fixed.**
+  `--sigmoid-contrast`'s remedy said `--density-gamma`, which `merge` refuses beside the
+  resolved sigmoid default, whose own first remedy is `--sigmoid-contrast` — a two-step
+  loop; it now names `--density-curve exponential --density-gamma`, verified to work in
+  one step. `DMAX_REASON` said only what is gone, reading as "you need leader data"; it
+  now states that mid-grey is pinned above the **film base**, which every scan carries.
+  `ANCHOR_RULE_REASON` diagnosed all three anchor rows as "chosen because it is
+  reference-free", which `--anchor-black-floor` **also** is (`reads_reference()` is false
+  for `BlackAtBase`), so it is split in two. And "nothing reaches the new flow through a
+  knob it does not read" is scoped to the reconstruction: `print.*`, `output.*` and
+  `measure.*` are still accepted and read by nothing.
+
+  **Stale-by-this-change prose corrected**: the seam rustdoc and `pipeline::chain`'s
+  module doc both said the decode feeding the chain was missing (only the destination
+  is), `chain`'s producer-agnostic test comment said the new flow will take those density
+  curves (it will not — it decodes through `DecodeParams` and refuses a recipe
+  `reconstruction`), `docs/TASKS.md` twice called this task "defaults and wiring, not new
+  arithmetic" (the task file had already been corrected), and `docs/design-spec.md` §10's
+  module tree had no `algo/fixed.rs`.
+
+  **`docs/using-nc.md` carried a claim the binary contradicts.** It listed
+  `--density-gamma` among the knobs that "still work" under `--new-flow`; bare, it exits
+  **2** (`merge` refuses it beside the resolved sigmoid default) where the other three
+  reach the seam at exit 4. The guide is now qualified, and
+  `the_fixed_decodes_own_knobs_stay_reachable_under_the_new_flow` gained bare-flag cases
+  — its base argv injects `--density-curve exponential`, so it could not observe this.
+
+  **Four remedy defects reachable under `--new-flow` are `nf-core/knob-availability-audit`'s,
+  not this task's**, agreed with that session: `--sigmoid-contrast`'s own `instead:`
+  (fixed here), `merge`'s `--density-gamma` arm, the two knee arms, and the `cli.rs`
+  anchor-placement guard's remedy. The **knee** case is the worst, and this task's design
+  creates it: the rows deliberately accept a zero knee as an identity value (to keep the
+  flags-win reset usable), and `merge` then refuses `--sigmoid-toe 0` beside a resolved
+  exponential with "pass `--density-curve sigmoid`" — a curve the rows refuse. Its
+  parenthetical is an aside about slope *naming*, not a second remedy: adding
+  `--density-gamma 2` leaves the message byte-identical. So it is the only one of the
+  four offering no working action, and the action that does work — drop the knee flag —
+  is never stated. Legacy is unaffected (`--density-curve sigmoid --sigmoid-toe 0`
+  renders at exit 0). The general lesson from that session: bounding the search to "only
+  rules keyed on an accepted knob's value can fire" is correct, but walking it by
+  enumerating **knobs** misses the reachable **values** — a refused knob's accepted
+  identity value is in the reachable set.
+
+  **Not applied here: the two `CLAUDE.md` items** (the module map's missing
+  `algo/fixed.rs`, and the availability-refusal sentence, which now needs the third
+  recipe-section provenance and no longer holds for `roll`). This agent may not edit
+  `CLAUDE.md` on an agent's say-so, so both went back to the user with the exact wording.
+
+- 2026-09-22: **done.** Landed as `src/algo/fixed.rs` — `DecodeParams` / `AnchorRule` /
+  `DecodeReport` plus `decode()`, written fresh and fused into one pass, living in
+  `algo` because `FilmRgbImage` is mintable only there. Verified **bit-identical** to
+  `algo::reconstruct` under the equivalent explicit configuration, and that equality
+  re-run across five `DmaxSource` values is what proves no reference density is read.
+  Beside it: the reconstruction half of the new-flow knob inventory in `flow.rs`, and a
+  raw-JSON witness refusing a recipe `reconstruction` section. All five gates green.
+
+  **What a dependent task needs.**
+  - **`nf-core/minimal-end-to-end` owns three loose ends.** Nothing yet *maps* the
+    surviving flags (`--density-scale`, `--density-offset`, `--density-gamma`,
+    `--anchor-mid-offset`) onto `DecodeParams` — harmless only while the seam refuses
+    first. `--density-gamma` still needs `--density-curve exponential` named alongside
+    until the new flow's default curve moves. And the fused decode allocates **one
+    buffer fewer** than the legacy staged path, so its `RunProfile` must be measured
+    rather than inherited from `Convert`.
+  - **The recipe refusal is blunt and temporary.** `--new-flow` refuses a `reconstruction`
+    section whole, so `roll --new-flow` can state no decode knob at all until
+    `nf-core/recipe-schema` gives the new stages a spelling. A per-frame overlay is *not*
+    witnessed — unreachable today, live the moment the roll seam opens
+    (`nf-core/subcommands`).
+  - **Four remedy defects reachable under `--new-flow` are `nf-core/knob-availability-audit`'s**,
+    not this task's: `merge`'s `--density-gamma` arm, its two knee arms, and the `cli.rs`
+    anchor-placement guard. The knee pair additionally *closed a cycle* with this task's
+    own `--density-curve` row; that half is fixed here (the knee rows now fire beside a
+    typed knee-less curve, where "Drop it for now" is the working remedy) and pinned by
+    `a_knee_flag_beside_a_knee_less_curve_is_refused_before_merge_can_loop`.
+  - **The end-to-end acceptance criterion moved and is unscheduled.** This task's original
+    "under `--new-flow` with no other flags the pixels are identical to the old flow" is
+    only testable once the seam opens; it was replaced by the function-level equality.
+    Whoever opens the seam should re-state it there.
 
 ## anchor-spike
 
