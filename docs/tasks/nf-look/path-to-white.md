@@ -9,7 +9,7 @@ white.
 ## Design
 
 - **The form is settled: a chroma pull, keyed on brightness *and* saturation.**
-  [The spike](desaturation-spike.md) compared it against a per-channel curve — what film,
+  [The spike](desaturation-spike.md) (report: [`docs/spike/highlight-desaturation.md`](../../spike/highlight-desaturation.md)) compared it against a per-channel curve — what film,
   paper and all three outside converters do — and found them perceptually equivalent at
   matched cleanup and matched brightness (ΔE ≈ 0.7). The pull wins on **separability**:
   a per-channel curve moves luminance as well as chroma, and the fit range downstream

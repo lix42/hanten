@@ -7,7 +7,7 @@
 Extend the parallel drivers to the HDR side — `hdr::render`, `hdr::encode_transfer`,
 `gain_map::build` and `io::encode::quantize_u16` — with byte-identical output, so
 `hdr-linear-tiff`, the coded HDR TIFFs and the gain-map preset stop paying ~500 ms of
-sequential per-pixel work ([gpu-rendering-spike](../../gpu-rendering-spike.md),
+sequential per-pixel work ([gpu-rendering-spike](../../spike/gpu-rendering-spike.md),
 Experiment 1).
 
 ## Design

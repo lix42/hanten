@@ -14,7 +14,7 @@ licensing notices/review inputs, and error translation at the Rust boundary.
 
 **Encoder/container decision (2026-08-05, supersedes the original "wrap
 `libavif` 1.4.2 or newer behind a narrow Rust FFI" plan and the matching
-paragraph in `docs/hdr-output-spike.md`).** Use the published `libaom-sys` crate
+paragraph in `docs/spike/hdr-output-spike.md`).** Use the published `libaom-sys` crate
 for the AV1 codestream and an **nc-owned Rust MIAF/AVIF container writer**. Two
 measured facts forced this: no published crate ships libavif ≥ 1.4.2
 (`libavif-sys` 0.17 is libavif **1.0.4**, predating `MA1A`/Advanced Profile

@@ -127,9 +127,9 @@ review remains appropriate.
 > writer. Everything else in this section — the pinned encoder settings, brands,
 > profile limits, and CICP/content-light policy below — still stands, as do all
 > of this note's binding rendering numbers. See
-> [`tasks/output/hdr-avif-output.md`](tasks/output/hdr-avif-output.md).
+> [`tasks/output/hdr-avif-output.md`](../tasks/output/hdr-avif-output.md).
 
-The dedicated [`hdr-avif-output`](tasks/output/hdr-avif-output.md) task owns this
+The dedicated [`hdr-avif-output`](../tasks/output/hdr-avif-output.md) task owns this
 encoder/container boundary. Pin these encoder settings for the first
 implementation:
 

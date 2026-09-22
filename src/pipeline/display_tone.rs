@@ -401,7 +401,7 @@ impl DisplayTone {
 /// is why those are two predicates rather than one.
 ///
 /// `ceiling` is a parameter, never a literal: the 1000/203 headroom is binding policy
-/// owned by `hdr::LINEAR_HEADROOM` and `docs/hdr-output-spike.md`. `crossover` is stated
+/// owned by `hdr::LINEAR_HEADROOM` and `docs/spike/hdr-output-spike.md`. `crossover` is stated
 /// rather than assumed to be `1.0` because where diffuse white actually lands depends on
 /// the reconstruction's anchor offset, which is measured-but-uncalibrated
 /// (`algo/exponential-anchor-placement`).

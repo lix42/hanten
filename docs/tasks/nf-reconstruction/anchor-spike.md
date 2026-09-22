@@ -27,7 +27,7 @@ Per **roll**, never per frame: a per-frame anchor is NLP's method and the mechan
 behind its worst failure, and it normalises HDR headroom away with the exposure.
 
 Everything measured, and the four candidates it produced, is in
-[`docs/reports/white-placement.md`](../../reports/white-placement.md).
+[`docs/spike/white-placement.md`](../../spike/white-placement.md).
 
 ## Open questions
 

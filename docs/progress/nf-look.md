@@ -196,6 +196,7 @@ migration plan (`docs/nf-migration.md`).
   *parameters* are fitted to a single example and should not be carried into
   `path-to-white` as values. What carries is the shape: two thresholds, on saturation,
   multiplying the brightness term.
+- 2026-09-21: written up as [`docs/spike/highlight-desaturation.md`](../spike/highlight-desaturation.md); the entries above are the execution trail, the report is the result.
 - 2026-09-21: **confirmed by eye — "I can see the diff between 3 and 4. 4 keeps the
   color."** The guard is visible, not just measurable, on 1820's sand beach at the
   strength that cleans the whites. Spike **done**; the throwaway operator is reverted and

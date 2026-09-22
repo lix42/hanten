@@ -6,7 +6,7 @@
 
 Let libaom use row multithreading with a **fixed thread count ≥ 2**, cutting the
 `hdr-pq`/`hdr-hlg` encode from ~2.8 s to ~0.6 s on a 16.4 MP scan while keeping the
-output reproducible ([gpu-rendering-spike](../../gpu-rendering-spike.md), Experiment 2).
+output reproducible ([gpu-rendering-spike](../../spike/gpu-rendering-spike.md), Experiment 2).
 
 ## Design
 

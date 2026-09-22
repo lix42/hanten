@@ -852,7 +852,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   Coordinate with `output/presets`, which owns the "never silently renamed" wording and
   container-aware roll naming — deliberately *not* a dependency, since the suffix table already
   shipped and this stands alone for `convert`
-- `output/parallel-display-stages` (post-MVP): `output/sdr-display-rendering`, `color/film-master-render-pipeline` — byte-identical rayon drivers for the lcms2 transform, SDR render, ACEScg mapping and print controls, plus the small `pipeline::pixels` helper; decided in [gpu-rendering-spike](gpu-rendering-spike.md)
+- `output/parallel-display-stages` (post-MVP): `output/sdr-display-rendering`, `color/film-master-render-pipeline` — byte-identical rayon drivers for the lcms2 transform, SDR render, ACEScg mapping and print controls, plus the small `pipeline::pixels` helper; decided in [gpu-rendering-spike](spike/gpu-rendering-spike.md)
 - `output/parallel-hdr-stages` (post-MVP): `output/parallel-display-stages`, `output/hdr-display-rendering`, `output/gain-map-hdr-output` — the HDR render (MaxFALL sum kept sequential), transfer encode, gain-map build and quantize on the same helper
 - `output/avif-row-multithreading` (post-MVP): `output/hdr-avif-output`, `core/conversion-versioning` — libaom row-mt with a pinned thread count ≥ 2; changes shipped `hdr-pq`/`hdr-hlg` bytes, so it rides the versioning rules
 - `output/post-fanout-encode-slowdown` (post-MVP): `output/parallel-hdr-stages` — investigate the single-threaded encode running 30–90 ms slower right after a wide rayon section (`film-master` still carries it); cause unknown, byte-identical fix or documented non-issue
@@ -1347,7 +1347,7 @@ the design in `docs/design-update.md`:
   gap, tracked for the follow-on tuning work and recorded in the v3 report
 - [x] [Parallel display stages](tasks/output/parallel-display-stages.md) — rayon drivers for
   the lcms2 transform, SDR render, ACEScg mapping and print controls, byte-identical;
-  measured 3–4x on `legacy`/`display-p3` in [gpu-rendering-spike](gpu-rendering-spike.md)
+  measured 3–4x on `legacy`/`display-p3` in [gpu-rendering-spike](spike/gpu-rendering-spike.md)
 - [x] [Parallel HDR stages](tasks/output/parallel-hdr-stages.md) — HDR render with the
   MaxFALL reduction split out, transfer encode, gain-map build, quantize; memory model re-checked
 - [x] [AVIF row multithreading](tasks/output/avif-row-multithreading.md) — libaom row-mt at a

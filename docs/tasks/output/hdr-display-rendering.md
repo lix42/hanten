@@ -33,7 +33,7 @@ The output stage uses current ISO 22028-5:2026 and Rec. BT.2100-3. The
 single-rendition container task consumes 10-bit full-range BT.2020 4:4:4 pixels
 and writes AVIF with CICP `9/16/9` for PQ or `9/18/9` for HLG. HLG must pin its
 OETF/OOTF/system-gamma and reference-display assumptions rather than inheriting
-an ambient default. See [the spike decision](../../hdr-output-spike.md).
+an ambient default. See [the spike decision](../../spike/hdr-output-spike.md).
 
 The stage returns pixels and metadata but does not own HEIC/gain-map packaging.
 The separately tracked `hdr-avif-output` task owns AV1 encoding and AVIF

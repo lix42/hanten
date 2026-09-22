@@ -73,7 +73,7 @@ migration plan (`docs/nf-migration.md`).
   reach the holder on this scan. Relevant to `film-base/holder-cap-contamination`, and a
   trap for any measurement taken on a full frame rather than an inset one.
 - 2026-09-21: **done**, having costed a shortlist rather than picked from it. The
-  numbers live in [`docs/reports/white-placement.md`](../reports/white-placement.md);
+  numbers live in [`docs/spike/white-placement.md`](../spike/white-placement.md);
   the summary below is the decision trail. Four
   placements, with what each gets right on 2026-09-18-Gold200 (`W` = 0.800, `d` = 0.62):
   **A** fixed anchor pins mid and reaches 0.412; **B** content white reaches white and

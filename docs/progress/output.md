@@ -37,7 +37,7 @@ What other epics need to know about `output`:
   4.926108 linear and 2.300448 log2 capacity of that display ratio (not
   per-pixel gain extrema — those come from the offset-adjusted formula). The
   renderers **may not change reference white, target peak, the common gain-map
-  domain, or the RGB-map decision** without reopening `docs/hdr-output-spike.md`.
+  domain, or the RGB-map decision** without reopening `docs/spike/hdr-output-spike.md`.
   The spike waived the licensed-normative-text review at spike level and re-homed
   it as a pre-merge gate on the encoder tasks; the ISO 21496-1 half was discharged
   by buying the text (2026-08-04), the AVIF/AV1 half by reading the public specs.
@@ -202,7 +202,7 @@ changes already-shipped ICC bytes and was left for a deliberate decision.
 ## hdr-output-spike
 **Status:** done (2026-07-24)
 
-Decision note: [`docs/hdr-output-spike.md`](../hdr-output-spike.md). Pinned ISO
+Decision note: [`docs/spike/hdr-output-spike.md`](../spike/hdr-output-spike.md). Pinned ISO
 22028-5:2026 (replacing the withdrawn 2023 TS), ISO 21496-1:2025, BT.2100-3,
 203 cd/m² reference white, 1000 cd/m² target peak, 4.926108 linear / 2.300448 log2
 headroom; JPEG + ISO gain map as the default HDR still, 10-bit 4:4:4 AVIF for
@@ -1299,7 +1299,7 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 - Goal: byte-identical rayon drivers for the lcms2 transform, SDR render, ACEScg
   mapping and print controls, plus the `pipeline::pixels` helper. Filed 2026-09-16 from
-  [gpu-rendering-spike](../gpu-rendering-spike.md), Experiment 1, which measured the
+  [gpu-rendering-spike](../spike/gpu-rendering-spike.md), Experiment 1, which measured the
   sequential colour stage at ~1100–1300 ms of a 1.4–1.6 s run on a 16.4 MP scan.
 - 2026-09-16: started. The spike's throwaway patch is the reference for what to expect:
   `legacy` 1377 → 360 ms, `display-p3` 1567 → 417 ms, all six presets `cmp`-identical.
