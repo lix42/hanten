@@ -129,6 +129,43 @@ migration plan (`docs/nf-migration.md`).
   **Recommendation for [path to white](../tasks/nf-look/path-to-white.md): the chroma
   pull**, chosen for **separability, not for looks**. Its remaining open question is no
   longer "which family" but what "approaches white" is measured on, and at what strength.
+- 2026-09-21: **the user marked 12 patches on 7 frames, and they found the case the
+  aggregate hid.** Measured per patch rather than over the top 3%
+  (`../temp/desat-spike/patch-measurements.json`).
+
+  **(1) The operator's reach is exactly its threshold, and two marked surfaces are
+  outside it.** The chroma pull starts at linear luminance 0.5, about L\* 76, and how
+  much a patch moves scales with how far above that it sits — 96% at L\* 86.9, 44% at
+  80.5, 25% at 74.9, and **0% at 67.9 and 63.9**. The user's "fog" (L\* 63.9, C\* 10.4)
+  and one "cloud" (L\* 67.9, C\* 5.9) are untouched by **every** configuration.
+
+  That is not a defect — it is the boundary of what a *highlight* operator can do. Cast
+  on a surface at L\* 64 belongs to [the per-channel
+  grade](../tasks/nf-look/per-channel-grade.md) or to the decode's `scale`, and this
+  operator will never reach it. It also means **judging "are the whites clean" on a frame
+  whose white sits at L\* 64 measures the decode, not the operator** — the same
+  measure-the-right-thing trap as the white-patch bias in Part 3.
+
+  **(2) The families diverge on exactly one patch, and it is the sunset case.** Matched
+  on average cleanup, 11 of 12 patches agree within C\* 1.4. The twelfth is **1820 "sand
+  beach"** — the brightest and most saturated of them, L\* 86.9, control C\* 27.5:
+
+  | | C\* kept |
+  |---|---|
+  | per-channel, brightness-matched | **7.6** |
+  | chroma pull | **1.1** |
+
+  The pull neutralises a bright warm surface almost completely; the per-channel curve
+  keeps two-thirds more of it. **This corrects the earlier "indistinguishable" reading**,
+  which averaged over the top 3% where such surfaces are rare — one marked patch was
+  worth more than eight frames of aggregate.
+
+  The mechanism is that the pull's strength keys on **brightness alone**, so a bright
+  *coloured* surface is neutralised as hard as a bright *white* one. That is the sunset
+  problem, reproduced on a real patch, and it sharpens the open question: keying on
+  distance from the neutral axis as well as on luminance would protect the sand beach
+  while still cleaning the cloth. **What "approaches white" is measured on is now the
+  live design question, not the family.**
 
 ## path-to-white
 
