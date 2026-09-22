@@ -1487,10 +1487,13 @@ the design in `docs/design-update.md`:
 
 - [x] [The `--new-flow` selector](tasks/nf-core/new-flow-flag.md) —
   scaffolding with a written expiry — CLI-only, never a recipe key, removed by
-  `nf-core/default-flip`. `convert` **and** `roll`; the chain it selects has no
-  stages yet, so it stops at the render seam with exit 4 (`src/flow.rs`)
-- [ ] [The new stage module tree](tasks/nf-core/stage-skeleton.md) — the
-  modules and typed boundaries, written fresh rather than extracted
+  `nf-core/default-flip`. `convert` **and** `roll`; the chain it selects cannot
+  render until `nf-core/minimal-end-to-end`, so it stops at the render seam with
+  exit 4 (`src/flow.rs`)
+- [x] [The new stage module tree](tasks/nf-core/stage-skeleton.md) — the
+  modules and typed boundaries, written fresh rather than extracted; every stage
+  an identity pass, and the seam still refuses, so the chain is not CLI-reachable
+  until `minimal-end-to-end`
 - [ ] [A minimal end-to-end render](tasks/nf-core/minimal-end-to-end.md) — the
   milestone that expires the flag and unblocks retirement
 - [ ] [Audit every knob against the new

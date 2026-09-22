@@ -10854,8 +10854,9 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
 // ---------------------------------------------------------------------------
 //
 // Every test below is scaffolding with the same expiry as the flag itself:
-// `nf-core/stage-skeleton` replaces the not-implemented seam with the identity
-// chain, and `nf-core/default-flip` deletes the flag and these tests with it.
+// `nf-core/minimal-end-to-end` replaces the not-implemented seam with a render
+// (`nf-core/stage-skeleton` built the chain behind it, but left the seam shut),
+// and `nf-core/default-flip` deletes the flag and these tests with it.
 // They use `run_exact` and state their own preset, so nothing is injected.
 
 #[test]
@@ -10896,7 +10897,7 @@ fn without_new_flow_nothing_moves() {
 
     let on = args(&dump_on, &tmp.path("on.tif"), &["--new-flow"]);
     let (code, _out, _err) = run_exact(&borrow(&on));
-    assert_eq!(code, 4, "the new flow has no render stages yet");
+    assert_eq!(code, 4, "the new flow has no output to render into yet");
 
     assert_eq!(
         std::fs::read_to_string(&dump_off).unwrap(),
@@ -10907,7 +10908,7 @@ fn without_new_flow_nothing_moves() {
 
 #[test]
 fn new_flow_render_is_not_implemented_yet() {
-    // The seam. `nf-core/stage-skeleton` replaces this expectation with a render;
+    // The seam. `nf-core/minimal-end-to-end` replaces this expectation with a render;
     // exit 4 (`Unsupported`), not 2, because the command line is well-formed and the
     // config resolved — it is this build that cannot serve it.
     let tmp = TempDir::new("new-flow-seam");
@@ -10926,7 +10927,7 @@ fn new_flow_render_is_not_implemented_yet() {
     ]);
     assert_eq!(code, 4, "{err}");
     assert!(
-        err.contains("has no stages yet") && err.contains("stage-skeleton"),
+        err.contains("cannot render yet") && err.contains("minimal-end-to-end"),
         "the seam must say what is missing and who fills it: {err}"
     );
 }
@@ -11001,7 +11002,7 @@ fn new_flow_accepts_a_knee_flag_that_asks_for_no_knee() {
     // curve, which is bit-exactly the straight line the new flow decodes with. An
     // identity value asks for nothing, and refusing it would kill the flags-win reset
     // that lets one recipe be re-used on the new chain. Reaching the seam (exit 4) is
-    // what "accepted" looks like while the chain has no stages.
+    // what "accepted" looks like while the chain has no output to render into.
     let tmp = TempDir::new("new-flow-knee-zero");
     let (code, _out, err) = run_exact(&[
         "convert",
@@ -11021,7 +11022,7 @@ fn new_flow_accepts_a_knee_flag_that_asks_for_no_knee() {
         "none",
     ]);
     assert_eq!(code, 4, "a zero knee must not be refused: {err}");
-    assert!(err.contains("has no stages yet"), "{err}");
+    assert!(err.contains("cannot render yet"), "{err}");
 }
 
 #[test]
@@ -11194,7 +11195,7 @@ fn roll_under_the_new_flow_refuses_once_before_any_decode() {
         "none",
     ]);
     assert_eq!(code, 4, "{err}");
-    assert!(err.contains("has no stages yet"), "{err}");
+    assert!(err.contains("cannot render yet"), "{err}");
     // The refusal precedes `create_dir_all`, so the *directory* is the witness: a
     // counted-zero read of a directory that was never created would pass whatever roll
     // did before failing.

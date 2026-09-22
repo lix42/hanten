@@ -1549,15 +1549,21 @@ unknown field — but **it is not in their "can never perturb a pixel" class**:
 choosing a chain is a choice of pixels. That is precisely why it must stay out of
 the recipe rather than merely out of the image.
 
-Today the new chain has no rendering stages, so selecting it resolves everything
-and then stops at the render, with **exit 4**:
+The new chain's stages now exist, but nothing connects them to an output yet, so
+selecting it resolves everything and then stops at the render, with **exit 4**:
 
 ```console
 $ nc convert scan.tif -o out.tif --output-preset legacy --film-base 0.9,0.55,0.42 --new-flow
-unsupported: --new-flow selected the new rendering chain, which has no stages yet
-(`nf-core/stage-skeleton` fills them). Every other part of the run resolved: drop
-`--new-flow` to convert through the current chain.
+unsupported: --new-flow selected the new rendering chain, which cannot render yet
+— its stages exist but nothing connects them to an output
+(`nf-core/minimal-end-to-end`). Every other part of the run resolved under
+`--new-flow`'s own rules: re-run without it to take the current chain, which
+checks these settings itself.
 ```
+
+The last clause is deliberate: dropping the flag runs the *current* chain, which
+applies its own rules to the same settings — a command line refused here may still
+be refused there, for its own reasons.
 
 What *is* live is the availability rule: a knob the new chain cannot honour is
 refused (exit 2) rather than accepted and ignored, and the message says whether the
@@ -1569,6 +1575,16 @@ usage: --sigmoid-shoulder has no meaning under `--new-flow`: the new flow has no
 counterpart for it yet — one arrives with the fit-range stage: …
 
 $ nc convert … --new-flow --reconstruction simple
+usage: --reconstruction simple has no meaning under `--new-flow`: the new flow has
+no counterpart for it, and will not gain one: … Use `--reconstruction density`, …
+```
+
+A knob can be refused by the **flag** you typed or by the **resolved value**, and
+`simple` is both — so the same refusal reaches you from a recipe, with no flag on
+the command line, worded for that spelling:
+
+```console
+$ nc convert … --new-flow --params recipe.json     # {"reconstruction": {"schema_version": 1, "type": "simple"}}
 usage: `simple` reconstruction (`--reconstruction simple`, recipe
 `reconstruction.type`) has no meaning under `--new-flow`: the new flow has no
 counterpart for it, and will not gain one: … Use `--reconstruction density`, …
@@ -1578,7 +1594,7 @@ The inventory is still being assembled (`nf-core/knob-availability-audit`), so
 today only a few knobs are classified — most notably, a knee stated by a *recipe*
 rather than by `--sigmoid-toe` / `--sigmoid-shoulder` is not yet refused.
 
-On `roll` the flag applies to every frame, and the "no stages yet" refusal comes
+On `roll` the flag applies to every frame, and the "cannot render yet" refusal comes
 **once**, after the plan is resolved and before the first frame is decoded — so a
 roll fails in a second rather than decoding every frame to print the same error N
 times. `roll` takes no conversion flags, so the knobs it can trip are resolved

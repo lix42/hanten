@@ -1,20 +1,38 @@
 //! Pure pipeline stages between decode and encode: film-base estimation, color
 //! transforms, and the stage wiring that threads them together.
+//!
+//! **Two chains live here during the migration** (`docs/nf-migration.md`). The
+//! shipped one runs `stages::render` → `render_split` → `sdr`/`hdr`; the one
+//! `--new-flow` selects is [`chain`], composing [`scene_correction`] → [`look`] →
+//! [`fit_range`] → [`fit_gamut`] over the shared buffer in [`working_image`].
+//! The new stages are named for the job they do rather than for the migration, so
+//! that retiring the old path is a deletion and not a rename.
+//!
+//! The new chain is **not reachable from the CLI yet**: every stage is an identity
+//! pass and the `--new-flow` seam still refuses with exit 4 until
+//! `nf-core/minimal-end-to-end` puts a decode in front of it and a destination
+//! behind it. Nothing about the no-flag path moved.
 
+pub mod chain;
 pub mod color;
 pub mod colorimetry;
 pub mod display_tone;
 pub mod film_base;
+pub mod fit_gamut;
+pub mod fit_range;
 pub mod gain_map;
 pub mod hdr;
 pub mod input_semantics;
+pub mod look;
 pub mod memory;
 pub mod pixels;
 pub mod render_split;
+pub mod scene_correction;
 pub mod sdr;
 /// Test-only diagnostic harness for `algo/reference-anchored-sigmoid`. `cfg(test)` so it
 /// never reaches the shipped binary; its asset-dependent entries are `#[ignore]`d.
 #[cfg(test)]
 pub mod shadow_metrics;
 pub mod stages;
+pub mod working_image;
 pub mod working_space;

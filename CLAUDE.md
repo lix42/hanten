@@ -230,6 +230,14 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
 - Current module map (`src/`, all implemented): `types.rs` (shared types),
   `io/{decode,encode,ultra_hdr,avif}.rs`,
   `pipeline/{film_base,color,stages,input_semantics,working_space,render_split,display_tone,sdr,hdr,gain_map,memory,pixels}.rs`
+  plus the **new-flow chain** — `pipeline/{chain,scene_correction,look,fit_range,fit_gamut,working_image}.rs`,
+  every stage an identity pass and not reachable from the CLI until
+  `nf-core/minimal-end-to-end` (the boundary types are what pin the stage order;
+  `working_image::WorkingBuffer` is their shared payload). **The boundary that *leaves*
+  a typed chain needs its consuming unwrap most, and is the one you forget** — nothing
+  inside the chain exercises it: `DisplayReferredImage` first shipped with borrowing
+  accessors only, while `io::encode` takes `&LinearImage`, which would have forced a
+  ~0.9 GB full-frame copy at the hand-off on a 74.6 MP scan with every gate green.
   plus `pipeline/colorimetry/` — the **single source of truth for every
   standards-based matrix and luma vector**; see the colorimetry note below
   (`film_base::estimate` is stage 2, resolved by the orchestrator before the
@@ -662,6 +670,12 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   directly above bodies doing the opposite. After changing behaviour, grep for the
   **negation** of the claim you just falsified — `grep -rn "SDR only\|is refused" src docs
   CLAUDE.md` — not for the code you changed; the stale sentence is never in your diff.
+  **Two ways that grep fails silently, both of which shipped here.** Excluding a path
+  (`grep -v docs/TASKS.md`, reasoning it holds only status) misses the authoritative plan
+  file, which carries prose claims too — grep every path. And the same falsified claim is
+  usually *worded four different ways* ("has no stages yet", "gives the new flow stages to
+  run", "replaces the not-implemented seam"), so grep the claim's **meaning**, then re-grep
+  with no exclusions until it returns only append-only history.
 - **The Rust four-gate sequence does not itself cover `scripts/analysis/`.** CI
   runs the `nctool` Python suite as a separate gate on Linux and macOS:
   `NCTOOL_REQUIRE_DEPS=1 PYTHONPATH=scripts/analysis python3 -m unittest discover

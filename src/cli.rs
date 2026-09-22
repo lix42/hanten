@@ -6098,7 +6098,9 @@ fn convert_frame(
 
     // The migration seam. Decode and film base are shared by both flows — the new
     // design keeps them — so the branch belongs here, at the render, which is also
-    // what makes this the arm `nf-core/stage-skeleton` fills rather than moves.
+    // what makes this the arm the new chain is wired into rather than moved to.
+    // `pipeline::chain` exists behind it already (identity stages); this returns
+    // until `nf-core/minimal-end-to-end` connects a decode and a destination.
     if flow == Flow::New {
         return Err(flow::render_not_implemented());
     }
@@ -8120,7 +8122,9 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // verdict is per frame, since it depends on the frame's own size) this condition
     // is frame-independent and already known. Per-frame handling would otherwise
     // decode all 25 frames of a real roll to print one identical error 25 times.
-    // Deleted by `nf-core/stage-skeleton`, which gives the new flow stages to run.
+    // Deleted by `nf-core/minimal-end-to-end`, which gives the new flow something to
+    // render into. The chain itself already exists (`pipeline::chain`, identity
+    // stages); what is missing is a decode in front of it and a destination behind.
     if Flow::from_flag(args.new_flow) == Flow::New {
         return Err(flow::render_not_implemented());
     }
@@ -8164,7 +8168,8 @@ fn run_roll(args: RollArgs) -> Result<()> {
             &pf.cfg,
             // `Legacy` today — the roll-level seam above returns before this loop
             // whenever the new flow is selected. The argument is the wiring
-            // `nf-core/stage-skeleton` needs once there is a chain to run per frame.
+            // `nf-core/minimal-end-to-end` needs once the chain has an output to
+            // render per frame.
             Flow::from_flag(args.new_flow),
             InputFromCli::none(),
             pf.dmax_setting,
