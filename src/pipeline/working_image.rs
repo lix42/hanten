@@ -76,6 +76,11 @@ impl WorkingBuffer {
             .expect("a WorkingBuffer preserves the validated buffer-length invariants")
     }
 
+    /// The interleaved `r,g,b` samples, for a stage that transforms them in place.
+    pub(in crate::pipeline) fn rgb_mut(&mut self) -> &mut [f32] {
+        &mut self.rgb
+    }
+
     /// The boundary types' shared `Debug` body — dimensions and whether an IR
     /// plane rides along, **never** the pixel buffers (matching
     /// [`AcesCgImage`]'s own rule). `name` is the wrapping type's own name, so

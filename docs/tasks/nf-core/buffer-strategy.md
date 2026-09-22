@@ -38,7 +38,7 @@ memory decision as much as a structural one.
 - **`nf-core/stage-skeleton` already made a provisional call here**, which this task
   may keep or overturn: the plane travels *in* the stage types
   (`working_image::WorkingBuffer` carries `ir`, and
-  `fit_gamut::DisplayReferredImage::into_linear` returns it), and every boundary —
+  `fit_gamut::DisplayReferredImage::into_parts` returns it), and every boundary —
   entry, each stage, and the exit — **moves** the
   buffers rather than copying, so the identity stages allocate nothing. It did not
   decide `ir_verified`, which `AcesCgImage` already drops on the way in.

@@ -8,10 +8,11 @@
 //! The new stages are named for the job they do rather than for the migration, so
 //! that retiring the old path is a deletion and not a rename.
 //!
-//! The new chain is **not reachable from the CLI yet**: every stage is an identity
-//! pass and the `--new-flow` seam still refuses with exit 4 until
-//! `nf-core/minimal-end-to-end` wires the decode (`algo::fixed`) to it and a destination
-//! behind it. Nothing about the no-flag path moved.
+//! `--new-flow` reaches the new chain (`nf-core/minimal-end-to-end`): the fixed decode
+//! (`algo::fixed`) feeds it, and it renders into one destination, a Display P3 16-bit
+//! TIFF. The first three stages are identity passes and fit gamut applies only the
+//! change of primaries; the stage epics fill them. Nothing about the no-flag path
+//! moved.
 
 pub mod chain;
 pub mod color;

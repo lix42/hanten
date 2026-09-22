@@ -228,10 +228,9 @@ impl Default for DecodeParams {
 
 /// What the decode resolved, for the report.
 ///
-/// The values, not new knobs. `nf-core/minimal-end-to-end` serializes this; nothing
-/// reaches a report before the render seam opens, so it is defined and tested here
-/// rather than emitted.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The values, not new knobs. The CLI serializes it as the report's
+/// `new_flow.decode` block.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DecodeReport {
     /// The corrected density that rendered to `1.0`, and therefore what sets the
     /// black floor at `10^(−contrast·anchor)`.
@@ -254,7 +253,6 @@ pub struct DecodeReport {
 /// surfaces as an [`NcError`], never a silently-wrong image. Values are unclamped
 /// and non-finite samples ride through for `io::encode` to count — the clamping
 /// boundary is the u16 encode and nowhere else.
-#[allow(dead_code)] // wired to the chain by `nf-core/minimal-end-to-end`.
 pub fn decode(
     image: &LinearImage,
     base: &FilmBase,

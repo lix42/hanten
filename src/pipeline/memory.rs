@@ -173,6 +173,10 @@
 //! | `hdr-pq-tiff` 74.65 MP (explicit base, no IR export) | 3.911 GB | (not measured) | — |
 //! | SDR preset 15.55 MP (explicit base, no IR export) | 0.921 GB | 0.850 GB | +8.4% |
 //! | SDR preset 74.65 MP (explicit base, no IR export) | 3.911 GB | 3.594 GB | +8.8% |
+//! | `--new-flow` 14.45 MP (explicit base, no IR export) | 0.766 GB | 0.618 GB | +23.9% |
+//! | `--new-flow --export-ir` 14.45 MP (explicit base) | 0.799 GB | 0.618 GB | +29.3% |
+//! | `--new-flow` 18.66 MP (explicit base, no IR export) | 0.950 GB | 0.795 GB | +19.5% |
+//! | `--new-flow --export-ir` 18.66 MP (explicit base) | 0.992 GB | 0.795 GB | +24.9% |
 //!
 //! Two sources of slack are visible and deliberate. Small frames run looser
 //! (+39.4% for the u16 18.66 MP run) because [`ALLOWANCE_FIXED_BYTES`] stops being negligible —
@@ -206,6 +210,13 @@
 //! covering real unmodelled overhead rather than padding. `display-p3` and
 //! `compatibility` share one profile — same buffers, different destination gamut —
 //! so the pair of frame sizes covers both.
+//!
+//! The four `--new-flow` rows (2026-09-22, `nf-core/minimal-end-to-end`) are what
+//! [`RunProfile::NewFlowSdrTiff`]'s shared arithmetic rests on: a legacy u16 `convert`
+//! of the same two frames measured within 0.1 MB of each, and the pair solves to
+//! ~42 B/px with ~10 MB fixed against the 38 B/px the enumerated buffers account —
+//! `accounted` 0.89–0.94x of measured, the allowance covering the rest. The largest
+//! scan was not on hand for this pair, so the rows are 14.45 and 18.66 MP.
 //!
 //! The two `hdr-pq` rows are the *pair* that solved
 //! [`AVIF_STAGING_BYTES_PER_PX`] — they are a fit, not two independent
@@ -426,6 +437,23 @@ pub enum RunProfile {
     /// its own right. Structural equivalence is still not self-enforcing: if a future
     /// SDR change adds a buffer, this arm must move, and nothing here will notice.
     SdrTiff {
+        /// Whether a u16 IR TIFF is staged before the primary TIFF.
+        export_ir: bool,
+    },
+    /// `convert --new-flow` / `roll --new-flow`: the fixed decode, the new chain,
+    /// and its one destination — a Display P3 16-bit TIFF
+    /// (`nf-core/minimal-end-to-end`).
+    ///
+    /// **Shares [`Convert`](Self::Convert)'s u16 arithmetic exactly**, because it
+    /// holds the same buffers: the decoded image (kept for `--export-ir`), the
+    /// decode's one output buffer carrying a cloned IR plane (`algo::fixed` fuses
+    /// the legacy staged pair into one pass, so there is no second intermediate), a
+    /// chain that moves that buffer through every boundary and transforms it in
+    /// place, and a 3x2 B quantize buffer with `tiff` streaming strips. Its peak is
+    /// the **encode** phase, like `Convert`'s. Measured rather than inherited: see
+    /// the module doc's calibration table. A separate variant so a chain stage that
+    /// gains a full-frame buffer has an arm of its own to move.
+    NewFlowSdrTiff {
         /// Whether a u16 IR TIFF is staged before the primary TIFF.
         export_ir: bool,
     },
@@ -796,40 +824,44 @@ pub fn estimate_peak(
     // Film base (stage 2): the decoded image plus that sample.
     let film_base_bytes = sum(image, sampled)?;
 
+    // `Convert`'s phases, as a closure because the new flow holds exactly the same
+    // buffer set at a fixed u16 depth (see `RunProfile::NewFlowSdrTiff`).
+    let convert_phases = |depth: OutDepth, export_ir: bool| -> Result<(u64, u64)> {
+        // Render: the decoded image (held for `--export-ir` / the report) plus
+        // the density→positive buffer and its cloned IR plane. The output
+        // color transform is in place, so there is no third image.
+        let render = mul(image, 2)?;
+        // Encode: decoded + rendered, plus the u16 staging buffers (none at
+        // f32 depth, which writes the working buffer verbatim). The output is
+        // RGB whatever the input was, so these follow `WORKING_CHANNELS`.
+        let quantize = match depth {
+            OutDepth::U16 => {
+                let rgb = mul(pixels, mul(WORKING_CHANNELS, 2)?)?;
+                if export_ir && shape.ir_present {
+                    sum(rgb, mul(pixels, 2)?)?
+                } else {
+                    rgb
+                }
+            }
+            OutDepth::F32 => 0,
+        };
+        // `sampled` is added to both later phases, not competed against them:
+        // the film-base vectors are freed before the render, but freed pages
+        // stay resident, so they still occupy the process at every later peak.
+        // This is the same retention rule the encode buffers are summed under —
+        // one rule, applied consistently, rather than two ad-hoc choices.
+        // Measured: a full-frame `--base-region` convert peaks at 50 B/px
+        // (32 render + 6 quantize + 12 sampled), and treating the sample as a
+        // *competing* phase instead under-estimated that run by 10%.
+        Ok((
+            sum(render, sampled)?,
+            sum(sum(mul(image, 2)?, quantize)?, sampled)?,
+        ))
+    };
     let (render_bytes, encode_bytes) = match profile {
         RunProfile::DecodeOnly => (0, 0),
-        RunProfile::Convert { depth, export_ir } => {
-            // Render: the decoded image (held for `--export-ir` / the report) plus
-            // the density→positive buffer and its cloned IR plane. The output
-            // color transform is in place, so there is no third image.
-            let render = mul(image, 2)?;
-            // Encode: decoded + rendered, plus the u16 staging buffers (none at
-            // f32 depth, which writes the working buffer verbatim). The output is
-            // RGB whatever the input was, so these follow `WORKING_CHANNELS`.
-            let quantize = match depth {
-                OutDepth::U16 => {
-                    let rgb = mul(pixels, mul(WORKING_CHANNELS, 2)?)?;
-                    if export_ir && shape.ir_present {
-                        sum(rgb, mul(pixels, 2)?)?
-                    } else {
-                        rgb
-                    }
-                }
-                OutDepth::F32 => 0,
-            };
-            // `sampled` is added to both later phases, not competed against them:
-            // the film-base vectors are freed before the render, but freed pages
-            // stay resident, so they still occupy the process at every later peak.
-            // This is the same retention rule the encode buffers are summed under —
-            // one rule, applied consistently, rather than two ad-hoc choices.
-            // Measured: a full-frame `--base-region` convert peaks at 50 B/px
-            // (32 render + 6 quantize + 12 sampled), and treating the sample as a
-            // *competing* phase instead under-estimated that run by 10%.
-            (
-                sum(render, sampled)?,
-                sum(sum(mul(image, 2)?, quantize)?, sampled)?,
-            )
-        }
+        RunProfile::Convert { depth, export_ir } => convert_phases(depth, export_ir)?,
+        RunProfile::NewFlowSdrTiff { export_ir } => convert_phases(OutDepth::U16, export_ir)?,
         // One arm for both dialects: see `RunProfile::GainMapHdr`'s note on why they
         // share it, and what in the staging term covers the ISO half.
         RunProfile::UltraHdrV1 { export_ir } | RunProfile::GainMapHdr { export_ir } => {
@@ -1553,8 +1585,36 @@ mod tests {
                 },
                 "encode",
             ),
+            (RunProfile::NewFlowSdrTiff { export_ir: false }, "encode"),
         ] {
             assert_eq!(peak_phase(profile), expected, "{profile:?}");
+        }
+    }
+
+    #[test]
+    fn the_new_flow_is_sized_exactly_like_a_u16_convert() {
+        // `RunProfile::NewFlowSdrTiff`'s claim, pinned: the same buffer set as the
+        // legacy u16 TIFF path, with and without an IR export and a sampled base. The
+        // calibration table is what shows the arithmetic is *true*; this shows the arm
+        // is wired to it, so a new-flow buffer added later has to move this test too.
+        for ir in [false, true] {
+            for export_ir in [false, true] {
+                for sampling in [SamplePlan::none(), SamplePlan::auto()] {
+                    let s = shape(5184, 3600, ir);
+                    let new = estimate_peak(&s, RunProfile::NewFlowSdrTiff { export_ir }, sampling)
+                        .unwrap();
+                    let legacy = estimate_peak(
+                        &s,
+                        RunProfile::Convert {
+                            depth: OutDepth::U16,
+                            export_ir,
+                        },
+                        sampling,
+                    )
+                    .unwrap();
+                    assert_eq!(new, legacy, "ir={ir} export_ir={export_ir}");
+                }
+            }
         }
     }
 

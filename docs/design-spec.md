@@ -2883,7 +2883,7 @@ nc/
     │   ├── pixels.rs     # the parallel per-pixel map drivers (byte-identical to a loop)
     │   ├── memory.rs     # peak-memory sizing model + budget preflight
     │   ├── stages.rs     # stage wiring as pure functions
-    │   ├── chain.rs           # the --new-flow chain, composed (identity stages today)
+    │   ├── chain.rs           # the --new-flow chain, composed (mostly identity stages today)
     │   ├── working_image.rs   # the buffer every new-flow stage boundary carries
     │   ├── scene_correction.rs # new flow stage 1: WB, exposure, flare (scene-referred)
     │   ├── look.rs            # new flow stage 2: contrast, grade, highlight desaturation
@@ -2904,8 +2904,9 @@ nc/
 
 The tree is the shipped module set, not a proposal — it had drifted by nine modules
 and is worth re-checking whenever one is added. The six new-flow modules are the
-migration's chain (`docs/design-update.md`, `docs/nf-migration.md`); they ship as
-identity stages behind a seam that still refuses, so nothing in this spec's pipeline
+migration's chain (`docs/design-update.md`, `docs/nf-migration.md`). `--new-flow`
+runs them — the fixed decode, three identity stages, fit gamut's change of primaries,
+and one Display P3 16-bit TIFF destination — but nothing in this spec's pipeline
 runs through them yet.
 
 ### Candidate crates

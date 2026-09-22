@@ -25,6 +25,15 @@ use crate::types::Result;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LookParams {}
 
+impl LookParams {
+    /// What the look does under these parameters, for the report — stated by the
+    /// stage rather than by its caller, so filling the stage changes the report in the
+    /// same edit. `"identity"` until the stage has knobs.
+    pub fn applied(&self) -> &'static str {
+        "identity"
+    }
+}
+
 /// Linear ACEScg after the look: scene-referred, graded.
 ///
 /// This is also **the one source both display branches share**. The branch point

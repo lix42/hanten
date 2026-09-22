@@ -39,6 +39,7 @@ use rayon::prelude::*;
 
 use crate::pipeline::colorimetry::definitions::{self, ColorSpace, transfer};
 use crate::pipeline::colorimetry::pinned;
+use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::hdr;
 use crate::pipeline::pixels;
 use crate::pipeline::sdr::{RenderedSdr, SdrGamut, SdrRenderMetadata};
@@ -187,19 +188,41 @@ pub fn encode_rendered_sdr(
 ) -> Result<(LinearImage, Vec<u8>, SdrRenderMetadata)> {
     let (mut image, metadata) = rendered.into_parts();
     let (linear, output) = match metadata.gamut {
-        SdrGamut::DisplayP3 => {
-            // Linear P3 as the *source* space: the renderer already converted to
-            // the P3 gamut, so this transform only applies the destination curve.
-            let (white, primaries) = lcms_inputs(definitions::DISPLAY_P3);
-            (
-                synth(white, primaries, 1.0)?,
-                build_profile(&OutputSpace::DisplayP3)?,
-            )
-        }
+        SdrGamut::DisplayP3 => display_p3_transfer_profiles()?,
         SdrGamut::SRgb => (working_profile()?, build_profile(&OutputSpace::SRgb)?),
     };
     transform_in_place(&mut image, &linear, &output)?;
     Ok((image, profile_icc(&output)?, metadata))
+}
+
+/// Apply only the destination's transfer curve to the new chain's output, which
+/// `fit_gamut` has already moved into the destination's primaries, and return the
+/// matching ICC profile — the new flow's counterpart of [`encode_rendered_sdr`], and
+/// for the same reason not [`to_output`]: a second gamut transform would remap
+/// values that are already in the destination's primaries.
+///
+/// The gamut is read off the chain's exit rather than chosen here, so the embedded
+/// profile names the primaries the pixels are actually in. Consumes and returns the
+/// image, like [`to_output`], so no second full-frame buffer exists.
+pub fn encode_display_linear(
+    mut image: LinearImage,
+    gamut: DestinationGamut,
+) -> Result<(LinearImage, Vec<u8>)> {
+    let (linear, output) = match gamut {
+        DestinationGamut::DisplayP3 => display_p3_transfer_profiles()?,
+    };
+    transform_in_place(&mut image, &linear, &output)?;
+    Ok((image, profile_icc(&output)?))
+}
+
+/// Linear Display P3 → the Display P3 output profile: the same primaries on both
+/// sides, so the transform applies the destination's sRGB curve and nothing else.
+fn display_p3_transfer_profiles() -> Result<(Profile, Profile)> {
+    let (white, primaries) = lcms_inputs(definitions::DISPLAY_P3);
+    Ok((
+        synth(white, primaries, 1.0)?,
+        build_profile(&OutputSpace::DisplayP3)?,
+    ))
 }
 
 /// The ICC blob for the `hdr-linear-tiff` output: linear BT.2020 / D65.
@@ -1826,6 +1849,26 @@ mod tests {
                     inp[ch]
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_new_flows_display_linear_encode_applies_only_the_srgb_curve() {
+        // The new flow's destination half of "the declared profile matches the pixels":
+        // `fit_gamut` already moved the pixels into Display P3, so the encode must apply
+        // the sRGB curve and nothing else — no second gamut transform — and embed the
+        // Display P3 profile. The IR plane rides through untouched.
+        let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
+        let image = LinearImage::new(3, 1, linear.to_vec(), Some(vec![0.1, 0.2, 0.3])).unwrap();
+        let (encoded, icc) = encode_display_linear(image, DestinationGamut::DisplayP3).unwrap();
+        assert_eq!(icc, icc_profile(&OutputSpace::DisplayP3).unwrap());
+        assert_eq!(encoded.ir, Some(vec![0.1, 0.2, 0.3]));
+        for (got, inp) in encoded.rgb.iter().zip(linear) {
+            let want = srgb_encode(inp);
+            assert!(
+                (got - want).abs() < 2e-3,
+                "{got} != sRGB-encoded {want} (input {inp})"
+            );
         }
     }
 

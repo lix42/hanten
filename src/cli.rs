@@ -21,24 +21,29 @@ use std::time::Instant;
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
-use crate::algo::density;
+use crate::algo::{density, fixed};
 use crate::flow::{self, Flow};
 use crate::io::decode::{DecodeInfo, decode_within, probe};
 use crate::io::{avif, encode, staged, ultra_hdr};
+use crate::pipeline::chain::{self, ChainParams};
 use crate::pipeline::display_tone::DisplayTone;
+use crate::pipeline::fit_gamut::{DestinationGamut, FitGamutParams};
+use crate::pipeline::fit_range::FitRangeParams;
 use crate::pipeline::input_semantics::{
     self, ContainerColorFacts, InputAssertions, InputColorReport, RawMode,
 };
+use crate::pipeline::look::LookParams;
 use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
+use crate::pipeline::scene_correction::SceneCorrectionParams;
 use crate::pipeline::{color, film_base, gain_map, hdr, sdr, stages, working_space};
 use crate::telemetry;
 use crate::types::{
     AnchorPlacement, BalanceRange, BigTiff, CalibrationParams, CharacteristicParams,
     DEFAULT_MEASURE_INSET, DensityCurve, DensityCurveType, DensityParams, DisplayToneCurve,
-    DmaxInput, DmaxSource, EncodeReport, FilmBase, FilmBaseSource, FilmStock, FilmType,
-    InputParams, MeaningAssertion, MeasureParams, NcError, OutDepth, OutputParams, OutputPreset,
-    OutputStats, PrintParams, Reconstruction, ReconstructionType, Result, SigmoidParams,
-    TransferAssertion, WbSource, check_measure_inset,
+    DmaxInput, DmaxSource, EncodeOutcome, EncodeReport, FilmBase, FilmBaseSource, FilmStock,
+    FilmType, InputParams, LinearImage, MeaningAssertion, MeasureParams, NcError, OutDepth,
+    OutputParams, OutputPreset, OutputStats, PrintParams, Reconstruction, ReconstructionType,
+    Result, SigmoidParams, TransferAssertion, WbSource, check_measure_inset,
 };
 use crate::version::{self, Identity};
 
@@ -312,8 +317,8 @@ pub struct ConvertArgs {
     /// rather than setting one — and removed when the default flips, as a migration
     /// error with no alias (nc is unreleased, so removal is cheap). A knob the new
     /// chain cannot honour is refused rather than accepted and ignored, and so is a
-    /// recipe section it does not read; the output path's suffix is not judged,
-    /// because no destination is resolved yet.
+    /// recipe section it does not read. It writes one destination, a Display P3
+    /// 16-bit TIFF, with no sidecar.
     // Plain prose on purpose: clap renders a doc comment verbatim as `--help` text,
     // so markdown emphasis would print as asterisks.
     #[arg(long = "new-flow")]
@@ -370,7 +375,7 @@ pub struct RollArgs {
     /// `convert --new-flow`. Roll accepts no conversion flags, so a knob the new
     /// chain refuses reaches it as a resolved value from the shared recipe or a
     /// per-frame override — or, for a recipe section the new chain does not read
-    /// (`reconstruction`, `print`, `output`), by its presence in the shared recipe.
+    /// (`reconstruction`, `print`, `output`), by its presence in either.
     #[arg(long = "new-flow")]
     pub new_flow: bool,
     #[command(flatten)]
@@ -1876,6 +1881,40 @@ pub struct HdrCodedTiffResult {
     pub interoperability: &'static str,
 }
 
+/// What a `--new-flow` conversion ran: the fixed decode's resolved parameters, what
+/// each stage of the new chain applied, and the destination. Serialize-only.
+///
+/// **Provisional.** It exists so the new flow's report says something true while
+/// `nf-core/report-contract` decides the real shape; the legacy-chain sections
+/// (`reconstruction_result`, `output_render`, `dmax`, `white_balance`, …) are
+/// omitted under the flag rather than filled with values that describe a chain the
+/// run did not take. Every field is a fact read off the resolved chain — no prose.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct NewFlowResult {
+    /// The fixed decode's resolved parameters, as the render used them.
+    pub decode: fixed::DecodeReport,
+    /// Each stage of the new chain in order, with what it applied.
+    pub stages: [NewFlowStageResult; 4],
+    /// The destination written — one today (`nf-destinations/preset-set` owns the set).
+    pub destination: &'static str,
+    /// The gamut the chain rendered into, read off its exit.
+    pub gamut: &'static str,
+    /// Always `false`: no sidecar is written under `--new-flow`, because its
+    /// `params` would describe a chain the run did not select (`nf-core/recipe-schema`).
+    pub sidecar_written: bool,
+    /// A sidecar an earlier run left beside this output, removed because it
+    /// described the image this run replaced. Absent when there was none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed_sidecar: Option<PathBuf>,
+}
+
+/// One stage of the new chain and what it applied under the run's parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct NewFlowStageResult {
+    pub stage: &'static str,
+    pub applied: &'static str,
+}
+
 /// Which branch out of the NC film RGB v1 ACEScg boundary this conversion took,
 /// and what that branch did (design-spec §5/§8). Serialize-only.
 ///
@@ -2242,6 +2281,10 @@ pub struct Report {
     /// content claim (design-spec §5/§8). See [`OutputRenderResult`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_render: Option<OutputRenderResult>,
+    /// What a `--new-flow` conversion ran (`convert` and each `roll` frame under the
+    /// flag). See [`NewFlowResult`]; absent on the legacy flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_flow: Option<NewFlowResult>,
     /// What the AVIF encoder actually coded (`convert` with `hdr-pq` / `hdr-hlg`):
     /// the profile the file may claim and why, the AV1 profile/level read back out
     /// of the codestream, the CICP triple, and the coded size. Absent for every
@@ -4066,16 +4109,9 @@ pub fn validate_convert(
     // omission is the least specific diagnosis available. Without this ordering,
     // `-o out.jpg --output-preset hdr-pq` with no base demands a base first and
     // only then mentions the suffix, making the user fix two things in series.
-    // ...but not under `--new-flow`, which resolves no destination at all. The rule
-    // would blame a preset nobody selected — the default the flow refuses to let you
-    // change — and its remedy ("see --help for the other presets") names
-    // `--output-preset`, which this flow rejects. Skipping it is the honest state
-    // rather than a reworded message: there is nothing yet for a suffix to match.
-    // `nf-core/minimal-end-to-end` wires the first destination and owns what replaces
-    // this; the seam refuses the run either way, so nothing is written unchecked.
-    if Flow::from_flag(args.new_flow) == Flow::Legacy {
-        reject_output_suffix_mismatch(cfg, args, recipe_preset)?;
-    }
+    // Under `--new-flow` the rule is judged against the new flow's one destination
+    // rather than the (refused) output preset — see [`OutputTarget`].
+    reject_output_suffix_mismatch(cfg, args, recipe_preset)?;
     validate(cfg)?;
     Ok(())
 }
@@ -4215,7 +4251,7 @@ fn reject_output_suffix_mismatch(
 ) -> Result<()> {
     resolve_output_path(
         &args.output,
-        cfg.output.preset,
+        OutputTarget::resolve(Flow::from_flag(args.new_flow), cfg.output.preset),
         convert_suffix_context(args, recipe_preset),
     )
     .map(|_| ())
@@ -4276,10 +4312,11 @@ enum SuffixContext<'a> {
 /// by construction.
 fn resolve_output_path(
     given: &Path,
-    preset: OutputPreset,
+    target: impl Into<OutputTarget>,
     context: SuffixContext<'_>,
 ) -> Result<PathBuf> {
-    let container = container_for(preset);
+    let target = target.into();
+    let container = target.container();
     match given.extension() {
         // A spelling some preset claims is a container request, so it is judged.
         Some(ext) if is_container_suffix(ext) => {
@@ -4288,7 +4325,7 @@ fn resolve_output_path(
                 // its case: `out.jpeg` stays `.jpeg`, `out.TIF` stays `.TIF`.
                 Ok(given.to_path_buf())
             } else {
-                Err(suffix_mismatch_error(preset, given, context))
+                Err(suffix_mismatch_error(target, given, context))
             }
         }
         // No dot-segment, or one no preset claims: the whole path is the stem.
@@ -4431,15 +4468,32 @@ fn append_suffix(given: &Path, ext: &str, context: SuffixContext<'_>) -> Result<
 /// The diagnosis for a stated suffix the resolved container does not accept.
 /// Every arm names a remedy the *reader's* command line can actually reach.
 fn suffix_mismatch_error(
-    preset: OutputPreset,
+    target: OutputTarget,
     output: &Path,
     context: SuffixContext<'_>,
 ) -> NcError {
-    let list = required_extensions(preset)
+    let list = required_extensions(target)
         .iter()
         .map(|e| format!(".{e}"))
         .collect::<Vec<_>>()
         .join(" or ");
+    let preset = match target {
+        OutputTarget::Preset(preset) => preset,
+        // One destination and no selector, so there is no preset to blame and no
+        // flag to point at — the same sentence whichever command stated the path.
+        OutputTarget::NewFlow => {
+            let frame = match context {
+                SuffixContext::RollFrame(input) => format!("frame {}: ", input.display()),
+                SuffixContext::Chosen | SuffixContext::Default => String::new(),
+            };
+            return NcError::Usage(format!(
+                "{frame}the output path {} does not end in {list}: under --new-flow, Hanten \
+                 writes its one destination, a Display P3 16-bit TIFF. Hanten never renames \
+                 a suffix you state — drop it and the path is completed for you",
+                output.display()
+            ));
+        }
+    };
     NcError::Usage(match context {
         // A manifest named this path, so point at the entry to fix and at both ways
         // out (the derived name always matches by construction).
@@ -4495,9 +4549,11 @@ enum Container {
 ///
 /// Exhaustive on purpose, and it must stay that way: a new preset has to *fail to
 /// compile* here rather than inherit a container from a `_` arm or a lookup map.
-/// Both [`required_extensions`] and [`derived_extension`] hang off this, so a
-/// future destination set that resolves a container from a product of selectors
-/// changes this function and nothing under it (`nf-destinations/preset-set`).
+/// [`OutputTarget::container`] routes every legacy-flow path through this, and
+/// [`required_extensions`] and [`derived_extension`] hang off that — so a future
+/// destination set changes `OutputTarget` and this function and nothing under them
+/// (`nf-destinations/preset-set`). The new flow's arm lives in `OutputTarget`, not
+/// here, because it is not a preset.
 fn container_for(preset: OutputPreset) -> Container {
     match preset {
         OutputPreset::UltraHdrV1 | OutputPreset::GainMapHdr => Container::Jpeg,
@@ -4537,13 +4593,51 @@ impl Container {
     }
 }
 
+/// What an output path is judged against: a legacy-flow output preset, or the new
+/// flow's one destination.
+///
+/// Under `--new-flow` the output preset is refused, so judging a path against the
+/// resolved (default) preset would blame a preset nobody selected and point at a flag
+/// the flow rejects. The new flow's destination is a Display P3 16-bit TIFF
+/// (`nf-core/minimal-end-to-end`); `nf-destinations/preset-set` replaces this with the
+/// real destination set, whose selection rules are its to settle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputTarget {
+    Preset(OutputPreset),
+    NewFlow,
+}
+
+impl OutputTarget {
+    /// The target a run's output is judged against.
+    fn resolve(flow: Flow, preset: OutputPreset) -> Self {
+        match flow {
+            Flow::Legacy => Self::Preset(preset),
+            Flow::New => Self::NewFlow,
+        }
+    }
+
+    /// The file container the target's encoder writes.
+    fn container(self) -> Container {
+        match self {
+            Self::Preset(preset) => container_for(preset),
+            Self::NewFlow => Container::Tiff,
+        }
+    }
+}
+
+impl From<OutputPreset> for OutputTarget {
+    fn from(preset: OutputPreset) -> Self {
+        Self::Preset(preset)
+    }
+}
+
 /// Output-path extensions a preset's resolved container accepts.
 ///
 /// Every preset states a rule — there is no "declines a suffix" case left, and the
 /// `Option` this returned before is gone with it: since nc now *derives* a suffix,
 /// a preset with no container could not be given a name at all.
-fn required_extensions(preset: OutputPreset) -> &'static [&'static str] {
-    container_for(preset).accepted()
+fn required_extensions(target: impl Into<OutputTarget>) -> &'static [&'static str] {
+    target.into().container().accepted()
 }
 
 /// How the calling command can state a film base — the one thing the
@@ -5899,7 +5993,8 @@ fn input_assertions(cfg: &ResolvedConfig, from_cli: InputFromCli) -> InputAssert
 struct ConvertedFrame {
     report: Report,
     info: DecodeInfo,
-    recipe_json: String,
+    /// The canonical resolved recipe — `None` under `--new-flow`, which computes none.
+    recipe_json: Option<String>,
     /// Per-stage wall clocks; `total` is left `0.0` for the orchestrator to fill
     /// from its own whole-run clock (this struct times only the stages here).
     timings: telemetry::TimingInfo,
@@ -6074,6 +6169,9 @@ fn convert_frame(
     input_from_cli: InputFromCli,
     dmax_setting: DmaxSetting,
     conversion_preset: Option<ConversionPresetResult>,
+    // Files this run *read* besides the scan (`--params`, a roll's `--frames`), so a
+    // cleanup never removes one — see `render_new_flow_frame`.
+    read_inputs: &[&Path],
     budget: memory::Budget,
     memory_out: &mut Option<MemoryReport>,
     log: &Log,
@@ -6082,8 +6180,20 @@ fn convert_frame(
     // The canonical resolved-recipe JSON, resolved up front: it is both the
     // sidecar's `params` body and the input to the identity `params_hash`, so the
     // hash a report advertises is provably the hash of the recipe that ran.
-    let recipe_json = canonical_params_json(cfg)?;
-    let identity = Identity::with_params_hash(version::stable_hash(&recipe_json));
+    //
+    // Under `--new-flow` the resolved recipe describes the legacy chain (its
+    // `reconstruction`, `print` and `output` sections are defaults nothing reads), so
+    // neither its hash nor its echo would identify what ran — the `--dump-params`
+    // reasoning. Neither is computed until `nf-core/recipe-schema` gives the new chain
+    // a recipe shape.
+    let recipe_json = match flow {
+        Flow::Legacy => Some(canonical_params_json(cfg)?),
+        Flow::New => None,
+    };
+    let identity = match &recipe_json {
+        Some(json) => Identity::with_params_hash(version::stable_hash(json)),
+        None => Identity::new(),
+    };
 
     // `calibration.film_base` has no default, and the gate rejects `None` before any
     // frame runs (`validate_convert` for `convert`, `validate_with_remedy` directly
@@ -6104,7 +6214,7 @@ fn convert_frame(
         output: Some(output.to_path_buf()),
         // The effective recipe (the sidecar's exact object), so
         // `recipe.reconstruction` is the tagged reconstruction schema.
-        recipe: Some(cfg.clone()),
+        recipe: (flow == Flow::Legacy).then(|| cfg.clone()),
         conversion_preset,
         film_base_source: Some(base_source.clone()),
         ..Report::default()
@@ -6137,29 +6247,38 @@ fn convert_frame(
     let export_ir_planned = cfg.input.export_ir.is_some();
     let mem = preflight_memory(
         input,
-        match cfg.output.preset {
-            OutputPreset::UltraHdrV1 => RunProfile::UltraHdrV1 {
+        // The new flow renders into one destination whatever `output.preset`
+        // resolves (that section is refused under the flag), so its profile is
+        // chosen by the flow, not by the preset.
+        if flow == Flow::New {
+            RunProfile::NewFlowSdrTiff {
                 export_ir: export_ir_planned,
-            },
-            OutputPreset::GainMapHdr => RunProfile::GainMapHdr {
-                export_ir: export_ir_planned,
-            },
-            OutputPreset::HdrPq | OutputPreset::HdrHlg => RunProfile::HdrAvif {
-                export_ir: export_ir_planned,
-            },
-            OutputPreset::HdrLinearTiff => RunProfile::HdrLinearTiff {
-                export_ir: export_ir_planned,
-            },
-            OutputPreset::HdrPqTiff | OutputPreset::HdrHlgTiff => RunProfile::HdrCodedTiff {
-                export_ir: export_ir_planned,
-            },
-            OutputPreset::DisplayP3 | OutputPreset::Compatibility => RunProfile::SdrTiff {
-                export_ir: export_ir_planned,
-            },
-            OutputPreset::Legacy | OutputPreset::Custom | OutputPreset::FilmMaster => {
-                RunProfile::Convert {
-                    depth: cfg.output.depth(),
+            }
+        } else {
+            match cfg.output.preset {
+                OutputPreset::UltraHdrV1 => RunProfile::UltraHdrV1 {
                     export_ir: export_ir_planned,
+                },
+                OutputPreset::GainMapHdr => RunProfile::GainMapHdr {
+                    export_ir: export_ir_planned,
+                },
+                OutputPreset::HdrPq | OutputPreset::HdrHlg => RunProfile::HdrAvif {
+                    export_ir: export_ir_planned,
+                },
+                OutputPreset::HdrLinearTiff => RunProfile::HdrLinearTiff {
+                    export_ir: export_ir_planned,
+                },
+                OutputPreset::HdrPqTiff | OutputPreset::HdrHlgTiff => RunProfile::HdrCodedTiff {
+                    export_ir: export_ir_planned,
+                },
+                OutputPreset::DisplayP3 | OutputPreset::Compatibility => RunProfile::SdrTiff {
+                    export_ir: export_ir_planned,
+                },
+                OutputPreset::Legacy | OutputPreset::Custom | OutputPreset::FilmMaster => {
+                    RunProfile::Convert {
+                        depth: cfg.output.depth(),
+                        export_ir: export_ir_planned,
+                    }
                 }
             }
         },
@@ -6403,12 +6522,24 @@ fn convert_frame(
     }
 
     // The migration seam. Decode and film base are shared by both flows — the new
-    // design keeps them — so the branch belongs here, at the render, which is also
-    // what makes this the arm the new chain is wired into rather than moved to.
-    // `pipeline::chain` exists behind it already (identity stages); this returns
-    // until `nf-core/minimal-end-to-end` connects a decode and a destination.
+    // design keeps them — so the branch belongs here, at the render.
     if flow == Flow::New {
-        return Err(flow::render_not_implemented());
+        return render_new_flow_frame(
+            NewFlowFrame {
+                cfg,
+                image,
+                base: base.base,
+                export_ir,
+                output,
+                report,
+                info,
+                decode_ms,
+                film_base_ms,
+                read_inputs,
+            },
+            log,
+            warnings,
+        );
     }
     // Clear any stale lcms2 flag so only errors from *this* render are counted.
     let _ = cms_error_occurred();
@@ -6901,33 +7032,7 @@ fn convert_frame(
         });
     }
     let loss = outcome.loss;
-    report.loss = Some(loss);
-    // Report-only statistics of the samples as written — the numeric basis a
-    // cross-version `compare` diffs (per-channel mean ΔRGB). Measured *after* the
-    // pixels are final, from the same data the encoder wrote.
-    report.output_stats = Some(outcome.stats);
-    if loss.any_loss() {
-        push_warning_buf(
-            warnings,
-            log,
-            format!(
-                "output lost {} clipped and {} non-finite of {} samples ({:.2}%)",
-                loss.clipped_total(),
-                loss.non_finite,
-                loss.total_samples,
-                loss.loss_fraction() * 100.0,
-            ),
-        );
-    }
-    // A non-finite sample is a numerical fault, not routine gamut clipping — make
-    // sure it is never fully silenced (the `--quiet --report none` combination
-    // would otherwise suppress both channels of the warning above).
-    if loss.non_finite > 0 && log.quiet {
-        eprintln!(
-            "hanten: warning: {} non-finite (NaN/inf) output sample(s) — numerical fault",
-            loss.non_finite
-        );
-    }
+    report_encode_outcome(&mut report, &outcome, log, warnings);
 
     // The sidecar is the identity-stamped envelope `{ meta, params }` — identity
     // beside the recipe, never inside it, so `--params <sidecar>` still reloads
@@ -6993,6 +7098,253 @@ fn convert_frame(
             ir_export: ir_export_ms,
         },
         loss,
+    })
+}
+
+/// Fold an encode's loss and output statistics into the report, warning on any
+/// loss. Shared by both flows' encode sites so the loss is described one way.
+fn report_encode_outcome(
+    report: &mut Report,
+    outcome: &EncodeOutcome,
+    log: &Log,
+    warnings: &mut Vec<String>,
+) {
+    let loss = outcome.loss;
+    report.loss = Some(loss);
+    // Report-only statistics of the samples as written — the numeric basis a
+    // cross-version `compare` diffs (per-channel mean ΔRGB). Measured *after* the
+    // pixels are final, from the same data the encoder wrote.
+    report.output_stats = Some(outcome.stats);
+    if loss.any_loss() {
+        push_warning_buf(
+            warnings,
+            log,
+            format!(
+                "output lost {} clipped and {} non-finite of {} samples ({:.2}%)",
+                loss.clipped_total(),
+                loss.non_finite,
+                loss.total_samples,
+                loss.loss_fraction() * 100.0,
+            ),
+        );
+    }
+    // A non-finite sample is a numerical fault, not routine gamut clipping — make
+    // sure it is never fully silenced (the `--quiet --report none` combination
+    // would otherwise suppress both channels of the warning above).
+    if loss.non_finite > 0 && log.quiet {
+        eprintln!(
+            "hanten: warning: {} non-finite (NaN/inf) output sample(s) — numerical fault",
+            loss.non_finite
+        );
+    }
+}
+
+/// Whether `path` holds one of nc's sidecars, recognised by its provenance rather
+/// than by key names: the `{meta, params}` envelope with `params` an object and
+/// `meta` carrying the identity every sidecar stamps (`nc_version`,
+/// `pipeline_version`, `target`). Deleting is destructive, so anything short of that
+/// — missing, unreadable, or a different file that merely shares the shape — is not
+/// ours to remove.
+fn is_nc_sidecar(path: &Path) -> bool {
+    let Some(doc) = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+    else {
+        return false;
+    };
+    let meta = &doc["meta"];
+    doc.as_object().is_some_and(|o| o.len() == 2)
+        && doc["params"].is_object()
+        && meta["nc_version"].is_string()
+        && meta["pipeline_version"].is_u64()
+        && meta["target"].is_string()
+}
+
+/// The new flow's one destination, as the report names it. Provisional —
+/// `nf-destinations/preset-set` owns the set and its names.
+const NEW_FLOW_DESTINATION: &str = "display-p3-u16-tiff";
+
+/// The gamut the new flow's one destination renders into.
+const NEW_FLOW_GAMUT: DestinationGamut = DestinationGamut::DisplayP3;
+
+/// What [`convert_frame`] has resolved by the time the new flow's render takes
+/// over: everything up to and including the film base, which both flows share.
+struct NewFlowFrame<'a> {
+    cfg: &'a ResolvedConfig,
+    image: LinearImage,
+    base: FilmBase,
+    export_ir: Option<PathBuf>,
+    output: &'a Path,
+    report: Report,
+    info: DecodeInfo,
+    decode_ms: f64,
+    film_base_ms: f64,
+    read_inputs: &'a [&'a Path],
+}
+
+/// The new flow's render, encode and commit for one frame: the fixed decode
+/// (`algo::fixed`) → NC film RGB v1 → `pipeline::chain` → its one destination, a
+/// Display P3 16-bit TIFF (`nf-core/minimal-end-to-end`).
+///
+/// The same staging discipline as the legacy path — the optional IR export and the
+/// primary are staged, then committed together with the primary last — but **no
+/// sidecar**: its `params` would be the resolved legacy recipe, describing a chain
+/// the run did not select and unloadable under `--new-flow` (the `--dump-params`
+/// reasoning; `nf-core/recipe-schema`). The report says so in `new_flow`.
+fn render_new_flow_frame(
+    frame: NewFlowFrame<'_>,
+    log: &Log,
+    warnings: &mut Vec<String>,
+) -> Result<ConvertedFrame> {
+    let NewFlowFrame {
+        cfg,
+        image,
+        base,
+        export_ir,
+        output,
+        mut report,
+        info,
+        decode_ms,
+        film_base_ms,
+        read_inputs,
+    } = frame;
+    let decode_params = flow::decode_params(cfg)?;
+    let chain_params = ChainParams {
+        scene_correction: SceneCorrectionParams::default(),
+        look: LookParams::default(),
+        fit_range: FitRangeParams::default(),
+        fit_gamut: FitGamutParams {
+            target: NEW_FLOW_GAMUT,
+        },
+    };
+
+    // Reconstruction: the fixed decode, then the pinned NC film RGB v1 3×3.
+    let stage_started = Instant::now();
+    let (film, decoded) = fixed::decode(&image, &base, &decode_params)?;
+    let aces = working_space::map_nc_film_rgb_v1(film);
+    let algorithm_ms = elapsed_ms(stage_started);
+
+    // The chain, then the destination's transfer. Clear any stale lcms2 flag first so
+    // only a fault from *this* transform is counted.
+    let _ = cms_error_occurred();
+    let stage_started = Instant::now();
+    let (linear, gamut) = chain::render(aces, &chain_params)?.into_parts();
+    let (encoded, icc) = color::encode_display_linear(linear, gamut)?;
+    let color_ms = elapsed_ms(stage_started);
+    if cms_error_occurred() {
+        return Err(NcError::Other(
+            "color management (lcms2) reported a runtime error; see stderr".into(),
+        ));
+    }
+
+    // The NC film RGB v1 3×3 into ACEScg runs on this flow too, so the pinned
+    // interpretation is a fact about the run.
+    report.working_mapping = Some(working_space::WORKING_MAPPING_ID);
+    report.new_flow = Some(NewFlowResult {
+        decode: decoded,
+        stages: chain_params
+            .applied()
+            .map(|(stage, applied)| NewFlowStageResult { stage, applied }),
+        destination: NEW_FLOW_DESTINATION,
+        gamut: gamut.name(),
+        sidecar_written: false,
+        removed_sidecar: None,
+    });
+
+    // The IR export reads the *decoded* image and is staged before the primary, at
+    // the destination's depth (u16), as on the legacy path.
+    let mut pending: Vec<staged::Staged> = Vec::new();
+    let mut ir_export_ms = None;
+    if let Some(path) = &export_ir {
+        let stage_started = Instant::now();
+        pending.push(encode::export_ir(&image, OutDepth::U16, path)?);
+        ir_export_ms = Some(elapsed_ms(stage_started));
+        report.ir_exported = Some(path.clone());
+    }
+
+    let stage_started = Instant::now();
+    let (primary, outcome, bigtiff) = encode::encode_u16(&encoded, &icc, output)?;
+    let encode_ms = elapsed_ms(stage_started);
+    if bigtiff {
+        push_warning_buf(
+            warnings,
+            log,
+            "output promoted to BigTIFF (would exceed the classic 4 GiB TIFF limit)".into(),
+        );
+    }
+    report_encode_outcome(&mut report, &outcome, log, warnings);
+
+    // The primary goes last, as on the legacy path: its presence is what reads as
+    // success.
+    pending.push(primary);
+    for note in staged::commit_all(std::mem::take(&mut pending))? {
+        push_warning_buf(warnings, log, note);
+    }
+    if let Some(path) = &export_ir {
+        log.info(format_args!("wrote IR plane {}", path.display()));
+    }
+    log.info(format_args!("wrote {}", output.display()));
+
+    // A sidecar an earlier run wrote beside this path now describes an image that no
+    // longer exists — reloading it would reproduce a different picture. Removed only
+    // after the new image is committed, and only when it is recognisably one of nc's
+    // sidecars, so a user's own file that happens to share the name is left alone.
+    let stale = encode::sidecar_path(output);
+    let stale_key = collision_key(&stale);
+    let is_read_input = read_inputs
+        .iter()
+        .any(|input| keys_collide(&collision_key(input), &stale_key));
+    if is_read_input && is_nc_sidecar(&stale) {
+        // This run's own recipe (or manifest) sits where the old sidecar would: it is
+        // an input, not a stale artifact, so it stays — loudly, since it still pairs
+        // by name with an image it no longer describes.
+        push_warning_buf(
+            warnings,
+            log,
+            format!(
+                "{} pairs by name with this output but describes the image a legacy run \
+                 wrote there; it was left in place because this run read it (--params / \
+                 --frames)",
+                stale.display()
+            ),
+        );
+    } else if is_nc_sidecar(&stale) {
+        // A warning, not an error: the new image is already committed, and failing
+        // the run here would discard the report that describes it.
+        match std::fs::remove_file(&stale) {
+            Ok(()) => {
+                log.info(format_args!("removed stale sidecar {}", stale.display()));
+                if let Some(nf) = report.new_flow.as_mut() {
+                    nf.removed_sidecar = Some(stale);
+                }
+            }
+            Err(e) => push_warning_buf(
+                warnings,
+                log,
+                format!(
+                    "could not remove the stale sidecar {} (it describes the image this \
+                     run replaced): {e}",
+                    stale.display()
+                ),
+            ),
+        }
+    }
+
+    report.warnings = std::mem::take(warnings);
+    Ok(ConvertedFrame {
+        report,
+        info,
+        recipe_json: None,
+        timings: telemetry::TimingInfo {
+            total: 0.0,
+            decode: decode_ms,
+            film_base: film_base_ms,
+            algorithm: algorithm_ms,
+            color: color_ms,
+            encode: encode_ms,
+            ir_export: ir_export_ms,
+        },
+        loss: outcome.loss,
     })
 }
 
@@ -7226,26 +7578,21 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // Resolved **here**, before anything derives from it — the write-target guard,
     // the sidecar, the report's `output` and telemetry's `output_bytes` must all
     // see the completed path, never the stem. (`validate_convert` ran the same rule
-    // and discarded the value; this is the one call that keeps it.)
-    // ...except under `--new-flow`, which resolves no destination, so there is no
-    // container to complete or judge a suffix against. The path is taken as typed:
-    // the seam refuses the run before anything is written, and the alternative is to
-    // complete `-o out` into a preset the flow itself refuses to let the user change
-    // (`--output-preset` is an availability refusal). `nf-core/minimal-end-to-end`
-    // wires the first destination and restores a real resolution here.
-    let output = if flow == Flow::New {
-        args.output.clone()
-    } else {
-        resolve_output_path(
-            &args.output,
-            cfg.output.preset,
-            convert_suffix_context(&args, recipe_preset),
-        )?
-    };
+    // and discarded the value; this is the one call that keeps it.) Under
+    // `--new-flow` the container is the new flow's one destination's — a TIFF.
+    let target = OutputTarget::resolve(flow, cfg.output.preset);
+    let output = resolve_output_path(
+        &args.output,
+        target,
+        convert_suffix_context(&args, recipe_preset),
+    )?;
     if output != args.output {
+        let from = match target {
+            OutputTarget::Preset(preset) => format!("the resolved preset `{}`", preset.name()),
+            OutputTarget::NewFlow => "the new flow's destination".to_string(),
+        };
         log.info(format!(
-            "output path completed from the resolved preset `{}`: writing {}",
-            cfg.output.preset.name(),
+            "output path completed from {from}: writing {}",
             output.display()
         ));
     }
@@ -7264,13 +7611,9 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         None
     };
     let mut targets: Vec<(&str, &Path)> = vec![("--output", &output)];
-    // The sidecar is derived from the *completed* output path, and under `--new-flow`
-    // there is none — `-o out` stays `out`, so `sidecar_path` yields `out.json` and the
-    // guard reports a collision with a `--report-file out.json` that exists on neither
-    // chain, pre-empting the seam with a wrong diagnosis. No sidecar is written under
-    // the flag anyway. Every *other* target here is a real path on both chains and
-    // stays checked, so an input-clobbering `--report-file` is still refused.
-    // `nf-core/minimal-end-to-end` restores this with the destination.
+    // No sidecar is written under `--new-flow` (its `params` would describe a chain
+    // the run did not select, and could not be reloaded — the `--dump-params`
+    // reasoning), so it is no write target there.
     if flow == Flow::Legacy {
         targets.push(("the sidecar", &sidecar));
     }
@@ -7375,6 +7718,11 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         },
         dmax_setting,
         conversion_preset_result(&args, args.recipe_in.is_some().then_some(&recipe_cfg), &cfg)?,
+        &args
+            .recipe_in
+            .iter()
+            .map(PathBuf::as_path)
+            .collect::<Vec<_>>(),
         args.memory.budget(),
         // `convert` reads the preflight decision off the returned report; the
         // out-param exists for `roll`'s failed frames.
@@ -7439,7 +7787,12 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // (and `--strict` does not promote it), so it runs *after* the report and is
     // kept out of `report.warnings` — see `emit_telemetry`. Skipped on a
     // `--strict` failure so the log stays "one record per successful run".
-    if telemetry_requested(&args) && !strict_failure {
+    // `recipe_json` is `None` only under `--new-flow`, which refuses the telemetry
+    // flags before anything runs, so the pair below is the whole condition.
+    if telemetry_requested(&args)
+        && !strict_failure
+        && let Some(recipe_json) = &recipe_json
+    {
         // `convert_frame` measured the per-stage wall clocks; the total is this
         // orchestrator's whole-run clock.
         let mut timings = stage_timings;
@@ -7451,7 +7804,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
             &info,
             timings,
             loss,
-            &recipe_json,
+            recipe_json,
             &report,
             &log,
             telemetry_log.as_deref(),
@@ -7524,12 +7877,16 @@ struct RollReport {
     /// What produced this batch: build identity + the behavioral
     /// `pipeline_version` + the `params_hash` of the **shared** frozen recipe
     /// (`core/conversion-versioning`). Unconditional here (unlike `Report.identity`)
-    /// because a roll always resolves a full recipe. Operational provenance only —
+    /// because a roll always resolves a full recipe — though under `--new-flow` the
+    /// hash is omitted, for the reason `recipe` is. Operational provenance only —
     /// no CLI flag, no recipe key, no effect on a single output pixel.
     identity: Identity,
     /// The shared frozen recipe configuration every frame was converted from —
     /// where the roll-fixed `film_base` / `calibration.dmax` config lives, once.
-    recipe: ResolvedConfig,
+    /// Omitted under `--new-flow`, as on `convert`: the resolved recipe describes the
+    /// legacy chain, not the one the frames ran through (`nf-core/recipe-schema`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recipe: Option<ResolvedConfig>,
     /// Roll-level warnings not tied to a single frame (e.g. the film base is not
     /// frozen because the shared recipe's `calibration.film_base` is not `explicit`).
     /// Echoed to stderr and, like per-frame warnings, promoted to a failing exit
@@ -7630,8 +7987,14 @@ enum FrameStatus {
         /// that frame's effective recipe and therefore its hash, so the per-frame
         /// value is the only place that difference is visible in the report (it also
         /// rides that frame's sidecar `meta`).
+        /// Boxed with `new_flow` below: adding that block tipped `Ok` over
+        /// `clippy::large_enum_variant`, and this is the largest remaining field.
         #[serde(skip_serializing_if = "Option::is_none")]
-        identity: Option<Identity>,
+        identity: Option<Box<Identity>>,
+        /// What a `--new-flow` frame ran — mirrors the single-frame `Report` field.
+        /// Boxed like `effective_area` (`clippy::large_enum_variant`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        new_flow: Option<Box<NewFlowResult>>,
     },
     /// A frame that failed to convert: the failure message. The roll records it
     /// and continues (the loud non-zero exit is the batch-level signal).
@@ -7703,12 +8066,12 @@ fn expand_input(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 /// [`required_extensions`] — that lists `tif` before `tiff`, so taking its head
 /// would have silently renamed every existing roll output from `_positive.tiff` to
 /// `_positive.tif`.
-fn default_output_name(input: &Path, out_dir: &Path, preset: OutputPreset) -> PathBuf {
+fn default_output_name(input: &Path, out_dir: &Path, target: impl Into<OutputTarget>) -> PathBuf {
     let stem = input
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "frame".to_string());
-    out_dir.join(format!("{stem}_positive.{}", derived_extension(preset)))
+    out_dir.join(format!("{stem}_positive.{}", derived_extension(target)))
 }
 
 /// The extension nc writes when it supplies the suffix itself — a `roll` frame's
@@ -7723,8 +8086,8 @@ fn default_output_name(input: &Path, out_dir: &Path, preset: OutputPreset) -> Pa
 ///
 /// TIFF presets keep `tiff` because that is what roll wrote before containers
 /// existed; changing it would rename every output of an unchanged recipe.
-fn derived_extension(preset: OutputPreset) -> &'static str {
-    container_for(preset).canonical()
+fn derived_extension(target: impl Into<OutputTarget>) -> &'static str {
+    target.into().container().canonical()
 }
 
 /// Resolve a frame's output path: a manifest's explicit path (absolute used
@@ -7742,21 +8105,13 @@ fn resolve_frame_output(
     preset: OutputPreset,
     flow: Flow,
 ) -> Result<PathBuf> {
+    let target = OutputTarget::resolve(flow, preset);
     let path = match explicit {
         Some(o) if o.is_absolute() => o.to_path_buf(),
         Some(o) => out_dir.join(o),
-        None => return Ok(default_output_name(input, out_dir, preset)),
+        None => return Ok(default_output_name(input, out_dir, target)),
     };
-    // Under `--new-flow` the suffix is not judged, for the same reason as on
-    // `convert`: no destination is resolved, so the preset this rule would blame is
-    // one the flow refuses to let anyone change — and on `roll` that is sharper
-    // still, since its only spelling is the recipe `output` section, refused whole.
-    // The *derived* branch above needs no such guard: it is correct by construction
-    // and never judged. `nf-core/minimal-end-to-end` restores this.
-    if flow == Flow::New {
-        return Ok(path);
-    }
-    resolve_output_path(&path, preset, SuffixContext::RollFrame(input))
+    resolve_output_path(&path, target, SuffixContext::RollFrame(input))
 }
 
 /// Deep-merge `overlay` into `base`: JSON objects merge key-by-key (recursively),
@@ -8034,6 +8389,20 @@ fn resolve_frames(
                             &ov,
                             &format!("frame {}: per-frame `params` override", mf.input.display()),
                         )?;
+                        // The shared recipe's section refusal, applied to the overlay:
+                        // now that a `--new-flow` roll renders, an overlay stating a
+                        // section the new flow never reads would be parsed and ignored.
+                        flow::reject_recipe_sections(
+                            Flow::from_flag(args.new_flow),
+                            &stated_unread_sections(&ov),
+                        )
+                        .map_err(|e| {
+                            NcError::Usage(format!(
+                                "frame {}: per-frame `params` override: {}",
+                                mf.input.display(),
+                                e.message()
+                            ))
+                        })?;
                         // `calibration.film_base` and `calibration.dmax` are both roll
                         // calibrations — one section, for exactly this reason: the whole
                         // batch is meant to share one frozen
@@ -8289,7 +8658,11 @@ fn resolve_frames(
                 ));
             }
             for input in inputs {
-                let output = default_output_name(&input, out_dir, shared.output.preset);
+                let output = default_output_name(
+                    &input,
+                    out_dir,
+                    OutputTarget::resolve(Flow::from_flag(args.new_flow), shared.output.preset),
+                );
                 planned.push(PlannedFrame {
                     input,
                     output,
@@ -8344,7 +8717,8 @@ fn frame_report_ok(pf: &PlannedFrame, report: Report) -> FrameReport {
             input_color: report.input_color.map(Box::new),
             loss: report.loss,
             output_stats: report.output_stats,
-            identity: report.identity,
+            identity: report.identity.map(Box::new),
+            new_flow: report.new_flow.map(Box::new),
         },
         memory: report.memory,
         warnings: report.warnings,
@@ -8401,11 +8775,10 @@ fn run_roll(args: RollArgs) -> Result<()> {
         output_preset_present: _,
         unread_sections,
     } = load_recipe(args.recipe_in.as_deref())?;
-    // Same rule as `convert`, over `roll`'s shared recipe. A *per-frame* overlay can
-    // state an unread section too, and it is not refused there — that half is
-    // `nf-core/subcommands`'. The reference is the exception, and not by this call:
-    // `calibration.dmax` is a `VALUE_ENTRIES` row, so `validate_with_flow` catches it
-    // on the shared recipe *and* on every per-frame override.
+    // Same rule as `convert`, over `roll`'s shared recipe; `resolve_frames` applies
+    // it to each per-frame overlay too. `calibration.dmax` is a `VALUE_ENTRIES` row
+    // rather than a section, so `validate_with_flow` catches it on the shared recipe
+    // *and* on every per-frame override.
     flow::reject_recipe_sections(Flow::from_flag(args.new_flow), &unread_sections)?;
     // Roll-specific rejections run **before** the shared `validate`, and the order
     // is the same least-specific-diagnosis-last policy `validate` itself now
@@ -8518,29 +8891,18 @@ fn run_roll(args: RollArgs) -> Result<()> {
             format!("output for {}", pf.input.display()),
             pf.output.clone(),
         ));
-        targets.push((
-            format!("sidecar for {}", pf.input.display()),
-            encode::sidecar_path(&pf.output),
-        ));
+        // No sidecar is written under `--new-flow` (see `render_new_flow_frame`).
+        if Flow::from_flag(args.new_flow) == Flow::Legacy {
+            targets.push((
+                format!("sidecar for {}", pf.input.display()),
+                encode::sidecar_path(&pf.output),
+            ));
+        }
     }
     if let Some(rf) = args.report.report_file.as_deref() {
         targets.push(("--report-file".to_string(), rf.to_path_buf()));
     }
     ensure_roll_targets_distinct(&inputs, &targets)?;
-
-    // The migration seam, refused **once** for the whole roll rather than per frame.
-    // Placed after the plan resolves, so every config diagnosis a roll would give is
-    // unchanged — and before the first decode, because unlike the memory gate (whose
-    // verdict is per frame, since it depends on the frame's own size) this condition
-    // is frame-independent and already known. Per-frame handling would otherwise
-    // decode all 25 frames of a real roll to print one identical error 25 times.
-    // Deleted by `nf-core/minimal-end-to-end`, which gives the new flow something to
-    // render into. The chain itself already exists (`pipeline::chain`, identity
-    // stages); the decode exists too (`algo::fixed`), so what is missing is a
-    // destination behind it and the wiring that joins the three.
-    if Flow::from_flag(args.new_flow) == Flow::New {
-        return Err(flow::render_not_implemented());
-    }
 
     // Create the output directory now that the plan is known-good. A manifest may
     // name a per-frame output in a subdirectory (`sub/x.tiff`), so create each
@@ -8579,16 +8941,18 @@ fn run_roll(args: RollArgs) -> Result<()> {
             &pf.input,
             &pf.output,
             &pf.cfg,
-            // `Legacy` today — the roll-level seam above returns before this loop
-            // whenever the new flow is selected. The argument is the wiring
-            // `nf-core/minimal-end-to-end` needs once the chain has an output to
-            // render per frame.
             Flow::from_flag(args.new_flow),
             InputFromCli::none(),
             pf.dmax_setting,
             // `roll` has no `--preset` flag — its shared recipe already carries the
             // expanded values, which is the whole point of the expansion being CLI-only.
             None,
+            &args
+                .recipe_in
+                .iter()
+                .chain(args.frames.iter())
+                .map(PathBuf::as_path)
+                .collect::<Vec<_>>(),
             args.memory.budget(),
             &mut memory,
             &log,
@@ -8619,12 +8983,17 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // Roll-level identity: the build that ran, plus the `params_hash` of the
     // **shared** frozen recipe (a per-frame override changes that frame's effective
     // recipe, and that frame's own sidecar/report carries its own hash).
-    let identity =
-        Identity::with_params_hash(version::stable_hash(&canonical_params_json(&shared)?));
+    let (identity, recipe) = match Flow::from_flag(args.new_flow) {
+        Flow::Legacy => (
+            Identity::with_params_hash(version::stable_hash(&canonical_params_json(&shared)?)),
+            Some(shared),
+        ),
+        Flow::New => (Identity::new(), None),
+    };
     let roll = RollReport {
         command: "roll",
         identity,
-        recipe: shared,
+        recipe,
         warnings: roll_warnings,
         frames,
         summary: RollSummary {
@@ -16272,7 +16641,7 @@ mod tests {
         let roll = RollReport {
             command: "roll",
             identity: Identity::with_params_hash(version::stable_hash("{}")),
-            recipe: shared,
+            recipe: Some(shared),
             warnings: vec![],
             frames: vec![FrameReport {
                 input: PathBuf::from("f1.tif"),
@@ -16288,7 +16657,10 @@ mod tests {
                     output_stats: Some(OutputStats {
                         mean: [0.25, 0.5, 0.75],
                     }),
-                    identity: Some(Identity::with_params_hash(version::stable_hash("frame"))),
+                    identity: Some(Box::new(Identity::with_params_hash(version::stable_hash(
+                        "frame",
+                    )))),
+                    new_flow: None,
                 },
                 memory: None,
                 warnings: vec![],

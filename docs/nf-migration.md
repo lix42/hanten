@@ -38,9 +38,9 @@ authoritative for status and dependencies.
   `convert` and `roll`) and lasts until the retirements have removed the old chain;
   after that there is nothing to select. `nf-core/default-flip` is the last of those
   changes plus the flag's removal. `nf-core/stage-skeleton` built the chain it
-  selects (identity stages); until `nf-core/minimal-end-to-end` connects a decode and
-  a destination it still resolves the run and then stops at the render seam with
-  exit 4 — the availability refusals are live before the renders are.
+  selects and `nf-core/minimal-end-to-end` connected it: the fixed decode feeds it and
+  it writes one destination, a Display P3 16-bit TIFF, with the first three stages
+  still identity passes. The availability refusals went live before the render did.
 - **The container default is untouched by all of this**, so it moves once, when
   `nf-destinations/default-destination` says so.
 - **New stages are written fresh.** See CLAUDE.md's migration rule: structure for
