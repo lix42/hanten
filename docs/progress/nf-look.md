@@ -92,8 +92,43 @@ migration plan (`docs/nf-migration.md`).
   them needs either a throwaway patch or a measurement of how many top-end pixels are
   out of P3 before mapping. Carried forward.
 
-  **Awaiting the user's ranking** — the measurements cannot say whether 5 points of
-  saturated chroma or 0.8° of hue is the one that shows.
+- 2026-09-21: **the user's verdict closed it, and corrected the experiment on the way.**
+  Comparing #2 (per-channel, shoulder 0.3) against #5 (chroma pull 0.35): *"I can tell the
+  bright change, but I cannot tell the color change."*
+
+  That was a flaw in the set and a finding at once. The two arms were matched on **chroma
+  removal** and left unmatched on **brightness**, because the per-channel curve compresses
+  luminance as well as converging chroma while the pull holds luminance by construction:
+
+  | config | L\* top | vs control | C\* top | removed |
+  |---|---|---|---|---|
+  | control | 80.6 | +0.0 | 17.0 | 0% |
+  | per-channel 0.3 | 76.6 | **−4.0** | 9.0 | 47% |
+  | chroma pull 0.35 | 80.6 | **+0.0** | 8.8 | 48% |
+
+  **Matching the brightness needed `--print-exposure 0.38` and two attempts** — the first
+  at 0.19 recovered only half, because the exposure is applied *before* the fit range and
+  reinhard re-compresses the lift. With it matched:
+
+  | | L\* top | C\* top | hue shift |
+  |---|---|---|---|
+  | per-channel, matched | 80.4 | 9.5 | 5.1° |
+  | chroma pull | 80.6 | 8.8 | 4.3° |
+
+  **ΔL\* 0.16, ΔC\* 0.66, Δhue 0.7° — a total ΔE of about 0.7, below visibility.** At
+  matched brightness the two families produce the same picture, which is what the eye
+  reported before the measurement caught up.
+
+  **So the form question is closed, and not on appearance.** What separates the families
+  is that the per-channel curve **entangles tone with chroma** and the pull does not —
+  and the entanglement cannot be undone by a scalar, since whatever exposure compensates
+  it is partly eaten by the fit range downstream. In a staged chain where fit range
+  already owns luminance, an operator that also moves luminance double-compresses and
+  then needs a correction that does not fully land.
+
+  **Recommendation for [path to white](../tasks/nf-look/path-to-white.md): the chroma
+  pull**, chosen for **separability, not for looks**. Its remaining open question is no
+  longer "which family" but what "approaches white" is measured on, and at what strength.
 
 ## path-to-white
 
