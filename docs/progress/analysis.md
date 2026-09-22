@@ -51,6 +51,17 @@ What other epics need to know about `analysis`:
   a study comparing nc against an *outside* reference (NLP's own TIFFs) cannot be expressed
   as a matrix today; `film-base/dmax-per-channel-reduction` (parked 2026-09-13) asks for a
   reference-cell kind rather than a bespoke script.
+- **A review set can compare two *builds* since 2026-09-22.** A matrix declares
+  `builds` (an id, a label and a path to a **pre-built** binary each); the generator
+  renders every config under every build and flattens the product into cells named
+  `<config>@<build>`, so the app keeps its one toggle and its one grid cell per frame.
+  What other epics need to know: the cell's provenance is **derived, never declared** —
+  each config's `producer` block in `review.json` carries the identity that binary
+  reported about itself, and a build that reports two identities inside one run aborts
+  it. `nf-verification/reference-snapshot` is the intended first consumer, and the
+  pre-flight accepts the **pre-rename `nc` banner** precisely so a git-tagged reference
+  binary is usable. `--nc` is refused beside a `builds` block; `--build <id>=<path>`
+  repoints one arm for the rebuild loop.
 - **The tone bands are cut in CIELAB lightness, and the record is `schema_version`
   2 (2026-09-10).** Edges every 15 L\* to 75, then diffuse white (L\* 100), then an
   overflow band above it — `deep_shadow, shadow, low_mid, mid, high_mid,
@@ -879,9 +890,139 @@ What other epics need to know about `analysis`:
 
 ## review-build-axis
 
-**Status:** not started
-**Updated:** 2026-09-13
+**Status:** done (2026-09-22)
+**Updated:** 2026-09-22
 
 - Goal: the same frame and config across two builds as toggling cells, labelled from
   the sidecar's `identity` block. Deferred by `comparison-review-tooling` until a
   default moves; two default moves are now filed.
+
+### 2026-09-22 — shipped
+
+- **No nc change was needed, and the task file understated what already existed.**
+  Every `convert` writes `<output>.json` = `{meta, params}`, and `meta` carries the
+  identity block **flattened** (not nested under `meta.identity`). But the *report* on
+  stdout carries the same value — `SidecarMeta.identity` is the very `&Identity` the
+  report serializes — and `_render` already parsed that report and threw it away. So
+  provenance cost one line, not a file read. Probed on a committed fixture: report
+  `identity` and sidecar `meta` are byte-identical. The sidecar stays as a fallback
+  in `cell_identity`, but **no binary is known to write one without the other** — it
+  is kept because it costs a line, not because a version needing it was established.
+  (An earlier draft of this entry and of that docstring both asserted the history;
+  the docstring was corrected in review and this bullet with it.)
+- **Answers to the task's three open questions.** (1) *Neither* a third matrix
+  dimension nor paired matrices: `builds` is declared top-level and the generator
+  expands builds x configs into the flat `configs` the app already renders. The app's
+  premise is one grid cell per (frame, config) so toggling cannot move the picture by a
+  pixel; a real second axis means a second toggle. A config may state its own `builds`
+  subset for the asymmetric pair. (2) **Pre-built binaries**, plus `--build <id>=<path>`
+  to repoint one arm without editing a committed matrix — no cargo, no scratch target
+  dir, no dirty-tree question. (3) **Both**: the matrix gives a short name, which the
+  generator composes into `label` as `<config> · <build>`; the *identity* is derived and
+  rides in a new optional `configs[].producer` block.
+- **The join is `@`, and that is load-bearing.** `SAFE_ID` admits hyphens inside an
+  author's id, so a hyphenated join would reproduce the `<frame>-<config>` ambiguity
+  `colliding_stems` exists to refuse. `@` is outside `SAFE_ID` altogether, so an author
+  id can never contain one and a composed id splits exactly one way — the join is
+  injective, which *removes* a collision class. `charts/domId.ts` already hex-escapes
+  everything outside `[A-Za-z0-9]`, so SVG gradient ids were safe with no change.
+- **`producer` is tagged by `kind`, for `analysis/review-reference-cells`.** `hanten`
+  carries the identity fields (all optional — a tarball build stamps no commit);
+  `external` carries `label` + `note` for an outside producer's cell. Both answer the
+  same question — which cell did nc-as-configured not render — so doing them as two
+  blocks would have been the mistake. Additive and optional, so `review.json` stays
+  `schema_version` 1 (the `metrics` key set that precedent), and a matrix with no
+  `builds` produces the document it always did, byte for byte.
+- **The honesty checks, and why two of them are notes rather than errors.**
+  *Error, aborts the run:* a build that reports one identity and then another — the
+  binary changed underneath, so every cell already rendered under that name is suspect.
+  Since the matrix claims no identity, "a cell that disagrees with its claimed build"
+  can only mean disagreeing with the rest of its own build. **The abort also deletes an
+  earlier run's `review.json` from the output directory when this run overwrote a cell
+  that file names** — writing none is not enough, because those cells would still be
+  attributed to the previous build by the set sitting there, and the app *watches* the
+  set, so a page already open refreshes straight onto the new pixels under the old
+  label. The deletion is conditional on the *destinations this run actually wrote*,
+  which the loop now tracks: a run over different frames or different configs
+  overwrote nothing the stale set indexes, told it no lie, and gets a message saying
+  the set was left alone. Deleting there would destroy a set that is still true, and
+  the first version's fixed message claimed an overwrite that had not happened.
+  **The compare is the hard part, and its errors are one-sided.** A miss lands on
+  the branch that *spares* the file, which then asserts the set still describes its
+  own pixels — so the predicate must recognise every spelling of a destination the
+  schema permits, not only the ones this generator writes. Three got through the
+  first conditional version: `review.json`'s **string** rendition shorthand (the
+  form `SCHEMA.md` calls the common case) was invisible; `src` is a path *relative
+  to the set*, not a filename, so `renders/../F1-a.jpg` never matched; and the
+  compare was case-sensitive although `F1-Dflt.jpg` and `F1-dflt.jpg` are one file
+  on the default macOS volume — reachable from two ordinary runs in the very
+  rebuild-into-the-same-directory loop `--build` invites, with no hand-authored set
+  involved. `colliding_stems` had casefolded for exactly this reason since before
+  the axis existed and cannot help here: it only ever sees one run's matrix, so it
+  refuses `Dflt`/`dflt` *within* a matrix and is blind across runs. Now
+  `indexed_sources` reads both shapes, resolves each `src` against the output
+  directory and compares case-folded paths (`dest_key`) — and returns a second
+  value saying whether it read the whole document. That second value is what
+  separates **three** outcomes from two: deleted, spared-and-vouched-for, and
+  spared-but-unchecked. "I recognised nothing" is not "there was nothing", so an
+  unparseable set, a shape the schema does not have or a path that will not resolve
+  leaves the file (the app refuses a set it cannot parse, loudly) and says the
+  question is open instead of answering it. The two messages deliberately share no
+  phrase, so a test asserting one is absent can tell them apart. **A fourth axis is
+  not about spelling at all: a render that *fails* can still have written its
+  output.** `--strict` gates after encoding, so nc writes the image and its sidecar
+  and *then* exits 1 — tested against the release binary on `hdri-64bit.tif`, where
+  the IR warning makes it fail, and `--strict` is not an owned flag so an ordinary
+  config may pass it. **Record the assumption as disproved**: "a failed convert
+  leaves nothing on disk to account for" is plausible, was asserted in review, and
+  is false; do not re-derive it. Destinations are therefore booked *before* the
+  render, not after it succeeds, so a render that failed before writing anything
+  over-matches — the same trade `dest_key`'s casefold makes, and the reason is the
+  same one in both places: over-matching costs a stale index that was arguably
+  still true, a miss leaves a lie in place and vouches for it. All of it caught in
+  review, none of it by the first version of the test. *Note:* two builds that are the **same file** — refusing that would refuse the
+  task's own acceptance probe, which is that the same binary twice yields byte-identical
+  cells (verified: `cmp` clean). *Note:* two **different** files reporting the same
+  identity — the realistic shape of a patched-versus-shipped spike, and it cannot be
+  called an error because the binaries really do differ; what it can be is said out loud.
+  The binary's sha256 is the only fact here that separates those last two, which is why
+  the pre-flight computes it.
+- **The pre-flight accepts the pre-rename `nc` banner**, via `manifest.is_nc`. Not
+  tidiness: the reference arm of a before/after is a git-tagged binary
+  (`nf-verification/reference-snapshot`), and a tag old enough to be worth comparing
+  prints `nc`. A check that demanded `hanten` would have rejected exactly the binary the
+  axis exists for. `manifest.sha256` was reused the same way — both stdlib.
+- **Two behaviour changes to the existing path**, both because a matrix with no `builds`
+  is modelled as one *unnamed* build rather than as a second code path. (1) The
+  pre-flight now runs `is_nc` on the `--nc` binary too, not just on a declared build's.
+  A `--nc` pointing at something that is not this CLI used to fail at the first render;
+  it now fails before anything is written — same verdict, twenty minutes earlier.
+  (2) **Identity drift aborts a no-axis run too**: if the `--nc` binary changes commit
+  between two cells, the run exits 1, writes no `review.json` and removes an earlier
+  one that names a cell it overwrote. That is the path most runs take, so it is not a
+  build-axis footnote; the abort message names the binary by path, since there is no
+  build id to print. Covered end to end (`test_a_run_with_no_build_axis_aborts_on_drift_too`)
+  and stated in the skill's step 4 as a rule that is not build-axis-only.
+- **Known limit:** the cells are a product and only ten have a number key, so two builds
+  over five configs already spends the whole keyboard. A build comparison wants a short
+  config list. That follows from the one-toggle decision and is the price of it.
+- **Also deliberate:** a matrix with **no** `builds` gets no `producer` at all, even
+  though its single binary is known. Keeping the no-axis document byte-identical was
+  worth more than recording provenance nobody asked for; the per-cell `<image>.json`
+  sidecars carry the commit in that case anyway.
+- Tests: `test_review.py` 55 → 143, including eighteen end-to-end cases driven through
+  `cmd_generate` against a **fake `hanten`** (no assets, no venv, no real binary) that
+  changes the commit it reports between calls. Those thirteen carry the ordering: a rule
+  called directly never proves it runs before the coarser gate that used to hide it.
+  Falsifiability checked: neutering the drift check reds two of them, and reverting
+  each of the three compare axes in turn reds a distinct unit-plus-end-to-end pair,
+  and booking a destination only on success reds the fail-after-write case (whose
+  fake `hanten` writes its output and *then* exits nonzero, the shape no other
+  failure case in the suite has).
+  `indexed_sources` also has direct tests, which it needed most: it is the one
+  function here that reads a document this toolkit did not write, so a test built
+  only from `build_review`'s output exercises half the schema. App suite 265,
+  with `producer.ts` holding the formatting
+  (nothing above the pure `.ts` layer in that app is testable). Verified in a real
+  browser — the button tooltip and the line under the picture both read the identity,
+  and the line swaps with the config.

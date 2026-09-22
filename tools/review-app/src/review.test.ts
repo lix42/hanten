@@ -274,3 +274,90 @@ describe("parseReview and measurements", () => {
     expect(image.renditions["shoulder"]!.metricsError).toBeUndefined();
   });
 });
+
+describe("parseReview — producer", () => {
+  const HANTEN = {
+    kind: "hanten",
+    label: "candidate",
+    nc_version: "0.1.0",
+    git_commit: "2664a0ddbdd5",
+    git_dirty: true,
+    pipeline_version: 5,
+    target: "aarch64-apple-darwin",
+  };
+
+  function withProducer(producer: unknown) {
+    return doc({
+      configs: [
+        { id: "shoulder", label: "shoulder", producer },
+        { id: "none", label: "none" },
+      ],
+    });
+  }
+
+  it("reads a build's identity into the model", () => {
+    const [build, plain] = parseReview(withProducer(HANTEN), RESOLVE).configs;
+    expect(build!.producer).toEqual({
+      kind: "hanten",
+      label: "candidate",
+      ncVersion: "0.1.0",
+      gitCommit: "2664a0ddbdd5",
+      gitDirty: true,
+      pipelineVersion: 5,
+      target: "aarch64-apple-darwin",
+    });
+    // Optional: every set written before a build axis existed still loads.
+    expect(plain!.producer).toBeUndefined();
+  });
+
+  it("reads a build that identifies itself only by name", () => {
+    const configs = parseReview(withProducer({ kind: "hanten", label: "only" }), RESOLVE).configs;
+    expect(configs[0]!.producer).toEqual({
+      kind: "hanten",
+      label: "only",
+      ncVersion: undefined,
+      gitCommit: undefined,
+      gitDirty: undefined,
+      pipelineVersion: undefined,
+      target: undefined,
+    });
+  });
+
+  // `analysis/review-reference-cells` adds a variant here rather than a second
+  // block: both answer "which cell did nc-as-configured not render?".
+  it("reads an outside producer", () => {
+    const configs = parseReview(
+      withProducer({ kind: "external", label: "NLP", note: "nlp/2026-09-09" }),
+      RESOLVE,
+    ).configs;
+    expect(configs[0]!.producer).toEqual({
+      kind: "external",
+      label: "NLP",
+      note: "nlp/2026-09-09",
+    });
+  });
+
+  // Unlike an unreadable metric record, wrong provenance is the exact lie a build
+  // comparison exists to rule out — so it refuses the set rather than costing only
+  // itself.
+  it("refuses a kind it does not know", () => {
+    expect(() => parseReview(withProducer({ kind: "nc", label: "old" }), RESOLVE)).toThrow(
+      /configs\[0\]\.producer\.kind must be "hanten" or "external", got "nc"/,
+    );
+  });
+
+  it("refuses a producer with no label", () => {
+    expect(() => parseReview(withProducer({ kind: "hanten" }), RESOLVE)).toThrow(
+      /configs\[0\]\.producer\.label must be a non-empty string/,
+    );
+  });
+
+  it("refuses an identity field of the wrong type", () => {
+    expect(() => parseReview(withProducer({ ...HANTEN, git_dirty: "yes" }), RESOLVE)).toThrow(
+      /configs\[0\]\.producer\.git_dirty must be a boolean/,
+    );
+    expect(() => parseReview(withProducer({ ...HANTEN, git_commit: 7 }), RESOLVE)).toThrow(
+      /configs\[0\]\.producer\.git_commit must be a non-empty string/,
+    );
+  });
+});

@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import { css } from "../styled-system/css";
 import { keyForConfigIndex, type PointerMode } from "./keys";
+import { producerSummary } from "./producer";
 import type { ReviewConfig, ZoomMode } from "./review";
 
 // Border longhands rather than the `border` shorthand: `active` overrides only
@@ -127,7 +128,17 @@ export function ControlBar(props: Props) {
                 // The real ARIA spelling of what the `<kbd>` shows, so the shortcut
                 // is announced as a shortcut rather than read as part of the name.
                 aria-keyshortcuts={shortcut()}
-                title={config.note ?? config.label}
+                // The build **name** is already in `config.label`, which the
+                // generator composes — so a set stays legible to an app build
+                // that ignores `producer` entirely, and a badge here would print
+                // it twice. What the tooltip adds is the identity the name stands
+                // for, reachable without the charts band the `m` key hides.
+                title={[
+                  config.note ?? config.label,
+                  config.producer && producerSummary(config.producer),
+                ]
+                  .filter(Boolean)
+                  .join(" — ")}
                 onClick={() => props.onActivate(index())}
               >
                 <span>{config.label}</span>

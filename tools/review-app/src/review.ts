@@ -15,6 +15,7 @@
  */
 
 import type { Metrics } from "./charts/metrics";
+import type { ExternalProducer, HantenProducer, Producer } from "./producer";
 
 export type ZoomMode = "fit" | "fullsize";
 
@@ -22,6 +23,16 @@ export interface ReviewConfig {
   readonly id: string;
   readonly label: string;
   readonly note?: string;
+  /**
+   * What produced this config's cells, when the set says.
+   *
+   * Optional, so every set written before a build axis existed still loads. It
+   * is a *label*, not a measurement, which is why a malformed one refuses the
+   * whole set rather than costing only itself: an unreadable metric record leaves
+   * the picture honest, whereas wrong provenance is precisely the lie a build
+   * comparison exists to rule out.
+   */
+  readonly producer?: Producer;
 }
 
 export interface Rendition {
@@ -103,6 +114,12 @@ function optionalString(value: unknown, at: string): string | undefined {
   return asString(value, at);
 }
 
+function optionalBoolean(value: unknown, at: string): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") fail(`${at} must be a boolean, got ${describe(value)}`);
+  return value;
+}
+
 function optionalPositiveInt(value: unknown, at: string): number | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
@@ -176,6 +193,37 @@ function dimensions(
   return { width, height };
 }
 
+/**
+ * The `producer` block, when a set states one.
+ *
+ * `kind` is required and closed: an unrecognised one is a typo the author wants
+ * to hear about — the same reason an unknown config id refuses the set — and
+ * silently dropping it would show a build comparison with no way to tell the
+ * builds apart, which reads exactly like a comparison that worked.
+ */
+function parseProducer(raw: unknown, at: string): Producer {
+  const record = asRecord(raw, at);
+  const kind = asString(record["kind"], `${at}.kind`);
+  const label = asString(record["label"], `${at}.label`);
+  const note = optionalString(record["note"], `${at}.note`);
+  if (kind === "external") {
+    return { kind, label, ...(note ? { note } : {}) } satisfies ExternalProducer;
+  }
+  if (kind !== "hanten") {
+    fail(`${at}.kind must be "hanten" or "external", got ${JSON.stringify(kind)}`);
+  }
+  return {
+    kind,
+    label,
+    ...(note ? { note } : {}),
+    ncVersion: optionalString(record["nc_version"], `${at}.nc_version`),
+    gitCommit: optionalString(record["git_commit"], `${at}.git_commit`),
+    gitDirty: optionalBoolean(record["git_dirty"], `${at}.git_dirty`),
+    pipelineVersion: optionalPositiveInt(record["pipeline_version"], `${at}.pipeline_version`),
+    target: optionalString(record["target"], `${at}.target`),
+  } satisfies HantenProducer;
+}
+
 function parseRendition(
   raw: unknown,
   resolve: ResolveRendition,
@@ -232,10 +280,14 @@ export function parseReview(
   const configs = asArray(doc["configs"], "configs").map((raw, index) => {
     const at = `configs[${index}]`;
     const record = asRecord(raw, at);
+    const producer = record["producer"];
     return {
       id: asString(record["id"], `${at}.id`),
       label: asString(record["label"], `${at}.label`),
       note: optionalString(record["note"], `${at}.note`),
+      ...(producer === undefined || producer === null
+        ? {}
+        : { producer: parseProducer(producer, `${at}.producer`) }),
     } satisfies ReviewConfig;
   });
   if (configs.length === 0) fail("configs must list at least one configuration");

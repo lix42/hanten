@@ -49,6 +49,7 @@ nc-adjacent scripts, not JavaScript.
 | `configs[].id`         | yes      | Referenced by `renditions`. Must be unique.                          |
 | `configs[].label`      | yes      | Button text. Keep it short — it sits in the top bar.                 |
 | `configs[].note`       | no       | Tooltip on the button.                                               |
+| `configs[].producer`   | no       | What produced this config's cells — see "Provenance" below.          |
 | `images[].id`          | yes      | Used as the label when none is given.                                |
 | `images[].label`       | no       | Heading for the section.                                             |
 | `images[].note`        | no       | A line beside the heading — the natural home for measured numbers.   |
@@ -84,6 +85,52 @@ either — a render that failed, or one still to come. Its slot renders as a gap
 and the request for it returns 404 naming the missing file. It starts working the
 moment the file appears: the server watches the set, so a re-render updates the
 page in place without a reload.
+
+## Provenance
+
+A config may say **what produced its cells**. It is optional, and a set that says
+nothing still loads exactly as it did before this existed.
+
+```json
+{
+  "id": "default@after",
+  "label": "default · candidate",
+  "producer": {
+    "kind": "hanten",
+    "label": "candidate",
+    "nc_version": "0.1.0",
+    "git_commit": "2664a0ddbdd5",
+    "git_dirty": false,
+    "pipeline_version": 5,
+    "target": "aarch64-apple-darwin"
+  }
+}
+```
+
+The block is **tagged by `kind`**, which is closed:
+
+| `kind`     | Meaning                                                                                                                                                             |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hanten`   | A named build of the converter. The identity fields are those of nc's own report and sidecar `meta`, all optional — a binary built from a tarball stamps no commit. |
+| `external` | Some other producer's image brought in as a reference. `label` and `note` only.                                                                                     |
+
+`label` is required for both; `note` is optional and is shown after the identity.
+
+Three rules, and the first is the point of the block:
+
+- **The identity is derived, never declared.** `nctool review generate` reads it
+  back off each render's own report and writes it here; the matrix supplies only
+  the short `label`. A name a human typed is a claim, and a claim about which
+  binary produced a cell is exactly the thing a build comparison cannot afford to
+  get wrong.
+- **An unrecognised `kind` refuses the whole set**, unlike an unreadable metric
+  record, which costs only its own charts. A broken measurement leaves the picture
+  honest; wrong provenance does not — and a build comparison whose two cells cannot
+  be told apart looks precisely like one that worked.
+- **The build is also in `label`**, because the generator composes
+  `<config> · <build>`. So the buttons stay distinguishable even in a build of the
+  app that knows nothing about `producer`, and this block adds the identity that
+  short name stands for.
 
 ## Measurements
 

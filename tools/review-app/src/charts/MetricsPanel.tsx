@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import { css } from "../../styled-system/css";
+import { type Producer, producerSummary } from "../producer";
 import type { Rendition } from "../review";
 import { CastOverTone } from "./CastOverTone";
 import { Histogram } from "./Histogram";
@@ -41,6 +42,10 @@ const styles = {
   heading: css.raw({ fontSize: "key", fontWeight: "semibold" }),
   scope: css.raw({ color: "fg.dim", fontSize: "meta", fontVariantNumeric: "tabular-nums" }),
   caveat: css.raw({ color: "accent", fontSize: "meta" }),
+  // Monospace because the thing worth reading in it is a commit hash, and a
+  // proportional font makes two hashes that differ in one character look alike —
+  // which is the single comparison this line exists to support.
+  provenance: css.raw({ color: "fg.dim", fontSize: "meta", fontFamily: "mono" }),
   // Three equal columns that never wrap. A grid rather than a wrapping flex row
   // because the three charts are one instrument read together — wrapping put the
   // cast chart on its own line at some widths, and comparing a shape against a
@@ -113,6 +118,14 @@ interface Props {
   id: string;
   rendition: Rendition | undefined;
   configLabel: string;
+  /**
+   * What produced this rendition, when the set says.
+   *
+   * Beside "which rendition" rather than on its own line: the panel head already
+   * answers *what is this*, and the build is part of that answer whenever a set
+   * has more than one.
+   */
+  producer?: Producer;
 }
 
 export function MetricsPanel(props: Props) {
@@ -154,6 +167,13 @@ export function MetricsPanel(props: Props) {
             {(what) => (
               <span class={css(styles.scope)}>
                 {what()}, {((metrics()?.region.pixels ?? 0) / 1e6).toFixed(1)} Mpx
+              </span>
+            )}
+          </Show>
+          <Show when={props.producer}>
+            {(producer) => (
+              <span class={css(styles.provenance)}>
+                {producer().label} — {producerSummary(producer())}
               </span>
             )}
           </Show>

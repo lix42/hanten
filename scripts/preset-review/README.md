@@ -20,6 +20,10 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
 … --no-metrics                                                # render only, no charts
 ```
 
+This matrix compares five *configurations* of one binary. To compare one configuration
+across two **binaries** instead, add a top-level `builds` block naming each one; see
+"Render" in the `render-review-set` skill.
+
 It writes a `review.json` for [`tools/review-app`](../../tools/review-app/README.md) and
 prints the command to open it. Frames and per-roll `Dmin` come from
 `scripts/sigmoid-baseline/fixtures.json` — the same declaration the metrics use, so the two

@@ -35,7 +35,8 @@ configure for a while."
 overlapping ones; a configuration matrix described as data rather than edited in code; HDR
 review (full-size gain-map files for the frames whose range exceeds SDR); and the ability to
 compare *builds* as well as configurations, so a future default change can be reviewed the
-same way.
+same way. *(The build axis shipped 2026-09-22 —
+[`analysis/review-build-axis`](review-build-axis.md); see the deferral entry below.)*
 
 ## What has shipped
 
@@ -67,6 +68,8 @@ same declaration the metrics use, so the two cannot drift.
   is not just a flag: two builds must be identified in the page (provenance, not a label a
   human typed), which is what `nc`'s own report block exists for. Worth doing when a default
   actually moves, against a real before/after.
+  *Done 2026-09-22 as [`analysis/review-build-axis`](review-build-axis.md), on exactly that
+  reading: the matrix names a build, the generator derives its identity from the render.*
 
 ## Implementation Suggestion
 
