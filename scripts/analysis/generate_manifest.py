@@ -30,7 +30,7 @@ def main() -> int:
                                              "(shim for `nctool manifest generate`)")
     ap.add_argument("asset_root", nargs="?",
                     default=os.environ.get("NC_ASSET_ROOT", "../nc-assets"))
-    ap.add_argument("--nc", help="path to the nc binary")
+    ap.add_argument("--nc", help="path to the hanten binary")
     ap.add_argument("--reuse-hash", action="store_true",
                     help="reuse an existing sha256 when the byte size is unchanged "
                          "(faster, but misses same-size edits; default recomputes all)")

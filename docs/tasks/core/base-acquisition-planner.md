@@ -15,11 +15,11 @@ is the "plan" phase of `roll-conversion` and the brains of its auto mode.
 
 ## Shape decided 2026-08-11
 
-The command is **`nc calibrate`** (renamed from `nc estimate`: it resolves a roll,
+The command is **`hanten calibrate`** (renamed from `hanten estimate`: it resolves a roll,
 not a single value), and it resolves both references in **one invocation**:
 
 ```sh
-nc calibrate --unexposed blank.tif --leader exposed.tif --out roll-cal.jsonc
+hanten calibrate --unexposed blank.tif --leader exposed.tif --out roll-cal.jsonc
 ```
 
 Both flags are independently optional — either alone resolves its own half and
@@ -32,7 +32,7 @@ The emitted artifact is a **calibration**, not a whole recipe: only
 composes with a pipeline profile through layered `--params`, so this task no
 longer needs to emit a complete runnable recipe — just the measured half, with its
 provenance and confidence. The report stays on stdout so
-`nc calibrate … | jq .calibration | nc roll … --params -` works without a file.
+`hanten calibrate … | jq .calibration | hanten roll … --params -` works without a file.
 
 ## Background
 

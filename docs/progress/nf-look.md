@@ -1,4 +1,4 @@
-# nc — nf-look Progress Log
+# Hanten — nf-look Progress Log
 
 Execution log for the `nf-look` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status; this file is the

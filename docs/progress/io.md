@@ -1,4 +1,4 @@
-# Negative Converter — io Progress Log
+# Hanten — io Progress Log
 
 Execution log for the `io` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status (the checkboxes);

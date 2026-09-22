@@ -41,7 +41,7 @@ lives here, and the terminology task keeps only its documentation and help-text 
 
 1. Does `curve.anchor` stay in the curve? Design-spec §8 says yes: the anchor is the
    rule for what the reference places, which is part of the look.
-2. What does `nc estimate` write today, and does its output become a bare
+2. What does `hanten estimate` write today, and does its output become a bare
    `calibration` object so it can be handed to `--params` unchanged?
 3. Every place that resolves `dmax` by path: the recipe `Deserialize`, the merge arms,
    the `roll` planner, the report and sidecar writers, `--dump-params`, the guide's
@@ -55,7 +55,7 @@ lives here, and the terminology task keeps only its documentation and help-text 
   by flags; a recipe with no `calibration` and the base from a flag converts too.
 - Every existing conversion is byte-identical: `render` and `base` fingerprints
   unchanged, only `recipe` refreshed with its rationale noted in the log.
-- `nc estimate` output round-trips into `--params` without hand editing.
+- `hanten estimate` output round-trips into `--params` without hand editing.
 - `docs/using-nc.md` updated by running the binary.
 
 ## Dependencies

@@ -1,4 +1,4 @@
-# Negative Converter — output Progress Log
+# Hanten — output Progress Log
 
 Execution log for the `output` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status (the checkboxes);

@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-`nc` — a command-line tool that reads a film **negative** scan (SilverFast
-HDR/HDRi format first) and converts it to a **positive** image, written as TIFF.
+**Hanten** — a command-line tool that reads a film **negative** scan (SilverFast
+HDR/HDRi format first) and converts it to a **positive** image. The binary is
+`hanten`; `nc` is the internal name.
 
 The defining requirement is what "AI-friendly" means here: **every conversion
 parameter is exposed as a CLI flag**, and the tool is deterministic and scriptable
@@ -13,6 +14,39 @@ with JSON recipes/reports. It does **not** mean using ML/AI to process images
 (no auto-crop, generative restoration, etc.). Any future ML assistance is opt-in
 and sits *around* a deterministic core. Keep this distinction — it has been
 explicitly corrected once already.
+
+### Hanten outside, `nc` inside
+
+**Almost every `nc` in the tree is an identifier, not branding.** That is why the
+boundary is written down here rather than re-derived: without it, a later pass
+"tidies up" a version string.
+
+| Stays `nc` | Why |
+|---|---|
+| `nc-film-rgb-v1` (`working_mapping` in every report) | a **versioned** colour-space identifier. Renaming it means a v2, with pixel-identity questions attached — see the colorimetry notes below |
+| `nc_version`, telemetry `schema_version` | snapshot tests assert the exact JSON; a rename costs a schema bump for nothing |
+| `NC_*` environment variables | diagnostic and test surface |
+| the telemetry log directory (`<data-dir>/nc/telemetry.jsonl`) | an on-disk location; moving it orphans existing logs |
+| the `(nc)` suffix in the synthesized coded-HDR ICC descriptions (`pipeline::color`) | it is **written into the profile bytes** of every `hdr-pq-tiff` / `hdr-hlg-tiff`, so renaming it changes output files for a cosmetic gain |
+| recipe keys, report fields, exit codes | the scripting contract |
+| the crate and Cargo package | `NC_VERSION` is `CARGO_PKG_VERSION`; a `[[bin]]` section is what renames the binary without touching it |
+| `nctool`, its `--nc`/`$NC`, `../nc-assets` | internal tooling and the machine-local asset symlink |
+| command lines in `docs/progress/`, `docs/reports/`, `docs/spike/` and closed task files | they record what was **run** at the time; progress logs are append-only. The one exception is a progress file's `## Epic summary`, which is *curated current guidance* other epics read instead of the detail — it moves |
+
+| Is Hanten | |
+|---|---|
+| the GitHub repository | `lix42/hanten`, renamed 2026-09-21 (and private). GitHub redirects the old URL permanently, and the linked worktrees share `main/.git/config`, so `origin` was repointed **once**, not per worktree |
+| `README.md`, `docs/design-spec.md`, `docs/using-nc.md`, `docs/TASKS.md` and the progress-log titles | titles and opening prose |
+| the binary, and every command line in a **live** doc, skill or script | renamed 2026-09-21; anything written before that spells it `nc` |
+| clap's `about` line | `--version` already names the product through the binary name — do **not** also prefix `version_string()`, which prints `hanten Hanten 0.1.0` |
+| the stderr diagnostic prefix (`hanten: warning:`) | a tool names itself in its diagnostics. `scripts/real-scan-verify/harness.sh` greps the *message*, never the prefix — keep it that way |
+
+**`nctool` must keep recognising both spellings**, and the failure is silent.
+`manifest::is_nc` identifies a binary by its `--version` banner, and the reference
+rendition is produced by building the **git-tagged** pre-rename binary
+(`nctool review generate --nc <that binary>`), which prints `nc`. Drop the old
+prefix and `find_nc()` returns `None` with *no error*, degrading every manifest,
+metrics and review command to exiftool.
 
 ## The migration rule (read before writing any `nf` code)
 
@@ -273,9 +307,9 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `docs/tasks/output/hdr-avif-output.md`: whichever task ships an explicit
   `convert`-only preset also calibrates that preset's `memory::RunProfile`. `cli::required_extensions` is now **complete** (every preset states a
   suffix, including `legacy` and `film-master`, which previously let
-  `nc convert -o out.jpg` write a TIFF named `.jpg`). It never drove the roll
+  `hanten convert -o out.jpg` write a TIFF named `.jpg`). It never drove the roll
   refusal — deriving "convert-only" from "pins a suffix" refused *every* preset
-  once the table was completed and broke `nc roll` outright — and **there is no
+  once the table was completed and broke `hanten roll` outright — and **there is no
   roll refusal left**: every preset is roll-capable, because `default_output_name`
   derives `<stem>_positive.<ext>` from the frame's own resolved preset and an
   explicit manifest `output` goes through the same `reject_suffix_mismatch` rule
@@ -401,7 +435,7 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   faults to the handler `cli` installs. Rationale and measurements in
   `docs/spike/gpu-rendering-spike.md`.
 - **Telemetry is operational, not a conversion knob.** `src/telemetry.rs` emits
-  an opt-in, fail-soft, schema-versioned JSON record per `nc convert` run (image
+  an opt-in, fail-soft, schema-versioned JSON record per `hanten convert` run (image
   facts, per-stage timings, conversion summary) to a JSONL log / one-off file.
   Its flags (`--telemetry`, `--telemetry-file`, env `NC_TELEMETRY_LOG`) are the
   **exception** to the "every knob is a CLI flag *and* a recipe key" rule: like
@@ -622,7 +656,7 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
 
 ### Stack / commands
 
-Rust (edition 2024), single binary crate `nc`. Dependencies: `clap` (`derive`),
+Rust (edition 2024), single binary crate `nc`, whose binary is `hanten`. Dependencies: `clap` (`derive`),
 `tiff`, `image`, `palette`, `lcms2`, `serde`/`serde_json`, `rayon`,
 `kamadak-exif`, `roxmltree` (read-only XML — parses the SilverFast XMP packet
 for input provenance), `libc` (one `sysctlbyname("hw.memsize")` call on Darwin for
@@ -641,7 +675,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   — the `bin` target's `0 passed; N filtered out` first — so `| head -1` looks like the
   test does not exist. Read both.
 - **`cargo test --lib` fails here** — `nc` is a binary crate with no `[lib]` target, so it
-  errors with "no library targets found". Use `cargo test --bin nc <filter>` to run only
+  errors with "no library targets found". Use `cargo test --bin hanten <filter>` to run only
   the in-`src` unit tests; a bare `cargo test <filter>` also runs `tests/pipeline.rs`.
 - `cargo clippy --all-targets` — lint (keep clean)
 - **Before pushing, match CI** (`.github/workflows/ci.yml`, runs on every PR):
@@ -681,7 +715,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   `NCTOOL_REQUIRE_DEPS=1 PYTHONPATH=scripts/analysis python3 -m unittest discover
   -s scripts/analysis -p "test_*.py"`. Run that command by hand after touching it;
   the suite includes fixture-backed black-box coverage of
-  `scripts/real-scan-verify/harness.sh` (which needs `target/debug/nc`, so
+  `scripts/real-scan-verify/harness.sh` (which needs `target/debug/hanten`, so
   `cargo build` first — release alone leaves that one test failing).
   **`nctool` is stdlib-only *except* `metrics`**, which reads output pixels and
   needs `numpy`/`tifffile`/`Pillow` from `scripts/analysis/requirements.txt` (CI
@@ -696,6 +730,14 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   works — but **state the Python version**: `uv venv` picks whichever interpreter it
   finds first, which is *not* the system one (it prefers its own managed build), and
   an unstated version differs between machines and between the two CI runner images.
+- **A stale `__pycache__` shadows a corrected `scripts/analysis/` edit, and the
+  resulting failure looks real.** CPython validates a `.pyc` on mtime **+ size**, so
+  a *same-length* edit rewritten within the same second keeps the old bytecode: a
+  transposition reverted by `cp` left a unittest failure whose traceback quoted the
+  **fixed** on-disk source, with `inspect.getsource` showing one thing and the
+  executing code probing another. When a Python-side fix appears not to take, clear
+  `__pycache__` (or run the gate with `PYTHONDONTWRITEBYTECODE=1`) before believing
+  the failure — or the diagnosis.
 - **`tests/pipeline.rs`'s `run()` injects `--output-preset legacy`** into a
   `convert` that names no preset, loads no `--params`, and writes `.tif`/`.tiff` —
   ~87 tests predate the gain-map default and assert TIFF-path behaviour. A test
@@ -850,7 +892,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   field or error message a user acts on, the guide is part of the change — not a
   follow-up. Internal refactors that leave the surface identical are exempt.
   **Update it by running the binary, not by reading the diff**: the guide's own
-  contract is that it is verified against `nc`, and every time it has gone stale,
+  contract is that it is verified against `hanten`, and every time it has gone stale,
   re-verification found two or three of *its own examples* had broken in ways the
   changelog did not mention. The `update-usingnc-doc` skill carries the procedure
   and the traps.
@@ -1146,10 +1188,10 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   cosmetic for the harness. Decoder
   unit-test fixtures are committed separately under `tests/fixtures/`.
   **Never read them into context**; inspect IFD
-  structure with `exiftool` (`tiffinfo` is not installed here) or `nc inspect`, and
+  structure with `exiftool` (`tiffinfo` is not installed here) or `hanten inspect`, and
   exercise the pipeline on them either with a throwaway `#[ignore]` test that calls
   `io::decode` and prints only derived numbers, or via the committed
-  `scripts/real-scan-verify/` harness (staged verification driving the `nc` binary,
+  `scripts/real-scan-verify/` harness (staged verification driving the `hanten` binary,
   derived numbers only — see its `README.md`). To measure an output *image* — nc's
   or another tool's — use `python -m nctool metrics image|roll` (needs the venv);
   it is the only thing here that reads output pixels rather than nc's report. Note: real scans are laid out
@@ -1179,7 +1221,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   (`SCHEMA.md`), which the server reads, parses and **watches like an image** — a
   record nothing stamps makes re-measuring invisible, since the model holds the
   parsed value; records are deliberately kept out of the asset map, which is the
-  set of files the server may *serve*. It **watches the set**, so re-running `nc` updates the page
+  set of files the server may *serve*. It **watches the set**, so re-running `hanten` updates the page
   in place, keeping the selected config and scroll position. It is now a
   **fullstack** app — **TanStack Start on Vite+ (`vp`), Solid, Panda CSS, pnpm** —
   with its own CI job; run `pnpm check && pnpm test && pnpm build` in

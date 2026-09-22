@@ -4,7 +4,7 @@
 `docs/reports/render-defaults-v2.md`. It compares the former v1 exponential
 settings with the then-new v2 defaults on four fixed Ektar and Portra 160 scans.
 
-The script runs `nc convert` with explicit argument lists, reads only the JSON
+The script runs `hanten convert` with explicit argument lists, reads only the JSON
 report, and prints a Markdown table containing high-clipping percentage and mean
 green output value. It also prints the resolved Dmax values as a calibration
 sanity check. Rendered TIFFs live in a temporary directory and are deleted.

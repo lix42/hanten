@@ -81,7 +81,7 @@ the evidence this belongs in `estimate`.
 - [Rebuild Dmin and Dmax measurement on area x method](holder-masked-measurement.md) —
   it owns the method, so **it decides whether `--grid` survives**; do not retire the flag
   here if that task keeps it (its open question 1, 2026-09-16)
-- [Reuse-ready `nc estimate` output](estimate-reuse-output.md) — carried over from the
+- [Reuse-ready `hanten estimate` output](estimate-reuse-output.md) — carried over from the
   retired `grid-verdict-enum`: this task removes the `--grid` reporting that task shipped
 
 Coordinate with [Dmax anchor reliability](dmax-anchor-reliability.md), which owns

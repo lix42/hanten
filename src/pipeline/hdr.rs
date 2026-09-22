@@ -112,7 +112,7 @@ pub fn sdr_range_warning(content_light: ContentLightLevel) -> Option<String> {
              at or below the {reference_white}-nit reference white, so nothing in this frame \
              uses the {:.0}-nit headroom the container and report advertise. Two common \
              causes: the resolved Dmax anchor is too high for this roll, which darkens the \
-             whole render — measure the roll's own anchor with `nc estimate --d-max-region` \
+             whole render — measure the roll's own anchor with `hanten estimate --d-max-region` \
              and pass it as `--d-max` — or the frame's content genuinely never rises above \
              reference white, in which case an SDR preset delivers the same picture in a \
              more compatible container.",

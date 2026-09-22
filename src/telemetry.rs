@@ -1,4 +1,4 @@
-//! Embedded, opt-in performance + context telemetry for `nc convert`.
+//! Embedded, opt-in performance + context telemetry for `hanten convert`.
 //!
 //! After a real conversion succeeds, the orchestrator gathers a full metadata
 //! record — image facts, per-stage timings, a compact conversion summary, and the
@@ -136,7 +136,7 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 // the server owns ingestion)
 // ---------------------------------------------------------------------------
 
-/// One full telemetry record for a single `nc convert` run (design-spec §9).
+/// One full telemetry record for a single `hanten convert` run (design-spec §9).
 ///
 /// Optional fields follow two wire conventions: an absent `cpu_count` /
 /// `image.input_bytes` / `image.output_bytes` serializes as JSON `null` (the key

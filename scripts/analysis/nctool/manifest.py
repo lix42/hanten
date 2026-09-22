@@ -6,7 +6,7 @@ NLP). It lives **at the assets root** with paths relative to its own directory, 
 it is portable across machines / Drive mounts.
 
 This module NEVER reads sample pixels into an agent context — only derived numbers
-(via `nc inspect`) and streamed file checksums.
+(via `hanten inspect`) and streamed file checksums.
 
 Commands (dispatched from `python -m nctool manifest …`):
 - `generate` — walk the asset root, fill derived fields, write `manifest.json`.
@@ -81,24 +81,39 @@ SUFFIXES = ("_positive_hdr.tiff", "_positive.tiff", "_corr.tif", "_pos.tif",
 
 # --------------------------------------------------------------------------- nc
 
+# Accepted `--version` banners. `hanten ` is current; `nc ` is the pre-rename
+# spelling and must stay, because a reference rendition is produced by building the
+# git-tagged binary (`review generate --nc <that binary>`), which still prints `nc`.
+# Dropping it fails silently: find_nc() would return None with no error.
+BANNERS = ("hanten ", "nc ")
+
+
 def is_nc(cand: str) -> bool:
-    """Confirm `cand` is *this* project's `nc` CLI, not something else on PATH.
-    `nc` is also the system netcat (`/usr/bin/nc`), which would be invoked once
-    per image and silently degrade to exiftool. Our CLI prints `nc <version>` to
-    stdout for `--version`; netcat writes its usage/error to stderr (empty stdout)."""
+    """Confirm `cand` is *this* project's CLI, not something else on PATH. `nc` is
+    also the system netcat (`/usr/bin/nc`), which would be invoked once per image
+    and silently degrade to exiftool. Our CLI prints `<name> <version>` to stdout
+    for `--version`; netcat writes its usage/error to stderr (empty stdout)."""
     try:
         out = subprocess.run([cand, "--version"], capture_output=True, text=True, timeout=15)
     except Exception:
         return False
     v = out.stdout.strip()
-    return out.returncode == 0 and v.startswith("nc ") and any(c.isdigit() for c in v)
+    return (out.returncode == 0 and v.startswith(BANNERS)
+            and any(c.isdigit() for c in v))
 
 
 def find_nc() -> str | None:
-    """Auto-discover this project's nc (verified). An explicit --nc / $NC is
+    """Auto-discover this project's CLI (verified). An explicit --nc / $NC is
     validated separately by resolve_nc() — a bad explicit path is a hard error, not
-    a silent fallback."""
-    for cand in ("target/release/nc", "target/debug/nc", shutil.which("nc")):
+    a silent fallback.
+
+    Deliberately `hanten`-only, though is_nc() also accepts the pre-rename banner: a
+    stale `target/debug/nc` beside a fresh build would otherwise be discovered
+    silently and measure old behaviour. A tagged pre-rename binary is reached by
+    naming it with --nc / $NC, which is how the reference-rendition workflow spells
+    it."""
+    for cand in ("target/release/hanten", "target/debug/hanten",
+                 shutil.which("hanten")):
         if cand and os.path.exists(cand) and is_nc(cand):
             return os.path.abspath(cand)
     return None
@@ -113,8 +128,9 @@ def resolve_nc(explicit: str | None, src: str) -> tuple[str | None, str | None]:
         if not os.path.exists(explicit):
             return None, f"{src} path does not exist: {explicit}"
         if not is_nc(explicit):
-            return None, (f"{src}={explicit} is not this project's nc CLI "
-                          "(its `--version` did not report `nc <ver>`)")
+            return None, (f"{src}={explicit} is not this project's CLI "
+                          "(its `--version` did not report `hanten <ver>`, "
+                          "nor the pre-rename `nc <ver>`)")
         return os.path.abspath(explicit), None
     return find_nc(), None
 
@@ -128,14 +144,14 @@ def sha256(path: str) -> str:
 
 
 def inspect(nc: str | None, path: str) -> dict:
-    """Derived metadata for one image. Prefer `nc inspect` — the only
+    """Derived metadata for one image. Prefer `hanten inspect` — the only
     authoritative source for `format`/`ir_present` — and fall back to exiftool
     when nc is unavailable, times out, or *rejects* the file (non-zero exit; e.g.
     the NLP/V0 positive TIFFs nc does not recognize). Fallback entries are tagged
     `metadata_source: "exiftool"`; their `format`/`ir_present` are best-effort
     placeholders (`tiff`/`false`), never authoritative.
 
-    A `nc inspect` that exits 0 but whose JSON is unparseable / missing expected
+    A `hanten inspect` that exits 0 but whose JSON is unparseable / missing expected
     keys is NOT a rejection — nc accepted and decoded the file — so it is a loud
     per-file error (`{"error": ..., "metadata_source": "none"}`), never a silent
     downgrade to the exiftool placeholders (which would corrupt `format`/
@@ -158,7 +174,7 @@ def inspect(nc: str | None, path: str) -> dict:
                             bits=d["bits_per_sample"], format=d["format"],
                             ir_present=d["ir_present"])
             except (json.JSONDecodeError, KeyError, ValueError) as ex:
-                return dict(error=f"nc inspect exited 0 but its output was unparseable "
+                return dict(error=f"hanten inspect exited 0 but its output was unparseable "
                                   f"({type(ex).__name__}: {ex})",
                             metadata_source="none")
         # nc absent, timed out, or rejected the file (non-zero exit): fall through
@@ -353,7 +369,7 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
     """Assemble the v1 manifest dict from the asset tree. Returns (manifest,
     diagnostics), where diagnostics carries the derived counts / warnings the CLI
     prints (`carried`, `unresolved`, `exiftool`, `errors`). Pure w.r.t. the
-    filesystem apart from reading files (nc inspect + streamed hashes)."""
+    filesystem apart from reading files (hanten inspect + streamed hashes)."""
     prev = Prev(prev_data)
     carried: list[str] = []  # files whose authoritative nc metadata was preserved
 
@@ -421,7 +437,7 @@ def build_manifest(A: str, nc: str | None, reuse_hash: bool,
         "generated": os.environ.get("NC_MANIFEST_DATE") or prev_data.get("generated") or "auto",
         "note": ("Inventory + source-of-truth for nc-assets. Paths are relative to "
                  "this file's directory (the asset root), so the manifest is "
-                 "portable across machines / Drive mounts. Metadata from `nc inspect`."),
+                 "portable across machines / Drive mounts. Metadata from `hanten inspect`."),
         "rolls": {}, "samples": [], "converted": {}, "coverage_gaps": [],
     }
 

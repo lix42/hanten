@@ -1,4 +1,4 @@
-# nc — nf-docs Progress Log
+# Hanten — nf-docs Progress Log
 
 Execution log for the `nf-docs` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status; this file is the

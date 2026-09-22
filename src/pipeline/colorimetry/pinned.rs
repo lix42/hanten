@@ -146,7 +146,7 @@ pub const BT2020_TO_DISPLAY_P3: [[f32; 3]; 3] = [
 /// `pipeline::color` puts in the `lutAtoBType` matrix stage of the
 /// `hdr-pq-tiff` / `hdr-hlg-tiff` profiles.
 ///
-/// **Why nc needs it explicitly at all**, when every other nc profile lets Little
+/// **Why Hanten needs it explicitly at all**, when every other ICC profile it writes lets Little
 /// CMS derive colorants from pinned primaries: those are matrix-shaper profiles
 /// built by `Profile::new_rgb`, whose TRC output is confined to `[0, 1]` and which
 /// therefore cannot express an HDR PCS. The coded PQ/HLG profiles are authored as

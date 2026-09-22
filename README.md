@@ -1,7 +1,8 @@
-# negative-converter (`nc`)
+# Hanten
 
 A command-line tool that converts film **negative** scans into **positive**
-images.
+images. The binary is `hanten`; `nc` remains the internal name of the crate and
+of every versioned identifier (see `CLAUDE.md` for the boundary).
 
 It reads high-bit-depth scanner files (SilverFast HDR/HDRi first), runs a
 deterministic negative→positive pipeline in a 32-bit float linear working space,
@@ -26,14 +27,14 @@ around the edges.
 The Step-1 TIFF converter is implemented, with post-MVP pipeline, display-output,
 and hardening work tracked in the task roadmap.
 
-- [`docs/using-nc.md`](docs/using-nc.md) — **how to use `nc`**: the
+- [`docs/using-nc.md`](docs/using-nc.md) — **how to use `hanten`**: the
   measure → freeze a recipe → apply workflow, recipes, presets, exit codes.
 - [`docs/design-spec.md`](docs/design-spec.md) — full design (architecture,
   pipeline, CLI surface, parameters).
 - [`docs/TASKS.md`](docs/TASKS.md) — the build plan and dependency graph.
 - [`docs/negative-convertor-research-report.md`](docs/negative-convertor-research-report.md)
   — background research.
-- [`docs/spike/gpu-rendering-spike.md`](docs/spike/gpu-rendering-spike.md) — where `nc` spends
+- [`docs/spike/gpu-rendering-spike.md`](docs/spike/gpu-rendering-spike.md) — where `hanten` spends
   its time, and why it multithreads every per-pixel stage and the AV1 encoder on the
   CPU rather than rendering on a GPU; revisit for an interactive or browser app.
 
@@ -41,27 +42,28 @@ and hardening work tracked in the task roadmap.
 
 ```sh
 # Measure the film base (Dmin) once per roll from an unexposed border.
-nc estimate reference.tiff --base-region 0,0,120,40
+hanten estimate reference.tiff --base-region 0,0,120,40
 
 # Convert a negative scan to a positive 16-bit TIFF. Every conversion must state
 # where the film base comes from — there is no default, because Dmin sets both the
 # black point and the colour balance. Use the measured value, or --auto-base to
-# detect the rebate band (best-effort; it fails loudly when it can't).
-nc convert in.tiff -o out.tiff --reconstruction density \
-  --film-base 0.92,0.55,0.42
+# detect the rebate band (best-effort; it fails loudly when it can't). A preset is
+# named explicitly because the default (`gain-map-hdr`) writes a JPEG.
+hanten convert in.tiff -o out.tiff --reconstruction density \
+  --film-base 0.92,0.55,0.42 --output-preset display-p3
 
 # Full HDR float output with explicit controls. `--density-gamma` is the
 # exponential curve's knob, so that curve is selected explicitly — the default
 # is the sigmoid, whose slope is `--sigmoid-contrast`.
-nc convert in.tiff -o out.tiff --reconstruction density --out-depth f32 \
-  --film-base 0.92,0.55,0.42 \
+hanten convert in.tiff -o out.tiff --reconstruction density --out-depth f32 \
+  --film-base 0.92,0.55,0.42 --output-preset legacy \
   --density-curve exponential --density-gamma 1.8 --print-exposure 0.0
 
 # Inspect a scan and emit machine-readable JSON.
-nc inspect in.tiff --report json
+hanten inspect in.tiff --report json
 
 # Backward-compatible SDR JPEG with legacy Ultra HDR v1 gain-map metadata.
-nc convert in.tiff -o out.jpg --output-preset ultra-hdr-v1 \
+hanten convert in.tiff -o out.jpg --output-preset ultra-hdr-v1 \
   --film-base 0.92,0.55,0.42
 ```
 
@@ -86,7 +88,7 @@ export LIBCLANG_PATH="$(brew --prefix llvm)/lib"
 ```
 
 Runtime deployment does not require a separate libultrahdr, libjpeg, libaom or
-libavif installation — nc writes the AVIF container itself and statically links
+libavif installation — Hanten writes the AVIF container itself and statically links
 every codec. The complete IJG attribution, Modified BSD terms, Adobe Gain Map
 notice, and the libaom / Alliance for Open Media patent-license summary are in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Binary release packaging must

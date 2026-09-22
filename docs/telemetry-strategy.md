@@ -20,7 +20,7 @@ implementation children.
   burden, exact event rows and SQL. V1 runs in a dedicated Cloudflare FREE-plan
   account with no billing-enabled resources; hard platform and application
   quotas fail closed before the approved $10/month ceiling can be crossed.
-- Separate local collection from transmission consent. `nc telemetry enable`
+- Separate local collection from transmission consent. `hanten telemetry enable`
   persistently opts into automatic collection and upload, including upload of
   records previously collected through the explicit local `--telemetry` flag.
 - Never assign an installation, machine, user, or session identifier. Every
@@ -49,7 +49,7 @@ non-negotiable:
 4. **Bounded local resources:** an unavailable server cannot grow the automatic
    upload queue without limit.
 5. **Inspectable contract:** the documented field manifest and
-   `nc telemetry preview` describe the exact projection sent over the network.
+   `hanten telemetry preview` describe the exact projection sent over the network.
 6. **Bounded foreground overhead:** no network or endpoint latency is on the
    conversion critical path. The helper is spawned only after telemetry timing,
    output artifacts, report, and exit outcome are fixed. Process creation has
@@ -149,7 +149,7 @@ The server responds only after D1 has committed:
 
 Accepted and duplicate IDs are acknowledged locally. Permanently rejected
 records move to a bounded local quarantine visible through
-`nc telemetry status`; they are not retried forever. Network failures, HTTP 429,
+`hanten telemetry status`; they are not retried forever. Network failures, HTTP 429,
 and HTTP 5xx retain the records for exponential-backoff retry. A malformed
 top-level request receives HTTP 400 and is quarantined rather than retried.
 
@@ -319,7 +319,7 @@ Local per-run and persistent remote consent remain distinct:
   imply queueing or upload.
 - Exactly one active JSONL file path is managed for automatic collection and
   upload.
-  `nc telemetry enable [--queue PATH]` resolves `PATH`, or the current
+  `hanten telemetry enable [--queue PATH]` resolves `PATH`, or the current
   `NC_TELEMETRY_LOG`/default path when omitted, displays the resolved path plus
   its local count/date range, field manifest, retention, and backend, and asks
   permission to rotate and drain that file. It prompts on a TTY and requires
@@ -338,19 +338,19 @@ Local per-run and persistent remote consent remain distinct:
 - Once enabled, supported commands automatically collect success, failure, and
   panic events and launch the detached upload helper after the foreground
   outcome is fixed.
-- `nc telemetry disable` revokes new invocation snapshots, helper launches, and
+- `hanten telemetry disable` revokes new invocation snapshots, helper launches, and
   network requests but preserves queued data and the last generation/active/spool
   paths. It does not wait for conversions that already captured consent; one may
   finish a local success/failure or panic event after disable. That event remains
   queued and unsent while consent is inactive. Disable does wait for bounded
   in-flight network work; after it returns, no request is in flight or may start.
-- `nc telemetry purge` is allowed only while consent is inactive. It waits for
+- `hanten telemetry purge` is allowed only while consent is inactive. It waits for
   already-started consented invocations before durably clearing recognized
   active/spool telemetry.
-- `nc telemetry status` reports consent, queue/quarantine size, last successful
+- `hanten telemetry status` reports consent, queue/quarantine size, last successful
   upload, and last fail-soft upload error.
-- `nc telemetry preview` prints the exact privacy projection without sending it.
-- `nc telemetry flush` performs an explicit foreground drain and reports errors.
+- `hanten telemetry preview` prints the exact privacy projection without sending it.
+- `hanten telemetry flush` performs an explicit foreground drain and reports errors.
 - `NC_TELEMETRY=0` overrides persistent consent for the process: no automatic
   collection, helper launch, or network. It does not disable an explicit
   local-only `--telemetry-file`.
@@ -455,7 +455,7 @@ under the 180-day retention policy. The enable notice states this explicitly.
 
 No network request runs on the conversion critical path. `enable` launches a
 helper immediately; later eligible invocations spawn a short-lived detached
-`nc telemetry upload-once` process with stdin/stdout/stderr disconnected. An
+`hanten telemetry upload-once` process with stdin/stdout/stderr disconnected. An
 explicit foreground `flush` is also available. There is no resident daemon or OS
 scheduler requirement.
 

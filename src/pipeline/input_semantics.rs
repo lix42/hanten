@@ -566,7 +566,7 @@ pub fn require_convertible(m: &InputColorMetadata) -> Result<()> {
             "input is not a supported linear scanner-device negative (resolved \
              transfer={}, meaning={}). Only scanner-device measurements with a supported \
              linear transfer enter density; colorimetric/encoded negatives and ambiguous \
-             inputs are unsupported. Run `nc inspect` to see the per-axis evidence. If you \
+             inputs are unsupported. Run `hanten inspect` to see the per-axis evidence. If you \
              know this is a raw linear scanner scan, assert it explicitly with \
              `--input-transfer linear --input-meaning scanner-device`.",
             transfer_label(m.transfer),

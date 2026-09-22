@@ -44,7 +44,7 @@ present and marker-verified; only the primary's channel count differs.
 
 ## How to Verify
 
-- The HP5 frames decode, and `nc inspect` reports their dimensions, IR presence
+- The HP5 frames decode, and `hanten inspect` reports their dimensions, IR presence
   and scanner metadata — derived numbers only, never sample pixels in context.
 - The IR page is recognised as marker-verified (`NewSubfileType=4`), the same as
   on an RGB HDRi scan.

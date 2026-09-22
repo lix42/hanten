@@ -1,4 +1,4 @@
-# nc — nf-scene-correction Progress Log
+# Hanten — nf-scene-correction Progress Log
 
 Execution log for the `nf-scene-correction` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status; this file is the

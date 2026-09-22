@@ -275,7 +275,7 @@ pub enum Edge {
 /// A candidate unexposed-rebate band found by the inward-scan detector: a
 /// uniform, holder-backed strip run on one edge. **Brightness relative to the
 /// frame is not gated here** — that check lives in [`select_auto_base`], so a
-/// candidate darker than the interior can still be listed (and `nc inspect`
+/// candidate darker than the interior can still be listed (and `hanten inspect`
 /// reports candidates even when selection then refuses). Reported so a user (or
 /// a future UI) can confirm a region instead of measuring one — `region` drops
 /// directly into `--base-region`.
@@ -303,7 +303,7 @@ pub struct RebateCandidate {
 /// on every channel** ([`guard_base`]) before it is returned — the base anchors
 /// the density divide `D = -log10(scan / base)`, so a zero / negative /
 /// non-finite channel is unusable and errors loudly here rather than poisoning
-/// the render (or, worse, being printed by `nc estimate` as a trustworthy Dmin
+/// the render (or, worse, being printed by `hanten estimate` as a trustworthy Dmin
 /// the user bakes into a recipe). This is the "reject degenerate bases at birth"
 /// guard the film-base gotcha in `CLAUDE.md` called for; the per-algo guards in
 /// `algo/*` remain as defense-in-depth.
@@ -372,7 +372,7 @@ fn sample_region(image: &LinearImage, rect: [u32; 4]) -> Result<BaseEstimate> {
         est.warnings.push(format!(
             "base-region [{x},{y},{w},{h}] is not uniform (worst per-channel relative \
              spread {spread:.2} > {MAX_RELATIVE_SPREAD:.2}); the rectangle may mix \
-             unexposed rebate with image content — verify it with `nc inspect`"
+             unexposed rebate with image content — verify it with `hanten inspect`"
         ));
     }
     Ok(est)
@@ -492,7 +492,7 @@ pub fn select_auto_base(
             est.warnings.push(format!(
                 "auto film-base candidates disagree: chose {:?} {:?} (region {:?}) but \
                  {:?} {:?} (region {:?}) reads a relative difference {diff:.2} > \
-                 {CROSS_EDGE_AGREE_TOL:.2}; verify with `nc inspect` / --base-region",
+                 {CROSS_EDGE_AGREE_TOL:.2}; verify with `hanten inspect` / --base-region",
                 best.edge, best.base, best.region, other.edge, other.base, other.region
             ));
         }
@@ -746,7 +746,7 @@ pub enum HolderClass {
 
 /// One along-edge segment of the IR holder mask: the along-edge pixel span it
 /// covers, its holder/film class, and the representative IR transmission behind
-/// the class. Serialized into `nc inspect` so a user can see which parts of which
+/// the class. Serialized into `hanten inspect` so a user can see which parts of which
 /// edges the holder occludes.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct HolderSegment {
@@ -1851,7 +1851,7 @@ fn percentile(values: &mut Vec<f32>, p: f32) -> f32 {
 /// stage 2 over (`crate::version`).
 ///
 /// `film_base.source` defaults to [`FilmBaseSource::Auto`], so every default
-/// `nc convert` runs the inward-scan rebate detector over real pixels — a stage the
+/// `hanten convert` runs the inward-scan rebate detector over real pixels — a stage the
 /// render fingerprint (which is handed a hardcoded base) cannot see, and the recipe
 /// fingerprint sees only as the string `"auto"`. Retuning [`SAMPLE_PERCENTILE`],
 /// [`REBATE_SCAN_FRAC`], or the band gates changes every default conversion, so it
@@ -2553,7 +2553,7 @@ mod tests {
 
     #[test]
     fn candidate_serializes_with_lowercase_edge_and_region_array() {
-        // The `nc inspect` machine contract (a future UI / agent consumes this):
+        // The `hanten inspect` machine contract (a future UI / agent consumes this):
         // `edge` is a bare lowercase string, `region` an [x,y,w,h] array. A lost
         // `#[serde(rename_all)]` on `Edge` or a field rename would ship silently.
         let c = RebateCandidate {
@@ -2575,7 +2575,7 @@ mod tests {
     #[test]
     fn degenerate_region_base_errors_loudly() {
         // A `--base-region` on the dark holder yields a zero channel; `estimate`
-        // must reject it at birth (not print a poison Dmin `nc estimate` would
+        // must reject it at birth (not print a poison Dmin `hanten estimate` would
         // echo back), naming a recovery flag.
         let mut img = solid(50, 50, [0.4, 0.3, 0.2]);
         fill_rect(&mut img, [0, 0, 10, 10], [0.0, 0.0, 0.0]);
@@ -3605,7 +3605,7 @@ mod tests {
 
     #[test]
     fn holder_mask_serializes_with_lowercase_class() {
-        // The `nc inspect` holder output is a machine contract: `class` must be a
+        // The `hanten inspect` holder output is a machine contract: `class` must be a
         // bare lowercase string and the segment fields stable, so a lost
         // `#[serde(rename_all)]` on `HolderClass` (or a field rename) can't ship
         // Capitalized JSON silently — the mirror of the `RebateCandidate` guard.

@@ -16,7 +16,7 @@ Frozen in [`scripts/sigmoid-baseline/fixtures.json`](../../scripts/sigmoid-basel
 user-confirmed semantics*. Reproduce with:
 
 ```sh
-cargo test --release --bin nc shadow_metrics::measure_candidates -- --ignored --nocapture --test-threads=1
+cargo test --release --bin hanten shadow_metrics::measure_candidates -- --ignored --nocapture --test-threads=1
 ```
 
 | Roll | Stock | Dmin (r,g,b) | Dmax |

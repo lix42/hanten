@@ -6,14 +6,14 @@
 > migration plan.
 
 > **Parametric curves only (noted 2026-09-13).** The `characteristic` curve resolves no
-> `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`nc convert`
+> `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`hanten convert`
 > default. Once that lands, this task serves `sigmoid`/`exponential` users only. Re-rank
 > accordingly before picking it up.
 
 
 ## Goal
 
-Stop `nc estimate` from emitting spurious plausibility warnings on legitimately
+Stop `hanten estimate` from emitting spurious plausibility warnings on legitimately
 dense- / atypical-base film stocks. The `--d-max-region` reference-Dmax
 plausibility floor (and, secondarily, the unexposed-base uniformity check) are
 calibrated for standard C41 orange-mask negatives; a correctly-calibrated

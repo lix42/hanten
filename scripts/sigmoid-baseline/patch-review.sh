@@ -22,7 +22,7 @@ RAW=${1:?usage: patch-review.sh <propose-output.txt> [outdir]}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 OUT=${2:-$ROOT/../temp/patch-review}
-NC=${NC:-$ROOT/target/release/nc}
+NC=${NC:-$ROOT/target/release/hanten}
 A=${A:-$ROOT/../nc-assets}
 REC="$ROOT/scripts/real-scan-verify/recipes"
 

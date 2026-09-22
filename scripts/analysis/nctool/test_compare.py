@@ -46,7 +46,7 @@ def record(frames, pipeline_version=1, commit="abc123", dirty=False,
 def nc_report(params_hash="feed", mean=(0.25, 0.5, 0.75), depth="u16",
               encoding="rendered-u16-tiff",
               total=400, low=10, high=30, non_finite=0):
-    """A complete `nc convert` report, i.e. every block+field `run` reads.
+    """A complete `hanten convert` report, i.e. every block+field `run` reads.
 
     `depth` is the `output.depth` **knob** and `encoding` the container the preset
     actually resolved. They are separate arguments because the whole point of the
@@ -692,7 +692,7 @@ class TestRunCommand(unittest.TestCase):
             os.chmod(fake, stat.S_IRUSR | stat.S_IWUSR)
             code, _, err = self.call(self.args(tmp, nc=fake), report=nc_report())
         self.assertEqual(code, 2)
-        self.assertIn("not an executable nc binary", err)
+        self.assertIn("not an executable binary", err)
 
     def test_checksum_drift_aborts_before_converting(self):
         # The record must never describe a benchmark over changed bytes.

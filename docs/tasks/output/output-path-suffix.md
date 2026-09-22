@@ -11,7 +11,7 @@ not, fail as it does today.
 ## Why now
 
 Every preset now pins a required suffix (completed 2026-08-09; `legacy` and
-`film-master` state one too). That closed a real hole — `nc convert -o out.jpg`
+`film-master` state one too). That closed a real hole — `hanten convert -o out.jpg`
 used to write a TIFF named `.jpg` — but it left the user responsible for knowing
 which container a preset resolves to, which is exactly the knowledge the preset
 exists to encapsulate. The check should stay; supplying the suffix should become

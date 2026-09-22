@@ -1,4 +1,4 @@
-# Negative Converter — telemetry Progress Log
+# Hanten — telemetry Progress Log
 
 Execution log for the `telemetry` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status (the checkboxes);

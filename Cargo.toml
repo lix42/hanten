@@ -3,6 +3,13 @@ name = "nc"
 version = "0.1.0"
 edition = "2024"
 
+# The product is Hanten; the crate stays `nc` (see CLAUDE.md's naming boundary).
+# Renaming the binary here rather than the package keeps `NC_VERSION`
+# (`CARGO_PKG_VERSION`) and the `nc_version` report field untouched.
+[[bin]]
+name = "hanten"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 image = "0.25.10"

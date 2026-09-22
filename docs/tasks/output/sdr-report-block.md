@@ -21,7 +21,7 @@ their render only as prose in `output_render.content`, while `hdr-linear-tiff` e
 
 ## How to Verify
 
-- `nc convert --output-preset display-p3 --report json` carries the SDR contract as
+- `hanten convert --output-preset display-p3 --report json` carries the SDR contract as
   fields, and the same for `compatibility`; the block agrees with the resolved
   `print.display_tone`.
 - The `#[allow(dead_code)]` on `RenderedSdr::metadata()` is gone.

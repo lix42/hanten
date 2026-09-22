@@ -41,7 +41,7 @@ Preferred: one bump carrying both, with one report. Decide before either lands.
 - `legacy` and its frozen `stages::golden` vectors become deletable once a modern-path
   preset is the default. Do not delete them first.
 - `default_output_name` and `cli::derived_extension` already derive the suffix from the
-  resolved preset, so `nc roll` follows the flip for free.
+  resolved preset, so `hanten roll` follows the flip for free.
 
 ## How to Verify
 

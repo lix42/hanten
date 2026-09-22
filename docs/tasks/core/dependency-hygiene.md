@@ -40,7 +40,7 @@ tagged `reconstruction` object. Only the crate cleanup remains, and its shape ch
 - `grep` confirms zero `kamadak-exif` / `palette` references and no non-test `image::`
   path.
 - `Cargo.lock` reflects the dropped crates.
-- A `nc convert` on a sample scan produces output identical to pre-cleanup
+- A `hanten convert` on a sample scan produces output identical to pre-cleanup
   (throwaway `#[ignore]` test; derived numbers only, never sample pixels in context).
 
 ## Dependencies

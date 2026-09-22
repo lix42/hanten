@@ -11,7 +11,7 @@ in [`docs/telemetry-strategy.md`](../../telemetry-strategy.md).
 
 ## Design
 
-Add a `nc telemetry` maintenance surface:
+Add a `hanten telemetry` maintenance surface:
 
 - `enable` displays the field manifest, existing queue count/date range,
   retention, backend, and the resolved active JSONL/spool paths; it prompts on a

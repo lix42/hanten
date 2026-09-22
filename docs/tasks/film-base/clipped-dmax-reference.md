@@ -5,7 +5,7 @@
 > resolve; see `docs/nf-migration.md` for the migration plan.
 
 > **Parametric curves only (noted 2026-09-13).** The `characteristic` curve resolves no
-> `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`nc convert`
+> `Dmax` and no anchor, and `algo/split-default-migration` proposes it as the bare-`hanten convert`
 > default. Once that lands, this task serves `sigmoid`/`exponential` users only. Re-rank
 > accordingly before picking it up.
 
@@ -16,7 +16,7 @@ Portra 400 roll `portra400-2026-08-04`, frame `20260803-film-1229`, is a confirm
 fully-exposed leader. Its holder-free center 80% has zero transmission in all
 three channels of the primary RGB image. That is a valid dense-negative case:
 the scanner recorded no visible light, so the true density is above its boundary
-and cannot be recovered as an exact number. Today `nc estimate --d-max-region`
+and cannot be recovered as an exact number. Today `hanten estimate --d-max-region`
 rejects the sample and therefore cannot produce a value for the normal
 estimate-to-recipe-to-convert workflow.
 

@@ -1,4 +1,4 @@
-# nc — nf-reconstruction Progress Log
+# Hanten — nf-reconstruction Progress Log
 
 Execution log for the `nf-reconstruction` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status; this file is the

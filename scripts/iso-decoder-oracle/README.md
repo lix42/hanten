@@ -42,7 +42,7 @@ mkdir -p /tmp/iso-oracle
 NC_ISO_SAMPLE_DIR=/tmp/iso-oracle \
 NC_ISO_SAMPLE_INPUT=../nc-assets/rolls/<roll>/<frame>.tif \
 NC_ISO_SAMPLE_BASE=<r,g,b> NC_ISO_SAMPLE_DMAX=<dmax> NC_ISO_SAMPLE_EV=3.0 \
-  cargo test --bin nc iso_oracle_samples -- --ignored --nocapture
+  cargo test --bin hanten iso_oracle_samples -- --ignored --nocapture
 
 # 3. read them back
 ./scripts/iso-decoder-oracle/oracle /tmp/iso-oracle/oracle-*.jpg
@@ -75,7 +75,7 @@ content over the knee (`GainMapMax` 1.095 log2 = 2.14x) and makes the check
 meaningful. (That the *default* render produces no HDR is a separate, recorded
 finding owned by `output/presets`.)
 
-Measure `_BASE` and `_DMAX` once per roll the usual way — `nc estimate`, or the
+Measure `_BASE` and `_DMAX` once per roll the usual way — `hanten estimate`, or the
 frozen `scripts/real-scan-verify/recipes/<roll>.json`.
 
 ## Reading the output

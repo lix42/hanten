@@ -561,7 +561,7 @@ def cmd_run(args) -> int:
         return 2
 
     if not os.path.isfile(args.nc) or not os.access(args.nc, os.X_OK):
-        print(f"error: not an executable nc binary: {args.nc}", file=sys.stderr)
+        print(f"error: not an executable binary: {args.nc}", file=sys.stderr)
         return 2
 
     if err := _verify_inputs(cases, args.skip_checksums):

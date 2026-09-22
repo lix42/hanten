@@ -32,7 +32,7 @@ leader or reference frame, now that the only anchor rule is reference-free.
   arithmetic the gate is calibrated against, and nothing tests that model against
   the code.
 - Prose goes stale here more than code does — the HDR renderer's error message
-  tells users to run `nc estimate --d-max-region`, and `types.rs` carries long
+  tells users to run `hanten estimate --d-max-region`, and `types.rs` carries long
   rustdoc on why `Auto` was demoted.
 
 ## How to Verify

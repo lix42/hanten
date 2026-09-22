@@ -1,4 +1,4 @@
-# Negative Converter — algo Progress Log
+# Hanten — algo Progress Log
 
 Execution log for the `algo` epic: what was done and how, key decisions, what
 works, what doesn't. TASKS.md holds the authoritative status (the checkboxes);

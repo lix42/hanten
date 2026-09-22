@@ -45,16 +45,20 @@ use crate::version::{self, Identity};
 // Parser
 // ---------------------------------------------------------------------------
 
-/// `nc` — film-negative → positive converter.
+/// `hanten` — film-negative → positive converter.
 //
 // `--version` prints the full build identity (semver + behavioral
 // `pipeline_version` + commit + target), not just the crate version, so an output
 // can be attributed to a build — see `version::version_string`.
 #[derive(Parser, Debug)]
 #[command(
-    name = "nc",
+    // `name` is what `--version` prints before the identity block and what every
+    // usage/error line spells, so it is the product name. `nctool`'s `is_nc`
+    // recognises this banner — it must accept the pre-rename `nc ` too, since the
+    // reference rendition builds the git-tagged binary (CLAUDE.md's boundary).
+    name = "hanten",
     version = version::version_string(),
-    about = "Film-negative → positive converter"
+    about = "Hanten — film-negative → positive converter"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -66,7 +70,7 @@ pub struct Cli {
 // only fight clap's derive for a one-shot CLI enum that's never stored en masse.
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
-    /// Convert a negative scan to a positive TIFF.
+    /// Convert a negative scan to a positive image.
     Convert(ConvertArgs),
     /// Convert a roll (batch of frames) from one shared, frozen recipe.
     Roll(RollArgs),
@@ -317,11 +321,11 @@ pub struct ConvertArgs {
     pub report: ReportArgs,
 }
 
-/// `nc roll`: convert a batch of frames from ONE shared, frozen recipe so the
+/// `hanten roll`: convert a batch of frames from ONE shared, frozen recipe so the
 /// whole roll is color-consistent and reproducible (design-spec §8, §12 item 6).
 ///
 /// This is the batch-**apply** half of plan→recipe→apply: it replays a *provided*
-/// frozen recipe (hand-authored or `nc params`/`--dump-params`-produced) over N
+/// frozen recipe (hand-authored or `hanten params`/`--dump-params`-produced) over N
 /// frames. It deliberately owns no auto-cascade that *generates* the recipe —
 /// that is the separate `base-acquisition-planner` task. Roll-fixed params (the
 /// film base, `density.dmax`) live in the shared `--params` recipe and appear
@@ -873,7 +877,7 @@ pub struct OutputOverrides {
 /// # Precedence
 ///
 /// `defaults < --params recipe < --preset < flags`. The preset sits **above** the recipe,
-/// not below it: `nc params` / `--dump-params` write *every* key explicitly, so a preset
+/// not below it: `hanten params` / `--dump-params` write *every* key explicitly, so a preset
 /// layered underneath would be inert against any recipe nc itself produced. Individual
 /// flags still win over the preset, which is what lets one be used as a starting point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -919,7 +923,7 @@ pub enum ConversionPreset {
 /// are untouched, which is what lets a preset be layered onto a roll calibration.
 ///
 /// **`curve` is one path but six knobs, and one of them is not a look.**
-/// `reconstruction.curve.dmax` is the reference `nc estimate --d-max-region` measures
+/// `reconstruction.curve.dmax` is the reference `hanten estimate --d-max-region` measures
 /// once for a roll, so [`preset_curve`] carries it across rather than letting the
 /// replacement take it — without that, `--params roll.json --preset sigmoid-flat` reset a
 /// measured reference to `fixed` and rendered the roll off its own calibration at exit 0.
@@ -927,7 +931,7 @@ pub enum ConversionPreset {
 /// **A preset must never set `output.preset`.** `legacy` / `custom` / `film-master`
 /// refuse `reinhard` outright and `film-master` refuses any non-default
 /// `print_exposure`, so a preset that pinned an output branch would make a bare
-/// `nc convert --output-preset film-master` fail. Keeping the two axes separate is what
+/// `hanten convert --output-preset film-master` fail. Keeping the two axes separate is what
 /// lets the conversion default move later without touching the master path.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PresetExpansion {
@@ -1345,7 +1349,7 @@ fn preset_replaced_paths(recipe: &ResolvedConfig, cfg: &ResolvedConfig) -> Vec<&
 
 /// The fully-resolved parameter set the pipeline runs on. This is *also* the
 /// recipe shape: `--params` deserializes a (partial) recipe into it with serde
-/// defaults filling the gaps, and `--dump-params` / `nc params` serialize it.
+/// defaults filling the gaps, and `--dump-params` / `hanten params` serialize it.
 ///
 /// Nested per-stage objects (not a flat bag) so `deny_unknown_fields` can reject
 /// typo'd keys at every level — `serde(flatten)` would defeat that. The
@@ -2084,7 +2088,7 @@ fn output_render_result(cfg: &ResolvedConfig) -> OutputRenderResult {
             "srgb-u16-tiff",
             "single-rendition SDR: sRGB primaries and transfer, 203 cd/m² reference \
              white, stored losslessly as 16-bit integer codes — the widest-support \
-             output nc writes. The same render as `display-p3` with a smaller \
+             output Hanten writes. The same render as `display-p3` with a smaller \
              destination gamut, so more saturated film colour is mapped in rather \
              than preserved; choose `display-p3` when the target display can show it",
         ),
@@ -2664,7 +2668,7 @@ fn meta_pipeline_version(meta: Option<&serde_json::Value>, context: &str) -> Res
     let bad = || {
         NcError::Usage(format!(
             "{context}: `meta.pipeline_version` is {raw}, which is not a pipeline version — it \
-             must be a non-negative integer no larger than {}. A value nc cannot read would be \
+             must be a non-negative integer no larger than {}. A value Hanten cannot read would be \
              indistinguishable from an absent one and would silently disable the \
              pipeline_version skew warning",
             u32::MAX
@@ -2952,7 +2956,7 @@ fn pipeline_version_warning(loaded_version: Option<u32>) -> Option<String> {
 /// that actually holds.
 ///
 /// Pinning one function means the hash a report advertises always corresponds to a
-/// recipe an agent can actually reproduce (`nc convert --dump-params …` then hash
+/// recipe an agent can actually reproduce (`hanten convert --dump-params …` then hash
 /// it), and can never describe a different config than the sidecar's body.
 fn canonical_params_json(cfg: &ResolvedConfig) -> Result<String> {
     serde_json::to_string_pretty(cfg)
@@ -3368,7 +3372,7 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
 
     // --preset: a named bundle, applied before every *value* flag below so each of them
     // wins over it (`defaults < params < preset < flags`). It sits above the recipe
-    // rather than under it because `nc params` / `--dump-params` write every key
+    // rather than under it because `hanten params` / `--dump-params` write every key
     // explicitly — a preset layered underneath would be inert against any recipe nc
     // produced.
     //
@@ -3401,7 +3405,7 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
             Reconstruction::Density { density, curve } => {
                 // **The roll-fixed reference survives the replacement.** A preset names a
                 // *look*; `curve.dmax` is a roll calibration measured by
-                // `nc estimate --d-max-region`, and the two are independent. Carried on
+                // `hanten estimate --d-max-region`, and the two are independent. Carried on
                 // exactly the condition the `--density-curve` arm below uses — both sides
                 // take a reference — so a same-type preset cannot discard what a
                 // curve-*type* switch preserves. Without this, `--params roll.json
@@ -3883,7 +3887,7 @@ fn validate_explicit_film_base(base: &[f32; 3]) -> Result<()> {
 /// the resolved config keeps no trace of it — a value rule cannot see the request at all.
 /// It also passes the project's presence-rule tiebreaker: unlike an identity value that
 /// asks for nothing, every one of these flags *forces* a reference the branch cannot
-/// produce. Left unrejected, `nc convert --density-curve characteristic --d-max 1.3` would
+/// produce. Left unrejected, `hanten convert --density-curve characteristic --d-max 1.3` would
 /// exit 0 having silently ignored the calibration the user measured.
 ///
 /// The recipe spelling needs no rule here: `reconstruction.curve`'s deserializer already
@@ -4210,7 +4214,7 @@ fn reject_suffix_mismatch(
         // out (the derived name always matches by construction).
         SuffixContext::RollFrame(input) => format!(
             "frame {}: the manifest's explicit output {} does not match output preset \
-             `{}`, which requires {list} — nc never renames the path you gave it (drop \
+             `{}`, which requires {list} — Hanten never renames the path you gave it (drop \
              the entry's `output` key to take the derived name instead)",
             input.display(),
             output.display(),
@@ -4230,7 +4234,7 @@ fn reject_suffix_mismatch(
         // `positive.jpg`, and nc is unreleased, so the strict rule is cheap now
         // (design-spec §5).
         SuffixContext::Default => format!(
-            "the output path must end in {list}: with no --output-preset, nc writes \
+            "the output path must end in {list}: with no --output-preset, Hanten writes \
              `{}` (see --help for the other presets, e.g. `display-p3` for a 16-bit \
              TIFF), and it never renames the path you gave it",
             preset.name()
@@ -4256,7 +4260,7 @@ fn required_extensions(preset: OutputPreset) -> Option<&'static [&'static str]> 
             Some(&["tif", "tiff"])
         }
         // Every TIFF preset states the rule, including the two oldest. Until now
-        // `legacy` and `film-master` returned `None`, so `nc convert -o out.jpg`
+        // `legacy` and `film-master` returned `None`, so `hanten convert -o out.jpg`
         // wrote a TIFF named `.jpg`, exit 0, no warning — the exact
         // silently-misnamed-file mistake the newer presets are guarded against.
         OutputPreset::DisplayP3
@@ -4300,7 +4304,7 @@ impl FilmBaseRemedy {
 pub fn missing_film_base_message(remedy: FilmBaseRemedy) -> String {
     match remedy {
         FilmBaseRemedy::Flags => "no film base selected: pass --film-base R,G,B (a Dmin measured \
-             once per roll, e.g. with `nc estimate`), --base-region X,Y,W,H to sample an \
+             once per roll, e.g. with `hanten estimate`), --base-region X,Y,W,H to sample an \
              unexposed border, or --auto-base to detect the rebate band (best-effort: real scans \
              put a thin inset rebate behind the holder, so it can fail). Recipe key: \
              `film_base.source`."
@@ -4310,7 +4314,7 @@ pub fn missing_film_base_message(remedy: FilmBaseRemedy) -> String {
         // that exit 2.
         FilmBaseRemedy::SharedRecipe => "no film base selected: `roll` takes no film-base flags, \
              so set `film_base.source` in the shared --params recipe. Measuring once per roll is \
-             the intended workflow: run `nc estimate --base-region X,Y,W,H <reference-scan>` on \
+             the intended workflow: run `hanten estimate --base-region X,Y,W,H <reference-scan>` on \
              one frame and paste the reported `film_base` fragment \
              (`\"film_base\": {\"source\": {\"explicit\": [R, G, B]}}`) into the recipe — that is \
              also the only source that keeps every frame on one frozen Dmin. \
@@ -4658,7 +4662,7 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
         {
             return Err(usage(
                 "--auto-wb needs --reconstruction density: the auto estimators are \
-                 defined on the density path's corrected positive and nc does not \
+                 defined on the density path's corrected positive and Hanten does not \
                  currently run them for `simple`. Note this is a restriction on \
                  *estimation*, not on white balance itself — a display preset applies \
                  explicit --white-balance gains to a simple reconstruction, so pass \
@@ -4969,7 +4973,7 @@ fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
              the anchor per frame, which normalizes exposure frame-by-frame and breaks \
              the cross-frame consistency the master exists to preserve. Use the \
              roll-fixed anchor — the default --fixed-d-max, an explicit --d-max <d> \
-             measured once with `nc estimate --d-max-region`, or (exponential curve \
+             measured once with `hanten estimate --d-max-region`, or (exponential curve \
              only) --no-d-max for the scene-referred unity placement."
                 .into(),
         ));
@@ -4996,7 +5000,7 @@ fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
              highlight_balance {:?}): the ramp anchors are measured from this frame's \
              density percentiles, so two frames of a roll would be corrected against \
              different anchors and their masters would not be mutually consistent — the \
-             same reason the master rejects auto Dmax. Measure the range once with `nc \
+             same reason the master rejects auto Dmax. Measure the range once with `hanten \
              convert` on a representative frame and reuse it via --balance-range LO,HI, \
              or leave the balances equal (an equal pair is a tone-independent offset and \
              consults no range).",
@@ -5159,7 +5163,7 @@ unsafe extern "C" fn cms_error_handler(
         // SAFETY: lcms2 passes a NUL-terminated C string for the message text.
         unsafe { std::ffi::CStr::from_ptr(text) }.to_string_lossy()
     };
-    eprintln!("nc: lcms2 error [{code}]: {msg}");
+    eprintln!("hanten: lcms2 error [{code}]: {msg}");
 }
 
 /// Install the process-global lcms2 error handler at startup. `pipeline::color`
@@ -5202,14 +5206,14 @@ impl Log {
     /// Progress line — only shown with `-v` (and never when `--quiet`).
     fn info(&self, msg: impl Display) {
         if !self.quiet && self.verbose >= 1 {
-            eprintln!("nc: {msg}");
+            eprintln!("hanten: {msg}");
         }
     }
 
     /// Warning line — shown unless `--quiet` (the report keeps it either way).
     fn warn(&self, msg: &str) {
         if !self.quiet {
-            eprintln!("nc: warning: {msg}");
+            eprintln!("hanten: warning: {msg}");
         }
     }
 
@@ -5220,7 +5224,7 @@ impl Log {
     /// [`warn`](Self::warn), which `--quiet` suppresses since the report still
     /// records them.
     fn warn_always(&self, msg: &str) {
-        eprintln!("nc: warning: {msg}");
+        eprintln!("hanten: warning: {msg}");
     }
 }
 
@@ -5260,7 +5264,7 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// `nc params` — print the full default parameter set as JSON to stdout.
+/// `hanten params` — print the full default parameter set as JSON to stdout.
 fn run_params() -> Result<()> {
     let json = serde_json::to_string_pretty(&ResolvedConfig::default())
         .map_err(|e| NcError::Other(format!("serializing params: {e}")))?;
@@ -5508,12 +5512,12 @@ fn reject_out_depth_with_atomic_preset(cfg: &ResolvedConfig, args: &ConvertArgs)
     // the contradiction wording, which is the conservative half.)
     let reason = if cfg.output.depth() == requested {
         "already resolves exactly that, so the flag restates what the preset has \
-         fixed. nc rejects the redundant request rather than accepting it, because \
+         fixed. Hanten rejects the redundant request rather than accepting it, because \
          the flag would silently become a no-op the day the preset's depth changed"
     } else {
         "resolves its own container format, bit depth, and colour profile \
          (film-master, for example, is an unclamped 32-bit float linear ACEScg \
-         TIFF), so the two requests contradict each other and nc will not silently \
+         TIFF), so the two requests contradict each other and Hanten will not silently \
          honour one of them"
     };
     Err(NcError::Usage(format!(
@@ -6617,7 +6621,7 @@ fn convert_frame(
     // would otherwise suppress both channels of the warning above).
     if loss.non_finite > 0 && log.quiet {
         eprintln!(
-            "nc: warning: {} non-finite (NaN/inf) output sample(s) — numerical fault",
+            "hanten: warning: {} non-finite (NaN/inf) output sample(s) — numerical fault",
             loss.non_finite
         );
     }
@@ -6741,7 +6745,7 @@ fn explicit_dmax_domain_warning(cfg: &ResolvedConfig) -> Option<String> {
         || density.highlight_balance != default_density.highlight_balance;
     if nondefault_correction || nonneutral_balance {
         Some(format!(
-            "explicit --d-max is a raw base-relative density (what `nc estimate \
+            "explicit --d-max is a raw base-relative density (what `hanten estimate \
              --d-max-region` measures), but density-scale ({:?}) / density-offset ({:?}) / \
              regional balance (shadow {:?}, highlight {:?}) are not the identity — the \
              anchor is in a different density domain than the curve subtracts it \
@@ -6800,7 +6804,7 @@ fn reference_dmax_plausibility_warning(measured: &density::ReferenceDmax) -> Opt
     }
 }
 
-/// `nc convert` — the full pipeline: decode → film-base → algorithm → output
+/// `hanten convert` — the full pipeline: decode → film-base → algorithm → output
 /// color transform → encode (+ sidecar, + optional IR export). Warnings are
 /// collected into the report and echoed to stderr; `--strict` promotes any of
 /// them to a non-zero exit.
@@ -7553,13 +7557,13 @@ fn reject_roll_unsupported(cfg: &ResolvedConfig) -> Result<()> {
     //
     // Do not reintroduce a preset list here. Roll capability was once *derived* from
     // "pins a suffix", and completing the suffix table then refused every preset and
-    // broke `nc roll` outright — the two concepts had merely coincided. They are
+    // broke `hanten roll` outright — the two concepts had merely coincided. They are
     // separate axes, and the correct number of presets on this one is now zero.
     if cfg.input.export_ir.is_some() {
         return Err(NcError::Usage(
             "input.export_ir (--export-ir) is not supported in roll mode: it names a \
              single path that every frame would overwrite; export the IR plane per \
-             frame with `nc convert` instead"
+             frame with `hanten convert` instead"
                 .into(),
         ));
     }
@@ -7973,7 +7977,7 @@ fn frame_report_err(
     }
 }
 
-/// `nc roll` — convert a batch of frames from one shared, frozen recipe (the
+/// `hanten roll` — convert a batch of frames from one shared, frozen recipe (the
 /// batch-apply scaffold, design-spec §8/§12 item 6). Resolves the plan (frames +
 /// per-frame configs), guards write targets, then converts each frame through the
 /// same [`convert_frame`] core `convert` uses — so per-frame output is
@@ -8045,7 +8049,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
         let msg = format!(
             "roll film base is NOT frozen: film_base.source is `{kind}`, so every frame \
              estimates its own Dmin — the roll is not color-consistent and the shared \
-             recipe is not truly shared. Calibrate the base once (e.g. `nc estimate \
+             recipe is not truly shared. Calibrate the base once (e.g. `hanten estimate \
              --base-region X,Y,W,H <reference-scan>`), then pass the reported explicit \
              base via `--film-base R,G,B` or a recipe with `film_base.source.explicit`."
         );
@@ -8070,7 +8074,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
         let msg = "roll Dmax is NOT frozen: reconstruction.curve.dmax is `auto`, so every \
              frame measures its own display-white anchor — the roll is not \
              color-consistent and the shared recipe is not truly shared. Freeze Dmax \
-             once (e.g. `nc estimate --d-max-region X,Y,W,H <reference-scan>`), then \
+             once (e.g. `hanten estimate --d-max-region X,Y,W,H <reference-scan>`), then \
              pass the reported anchor via `--d-max <d>` or a recipe with \
              `reconstruction.curve.dmax.explicit`, or accept the default fixed \
              nominal anchor."
@@ -8244,7 +8248,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     Ok(())
 }
 
-/// `nc inspect` — decode a scan and report what was found (format, dimensions,
+/// `hanten inspect` — decode a scan and report what was found (format, dimensions,
 /// channels, bit depth, IR presence, scanner metadata) plus a best-effort
 /// suggested `Dmin`. No output image is written.
 fn run_inspect(args: IoArgs) -> Result<()> {
@@ -8481,7 +8485,7 @@ fn reuse_ready(rgb: [f32; 3]) -> Option<(String, FilmBaseParams)> {
     ))
 }
 
-/// `nc estimate` — run only film-base / `Dmin` estimation from the selected
+/// `hanten estimate` — run only film-base / `Dmin` estimation from the selected
 /// source (default `auto`, or `--base-region`/`--film-base`; `--grid` samples
 /// a 5-cell grid for unexposed-frame calibration) and emit the resolved
 /// [`FilmBase`] as JSON — together with reuse-ready forms of it (a
@@ -8499,7 +8503,7 @@ fn reuse_ready(rgb: [f32; 3]) -> Option<(String, FilmBaseParams)> {
 /// longer covers this decision from either side: `base` pins the detector by
 /// naming `Auto` explicitly, and `recipe` sees the resolved config's `null`.
 /// Changing what an unstated `estimate` resolves to would therefore move every
-/// `nc estimate` result with the whole drift gate green — verify such a change by
+/// `hanten estimate` result with the whole drift gate green — verify such a change by
 /// hand, and do not assume the gate is watching.
 fn run_estimate(args: EstimateArgs) -> Result<()> {
     let started = Instant::now();
@@ -9022,7 +9026,7 @@ mod tests {
     /// Parse a `convert` invocation (with the required input/output already set)
     /// and return its args, so merge can be tested against the real parser.
     fn parse_convert(extra: &[&str]) -> ConvertArgs {
-        let mut argv = vec!["nc", "convert", "in.tiff", "-o", "out.tiff"];
+        let mut argv = vec!["hanten", "convert", "in.tiff", "-o", "out.tiff"];
         argv.extend_from_slice(extra);
         match Cli::try_parse_from(argv).unwrap().command {
             Command::Convert(a) => a,
@@ -9076,7 +9080,7 @@ mod tests {
             assert_eq!(tone, expansion.display_tone, "{}", preset.name());
             // The knobs a preset must leave alone. `output.preset` is the load-bearing
             // one: pinning an output branch here would make a bare
-            // `nc convert --output-preset film-master` fail, which is exactly what a
+            // `hanten convert --output-preset film-master` fail, which is exactly what a
             // later default migration must not do.
             assert_eq!(cfg.output, base_cfg().output, "{}", preset.name());
             assert_eq!(cfg.film_base, base_cfg().film_base, "{}", preset.name());
@@ -9126,7 +9130,7 @@ mod tests {
 
     /// The preset wins over the recipe — the `params < preset` half.
     ///
-    /// It has to: `nc params` / `--dump-params` write **every** key explicitly, so a
+    /// It has to: `hanten params` / `--dump-params` write **every** key explicitly, so a
     /// preset layered underneath a recipe would be inert against any recipe nc itself
     /// produced, which is the whole workflow this flag exists for.
     #[test]
@@ -9407,7 +9411,7 @@ mod tests {
     /// **A preset replaces the look, never the roll calibration.**
     ///
     /// `reconstruction.curve` is one recipe path but six knobs, and `dmax` is not a look:
-    /// it is the reference `nc estimate --d-max-region` measures once for a roll. The
+    /// it is the reference `hanten estimate --d-max-region` measures once for a roll. The
     /// `--density-curve` arm carries it across a curve-*type* switch; a preset replacing
     /// the whole curve object must not discard it on a same-type one. It did: a recipe's
     /// measured `{explicit: 2.1}` silently became `fixed`, so every frame of the roll
@@ -10065,7 +10069,7 @@ mod tests {
     #[test]
     fn mutually_exclusive_wb_flags_are_rejected() {
         let argv = [
-            "nc",
+            "hanten",
             "convert",
             "i",
             "-o",
@@ -10490,7 +10494,7 @@ mod tests {
         // And they are mutually exclusive at the clap layer.
         assert!(
             Cli::try_parse_from([
-                "nc",
+                "hanten",
                 "convert",
                 "in.tiff",
                 "-o",
@@ -11443,7 +11447,7 @@ mod tests {
     fn mutually_exclusive_balance_range_flags_are_rejected() {
         assert!(
             Cli::try_parse_from([
-                "nc",
+                "hanten",
                 "convert",
                 "i",
                 "-o",
@@ -11573,7 +11577,7 @@ mod tests {
             ["--fixed-d-max", "--no-d-max"].as_slice(),
             ["--auto-d-max", "--no-d-max"].as_slice(),
         ] {
-            let mut argv = vec!["nc", "convert", "i", "-o", "o"];
+            let mut argv = vec!["hanten", "convert", "i", "-o", "o"];
             argv.extend_from_slice(pair);
             assert!(
                 Cli::try_parse_from(argv).is_err(),
@@ -13842,7 +13846,7 @@ mod tests {
 
     #[test]
     fn params_default_is_parseable_json_but_no_longer_runnable() {
-        // The subject is the exact document `nc params` prints — `run_params`
+        // The subject is the exact document `hanten params` prints — `run_params`
         // serializes `ResolvedConfig::default()` — so this must stay on the real
         // default, not on a film-base-stated stand-in. Substituting `base_cfg()`
         // here would leave nothing asserting that the printed scaffold round-trips.
@@ -13921,14 +13925,14 @@ mod tests {
         for absent in ["--auto-base", "--film-base"] {
             assert!(!msg.contains(absent), "{absent} must not be offered: {msg}");
         }
-        // `--base-region` *does* appear — but only inside the `nc estimate`
+        // `--base-region` *does* appear — but only inside the `hanten estimate`
         // invocation the message recommends, which is a different command and does
         // accept it. What must never appear is a `roll` flag.
         assert!(
             msg.matches("--base-region")
                 .count()
-                .eq(&msg.matches("nc estimate --base-region").count()),
-            "--base-region may only appear as an argument of `nc estimate`: {msg}"
+                .eq(&msg.matches("hanten estimate --base-region").count()),
+            "--base-region may only appear as an argument of `hanten estimate`: {msg}"
         );
         // The *requirement* is remedy-independent — only the wording moves.
         let mut stated = ResolvedConfig::default();
@@ -14205,7 +14209,7 @@ mod tests {
         // clap must reject conflicting source flags rather than silently picking one.
         assert!(
             Cli::try_parse_from([
-                "nc",
+                "hanten",
                 "convert",
                 "i",
                 "-o",
@@ -14218,7 +14222,7 @@ mod tests {
         );
         assert!(
             Cli::try_parse_from([
-                "nc",
+                "hanten",
                 "convert",
                 "i",
                 "-o",
@@ -14240,7 +14244,7 @@ mod tests {
             ["--grid", "--film-base", "0.9,0.5,0.4"].as_slice(),
             ["--grid", "--auto-base"].as_slice(),
         ] {
-            let mut argv = vec!["nc", "estimate", "in.tiff"];
+            let mut argv = vec!["hanten", "estimate", "in.tiff"];
             argv.extend_from_slice(bad);
             assert!(
                 Cli::try_parse_from(argv).is_err(),
@@ -14249,7 +14253,7 @@ mod tests {
         }
         // `--grid` with `--base-region` is the documented sub-rectangle mode.
         let cli = Cli::try_parse_from([
-            "nc",
+            "hanten",
             "estimate",
             "in.tiff",
             "--grid",
@@ -14333,7 +14337,7 @@ mod tests {
         // The plan-phase `--d-max-region` mirror of `--base-region` parses into an
         // [x,y,w,h] rectangle and coexists with an explicit `--film-base`.
         let cli = Cli::try_parse_from([
-            "nc",
+            "hanten",
             "estimate",
             "leader.tiff",
             "--film-base",
@@ -14855,17 +14859,17 @@ mod tests {
     #[test]
     fn roll_requires_input_or_frames_and_they_conflict() {
         // Neither positional inputs nor --frames → usage error.
-        assert!(Cli::try_parse_from(["nc", "roll", "-o", "out"]).is_err());
+        assert!(Cli::try_parse_from(["hanten", "roll", "-o", "out"]).is_err());
         // Both → mutually exclusive.
         assert!(
-            Cli::try_parse_from(["nc", "roll", "a.tif", "--frames", "m.json", "-o", "out"])
+            Cli::try_parse_from(["hanten", "roll", "a.tif", "--frames", "m.json", "-o", "out"])
                 .is_err()
         );
         // Either alone (with --out-dir) is fine.
-        assert!(Cli::try_parse_from(["nc", "roll", "a.tif", "b.tif", "-o", "out"]).is_ok());
-        assert!(Cli::try_parse_from(["nc", "roll", "--frames", "m.json", "-o", "out"]).is_ok());
+        assert!(Cli::try_parse_from(["hanten", "roll", "a.tif", "b.tif", "-o", "out"]).is_ok());
+        assert!(Cli::try_parse_from(["hanten", "roll", "--frames", "m.json", "-o", "out"]).is_ok());
         // --out-dir is required.
-        assert!(Cli::try_parse_from(["nc", "roll", "a.tif"]).is_err());
+        assert!(Cli::try_parse_from(["hanten", "roll", "a.tif"]).is_err());
     }
 
     /// A bare-string overlay naming the base's own variant preserves the base's parameters.

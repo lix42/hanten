@@ -284,7 +284,7 @@ class TestOutputDirectory(unittest.TestCase):
         for target in (repo, repo / "tools" / "review-app" / "public"):
             # A binary path that cannot exist, deliberately: the refusal must
             # come from *what was asked*, not depend on what happens to be built.
-            # CI builds only `target/debug/nc`, and an earlier version of this
+            # CI builds only `target/debug/hanten`, and an earlier version of this
             # check reported "build the binary first" there instead.
             args = argparse.Namespace(
                 matrix=str(write(MATRIX)), fixtures="scripts/sigmoid-baseline/fixtures.json",

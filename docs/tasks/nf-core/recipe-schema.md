@@ -24,7 +24,7 @@ epics each invent their own answer.
   sidecar from a bare recipe by that key alone, so no stage section may be named
   `params`; a test asserts it stays absent.
 - **The round-trip is the cheapest gate on the whole schema.** `--dump-params` and
-  `nc params` write every key expanded, and `--preset` has no recipe key. A new-flow
+  `hanten params` write every key expanded, and `--preset` has no recipe key. A new-flow
   dump must reload to the same resolved config and the same `params_hash`.
 - **§9 is the mapping, and it is not written ahead.** design-spec §9 assigns each
   flag's key to its stage section, and the stage names change here — but

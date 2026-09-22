@@ -21,7 +21,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 OUT=${1:-$ROOT/../temp/candidate-review}
-NC=${NC:-$ROOT/target/release/nc}
+NC=${NC:-$ROOT/target/release/hanten}
 A=${A:-$ROOT/../nc-assets}
 FX="$ROOT/scripts/sigmoid-baseline/fixtures.json"
 # STUDY=--shoulder renders the two GO forms at three shoulder widths instead of all 8 forms.

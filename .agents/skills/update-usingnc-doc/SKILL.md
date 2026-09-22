@@ -1,12 +1,12 @@
 ---
 name: update-usingnc-doc
 description: >-
-  Bring docs/using-nc.md back in step with the binary after a change to nc's
+  Bring docs/using-nc.md back in step with the binary after a change to Hanten's
   user-visible surface — a flag, subcommand, default, recipe key, output preset,
   exit code, or a report field or error message a user acts on. Use when finishing
   such a change, when asked to "update the usage guide", "check using-nc", or
   "does the guide still match", and after rebasing onto work that shipped any of
-  those. Verifies every claim by running nc, never by reading the diff.
+  those. Verifies every claim by running `hanten`, never by reading the diff.
 ---
 
 # Update the usage guide
@@ -43,8 +43,8 @@ against the binary built from it.
 just built, not the one in another worktree — a stale binary from a sibling
 checkout has produced wrong "verification" before.
 
-**2. Re-read the header pin.** The guide's header records `nc --version` and a
-commit. If they disagree with `nc --version` now, treat the whole document as
+**2. Re-read the header pin.** The guide's header records `hanten --version` and a
+commit. If they disagree with `hanten --version` now, treat the whole document as
 suspect rather than only the section you touched.
 
 **3. Re-run the examples in every section your change could reach.** Not just the
@@ -63,7 +63,7 @@ move. Worked cases:
 
 | | How to check |
 |---|---|
-| the default recipe in §5 | `nc params` |
+| the default recipe in §5 | `hanten params` |
 | accepted preset names and suffixes | try each; the help text has been wrong when the parser was right |
 | exit codes | provoke each one; do not copy them from the spec |
 | quoted report values | re-run the command that produced them |

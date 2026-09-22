@@ -20,7 +20,7 @@ set -euo pipefail
 # (see CLAUDE.md `../nc-assets`).
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"        # repo root (worktree)
-NC=${NC:-$ROOT/target/release/nc}
+NC=${NC:-$ROOT/target/release/hanten}
 A=${A:-$ROOT/../nc-assets}
 OUTDIR=${OUTDIR:-$A/converted/nc/2026-07-22}
 REC=${REC:-$HERE/recipes}
@@ -158,7 +158,7 @@ stage_classify() {
   for row in "${ROLLS[@]}"; do IFS='|' read -r roll uf ff reals <<<"$row"
     # Match both .tif and .tiff (list_imgs / the manifest accept either); the
     # `-e` guard is nullglob-safe on bash 3.2 (an unmatched glob stays literal, so
-    # skip it rather than passing a bogus path to `nc estimate`).
+    # skip it rather than passing a bogus path to `hanten estimate`).
     for f in "$A/rolls/$roll"/*.tif "$A/rolls/$roll"/*.tiff; do
       [ -e "$f" ] || continue
       j=$($NC estimate --grid "$f" 2>/dev/null)

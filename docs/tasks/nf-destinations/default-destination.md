@@ -2,7 +2,7 @@
 
 ## Goal
 
-Decide and execute what a bare `nc convert` writes under the new flow. The product
+Decide and execute what a bare `hanten convert` writes under the new flow. The product
 shape is decided; this task owns the execution and the migration cost.
 
 ## Design
@@ -36,8 +36,8 @@ Open:
 
 ## How to Verify
 
-- A bare `nc convert` resolves the intended destination with no output-selection
-  flags, and `nc roll` derives its names to match.
+- A bare `hanten convert` resolves the intended destination with no output-selection
+  flags, and `hanten roll` derives its names to match.
 - A `pipeline_version` bump with its own recorded fingerprint row — never a
   historical row edited in place — and a before/after report on real frames.
 - `docs/using-nc.md` updated by running the binary, not by reading the diff.

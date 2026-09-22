@@ -21,7 +21,7 @@ Usage (from anywhere):
     cargo build --release
     python3 scripts/render-defaults-v2/measure.py
 
-Prerequisites: a release `nc` at `target/release/nc`, and the real scans at
+Prerequisites: a release `hanten` at `target/release/hanten`, and the real scans at
 `../nc-assets` (the machine-local symlink described in CLAUDE.md).
 """
 
@@ -34,7 +34,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-NC = REPO / "target" / "release" / "nc"
+NC = REPO / "target" / "release" / "hanten"
 ASSETS = REPO.parent / "nc-assets"
 
 # (label, frame path relative to the assets root, the roll's frozen film base).
