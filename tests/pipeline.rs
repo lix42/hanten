@@ -11207,14 +11207,15 @@ fn without_new_flow_nothing_moves() {
     let tmp = TempDir::new("new-flow-params");
     let dump_off = tmp.path("off.json");
     let dump_on = tmp.path("on.json");
+    // `--output-preset legacy` rides in `flow` rather than the shared list: the new
+    // flow refuses that flag (it resolves no destination), while the legacy run needs
+    // it to accept a `.tif` path.
     let args = |dump: &Path, out: &Path, flow: &[&str]| -> Vec<String> {
         let mut v: Vec<String> = vec![
             "convert".into(),
             fixture("hdr-48bit.tif").display().to_string(),
             "-o".into(),
             out.display().to_string(),
-            "--output-preset".into(),
-            "legacy".into(),
             "--film-base".into(),
             "0.9,0.55,0.42".into(),
             "--dump-params".into(),
@@ -11229,7 +11230,11 @@ fn without_new_flow_nothing_moves() {
         v.iter().map(String::as_str).collect()
     }
 
-    let off = args(&dump_off, &tmp.path("off.tif"), &[]);
+    let off = args(
+        &dump_off,
+        &tmp.path("off.tif"),
+        &["--output-preset", "legacy"],
+    );
     let (code, _out, err) = run_exact(&borrow(&off));
     assert_eq!(code, 0, "the no-flag path still converts: {err}");
 
@@ -11269,8 +11274,6 @@ fn new_flow_render_is_not_implemented_yet() {
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
         tmp.path("out.tif").to_str().unwrap(),
-        "--output-preset",
-        "legacy",
         "--film-base",
         "0.9,0.55,0.42",
         "--new-flow",
@@ -11361,8 +11364,6 @@ fn new_flow_accepts_a_knee_flag_that_asks_for_no_knee() {
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
         tmp.path("out.tif").to_str().unwrap(),
-        "--output-preset",
-        "legacy",
         "--film-base",
         "0.9,0.55,0.42",
         "--sigmoid-toe",
@@ -11387,8 +11388,6 @@ fn new_flow_refuses_a_knob_the_design_drops() {
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
         tmp.path("out.tif").to_str().unwrap(),
-        "--output-preset",
-        "legacy",
         "--film-base",
         "0.9,0.55,0.42",
         "--reconstruction",
@@ -11441,8 +11440,6 @@ fn the_availability_gate_outranks_the_rules_it_would_confuse() {
             fixture("hdr-48bit.tif").to_str().unwrap(),
             "-o",
             tmp.path("out.tif").to_str().unwrap(),
-            "--output-preset",
-            "legacy",
             knob[0],
             knob[1],
             "--new-flow",
@@ -11478,8 +11475,6 @@ fn the_availability_gate_outranks_a_merge_refusal_too() {
             fixture("hdr-48bit.tif").to_str().unwrap(),
             "-o",
             tmp.path("out.tif").to_str().unwrap(),
-            "--output-preset",
-            "legacy",
             "--film-base",
             "0.9,0.55,0.42",
             "--reconstruction",
@@ -11540,8 +11535,6 @@ fn a_knee_flag_beside_a_knee_less_curve_is_refused_before_merge_can_loop() {
             &fixture_path,
             "-o",
             out.to_str().unwrap(),
-            "--output-preset",
-            "legacy",
             "--film-base",
             "0.9,0.55,0.42",
             "--new-flow",
@@ -11575,8 +11568,6 @@ fn a_knee_flag_beside_a_knee_less_curve_is_refused_before_merge_can_loop() {
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
         tmp2.path("bare.tif").to_str().unwrap(),
-        "--output-preset",
-        "legacy",
         "--film-base",
         "0.9,0.55,0.42",
         "--sigmoid-toe",
@@ -11626,8 +11617,6 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
             "FIXTURE",
             "-o",
             out.to_str().unwrap(),
-            "--output-preset",
-            "legacy",
             "--film-base",
             "0.9,0.55,0.42",
             "--new-flow",
@@ -11705,8 +11694,6 @@ fn the_new_flow_refusal_outranks_the_merge_rule_for_the_same_command_line() {
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
         tmp.path("out.tif").to_str().unwrap(),
-        "--output-preset",
-        "legacy",
         "--film-base",
         "0.9,0.55,0.42",
         "--film-stock",
@@ -11768,8 +11755,6 @@ fn the_fixed_decodes_own_knobs_stay_reachable_under_the_new_flow() {
             "FIXTURE",
             "-o",
             out.to_str().unwrap(),
-            "--output-preset",
-            "legacy",
             "--film-base",
             "0.9,0.55,0.42",
             "--density-curve",
@@ -11798,8 +11783,6 @@ fn the_fixed_decodes_own_knobs_stay_reachable_under_the_new_flow() {
             fixture("hdr-48bit.tif").display().to_string(),
             "-o".into(),
             out.display().to_string(),
-            "--output-preset".into(),
-            "legacy".into(),
             "--film-base".into(),
             "0.9,0.55,0.42".into(),
             "--new-flow".into(),
@@ -11880,11 +11863,14 @@ fn convert_under_the_new_flow_refuses_a_recipe_reconstruction() {
     let (code, err) = argv(&[], &tmp.path("legacy.tif"));
     assert_eq!(code, 0, "{err}");
 
+    // Only sections the new flow reads: `print` and `output` are refused the same way
+    // `reconstruction` is, so a control recipe stating either would prove nothing about
+    // which rule fired.
     let clean = write_file(
         &tmp.path("clean.json"),
         r#"{
   "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
-  "output": { "preset": "legacy" }
+  "measure": { "inset": 0.05 }
 }"#,
     );
     let (code, _out, err) = run_exact(&[
@@ -11902,6 +11888,461 @@ fn convert_under_the_new_flow_refuses_a_recipe_reconstruction() {
 }
 
 #[test]
+fn new_flow_refuses_every_print_control() {
+    // The print family, driven through the binary one flag at a time. Each names the
+    // stage that will carry it, so the refusal tells a user where the knob went
+    // rather than only that it is gone.
+    //
+    // Two of these resolve the documented **default** (`--white-balance 1,1,1`,
+    // `--highlight-compress 0`) and are still refused, which is the tiebreaker applied
+    // rather than waived: an identity value is spared to keep the flags-win reset
+    // usable, and `reject_recipe_sections` refuses any recipe stating `print`, so on
+    // this flow there is no pinned value for one to clear.
+    let tmp = TempDir::new("new-flow-print");
+    let cases: &[(&[&str], &str)] = &[
+        (&["--print-exposure", "1"], "nf-scene-correction/stage"),
+        (
+            &["--black-point", "0.01"],
+            "nf-scene-correction/flare-removal",
+        ),
+        (&["--white-balance", "1,1,1"], "nf-scene-correction/stage"),
+        (&["--auto-wb", "gray-world"], "nf-scene-correction/stage"),
+        (
+            &["--linear-range", "0,1"],
+            "nf-scene-correction/levels-knob",
+        ),
+        (
+            &["--display-tone", "reinhard"],
+            "nf-display-stages/fit-range",
+        ),
+        (
+            &["--display-tone-headroom", "6"],
+            "nf-display-stages/fit-range",
+        ),
+        (&["--highlight-compress", "0"], "will not gain one"),
+    ];
+    for (i, (extra, expect)) in cases.iter().enumerate() {
+        let out = tmp.path(&format!("out{i}.tif"));
+        let mut argv: Vec<&str> = vec![
+            "convert",
+            "FIXTURE",
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--new-flow",
+            "--report",
+            "none",
+        ];
+        let fixture_path = fixture("hdr-48bit.tif").display().to_string();
+        argv[1] = &fixture_path;
+        argv.extend_from_slice(extra);
+        let (code, _out, err) = run_exact(&argv);
+        assert_eq!(code, 2, "{extra:?} must be refused: {err}");
+        assert!(err.contains(extra[0]), "{extra:?} must be named: {err}");
+        assert!(
+            err.contains(expect),
+            "{extra:?} must say where it went: {err}"
+        );
+    }
+}
+
+#[test]
+fn every_print_control_is_accepted_without_the_flag() {
+    // The falsifiable half of the test above, and the whole contract of the gate: a
+    // row added by the audit must not start refusing commands that work today. Driven
+    // through the binary on the legacy path with the same values.
+    let tmp = TempDir::new("print-controls-legacy");
+    for (i, extra) in [
+        vec!["--print-exposure", "1"],
+        vec!["--black-point", "0.01"],
+        vec!["--white-balance", "1,1,1"],
+        vec!["--auto-wb", "gray-world"],
+        vec!["--linear-range", "0,1"],
+        vec!["--display-tone", "reinhard"],
+        // The headroom needs its tone beside it: on its own the resolved tone is
+        // `shoulder`, which has no white point for it to set, so `validate_convert`
+        // refuses it on the legacy path for a reason that has nothing to do with this
+        // gate. Pairing them keeps the control about availability.
+        vec!["--display-tone", "reinhard", "--display-tone-headroom", "6"],
+        vec!["--highlight-compress", "0"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let out = tmp.path(&format!("ok{i}.tif"));
+        let mut argv: Vec<&str> = vec![
+            "convert",
+            "FIXTURE",
+            "-o",
+            out.to_str().unwrap(),
+            "--output-preset",
+            "display-p3",
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--report",
+            "none",
+        ];
+        let fixture_path = fixture("hdr-48bit.tif").display().to_string();
+        argv[1] = &fixture_path;
+        argv.extend_from_slice(&extra);
+        let (code, _out, err) = run_exact(&argv);
+        assert_eq!(
+            code, 0,
+            "{extra:?} must still convert without the flag: {err}"
+        );
+    }
+}
+
+#[test]
+fn new_flow_refuses_the_output_policy_flags() {
+    // The new flow resolves no destination at all, so an output policy has nothing to
+    // apply to. Refused for a different reason than the print family — not "the stage
+    // that carries it is empty" — and the message says so by naming the task that
+    // wires the first destination.
+    let tmp = TempDir::new("new-flow-output");
+    for (i, extra) in [
+        vec!["--output-preset", "display-p3"],
+        vec!["--out-depth", "u16"],
+        vec!["--output-profile", "srgb"],
+        vec!["--bigtiff", "auto"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let out = tmp.path(&format!("out{i}.tif"));
+        let mut argv: Vec<&str> = vec![
+            "convert",
+            "FIXTURE",
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--new-flow",
+            "--report",
+            "none",
+        ];
+        let fixture_path = fixture("hdr-48bit.tif").display().to_string();
+        argv[1] = &fixture_path;
+        argv.extend_from_slice(&extra);
+        let (code, _out, err) = run_exact(&argv);
+        assert_eq!(code, 2, "{extra:?} must be refused: {err}");
+        assert!(err.contains(extra[0]), "{extra:?} must be named: {err}");
+        assert!(
+            err.contains("nf-core/minimal-end-to-end"),
+            "{extra:?} must name the task that gives it something to describe: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_print_or_output_recipe_section_is_refused_whole() {
+    // The provenance no flag row can see, and the reason none of these knobs needs a
+    // value rule: between the rows above and this, both spellings are covered. Each
+    // section is named individually so a user fixing a recipe knows which key to
+    // remove.
+    let tmp = TempDir::new("new-flow-sections");
+    for (name, body) in [
+        ("print", r#"{ "print": { "print_exposure": 1.0 } }"#),
+        ("output", r#"{ "output": { "preset": "display-p3" } }"#),
+    ] {
+        let recipe = write_file(&tmp.path(&format!("{name}.json")), body);
+        let out = tmp.path(&format!("{name}.tif"));
+        let input = fixture("hdr-48bit.tif");
+        let argv = vec![
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--params",
+            recipe.to_str().unwrap(),
+            "--new-flow",
+            "--report",
+            "none",
+        ];
+        let (code, _out, err) = run_exact(&argv);
+        assert_eq!(code, 2, "a recipe `{name}` section must be refused: {err}");
+        assert!(err.contains(&format!("`{name}` section")), "{err}");
+        assert!(err.contains("nf-core/recipe-schema"), "{err}");
+
+        // Falsifiability: the same recipe is fine on the current chain. It needs a
+        // preset that writes TIFF, since the `.tif` path is judged there — which is
+        // the very rule `the_suffix_rule_stands_down_under_the_new_flow` covers.
+        let mut legacy = argv.clone();
+        legacy.retain(|a| *a != "--new-flow");
+        legacy.extend_from_slice(&["--output-preset", "display-p3"]);
+        let (code, _out, err) = run_exact(&legacy);
+        assert_eq!(code, 0, "the same recipe must still convert: {err}");
+    }
+}
+
+#[test]
+fn the_suffix_rule_stands_down_under_the_new_flow() {
+    // `nf-core/knob-availability-audit`: the rule would blame a preset nobody
+    // selected, and its remedy points at `--output-preset`, which this flow refuses —
+    // a remedy naming a knob its own rule never checked was available. Skipped rather
+    // than reworded: with no destination resolved there is nothing for a suffix to
+    // match. The legacy control is what keeps this from silently disabling the rule.
+    let tmp = TempDir::new("new-flow-suffix");
+    let out = tmp.path("out.tif");
+    let argv = |flow: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = vec![
+            "convert".into(),
+            fixture("hdr-48bit.tif").display().to_string(),
+            "-o".into(),
+            out.display().to_string(),
+            "--film-base".into(),
+            "0.9,0.55,0.42".into(),
+            "--report".into(),
+            "none".into(),
+        ];
+        v.extend(flow.iter().map(|s| (*s).to_string()));
+        v
+    };
+    let on = argv(&["--new-flow"]);
+    let (code, _out, err) = run_exact(&on.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(code, 4, "a `.tif` path must reach the seam: {err}");
+
+    let off = argv(&[]);
+    let (code, _out, err) = run_exact(&off.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(code, 2, "the current chain still judges the suffix: {err}");
+    assert!(err.contains("does not end in"), "{err}");
+}
+
+#[test]
+fn the_anchor_guard_recommends_only_a_slope() {
+    // `nf-core/knob-availability-audit`, finding #2. The remedy used to end "or
+    // --anchor-white-at-reference, which needs no such division" — a placement the
+    // rule never checked was available, and one `--new-flow` refuses. Every flag in
+    // this command line is one the new flow accepts, which is what made it reachable.
+    //
+    // The losing wording is asserted **absent**, not merely the new one present:
+    // both sentences name the same flag (the explanation still does, as a fact about
+    // the arithmetic), so a `contains` on the flag alone cannot tell them apart.
+    let tmp = TempDir::new("anchor-guard-remedy");
+    let base: Vec<String> = vec![
+        "convert".into(),
+        fixture("hdr-48bit.tif").display().to_string(),
+        "-o".into(),
+        tmp.path("out.jpg").display().to_string(),
+        "--film-base".into(),
+        "0.9,0.55,0.42".into(),
+        "--density-curve".into(),
+        "exponential".into(),
+        "--density-gamma".into(),
+        "2e-39".into(),
+        "--anchor-mid-offset".into(),
+        "0.62".into(),
+        "--report".into(),
+        "none".into(),
+    ];
+    for flow in [vec![], vec!["--new-flow".to_string()]] {
+        let mut argv = base.clone();
+        let under_new_flow = !flow.is_empty();
+        argv.extend(flow);
+        let (code, _out, err) = run_exact(&argv.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(code, 2, "{err}");
+        assert!(err.contains("Use a photographic slope"), "{err}");
+        assert!(
+            !err.contains("which needs no such division"),
+            "the remedy must not recommend a placement it never checked ({}): {err}",
+            if under_new_flow { "new flow" } else { "legacy" }
+        );
+    }
+}
+
+#[test]
+fn the_gamma_arm_states_its_two_remedies_as_equals() {
+    // `nf-core/knob-availability-audit`, finding #1. `--sigmoid-contrast` was stated
+    // as *the* answer with `--density-curve exponential` parenthesised, and under
+    // `--new-flow` the ranked one is refused while the parenthetical works. Reordering
+    // would promote the more invasive option on the legacy chain, so the ranking is
+    // dropped instead — which needs no knowledge of the flow, and is asserted on both.
+    let tmp = TempDir::new("gamma-arm-remedy");
+    let out = tmp.path("out.tif");
+    for flow in [vec![], vec!["--new-flow"]] {
+        let mut argv: Vec<&str> = vec![
+            "convert",
+            "FIXTURE",
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--density-gamma",
+            "2.5",
+            "--report",
+            "none",
+        ];
+        let fixture_path = fixture("hdr-48bit.tif").display().to_string();
+        argv[1] = &fixture_path;
+        argv.extend_from_slice(&flow);
+        let (code, _out, err) = run_exact(&argv);
+        assert_eq!(code, 2, "{err}");
+        assert!(err.contains("--sigmoid-contrast"), "{err}");
+        assert!(err.contains("--density-curve exponential"), "{err}");
+        // The ranked wording, asserted absent: "its mid-density slope is X (or pass Y)".
+        assert!(
+            !err.contains("(or pass"),
+            "neither remedy may be parenthetical: {err}"
+        );
+    }
+}
+
+#[test]
+fn new_flow_refuses_the_ir_export_rather_than_skipping_it() {
+    // Found in review: the IR file is staged **after** the render and at the depth the
+    // destination resolves, so under `--new-flow` it was accepted and then written by
+    // nobody — the accepted-and-ignored state this inventory exists to eliminate. The
+    // witness is the absent file, not the exit code: the seam returns 4 either way, so
+    // a test that only read the exit would have passed before the fix.
+    let tmp = TempDir::new("new-flow-export-ir");
+    let ir = tmp.path("ir.tiff");
+    let argv = |flow: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = vec![
+            "convert".into(),
+            fixture("hdri-64bit.tif").display().to_string(),
+            "-o".into(),
+            tmp.path("out.tif").display().to_string(),
+            "--output-preset".into(),
+            "display-p3".into(),
+            "--film-base".into(),
+            "0.9,0.55,0.42".into(),
+            "--export-ir".into(),
+            ir.display().to_string(),
+            "--report".into(),
+            "none".into(),
+        ];
+        v.extend(flow.iter().map(|s| (*s).to_string()));
+        v
+    };
+
+    // Without the flag the export happens, which is what makes the refusal meaningful.
+    let off = argv(&[]);
+    let (code, _out, err) = run_exact(&off.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(code, 0, "{err}");
+    assert!(ir.exists(), "the legacy path must write the IR plane");
+    std::fs::remove_file(&ir).unwrap();
+
+    // With it, refused by resolved value — so a recipe naming the key is caught too,
+    // which is why this is a `VALUE_ENTRIES` row and not a flag one.
+    let mut on = argv(&["--new-flow"]);
+    on.retain(|a| a != "--output-preset" && a != "display-p3");
+    let (code, _out, err) = run_exact(&on.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--export-ir"), "{err}");
+    assert!(err.contains("nf-core/minimal-end-to-end"), "{err}");
+    assert!(!ir.exists(), "a refused export must write nothing");
+}
+
+#[test]
+fn the_new_flow_invents_no_sidecar_collision() {
+    // Found in review, and a defect the suffix stand-down itself introduced: with the
+    // output path taken verbatim, `sidecar_path` appended `.json` to the *stem*, so
+    // `-o out --report-file out.json` was refused for colliding with a sidecar that
+    // exists on neither chain — and the refusal pre-empted the seam, replacing "cannot
+    // render yet" with a wrong diagnosis.
+    let tmp = TempDir::new("new-flow-sidecar");
+    let stem = tmp.path("out");
+    let report = tmp.path("out.json");
+    let argv = |flow: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = vec![
+            "convert".into(),
+            fixture("hdr-48bit.tif").display().to_string(),
+            "-o".into(),
+            stem.display().to_string(),
+            "--film-base".into(),
+            "0.9,0.55,0.42".into(),
+            "--report-file".into(),
+            report.display().to_string(),
+        ];
+        v.extend(flow.iter().map(|s| (*s).to_string()));
+        v
+    };
+    let on = argv(&["--new-flow"]);
+    let (code, _out, err) = run_exact(&on.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(code, 4, "the seam must win, not a phantom collision: {err}");
+    assert!(!err.contains("collides with the sidecar"), "{err}");
+
+    // Falsifiable both ways: the same line converts on the current chain, where the
+    // completed path makes the sidecar `out.jpg.json` and there is no collision.
+    let off = argv(&[]);
+    let (code, _out, err) = run_exact(&off.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(code, 0, "{err}");
+
+    // And the guard's *real* checks still run under the flag — only the sidecar entry
+    // stood down, so a report file aimed at the input scan is still refused.
+    let victim = tmp.path("victim.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &victim).unwrap();
+    let before = std::fs::metadata(&victim).unwrap().len();
+    let (code, _out, err) = run_exact(&[
+        "convert",
+        victim.to_str().unwrap(),
+        "-o",
+        tmp.path("o.jpg").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--new-flow",
+        "--report-file",
+        victim.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("overwrite the input scan"), "{err}");
+    assert_eq!(
+        std::fs::metadata(&victim).unwrap().len(),
+        before,
+        "the input must be untouched"
+    );
+}
+
+#[test]
+fn roll_stands_the_suffix_rule_down_under_the_new_flow_too() {
+    // Found in review: the stand-down was applied at `validate_convert` and
+    // `run_convert` only, so a roll manifest's explicit output was still judged
+    // against a preset the flow refuses to let anyone change — and on `roll` that is
+    // sharper, since its only spelling is the recipe `output` section, refused whole.
+    let tmp = TempDir::new("new-flow-roll-suffix");
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{ "frames": [ {{ "input": {:?}, "output": "one.tif" }} ] }}"#,
+            fixture("hdr-48bit.tif").display().to_string()
+        ),
+    );
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{ "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } } }"#,
+    );
+    let argv = |flow: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = vec![
+            "roll".into(),
+            "--frames".into(),
+            manifest.display().to_string(),
+            "--out-dir".into(),
+            tmp.path("out").display().to_string(),
+            "--params".into(),
+            recipe.display().to_string(),
+            "--report".into(),
+            "none".into(),
+        ];
+        v.extend(flow.iter().map(|s| (*s).to_string()));
+        v
+    };
+    let on = argv(&["--new-flow"]);
+    let (code, _out, err) = run_exact(&on.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(code, 4, "a `.tif` frame must reach the seam: {err}");
+    assert!(!err.contains("does not match output preset"), "{err}");
+
+    // The current chain still judges it, which is what keeps this from silently
+    // disabling the rule for every roll.
+    let off = argv(&[]);
+    let (code, _out, err) = run_exact(&off.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("does not match output preset"), "{err}");
+}
+
+#[test]
 fn roll_under_the_new_flow_refuses_once_before_any_decode() {
     // `roll` takes the flag too, and refuses **once**, after the plan resolves and
     // before the first decode. Not per frame: unlike the memory gate — whose verdict
@@ -11909,15 +12350,15 @@ fn roll_under_the_new_flow_refuses_once_before_any_decode() {
     // already known, so per-frame handling would decode every frame of a real roll to
     // print one identical error N times. Pinned by counting what was written.
     let tmp = TempDir::new("new-flow-roll");
-    // A shared recipe with **no** `reconstruction` section, so the refusal can only
-    // come from the flag. `ROLL_RECIPE` states one and is therefore refused a step
-    // earlier — which is what `roll_under_the_new_flow_refuses_a_recipe_reconstruction`
-    // covers.
+    // A shared recipe stating only sections the new flow **reads**, so the refusal can
+    // only come from the flag. `ROLL_RECIPE` states `reconstruction` and is therefore
+    // refused a step earlier — which is what
+    // `roll_under_the_new_flow_refuses_a_recipe_reconstruction` covers.
     let recipe = write_file(
         &tmp.path("roll.json"),
         r#"{
   "film_base": { "source": { "explicit": [0.9, 0.55, 0.42] } },
-  "output": { "preset": "legacy" }
+  "measure": { "inset": 0.05 }
 }"#,
     );
     let out_dir = tmp.path("out");

@@ -658,7 +658,10 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   (`s` = sampled rectangle ÷ frame; ~0.69 for the auto interior, 1.0 for a
   full-frame `--base-region`). For `convert` the **encode** phase is the peak: the
   decoded image is held for `--export-ir` while the rendered one exists, and the
-  u16 quantize buffer sits on both. For `inspect`/`estimate` the **film-base**
+  u16 quantize buffer sits on both. That overlap *is* the export's ordering: it reads
+  the decoded image but is staged **after** the render, at `cfg.output.depth()` —
+  "reads the decoded image" and "runs before the render" are different claims, and two
+  sessions have conflated them in opposite directions. For `inspect`/`estimate` the **film-base**
   phase is — `film_base::region_channels` materializes the sampled rectangle
   unstrided into three `Vec<f32>`, so sampling is *not* free (that omission was a
   real bug in the first version of the model). The `12·s` term appears in *every
@@ -1024,11 +1027,16 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   refusals key on **three** provenances, in the order they run: flag **presence before
   `merge`** — a presence rule placed after it is unreachable on every command line
   `merge` refuses first; raw-JSON **recipe-section presence** right after `load_recipe`
-  (`flow::reject_recipe_reconstruction`), which exists because the new flow decodes
-  through its own `DecodeParams` rather than the resolved `reconstruction`, so that
-  section would otherwise be parsed and read by nobody; and **resolved value first
-  inside `validate_convert`**. `roll` takes the flag too and reaches the second and
-  third — its shared recipe is the only way it can state a reconstruction — but not
+  (`flow::reject_recipe_sections`, over `flow::UNREAD_RECIPE_SECTIONS` —
+  `reconstruction`, `print` and `output`), which exists because the new flow decodes
+  through its own `DecodeParams` and renders through `pipeline::chain`'s per-stage
+  params, resolving no destination at all, so those sections would otherwise be parsed
+  and read by nobody; and **resolved value first inside `validate_convert`**. That
+  section refusal is also why no `print.*` or `output.*` knob needs a value rule, and
+  why an **identity value earns no exemption there**: the tiebreaker spares one to keep
+  the flags-win reset usable, and a section refused whole leaves no recipe value to
+  reset. `roll` takes the flag too and reaches the second and
+  third — its shared recipe is the only way it can state one of those sections — but not
   the first, since it accepts no conversion flags; the value half runs at **two**
   validate sites composed into `cli::validate_with_flow`.
   **`film_base.source` is the first knob with no default at all** (`Option`, no
@@ -1155,7 +1163,15 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     master. An identity value that renders byte-identically — `--bigtiff auto`,
     `--highlight-compress 0`, `--display-tone shoulder` — asks for nothing, and
     rejecting it kills the flags-win reset that lets one recipe be re-used on another
-    branch.
+    branch. **The exemption is conditional on that reset being possible**, which
+    `--new-flow` is the first branch to break: it refuses the whole `print` and
+    `output` recipe sections, so no flag there can be clearing a pinned value, and
+    those same three identity values *are* rejected under it (`src/flow.rs`). Read the
+    rule as "spare an identity value where a recipe could have set the knob"; where a
+    section is refused whole, an identity value has to earn acceptance on its own.
+    And when bounding *which rules can still fire* on such a branch, enumerate the
+    reachable **values**, not the knobs: a refused knob's spared identity value is
+    itself reachable, so a knob-level walk of a correct bound silently comes up short.
   - *`validate` is not the whole `convert` gate.* Every rule inside it reads only
     the resolved config — which is why `roll` and each per-frame override share it
     verbatim. `convert` must call **`validate_convert`**, which composes it with the

@@ -311,8 +311,9 @@ pub struct ConvertArgs {
     /// feature: CLI-only — never a recipe key, since it selects which knobs exist
     /// rather than setting one — and removed when the default flips, as a migration
     /// error with no alias (nc is unreleased, so removal is cheap). A knob the new
-    /// chain cannot honour is refused rather than accepted and ignored — the
-    /// inventory of those knobs is still being assembled.
+    /// chain cannot honour is refused rather than accepted and ignored, and so is a
+    /// recipe section it does not read; the output path's suffix is not judged,
+    /// because no destination is resolved yet.
     // Plain prose on purpose: clap renders a doc comment verbatim as `--help` text,
     // so markdown emphasis would print as asterisks.
     #[arg(long = "new-flow")]
@@ -368,8 +369,8 @@ pub struct RollArgs {
     /// Transitional: resolve the new rendering chain for every frame — see
     /// `convert --new-flow`. Roll accepts no conversion flags, so a knob the new
     /// chain refuses reaches it as a resolved value from the shared recipe or a
-    /// per-frame override — or, for a `reconstruction` section, by its presence in
-    /// the shared recipe.
+    /// per-frame override — or, for a recipe section the new chain does not read
+    /// (`reconstruction`, `print`, `output`), by its presence in the shared recipe.
     #[arg(long = "new-flow")]
     pub new_flow: bool,
     #[command(flatten)]
@@ -2437,10 +2438,10 @@ struct LoadedRecipe {
     /// a resolved `gain-map-hdr` no longer says whether anyone chose it. The suffix
     /// diagnosis varies on that (see [`SuffixContext`]).
     output_preset_present: bool,
-    /// Whether the file carries a `reconstruction` section at all. Not a value
-    /// question like the two above — the new flow never reads that section, so the
-    /// key's mere presence is what makes a recipe describe the wrong chain.
-    reconstruction_present: bool,
+    /// Which of the sections the new flow never reads this file carries
+    /// (`flow::UNREAD_RECIPE_SECTIONS`). Not a value question like the two above —
+    /// the key's mere presence is what makes a recipe describe the wrong chain.
+    unread_sections: Vec<&'static str>,
     /// `meta.pipeline_version` from a sidecar envelope, when the loaded file
     /// carried one. Provenance only — never applied, only compared (see
     /// [`pipeline_version_warning`]).
@@ -2529,7 +2530,7 @@ fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
             cfg: ResolvedConfig::default(),
             curve_dmax_present: false,
             output_preset_present: false,
-            reconstruction_present: false,
+            unread_sections: Vec::new(),
             meta_pipeline_version: None,
             // No recipe file means nothing was archived and nothing is being
             // reinterpreted — the run simply *is* this build's defaults. Only a
@@ -2579,12 +2580,12 @@ fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
             };
             let curve_dmax_present = body.is_some_and(sets_curve_dmax);
             let output_preset_present = body.is_some_and(sets_output_preset);
-            let reconstruction_present = body.is_some_and(sets_reconstruction);
+            let unread_sections = body.map(stated_unread_sections).unwrap_or_default();
             Ok(LoadedRecipe {
                 cfg,
                 curve_dmax_present,
                 output_preset_present,
-                reconstruction_present,
+                unread_sections,
                 meta_pipeline_version,
                 unpinned_curve: body.and_then(unpinned_curve),
             })
@@ -3035,16 +3036,24 @@ fn sets_curve_dmax(v: &serde_json::Value) -> bool {
         .is_some()
 }
 
-/// Whether the recipe body carries a `reconstruction` section at all — the witness
-/// behind [`flow::reject_recipe_reconstruction`].
+/// Which sections the new flow never reads this recipe body carries — the witness
+/// behind [`flow::reject_recipe_sections`].
 ///
 /// A raw-JSON probe like [`sets_curve_dmax`], and for the sharper version of the same
-/// reason: the new flow decodes through its own params, so a *resolved*
-/// `reconstruction` cannot say whether anyone asked for it. Presence of the key is the
-/// only thing that distinguishes "this recipe describes the old chain" from "serde
-/// filled a default nobody wrote".
-fn sets_reconstruction(v: &serde_json::Value) -> bool {
-    v.get("reconstruction").is_some()
+/// reason: the new flow reads these sections through nothing, so a *resolved* value
+/// cannot say whether anyone asked for it. Presence of the key is the only thing that
+/// distinguishes "this recipe describes the old chain" from "serde filled a default
+/// nobody wrote".
+///
+/// The list is `flow`'s, not this function's: which sections the new chain ignores is
+/// a fact about that chain, and keeping it here would be a second place to update
+/// when a stage starts reading one.
+fn stated_unread_sections(v: &serde_json::Value) -> Vec<&'static str> {
+    flow::UNREAD_RECIPE_SECTIONS
+        .iter()
+        .copied()
+        .filter(|section| v.get(section).is_some())
+        .collect()
 }
 
 /// Whether an override object explicitly carries `reconstruction.curve.stock` — the
@@ -3618,10 +3627,22 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
                 match curve {
                     DensityCurve::Exponential(e) => e.gamma = g,
                     DensityCurve::Sigmoid(_) => {
+                        // Two remedies stated as equals, deliberately. This used to
+                        // read "its mid-density slope is --sigmoid-contrast (or pass
+                        // --density-curve exponential)", ranking one as the answer and
+                        // parenthesising the other — and under `--new-flow` the ranked
+                        // one is refused while the parenthetical works. Reordering was
+                        // the obvious fix and is worse: on this chain
+                        // `--sigmoid-contrast` keeps the user on the curve they
+                        // resolved while switching curves does not, so promoting the
+                        // switch trades a dead lead on one flow for a more invasive one
+                        // here. Dropping the ranking costs neither.
                         return Err(usage(format!(
                             "--density-gamma ({g}) sets the exponential curve's gamma, \
-                             but the resolved curve is sigmoid — its mid-density slope \
-                             is --sigmoid-contrast (or pass --density-curve exponential)"
+                             but the resolved curve is sigmoid. Either set the sigmoid's \
+                             mid-density slope with --sigmoid-contrast, or pass \
+                             --density-curve exponential to take the curve this gamma \
+                             belongs to"
                         )));
                     }
                     DensityCurve::Characteristic(_) => {
@@ -4041,7 +4062,16 @@ pub fn validate_convert(
     // omission is the least specific diagnosis available. Without this ordering,
     // `-o out.jpg --output-preset hdr-pq` with no base demands a base first and
     // only then mentions the suffix, making the user fix two things in series.
-    reject_output_suffix_mismatch(cfg, args, recipe_preset)?;
+    // ...but not under `--new-flow`, which resolves no destination at all. The rule
+    // would blame a preset nobody selected — the default the flow refuses to let you
+    // change — and its remedy ("see --help for the other presets") names
+    // `--output-preset`, which this flow rejects. Skipping it is the honest state
+    // rather than a reworded message: there is nothing yet for a suffix to match.
+    // `nf-core/minimal-end-to-end` wires the first destination and owns what replaces
+    // this; the seam refuses the run either way, so nothing is written unchecked.
+    if Flow::from_flag(args.new_flow) == Flow::Legacy {
+        reject_output_suffix_mismatch(cfg, args, recipe_preset)?;
+    }
     validate(cfg)?;
     Ok(())
 }
@@ -4839,12 +4869,22 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
             let anchor = placement.anchor(reference, slope);
             if !anchor.is_finite() {
                 return Err(usage(format!(
+                    // The remedy says only what this rule inspected. It used to end
+                    // "or --anchor-white-at-reference, which needs no such division",
+                    // recommending a placement whose availability it never checked —
+                    // and `--new-flow` refuses all three reference-reading placements,
+                    // so that advice was dead on a line built entirely from flags the
+                    // new flow accepts (`--density-curve exponential --density-gamma
+                    // 2e-39 --anchor-mid-offset 0.62`). It gets worse rather than
+                    // better with time: `nf-retire/dmax-machinery` deletes the flag
+                    // outright. The *explanation* still names it, which is a fact about
+                    // the arithmetic rather than a recommendation, and is what lets a
+                    // legacy user pick a different placement if they want one.
                     "the resolved anchor placement is not usable: it derives a non-finite \
                      anchor ({anchor}) at {slope_flag} {slope:e}. Every placement but \
                      --anchor-white-at-reference divides by the slope, and that quotient \
                      overflows f32 for a very small slope (or, under --anchor-black-floor, a \
-                     very small floor). Use a photographic slope, or \
-                     --anchor-white-at-reference, which needs no such division"
+                     very small floor). Use a photographic slope"
                 )));
             }
             // A finite anchor is not enough. The curve evaluates `slope · (density − anchor)`,
@@ -7066,7 +7106,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // describing the chain the new flow does not run. Refused here, right after the
     // load, so it is diagnosed before `merge` reasons about values the new flow
     // never reads.
-    flow::reject_recipe_reconstruction(flow, loaded.reconstruction_present)?;
+    flow::reject_recipe_sections(flow, &loaded.unread_sections)?;
     // Dmax provenance for the report: a CLI flag beats the recipe key beats the
     // default — the same precedence the merge applies to the value itself.
     let dmax_setting = if dmax_flag_given(&args.dmax) {
@@ -7098,11 +7138,21 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // the sidecar, the report's `output` and telemetry's `output_bytes` must all
     // see the completed path, never the stem. (`validate_convert` ran the same rule
     // and discarded the value; this is the one call that keeps it.)
-    let output = resolve_output_path(
-        &args.output,
-        cfg.output.preset,
-        convert_suffix_context(&args, recipe_preset),
-    )?;
+    // ...except under `--new-flow`, which resolves no destination, so there is no
+    // container to complete or judge a suffix against. The path is taken as typed:
+    // the seam refuses the run before anything is written, and the alternative is to
+    // complete `-o out` into a preset the flow itself refuses to let the user change
+    // (`--output-preset` is an availability refusal). `nf-core/minimal-end-to-end`
+    // wires the first destination and restores a real resolution here.
+    let output = if flow == Flow::New {
+        args.output.clone()
+    } else {
+        resolve_output_path(
+            &args.output,
+            cfg.output.preset,
+            convert_suffix_context(&args, recipe_preset),
+        )?
+    };
     if output != args.output {
         log.info(format!(
             "output path completed from the resolved preset `{}`: writing {}",
@@ -7124,7 +7174,17 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     } else {
         None
     };
-    let mut targets: Vec<(&str, &Path)> = vec![("--output", &output), ("the sidecar", &sidecar)];
+    let mut targets: Vec<(&str, &Path)> = vec![("--output", &output)];
+    // The sidecar is derived from the *completed* output path, and under `--new-flow`
+    // there is none — `-o out` stays `out`, so `sidecar_path` yields `out.json` and the
+    // guard reports a collision with a `--report-file out.json` that exists on neither
+    // chain, pre-empting the seam with a wrong diagnosis. No sidecar is written under
+    // the flag anyway. Every *other* target here is a real path on both chains and
+    // stays checked, so an input-clobbering `--report-file` is still refused.
+    // `nf-core/minimal-end-to-end` restores this with the destination.
+    if flow == Flow::Legacy {
+        targets.push(("the sidecar", &sidecar));
+    }
     if let Some(p) = &args.dump_params {
         targets.push(("--dump-params", p));
     }
@@ -7591,12 +7651,22 @@ fn resolve_frame_output(
     input: &Path,
     out_dir: &Path,
     preset: OutputPreset,
+    flow: Flow,
 ) -> Result<PathBuf> {
     let path = match explicit {
         Some(o) if o.is_absolute() => o.to_path_buf(),
         Some(o) => out_dir.join(o),
         None => return Ok(default_output_name(input, out_dir, preset)),
     };
+    // Under `--new-flow` the suffix is not judged, for the same reason as on
+    // `convert`: no destination is resolved, so the preset this rule would blame is
+    // one the flow refuses to let anyone change — and on `roll` that is sharper
+    // still, since its only spelling is the recipe `output` section, refused whole.
+    // The *derived* branch above needs no such guard: it is correct by construction
+    // and never judged. `nf-core/minimal-end-to-end` restores this.
+    if flow == Flow::New {
+        return Ok(path);
+    }
     resolve_output_path(&path, preset, SuffixContext::RollFrame(input))
 }
 
@@ -8122,6 +8192,7 @@ fn resolve_frames(
                     &mf.input,
                     out_dir,
                     cfg.output.preset,
+                    Flow::from_flag(args.new_flow),
                 )?;
                 planned.push(PlannedFrame {
                     input: mf.input,
@@ -8255,12 +8326,12 @@ fn run_roll(args: RollArgs) -> Result<()> {
         // (Roll's *per-frame* `output.preset` witness is probed separately, at the
         // override, for the roll-consistency warning.)
         output_preset_present: _,
-        reconstruction_present,
+        unread_sections,
     } = load_recipe(args.recipe_in.as_deref())?;
     // Same rule as `convert`: the shared recipe is `roll`'s only way to state a
     // reconstruction, so it is also the only place the accepted-and-ignored hole
     // could open. (A *per-frame* overlay stating one is `nf-core/subcommands`'.)
-    flow::reject_recipe_reconstruction(Flow::from_flag(args.new_flow), reconstruction_present)?;
+    flow::reject_recipe_sections(Flow::from_flag(args.new_flow), &unread_sections)?;
     // Roll-specific rejections run **before** the shared `validate`, and the order
     // is the same least-specific-diagnosis-last policy `validate` itself now
     // follows: "this setting cannot work in roll mode" names the offending key,
@@ -15747,7 +15818,7 @@ mod tests {
             default_output_name(
                 Path::new("/scans/frame01.tif"),
                 Path::new("/out"),
-                OutputPreset::Legacy
+                OutputPreset::Legacy,
             ),
             PathBuf::from("/out/frame01_positive.tiff")
         );
@@ -15758,7 +15829,8 @@ mod tests {
                 Some(Path::new("custom.tiff")),
                 Path::new("/s/f.tif"),
                 Path::new("/out"),
-                OutputPreset::Legacy
+                OutputPreset::Legacy,
+                Flow::Legacy,
             )
             .unwrap(),
             PathBuf::from("/out/custom.tiff")
@@ -15768,7 +15840,8 @@ mod tests {
                 Some(Path::new("/abs/c.tiff")),
                 Path::new("/s/f.tif"),
                 Path::new("/out"),
-                OutputPreset::Legacy
+                OutputPreset::Legacy,
+                Flow::Legacy,
             )
             .unwrap(),
             PathBuf::from("/abs/c.tiff")
@@ -15778,7 +15851,8 @@ mod tests {
                 None,
                 Path::new("/s/f.tif"),
                 Path::new("/out"),
-                OutputPreset::Legacy
+                OutputPreset::Legacy,
+                Flow::Legacy,
             )
             .unwrap(),
             PathBuf::from("/out/f_positive.tiff")
@@ -15836,6 +15910,7 @@ mod tests {
             Path::new("/s/f.tif"),
             Path::new("/out"),
             OutputPreset::GainMapHdr,
+            Flow::Legacy,
         )
         .unwrap_err()
         .to_string();
@@ -15855,6 +15930,7 @@ mod tests {
                     Path::new("/s/f.tif"),
                     Path::new("/out"),
                     preset,
+                    Flow::Legacy,
                 )
                 .unwrap(),
                 PathBuf::from(want),

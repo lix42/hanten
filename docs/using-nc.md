@@ -1593,7 +1593,7 @@ The new chain's stages now exist, but nothing connects them to an output yet, so
 selecting it resolves everything and then stops at the render, with **exit 4**:
 
 ```console
-$ hanten convert scan.tif -o out.tif --output-preset legacy --film-base 0.9,0.55,0.42 --new-flow
+$ hanten convert scan.tif -o out.tif --film-base 0.9,0.55,0.42 --new-flow
 unsupported: --new-flow selected the new rendering chain, which cannot render yet
 — its stages exist but nothing connects them to an output
 (`nf-core/minimal-end-to-end`). Every other part of the run resolved under
@@ -1604,6 +1604,12 @@ checks these settings itself.
 The last clause is deliberate: dropping the flag runs the *current* chain, which
 applies its own rules to the same settings — a command line refused here may still
 be refused there, for its own reasons.
+
+Note the `.tif` path in that example. Under `--new-flow` the **output suffix is not
+judged**, on `convert` or on `roll`, because no destination is resolved to judge it
+against: `-o` — and a `roll` manifest's explicit `output` — is taken exactly as
+typed. On the current chain the same path is refused unless a preset that writes
+TIFF is named; that rule returns when the new chain gains a destination.
 
 What *is* live is the availability rule: a knob the new chain cannot honour is
 refused (exit 2) rather than accepted and ignored, and the message says whether the
@@ -1642,8 +1648,10 @@ And these still work, because they *are* the fixed decode's own calibration and
 anchor: `--density-scale`, `--density-offset` and `--anchor-mid-offset`. So does
 `--density-curve exponential`, which names what the new flow already decodes
 with, and a zero `--shadow-balance` / `--highlight-balance`
-/ `--sigmoid-toe` / `--sigmoid-shoulder` — an identity value asks for nothing, which
-is what lets one recipe be re-used on either chain.
+/ `--sigmoid-toe` / `--sigmoid-shoulder` — an identity value asks for nothing this
+flow cannot do. (It is *not* spared in order to let one recipe be re-used on either
+chain: a recipe stating any of the sections below is refused whole, so there is no
+pinned value for a flag to clear.)
 
 `--density-gamma` is the fixed decode's own contrast and reaches it too, but **not on
 its own**: pass `--density-curve exponential --density-gamma <value>`. Bare, it is
@@ -1665,15 +1673,54 @@ new flow would parse this section and never read it (`nf-core/recipe-schema`). �
 ```
 
 That is blunt and temporary: `nf-core/recipe-schema` decides how a recipe describes
-the new stages, and until it does, state the decode's knobs as flags. The rest of
-the inventory — `print.*`, `output.*`, `measure.*` — is still being assembled
-(`nf-core/knob-availability-audit`).
+the new stages, and until it does, state the decode's knobs as flags.
+
+**The rest of the inventory is now classified too.** The same rule applies to the
+`print` and `output` sections, and for the same reason — each of the new chain's
+stages carries its own parameters, and the chain resolves no destination at all:
+
+```console
+$ hanten convert … --new-flow --params recipe.json     # {"print": {…}}
+usage: a recipe `print` section has no meaning under `--new-flow`: the new flow
+has no counterpart for it yet — one arrives with the new chain's recipe schema,
+which decides how a recipe describes these stages at all — until then the new
+flow would parse this section and never read it (`nf-core/recipe-schema`). …
+```
+
+So every print and output **flag** is refused as well, each naming the stage that
+will carry it:
+
+| Refused | Where it goes |
+|---|---|
+| `--print-exposure`, `--white-balance`, `--auto-wb` | the scene-correction stage |
+| `--black-point` | split in two — flare/fog in scene correction, display black in fit range — which is why it is not a rename |
+| `--linear-range` | an affine levels remap needing a stage and a name; retiring it outright is a listed outcome |
+| `--display-tone`, `--display-tone-headroom` | the fit-range stage, which is an identity pass today |
+| `--highlight-compress` | the knee width of the `shoulder` tone specifically (`none` and `reinhard` refuse a non-default value outright); fit range compresses against the display's peak and has no knee width to set |
+| `--output-preset`, `--out-depth`, `--output-profile`, `--bigtiff` | a destination for the new chain to render into, which it does not have yet |
+
+Unlike the decode's knees, **no value is spared here** — `--white-balance 1,1,1` and
+`--highlight-compress 0` resolve the documented defaults and are still refused. An
+identity value is normally left alone so a flag can clear what a recipe pinned, and
+with the whole `print` section refused there is nothing to clear.
+
+What survives untouched is everything before the seam: `--film-base`,
+`--base-region`, `--auto-base`, `--measure-inset`, `--input-transfer`,
+`--input-meaning` and `--film-type`. Decode, film base and the measurement region
+are shared by both chains.
+
+`--export-ir` is the one knob that *looks* like it belongs to that list and does
+not. The IR plane is read from the decoded image, but the file is staged **after**
+the render and at the bit depth the destination resolves — so under `--new-flow`
+there is nowhere to put it, and it is refused (recipe key `input.export_ir`
+included) rather than accepted and silently skipped.
 
 On `roll` the flag applies to every frame, and the "cannot render yet" refusal comes
 **once**, after the plan is resolved and before the first frame is decoded — so a
 roll fails in a second rather than decoding every frame to print the same error N
 times. `roll` takes no conversion flags, so the knobs it can trip come from the
-shared recipe or a per-frame override; a shared recipe stating `reconstruction` is
+shared recipe or a per-frame override; a shared recipe stating any of the three
+sections the new chain does not read (`reconstruction`, `print`, `output`) is
 refused up front, and a per-frame override's resolved values are diagnosed per
 frame, at exit 2.
 
