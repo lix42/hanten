@@ -32,8 +32,15 @@ check before adding one back:
   replaced `flow::UNREAD_RECIPE_SECTIONS` (`nf-core/recipe-schema`); a stage that
   gains a knob gives its own section a field.
 - **A flag row per knob** in `FLAG_ENTRIES`, keyed on presence, naming the task that
-  will carry it — never a replacement flag spelling, since that belongs to the task
-  that builds the stage. There is deliberately **no renamed-knob mapping table**.
+  will carry it — never a replacement flag spelling written ahead of the stage, since
+  that belongs to the task that builds it. That task turns the row into
+  `Availability::Renamed` once the new flag exists (`--print-exposure` → `--exposure`,
+  `nf-scene-correction/stage`), or deletes it when the spelling is kept.
+- **A flag only the new chain reads must also be refused on the current one**, whose
+  `merge` has no arm for it — `flow::reject_new_flow_only_flags` does that by hand for
+  `--exposure`, and **nothing tests the direction**: a second such flag added only to
+  `KEPT_FLAGS` would be accepted-and-ignored without `--new-flow`. Add it there, and
+  when there are two, make it a table with a completeness test.
 - **`every_convert_flag_is_classified`** reads the flag surface back out of `cli.rs`,
   so a knob added to `ConvertArgs` with no verdict reds the gate. Adding a flag now
   means adding a row (refused or kept) or an allowlist line.
@@ -41,7 +48,8 @@ check before adding one back:
 **One corollary that will bite whoever adds a knob back:** once a section is refused
 whole, an identity value earns **no** exemption from the presence-vs-value tiebreaker
 — the exemption exists so a flag can clear what a recipe pinned, and there is nothing
-left to clear. `--white-balance 1,1,1` and `--highlight-compress 0` are refused.
+left to clear. `--highlight-compress 0` is refused. (`--white-balance 1,1,1` was too,
+until `nf-scene-correction/stage` gave white balance a `scene_correction` key.)
 
 **`nf-core/minimal-end-to-end` made the flag render** (2026-09-22): the fixed decode
 (`algo::fixed`) → NC film RGB v1 → `pipeline::chain` → one destination, a **Display
@@ -89,9 +97,11 @@ the types**, not by the composition function: each stage's input is the previous
 one's output, and each boundary type can be minted only inside the module that
 produces it, so an out-of-order chain does not compile. Crossing a boundary
 **moves** the buffers, so a type per stage costs no allocation. Each stage's
-`Params` is an **empty struct** — not an `Option`, because "this stage is off" is
-deliberately not expressible — and each is now also its stage's recipe section
-(`nf-core/recipe-schema`); `nf-core/report-contract` owns the report. The IR plane
+`Params` is a struct — not an `Option`, because "this stage is off" is
+deliberately not expressible — empty until its epic gives it a knob, and it *is*
+that stage's recipe section (`nf-core/recipe-schema`). Fit gamut is the exception on
+both counts: `FitGamutParams` carries the destination's target, and its recipe
+section is the separate, empty `recipe::FitGamut`; `nf-core/report-contract` owns the report. The IR plane
 rides the whole chain and leaves it with the image — the exit is
 `DisplayReferredImage::into_parts`, a
 consuming unwrap, and it is the boundary's whole surface. `GradedImage` is the

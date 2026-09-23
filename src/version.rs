@@ -490,8 +490,8 @@ pub struct Identity {
     /// full recipe (`convert`, `roll`). Omitted for `inspect` / `estimate`, which
     /// run no conversion and therefore have no effective recipe to identify —
     /// [`Identity::new`] is the constructor for exactly that state — and under
-    /// `--new-flow`, whose resolved recipe describes the legacy chain rather than
-    /// the one that ran.
+    /// `--new-flow`, where what a run's identity hashes is still
+    /// `nf-core/report-contract`'s to decide, although the run has its own recipe.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params_hash: Option<String>,
 }

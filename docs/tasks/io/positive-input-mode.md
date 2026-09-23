@@ -25,7 +25,10 @@ input exists and is refused today.
   ICC (or a declared `--input-meaning colorimetric` reference) gives the pixels
   colorimetric meaning, which `input_semantics` already models as
   `MeasurementMeaning::Colorimetric` and marks "recognized but unsupported: no inverse".
-- From linear ACEScg onward the shared print controls and every display preset apply
+- **In the new chain the entry point is settled** (`nf-scene-correction/stage`): a
+  positive joins at the working space — an `AcesCgImage` — ahead of scene correction,
+  so it gets white balance and exposure like a negative. On the current chain, from
+  linear ACEScg onward the shared print controls and every display preset apply
   unchanged; `film-master` would be the positive's own colorimetry, not a film
   rendering, and its report must say so.
 - A positive-mode scan may still carry a usable IR plane; the holder mask is

@@ -515,7 +515,9 @@ pub fn check_measure_inset(frac: f32) -> Result<()> {
              edge (IR march, 31 real frames), so lower the fraction. There is no \
              explicit measurement region to point at instead — `--base-region` sets \
              the film-base source, not the measured area — so if nothing should be \
-             measured over that area, drop what measures it (`--auto-d-max`).",
+             measured over that area, drop what measures it: `--auto-d-max` on the \
+             current chain, or under `--new-flow` an auto white balance (`--auto-wb`, \
+             or `scene_correction.white_balance` in the recipe).",
             (frac * 2.0 * 100.0).min(100.0)
         )));
     }

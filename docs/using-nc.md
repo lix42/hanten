@@ -9,7 +9,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 5`, built at commit
-> `1033b108e90a` plus the new chain's recipe (`nf-core/recipe-schema`, §11). The staleness signal
+> `9a61136bfe6e` plus the new chain's scene correction (`nf-scene-correction/stage`,
+> §11). The staleness signal
 > is `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -929,6 +930,9 @@ This is deliberate: a flag that quietly did nothing would be worse than a failur
 | `--display-tone-headroom STOPS` | Specular headroom above reference white, `reinhard` only (default `6` = a white point of 64) |
 | `--linear-range LOW,HIGH` | Affine black/white placement, applied last — **display presets only**, which includes the default (see §8) |
 
+(Under `--new-flow` exposure is spelled `--exposure` and white balance is scene
+correction's — §11.)
+
 `--white-balance` and `--auto-wb` are the two faces of one setting and are mutually
 exclusive. The report tells you what was actually used:
 
@@ -1625,8 +1629,9 @@ choosing a chain is a choice of pixels. That is precisely why it must stay out o
 the recipe rather than merely out of the image.
 
 **It renders a minimal picture, not a finished one.** The fixed decode feeds the new
-chain, whose first three stages (scene correction, look, fit range) are still
-identity passes; fit gamut only converts into Display P3 primaries. The result goes
+chain. Scene correction applies white balance and exposure (below); the look and fit
+range are still identity passes, and fit gamut only converts into Display P3
+primaries. The result goes
 to **one destination, a Display P3 16-bit TIFF** — there is no other, and no way to
 choose one:
 
@@ -1661,8 +1666,10 @@ by `--strict`). Whether the picture *looks* right is not what this flow promises
 - **The report is provisional.** The current chain's sections (`reconstruction_result`,
   `output_render`, `dmax`, `white_balance`, …) are absent; a `new_flow` block states
   what ran instead — the decode's resolved `anchor`, `contrast`, `scale` and `offset`,
-  each stage with what it `applied` (`"identity"` for the first three,
-  `"acescg-to-display-p3-matrix"` for fit gamut), the `destination`
+  each stage with what it `applied` (scene correction's from what it resolved —
+  `"identity"`, `"white-balance"`, `"exposure"` or `"white-balance+exposure"`;
+  `"identity"` for the look and fit range; `"acescg-to-display-p3-matrix"` for fit
+  gamut), scene correction's resolved values in `scene_correction`, the `destination`
   (`display-p3-u16-tiff`) and `"sidecar_written": false`. Its final shape is
   `nf-core/report-contract`'s to decide.
 
@@ -1724,7 +1731,10 @@ $ hanten params --new-flow
     "contrast": 2.0,
     "anchor": { "mid-at-base-offset": 0.62 }
   },
-  "scene_correction": {},
+  "scene_correction": {
+    "white_balance": { "explicit": [1.0, 1.0, 1.0] },
+    "exposure": 0.0
+  },
   "look": {},
   "fit_range": {},
   "fit_gamut": {}
@@ -1734,8 +1744,9 @@ $ hanten params --new-flow
 (Abridged; the real output is one value per line.) `input` and `measure` are the
 current chain's sections unchanged. `calibration` holds the film base only — the
 fixed decode reads no reference density. `reconstruction` spells the four decode
-knobs above (`--density-gamma` is `contrast` here). The four rendering stages are
-empty and refuse any key until their stage gains one. There is no `output` section:
+knobs above (`--density-gamma` is `contrast` here). `scene_correction` holds white
+balance and exposure (below); the other three rendering stages are empty and refuse
+any key until their stage gains one. There is no `output` section:
 the new chain writes one fixed destination. `--dump-params` under `--new-flow` writes this
 document with your values resolved, and it reloads under the flag unchanged.
 
@@ -1751,7 +1762,7 @@ does not read. `hanten params --new-flow` writes the new layout; or run without
 
 $ hanten convert … --params v2.json               # "recipe_version": 2, no flag
 usage: recipe v2.json: states `recipe_version`, so it describes the new rendering
-chain — pass `--new-flow` to read it. The current chain's recipe carries no version
+chain, which only `--new-flow` reads. The current chain's recipe carries no version
 ```
 
 Any other `recipe_version` reads on neither chain, and says so rather than sending
@@ -1772,19 +1783,20 @@ it only in a recipe with no `recipe_version`
 
 $ hanten convert … --new-flow --params print.json # "print": {…}
 usage: recipe print.json: `print` is a section of the current chain's recipe, not
-the new one's: the print controls are split across the rendering stages — white
-balance and exposure to `scene_correction` (`nf-scene-correction/stage`), the
-display tone to `fit_range` (`nf-display-stages/fit-range`) — and none has a key
-there yet. Drop it — the current chain reads it only in a recipe with no
-`recipe_version`
+the new one's: white balance and exposure are `scene_correction.white_balance` and
+`scene_correction.exposure`; the display tone goes to `fit_range`
+(`nf-display-stages/fit-range`), the black point splits between scene correction
+and fit range (`nf-scene-correction/flare-removal`), and `linear_range` has no home
+yet (`nf-scene-correction/levels-knob`) — none of those three has a key yet. Drop it
+— the current chain reads it only in a recipe with no `recipe_version`
 ```
 
-So every print and output **flag** is refused as well, each naming the stage that
-will carry it:
+The rest of the print and output **flags** are refused as well, each naming the stage
+that will carry it:
 
 | Refused | Where it goes |
 |---|---|
-| `--print-exposure`, `--white-balance`, `--auto-wb` | the scene-correction stage |
+| `--print-exposure` | renamed: `--exposure` (below) |
 | `--black-point` | split in two — flare/fog in scene correction, display black in fit range — which is why it is not a rename |
 | `--linear-range` | an affine levels remap needing a stage and a name; retiring it outright is a listed outcome |
 | `--display-tone`, `--display-tone-headroom` | the fit-range stage, which is an identity pass today |
@@ -1792,10 +1804,50 @@ will carry it:
 | `--output-preset`, `--out-depth`, `--output-profile`, `--bigtiff` | the new flow's destination set (`nf-destinations/preset-set`) — it writes one destination today, so there is no output policy to choose |
 | `--telemetry`, `--telemetry-file` | the new chain's report and telemetry shape — the record would name the current chain's preset and timing buckets |
 
-Unlike the decode's knees, **no value is spared here** — `--white-balance 1,1,1` and
-`--highlight-compress 0` resolve the documented defaults and are still refused. An
+Unlike the decode's knees, **no value is spared here** — `--highlight-compress 0`
+resolves the documented default and is still refused. An
 identity value is normally left alone so a flag can clear what a recipe pinned, and
 the new chain's recipe has no `print` section, so there is nothing to clear.
+
+**Scene correction** is the first rendering stage, and the only one with knobs so
+far. It applies white balance and exposure as per-channel gains on linear ACEScg —
+after the decode's 3×3, before the look — and clamps nothing:
+
+| Flag | Recipe key | |
+|---|---|---|
+| `--white-balance R,G,B` | `scene_correction.white_balance` = `{"explicit": [r, g, b]}` | stated gains (default `[1, 1, 1]`) |
+| `--auto-wb MODE` | `scene_correction.white_balance` = `"gray-world"` or `"percentile"` | gains estimated per frame, green-anchored |
+| `--exposure EV` | `scene_correction.exposure` | a gain of `2^EV` (default `0`) |
+
+`--exposure` is the new chain's spelling: under `--new-flow`, `--print-exposure` is
+refused with `Use --exposure`, and without the flag `--exposure` is refused naming
+`--print-exposure`. The white-balance flags keep one spelling on both chains, and
+precedence is by source: `--white-balance 1,1,1` over a recipe's auto mode means
+neutral gains, not a re-estimate. The recipe takes only the tagged form — a bare
+`[r, g, b]` array, which the current chain still accepts, is refused.
+
+An auto mode estimates over the **effective area** (the measurement region every run
+reports as `effective_area`), not the whole frame, so the film holder and rebate do
+not pull the estimate. The report says what it came to and where from:
+
+```console
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
+    --auto-wb percentile --exposure 0.5 | jq '.new_flow.scene_correction'
+{
+  "white_balance": [0.97473544, 1.0, 0.7211308],
+  "provenance": "estimated",
+  "estimator": "percentile",
+  "region": [23, 23, 456, 416],
+  "exposure": 0.5
+}
+```
+
+Stating those gains with `--white-balance` (or in the roll's recipe) reproduces the
+frame byte for byte — measure once, reuse across the roll. Stated gains report
+`"provenance": "stated"` and no region. Because an auto mode reads the region, an
+**empty** one (a holder and inset that cover the frame) is a refusal (exit 2) under
+`--auto-wb`, naming `--white-balance` as the way out; with stated gains it stays a
+warning.
 
 What survives untouched is everything before the seam: `--film-base`,
 `--base-region`, `--auto-base`, `--measure-inset`, `--input-transfer`,
@@ -1810,7 +1862,8 @@ On `roll` the flag applies to every frame: each is written as
 takes no conversion flags, so its knobs come from the shared recipe and the
 per-frame overrides. The shared recipe must be the new chain's document, and each
 override is merged onto it and rendered with it, so an override uses the new
-sections too (`{"reconstruction": {"contrast": 1.8}}`) and one naming a
+sections too (`{"reconstruction": {"contrast": 1.8}}`,
+`{"scene_correction": {"exposure": -1}}`) and one naming a
 current-chain key is refused the same way — naming its frame — at exit 2.
 
 ---

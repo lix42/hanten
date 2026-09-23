@@ -270,8 +270,10 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `pipeline/{film_base,color,stages,input_semantics,working_space,render_split,display_tone,sdr,hdr,gain_map,memory,pixels}.rs`
   plus the **new-flow chain** — `pipeline/{chain,scene_correction,look,fit_range,fit_gamut,working_image}.rs`,
   reached by `--new-flow` since `nf-core/minimal-end-to-end`: `algo::fixed` feeds it,
-  the first three stages are identity passes, `fit_gamut` applies only the change of
-  primaries into its `DestinationGamut`, and `cli::render_new_flow_frame` writes the one
+  `scene_correction` applies white balance and exposure (the auto estimators live in
+  `pipeline/white_balance.rs`, shared with the current chain), look and fit range are
+  identity passes, `fit_gamut` applies only the change of primaries into its
+  `DestinationGamut`, and `cli::render_new_flow_frame` writes the one
   destination — a Display P3 16-bit TIFF, no sidecar, sized by
   `RunProfile::NewFlowSdrTiff` (the boundary types are what pin the stage order;
   `working_image::WorkingBuffer` is their shared payload). **The destination's gamut

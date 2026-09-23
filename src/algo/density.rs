@@ -70,7 +70,7 @@
 //! render **identical** color (no per-channel term).
 //!
 //! **Auto neutral white balance (`WbSource`).** The stage-4 white-balance
-//! gains come from [`WbSource`]: `Explicit` gains (the default, `[1,1,1]`) are
+//! gains come from [`WbSource`](crate::types::WbSource): `Explicit` gains (the default, `[1,1,1]`) are
 //! applied directly; the `GrayWorld` / `Percentile` auto modes first
 //! *estimate* the gains from the neutrally-reconstructed film positive
 //! (deterministic statistics — trimmed channel means / matched near-white
@@ -101,7 +101,7 @@ use rayon::prelude::*;
 use crate::algo::{FilmRgbImage, ReconstructionReport, sigmoid};
 use crate::types::{
     AnchorPlacement, BalanceRange, DensityCurve, DensityParams, DmaxInput, DmaxSource, FilmBase,
-    LinearImage, NcError, PrintParams, Result, WbSource,
+    LinearImage, NcError, PrintParams, Result,
 };
 
 /// Floor applied to the scan transmission before the `log10`, so a zero / negative
@@ -541,8 +541,8 @@ pub(crate) fn apply_curve(density: DensityImage, tone: impl Fn(f32) -> f32 + Syn
 /// soft-clip.
 ///
 /// The white-balance gains arrive **resolved** (`[f32; 3]`), not as the
-/// `print.white_balance` [`WbSource`]: an auto mode is estimated from the film
-/// positive *before* this call (via [`estimate_wb_gains`]) and applied here
+/// `print.white_balance` [`WbSource`](crate::types::WbSource): an auto mode is estimated from the film
+/// positive *before* this call (via [`white_balance::estimate_gains`](crate::pipeline::white_balance::estimate_gains)) and applied here
 /// through the standard slot, so a later run reusing the reported gains via
 /// explicit `--white-balance` is bit-identical. `print.white_balance` itself is
 /// deliberately not read here.
@@ -616,7 +616,7 @@ pub(crate) const NOMINAL_DMAX: f32 = 1.3;
 /// the buffer is not consulted); `Explicit` returns the given roll-fixed value;
 /// `Auto` (opt-in) measures a high percentile of the *finite* densities (scalar,
 /// pooled across channels — a per-channel anchor would double as color correction,
-/// which is the auto-WB modes' job, see [`estimate_wb_gains`]); `None` yields no
+/// which is the auto-WB modes' job, see [`white_balance::estimate_gains`](crate::pipeline::white_balance::estimate_gains)); `None` yields no
 /// anchor. Deterministic: same buffer + params ⇒ same value. `pub(crate)` because
 /// the sigmoid curve anchors its S-curve on the same resolved `Dmax` rather than
 /// inventing a second measurement.
@@ -872,167 +872,6 @@ fn collect_region_samples(density: &DensityImage, rect: [u32; 4]) -> Vec<f32> {
     finite
 }
 
-// ---------------------------------------------------------------------------
-// Auto white balance (stage-4 gain estimation)
-// ---------------------------------------------------------------------------
-
-/// Cap on how many *pixels* the auto-WB statistics examine. Like
-/// [`AUTO_DMAX_MAX_SAMPLES`], ~1M pixels are statistically indistinguishable
-/// from the full population for a mean/percentile, and the cap bounds the
-/// analysis to a small transient buffer per channel on large scans.
-const AUTO_WB_MAX_PIXELS: usize = 1 << 20;
-
-/// Percentile equalized by [`WbSource::Percentile`] (per channel, nearest rank).
-/// High enough to sit on near-white content — where a neutral rendition matters
-/// most — while the top 5% (specular sparkle, dust, would-be-clipped extremes)
-/// never enters the statistic.
-const AUTO_WB_PERCENTILE: f32 = 0.95;
-
-/// Fraction trimmed from *each* end of a channel's distribution before the
-/// [`WbSource::GrayWorld`] mean, so dead blacks and clipped/specular extremes
-/// can't skew it. Frame-relative (a quantile, not an absolute level), so it
-/// works for display-anchored and scene-referred (`--no-d-max`) renders alike.
-const AUTO_WB_TRIM: f32 = 0.01;
-
-/// Deterministic pixel stride for the WB statistics: the smallest stride that
-/// keeps the examined pixel count under [`AUTO_WB_MAX_PIXELS`]. Strides whole
-/// pixels (interleaved RGB triples), so unlike [`auto_dmax_stride`] there is no
-/// channel-bias concern — every sampled pixel contributes all three channels.
-fn auto_wb_stride(pixels: usize) -> usize {
-    pixels.div_ceil(AUTO_WB_MAX_PIXELS).max(1)
-}
-
-/// Sample the film positive on the deterministic [`auto_wb_stride`], yielding
-/// the small interleaved-RGB buffer the estimator consumes.
-///
-/// This is bit-exact with the pre-split approach — stride the *density* buffer
-/// and tone only the sampled pixels — because a per-sample map commutes with
-/// striding: the curve stage now tones the whole buffer once (it always did the
-/// work for the final render), and this stride picks the same pixels with the
-/// same values. The estimator must therefore *not* stride again (see
-/// [`estimate_wb_gains`] / [`wb_channel_samples`]): it examines exactly this
-/// pre-sampled set.
-pub(crate) fn sample_positive(rgb: &[f32]) -> Vec<f32> {
-    let pixels = rgb.len() / 3;
-    let stride = auto_wb_stride(pixels);
-    let mut sampled = Vec::with_capacity(pixels.div_ceil(stride) * 3);
-    for px in rgb.as_chunks::<3>().0.iter().step_by(stride) {
-        sampled.extend_from_slice(px);
-    }
-    sampled
-}
-
-/// Per-channel *finite* samples of an already-sampled positive `rgb` (see
-/// [`sample_positive`] — the stride is applied by the caller, not here),
-/// each channel sorted ascending (`total_cmp`). Non-finite samples (`NaN`/`±inf`
-/// from corrupt input) are excluded per sample, so a bad pixel can't poison a
-/// statistic. The full sort makes every downstream statistic order-defined,
-/// hence deterministic: same buffer ⇒ same samples ⇒ same gains.
-fn wb_channel_samples(rgb: &[f32]) -> [Vec<f32>; 3] {
-    let cap = rgb.len() / 3;
-    let mut channels = [
-        Vec::with_capacity(cap),
-        Vec::with_capacity(cap),
-        Vec::with_capacity(cap),
-    ];
-    for px in rgb.as_chunks::<3>().0 {
-        for (c, channel) in channels.iter_mut().enumerate() {
-            if px[c].is_finite() {
-                channel.push(px[c]);
-            }
-        }
-    }
-    for channel in &mut channels {
-        channel.sort_unstable_by(f32::total_cmp);
-    }
-    channels
-}
-
-/// Nearest-rank percentile of a sorted, non-empty slice (`round((n−1)·p)`, the
-/// same convention as [`auto_dmax`]).
-fn nearest_rank(sorted: &[f32], p: f32) -> f32 {
-    sorted[(((sorted.len() - 1) as f32) * p).round() as usize]
-}
-
-/// Mean of the central `[trim, 1 − trim]` quantile span of a sorted, non-empty
-/// slice. Accumulates in `f64` sequentially over the sorted order — a fully
-/// order-defined sum, so the result is deterministic (a parallel float
-/// reduction would not be).
-fn trimmed_mean(sorted: &[f32], trim: f32) -> f32 {
-    let lo = (((sorted.len() - 1) as f32) * trim).round() as usize;
-    let hi = (((sorted.len() - 1) as f32) * (1.0 - trim)).round() as usize;
-    let span = &sorted[lo..=hi];
-    (span.iter().map(|&v| f64::from(v)).sum::<f64>() / span.len() as f64) as f32
-}
-
-/// Resolve the stage-4 white-balance gains `[r, g, b]` from the neutrally
-/// reconstructed film positive (`rgb`: curve-stage output — no gains, exposure,
-/// black point, or soft-clip applied yet).
-///
-/// `Explicit` gains pass through untouched, keeping the function total (callers
-/// shortcut that case to skip the analysis pass entirely). Otherwise `rgb`
-/// arrives **already sampled** — the caller strides the film positive (see
-/// [`sample_positive`]), so this function examines every pixel it is given and
-/// does *not* stride again. The auto modes are pure, deterministic statistics
-/// over the finite samples (see [`wb_channel_samples`]); distribution extremes
-/// are excluded by construction (the percentile's top tail / the trimmed mean),
-/// so clipped speculars and dead pixels don't skew the estimate:
-///
-/// - [`WbSource::GrayWorld`]: equalize the per-channel trimmed means — a cast
-///   shows up as unequal channel averages (assumes the frame averages neutral).
-/// - [`WbSource::Percentile`]: equalize the per-channel [`AUTO_WB_PERCENTILE`]
-///   levels — a cast shows up as unequal near-white levels; robust to a
-///   dominant scene color that would bias the means.
-///
-/// Gains are **green-anchored** (`g = 1`): auto WB corrects *color*, not
-/// overall brightness — exposure is `print_exposure`'s job. Fails loudly
-/// ([`NcError::Other`], exit 1) when a channel yields no usable level (all
-/// samples non-finite, or a non-positive level no multiplicative gain can
-/// correct) — never silently-neutral or garbage gains.
-pub(crate) fn estimate_wb_gains(rgb: &[f32], source: WbSource) -> Result<[f32; 3]> {
-    let mode = match source {
-        WbSource::Explicit(gains) => return Ok(gains),
-        WbSource::GrayWorld => "gray-world",
-        WbSource::Percentile => "percentile",
-    };
-    let level_of = |sorted: &[f32]| match source {
-        WbSource::GrayWorld => trimmed_mean(sorted, AUTO_WB_TRIM),
-        // `Explicit` returned above; only `Percentile` reaches here.
-        _ => nearest_rank(sorted, AUTO_WB_PERCENTILE),
-    };
-
-    let channels = wb_channel_samples(rgb);
-    let mut level = [0.0f32; 3];
-    for (c, name) in ["red", "green", "blue"].into_iter().enumerate() {
-        let l = if channels[c].is_empty() {
-            f32::NAN // no usable sample in this channel
-        } else {
-            level_of(&channels[c])
-        };
-        if !l.is_finite() || l <= 0.0 {
-            return Err(NcError::Other(format!(
-                "auto white balance ({mode}): the {name} channel has no usable \
-                 level (got {l}); pass explicit --white-balance gains instead"
-            )));
-        }
-        level[c] = l;
-    }
-
-    let gains = [level[1] / level[0], 1.0, level[1] / level[2]];
-    for (g, name) in gains.into_iter().zip(["red", "green", "blue"]) {
-        // Positive finite levels can still divide into inf/0 across an extreme
-        // dynamic range (subnormal denominators); guard the gains themselves.
-        if !g.is_finite() || g <= 0.0 {
-            return Err(NcError::Other(format!(
-                "auto white balance ({mode}): estimated {name} gain is not a \
-                 positive finite value (got {g}); pass explicit --white-balance \
-                 gains instead"
-            )));
-        }
-    }
-    Ok(gains)
-}
-
 /// Highlight soft-clip: a smooth roll-off of values above the nominal display
 /// white (`1.0`). Below white the value passes through unchanged; above it the
 /// excess is compressed with an exponential knee of width `amount`, so the output
@@ -1076,7 +915,7 @@ pub(crate) fn check_base(base: &FilmBase) -> Result<()> {
 mod tests {
     use super::*;
     use crate::algo::{finish_print, reconstruct as reconstruct_config};
-    use crate::types::{ExponentialParams, Reconstruction};
+    use crate::types::{ExponentialParams, Reconstruction, WbSource};
 
     fn approx(a: f32, b: f32, eps: f32) -> bool {
         (a - b).abs() <= eps
@@ -2608,116 +2447,6 @@ mod tests {
                 out.rgb[c]
             );
         }
-    }
-
-    // --- auto white balance ------------------------------------------------
-
-    /// An interleaved RGB buffer of `n` copies of `px` (a rendered positive for
-    /// the estimator tests).
-    fn uniform_positive(px: [f32; 3], n: usize) -> Vec<f32> {
-        px.iter().copied().cycle().take(3 * n).collect()
-    }
-
-    #[test]
-    fn estimate_wb_explicit_gains_pass_through() {
-        // Explicit is a pass-through: no statistics run, the image is ignored.
-        let gains = [1.3, 1.0, 0.7];
-        let got = estimate_wb_gains(&[], WbSource::Explicit(gains)).unwrap();
-        assert_eq!(got, gains);
-    }
-
-    #[test]
-    fn gray_world_gains_neutralize_a_uniform_cast() {
-        // Every pixel carries the same cast, so the trimmed means are exactly the
-        // cast and the gains are the green-anchored inverse: applying them
-        // equalizes the channels.
-        let rgb = uniform_positive([0.4, 0.5, 0.8], 200);
-        let gains = estimate_wb_gains(&rgb, WbSource::GrayWorld).unwrap();
-        assert!(approx(gains[0], 0.5 / 0.4, 1e-5), "r gain {}", gains[0]);
-        assert_eq!(gains[1], 1.0, "green-anchored");
-        assert!(approx(gains[2], 0.5 / 0.8, 1e-5), "b gain {}", gains[2]);
-        for px in rgb.as_chunks::<3>().0 {
-            let balanced = [px[0] * gains[0], px[1] * gains[1], px[2] * gains[2]];
-            assert!(approx(balanced[0], balanced[1], 1e-5));
-            assert!(approx(balanced[1], balanced[2], 1e-5));
-        }
-    }
-
-    #[test]
-    fn percentile_gains_equalize_near_white_levels() {
-        // Channels are the same ramp scaled per channel, so every per-channel
-        // statistic scales with it and both modes recover the inverse scale.
-        let scale = [0.8f32, 1.0, 1.2];
-        let mut rgb = Vec::new();
-        for i in 0..100 {
-            let t = (i + 1) as f32 / 100.0;
-            rgb.extend_from_slice(&[scale[0] * t, scale[1] * t, scale[2] * t]);
-        }
-        for mode in [WbSource::Percentile, WbSource::GrayWorld] {
-            let gains = estimate_wb_gains(&rgb, mode).unwrap();
-            assert!(approx(gains[0], 1.0 / 0.8, 1e-4), "{mode:?} r {}", gains[0]);
-            assert_eq!(gains[1], 1.0, "{mode:?} green-anchored");
-            assert!(approx(gains[2], 1.0 / 1.2, 1e-4), "{mode:?} b {}", gains[2]);
-        }
-    }
-
-    #[test]
-    fn percentile_mode_resists_a_dominant_color_gray_world_does_not() {
-        // 90% of the frame is a strong green subject; 10% is genuinely neutral
-        // near-white. The near-white percentile lands on the neutral highlights
-        // (gains ≈ 1), while the gray-world means are dragged by the subject —
-        // the documented tradeoff between the two modes.
-        let mut rgb = uniform_positive([0.2, 0.6, 0.2], 90);
-        rgb.extend(uniform_positive([0.9, 0.9, 0.9], 10));
-        let p = estimate_wb_gains(&rgb, WbSource::Percentile).unwrap();
-        for (c, gain) in p.into_iter().enumerate() {
-            assert!(approx(gain, 1.0, 1e-5), "percentile chan {c}: {gain}");
-        }
-        let gw = estimate_wb_gains(&rgb, WbSource::GrayWorld).unwrap();
-        assert!(
-            gw[0] > 2.0,
-            "gray-world red gain dragged by cast: {}",
-            gw[0]
-        );
-    }
-
-    #[test]
-    fn estimate_wb_ignores_non_finite_and_extreme_samples() {
-        // A NaN sample, an inf sample, and a huge finite outlier (< 1% of the
-        // data) must not move either statistic off the bulk values.
-        let mut rgb = uniform_positive([0.4, 0.5, 0.6], 200);
-        rgb.extend_from_slice(&[1000.0, f32::NAN, f32::INFINITY]);
-        for mode in [WbSource::GrayWorld, WbSource::Percentile] {
-            let gains = estimate_wb_gains(&rgb, mode).unwrap();
-            assert!(approx(gains[0], 0.5 / 0.4, 1e-3), "{mode:?} r {}", gains[0]);
-            assert!(approx(gains[2], 0.5 / 0.6, 1e-3), "{mode:?} b {}", gains[2]);
-        }
-    }
-
-    #[test]
-    fn estimate_wb_fails_loudly_on_an_unusable_channel() {
-        // An all-non-finite channel has no usable level — that must be a loud
-        // error (exit 1), never silently-neutral or garbage gains.
-        let rgb = uniform_positive([f32::NAN, 0.5, 0.5], 8);
-        for mode in [WbSource::GrayWorld, WbSource::Percentile] {
-            let err = estimate_wb_gains(&rgb, mode).unwrap_err();
-            assert_eq!(err.exit_code(), 1, "{mode:?}");
-        }
-        // A non-positive level (possible only for degenerate input — the neutral
-        // analysis positive itself is 10^x > 0) is rejected the same way.
-        let rgb = uniform_positive([0.0, 0.5, 0.5], 8);
-        for mode in [WbSource::GrayWorld, WbSource::Percentile] {
-            assert!(estimate_wb_gains(&rgb, mode).is_err(), "{mode:?}");
-        }
-    }
-
-    #[test]
-    fn auto_wb_stride_is_bounded() {
-        assert_eq!(auto_wb_stride(0), 1);
-        assert_eq!(auto_wb_stride(AUTO_WB_MAX_PIXELS), 1);
-        let big = 7 * AUTO_WB_MAX_PIXELS + 3;
-        let stride = auto_wb_stride(big);
-        assert!(big.div_ceil(stride) <= AUTO_WB_MAX_PIXELS);
     }
 
     #[test]

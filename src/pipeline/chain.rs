@@ -3,9 +3,10 @@
 //!
 //! The chain `--new-flow` selects (`docs/design-update.md` Part 2,
 //! `docs/nf-migration.md`), fed by the fixed decode (`algo::fixed`) and rendering
-//! into one destination (`cli::convert_frame`, `nf-core/minimal-end-to-end`). The
-//! first three stages are **identity passes** — the stage epics fill them — and
-//! fit gamut applies only the change of primaries into the destination's gamut.
+//! into one destination (`cli::convert_frame`, `nf-core/minimal-end-to-end`). Scene
+//! correction applies white balance and exposure; the look and fit range are still
+//! **identity passes** — their epics fill them — and fit gamut applies only the
+//! change of primaries into the destination's gamut.
 //!
 //! **The order is carried by the types, not by this function.** Each stage's
 //! input is the previous stage's output type, and each of those can be minted
@@ -26,7 +27,7 @@
 use crate::pipeline::fit_gamut::{self, DisplayReferredImage, FitGamutParams};
 use crate::pipeline::fit_range::{self, FitRangeParams};
 use crate::pipeline::look::{self, LookParams};
-use crate::pipeline::scene_correction::{self, SceneCorrectionParams};
+use crate::pipeline::scene_correction::{self, SceneCorrection, SceneCorrectionParams};
 use crate::pipeline::working_space::AcesCgImage;
 use crate::types::Result;
 
@@ -47,26 +48,26 @@ pub struct ChainParams {
     pub fit_gamut: FitGamutParams,
 }
 
-impl ChainParams {
-    /// Each stage, in [`render`]'s order, with what it applies under these
-    /// parameters — the report's account of the chain. Kept beside `render` so a
-    /// stage inserted, moved or renamed there cannot leave the report listing the
-    /// old chain.
-    pub fn applied(&self) -> [(&'static str, &'static str); 4] {
-        [
-            ("scene_correction", self.scene_correction.applied()),
-            ("look", self.look.applied()),
-            ("fit_range", self.fit_range.applied()),
-            ("fit_gamut", self.fit_gamut.applied()),
-        ]
-    }
+/// What [`render`] produced: the display-referred image, and what the chain applied
+/// to reach it.
+pub struct Rendered {
+    pub image: DisplayReferredImage,
+    /// Each stage, in the order `render` ran it, with what it applied — the report's
+    /// account of the chain. Built inside `render` so a stage inserted, moved or
+    /// renamed there cannot leave the report listing the old chain, and read off
+    /// *resolved* values where a stage resolves any, so an estimate is reported as
+    /// what it came to.
+    pub applied: [(&'static str, &'static str); 4],
+    /// Scene correction's values as resolved for this frame — the estimated gains
+    /// included, which is what makes an auto run reproducible from its report.
+    pub scene_correction: SceneCorrection,
 }
 
 /// Render an [`AcesCgImage`] through the new chain.
 ///
-/// **Today this is the destination's 3×3 and nothing else** — the first three
-/// stages are identities and fit gamut applies only the change of primaries — so
-/// non-finite samples and values outside `[0, 1]` ride through unclamped: the
+/// **Today this is scene correction's per-channel gains and the destination's 3×3**
+/// — look and fit range are identities, and fit gamut applies only the change of
+/// primaries — so non-finite samples and values outside `[0, 1]` ride through unclamped: the
 /// working range is preserved to the encoder, which is the only place clamping
 /// happens. The clamping boundary is permanent; the *unclamped* half is a statement
 /// about today's stages, not a contract — a filled fit range may legitimately refuse
@@ -88,11 +89,31 @@ impl ChainParams {
 /// It splits *from* [`GradedImage`], whichever way it lands.
 ///
 /// [`GradedImage`]: crate::pipeline::look::GradedImage
-pub fn render(image: AcesCgImage, params: &ChainParams) -> Result<DisplayReferredImage> {
-    let corrected = scene_correction::apply(image, &params.scene_correction)?;
+///
+/// `measure_region` is the frame's measurement region (`[x, y, w, h]`), for the
+/// stages that measure the frame they correct — today only an auto white balance.
+/// It is a fact about the frame, not a parameter, which is why it is not in
+/// [`ChainParams`].
+pub fn render(
+    image: AcesCgImage,
+    params: &ChainParams,
+    measure_region: Option<[u32; 4]>,
+) -> Result<Rendered> {
+    let (corrected, scene_correction) =
+        scene_correction::apply(image, &params.scene_correction, measure_region)?;
     let graded = look::apply(corrected, &params.look)?;
     let fitted = fit_range::apply(graded, &params.fit_range)?;
-    fit_gamut::apply(fitted, &params.fit_gamut)
+    let image = fit_gamut::apply(fitted, &params.fit_gamut)?;
+    Ok(Rendered {
+        image,
+        applied: [
+            ("scene_correction", scene_correction.applied()),
+            ("look", params.look.applied()),
+            ("fit_range", params.fit_range.applied()),
+            ("fit_gamut", params.fit_gamut.applied()),
+        ],
+        scene_correction,
+    })
 }
 
 #[cfg(test)]
@@ -102,6 +123,7 @@ mod tests {
     use crate::pipeline::colorimetry::pinned::ACESCG_TO_DISPLAY_P3;
     use crate::pipeline::fit_gamut::DestinationGamut;
     use crate::pipeline::fit_range::RangeFittedImage;
+    use crate::pipeline::scene_correction::WhiteBalance;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
     use crate::types::{
         DensityCurve, DensityParams, ExponentialParams, FilmBase, LinearImage, Reconstruction,
@@ -147,10 +169,13 @@ mod tests {
         pixels.iter().map(|v| v.to_bits()).collect()
     }
 
-    /// The chain up to fit range — the three stages that are still identities.
+    /// The chain up to fit range at default parameters, where all three stages are
+    /// identities.
     fn through_fit_range(image: AcesCgImage) -> RangeFittedImage {
         let p = params();
-        let corrected = scene_correction::apply(image, &p.scene_correction).unwrap();
+        let corrected = scene_correction::apply(image, &p.scene_correction, None)
+            .unwrap()
+            .0;
         let graded = look::apply(corrected, &p.look).unwrap();
         fit_range::apply(graded, &p.fit_range).unwrap()
     }
@@ -234,7 +259,7 @@ mod tests {
         let aces = aces_from(3, 1, &AWKWARD, None);
         let expected = bits(&to_p3(aces.rgb()));
 
-        let (out, gamut) = render(aces, &params()).unwrap().into_parts();
+        let (out, gamut) = render(aces, &params(), None).unwrap().image.into_parts();
 
         assert_eq!(gamut, DestinationGamut::DisplayP3);
         assert_eq!(bits(&out.rgb), expected);
@@ -248,7 +273,7 @@ mod tests {
         // cube (which an unclamped decode can produce) lands outside P3 with a negative
         // channel. Clamping is the encoder's alone.
         let aces = aces_from(2, 1, &[4.0, 4.0, 4.0, 1.0, -0.5, -0.5], None);
-        let (out, _) = render(aces, &params()).unwrap().into_parts();
+        let (out, _) = render(aces, &params(), None).unwrap().image.into_parts();
 
         assert!(out.rgb.iter().all(|v| v.is_finite()));
         assert!(out.rgb[..3].iter().all(|v| *v > 1.0), "{:?}", &out.rgb[..3]);
@@ -267,7 +292,7 @@ mod tests {
             "the film-RGB neutral must reach the chain as an ACEScg neutral: {neutral:?}"
         );
 
-        let (out, _) = render(aces, &params()).unwrap().into_parts();
+        let (out, _) = render(aces, &params(), None).unwrap().image.into_parts();
         for c in 0..3 {
             assert!(
                 (out.rgb[c] - neutral[0]).abs() < 1e-5,
@@ -289,7 +314,7 @@ mod tests {
         let aces = aces_from(2, 2, &[0.25; 12], Some(ir.clone()));
         let expected = bits(&to_p3(aces.rgb()));
 
-        let (linear, _) = render(aces, &params()).unwrap().into_parts();
+        let (linear, _) = render(aces, &params(), None).unwrap().image.into_parts();
 
         assert_eq!(linear.width, 2);
         assert_eq!(linear.height, 2);
@@ -300,8 +325,9 @@ mod tests {
     #[test]
     fn an_ir_free_input_stays_ir_free() {
         // Falsifiability for the test above: the plane must be carried, not minted.
-        let (out, _) = render(aces_from(2, 2, &[0.5; 12], None), &params())
+        let (out, _) = render(aces_from(2, 2, &[0.5; 12], None), &params(), None)
             .unwrap()
+            .image
             .into_parts();
         assert_eq!(out.ir, None);
     }
@@ -331,7 +357,7 @@ mod tests {
             let aces = map_nc_film_rgb_v1(film);
             let expected = bits(&to_p3(aces.rgb()));
 
-            let (out, _) = render(aces, &params()).unwrap().into_parts();
+            let (out, _) = render(aces, &params(), None).unwrap().image.into_parts();
 
             assert_eq!(bits(&out.rgb), expected, "{config:?}");
         }
@@ -342,19 +368,54 @@ mod tests {
         // The chain written out by hand. It compiles only in this order: each
         // stage takes the previous stage's output type, and nothing outside the
         // producing module can mint one — so changing a stage's position is a
-        // compile error here. While the first three stages are identities,
-        // reordering them is unobservable at runtime, so no runtime assertion can
-        // catch it; real order coverage arrives with the first of them that does
-        // something.
+        // compile error here. The runtime half — that scene correction's gains land
+        // *before* the change of primaries — is
+        // `scene_correction_runs_before_the_change_of_primaries`.
         let aces = aces_from(1, 1, &[0.2, 0.4, 0.6], None);
         let p = params();
 
-        let corrected = scene_correction::apply(aces, &p.scene_correction).unwrap();
+        let corrected = scene_correction::apply(aces, &p.scene_correction, None)
+            .unwrap()
+            .0;
         let graded = look::apply(corrected, &p.look).unwrap();
         let fitted = fit_range::apply(graded, &p.fit_range).unwrap();
         let out: DisplayReferredImage = fit_gamut::apply(fitted, &p.fit_gamut).unwrap();
 
         assert_eq!(out.into_parts().0.width, 1);
+    }
+
+    #[test]
+    fn scene_correction_runs_before_the_change_of_primaries() {
+        // Per-channel gains do not commute with the 3×3, so the two orders give
+        // different pixels — and only one of them is scene correction's contract:
+        // white balance acts on ACEScg channels, before the destination's primaries.
+        let rgb = [0.2, 0.4, 0.6];
+        let aces = aces_from(1, 1, &rgb, None);
+        let gains = [2.0f32, 1.0, 0.5];
+        let balanced: Vec<f32> = aces
+            .rgb()
+            .iter()
+            .enumerate()
+            .map(|(i, v)| v * gains[i % 3])
+            .collect();
+        let after: Vec<f32> = to_p3(aces.rgb())
+            .iter()
+            .enumerate()
+            .map(|(i, v)| v * gains[i % 3])
+            .collect();
+        let mut p = params();
+        p.scene_correction.white_balance = WhiteBalance::Explicit(gains);
+
+        let rendered = render(aces, &p, None).unwrap();
+        let (out, _) = rendered.image.into_parts();
+
+        assert_eq!(bits(&out.rgb), bits(&to_p3(&balanced)));
+        assert_ne!(
+            bits(&out.rgb),
+            bits(&after),
+            "the other order must differ here"
+        );
+        assert_eq!(rendered.applied[0], ("scene_correction", "white-balance"));
     }
 
     #[test]

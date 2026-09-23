@@ -1300,7 +1300,10 @@ top-level **document version** rather than per-object ones:
     "contrast": 2.0,
     "anchor": {"mid-at-base-offset": 0.62}
   },
-  "scene_correction": {},
+  "scene_correction": {
+    "white_balance": {"explicit": [1.0, 1.0, 1.0]},
+    "exposure": 0.0
+  },
   "look": {},
   "fit_range": {},
   "fit_gamut": {}
@@ -1311,8 +1314,9 @@ top-level **document version** rather than per-object ones:
   the current chain; `calibration` holds the film base alone, since the fixed
   decode reads no reference density. `reconstruction` is the fixed decode's
   parameters (`--density-scale`, `--density-offset`, `--density-gamma`,
-  `--anchor-mid-offset`). The four rendering stages are present and empty until
-  each stage's task gives it a knob, and refuse any key until then. There is no
+  `--anchor-mid-offset`). `scene_correction` is white balance and exposure (below).
+  The other three rendering stages are present and empty until each stage's task
+  gives it a knob, and refuse any key until then. There is no
   `output` section while the new chain writes one fixed destination.
 - **The version is the chain declaration.** `recipe_version` is required and is
   exactly `2`. Under `--new-flow` a recipe without it is refused; without the flag,
@@ -1324,6 +1328,16 @@ top-level **document version** rather than per-object ones:
   `--new-flow` writes the resolved one; either reloads under the flag unchanged.
   `recipe_version`, like `params`, is reserved and never a key of the current
   chain's recipe.
+
+- **`scene_correction`** (`nf-scene-correction/stage`): per-channel gains on linear
+  ACEScg, after the NC film RGB v1 3×3 and before the look. `white_balance` is
+  `{"explicit": [r, g, b]}` (`--white-balance`; finite and positive), `"gray-world"`
+  or `"percentile"` (`--auto-wb`) — an auto mode estimates green-anchored gains per
+  frame over the effective area, so an empty area is a refusal under it. `exposure`
+  is in stops (`--exposure`, the new chain's spelling of `--print-exposure`), applied
+  as `2^EV`; each gain times it must be a normal `f32`. The report's
+  `new_flow.scene_correction` states the gains applied, their provenance
+  (`stated` / `estimated`, with the estimator and region), and the exposure.
 
 This section states the shape. Each stage's keys are specified by the task that
 ships the knob, not written here ahead of the code.
@@ -2928,7 +2942,8 @@ nc/
     │   ├── pixels.rs     # the parallel per-pixel map drivers (byte-identical to a loop)
     │   ├── memory.rs     # peak-memory sizing model + budget preflight
     │   ├── stages.rs     # stage wiring as pure functions
-    │   ├── chain.rs           # the --new-flow chain, composed (mostly identity stages today)
+    │   ├── white_balance.rs # auto white-balance estimators (both chains)
+    │   ├── chain.rs           # the --new-flow chain, composed (look and fit range still identities)
     │   ├── working_image.rs   # the buffer every new-flow stage boundary carries
     │   ├── scene_correction.rs # new flow stage 1: WB, exposure, flare (scene-referred)
     │   ├── look.rs            # new flow stage 2: contrast, grade, highlight desaturation
@@ -2951,8 +2966,9 @@ nc/
 The tree is the shipped module set, not a proposal — it had drifted by nine modules
 and is worth re-checking whenever one is added. The six new-flow modules are the
 migration's chain (`docs/design-update.md`, `docs/nf-migration.md`). `--new-flow`
-runs them — the fixed decode, three identity stages, fit gamut's change of primaries,
-and one Display P3 16-bit TIFF destination — but nothing in this spec's pipeline
+runs them — the fixed decode, scene correction's white balance and exposure, two
+identity stages, fit gamut's change of primaries, and one Display P3 16-bit TIFF
+destination — but nothing in this spec's pipeline
 runs through them yet.
 
 ### Candidate crates
