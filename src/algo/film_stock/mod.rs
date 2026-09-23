@@ -335,11 +335,15 @@ mod tests {
         Reconstruction,
     };
 
+    /// `generic-c41`'s own mid-grey aim above base, red — the averaged curve's, not the
+    /// mean of the table below (0.617), which averages numbers rather than curves.
+    const GENERIC_MID_ABOVE_BASE: f32 = 0.624;
+
     /// `mid aim − D-min` per stock, from the datasheets (progress log, 2026-09-04). These
     /// are *not* read by the render — the curve carries the placement — so this table
     /// exists only to prove the log-exposure axis was shifted correctly when the curves
-    /// were generated.
-    const MID_ABOVE_BASE: &[(&str, f32)] = &[
+    /// were generated, and to bound the fixed decode's hand-frozen `d`.
+    const STOCK_MID_ABOVE_BASE: &[(&str, f32)] = &[
         ("ektar-100", 0.611),
         ("portra-160", 0.640),
         ("portra-400", 0.600),
@@ -621,7 +625,7 @@ mod tests {
     /// generated data.
     #[test]
     fn published_mid_grey_inverts_to_eighteen_percent() {
-        for (name, mid_above_base) in MID_ABOVE_BASE {
+        for (name, mid_above_base) in STOCK_MID_ABOVE_BASE {
             let sc = STOCKS.iter().find(|s| s.name == *name).unwrap();
             let (log_e, ok) = invert(sc.channels[0], *mid_above_base);
             assert!(ok, "{name}: the mid aim fell outside its own table");
@@ -638,7 +642,7 @@ mod tests {
     #[test]
     fn generic_sits_inside_the_measured_spread() {
         let generic = curves_for(FilmStock::GenericC41);
-        let (log_e, _) = invert(generic.channels[0], 0.624);
+        let (log_e, _) = invert(generic.channels[0], GENERIC_MID_ABOVE_BASE);
         assert!(
             (10f32.powf(log_e) - 0.18).abs() < 0.01,
             "the generic's own mid-above-base must invert to 0.18"
@@ -650,6 +654,31 @@ mod tests {
         assert!(
             (0.50..=0.61).contains(&gamma),
             "generic red gamma {gamma:.3} is outside the measured per-stock range"
+        );
+    }
+
+    /// The fixed decode's `d` is this generic's mid aim, rounded — the provenance
+    /// `algo::fixed::MID_ABOVE_BASE` claims, checked here because only this module's tests
+    /// may read the datasheet figures. Moving the constant means restating its derivation
+    /// there and here, not loosening this.
+    #[test]
+    fn the_fixed_decode_mid_is_the_generic_aim() {
+        let d = crate::algo::fixed::MID_ABOVE_BASE;
+        assert_eq!(
+            d,
+            (GENERIC_MID_ABOVE_BASE * 100.0).round() / 100.0,
+            "the fixed decode's d is no longer the generic aim rounded"
+        );
+
+        // A convention for every stock, so it must sit inside what the stocks measure.
+        let (lo, hi) = STOCK_MID_ABOVE_BASE
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), (_, m)| {
+                (lo.min(*m), hi.max(*m))
+            });
+        assert!(
+            (lo..=hi).contains(&d),
+            "d {d} is outside the stocks' {lo}..={hi}"
         );
     }
 
@@ -966,8 +995,8 @@ mod tests {
     #[test]
     fn the_published_mid_grey_reconstructs_to_eighteen_percent_through_the_whole_chain() {
         let log18 = 0.18f32.log10();
-        for (name, mid_above_base) in MID_ABOVE_BASE {
-            let stock = FilmStock::parse(name).expect("MID_ABOVE_BASE names shipped stocks");
+        for (name, mid_above_base) in STOCK_MID_ABOVE_BASE {
+            let stock = FilmStock::parse(name).expect("STOCK_MID_ABOVE_BASE names shipped stocks");
             let sc = curves_for(stock);
             // Red carries the published aim; green and blue take the curve's own neutral
             // densities at mid-grey, so the pixel is a plausible grey card rather than a

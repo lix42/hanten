@@ -28,7 +28,7 @@ Under the base-referenced anchor at contrast 2.0 the operator is **inert** — a
 measured rolls land 0.55–1.28 stops below white — so the task is developed with a
 per-roll `--density-gamma` computed from that roll's base and red p97 (candidate C/D in
 `docs/spike/white-placement.md`), and its band values are provisional until
-`nf-reconstruction/anchor-rule` chooses the rule. Two tasks split out of it so they can
+`nf-calibration/anchor-comparison` chooses the rule. Two tasks split out of it so they can
 run now against today's binary: `desaturation-band-fit` here, and
 `nf-display-stages/gamut-map-share`.
 

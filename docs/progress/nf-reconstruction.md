@@ -20,12 +20,13 @@ reachable through `--new-flow` since `nf-core/minimal-end-to-end` wired it to th
 and a destination.
 
 **Three things other epics need from it.** The decode's parameters are
-`algo::fixed::DecodeParams`, **not** the resolved `reconstruction` object: under
-`--new-flow` a recipe stating that section is refused whole, which is blunt and
-temporary until `nf-core/recipe-schema` gives the new stages a spelling, and which
-means `roll --new-flow` can state no decode knob today. The surviving knobs
+`algo::fixed::DecodeParams`, **not** the current chain's resolved `reconstruction`
+object — and since `nf-core/recipe-schema` they are also the new chain's recipe section
+`reconstruction` (`recipe_version` 2), field for field, on `convert` and `roll` alike.
+The surviving knobs
 (`--density-scale`, `--density-offset`, `--density-gamma`, `--anchor-mid-offset`) reach
-it through `flow::decode_params`, and the report's `new_flow.decode` block echoes what
+it through `recipe::merge` (one arm per flag, which `flow`'s
+`every_kept_flag_reaches_the_recipe` checks), and the report's `new_flow.decode` block echoes what
 arrived. Its memory profile was measured: a `--new-flow` run peaks within 0.1 MB of a
 legacy u16 `convert` on the same frame (`RunProfile::NewFlowSdrTiff`). And the remaining `--new-flow` remedy defects in
 `cli.rs` belong to `nf-core/knob-availability-audit`.
@@ -34,6 +35,13 @@ legacy u16 `convert` on the same frame (`RunProfile::NewFlowSdrTiff`). And the r
 today's proposed anchor all three rolls measured land **0.55–1.28 stops short of white**,
 so a per-channel highlight operator has nothing to act on. Anyone building on this epic,
 and `nf-calibration/anchor-comparison` in particular, needs that before they start.
+
+**The anchor is settled as a rule, not as a white** (`anchor-rule`, 2026-09-22).
+`mid-at-base-offset(d)` is the decode's only placement, with `d = 0.62` hand-frozen as
+`generic-c41`'s mid aim rounded — never read from a datasheet at runtime, and pinned to
+that origin by `algo::film_stock`'s `the_fixed_decode_mid_is_the_generic_aim`. `d` stays
+reachable as `--anchor-mid-offset`. What the anchor is *referenced to* (candidates A–D)
+belongs to `nf-calibration/anchor-comparison`; keep `AnchorRule` an enum until it rules.
 
 ## fixed-decode
 
@@ -396,7 +404,7 @@ and `nf-calibration/anchor-comparison` in particular, needs that before they sta
 
 ## anchor-rule
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-09-22
 
 - 2026-09-19: created with the new-flow plan. Goal: one anchor rule, with a value for `d`.
@@ -435,6 +443,43 @@ and `nf-calibration/anchor-comparison` in particular, needs that before they sta
   only if it is to **consume** that measurement rather than take a hand-set number, which
   is the same distinction `film_base::estimate` draws by taking a *resolved*
   `&FilmBaseSource` rather than the params object.
+
+- 2026-09-22: **done — smaller than filed, because `fixed-decode` had already built it.**
+  The single `AnchorRule` variant, reference-freedom, `changing_the_anchor_is_a_pure_gain`
+  and `the_anchor_is_the_documented_number` all shipped with #137, which also refused
+  the other three placements under `--new-flow` (the audit, #139, inventoried them). What remained was where `0.62`
+  comes from and the task's open questions.
+
+  **Hand-frozen, not lifted.** `d = 0.62` is `generic-c41`'s mid aim — 0.624 above base on
+  red (`docs/progress/algo.md`, the characteristic-curve entry) — rounded, and it sits
+  inside the nine stocks' 0.542–0.699. Lifting `film-stock-profiles` Constraint 1 was
+  rejected: it would make a datasheet a runtime input for a value whose whole point is
+  that it does *not* vary per stock. (The matched-lightness probe's
+  `MidAtBaseOffset(0.626)` in the same log is **not** corroboration: that entry says the
+  probe cannot adjudicate the anchor, and `output.md` calls the value not a calibrated
+  constant.) Note the table mean is 0.617, not
+  0.624 — the generic averages *curves*, not numbers — so the test names the generic's aim
+  as its own constant (`GENERIC_MID_ABOVE_BASE`) rather than recomputing it from the table.
+
+  **The provenance is a test, not only a comment.** `algo::film_stock`'s
+  `the_fixed_decode_mid_is_the_generic_aim` asserts the constant is the generic aim
+  rounded and inside the stocks' range (that the aim renders mid-grey is
+  `generic_sits_inside_the_measured_spread`'s, so it is not re-checked).
+  It lives there because only that module's tests may read the datasheet figures.
+  Mutation-checked: `0.63` fails it with the intended message.
+
+  **The open questions, answered.** `d` stays user-reachable (`--anchor-mid-offset`,
+  `reconstruction.anchor`) — `nf-look/path-to-white` is tuned through it. The other three
+  placements leave with the legacy path (`nf-retire/dmax-machinery`). "Highlight anchor
+  instead of mid" dissolves on a straight line (`white-placement.md`); what the anchor is
+  *referenced to* moved to `nf-calibration/anchor-comparison`, together with this task's
+  evidence on content-white failure modes and HDR headroom, now kept under a handoff
+  heading in the task file. Every prose reference naming this task as that decision's
+  owner was re-pointed (`flow.rs`, `types.rs`, design-spec §8, `TASKS.md` twice,
+  `nf-look/path-to-white`, the `nf-look` Epic summary).
+
+  No pixel moved, no fingerprint, no flag or default: no `pipeline_version` bump and no
+  `using-nc.md` change.
 
 ## gamma-split
 

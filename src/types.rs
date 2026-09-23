@@ -585,7 +585,7 @@ pub enum FilmBaseSource {
 /// reads lives here. That is why [`AnchorPlacement`] stays in
 /// `reconstruction.curve` while the reference density it places does not. The
 /// section is expected to grow: a roll **content white** (and possibly its
-/// per-frame spread) joins it if `nf-reconstruction/anchor-rule` adopts a
+/// per-frame spread) joins it if `nf-calibration/anchor-comparison` picks a
 /// content-referenced or hybrid placement — see `docs/spike/white-placement.md`.
 /// So nothing here may assume a closed pair, and every member carries its own
 /// optionality and its own default rather than the section carrying one for all
