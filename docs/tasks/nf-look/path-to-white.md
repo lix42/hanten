@@ -58,8 +58,9 @@ white.
   explicit parameter rather than an accident — C asks Gold200 for 4.15 where the outside
   converters measured 3.07–3.18, and `corr(slope, noise) = 0.89`).
 
-  That rule is [`nf-reconstruction/anchor-rule`](../nf-reconstruction/anchor-rule.md)'s
-  to choose, and it is expected to land **after** this task. So this task is built and
+  That rule is [`nf-calibration/anchor-comparison`](../nf-calibration/anchor-comparison.md)'s
+  to choose, and it runs **after** this task
+  ([`anchor-rule`](../nf-reconstruction/anchor-rule.md) froze only `d`). So this task is built and
   verified against a **hand-set per-roll contrast** — flags only, no new code:
   `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>`, with `g`
   computed per roll from that roll's measured base and its red p97 (the arithmetic and

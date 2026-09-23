@@ -943,8 +943,8 @@ the design in `docs/design-update.md`:
   — exponential, toe passed through as recorded — written fresh, and measured
   bit-identical to the equivalent legacy configuration
 - `nf-reconstruction/anchor-rule` (new flow): `nf-reconstruction/fixed-decode`, `nf-reconstruction/anchor-spike`
-  — `mid-at-base-offset` as the only rule, and a runtime `d` the render path
-  is currently forbidden to read
+  — `mid-at-base-offset` as the only rule, `d` hand-frozen as `generic-c41`'s
+  mid aim; which white it references moved to `nf-calibration/anchor-comparison`
 - `nf-reconstruction/gamma-split` (new flow): `nf-reconstruction/fixed-decode`
   — the film-linearization half stays; print contrast becomes a look knob
 - `nf-reconstruction/curve-endpoint-warning` (new flow): `nf-reconstruction/anchor-rule`
@@ -971,7 +971,7 @@ the design in `docs/design-update.md`:
   — what makes whites read clean, made a deliberate control instead of a
   gamut-map side effect. Built against a **hand-set** per-roll contrast (decided
   2026-09-22): under the base-referenced anchor the operator is inert, and the
-  rule that lifts white is `nf-reconstruction/anchor-rule`'s, expected after this
+  rule that lifts white is `nf-calibration/anchor-comparison`'s, which follows this
   task — so the shape ships here and the values are re-fitted later
 - `nf-look/contrast` (new flow): `nf-look/stage`, `nf-reconstruction/gamma-split`
   — the look half of `gamma`; supersedes `algo/contrast-latitude-spike`
@@ -1563,9 +1563,11 @@ the design in `docs/design-update.md`:
   decode](tasks/nf-reconstruction/fixed-decode.md) — exponential, toe passed
   through as recorded — written fresh, and measured bit-identical to the
   equivalent legacy configuration
-- [ ] [One anchor rule, with a value for
-  `d`](tasks/nf-reconstruction/anchor-rule.md) — `mid-at-base-offset` as the
-  only rule, and a runtime `d` the render path is currently forbidden to read
+- [x] [One anchor rule, with a value for
+  `d`](tasks/nf-reconstruction/anchor-rule.md) — **done 2026-09-22.**
+  `mid-at-base-offset` is the only rule; `d = 0.62` is hand-frozen as
+  `generic-c41`'s mid aim, rounded, and never read from a datasheet at runtime.
+  Which white the anchor references is `nf-calibration/anchor-comparison`'s
 - [ ] [Split `gamma` into calibration and
   look](tasks/nf-reconstruction/gamma-split.md) — the film-linearization half
   stays; print contrast becomes a look knob

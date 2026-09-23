@@ -26,7 +26,12 @@ leader or reference frame, now that the only anchor rule is reference-free.
   the display stage as an opt-in (`nf-look`'s scene-range mapping), written fresh
   there — its failure mode is the *unbounded* stretch, not the idea. Nothing here
   is preserved in anticipation of it, and it must never become a default: roll
-  consistency is the product's central promise.
+  consistency is the product's central promise. The same holds for the "minimum gap
+  below the leader's `Dmax`" guard proposed for a content-referenced white
+  ([`anchor-rule`'s handoff](../nf-reconstruction/anchor-rule.md#evidence-handed-to-anchor-comparison)):
+  if `nf-calibration/anchor-comparison` adopts such a white, its guard reads a
+  measurement written fresh for it, and the `pre-new-flow` tag keeps the old one
+  comparable.
 - **The memory model counts these rectangles.** The sampled-region term covers
   `--d-max-region` and `estimate --grid`; removing a rectangle changes the
   arithmetic the gate is calibrated against, and nothing tests that model against

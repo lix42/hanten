@@ -665,8 +665,9 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     },
     KeptEntry {
         covers: &["--anchor-mid-offset"],
-        why: "it is the one anchor rule the decode has — `mid-at-base-offset`'s `d`, \
-              whose value is `nf-reconstruction/anchor-rule`'s",
+        why: "the fixed decode's anchor (recipe `reconstruction.anchor`), `mid-at-base-offset`'s \
+              `d`: every conversion knob is a flag and a recipe key, and \
+              `nf-look/path-to-white` tunes against it directly",
     },
 ];
 

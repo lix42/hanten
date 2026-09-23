@@ -24,6 +24,10 @@ The shortlist, from [the report](../../spike/white-placement.md):
 | **C** hybrid, contrast solved | ✓ | ✓ | 1.43–2.31× |
 | **D** C with a gamma ceiling, sliding toward B when it binds | ✓ | mostly | capped |
 
+The known failure modes of a content-referenced white (a blown frame, an underexposed
+roll) and the measured HDR headroom per anchor percentile are in
+[`anchor-rule`'s handoff section](../nf-reconstruction/anchor-rule.md#evidence-handed-to-anchor-comparison).
+
 **What the render has to separate**, and the arithmetic cannot:
 
 - Whether B's washed-out midtone (a datasheet mid at 0.437 rather than 0.18) reads as

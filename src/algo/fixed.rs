@@ -96,10 +96,17 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 /// inside a decode declared stock-agnostic. A fixed value lets film speed show
 /// through, which is the faithful behaviour.
 ///
-/// **Provisional.** `nf-reconstruction/anchor-rule` owns where this number comes
-/// from — the per-stock figures live in a `#[cfg(test)]` table no render path may
-/// read — and `nf-calibration/anchor-comparison` may move it. Moving it costs a
-/// `pipeline_version` bump, which is planned rather than a regression.
+/// **Where the number comes from:** `generic-c41`'s mid-grey aim, 0.624 above base on
+/// red — the averaged curve's own aim, inside the nine stocks' 0.542–0.699 — rounded.
+/// It is **hand-frozen**, never read from the datasheets at runtime: a datasheet input
+/// would invite exactly the per-stock variation this constant exists to refuse, and the
+/// published `D-min` stays diagnostic-only (`algo/film-stock-profiles`, Constraint 1).
+/// `film_stock`'s `the_fixed_decode_mid_is_the_generic_aim` ties the two together.
+///
+/// The value is today's pick, not a closed question: `nf-calibration/anchor-comparison`
+/// may move it. That changes every `--new-flow` render, and nothing versions it yet —
+/// `pipeline_version` tracks the default render only, and a new-flow fingerprint is
+/// `nf-verification/fingerprints`'. It stays reachable as `--anchor-mid-offset`.
 pub const MID_ABOVE_BASE: f32 = 0.62;
 
 /// The decode's contrast — **still both halves of `gamma` in one number.**

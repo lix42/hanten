@@ -1255,7 +1255,7 @@ roll, and (c) consumed by a rule that lives elsewhere.** That is why `curve.anch
 stays in the curve: the anchor is the *rule* for what the reference places, which
 is part of the look — only the measurement leaves. The section is deliberately
 **open**, not a fixed pair: a roll content white (and possibly its per-frame
-spread) joins it if `nf-reconstruction/anchor-rule` adopts a content-referenced or
+spread) joins it if `nf-calibration/anchor-comparison` picks a content-referenced or
 hybrid placement (`docs/spike/white-placement.md`). Each member carries its own
 optionality and its own default.
 

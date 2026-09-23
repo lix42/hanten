@@ -26,7 +26,7 @@ a decode declared stock-agnostic. A fixed value lets film speed show through, wh
 is the faithful behaviour.
 
 **The known problem is where the number comes from.** The per-stock figures exist
-only in a `#[cfg(test)]` table (`MID_ABOVE_BASE`, `src/algo/film_stock/mod.rs`), and
+only in a `#[cfg(test)]` table (`STOCK_MID_ABOVE_BASE`, `src/algo/film_stock/mod.rs`), and
 the datasheet `d_min` in `film_stock/curves.rs` is documented diagnostic-only — no
 render path reads it (`film-stock-profiles` Constraint 1). So this task must
 **decide**: lift that prohibition, or hand-freeze one constant with its derivation
@@ -102,15 +102,33 @@ today's `AnchorPlacement::anchor(reference, contrast)` ignores that argument in 
 four variants, which is precisely what forced `reads_reference()` to exist as a separate
 predicate. A content-referenced variant should carry the measured density.
 
-## Open questions
+## Outcome (2026-09-22)
 
-- **The value itself.** ≈0.62 is today's pick and is expected to move — by visual
-  review now, by the bracketed calibration frames later. Moving it costs a
-  `pipeline_version` bump, which is planned rather than a regression.
-- **Does `d` stay user-reachable?** Every value like this is a flag and a recipe key
-  today; the design deliberately does not settle whether it should remain one.
-- **What the other three placements become** — removed, or refused. That answer is an
-  input to [the audit](../nf-core/knob-availability-audit.md).
+Most of this task shipped with [the fixed decode](fixed-decode.md): one variant, reference-free,
+the pure-gain test, and the other three placements refused under `--new-flow` (inventoried
+since by [the audit](../nf-core/knob-availability-audit.md)). What was left was the number's origin
+and the open questions, answered here; the reasoning is in `docs/progress/nf-reconstruction.md`.
+
+- **The value: hand-frozen, not lifted.** `d = 0.62` is `generic-c41`'s mid aim (0.624
+  above base, red), rounded. No render path reads a datasheet, so `film-stock-profiles`
+  Constraint 1 stands unchanged. A test in `algo::film_stock` ties the constant to that
+  aim and to the stocks' 0.542–0.699 range.
+- **`d` stays user-reachable** as `--anchor-mid-offset` and `reconstruction.anchor`:
+  every knob is a flag, and `nf-look/path-to-white` is tuned through it.
+- **The other three placements** are refused under `--new-flow` and leave the tree with
+  the legacy path (`nf-retire/dmax-machinery`).
+- **A highlight anchor instead of a mid one** is not a separate question: on a straight
+  line the two are one rule (`docs/spike/white-placement.md`). What the anchor is
+  *referenced to* — the fixed convention or the roll's content, candidates A–D, and with
+  it the HDR headroom — is
+  [`nf-calibration/anchor-comparison`](../nf-calibration/anchor-comparison.md)'s, and
+  moving `d` is that task's null hypothesis.
+
+## Evidence handed to `anchor-comparison`
+
+Kept verbatim from this task's open questions, since the choice they informed moved
+there with them.
+
 - **Should the anchor be at the highlight instead of the mid?** All three outside
   converters anchor the **bright end on content**, at the 96–97th percentile of the
   frame's own density (`docs/reports/three-way-gold200.md`), and that — not any colour
