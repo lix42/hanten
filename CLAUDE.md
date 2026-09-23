@@ -460,9 +460,10 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   (build/pipeline identity + `stable_hash`, the crate's only params-hash
   implementation — `telemetry::params_hash` delegates to it so the core report
   never depends on the opt-in telemetry module), `cli.rs`, `main.rs`, plus
-  `flow.rs` — the `--new-flow` selector (`Flow`), the knob-availability tables and
-  `decode_params` (the kept flags → `algo::fixed::DecodeParams`), all of it
-  scaffolding `nf-core/default-flip` deletes.
+  `flow.rs` — the `--new-flow` selector (`Flow`) and the knob-availability tables,
+  scaffolding `nf-core/default-flip` deletes — and `recipe.rs`, the new chain's recipe (`recipe_version` 2), which is
+  **not** scaffolding: after the flip it is the recipe, and `ResolvedConfig` is what
+  goes.
   `main`/`cli` are the only orchestrators; stages stay pure. `build.rs` exposes
   the compile target triple as `NC_TARGET` plus `NC_GIT_COMMIT`/`NC_GIT_DIRTY`
   for the report's identity block.
@@ -1036,27 +1037,31 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   could never report what the *preset* replaced — that needs its own `replaced` field.
   **`--new-flow` is CLI-only for a third reason again, and it is the one flag that
   *breaks* the determinism rule above** (`src/flow.rs`): it selects which chain — and
-  therefore which knobs — exist, so the same recipe renders differently with and
+  therefore which knobs — exist, so the same command line renders differently with and
   without it, which is exactly why it must stay out of the recipe rather than merely
-  out of the image. Do **not** describe it with the operational trio's "never affects
+  out of the image. A *recipe* no longer can: the new chain reads its own document
+  (`src/recipe.rs`, `"recipe_version": 2`, one section per stage), and each chain
+  refuses the other's recipe by name at load, so a recipe's meaning never silently
+  depends on the flag. Do **not** describe it with the operational trio's "never affects
   the output" wording. It is migration scaffolding with a written expiry
   (`nf-core/default-flip` deletes the flag and the module), and its availability
-  refusals key on **three** provenances, in the order they run: flag **presence before
+  refusals key on **two** provenances, in the order they run: flag **presence before
   `merge`** — a presence rule placed after it is unreachable on every command line
-  `merge` refuses first; raw-JSON **recipe-section presence** right after `load_recipe`
-  (`flow::reject_recipe_sections`, over `flow::UNREAD_RECIPE_SECTIONS` —
-  `reconstruction`, `print` and `output`), which exists because the new flow decodes
-  through its own `DecodeParams`, renders through `pipeline::chain`'s per-stage
-  params and writes one fixed destination, so those sections would otherwise be parsed
-  and read by nobody; and **resolved value first inside `validate_convert`**. That
-  section refusal is also why no `print.*` or `output.*` knob needs a value rule, and
-  why an **identity value earns no exemption there**: the tiebreaker spares one to keep
-  the flags-win reset usable, and a section refused whole leaves no recipe value to
-  reset. `roll` takes the flag too and reaches the second and
-  third — its shared recipe and each per-frame overlay are the only ways it can state one
-  of those sections, and both are refused — but not the first, since it accepts no
-  conversion flags; the value half runs at **two** validate sites composed into
-  `cli::validate_with_flow`.
+  `merge` refuses first; and the **recipe's schema** inside the load
+  (`recipe::check_body` on the raw JSON — a missing version, a `print`/`output`
+  section, an old `reconstruction`/`calibration` key or a key both chains retired,
+  each named with where it went). There is **no resolved-value half**: under the flag
+  `merge` is not run at all — the kept flags merge into the new recipe
+  (`recipe::merge`, sharing `cli::merge_shared_sections`), the decode and the chain
+  read that recipe, and the stages both chains run read its projection
+  (`Recipe::to_config`) — so no value can reach the new chain that neither the flag
+  rows nor the schema saw. The schema is also why no `print.*` or `output.*` knob
+  needs a value rule, and why an **identity value earns no exemption there**: the
+  tiebreaker spares one to keep the flags-win reset usable, and a recipe with no
+  section for the knob leaves no value to reset. `roll` takes the flag too and reaches
+  the schema — on its shared recipe and on every per-frame override, which is merged
+  onto the serialized new recipe and carried to that frame's render — but not the
+  flag rows, since it accepts no conversion flags.
   **`calibration.film_base` is the first knob with no default at all** (`Option`, no
   `Default` on `FilmBaseSource`): `convert`/`roll` refuse an unstated one rather
   than choosing. A defaultless knob adds two obligations — every `ResolvedConfig`
@@ -1182,11 +1187,11 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     `--highlight-compress 0`, `--display-tone shoulder` — asks for nothing, and
     rejecting it kills the flags-win reset that lets one recipe be re-used on another
     branch. **The exemption is conditional on that reset being possible**, which
-    `--new-flow` is the first branch to break: it refuses the whole `print` and
-    `output` recipe sections, so no flag there can be clearing a pinned value, and
+    `--new-flow` is the first branch to break: its recipe has no `print` or `output`
+    section, so no flag there can be clearing a pinned value, and
     those same three identity values *are* rejected under it (`src/flow.rs`). Read the
-    rule as "spare an identity value where a recipe could have set the knob"; where a
-    section is refused whole, an identity value has to earn acceptance on its own.
+    rule as "spare an identity value where a recipe could have set the knob"; where no
+    recipe can hold the knob, an identity value has to earn acceptance on its own.
     And when bounding *which rules can still fire* on such a branch, enumerate the
     reachable **values**, not the knobs: a refused knob's spared identity value is
     itself reachable, so a knob-level walk of a correct bound silently comes up short.

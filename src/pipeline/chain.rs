@@ -32,10 +32,13 @@ use crate::types::Result;
 
 /// Every stage's parameters, in chain order.
 ///
-/// Not a recipe type: `nf-core/recipe-schema` owns which sections exist and how a
-/// recipe declares them. These structs exist so a stage's signature is settled now
-/// and does not change when its knobs arrive. No `Default`, because
-/// [`FitGamutParams`] has none: the destination states its gamut.
+/// Not a recipe type, though three of its four fields are: `scene_correction`, `look`
+/// and `fit_range` are top-level sections of the new chain's recipe
+/// (`crate::recipe::Recipe`) as they stand, while fit gamut's target is the
+/// destination's, so the recipe's `fit_gamut` section is its own type and
+/// [`crate::recipe::Recipe::chain_params`] adds the target. These structs exist so a
+/// stage's signature is settled now and does not change when its knobs arrive. No
+/// `Default`, because [`FitGamutParams`] has none: the destination states its gamut.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChainParams {
     pub scene_correction: SceneCorrectionParams,

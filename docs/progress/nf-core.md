@@ -19,17 +19,18 @@ The epic was created on 2026-09-19 as part of the new-flow migration plan
 (`src/flow.rs`), and the render seam — **`stage-skeleton`** (2026-09-21) — the
 chain that seam guards: `pipeline::chain` composing `scene_correction` -> `look` ->
 `fit_range` -> `fit_gamut` over `working_image::WorkingBuffer` — and
-**`knob-availability-audit`** (2026-09-22), which closed the availability surface.
+**`knob-availability-audit`** (2026-09-22), which closed the availability surface
+— and **`recipe-schema`** (2026-09-22), the new chain's own recipe.
 
 **What the audit means for every other epic.** Under `--new-flow` the old knobs are
 now *refused*, not accepted-and-ignored, so the epic that builds a stage also owns
 un-refusing its knobs. Three mechanisms, and which one a knob uses is the thing to
 check before adding one back:
 
-- **`flow::UNREAD_RECIPE_SECTIONS`** (`reconstruction`, `print`, `output`) refuses
-  those recipe sections *whole*, because each stage carries its own params and the
-  chain resolves no destination. A stage that starts reading a section moves it to
-  `READ_RECIPE_SECTIONS`; `nf-core/recipe-schema` decides the sections' real shape.
+- **The new chain's recipe schema** (`crate::recipe`) refuses the current chain's
+  `print`/`output` sections and old `reconstruction`/`calibration` keys by name. It
+  replaced `flow::UNREAD_RECIPE_SECTIONS` (`nf-core/recipe-schema`); a stage that
+  gains a knob gives its own section a field.
 - **A flag row per knob** in `FLAG_ENTRIES`, keyed on presence, naming the task that
   will carry it — never a replacement flag spelling, since that belongs to the task
   that builds the stage. There is deliberately **no renamed-knob mapping table**.
@@ -43,9 +44,9 @@ whole, an identity value earns **no** exemption from the presence-vs-value tiebr
 left to clear. `--white-balance 1,1,1` and `--highlight-compress 0` are refused.
 
 **`nf-core/minimal-end-to-end` made the flag render** (2026-09-22): the fixed decode
-(`algo::fixed`, fed by `flow::decode_params`) → NC film RGB v1 → `pipeline::chain` →
-one destination, a **Display P3 16-bit TIFF** (`cli::render_new_flow_frame`), on
-`convert` and `roll`. What a dependent epic builds on:
+(`algo::fixed`) → NC film RGB v1 → `pipeline::chain` → one destination, a **Display
+P3 16-bit TIFF** (`cli::render_new_flow_frame`), on `convert` and `roll`. What a
+dependent epic builds on:
 
 - **`fit_gamut` owns the change of primaries** into a `DestinationGamut` carried by
   `FitGamutParams` (no `Default`: the destination states it), and the gamut rides out
@@ -57,17 +58,26 @@ one destination, a **Display P3 16-bit TIFF** (`cli::render_new_flow_frame`), on
 - **The suffix rule judges against the new flow's destination** (`cli::OutputTarget`),
   so `-o out` completes to `out.tiff` and `.jpg` is refused naming the flag.
 - **No sidecar, no `params_hash`, no `recipe` echo** under the flag, on `convert` or
-  `roll`: the resolved recipe describes the legacy chain. The report carries a
+  `roll`: those were built around the legacy chain's config. The report carries a
   provisional `new_flow` block (decode facts, each stage's `applied`, destination) and
-  omits the legacy-chain sections; `nf-core/report-contract` owns the real shape.
+  omits the legacy-chain sections; `nf-core/report-contract` owns the real shape, and
+  now has the new chain's recipe to put in all three.
 - **`--export-ir` renders** (u16, from the decoded image); **`--telemetry*` is
   refused** — its record would name the legacy preset and timing buckets.
-- **`roll` refuses an unread section in a per-frame overlay**, not just the shared
-  recipe.
 - **`RunProfile::NewFlowSdrTiff`** shares `Convert`'s u16 arithmetic, measured on two
   frame sizes. A new-flow buffer added later must move that arm.
-- `--density-gamma` still needs `--density-curve exponential` beside it until the new
-  flow's default curve moves (`nf-core/default-flip`).
+
+**The new chain's recipe exists** (`nf-core/recipe-schema`, 2026-09-22):
+`src/recipe.rs`, a `"recipe_version": 2` document with one section per stage, which
+the decode (`Recipe::reconstruction`) and the chain (`Recipe::chain_params`) read —
+`convert_frame` takes it as `FrameChain::New`, and each `roll` frame carries its own.
+A stage epic adds its knobs as fields on its own `*Params` struct — which *is* the
+recipe section (fit gamut's excepted: its target is the destination's) — plus a
+`recipe::merge` arm for the flag, and un-refuses the flag's row in `flow`. Under
+`--new-flow` the current chain's `merge` does not run, so a new flag has no effect
+until that arm exists; `every_kept_flag_reaches_the_recipe` catches a kept flag
+without one. There is no resolved-value refusal table any more: the schema refuses at
+load what it would have.
 
 **What a dependent epic needs to know.** Every stage is
 `apply(input, &Params) -> Result<Output>`, pure, and an **identity pass** until its
@@ -80,10 +90,10 @@ one's output, and each boundary type can be minted only inside the module that
 produces it, so an out-of-order chain does not compile. Crossing a boundary
 **moves** the buffers, so a type per stage costs no allocation. Each stage's
 `Params` is an **empty struct** — not an `Option`, because "this stage is off" is
-deliberately not expressible — and **is not yet a recipe key**: `nf-core/recipe-schema`
-owns the sections and `nf-core/report-contract` the report, and both depend on this
-task, so neither surface was pre-empted here. The IR plane rides the whole chain and
-leaves it with the image — the exit is `DisplayReferredImage::into_parts`, a
+deliberately not expressible — and each is now also its stage's recipe section
+(`nf-core/recipe-schema`); `nf-core/report-contract` owns the report. The IR plane
+rides the whole chain and leaves it with the image — the exit is
+`DisplayReferredImage::into_parts`, a
 consuming unwrap, and it is the boundary's whole surface. `GradedImage` is the
 boundary the SDR/HDR split will split *from*. Nothing about the no-flag path moved.
 
@@ -926,10 +936,136 @@ boundary the SDR/HDR split will split *from*. Nothing about the no-flag path mov
 
 ## recipe-schema
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-22
 
 - 2026-09-19: filed after the plan review. Goal: the recipe schema across the flow boundary.
+- 2026-09-22: shipped. The new chain reads its own document, `crate::recipe::Recipe`.
+
+  **Decisions (user, 2026-09-22).** A required **document** version,
+  `"recipe_version": 2` — not per-section versions, and not a marker that selects the
+  chain by itself (`--new-flow` still selects; the marker makes a mismatch loud both
+  ways). A **separate type**, not new sections on `ResolvedConfig`, per the migration
+  rule. The decode's section keeps the name **`reconstruction`** (the stage's name
+  everywhere; the document version tells the two shapes apart). **All four stage
+  sections exist now**, as empty objects that refuse any key.
+
+  **What the schema is.** `recipe_version`, `input`, `calibration`, `measure`,
+  `reconstruction`, `scene_correction`, `look`, `fit_range`, `fit_gamut`, in chain
+  order. `reconstruction` *is* `algo::fixed::DecodeParams` (serde derived on it), so
+  there is no mapping between recipe and decode to drift; its keys are `scale`,
+  `offset`, `contrast` (the `--density-gamma` flag keeps its spelling —
+  `nf-reconstruction/gamma-split` owns renaming it) and `anchor`
+  (`{"mid-at-base-offset": d}`, the current chain's spelling of the same rule).
+  `calibration` is **its own type** holding the film base only: sharing
+  `CalibrationParams` would have written `"dmax": "fixed"` into every new-flow dump,
+  a key claiming a reference the decode never reads. No `output` section.
+
+  **How the chains are kept apart.** `recipe::check_body` runs on the raw JSON before
+  the typed parse: a missing or wrong version, a `print`/`output` section, or an old
+  `reconstruction`/`calibration` key (`schema_version`, `type`, `curve`, `density`,
+  `dmax`) is refused by name with where it went. `check_body_without_flag` is the
+  reverse. That replaced `flow::reject_recipe_sections` and the
+  `UNREAD_RECIPE_SECTIONS`/`READ_RECIPE_SECTIONS` lists, and made two value rows
+  unreachable — `calibration.dmax` and `simple` — so both were deleted rather than
+  kept vacuous. `every_key_of_the_current_chains_recipe_is_shared_or_diagnosed`
+  replaces the section-classification test: a key added to the current chain's
+  schema and classified nowhere reds it.
+
+  **Under `--new-flow` the current chain's `merge` no longer runs.** The flags merge
+  into the `Recipe` (`recipe::merge`), sharing `cli::merge_shared_sections` with the
+  current `merge` so the two cannot resolve a shared flag differently; the stages both
+  chains run read `Recipe::to_config`, a projection that fills only the shared
+  sections. Two consequences: bare `--density-gamma` now works (the sigmoid default
+  that refused it is gone), and `--balance-range` / `--auto-balance-range` — kept
+  before because they landed in a section nobody read — had no home, so they are now
+  refused. `every_kept_flag_reaches_the_recipe` holds every kept flag to a merge arm.
+
+  **Round-trip.** `--dump-params` is un-refused under the flag and writes the
+  `Recipe`; `hanten params --new-flow` prints the default. A dump reloads under the
+  flag to byte-identical output (tested through the binary) and is refused without it.
+
+  **Roll.** The shared recipe loads under the flow's schema, and each per-frame overlay
+  is checked by `check_body` (overlays may omit the version) and merged onto the
+  serialized `Recipe` — which closes the overlay hole the audit left. Only the
+  projection is kept per frame; carrying the frame's `Recipe` to the render is noted in
+  `nf-core/subcommands`.
+
+- 2026-09-22 (review round): ten findings from `/code-review`; nine fixed, one filed.
+
+  **The "refused by name" promise had two holes.** A current-chain `roll` override was
+  never checked for `recipe_version` (only the shared recipe was), and under
+  `--new-flow` the keys *both* chains retired (`algorithm`, top-level `density`,
+  `film_base`, `input.color`, …) fell through to serde's bare "unknown field": the
+  current chain's migration check could not simply be run, because its remedies name
+  that chain's homes (`reconstruction.density.scale`). `recipe::RETIRED_KEYS` gives them
+  new-chain wording.
+
+  **Ordering.** `recipe::validate` had been placed ahead of `validate_convert`, whose
+  first rule — the availability refusal — is documented as outranking every value rule,
+  so `--export-ir` beside a bad `--density-scale` diagnosed the scale first. Now one
+  composed gate, `cli::validate_new_recipe`, runs the refusal then the decode's rules at
+  all three sites (convert, roll's shared recipe, each override). A per-frame failure
+  names the frame and only the recipe key (`recipe::KnobNames::KeyOnly`) — `roll`
+  accepts no `--density-gamma`.
+
+  **One checker.** `recipe::validate` had re-implemented `algo::fixed::check_params`,
+  and the two already disagreed: the stage accepted a zero or negative mid-grey offset
+  the recipe gate refused. The rules now live once, in `DecodeParams::check` returning a
+  `DecodeFault`, rendered as an internal error by the stage and as a usage error naming
+  flag and key by the recipe; the stage now also refuses `d <= 0`, the range
+  `mid-at-base-offset` has always had on the current chain.
+
+  **Smaller.** `LoadedRecipe` held both the recipe and its projection; it now holds one
+  `RecipeDoc` and projects where needed. Roll serializes the shared document once rather
+  than per frame. `every_kept_flag_reaches_the_recipe` asserted only "the recipe
+  changed", which a flag wired to the wrong field passes; it now checks each flag's own
+  field, and that the check is not already true of the default. Stale references to
+  `cli::load_recipe` (now test-only) and a comment claiming the legacy anchor guard
+  fires under `--new-flow` were corrected.
+
+  **Filed, not fixed:** the new chain's per-frame overrides of `reconstruction.anchor` /
+  `contrast` get no roll-consistency warning. It belongs with carrying the frame's
+  recipe to the render, so it is in `nf-core/subcommands`.
+
+- 2026-09-22 (pre-ship review): Codex found nothing; `ship:diff-reviewer` found two
+  remedy loops, both the defect CLAUDE.md records as "a remedy must actually work".
+  `check_body`'s section and old-key refusals ended "or run without `--new-flow`,
+  where it is read" — but they are reachable only in a document stating
+  `recipe_version`, which the current chain refuses outright, so the two messages sent
+  the user to each other. And `check_body_without_flag` told *any* `recipe_version`
+  to pass `--new-flow`, where `1` is refused again. Both remedies now say only what the
+  rule checked, and a unit test asserts the loop's wording absent. The anchor-overflow
+  remedy also now follows its route (a tiny contrast wants a larger contrast; a huge
+  offset wants a smaller offset, where a larger contrast would make it worse).
+
+- 2026-09-22 (rebased onto `nf-core/minimal-end-to-end`, #141): that task shipped the
+  render first, and it had solved the decode's knobs its own way — the current chain's
+  `merge` still ran under `--new-flow`, and `flow::decode_params` read the fixed
+  decode's parameters back off the resolved `reconstruction`. Per CLAUDE.md's rebuild
+  rule its render, destination, report and sidecar-cleanup design were taken whole, and
+  the recipe re-applied on top: `decode_params` is deleted (the decode reads
+  `Recipe::reconstruction`), `convert_frame` takes a `FrameChain` carrying the recipe
+  instead of a bare `Flow`, and `recipe::FitGamut` is a section type of its own because
+  `FitGamutParams` now carries the destination's gamut and has no `Default`.
+
+  **Two consequences worth knowing.** The deferred "per-frame recipe is dropped" became
+  a live bug the moment the seam opened — a roll override of `reconstruction.contrast`
+  would have rendered with the shared value — so `PlannedFrame` now carries each frame's
+  recipe; a mutation that renders every frame with the shared recipe reds
+  `roll_refuses_the_current_chains_keys_from_either_recipe_site`. And #141 had already
+  deleted the `--export-ir` value row, so with this task's two unreachable rows gone the
+  resolved-value table was empty: `ValueEntry`, `VALUE_ENTRIES`,
+  `reject_unavailable_values` and `cli::validate_with_flow` are deleted rather than kept
+  vacuous. The availability gate is now flag presence before `merge` plus the recipe
+  schema at load.
+
+  **Kept as #141 left it, deliberately:** no sidecar, `recipe` echo or `params_hash`
+  under the flag. Those can now carry the `Recipe`, but that changes the report's and
+  the sidecar's contract, so it is recorded in `nf-core/report-contract` rather than
+  done in a rebase. #141's tests that fed unversioned recipes to `--new-flow` now state
+  `recipe_version`, and the "never removes the recipe it read" case uses an enveloped v2
+  recipe, since a stripped legacy sidecar no longer loads under the flag.
 
 ## subcommands
 

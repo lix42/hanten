@@ -5,18 +5,18 @@
 //! `nf-core/default-flip`, when the new chain becomes the only chain and
 //! `--new-flow` becomes a removed-flag error on the `--algorithm` precedent.
 //!
-//! Three things live here, so the migration's surface is one file rather than a
+//! Two things live here, so the migration's surface is one file rather than a
 //! scatter of `if` arms across `cli`:
 //!
 //! - [`Flow`] — the selected chain. An enum rather than a bool because the
 //!   orchestrator passes it down to the render seam, and because the flip deletes
 //!   a variant rather than inverting a flag.
-//! - The **availability tables** — the knobs the new flow refuses, and the two
+//! - The **availability tables** — the flags the new flow refuses, and the two
 //!   different sentences it refuses them with ([`Availability`]).
-//! - [`decode_params`] — how the knobs the new flow keeps reach the fixed decode
-//!   (`algo::fixed`), which reads its own parameters rather than the resolved
-//!   `reconstruction` object. The render itself — decode, `pipeline::chain`, and
-//!   the one destination — is `cli::convert_frame`'s (`nf-core/minimal-end-to-end`).
+//!
+//! The knobs the new flow keeps reach the fixed decode through the new chain's own
+//! recipe (`crate::recipe`, which outlives this module), and the render itself —
+//! decode, `pipeline::chain`, and the one destination — is `cli::convert_frame`'s.
 //!
 //! `Flow` is *orchestration state*, like an unresolved `calibration.film_base`: it
 //! never reaches a stage, and it is never a recipe key (`--new-flow` selects which
@@ -25,9 +25,8 @@
 //! choosing a chain is exactly a choice of pixels, which is why it must stay out
 //! of the recipe rather than merely out of the image.
 
-use crate::algo::fixed::{AnchorRule, DecodeParams};
-use crate::cli::{ConvertArgs, ResolvedConfig};
-use crate::types::{AnchorPlacement, DensityCurve, DmaxSource, NcError, Reconstruction, Result};
+use crate::cli::ConvertArgs;
+use crate::types::{NcError, Result};
 
 /// The rendering chain a run resolves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -91,10 +90,10 @@ struct FlagEntry {
     knob: &'static str,
     /// The `convert` flags this row classifies, spelled as `--help` spells them.
     ///
-    /// Only flags: every *recipe* path under `reconstruction`, `print` or `output` is
-    /// classified wholesale by [`UNREAD_RECIPE_SECTIONS`], because the new flow reads
-    /// none of those sections. A flag needs its own row because it sets a resolved
-    /// value with no recipe section for that witness to see.
+    /// Only flags: every *recipe* path is classified by the new chain's own schema
+    /// (`crate::recipe`), which refuses a key it does not define at load — by name,
+    /// with where it went, when the key belongs to the current chain's recipe. A flag
+    /// needs its own row because the flag parser knows nothing of that schema.
     ///
     /// What this field buys is `every_convert_flag_is_classified`, which reads the
     /// flag surface back out of `cli.rs` and fails on a knob no row mentions. Without
@@ -106,21 +105,6 @@ struct FlagEntry {
     #[allow(dead_code)]
     covers: &'static [&'static str],
     present: fn(&ConvertArgs) -> bool,
-    availability: Availability,
-}
-
-/// A knob refused by **resolved value**, checked before every other validation
-/// rule. Names both spellings, because a resolved value can come from a recipe
-/// nobody typed a flag for.
-struct ValueEntry {
-    knob: &'static str,
-    /// The `convert` flags this row classifies — see [`FlagEntry::covers`]. Empty
-    /// when a [`FLAG_ENTRIES`] row already owns the flag and this is the value half
-    /// of a dual rule (`simple`), non-empty when the value rule is the *only* rule,
-    /// so that `every_convert_flag_is_classified` still sees the flag.
-    #[allow(dead_code)]
-    covers: &'static [&'static str],
-    matches: fn(&ResolvedConfig) -> bool,
     availability: Availability,
 }
 
@@ -168,28 +152,28 @@ const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which su
 ///
 /// That is the *whole* reason, and the tiebreaker's usual second one does not apply
 /// here: "an identity value keeps the flags-win reset usable" presumes a recipe that
-/// pinned the knob, and [`reject_recipe_sections`] refuses any recipe stating
-/// `reconstruction` at all. Where a section is refused whole there is nothing left to
-/// reset, so an identity value has to earn its acceptance on its own — which the zero
-/// knee does and `--no-d-max` does not.
+/// pinned the knob, and the new chain's recipe (`crate::recipe`) has no knee to pin —
+/// its `reconstruction` is the fixed decode's, and a recipe stating the current
+/// chain's `curve` is refused at load. Where no recipe can hold the knob there is
+/// nothing left to reset, so an identity value has to earn its acceptance on its own
+/// — which the zero knee does and `--no-d-max` does not.
 ///
 /// **How a knob the user never typed is handled**, which this table alone cannot do.
 /// It sees only the flag, so the same knee stated by a *recipe* or expanded from
 /// `--preset sigmoid-knees` is invisible here — and a value rule cannot be added
 /// beside it, because the shipped default sigmoid *has* knees (`toe: 0.2`), so
 /// "refuse a non-zero resolved knee" would refuse every `--new-flow` run. The fixed
-/// decode closes that from the other end: it reads its own [`DecodeParams`] rather
-/// than the resolved `reconstruction`, so a recipe stating that section is refused
-/// whole ([`reject_recipe_sections`]) and `--preset` is refused by presence.
-/// Nothing the user *asks for* in the new flow's **reconstruction** is silently
-/// dropped. (Knobs that merely resolve to a default still land in that section and
-/// are read by nothing — a zero knee, `--balance-range`, `reconstruction.type` — which
-/// is why the paragraph below says nothing *maps* them yet.)
-/// The rest of the surface is closed too, by the same mechanism:
-/// `nf-core/knob-availability-audit` put `print` and `output` in
-/// [`UNREAD_RECIPE_SECTIONS`] beside `reconstruction` and gave every flag under them
-/// a row below. `measure` is the section that is genuinely *read*
-/// (`READ_RECIPE_SECTIONS`), so it needed no refusal at all.
+/// decode closes that from the other end: it reads its own [`DecodeParams`], which is
+/// the new chain's recipe section `reconstruction` field for field
+/// (`nf-core/recipe-schema`), so a recipe stating the current chain's keys there is
+/// refused at load and `--preset` is refused by presence. Nothing the user *asks
+/// for* in the new flow's **reconstruction** is silently dropped. (An identity flag
+/// — a zero knee, `--reconstruction density`, `--density-curve exponential` — sets
+/// nothing, because the new recipe has no field for it to set.)
+/// The rest of the surface is closed by the same schema: it has no `print` or
+/// `output` section, so a recipe stating either is refused by name, and every flag
+/// under them has a row below. The shared sections (`input`, `calibration`'s film
+/// base, `measure`) are read.
 /// The asymmetry that remains here is benign and deliberate: typing
 /// `--sigmoid-toe 0.2`, which resolves
 /// today's default, is refused while the same resolved config with no flag is simply
@@ -197,15 +181,15 @@ const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which su
 ///
 /// [`DecodeParams`]: crate::algo::fixed::DecodeParams
 ///
-/// The ordering face of the same gap is why `simple` is listed here as well as in
-/// [`VALUE_ENTRIES`]: a value rule cannot run until `merge` has resolved a value, so
-/// any command line `merge` itself refuses is diagnosed by the legacy chain first. A
-/// flag row pre-empts that.
+/// The ordering face of the same gap is why these are **presence** rules, checked
+/// before `merge`: a value rule cannot run until `merge` has resolved a value, so any
+/// command line `merge` itself refuses would be diagnosed by the legacy chain first.
 ///
 /// **The inventory is complete**, and `every_convert_flag_is_classified` is what
 /// keeps it so: every conversion flag is either refused by a row here, kept by a row
-/// in `KEPT_FLAGS`, or named a non-knob, and every recipe section is in
-/// [`UNREAD_RECIPE_SECTIONS`] or read in full. The reconstruction rows are
+/// in `KEPT_FLAGS`, or named a non-knob — and `crate::recipe`'s tests hold the recipe
+/// half, that every section and key of the current chain's recipe is either shared
+/// with the new one or refused by name. The reconstruction rows are
 /// `nf-reconstruction/fixed-decode`'s, landed with the decode that strands them; the
 /// print, output and kept rows are `nf-core/knob-availability-audit`'s. Adding a row
 /// changes no message, ordering or call site.
@@ -213,17 +197,16 @@ const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which su
 /// The one thing the inventory does **not** carry is a renamed-knob mapping table.
 /// That is deliberate: a `NotYet` names the *task* that will carry the knob, not a
 /// flag spelling, because the spelling belongs to the task that builds the stage
-/// (`nf-core/recipe-schema` owns the sections). Inventing one here would be a second
-/// source of truth for it, and advice the user cannot act on today.
+/// (the stage's recipe section exists, empty, and its keys land with its knobs).
+/// Inventing one here would be a second source of truth for it, and advice the user
+/// cannot act on today.
 const FLAG_ENTRIES: &[FlagEntry] = &[
-    // Paired with the `simple` row in [`VALUE_ENTRIES`], which is the same dual-rule
-    // shape CLAUDE.md records for `OutputPreset::is_atomic` — a value rule for either
-    // provenance, plus a presence rule for what the value rule cannot see in time.
-    // Here that is *ordering*: `merge` refuses `--reconstruction simple` beside a
-    // `--preset` or a `--density-curve` before any value rule runs, so without this
-    // row the new flow's own refusal arrives second, behind advice about a chain the
-    // user did not select. The flag has no identity value to protect — its other
-    // value is `density`, which this flow wants.
+    // The only rule `simple` needs. Its recipe spelling, `reconstruction.type`, is
+    // not a key of the new chain's recipe and is refused at load (`crate::recipe`),
+    // and the new flow merges its flags into that recipe rather than into the current
+    // chain's `reconstruction`, so no resolved value can carry it past this row. The
+    // flag has no identity value to protect — its other value is `density`, which
+    // names what this flow already does.
     FlagEntry {
         knob: "--reconstruction simple",
         covers: &["--reconstruction"],
@@ -280,23 +263,18 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // The decode's *surviving* knobs are deliberately absent from this table and stay
     // reachable: `--density-scale`, `--density-offset`, `--density-gamma` and
     // `--anchor-mid-offset` are exactly the calibration and the anchor
-    // `algo::fixed::DecodeParams` carries, and [`decode_params`] maps them onto it.
-    // One wrinkle: `--density-gamma` beside the resolved *sigmoid* default is refused by `merge`
-    // (exit 2) before this flow ever sees it, and one of merge's two remedies is
-    // `--sigmoid-contrast` — which the row below refuses. (`merge` used to rank that
-    // one first; `nf-core/knob-availability-audit` dropped the ranking, so the two
-    // now read as equals and only one of them is dead here.) That row's remedy still
-    // names `--density-curve exponential --density-gamma` together rather than the
-    // flag alone, so following it works in one step. So the fixed decode's own contrast
-    // currently needs the curve named beside it; that dissolves when the new flow's
-    // default curve moves (`nf-core/default-flip`).
+    // `algo::fixed::DecodeParams` carries — the new chain's recipe section
+    // `reconstruction`, into which `crate::recipe::merge` writes them and from which
+    // the decode reads. `--density-gamma` works bare: the new flow does not run the
+    // current chain's `merge`, whose sigmoid default used to refuse it unless
+    // `--density-curve exponential` came with it.
     FlagEntry {
         knob: "--density-curve",
         covers: &["--density-curve"],
         // `--density-curve exponential` names the curve this flow already decodes
         // with, so it forces nothing and stays accepted — the tiebreaker's identity
-        // value. Not to preserve a reset: a recipe pinning a sigmoid is refused whole
-        // by `reject_recipe_sections`, so there is none to preserve. The other two
+        // value. Not to preserve a reset: the new chain's recipe has no curve to pin,
+        // so there is none to preserve. The other two
         // select a curve the fixed decode does not have.
         present: |args| {
             matches!(
@@ -330,13 +308,7 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
         present: |args| args.sigmoid.sigmoid_contrast.is_some(),
         availability: Availability::Never {
             reason: "it is the sigmoid's slope, and the fixed decode is the straight line",
-            // The curve is named alongside the flag on purpose: bare `--density-gamma`
-            // beside the resolved sigmoid default is refused by `merge`, one of whose
-            // two remedies is `--sigmoid-contrast` — the flag being refused here. See
-            // the note above the surviving knobs.
-            instead: Some(
-                "`--density-curve exponential --density-gamma`, this decode's own contrast",
-            ),
+            instead: Some("`--density-gamma`, this decode's own contrast"),
         },
     },
     // The three placements the one anchor rule replaces. `--anchor-mid-offset` is
@@ -453,15 +425,15 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // that owns its parameters reads no resolved section, so accepting one of these
     // would be accepting-and-ignoring. `pipeline::chain`'s four stages each carry
     // their own `Params`, so nothing under `print` reaches the new flow — which is
-    // why the recipe half needs no value rules either, only
-    // [`UNREAD_RECIPE_SECTIONS`].
+    // why the recipe half needs no value rules either: the new chain's recipe has no
+    // `print` section, and refuses one by name at load.
     //
-    // **Refused by presence, at every value, and the section refusal is why.** The
+    // **Refused by presence, at every value, and the missing section is why.** The
     // tiebreaker would normally leave an identity value alone to keep the flags-win
     // reset usable — `--white-balance 1,1,1` and `--highlight-compress 0` resolve the
     // documented defaults and render byte-identically. But that exemption exists to
-    // let a flag clear a value a *recipe* pinned, and `reject_recipe_sections` refuses
-    // any recipe stating `print`, so on this flow there is never a print value to
+    // let a flag clear a value a *recipe* pinned, and the new chain's recipe has no
+    // `print` section, so on this flow there is never a print value to
     // reset. With nothing to protect, presence is the honest rule: each of these names
     // an operation whose stage is an identity pass.
     //
@@ -599,15 +571,10 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
             arriving_with: DESTINATION_ARRIVES_WITH,
         },
     },
-    // Operational, and refused for a reason none of the others share: it writes the
-    // resolved *legacy* config, and it writes it before the render seam — so under
-    // `--new-flow` it would hand the user a recipe describing a chain the run did not
-    // select. Refusing beats emitting a plausible lie.
-    // Operational like `--dump-params`, and refused for the same shape of reason: the
-    // record names the resolved output preset, the reconstruction and curve, and times
-    // the legacy chain's buckets (`algorithm` / `color`) — so under `--new-flow` it
-    // would describe a chain the run did not take, and a telemetry record's existence
-    // reads as a successful run of what it names.
+    // Operational, and refused because the record names the resolved output preset,
+    // the reconstruction and curve, and times the legacy chain's buckets (`algorithm` /
+    // `color`) — so under `--new-flow` it would describe a chain the run did not take,
+    // and a telemetry record's existence reads as a successful run of what it names.
     FlagEntry {
         knob: "--telemetry / --telemetry-file",
         covers: &["--telemetry", "--telemetry-file"],
@@ -618,56 +585,16 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
                             (`nf-core/report-contract`)",
         },
     },
+    // Anchors of the regional balance's tone ramp. The new chain's recipe has no
+    // field for them — the balance they shape is refused above, and its successor is a
+    // grade in the look — so they are refused at every value: with no recipe to hold
+    // the knob, there is no reset for an identity value to protect.
     FlagEntry {
-        knob: "--dump-params",
-        covers: &["--dump-params"],
-        present: |args| args.dump_params.is_some(),
+        knob: "--balance-range / --auto-balance-range",
+        covers: &["--balance-range", "--auto-balance-range"],
+        present: |args| args.density.balance_range.is_some() || args.density.auto_balance_range,
         availability: Availability::NotYet {
-            arriving_with: "the new chain's recipe schema, which decides how a recipe \
-                            describes these stages at all (`nf-core/recipe-schema`)",
-        },
-    },
-];
-
-/// Knobs with no new-flow meaning, keyed on the **resolved value**.
-///
-/// Provisional for the same reason as [`FLAG_ENTRIES`], and settled by the same
-/// document (`simple` — "Remove").
-const VALUE_ENTRIES: &[ValueEntry] = &[
-    ValueEntry {
-        knob: "`simple` reconstruction (`--reconstruction simple`, recipe \
-               `reconstruction.type`)",
-        // The flag is owned by the `FLAG_ENTRIES` row it pairs with.
-        covers: &[],
-        matches: |cfg| matches!(cfg.reconstruction, Reconstruction::Simple),
-        availability: Availability::Never {
-            reason: "`1 - T/T_base` is an affine inversion of transmission, not a decode of \
-                     anything a print sees, so the fixed decode has nothing to map it onto",
-            instead: Some("`--reconstruction density`"),
-        },
-    },
-    // The one half-read section, and the row is what keeps `calibration` in
-    // `READ_RECIPE_SECTIONS` honest: the base is read, the reference is not.
-    //
-    // **A value row rather than a section refusal, and rather than flag rows alone.**
-    // The four `--*d-max` flags above already cover what the user *types*; this covers
-    // what a *recipe* states, which before `core/calibration-recipe-section` was inside
-    // `reconstruction` and so already refused whole. Moving the key to its own section
-    // put it beyond that witness — the flag would have stayed refused while the recipe
-    // key saying the same thing was parsed and read by nothing.
-    //
-    // Matching a **non-default** resolved value is what makes it a value rule rather
-    // than a second presence rule: `"fixed"` is what an unstated reference resolves to,
-    // so refusing it would refuse every `--new-flow` run that states a base.
-    ValueEntry {
-        knob: "recipe `calibration.dmax`",
-        // The flag rows above own the flag spellings; this row exists for the recipe
-        // provenance they cannot see.
-        covers: &[],
-        matches: |cfg| cfg.calibration.dmax != DmaxSource::default(),
-        availability: Availability::Never {
-            reason: DMAX_REASON,
-            instead: None,
+            arriving_with: BALANCE_ARRIVES_WITH,
         },
     },
 ];
@@ -724,7 +651,8 @@ const KEPT_FLAGS: &[KeptEntry] = &[
               under the legacy default reference",
     },
     // The decode's own knobs — the calibration and the anchor that
-    // `algo::fixed::DecodeParams` carries, mapped onto it by [`decode_params`].
+    // `algo::fixed::DecodeParams` carries, which is also the new recipe's
+    // `reconstruction` section; `crate::recipe::merge` sets each one there.
     KeptEntry {
         covers: &["--density-scale", "--density-offset"],
         why: "the decode's own calibration — `nf-calibration/scale-gamma-loop` owns the \
@@ -732,55 +660,15 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     },
     KeptEntry {
         covers: &["--density-gamma"],
-        why: "the fixed decode's contrast. `nf-look/path-to-white` tunes against it \
-              directly, so it must stay reachable — though not yet *bare*: `merge` \
-              refuses it beside the resolved sigmoid default, so it needs \
-              `--density-curve exponential` alongside until that default moves",
+        why: "the fixed decode's contrast (recipe `reconstruction.contrast`). \
+              `nf-look/path-to-white` tunes against it directly, so it must stay reachable",
     },
     KeptEntry {
         covers: &["--anchor-mid-offset"],
         why: "it is the one anchor rule the decode has — `mid-at-base-offset`'s `d`, \
               whose value is `nf-reconstruction/anchor-rule`'s",
     },
-    // Accepted because they force nothing on their own, not because the idea
-    // survives: both ramp a regional balance that is itself refused above, so with
-    // the balances at zero they configure a correction that does not happen. Not to
-    // preserve a reset — `balance_range` serializes under `reconstruction.density`,
-    // so a recipe stating it is refused whole — but because there is no diagnosis to
-    // give: the row that has one fires as soon as a balance is non-zero.
-    KeptEntry {
-        covers: &["--balance-range", "--auto-balance-range"],
-        why: "they only anchor the regional balance's tone ramp, which is refused \
-              whenever it is non-zero, so alone they ask for nothing",
-    },
 ];
-
-/// The recipe sections the new flow does not read, refused whole.
-///
-/// The decode settled the argument ([`reject_recipe_sections`]): a stage that owns
-/// its parameters reads no resolved section, so a recipe stating one would parse,
-/// validate and then do nothing. `print` and `output` join `reconstruction` for the
-/// same reason — `pipeline::chain`'s four stages each carry their own `Params`, and
-/// the new flow's one destination is fixed rather than resolved from `output`.
-///
-/// This is also why no `print.*` or `output.*` knob needs a value rule: between this
-/// list and the flag rows above, both provenances are covered.
-pub const UNREAD_RECIPE_SECTIONS: &[&str] = &["reconstruction", "print", "output"];
-
-/// The recipe sections the new flow **does** read.
-///
-/// `input` and `measure` are read in full. `calibration` is read in part: the section
-/// stays here and its unread key is refused by a [`VALUE_ENTRIES`] row, because
-/// widening this list would reject the rest of the section with it. The fixed decode
-/// divides by `calibration.film_base` like any other, but its anchor rule reads no
-/// reference density at all (`calibration.dmax`), so refusing the section whole would
-/// reject the base with it.
-///
-/// The complement of [`UNREAD_RECIPE_SECTIONS`], stated rather than inferred so that
-/// `every_recipe_section_is_classified` can fail on a section added to the schema
-/// and classified nowhere.
-#[cfg(test)]
-const READ_RECIPE_SECTIONS: &[&str] = &["input", "calibration", "measure"];
 
 /// Refuse a **flag** the new flow has no meaning for.
 ///
@@ -796,65 +684,6 @@ pub fn reject_unavailable_flags(flow: Flow, args: &ConvertArgs) -> Result<()> {
         if (entry.present)(args) {
             return Err(refusal(entry.knob, entry.availability));
         }
-    }
-    Ok(())
-}
-
-/// Refuse a **resolved value** the new flow has no meaning for.
-///
-/// Runs ahead of every rule that reasons about the shipped chain's parameters, for
-/// the same reason as above. (`roll`'s own mode rejections still precede it; they
-/// diagnose roll-versus-convert facts, not chain parameters, so their remedies
-/// cannot name a knob this flow refuses.) This is the only half `roll` can reach:
-/// it accepts no conversion flags, so a roll knob — shared recipe or per-frame
-/// overlay — is always a resolved value.
-pub fn reject_unavailable_values(flow: Flow, cfg: &ResolvedConfig) -> Result<()> {
-    if flow == Flow::Legacy {
-        return Ok(());
-    }
-    for entry in VALUE_ENTRIES {
-        if (entry.matches)(cfg) {
-            return Err(refusal(entry.knob, entry.availability));
-        }
-    }
-    Ok(())
-}
-
-/// Refuse a **recipe** that describes the chain the new flow does not run.
-///
-/// The third provenance, and the one neither table can see. Every section in
-/// [`UNREAD_RECIPE_SECTIONS`] would parse, validate and then do nothing — the new
-/// flow decodes through [`DecodeParams`](crate::algo::fixed::DecodeParams), renders
-/// through `pipeline::chain`'s own per-stage params, and writes one fixed destination
-/// rather than resolving `output`. `deny_unknown_fields` catches an *unknown* key and is blind to a **known but
-/// meaningless** one, which is the bug class the project forbids.
-///
-/// Refusing the sections whole is blunt and temporary: `nf-core/recipe-schema`
-/// decides how a recipe describes these stages, and until it does the knobs the new
-/// flow *does* read stay reachable by flag (see `KEPT_FLAGS`).
-///
-/// `stated` comes from a raw-JSON witness, not from a comparison against the
-/// defaults: a recipe that *writes* the defaults it would otherwise inherit is
-/// indistinguishable from one that omitted them once serde has filled the gaps — the
-/// same reason `calibration_dmax_present` exists.
-///
-/// One section per call is deliberate — the first stated one is named rather than
-/// all of them, because a user fixing a recipe removes them one at a time and a list
-/// reads as though all of them had to go before anything else could be checked.
-pub fn reject_recipe_sections(flow: Flow, stated: &[&'static str]) -> Result<()> {
-    if flow == Flow::Legacy {
-        return Ok(());
-    }
-    if let Some(section) = stated.first() {
-        return Err(refusal(
-            &format!("a recipe `{section}` section"),
-            Availability::NotYet {
-                arriving_with: "the new chain's recipe schema, which decides how a recipe \
-                                describes these stages at all — until then the new flow \
-                                would parse this section and never read it \
-                                (`nf-core/recipe-schema`)",
-            },
-        ));
     }
     Ok(())
 }
@@ -894,70 +723,9 @@ fn refusal(knob: &str, availability: Availability) -> NcError {
     ))
 }
 
-/// The fixed decode's parameters, read off the resolved config.
-///
-/// The decode reads its own [`DecodeParams`] rather than the resolved
-/// `reconstruction` object, and under `--new-flow` that object can only have come
-/// from **defaults plus the kept flags**: a recipe stating the section is refused
-/// whole, and every flag that would set a curve, a knee, a placement or a balance
-/// is refused by presence. So each field reads whichever of the two is present:
-///
-/// - `scale`, `offset` — `reconstruction.density`, whose defaults are the decode's
-///   own ([`crate::algo::fixed::DENSITY_SCALE`] agrees with the parametric default,
-///   pinned by `fixed`'s tests), so an untouched value maps to the same number.
-/// - `contrast` — the exponential's `gamma` when the resolved curve is exponential
-///   (reached by `--density-curve exponential`, with or without `--density-gamma`);
-///   otherwise the resolved curve is the *legacy* sigmoid default, whose contrast is
-///   not this decode's, so the decode's own [`crate::algo::fixed::CONTRAST`] applies.
-/// - the anchor — `d` from `mid-at-base-offset(d)` (`--anchor-mid-offset`); any other
-///   placement is a legacy curve's default, so the decode's own `d` applies.
-///
-/// The fallbacks are therefore never a user's value silently dropped: a value the
-/// user could state is either read here or refused before this runs. The two rules
-/// that would make that false — a non-zero regional balance, a `simple`
-/// reconstruction — are refused upstream, and restated here as errors so this
-/// function stays total rather than trusting another module's ordering.
-pub fn decode_params(cfg: &ResolvedConfig) -> Result<DecodeParams> {
-    let defaults = DecodeParams::default();
-    let Reconstruction::Density { density, curve } = &cfg.reconstruction else {
-        return Err(NcError::Other(
-            "the new flow reached the fixed decode with a `simple` reconstruction, which \
-             its availability rules refuse"
-                .into(),
-        ));
-    };
-    if density.shadow_balance != [0.0; 3] || density.highlight_balance != [0.0; 3] {
-        return Err(NcError::Other(
-            "the new flow reached the fixed decode with a regional balance, which its \
-             availability rules refuse"
-                .into(),
-        ));
-    }
-    let contrast = match curve {
-        DensityCurve::Exponential(e) => e.gamma,
-        DensityCurve::Sigmoid(_) | DensityCurve::Characteristic(_) => defaults.contrast,
-    };
-    let anchor = match curve.anchor() {
-        Some(AnchorPlacement::MidAtBaseOffset(d)) => AnchorRule::MidAboveBase(d),
-        Some(
-            AnchorPlacement::WhiteAtDmax
-            | AnchorPlacement::MidAtDmaxFraction(_)
-            | AnchorPlacement::BlackAtBase(_),
-        )
-        | None => defaults.anchor,
-    };
-    Ok(DecodeParams {
-        scale: density.scale,
-        offset: density.offset,
-        contrast,
-        anchor,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::DensityParams;
     use std::collections::BTreeSet;
 
     /// `convert` flags that are **not** conversion knobs, so the inventory owes them
@@ -967,10 +735,10 @@ mod tests {
     /// skip a hidden *knob*, and "takes no value" would skip `--auto-base`. Adding a
     /// flag to any of these groups therefore still forces a deliberate choice.
     const NON_KNOB_FLAGS: &[&str] = &[
-        // Operational: arg-struct only, never a recipe key. (`--dump-params` and the
-        // telemetry pair are the exceptions that prove the rule — operational *and*
-        // refused, because each would write a record describing a chain the run did
-        // not select, so they earn rows in FLAG_ENTRIES instead of lines here.)
+        // Operational: arg-struct only, never a recipe key. `--dump-params` writes the
+        // recipe of whichever chain the run selected — under `--new-flow`, the new
+        // chain's document (`crate::recipe`).
+        "--dump-params",
         "--strict",
         "--seed",
         // Plumbing: paths and the recipe itself, not settings inside it.
@@ -1093,7 +861,6 @@ mod tests {
         FLAG_ENTRIES
             .iter()
             .flat_map(|e| e.covers)
-            .chain(VALUE_ENTRIES.iter().flat_map(|e| e.covers))
             .chain(KEPT_FLAGS.iter().flat_map(|e| e.covers))
             .copied()
             .collect()
@@ -1142,9 +909,6 @@ mod tests {
     #[test]
     fn no_flag_is_classified_twice() {
         // Two rows matching one flag would make the diagnosis depend on row order.
-        // The dual-rule `simple` pair is not an exception: the flag row owns
-        // `--reconstruction` and the value row carries no ids, precisely so this stays
-        // a flat uniqueness check.
         let ids = classified_ids();
         let mut seen = BTreeSet::new();
         for id in &ids {
@@ -1158,74 +922,85 @@ mod tests {
         }
     }
 
+    /// A kept flag is kept because the new flow *reads* it, so each one must reach the
+    /// new chain's recipe — a kept flag with no arm in `recipe::merge` would be the
+    /// accepted-and-ignored defect this inventory exists to prevent. Driven over
+    /// [`KEPT_FLAGS`] itself, so a row added later without a sample here reds.
     #[test]
-    fn every_recipe_section_is_classified() {
-        // The flag half above has a per-knob verdict; the recipe half is decided a
-        // section at a time, because a stage that owns its parameters reads none of
-        // its old section. So the check is that every section a recipe can carry is
-        // named in one of the two lists — a new one is unread by default and would
-        // otherwise be accepted-and-ignored.
-        let recipe = serde_json::to_value(ResolvedConfig::default()).expect("a recipe serializes");
-        let sections: Vec<&str> = recipe
-            .as_object()
-            .expect("the recipe is an object")
-            .keys()
-            .map(String::as_str)
-            .collect();
-        assert!(!sections.is_empty());
-        for section in &sections {
-            assert!(
-                UNREAD_RECIPE_SECTIONS.contains(section) || READ_RECIPE_SECTIONS.contains(section),
-                "recipe section `{section}` is classified neither read nor unread"
-            );
+    fn every_kept_flag_reaches_the_recipe() {
+        use crate::algo::fixed::AnchorRule;
+        use crate::cli::{Cli, Command};
+        use crate::recipe::{self, Recipe};
+        use crate::types::{FilmBaseSource, FilmType, MeaningAssertion, TransferAssertion};
+        use clap::Parser;
+        type Landed = fn(&Recipe) -> bool;
+        // One command line per kept flag, each setting a non-default value, and the
+        // one field it must land in — "the recipe changed" alone would pass a flag
+        // wired to the wrong knob.
+        let samples: &[(&str, &[&str], Landed)] = &[
+            ("--input-transfer", &["--input-transfer", "linear"], |r| {
+                r.input.transfer == TransferAssertion::Linear
+            }),
+            (
+                "--input-meaning",
+                &["--input-meaning", "scanner-device"],
+                |r| r.input.meaning == MeaningAssertion::ScannerDevice,
+            ),
+            ("--film-type", &["--film-type", "silver"], |r| {
+                r.input.film_type == FilmType::Silver
+            }),
+            ("--film-base", &["--film-base", "0.5,0.4,0.3"], |r| {
+                matches!(r.calibration.film_base, Some(FilmBaseSource::Explicit(_)))
+            }),
+            ("--base-region", &["--base-region", "0,0,10,10"], |r| {
+                matches!(r.calibration.film_base, Some(FilmBaseSource::Region(_)))
+            }),
+            ("--auto-base", &["--auto-base"], |r| {
+                r.calibration.film_base == Some(FilmBaseSource::Auto)
+            }),
+            ("--export-ir", &["--export-ir", "ir.tiff"], |r| {
+                r.input.export_ir.as_deref() == Some("ir.tiff")
+            }),
+            ("--measure-inset", &["--measure-inset", "0.1"], |r| {
+                r.measure.inset == 0.1
+            }),
+            ("--density-scale", &["--density-scale", "1,0.9,0.8"], |r| {
+                r.reconstruction.scale == [1.0, 0.9, 0.8]
+            }),
+            ("--density-offset", &["--density-offset", "0,0.1,0"], |r| {
+                r.reconstruction.offset == [0.0, 0.1, 0.0]
+            }),
+            ("--density-gamma", &["--density-gamma", "1.8"], |r| {
+                r.reconstruction.contrast == 1.8
+            }),
+            (
+                "--anchor-mid-offset",
+                &["--anchor-mid-offset", "0.5"],
+                |r| r.reconstruction.anchor == AnchorRule::MidAboveBase(0.5),
+            ),
+        ];
+        for entry in KEPT_FLAGS {
+            for flag in entry.covers {
+                let (_, extra, landed) = samples
+                    .iter()
+                    .find(|(f, _, _)| f == flag)
+                    .unwrap_or_else(|| panic!("kept flag {flag} has no sample here"));
+                let argv = ["hanten", "convert", "in.tif", "-o", "out", "--new-flow"]
+                    .iter()
+                    .chain(extra.iter())
+                    .copied();
+                let Command::Convert(args) = Cli::try_parse_from(argv).unwrap().command else {
+                    unreachable!()
+                };
+                let merged = recipe::merge(Recipe::default(), &args);
+                assert!(
+                    landed(&merged),
+                    "{flag} did not land in its field: {merged:?}"
+                );
+                // Falsifiability: the default does not already satisfy the check.
+                assert!(!landed(&Recipe::default()), "{flag}'s check is vacuous");
+            }
         }
-        for named in UNREAD_RECIPE_SECTIONS.iter().chain(READ_RECIPE_SECTIONS) {
-            assert!(
-                sections.contains(named),
-                "`{named}` is classified but is not a recipe section"
-            );
-        }
-    }
-
-    #[test]
-    fn an_unread_section_is_refused_and_a_read_one_is_not() {
-        // Falsifiability for the section lists: the refusal must key on which section
-        // was stated, not merely on the flow.
-        let err = reject_recipe_sections(Flow::New, &["print"]).unwrap_err();
-        assert!(err.message().contains("a recipe `print` section"), "{err}");
-        assert!(reject_recipe_sections(Flow::New, &[]).is_ok());
-        assert!(reject_recipe_sections(Flow::Legacy, &["print"]).is_ok());
-    }
-
-    #[test]
-    fn legacy_refuses_nothing() {
-        // The flag's whole contract on the no-flag path: nothing moves. A table row
-        // added by the audit must not start refusing commands that work today.
-        let cfg = ResolvedConfig {
-            reconstruction: Reconstruction::Simple,
-            ..Default::default()
-        };
-        assert!(reject_unavailable_values(Flow::Legacy, &cfg).is_ok());
-    }
-
-    #[test]
-    fn a_value_entry_is_refused_under_the_new_flow() {
-        let cfg = ResolvedConfig {
-            reconstruction: Reconstruction::Simple,
-            ..Default::default()
-        };
-        let err = reject_unavailable_values(Flow::New, &cfg).unwrap_err();
-        let msg = err.message();
-        assert!(msg.contains("--reconstruction simple"), "{msg}");
-        assert!(msg.contains("will not gain one"), "{msg}");
-        assert!(msg.contains("--reconstruction density"), "{msg}");
-    }
-
-    #[test]
-    fn the_default_reconstruction_passes() {
-        // Falsifiability for the test above: the refusal must key on the value, not
-        // on the flow alone.
-        assert!(reject_unavailable_values(Flow::New, &ResolvedConfig::default()).is_ok());
     }
 
     #[test]
@@ -1250,117 +1025,14 @@ mod tests {
 
     #[test]
     fn no_table_lists_one_knob_twice() {
-        // *Within* a table, two rows matching one knob would make the diagnosis depend
-        // on row order. **Across** the two tables is the deliberate dual-rule pattern
-        // (`simple` is both), so the check is per table, not over the union.
-        for (label, knobs) in [
-            (
-                "FLAG_ENTRIES",
-                FLAG_ENTRIES.iter().map(|e| e.knob).collect::<Vec<_>>(),
-            ),
-            (
-                "VALUE_ENTRIES",
-                VALUE_ENTRIES.iter().map(|e| e.knob).collect::<Vec<_>>(),
-            ),
-        ] {
-            for knob in &knobs {
-                assert!(!knob.is_empty(), "{label} has an unnamed row");
-            }
-            let mut sorted = knobs.clone();
-            sorted.sort_unstable();
-            sorted.dedup();
-            assert_eq!(sorted.len(), knobs.len(), "duplicate knob in {label}");
+        // Two rows matching one knob would make the diagnosis depend on row order.
+        let knobs: Vec<&str> = FLAG_ENTRIES.iter().map(|e| e.knob).collect();
+        for knob in &knobs {
+            assert!(!knob.is_empty(), "FLAG_ENTRIES has an unnamed row");
         }
-    }
-
-    fn density_cfg(density: DensityParams, curve: DensityCurve) -> ResolvedConfig {
-        ResolvedConfig {
-            reconstruction: Reconstruction::Density { density, curve },
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn the_default_config_maps_to_the_decodes_own_defaults() {
-        // The resolved default is the legacy sigmoid, whose contrast and placement are
-        // not the decode's — so the decode's own constants must apply, not the
-        // sigmoid's 2.0687 or its `mid-at-dmax-fraction`.
-        assert_eq!(
-            decode_params(&ResolvedConfig::default()).unwrap(),
-            DecodeParams::default()
-        );
-    }
-
-    #[test]
-    fn the_kept_knobs_reach_the_decode() {
-        let cfg = density_cfg(
-            DensityParams {
-                scale: [1.0, 0.9, 0.8],
-                offset: [0.0, -0.03, -0.05],
-                ..DensityParams::default()
-            },
-            DensityCurve::Exponential(crate::types::ExponentialParams {
-                gamma: 1.8,
-                anchor: AnchorPlacement::MidAtBaseOffset(0.7),
-            }),
-        );
-        let p = decode_params(&cfg).unwrap();
-        assert_eq!(p.scale, [1.0, 0.9, 0.8]);
-        assert_eq!(p.offset, [0.0, -0.03, -0.05]);
-        assert_eq!(p.contrast, 1.8);
-        assert_eq!(p.anchor, AnchorRule::MidAboveBase(0.7));
-    }
-
-    #[test]
-    fn a_legacy_default_placement_falls_back_to_the_decodes_rule() {
-        // `--density-curve exponential` alone resolves the exponential's own default
-        // placement, `white-at-dmax` — a reference-reading rule this decode does not
-        // have. It is a default nobody typed (every placement flag but
-        // `--anchor-mid-offset` is refused), so the decode's own `d` applies.
-        let cfg = density_cfg(
-            DensityParams::default(),
-            DensityCurve::Exponential(crate::types::ExponentialParams::default()),
-        );
-        let p = decode_params(&cfg).unwrap();
-        assert_eq!(p.anchor, DecodeParams::default().anchor);
-        assert_eq!(
-            p.contrast, 2.0,
-            "the exponential's default gamma is the decode's"
-        );
-    }
-
-    #[test]
-    fn what_the_availability_rules_refuse_is_an_error_here_too() {
-        assert!(
-            decode_params(&ResolvedConfig {
-                reconstruction: Reconstruction::Simple,
-                ..Default::default()
-            })
-            .is_err()
-        );
-        let balanced = density_cfg(
-            DensityParams {
-                shadow_balance: [0.1, 0.0, 0.0],
-                ..DensityParams::default()
-            },
-            DensityCurve::default(),
-        );
-        assert!(decode_params(&balanced).is_err());
-    }
-
-    #[test]
-    fn the_dual_rule_pair_agrees_on_its_verdict() {
-        // `simple` is refused by both tables, so the two rows must tell the user the
-        // same thing — a pair that disagreed would diagnose one knob two ways
-        // depending on whether it arrived by flag or by recipe.
-        let flag = FLAG_ENTRIES
-            .iter()
-            .find(|e| e.knob.contains("--reconstruction simple"))
-            .expect("the flag row for simple");
-        let value = VALUE_ENTRIES
-            .iter()
-            .find(|e| e.knob.contains("`simple` reconstruction"))
-            .expect("the value row for simple");
-        assert_eq!(flag.availability, value.availability);
+        let mut sorted = knobs.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), knobs.len(), "duplicate knob in FLAG_ENTRIES");
     }
 }

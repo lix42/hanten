@@ -26,13 +26,15 @@ use crate::types::Result;
 ///
 /// An empty struct rather than an `Option`: a stage is always in the chain, and
 /// "this stage is off" is deliberately not expressible — `nf-look/stage.md`
-/// settled that an empty stage reports as empty, not absent. Filling the stage
-/// adds fields here; [`apply`]'s signature already accommodates failure (see
+/// settled that an empty stage reports as empty, not absent — and it is a recipe
+/// section (`crate::recipe`) that loads as `{}` and refuses any key until one exists
+/// here. Filling the stage adds fields here; [`apply`]'s signature already accommodates failure (see
 /// [`chain::render`]). How a filled stage hands its *resolved* values back for the
 /// report is not settled here — that is `nf-core/report-contract`'s.
 ///
 /// [`chain::render`]: crate::pipeline::chain::render
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SceneCorrectionParams {}
 
 impl SceneCorrectionParams {

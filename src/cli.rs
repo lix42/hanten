@@ -25,17 +25,15 @@ use crate::algo::{density, fixed};
 use crate::flow::{self, Flow};
 use crate::io::decode::{DecodeInfo, decode_within, probe};
 use crate::io::{avif, encode, staged, ultra_hdr};
-use crate::pipeline::chain::{self, ChainParams};
+use crate::pipeline::chain;
 use crate::pipeline::display_tone::DisplayTone;
-use crate::pipeline::fit_gamut::{DestinationGamut, FitGamutParams};
-use crate::pipeline::fit_range::FitRangeParams;
+use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::input_semantics::{
     self, ContainerColorFacts, InputAssertions, InputColorReport, RawMode,
 };
-use crate::pipeline::look::LookParams;
 use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
-use crate::pipeline::scene_correction::SceneCorrectionParams;
 use crate::pipeline::{color, film_base, gain_map, hdr, sdr, stages, working_space};
+use crate::recipe::{self, KnobNames, Recipe};
 use crate::telemetry;
 use crate::types::{
     AnchorPlacement, BalanceRange, BigTiff, CalibrationParams, CharacteristicParams,
@@ -85,7 +83,17 @@ pub enum Command {
     /// Run only film-base / Dmin estimation; emit JSON.
     Estimate(EstimateArgs),
     /// Print the full default parameter set as JSON (recipe scaffolding).
-    Params,
+    Params(ParamsArgs),
+}
+
+/// `hanten params` options.
+#[derive(Args, Debug)]
+pub struct ParamsArgs {
+    /// Transitional: print the new rendering chain's recipe (recipe_version 2)
+    /// instead of the shipped one's — the document `convert --new-flow` and
+    /// `roll --new-flow` read. See `convert --new-flow`.
+    #[arg(long = "new-flow")]
+    pub new_flow: bool,
 }
 
 /// Fraction of out-of-table samples above which the characteristic curve warns.
@@ -316,9 +324,10 @@ pub struct ConvertArgs {
     /// feature: CLI-only — never a recipe key, since it selects which knobs exist
     /// rather than setting one — and removed when the default flips, as a migration
     /// error with no alias (nc is unreleased, so removal is cheap). A knob the new
-    /// chain cannot honour is refused rather than accepted and ignored, and so is a
-    /// recipe section it does not read. It writes one destination, a Display P3
-    /// 16-bit TIFF, with no sidecar.
+    /// chain cannot honour is refused rather than accepted and ignored. A --params
+    /// recipe must be the new chain's own document (`"recipe_version": 2`; `hanten
+    /// params --new-flow` writes one) — each chain refuses the other's recipe by name.
+    /// It writes one destination, a Display P3 16-bit TIFF, with no sidecar.
     // Plain prose on purpose: clap renders a doc comment verbatim as `--help` text,
     // so markdown emphasis would print as asterisks.
     #[arg(long = "new-flow")]
@@ -372,10 +381,10 @@ pub struct RollArgs {
     #[arg(long)]
     pub strict: bool,
     /// Transitional: resolve the new rendering chain for every frame — see
-    /// `convert --new-flow`. Roll accepts no conversion flags, so a knob the new
-    /// chain refuses reaches it as a resolved value from the shared recipe or a
-    /// per-frame override — or, for a recipe section the new chain does not read
-    /// (`reconstruction`, `print`, `output`), by its presence in either.
+    /// `convert --new-flow`. Roll accepts no conversion flags, so its knobs arrive in
+    /// the shared recipe and the per-frame overrides: the shared recipe must be the
+    /// new chain's document (`"recipe_version": 2`), and each override is merged onto
+    /// it, so the current chain's keys are refused by name at either site.
     #[arg(long = "new-flow")]
     pub new_flow: bool,
     #[command(flatten)]
@@ -1346,7 +1355,7 @@ fn preset_replaced_paths(recipe: &ResolvedConfig, cfg: &ResolvedConfig) -> Vec<&
 /// algorithm selection is the one tagged `reconstruction` object
 /// (`schema_version` 1, design-spec §8): there are no sibling top-level
 /// `algorithm`/`density`/`sigmoid`/`simple` sections — the removed legacy forms
-/// are rejected with a migration error at recipe load (`load_recipe`).
+/// are rejected with a migration error at recipe load (`load_recipe_for`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct ResolvedConfig {
@@ -1899,8 +1908,8 @@ pub struct NewFlowResult {
     pub destination: &'static str,
     /// The gamut the chain rendered into, read off its exit.
     pub gamut: &'static str,
-    /// Always `false`: no sidecar is written under `--new-flow`, because its
-    /// `params` would describe a chain the run did not select (`nf-core/recipe-schema`).
+    /// Always `false`: no sidecar is written under `--new-flow` yet. The new chain's
+    /// recipe exists (`crate::recipe`); writing it here is `nf-core/report-contract`'s.
     pub sidecar_written: bool,
     /// A sidecar an earlier run left beside this output, removed because it
     /// described the image this run replaced. Absent when there was none.
@@ -2510,17 +2519,13 @@ fn parse_floats<const N: usize>(s: &str) -> std::result::Result<[f32; N], String
 /// records for the build that produced it.
 #[derive(Debug)]
 struct LoadedRecipe {
-    cfg: ResolvedConfig,
+    doc: RecipeDoc,
     calibration_dmax_present: bool,
     /// Whether the file explicitly set `output.preset`. The same raw-JSON witness
     /// problem as `calibration_dmax_present`: once the default became a *named* preset,
     /// a resolved `gain-map-hdr` no longer says whether anyone chose it. The suffix
     /// diagnosis varies on that (see [`SuffixContext`]).
     output_preset_present: bool,
-    /// Which of the sections the new flow never reads this file carries
-    /// (`flow::UNREAD_RECIPE_SECTIONS`). Not a value question like the two above —
-    /// the key's mere presence is what makes a recipe describe the wrong chain.
-    unread_sections: Vec<&'static str>,
     /// `meta.pipeline_version` from a sidecar envelope, when the loaded file
     /// carried one. Provenance only — never applied, only compared (see
     /// [`pipeline_version_warning`]).
@@ -2603,13 +2608,20 @@ struct SidecarEnvelopeIn {
 ///
 /// The two are told apart by the presence of a top-level `params` key, which is not
 /// (and must never become) a recipe key.
-fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
+///
+/// **Which schema is read depends on `flow`**, and each side refuses the other's
+/// document by name before the typed parse: under `--new-flow` the body must be a
+/// `recipe_version` 2 [`Recipe`] ([`recipe::check_body`]), and without it a body
+/// stating `recipe_version` is refused ([`recipe::check_body_without_flag`]).
+fn load_recipe_for(path: Option<&Path>, flow: Flow) -> Result<LoadedRecipe> {
     match path {
         None => Ok(LoadedRecipe {
-            cfg: ResolvedConfig::default(),
+            doc: match flow {
+                Flow::Legacy => RecipeDoc::Current(ResolvedConfig::default()),
+                Flow::New => RecipeDoc::New(Recipe::default()),
+            },
             calibration_dmax_present: false,
             output_preset_present: false,
-            unread_sections: Vec::new(),
             meta_pipeline_version: None,
             // No recipe file means nothing was archived and nothing is being
             // reinterpreted — the run simply *is* this build's defaults. Only a
@@ -2647,10 +2659,34 @@ fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
                 };
             // The recipe *body*: an envelope's `params`, else the whole document.
             let body = envelope_body.as_ref().or(value.as_ref());
+            let usage = |e| NcError::Usage(format!("invalid recipe {}: {e}", p.display()));
+            if flow == Flow::New {
+                // The new chain's document. Its own migration checks replace the
+                // current chain's: those point at `reconstruction.type` and the like,
+                // homes this schema does not have.
+                if let Some(v) = body {
+                    recipe::check_body(v, true, &context)?;
+                }
+                let r: Recipe = match &envelope_body {
+                    Some(v) => serde_json::from_value(v.clone()).map_err(usage)?,
+                    None => serde_json::from_str(&txt).map_err(usage)?,
+                };
+                return Ok(LoadedRecipe {
+                    doc: RecipeDoc::New(r),
+                    // `recipe::check_body` refuses a `calibration.dmax`, so there is
+                    // no reference provenance to carry.
+                    calibration_dmax_present: false,
+                    // No `output` section exists in this schema.
+                    output_preset_present: false,
+                    meta_pipeline_version,
+                    // No curve to leave unpinned: the decode is one fixed line.
+                    unpinned_curve: None,
+                });
+            }
             if let Some(v) = body {
+                recipe::check_body_without_flag(v, &context)?;
                 reject_legacy_recipe_keys(v, &context)?;
             }
-            let usage = |e| NcError::Usage(format!("invalid recipe {}: {e}", p.display()));
             // Bare recipes keep parsing straight from the file text, so their
             // (line/column-bearing) serde diagnostics are unchanged.
             let cfg = match &envelope_body {
@@ -2659,15 +2695,54 @@ fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
             };
             let calibration_dmax_present = body.is_some_and(sets_calibration_dmax);
             let output_preset_present = body.is_some_and(sets_output_preset);
-            let unread_sections = body.map(stated_unread_sections).unwrap_or_default();
             Ok(LoadedRecipe {
-                cfg,
+                doc: RecipeDoc::Current(cfg),
                 calibration_dmax_present,
                 output_preset_present,
-                unread_sections,
                 meta_pipeline_version,
                 unpinned_curve: body.and_then(unpinned_curve),
             })
+        }
+    }
+}
+
+/// [`load_recipe_for`] on the current chain — the spelling the unit tests use.
+#[cfg(test)]
+fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
+    load_recipe_for(path, Flow::Legacy)
+}
+
+/// A loaded recipe, in the schema of the chain the run selected.
+///
+/// One document, never two views of it: the new chain's projection onto the current
+/// chain's config ([`Recipe::to_config`]) is derived where it is needed — after the
+/// flags merged — rather than stored beside the recipe it would have to agree with.
+#[derive(Debug)]
+enum RecipeDoc {
+    /// The current chain's recipe.
+    Current(ResolvedConfig),
+    /// The new chain's (`--new-flow`, `crate::recipe`).
+    New(Recipe),
+}
+
+impl RecipeDoc {
+    /// The current chain's config this document describes — itself, or the new
+    /// recipe's projection — for the reads that precede the merge.
+    fn config(&self) -> std::borrow::Cow<'_, ResolvedConfig> {
+        match self {
+            RecipeDoc::Current(cfg) => std::borrow::Cow::Borrowed(cfg),
+            RecipeDoc::New(r) => std::borrow::Cow::Owned(r.to_config()),
+        }
+    }
+}
+
+#[cfg(test)]
+impl LoadedRecipe {
+    /// The current chain's document; the unit tests load only that one.
+    fn cfg(&self) -> &ResolvedConfig {
+        match &self.doc {
+            RecipeDoc::Current(cfg) => cfg,
+            RecipeDoc::New(_) => panic!("a new-chain recipe has no current-chain config"),
         }
     }
 }
@@ -3130,26 +3205,6 @@ fn sets_calibration_film_base(v: &serde_json::Value) -> bool {
     v.get("calibration")
         .and_then(|c| c.get("film_base"))
         .is_some()
-}
-
-/// Which sections the new flow never reads this recipe body carries — the witness
-/// behind [`flow::reject_recipe_sections`].
-///
-/// A raw-JSON probe like [`sets_calibration_dmax`], and for the sharper version of the
-/// same reason: the new flow reads these sections through nothing, so a *resolved*
-/// value cannot say whether anyone asked for it. Presence of the key is the only thing
-/// that distinguishes "this recipe describes the old chain" from "serde filled a
-/// default nobody wrote".
-///
-/// The list is `flow`'s, not this function's: which sections the new chain ignores is
-/// a fact about that chain, and keeping it here would be a second place to update
-/// when a stage starts reading one.
-fn stated_unread_sections(v: &serde_json::Value) -> Vec<&'static str> {
-    flow::UNREAD_RECIPE_SECTIONS
-        .iter()
-        .copied()
-        .filter(|section| v.get(section).is_some())
-        .collect()
 }
 
 /// Whether a recipe/override JSON object explicitly carries `calibration.dmax` —
@@ -3633,34 +3688,12 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
         }
     }
 
-    // input color: transfer and meaning are independent axes — each override
-    // replaces the recipe's value on its own axis (flags win). The deprecated
-    // `--assume-linear` / `--input-profile` flags are handled (rejected) outside
-    // `merge`, in `reject_deprecated_input_flags`, before this runs.
-    if let Some(t) = args.input_opts.input_transfer {
-        cfg.input.transfer = t;
-    }
-    if let Some(m) = args.input_opts.input_meaning {
-        cfg.input.meaning = m;
-    }
-    if let Some(t) = args.input_opts.film_type {
-        cfg.input.film_type = t;
-    }
-    if let Some(p) = &args.input_opts.export_ir {
-        cfg.input.export_ir = Some(p.clone());
-    }
-
-    // film base: the three source flags are mutually exclusive (clap-enforced);
-    // whichever is given replaces the recipe's source entirely.
-    if let Some(src) = film_base_source_override(&args.film_base) {
-        cfg.calibration.film_base = Some(src);
-    }
-
-    // measurement region: the static inset. A plain value override — the holder
-    // half of the effective area is measured, never configured.
-    if let Some(f) = args.measure.measure_inset {
-        cfg.measure.inset = f;
-    }
+    merge_shared_sections(
+        &mut cfg.input,
+        &mut cfg.calibration.film_base,
+        &mut cfg.measure,
+        args,
+    );
 
     // Density-reconstruction, curve, and Dmax flags — all live inside the tagged
     // `reconstruction`, so with a resolved `simple` any of them is an invalid
@@ -3989,6 +4022,48 @@ fn region_reaches_a_rendered_pixel(cfg: &ResolvedConfig) -> bool {
         }
 }
 
+/// The flag arms for the sections both chains read — `input`, the film base and
+/// `measure` — shared by [`merge`] and [`recipe::merge`], so the two chains cannot
+/// resolve the same flag differently.
+///
+/// The film base is passed as its field rather than the section, because the two
+/// chains' `calibration` sections differ: the new one has no reference density.
+pub(crate) fn merge_shared_sections(
+    input: &mut InputParams,
+    film_base: &mut Option<FilmBaseSource>,
+    measure: &mut MeasureParams,
+    args: &ConvertArgs,
+) {
+    // input color: transfer and meaning are independent axes — each override
+    // replaces the recipe's value on its own axis (flags win). The deprecated
+    // `--assume-linear` / `--input-profile` flags are handled (rejected) outside
+    // `merge`, in `reject_deprecated_input_flags`, before this runs.
+    if let Some(t) = args.input_opts.input_transfer {
+        input.transfer = t;
+    }
+    if let Some(m) = args.input_opts.input_meaning {
+        input.meaning = m;
+    }
+    if let Some(t) = args.input_opts.film_type {
+        input.film_type = t;
+    }
+    if let Some(p) = &args.input_opts.export_ir {
+        input.export_ir = Some(p.clone());
+    }
+
+    // film base: the three source flags are mutually exclusive (clap-enforced);
+    // whichever is given replaces the recipe's source entirely.
+    if let Some(src) = film_base_source_override(&args.film_base) {
+        *film_base = Some(src);
+    }
+
+    // measurement region: the static inset. A plain value override — the holder
+    // half of the effective area is measured, never configured.
+    if let Some(f) = args.measure.measure_inset {
+        measure.inset = f;
+    }
+}
+
 fn film_base_source_override(o: &FilmBaseOverrides) -> Option<FilmBaseSource> {
     if let Some(v) = o.film_base {
         Some(FilmBaseSource::Explicit(v))
@@ -4025,8 +4100,8 @@ fn validate_explicit_film_base(base: &[f32; 3]) -> Result<()> {
 /// `convert` orchestrators must call **this**, not `validate` — a `merge` + `validate`
 /// pair silently omits the flag-presence rules and reinstates the bug where
 /// `--out-depth u16` next to an atomic preset writes an f32 master. `roll` calls
-/// [`validate_with_flow`]: it has no output flags at all, so there is nothing for the
-/// provenance rules above to see, but it does accept `--new-flow`. `output/presets`
+/// [`validate_with_remedy`]: it has no output flags at all, so there is nothing for the
+/// provenance rules above to see. `output/presets`
 /// must preserve the same rules when it adds roll-aware activation for the remaining
 /// named policies.
 ///
@@ -4035,19 +4110,14 @@ fn validate_explicit_film_base(base: &[f32; 3]) -> Result<()> {
 /// [`flow::reject_unavailable_flags`] must run **before** `merge`, because a presence
 /// rule placed after it is unreachable on every command line `merge` refuses first.
 /// `run_convert` calls it there, and a future `convert` orchestrator owes that call as
-/// well as this one — the flow gate's *value* half is inside this function, so an
-/// orchestrator that forgets the presence call loses only the flag refusals, silently.
+/// well as this one. (There is no value half: under `--new-flow` a recipe is the new
+/// chain's own document, whose schema refuses at load what a value rule would have.)
 /// It is scaffolding: `nf-core/default-flip` deletes it along with `--new-flow`.
 pub fn validate_convert(
     cfg: &ResolvedConfig,
     args: &ConvertArgs,
     recipe_preset: RecipePreset,
 ) -> Result<()> {
-    // Flow availability outranks even the flag-shape rules: every rule below
-    // reasons about the shipped chain, so under `--new-flow` their remedies can name
-    // knobs this flow refuses. Refusing the unavailable knob first is the only
-    // ordering whose advice a user can act on.
-    flow::reject_unavailable_values(Flow::from_flag(args.new_flow), cfg)?;
     // Flag-shape first: "these two requests contradict each other" is a clearer
     // diagnosis than whatever value rule the same config might also trip.
     //
@@ -4710,20 +4780,6 @@ pub fn validate(cfg: &ResolvedConfig) -> Result<()> {
     validate_with_remedy(cfg, FilmBaseRemedy::Flags)
 }
 
-/// [`validate_with_remedy`] preceded by the resolved-value half of the flow
-/// availability gate — `roll`'s whole gate, and the only spelling a `roll` call
-/// site should use.
-///
-/// Composed rather than repeated at each site: `roll` validates in **two** places
-/// (the shared recipe, then each per-frame override), and CLAUDE.md's record of
-/// `OutputPreset::is_atomic` is that a rule spread over three call sites loses one.
-/// `convert`'s equivalent composition is [`validate_convert`], which also carries
-/// the presence half.
-pub fn validate_with_flow(flow: Flow, cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Result<()> {
-    flow::reject_unavailable_values(flow, cfg)?;
-    validate_with_remedy(cfg, remedy)
-}
-
 /// [`validate`], with the caller stating which remedy its users actually have for
 /// an unstated film base. Only the wording of that one diagnosis differs; every
 /// rule is identical, which is what keeps `roll` and `convert` on one gate.
@@ -4976,12 +5032,11 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
                     // The remedy says only what this rule inspected. It used to end
                     // "or --anchor-white-at-reference, which needs no such division",
                     // recommending a placement whose availability it never checked —
-                    // and `--new-flow` refuses all three reference-reading placements,
-                    // so that advice was dead on a line built entirely from flags the
-                    // new flow accepts (`--density-curve exponential --density-gamma
-                    // 2e-39 --anchor-mid-offset 0.62`). It gets worse rather than
-                    // better with time: `nf-retire/dmax-machinery` deletes the flag
-                    // outright. The *explanation* still names it, which is a fact about
+                    // and `--new-flow` refuses all three reference-reading placements.
+                    // (This rule no longer runs under `--new-flow` at all: the decode's
+                    // flags merge into the new chain's recipe, whose own guard is
+                    // `recipe::validate`.) It gets worse rather than better with time:
+                    // `nf-retire/dmax-machinery` deletes the flag outright. The *explanation* still names it, which is a fact about
                     // the arithmetic rather than a recommendation, and is what lets a
                     // legacy user pick a different placement if they want one.
                     "the resolved anchor placement is not usable: it derives a non-finite \
@@ -5641,7 +5696,7 @@ pub fn run() -> Result<()> {
     install_cms_error_handler();
     let cli = Cli::parse();
     match cli.command {
-        Command::Params => run_params(),
+        Command::Params(args) => run_params(&args),
         Command::Convert(args) => run_convert(args),
         Command::Roll(args) => run_roll(args),
         Command::Inspect(args) => run_inspect(args),
@@ -5649,10 +5704,14 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// `hanten params` — print the full default parameter set as JSON to stdout.
-fn run_params() -> Result<()> {
-    let json = serde_json::to_string_pretty(&ResolvedConfig::default())
-        .map_err(|e| NcError::Other(format!("serializing params: {e}")))?;
+/// `hanten params` — print the full default parameter set as JSON to stdout, in
+/// the schema of the chain `--new-flow` selects.
+fn run_params(args: &ParamsArgs) -> Result<()> {
+    let json = match Flow::from_flag(args.new_flow) {
+        Flow::Legacy => serde_json::to_string_pretty(&ResolvedConfig::default()),
+        Flow::New => serde_json::to_string_pretty(&Recipe::default()),
+    }
+    .map_err(|e| NcError::Other(format!("serializing params: {e}")))?;
     println!("{json}");
     Ok(())
 }
@@ -6159,13 +6218,36 @@ impl FrameRender {
     }
 }
 
+/// Which chain renders a frame — and, for the new one, the recipe it reads.
+///
+/// Carried as one value rather than a [`Flow`] beside an `Option<&Recipe>`, so the
+/// new chain cannot be selected without the document its decode and stages read.
+#[derive(Clone, Copy, Debug)]
+enum FrameChain<'a> {
+    Legacy,
+    New(&'a Recipe),
+}
+
+impl<'a> FrameChain<'a> {
+    fn of(recipe: Option<&'a Recipe>) -> Self {
+        recipe.map_or(FrameChain::Legacy, FrameChain::New)
+    }
+
+    fn flow(self) -> Flow {
+        match self {
+            FrameChain::Legacy => Flow::Legacy,
+            FrameChain::New(_) => Flow::New,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn convert_frame(
     command: &'static str,
     input: &Path,
     output: &Path,
     cfg: &ResolvedConfig,
-    flow: Flow,
+    chain: FrameChain<'_>,
     input_from_cli: InputFromCli,
     dmax_setting: DmaxSetting,
     conversion_preset: Option<ConversionPresetResult>,
@@ -6177,15 +6259,16 @@ fn convert_frame(
     log: &Log,
     warnings: &mut Vec<String>,
 ) -> Result<ConvertedFrame> {
+    let flow = chain.flow();
     // The canonical resolved-recipe JSON, resolved up front: it is both the
     // sidecar's `params` body and the input to the identity `params_hash`, so the
     // hash a report advertises is provably the hash of the recipe that ran.
     //
-    // Under `--new-flow` the resolved recipe describes the legacy chain (its
+    // Under `--new-flow` the resolved config describes the legacy chain (its
     // `reconstruction`, `print` and `output` sections are defaults nothing reads), so
-    // neither its hash nor its echo would identify what ran — the `--dump-params`
-    // reasoning. Neither is computed until `nf-core/recipe-schema` gives the new chain
-    // a recipe shape.
+    // neither its hash nor its echo would identify what ran. What would is the new
+    // chain's `Recipe` — hashing and echoing it changes the report's shape, which is
+    // `nf-core/report-contract`'s.
     let recipe_json = match flow {
         Flow::Legacy => Some(canonical_params_json(cfg)?),
         Flow::New => None,
@@ -6523,10 +6606,10 @@ fn convert_frame(
 
     // The migration seam. Decode and film base are shared by both flows — the new
     // design keeps them — so the branch belongs here, at the render.
-    if flow == Flow::New {
+    if let FrameChain::New(recipe) = chain {
         return render_new_flow_frame(
             NewFlowFrame {
-                cfg,
+                recipe,
                 image,
                 base: base.base,
                 export_ir,
@@ -7170,7 +7253,8 @@ const NEW_FLOW_GAMUT: DestinationGamut = DestinationGamut::DisplayP3;
 /// What [`convert_frame`] has resolved by the time the new flow's render takes
 /// over: everything up to and including the film base, which both flows share.
 struct NewFlowFrame<'a> {
-    cfg: &'a ResolvedConfig,
+    /// The new chain's recipe: what the decode and the chain read.
+    recipe: &'a Recipe,
     image: LinearImage,
     base: FilmBase,
     export_ir: Option<PathBuf>,
@@ -7188,16 +7272,16 @@ struct NewFlowFrame<'a> {
 ///
 /// The same staging discipline as the legacy path — the optional IR export and the
 /// primary are staged, then committed together with the primary last — but **no
-/// sidecar**: its `params` would be the resolved legacy recipe, describing a chain
-/// the run did not select and unloadable under `--new-flow` (the `--dump-params`
-/// reasoning; `nf-core/recipe-schema`). The report says so in `new_flow`.
+/// sidecar** yet: the one it would write is the new chain's `Recipe`, and changing
+/// what a sidecar holds is `nf-core/report-contract`'s. The report says so in
+/// `new_flow`.
 fn render_new_flow_frame(
     frame: NewFlowFrame<'_>,
     log: &Log,
     warnings: &mut Vec<String>,
 ) -> Result<ConvertedFrame> {
     let NewFlowFrame {
-        cfg,
+        recipe,
         image,
         base,
         export_ir,
@@ -7208,15 +7292,8 @@ fn render_new_flow_frame(
         film_base_ms,
         read_inputs,
     } = frame;
-    let decode_params = flow::decode_params(cfg)?;
-    let chain_params = ChainParams {
-        scene_correction: SceneCorrectionParams::default(),
-        look: LookParams::default(),
-        fit_range: FitRangeParams::default(),
-        fit_gamut: FitGamutParams {
-            target: NEW_FLOW_GAMUT,
-        },
-    };
+    let decode_params = recipe.reconstruction;
+    let chain_params = recipe.chain_params(NEW_FLOW_GAMUT);
 
     // Reconstruction: the fixed decode, then the pinned NC film RGB v1 3×3.
     let stage_started = Instant::now();
@@ -7542,12 +7619,10 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // on exactly those — handing the user a remedy that names a knob this flow
     // rejects (CLAUDE.md, ordering across gates).
     flow::reject_unavailable_flags(flow, &args)?;
-    let loaded = load_recipe(args.recipe_in.as_deref())?;
-    // The third provenance the two availability tables cannot see: a recipe
-    // describing the chain the new flow does not run. Refused here, right after the
-    // load, so it is diagnosed before `merge` reasons about values the new flow
-    // never reads.
-    flow::reject_recipe_sections(flow, &loaded.unread_sections)?;
+    // The third provenance the two availability tables cannot see — a recipe
+    // written for the other chain — is refused inside the load, before `merge`
+    // reasons about values the selected chain never reads.
+    let loaded = load_recipe_for(args.recipe_in.as_deref(), flow)?;
     // Dmax provenance for the report: a CLI flag beats the recipe key beats the
     // default — the same precedence the merge applies to the value itself.
     let dmax_setting = if dmax_flag_given(&args.dmax) {
@@ -7564,12 +7639,25 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     };
     // Kept across the merge (which consumes the recipe) only to diagnose a
     // `--density-curve` switch that discards a stated anchor placement.
-    let recipe_reconstruction = loaded.cfg.reconstruction.clone();
-    let recipe_display_tone = loaded.cfg.print.display_tone;
     // The whole loaded recipe, so the report can say which of its values a `--preset`
     // replaced. `merge` consumes it, and the resolved config alone cannot answer that.
-    let recipe_cfg = loaded.cfg.clone();
-    let cfg = merge(loaded.cfg, &args)?;
+    let recipe_cfg = loaded.doc.config().into_owned();
+    let recipe_reconstruction = recipe_cfg.reconstruction.clone();
+    let recipe_display_tone = recipe_cfg.print.display_tone;
+    // Under `--new-flow` the flags merge into the new chain's recipe, whose decode
+    // section the current chain's `merge` does not have; `cfg` is then its projection,
+    // for the stages both chains run. The decode's value rules run here, ahead of
+    // `validate_convert`, whose last rule — no film base chosen — is the least
+    // specific diagnosis there is.
+    let (cfg, new_recipe) = match loaded.doc {
+        RecipeDoc::Current(doc) => (merge(doc, &args)?, None),
+        RecipeDoc::New(r) => {
+            let r = recipe::merge(r, &args);
+            let cfg = r.to_config();
+            recipe::validate(&r, KnobNames::FlagAndKey)?;
+            (cfg, Some(r))
+        }
+    };
     // The *complete* convert gate: `validate`'s resolved-config rules plus the two
     // provenance-sensitive rules that cannot live there (see `validate_convert`).
     validate_convert(&cfg, &args, recipe_preset)?;
@@ -7639,8 +7727,13 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     }
     ensure_write_targets_distinct(&args.input, &targets)?;
 
+    // The recipe of the chain the run selected — under `--new-flow`, the new chain's
+    // document, which reloads under the same flag to the same recipe.
     if let Some(path) = &args.dump_params {
-        write_json(path, &cfg, &log)?;
+        match &new_recipe {
+            Some(r) => write_json(path, r, &log)?,
+            None => write_json(path, &cfg, &log)?,
+        }
     }
     // `--seed` is reserved (no stochastic step in Step 1) but accepted so the
     // documented flag isn't rejected; nothing consumes it yet.
@@ -7711,7 +7804,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         &args.input,
         &output,
         &cfg,
-        flow,
+        FrameChain::of(new_recipe.as_ref()),
         InputFromCli {
             transfer: args.input_opts.input_transfer.is_some(),
             meaning: args.input_opts.input_meaning.is_some(),
@@ -7855,6 +7948,10 @@ struct PlannedFrame {
     input: PathBuf,
     output: PathBuf,
     cfg: ResolvedConfig,
+    /// Under `--new-flow`, the frame's own recipe — the shared one with any per-frame
+    /// override applied — which the decode and the chain read; `cfg` is then its
+    /// projection, for the stages both chains run.
+    recipe: Option<Recipe>,
     /// The per-frame override applied (manifest `params`), echoed into the roll
     /// report so a reader sees exactly what differed for this frame; `None` when
     /// the frame ran the shared recipe unchanged.
@@ -7883,8 +7980,9 @@ struct RollReport {
     identity: Identity,
     /// The shared frozen recipe configuration every frame was converted from —
     /// where the roll-fixed `film_base` / `calibration.dmax` config lives, once.
-    /// Omitted under `--new-flow`, as on `convert`: the resolved recipe describes the
-    /// legacy chain, not the one the frames ran through (`nf-core/recipe-schema`).
+    /// Omitted under `--new-flow`, as on `convert`: this field's type is the legacy
+    /// chain's config, and echoing the new chain's `Recipe` instead is
+    /// `nf-core/report-contract`'s.
     #[serde(skip_serializing_if = "Option::is_none")]
     recipe: Option<ResolvedConfig>,
     /// Roll-level warnings not tied to a single frame (e.g. the film base is not
@@ -8277,7 +8375,7 @@ fn internally_tagged_switch(
 }
 
 /// Load a `--frames` manifest. A read failure or invalid/unknown-key JSON is a
-/// usage error (a config mistake), like [`load_recipe`].
+/// usage error (a config mistake), like [`load_recipe_for`].
 fn load_manifest(path: &Path) -> Result<RollManifest> {
     let txt = std::fs::read_to_string(path).map_err(|e| {
         NcError::Usage(format!(
@@ -8355,6 +8453,7 @@ fn reject_roll_unsupported_input(cfg: &ResolvedConfig) -> Result<()> {
 fn resolve_frames(
     args: &RollArgs,
     shared: &ResolvedConfig,
+    shared_recipe: Option<&Recipe>,
     shared_dmax_present: bool,
     roll_warnings: &mut Vec<String>,
     log: &Log,
@@ -8377,32 +8476,29 @@ fn resolve_frames(
             }
             // The shared recipe as JSON, so a per-frame partial override can be
             // deep-merged onto it and deserialized back with `deny_unknown_fields`.
-            let shared_value = serde_json::to_value(shared)
-                .map_err(|e| NcError::Other(format!("serializing shared recipe: {e}")))?;
+            // Under `--new-flow` that is the new chain's document, so an override's
+            // sections are that schema's; serialized once, cloned per frame.
+            let shared_value = match shared_recipe {
+                Some(sr) => serde_json::to_value(sr),
+                None => serde_json::to_value(shared),
+            }
+            .map_err(|e| NcError::Other(format!("serializing shared recipe: {e}")))?;
             for mf in manifest.frames {
-                let (cfg, overrides, dmax_setting) = match mf.params {
+                let (cfg, recipe, overrides, dmax_setting) = match mf.params {
                     Some(ov) => {
                         // A per-frame override carrying a removed legacy key gets
                         // the same pinned migration guidance as the shared recipe,
-                        // not an opaque `deny_unknown_fields` serde error.
-                        reject_legacy_recipe_keys(
-                            &ov,
-                            &format!("frame {}: per-frame `params` override", mf.input.display()),
-                        )?;
-                        // The shared recipe's section refusal, applied to the overlay:
-                        // now that a `--new-flow` roll renders, an overlay stating a
-                        // section the new flow never reads would be parsed and ignored.
-                        flow::reject_recipe_sections(
-                            Flow::from_flag(args.new_flow),
-                            &stated_unread_sections(&ov),
-                        )
-                        .map_err(|e| {
-                            NcError::Usage(format!(
-                                "frame {}: per-frame `params` override: {}",
-                                mf.input.display(),
-                                e.message()
-                            ))
-                        })?;
+                        // not an opaque `deny_unknown_fields` serde error — and under
+                        // `--new-flow`, the same refusal of the current chain's keys.
+                        let context =
+                            format!("frame {}: per-frame `params` override", mf.input.display());
+                        match shared_recipe {
+                            Some(_) => recipe::check_body(&ov, false, &context)?,
+                            None => {
+                                recipe::check_body_without_flag(&ov, &context)?;
+                                reject_legacy_recipe_keys(&ov, &context)?;
+                            }
+                        }
                         // `calibration.film_base` and `calibration.dmax` are both roll
                         // calibrations — one section, for exactly this reason: the whole
                         // batch is meant to share one frozen
@@ -8521,23 +8617,37 @@ fn resolve_frames(
                         } else {
                             shared_setting
                         };
-                        let mut v = shared_value.clone();
-                        merge_json(&mut v, &ov);
-                        let mut cfg: ResolvedConfig = serde_json::from_value(v).map_err(|e| {
+                        let invalid = |e: serde_json::Error| {
                             NcError::Usage(format!(
                                 "frame {}: invalid params override: {e}",
                                 mf.input.display()
                             ))
-                        })?;
+                        };
+                        let mut v = shared_value.clone();
+                        merge_json(&mut v, &ov);
+                        // Under `--new-flow` the frame keeps its own recipe as well as the
+                        // projection: the decode and the chain read the recipe, so an
+                        // override of `reconstruction.*` would otherwise be validated and
+                        // then rendered with the shared value.
+                        let (mut cfg, frame_recipe): (ResolvedConfig, Option<Recipe>) =
+                            match shared_recipe {
+                                Some(_) => {
+                                    let r: Recipe = serde_json::from_value(v).map_err(invalid)?;
+                                    (r.to_config(), Some(r))
+                                }
+                                None => (serde_json::from_value(v).map_err(invalid)?, None),
+                            };
                         // Same ordering as the shared gate above: roll-specific
-                        // rejections first, the least-specific missing-base last.
+                        // rejections first, then the new chain's recipe gate, the
+                        // least-specific missing-base last.
                         reject_roll_unsupported(&cfg)?;
                         reject_roll_unsupported_input(&cfg)?;
-                        validate_with_flow(
-                            Flow::from_flag(args.new_flow),
-                            &cfg,
-                            FilmBaseRemedy::SharedRecipe,
-                        )?;
+                        if let Some(r) = &frame_recipe {
+                            recipe::validate(r, KnobNames::KeyOnly).map_err(|e| {
+                                NcError::Usage(format!("{context}: {}", e.message()))
+                            })?;
+                        }
+                        validate_with_remedy(&cfg, FilmBaseRemedy::SharedRecipe)?;
                         // A roll-consistency break, and the only one reachable
                         // *without* naming the key: an override that switches only
                         // `curve.type` takes the new curve's default placement, so a
@@ -8625,9 +8735,9 @@ fn resolve_frames(
                             log.warn(&msg);
                             roll_warnings.push(msg);
                         }
-                        (cfg, Some(ov), setting)
+                        (cfg, frame_recipe, Some(ov), setting)
                     }
-                    None => (shared.clone(), None, shared_setting),
+                    None => (shared.clone(), shared_recipe.cloned(), None, shared_setting),
                 };
                 let output = resolve_frame_output(
                     mf.output.as_deref(),
@@ -8640,6 +8750,7 @@ fn resolve_frames(
                     input: mf.input,
                     output,
                     cfg,
+                    recipe,
                     overrides,
                     dmax_setting,
                 });
@@ -8667,6 +8778,7 @@ fn resolve_frames(
                     input,
                     output,
                     cfg: shared.clone(),
+                    recipe: shared_recipe.cloned(),
                     overrides: None,
                     dmax_setting: shared_setting,
                 });
@@ -8763,7 +8875,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // Shared frozen recipe — validated once up front so a broken recipe fails
     // loudly before any frame is touched.
     let LoadedRecipe {
-        cfg: shared,
+        doc,
         calibration_dmax_present: shared_dmax_present,
         meta_pipeline_version,
         unpinned_curve: shared_unpinned_curve,
@@ -8773,13 +8885,12 @@ fn run_roll(args: RollArgs) -> Result<()> {
         // (Roll's *per-frame* `output.preset` witness is probed separately, at the
         // override, for the roll-consistency warning.)
         output_preset_present: _,
-        unread_sections,
-    } = load_recipe(args.recipe_in.as_deref())?;
-    // Same rule as `convert`, over `roll`'s shared recipe; `resolve_frames` applies
-    // it to each per-frame overlay too. `calibration.dmax` is a `VALUE_ENTRIES` row
-    // rather than a section, so `validate_with_flow` catches it on the shared recipe
-    // *and* on every per-frame override.
-    flow::reject_recipe_sections(Flow::from_flag(args.new_flow), &unread_sections)?;
+    } = load_recipe_for(args.recipe_in.as_deref(), Flow::from_flag(args.new_flow))?;
+    // `roll` merges no flags, so the new chain's projection can be taken once here.
+    let (shared, shared_recipe) = match doc {
+        RecipeDoc::Current(cfg) => (cfg, None),
+        RecipeDoc::New(r) => (r.to_config(), Some(r)),
+    };
     // Roll-specific rejections run **before** the shared `validate`, and the order
     // is the same least-specific-diagnosis-last policy `validate` itself now
     // follows: "this setting cannot work in roll mode" names the offending key,
@@ -8788,13 +8899,17 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // first, or the user adds a base only to meet a second error.
     reject_roll_unsupported(&shared)?;
     reject_roll_unsupported_input(&shared)?;
+    // Under `--new-flow` the shared recipe is the new chain's document: its decode
+    // values are checked here, ahead of the missing-base rule below for the same
+    // reason as on `convert`, and its shared sections by `validate_with_remedy` on the
+    // projection. Each per-frame overlay gets both in `resolve_frames`.
+    if let Some(r) = &shared_recipe {
+        recipe::validate(r, KnobNames::KeyOnly)
+            .map_err(|e| NcError::Usage(format!("shared recipe: {}", e.message())))?;
+    }
     // `roll`'s remedy for an unstated film base is the shared recipe, never a flag:
     // `RollArgs` accepts none of the three film-base flags.
-    validate_with_flow(
-        Flow::from_flag(args.new_flow),
-        &shared,
-        FilmBaseRemedy::SharedRecipe,
-    )?;
+    validate_with_remedy(&shared, FilmBaseRemedy::SharedRecipe)?;
 
     // A roll's headline guarantee is one frozen, roll-fixed film base shared by
     // every frame. Only an *explicit* base delivers that: `auto`/`region`
@@ -8871,6 +8986,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
     let planned = resolve_frames(
         &args,
         &shared,
+        shared_recipe.as_ref(),
         shared_dmax_present,
         &mut roll_warnings,
         &log,
@@ -8941,7 +9057,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
             &pf.input,
             &pf.output,
             &pf.cfg,
-            Flow::from_flag(args.new_flow),
+            FrameChain::of(pf.recipe.as_ref()),
             InputFromCli::none(),
             pf.dmax_setting,
             // `roll` has no `--preset` flag — its shared recipe already carries the
@@ -15668,7 +15784,7 @@ mod tests {
     fn load_recipe_maps_failures_to_usage() {
         // No path → defaults, infallibly, with no dmax provenance.
         let loaded = load_recipe(None).unwrap();
-        assert_eq!(loaded.cfg, ResolvedConfig::default());
+        assert_eq!(*loaded.cfg(), ResolvedConfig::default());
         assert!(!loaded.calibration_dmax_present);
 
         // Missing file → Usage (exit 2), not Other.
@@ -15707,8 +15823,8 @@ mod tests {
         .unwrap();
         let got = load_recipe(Some(&p)).unwrap();
         std::fs::remove_file(&p).ok();
-        assert_eq!(gamma_of(&got.cfg), 1.8);
-        assert_eq!(got.cfg.print, PrintParams::default());
+        assert_eq!(gamma_of(got.cfg()), 1.8);
+        assert_eq!(got.cfg().print, PrintParams::default());
         assert!(!got.calibration_dmax_present, "gamma alone sets no dmax");
 
         let p = std::env::temp_dir().join(format!("nc-recipe-dmax-{}.json", std::process::id()));
@@ -15745,8 +15861,12 @@ mod tests {
 
         let flat = load_recipe_body("bare", bare).unwrap();
         let wrapped = load_recipe_body("env", &enveloped).unwrap();
-        assert_eq!(flat.cfg, wrapped.cfg, "both shapes resolve to one config");
-        assert_eq!(gamma_of(&wrapped.cfg), 1.8);
+        assert_eq!(
+            flat.cfg(),
+            wrapped.cfg(),
+            "both shapes resolve to one config"
+        );
+        assert_eq!(gamma_of(wrapped.cfg()), 1.8);
         // A bare recipe records no provenance; the envelope's is read but never
         // applied — only compared (see `pipeline_version_warning`).
         assert_eq!(flat.meta_pipeline_version, None);
@@ -15942,13 +16062,13 @@ mod tests {
         // later rejects for `convert`. "All defaults" is not the same as "ready
         // to run" any more, and that is the point of the requirement.
         assert_eq!(
-            load_recipe_body("obj-bare", "{}").unwrap().cfg,
+            *load_recipe_body("obj-bare", "{}").unwrap().cfg(),
             ResolvedConfig::default()
         );
         assert_eq!(
-            load_recipe_body("obj-envelope", r#"{"params": {}}"#)
+            *load_recipe_body("obj-envelope", r#"{"params": {}}"#)
                 .unwrap()
-                .cfg,
+                .cfg(),
             ResolvedConfig::default()
         );
     }
@@ -16253,7 +16373,7 @@ mod tests {
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         let mut warnings = Vec::new();
         let log = Log::new(&args.report);
-        let planned = resolve_frames(&args, &shared, true, &mut warnings, &log);
+        let planned = resolve_frames(&args, &shared, None, true, &mut warnings, &log);
         std::fs::remove_dir_all(&dir).ok();
         let planned = planned.expect("per-frame type switches must apply, not error");
         assert_eq!(planned.len(), 2);
@@ -16317,7 +16437,7 @@ mod tests {
         };
         let mut warnings = Vec::new();
         let log = Log::new(&args.report);
-        let planned = resolve_frames(&args, &shared, false, &mut warnings, &log);
+        let planned = resolve_frames(&args, &shared, None, false, &mut warnings, &log);
         std::fs::remove_dir_all(&dir).ok();
         let planned = planned.expect("region→explicit override should apply, not error");
         assert_eq!(planned.len(), 1);
@@ -16381,7 +16501,7 @@ mod tests {
         };
         let mut warnings = Vec::new();
         let log = Log::new(&args.report);
-        let got = resolve_frames(&args, &base_cfg(), false, &mut warnings, &log);
+        let got = resolve_frames(&args, &base_cfg(), None, false, &mut warnings, &log);
         std::fs::remove_dir_all(&dir).ok();
         let err = got.expect_err("a legacy per-frame override must be rejected");
         assert_eq!(err.exit_code(), 2);
@@ -16722,6 +16842,7 @@ mod tests {
             input: PathBuf::from("bad.tif"),
             output: PathBuf::from("out/bad_positive.tiff"),
             cfg: base_cfg(),
+            recipe: None,
             overrides: None,
             dmax_setting: DmaxSetting::Default,
         };

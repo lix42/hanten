@@ -2,7 +2,7 @@
 //!
 //! Three independent layers, all stamped into the JSON **report** (and mirrored
 //! into the sidecar's `meta` envelope — never as recipe keys; see
-//! `io::encode::write_sidecar` and `cli::load_recipe`):
+//! `io::encode::write_sidecar` and `cli::load_recipe_for`):
 //!
 //! 1. **Build identity** — crate semver ([`NC_VERSION`]), the git commit the
 //!    binary was built from ([`git_commit`] / [`git_dirty`], captured by

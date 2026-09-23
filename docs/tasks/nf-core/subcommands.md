@@ -14,6 +14,17 @@ nothing in the plan owns them.
   `density.scale` is re-resolved there in code, the third `default_scale_for` site.
   Any new-flow default that keys off a key's *presence* breaks there silently, on a
   whole roll rather than one frame.
+- **Roll's per-frame recipe** (`nf-core/recipe-schema`, 2026-09-22): each `--new-flow`
+  overlay is merged onto the serialized new `Recipe`, checked, and carried on
+  `PlannedFrame` to that frame's render, so a per-frame decode override reaches the
+  pixels (pinned by `roll_refuses_the_current_chains_keys_from_either_recipe_site`).
+- **The new chain's per-frame overrides get no roll-consistency warning.** The current
+  chain warns (`--strict`-promotable) when an override sets `calibration.*`,
+  `reconstruction.curve.anchor`, `curve.stock` or `output.preset`. Their new-chain
+  counterparts — `reconstruction.anchor` and `reconstruction.contrast`, a frame pinned
+  on a different rule or slope than its roll — are probed by nothing, so such a frame
+  would render differently from its siblings in silence once the seam opens. Decide
+  which of the new sections are roll-fixed and warn on them.
 - **`inspect` reports the resolved `dmax` and always runs the base detector.**
   [Retiring the anchor machinery](../nf-retire/dmax-machinery.md) takes the first;
   the rest of `inspect` — film base, effective area, IR separability, holder mask —

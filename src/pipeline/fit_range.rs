@@ -27,7 +27,8 @@ use crate::types::Result;
 /// an empty struct rather than an `Option`.
 ///
 /// [`SceneCorrectionParams`]: crate::pipeline::scene_correction::SceneCorrectionParams
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FitRangeParams {}
 
 impl FitRangeParams {
