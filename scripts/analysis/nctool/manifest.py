@@ -82,8 +82,8 @@ SUFFIXES = ("_positive_hdr.tiff", "_positive.tiff", "_corr.tif", "_pos.tif",
 # --------------------------------------------------------------------------- nc
 
 # Accepted `--version` banners. `hanten ` is current; `nc ` is the pre-rename
-# spelling and must stay, because a reference rendition is produced by building the
-# git-tagged binary (`review generate --nc <that binary>`), which still prints `nc`.
+# spelling and must stay, because the reference rendition comes from the pre-rename
+# reference build (scripts/reference-snapshot/), which still prints `nc`.
 # Dropping it fails silently: find_nc() would return None with no error.
 BANNERS = ("hanten ", "nc ")
 
@@ -109,9 +109,8 @@ def find_nc() -> str | None:
 
     Deliberately `hanten`-only, though is_nc() also accepts the pre-rename banner: a
     stale `target/debug/nc` beside a fresh build would otherwise be discovered
-    silently and measure old behaviour. A tagged pre-rename binary is reached by
-    naming it with --nc / $NC, which is how the reference-rendition workflow spells
-    it."""
+    silently and measure old behaviour. The pre-rename reference build is reached by
+    naming it explicitly (--nc / $NC, or a review matrix's --build)."""
     for cand in ("target/release/hanten", "target/debug/hanten",
                  shutil.which("hanten")):
         if cand and os.path.exists(cand) and is_nc(cand):

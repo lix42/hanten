@@ -96,7 +96,12 @@ every cell whose `common_args` reference `{dmin}`.
   `<config> · <build>`; a config may state its own `"builds": ["after"]` to opt out of one,
   which is what to do when a flag only the new binary accepts would otherwise fail on every
   frame. `--nc` is refused beside a `builds` block — repoint one arm with
-  `--build <id>=<path>` instead, which is the flag for the rebuild loop.
+  `--build <id>=<path>` instead, which is the flag for the rebuild loop. A build may add
+  `"expect_commit": "<hex>"`: its binary must then be a clean build of that commit — checked
+  on `--version` before anything renders, and on every cell's report — or the run stops. Use
+  it on a reference arm, where a wrong path otherwise renders
+  and is merely *labelled* with the wrong commit. The pre-migration reference arm is built by
+  [`scripts/reference-snapshot/`](../../../scripts/reference-snapshot/README.md).
 
 Rules, each with a reason:
 
@@ -131,7 +136,8 @@ binary, and both rules apply to it verbatim:
 - Every binary is verified **before anything renders** — it exists, and its `--version`
   really is this project's CLI. That includes a plain `--nc` binary, which used to fail at
   the first render instead. The **pre-rename `nc` banner is accepted**, which matters because
-  the reference arm of a before/after is usually a git-tagged binary old enough to print it.
+  the reference arm of a before/after is usually the pre-rename reference build, which
+  prints it.
 - A binary that reports **one identity and then another** aborts the run — a build by name,
   or the `--nc` binary by path. It writes no `review.json`, and it *deletes* an earlier run's
   `review.json` from the output directory **when this run overwrote a cell that file names**

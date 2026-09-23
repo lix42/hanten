@@ -43,8 +43,8 @@ boundary is written down here rather than re-derived: without it, a later pass
 
 **`nctool` must keep recognising both spellings**, and the failure is silent.
 `manifest::is_nc` identifies a binary by its `--version` banner, and the reference
-rendition is produced by building the **git-tagged** pre-rename binary
-(`nctool review generate --nc <that binary>`), which prints `nc`. Drop the old
+rendition comes from the pre-rename **reference build** (`reserve`, from tag
+`pre-new-flow`; `scripts/reference-snapshot/`), which prints `nc`. Drop the old
 prefix and `find_nc()` returns `None` with *no error*, degrading every manifest,
 metrics and review command to exiftool.
 
@@ -61,10 +61,13 @@ beats reusing what is there**. Concretely:
 - **Retiring an old path is not a loss of capability** — it is a list of abilities
   the new code may need to add. Decide each on its merits rather than keeping a
   branch alive to preserve it.
-- **The old behaviour is preserved by a git tag, not by code.** A reference
-  rendition is produced by building the tagged binary in a worktree
-  (`nctool review generate --nc <that binary>`), so nothing in the tree needs to
-  stay alive to remain comparable.
+- **The old behaviour is preserved by git, not by code.** The reference is the
+  `reserve` branch, which starts at tag `pre-new-flow` and may take cherry-picked
+  fixes, so it is named by **commit**. It is built in a worktree and cached by
+  `scripts/reference-snapshot/build.sh`, so nothing in the tree needs to stay alive
+  to remain comparable; the README beside it is the procedure. In a review matrix it
+  is a `builds` arm (`--build ref=…`, never `--nc`) carrying `expect_commit`, or a
+  wrong binary renders under the reference's name.
 
 ## Source of truth (read these first)
 
@@ -1323,12 +1326,15 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   the matrix**: a typed name is a claim, and a wrong claim about which binary made a
   cell is the failure the axis exists to prevent. Keep the pre-flight accepting the
   **pre-rename `nc` banner** (`manifest.is_nc`) — the reference arm of a before/after
-  is a git-tagged binary that prints it. Two gotchas paid for in review: the
+  is the pre-rename reference build, which prints it. Two gotchas paid for in review: the
   stale-index check compares **casefolded resolved** paths and reads both rendition
   spellings, because a raw-filename compare silently spared a lying index on a
   case-insensitive volume; and **"a failed convert leaves nothing on disk" is
   false** — `--strict` gates *after* encoding, so it writes the image and its sidecar
   and then exits 1 (measured against the release binary; don't re-derive it).
+  **A `--new-flow` cell cannot be generated yet**: `review generate` passes
+  `--output-preset` to every cell and `--new-flow` refuses it (exit 2), so render that
+  side by hand until `nf-destinations/preset-set` gives the new flow a destination to name.
   Feed it a `review.json`
   (`tools/review-app/SCHEMA.md`) naming the configs and the images, and start it with
   `pnpm dev <path to review.json>` (a directory works too, meaning the `review.json`

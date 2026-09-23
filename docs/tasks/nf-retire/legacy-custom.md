@@ -36,7 +36,7 @@ waits on.
   the names are gone — those four have gone stale together twice.
 - A recipe or flag naming either preset exits with the documented code and a
   message pointing at the replacement.
-- The tagged reference build still renders the old behaviour, which is the only
+- The reference build still renders the old behaviour, which is the only
   place it now lives.
 
 ## Dependencies

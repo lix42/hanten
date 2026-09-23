@@ -59,7 +59,8 @@ use crate::version::{self, Identity};
     // `name` is what `--version` prints before the identity block and what every
     // usage/error line spells, so it is the product name. `nctool`'s `is_nc`
     // recognises this banner — it must accept the pre-rename `nc ` too, since the
-    // reference rendition builds the git-tagged binary (CLAUDE.md's boundary).
+    // reference rendition comes from the pre-rename reference build (CLAUDE.md's
+    // boundary).
     name = "hanten",
     version = version::version_string(),
     about = "Hanten — film-negative → positive converter"

@@ -12,11 +12,12 @@ authoritative for status and dependencies.
 
 ## Strategy
 
-**Strangler, with the old behaviour preserved by a tag rather than by code.**
+**Strangler, with the old behaviour preserved by git rather than by code.**
 
-- A **git tag** freezes the pre-migration binary. A reference rendition is produced
-  by building that tag in a worktree and pointing the review harness at it
-  (`nctool review generate --nc <that binary>`), and `nctool compare` compares two
+- A **git tag** (`pre-new-flow`) freezes the pre-migration binary; the reference is
+  the `reserve` branch that starts there and may take fixes, named by commit. A
+  reference rendition is produced by building it in a worktree and pointing the review
+  harness at it (`scripts/reference-snapshot/README.md`), and `nctool compare` compares two
   builds the same way. Nothing in the tree has to stay alive to remain comparable —
   which is what lets `nf-retire` run early instead of last.
 - **`--new-flow`** is a presence flag that selects the new chain. It is

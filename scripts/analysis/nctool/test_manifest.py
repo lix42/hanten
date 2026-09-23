@@ -398,7 +398,7 @@ class TestBinaryResolution(unittest.TestCase):
     """`is_nc` keys on the `--version` banner, and getting it wrong fails *silently*:
     find_nc() returns None with no error and every caller degrades to exiftool. The
     pre-rename `nc ` banner must keep being accepted, because the reference rendition
-    is produced by building the git-tagged binary (`--nc <that binary>`)."""
+    comes from the pre-rename reference build (scripts/reference-snapshot/)."""
 
     def _is(self, stdout, rc=0):
         with mock.patch.object(manifest.subprocess, "run",
@@ -409,7 +409,7 @@ class TestBinaryResolution(unittest.TestCase):
         self.assertTrue(self._is("hanten 0.1.0\npipeline_version: 5 (x)\n"))
 
     def test_pre_rename_banner_still_accepted(self):
-        # The tagged binary predates the rename; refusing it breaks the
+        # The reference build predates the rename; refusing it breaks the
         # reference-rendition workflow.
         self.assertTrue(self._is("nc 0.1.0\npipeline_version: 3 (x)\n"))
 
