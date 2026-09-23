@@ -15,18 +15,19 @@ The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`
 
 The fixed decode has landed (`src/algo/fixed.rs`, 2026-09-22): fresh arithmetic,
 bit-identical to the equivalent legacy configuration, reading no reference density,
-with the reconstruction half of the knob-availability inventory beside it. It is not
-yet reachable from the CLI — `nf-core/minimal-end-to-end` wires it to a destination.
+with the reconstruction half of the knob-availability inventory beside it. It is
+reachable through `--new-flow` since `nf-core/minimal-end-to-end` wired it to the chain
+and a destination.
 
 **Three things other epics need from it.** The decode's parameters are
 `algo::fixed::DecodeParams`, **not** the resolved `reconstruction` object: under
 `--new-flow` a recipe stating that section is refused whole, which is blunt and
 temporary until `nf-core/recipe-schema` gives the new stages a spelling, and which
 means `roll --new-flow` can state no decode knob today. The surviving knobs
-(`--density-scale`, `--density-offset`, `--density-gamma`, `--anchor-mid-offset`) are
-accepted but nothing maps them yet — `nf-core/minimal-end-to-end`'s, along with a
-`RunProfile` that must be *measured*, since the fused decode holds one buffer fewer
-than the legacy staged path. And the remaining `--new-flow` remedy defects in
+(`--density-scale`, `--density-offset`, `--density-gamma`, `--anchor-mid-offset`) reach
+it through `flow::decode_params`, and the report's `new_flow.decode` block echoes what
+arrived. Its memory profile was measured: a `--new-flow` run peaks within 0.1 MB of a
+legacy u16 `convert` on the same frame (`RunProfile::NewFlowSdrTiff`). And the remaining `--new-flow` remedy defects in
 `cli.rs` belong to `nf-core/knob-availability-audit`.
 **One spike is also done and its result is an input to other epics**. `anchor-spike` costed four ways to place the decode's white
 ([`docs/spike/white-placement.md`](../spike/white-placement.md)) and found that under

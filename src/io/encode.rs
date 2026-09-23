@@ -66,7 +66,38 @@ pub fn encode(
     // does not exist (or still holds the previous output) until the caller commits.
     // Flushing is `stage`'s job now — a `BufWriter` dropped unflushed silently
     // truncates, which is why neither layer may leave it implicit.
-    staged::stage(path, |writer| encode_to_writer(writer, image, params, icc))
+    staged::stage(path, |writer| {
+        encode_to_writer(writer, image, params.depth(), params.bigtiff, icc)
+    })
+}
+
+/// Encode `image` as a 16-bit integer TIFF — the new flow's destination encode.
+///
+/// The same writer [`encode`] drives, reached without an [`OutputParams`]: that type
+/// resolves depth from the *legacy* output preset, a section the new flow does not
+/// read, so borrowing it would pick the depth through a preset name that says
+/// nothing about this destination. BigTIFF is decided automatically, as `--bigtiff
+/// auto` would, and the decision is **returned** rather than predicted by a second
+/// sizing call, so the caller reports exactly what was written.
+pub fn encode_u16(
+    image: &LinearImage,
+    icc: &[u8],
+    path: &Path,
+) -> Result<(Staged, EncodeOutcome, bool)> {
+    let big = resolve_bigtiff(
+        BigTiff::Auto,
+        image.width,
+        image.height,
+        3,
+        depth_bytes(OutDepth::U16),
+        icc.len() as u64,
+    );
+    // The writer is handed the decision itself, so it cannot re-derive a different one.
+    let policy = if big { BigTiff::On } else { BigTiff::Off };
+    let (staged, outcome) = staged::stage(path, |writer| {
+        encode_to_writer(writer, image, OutDepth::U16, policy, Some(icc))
+    })?;
+    Ok((staged, outcome, big))
 }
 
 /// Whether encoding `image` under `params` (with an `icc_len`-byte embedded
@@ -419,18 +450,19 @@ pub fn sidecar_path(output_path: &Path) -> PathBuf {
 fn encode_to_writer<W: Write + Seek>(
     writer: W,
     image: &LinearImage,
-    params: &OutputParams,
+    depth: OutDepth,
+    bigtiff: BigTiff,
     icc: Option<&[u8]>,
 ) -> Result<EncodeOutcome> {
     let (w, h) = (image.width, image.height);
-    let bytes_per_sample = depth_bytes(params.depth());
+    let bytes_per_sample = depth_bytes(depth);
     let icc_bytes = icc.map_or(0, |b| b.len() as u64);
-    let big = resolve_bigtiff(params.bigtiff, w, h, 3, bytes_per_sample, icc_bytes);
+    let big = resolve_bigtiff(bigtiff, w, h, 3, bytes_per_sample, icc_bytes);
 
     // Only the u16 path quantizes and can clamp out-of-range samples. f32 is
     // written verbatim (HDR-preserving, no clamp), but we still scan it for
     // non-finite samples so a NaN/inf numerical fault surfaces at either depth.
-    match (params.depth(), big) {
+    match (depth, big) {
         (OutDepth::U16, false) => {
             let (data, report) = quantize_u16(&image.rgb);
             let stats = channel_means_u16(&data);
@@ -795,7 +827,7 @@ mod tests {
 
     fn encode_bytes(image: &LinearImage, params: &OutputParams, icc: Option<&[u8]>) -> Vec<u8> {
         let mut buf = Cursor::new(Vec::new());
-        let _ = encode_to_writer(&mut buf, image, params, icc).unwrap();
+        let _ = encode_to_writer(&mut buf, image, params.depth(), params.bigtiff, icc).unwrap();
         buf.into_inner()
     }
 
@@ -805,7 +837,7 @@ mod tests {
 
     fn encode_outcome(image: &LinearImage, params: &OutputParams) -> EncodeOutcome {
         let mut buf = Cursor::new(Vec::new());
-        encode_to_writer(&mut buf, image, params, None).unwrap()
+        encode_to_writer(&mut buf, image, params.depth(), params.bigtiff, None).unwrap()
     }
 
     #[test]

@@ -9,7 +9,7 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 5`, built at commit
-> `2664a0ddbdd5` plus the `calibration` recipe section (§4/§5). The staleness signal
+> `2a15e817c1c7` plus the `--new-flow` render (§11). The staleness signal
 > is `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -1624,27 +1624,46 @@ unknown field — but **it is not in their "can never perturb a pixel" class**:
 choosing a chain is a choice of pixels. That is precisely why it must stay out of
 the recipe rather than merely out of the image.
 
-The new chain's stages now exist, but nothing connects them to an output yet, so
-selecting it resolves everything and then stops at the render, with **exit 4**:
+**It renders a minimal picture, not a finished one.** The fixed decode feeds the new
+chain, whose first three stages (scene correction, look, fit range) are still
+identity passes; fit gamut only converts into Display P3 primaries. The result goes
+to **one destination, a Display P3 16-bit TIFF** — there is no other, and no way to
+choose one:
 
 ```console
-$ hanten convert scan.tif -o out.tif --film-base 0.9,0.55,0.42 --new-flow
-unsupported: --new-flow selected the new rendering chain, which cannot render yet
-— its stages exist but nothing connects them to an output
-(`nf-core/minimal-end-to-end`). Every other part of the run resolved under
-`--new-flow`'s own rules: re-run without it to take the current chain, which
-checks these settings itself.
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow
+hanten: warning: output lost 68772 clipped and 0 non-finite of 695772 samples (9.88%)
 ```
 
-The last clause is deliberate: dropping the flag runs the *current* chain, which
-applies its own rules to the same settings — a command line refused here may still
-be refused there, for its own reasons.
+That writes `out.tiff`. Expect the clipping warning on most frames: with no fit range
+yet, anything above display white is clipped at the 16-bit encode (counted, and failed
+by `--strict`). Whether the picture *looks* right is not what this flow promises yet.
 
-Note the `.tif` path in that example. Under `--new-flow` the **output suffix is not
-judged**, on `convert` or on `roll`, because no destination is resolved to judge it
-against: `-o` — and a `roll` manifest's explicit `output` — is taken exactly as
-typed. On the current chain the same path is refused unless a preset that writes
-TIFF is named; that rule returns when the new chain gains a destination.
+- **The suffix is judged against that destination**, on `convert` and on a `roll`
+  manifest's explicit `output`: `.tif`/`.tiff` is kept as typed, a missing suffix is
+  completed to `.tiff`, and anything else is refused:
+
+  ```console
+  $ hanten convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --new-flow
+  usage: the output path out.jpg does not end in .tif or .tiff: under --new-flow,
+  Hanten writes its one destination, a Display P3 16-bit TIFF. Hanten never renames
+  a suffix you state — drop it and the path is completed for you
+  ```
+
+- **No sidecar is written**, and the report carries no `recipe` echo and no
+  `identity.params_hash`: the resolved recipe describes the *current* chain, not the one
+  that ran, so it would reload as a different picture. A sidecar an earlier run left at
+  the same path is **removed** — it describes the image just replaced — and the report
+  names it in `new_flow.removed_sidecar`. A file there that is not one of Hanten's
+  sidecars is left alone, and so is one this run read as its `--params` recipe (with a
+  warning, since it still pairs by name with an image it no longer describes).
+- **The report is provisional.** The current chain's sections (`reconstruction_result`,
+  `output_render`, `dmax`, `white_balance`, …) are absent; a `new_flow` block states
+  what ran instead — the decode's resolved `anchor`, `contrast`, `scale` and `offset`,
+  each stage with what it `applied` (`"identity"` for the first three,
+  `"acescg-to-display-p3-matrix"` for fit gamut), the `destination`
+  (`display-p3-u16-tiff`) and `"sidecar_written": false`. Its final shape is
+  `nf-core/report-contract`'s to decide.
 
 What *is* live is the availability rule: a knob the new chain cannot honour is
 refused (exit 2) rather than accepted and ignored, and the message says whether the
@@ -1712,7 +1731,7 @@ the new stages, and until it does, state the decode's knobs as flags.
 
 **The rest of the inventory is now classified too.** The same rule applies to the
 `print` and `output` sections, and for the same reason — each of the new chain's
-stages carries its own parameters, and the chain resolves no destination at all:
+stages carries its own parameters, and the chain writes one fixed destination:
 
 ```console
 $ hanten convert … --new-flow --params recipe.json     # {"print": {…}}
@@ -1732,7 +1751,8 @@ will carry it:
 | `--linear-range` | an affine levels remap needing a stage and a name; retiring it outright is a listed outcome |
 | `--display-tone`, `--display-tone-headroom` | the fit-range stage, which is an identity pass today |
 | `--highlight-compress` | the knee width of the `shoulder` tone specifically (`none` and `reinhard` refuse a non-default value outright); fit range compresses against the display's peak and has no knee width to set |
-| `--output-preset`, `--out-depth`, `--output-profile`, `--bigtiff` | a destination for the new chain to render into, which it does not have yet |
+| `--output-preset`, `--out-depth`, `--output-profile`, `--bigtiff` | the new flow's destination set (`nf-destinations/preset-set`) — it writes one destination today, so there is no output policy to choose |
+| `--telemetry`, `--telemetry-file` | the new chain's report and telemetry shape — the record would name the current chain's preset and timing buckets |
 
 Unlike the decode's knees, **no value is spared here** — `--white-balance 1,1,1` and
 `--highlight-compress 0` resolve the documented defaults and are still refused. An
@@ -1744,20 +1764,15 @@ What survives untouched is everything before the seam: `--film-base`,
 `--input-meaning` and `--film-type`. Decode, film base and the measurement region
 are shared by both chains.
 
-`--export-ir` is the one knob that *looks* like it belongs to that list and does
-not. The IR plane is read from the decoded image, but the file is staged **after**
-the render and at the bit depth the destination resolves — so under `--new-flow`
-there is nowhere to put it, and it is refused (recipe key `input.export_ir`
-included) rather than accepted and silently skipped.
+`--export-ir` works too: the IR plane is written from the decoded image at the
+destination's depth, 16-bit.
 
-On `roll` the flag applies to every frame, and the "cannot render yet" refusal comes
-**once**, after the plan is resolved and before the first frame is decoded — so a
-roll fails in a second rather than decoding every frame to print the same error N
-times. `roll` takes no conversion flags, so the knobs it can trip come from the
-shared recipe or a per-frame override; a shared recipe stating any of the three
-sections the new chain does not read (`reconstruction`, `print`, `output`) is
-refused up front, and a per-frame override's resolved values are diagnosed per
-frame, at exit 2.
+On `roll` the flag applies to every frame: each is written as
+`<stem>_positive.tiff`, with no sidecars and no `recipe` in the roll report. `roll`
+takes no conversion flags, so the knobs it can trip come from the shared recipe or a
+per-frame override. A section the new chain does not read (`reconstruction`,
+`print`, `output`) is refused up front in **either** — an override's refusal names
+its frame — and an override's resolved values are diagnosed per frame, at exit 2.
 
 ---
 

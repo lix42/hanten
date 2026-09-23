@@ -480,22 +480,25 @@ pub struct Identity {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_dirty: Option<bool>,
     /// The behavioral [`PIPELINE_VERSION`] — the axis a version comparison is
-    /// keyed on.
+    /// keyed on. A property of the **build's default render**, not of the run: a
+    /// non-default configuration — `--new-flow` included — carries it unchanged, the
+    /// way a legacy run with a non-default curve does.
     pub pipeline_version: u32,
     /// Compile target triple ([`TARGET`]).
     pub target: &'static str,
     /// Hash of the canonical resolved-recipe JSON, when the command resolved a
     /// full recipe (`convert`, `roll`). Omitted for `inspect` / `estimate`, which
     /// run no conversion and therefore have no effective recipe to identify —
-    /// [`Identity::new`] is the constructor for exactly that state, and both of
-    /// those commands use it.
+    /// [`Identity::new`] is the constructor for exactly that state — and under
+    /// `--new-flow`, whose resolved recipe describes the legacy chain rather than
+    /// the one that ran.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params_hash: Option<String>,
 }
 
 impl Identity {
-    /// Build identity for a command with no effective conversion recipe
-    /// (`inspect` / `estimate`).
+    /// Build identity for a run with no effective conversion recipe to hash:
+    /// `inspect` / `estimate`, and a `--new-flow` conversion (see `params_hash`).
     pub fn new() -> Self {
         Self {
             nc_version: NC_VERSION,

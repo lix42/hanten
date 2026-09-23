@@ -266,9 +266,14 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `io/{decode,encode,ultra_hdr,avif}.rs`,
   `pipeline/{film_base,color,stages,input_semantics,working_space,render_split,display_tone,sdr,hdr,gain_map,memory,pixels}.rs`
   plus the **new-flow chain** — `pipeline/{chain,scene_correction,look,fit_range,fit_gamut,working_image}.rs`,
-  every stage an identity pass and not reachable from the CLI until
-  `nf-core/minimal-end-to-end` (the boundary types are what pin the stage order;
-  `working_image::WorkingBuffer` is their shared payload). **The boundary that *leaves*
+  reached by `--new-flow` since `nf-core/minimal-end-to-end`: `algo::fixed` feeds it,
+  the first three stages are identity passes, `fit_gamut` applies only the change of
+  primaries into its `DestinationGamut`, and `cli::render_new_flow_frame` writes the one
+  destination — a Display P3 16-bit TIFF, no sidecar, sized by
+  `RunProfile::NewFlowSdrTiff` (the boundary types are what pin the stage order;
+  `working_image::WorkingBuffer` is their shared payload). **The destination's gamut
+  rides out of the chain on `DisplayReferredImage`** and the encode reads it from there,
+  so the embedded profile cannot name primaries the pixels are not in. **The boundary that *leaves*
   a typed chain needs its consuming unwrap most, and is the one you forget** — nothing
   inside the chain exercises it: `DisplayReferredImage` first shipped with borrowing
   accessors only, while `io::encode` takes `&LinearImage`, which would have forced a
@@ -309,10 +314,12 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `convert`-only preset also calibrates that preset's `memory::RunProfile`.
   **`cli::container_for` is the only preset-shaped step in output-path *handling*** —
   it maps a preset to a `Container` (Tiff/Jpeg/Avif) with an exhaustive match that
-  must *fail to compile* when the enum moves (never a `_` arm or a map), and both
+  must *fail to compile* when the enum moves (never a `_` arm or a map). Since
+  `nf-core/minimal-end-to-end` it sits under **`cli::OutputTarget`** — `Preset(p)`
+  delegates to it, `NewFlow` is the `--new-flow` destination's TIFF — and both
   `required_extensions` (what a stated path may spell) and `derived_extension`
-  (what nc spells when it supplies one) hang off it, so a destination set built
-  from a product of selectors changes one function. **It is not the only preset
+  (what nc spells when it supplies one) hang off `OutputTarget::container`, so a
+  destination change touches those two functions and nothing under them. **It is not the only preset
   match a new preset must touch**: the render dispatch in `convert_frame` picks the
   encoder that writes the *bytes*, and nothing in the type system makes the two
   agree — a preset named `.tiff` while dispatched to the AVIF encoder compiles.
@@ -454,7 +461,8 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   implementation — `telemetry::params_hash` delegates to it so the core report
   never depends on the opt-in telemetry module), `cli.rs`, `main.rs`, plus
   `flow.rs` — the `--new-flow` selector (`Flow`), the knob-availability tables and
-  the render seam, all of it scaffolding `nf-core/default-flip` deletes.
+  `decode_params` (the kept flags → `algo::fixed::DecodeParams`), all of it
+  scaffolding `nf-core/default-flip` deletes.
   `main`/`cli` are the only orchestrators; stages stay pure. `build.rs` exposes
   the compile target triple as `NC_TARGET` plus `NC_GIT_COMMIT`/`NC_GIT_DIRTY`
   for the report's identity block.
@@ -717,6 +725,11 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   Filtering a test that lives in `tests/pipeline.rs` prints **two** `test result` lines
   — the `bin` target's `0 passed; N filtered out` first — so `| head -1` looks like the
   test does not exist. Read both.
+- **`nctool`'s `test_falls_back_to_the_default_binary` fails whenever `target/release/hanten`
+  exists** — it asserts the default binary is *missing*. After a release build (e.g. for memory
+  calibration), move the binary aside for the Python gate rather than reading it as a regression.
+- **The shell is zsh: an unquoted `$extra` holding `--flag value` is passed as ONE argument.** Use
+  an array (`args=(--flag value); cmd "${args[@]}"`) in scripted loops.
 - **`cargo test --lib` fails here** — `nc` is a binary crate with no `[lib]` target, so it
   errors with "no library targets found". Use `cargo test --bin hanten <filter>` to run only
   the in-`src` unit tests; a bare `cargo test <filter>` also runs `tests/pipeline.rs`.
@@ -1033,16 +1046,17 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   `merge` refuses first; raw-JSON **recipe-section presence** right after `load_recipe`
   (`flow::reject_recipe_sections`, over `flow::UNREAD_RECIPE_SECTIONS` —
   `reconstruction`, `print` and `output`), which exists because the new flow decodes
-  through its own `DecodeParams` and renders through `pipeline::chain`'s per-stage
-  params, resolving no destination at all, so those sections would otherwise be parsed
+  through its own `DecodeParams`, renders through `pipeline::chain`'s per-stage
+  params and writes one fixed destination, so those sections would otherwise be parsed
   and read by nobody; and **resolved value first inside `validate_convert`**. That
   section refusal is also why no `print.*` or `output.*` knob needs a value rule, and
   why an **identity value earns no exemption there**: the tiebreaker spares one to keep
   the flags-win reset usable, and a section refused whole leaves no recipe value to
   reset. `roll` takes the flag too and reaches the second and
-  third — its shared recipe is the only way it can state one of those sections — but not
-  the first, since it accepts no conversion flags; the value half runs at **two**
-  validate sites composed into `cli::validate_with_flow`.
+  third — its shared recipe and each per-frame overlay are the only ways it can state one
+  of those sections, and both are refused — but not the first, since it accepts no
+  conversion flags; the value half runs at **two** validate sites composed into
+  `cli::validate_with_flow`.
   **`calibration.film_base` is the first knob with no default at all** (`Option`, no
   `Default` on `FilmBaseSource`): `convert`/`roll` refuse an unstated one rather
   than choosing. A defaultless knob adds two obligations — every `ResolvedConfig`

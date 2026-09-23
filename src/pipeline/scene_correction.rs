@@ -35,6 +35,15 @@ use crate::types::Result;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SceneCorrectionParams {}
 
+impl SceneCorrectionParams {
+    /// What scene correction does under these parameters, for the report — stated by the
+    /// stage rather than by its caller, so filling the stage changes the report in the
+    /// same edit. `"identity"` until the stage has knobs.
+    pub fn applied(&self) -> &'static str {
+        "identity"
+    }
+}
+
 /// Linear ACEScg after scene correction: still **scene-referred**, now carrying
 /// the photographic corrections.
 ///

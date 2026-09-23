@@ -42,16 +42,36 @@ whole, an identity value earns **no** exemption from the presence-vs-value tiebr
 — the exemption exists so a flag can clear what a recipe pinned, and there is nothing
 left to clear. `--white-balance 1,1,1` and `--highlight-compress 0` are refused.
 
-**What `nf-core/minimal-end-to-end` inherits**, beyond the render itself: the output
-suffix rule and the write-target guard's sidecar entry both stand down under the flag
-(no destination is resolved, and a sidecar derived from an uncompleted path invents a
-collision), `--export-ir` is refused because it is staged *after* the render at the
-destination's depth, and `--density-gamma` still needs `--density-curve exponential`
-beside it until the new flow's default curve moves.
+**`nf-core/minimal-end-to-end` made the flag render** (2026-09-22): the fixed decode
+(`algo::fixed`, fed by `flow::decode_params`) → NC film RGB v1 → `pipeline::chain` →
+one destination, a **Display P3 16-bit TIFF** (`cli::render_new_flow_frame`), on
+`convert` and `roll`. What a dependent epic builds on:
+
+- **`fit_gamut` owns the change of primaries** into a `DestinationGamut` carried by
+  `FitGamutParams` (no `Default`: the destination states it), and the gamut rides out
+  of the chain on `DisplayReferredImage::into_parts`. The encode
+  (`color::encode_display_linear`) applies only the transfer, so the embedded profile
+  is the shipped `display-p3` preset's, byte for byte. `nf-display-stages/fit-gamut`
+  adds the radial map on top of the matrix; with fit range still an identity, bright
+  frames clip at the u16 encode (counted, `--strict`-promotable).
+- **The suffix rule judges against the new flow's destination** (`cli::OutputTarget`),
+  so `-o out` completes to `out.tiff` and `.jpg` is refused naming the flag.
+- **No sidecar, no `params_hash`, no `recipe` echo** under the flag, on `convert` or
+  `roll`: the resolved recipe describes the legacy chain. The report carries a
+  provisional `new_flow` block (decode facts, each stage's `applied`, destination) and
+  omits the legacy-chain sections; `nf-core/report-contract` owns the real shape.
+- **`--export-ir` renders** (u16, from the decoded image); **`--telemetry*` is
+  refused** — its record would name the legacy preset and timing buckets.
+- **`roll` refuses an unread section in a per-frame overlay**, not just the shared
+  recipe.
+- **`RunProfile::NewFlowSdrTiff`** shares `Convert`'s u16 arithmetic, measured on two
+  frame sizes. A new-flow buffer added later must move that arm.
+- `--density-gamma` still needs `--density-curve exponential` beside it until the new
+  flow's default curve moves (`nf-core/default-flip`).
 
 **What a dependent epic needs to know.** Every stage is
 `apply(input, &Params) -> Result<Output>`, pure, and an **identity pass** until its
-epic fills it. The `Result` is there so that filling one needs no re-plumbing: every
+epic fills it — except fit gamut, which already applies the change of primaries (above). The `Result` is there so that filling one needs no re-plumbing: every
 stage this chain will host has a fallible counterpart in the shipped code, so the
 alternative was changing four signatures, `chain::render` and every test the first
 time a stage could refuse a pixel. The stage **order is carried by
@@ -63,11 +83,9 @@ produces it, so an out-of-order chain does not compile. Crossing a boundary
 deliberately not expressible — and **is not yet a recipe key**: `nf-core/recipe-schema`
 owns the sections and `nf-core/report-contract` the report, and both depend on this
 task, so neither surface was pre-empted here. The IR plane rides the whole chain and
-leaves it with the image — the exit is `DisplayReferredImage::into_linear`, a
+leaves it with the image — the exit is `DisplayReferredImage::into_parts`, a
 consuming unwrap, and it is the boundary's whole surface. `GradedImage` is the
-boundary the SDR/HDR split will split *from*. The seam still returns exit 4 — nothing connects the chain to an output
-until `nf-core/minimal-end-to-end`, which also owes the `RunProfile`. Nothing about
-the no-flag path moved.
+boundary the SDR/HDR split will split *from*. Nothing about the no-flag path moved.
 
 ## new-flow-flag
 
@@ -463,10 +481,73 @@ the no-flag path moved.
 
 ## minimal-end-to-end
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-22
 
 - 2026-09-19: created with the new-flow plan. Goal: a minimal end-to-end render.
+- 2026-09-22: implemented; awaiting review. Scope settled with the user before any
+  code: a Display P3 16-bit TIFF destination with the ACEScg → P3 matrix in
+  `fit_gamut` (not in the encode), a provisional report block, no sidecar, `roll`
+  opened too, and `--export-ir` un-refused.
+
+  **Why the matrix sits in `fit_gamut`.** With every stage an identity the chain's
+  exit is still linear ACEScg, so a destination can only declare a profile that
+  matches its pixels if something changes primaries. The encode was the cheaper home
+  and the wrong one: mapping to a gamut's boundary presupposes being in its primaries,
+  so the stage that will map must own the matrix, and putting it in the encode would
+  have had to move when `nf-display-stages/fit-gamut` lands. The gamut travels out on
+  `DisplayReferredImage` so the encode cannot pick a different one.
+
+  **What the kept flags map onto.** `flow::decode_params` reads `scale`, `offset`, the
+  exponential's `gamma` and a `mid-at-base-offset` `d` off the resolved config, and
+  uses the decode's own constants where the resolved value can only be a *legacy*
+  default (the sigmoid's contrast, `white-at-dmax`). That is safe only because every
+  flag and recipe section that could state those values is refused upstream; the
+  integration test asserts arrival through the report's `new_flow.decode`, not the exit.
+
+  **Memory, measured** (release, explicit base, peak RSS): 14.45 MP 0.618 GB and
+  18.66 MP 0.795 GB, each within 0.1 MB of a legacy u16 `convert` of the same frame, with
+  or without `--export-ir`. The pair solves to ~42 B/px + ~10 MB; the model accounts
+  38 B/px (0.89–0.94x measured) and estimates 1.20–1.29x. `fixed::decode` clones the IR
+  plane beside the decoded image, and the model counts it; moving it would need the
+  decoded image consumed, which `--export-ir` reads after the render. The 74.65 MP scan
+  the older calibration rows used is no longer in `../nc-assets`.
+
+  **The legacy flow did not move.** Checked against a release build of the base commit
+  (`2a15e81`) in a scratch worktree: all 12 presets on both fixtures write byte-identical
+  primaries, and the sidecars differ only in the commit/dirty stamp.
+
+  **Two traps met on the way.** An "unclamped" assertion on a vector carrying ±inf and
+  NaN passed or failed on the infinities rather than on the finite channels — split it
+  out onto finite inputs. And a Rec.709 red is *inside* P3, so it cannot witness a
+  negative channel after the matrix; a film-RGB value outside the cube (which the
+  unclamped decode can produce) does.
+- 2026-09-22: `/code-review` pass, eight of ten findings applied. The one behaviour
+  bug: a `--new-flow` run replacing an image a legacy run wrote left that run's
+  sidecar beside it, describing a picture that no longer exists — it is now removed
+  after the commit, only when it is an nc `{meta, params}` envelope, and reported in
+  `new_flow.removed_sidecar`. The stage list moved into `ChainParams::applied` beside
+  `chain::render`; `fixed::DecodeReport` serializes directly; the recipe is not
+  serialized under the flag; `encode_u16` returns its BigTIFF decision instead of a
+  second predictor. **Declined, with reasons:** dropping `pipeline_version` under the
+  flag — it labels the build's default render, a non-default legacy config shares it
+  too, and `nctool review` treats it as build identity, so a mixed matrix would read as
+  two binaries; moving the destination encode out of `color` (a three-line shared
+  profile pair, and the new flow keeps lcms2); and sharing one 3×3 between `fit_gamut`
+  and its test oracle, which would make the oracle vacuous.
+- 2026-09-22: done. Ship review (Codex + `ship:diff-reviewer`) found two holes in the
+  stale-sidecar removal, both fixed with regression tests: it keyed on the envelope's
+  key names alone, so `{"meta":null,"params":null}` qualified — it now requires the
+  identity every sidecar stamps (`nc_version`, `pipeline_version`, `target`) — and it
+  deleted a sidecar the run had just loaded as its own `--params` recipe (a legacy
+  sidecar with the refused sections stripped is exactly that). Files the run read
+  (`--params`, roll's `--frames`) are now threaded into the frame and never removed; a
+  failed removal after the image is committed is a warning, not exit 5. Verified: all
+  CI gates, legacy output byte-identical to `2a15e81` on all 12 presets, memory
+  measured on two frame sizes. **For dependent tasks:** `nf-verification/*` can build
+  on the `new_flow` report block and `RunProfile::NewFlowSdrTiff`; `nf-core/subcommands`
+  inherits roll under the flag already working; `nf-destinations/preset-set` extends
+  `cli::OutputTarget` and `fit_gamut::DestinationGamut`.
 
 ## knob-availability-audit
 

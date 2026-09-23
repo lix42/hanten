@@ -13,10 +13,10 @@
 //!   a variant rather than inverting a flag.
 //! - The **availability tables** — the knobs the new flow refuses, and the two
 //!   different sentences it refuses them with ([`Availability`]).
-//! - [`render_not_implemented`] — the seam itself. `nf-core/stage-skeleton` built
-//!   the chain behind it (`pipeline::chain`); it stays closed until
-//!   `nf-core/minimal-end-to-end` wires the decode (`algo::fixed`) to that chain and a
-//!   destination behind it.
+//! - [`decode_params`] — how the knobs the new flow keeps reach the fixed decode
+//!   (`algo::fixed`), which reads its own parameters rather than the resolved
+//!   `reconstruction` object. The render itself — decode, `pipeline::chain`, and
+//!   the one destination — is `cli::convert_frame`'s (`nf-core/minimal-end-to-end`).
 //!
 //! `Flow` is *orchestration state*, like an unresolved `calibration.film_base`: it
 //! never reaches a stage, and it is never a recipe key (`--new-flow` selects which
@@ -25,8 +25,9 @@
 //! choosing a chain is exactly a choice of pixels, which is why it must stay out
 //! of the recipe rather than merely out of the image.
 
+use crate::algo::fixed::{AnchorRule, DecodeParams};
 use crate::cli::{ConvertArgs, ResolvedConfig};
-use crate::types::{DmaxSource, NcError, Reconstruction, Result};
+use crate::types::{AnchorPlacement, DensityCurve, DmaxSource, NcError, Reconstruction, Result};
 
 /// The rendering chain a run resolves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -147,9 +148,9 @@ const SCENE_CORRECTION_ARRIVES_WITH: &str = "the scene-correction stage, which i
 const FIT_RANGE_ARRIVES_WITH: &str = "the fit-range stage, which is the new home of every display tone — it exists \
      as an identity pass today, so there is no operator yet for a tone selector or a \
      headroom to configure (`nf-display-stages/fit-range`)";
-const DESTINATION_ARRIVES_WITH: &str = "a destination for the new chain to render into: it has none yet, so there is \
-     nothing for an output policy to describe (`nf-core/minimal-end-to-end` wires the \
-     first one, `nf-destinations/preset-set` settles the set)";
+const DESTINATION_ARRIVES_WITH: &str = "the new flow's destination set: it renders into exactly one destination today \
+     (a Display P3 16-bit TIFF), so there is no output policy to choose or describe \
+     (`nf-destinations/preset-set`)";
 const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which subsumes it: adjusting channels by tone \
      region is a grade, and it is also the one term in the old chain that could be \
      non-monotone, so it cannot sit in a decode that loses nothing by construction \
@@ -279,10 +280,8 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // The decode's *surviving* knobs are deliberately absent from this table and stay
     // reachable: `--density-scale`, `--density-offset`, `--density-gamma` and
     // `--anchor-mid-offset` are exactly the calibration and the anchor
-    // `algo::fixed::DecodeParams` carries. Nothing **maps** them onto it yet —
-    // `nf-core/minimal-end-to-end` owns the wiring, and until it lands the seam
-    // refuses before any of them could be ignored. One wrinkle for that task:
-    // `--density-gamma` beside the resolved *sigmoid* default is refused by `merge`
+    // `algo::fixed::DecodeParams` carries, and [`decode_params`] maps them onto it.
+    // One wrinkle: `--density-gamma` beside the resolved *sigmoid* default is refused by `merge`
     // (exit 2) before this flow ever sees it, and one of merge's two remedies is
     // `--sigmoid-contrast` — which the row below refuses. (`merge` used to rank that
     // one first; `nf-core/knob-availability-audit` dropped the ranking, so the two
@@ -290,7 +289,7 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // names `--density-curve exponential --density-gamma` together rather than the
     // flag alone, so following it works in one step. So the fixed decode's own contrast
     // currently needs the curve named beside it; that dissolves when the new flow's
-    // default curve moves (`nf-core/minimal-end-to-end` / `nf-core/default-flip`).
+    // default curve moves (`nf-core/default-flip`).
     FlagEntry {
         knob: "--density-curve",
         covers: &["--density-curve"],
@@ -562,15 +561,12 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     },
     // --- output (`nf-core/knob-availability-audit`) --------------------------------
     //
-    // The new flow resolves **no destination at all** — that is `nf-destinations`',
-    // and `nf-core/minimal-end-to-end` wires the first one. So these are refused for a
-    // different reason than the print family: not "the stage that carries it is
-    // empty", but "there is nothing yet for a destination policy to apply to".
-    //
-    // Note what this does *not* claim. The memory preflight still reads
-    // `output.preset` to pick a `RunProfile`, so "nothing reads it" would be false
-    // today; what is true is that the profile it picks models a legacy render the new
-    // flow will not perform, which `nf-core/minimal-end-to-end` owes.
+    // The new flow renders into **exactly one destination** (a Display P3 16-bit
+    // TIFF, `nf-core/minimal-end-to-end`); the set, and how one is selected, is
+    // `nf-destinations`'. So these are refused for a different reason than the print
+    // family: not "the stage that carries it is empty", but "there is no output policy
+    // to choose yet". Nothing under the flow reads `output.*` — not even the memory
+    // preflight, which sizes the new flow with its own `RunProfile::NewFlowSdrTiff`.
     FlagEntry {
         knob: "--output-preset",
         covers: &["--output-preset"],
@@ -607,6 +603,21 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // resolved *legacy* config, and it writes it before the render seam — so under
     // `--new-flow` it would hand the user a recipe describing a chain the run did not
     // select. Refusing beats emitting a plausible lie.
+    // Operational like `--dump-params`, and refused for the same shape of reason: the
+    // record names the resolved output preset, the reconstruction and curve, and times
+    // the legacy chain's buckets (`algorithm` / `color`) — so under `--new-flow` it
+    // would describe a chain the run did not take, and a telemetry record's existence
+    // reads as a successful run of what it names.
+    FlagEntry {
+        knob: "--telemetry / --telemetry-file",
+        covers: &["--telemetry", "--telemetry-file"],
+        present: |args| args.telemetry || args.telemetry_file.is_some(),
+        availability: Availability::NotYet {
+            arriving_with: "the new chain's report and telemetry shape, which decides \
+                            which stages a record times and what it says ran \
+                            (`nf-core/report-contract`)",
+        },
+    },
     FlagEntry {
         knob: "--dump-params",
         covers: &["--dump-params"],
@@ -635,30 +646,7 @@ const VALUE_ENTRIES: &[ValueEntry] = &[
             instead: Some("`--reconstruction density`"),
         },
     },
-    // **A value rule, not a flag one, and it is the only knob in a *read* section that
-    // needs a rule at all.** `input` is read by the new flow, so
-    // `reject_recipe_sections` does not cover `input.export_ir` — and the export is
-    // not, as this row first claimed, written before the render: `cli.rs` stages it
-    // *after* `stages::render`, past the seam, and takes its bit depth from
-    // `cfg.output.depth()` — from `output.preset`, a section this flow refuses. So
-    // `--export-ir --new-flow` is accepted today and writes nothing, which is exactly
-    // the accepted-and-ignored state this inventory exists to eliminate. Verified: it
-    // exits 4 with no IR file, while the same line without the flag writes one.
-    //
-    // Keyed on the resolved value so it covers both spellings in one row: there is no
-    // `merge` refusal to pre-empt, so the flag half would buy nothing.
-    ValueEntry {
-        knob: "--export-ir (recipe `input.export_ir`)",
-        covers: &["--export-ir"],
-        matches: |cfg| cfg.input.export_ir.is_some(),
-        availability: Availability::NotYet {
-            arriving_with: "a render for the export to be staged beside: it is written after \
-                            the render, at the bit depth the destination resolves, so the new \
-                            flow has nowhere to put it until a destination exists \
-                            (`nf-core/minimal-end-to-end`)",
-        },
-    },
-    // The other half-read section, and the row is what keeps `calibration` in
+    // The one half-read section, and the row is what keeps `calibration` in
     // `READ_RECIPE_SECTIONS` honest: the base is read, the reference is not.
     //
     // **A value row rather than a section refusal, and rather than flag rows alone.**
@@ -722,14 +710,21 @@ const KEPT_FLAGS: &[KeptEntry] = &[
         why: "the film base is measured before the seam and is shared by both flows",
     },
     KeptEntry {
+        covers: &["--export-ir"],
+        why: "the IR plane is written from the decoded image after the render, at the \
+              destination's depth — u16 for the one destination the new flow has",
+    },
+    KeptEntry {
         covers: &["--measure-inset"],
-        why: "it bounds the measurement region the film-base search runs in, which the \
-              new flow shares — the seam is taken after it",
+        // Not because a pixel reads it: the only statistic measured over the region
+        // is `calibration.dmax = auto`, which this flow refuses, and the film base
+        // never reads the inset. The legacy default is in the same state.
+        why: "it resolves the reported `effective_area`, which every decoding run \
+              reports on either flow — no new-flow pixel reads it, exactly as none does \
+              under the legacy default reference",
     },
     // The decode's own knobs — the calibration and the anchor that
-    // `algo::fixed::DecodeParams` carries. `nf-core/minimal-end-to-end` owes the
-    // wiring that maps them onto it; until then the seam refuses before any of them
-    // could be silently ignored.
+    // `algo::fixed::DecodeParams` carries, mapped onto it by [`decode_params`].
     KeptEntry {
         covers: &["--density-scale", "--density-offset"],
         why: "the decode's own calibration — `nf-calibration/scale-gamma-loop` owns the \
@@ -766,7 +761,7 @@ const KEPT_FLAGS: &[KeptEntry] = &[
 /// its parameters reads no resolved section, so a recipe stating one would parse,
 /// validate and then do nothing. `print` and `output` join `reconstruction` for the
 /// same reason — `pipeline::chain`'s four stages each carry their own `Params`, and
-/// the new flow resolves no destination at all.
+/// the new flow's one destination is fixed rather than resolved from `output`.
 ///
 /// This is also why no `print.*` or `output.*` knob needs a value rule: between this
 /// list and the flag rows above, both provenances are covered.
@@ -774,14 +769,12 @@ pub const UNREAD_RECIPE_SECTIONS: &[&str] = &["reconstruction", "print", "output
 
 /// The recipe sections the new flow **does** read.
 ///
-/// `measure` is read in full. Two are read in part, and both take the same shape:
-/// the section stays here and the unread key is refused by a [`VALUE_ENTRIES`] row,
-/// because widening this list would reject the rest of the section with it.
-/// `input` is read apart from `export_ir`, whose export is staged after the render
-/// and so cannot be honoured yet. `calibration` is read apart from `dmax`: the fixed
-/// decode divides by `calibration.film_base` like any other, but its anchor rule
-/// reads no reference density at all, so refusing the section whole would reject the
-/// base with it.
+/// `input` and `measure` are read in full. `calibration` is read in part: the section
+/// stays here and its unread key is refused by a [`VALUE_ENTRIES`] row, because
+/// widening this list would reject the rest of the section with it. The fixed decode
+/// divides by `calibration.film_base` like any other, but its anchor rule reads no
+/// reference density at all (`calibration.dmax`), so refusing the section whole would
+/// reject the base with it.
 ///
 /// The complement of [`UNREAD_RECIPE_SECTIONS`], stated rather than inferred so that
 /// `every_recipe_section_is_classified` can fail on a section added to the schema
@@ -832,8 +825,8 @@ pub fn reject_unavailable_values(flow: Flow, cfg: &ResolvedConfig) -> Result<()>
 /// The third provenance, and the one neither table can see. Every section in
 /// [`UNREAD_RECIPE_SECTIONS`] would parse, validate and then do nothing — the new
 /// flow decodes through [`DecodeParams`](crate::algo::fixed::DecodeParams), renders
-/// through `pipeline::chain`'s own per-stage params, and resolves no destination at
-/// all. `deny_unknown_fields` catches an *unknown* key and is blind to a **known but
+/// through `pipeline::chain`'s own per-stage params, and writes one fixed destination
+/// rather than resolving `output`. `deny_unknown_fields` catches an *unknown* key and is blind to a **known but
 /// meaningless** one, which is the bug class the project forbids.
 ///
 /// Refusing the sections whole is blunt and temporary: `nf-core/recipe-schema`
@@ -901,43 +894,70 @@ fn refusal(knob: &str, availability: Availability) -> NcError {
     ))
 }
 
-/// The migration seam: `--new-flow` selected a chain that cannot yet render.
+/// The fixed decode's parameters, read off the resolved config.
 ///
-/// Exit 4 (`Unsupported`), not a usage error: the command line is well-formed and
-/// the config resolved: it is *this build* that cannot serve it, which is the same
-/// distinction `Resource` draws for the memory gate.
+/// The decode reads its own [`DecodeParams`] rather than the resolved
+/// `reconstruction` object, and under `--new-flow` that object can only have come
+/// from **defaults plus the kept flags**: a recipe stating the section is refused
+/// whole, and every flag that would set a curve, a knee, a placement or a balance
+/// is refused by presence. So each field reads whichever of the two is present:
 ///
-/// The chain itself exists as of `nf-core/stage-skeleton` (`pipeline::chain`, every
-/// stage an identity pass), and so does the fixed decode that feeds it
-/// (`algo::fixed`, `nf-reconstruction/fixed-decode`). What is missing is a
-/// destination to write to, and the wiring between the two
-/// (`nf-core/minimal-end-to-end`), which is the task that opens this seam. It stays
-/// shut until then rather than composing an identity chain and refusing at the
-/// encode: on a real 5000 dpi scan that is a full render thrown away to reach the
-/// same message.
-pub fn render_not_implemented() -> NcError {
-    // The tail says only what this rule inspected — the same discipline as
-    // `refusal`. "Drop `--new-flow` to convert through the current chain" asserted
-    // that the legacy path *accepts* this command line, from a rule that never
-    // looked at it, and it is false whenever the same line is independently invalid
-    // there. (The example that motivated the rewrite was `--display-tone none
-    // --print-exposure 3`, refused by `pipeline::sdr`'s range check on the legacy
-    // path; both flags are now refused by presence before the seam, so reaching this
-    // message needs a line the availability rows accept — `--density-scale 1,0.9,0.8`
-    // beside a legacy-invalid film base, say. The discipline is unchanged.)
-    NcError::Unsupported(
-        "--new-flow selected the new rendering chain, which cannot render yet — its \
-         stages exist but nothing connects them to an output \
-         (`nf-core/minimal-end-to-end`). Every other part of the run resolved under \
-         `--new-flow`'s own rules: re-run without it to take the current chain, \
-         which checks these settings itself."
-            .into(),
-    )
+/// - `scale`, `offset` — `reconstruction.density`, whose defaults are the decode's
+///   own ([`crate::algo::fixed::DENSITY_SCALE`] agrees with the parametric default,
+///   pinned by `fixed`'s tests), so an untouched value maps to the same number.
+/// - `contrast` — the exponential's `gamma` when the resolved curve is exponential
+///   (reached by `--density-curve exponential`, with or without `--density-gamma`);
+///   otherwise the resolved curve is the *legacy* sigmoid default, whose contrast is
+///   not this decode's, so the decode's own [`crate::algo::fixed::CONTRAST`] applies.
+/// - the anchor — `d` from `mid-at-base-offset(d)` (`--anchor-mid-offset`); any other
+///   placement is a legacy curve's default, so the decode's own `d` applies.
+///
+/// The fallbacks are therefore never a user's value silently dropped: a value the
+/// user could state is either read here or refused before this runs. The two rules
+/// that would make that false — a non-zero regional balance, a `simple`
+/// reconstruction — are refused upstream, and restated here as errors so this
+/// function stays total rather than trusting another module's ordering.
+pub fn decode_params(cfg: &ResolvedConfig) -> Result<DecodeParams> {
+    let defaults = DecodeParams::default();
+    let Reconstruction::Density { density, curve } = &cfg.reconstruction else {
+        return Err(NcError::Other(
+            "the new flow reached the fixed decode with a `simple` reconstruction, which \
+             its availability rules refuse"
+                .into(),
+        ));
+    };
+    if density.shadow_balance != [0.0; 3] || density.highlight_balance != [0.0; 3] {
+        return Err(NcError::Other(
+            "the new flow reached the fixed decode with a regional balance, which its \
+             availability rules refuse"
+                .into(),
+        ));
+    }
+    let contrast = match curve {
+        DensityCurve::Exponential(e) => e.gamma,
+        DensityCurve::Sigmoid(_) | DensityCurve::Characteristic(_) => defaults.contrast,
+    };
+    let anchor = match curve.anchor() {
+        Some(AnchorPlacement::MidAtBaseOffset(d)) => AnchorRule::MidAboveBase(d),
+        Some(
+            AnchorPlacement::WhiteAtDmax
+            | AnchorPlacement::MidAtDmaxFraction(_)
+            | AnchorPlacement::BlackAtBase(_),
+        )
+        | None => defaults.anchor,
+    };
+    Ok(DecodeParams {
+        scale: density.scale,
+        offset: density.offset,
+        contrast,
+        anchor,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::DensityParams;
     use std::collections::BTreeSet;
 
     /// `convert` flags that are **not** conversion knobs, so the inventory owes them
@@ -947,14 +967,12 @@ mod tests {
     /// skip a hidden *knob*, and "takes no value" would skip `--auto-base`. Adding a
     /// flag to any of these groups therefore still forces a deliberate choice.
     const NON_KNOB_FLAGS: &[&str] = &[
-        // Operational: arg-struct only, never a recipe key. (`--dump-params` is the
-        // exception that proves the rule — it is operational *and* refused, because it
-        // would write a recipe describing a chain the run did not select, so it earns a
-        // row in FLAG_ENTRIES instead of a line here.)
+        // Operational: arg-struct only, never a recipe key. (`--dump-params` and the
+        // telemetry pair are the exceptions that prove the rule — operational *and*
+        // refused, because each would write a record describing a chain the run did
+        // not select, so they earn rows in FLAG_ENTRIES instead of lines here.)
         "--strict",
         "--seed",
-        "--telemetry",
-        "--telemetry-file",
         // Plumbing: paths and the recipe itself, not settings inside it.
         "--output",
         "--params",
@@ -1253,6 +1271,81 @@ mod tests {
             sorted.dedup();
             assert_eq!(sorted.len(), knobs.len(), "duplicate knob in {label}");
         }
+    }
+
+    fn density_cfg(density: DensityParams, curve: DensityCurve) -> ResolvedConfig {
+        ResolvedConfig {
+            reconstruction: Reconstruction::Density { density, curve },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_default_config_maps_to_the_decodes_own_defaults() {
+        // The resolved default is the legacy sigmoid, whose contrast and placement are
+        // not the decode's — so the decode's own constants must apply, not the
+        // sigmoid's 2.0687 or its `mid-at-dmax-fraction`.
+        assert_eq!(
+            decode_params(&ResolvedConfig::default()).unwrap(),
+            DecodeParams::default()
+        );
+    }
+
+    #[test]
+    fn the_kept_knobs_reach_the_decode() {
+        let cfg = density_cfg(
+            DensityParams {
+                scale: [1.0, 0.9, 0.8],
+                offset: [0.0, -0.03, -0.05],
+                ..DensityParams::default()
+            },
+            DensityCurve::Exponential(crate::types::ExponentialParams {
+                gamma: 1.8,
+                anchor: AnchorPlacement::MidAtBaseOffset(0.7),
+            }),
+        );
+        let p = decode_params(&cfg).unwrap();
+        assert_eq!(p.scale, [1.0, 0.9, 0.8]);
+        assert_eq!(p.offset, [0.0, -0.03, -0.05]);
+        assert_eq!(p.contrast, 1.8);
+        assert_eq!(p.anchor, AnchorRule::MidAboveBase(0.7));
+    }
+
+    #[test]
+    fn a_legacy_default_placement_falls_back_to_the_decodes_rule() {
+        // `--density-curve exponential` alone resolves the exponential's own default
+        // placement, `white-at-dmax` — a reference-reading rule this decode does not
+        // have. It is a default nobody typed (every placement flag but
+        // `--anchor-mid-offset` is refused), so the decode's own `d` applies.
+        let cfg = density_cfg(
+            DensityParams::default(),
+            DensityCurve::Exponential(crate::types::ExponentialParams::default()),
+        );
+        let p = decode_params(&cfg).unwrap();
+        assert_eq!(p.anchor, DecodeParams::default().anchor);
+        assert_eq!(
+            p.contrast, 2.0,
+            "the exponential's default gamma is the decode's"
+        );
+    }
+
+    #[test]
+    fn what_the_availability_rules_refuse_is_an_error_here_too() {
+        assert!(
+            decode_params(&ResolvedConfig {
+                reconstruction: Reconstruction::Simple,
+                ..Default::default()
+            })
+            .is_err()
+        );
+        let balanced = density_cfg(
+            DensityParams {
+                shadow_balance: [0.1, 0.0, 0.0],
+                ..DensityParams::default()
+            },
+            DensityCurve::default(),
+        );
+        assert!(decode_params(&balanced).is_err());
     }
 
     #[test]

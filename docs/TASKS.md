@@ -1522,8 +1522,10 @@ the design in `docs/design-update.md`:
   modules and typed boundaries, written fresh rather than extracted; every stage
   an identity pass, and the seam still refuses, so the chain is not CLI-reachable
   until `minimal-end-to-end`
-- [ ] [A minimal end-to-end render](tasks/nf-core/minimal-end-to-end.md) — the
-  milestone that expires the flag and unblocks retirement
+- [x] [A minimal end-to-end render](tasks/nf-core/minimal-end-to-end.md) — **done
+  2026-09-22.** The milestone that expires the flag and unblocks retirement. `--new-flow` now renders:
+  fixed decode → chain (three identities, fit gamut's P3 matrix) → a Display P3
+  16-bit TIFF with no sidecar, on `convert` and `roll`
 - [x] [Audit every knob against the new
   flow](tasks/nf-core/knob-availability-audit.md) — every conversion flag
   classified (refused by presence, refused by resolved value, or kept) and every
