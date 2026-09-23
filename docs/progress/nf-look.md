@@ -13,9 +13,18 @@ ones.
 
 The creative stage the old chain never had: per-channel grade, path to white, contrast, look presets, and the stock data that survives `characteristic` leaving the decode.
 
-No code has landed yet — the epic was created on 2026-09-19 with the new-flow plan
-(`docs/nf-migration.md`) — but **one spike is done and it settles what `path-to-white`
-ships**. `desaturation-spike`
+The epic was created on 2026-09-19 with the new-flow plan (`docs/nf-migration.md`).
+**`stage` closed 2026-09-23**: the stage, its empty `look` recipe section and its report
+entry already existed from `nf-core`; what it settled is the spelling — **one key per
+control under `look`**, each named and added by its own task with a field on
+`LookParams`, a CLI flag (classified in `flow`, which must also refuse a new-flow-only
+flag on the current chain), a `recipe::merge` arm with a merge test, and a value rule.
+`contrast` and the grade overlap (equal pivoted exponents are contrast), so whichever
+lands first decides who owns neutral contrast. The first control also adds a "non-empty"
+predicate on `LookParams`, which `applied()` and `film-master`'s refusal read — never a
+rule per knob; the refusal is verified by that control or `nf-destinations/preset-set`,
+whichever lands second.
+**One spike is done and it settles what `path-to-white` ships**. `desaturation-spike`
 ([`docs/spike/highlight-desaturation.md`](../spike/highlight-desaturation.md)) chose a
 **chroma pull** over a per-channel curve — not on appearance, which is equivalent
 (ΔE ≈ 0.7), but because the curve moves luminance too and the fit range downstream eats
@@ -34,10 +43,38 @@ run now against today's binary: `desaturation-band-fit` here, and
 
 ## stage
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-23
 
 - 2026-09-19: created with the new-flow plan. Goal: the look stage.
+- 2026-09-23: **closed as a decision task — most of it had already shipped.**
+  `nf-core/stage-skeleton` built the stage (`pipeline::look`, `SceneReferredImage ->
+  GradedImage`, order enforced by the types), `nf-core/recipe-schema` gave it an empty
+  `look` section that refuses any key, and every new-flow report already lists
+  `{"stage": "look", "applied": "identity"}` in `new_flow.stages`. Decisions, with the
+  user:
+  - **One key per control under `look`** (names left to each
+    control's task), not one CDL-style object. CDL's slope restates white
+    balance and its offset the flare subtraction, both scene correction's;
+    path-to-white is not CDL-shaped; and one object holding knobs of different
+    lifetimes is the trap `reconstruction.curve` already shipped. The grade's inner
+    form stays `per-channel-grade`'s question.
+  - **The empty look reports `"identity"`**, the vocabulary every stage uses.
+  - **The `film-master` refusal is not built here**: the new flow has one destination
+    and `LookParams` has no field, so the rule would be unreachable dead code. Its
+    shape is recorded — one predicate on `LookParams` ("non-empty"), one rule keyed on
+    whether the destination runs a look — and its verification moved to
+    `nf-destinations/preset-set`. The first control to land adds the predicate.
+  Code: `look.rs` rustdoc only. The identity guarantee is
+  `chain::tests::the_first_three_stages_are_a_bit_exact_identity`; note that its
+  input is built through `simple` → the NC film RGB v1 3×3, which mixes channels,
+  so an awkward value sharing a pixel with a NaN or infinity reaches the look as NaN.
+  The first look control should place its test values *after* the matrix.
+- 2026-09-23: review follow-ups. A stage-local identity test was dropped as a
+  duplicate of the chain's, sharing its construction flaw. The `film-master`
+  obligation is now written into all three control task files (and conditionally
+  into `preset-set`, which may land first); the grade/contrast overlap — equal
+  pivoted exponents *are* contrast — is an open question on both tasks.
 
 ## per-channel-grade
 

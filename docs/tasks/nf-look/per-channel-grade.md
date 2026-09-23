@@ -30,8 +30,14 @@ channels after the 3×3.
 
 ## Open questions
 
-- Spelling: per-channel exponents, or a CDL-style slope/offset/power triple? Part
-  2 leaves this open for contrast too, and it should be answered once for both.
+- The grade's form inside its `look` key: a pivoted per-channel power, or a
+  lift/gamma/gain triple per channel? The container is settled (`nf-look/stage`,
+  2026-09-23): one key per control under `look`, not one CDL object — CDL's slope
+  is white balance and its offset the flare subtraction, both scene correction's.
+- **Its overlap with contrast.** Equal exponents on all three channels, pivoted at
+  mid, *are* contrast — the same duplication that ruled out CDL. Decide who owns
+  neutral contrast (e.g. the grade is constrained to keep a neutral neutral, or
+  defined relative to one channel) in whichever of the two tasks runs first.
 - Is the pivot fixed at 0.18 or stated? Fixed is the honest default while the
   decode pins mid.
 
@@ -42,6 +48,12 @@ channels after the 3×3.
   grows away from mid in both directions on a synthetic ramp.
 - Zero and negative components stay finite, in the documented way.
 - A synthetic cast measurably shrinks, read back with `nctool metrics`.
+- If this is the **first look control to land**: `LookParams` gains a "non-empty"
+  predicate, and `applied()` and any destination that runs no look (`film-master`,
+  once the new flow has one) read it — one rule, never one per knob
+  (`nf-look/stage`). A look key on a no-look destination refuses, naming the look
+  — if the new flow has one by then; otherwise `nf-destinations/preset-set`
+  verifies it.
 
 ## Dependencies
 

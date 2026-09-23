@@ -48,6 +48,12 @@ Open:
   covered by a parse diagnostic generated from the same list (the `OutputPreset::ALL`
   precedent, so the name list and the help text cannot desynchronize).
 - `hanten roll` derives a name for each; `docs/using-nc.md` updated by running the binary.
+- If a look control has landed: `film-master` with any look key stated refuses,
+  naming the look rather than a downstream knob — **one** rule keyed on whether the
+  destination runs a look, never one per look knob (`nf-look/stage`). If none has,
+  the first control verifies it instead.
+- One recipe drives the same look through every destination that runs one, and the
+  report names the look stage on each, empty or not.
 
 ## Dependencies
 

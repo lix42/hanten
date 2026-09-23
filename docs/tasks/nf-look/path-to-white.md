@@ -128,6 +128,12 @@ white.
   Appendix E's decile columns are not the check: they carry one frame's own scene colour,
   so only their trend is comparable, and the causal reading attached to them was retired.
 - The SDR and HDR renditions still agree below diffuse white.
+- If this is the **first look control to land**: `LookParams` gains a "non-empty"
+  predicate, and `applied()` and any destination that runs no look (`film-master`,
+  once the new flow has one) read it — one rule, never one per knob
+  (`nf-look/stage`). A look key on a no-look destination refuses, naming the look
+  — if the new flow has one by then; otherwise `nf-destinations/preset-set`
+  verifies it.
 
 ## Dependencies
 

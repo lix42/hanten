@@ -1602,7 +1602,7 @@ the design in `docs/design-update.md`:
   take?](tasks/nf-look/desaturation-spike.md) — per-channel curve against a
   hue-preserving chroma pull; the design's prose describes one and every measured
   reference does the other
-- [ ] [The look stage](tasks/nf-look/stage.md) — scene-referred and before the
+- [x] [The look stage](tasks/nf-look/stage.md) — scene-referred and before the
   SDR/HDR branch, because a gain map needs agreement below diffuse white
 - [ ] [A per-channel grade with a mid-grey
   pivot](tasks/nf-look/per-channel-grade.md) — the tunable counterpart of the
