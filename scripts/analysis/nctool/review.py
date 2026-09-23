@@ -25,7 +25,9 @@ Five properties worth keeping:
 * **A build's provenance is derived, never declared.** The matrix supplies a short
   name; the identity under it is read back off each render. A name a human typed is
   a claim, and a wrong claim about which binary made a cell is the one failure a
-  build comparison cannot survive.
+  build comparison cannot survive. A build may state an `expect_commit`, which is
+  *checked* against that derived identity and aborts the run on a mismatch — an
+  expectation, never a label.
 * **A binary that reports two identities inside one run aborts it.** Not a build-axis
   rule: a matrix with no `builds` renders through one *unnamed* build — the `--nc`
   binary — and it is held to the same thing, which is the path most runs take. The
@@ -233,7 +235,7 @@ def load_builds(value) -> list[dict]:
         at = f"builds[{index}]"
         if not isinstance(entry, dict):
             raise ReviewError(f"{at} must be an object")
-        _known_keys(entry, {"id", "label", "note", "nc"}, at)
+        _known_keys(entry, {"id", "label", "note", "nc", "expect_commit"}, at)
         bid = check_id(_string(entry.get("id"), f"{at}.id"), "build id", f"{at}.id")
         if bid in seen:
             raise ReviewError(f"builds contains two entries with id {bid!r}")
@@ -245,8 +247,66 @@ def load_builds(value) -> list[dict]:
             # Resolved against the working directory, exactly as `--nc` is, so the
             # two spellings of "which binary" cannot mean different things.
             "nc": _string(entry.get("nc"), f"{at}.nc"),
+            "expect_commit": expected_commit(entry.get("expect_commit"),
+                                             f"{at}.expect_commit"),
         })
     return builds
+
+
+COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def expected_commit(value, at: str) -> str | None:
+    """A build's optional `expect_commit`: a hex commit, at least 7 digits.
+
+    An **expectation, not a label.** The cell is still labelled from what the
+    binary reports; this only lets a matrix refuse a run whose binary is not the
+    commit it was meant to be — the reference arm pointed at the wrong file is
+    otherwise rendered, labelled correctly, and never flagged.
+    """
+    if value is None:
+        return None
+    text = _string(value, at).lower()
+    if not COMMIT.match(text):
+        raise ReviewError(f"{at} must be a hex commit of 7 to 40 digits, not {value!r}")
+    return text
+
+
+VERSION_COMMIT = re.compile(r"^commit: ([0-9a-f]+)(-dirty| \(dirty unknown\))?$", re.M)
+
+
+def banner_identity(banner: str) -> dict | None:
+    """The commit and cleanliness a `--version` banner states, in report-identity shape.
+
+    nc prints `commit: <hex>`, `<hex>-dirty` or `<hex> (dirty unknown)` — the same
+    on both sides of the rename — so the pre-flight can hold a build to its
+    `expect_commit` before a single cell renders.
+    """
+    match = VERSION_COMMIT.search(banner)
+    if match is None:
+        return None
+    suffix = match.group(2)
+    return {"git_commit": match.group(1),
+            "git_dirty": None if suffix and "unknown" in suffix else bool(suffix)}
+
+
+def commit_mismatch(expected: str, identity: dict | None) -> str | None:
+    """Why a cell's identity is not a clean build of `expected`, or `None`.
+
+    nc reports a 12-digit commit and the matrix may state more or fewer, so the two
+    agree when the shorter is a prefix of the longer. A dirty build — or one whose
+    dirtiness is unknown — is refused: its commit does not identify its source.
+    """
+    commit = (identity or {}).get("git_commit")
+    if not isinstance(commit, str) or not commit:
+        return "no commit"
+    short, long = sorted((expected, commit.lower()), key=len)
+    if not long.startswith(short):
+        return f"commit {commit}"
+    dirty = identity.get("git_dirty")
+    if dirty is not False:
+        return f"commit {commit} from a {'dirty' if dirty else 'possibly dirty'} tree"
+    return None
 
 
 def config_builds(value, builds: list[dict], at: str) -> list[str] | None:
@@ -625,9 +685,16 @@ def record_identity(identities: dict, build: dict, cell: str,
 
     This is also the check the task asks for as "a cell whose sidecar disagrees
     with the matrix's claimed build is flagged". The matrix claims no identity, so
-    the only thing a cell can disagree with is the rest of its own build.
+    the only thing a cell can disagree with is the rest of its own build — unless
+    the build states an `expect_commit`, which every cell must then satisfy. That
+    is a run fault for the same reason: the binary at that path is the wrong one.
     """
     identity = build_identity(cell_identity(report, dest))
+    expected = build.get("expect_commit")
+    if expected and (mismatch := commit_mismatch(expected, identity)):
+        return (f"build {build['id']!r} ({build['nc']}) expects a clean build of "
+                f"{expected}, but {cell} reports {mismatch}; its cells would carry "
+                "the build's name without being that build")
     if identity is None:
         return None
     known = identities.get(build["id"])
@@ -758,8 +825,8 @@ def resolve_binaries(builds: list[dict], overrides: dict[str, str],
 
     The second check goes through `manifest.is_nc`, which accepts the **pre-rename
     `nc` banner** as well as `hanten`. That is load-bearing rather than tidy: the
-    reference build this axis exists to compare against is produced by building a
-    git-tagged binary, and a tag old enough to be worth comparing prints `nc`.
+    reference build this axis exists to compare against (`reserve`, from tag
+    `pre-new-flow`) predates the rename and prints `nc`.
     """
     # A matrix with no build axis is one unnamed build — the `--nc` binary — so the
     # render loop has a single shape rather than two.
@@ -778,6 +845,16 @@ def resolve_binaries(builds: list[dict], overrides: dict[str, str],
             raise ReviewError(
                 f"{named}{path} is not this project's CLI (its `--version` reported "
                 "neither `hanten <ver>` nor the pre-rename `nc <ver>`)")
+        # Checked here as well as per cell: refusing now writes nothing, where the
+        # render-time check has already rendered over the cell it refuses.
+        if build.get("expect_commit"):
+            banner = subprocess.run([str(path), "--version"], capture_output=True,
+                                    text=True).stdout
+            mismatch = commit_mismatch(build["expect_commit"], banner_identity(banner))
+            if mismatch:
+                raise ReviewError(f"{named}{path} is not a clean build of "
+                                  f"{build['expect_commit']} (`--version` reports "
+                                  f"{mismatch})")
         resolved.append({**build, "nc": str(path), "digest": _manifest.sha256(str(path))})
     return resolved
 

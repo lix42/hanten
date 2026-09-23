@@ -56,7 +56,7 @@ memory decision as much as a structural one.
 ## How to Verify
 
 - A before/after measurement on a real 5000 dpi frame: per-stage wall time and peak
-  RSS against the tagged reference build. Not a fixture — the effect is invisible at
+  RSS against the reference build. Not a fixture — the effect is invisible at
   fixture size.
 - The memory model's estimate stays slightly under measured, inside its 15%
   allowance, and a budget just under the modelled peak exits 6.

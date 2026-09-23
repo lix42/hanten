@@ -1015,7 +1015,8 @@ the design in `docs/design-update.md`:
 - `nf-calibration/user-calibration-procedure` (new flow): `io/scanner-density-calibration`, `nf-calibration/scale-gamma-loop`
   — we fit our own chain, never a user's, so the shipped value is a prior
 - `nf-verification/reference-snapshot` (new flow): `analysis/review-build-axis`
-  — a tag freezes the old binary — this is what lets `nf-retire` run early
+  — the `reserve` branch (from tag `pre-new-flow`), named by commit, keeps the old
+  binary — this is what lets `nf-retire` run early
 - `nf-verification/fingerprints` (new flow): `nf-core/minimal-end-to-end`
   — retire the print half of the `render` row, not the row; supersedes
   `algo/characteristic-fingerprint-vector`
@@ -1690,9 +1691,10 @@ the design in `docs/design-update.md`:
 > Gates that describe the new chain, and the frozen reference build that lets the old
 > paths retire early.
 
-- [ ] [The frozen reference
-  build](tasks/nf-verification/reference-snapshot.md) — a tag freezes the old
-  binary — this is what lets `nf-retire` run early
+- [x] [The frozen reference
+  build](tasks/nf-verification/reference-snapshot.md) — done: `reserve` (from tag
+  `pre-new-flow`), built by `scripts/reference-snapshot/` — this is what lets
+  `nf-retire` run early
 - [ ] [Rebase the drift gate on the new
   chain](tasks/nf-verification/fingerprints.md) — retire the print half of the
   `render` row, not the row; supersedes
@@ -1702,7 +1704,7 @@ the design in `docs/design-update.md`:
   post-transform hash
 - [ ] [A benchmark set for the new
   flow](tasks/nf-verification/benchmark-set.md) — every current case names
-  `legacy`; comparability comes from the tagged build
+  `legacy`; comparability comes from the reference build
 - [ ] [Export the pre-matrix film
   RGB](tasks/nf-verification/film-rgb-export.md) — the cleanest measurement
   point is before the 3×3, which nc cannot export today

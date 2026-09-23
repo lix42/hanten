@@ -85,6 +85,12 @@ does. If it documents something that no longer exists, remove it.
   branch is a dangling link on `main`; a reviewer has already caught this once.
 - **Do not document a target as if it shipped.** `design-spec.md` §8 carries a
   target subsection; the guide carries only current behaviour.
+- **A retired flag's old usage is not lost — point to it, don't preserve it.** The
+  pre-migration CLI stays documented in its own guide, frozen with the reference
+  binary (`git show origin/reserve:docs/using-nc.md`; procedure in
+  `scripts/reference-snapshot/README.md`). When `nf-retire` removes a flag, preset or
+  workflow, drop it from the live guide and say once where the reference covers it.
+  Don't keep a "legacy" section alive here.
 - **Keep it short.** Per `CLAUDE.md`, write what will still matter in six months.
   A question answered in one conversation is not automatically a section.
 

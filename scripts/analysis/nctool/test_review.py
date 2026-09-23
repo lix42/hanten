@@ -466,6 +466,17 @@ class TestBuildDeclaration(unittest.TestCase):
         with self.assertRaisesRegex(review.ReviewError, "unknown key binary"):
             load(builds=[{"id": "b", "binary": "/x"}])
 
+    def test_a_build_may_expect_a_commit(self):
+        build = load(builds=[{"id": "b", "nc": "/x", "expect_commit": "0DA32D0"}])
+        self.assertEqual(build["builds"][0]["expect_commit"], "0da32d0")
+        self.assertIsNone(load(builds=BUILDS)["builds"][0]["expect_commit"])
+
+    def test_refuses_an_expected_commit_that_is_not_one(self):
+        for value in ("0da32d", "main", "0da32d0-dirty", 7):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    review.ReviewError, r"builds\[0\].expect_commit"):
+                load(builds=[{"id": "b", "nc": "/x", "expect_commit": value}])
+
     def test_a_matrix_without_builds_declares_none(self):
         self.assertEqual(load()["builds"], [])
 
@@ -588,8 +599,8 @@ class TestResolveBinaries(unittest.TestCase):
         with self.assertRaisesRegex(review.ReviewError, review.DEFAULT_NC):
             review.resolve_binaries([], {}, None)
 
-    # The reference build this axis exists to compare against is a git-tagged
-    # binary, and a tag old enough to be worth comparing prints `nc`. A pre-flight
+    # The reference build this axis exists to compare against predates the rename
+    # and prints `nc`. A pre-flight
     # that demanded `hanten` would reject exactly that binary.
     def test_accepts_the_pre_rename_banner(self):
         binary = self.fake(banner="nc 0.1.0")
@@ -815,6 +826,56 @@ class TestRecordIdentity(unittest.TestCase):
         self.assertIsNone(self.record(identities, None))
 
 
+class TestExpectedCommit(unittest.TestCase):
+    CLEAN = {"git_commit": "0da32d063211", "git_dirty": False}
+
+    # nc prints 12 digits; a matrix may state the full hash or a short one.
+    def test_either_side_may_be_the_shorter(self):
+        for expected in ("0da32d0", "0da32d063211",
+                         "0da32d0632111196cfd8feb6f70d7e08b8b22a51"):
+            with self.subTest(expected=expected):
+                self.assertIsNone(review.commit_mismatch(expected, self.CLEAN))
+
+    def test_another_commit(self):
+        self.assertIn("9a61136bfe6e", review.commit_mismatch(
+            "0da32d0", {"git_commit": "9a61136bfe6e", "git_dirty": False}))
+
+    # A dirty tree's commit does not identify its source, and "unknown" is not clean.
+    def test_a_dirty_or_unknown_tree_is_not_the_commit(self):
+        self.assertIn("dirty", review.commit_mismatch(
+            "0da32d0", {**self.CLEAN, "git_dirty": True}))
+        self.assertIn("possibly dirty", review.commit_mismatch(
+            "0da32d0", {"git_commit": "0da32d063211"}))
+
+    def test_reads_the_version_banner(self):
+        head = "hanten 0.1.0\npipeline_version: 5 (x)\n"
+        self.assertEqual(review.banner_identity(head + "commit: 0da32d063211\ntarget: t"),
+                         {"git_commit": "0da32d063211", "git_dirty": False})
+        self.assertEqual(review.banner_identity(head + "commit: 0da32d063211-dirty"),
+                         {"git_commit": "0da32d063211", "git_dirty": True})
+        self.assertEqual(
+            review.banner_identity(head + "commit: 0da32d063211 (dirty unknown)"),
+            {"git_commit": "0da32d063211", "git_dirty": None})
+        self.assertIsNone(review.banner_identity(head + "commit: unknown"))
+        self.assertIsNone(review.banner_identity("hanten 0.1.0"))
+
+    def test_a_cell_that_identifies_itself_nowhere_cannot_meet_it(self):
+        self.assertEqual(review.commit_mismatch("0da32d0", None), "no commit")
+
+    # Checked on the first cell too, which the drift rule alone lets through.
+    def test_the_first_cell_is_held_to_it(self):
+        build = {"id": "ref", "label": "r", "nc": "/bin/ref",
+                 "expect_commit": "0da32d0"}
+        directory = Path(tempfile.mkdtemp(prefix="nc-review-cell-"))
+        message = review.record_identity(
+            {}, build, "F1/a",
+            {"identity": {"git_commit": "9a61136bfe6e", "git_dirty": False}},
+            directory / "F1-a.tiff")
+        self.assertIn("'ref'", message)
+        self.assertIn("0da32d0", message)
+        self.assertIn("9a61136bfe6e", message)
+
+
 class TestDistinctnessWarnings(unittest.TestCase):
     # A warning and not an error: the task's own acceptance check is that the same
     # binary declared twice yields byte-identical cells, which a generator that
@@ -935,7 +996,7 @@ FAKE_NC = '''#!{python}
 import json, pathlib, sys
 here = pathlib.Path(__file__).resolve().parent
 if "--version" in sys.argv:
-    print("hanten 0.1.0")
+    print("hanten 0.1.0\\ncommit: {banner}")
     raise SystemExit(0)
 if "--strict" in sys.argv:
     # The shape measured off the release binary: `--strict` gates *after*
@@ -975,9 +1036,12 @@ class TestBuildAxisEndToEnd(unittest.TestCase):
              "frames": {"F1": {"roll": "R", "file": "f1.tif"},
                         "F2": {"roll": "R", "file": "f1.tif"}}}), encoding="utf-8")
 
-    def binary(self, name: str, *commits: str) -> str:
+    def binary(self, name: str, *commits: str, banner: str | None = None) -> str:
+        """A fake nc whose renders report `commits` in turn and whose `--version`
+        states `banner` — the first commit unless a test needs the two to disagree."""
         path = self.root / name
         path.write_text(FAKE_NC.format(python=sys.executable, commits=list(commits),
+                                       banner=banner or commits[0],
                                        name=name), encoding="utf-8")
         path.chmod(0o755)
         return str(path)
@@ -1037,6 +1101,44 @@ class TestBuildAxisEndToEnd(unittest.TestCase):
         self.assertIn("bbb", err)
         self.assertIn("No review.json was written", err)
         self.assertFalse((self.root / "out" / "review.json").exists())
+
+    # The reference arm pointed at the wrong binary: without an expectation it
+    # renders and is labelled with its real commit, but nothing refuses it.
+    def test_a_build_that_is_not_its_expected_commit_writes_nothing(self):
+        wrong = self.binary("a", "bbb000000000")
+        code, err = self.run_generate(
+            [{"id": "ref", "label": "reference", "nc": wrong}])
+        self.assertEqual(code, 0, err)
+        renders = (self.root / "a.count").read_text()
+        before = self.review_json()
+        code, err = self.run_generate(
+            [{"id": "ref", "label": "reference", "nc": wrong,
+              "expect_commit": "aaa0000"}])
+        self.assertEqual(code, 2)
+        self.assertIn("is not a clean build of aaa0000", err)
+        self.assertIn("bbb000000000", err)
+        # Refused in the pre-flight: no cell rendered over, the earlier set untouched.
+        self.assertEqual((self.root / "a.count").read_text(), renders)
+        self.assertEqual(self.review_json(), before)
+
+    # The render-time check is the backstop: a binary whose banner agrees but whose
+    # renders do not (it changed after the pre-flight) still aborts the run.
+    def test_a_render_that_is_not_the_expected_commit_aborts(self):
+        code, err = self.run_generate(
+            [{"id": "ref", "label": "reference", "expect_commit": "aaa0000",
+              "nc": self.binary("a", "bbb000000000", banner="aaa000000000")}])
+        self.assertEqual(code, 1)
+        self.assertIn("expects a clean build of aaa0000", err)
+        self.assertIn("No review.json was written", err)
+        self.assertFalse((self.root / "out" / "review.json").exists())
+
+    def test_a_build_that_is_its_expected_commit_renders(self):
+        code, err = self.run_generate(
+            [{"id": "ref", "label": "reference", "nc": self.binary("a", "aaa000000000"),
+              "expect_commit": "aaa0000"}])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.review_json()["configs"][0]["producer"]["git_commit"],
+                         "aaa000000000")
 
     # The cells this run had already re-rendered were overwritten in place, so a
     # `review.json` left by an earlier run now names new pixels under the old
