@@ -1515,21 +1515,20 @@ the design in `docs/design-update.md`:
 
 - [x] [The `--new-flow` selector](tasks/nf-core/new-flow-flag.md) —
   scaffolding with a written expiry — CLI-only, never a recipe key, removed by
-  `nf-core/default-flip`. `convert` **and** `roll`; the chain it selects cannot
-  render until `nf-core/minimal-end-to-end`, so it stops at the render seam with
-  exit 4 (`src/flow.rs`)
+  `nf-core/default-flip`. `convert` **and** `roll`, with the availability refusals in `src/flow.rs`;
+  it renders since `nf-core/minimal-end-to-end`
 - [x] [The new stage module tree](tasks/nf-core/stage-skeleton.md) — the
   modules and typed boundaries, written fresh rather than extracted; every stage
-  an identity pass, and the seam still refuses, so the chain is not CLI-reachable
-  until `minimal-end-to-end`
+  an identity pass when it landed; CLI-reachable since `minimal-end-to-end`
 - [x] [A minimal end-to-end render](tasks/nf-core/minimal-end-to-end.md) — **done
   2026-09-22.** The milestone that expires the flag and unblocks retirement. `--new-flow` now renders:
   fixed decode → chain (three identities, fit gamut's P3 matrix) → a Display P3
   16-bit TIFF with no sidecar, on `convert` and `roll`
 - [x] [Audit every knob against the new
   flow](tasks/nf-core/knob-availability-audit.md) — every conversion flag
-  classified (refused by presence, refused by resolved value, or kept) and every
-  recipe section read-or-refused-whole, held complete by an exhaustiveness test;
+  classified (refused by presence, or kept) and held complete by an exhaustiveness
+  test — its resolved-value table and section refusal were since replaced by the
+  new chain's own recipe (`nf-core/recipe-schema`);
   three remedies that named a knob this flow refuses are fixed
 - [ ] [Flip the default to the new flow](tasks/nf-core/default-flip.md) — the
   default resolves the new chain; version bump, drift row, before/after
@@ -1583,7 +1582,7 @@ the design in `docs/design-update.md`:
 > Photographic corrections as a named stage: white balance, exposure, and the
 > scene-referred half of the black point.
 
-- [ ] [Scene correction as a named stage](tasks/nf-scene-correction/stage.md)
+- [x] [Scene correction as a named stage](tasks/nf-scene-correction/stage.md)
   — white balance and exposure resolved once and reported, instead of a fused
   expression
 - [ ] [The scene-referred half of the black

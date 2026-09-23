@@ -11437,6 +11437,99 @@ fn an_empty_measurement_region_only_refuses_a_run_that_measures_over_it() {
         err.contains("measurement region is empty") && err.contains("drop --auto-d-max"),
         "{err}"
     );
+
+    // The new flow's consumer is an auto white balance, and the remedy names it —
+    // `--auto-d-max` does not exist there. With stated gains the same region is only
+    // a warning, as above.
+    let new_flow = |extra: &[&str], out: &std::path::Path| {
+        let mut args = vec![
+            "convert",
+            "--new-flow",
+            "--film-base",
+            "0.9,0.6,0.5",
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            "--measure-inset",
+            "0.4",
+        ];
+        args.extend(extra);
+        args.extend(["-o", out.to_str().unwrap(), path.to_str().unwrap()]);
+        run_exact(&args)
+    };
+    let (code, _, err) = new_flow(&["--auto-wb", "gray-world"], &dir.path("nf-read.tiff"));
+    assert_eq!(
+        code, 2,
+        "auto white balance with no region must fail loudly: {err}"
+    );
+    assert!(
+        err.contains("measurement region is empty")
+            && err.contains("--white-balance")
+            && !err.contains("--auto-d-max"),
+        "{err}"
+    );
+    let (code, _, err) = new_flow(&["--white-balance", "1.1,1,0.9"], &dir.path("nf.tiff"));
+    assert_eq!(code, 0, "stated gains read no region: {err}");
+
+    // The inset's value bound is checked before any chain resolves, so its remedy has
+    // to name each chain's consumer — a new-flow user told only "drop --auto-d-max"
+    // is sent to a flag that flow refuses.
+    let bound_out = dir.path("nf-bound.tiff");
+    let (code, _, err) = run_exact(&[
+        "convert",
+        "--new-flow",
+        "--film-base",
+        "0.9,0.6,0.5",
+        "--auto-wb",
+        "gray-world",
+        "--measure-inset",
+        "0.5",
+        "-o",
+        bound_out.to_str().unwrap(),
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("beyond the supported maximum") && err.contains("--auto-wb"),
+        "{err}"
+    );
+
+    // At an inset that leaves a region, the IR plane's holder cut reaches the pixels
+    // exactly when auto white balance reads the region — so "IR preserved but not
+    // used" must go quiet then, and only then.
+    let ir_note = |extra: &[&str], name: &str| {
+        let out = dir.path(name);
+        let (code, stdout, err) = run_exact(
+            &[
+                &[
+                    "convert",
+                    "--new-flow",
+                    "--film-base",
+                    "0.9,0.6,0.5",
+                    "--input-transfer",
+                    "linear",
+                    "--input-meaning",
+                    "scanner-device",
+                    "-o",
+                    out.to_str().unwrap(),
+                    path.to_str().unwrap(),
+                ][..],
+                extra,
+            ]
+            .concat(),
+        );
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        let report = json(&stdout);
+        assert_eq!(report["effective_area"]["holder_applied"], true, "{report}");
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("preserved but not used"))
+    };
+    assert!(!ir_note(&["--auto-wb", "gray-world"], "nf-auto.tiff"));
+    assert!(ir_note(&["--white-balance", "1.1,1,0.9"], "nf-stated.tiff"));
 }
 
 /// A capped or unsettled holder march warns, so `--strict` can see it
@@ -11686,9 +11779,177 @@ fn without_new_flow_nothing_moves() {
     let (code, _out, err) = run_exact(&borrow(&off_replay));
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("recipe_version") && err.contains("pass `--new-flow`"),
+        err.contains("recipe_version") && err.contains("only `--new-flow` reads"),
         "{err}"
     );
+}
+
+/// The `u16` samples of a TIFF `hanten` wrote.
+fn read_u16_tiff(path: &Path) -> Vec<u16> {
+    use tiff::decoder::{Decoder, DecodingResult};
+    let mut dec =
+        Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap())).unwrap();
+    match dec.read_image().unwrap() {
+        DecodingResult::U16(data) => data,
+        other => panic!(
+            "expected u16 samples, got {:?}",
+            std::mem::discriminant(&other)
+        ),
+    }
+}
+
+/// Per-channel means of interleaved RGB `u16` samples.
+fn channel_means(samples: &[u16]) -> [f64; 3] {
+    let mut sum = [0f64; 3];
+    for px in samples.as_chunks::<3>().0 {
+        for c in 0..3 {
+            sum[c] += f64::from(px[c]);
+        }
+    }
+    sum.map(|v| v / (samples.len() / 3) as f64)
+}
+
+#[test]
+fn new_flow_applies_scene_correction() {
+    // `nf-scene-correction/stage` through the binary: each knob reaches the pixels,
+    // and the report states what was applied — as resolved, with its provenance.
+    let tmp = TempDir::new("new-flow-scene");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--new-flow",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run_exact(&argv);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        (out, json(&stdout))
+    };
+    let applied = |report: &serde_json::Value| report["new_flow"]["stages"][0]["applied"].clone();
+
+    let (plain, report) = convert("plain.tiff", &[]);
+    let sc = &report["new_flow"]["scene_correction"];
+    assert_eq!(sc["white_balance"], serde_json::json!([1.0, 1.0, 1.0]));
+    assert_eq!(sc["provenance"], "stated");
+    assert_eq!(sc["exposure"], 0.0);
+    assert_eq!(applied(&report), "identity");
+    let plain_means = channel_means(&read_u16_tiff(&plain));
+
+    // Exposure: one stop down darkens every channel.
+    let (darker, report) = convert("darker.tiff", &["--exposure", "-1"]);
+    assert_eq!(applied(&report), "exposure");
+    assert_eq!(report["new_flow"]["scene_correction"]["exposure"], -1.0);
+    let darker_means = channel_means(&read_u16_tiff(&darker));
+    for c in 0..3 {
+        assert!(
+            darker_means[c] < plain_means[c],
+            "channel {c}: {darker_means:?}"
+        );
+    }
+
+    // Stated white balance: warms red against blue, and is reported as stated.
+    let (warm, report) = convert("warm.tiff", &["--white-balance", "1.3,1,0.7"]);
+    assert_eq!(applied(&report), "white-balance");
+    let sc = &report["new_flow"]["scene_correction"];
+    assert_eq!(sc["provenance"], "stated");
+    assert!(sc.get("estimator").is_none(), "{sc}");
+    let warm_means = channel_means(&read_u16_tiff(&warm));
+    assert!(
+        warm_means[0] / warm_means[2] > plain_means[0] / plain_means[2],
+        "{warm_means:?} vs {plain_means:?}"
+    );
+
+    // Auto: estimated over the effective area the same report carries, and the
+    // reported gains reproduce the image exactly when stated — measure once, reuse.
+    let (auto, report) = convert("auto.tiff", &["--auto-wb", "percentile"]);
+    let sc = &report["new_flow"]["scene_correction"];
+    assert_eq!(sc["provenance"], "estimated", "{sc}");
+    assert_eq!(sc["estimator"], "percentile");
+    assert_eq!(sc["region"], report["effective_area"]["region"], "{report}");
+    assert_eq!(sc["white_balance"][1], 1.0, "green-anchored");
+    // Not a vacuous reuse: the fixture's estimate is well off neutral.
+    assert_eq!(applied(&report), "white-balance", "{sc}");
+    // And the region steers it: the whole frame (no inset) estimates differently.
+    let (_, whole) = convert(
+        "whole.tiff",
+        &["--auto-wb", "percentile", "--measure-inset", "0"],
+    );
+    assert_ne!(
+        whole["new_flow"]["scene_correction"]["white_balance"], sc["white_balance"],
+        "the estimate must read the effective area, not the whole frame"
+    );
+    let gains: Vec<String> = sc["white_balance"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g.to_string())
+        .collect();
+    let (reused, _) = convert("reused.tiff", &["--white-balance", &gains.join(",")]);
+    assert_eq!(
+        std::fs::read(&auto).unwrap(),
+        std::fs::read(&reused).unwrap(),
+        "stating the reported gains must reproduce the estimated render"
+    );
+
+    // The recipe spelling reaches the same knobs, and a dump writes them back.
+    let recipe = write_file(
+        &tmp.path("scene.json"),
+        r#"{ "recipe_version": 2,
+             "scene_correction": { "white_balance": {"explicit": [1.3, 1.0, 0.7]} } }"#,
+    );
+    let dump = tmp.path("dump.json");
+    let (from_recipe, _) = convert(
+        "recipe.tiff",
+        &[
+            "--params",
+            recipe.to_str().unwrap(),
+            "--dump-params",
+            dump.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        std::fs::read(&from_recipe).unwrap(),
+        std::fs::read(&warm).unwrap(),
+        "the recipe key and the flag are one knob"
+    );
+    let dumped: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+    assert_eq!(
+        dumped["scene_correction"],
+        serde_json::json!({"white_balance": {"explicit": [1.3, 1.0, 0.7]}, "exposure": 0.0})
+    );
+}
+
+#[test]
+fn exposure_is_the_new_flows_spelling_and_each_chain_refuses_the_other() {
+    let tmp = TempDir::new("exposure-spelling");
+    let out = tmp.path("out.tif");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let base = [
+        "convert",
+        input.as_str(),
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--output-preset",
+        "legacy",
+    ];
+    let (code, _, err) = run_exact(&[&base[..], &["--exposure", "1"]].concat());
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--exposure") && err.contains("`--print-exposure`"),
+        "{err}"
+    );
+    // Control: the same line with the current chain's spelling is accepted.
+    let (code, _, err) = run_exact(&[&base[..], &["--print-exposure", "1"]].concat());
+    assert_eq!(code, 0, "{err}");
 }
 
 #[test]
@@ -12654,23 +12915,23 @@ fn hanten_params_writes_the_schema_the_flag_selects() {
 #[test]
 fn new_flow_refuses_every_print_control() {
     // The print family, driven through the binary one flag at a time. Each names the
-    // stage that will carry it, so the refusal tells a user where the knob went
-    // rather than only that it is gone.
+    // stage that will carry it — or, for `--print-exposure`, the flag that already
+    // does — so the refusal tells a user where the knob went rather than only that it
+    // is gone. White balance is not here: scene correction reads it under its own
+    // spelling (`new_flow_applies_scene_correction`).
     //
-    // Two of these resolve the documented **default** (`--white-balance 1,1,1`,
-    // `--highlight-compress 0`) and are still refused, which is the tiebreaker applied
+    // One of these resolves the documented **default** (`--highlight-compress 0`) and
+    // is still refused, which is the tiebreaker applied
     // rather than waived: an identity value is spared to keep the flags-win reset
     // usable, and the new chain's recipe has no `print` section, so on this flow there
     // is no pinned value for one to clear.
     let tmp = TempDir::new("new-flow-print");
     let cases: &[(&[&str], &str)] = &[
-        (&["--print-exposure", "1"], "nf-scene-correction/stage"),
+        (&["--print-exposure", "1"], "Use `--exposure`"),
         (
             &["--black-point", "0.01"],
             "nf-scene-correction/flare-removal",
         ),
-        (&["--white-balance", "1,1,1"], "nf-scene-correction/stage"),
-        (&["--auto-wb", "gray-world"], "nf-scene-correction/stage"),
         (
             &["--linear-range", "0,1"],
             "nf-scene-correction/levels-knob",
@@ -13285,6 +13546,76 @@ fn roll_under_the_new_flow_renders_every_frame() {
 }
 
 #[test]
+fn a_roll_frame_override_reaches_scene_correction() {
+    // Exposure is per frame by nature (a bracket, a frame shot a stop over), so a
+    // per-frame `scene_correction` overlay must reach that frame and only that one.
+    let tmp = TempDir::new("new-flow-roll-scene");
+    let shared = write_file(
+        &tmp.path("roll.json"),
+        r#"{ "recipe_version": 2,
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
+    );
+    let (a, b) = (fixture("hdr-48bit.tif"), fixture("hdri-64bit.tif"));
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{ "frames": [
+                 {{ "input": {a:?}, "params": {{ "scene_correction": {{ "exposure": -1.5 }} }} }},
+                 {{ "input": {b:?} }} ] }}"#
+        ),
+    );
+    let out_dir = tmp.path("out");
+    let (code, stdout, err) = run_exact(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        shared.to_str().unwrap(),
+        "--new-flow",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let exposures: Vec<f64> = report["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            f["new_flow"]["scene_correction"]["exposure"]
+                .as_f64()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(exposures, [-1.5, 0.0], "{stdout}");
+
+    // A value the stage refuses is refused per frame, naming the key — roll takes no
+    // conversion flags, so a flag spelling would be a remedy the user cannot type.
+    let bad = write_file(
+        &tmp.path("bad.json"),
+        &format!(
+            r#"{{ "frames": [ {{ "input": {a:?},
+                 "params": {{ "scene_correction": {{ "white_balance": {{ "explicit": [1, 0, 1] }} }} }} }} ] }}"#
+        ),
+    );
+    let (code, _, err) = run_exact(&[
+        "roll",
+        "--frames",
+        bad.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("bad-out").to_str().unwrap(),
+        "--params",
+        shared.to_str().unwrap(),
+        "--new-flow",
+    ]);
+    assert_ne!(code, 0, "{err}");
+    assert!(
+        err.contains("`scene_correction.white_balance`") && !err.contains("--white-balance"),
+        "{err}"
+    );
+}
+
+#[test]
 fn roll_under_the_new_flow_refuses_an_unread_section_in_a_frame_override() {
     // A per-frame overlay can state a section the new flow never reads; now that the
     // roll renders, accepting it would be accepted-and-ignored. Refused, naming the
@@ -13490,7 +13821,7 @@ fn roll_refuses_the_current_chains_keys_from_either_recipe_site() {
         &[],
     );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("pass `--new-flow`"), "{err}");
+    assert!(err.contains("only `--new-flow` reads"), "{err}");
 
     // Falsifiability: the simple overlay runs on the current chain.
     let (code, err) = roll(

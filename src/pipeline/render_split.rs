@@ -58,10 +58,9 @@
 //! owned by `output/sdr-display-rendering` and `output/hdr-display-rendering`,
 //! which are this half's consumers.
 
-use crate::algo::density;
 use crate::pipeline::pixels;
 use crate::pipeline::working_space::AcesCgImage;
-use crate::types::{LinearImage, NcError, PrintParams, Result, WbSource};
+use crate::types::{LinearImage, NcError, PrintParams, Result};
 
 /// The `film-master` branch: the mapped linear ACEScg buffer, unchanged.
 ///
@@ -90,7 +89,7 @@ pub enum DisplayBranch {
 
 /// The shared print controls after resolution: the values that actually get
 /// applied, in the order [`apply_shared_controls`] applies them. An **auto**
-/// [`WbSource`] is resolved to concrete gains here, so the two display branches
+/// [`WbSource`](crate::types::WbSource) is resolved to concrete gains here, so the two display branches
 /// cannot re-estimate and drift apart — and so a run can freeze the reported
 /// gains into an explicit recipe and reproduce the buffer bit-for-bit.
 ///
@@ -310,10 +309,10 @@ pub struct SharedDisplaySource {
 
 /// Resolve the shared print controls for this frame (design-spec §6).
 ///
-/// An explicit [`WbSource`] passes its gains straight through; an **auto** mode is
+/// An explicit [`WbSource`](crate::types::WbSource) passes its gains straight through; an **auto** mode is
 /// estimated from a deterministic strided sample of the *mapped ACEScg* buffer
 /// with the same estimators the legacy print render uses
-/// (`density::estimate_wb_gains`). Note the domain difference this implies: the
+/// (`white_balance::resolve_print_gains`). Note the domain difference this implies: the
 /// legacy estimate runs on pre-matrix film RGB, so an auto mode resolves to
 /// *different numbers* here — per-channel gains do not commute with the
 /// working-space matrix. That is the documented consequence of moving the
@@ -327,13 +326,8 @@ pub fn resolve_shared_controls(
     aces: &AcesCgImage,
     print: &PrintParams,
 ) -> Result<ResolvedPrintControls> {
-    let white_balance = match print.white_balance {
-        WbSource::Explicit(gains) => gains,
-        auto_mode => {
-            let sampled = density::sample_positive(aces.rgb());
-            density::estimate_wb_gains(&sampled, auto_mode)?
-        }
-    };
+    let white_balance =
+        crate::pipeline::white_balance::resolve_print_gains(aces.rgb(), print.white_balance)?;
     ResolvedPrintControls::new(
         white_balance,
         2f32.powf(print.print_exposure),
@@ -401,6 +395,7 @@ mod tests {
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
     use crate::types::{
         DensityCurve, DensityParams, ExponentialParams, FilmBase, Reconstruction, SigmoidParams,
+        WbSource,
     };
 
     /// Build an `AcesCgImage` whose *film RGB* input was exactly `rgb`, through
@@ -651,7 +646,7 @@ mod tests {
         // An auto mode is resolved to explicit gains *before* the branches split,
         // so neither can re-estimate; and feeding the resolved gains back as
         // explicit reproduces the buffer bit-for-bit. Both estimators, since each
-        // reaches `estimate_wb_gains` through this same slot.
+        // reaches `white_balance::estimate_gains` through this same slot.
         let px = [0.85_f32, 0.5, 0.38, 0.3, 0.18, 0.12, 0.02, 0.012, 0.009];
         for mode in [WbSource::Percentile, WbSource::GrayWorld] {
             let auto = PrintParams {

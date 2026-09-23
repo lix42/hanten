@@ -39,8 +39,9 @@ authoritative for status and dependencies.
   after that there is nothing to select. `nf-core/default-flip` is the last of those
   changes plus the flag's removal. `nf-core/stage-skeleton` built the chain it
   selects and `nf-core/minimal-end-to-end` connected it: the fixed decode feeds it and
-  it writes one destination, a Display P3 16-bit TIFF, with the first three stages
-  still identity passes. The availability refusals went live before the render did.
+  it writes one destination, a Display P3 16-bit TIFF. Scene correction has since
+  gained white balance and exposure (`nf-scene-correction/stage`); the look and fit
+  range are still identity passes. The availability refusals went live before the render did.
 - **The container default is untouched by all of this**, so it moves once, when
   `nf-destinations/default-destination` says so.
 - **New stages are written fresh.** See CLAUDE.md's migration rule: structure for

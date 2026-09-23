@@ -32,7 +32,9 @@ use crate::pipeline::input_semantics::{
     self, ContainerColorFacts, InputAssertions, InputColorReport, RawMode,
 };
 use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
-use crate::pipeline::{color, film_base, gain_map, hdr, sdr, stages, working_space};
+use crate::pipeline::{
+    color, film_base, gain_map, hdr, scene_correction, sdr, stages, working_space,
+};
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::telemetry;
 use crate::types::{
@@ -290,6 +292,8 @@ pub struct ConvertArgs {
     pub anchor: AnchorOverrides,
     #[command(flatten)]
     pub print: PrintOverrides,
+    #[command(flatten)]
+    pub scene: SceneCorrectionOverrides,
     #[command(flatten)]
     pub simple: SimpleOverrides,
     #[command(flatten)]
@@ -657,10 +661,27 @@ impl From<AutoWb> for WbSource {
     }
 }
 
+/// The new chain's scene-correction overrides that have no current-chain flag
+/// (recipe section `scene_correction`, `nf-scene-correction/stage`).
+///
+/// White balance keeps its spelling on both chains (`--white-balance` / `--auto-wb`,
+/// in [`PrintOverrides`]); only exposure is renamed, because `--print-exposure`
+/// names a print stage the new chain does not have. Refused without `--new-flow`
+/// (`flow::reject_unavailable_flags`), where the exposure is `--print-exposure`.
+#[derive(Args, Debug, Default)]
+pub struct SceneCorrectionOverrides {
+    /// Exposure in stops (EV) — a scene-referred gain of `2^EV` on every channel,
+    /// before the look and the display fit (recipe key `scene_correction.exposure`).
+    /// `--new-flow` only; the current chain's exposure is `--print-exposure`.
+    #[arg(long, allow_hyphen_values = true, conflicts_with = "print_exposure")]
+    pub exposure: Option<f32>,
+}
+
 /// Print / tone-render overrides (design-spec §9).
 ///
-/// `--white-balance` and `--auto-wb` are the two faces of the single
-/// `print.white_balance` source (mutually exclusive; clap rejects passing both);
+/// `--white-balance` and `--auto-wb` are the two faces of one white-balance source —
+/// `print.white_balance` on the current chain, `scene_correction.white_balance` under
+/// `--new-flow` (`recipe::merge`) — mutually exclusive (clap rejects passing both);
 /// whichever is given replaces the recipe's choice entirely. Precedence is by
 /// **source**, not value: an explicit `--white-balance 1,1,1` over a recipe's
 /// auto mode means neutral gains, not re-estimation.
@@ -1904,6 +1925,10 @@ pub struct NewFlowResult {
     pub decode: fixed::DecodeReport,
     /// Each stage of the new chain in order, with what it applied.
     pub stages: [NewFlowStageResult; 4],
+    /// Scene correction's resolved values: the white-balance gains applied and
+    /// whether they were stated or estimated (and over which region), and the
+    /// exposure. An estimated frame is reproduced exactly by stating these gains.
+    pub scene_correction: scene_correction::SceneCorrection,
     /// The destination written — one today (`nf-destinations/preset-set` owns the set).
     pub destination: &'static str,
     /// The gamut the chain rendered into, read off its exit.
@@ -5090,7 +5115,7 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
     // density through `finish_print`'s WB slot and passes simple's positive through
     // untouched. A display preset is different — `render_split::resolve_shared_controls`
     // applies WB whatever the reconstruction, and resolves an auto mode there through
-    // the same `density::estimate_wb_gains`, so `simple` + a display preset + `--auto-wb`
+    // the same `white_balance::resolve_print_gains`, so `simple` + a display preset + `--auto-wb`
     // would work. Relaxing it is a *behaviour* change (it newly accepts a combination)
     // and wants its own evidence that the estimators read sensibly off simple's
     // unclamped positive, so the rule stays and the message below states what is true
@@ -6516,7 +6541,21 @@ fn convert_frame(
     // no region to measure over, and a warning otherwise — with no
     // `report.effective_area`, because there is no region to report. The knock-on is
     // that `--measure-inset` is inert on such a run; the warning is the observable.
-    let region_measured = measures_over_region(cfg);
+    //
+    // On the new flow the question has a different answer, because a different
+    // measurement reads the region: an auto white balance, which estimates over it
+    // (`scene_correction::apply`). Its gains multiply every pixel, so there the two
+    // predicates coincide — measuring over the region *is* reaching a rendered pixel.
+    let (region_measured, region_reaches_a_pixel) = match chain {
+        FrameChain::Legacy => (
+            measures_over_region(cfg),
+            region_reaches_a_rendered_pixel(cfg),
+        ),
+        FrameChain::New(recipe) => {
+            let measured = recipe.scene_correction.measures_over_region();
+            (measured, measured)
+        }
+    };
     let measure_area = match film_base::effective_area(&image, cfg.measure.inset) {
         Ok(area) => {
             report.effective_area = Some(area);
@@ -6532,10 +6571,20 @@ fn convert_frame(
             // `validate_convert` refused an out-of-bound inset before the decode, so
             // the only error reachable here is the empty region — and the extra
             // remedy is accurate for it.
+            let consumer = match chain {
+                FrameChain::Legacy => {
+                    "Alternatively drop --auto-d-max: the per-frame reference is what \
+                     measures over the region"
+                }
+                FrameChain::New(_) => {
+                    "Alternatively state the white-balance gains \
+                     (`scene_correction.white_balance` in the recipe, or --white-balance \
+                     on `convert`): the auto white balance is what measures over the region"
+                }
+            };
             return Err(NcError::Usage(format!(
-                "{} Alternatively drop --auto-d-max: the per-frame reference is \
-                 what measures over the region, and with nothing reading it an \
-                 empty region is a warning rather than a refusal.",
+                "{} {consumer}, and with nothing reading it an empty region is a \
+                 warning rather than a refusal.",
                 e.message()
             )));
         }
@@ -6553,14 +6602,17 @@ fn convert_frame(
             None
         }
     };
-    // The reconstruction stage's reference input: the roll's configured source plus
-    // the region an `auto` source measures over. Paired here rather than threaded as
-    // two arguments so a region cannot reach a run that measures nothing
-    // (`region_measured` is the one gate) — see `types::DmaxInput`.
-    let mut dmax_input = DmaxInput::new(cfg.calibration.dmax);
-    dmax_input.region = measure_area
+    // The region handed to whichever chain measures over it — resolved once, so
+    // `region_measured` stays the one gate and a region cannot reach a run that
+    // measures nothing on either chain.
+    let measured_region = measure_area
         .filter(|_| region_measured)
         .map(|area| area.region);
+    // The reconstruction stage's reference input: the roll's configured source plus
+    // the region an `auto` source measures over. Paired here rather than threaded as
+    // two arguments — see `types::DmaxInput`.
+    let mut dmax_input = DmaxInput::new(cfg.calibration.dmax);
+    dmax_input.region = measured_region;
 
     // Note an IR plane that's carried but not consumed. Keyed on what each stage
     // actually did, never on a prediction from the inputs: a marker-verified plane
@@ -6590,7 +6642,7 @@ fn convert_frame(
     if info.ir_present
         && export_ir.is_none()
         && !base.ir_mask_applied
-        && !(region_reaches_a_rendered_pixel(cfg) && measure_area.is_some_and(|a| a.holder_applied))
+        && !(region_reaches_a_pixel && measure_area.is_some_and(|a| a.holder_applied))
         && !shape_only_holder_note
         && !ir_unusable_note
     {
@@ -6612,6 +6664,7 @@ fn convert_frame(
                 recipe,
                 image,
                 base: base.base,
+                measure_region: measured_region,
                 export_ir,
                 output,
                 report,
@@ -7257,6 +7310,10 @@ struct NewFlowFrame<'a> {
     recipe: &'a Recipe,
     image: LinearImage,
     base: FilmBase,
+    /// The effective area, handed on only when a stage measures over it — the same
+    /// gate the current chain's reference uses, so a region never reaches a run that
+    /// measures nothing.
+    measure_region: Option<[u32; 4]>,
     export_ir: Option<PathBuf>,
     output: &'a Path,
     report: Report,
@@ -7284,6 +7341,7 @@ fn render_new_flow_frame(
         recipe,
         image,
         base,
+        measure_region,
         export_ir,
         output,
         mut report,
@@ -7305,7 +7363,8 @@ fn render_new_flow_frame(
     // only a fault from *this* transform is counted.
     let _ = cms_error_occurred();
     let stage_started = Instant::now();
-    let (linear, gamut) = chain::render(aces, &chain_params)?.into_parts();
+    let rendered = chain::render(aces, &chain_params, measure_region)?;
+    let (linear, gamut) = rendered.image.into_parts();
     let (encoded, icc) = color::encode_display_linear(linear, gamut)?;
     let color_ms = elapsed_ms(stage_started);
     if cms_error_occurred() {
@@ -7319,9 +7378,10 @@ fn render_new_flow_frame(
     report.working_mapping = Some(working_space::WORKING_MAPPING_ID);
     report.new_flow = Some(NewFlowResult {
         decode: decoded,
-        stages: chain_params
-            .applied()
+        stages: rendered
+            .applied
             .map(|(stage, applied)| NewFlowStageResult { stage, applied }),
+        scene_correction: rendered.scene_correction,
         destination: NEW_FLOW_DESTINATION,
         gamut: gamut.name(),
         sidecar_written: false,

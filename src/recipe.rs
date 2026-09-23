@@ -13,8 +13,8 @@
 //! ```text
 //! input · calibration · measure      shared with the current chain (decode, film base)
 //! reconstruction                     the fixed decode — algo::fixed::DecodeParams
-//! scene_correction · look ·          one per rendering stage, empty until its epic
-//! fit_range · fit_gamut                gives it a knob
+//! scene_correction · look ·          one per rendering stage, each empty until its
+//! fit_range · fit_gamut                epic gives it a knob (scene correction has)
 //! ```
 //!
 //! **No per-section `schema_version`.** The current chain's tagged `reconstruction`
@@ -33,12 +33,12 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::algo::fixed::{AnchorRule, DecodeFault, DecodeParams};
-use crate::cli::ResolvedConfig;
+use crate::cli::{AutoWb, ResolvedConfig};
 use crate::pipeline::chain::ChainParams;
 use crate::pipeline::fit_gamut::{DestinationGamut, FitGamutParams};
 use crate::pipeline::fit_range::FitRangeParams;
 use crate::pipeline::look::LookParams;
-use crate::pipeline::scene_correction::SceneCorrectionParams;
+use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
 use crate::types::{
     CalibrationParams, FilmBaseSource, InputParams, MeasureParams, NcError, Result,
 };
@@ -136,9 +136,12 @@ pub struct Calibration {
 const SECTIONS_WITH_NO_COUNTERPART: &[(&str, &str)] = &[
     (
         "print",
-        "the print controls are split across the rendering stages — white balance and \
-         exposure to `scene_correction` (`nf-scene-correction/stage`), the display tone \
-         to `fit_range` (`nf-display-stages/fit-range`) — and none has a key there yet",
+        "white balance and exposure are `scene_correction.white_balance` and \
+         `scene_correction.exposure`; the display tone goes to `fit_range` \
+         (`nf-display-stages/fit-range`), the black point splits between scene \
+         correction and fit range (`nf-scene-correction/flare-removal`), and \
+         `linear_range` has no home yet (`nf-scene-correction/levels-knob`) — none of \
+         those three has a key yet",
     ),
     (
         "output",
@@ -298,8 +301,8 @@ pub fn check_body_without_flag(body: &serde_json::Value, context: &str) -> Resul
     match body.get(VERSION_KEY) {
         None => Ok(()),
         Some(v) if v.as_u64() == Some(u64::from(RECIPE_VERSION)) => Err(NcError::Usage(format!(
-            "{context}: states `{VERSION_KEY}`, so it describes the new rendering chain — \
-                 pass `--new-flow` to read it. The current chain's recipe carries no version"
+            "{context}: states `{VERSION_KEY}`, so it describes the new rendering chain, \
+                 which only `--new-flow` reads. The current chain's recipe carries no version"
         ))),
         Some(v) => Err(NcError::Usage(format!(
             "{context}: states `{VERSION_KEY}` {v}, which no chain reads — the current \
@@ -338,6 +341,20 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     if let Some(d) = args.anchor.anchor_mid_offset {
         r.reconstruction.anchor = AnchorRule::MidAboveBase(d);
     }
+    // Scene correction. Precedence is by source: `--white-balance 1,1,1` over a
+    // recipe's auto mode means neutral gains, not a re-estimate (clap refuses both
+    // flags together).
+    if let Some(gains) = args.print.white_balance {
+        r.scene_correction.white_balance = WhiteBalance::Explicit(gains);
+    } else if let Some(mode) = args.print.auto_wb {
+        r.scene_correction.white_balance = match mode {
+            AutoWb::GrayWorld => WhiteBalance::GrayWorld,
+            AutoWb::Percentile => WhiteBalance::Percentile,
+        };
+    }
+    if let Some(stops) = args.scene.exposure {
+        r.scene_correction.exposure = stops;
+    }
     r
 }
 
@@ -350,18 +367,23 @@ pub enum KnobNames {
     KeyOnly,
 }
 
+/// A knob as a validation message names it — one spelling rule for every section.
+fn knob_name(names: KnobNames, section: &str, flag: &str, key: &str) -> String {
+    match names {
+        KnobNames::FlagAndKey => format!("{flag} (recipe `{section}.{key}`)"),
+        KnobNames::KeyOnly => format!("`{section}.{key}`"),
+    }
+}
+
 /// The value rules this recipe's own sections carry: the decode's, which live in
 /// [`DecodeParams::check`] and are rendered here as a usage error. The shared
 /// sections are checked on the projection, by the same `cli::validate` the current
 /// chain uses.
 pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
-    let name = |flag: &str, key: &str| match names {
-        KnobNames::FlagAndKey => format!("{flag} (recipe `reconstruction.{key}`)"),
-        KnobNames::KeyOnly => format!("`reconstruction.{key}`"),
-    };
+    let name = |flag: &str, key: &str| knob_name(names, "reconstruction", flag, key);
     let d = &r.reconstruction;
     let message = match d.check() {
-        Ok(_) => return Ok(()),
+        Ok(_) => return validate_scene_correction(&r.scene_correction, names),
         Err(DecodeFault::Offset { channel, value }) => format!(
             "{} must be finite on every channel, got {value} on channel {channel}",
             name("--density-offset", "offset")
@@ -396,6 +418,33 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
                 name("--anchor-mid-offset", "anchor"),
             )
         }
+    };
+    Err(NcError::Usage(message))
+}
+
+/// Scene correction's value rules ([`SceneCorrectionParams::check`]), rendered as a
+/// usage error naming the knob the way `names` says the command spells it.
+fn validate_scene_correction(p: &SceneCorrectionParams, names: KnobNames) -> Result<()> {
+    let name = |flag: &str, key: &str| knob_name(names, "scene_correction", flag, key);
+    let message = match p.check() {
+        Ok(()) => return Ok(()),
+        Err(SceneFault::WhiteBalance { channel, value }) => format!(
+            "{} must be finite and positive on every channel, got {value} on channel \
+             {channel}",
+            name("--white-balance", "white_balance")
+        ),
+        Err(SceneFault::Exposure(stops)) => format!(
+            "{} must be finite, with a gain 2^EV that is a normal f32 (roughly -126 to \
+             +127 stops), got {stops}",
+            name("--exposure", "exposure")
+        ),
+        Err(SceneFault::Combined { channel, gain }) => format!(
+            "{} times the exposure gain from {} is {gain:e} on channel {channel}, which \
+             is not a normal f32 — every sample of that channel would render as 0 or \
+             inf. Move the white balance or the exposure toward neutral",
+            name("--white-balance", "white_balance"),
+            name("--exposure", "exposure"),
+        ),
     };
     Err(NcError::Usage(message))
 }
@@ -490,10 +539,15 @@ mod tests {
             ]
         );
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        // An identity stage is present as an empty object, not absent or `null`.
-        for stage in ["scene_correction", "look", "fit_range", "fit_gamut"] {
+        // A stage with no knob yet is present as an empty object, not absent or
+        // `null`; one with knobs writes each of them, at its identity default.
+        for stage in ["look", "fit_range", "fit_gamut"] {
             assert_eq!(json[stage], serde_json::json!({}), "{stage}");
         }
+        assert_eq!(
+            json["scene_correction"],
+            serde_json::json!({"white_balance": {"explicit": [1.0, 1.0, 1.0]}, "exposure": 0.0})
+        );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
         assert_eq!(back, Recipe::default());
@@ -608,7 +662,7 @@ mod tests {
     fn a_new_chain_recipe_is_refused_without_the_flag() {
         let v = serde_json::json!({"recipe_version": 2});
         let err = check_body_without_flag(&v, "recipe r.json").unwrap_err();
-        assert!(err.message().contains("pass `--new-flow`"), "{err}");
+        assert!(err.message().contains("only `--new-flow` reads"), "{err}");
         check_body_without_flag(&serde_json::json!({}), "recipe r.json").unwrap();
         // Any other value reads on neither chain, so the flag is not the remedy: under
         // it, `1` would be refused again for the version.

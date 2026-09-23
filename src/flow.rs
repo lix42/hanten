@@ -46,12 +46,12 @@ impl Flow {
     }
 }
 
-/// Why a knob is unavailable — and which of two *different* sentences it earns.
+/// Why a knob is unavailable — and which of three *different* sentences it earns.
 ///
 /// The distinction is the user's next action, so it is modelled rather than
-/// written into each message: "wait for the stage that carries it" and "this idea
-/// is gone" are not the same advice, and a single generic string would have to
-/// pick one and be wrong for half the table.
+/// written into each message: "wait for the stage that carries it", "this idea is
+/// gone" and "it is spelled differently here" are not the same advice, and a single
+/// generic string would have to pick one and be wrong for most of the table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Availability {
     /// No counterpart **yet**: the capability is planned, in a stage that has not
@@ -64,6 +64,9 @@ enum Availability {
         reason: &'static str,
         instead: Option<&'static str>,
     },
+    /// The same capability under **another spelling**, set by the task that built its
+    /// stage. `to` is the new flag and `why` completes "…is {to}: {}".
+    Renamed { to: &'static str, why: &'static str },
 }
 
 /// Whether the command line *names* a curve that has no knees.
@@ -126,9 +129,6 @@ const DMAX_REASON: &str = "the anchor rule never reads a reference density, so n
      neither diffuse white nor the density this decode pins — it pins mid-grey a fixed \
      density above the film base, which every scan carries, so nothing has to be \
      stated in the reference's place";
-const SCENE_CORRECTION_ARRIVES_WITH: &str = "the scene-correction stage, which is where white balance and exposure land \
-     once they are corrections toward what the scene was rather than print controls \
-     (`nf-scene-correction/stage`)";
 const FIT_RANGE_ARRIVES_WITH: &str = "the fit-range stage, which is the new home of every display tone — it exists \
      as an identity pass today, so there is no operator yet for a tone selector or a \
      headroom to configure (`nf-display-stages/fit-range`)";
@@ -194,12 +194,12 @@ const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which su
 /// print, output and kept rows are `nf-core/knob-availability-audit`'s. Adding a row
 /// changes no message, ordering or call site.
 ///
-/// The one thing the inventory does **not** carry is a renamed-knob mapping table.
-/// That is deliberate: a `NotYet` names the *task* that will carry the knob, not a
-/// flag spelling, because the spelling belongs to the task that builds the stage
-/// (the stage's recipe section exists, empty, and its keys land with its knobs).
-/// Inventing one here would be a second source of truth for it, and advice the user
-/// cannot act on today.
+/// The one thing the inventory does **not** carry is a renamed-knob mapping table
+/// written ahead of the stages. A `NotYet` names the *task* that will carry the knob,
+/// not a flag spelling, because the spelling belongs to the task that builds the
+/// stage. When that task lands and chooses a new spelling, the row becomes
+/// [`Availability::Renamed`] in the same change (`--print-exposure` → `--exposure`),
+/// so a rename is only ever stated once the new flag exists.
 const FLAG_ENTRIES: &[FlagEntry] = &[
     // The only rule `simple` needs. Its recipe spelling, `reconstruction.type`, is
     // not a key of the new chain's recipe and is refused at load (`crate::recipe`),
@@ -430,14 +430,16 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     //
     // **Refused by presence, at every value, and the missing section is why.** The
     // tiebreaker would normally leave an identity value alone to keep the flags-win
-    // reset usable — `--white-balance 1,1,1` and `--highlight-compress 0` resolve the
-    // documented defaults and render byte-identically. But that exemption exists to
+    // reset usable — `--highlight-compress 0` resolves the documented default and
+    // renders byte-identically. But that exemption exists to
     // let a flag clear a value a *recipe* pinned, and the new chain's recipe has no
     // `print` section, so on this flow there is never a print value to
     // reset. With nothing to protect, presence is the honest rule: each of these names
-    // an operation whose stage is an identity pass.
+    // an operation whose stage is an identity pass, or — `--print-exposure` — a knob
+    // the new chain spells differently.
     //
-    // Every verdict here is `NotYet`, including the two display tones
+    // Every verdict here is `NotYet` except `--print-exposure`'s `Renamed` (its stage
+    // has landed, under another spelling) — including the two display tones
     // `nf-retire/display-tones` removes outright. That is not a softer reading of
     // their fate: `Never` is a claim about the *knob*, and what a user needs to know
     // at this gate is that the stage which would carry any tone is empty. Whether
@@ -447,8 +449,11 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
         knob: "--print-exposure",
         covers: &["--print-exposure"],
         present: |args| args.print.print_exposure.is_some(),
-        availability: Availability::NotYet {
-            arriving_with: SCENE_CORRECTION_ARRIVES_WITH,
+        availability: Availability::Renamed {
+            to: "`--exposure`",
+            why: "the new chain has no print stage — exposure is a scene-referred \
+                  correction, applied before the look and the display fit \
+                  (recipe `scene_correction.exposure`)",
         },
     },
     FlagEntry {
@@ -464,22 +469,6 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
                             scene-referred values, and display black in fit range; today \
                             it is one subtraction doing both, which is why it is not a \
                             rename (`nf-scene-correction/flare-removal`)",
-        },
-    },
-    FlagEntry {
-        knob: "--white-balance",
-        covers: &["--white-balance"],
-        present: |args| args.print.white_balance.is_some(),
-        availability: Availability::NotYet {
-            arriving_with: SCENE_CORRECTION_ARRIVES_WITH,
-        },
-    },
-    FlagEntry {
-        knob: "--auto-wb",
-        covers: &["--auto-wb"],
-        present: |args| args.print.auto_wb.is_some(),
-        availability: Availability::NotYet {
-            arriving_with: SCENE_CORRECTION_ARRIVES_WITH,
         },
     },
     FlagEntry {
@@ -643,12 +632,8 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     },
     KeptEntry {
         covers: &["--measure-inset"],
-        // Not because a pixel reads it: the only statistic measured over the region
-        // is `calibration.dmax = auto`, which this flow refuses, and the film base
-        // never reads the inset. The legacy default is in the same state.
         why: "it resolves the reported `effective_area`, which every decoding run \
-              reports on either flow — no new-flow pixel reads it, exactly as none does \
-              under the legacy default reference",
+              reports on either flow, and which an auto white balance estimates over",
     },
     // The decode's own knobs — the calibration and the anchor that
     // `algo::fixed::DecodeParams` carries, which is also the new recipe's
@@ -662,6 +647,19 @@ const KEPT_FLAGS: &[KeptEntry] = &[
         covers: &["--density-gamma"],
         why: "the fixed decode's contrast (recipe `reconstruction.contrast`). \
               `nf-look/path-to-white` tunes against it directly, so it must stay reachable",
+    },
+    // Scene correction (`nf-scene-correction/stage`). `--exposure` is the new chain's
+    // own spelling; white balance keeps the current chain's, since the knob means the
+    // same thing on both — a per-channel gain on linear ACEScg, after the 3×3.
+    KeptEntry {
+        covers: &["--white-balance", "--auto-wb"],
+        why: "scene correction's white balance (recipe `scene_correction.white_balance`); \
+              an auto mode estimates over the effective area",
+    },
+    KeptEntry {
+        covers: &["--exposure"],
+        why: "scene correction's exposure (recipe `scene_correction.exposure`) — the new \
+              chain's spelling of `--print-exposure`",
     },
     KeptEntry {
         covers: &["--anchor-mid-offset"],
@@ -679,12 +677,27 @@ const KEPT_FLAGS: &[KeptEntry] = &[
 /// the circular-advice defect CLAUDE.md records shipping four times.
 pub fn reject_unavailable_flags(flow: Flow, args: &ConvertArgs) -> Result<()> {
     if flow == Flow::Legacy {
-        return Ok(());
+        return reject_new_flow_only_flags(args);
     }
     for entry in FLAG_ENTRIES {
         if (entry.present)(args) {
             return Err(refusal(entry.knob, entry.availability));
         }
+    }
+    Ok(())
+}
+
+/// Refuse, on the **current** chain, a flag only the new chain reads — the other
+/// direction of the same accepted-and-ignored hole: the current chain's `merge` has no
+/// arm for it, so without this it would parse and do nothing.
+fn reject_new_flow_only_flags(args: &ConvertArgs) -> Result<()> {
+    if args.scene.exposure.is_some() {
+        return Err(NcError::Usage(
+            "--exposure sets the new chain's scene-correction exposure (recipe \
+             `scene_correction.exposure`) and has no meaning without `--new-flow`; the \
+             current chain's exposure is `--print-exposure`"
+                .into(),
+        ));
     }
     Ok(())
 }
@@ -708,6 +721,10 @@ fn refusal(knob: &str, availability: Availability) -> NcError {
         Availability::Never { reason, instead } => (
             format!("the new flow has no counterpart for it, and will not gain one: {reason}."),
             instead.map_or_else(|| "Drop it".to_string(), |i| format!("Use {i}")),
+        ),
+        Availability::Renamed { to, why } => (
+            format!("the new flow's counterpart is {to}: {why}."),
+            format!("Use {to}"),
         ),
     };
     // The trailing clause says only what this rule inspected. "…the current chain
@@ -931,6 +948,7 @@ mod tests {
     fn every_kept_flag_reaches_the_recipe() {
         use crate::algo::fixed::AnchorRule;
         use crate::cli::{Cli, Command};
+        use crate::pipeline::scene_correction::WhiteBalance;
         use crate::recipe::{self, Recipe};
         use crate::types::{FilmBaseSource, FilmType, MeaningAssertion, TransferAssertion};
         use clap::Parser;
@@ -979,6 +997,15 @@ mod tests {
                 &["--anchor-mid-offset", "0.5"],
                 |r| r.reconstruction.anchor == AnchorRule::MidAboveBase(0.5),
             ),
+            ("--white-balance", &["--white-balance", "1.1,1,0.9"], |r| {
+                r.scene_correction.white_balance == WhiteBalance::Explicit([1.1, 1.0, 0.9])
+            }),
+            ("--auto-wb", &["--auto-wb", "percentile"], |r| {
+                r.scene_correction.white_balance == WhiteBalance::Percentile
+            }),
+            ("--exposure", &["--exposure", "-0.5"], |r| {
+                r.scene_correction.exposure == -0.5
+            }),
         ];
         for entry in KEPT_FLAGS {
             for flag in entry.covers {

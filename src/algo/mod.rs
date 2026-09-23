@@ -36,9 +36,7 @@ pub mod simple;
 #[cfg(test)]
 mod curve_probe;
 
-use crate::types::{
-    DmaxInput, FilmBase, LinearImage, PrintParams, Reconstruction, Result, WbSource,
-};
+use crate::types::{DmaxInput, FilmBase, LinearImage, PrintParams, Reconstruction, Result};
 
 /// The typed film-rendering RGB boundary every reconstruction path produces:
 /// the unclamped linear positive in NC's film-rendering interpretation, plus
@@ -204,7 +202,8 @@ pub fn reconstruct(
 /// working-space boundary (`film-master-render-pipeline`), behind a
 /// `pipeline_version` bump owned by `conversion-versioning`.
 ///
-/// An auto WB mode ([`WbSource::GrayWorld`]/[`Percentile`](WbSource::Percentile))
+/// An auto WB mode ([`WbSource::GrayWorld`](crate::types::WbSource::GrayWorld)/
+/// [`Percentile`](crate::types::WbSource::Percentile))
 /// is estimated from a deterministic strided sample of the film positive — the
 /// same values the pre-split code produced by toning a strided sample of the
 /// density buffer (a per-sample map commutes with striding) — and applied
@@ -220,13 +219,10 @@ pub fn finish_print(
         // WB modes for it, and the explicit controls are inert as before).
         Reconstruction::Simple => Ok((film.into_linear(), None)),
         Reconstruction::Density { .. } => {
-            let wb = match print.white_balance {
-                WbSource::Explicit(gains) => gains,
-                auto_mode => {
-                    let sampled = density::sample_positive(film.rgb());
-                    density::estimate_wb_gains(&sampled, auto_mode)?
-                }
-            };
+            let wb = crate::pipeline::white_balance::resolve_print_gains(
+                film.rgb(),
+                print.white_balance,
+            )?;
             Ok((density::render_print(film, wb, print), Some(wb)))
         }
     }
