@@ -494,7 +494,7 @@ reconstruction (the fixed decode)
 | **scene correction** | Photographic corrections toward what the scene was: white balance, exposure, flare/fog removal. Scene-referred, linear. | `render_split::display_source` (`apply_shared_controls`): WB → exposure → black point → `linear_range` |
 | **look** | Creative and optional: contrast, per-channel colour grading, saturation, print or paper emulation, per-stock normalization. Scene-referred. | Doesn't exist as a stage |
 | **fit range** | Fit the scene's dynamic range into the display's range, with parameters from the display's peak (SDR vs HDR). The industry term is *tone mapping*: "tone" means brightness levels, not colour. | `fit_range.headroom_stops` (`display_tone::Headroom`) in `pipeline::sdr` / `pipeline::hdr`; `pipeline::fit_range` under `--new-flow` |
-| **fit gamut** | Move out-of-gamut colour to the display's boundary, keeping hue. | `gamut_map` (`neutral-axis-radial-boundary-v1`) |
+| **fit gamut** | Move out-of-gamut colour to the display's boundary, keeping hue. | `fit_gamut::radial_to_boundary`, shared by both chains (the legacy metadata names it `neutral-axis-radial-boundary-v1`, with a `bt2020-` / `display-p3-` prefix on the HDR and gain-map renditions) |
 | **encode** | Transfer function (sRGB, PQ or HLG), quantization, counting clipped samples | `color`, `io::encode`, `io::avif` |
 | **package** | Container (TIFF / AVIF / gain-map JPEG), ICC profile or CICP, metadata | `io::*` |
 
@@ -505,8 +505,8 @@ Constraints the order carries:
   range, whose parameters depend on the display's peak, the midtones would
   disagree. Only fit range and later stages may differ per branch.
 - **Fit range and fit gamut are separate but coupled.** The gamut ceiling
-  follows the luminance fit range produced (`sdr.rs:266`), so they stay
-  adjacent.
+  follows the luminance fit range produced (`fit_gamut::apply`'s
+  `max(peak, Y)`), so they stay adjacent.
 - **Encode and package are separate.** `hdr-pq` and `hdr-pq-tiff` write the same
   encoded signal in two containers. The gain map is the one thing spanning the
   boundary: it needs both renditions, then gets built into the package.

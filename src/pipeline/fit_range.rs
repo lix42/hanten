@@ -156,16 +156,22 @@ pub struct FitRange {
 }
 
 /// Pixels whose **luminance** now fits the display's range, before the gamut is
-/// fitted.
+/// fitted — and the peak they were fitted to.
 ///
 /// A separate boundary from [`DisplayReferredImage`] because the two stages are
 /// coupled but distinct: the gamut ceiling follows the range this stage produced,
-/// which is why they stay adjacent rather than merged.
+/// which is why they stay adjacent rather than merged. The peak rides here so fit
+/// gamut reads the one this stage used rather than being handed it a second time.
 ///
 /// [`DisplayReferredImage`]: crate::pipeline::fit_gamut::DisplayReferredImage
-pub struct RangeFittedImage(WorkingBuffer);
+pub struct RangeFittedImage(WorkingBuffer, DisplayPeak);
 
 impl RangeFittedImage {
+    /// The display peak these pixels were fitted to.
+    pub fn peak(&self) -> DisplayPeak {
+        self.1
+    }
+
     /// Hand the buffer to the next stage. Consuming, so the pixels move rather
     /// than copy.
     pub(in crate::pipeline) fn into_buffer(self) -> WorkingBuffer {
@@ -220,7 +226,7 @@ pub fn apply(image: GradedImage, params: &FitRangeParams) -> Result<RangeFittedI
         }
         Ok(())
     })?;
-    Ok(RangeFittedImage(buffer))
+    Ok(RangeFittedImage(buffer, params.peak))
 }
 
 /// The operator with its per-frame constants resolved once.

@@ -19,6 +19,7 @@ pub(crate) mod iso;
 
 use crate::pipeline::colorimetry::pinned::{BT2020_TO_DISPLAY_P3, DISPLAY_P3_LUMA};
 use crate::pipeline::display_tone::Headroom;
+use crate::pipeline::fit_gamut::radial_to_boundary;
 use crate::pipeline::hdr::{LINEAR_HEADROOM, LinearBt2020Hdr, REFERENCE_WHITE_NITS, render_linear};
 use crate::pipeline::pixels;
 use crate::pipeline::render_split::SharedDisplaySource;
@@ -386,7 +387,7 @@ fn gain_pixel(
              display range at pixel {index}"
         )));
     }
-    let mapped = gamut_map(converted, luminance, LINEAR_HEADROOM);
+    let mapped = radial_to_boundary(converted, luminance, LINEAR_HEADROOM);
     validate_non_negative_finite("common-domain HDR", mapped, index)?;
 
     let mut gain_px = [0.0; 3];
@@ -529,35 +530,6 @@ fn validate_non_negative_finite(name: &str, pixel: [f32; 3], index: usize) -> Re
         )));
     }
     Ok(())
-}
-
-/// Same-luminance radial mapping into the Display P3 compatibility cube.
-fn gamut_map(rgb: [f32; 3], luminance: f32, maximum: f32) -> [f32; 3] {
-    let neutral = f64::from(luminance);
-    let upper = f64::from(maximum);
-    let delta = rgb.map(|channel| f64::from(channel) - neutral);
-    let mut scale = 1.0_f64;
-    let mut limiting_boundary = None;
-    for (channel, d) in delta.into_iter().enumerate() {
-        let candidate = if d > 0.0 {
-            Some(((upper - neutral) / d, maximum))
-        } else if d < 0.0 {
-            Some((-neutral / d, 0.0))
-        } else {
-            None
-        };
-        if let Some((candidate, boundary)) = candidate
-            && candidate < scale
-        {
-            scale = candidate;
-            limiting_boundary = Some((channel, boundary));
-        }
-    }
-    let mut output = delta.map(|d| (neutral + scale * d) as f32);
-    if let Some((channel, boundary)) = limiting_boundary {
-        output[channel] = boundary;
-    }
-    output
 }
 
 fn mul(matrix: [[f32; 3]; 3], value: [f32; 3]) -> [f32; 3] {
@@ -834,7 +806,7 @@ mod tests {
     fn p3_compatibility_mapping_preserves_luminance_and_chroma_direction() {
         let input = [-0.5, 1.2, 0.4];
         let luminance = dot(input, DISPLAY_P3_LUMA);
-        let output = gamut_map(input, luminance, LINEAR_HEADROOM);
+        let output = radial_to_boundary(input, luminance, LINEAR_HEADROOM);
         close(dot(output, DISPLAY_P3_LUMA), luminance);
         let before = input.map(|channel| channel - luminance);
         let after = output.map(|channel| channel - luminance);

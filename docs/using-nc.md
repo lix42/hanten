@@ -10,7 +10,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 7`, built at commit
 > `c9a9b9d` plus `nf-retire/dmax-machinery` (the roll reference density `Dmax` and the
-> three anchor placements that read it or pinned black retired, §6). The staleness
+> three anchor placements that read it or pinned black retired, §6) and fit gamut's
+> radial map under `--new-flow` (`nf-display-stages/fit-gamut`, §11). The staleness
 > signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
@@ -1363,19 +1364,21 @@ the recipe rather than merely out of the image.
 **It renders a minimal picture, not a finished one.** The fixed decode feeds the new
 chain. Scene correction applies white balance and exposure, the look desaturates
 near-white highlights, fit range compresses the scene's range into the display's (all
-below), and fit gamut only converts into Display P3 primaries. The result goes
-to **one destination, a Display P3 16-bit TIFF** — there is no other, and no way to
+below), and fit gamut maps colour outside Display P3 onto its boundary, keeping hue.
+The result goes to **one destination, a Display P3 16-bit TIFF** — there is no other, and no way to
 choose one:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow
-hanten: warning: output lost 847 clipped and 0 non-finite of 695772 samples (0.12%)
 ```
 
-That writes `out.tiff`. Some clipping is still expected: colours outside Display P3
-are clamped at the 16-bit encode until fit gamut maps them, and so is content brighter
-than fit range's headroom (counted, and failed by `--strict`). Whether the picture
-*looks* right is not what this flow promises yet.
+That writes `out.tiff`. Colour outside Display P3 is never clipped channel by channel:
+fit gamut moves it toward neutral at the same luminance until it fits. The one
+exception is a colour whose Display P3 luminance is zero or below, which has no
+in-gamut rendition and is written black. What can still clip is content brighter
+than fit range's headroom, which reaches the encoder above display white as a neutral
+(counted, and failed by `--strict`). Whether the picture *looks* right is not what
+this flow promises yet.
 
 - **The suffix is judged against that destination**, on `convert` and on a `roll`
   manifest's explicit `output`: `.tif`/`.tiff` is kept as typed, a missing suffix is
@@ -1401,10 +1404,11 @@ than fit range's headroom (counted, and failed by `--strict`). Whether the pictu
   what ran instead — the decode's resolved `anchor`, `contrast`, `scale` and `offset`,
   each stage with what it `applied` (scene correction's from what it resolved —
   `"identity"`, `"white-balance"`, `"exposure"` or `"white-balance+exposure"`;
-  `"highlight-desaturation"` for the look, or `"identity"` at strength 0; fit range's operator; `"acescg-to-display-p3-matrix"` for
-  fit gamut), scene correction's resolved values in `scene_correction`, fit range's in
-  `fit_range` (below), the `destination`
-  (`display-p3-u16-tiff`) and `"sidecar_written": false`. Its final shape is
+  `"highlight-desaturation"` for the look, or `"identity"` at strength 0; fit range's
+  operator; `"acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"` for fit
+  gamut), scene correction's resolved values in `scene_correction`, fit range's in
+  `fit_range` (below), the `destination` (`display-p3-u16-tiff`) and
+  `"sidecar_written": false`. Its final shape is
   `nf-core/report-contract`'s to decide.
 
 What *is* live is the availability rule: a knob the new chain cannot honour is
@@ -1480,7 +1484,8 @@ current chain's sections unchanged. `calibration` holds the film base only — t
 fixed decode reads no reference density. `reconstruction` spells the four decode
 knobs above (`--density-gamma` is `contrast` here). `scene_correction` holds white
 balance and exposure, `look` highlight desaturation, `fit_range` its headroom (all
-below); `fit_gamut` is empty and refuses any key until its stage gains one. There is no `output` section:
+below); `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
+from the destination. There is no `output` section:
 the new chain writes one fixed destination. `--dump-params` under `--new-flow` writes this
 document with your values resolved, and it reloads under the flag unchanged.
 
@@ -1646,8 +1651,10 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
 ```
 
 At `0` the operator reads `"identity"`: fit range passes the scene through unchanged,
-and everything above display white is clipped at the encode. A pixel with a non-finite channel
-is refused (exit 1, naming the pixel) rather than passed to the encoder.
+and everything above display white clips at the encode (32% of the samples on
+`tests/fixtures/hdr-48bit.tif`, against none at the default). A pixel with a
+non-finite channel is refused (exit 1, naming the pixel) rather than passed to the
+encoder.
 
 #### `measure-roll` — a roll's white balance, measured once
 

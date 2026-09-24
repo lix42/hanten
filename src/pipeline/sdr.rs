@@ -15,6 +15,7 @@ use crate::pipeline::colorimetry::pinned::{
     ACESCG_TO_DISPLAY_P3, ACESCG_TO_SRGB, DISPLAY_P3_LUMA, SRGB_LUMA,
 };
 use crate::pipeline::display_tone::Headroom;
+use crate::pipeline::fit_gamut::radial_to_boundary;
 use crate::pipeline::pixels;
 use crate::pipeline::render_split::SharedDisplaySource;
 use crate::types::{LinearImage, NcError, Result};
@@ -216,58 +217,12 @@ fn render_destination_pixel(mut rgb: [f32; 3], luminance: f32, tone: Headroom) -
     for channel in &mut rgb {
         *channel *= scale;
     }
-    // The radial intersection is taken against `[0, max(display white, this pixel's
-    // rendered luminance)]`, which matters only for a tone that can exceed the ceiling.
-    //
-    // Constant-luminance radial mapping already squeezes chroma out as luminance
-    // approaches the cube's top — at luminance 1.0 the only in-gamut colour *is* white —
-    // so the boundary reaches `neutral` continuously. Letting the ceiling follow the
-    // pixel keeps that continuous above display white: the intersection degenerates to
-    // the neutral axis and highlights desaturate toward white, which is what film and
-    // print do anyway.
-    //
-    // Gating the ceiling on `rendered_luminance <= 1` instead looked equivalent and is
-    // not: it restores full chroma in one step. Measured on the shipped arithmetic
-    // (reinhard `W = 2`, sRGB direction `[3, 1, 0.1]`), rendered luminance 0.9998 gives
-    // `[1.000, 1.000, 1.000]` and 1.0000 gives `[2.913, 0.532, 0.000]` — green and blue
-    // *fall* as scene luminance rises, a hard ring around every bright saturated
-    // highlight.
-    gamut_map(rgb, rendered_luminance, rendered_luminance.max(1.0))
-}
-
-/// Same-luminance radial mapping to the RGB cube boundary. Because every
-/// channel receives one common chroma scale, hue direction and the neutral axis
-/// are preserved; no per-channel clip is used as the gamut policy.
-fn gamut_map(rgb: [f32; 3], luminance: f32, ceiling: f32) -> [f32; 3] {
-    let neutral = f64::from(luminance);
-    let delta = rgb.map(|channel| f64::from(channel) - neutral);
-    let mut chroma_scale = 1.0_f64;
-    let mut limiting_boundary = None;
-    for (channel, d) in delta.into_iter().enumerate() {
-        if d > 0.0 {
-            let candidate = (f64::from(ceiling) - neutral) / d;
-            if candidate < chroma_scale {
-                chroma_scale = candidate;
-                limiting_boundary = Some((channel, ceiling));
-            }
-        } else if d < 0.0 {
-            let candidate = -neutral / d;
-            if candidate < chroma_scale {
-                chroma_scale = candidate;
-                limiting_boundary = Some((channel, 0.0_f32));
-            }
-        }
-    }
-    // The radial calculation is the complete gamut policy. Do not terminally
-    // clamp individual channels. Binary64 intersection arithmetic keeps every
-    // non-limiting channel inside the cube; assigning the actual limiting
-    // channel to its computed boundary makes the intersection exact after the
-    // f32 conversion without changing the common radial scale.
-    let mut out = delta.map(|d| (neutral + chroma_scale * d) as f32);
-    if let Some((channel, boundary)) = limiting_boundary {
-        out[channel] = boundary;
-    }
-    out
+    // Display white is the ceiling; above it the map's cube follows the pixel, which
+    // matters only for a tone that can exceed white. Gating the map on `Y ≤ 1` instead
+    // restores full chroma in one step — measured with reinhard `W = 2`, sRGB direction
+    // `[3, 1, 0.1]`: luminance 0.9998 gives `[1.000, 1.000, 1.000]` and 1.0000 gives
+    // `[2.913, 0.532, 0.000]`, a hard ring around every bright saturated highlight.
+    radial_to_boundary(rgb, rendered_luminance, 1.0)
 }
 
 fn mul(matrix: [[f32; 3]; 3], value: [f32; 3]) -> [f32; 3] {
@@ -348,7 +303,7 @@ mod tests {
         let weights = [0.212_639, 0.715_169, 0.072_192];
         let input = [-0.2, 0.4, 1.1];
         let luminance = dot(input, weights);
-        let output = gamut_map(input, luminance, 1.0);
+        let output = radial_to_boundary(input, luminance, 1.0);
 
         close(dot(output, weights), luminance);
         let in_delta = input.map(|channel| channel - luminance);

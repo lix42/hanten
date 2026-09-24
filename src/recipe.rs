@@ -13,9 +13,9 @@
 //! ```text
 //! input · calibration · measure      shared with the current chain (decode, film base)
 //! reconstruction                     the fixed decode — algo::fixed::DecodeParams
-//! scene_correction · look ·          one per rendering stage, each empty until its
-//! fit_range · fit_gamut                epic gives it a knob (scene correction, the look
-//!                                      and fit range have)
+//! scene_correction · look ·          one per rendering stage with its knobs; fit
+//! fit_range · fit_gamut                gamut has none (its ceiling and target are not
+//!                                      the recipe's), so its section stays empty
 //! ```
 //!
 //! **No per-section `schema_version`.** The current chain's tagged `reconstruction`
@@ -126,8 +126,9 @@ impl Default for FitRange {
     }
 }
 
-/// Fit gamut's recipe section: empty until `nf-display-stages/fit-gamut` gives the
-/// stage a mapping knob.
+/// Fit gamut's recipe section: empty, and refuses any key. The map has no knob — its
+/// ceiling is fit range's output and its target the destination's — and no off switch
+/// (decided 2026-09-23, `nf-display-stages/gamut-map-share`).
 ///
 /// Its own type rather than [`FitGamutParams`], because the stage's one parameter
 /// today — the target gamut — is the **destination's** to state, not the recipe's:
@@ -639,10 +640,11 @@ mod tests {
             ]
         );
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        // A stage with no knob yet is present as an empty object, not absent or
-        // `null`; one with knobs writes each of them at its default — the identity for
-        // scene correction, highlight desaturation at 0.8 for the look, and reinhard at
-        // six stops for fit range.
+        // A stage with no knob is present as an empty object, not absent or `null`;
+        // one with knobs writes each of them at its default — the identity for scene
+        // correction, highlight desaturation at 0.8 for the look, and reinhard at six
+        // stops for fit range. (Fit gamut's map runs at every setting; it simply has
+        // nothing for a recipe to set.)
         assert_eq!(json["fit_gamut"], serde_json::json!({}));
         assert_eq!(
             serde_json::to_string(&Recipe::default().look).unwrap(),
