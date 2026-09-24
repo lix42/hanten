@@ -228,17 +228,17 @@ impl ImageShape {
 /// Read an input's [`ImageShape`] from its TIFF headers alone: IFD0's dimensions
 /// and color type plus an IFD walk for the IR plane. **No `read_image` call, so
 /// no pixel buffer is allocated** — this is the metadata-only probe the memory
-/// preflight gates on *before* [`decode`] commits to gigabytes (`decode` returns
+/// preflight gates on *before* [`decode_within`] commits to gigabytes (`decode_within` returns
 /// dimensions only after `read_image` has already allocated, which is far too
 /// late for an oversized input).
 ///
 /// Deliberately **permissive about layout**: it reports the shape it finds and
-/// leaves every accept/reject decision to [`decode`], which stays the single
+/// leaves every accept/reject decision to [`decode_within`], which stays the single
 /// authority on what nc supports (duplicating those checks here would risk the
 /// two paths disagreeing). Only an unreadable/corrupt header fails, with the same
-/// exit codes [`decode`] uses. The one shape it will *not* report is a degenerate
+/// exit codes [`decode_within`] uses. The one shape it will *not* report is a degenerate
 /// or unmappable one: a [`ColorType`] outside [`color_shape`]'s arms is an
-/// [`NcError::Unsupported`] here (exit 4, same class `decode` would give it)
+/// [`NcError::Unsupported`] here (exit 4, same class `decode_within` would give it)
 /// rather than a `(0, 0)` channel/depth pair, which would make the memory
 /// preflight's estimate independent of the dimensions and pass every budget.
 ///

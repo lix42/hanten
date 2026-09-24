@@ -168,14 +168,8 @@ only the dual-dialect one decodes as HDR on Apple platforms. Keep this list,
 `OutputPreset`'s rustdoc, and `OutputOverrides::output_preset`'s **help text** in
 step — those three have gone stale twice, and the help text is what `--help` prints.
 
-**Target replacement architecture (open roadmap tasks):**
-
-```text
-decode → film-base → tagged reconstruction + density curve → FilmRgbImage
-       → NC film RGB v1 → linear ACEScg
-         ├→ film-master
-         └→ shared print controls → SDR/HDR render → encode
-```
+**Target architecture:** the new flow in `docs/design-update.md` (see the migration
+rule above), reached today by `--new-flow`.
 
 - All processing is **32-bit float in a linear working space**; bit-depth
   reduction happens only at the final encode. HDR is a first-class concern.
@@ -268,7 +262,7 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   committed fixture. Deep fix: `film-base/holder-cap-contamination`.
 - Current module map (`src/`, all implemented): `types.rs` (shared types),
   `io/{decode,encode,ultra_hdr,avif}.rs`,
-  `pipeline/{film_base,color,stages,input_semantics,working_space,render_split,display_tone,sdr,hdr,gain_map,memory,pixels}.rs`
+  `pipeline/{film_base,color,stages,input_semantics,working_space,render_split,display_tone,sdr,hdr,gain_map,memory,pixels,white_balance}.rs`
   plus the **new-flow chain** — `pipeline/{chain,scene_correction,look,fit_range,fit_gamut,working_image}.rs`,
   reached by `--new-flow` since `nf-core/minimal-end-to-end`: `algo::fixed` feeds it,
   `scene_correction` applies stated white balance and exposure (a roll's gains are
@@ -320,10 +314,7 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   pixels (which gain-map work must convert to common linear Display P3 before
   ratio math) or opaque in-place Rec.2100 PQ/HLG pixels coupled to the fixed
   203-nit reference-white / 1000-nit peak, shoulder, gamut, HLG OOTF, and CICP
-  contract. `output/presets` still owns the remaining presets, roll integration,
-  and future default activation — the boundary is recorded in
-  `docs/tasks/output/hdr-avif-output.md`: whichever task ships an explicit
-  `convert`-only preset also calibrates that preset's `memory::RunProfile`.
+  contract. A new preset also calibrates its own `memory::RunProfile`.
   **`cli::container_for` is the only preset-shaped step in output-path *handling*** —
   it maps a preset to a `Container` (Tiff/Jpeg/Avif) with an exhaustive match that
   must *fail to compile* when the enum moves (never a `_` arm or a map). Since
@@ -443,8 +434,8 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   **asset-dependent** entry `#[ignore]`d and skipping with a message when
   `../nc-assets` is absent (its `mod tests` unit tests of the
   harness's own helpers are synthetic and deliberately run normally), so
-  `cargo test` is green without assets and CI never needs them; in-crate because the
-  SDR/HDR renderers are not CLI-reachable and nc has no `[lib]` target; prints derived
+  `cargo test` is green without assets and CI never needs them; in-crate because
+  it calls stages directly and nc has no `[lib]` target; prints derived
   numbers only, never pixels. **`cargo build` does not compile it** — use
   `cargo test --no-run` or `clippy --all-targets`. **A probe that derives its variants from
   a shipped function stops measuring when that function changes**: `hdr_gain_probe` (since
@@ -466,7 +457,7 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   asset probes also read `../nc-assets/manifest.json` by the pre-rename roll names**
   (`Ektar`, …), so on today's asset folder they panic before measuring anything — fix the
   names before trusting a re-run),
-  `algo/{mod,density,fixed}.rs`, `algo/film_stock/`, `telemetry.rs`,
+  `algo/{mod,density,fixed}.rs` (plus the test-only `curve_probe.rs`), `algo/film_stock/`, `telemetry.rs`,
   `version.rs`
   (build/pipeline identity + `stable_hash`, the crate's only params-hash
   implementation — `telemetry::params_hash` delegates to it so the core report
@@ -751,10 +742,8 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   invisible to all of it.** A rename that splits a documented item (`bounds_output` →
   `bounds_sdr_output`/`bounds_hdr_output`) leaves every `[\`Self::bounds_output\`]` link
   dangling with `fmt`, `clippy --all-targets -D warnings`, `build` and `test` all green.
-  Run `cargo doc --no-deps 2>&1 | grep "unresolved link"` after renaming a public item, and
-  **compare against the baseline** — 16 pre-existing unresolved links live in
-  `main.rs`/`io`/`colorimetry`/`version`/`stages`/`decode`/`cli`, so the count alone tells
-  you nothing; what matters is whether your diff added any.
+  Run `cargo doc --no-deps` after renaming a public item: it builds with **zero
+  warnings**, so any warning is yours.
   An intra-doc link from shipped code to a `#[cfg(test)]` item (a test fixture) is one of
   these: `cargo doc` builds without `cfg(test)`, so name such an item in backticks, never
   as a `[`link`]`.
@@ -884,11 +873,9 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   expression: bind each branch to a `let` instead, or adding a statement later
   turns the surviving block into an `unused_must_use` error on one target only.
 - `Cargo.lock` is committed (binary crate). The crate-level `#![allow(dead_code)]`
-  is gone; the remaining allows are narrow, documented item-level ones
-  (`algo/mod.rs`, `pipeline/working_space.rs`, `pipeline/render_split.rs` — the
-  last two for the `AcesCgImage` accessors and the shared display stage awaiting
-  their SDR/HDR consumers) for API surface the single Step-1 path doesn't
-  exercise — don't add new ones without a comment saying who will use it.
+  is gone; the remaining allows are narrow item-level ones, each with a comment
+  naming its consumer — don't add new ones without one. Several still name tasks
+  that have since shipped, so they may be removable.
 - **Codex review on a worktree.** `/codex:review` is a codex-plugin *command*
   (not a skill) that reviews the **current directory's** git state — so run it
   *from inside the worktree you want reviewed*. Pick the scope to match where the
@@ -1210,7 +1197,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   - *`validate` is not the whole `convert` gate.* Every rule inside it reads only
     the resolved config — which is why `roll` and each per-frame override share it
     verbatim. `convert` must call **`validate_convert`**, which composes it with the
-    flag-presence check above; `output/presets` is the next orchestrator that has to.
+    flag-presence check above.
     It runs under `--new-flow` too, on `Recipe::to_config()`'s projection, whose
     `print`/`output` are always defaults — so a presence rule there reading `cfg.print`
     must be gated on `Flow::from_flag(args.new_flow) == Flow::Legacy`, or it refuses a

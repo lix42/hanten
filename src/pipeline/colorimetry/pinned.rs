@@ -11,7 +11,7 @@
 //! Direction (which space is source), encoding domain (these are all *linear*
 //! transforms — no transfer function is folded in), the two white points, the
 //! chromatic-adaptation convention, and the measured deviation from the canonical
-//! `f64` re-derivation in [`super::derive`].
+//! `f64` re-derivation in `super::derive`.
 //!
 //! ## Why the deviations are stated in `f32` ulps
 //!
@@ -258,7 +258,7 @@ pub const BT2020_LUMA: [f32; 3] = [0.2627, 0.6780, 0.0593];
 /// BT.2020 non-constant-luminance R'G'B' → Y'CbCr matrix, used by `io::avif`.
 ///
 /// **Applied to nonlinear PQ/HLG code values, not to linear light** — see
-/// [`derive::ycbcr_from_luma`](super::derive::ycbcr_from_luma). It is the matrix
+/// `derive::ycbcr_from_luma`. It is the matrix
 /// AVIF signals as `matrix_coefficients = 9`, so it is a *container* coefficient:
 /// a decoder inverts exactly this to recover R'G'B', which is why it must be the
 /// standard's matrix and not a convenient approximation.

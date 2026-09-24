@@ -449,7 +449,7 @@ pub struct PipelineFingerprint {
 /// **Rewritten at each bump, not amended.** This text describes whatever
 /// [`PIPELINE_VERSION`] currently is, so a version bump replaces it outright: the
 /// v2 string below was written fresh for the 2026-08-08 default render, and v1's
-/// final text moved into its row in [`PIPELINE_FINGERPRINTS`] as a frozen literal.
+/// final text moved into its row in `PIPELINE_FINGERPRINTS` as a frozen literal.
 /// That is the normal path.
 ///
 /// The *abnormal* path is amending a string while its version stays put, and it has

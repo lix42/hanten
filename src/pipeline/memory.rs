@@ -105,7 +105,7 @@
 //!   rectangles, but `film_base::region_channels` materializes each one
 //!   *unstrided* into three `Vec<f32>` — 12 bytes per sampled pixel — and the
 //!   `auto` path's interior rectangle
-//!   ([`film_base::auto_interior_pixels`](crate::pipeline::film_base::auto_interior_pixels))
+//!   ([`film_base::auto_interior_pixels`])
 //!   is ~69% of a 3:2 frame. It is live alongside the decoded image, so the phase
 //!   costs ~24 B/px there, and 28 B/px for a full-frame rectangle. For
 //!   [`RunProfile::DecodeOnly`] (`inspect` / `estimate`, which stop after

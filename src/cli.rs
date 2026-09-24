@@ -5394,7 +5394,7 @@ fn ensure_write_targets_distinct(input: &Path, targets: &[(&str, &Path)]) -> Res
 /// validated placement; it is reserved for the deferred
 /// scanner-profile-before-density experiment). `convert`-only; `roll` takes its
 /// input axes from the shared recipe, whose legacy `input.color` key is rejected
-/// at load by [`reject_legacy_input_color`].
+/// at load by [`reject_legacy_recipe_keys`].
 fn reject_deprecated_input_flags(o: &InputOverrides) -> Result<()> {
     if o.assume_linear {
         return Err(NcError::Usage(
