@@ -71,8 +71,10 @@ so the placement is a two-parameter family `(d, gamma)` and every candidate is a
 it — solve either way. The hybrid fixes `d` and solves `gamma = M / (W − d)` to reach
 `A = W`; the level move fixes `gamma` and solves `d = W − M/gamma`, which at gamma 2.0 on
 Gold200's `W = 0.800` is 0.4276 — and `white-placement.md`'s own table already prints
-`d = 0.428 / 0.538 / 0.488` for the three rolls. So **all four are reachable on today's
-binary** as `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>`
+`d = 0.428 / 0.538 / 0.488` for the three rolls (09-11's is 0.360 once a non-picture
+frame is excluded — see the correction in
+[`white-placement.md`](../../spike/white-placement.md)). So **all four are reachable on
+today's binary** as `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>`
 (plus `--display-tone reinhard` for a render — left unstated it is `shoulder`, where the
 gamut map flattens the top end), which is also how
 [`nf-look/path-to-white`](../nf-look/path-to-white.md) is being built while this task is

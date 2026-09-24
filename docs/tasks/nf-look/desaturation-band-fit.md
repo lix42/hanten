@@ -54,6 +54,18 @@ chroma from exactly the bright patches this task measures
 
 ## How to Verify
 
+**Done 2026-09-23.** The result is [`docs/spike/desaturation-band.md`](../../spike/desaturation-band.md)
+(execution trail in `docs/progress/nf-look.md`): `s0 = 0.025`, `s1 = 0.055` on
+`log10(max/min) / gamma`, placed from 29 in-range patches (whites on Gold200 and Ektar,
+colours on those and Portra), holding on whichever of Gold200 and Ektar it was not fitted
+to, with the pair check judged by eye. It holds only behind a roll-level white balance,
+and Portra's white side is untested. **The pair check is only partly met, on
+both halves:** colours just above `s1` keep 96–99% of their chroma rather than all of it,
+and whites below `s0` do not clean identically — four of seven keep 0.7–1.6 C\* more with
+the band. Both are the same cause: a patch is placed by its median, but its pixels
+scatter across the band's edges. Not visible by eye; closed as done by user decision
+2026-09-23, with the band-edge placement carried to `path-to-white` as an open question.
+
 - A distribution, not a pair: the marked patches plotted by saturation, with the
   whites-with-cast and the genuinely-coloured populations visibly separated, and `s0`/`s1`
   placed from that separation.

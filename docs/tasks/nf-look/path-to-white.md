@@ -52,8 +52,9 @@ white.
   display tone, which is why the hand-set spelling below names `reinhard`.
 - **Build it under a hand-set contrast, and treat the band's numbers as provisional
   (decided 2026-09-22).** Under the base-referenced anchor the operator is inert — all
-  three measured rolls land 0.55–1.28 stops below white
-  ([`docs/spike/white-placement.md`](../../spike/white-placement.md)), so nothing enters
+  three measured rolls land 0.55–1.73 stops below white
+  ([`docs/spike/white-placement.md`](../../spike/white-placement.md); first published as
+  0.55–1.28 — the 09-11 figure included a calibration frame, corrected 2026-09-23), so nothing enters
   the range it acts in. The lift comes from letting the roll's own content drive
   **contrast** rather than moving a level: candidates **C** (pin mid *and* solve
   `gamma = MID_GREY_OUTPUT_DECADES / (W − d)`, reaching white by construction) and **D**
@@ -72,8 +73,8 @@ white.
   `A = d + MID_GREY_OUTPUT_DECADES / gamma`, and C's `gamma = MID_GREY_OUTPUT_DECADES /
   (W − d)` substitutes into it to give `A = W`. The mid-anchored and content-anchored
   spellings are the same placement — `white-placement.md`'s framing correction arriving a
-  second time. Solved the other way (`d = W − M/gamma`, giving 0.428 / 0.538 / 0.488 on
-  the three rolls — the spike's own table) the same two knobs reach **B** as well, so this
+  second time. Solved the other way (`d = W − M/gamma`, giving 0.428 / 0.538 / 0.360 on
+  the three rolls — the spike's own table, with 09-11 corrected) the same two knobs reach **B** as well, so this
   task can be tuned under more than one candidate white if that turns out to matter.
 
   **A caution about tuning only there.** The exponential is the right control because `A`
@@ -89,6 +90,13 @@ white.
   chosen. Do not bank the band values against the spike's per-frame p97 white, which is
   a *level* move: a contrast move steepens everything below white too, so a different
   population of pixels lands in the operator's range.
+- **It needs a roll-level white balance ahead of it** ([`desaturation-band.md`](../../spike/desaturation-band.md)).
+  The band measures distance from the neutral axis, which means "from white" only once
+  scene correction has neutralised the roll: with no white balance Ektar's whites carry
+  as much cast as skin, and a per-frame auto white balance removes a sunset before the
+  band can protect it. The intent (user, 2026-09-23) is to keep the scene's light and
+  remove only the roll-constant cast, which is also why `s0` sits low. The roll white
+  comes from the roll's own top percentile, not the base or the leader.
 - **The threshold is scene-referred, and the spike's was not.** The throwaway operator
   started at *rendered* linear luminance 0.5 (≈ L\* 76), i.e. after fit range. The design
   requires the trigger at **diffuse white, pre-branch**. Once the decode pins mid — and
@@ -100,17 +108,30 @@ white.
   [`nf-calibration/anchor-comparison`](../nf-calibration/anchor-comparison.md) depends on
   this task (only a render with a real highlight operator can rank the white placements),
   while this task needs an anchor that reaches white. The task graph stays acyclic and no
-  edge records that second direction — the coupling is the hand-set contrast above. (The
-  executability answer is otherwise unremarkable: this task now needs three `[x]` deps,
-  not just the look stage — `desaturation-band-fit` and `gamut-map-share` were added the
-  same day and both can run immediately.)
+  edge records that second direction — the coupling is the hand-set contrast above.
+  Every other dependency is done; it waits only on
+  [`roll-white-balance`](../nf-scene-correction/roll-white-balance.md) (added 2026-09-23),
+  which can run now.
 
 ## Open questions
 
-- **The functional form.** The spike used a linear band over linear-RGB `(max−min)/max`,
-  full pull below `s0` and off above `s1`. Its **numbers** are
-  [their own task](desaturation-band-fit.md) — 0.30 → 0.45 was fitted to one saturated
-  patch on one roll, so the shape carries and the values do not.
+- **The functional form.** A linear band, full pull below `s0` and off above `s1`.
+  [Its fit](desaturation-band-fit.md) (report:
+  [`docs/spike/desaturation-band.md`](../../spike/desaturation-band.md)) placed it at
+  **`s0 = 0.025`, `s1 = 0.055` of `log10(max/min) / gamma` on film RGB** — the negative's
+  density spread, not linear RGB, which the per-roll contrast rescales. Provisional until
+  the anchor rule is chosen.
+- **Whether the operator earns a default-on place.** Under a roll-level white balance its
+  extra cleaning was **not visible** (whites C\* 7.2 → 4.4); the white balance does the
+  cleaning and the band keeps the pull off colour. Strength and start were held at 0.8
+  and one stop below white, so a stronger setting is still open.
+- **Where the band's edges sit against pixel scatter.** The fit placed `s0`/`s1` from
+  patch *medians*, but the band acts per pixel, and a patch's pixels scatter across both
+  edges: whites just below `s0` kept 0.7–1.6 C\* more with the band than without it, and
+  colours just above `s1` kept 96–99% rather than all of their chroma. Invisible in the
+  pair check, but it is the pair check failing on both halves. The remedy is a margin
+  sized from the scatter, a softer ramp, or placing the edges on a per-pixel distribution
+  rather than on medians — `desaturation-band.md` has the numbers.
 - **Whether the pull should preserve hue exactly.** The spike's lerp toward `(Y, Y, Y)`
   holds luminance to 3e-3 but still rotates hue 4.3°, because a straight line to the
   achromatic point in linear ACEScg is not a constant-hue path in CIELAB. Nothing
@@ -158,6 +179,9 @@ white.
   (see Design). Whether the anchor also produces the whites is
   `nf-calibration/anchor-comparison`'s, and it depends on this task
 - [Fit the desaturation band on more than one patch](desaturation-band-fit.md)
-  — the values this task ships
+  — **done 2026-09-23**: the values, the measure, and the white-balance precondition
+- [A roll-level white balance](../nf-scene-correction/roll-white-balance.md) — the
+  saturation band measures distance from the neutral axis, which is distance from white
+  only once the roll's cast is gone
 - [Separate the gamut map's share](../nf-display-stages/gamut-map-share.md)
   — **done 2026-09-23.** Near zero at the renders this task is built under; see Design

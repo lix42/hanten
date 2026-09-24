@@ -32,7 +32,8 @@ legacy u16 `convert` on the same frame (`RunProfile::NewFlowSdrTiff`). And the r
 `cli.rs` belong to `nf-core/knob-availability-audit`.
 **One spike is also done and its result is an input to other epics**. `anchor-spike` costed four ways to place the decode's white
 ([`docs/spike/white-placement.md`](../spike/white-placement.md)) and found that under
-today's proposed anchor all three rolls measured land **0.55–1.28 stops short of white**,
+today's proposed anchor all three rolls measured land **0.55–1.73 stops short of white**
+(corrected 2026-09-23 from 0.55–1.28: 09-11's figure included a calibration frame),
 so a per-channel highlight operator has nothing to act on. Anyone building on this epic,
 and `nf-calibration/anchor-comparison` in particular, needs that before they start.
 
@@ -337,7 +338,7 @@ belongs to `nf-calibration/anchor-comparison`; keep `AnchorRule` an enum until i
 ## anchor-spike
 
 **Status:** done
-**Updated:** 2026-09-21
+**Updated:** 2026-09-23
 
 - 2026-09-20: filed after the three-way converter measurements
   (`docs/reports/three-way-gold200.md`). Goal: does a diffuse-white anchor earn its
@@ -401,6 +402,13 @@ belongs to `nf-calibration/anchor-comparison`; keep `AnchorRule` an enum until i
   which one is inert. It moves to
   [`nf-calibration/anchor-comparison`](../tasks/nf-calibration/anchor-comparison.md),
   which waits on the operator.
+- 2026-09-23: **correction — the 09-11 figures included a non-picture frame.** The roll's
+  12 frames include `calibration.tif` (manifest role `calibration`, red p97 1.524). Without
+  it: `W` 0.733 (not 0.860), −1.73 stops short (not −0.88), so the three rolls land
+  **0.55–1.73** stops short; the `d` reaching white is 0.360 (not 0.488), a 1.18-stop spread
+  (not 0.73); candidate C's gamma 6.61 (not 3.11). Found by `nf-look/desaturation-band-fit`;
+  [`white-placement.md`](../spike/white-placement.md) carries a correction note and marks
+  the originals. The conclusions stand and the first two strengthen.
 
 ## anchor-rule
 

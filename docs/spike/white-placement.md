@@ -7,6 +7,28 @@ Produced by `nf-reconstruction/anchor-spike`, 2026-09-21; the rendered ranking i
 Measured on three rolls — `2026-09-18-Gold200` (35 frames), `2026-09-14-Ektar100` (32)
 and `2026-09-11-Portra400` (12). Scripts and raw data in `../temp/anchor-spike/`.
 
+> **Correction, 2026-09-23** (found by `nf-look/desaturation-band-fit`). The 09-11 roll's
+> 12 frames include `calibration.tif`, which the asset manifest gives role `calibration`,
+> not `real`; its red p97 is 1.52 against 0.45–0.87 for the 11 pictures (band-fit's
+> reading of the spike's own `decode-side.json`). Every 09-11 figure below that uses `W`
+> carries it. Without it: `W` **0.733** (not 0.860), 0.260 below the anchor, rendering at
+> 0.302 — **−1.73 stops** (not −0.88); the `d` reaching white is **0.360** (not 0.488), so
+> the three rolls' spread is 0.178 density, **1.18 stops** (not 0.73); candidate C's gamma
+> is **6.61** (not 3.11), past anything the outside converters use; the within-roll
+> spread quoted below as 0.96 falls to **0.56**; and the look-stage contrast multiple
+> below becomes **3.67×** (not 1.73×). Gold200 and Ektar100 hold no non-picture frame
+> beyond base and leader and stand. The figures marked † are the originals, kept as
+> published. The conclusions survive, and the corrected numbers strengthen the first two:
+> the rolls land further below white, one fixed `d` leaves them further apart, and 09-11
+> becomes the clearest case of C's weakness — it cannot tell an underexposed roll from a
+> wrong `d`, and would pay in contrast.
+>
+> The within-roll spread line carries a second, older error, for all three rolls: its
+> figures are the range of the **p97 of each pixel's channel mean**, not of red p97 as it
+> says. On that statistic Ektar100's 0.40 and 09-11's 0.96 reproduce (09-11 corrected:
+> 0.56), but Gold200's 0.40 does not — `decode-side.json` gives 0.46. On red p97 alone the
+> three are 0.47 / 0.48 / 0.42 (09-11 corrected, from 1.07).
+
 ## Method
 
 Densities are `D′ = scale · D` with the shipped `[1, 0.84, 0.73]`, read on **red**,
@@ -37,18 +59,19 @@ It says where white *would* be if the roll met the aim, and never checks that it
 |---|---|---|---|---|---|
 | 2026-09-18-Gold200 | 35 | 0.800 | −0.193 | 0.412 | **−1.28** |
 | 2026-09-14-Ektar100 | 32 | 0.910 | −0.083 | 0.683 | −0.55 |
-| 2026-09-11-Portra400 | 12 | 0.860 | −0.133 | 0.543 | −0.88 |
+| 2026-09-11-Portra400 | 12 † | 0.860 † | −0.133 † | 0.543 † | −0.88 † |
 
 **Nothing reaches the region a per-channel highlight operator acts in**, so such an
 operator would be inert under this decode whatever form it takes. That is what couples
 the anchor question to `nf-look/path-to-white` by a number rather than an argument.
 
 **And one fixed `d` cannot serve the three.** Reaching white would need `d` = 0.428 /
-0.538 / 0.488 — a spread of 0.110 density, **0.73 stops**. So "0.62 is too high" is not
+0.538 / 0.488 † — a spread of 0.110 density, **0.73 stops** †. So "0.62 is too high" is not
 the reading: any single value leaves the rolls that far apart at the top.
 
-Per-frame would be far worse — within-roll spread of per-frame red p97 is 0.40 / 0.40 /
-**0.96**. Roll is the granularity; per frame is NLP's method and its failure mode.
+Per-frame would be far worse — within-roll spread of per-frame red p97 is 0.40 † / 0.40 /
+**0.96** † (see the correction: not red, and not all reproduce). Roll is the
+granularity; per frame is NLP's method and its failure mode.
 
 ## The shortlist
 
@@ -63,7 +86,7 @@ On Gold200, where `W` = 0.800 and `d` = 0.62:
 
 **C is the only one that pins both ends**, and structurally: two free parameters
 (anchor and contrast) against two constraints, where A and B each have one. Its contrast
-follows from `gamma = MID_GREY_OUTPUT_DECADES / (W − d)` — **4.15 / 2.57 / 3.11** on the
+follows from `gamma = MID_GREY_OUTPUT_DECADES / (W − d)` — **4.15 / 2.57 / 3.11 †** on the
 three rolls.
 
 **B is weaker than "level is free" suggests.** A level move puts a true datasheet
@@ -72,7 +95,7 @@ when the roll may simply be flat.
 
 **C stays inside the design.** `gamma` already splits — linearization (~1.8) in the
 decode, print contrast in rendering — so C's per-roll contrast is the **look stage's
-contrast knob** (2.31× / 1.43× / 1.73× over 1.8) and the decode stays fixed and
+contrast knob** (2.31× / 1.43× / 1.73× † over 1.8) and the decode stays fixed and
 stock-agnostic. The roll-level remainder landing in rendering is what design-update
 already says should happen.
 

@@ -17,13 +17,20 @@ The epic was created on 2026-09-19 as part of the new-flow migration plan
 (`docs/nf-migration.md`). **`stage`** (2026-09-22) filled `pipeline::scene_correction`:
 white balance and exposure as one per-channel gain on linear ACEScg, recipe section
 `scene_correction`, flags `--white-balance` / `--auto-wb` / `--exposure`, reported in
-`new_flow.scene_correction` with provenance. What the two remaining tasks build on:
+`new_flow.scene_correction` with provenance. What the remaining tasks build on:
 `apply(image, &params, measure_region)` returns the resolved values beside the image,
 so a new knob adds a field to `SceneCorrectionParams` (the recipe section), a
 `recipe::merge` arm, a value rule in `check`, and a field in `SceneCorrection` for the
 report. Auto white balance measures over the effective area, which makes it the
 region's consumer on the new flow — a flare estimate over the same region would join
 `measures_over_region`. Positive input enters ahead of this stage, at `AcesCgImage`.
+
+**`roll-white-balance` (filed 2026-09-23) does not fit that recipe as it stands.** It is
+a value measured once per roll from every frame, so `convert` — which sees one frame —
+can only carry it, the way `calibration` carries a roll's base; where it is measured and
+how it rides in the recipe are the task's first open question. It exists because
+`nf-look/path-to-white`'s saturation band is placeable only behind it
+([`docs/spike/desaturation-band.md`](../spike/desaturation-band.md)).
 
 ## stage
 
@@ -91,3 +98,15 @@ region's consumer on the new flow — a flare estimate over the same region woul
 **Updated:** 2026-09-19
 
 - 2026-09-19: created with the new-flow plan. Goal: a home and a name for `linear_range`.
+
+## roll-white-balance
+
+**Status:** not started
+**Updated:** 2026-09-23
+
+- 2026-09-23: filed from `nf-look/desaturation-band-fit`
+  ([`docs/spike/desaturation-band.md`](../spike/desaturation-band.md)). Goal: one white
+  balance per roll, measured from the roll's own pooled top percentile (per channel,
+  excluding pixels near the leader's density), removing the roll-constant cast and keeping
+  the scene's light. `nf-look/path-to-white` depends on it: its saturation band cannot tell
+  a cast white from skin without it, and a per-frame estimate removes sunsets first.

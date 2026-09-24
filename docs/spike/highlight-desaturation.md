@@ -116,6 +116,7 @@ decode, not this stage.**
 - **The parameters.** The band was fitted to **one** saturated patch on one roll. The
   shape carries; 0.30 and 0.45 do not. More marked saturated patches, on more rolls, is
   the cheapest way to advance it.
+  *Placed since, on 29 in-range patches over three rolls:* [`desaturation-band.md`](desaturation-band.md).
 - **The measure.** Linear-RGB saturation was the cheap choice; a perceptual one may
   separate the cases better — the gap between 0.279 and 0.463 is real but not wide.
 - **Hue exactness.** The pull's lerp toward `(Y, Y, Y)` holds luminance to 3e-3 but
