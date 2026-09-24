@@ -281,11 +281,19 @@ pub const BT2020_NCL_RGB_TO_YCBCR: [[f32; 3]; 3] = [
 /// three entries reproduce the canonical derivation exactly.
 pub const DISPLAY_P3_LUMA: [f32; 3] = [0.228_974_57, 0.691_738_55, 0.079_286_91];
 
+/// ACEScg luma weights, used by `pipeline::fit_range`.
+///
+/// Derived like [`DISPLAY_P3_LUMA`]: the luminance (Y) row of the ACEScg (AP1, ACES
+/// white) normalized primary matrix. Fit range measures luminance **before** fit
+/// gamut changes primaries, so it needs the working space's own row rather than a
+/// destination's. All three entries reproduce the canonical derivation exactly.
+pub const ACESCG_LUMA: [f32; 3] = [0.272_228_72, 0.674_081_74, 0.053_689_517];
+
 /// Rec.709 / sRGB luma weights, as used by `pipeline::sdr`'s sRGB branch.
 ///
-/// **A third provenance kind — neither of the other two luma vectors' rule
-/// applies.** [`BT2020_LUMA`] is a normative table; [`DISPLAY_P3_LUMA`] is an
-/// exact derivation. This one is the derivation **rounded to six decimals**:
+/// **A third provenance kind — neither of the other two kinds' rule applies.**
+/// [`BT2020_LUMA`] is a normative table; [`DISPLAY_P3_LUMA`] and [`ACESCG_LUMA`] are
+/// exact derivations. This one is the derivation **rounded to six decimals**:
 ///
 /// | | value |
 /// |---|---|

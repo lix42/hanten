@@ -4,9 +4,10 @@
 //! The chain `--new-flow` selects (`docs/design-update.md` Part 2,
 //! `docs/nf-migration.md`), fed by the fixed decode (`algo::fixed`) and rendering
 //! into one destination (`cli::convert_frame`, `nf-core/minimal-end-to-end`). Scene
-//! correction applies white balance and exposure; the look and fit range are still
-//! **identity passes** — their epics fill them — and fit gamut applies only the
-//! change of primaries into the destination's gamut.
+//! correction applies white balance and exposure; the look is still an **identity
+//! pass** — its epic fills it — fit range compresses the scene's range against the
+//! destination's peak, and fit gamut applies only the change of primaries into the
+//! destination's gamut.
 //!
 //! **The order is carried by the types, not by this function.** Each stage's
 //! input is the previous stage's output type, and each of those can be minted
@@ -25,7 +26,7 @@
 //! settle.
 
 use crate::pipeline::fit_gamut::{self, DisplayReferredImage, FitGamutParams};
-use crate::pipeline::fit_range::{self, FitRangeParams};
+use crate::pipeline::fit_range::{self, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, LookParams};
 use crate::pipeline::scene_correction::{self, SceneCorrection, SceneCorrectionParams};
 use crate::pipeline::working_space::AcesCgImage;
@@ -33,13 +34,14 @@ use crate::types::Result;
 
 /// Every stage's parameters, in chain order.
 ///
-/// Not a recipe type, though three of its four fields are: `scene_correction`, `look`
-/// and `fit_range` are top-level sections of the new chain's recipe
-/// (`crate::recipe::Recipe`) as they stand, while fit gamut's target is the
-/// destination's, so the recipe's `fit_gamut` section is its own type and
-/// [`crate::recipe::Recipe::chain_params`] adds the target. These structs exist so a
-/// stage's signature is settled now and does not change when its knobs arrive. No
-/// `Default`, because [`FitGamutParams`] has none: the destination states its gamut.
+/// Not a recipe type, though two of its four fields are: `scene_correction` and `look`
+/// are top-level sections of the new chain's recipe (`crate::recipe::Recipe`) as they
+/// stand, while fit range's peak and fit gamut's target are the destination's, so the
+/// recipe's `fit_range` and `fit_gamut` sections are their own types and
+/// [`crate::recipe::Recipe::chain_params`] adds the destination's half. These structs
+/// exist so a stage's signature is settled now and does not change when its knobs
+/// arrive. No `Default`, because neither [`FitRangeParams`] nor [`FitGamutParams`] has
+/// one: the destination states its peak and its gamut.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChainParams {
     pub scene_correction: SceneCorrectionParams,
@@ -60,26 +62,26 @@ pub struct Rendered {
     pub applied: [(&'static str, &'static str); 4],
     /// Scene correction's values as applied to this frame.
     pub scene_correction: SceneCorrection,
+    /// Fit range's operator and its arguments, as resolved.
+    pub fit_range: FitRange,
 }
 
 /// Render an [`AcesCgImage`] through the new chain.
 ///
-/// **Today this is scene correction's per-channel gains and the destination's 3×3**
-/// — look and fit range are identities, and fit gamut applies only the change of
-/// primaries — so non-finite samples and values outside `[0, 1]` ride through unclamped: the
-/// working range is preserved to the encoder, which is the only place clamping
-/// happens. The clamping boundary is permanent; the *unclamped* half is a statement
-/// about today's stages, not a contract — a filled fit range may legitimately refuse
-/// a non-finite sample, which is what the `Result` below is for.
+/// **Today this is scene correction's per-channel gains, fit range's luminance
+/// operator and the destination's 3×3** — the look is an identity, and fit gamut
+/// applies only the change of primaries. Nothing is clamped: values outside `[0, 1]`
+/// ride through to the encoder, which is the only place clamping happens. A
+/// non-finite sample is **refused** by fit range, naming the pixel.
 ///
 /// **Fallible by construction.** Every stage's signature returns a `Result` and so
-/// does this, although none of them can fail yet. That is the point of settling the
-/// boundaries once: every stage this chain will host has a *fallible* counterpart in
-/// the shipped code — `render_split::display_source`, `sdr::render` (which errors on
-/// a non-finite sample) and `hdr::render_linear` all return `Result` — so a stage
-/// that gains its arithmetic would otherwise change its signature, this function's,
-/// every call site and every test here. The cost while the stages are identities is
-/// an `Ok` wrapper.
+/// does this, although only scene correction and fit range can fail yet. That is the
+/// point of settling the boundaries once: every stage this chain will host has a
+/// *fallible* counterpart in the shipped code — `render_split::display_source`,
+/// `sdr::render` (which errors on a non-finite sample) and `hdr::render_linear` all
+/// return `Result` — so a stage that gains its arithmetic would otherwise change its
+/// signature, this function's, every call site and every test here. The cost for a
+/// stage that cannot fail is an `Ok` wrapper.
 ///
 /// The single-branch shape is deliberate. The SDR/HDR split belongs below the
 /// look — a gain map requires the two renditions to agree below diffuse white —
@@ -93,15 +95,17 @@ pub fn render(image: AcesCgImage, params: &ChainParams) -> Result<Rendered> {
     let graded = look::apply(corrected, &params.look)?;
     let fitted = fit_range::apply(graded, &params.fit_range)?;
     let image = fit_gamut::apply(fitted, &params.fit_gamut)?;
+    let fit_range = params.fit_range.resolved();
     Ok(Rendered {
         image,
         applied: [
             ("scene_correction", scene_correction.applied()),
             ("look", params.look.applied()),
-            ("fit_range", params.fit_range.applied()),
+            ("fit_range", fit_range.operator),
             ("fit_gamut", params.fit_gamut.applied()),
         ],
         scene_correction,
+        fit_range,
     })
 }
 
@@ -111,7 +115,7 @@ mod tests {
     use crate::algo::{FilmRgbImage, reconstruct};
     use crate::pipeline::colorimetry::pinned::ACESCG_TO_DISPLAY_P3;
     use crate::pipeline::fit_gamut::DestinationGamut;
-    use crate::pipeline::fit_range::RangeFittedImage;
+    use crate::pipeline::fit_range::{DisplayPeak, RangeFittedImage};
     use crate::pipeline::scene_correction::WhiteBalance;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
     use crate::types::{
@@ -119,15 +123,27 @@ mod tests {
         LinearImage, Reconstruction,
     };
 
+    /// Every stage at its identity — fit range at zero headroom — so a test sees the
+    /// wiring and the destination matrix rather than the operator.
     fn params() -> ChainParams {
         ChainParams {
             scene_correction: SceneCorrectionParams::default(),
             look: LookParams::default(),
-            fit_range: FitRangeParams::default(),
+            fit_range: FitRangeParams {
+                headroom_stops: 0.0,
+                peak: DisplayPeak::SDR,
+            },
             fit_gamut: FitGamutParams {
                 target: DestinationGamut::DisplayP3,
             },
         }
+    }
+
+    /// [`params`] with fit range at the recipe's default headroom — what a run gets.
+    fn shipped_params() -> ChainParams {
+        let mut p = params();
+        p.fit_range.headroom_stops = crate::types::DEFAULT_HEADROOM_STOPS;
+        p
     }
 
     /// An `AcesCgImage` whose *film RGB* input was exactly `rgb` — including a
@@ -144,8 +160,7 @@ mod tests {
         pixels.iter().map(|v| v.to_bits()).collect()
     }
 
-    /// The chain up to fit range at default parameters, where all three stages are
-    /// identities.
+    /// The chain up to fit range with every stage at its identity.
     fn through_fit_range(image: AcesCgImage) -> RangeFittedImage {
         let p = params();
         let corrected = scene_correction::apply(image, &p.scene_correction)
@@ -172,10 +187,13 @@ mod tests {
             .collect()
     }
 
-    /// Ordinary values, both ends of the working range, and the awkward ones:
+    /// Ordinary values, both ends of the working range, and the awkward finite ones:
     /// above 1.0 (unclamped is the contract), below 0.0 (a wide-gamut linear space
-    /// contains them), and non-finite (passed through for the encoder to count,
-    /// never silently repaired).
+    /// contains them), and far past any white point.
+    const FINITE: [f32; 9] = [0.0, 0.18, 1.0, 5.0, -0.25, 1e6, 0.5, 0.25, -1e-3];
+
+    /// [`FINITE`]'s shape with non-finite samples in pixels 1 and 2, which fit range
+    /// refuses.
     const AWKWARD: [f32; 9] = [
         0.0,
         0.18,
@@ -190,7 +208,7 @@ mod tests {
 
     #[test]
     fn the_first_three_stages_are_a_bit_exact_identity() {
-        let aces = aces_from(3, 1, &AWKWARD, None);
+        let aces = aces_from(3, 1, &FINITE, None);
         let before = bits(aces.rgb());
 
         let out = through_fit_range(aces).into_buffer().into_linear();
@@ -229,16 +247,64 @@ mod tests {
 
     #[test]
     fn the_chain_applies_the_destination_matrix_and_nothing_else() {
-        // What the whole chain does today: the pinned ACEScg → Display P3 3×3, bit
-        // for bit, with nothing clamped and non-finite samples propagated.
-        let aces = aces_from(3, 1, &AWKWARD, None);
+        // What the whole chain does with every stage at its identity: the pinned
+        // ACEScg → Display P3 3×3, bit for bit, with nothing clamped.
+        let aces = aces_from(3, 1, &FINITE, None);
         let expected = bits(&to_p3(aces.rgb()));
-
         let (out, gamut) = render(aces, &params()).unwrap().image.into_parts();
-
         assert_eq!(gamut, DestinationGamut::DisplayP3);
         assert_eq!(bits(&out.rgb), expected);
-        assert!(out.rgb.iter().any(|v| v.is_nan()), "a NaN must propagate");
+    }
+
+    #[test]
+    fn a_non_finite_sample_is_refused_naming_the_first_pixel() {
+        // At the identity headroom too: whether a frame renders must not depend on
+        // the setting.
+        for p in [params(), shipped_params()] {
+            let aces = aces_from(3, 1, &AWKWARD, None);
+            let err = render(aces, &p).err().expect("a non-finite sample");
+            let msg = err.message();
+            assert!(
+                msg.contains("fit range") && msg.contains("pixel 1"),
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_shipped_fit_range_compresses_highlights_and_keeps_mid_grey_and_hue() {
+        let aces = aces_from(
+            3,
+            1,
+            &[0.18, 0.18, 0.18, 4.0, 4.0, 4.0, 3.0, 1.5, 0.5],
+            None,
+        );
+        let input = aces.rgb().to_vec();
+        let p = shipped_params();
+        let corrected = scene_correction::apply(aces, &p.scene_correction)
+            .unwrap()
+            .0;
+        let graded = look::apply(corrected, &p.look).unwrap();
+        let out = fit_range::apply(graded, &p.fit_range)
+            .unwrap()
+            .into_buffer()
+            .into_linear()
+            .rgb;
+        for c in 0..3 {
+            assert!((out[c] - input[c]).abs() < 1e-5, "mid-grey moved: {out:?}");
+            assert!(out[3 + c] < 0.8 * input[3 + c], "not compressed: {out:?}");
+        }
+        // One scale for all three channels: the ratios survive.
+        for c in 0..3 {
+            let ratio = out[6 + c] / input[6 + c];
+            assert!(
+                (ratio - out[6] / input[6]).abs() < 1e-5,
+                "hue moved: {out:?}"
+            );
+        }
+        let rendered = render(aces_from(1, 1, &[0.5, 0.5, 0.5], None), &p).unwrap();
+        assert_eq!(rendered.applied[2], ("fit_range", fit_range::OPERATOR));
+        assert_eq!(rendered.fit_range.display_peak, DisplayPeak::SDR);
     }
 
     #[test]

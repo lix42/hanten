@@ -18,11 +18,12 @@
 //!   (`cli::render_new_flow_frame`) and are not covered here.
 //!
 //! **Which stages are bit-exact and which are windowed is decided by their libm
-//! calls.** The decode makes two (`log10`, `powf`) and a fractional exposure one
-//! (`exp2`); both are pinned within a window [`reachable_window`] *derives* by
+//! calls.** The decode makes two (`log10`, `powf`), a fractional exposure one
+//! (`exp2`), and fit range one (`log2`) — but only for an HDR peak and only above
+//! diffuse white; all are pinned within a window [`reachable_window`] *derives* by
 //! enumerating what a 1-ULP-accurate libm can return (CLAUDE.md, determinism). Every
-//! other stage here is IEEE `+ − × /` with no FMA contraction — Rust never fuses
-//! implicitly — plus sorts and fixed-order sums, so it is pinned bit for bit.
+//! other stage here is IEEE `+ − × /` and `sqrt` with no FMA contraction — Rust never
+//! fuses implicitly — plus sorts and fixed-order sums, so it is pinned bit for bit.
 //! A whole-stop exposure still calls `exp2`, but at an integer, and is **taken as
 //! exact** there — a power of two every shipped libm returns exactly, and an
 //! assumption the 1-ULP premise alone does not give.
@@ -30,7 +31,8 @@
 //! **Read a failure from the most upstream red golden — and never read a green one as
 //! covering the stages above it.** A stage's input can only be minted by the stage
 //! before it, so the downstream vectors enter through the mapping, and fit gamut's
-//! through scene correction, look and fit range at their identity defaults. A fault in
+//! through scene correction and the look at their identities and fit range at zero
+//! headroom. A fault in
 //! one of those paths can therefore red goldens below it, and the first red one in
 //! chain order names the stage that moved. But every downstream vector bypasses the
 //! decode (`FilmRgbImage::fixture`), so a decode fault reds only the decode's goldens;
@@ -39,6 +41,8 @@
 //!
 //! **NaN bits are never pinned.** A NaN's payload after arithmetic is a property of the
 //! target's FPU and libm, not of the chain; an expected NaN is asserted as *a* NaN.
+//! Fit range refuses a non-finite sample, so it and every stage below it are pinned on
+//! the finite pixels only, and the NaN pixel's refusal is a test of its own.
 //!
 //! Nothing past fit gamut is pinned here: the encode (and any future colour-managed
 //! transform) is verified by same-machine before/after, never by a committed vector.
@@ -47,16 +51,18 @@
 //! vector (and the threaded one) in the same change, with a dated note saying why.
 
 use crate::algo::FilmRgbImage;
+use crate::algo::fixed::DIFFUSE_WHITE;
 use crate::algo::fixed::{self, DENSITY_OFFSET, DecodeParams, SCAN_FLOOR};
 use crate::pipeline::chain::{self, ChainParams};
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::{self, DestinationGamut, FitGamutParams};
-use crate::pipeline::fit_range::{self, FitRangeParams};
+use crate::pipeline::fit_range::{self, DisplayPeak, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, LookParams};
 use crate::pipeline::scene_correction::{
     self, SceneCorrection, SceneCorrectionParams, WhiteBalance,
 };
 use crate::pipeline::working_space::{AcesCgImage, map_nc_film_rgb_v1};
-use crate::types::{FilmBase, LinearImage};
+use crate::types::{DEFAULT_HEADROOM_STOPS, FilmBase, LinearImage};
 
 // --- shared harness ----------------------------------------------------------
 
@@ -337,49 +343,64 @@ fn the_decode_capture_is_correctly_rounded_and_the_host_conforms() {
 /// Film-RGB values for everything downstream of the decode: mid-grey, a saturated
 /// blue, a red with a negative channel (outside the film cube, which an unclamped
 /// reconstruction can produce, and outside Display P3 after fit gamut), diffuse white,
-/// above white, black, a near-black, and a pixel with a NaN channel. With an IR plane, which every stage
-/// must carry.
-fn film() -> FilmRgbImage {
+/// above white, black, a near-black, and a pixel with a NaN channel.
+const FILM_RGB: [f32; 24] = [
+    0.18,
+    0.18,
+    0.18,
+    0.002,
+    0.004,
+    0.9,
+    0.9,
+    0.004,
+    -0.02,
+    1.0,
+    1.0,
+    1.0,
+    4.0,
+    3.0,
+    2.5,
+    0.0,
+    0.0,
+    0.0,
+    0.003,
+    0.004,
+    0.002,
+    0.4,
+    f32::NAN,
+    0.2,
+];
+
+/// The first `pixels` of [`FILM_RGB`], with an IR plane, which every stage must carry.
+fn film_of(pixels: usize) -> FilmRgbImage {
     FilmRgbImage::fixture(
         LinearImage::new(
-            8,
+            pixels as u32,
             1,
-            vec![
-                0.18,
-                0.18,
-                0.18,
-                0.002,
-                0.004,
-                0.9,
-                0.9,
-                0.004,
-                -0.02,
-                1.0,
-                1.0,
-                1.0,
-                4.0,
-                3.0,
-                2.5,
-                0.0,
-                0.0,
-                0.0,
-                0.003,
-                0.004,
-                0.002,
-                0.4,
-                f32::NAN,
-                0.2,
-            ],
-            Some(FILM_IR.to_vec()),
+            FILM_RGB[..pixels * 3].to_vec(),
+            Some(FILM_IR[..pixels].to_vec()),
         )
         .unwrap(),
     )
 }
 
+fn film() -> FilmRgbImage {
+    film_of(8)
+}
+
+/// How many of [`FILM_RGB`]'s pixels are finite — all but the last. Fit range refuses
+/// a non-finite sample, so it and every stage below it are pinned on these.
+const FINITE_PIXELS: usize = 7;
+
 const FILM_IR: [f32; 8] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
 
 fn aces() -> AcesCgImage {
     map_nc_film_rgb_v1(film())
+}
+
+/// [`aces`] without its NaN pixel.
+fn finite_aces() -> AcesCgImage {
+    map_nc_film_rgb_v1(film_of(FINITE_PIXELS))
 }
 
 const MAPPED: [u32; 24] = [
@@ -468,80 +489,190 @@ fn golden_scene_correction_fractional_exposure_is_correct_within_its_libm_window
     assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
 }
 
-/// [`aces`] through scene correction, look and fit range at their defaults — the only
-/// way to mint fit gamut's input, and, today, three identities.
-fn through_fit_range() -> fit_range::RangeFittedImage {
+// --- fit range -----------------------------------------------------------------
+
+/// Fit range at `headroom_stops` against `peak`.
+fn fit_range_params(headroom_stops: f32, peak: DisplayPeak) -> FitRangeParams {
+    FitRangeParams {
+        headroom_stops,
+        peak,
+    }
+}
+
+/// [`finite_aces`] through scene correction and the look at their identities, then
+/// fit range under `params` — the only way to mint fit range's and fit gamut's input.
+fn through_fit_range(params: &FitRangeParams) -> fit_range::RangeFittedImage {
     let (corrected, _) =
-        scene_correction::apply(aces(), &SceneCorrectionParams::default()).unwrap();
+        scene_correction::apply(finite_aces(), &SceneCorrectionParams::default()).unwrap();
     let graded = look::apply(corrected, &LookParams::default()).unwrap();
-    fit_range::apply(graded, &FitRangeParams::default()).unwrap()
+    fit_range::apply(graded, params).unwrap()
 }
 
 #[test]
-fn golden_look_and_fit_range_are_bit_exact_identities() {
-    // Identity is what these two stages *are* today, so their golden is the input.
-    // The first look control under `nf-look` and `nf-display-stages/fit-range` replace
-    // this with captured vectors of their own when they give the stages arithmetic.
-    let input = bits(aces().rgb());
-    let fitted = through_fit_range();
-    let out = fitted.into_buffer().into_linear();
+fn golden_look_and_zero_headroom_fit_range_are_bit_exact_identities() {
+    // The look is an identity today, and so is fit range at zero headroom — which is
+    // also how fit gamut's golden below enters its stage. The first look control
+    // under `nf-look` replaces the look's half with a captured vector of its own.
+    let input = bits(finite_aces().rgb());
+    let out = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR))
+        .into_buffer()
+        .into_linear();
     assert_eq!(
         bits(&out.rgb),
         input,
         "stage `look` or `fit-range` moved a pixel"
     );
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..]));
+    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }
 
-const FIT_GAMUT_P3: [u32; 24] = [
+/// Fit range at the default six stops against an SDR peak. `+ − × /` and `sqrt` in
+/// binary64, all correctly rounded by IEEE 754, so pinned bit for bit.
+const FIT_RANGE_SDR: [u32; 21] = [
+    0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3d514922, 0x3c9346a9, 0x3f628d4e, 0x3f0b3c44, 0x3d864902,
+    0x3ace0b24, 0x3f0cb273, 0x3f0cb273, 0x3f0cb272, 0x3f65e127, 0x3f44323f, 0x3f259945, 0x00000000,
+    0x00000000, 0x00000000, 0x3b82f761, 0x3b9b4360, 0x3b323396,
+];
+
+#[test]
+fn golden_fit_range_sdr_is_bit_identical() {
+    let out = through_fit_range(&fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR))
+        .into_buffer()
+        .into_linear();
+    assert_stage_bits("fit-range (sdr)", &out.rgb, &FIT_RANGE_SDR);
+    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
+}
+
+/// An HDR display's peak: 1000 nits over 203-nit reference white. Stated here rather
+/// than borrowed from `pipeline::hdr`, which retires with the legacy chain.
+const HDR_PEAK: f32 = 1000.0 / 203.0;
+
+/// The HDR peak's operator for one pixel, written out independently of the stage,
+/// with `log2(Y)` supplied — the one libm call, which the window enumerates.
+fn hdr_fit_range_pixel(px: [f32; 3], log2_luminance: f32) -> [f32; 3] {
+    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let w = f64::from(DEFAULT_HEADROOM_STOPS.exp2());
+    let k = 1.0 - 0.18;
+    let gain = 2.0 / (k + (k * k + 4.0 * 0.18 / (w * w)).sqrt());
+    let u = f64::from(y) * gain;
+    let base = (u * (1.0 + u / (w * w)) / (1.0 + u)) as f32;
+    // The lift starts at diffuse white, `1.0`, whose `log2` is exactly `0`.
+    let t = (log2_luminance / DEFAULT_HEADROOM_STOPS).clamp(0.0, 1.0);
+    let lift = t * t * (3.0 - 2.0 * t);
+    let scale = base * (1.0 + (HDR_PEAK - 1.0) * lift) / y;
+    px.map(|c| c * scale)
+}
+
+#[test]
+fn golden_fit_range_hdr_agrees_below_white_and_is_correct_within_its_libm_window() {
+    let peak = DisplayPeak::new(HDR_PEAK).unwrap();
+    let hdr = through_fit_range(&fit_range_params(DEFAULT_HEADROOM_STOPS, peak))
+        .into_buffer()
+        .into_linear()
+        .rgb;
+    let input = finite_aces().rgb().to_vec();
+    let (mut lifted, mut widest) = (0, 0);
+    for (p, px) in input.as_chunks::<3>().0.iter().enumerate() {
+        let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+        if y <= DIFFUSE_WHITE {
+            // Below diffuse white the lift is zero: the HDR peak renders the SDR
+            // pixel bit for bit — the gain-map contract, at the stage.
+            assert_stage_bits(
+                "fit-range (hdr, below white)",
+                &hdr[p * 3..p * 3 + 3],
+                &FIT_RANGE_SDR[p * 3..p * 3 + 3],
+            );
+            continue;
+        }
+        lifted += 1;
+        let rounded = f64::from(y).log2() as f32;
+        assert!(
+            ulps_between(y.log2(), rounded) <= LIBM_MAX_ERROR_ULPS,
+            "this host's `log2` is not conforming at {y:e}"
+        );
+        for (c, &want) in FIT_RANGE_HDR_LIFTED.iter().enumerate() {
+            let i = p * 3 + c;
+            let render = |l: f32| hdr_fit_range_pixel(*px, l)[c];
+            let captured = f32::from_bits(want);
+            assert_eq!(
+                render(rounded).to_bits(),
+                captured.to_bits(),
+                "sample {i}: capture integrity"
+            );
+            let window = reachable_window(render, rounded, 0);
+            widest = widest.max(window);
+            let drift = ulps_between(hdr[i], captured);
+            assert!(
+                drift <= window,
+                "stage `fit-range (hdr)` sample {i}: {drift} ULP from the capture, outside \
+                 the {window} ULP a conforming `log2` can reach"
+            );
+        }
+    }
+    assert_eq!(lifted, 1, "exactly one pixel sits above diffuse white");
+    assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
+}
+
+/// The one lifted pixel's three samples, correctly rounded.
+const FIT_RANGE_HDR_LIFTED: [u32; 3] = [0x3fc84f43, 0x3faaf58a, 0x3f904c23];
+
+// --- fit gamut -------------------------------------------------------------------
+
+const FIT_GAMUT_P3: [u32; 21] = [
     0x3e3851ed, 0x3e3851ed, 0x3e3851ec, 0x3b1a5990, 0x3b80e4f0, 0x3f51dddf, 0x3f3dad52, 0x3d0a3515,
     0xbb26e27a, 0x3f800001, 0x3f800000, 0x3f7fffff, 0x4074a339, 0x40421fdb, 0x4023f4e7, 0x00000000,
-    0x00000000, 0x00000000, 0x3b503e3d, 0x3b81fbfb, 0x3b0dae49, NAN, NAN, NAN,
+    0x00000000, 0x00000000, 0x3b503e3d, 0x3b81fbfb, 0x3b0dae49,
 ];
 
 #[test]
 fn golden_fit_gamut_is_bit_identical() {
-    let fitted = through_fit_range();
+    let fitted = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR));
     let params = FitGamutParams {
         target: DestinationGamut::DisplayP3,
     };
     let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
     assert_stage_bits("fit-gamut", &out.rgb, &FIT_GAMUT_P3);
     assert_eq!(gamut, DestinationGamut::DisplayP3);
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..]));
+    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }
 
 // --- threaded ----------------------------------------------------------------
 
-const THREADED: [u32; 24] = [
-    0x3dfe5b90, 0x3db651d4, 0x3d2f5812, 0x3cba6090, 0x3b86c73e, 0x3e51a4de, 0x3eee6f0c, 0x3c4616a9,
-    0xbaf134b8, 0x3f30a324, 0x3efd38c1, 0x3e738889, 0x4024d571, 0x3fbf370b, 0x3f1a4cc3, 0x00000000,
-    0x00000000, 0x00000000, 0x3b0fe646, 0x3b00970d, 0x3a015abe, NAN, NAN, NAN,
+/// Every stage at its shipped setting except scene correction, which is not an
+/// identity on purpose — see the threaded goldens.
+fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
+    ChainParams {
+        scene_correction: SceneCorrectionParams {
+            white_balance,
+            exposure: -1.0,
+        },
+        look: LookParams::default(),
+        fit_range: fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR),
+        fit_gamut: FitGamutParams {
+            target: DestinationGamut::DisplayP3,
+        },
+    }
+}
+
+const THREADED: [u32; 21] = [
+    0x3e0b2f73, 0x3dc78824, 0x3d3fe5ca, 0x3cdcecf4, 0x3b9fc30d, 0x3e78815e, 0x3efe9e8d, 0x3c538910,
+    0xbb00ca33, 0x3f03c63e, 0x3ebce85e, 0x3e35ae16, 0x3f840a0c, 0x3f192bfd, 0x3e7733c4, 0x00000000,
+    0x00000000, 0x00000000, 0x3b2f11a9, 0x3b1c7185, 0x3a1d5f9a,
 ];
 
 #[test]
 fn golden_the_chain_threaded_is_bit_identical() {
-    // Non-identity scene correction on purpose: per-channel gains and the destination
-    // matrix do not commute, so a chain that ran them in the other order, or handed a
-    // stage the wrong params, lands elsewhere even though every per-stage golden passes.
-    let params = ChainParams {
-        scene_correction: SceneCorrectionParams {
-            white_balance: WhiteBalance::Explicit([1.25, 1.0, 0.5]),
-            exposure: -1.0,
-        },
-        look: LookParams::default(),
-        fit_range: FitRangeParams::default(),
-        fit_gamut: FitGamutParams {
-            target: DestinationGamut::DisplayP3,
-        },
-    };
-    let rendered = chain::render(aces(), &params).unwrap();
+    // Non-identity scene correction on purpose: per-channel gains, fit range's
+    // luminance scale and the destination matrix do not commute, so a chain that ran
+    // them in another order, or handed a stage the wrong params, lands elsewhere even
+    // though every per-stage golden passes.
+    let params = threaded_params(WhiteBalance::Explicit([1.25, 1.0, 0.5]));
+    let rendered = chain::render(finite_aces(), &params).unwrap();
     assert_eq!(
         rendered.applied,
         [
             ("scene_correction", "white-balance+exposure"),
             ("look", "identity"),
-            ("fit_range", "identity"),
+            ("fit_range", fit_range::OPERATOR),
             ("fit_gamut", "acescg-to-display-p3-matrix"),
         ],
         "chain (threaded): the stage list the render reports"
@@ -554,8 +685,27 @@ fn golden_the_chain_threaded_is_bit_identical() {
         },
         "chain (threaded): the scene correction the render reports"
     );
+    assert_eq!(
+        rendered.fit_range,
+        FitRange {
+            operator: fit_range::OPERATOR,
+            headroom_stops: DEFAULT_HEADROOM_STOPS,
+            white_point: 64.0,
+            display_peak: DisplayPeak::SDR,
+        },
+        "chain (threaded): the fit range the render reports"
+    );
     let (out, gamut) = rendered.image.into_parts();
     assert_stage_bits("chain (threaded)", &out.rgb, &THREADED);
     assert_eq!(gamut, DestinationGamut::DisplayP3);
-    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..]));
+    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
+}
+
+#[test]
+fn the_chain_threaded_refuses_the_nan_pixel() {
+    // Scene correction carries the NaN through; fit range is the stage that refuses
+    // it, and names the pixel.
+    let params = threaded_params(WhiteBalance::Explicit([1.25, 1.0, 0.5]));
+    let err = chain::render(aces(), &params).err().expect("a NaN pixel");
+    assert!(err.message().contains("pixel 7"), "{}", err.message());
 }

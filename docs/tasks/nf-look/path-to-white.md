@@ -113,6 +113,10 @@ white.
   Every dependency is done as of 2026-09-23, the last being
   [`roll-white-balance`](../nf-scene-correction/roll-white-balance.md).
 
+- **Diffuse white has one definition**, `algo::fixed::DIFFUSE_WHITE` (`1.0`, what the
+  decode renders its anchor to). Fit range's HDR lift starts there (2026-09-23); key
+  this operator's threshold on the same constant rather than a second spelling.
+
 ## Open questions
 
 - **The functional form.** A linear band, full pull below `s0` and off above `s1`.

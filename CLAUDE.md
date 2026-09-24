@@ -273,12 +273,17 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   reached by `--new-flow` since `nf-core/minimal-end-to-end`: `algo::fixed` feeds it,
   `scene_correction` applies stated white balance and exposure (a roll's gains are
   measured once by `hanten measure-roll`, `pipeline/roll_white.rs`; the new chain has
-  no per-frame estimate), look and fit range are
-  identity passes, `fit_gamut` applies only the change of primaries into its
+  no per-frame estimate), the look is an identity pass, `fit_range` compresses the
+  scene's range with one reinhard whose argument is the destination's display peak
+  (exact agreement between peaks below diffuse white, `algo::fixed::DIFFUSE_WHITE`; it
+  refuses a non-finite sample), `fit_gamut` applies only the change of primaries into its
   `DestinationGamut`, and `cli::render_new_flow_frame` writes the one
   destination — a Display P3 16-bit TIFF, no sidecar, sized by
   `RunProfile::NewFlowSdrTiff` (the boundary types are what pin the stage order;
-  `working_image::WorkingBuffer` is their shared payload). **The destination's gamut
+  `working_image::WorkingBuffer` is their shared payload; `chain`'s
+  `a_boundary_type_can_be_minted_only_by_its_own_stage` scans each stage module's
+  source and fails on **any** `Self(` — build a helper newtype there by name
+  (`DisplayPeak(1.0)`), not `Self(..)`). **The destination's gamut
   rides out of the chain on `DisplayReferredImage`** and the encode reads it from there,
   so the embedded profile cannot name primaries the pixels are not in. **The boundary that *leaves*
   a typed chain needs its consuming unwrap most, and is the one you forget** — nothing
@@ -425,7 +430,8 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `validate`, not `validate_convert` — `roll` and per-frame overrides reach only the
   former, and a stage-only check let a whole roll decode before failing per frame;
   the headroom-*presence* rule (a headroom stated beside a tone with no white point)
-  genuinely needs the flag and stays in `validate_convert`.
+  genuinely needs the flag and stays in `validate_convert`, current chain only — under
+  `--new-flow` the headroom is fit range's and needs no tone.
   **`validate_output_preset`'s rules are ordered by how specific their diagnosis
   is**, and the reinhard-acceptance rule goes **last**: it also matches
   `film-master`, where its remedy ("use `--display-tone shoulder` or `none` there")
@@ -537,11 +543,12 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
     7-decimal inverse) exists *only* because `NC_FILM_RGB_V1_TO_ACESCG` was
     pinned with it — re-deriving v1 with the canonical one shifts it 9.1e-8, a
     pixel change to a frozen identifier. A test fails if you collapse them.
-  - **The three luma vectors have three different provenances, and each has its
+  - **The four luma vectors have three different provenances, and each has its
     own verification rule.** `BT2020_LUMA` is transcribed from a normative table
     and deliberately does *not* match a derivation from its own primaries (~2e-6,
     ~17 ulps) — the standard rounds and encoders use the rounded form.
-    `DISPLAY_P3_LUMA` *is* an exact derivation. `SRGB_LUMA` is the derivation
+    `DISPLAY_P3_LUMA` and `ACESCG_LUMA` (fit range's, which measures luminance
+    before fit gamut changes primaries) *are* exact derivations. `SRGB_LUMA` is the derivation
     **rounded to six decimals** (0/−6/43 ulps), so it carries its own
     `SRGB_LUMA_MAX_ULPS = 43` instead of relaxing the shared ±1 bound. Tests pin
     each relationship; don't "correct" one to match another.
@@ -1202,6 +1209,10 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     the resolved config — which is why `roll` and each per-frame override share it
     verbatim. `convert` must call **`validate_convert`**, which composes it with the
     flag-presence check above; `output/presets` is the next orchestrator that has to.
+    It runs under `--new-flow` too, on `Recipe::to_config()`'s projection, whose
+    `print`/`output` are always defaults — so a presence rule there reading `cfg.print`
+    must be gated on `Flow::from_flag(args.new_flow) == Flow::Legacy`, or it refuses a
+    flag the new flow keeps (`--display-tone-headroom` did).
   - *Gain-map container gotchas (ISO 21496-1 + MPF).* Six that cost time:
     **(a)** libultrahdr **rewrites the baseline image's marker segments** while
     packaging and drops unknown APP2s, but **appends the gain-map image verbatim** —

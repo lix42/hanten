@@ -202,7 +202,8 @@ impl fmt::Debug for SceneReferredImage {
 ///
 /// The identity configuration returns the buffer untouched, bit for bit. Otherwise
 /// nothing is clamped (clamping happens only at the encoder) and a non-finite sample
-/// stays non-finite, for the encoder to count.
+/// stays non-finite: repairing one is not this stage's to do, and fit range refuses
+/// the frame at the first one, naming the pixel.
 pub fn apply(
     image: AcesCgImage,
     params: &SceneCorrectionParams,
