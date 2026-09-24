@@ -1700,7 +1700,7 @@ the design in `docs/design-update.md`:
   chain](tasks/nf-verification/fingerprints.md) — retire the print half of the
   `render` row, not the row; supersedes
   `algo/characteristic-fingerprint-vector`
-- [ ] [Goldens for the new stages](tasks/nf-verification/stage-goldens.md) —
+- [x] [Goldens for the new stages](tasks/nf-verification/stage-goldens.md) —
   curated per-pixel vectors for the new stages; never a full-frame or
   post-transform hash
 - [ ] [A benchmark set for the new

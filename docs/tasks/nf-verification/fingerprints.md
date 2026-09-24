@@ -27,6 +27,12 @@ with it.
   close to an f32 rounding boundary to be provably portable. A fingerprint hashes
   raw f32 bits and has **no window**, so a non-portable sample must be designed
   out of the vector rather than bounded.
+- **From `stage-goldens`** (`docs/progress/nf-verification.md`, 2026-09-23): a decode
+  pixel cannot be *proved* portable to the bit, structurally — its final `powf` may
+  land either side on a conforming target — so a hash through the decode rests on
+  observed agreement. The measured part is the per-sample window list there: the base
+  and above-base samples carry nothing beyond that final call, the dead pixels up to
+  37 ULP. Everything downstream of the decode is IEEE-only.
 - **Historical rows are history.** Never edit an existing row's `render` or
   `base` — that would make one version label two behaviours. The migration is a
   version bump with a new row, and a bump with no row panics by design.
