@@ -915,9 +915,9 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `analysis/review-reference-cells` (post-MVP): `analysis/comparison-review-tooling`
 - `analysis/review-build-axis` (post-MVP): `analysis/comparison-review-tooling`
 - `analysis/probe-fixture-roll-names` (post-MVP): `analysis/asset-manifest`
+  — filed 2026-09-24: the `#[ignore]`d asset probes look rolls up by pre-rename names and panic
 - `analysis/manifest-seed-roles` (post-MVP): `analysis/asset-manifest`
   — filed 2026-09-24: no `SEED_ROLES` entry matches a date-named roll, so a from-scratch generation marks reference frames `real`
-  — filed 2026-09-24: the `#[ignore]`d asset probes look rolls up by pre-rename names and panic
 - `analysis/comparison-review-tooling` (post-MVP): `algo/reference-anchored-sigmoid`
   — promote the ad-hoc review pages into a maintained config-comparison tool; the user asked
   for it as a separate task rather than continued inline patching

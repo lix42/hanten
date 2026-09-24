@@ -1246,7 +1246,7 @@ fn scale_against_the_characteristic_curve() {
             };
             for (i, (_, scale)) in candidates.iter().enumerate() {
                 // Each candidate states its whole `scale`, the shipped one included (the
-                // `new default` row), so the base carries only the neutral offsets.
+                // `v5 default` row), so the base carries only the neutral offsets.
                 let params = DensityParams {
                     scale: *scale,
                     ..identity_gain()
