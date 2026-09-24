@@ -86,12 +86,12 @@ fn tile_grid() -> (u32, u32) {
 /// so a patch proposal is measured in the same density domain the baseline
 /// will use.
 ///
-/// The roll keys must match `../nc-assets/manifest.json`'s roll names; see
-/// `analysis/probe-fixture-roll-names` for the keys that no longer do.
+/// The roll key is `../nc-assets/manifest.json`'s name for the roll; the recipe stem keeps
+/// the name it was frozen under, and re-measures exactly on the renamed roll's frames.
 const FIXTURES: &[(&str, &str)] = &[
     ("2026-07-24-Gold200", "2026-07-24-Gold200"),
-    ("Ektar", "Ektar"),
-    ("Portra160-2026-07-22", "Portra160-2026-07-22"),
+    ("2026-07-15-Ektar100", "Ektar"),
+    ("2026-07-23-Portra160", "Portra160-2026-07-22"),
 ];
 
 /// The assets root, or `None` when it is absent (the skip case).
@@ -155,15 +155,23 @@ fn roles(assets: &Path, roll: &str) -> Roles {
     let path = assets.join("manifest.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let m: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let frames = m["rolls"][roll]["frames"]
-        .as_array()
-        .unwrap_or_else(|| panic!("{}: rolls.{roll}.frames missing", path.display()));
-
     let mut out = Roles {
         real: vec![],
         leader: vec![],
         unexposed: vec![],
     };
+    // No such roll: none of each, announced on stdout — where the figures go — so a record
+    // says which roll a figure excludes. A present but malformed roll still panics.
+    let Some(entry) = m["rolls"].get(roll) else {
+        println!(
+            "SKIP roll {roll}: not in {}; figures below exclude it",
+            path.display()
+        );
+        return out;
+    };
+    let frames = entry["frames"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{}: rolls.{roll}.frames is not a list", path.display()));
     for f in frames {
         let rel = f["file"].as_str().unwrap();
         let p = assets.join(rel);
@@ -330,13 +338,16 @@ fn propose_patches() {
 
     for (roll, stem) in FIXTURES {
         let base = frozen_reference(&recipes.join(format!("{stem}.json")));
+        // `real` frames only — see `Roles`. Looked up before the header, so a skipped roll
+        // prints its `SKIP` line and no header.
+        let frames = roles(&assets, roll).real;
+        if frames.is_empty() {
+            continue;
+        }
         println!(
             "\n=== {roll}  Dmin=({:.6}, {:.6}, {:.6})",
             base.r, base.g, base.b
         );
-
-        // `real` frames only — see `Roles`.
-        let frames = roles(&assets, roll).real;
 
         for frame in &frames {
             let name = frame.file_name().unwrap().to_string_lossy().to_string();
@@ -430,6 +441,9 @@ fn characterise_reference_frames() {
     for (roll, stem) in FIXTURES {
         let base = frozen_reference(&recipes.join(format!("{stem}.json")));
         let r = roles(&assets, roll);
+        if r.real.is_empty() && r.leader.is_empty() && r.unexposed.is_empty() {
+            continue;
+        }
         println!("\n=== {roll}");
 
         for (kind, list) in [("leader", &r.leader), ("unexposed", &r.unexposed)] {

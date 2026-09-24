@@ -299,6 +299,7 @@ graph TD
     analysis/review-reference-cells
     analysis/review-build-axis
     analysis/probe-fixture-roll-names
+    analysis/manifest-seed-roles
   end
   subgraph nf-core
     nf-core/buffer-strategy
@@ -544,6 +545,7 @@ graph TD
   analysis/comparison-review-tooling --> analysis/metrics-visualization
   analysis/asset-manifest --> analysis/drive-asset-migration
   analysis/asset-manifest --> analysis/probe-fixture-roll-names
+  analysis/asset-manifest --> analysis/manifest-seed-roles
   analysis/asset-manifest --> analysis/calibration-frame-capture
   core/roll-conversion --> core/base-acquisition-planner
   film-base/auto-base-redesign --> core/base-acquisition-planner
@@ -914,6 +916,8 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `analysis/review-build-axis` (post-MVP): `analysis/comparison-review-tooling`
 - `analysis/probe-fixture-roll-names` (post-MVP): `analysis/asset-manifest`
   — filed 2026-09-24: the `#[ignore]`d asset probes look rolls up by pre-rename names and panic
+- `analysis/manifest-seed-roles` (post-MVP): `analysis/asset-manifest`
+  — filed 2026-09-24: no `SEED_ROLES` entry matches a date-named roll, so a from-scratch generation marks reference frames `real`
 - `analysis/comparison-review-tooling` (post-MVP): `algo/reference-anchored-sigmoid`
   — promote the ad-hoc review pages into a maintained config-comparison tool; the user asked
   for it as a separate task rather than continued inline patching
@@ -1532,7 +1536,8 @@ the design in `docs/design-update.md`:
   grid cell. Each config carries a `producer` block **derived** from what that binary reported
   about itself, never typed into the matrix — and a build that reports two identities in one
   run aborts it.
-- [ ] [Re-key the asset probes to today's roll names](tasks/analysis/probe-fixture-roll-names.md) — the `#[ignore]`d probes' `FIXTURES` use pre-rename roll names and panic before measuring
+- [x] [Re-key the asset probes to today's roll names](tasks/analysis/probe-fixture-roll-names.md) — the `#[ignore]`d probes' `FIXTURES` use pre-rename roll names and panic before measuring
+- [ ] [Seed roles for the date-named rolls](tasks/analysis/manifest-seed-roles.md) — a from-scratch `nctool manifest generate` would mark every roll's `base.tif`/`leader.tif` as `real`
 
 
 

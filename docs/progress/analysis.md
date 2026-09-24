@@ -1029,9 +1029,37 @@ What other epics need to know about `analysis`:
 
 ## probe-fixture-roll-names
 
-**Status:** not started
+**Status:** done (2026-09-24)
 **Updated:** 2026-09-24
 
 - 2026-09-24: filed while restructuring CLAUDE.md. The `#[ignore]`d asset probes'
   `FIXTURES` look rolls up by names `manifest.json` no longer uses, so they panic
   before measuring; the task file lists the stale keys.
+- 2026-09-24: done. Mapped every stale key by re-measuring each dated roll's `base.tif`
+  and `leader.tif` over the frozen recipe's regions: `Ektar` → `2026-07-15-Ektar100`,
+  `Portra160-2026-07-22` → `2026-07-23-Portra160` and `WHOLE_ROLLS`' `2026-09-09-Ektar` →
+  `2026-09-09-Ektar100` reproduce `Dmin` and `Dmax` exactly, so the recipe stems stay.
+  `Portra160`, `Portra400` and `Portra400-leica-flaw` are gone from `../nc-assets`
+  (neither manifest nor disk) and were dropped; `curve_probe`'s corpus is now three rolls
+  and 10 frames. A roll missing from the manifest skips with a `SKIP roll …` line instead
+  of panicking. `cargo test --release -- --ignored`: 13 passed.
+  Found on the re-run: `whole_roll_scale` printed the pre-2026-09-16 default
+  (`0.90 / 0.86`) as "shipped default" — now `0.84 / 0.73` — and `WHOLE_ROLLS` was
+  described as ~32 frames a roll; the pruned rolls hold 12 and 11.
+  Not done: `nctool/manifest.py`'s `SEED_ROLES` has no seeds under the dated roll names,
+  so a from-scratch manifest generation would lose those rolls' roles.
+- 2026-09-24: review follow-up. A skipped roll now prints `SKIP roll …` on **stdout**,
+  before any header, and `sigmoid_scale` counts only rolls that contributed frames. A
+  roll present but malformed still panics. Rows labelled "shipped" now read
+  `algo::fixed::DENSITY_SCALE`, and `[1, 1, 1]` is labelled "identity". Figures quoted
+  from the six-roll corpus carry a note. The `SEED_ROLES` gap is filed as
+  `analysis/manifest-seed-roles`.
+
+## manifest-seed-roles
+
+**Status:** not started
+**Updated:** 2026-09-24
+
+- 2026-09-24: filed from `probe-fixture-roll-names`. No `SEED_ROLES` entry matches a
+  date-named roll, so a from-scratch generation would mark reference frames `real`.
+

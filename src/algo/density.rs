@@ -738,8 +738,9 @@ mod tests {
 
         // (b) Under the shipped gain, a patch carrying the **measured** channel slope
         // ratios reconstructs *closer to* neutral. `algo::curve_probe::sigmoid_scale`
-        // measures those ratios at green 1.115, blue 1.183 against red — so build the
-        // patch from the ratios and assert the render improves it.
+        // measured those ratios at green 1.115, blue 1.183 against red on its six-roll,
+        // 21-frame corpus (three rolls have since left the asset folder, so a re-run
+        // differs) — so build the patch from the ratios and assert the render improves it.
         //
         // **The patch is deliberately not rebuilt from the shipping gain, and the claim
         // is weaker since `pipeline_version` 5.** Two calibrations of this gain exist and

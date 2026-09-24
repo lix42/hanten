@@ -54,14 +54,13 @@ const BINS: usize = 10;
 /// The fixture rolls that have a digitized datasheet, as
 /// `(roll in the asset manifest, recipe stem, stock key in `curve_data`)`.
 ///
-/// The roll keys must match `../nc-assets/manifest.json`'s roll names; see
-/// `analysis/probe-fixture-roll-names` for the keys that no longer do.
+/// The roll key is `../nc-assets/manifest.json`'s name for the roll; the recipe stem keeps
+/// the name it was frozen under, and re-measures exactly on the renamed roll's frames.
+/// `Portra160`, `Portra400` and `Portra400-leica-flaw` left the asset folder, so figures
+/// recorded over all six earlier fixtures no longer reproduce.
 const FIXTURES: &[(&str, &str, &str)] = &[
-    ("Ektar", "Ektar", "ektar-100"),
-    ("Portra160-2026-07-22", "Portra160-2026-07-22", "portra-160"),
-    ("Portra160", "Portra160", "portra-160"),
-    ("Portra400", "Portra400", "portra-400"),
-    ("Portra400-leica-flaw", "Portra400-leica-flaw", "portra-400"),
+    ("2026-07-15-Ektar100", "Ektar", "ektar-100"),
+    ("2026-07-23-Portra160", "Portra160-2026-07-22", "portra-160"),
     ("2026-07-24-Gold200", "2026-07-24-Gold200", "gold-200"),
 ];
 
@@ -100,14 +99,23 @@ fn frozen_base(recipe: &Path) -> FilmBase {
     }
 }
 
-/// The roll's `real` frames, in manifest order.
+/// The roll's `real` frames, in manifest order. A roll the manifest does not have yields
+/// none, announced by a `SKIP` line on stdout — where the figures go — so a record says
+/// which rolls a figure excludes. A roll that is present but malformed still panics.
 fn real_frames(assets: &Path, roll: &str) -> Vec<PathBuf> {
     let path = assets.join("manifest.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let m: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let frames = m["rolls"][roll]["frames"]
+    let Some(entry) = m["rolls"].get(roll) else {
+        println!(
+            "SKIP roll {roll}: not in {}; figures below exclude it",
+            path.display()
+        );
+        return vec![];
+    };
+    let frames = entry["frames"]
         .as_array()
-        .unwrap_or_else(|| panic!("{}: rolls.{roll}.frames missing", path.display()));
+        .unwrap_or_else(|| panic!("{}: rolls.{roll}.frames is not a list", path.display()));
     let mut out: Vec<PathBuf> = frames
         .iter()
         .filter(|f| f["role"].as_str().unwrap_or("real") == "real")
@@ -711,6 +719,10 @@ fn stock_table_variants() {
             (white - grey) / (at(log18 + 0.694) - at(log18))
         };
 
+        let frames = real_frames(&assets, roll);
+        if frames.is_empty() {
+            continue;
+        }
         println!("\n=== {roll} ({key}) — green drift, stops per unit density");
         println!("    red-density scale that matches the aim table: {aim_k:.3}\n");
         println!(
@@ -719,7 +731,7 @@ fn stock_table_variants() {
         );
         let mut sums = [0.0f32; 5];
         let mut n = 0.0f32;
-        for frame in real_frames(&assets, roll) {
+        for frame in frames {
             let name = frame.file_name().unwrap().to_string_lossy().to_string();
             let Some(m) = measure(&frame, &base, sc) else {
                 continue;
@@ -987,7 +999,8 @@ fn channel_drift() {
 /// - **The corpus-nulling scale is `1 / mean(r_c)`, not `mean(1 / r_c)`.** An earlier
 ///   version of this probe averaged the per-frame nulling scales and reported 0.912/0.904;
 ///   by Jensen those are biased high, and applying them left blue drifting +0.48. The
-///   corpus nulls at 0.899/0.845.
+///   corpus nulls at 0.899/0.845 — on the six-roll, 21-frame corpus; three of those rolls
+///   left the asset folder (2026-09-24), so a re-run now prints the three-roll figure.
 ///
 /// The figure of merit is **not** each channel's drift magnitude. `G−R` and `B−R` are not
 /// perceptually independent: when both tilt together the result reads as a
@@ -1065,6 +1078,11 @@ fn sigmoid_scale() {
         return;
     }
     let n = frames_out.len() as f32;
+    // Rolls that contributed frames — the denominator, since a skipped roll measured nothing.
+    let measured_rolls = FIXTURES
+        .iter()
+        .filter(|(roll, _, _)| frames_out.iter().any(|f| f.roll == *roll))
+        .count();
     let mean_r_g = frames_out.iter().map(|f| f.r_g).sum::<f32>() / n;
     let mean_r_b = frames_out.iter().map(|f| f.r_b).sum::<f32>() / n;
     assert!(
@@ -1080,7 +1098,7 @@ fn sigmoid_scale() {
         let b = frames_out.iter().map(|f| drift(sb, f.r_b)).sum::<f32>() / n;
         let m = frames_out.iter().map(|f| gm(sg, sb, f)).sum::<f32>() / n;
         let a = frames_out.iter().map(|f| gm(sg, sb, f).abs()).sum::<f32>() / n;
-        // How many of the six rolls sit within a quarter stop per density of neutral on the
+        // How many of the fixture rolls sit within a quarter stop per density of neutral on the
         // unforgiving axis — a corpus mean can null while every roll is still off.
         let ok = FIXTURES
             .iter()
@@ -1099,7 +1117,7 @@ fn sigmoid_scale() {
         "\nScalar path drift, stops per unit density; 0 = neutral. {} frames, \
          {} rolls.\nClosed form verified against real renders to {:.4} stops/density.\n",
         frames_out.len(),
-        FIXTURES.len(),
+        measured_rolls,
         worst_model_err
     );
     println!("  scan slope ratio vs red: green {mean_r_g:.4}, blue {mean_r_b:.4}");
@@ -1113,10 +1131,10 @@ fn sigmoid_scale() {
         "scale [R,G,B]", "green", "blue", "green-mag", "|g-m|", "rolls<.25"
     );
     let candidates: [(&str, [f32; 3]); 7] = [
-        ("shipped", [1.0, 1.0, 1.0]),
+        ("identity", [1.0, 1.0, 1.0]),
         ("datasheet generic", [1.0, 0.977, 0.860]),
         ("proposed", [1.0, 0.90, 0.86]),
-        ("v5 default", [1.0, 0.84, 0.73]),
+        ("shipped default", crate::algo::fixed::DENSITY_SCALE),
         ("corpus null", [1.0, 1.0 / mean_r_g, 1.0 / mean_r_b]),
         ("green-magenta optimum", [1.0, 0.0, 0.0]), // filled below
         ("equal-slope", [1.0, 0.905, 0.905]),
@@ -1139,14 +1157,14 @@ fn sigmoid_scale() {
             m,
             a,
             ok,
-            FIXTURES.len()
+            measured_rolls
         );
     }
 
     println!("\n  per roll, on the unforgiving axis (green-magenta), by candidate:");
     println!(
         "    {:24}{:>10}{:>12}{:>11}{:>13}",
-        "roll", "shipped", "datasheet", "proposed", "corpus null"
+        "roll", "identity", "datasheet", "proposed", "corpus null"
     );
     for (roll, _, _) in FIXTURES {
         let rs: Vec<&Frame> = frames_out.iter().filter(|f| f.roll == *roll).collect();
@@ -1177,7 +1195,7 @@ fn sigmoid_scale() {
 /// `to_density` applies the gain *before* the curve, so the two corrections compose rather
 /// than one superseding the other. That is only right if the published curves under-correct
 /// by about the amount the gain supplies — which is what `channel_drift` measured (49% of
-/// the real green drift, 98% of blue). This checks it on the render path instead of
+/// the real green drift, 98% of blue, on the six-roll corpus [`FIXTURES`] no longer holds). This checks it on the render path instead of
 /// assuming it.
 ///
 /// ```text
@@ -1228,7 +1246,7 @@ fn scale_against_the_characteristic_curve() {
             };
             for (i, (_, scale)) in candidates.iter().enumerate() {
                 // Each candidate states its whole `scale`, the shipped one included (the
-                // `new default` row), so the base carries only the neutral offsets.
+                // `v5 default` row), so the base carries only the neutral offsets.
                 let params = DensityParams {
                     scale: *scale,
                     ..identity_gain()
@@ -1260,11 +1278,14 @@ fn scale_against_the_characteristic_curve() {
 
 /// The whole-roll sets: one roll each of two stocks, every frame of each, all on the same
 /// scanner and SilverFast build. Deliberately **not** [`FIXTURES`] — that list is the
-/// calibration corpus behind the shipped default, and these carry 32 frames apiece, which
-/// would swamp it.
-const WHOLE_ROLLS: &[(&str, &str)] = &[
-    ("2026-09-09-Ektar", "ektar-100"),
-    ("2026-09-11-Portra400", "portra-400"),
+/// calibration corpus behind the shipped default, and these carry 11–12 real frames apiece —
+/// together more than the whole corpus, so mixing them in would replace it rather than
+/// extend it.
+///
+/// `(roll in the asset manifest, recipe stem, stock key)`, as in [`FIXTURES`].
+const WHOLE_ROLLS: &[(&str, &str, &str)] = &[
+    ("2026-09-09-Ektar100", "2026-09-09-Ektar", "ektar-100"),
+    ("2026-09-11-Portra400", "2026-09-11-Portra400", "portra-400"),
 ];
 
 /// Minimum red-density span for a frame's slope fit to be conditioned. A frame that spans
@@ -1339,9 +1360,9 @@ impl RollMeasurement {
     }
 }
 
-fn measure_roll(assets: &Path, roll: &str, stock_key: &str) -> RollMeasurement {
+fn measure_roll(assets: &Path, roll: &str, stem: &str, stock_key: &str) -> RollMeasurement {
     let recipes = repo_root().join("scripts/real-scan-verify/recipes");
-    let base = frozen_base(&recipes.join(format!("{roll}.json")));
+    let base = frozen_base(&recipes.join(format!("{stem}.json")));
     let sc = stock(stock_key);
     let log2 = std::f32::consts::LN_2 / std::f32::consts::LN_10;
     let k = REFERENCE_CONTRAST / log2;
@@ -1483,7 +1504,7 @@ fn stats(rows: &[&RollRow], f: &dyn Fn(&RollRow) -> f32) -> (f32, f32, f32, f32)
 /// 0.3 stops/density difference needs ~11 frames of one condition, with two earlier per-roll
 /// conclusions retracted for reading n = 3–4 too confidently. Every roll in [`FIXTURES`] has
 /// 3–5 frames, so a per-roll statement was never supportable. [`WHOLE_ROLLS`] carries two
-/// rolls of ~32 frames, one stock each.
+/// rolls of 11–12 real frames, one stock each — just at that threshold.
 ///
 /// **Two rolls is what separates the two hypotheses.** One roll can show that a fitted gain
 /// beats the shipped constant, but not *why*. If the second roll — different stock, same
@@ -1512,10 +1533,12 @@ fn whole_roll_scale() {
     let k = REFERENCE_CONTRAST / log2;
     let drift = |s: f32, r: f32| k * (s * r - 1.0);
     let gm = |sg: f32, sb: f32, r: &RollRow| drift(sg, r.r_g) - drift(sb, r.r_b) / 2.0;
+    // Compared *as* the shipped default, so it follows the constant rather than a copy of it.
+    let shipped = crate::algo::fixed::DENSITY_SCALE;
 
     let mut summary: Vec<(&str, usize, f32, f32, f32, f32)> = vec![];
-    for (roll, stock_key) in WHOLE_ROLLS {
-        let m = measure_roll(&assets, roll, stock_key);
+    for (roll, stem, stock_key) in WHOLE_ROLLS {
+        let m = measure_roll(&assets, roll, stem, stock_key);
         let rows = &m.rows;
         if rows.len() < 4 {
             println!("\n=== {roll}: only {} frames measured, skipped", rows.len());
@@ -1657,7 +1680,7 @@ fn whole_roll_scale() {
             let sg = fg.len() as f32 / fg.iter().map(|r| r.r_g).sum::<f32>();
             let sb = fb.len() as f32 / fb.iter().map(|r| r.r_b).sum::<f32>();
             fit_sum += score(sg, sb, held);
-            def_sum += score(0.84, 0.73, held);
+            def_sum += score(shipped[1], shipped[2], held);
         }
         println!(
             "    split-half |green-magenta|, held out: fitted {:.2} vs current default {:.2}",
@@ -1665,8 +1688,11 @@ fn whole_roll_scale() {
             def_sum / 2.0
         );
         println!(
-            "    green-magenta at the current default [1, 0.84, 0.73]: {:+.2}",
-            kept.iter().map(|r| gm(0.84, 0.73, r)).sum::<f32>() / c
+            "    green-magenta at the current default {shipped:?}: {:+.2}",
+            kept.iter()
+                .map(|r| gm(shipped[1], shipped[2], r))
+                .sum::<f32>()
+                / c
         );
         summary.push((
             roll,
@@ -1694,10 +1720,10 @@ fn whole_roll_scale() {
         "  {:24}{:>6}{:>10.4}{:>10.4}{:>12.3}{:>12.3}",
         "shipped default",
         "",
-        1.0 / 0.90,
-        1.0 / 0.86,
-        0.900,
-        0.860
+        1.0 / shipped[1],
+        1.0 / shipped[2],
+        shipped[1],
+        shipped[2]
     );
     // Every pair, named. This block is the probe's only cross-roll statement and both the
     // task file and the progress log tell the next person to "add a roll to `WHOLE_ROLLS` and
@@ -1766,8 +1792,8 @@ fn whole_roll_white_point() {
     let log2 = std::f32::consts::LN_2 / std::f32::consts::LN_10;
     let stops = REFERENCE_CONTRAST / log2;
 
-    for (roll, stock_key) in WHOLE_ROLLS {
-        let m = measure_roll(&assets, roll, stock_key);
+    for (roll, stem, stock_key) in WHOLE_ROLLS {
+        let m = measure_roll(&assets, roll, stem, stock_key);
         let rows = &m.rows;
         // The span filter matters here too, and not only for conditioning: a uniform field
         // has no "near-white" to speak of, and a calibration frame carried as `real` would
