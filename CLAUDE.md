@@ -227,7 +227,7 @@ committed.
 - **Value terms (high/low/bright/dark):** read design-spec §4 first. As scene
   luminance rises, transmission falls while density, positive and output rise;
   "bright"/"dark" mean the *scene*. `Dmin` is a transmission (the film base);
-  `Dmax` is a scalar density.
+  the anchor `A` is a scalar density (`Dmax`, a leader density, retired).
 
 ### Knobs and recipes
 

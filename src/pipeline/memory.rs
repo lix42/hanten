@@ -74,8 +74,8 @@
 //!
 //! `s` is the sampled rectangle as a fraction of the frame ([`SamplePlan`]): `0`
 //! for an explicit `--film-base` (nothing is sampled), ~0.69 for the `auto` path's
-//! frame interior on a 3:2 frame, up to 1.0 for a full-frame `--base-region` /
-//! `--d-max-region`. `estimate --grid` gathers five cells of its rectangle one at
+//! frame interior on a 3:2 frame, up to 1.0 for a full-frame `--base-region`.
+//! `estimate --grid` gathers five cells of its rectangle one at
 //! a time, so it counts as one *cell*
 //! ([`grid_cell_pixels`](crate::pipeline::film_base::grid_cell_pixels), ~1/16 of
 //! the rectangle), not the whole rectangle.
@@ -491,22 +491,22 @@ pub enum RunProfile {
     MeasureRoll,
 }
 
-/// Which rectangles a run's film-base / reference sampling will gather into
-/// per-channel `f32` vectors (`film_base::region_channels`, 12 B per sampled
-/// pixel), so the film-base phase can be sized before anything is decoded.
+/// Which rectangles a run's film-base sampling will gather into per-channel `f32`
+/// vectors (`film_base::region_channels`, 12 B per sampled pixel), so the film-base
+/// phase can be sized before anything is decoded.
 ///
-/// The three fields are **independent facts, not alternatives** — one `nc
-/// estimate` run can auto-detect a base *and* sample a `--d-max-region` — so this
-/// is deliberately a struct rather than an enum. They are gathered (and dropped)
-/// one rectangle at a time, so the phase peaks at the **largest** of them, which
-/// is what [`SamplePlan::sampled_pixels`] returns.
+/// Today a run sets at most one field: the second rectangle an `estimate` could
+/// gather beside the base, `--d-max-region`, retired with the reference density
+/// (`nf-retire/dmax-machinery`). It stays a struct, and
+/// [`SamplePlan::sampled_pixels`] still takes the **largest**, because rectangles are
+/// gathered and dropped one at a time — a future second sample must not be summed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SamplePlan {
     /// The `auto` film-base path runs, sampling the frame interior
     /// ([`film_base::auto_interior_pixels`]).
     pub auto_interior: bool,
     /// Largest explicitly-bounded rectangle sampled, in pixels (`--base-region`,
-    /// `--d-max-region`, `estimate --grid`'s rectangle). `0` for none.
+    /// `estimate --grid`'s rectangle). `0` for none.
     ///
     /// For `--grid` this is one *cell* of the rectangle
     /// ([`film_base::grid_cell_pixels`]), not the whole rectangle: the five cells
@@ -542,14 +542,6 @@ impl SamplePlan {
         }
     }
 
-    /// Add another explicitly-bounded rectangle (keeping the larger).
-    pub fn with_rect(self, pixels: u64) -> Self {
-        Self {
-            rect_pixels: self.rect_pixels.max(pixels),
-            ..self
-        }
-    }
-
     /// `estimate --grid` over the whole frame (no `--base-region`).
     pub fn with_whole_frame_grid(self) -> Self {
         Self {
@@ -561,7 +553,7 @@ impl SamplePlan {
     /// Pixels in the largest single rectangle this plan gathers, for `shape`.
     ///
     /// **Clamped to the frame.** `rect_pixels` comes from a user-supplied
-    /// `--base-region` / `--d-max-region`, which this stage has no business
+    /// `--base-region`, which this stage has no business
     /// validating: `film_base::region_channels` is the authority on whether a
     /// rectangle fits the image, and it rejects an out-of-bounds one as a *usage*
     /// error (exit 2). Estimating the raw `w*h` instead would let a typo'd
@@ -1710,13 +1702,6 @@ mod tests {
         // With nothing sampled, the retained term is zero and encode is 38 again.
         let explicit = estimate_peak(&s, convert_u16(), SamplePlan::none()).unwrap();
         assert_eq!(explicit.encode_bytes, 38 * px);
-
-        // Several rectangles (e.g. `estimate --grid` plus `--d-max-region`) are
-        // gathered one at a time, so the largest wins — measured: sampling two
-        // full-frame rectangles peaks identically to sampling one.
-        let plan = SamplePlan::auto().with_rect(px).with_rect(10_000);
-        let combined = estimate_peak(&s, RunProfile::DecodeOnly, plan).unwrap();
-        assert_eq!(combined.film_base_bytes, 28 * px, "largest rectangle wins");
 
         // `--grid` counts one cell (~1/16 of its rectangle), not the rectangle.
         let cell = film_base::grid_cell_pixels(1000, 1000);

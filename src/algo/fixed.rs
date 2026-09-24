@@ -61,7 +61,7 @@
 //! | name | what it is | where it comes from | status |
 //! |---|---|---|---|
 //! | **film base** (`Dmin`) | per-roll transmission of unexposed film | measured from that roll's rebate | an input; `D′ = 0` by construction |
-//! | **leader `Dmax`** | film **saturation** density | `--d-max`, `estimate --d-max-region` | the legacy `curve.dmax`. **Not read here** |
+//! | **leader `Dmax`** | film **saturation** density | a light-struck leader; `estimate --d-max-region` measured it until `nf-retire/dmax-machinery` | **retired**; nothing reads it |
 //! | **anchor `A`** | the corrected density that renders to `1.0` | derived: [`AnchorRule::anchor`] | `0.9924` at the defaults; reported |
 //! | **diffuse white** | scene white on a correctly exposed negative | the datasheets: `d + types::REFERENCE_MID_TO_WHITE_DELTA` | `0.98` — a reference number, not an input |
 //! | **content white `W`** | a roll's bright end (red p97 of picture density) | `docs/spike/white-placement.md` | **not measured, not shipped** |
@@ -428,7 +428,7 @@ mod tests {
     use super::*;
     use crate::algo::reconstruct;
     use crate::types::{
-        AnchorPlacement, DensityCurve, DensityParams, DmaxInput, DmaxSource, ExponentialParams,
+        AnchorPlacement, DensityCurve, DensityParams, ExponentialParams,
         REFERENCE_MID_TO_WHITE_DELTA, Reconstruction,
     };
 
@@ -518,13 +518,7 @@ mod tests {
                 ..DecodeParams::default()
             };
             let (fresh, _) = decode(&img, &b, &params).unwrap();
-            let (legacy, _) = reconstruct(
-                &img,
-                &b,
-                &equivalent_legacy(offset),
-                DmaxInput::new(DmaxSource::Fixed),
-            )
-            .unwrap();
+            let (legacy, _) = reconstruct(&img, &b, &equivalent_legacy(offset)).unwrap();
             assert_eq!(
                 bits(fresh.rgb()),
                 bits(legacy.rgb()),
@@ -587,41 +581,10 @@ mod tests {
     }
 
     #[test]
-    fn nothing_the_decode_produces_depends_on_a_reference_density() {
-        // The design's central property, asserted rather than commented. The anchor
-        // rule never reads a reference, so the *same* equality must hold against a
-        // legacy configuration resolving any reference at all — including the
-        // per-frame `Auto` measurement and none. A decode that had quietly acquired
-        // a reference term would match one of these and not the others.
-        let (img, b) = (scan(), base());
-        let (fresh, report) = decode(&img, &b, &DecodeParams::default()).unwrap();
-        assert!(!report.reads_reference);
-        for dmax in [
-            DmaxSource::Fixed,
-            DmaxSource::Explicit(0.7),
-            DmaxSource::Explicit(2.4),
-            DmaxSource::Auto,
-            DmaxSource::None,
-        ] {
-            let (legacy, _) = reconstruct(
-                &img,
-                &b,
-                &equivalent_legacy(DENSITY_OFFSET),
-                DmaxInput::new(dmax),
-            )
-            .unwrap();
-            assert_eq!(
-                bits(fresh.rgb()),
-                bits(legacy.rgb()),
-                "the render moved with the reference density ({dmax:?})"
-            );
-        }
-    }
-
-    #[test]
     fn a_one_ulp_move_in_the_anchor_is_visible_to_that_comparison() {
-        // Falsifiability for both tests above: they are evidence only if the
-        // comparison can fail on the values this decode actually carries. A single
+        // Falsifiability for `the_fixed_decode_matches_the_equivalent_legacy_configuration`:
+        // it is evidence only if the comparison can fail on the values this decode
+        // actually carries. A single
         // ULP on `d` — the smallest change any of these parameters can take — must
         // red it.
         let (img, b) = (scan(), base());
@@ -643,7 +606,7 @@ mod tests {
     fn the_comparison_distinguishes_a_different_placement() {
         // The other half of falsifiability: the equality must be pinning *this*
         // configuration, not passing because every configuration agrees on this
-        // vector. A reference-derived placement on the same curve must differ.
+        // vector. A different placement on the same curve must differ.
         let (img, b) = (scan(), base());
         let (fresh, _) = decode(&img, &b, &DecodeParams::default()).unwrap();
         let other = Reconstruction {
@@ -654,10 +617,10 @@ mod tests {
             },
             curve: DensityCurve::Exponential(ExponentialParams {
                 gamma: CONTRAST,
-                anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
+                anchor: AnchorPlacement::MidAtBaseOffset(0.5),
             }),
         };
-        let (legacy, _) = reconstruct(&img, &b, &other, DmaxInput::new(DmaxSource::Fixed)).unwrap();
+        let (legacy, _) = reconstruct(&img, &b, &other).unwrap();
         assert_ne!(bits(fresh.rgb()), bits(legacy.rgb()));
     }
 

@@ -725,11 +725,8 @@ fn edge_candidate(
 // runs the RGB inward scan only over the film runs, so a partially-occluded edge
 // contributes only its film part and holder pixels never enter the rebate search.
 //
-// **Second consumer (follow-up, not wired here):** the same mask is what
-// `bw-support` (PR #21, finding 4) needs to exclude the dark holder/dust border
-// from the auto-`Dmax` anchor statistics (an uncropped holder can capture the
-// 99.5th-percentile anchor and dim the render). That reuse is left for the
-// auto-`Dmax` work; here the mask only feeds the film-base search.
+// The mask only feeds the film-base search. Other measurements keep the holder out
+// through the effective area (`effective_area`), which marches the same IR plane.
 
 /// IR-based holder classification of one along-edge segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -1237,7 +1234,9 @@ pub fn effective_area(image: &LinearImage, inset_frac: f32) -> Result<EffectiveA
     // At the default it never binds (a 3600 px frame insets 180 px against an 18 px
     // step); it takes effect only near `--measure-inset 0`, where the residual is
     // otherwise the whole defence — a 9-18 px holder ring is ~1-2% of the region at
-    // `SCAN_EPSILON` density, enough to own the percentile `auto_dmax` reads. A
+    // `SCAN_EPSILON` density, the size of the top 1% `hanten measure-roll`'s pooled
+    // white (`roll_white::PERCENTILE`, p99) reads. (It was sized against the per-frame
+    // auto `Dmax`'s p99.5, which retired.) A
     // stated `0` is therefore not honoured exactly on a measured frame; that is
     // deliberate, and [`EffectiveArea::inset`] reports the **applied** value so the
     // floor is visible rather than silent. Where the holder was *not* measured
@@ -1682,15 +1681,10 @@ fn region_channels(image: &LinearImage, [x, y, w, h]: [u32; 4]) -> Result<[Vec<f
 
 /// Per-channel `p`-quantile transmission over the rectangle `[x, y, w, h]`.
 ///
-/// `pub(crate)` so the roll-fixed `Dmax` reference measurement
-/// (`cli::run_estimate` → `algo::density::reference_dmax`) can sample the
-/// **median** (`p = 0.5`) transmission of a fully-exposed reference region: unlike
-/// the film base (which wants the region's *maximum* transmission, a high
-/// percentile), the `Dmax` reference wants its *typical* transmission, and the
-/// median is robust to dust/hot pixels without a uniformity gate — relative spread
-/// on near-opaque (near-zero) transmissions is dominated by sensor noise and would
-/// false-alarm, so the median's outlier-resistance is the right guard here.
-pub(crate) fn sample_region_at(image: &LinearImage, rect: [u32; 4], p: f32) -> Result<FilmBase> {
+/// The film base wants a region's near-*maximum* transmission (a high percentile);
+/// the IR separability check samples the frame interior's **median** (`p = 0.5`),
+/// which is robust to dust and hot pixels without a uniformity gate.
+fn sample_region_at(image: &LinearImage, rect: [u32; 4], p: f32) -> Result<FilmBase> {
     let mut chans = region_channels(image, rect)?;
     Ok(FilmBase {
         r: percentile(&mut chans[0], p),
@@ -2519,7 +2513,7 @@ mod tests {
 
     #[test]
     fn sample_region_at_takes_the_requested_percentile() {
-        // The roll-fixed `Dmax` reference samples the MEDIAN (`p = 0.5`), unlike the
+        // The IR separability check samples the MEDIAN (`p = 0.5`), unlike the
         // film base's high percentile. On a NON-uniform region the median must land
         // strictly between the low and high percentiles — a uniform fixture (all
         // channels equal) could not catch a regression back to `p = 0.995`.

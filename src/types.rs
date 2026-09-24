@@ -134,12 +134,11 @@ pub enum DensityCurveType {
 /// deserializer and the `--density-curve` parser so the two provenances say the same
 /// thing.
 pub const REMOVED_SIGMOID_CURVE: &str = "the `sigmoid` density curve was removed. The \
-     `exponential` is its knee-less shape — the default places it with mid-grey 0.62 above \
-     the film base and reads no `calibration.dmax`; on the current chain, \
-     `--anchor-mid-fraction 0.5` (recipe `\"anchor\": {\"mid-at-dmax-fraction\": 0.5}`) \
-     restores the sigmoid's old reference-based placement. Highlight roll-off belongs to \
-     the display tone (`--display-tone-headroom`). Use `exponential`, or leave the curve unset \
-     for the default";
+     `exponential` is its knee-less shape, placed with mid-grey 0.62 density above the \
+     film base (`--anchor-mid-offset`, recipe `\"anchor\": {\"mid-at-base-offset\": \
+     0.62}`); the sigmoid's reference-based placement retired with the reference density. \
+     Highlight roll-off belongs to the display tone (`--display-tone-headroom`). Use \
+     `exponential`, or leave the curve unset for the default";
 
 /// Output bit depth for the TIFF paths. Always *resolved* from the preset, by
 /// [`OutputParams::depth`], and never stated: the `--out-depth` / `output.depth`
@@ -411,7 +410,7 @@ pub enum FilmType {
 /// (design-spec §9, `measure`).
 ///
 /// Its own section rather than a key under `film_base`, because the effective area
-/// governs **every** measurement path (`Dmin`/`Dmax`, content exposure and
+/// governs **every** measurement path (`Dmin`, a roll's white balance, content exposure and
 /// contrast, tiling uniformity), not just the film base. Filing it under one
 /// consumer would misplace it permanently: every recipe struct carries
 /// `deny_unknown_fields`, so a key's section is part of its identity.
@@ -488,10 +487,9 @@ pub fn check_measure_inset(frac: f32) -> Result<()> {
              {DEFAULT_MEASURE_INSET}. Measured holder depth is 2.5-4% of the shorter \
              edge (IR march, 31 real frames), so lower the fraction. There is no \
              explicit measurement region to point at instead — `--base-region` sets \
-             the film-base source, not the measured area — so if nothing should be \
-             measured over that area, drop what measures it: `--auto-d-max` on the \
-             current chain. Under `--new-flow` a conversion measures nothing over it; \
-             `hanten measure-roll` reads it to pool a roll's white balance.",
+             the film-base source, not the measured area. A conversion measures \
+             nothing over the area; `hanten measure-roll` reads it to pool a roll's \
+             white balance.",
             (frac * 2.0 * 100.0).min(100.0)
         )));
     }
@@ -558,9 +556,9 @@ pub enum FilmBaseSource {
 /// **Deliberately an open section, not a fixed set.** A key belongs here when it
 /// is (a) measured from the film, (b) fixed across the roll, and (c) consumed by
 /// a rule that lives elsewhere — the rule stays a look knob, the measurement it
-/// reads lives here. That is why [`AnchorPlacement`] stays in
-/// `reconstruction.curve` while the reference density it places does not. The
-/// section is expected to grow: a roll **content white** (and possibly its
+/// reads lives here. The film base is its one member today; the roll reference
+/// density (`dmax`) retired with the placements that read it
+/// (`nf-retire/dmax-machinery`). The section is expected to grow: a roll **content white** (and possibly its
 /// per-frame spread) joins it if `nf-calibration/anchor-comparison` picks a
 /// content-referenced or hybrid placement — see `docs/spike/white-placement.md`.
 /// So nothing here may assume a closed pair, and every member carries its own
@@ -568,7 +566,7 @@ pub enum FilmBaseSource {
 /// of them.
 ///
 /// **Producing a calibration is not "one frame in, one calibration out".**
-/// `film_base` and `dmax` each come from a single reference frame, but a roll
+/// `film_base` comes from a single reference frame, but a roll
 /// content white is a percentile taken across many frames. The acquisition
 /// cascade that resolves a complete calibration is
 /// `core/base-acquisition-planner`; this struct is only its shape.
@@ -591,136 +589,12 @@ pub struct CalibrationParams {
     /// whose most important parameter nobody had decided. Stating `--auto-base`
     /// is still one flag; the point is that it is now a decision.
     pub film_base: Option<FilmBaseSource>,
-    /// The roll's reference density — the `Dmax` a placement rule reads
-    /// ([`DmaxSource`], default [`DmaxSource::Fixed`]).
-    ///
-    /// It lived in `reconstruction.curve` until `core/calibration-recipe-section`,
-    /// where it sat only because it had once been a parameter of the exponential
-    /// equation. It is a measurement of the roll, so it moved here; what stays in
-    /// the curve is `anchor`, the *rule* that decides which tone the reference
-    /// places.
-    ///
-    /// **Carried, not always consumed.** The `characteristic` curve reads its
-    /// reference and its mid-grey placement off the stock's published response, so
-    /// a `dmax` stated beside it is not read. That is accepted rather than
-    /// rejected — composing a roll calibration with a stock-curve profile is the
-    /// whole point of the section — and reported, so it is never silently ignored
-    /// (`cli::unconsumed_dmax_warning`).
-    pub dmax: DmaxSource,
-}
-
-/// Where the density render's display-white anchor (`Dmax`) comes from
-/// (design-spec §7.2/§9, `calibration.dmax`).
-///
-/// A single mutually-exclusive choice, like [`FilmBaseSource`] — not independent
-/// flags. `Dmax` is the corrected density that the render maps to display white
-/// (`1.0`) so the default u16 encode fills the display range instead of leaving
-/// all detail above `1.0`.
-///
-/// Like `Dmin`, `Dmax` is a **roll-fixed calibration** (a property of the film
-/// stock + development + scanner), so the default is a *fixed* anchor reused
-/// across the roll — not a per-frame measurement. The `dmax-reference` task
-/// (design-spec §7.2/§12) established this: anchoring each frame's densest pixel
-/// to display white is per-frame *exposure normalization* (it brightens
-/// underexposed frames and forces an overcast grey to white), which conflicts
-/// with NC's "convert faithfully, grade in Lightroom" purpose. The roll-fixed
-/// anchor is resolved reference → per-stock constant → nominal: a value measured
-/// once from a fully-exposed reference frame (or a known per-stock constant) is
-/// carried here as [`Explicit`](Self::Explicit); with no calibration the default
-/// [`Fixed`](Self::Fixed) nominal anchor applies. Serializes as `"fixed"` /
-/// `{ "explicit": <d> }` / `"auto"` / `"none"`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum DmaxSource {
-    /// Fixed nominal anchor: a scene-independent corrected-density placement
-    /// (`algo::density::NOMINAL_DMAX`), reused across every frame. The default
-    /// when none of the `--d-max` / `--fixed-d-max` / `--auto-d-max` /
-    /// `--no-d-max` flags is given — the roll-fixed behavior when no reference /
-    /// per-stock value has been measured. Because it is a constant, darker frames
-    /// render darker (faithful relative exposure), unlike the per-frame `Auto`.
-    #[default]
-    Fixed,
-    /// Explicit scalar anchor density — the roll-fixed calibration value. Carries
-    /// a `Dmax` measured once from a fully-exposed reference frame
-    /// (`estimate --d-max-region`) or a known per-stock constant, reused across
-    /// the roll exactly like an explicit `Dmin` base. Frozen into a roll recipe as
-    /// `calibration.dmax = { "explicit": <d> }`.
-    Explicit(f32),
-    /// Measure the anchor per frame from the corrected-density distribution
-    /// (a high percentile). **Per-frame exposure normalization** — an explicit
-    /// opt-in (`--auto-d-max`), *demoted* from the former default: it silently
-    /// brightens underexposed frames and breaks roll-to-roll consistency, so it
-    /// is a grading convenience, not the faithful-conversion default.
-    ///
-    /// Measured over the **effective area** ([`MeasureParams`]), not the whole
-    /// scan: the opaque film holder is at the density floor's other end and would
-    /// own the top percentile outright (it resolved 2.23-2.37 against a roll `Dmax`
-    /// of 1.28-1.38 that way, rendering every frame black). This is the **only**
-    /// anchor source that reads anything off the frame, which is why it is also the
-    /// only one for which `convert` resolves a region at all.
-    Auto,
-    /// No reference (`0`). Under [`AnchorPlacement::WhiteAtDmax`] that is scene-referred
-    /// output (base → `1.0`, exposed detail above it), reproducing the pre-anchor render
-    /// bit-for-bit — HDR f32 workflows rely on it. The base-derived placements, the
-    /// default among them, never read it.
-    ///
-    /// The `characteristic` curve reads no reference at all, so this — like every
-    /// other value here — is simply carried past it.
-    ///
-    /// This is the *reference*, not the anchor: [`AnchorPlacement`] derives the
-    /// anchor from it, and the base-derived placements do not read it at all, so
-    /// `"none"` beside one of them is a coherent combination — no reference exists
-    /// and none is wanted. It resolves the reference to `0`, which reproduces the
-    /// historical unity anchor `A = 0` only under [`AnchorPlacement::WhiteAtDmax`].
-    /// Under [`AnchorPlacement::MidAtDmaxFraction`] the reference term vanishes but
-    /// the `0.745/slope` term does not, so mid-grey ends up pinned that far above
-    /// the base — legal, and drastic: at the default gamma it renders essentially
-    /// the whole frame clipped. That is the same degeneracy
-    /// [`AnchorPlacement::MidAtBaseOffset`] rejects at `offset = 0`; the
-    /// reference-derived spelling of it validates clean because the bound there is
-    /// on the fraction, not on the resolved anchor.
-    None,
-}
-
-/// The roll's reference density as the reconstruction stage receives it: the
-/// configured [`DmaxSource`] plus the region [`DmaxSource::Auto`] measures over.
-///
-/// **One value, because the region exists only for `Auto`.** It is the sole source
-/// that reads anything off the frame, so a region beside any other source is
-/// meaningless — passing them as two parameters let a caller state that
-/// combination, and threaded a `measure_region` argument through six `stages::`
-/// functions that nothing else reads.
-///
-/// This is a *stage input*, not a recipe section: `calibration.dmax` supplies the
-/// source, and the orchestrator resolves the region from
-/// `pipeline::film_base::effective_area`. The base is the other half of the same
-/// recipe section but arrives differently — already resolved, as a `FilmBase` —
-/// because `Auto` here needs the **post-regional-balance** densities and so cannot
-/// be resolved before the stage runs.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct DmaxInput {
-    /// The configured source (`calibration.dmax`).
-    pub source: DmaxSource,
-    /// The effective area [`DmaxSource::Auto`] measures its percentile over;
-    /// `None` means the whole frame. Ignored by every other source.
-    pub region: Option<[u32; 4]>,
-}
-
-impl DmaxInput {
-    /// A source with no region — the whole-frame form, and what every non-`Auto`
-    /// source resolves under.
-    pub fn new(source: DmaxSource) -> Self {
-        Self {
-            source,
-            region: None,
-        }
-    }
 }
 
 /// Where the regional (shadow/highlight) balance's tone-ramp anchors come from
 /// (design-spec §7.2/§9, `density.balance_range`).
 ///
-/// A single mutually-exclusive choice, like [`DmaxSource`] — not independent
+/// A single mutually-exclusive choice, like [`FilmBaseSource`] — not independent
 /// flags. The ramps span the corrected-density range `[lo, hi]`: `lo` is the
 /// positive's deepest shadow tone, `hi` its brightest highlight tone. `Auto`
 /// (default) measures the range per frame from the pre-regional corrected
@@ -742,7 +616,7 @@ pub enum BalanceRange {
 
 /// Density-reconstruction knobs (design-spec §9, `reconstruction.density`) —
 /// everything that shapes the corrected density `D′` (stages 1–2). The
-/// density→positive curve (gamma / contrast / `Dmax`) is deliberately **not**
+/// density→positive curve (gamma and the anchor placement) is deliberately **not**
 /// here: it belongs to the tagged [`DensityCurve`], the separate curve stage.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -851,7 +725,7 @@ impl Default for DensityParams {
 /// Where the print white-balance gains come from (design-spec §9,
 /// `print.white_balance`).
 ///
-/// A single mutually-exclusive choice, like [`FilmBaseSource`] / [`DmaxSource`] —
+/// A single mutually-exclusive choice, like [`FilmBaseSource`] —
 /// not parallel fields. Modeling the source as **one enum** is what makes the
 /// precedence rule sound: an explicit `--white-balance 1,1,1` replaces a recipe's
 /// auto mode *by source*, because the variant itself records where the gains came
@@ -1066,9 +940,8 @@ pub fn check_headroom_stops(stops: f32) -> Result<()> {
 
 /// Exponential-curve knobs (design-spec §7.2/§9,
 /// `reconstruction.curve.type = "exponential"`): the straight-line
-/// `10^(gamma·(D′ − A))` density→positive mapping. The curve owns the placement
-/// *rule* ([`AnchorPlacement`]); a reference density `Dmax` it may place against is a
-/// roll measurement and lives in [`CalibrationParams::dmax`].
+/// `10^(gamma·(D′ − A))` density→positive mapping, with the anchor `A` placed by
+/// [`AnchorPlacement`].
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ExponentialParams {
@@ -1084,10 +957,6 @@ impl Default for ExponentialParams {
     /// two chains cannot drift apart. `algo::fixed`'s
     /// `the_fixed_decode_matches_the_equivalent_legacy_configuration` pins that this
     /// curve renders it bit-identically.
-    ///
-    /// Until `pipeline_version` 6 this curve was the diagnostic straight line beside the
-    /// sigmoid, pinning white at the reference; that placement stays reachable as
-    /// [`AnchorPlacement::WhiteAtDmax`] and is what the frozen reference goldens use.
     fn default() -> Self {
         Self {
             gamma: crate::algo::fixed::CONTRAST,
@@ -1136,109 +1005,53 @@ pub const REFERENCE_MID_TO_WHITE_DELTA: f32 = 0.36;
 #[cfg(test)]
 pub const REFERENCE_CONTRAST: f32 = MID_GREY_OUTPUT_DECADES / REFERENCE_MID_TO_WHITE_DELTA;
 
-/// Which tone a density curve pins, and at what density (design-spec §7.3/§9,
+/// Which tone the exponential pins, and at what density (design-spec §7.2/§9,
 /// `reconstruction.curve.anchor`).
 ///
 /// The curve is an affine map in log space: a slope ([`ExponentialParams::gamma`]) plus
-/// **one** pinned `(density, output)` pair, from which everything else follows. This enum
-/// is that choice — a single mutually-exclusive rule, like [`DmaxSource`], not independent
-/// fields. Placement is orthogonal to curve shape, which is what let the 2026-08-03
-/// candidate harness score eight anchoring forms through one curve implementation.
+/// **one** pinned `(density, output)` pair, from which everything else follows.
 ///
-/// Why it exists: pinning white at the reference density placed midtones 2.5–3.6 stops too
-/// dark once the contrast became photographic, because steepening the line pivots it *around
-/// white* and drags everything below down. Pinning a mid-tone instead removes that conflict.
+/// One rule is left, and it is **reference-free**: it reads the film base (which stage 1
+/// divides out, so the base *is* `D′ = 0`) and never a leader-measured reference
+/// density. That is what keeps a leader's roll-to-roll error — two rolls of one stock
+/// measured 0.295 apart while their bases agreed to 0.0005 — out of the render. The
+/// three placements that read a reference, or pinned black instead of mid, retired with
+/// the reference (`nf-retire/dmax-machinery`); a recipe naming one is refused by
+/// [`REMOVED_ANCHOR_PLACEMENTS`].
 ///
-/// # Reference-derived versus base-derived
-///
-/// The first two variants scale with the resolved reference density; the last two do not.
-/// That distinction is the load-bearing one, because the reference is a **leader** density —
-/// film saturation, not diffuse white — and two rolls of one stock have measured 0.295 apart
-/// while their bases agreed to 0.0005 (`film-base/dmax-anchor-reliability`). Since
-/// `dAnchor/dReference` is the reference's coefficient, that spread reaches the render
-/// multiplied by it: 1.96 stops at [`Self::WhiteAtDmax`], 0.98 at a
-/// [`Self::MidAtDmaxFraction`] of 0.5, and **zero** for the base-derived pair, which never
-/// read the reference at all. Base-derived placement is the only form with no roll-to-roll
-/// term.
-///
-/// The base needs no measurement here: stage 1 divides it out
-/// (`D = −log10(scan / base)`), so the film base *is* `D′ = 0` by construction, modulo the
-/// `density.offset` and regional balance the user asked for.
+/// Still an enum, and still serialized as a tagged object, so a later
+/// content-referenced placement (`nf-calibration/anchor-comparison`) can carry its own
+/// measured value rather than reuse this one's number for a different quantity.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AnchorPlacement {
-    /// Pin **display white** at the resolved reference density. The pre-2026-08 behaviour,
-    /// kept as an explicit diagnostic: it is what makes the reference's own unreliability
-    /// fully visible in the render (`film-base/dmax-anchor-reliability`).
-    WhiteAtDmax,
-    /// Pin **mid-grey** (output 0.18) at `fraction × reference`, letting white fall where it
-    /// must — above the reference.
-    ///
-    /// `0.5` was the retired sigmoid's default. Mid-grey sits roughly half-way up the measured reference range
-    /// (measured 0.48–0.57 across the fixture stocks), and this form is **half as sensitive**
-    /// to a reference error as pinning white: `dAnchor/dReference` is `fraction`, so the
-    /// 0.046 density disagreement seen between two rolls of one stock costs 0.15 stop rather
-    /// than 0.31.
-    MidAtDmaxFraction(f32),
-    /// Pin the **film base** to a stated output `floor`, letting white fall where the
-    /// contrast puts it. Reference-free, so it carries no roll-to-roll term at all.
-    ///
-    /// The base is `D′ = 0`, so `10^(contrast·(0 − A)) = floor` gives
-    /// `A = −log10(floor)/contrast`. That reproduces the anchors the 2026-08-03 candidate
-    /// retest recorded — floor 0.002 → 1.349, floor 0.005 → 1.151 at contrast 2.0 — which
-    /// is a free check on this arithmetic.
-    ///
-    /// `floor` is **linear light against the 203-nit reference white**, not an sRGB code
-    /// value; 0.005 encodes to about 16/255, not 5/255. (The candidate-5b row in
-    /// `reports/sigmoid-reference-baseline.md` reads 20/255 for this floor — that is the
-    /// darkest confirmed *shadow patch*, which sits just above the base, not the base.)
-    BlackAtBase(f32),
-    /// Pin **mid-grey** (output 0.18) at `offset` density *above the film base*, rather
-    /// than at a fraction of the reference. Reference-free, like [`Self::BlackAtBase`].
-    ///
-    /// `A = offset + 0.745/contrast`. This is the shape of the leading candidate from
-    /// `algo/reference-anchored-sigmoid` (mid at `Dmin` + a per-stock datasheet offset,
-    /// which scored best of every shippable form). The per-stock offset itself is **not**
-    /// available yet — it needs `mid aim − D-min`, and the registry's `D-min` figures are
-    /// chart reads that `algo/film-stock-profiles` forbids any render path from consuming.
-    /// Until then this variant takes the offset explicitly.
+    /// Pin **mid-grey** (output 0.18) at `offset` density *above the film base*,
+    /// letting white fall where the contrast puts it — `A = offset + 0.745/contrast`.
     MidAtBaseOffset(f32),
 }
 
-impl AnchorPlacement {
-    /// Derive the curve's anchor `A` from the resolved reference density and the contrast.
-    ///
-    /// `A` is the density that maps to display white, so pinning mid-grey at `M` means
-    /// solving `10^(contrast·(M − A)) = 0.18`, i.e. `A = M + 0.745/contrast`.
-    ///
-    /// The base-derived variants ignore `reference` entirely — that is the whole point of
-    /// them, not an oversight.
-    pub fn anchor(self, reference: f32, contrast: f32) -> f32 {
-        match self {
-            AnchorPlacement::WhiteAtDmax => reference,
-            AnchorPlacement::MidAtDmaxFraction(f) => {
-                f * reference + MID_GREY_OUTPUT_DECADES / contrast
-            }
-            AnchorPlacement::BlackAtBase(floor) => -floor.log10() / contrast,
-            AnchorPlacement::MidAtBaseOffset(offset) => offset + MID_GREY_OUTPUT_DECADES / contrast,
-        }
-    }
+/// The placements `reconstruction.curve.anchor` no longer accepts, by wire name, with
+/// what each did — so a recipe naming one gets a migration error rather than serde's
+/// bare "unknown variant".
+pub const REMOVED_ANCHOR_PLACEMENTS: [(&str, &str); 3] = [
+    (
+        "white-at-dmax",
+        "pinned display white at the reference density",
+    ),
+    (
+        "mid-at-dmax-fraction",
+        "pinned mid-grey at a fraction of the reference density",
+    ),
+    ("black-at-base", "pinned the film base to an output floor"),
+];
 
-    /// Whether resolving this placement **consumes** the reference density
-    /// (`calibration.dmax`). The base-derived pair does not: hand [`Self::anchor`] any
-    /// reference at all and they return the same number.
-    ///
-    /// **This, not [`DmaxSource`] alone, is the question every `Dmax`-policy gate must
-    /// ask.** `auto` measures the reference per frame, which is frame-local adaptation
-    /// only if something *reads* it — under `black-at-base` / `mid-at-base-offset` the
-    /// measurement is computed and discarded, so the render is deterministic and
-    /// roll-consistent. Gating on the source alone made `film-master` hard-reject a valid
-    /// config and made `roll` warn (and `--strict` fail) about a consistency break that
-    /// cannot happen.
-    pub fn reads_reference(self) -> bool {
+impl AnchorPlacement {
+    /// The curve's anchor `A` — the corrected density that renders to `1.0` — at this
+    /// contrast. Pinning mid-grey at `M` solves `10^(contrast·(M − A)) = 0.18`, i.e.
+    /// `A = M + 0.745/contrast`.
+    pub fn anchor(self, contrast: f32) -> f32 {
         match self {
-            AnchorPlacement::WhiteAtDmax | AnchorPlacement::MidAtDmaxFraction(_) => true,
-            AnchorPlacement::BlackAtBase(_) | AnchorPlacement::MidAtBaseOffset(_) => false,
+            AnchorPlacement::MidAtBaseOffset(offset) => offset + MID_GREY_OUTPUT_DECADES / contrast,
         }
     }
 }
@@ -1400,29 +1213,11 @@ impl DensityCurve {
         }
     }
 
-    /// Whether this curve reads the roll's reference density
-    /// ([`CalibrationParams::dmax`]) at all — the variant-agnostic question every
-    /// `Dmax`-policy site asks now that the value itself lives outside the curve.
-    ///
-    /// `false` for [`Self::Characteristic`], which resolves neither a reference nor a
-    /// placement: both come from the stock's published response. A `calibration.dmax`
-    /// stated beside it is **carried, not consumed** — accepted, so a roll calibration
-    /// composes with a stock-curve profile, and reported, so it is never silently
-    /// ignored.
-    ///
-    /// Note this answers a *narrower* question than "does the render depend on the
-    /// reference": the exponential under a base-derived placement — its default —
-    /// consumes no reference either. That is [`AnchorPlacement::reads_reference`], and the two
-    /// must be asked together — see `cli::region_reaches_a_rendered_pixel`.
-    pub fn consumes_reference(&self) -> bool {
-        self.curve_type().consumes_reference()
-    }
-
     /// The anchor-placement rule this curve carries, so placement-aware code (reports,
-    /// provenance) stays variant-agnostic like [`Self::consumes_reference`].
+    /// provenance) stays variant-agnostic.
     /// `None` for [`Self::Characteristic`], which has no placement *rule* to state: it
-    /// pins mid-grey wherever the stock's published curve puts it, so reporting one of the
-    /// four rules here would name a knob the render never consulted. Deliberately an
+    /// pins mid-grey wherever the stock's published curve puts it, so reporting a rule
+    /// here would name a knob the render never consulted. Deliberately an
     /// `Option` rather than a plausible-looking default — a report that names a number the
     /// render did not use is the exact defect PR #70 fixed.
     pub fn anchor(&self) -> Option<AnchorPlacement> {
@@ -1447,16 +1242,6 @@ impl DensityCurveType {
         DensityCurveType::Exponential,
         DensityCurveType::Characteristic,
     ];
-
-    /// Whether a curve of this type reads [`CalibrationParams::dmax`] — the
-    /// type-level twin of [`DensityCurve::consumes_reference`], for code that has
-    /// only the discriminator.
-    pub fn consumes_reference(self) -> bool {
-        match self {
-            Self::Exponential => true,
-            Self::Characteristic => false,
-        }
-    }
 }
 
 /// Extract an optional field from a raw recipe object, distinguishing an **absent**
@@ -1504,14 +1289,10 @@ impl<'de> Deserialize<'de> for DensityCurve {
         // nc is unreleased — this is a migration error, never an alias.
         if obj.contains_key("dmax") {
             return Err(D::Error::custom(
-                "`dmax` is no longer a `reconstruction.curve` key — the roll's reference \
-                 density moved to the top-level `calibration` section, because it is a \
-                 measurement of the roll rather than a parameter of the curve. Replace \
-                 `\"curve\": {…, \"dmax\": {\"explicit\": <d>}}` with a top-level \
-                 `\"calibration\": {\"dmax\": {\"explicit\": <d>}}` (also \"fixed\", \
-                 \"auto\", \"none\"). The value and the render are unchanged; only the \
-                 path moved. What stays in the curve is `anchor`, the rule that decides \
-                 which tone the reference places. See design-spec §8.",
+                "`dmax` is no longer a `reconstruction.curve` key: the roll reference \
+                 density retired with the placements that read it. The curve's one \
+                 placement, `\"anchor\": {\"mid-at-base-offset\": <d>}`, reads only the \
+                 film base. Remove the key.",
             ));
         }
 
@@ -1560,6 +1341,9 @@ impl<'de> Deserialize<'de> for DensityCurve {
                          it cannot refine a parametric one",
                     ));
                 }
+                if let Some(message) = obj.get("anchor").and_then(removed_anchor_message) {
+                    return Err(D::Error::custom(message));
+                }
                 let d = ExponentialParams::default();
                 Ok(DensityCurve::Exponential(ExponentialParams {
                     gamma: take_recipe_field(obj, "gamma")
@@ -1595,6 +1379,24 @@ impl<'de> Deserialize<'de> for DensityCurve {
             }
         }
     }
+}
+
+/// The migration error for a `reconstruction.curve.anchor` naming a retired
+/// placement, spelled either as a bare name or as a `{name: value}` object.
+fn removed_anchor_message(anchor: &serde_json::Value) -> Option<String> {
+    let name = match anchor {
+        serde_json::Value::String(name) => name.as_str(),
+        serde_json::Value::Object(obj) if obj.len() == 1 => obj.keys().next()?.as_str(),
+        _ => return None,
+    };
+    let (name, what) = REMOVED_ANCHOR_PLACEMENTS
+        .iter()
+        .find(|(removed, _)| *removed == name)?;
+    Some(format!(
+        "reconstruction.curve.anchor `{name}` was removed: it {what}. The one placement \
+         left is `{{\"mid-at-base-offset\": <d>}}` (flag `--anchor-mid-offset`), mid-grey \
+         pinned `d` density above the film base"
+    ))
 }
 
 /// Wire schema version of the tagged `reconstruction` recipe/report object
@@ -1783,7 +1585,7 @@ impl EncodeReport {
 /// render takes out of the NC film RGB v1 ACEScg boundary, and the container /
 /// depth / profile that branch resolves.
 ///
-/// One mutually-exclusive enum field, like [`FilmBaseSource`] / [`DmaxSource`]:
+/// One mutually-exclusive enum field, like [`FilmBaseSource`]:
 /// a preset resolves a whole coherent policy, so it can never be a bag of
 /// independent bools. Serializes kebab-case (`"gain-map-hdr"` / `"film-master"`).
 ///
@@ -1804,14 +1606,13 @@ pub enum OutputPreset {
     /// **`film-master`** — an unclamped 32-bit float linear ACEScg TIFF taken
     /// **directly** from the NC film RGB v1 mapping. It preserves the intentional
     /// film, lens, development, scanner, reconstruction, and density-curve
-    /// rendering (including supported fixed/roll `Dmax` placement) and bypasses
+    /// rendering (including its anchor placement) and bypasses
     /// every later white-balance, exposure, black/range-placement, highlight,
     /// display tone, gamut, and transfer operation. It is **not** a physical
     /// scene-linear recovery.
     ///
-    /// The bypass is strict, not silent: `cli::validate` rejects frame-local
-    /// `auto` `Dmax` and every non-default downstream control, whatever their
-    /// source. A linear float export that *wants* the print and display controls
+    /// The bypass is strict, not silent: `cli::validate` rejects every
+    /// non-default downstream control, whatever its source. A linear float export that *wants* the print and display controls
     /// applied is [`HdrLinearTiff`](Self::HdrLinearTiff).
     FilmMaster,
     /// **`ultra-hdr-v1`** — an explicitly legacy Ultra HDR v1 JPEG: an
@@ -2220,37 +2021,6 @@ mod tests {
     }
 
     #[test]
-    fn dmax_source_serializes_like_film_base_source() {
-        // Unit variants are bare lowercase strings; the newtype variant is a
-        // tagged object — the same shape convention as `FilmBaseSource`.
-        assert_eq!(
-            serde_json::to_string(&DmaxSource::Fixed).unwrap(),
-            "\"fixed\""
-        );
-        assert_eq!(
-            serde_json::to_string(&DmaxSource::Auto).unwrap(),
-            "\"auto\""
-        );
-        assert_eq!(
-            serde_json::to_string(&DmaxSource::None).unwrap(),
-            "\"none\""
-        );
-        assert_eq!(
-            serde_json::to_string(&DmaxSource::Explicit(1.5)).unwrap(),
-            r#"{"explicit":1.5}"#
-        );
-        for src in [
-            DmaxSource::Fixed,
-            DmaxSource::Auto,
-            DmaxSource::None,
-            DmaxSource::Explicit(2.25),
-        ] {
-            let json = serde_json::to_string(&src).unwrap();
-            assert_eq!(serde_json::from_str::<DmaxSource>(&json).unwrap(), src);
-        }
-    }
-
-    #[test]
     fn film_base_source_serializes_all_variants() {
         // Unit variants are bare lowercase strings; data variants are tagged
         // objects.
@@ -2269,20 +2039,6 @@ mod tests {
     }
 
     #[test]
-    fn calibration_default_dmax_is_fixed() {
-        // The default reference is the roll-fixed nominal `Fixed`, not the demoted
-        // per-frame `Auto` (dmax-reference): the faithful-conversion default must
-        // not normalize exposure per frame. It is one default for the roll now, not
-        // one per curve — `core/calibration-recipe-section` moved it out of the curve.
-        assert_eq!(CalibrationParams::default().dmax, DmaxSource::Fixed);
-        assert_eq!(DmaxSource::default(), DmaxSource::Fixed);
-        // Which curves *read* it is a separate question, and the one the curve still
-        // answers.
-        assert!(DensityCurve::default().consumes_reference());
-        assert!(!DensityCurveType::Characteristic.consumes_reference());
-    }
-
-    #[test]
     fn every_preset_resolves_its_own_depth() {
         // No knob states a depth any more: the two float TIFFs resolve f32 and every
         // other preset u16 (for its primary, or only for the optional IR TIFF).
@@ -2295,61 +2051,40 @@ mod tests {
         }
     }
 
-    /// The anchor arithmetic for each placement, including the values the 2026-08-03
-    /// candidate retest recorded — floor 0.002 → 1.349 and 0.005 → 1.151 at contrast 2.0.
-    /// Those two are why candidate 5's first rejection was overturned: the original run
-    /// paired a floor with an inconsistent anchor (1.607, above every roll's Dmax), so
-    /// nothing reached white and the frame rendered dark.
     #[test]
-    fn anchor_placement_resolves_each_rule() {
+    fn the_anchor_pins_mid_grey_above_the_base() {
         let c = 2.0f32;
-        let r = 1.3f32;
-        assert_eq!(AnchorPlacement::WhiteAtDmax.anchor(r, c), r);
-        // Mid-grey `f` of the way up the reference, plus 0.745/contrast.
-        let mid = AnchorPlacement::MidAtDmaxFraction(0.5).anchor(r, c);
-        assert!(
-            (mid - (0.5 * r + MID_GREY_OUTPUT_DECADES / c)).abs() < 1e-6,
-            "{mid}"
-        );
-        // Base-derived rules ignore the reference entirely — the property that removes
-        // the roll-to-roll term. Passing a wildly different reference must not move them.
-        for placement in [
-            AnchorPlacement::BlackAtBase(0.005),
-            AnchorPlacement::MidAtBaseOffset(0.5),
-        ] {
-            assert_eq!(
-                placement.anchor(r, c),
-                placement.anchor(r + 0.295, c),
-                "{placement:?} moved with the reference"
-            );
-        }
-        for (floor, want) in [(0.002f32, 1.349f32), (0.005, 1.151)] {
-            let got = AnchorPlacement::BlackAtBase(floor).anchor(r, c);
-            assert!((got - want).abs() < 5e-4, "floor {floor}: {got} vs {want}");
-        }
-        let off = AnchorPlacement::MidAtBaseOffset(0.5).anchor(r, c);
+        let off = AnchorPlacement::MidAtBaseOffset(0.5).anchor(c);
         assert!(
             (off - (0.5 + MID_GREY_OUTPUT_DECADES / c)).abs() < 1e-6,
             "{off}"
         );
     }
 
-    /// `reads_reference` must agree with [`AnchorPlacement::anchor`] rather than restate
-    /// it — it is what the `Dmax`-policy gates consult, so a rule that drifts from the
-    /// arithmetic would silently re-admit the false `film-master` rejection and the false
-    /// roll not-frozen warning it was introduced to remove.
+    /// A recipe naming a retired placement gets the migration error, in both of the
+    /// spellings serde wrote (a bare unit-variant name, a `{name: value}` object), and
+    /// the error names the one placement left.
     #[test]
-    fn reads_reference_matches_whether_the_reference_moves_the_anchor() {
-        let c = 2.0f32;
-        for p in [
-            AnchorPlacement::WhiteAtDmax,
-            AnchorPlacement::MidAtDmaxFraction(0.5),
-            AnchorPlacement::BlackAtBase(0.005),
-            AnchorPlacement::MidAtBaseOffset(0.5),
+    fn a_retired_anchor_placement_is_a_migration_error() {
+        for anchor in [
+            r#""white-at-dmax""#,
+            r#"{"mid-at-dmax-fraction": 0.5}"#,
+            r#"{"black-at-base": 0.005}"#,
         ] {
-            let moves = p.anchor(1.3, c) != p.anchor(1.3 + 0.295, c);
-            assert_eq!(p.reads_reference(), moves, "{p:?}");
+            let json = format!(r#"{{"type": "exponential", "anchor": {anchor}}}"#);
+            let err = serde_json::from_str::<DensityCurve>(&json)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("was removed") && err.contains("mid-at-base-offset"),
+                "{anchor}: {err}"
+            );
         }
+        let kept = serde_json::from_str::<DensityCurve>(
+            r#"{"type": "exponential", "anchor": {"mid-at-base-offset": 0.5}}"#,
+        )
+        .unwrap();
+        assert_eq!(kept.anchor(), Some(AnchorPlacement::MidAtBaseOffset(0.5)));
     }
 
     #[test]
@@ -2370,7 +2105,7 @@ mod tests {
     fn curve_json_round_trips_both_tagged_variants() {
         let exponential = DensityCurve::Exponential(ExponentialParams {
             gamma: 1.4,
-            anchor: AnchorPlacement::WhiteAtDmax,
+            anchor: AnchorPlacement::MidAtBaseOffset(0.5),
         });
         let characteristic = DensityCurve::Characteristic(CharacteristicParams {
             stock: FilmStock::Portra400,
@@ -2656,9 +2391,9 @@ mod tests {
     }
 
     #[test]
-    fn balance_range_serializes_like_dmax_source() {
+    fn balance_range_serializes_like_film_base_source() {
         // Unit variant is a bare lowercase string; the newtype variant is a
-        // tagged object — the same shape convention as `DmaxSource`.
+        // tagged object — the same shape convention as `FilmBaseSource`.
         assert_eq!(
             serde_json::to_string(&BalanceRange::Auto).unwrap(),
             "\"auto\""
@@ -2685,7 +2420,7 @@ mod tests {
     fn wb_source_serializes_like_the_other_source_enums() {
         // Unit variants are bare kebab-case strings; the payload variant is a
         // tagged object — the same shape convention as `FilmBaseSource` /
-        // `DmaxSource`.
+        // `BalanceRange`.
         assert_eq!(
             serde_json::to_string(&WbSource::GrayWorld).unwrap(),
             "\"gray-world\""

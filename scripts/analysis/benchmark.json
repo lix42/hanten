@@ -52,7 +52,7 @@
     },
     "rolls": {
       "root": "assets",
-      "note": "The real-scan benchmark: exposed frames from the Ektar and Phoenix rolls (the two rolls docs/reports/v0-baseline.md was measured on), each with its roll's frozen recipe from scripts/real-scan-verify/recipes/ -- so the roll-fixed Dmin/Dmax come from that roll's own calibration rather than a per-frame estimate. Requires the nc-assets Drive folder via ../nc-assets plus a generated manifest.json.",
+      "note": "The real-scan benchmark: exposed frames from the Ektar and Phoenix rolls (the two rolls docs/reports/v0-baseline.md was measured on), each with its roll's frozen recipe from scripts/real-scan-verify/recipes/ -- so the roll-fixed Dmin comes from that roll's own calibration rather than a per-frame estimate. Requires the nc-assets Drive folder via ../nc-assets plus a generated manifest.json.",
       "cases": [
         {
           "name": "Ektar-971",

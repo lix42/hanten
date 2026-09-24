@@ -32,30 +32,39 @@ class TestRecipe(unittest.TestCase):
 
     def test_switching_tagged_curve_replaces_incompatible_keys(self):
         merged = roll._deep_merge(
-            {"curve": {"type": "exponential", "gamma": 2, "anchor": "white-at-dmax"}},
+            {"curve": {"type": "exponential", "gamma": 2, "anchor": {"mid-at-base-offset": .62}}},
             {"curve": {"type": "characteristic", "stock": "ektar-100"}})
         self.assertEqual(merged["curve"], {"type": "characteristic", "stock": "ektar-100"})
 
     def test_measured_values_override_recipe_calibration(self):
         base = {
-            "calibration": {"film_base": {"explicit": [9, 9, 9]}, "dmax": "fixed"},
+            "calibration": {"film_base": {"explicit": [9, 9, 9]}},
             "reconstruction": {"curve": {"type": "exponential", "gamma": 1.5}},
         }
-        recipe, error = roll._freeze_recipe(base, [.1, .2, .3], 1.25,
+        recipe, error = roll._freeze_recipe(base, [.1, .2, .3],
                                              "chromogenic", "display-p3", .5)
         self.assertIsNone(error)
-        self.assertEqual(recipe["calibration"]["film_base"], {"explicit": [.1, .2, .3]})
+        self.assertEqual(recipe["calibration"], {"film_base": {"explicit": [.1, .2, .3]}})
         self.assertEqual(recipe["reconstruction"]["curve"]["type"], "exponential")
-        self.assertEqual(recipe["calibration"]["dmax"], {"explicit": 1.25})
-        # The reference is not a curve knob any more; leaving one there would be
-        # rejected by the binary with a migration error.
-        self.assertNotIn("dmax", recipe["reconstruction"]["curve"])
         self.assertEqual(recipe["input"]["film_type"], "chromogenic")
         self.assertEqual(recipe["output"]["preset"], "display-p3")
         self.assertEqual(recipe["print"]["print_exposure"], .5)
 
+    def test_the_reference_builds_retired_dmax_default_is_dropped(self):
+        # The reference build's `hanten params` still writes `"dmax": "fixed"`; a
+        # stated reference is kept for `hanten` to refuse by name.
+        recipe, error = roll._freeze_recipe(
+            {"calibration": {"film_base": None, "dmax": "fixed"}}, [.1, .2, .3],
+            None, None, None)
+        self.assertIsNone(error)
+        self.assertNotIn("dmax", recipe["calibration"])
+        recipe, error = roll._freeze_recipe(
+            {"calibration": {"dmax": {"explicit": 1.4}}}, [.1, .2, .3], None, None, None)
+        self.assertIsNone(error)
+        self.assertEqual(recipe["calibration"]["dmax"], {"explicit": 1.4})
+
     def test_an_unstated_curve_freezes_to_the_default_exponential(self):
-        recipe, error = roll._freeze_recipe({}, [.1, .2, .3], 1.0, None, None, None)
+        recipe, error = roll._freeze_recipe({}, [.1, .2, .3], None, None, None)
         self.assertIsNone(error)
         self.assertEqual(recipe["reconstruction"]["curve"], {"type": "exponential"})
 
@@ -63,12 +72,6 @@ class TestRecipe(unittest.TestCase):
         value, error = roll._region(None, {"width": 100, "height": 80}, "Dmin")
         self.assertIsNone(error)
         self.assertEqual(value, "10,8,80,64")
-
-    def test_dmax_region_defaults_to_center_eighty_percent(self):
-        value, error = roll._region(None, {"width": 100, "height": 80}, "Dmax")
-        self.assertIsNone(error)
-        self.assertEqual(value, "10,8,80,64")
-
 
 class TestConvert(unittest.TestCase):
     def setUp(self):
@@ -92,8 +95,7 @@ class TestConvert(unittest.TestCase):
 
     def args(self, **updates):
         values = dict(asset_root=str(self.root), roll="R", nc="fake-nc", config="test",
-                      out_dir=None, recipe=None, dmin_region=None, dmax_region=None,
-                      d_max=None, measure_dmax=False, dmin_mode="grid",
+                      out_dir=None, recipe=None, dmin_region=None, dmin_mode="grid",
                       film_type=None, output_preset="legacy", print_exposure=None,
                       max_memory="1GiB", strict_estimate=False, strict_roll=False)
         values.update(updates)
@@ -105,15 +107,13 @@ class TestConvert(unittest.TestCase):
                 "reconstruction": {"schema_version": 1,
                                    "curve": {"type": "exponential", "gamma": 2.0,
                                              "anchor": {"mid-at-base-offset": .62}}},
-                "calibration": {"film_base": None, "dmax": "fixed"},
+                "calibration": {"film_base": None},
                 "print": {"print_exposure": 0},
                 "output": {"preset": "gain-map-hdr", "depth": "u16"},
             }), stderr="")
-        if argv[1] == "estimate" and "--d-max-region" not in argv:
+        if argv[1] == "estimate":
             return mock.Mock(returncode=0, stdout=json.dumps({
                 "film_base": {"r": .1, "g": .2, "b": .3}}), stderr="")
-        if argv[1] == "estimate":
-            return mock.Mock(returncode=0, stdout=json.dumps({"dmax": 1.4}), stderr="")
         self.assertEqual(argv[1], "roll")
         report_path = Path(argv[argv.index("--report-file") + 1])
         inputs = argv[2:argv.index("--out-dir")]
@@ -150,38 +150,16 @@ class TestConvert(unittest.TestCase):
         calibration = json.loads((run / "calibration.json").read_text())
         self.assertEqual(tags["roll"], "R")
         self.assertEqual(tags["summary"]["succeeded"], 2)
-        self.assertEqual(recipe["calibration"]["film_base"], {"explicit": [.1, .2, .3]})
-        # By default no Dmax is measured or frozen: the default placement never reads
-        # one, so the leader is not estimated and the recipe keeps the params default.
-        self.assertEqual(recipe["calibration"]["dmax"], "fixed")
+        self.assertEqual(recipe["calibration"], {"film_base": {"explicit": [.1, .2, .3]}})
+        # Only the unexposed frame is estimated; a manifest leader is not measured.
         self.assertEqual(len([a for a in seen if a[1] == "estimate"]), 1)
         self.assertEqual(calibration["dmin"]["region"], "10,8,80,64")
         self.assertEqual(calibration["dmin"]["mode"], "grid")
-        self.assertEqual(calibration["dmax"]["source"], "not-frozen")
-        self.assertIsNone(calibration["dmax"]["value"])
+        self.assertNotIn("dmax", calibration)
+        self.assertEqual(tags["calibration"], {"dmin": {
+            "frame": "rolls/R/u.tif", "region": "10,8,80,64", "mode": "grid",
+            "value": [.1, .2, .3]}})
         self.assertEqual(json.loads(out.getvalue())["config"], "test")
-
-    def test_measure_dmax_estimates_the_leader_and_freezes_it(self):
-        with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
-             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            code = roll.cmd_convert(self.args(config="measured", measure_dmax=True))
-        self.assertEqual(code, 0)
-        run = self.root / "converted/nc/measured/R"
-        recipe = json.loads((run / "recipe.json").read_text())
-        calibration = json.loads((run / "calibration.json").read_text())
-        self.assertEqual(recipe["calibration"]["dmax"], {"explicit": 1.4})
-        self.assertEqual(calibration["dmax"]["region"], "10,8,80,64")
-        self.assertEqual(calibration["dmax"]["source"], "measured-reference")
-
-    def test_measure_dmax_and_an_explicit_d_max_are_alternatives(self):
-        with contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(
-                roll.cmd_convert(self.args(measure_dmax=True, d_max=1.2)), 2)
-
-    def test_a_dmax_region_without_measure_dmax_is_refused(self):
-        with contextlib.redirect_stderr(io.StringIO()) as err:
-            self.assertEqual(roll.cmd_convert(self.args(dmax_region="1,1,2,2")), 2)
-        self.assertIn("--measure-dmax", err.getvalue())
 
     def test_the_retired_density_tag_does_not_replace_the_default_reconstruction(self):
         recipe_path = self.root / "partial.json"
@@ -198,33 +176,14 @@ class TestConvert(unittest.TestCase):
         self.assertEqual(reconstruction["curve"]["gamma"], 2.0)
         self.assertEqual(reconstruction["curve"]["anchor"], {"mid-at-base-offset": .62})
 
-    def test_explicit_dmax_skips_leader_estimation_and_records_provenance(self):
-        seen = []
-
-        def capture(argv, **kwargs):
-            seen.append(argv)
-            return self.fake_run(argv, **kwargs)
-
-        with mock.patch.object(roll.subprocess, "run", side_effect=capture), \
-             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            code = roll.cmd_convert(self.args(config="explicit", d_max=5.4))
-        self.assertEqual(code, 0)
-        estimates = [argv for argv in seen if argv[1] == "estimate"]
-        self.assertEqual(len(estimates), 1)
-        run = self.root / "converted/nc/explicit/R"
-        recipe = json.loads((run / "recipe.json").read_text())
-        calibration = json.loads((run / "calibration.json").read_text())
-        self.assertEqual(recipe["calibration"]["dmax"], {"explicit": 5.4})
-        self.assertEqual(calibration["dmax"]["source"], "explicit-override")
-        self.assertIsNone(calibration["dmax"]["report"])
-
-    def test_explicit_dmax_must_be_positive_and_finite(self):
-        for value in (0, -1, float("nan"), float("inf")):
-            with self.subTest(value=value), \
-                 mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
-                 contextlib.redirect_stdout(io.StringIO()), \
-                 contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(roll.cmd_convert(self.args(d_max=value)), 2)
+    def test_a_missing_leader_does_not_fail_the_run(self):
+        (self.root / "rolls/R/l.tif").unlink()
+        with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            code = roll.cmd_convert(self.args(config="noleader"))
+        self.assertEqual(code, 0, err.getvalue())
+        tags = json.loads((self.root / "converted/nc/noleader/R/tags.json").read_text())
+        self.assertNotIn("rolls/R/l.tif", [f["file"] for f in tags["source_frames"]])
 
     def test_region_mode_omits_grid_flag(self):
         seen = []
@@ -237,8 +196,7 @@ class TestConvert(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             code = roll.cmd_convert(self.args(config="region", dmin_mode="region"))
         self.assertEqual(code, 0)
-        dmin_argv = next(argv for argv in seen if argv[1] == "estimate"
-                         and "--d-max-region" not in argv)
+        dmin_argv = next(argv for argv in seen if argv[1] == "estimate")
         self.assertNotIn("--grid", dmin_argv)
 
     def test_refuses_nonempty_output_before_roll(self):
@@ -250,7 +208,7 @@ class TestConvert(unittest.TestCase):
         # Calibration precedes config hashing/output resolution, but the existing
         # directory is still refused before hanten roll can overwrite an artifact.
         self.assertEqual(code, 2)
-        # `params` and the Dmin estimate; no leader estimate without --measure-dmax.
+        # `params` and the Dmin estimate.
         self.assertEqual(run_mock.call_count, 2)
 
 

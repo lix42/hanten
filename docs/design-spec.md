@@ -90,8 +90,8 @@ The deterministic core owns the image science. Any future ML assistance (see
 7. **Fail loudly, never silently.** Bad input, clipped data, or impossible
    parameters produce explicit errors/warnings with non-zero exit codes — never
    a quietly wrong image.
-8. **One recipe per roll, not per frame.** Calibration (`Dmin`, `Dmax`, the
-   stock's response) is measured per roll and then *frozen*: Hanten does not
+8. **One recipe per roll, not per frame.** Calibration (`Dmin`, the stock's
+   response, a roll's white balance) is measured per roll and then *frozen*: Hanten does not
    auto-optimize each frame to its own content. Frames from one roll stay
    comparable, and a difference between two of them is a difference in the
    scene rather than in the tool's reaction to it. This is deliberate and it is
@@ -154,7 +154,7 @@ nothing in the negative algorithm needs to know the on-disk container.
 or docs.** A pixel passes through several value *spaces* between scan and output,
 and one runs **backwards** relative to the others, so an unqualified "high value"
 is ambiguous. Everything below is **per channel** (RGB) — each pixel carries three
-values in every space; the lone exception is `Dmax` (a scalar, below). The IR
+values in every space; the lone exception is the anchor `A` (a scalar, below). The IR
 plane is a separate single channel, carried but not consumed (§6.1).
 
 | Space | Meaning | "Higher" means | Range (`f32`) | Where in code |
@@ -195,22 +195,19 @@ why `D` can dip `< 0` and why the `SCAN_EPSILON` floor exists),
 Ektar base ≈ `[0.53, 0.26, 0.16]`, blue near the bottom). Named for minimum
 *density* but stored as a transmission.
 
-**`Dmax`** is named for Hanten's shipped **legacy display-white density anchor**: in
-the current density render, corrected density `D′ = Dmax` maps to positive
-`1.0`. It lives in **density space** (a `D′` value,
-where the base is `0`) and is a **scalar** pooled across channels — a per-channel
-`Dmax` would apply three gains in `10^(γ·(D′ − Dmax))`, i.e. a white balance, which
-is the print-render stage's job, not the anchor's. ⚠️ **Distinct from classic
-photographic film `Dmax`** (the negative's physical maximum optical density, at
-the most-exposed point). In the replacement pipeline Dmax belongs to the selected
-density curve: the exponential uses it for scalar placement under a reference-reading
-anchor rule — and its default rule, `mid-at-base-offset`, reads none. SDR/HDR rendering
-owns display reference white. The shipped
-`dmax-reference`
-workflow derives it *from* a fully-exposed reference frame (near the film's
-physical Dmax) and freezes it as a roll-fixed calibration by default; the demoted
-per-frame `auto` remains opt-in exposure normalization. Never mix it with a
-transmission (a base transmission plus a range is a unit error).
+**The anchor `A`** is the corrected density `D′` that renders to positive `1.0`. It
+is a **scalar** pooled across channels (a per-channel anchor would apply three gains
+in `10^(γ·(D′ − A))`, i.e. a white balance, which is the print-render stage's job) and
+is **derived from the film base**, never measured: `A = d + 0.745/contrast` with
+mid-grey at `d` above the base (§7.2). It is reported, not an input.
+
+**`Dmax`** (historical) named the roll-fixed **reference density** the anchor used to
+be placed from — a nominal constant, a value measured from a light-struck leader, or a
+per-frame percentile. `nf-retire/dmax-machinery` retired it: **it is no longer an input
+anywhere**, and nothing measures, reads or reports it. ⚠️ Distinct from classic
+photographic film `Dmax` (the negative's physical maximum density), from diffuse white
+(a datasheet reference number, `d + 0.36`), and from a roll's content white (not
+measured) — `src/algo/fixed.rs`'s "Five quantities" table keeps them apart.
 
 **Domain glossary.** *auto-base* — auto-detecting `Dmin` from the unexposed rebate
 (`FilmBaseSource::Auto`). *rebate* — the unexposed film leader between holder and
@@ -330,18 +327,15 @@ detector proposes as possible rebate.
   does apply them is `hdr-linear-tiff`. An explicitly selected measured correction is exempt: it
   remains `film-master` and must record profile identity/hash/scope provenance. This
   master contains intentional film/lens/development/scanner character and is not
-  physical scene-linear recovery. To preserve cross-frame exposure,
-  `film-master` rejects frame-local auto Dmax under a placement that reads it; it
-  accepts supported `none` or fixed/roll placement. After recipe/CLI merge it also
-  rejects any
+  physical scene-linear recovery. After recipe/CLI merge it rejects any
   non-default downstream WB/exposure/black/white/highlight/tone/gamut/display-transfer
   control; there is no silent ignore mode. Measured correction alone does not
   rename the preset. **As shipped**, that rejection runs on the *resolved* config
   (`cli::validate`), so a value is rejected identically whether it came from a
   recipe, a flag, or a removed simple-control migration — and a flag that resets a
   recipe value back to its documented default is legitimately accepted, which is how
-  a roll recipe carrying print controls can still be re-exported as a master. `film-master` additionally rejects the **other** frame-local
-  measurement, for the same cross-frame reason as auto Dmax: an `auto`
+  a roll recipe carrying print controls can still be re-exported as a master. `film-master` additionally rejects a frame-local
+  measurement, to preserve cross-frame exposure: an `auto`
   `reconstruction.density.balance_range` *when a balance is actually applied*, because
   the tone-ramp anchors would then be measured from each frame's own density
   percentiles. An `auto` range with equal shadow and highlight balances — including the
@@ -519,9 +513,9 @@ See the "Architecture" section of `CLAUDE.md` for the current-vs-target framing.
 Stage 1's semantic resolution is **implemented** (`pipeline::input_semantics`,
 task `input-data-semantics`; see §4 and §9). Stage 3 is density reconstruction:
 density parameters plus a tagged `exponential` (default) or `characteristic` curve.
-Dmax belongs to the curve stage—scalar placement for the exponential under a rule that
-reads it; `characteristic` resolves no reference at all, reading both its slope and
-its mid-grey placement off the stock's published response. Every path returns
+The exponential places its anchor from the film base alone (§7.2); `characteristic`
+reads both its slope and its mid-grey placement off the stock's published response.
+Neither reads a reference density. Every path returns
 private-field `FilmRgbImage`.
 
 Stage 4 defines **NC film RGB v1** as the existing intentional interpretation of
@@ -541,10 +535,9 @@ bit-identical no-op.
 
 White balance, exposure, black/range placement, highlight compression,
 and output tone/gamut mapping live after ACEScg on the display branch. The
-`film-master` branch bypasses them and encodes stage 4 directly, rejects
-frame-local auto Dmax, and records that it contains intentional film rendering
-rather than a physical scene-linear recovery. Legacy-preset TIFF calls retain
-their current ordering until preset activation.
+`film-master` branch bypasses them and encodes stage 4 directly, and records that
+it contains intentional film rendering rather than a physical scene-linear
+recovery.
 
 Within the display branch, SDR and HDR share the same resolved linear white
 balance, exposure, and black/range placement. They diverge only for output-specific
@@ -650,8 +643,7 @@ detection falls back to RGB-only with a report warning naming the measurement.
 `--film-type` does not gate this: silver-halide blocks IR *in proportion to
 accumulated density*, so an unexposed silver frame is IR-transparent against an
 opaque holder (measured ~20:1) while its own fully-exposed leader is opaque
-throughout — the declared chemistry mispredicts both, and on exactly the frames
-`Dmin` and `Dmax` are calibrated from.
+throughout — the declared chemistry mispredicts both.
 
 Detection falls back to RGB-only in **four** cases: no IR plane; an IR page
 identified by shape alone; a frame measured unable to separate holder from film;
@@ -700,7 +692,7 @@ color negatives (ignores density behavior and the orange mask).
 The pre-reconstruction converter ran `positive = 1 - scan/Dmin` →
 `invert_white_balance` gain per channel → the `clip_low`/`clip_high` affine
 black/white remap. In the shipped pipeline, stage 3 ends at unclamped
-`U_c = 1 - scan_c/Dmin_c` and returns `FilmRgbImage`. `simple` has no Dmax.
+`U_c = 1 - scan_c/Dmin_c` and returns `FilmRgbImage`.
 Inversion WB and clip remapping move after the ACEScg boundary to the downstream
 shared WB/black/range-placement contract. **As shipped**, both replacement homes
 now exist — explicit `print.white_balance` and `print.linear_range` /
@@ -733,19 +725,19 @@ The credible baseline for color negatives, following Kodak Cineon / darktable
 2. density correction:       B  = per-channel scale·D + offset (orange-mask comp)
    regional balance:         D̄  = mean(B_r, B_g, B_b)   (scalar tone value)
                              D' = B + shadow_balance·w_lo(D̄) + highlight_balance·w_hi(D̄)
-3. density curve:            exponential { gamma, Dmax } or
-                             sigmoid { contrast, toe, shoulder, Dmax }
+3. density curve:            exponential { gamma, anchor } or
+                             characteristic { stock }
 4. typed film positive:      FilmRgbImage
 5. NC film RGB v1 mapping:   linear Rec.709/D65 → linear ACEScg/D60
 6. print/display controls:   white balance, exposure, black/range placement
 ```
 
-Steps 1–2 are density reconstruction. The tagged curve owns the positive mapping
-and Dmax semantics. Exponential preserves the current
-`10^(gamma·(D'−Dmax))` pixels, with Dmax as scalar placement; sigmoid preserves
-the current S-curve exactly and uses Dmax to shape that curve. Both return the
-same typed film RGB boundary before the shared working-space transform. Step 6
-runs after the ACEScg boundary, in the shared display stage (`render_split`).
+Steps 1–2 are density reconstruction. The tagged curve owns the positive mapping:
+the exponential renders `10^(gamma·(D'−A))` with a scalar anchor `A`; the
+characteristic curve inverts a named stock's published per-channel curve, which
+carries its own slope and mid-grey placement. Both return the same typed film RGB
+boundary before the shared working-space transform. Step 6 runs after the ACEScg
+boundary, in the shared display stage (`render_split`).
 
 **Polarity.** With `D = -log10(scan / Dmin)` the density is `≥ 0` and *grows* with
 the film's optical density — the unexposed base (scene black) sits at `D = 0`, a
@@ -754,39 +746,33 @@ dense negative area (a scene highlight) at large `D`. A positive must brighten a
 reproduce the negative). This matches darktable `negadoctor` (denser negative →
 brighter print).
 
-**Curve-stage Dmax.** In the shipped curve stage, `Dmax` is the corrected
-density of scene white and the exponential expression `10^(gamma·(D'−Dmax))`
-guarantees that `D' = Dmax` maps to `1.0` under the `white-at-dmax` placement. The
-base maps to `10^(−gamma·Dmax) ≈ 0`; with `none` *and that placement*, the
-exponential curve reproduces its unanchored output bit-for-bit (base `1.0`, detail
-above). `none` resolves the reference to `0`, so any other placement still derives a
-non-zero anchor from the slope and renders differently.
+**Curve-stage anchor.** The exponential's anchor `A` is the corrected density that
+renders to `1.0`; the base (`D′ = 0`) renders to `10^(−gamma·A)`. `curve.anchor` holds
+the placement rule, and one rule ships:
 
-In the shipped schema, exponential retains Dmax as scalar placement and
-sigmoid retains it as a nonlinear curve-shaping input. Display reference white
-belongs to the later SDR/HDR render. Fixed/roll Dmax preserves cross-frame
-exposure; frame-local auto Dmax is exposure normalization and is rejected for
-`film-master`.
+| `curve.anchor` | anchor `A` | meaning |
+|---|---|---|
+| `{"mid-at-base-offset": d}` (default `d = 0.62`) | `d + 0.745/contrast` | mid-grey (18%) renders at density `d` *above the film base*; display white falls `0.745/contrast` above it |
 
-`Dmax` is a **roll-fixed calibration** — a film + scanner property reused across
-the roll, like the `Dmin` base — **not** a per-frame measurement. Anchoring each
-frame's densest pixel to display white *normalizes exposure per frame* (it
-brightens underexposed frames and forces an overcast scene's grey to white), which
-conflicts with NC's "convert faithfully, grade in Lightroom" purpose. The
-default `calibration.dmax = "fixed"` therefore resolves a **fixed** anchor in the order
-**measured reference → per-stock constant → nominal**: a value measured once from
-a fully-exposed reference frame (§8, `estimate --d-max-region`) or a known
-per-stock constant is carried as `{ "explicit": <d> }`; with no calibration a
-**nominal** corrected-density anchor (`Dmax = 1.3`, a scene-independent placement
-*in density units* — not a base transmission plus a range) applies. The brightest
-pixel then maps to *wherever it falls* (below white for a dim frame, clipping above
-for a specular), the faithful behavior. `auto` (`--auto-d-max`) — the demoted
-per-frame percentile measurement — remains as an opt-in **exposure-normalizing**
-mode, and `"none"` (`--no-d-max`) selects, under `white-at-dmax`, unity exponential
-placement: an unanchored film rendering whose base is `1.0` and whose detail rises above it.
-This does not recover physical scene values. See §9. (This is the
-`dmax-reference` design, §12 item 14; it supersedes
-the earlier frame-local `auto` default.)
+`0.745 = −log10(0.18)` is mid-grey's fixed distance below white on the *output* axis.
+At the defaults (contrast 2.0) `A ≈ 0.99`. The rule is **reference-free**: it reads only
+the film base, which step 1 divides out, so the base *is* `D′ = 0` by construction
+(modulo `density.offset` and any regional balance). No leader or reference density
+enters the render, so a leader's roll-to-roll error cannot reach it, and nothing is
+measured per frame — the rule is a roll-level placement, never derived from frame
+content. The other three placements — `white-at-dmax` and `mid-at-dmax-fraction`, which
+read a roll reference density, and `black-at-base`, which pinned the base to an output
+floor — retired with that reference in `nf-retire/dmax-machinery`; a recipe naming one is refused naming `mid-at-base-offset`.
+`AnchorPlacement` stays a tagged enum so a later content-referenced placement
+(`nf-calibration/anchor-comparison`) can carry its own measured value.
+
+`characteristic` has no placement rule — the published curve carries it — so a switch
+to it resets `curve.anchor`; a switch that discards a **non-default** placement emits a
+loud, `--strict`-promotable warning. An `exponential` recipe without `gamma` or `anchor`
+warns that it will pick up this build's (moved) defaults: this build always writes both
+keys, so their absence marks a file some other build wrote. Gamma and the anchor
+exist only in the exponential variant: `--density-gamma` or `--anchor-mid-offset` under
+a resolved `characteristic` curve is refused (exit 2), never ignored.
 
 **Regional (shadow/highlight) color balance.** A color *crossover* — a cast that
 differs between shadows and highlights (expired film, misprocessing, mixed
@@ -806,8 +792,7 @@ above) a positive balance value brightens that channel in its region. The range
 anchors come from `reconstruction.density.balance_range`: `auto` (default)
 measures robust
 percentiles (0.5 % / 99.5 %, nearest-rank over a deterministic sample) of the
-per-pixel tone in a two-pass within step 2 — it cannot anchor on the `auto`
-`Dmax`, which is measured *after* step 2 (circular) — while an explicit
+per-pixel tone in a two-pass within step 2, while an explicit
 `[lo, hi]` (e.g. a frame's reported range reused across a roll) short-circuits
 the measuring pass. Neutral `[0,0,0]` balances (the default) skip the regional
 pass entirely: the output is bit-exact with the unbalanced render. This runs
@@ -836,24 +821,29 @@ Negative reconstruction, density-to-positive curve, working-space mapping, and
 print/display rendering remain separate, independently parameterized
 stages — the core fidelity rule from §3.
 
+`--highlight-compress` retired in `nf-retire/display-tones` with the `shoulder` tone
+whose knee it placed (its other meaning, an above-`1.0` soft clip on film RGB, had
+retired with the `legacy` preset); highlight roll-off is the display tone's, sized by
+`--display-tone-headroom` (§6).
+
 ### 7.3 `sigmoid` — density-domain S-curve (H&D / paper response) (retired)
 
 > **Retired** in `nf-retire/sigmoid-and-simple` (`pipeline_version` 6): its shoulder is a
 > rendering fused into the decode. The default became the exponential at the fixed
 > decode's configuration — the sigmoid with both knees off, at a base-derived anchor.
 > `curve.type = "sigmoid"`, the `--sigmoid-*` flags and the `sigmoid-*` presets are
-> migration errors; the text below records what it was. The anchor-placement rules it
-> introduced remain the exponential's.
+> migration errors; the text below records what it was. The base-offset anchor it
+> introduced is the exponential's one placement (§7.2).
 
 An S-shaped tone curve in density space, giving the shoulder/toe control of a
 photographic H&D / print-paper characteristic instead of the `density`
-algorithm's straight `10^(gamma·(D'−Dmax))` line. It shares density correction
+algorithm's straight `10^(gamma·(D'−A))` line. It shares density correction
 (steps 1–2 and their parameters, §9) and the later print/display render
 (`print.*`) with `density`; only step 3 — the density → positive curve — is
 replaced:
 
 ```
-A = anchor(R, contrast)                        anchor density: the D' rendering to 1.0 (below)
+A = anchor(contrast)                           anchor density: the D' rendering to 1.0 (§7.2)
 t = contrast·(D' − A)                          the straight line, in log10-output space
 F = −contrast·A                                paper-black floor (the line's value at D' = 0)
 p = F + toe·log10(1 + 10^((t−F)/toe))          toe  FIRST: soft-max with F   (skipped if toe = 0)
@@ -866,120 +856,18 @@ approach to paper black, then a **shoulder** compressing the approach to display
 white. **The knee order is deliberate:** the shoulder (soft-min with the
 log-output-`0` ceiling) is applied *last*, so nothing lifts the result back above
 white — for `shoulder > 0`, this **stage-3 output** is `≤ 1.0` for every finite
-density, for any valid params (including a small `Dmax` or low-contrast auto
-anchor), so under neutral print params the default u16 encode **reports no clipped
+density, for any valid params, so under neutral print params the default u16 encode **reports no clipped
 highlights** (the later print/display render — exposure/gains — can still lift samples
 above `1.0`).
-
-That is a statement in ℝ, and it must not be read as "no highlight information is
-lost". The approach to white is asymptotic, so in `f32` the gap closes at a finite
-density — at the shipped defaults with the nominal 1.3 anchor, the rendered value is
-exactly `1.0f32` from just above `D′ ≈ 3.1` onward. The encoder counts a clip as
-`v > 1.0` **strictly**, so those densities all encode to 65535 with
-`loss.clipped_high = 0` and `--strict` green. The region is narrow (near-opaque
-negative), but part of "0% clipped" is loss that moved from a counted category into
-an uncounted one; `docs/reports/render-defaults-v2.md` records the measurement.
 
 With `shoulder = 0` there is no roll-off and
 highlights follow the (toe-shaped) line, which can exceed `1.0` like `density`.
 The toe holds shadows to the paper-black floor `≈ 10^(−contrast·A)` (exact
 when `shoulder = 0`; the shoulder nudges it imperceptibly lower otherwise).
 `toe`/`shoulder` are knee widths in log10 density units; `contrast` is the
-mid-density slope in log-output space. The curve is strictly monotonic; with
-`toe = shoulder = 0` **and `anchor = "white-at-dmax"`** both knees are skipped
-and it reproduces `density`'s step 3 **bit-for-bit** (`contrast` standing in for
-`density_gamma`), so `density` remains the debuggable straight-line reference.
-Under the default mid-grey placement the line is the same shape but offset,
-since `A ≠ Dmax` — the equivalence is a property of that anchoring rule, not of
-zero knees alone. `contrast` is capped (§9) — an
-extreme slope would collapse the curve into a hard threshold that silently
-destroys tonal detail.
-
-Because both the white knee and the black floor derive from the anchor, the
-S-curve **requires** one: `calibration.dmax = "none"` with `curve.type = "sigmoid"`
-is a usage error (exit 2); unity placement is supported only by the exponential
-curve. `calibration.dmax` resolves by the same fixed, explicit/reference-derived, or
-opt-in auto policy under either curve.
-
-**`calibration.dmax` supplies the roll's *reference* density `R`; `curve.anchor` decides
-which tone that reference places.** Placement is **shared by both parametric curves**
-(the `characteristic` curve has no placement rule: the published curve carries it) — it is
-orthogonal to curve shape — so `curve.anchor` is a key of the exponential variant as
-well as the sigmoid, and one `--anchor-*` CLI family serves both. Pinning display
-white at a reference measured from a fully-exposed leader put midtones 2.5–3.6 stops
-too dark once the contrast became photographic: steepening the slope pivots the line
-about whatever point is pinned, so pinning the top end drags everything below it
-down. The four rules are:
-
-| `curve.anchor` | anchor `A` | meaning |
-|---|---|---|
-| `{"mid-at-dmax-fraction": f}` (sigmoid default, `f = 0.5`) | `f·R + 0.745/contrast` | mid-grey (18%) renders at fraction `f` of the reference; display white lands `0.745/contrast` above it, and densities beyond it are compressed by the shoulder rather than clipped |
-| `"white-at-dmax"` (exponential default) | `R` | display white renders *at* the reference — the pre-2026-08 rule, retained as an explicit diagnostic and as the exponential's debuggable straight line |
-| `{"black-at-base": floor}` | `−log10(floor)/contrast` | the **film base** renders to `floor`, a linear output value against the 203-nit reference white; display white falls where the slope puts it |
-| `{"mid-at-base-offset": d}` | `d + 0.745/contrast` | mid-grey renders at density `d` *above the film base* rather than at a fraction of the reference |
-
-`0.745 = −log10(0.18)` is mid-grey's fixed distance below white on the *output*
-axis. Every rule is a **roll-level** placement, never derived from frame content.
-
-**A `Dmax` policy is only frame-local if the placement reads it.** `black-at-base` and
-`mid-at-base-offset` discard the resolved reference, so `dmax = "auto"` under either is
-computed and thrown away: the render is deterministic and identical across frames. Every
-`Dmax`-policy gate therefore tests the *placement*, not the `DmaxSource` — `film-master`
-accepts `auto` under a reference-free rule (its rejection exists to keep frame-local
-adaptation out of a master, and there is none), and `roll` does not call such a recipe
-"not frozen". Gating on the source alone hard-rejected a valid master and made `--strict`
-fail a consistent roll.
-
-**A curve-type switch resets `curve.anchor`; it does not carry it.** It has nothing
-to carry: since `core/calibration-recipe-section` the reference density lives in
-`calibration.dmax`, outside the object being switched, so it survives every switch —
-including into and out of `characteristic`, which the earlier in-curve carry could not
-cross. Placement is a different case: each curve's default is chosen for that curve
-(`white-at-dmax` is the exponential's diagnostic straight line and the sigmoid's
-warned-against setting), so carrying it would make one curve's default the other's
-accident. A switch that discards a **non-default** placement emits a loud,
-`--strict`-promotable warning naming it — silence would be a different tonal rule with
-nothing in the report to show it, and on `roll` the override that causes it names only
-`type`, so no key-presence check can see it.
-
-**The last two are reference-free, and that is their point.** `R` is a leader
-density — film saturation rather than diffuse white — and two rolls of one stock have
-measured 0.295 apart while their bases agreed to 0.0005. Since `dA/dR` is the
-reference's coefficient, that spread reaches the render multiplied by it: 1.96 stops
-at `white-at-dmax`, 0.98 at `mid-at-dmax-fraction` with `f = 0.5`, and **zero** for
-the base-derived pair. The base needs no separate measurement — step 1 divides it out,
-so the film base *is* `D′ = 0` by construction, modulo `density.offset` and any
-regional balance. On the sigmoid, `black-at-base` places the straight-line-extrapolated
-base rather than the toe-rendered one, the same approximation `mid-at-dmax-fraction`
-already makes there.
-
-**Archived recipes are warned about, not silently reinterpreted.** `curve.anchor` did not
-exist before 2026-08-03, so a recipe frozen earlier omits it and picks up this build's
-default placement — a different render even with `contrast`, `toe`, `shoulder` and `dmax`
-all pinned. Loading a recipe that selects `sigmoid` without an `anchor` therefore emits a
-loud, `--strict`-promotable warning naming `"white-at-dmax"` as the way to reproduce the
-old placement. An `exponential` recipe without an `anchor` warns too, in the
-moved-defaults form it shares with a floating `gamma` or `calibration.dmax`: this build always writes the
-key, so its absence marks a file some other build wrote. The exponential's default
-placement is behaviour-preserving *today*, which is why it is the milder warning and not
-the placement-moved one. This is deliberately *not* a `reconstruction.schema_version` bump: that
-constant versions the schema **shape** and is checked for exact equality, so bumping it
-would reject every archived recipe outright, including the majority that select the
-exponential curve and are unaffected. Preserving per-version semantics instead (a
-historical default table, which would also have to cover `contrast` and `shoulder`) is
-policy owned by `core/conversion-versioning`. Mid-placement is also half as sensitive to a
-reference error (`dA/dR = f`), which matters because a leader's density records
-how the roll was loaded, not the film. `f` must be in `(0, 1]` (§9). Those two rules
-keep `calibration.dmax` as the normalisation reference, so the roll-fixed invariant
-holds; the base-derived pair never reads it, which is what removes their
-roll-to-roll term entirely. Gamma exists only in the exponential variant. Supplying
-`--density-gamma` while the resolved curve is sigmoid is an invalid combination
-after merge (exit 2), never a warning or ignored value (the pre-reconstruction
-implementation's ignored-gamma warning is gone).
-`--highlight-compress` retired in `nf-retire/display-tones` with the `shoulder` tone
-whose knee it placed (its other meaning, an above-`1.0` soft clip on film RGB, had
-retired with the `legacy` preset); highlight roll-off is the display tone's, sized by
-`--display-tone-headroom` (§6).
+mid-density slope in log-output space. With `toe = shoulder = 0` both knees are
+skipped and it reduces to the exponential's straight line — which is how the fixed
+decode's default was derived from it.
 
 ### Shipped and target interfaces (sketch)
 
@@ -1038,7 +926,7 @@ no interactive prompts.
 | `hanten convert` | The main pipeline: negative file → positive image in the resolved preset's container (a gain-map JPEG by default; a TIFF or AVIF under the presets that say so). |
 | `hanten roll` | Convert a batch of frames from one shared, frozen recipe (the batch-**apply** scaffold). Per-frame outputs into `--out-dir` + a roll-level JSON report. Single-frame `convert` is unchanged; roll is additive. |
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, candidate rebate regions (coordinates + spread, ready for `--base-region`), suggested `Dmin`. No output image. |
-| `hanten estimate` | Run only film-base/`Dmin` estimation; emit JSON with a reuse-ready `--film-base` flag and a `calibration` object in recipe shape. `--grid` adds 5-cell agreement-checked sampling for blank reference frames. `--d-max-region` additionally measures the roll-fixed display-white anchor `Dmax` from a fully-exposed reference frame, emitting a `--d-max` flag and the matching `calibration.dmax`. |
+| `hanten estimate` | Run only film-base/`Dmin` estimation; emit JSON with a reuse-ready `--film-base` flag and a `calibration` object in recipe shape. `--grid` adds 5-cell agreement-checked sampling for blank reference frames. |
 | `hanten measure-roll` | Measure a roll's white balance once, for its new-chain recipe (`nf-scene-correction/roll-white-balance`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99 — as a reuse-ready `--white-balance` flag and a `scene_correction` recipe fragment. `--leader` leaves out any pixel within 0.1 density of the leader, so a fully exposed frame cannot become the roll's white; without it the run warns. |
 | `hanten params`  | Print the full default/effective parameter set as JSON (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
@@ -1082,8 +970,8 @@ reconstruction shapes (other stage objects are omitted here):
 
 That example is the **resolved default document** as of `pipeline_version` 6 —
 copying it reproduces the shipped render, the fixed decode's configuration. The
-exponential takes other anchor rules too (here with a custom density block and a
-calibrated reference, to show the other fields):
+exponential's fields can all be restated (here with an explicit balance range and a
+lower mid-grey placement):
 
 ```json
 {
@@ -1099,7 +987,7 @@ calibrated reference, to show the other fields):
     "curve": {
       "type": "exponential",
       "gamma": 2.0,
-      "anchor": "white-at-dmax"
+      "anchor": {"mid-at-base-offset": 0.5}
     }
   }
 }
@@ -1120,15 +1008,13 @@ A third tagged curve reads the film's measured response instead of modelling it
 
 `reconstruction.schema_version` is exactly `1`. Partial input may omit it and
 defaults to 1; resolved recipes always emit it. `curve.anchor` (the exponential's)
-accepts `"white-at-dmax"`, `{"mid-at-dmax-fraction": <f>}` with `f` in `(0, 1]`,
-`{"black-at-base": <floor>}` with `floor` in `(0, 1)`, or `{"mid-at-base-offset": <d>}`
-with `d > 0`. It defaults to `{"mid-at-base-offset": 0.62}` — the fixed decode's rule,
-which reads no reference (§7.3's placement table). `curve.stock` belongs to `characteristic` alone and names one of the digitized
+accepts `{"mid-at-base-offset": <d>}` with `d > 0`, defaulting to
+`{"mid-at-base-offset": 0.62}` — the fixed decode's rule (§7.2). A retired placement
+(`"white-at-dmax"`, `mid-at-dmax-fraction`, `black-at-base`) is refused naming it. `curve.stock` belongs to `characteristic` alone and names one of the digitized
 stocks (`generic-c41` — the default — `ektar-100`, `portra-160`, `portra-160vc`,
 `portra-400`, `portra-400vc`, `portra-800`, `gold-200`, `ultramax-400`, `ultramax-800`);
-that curve accepts **no other key**, because it resolves neither a reference density nor a
-placement
-rule — both are properties of the published curve. Mixing a key across curve types is
+that curve accepts **no other key**, because its slope and placement are properties
+of the published curve. Mixing a key across curve types is
 rejected by name in either direction. Omitted
 density fields take the displayed defaults. Partial input may omit
 `reconstruction.curve`, which selects the default curve (exponential) with its defaults; every
@@ -1144,41 +1030,35 @@ in which file:
 ```json
 {
   "calibration": {
-    "film_base": {"explicit": [0.163, 0.080, 0.0377]},
-    "dmax": {"explicit": 1.276}
+    "film_base": {"explicit": [0.163, 0.080, 0.0377]}
   }
 }
 ```
 
 `calibration.film_base` accepts `"auto"`, `{"region": [x, y, w, h]}` or
 `{"explicit": [r, g, b]}` and has **no default** — `convert` and `roll` refuse an
-unstated one (§9). `calibration.dmax` accepts `"fixed"` (the default), `"auto"`,
-`"none"` or `{"explicit": <density>}`. The exponential renders `"none"` as the unity
-placement under `white-at-dmax`; the base-derived placements (the default among them)
-and `characteristic` read no reference at all, so they carry any value. A pipeline profile is then "a recipe with no `calibration` section", and a
-roll calibration is "a recipe with nothing else".
+unstated one (§9). It is the section's only member today. A pipeline profile is then
+"a recipe with no `calibration` section", and a roll calibration is "a recipe with
+nothing else".
 
 **A key belongs here when it is (a) measured from the film, (b) fixed across the
 roll, and (c) consumed by a rule that lives elsewhere.** That is why `curve.anchor`
-stays in the curve: the anchor is the *rule* for what the reference places, which
-is part of the look — only the measurement leaves. The section is deliberately
+stays in the curve: it is a rule, part of the look, and reads only the film base. The section is deliberately
 **open**, not a fixed pair: a roll content white (and possibly its per-frame
 spread) joins it if `nf-calibration/anchor-comparison` picks a content-referenced or
 hybrid placement (`docs/spike/white-placement.md`). Each member carries its own
 optionality and its own default.
 
-Producing a calibration is not "one frame in, one calibration out": `film_base` and
-`dmax` each come from a single reference frame, but a roll content white is a
-percentile across many. The acquisition cascade is `core/base-acquisition-planner`.
+Producing a calibration is not "one frame in, one calibration out": `film_base`
+comes from a single reference frame, but a roll content white is a percentile across
+many. The acquisition cascade is `core/base-acquisition-planner`.
 
-**A stated value the resolved look will not read is carried, not refused.** The
-`characteristic` curve reads its reference off the published response, and the
-exponential's base-derived placements — its default among them — never read one; a
-`calibration.dmax` beside either is accepted — which is
-what lets one calibration compose with any profile — and reported through a
-`--strict`-promotable warning, so it is never silently ignored. The old paths
-(`reconstruction.curve.dmax`, a top-level `film_base`) are rejected with a migration
-error naming the new one.
+**`calibration.dmax` retired** with the roll reference density
+(`nf-retire/dmax-machinery`). Because every earlier sidecar and `--dump-params` document
+serializes it at its old default, `"dmax": "fixed"` is accepted and dropped on load;
+any other value is refused (exit 2) naming the key. The older paths
+(`reconstruction.curve.dmax`, a top-level `film_base`) are likewise rejected with a
+migration error.
 
 The retired `simple.invert_white_balance`, `simple.clip_low`, and `simple.clip_high`
 keys (and flags) are rejected with a migration error naming their replacements under
@@ -1287,13 +1167,11 @@ ships the knob, not written here ahead of the code.
 | | Scope | Origin | Reused |
 |---|---|---|---|
 | **pipeline profile** — reconstruction, curve shape, print controls, output policy | a look | chosen | across many rolls |
-| **roll calibration** — `calibration.film_base`, `calibration.dmax` | one roll | measured from film | never |
+| **roll calibration** — `calibration.film_base` (and any later roll measurement) | one roll | measured from film | never |
 
 **The structural half of this has shipped** (`core/calibration-recipe-section`):
-the measurements live in their own `calibration` section, described above, and the
-name `dmax` was kept — it accurately names the maximum density; the historic
-confusion was its *role*, which `anchor` now carries explicitly. What remains
-below is the *workflow* built on that split.
+the measurements live in their own `calibration` section, described above. What
+remains below is the *workflow* built on that split.
 
 **Composition is layered, over one schema.** `--params` is repeatable and accepts
 `-` for stdin. Later layers win, and individual flags still win over all of them:
@@ -1314,8 +1192,9 @@ hanten profile --density-gamma 2.4            --output-preset display-p3 --out m
 hanten roll frames/*.tif --out-dir positives/         --params my-look.jsonc --params roll-cal.jsonc     # apply
 ```
 
-Both `--unexposed` and `--leader` are independently optional: either alone
-resolves its own half and leaves the other at its default. Agents can skip the
+Both `--unexposed` and `--leader` are optional: `--unexposed` resolves the film base,
+and `--leader` — which measured the retired reference density — would now only guard
+a roll-white measurement, as `measure-roll`'s does. Agents can skip the
 files entirely — the report stays on stdout, so
 `hanten calibrate … | jq '{calibration}' | hanten roll … --params -` composes
 (the report's `calibration` key is the section *body*, so the object form is what
@@ -1461,18 +1340,12 @@ task):
       }
     },
     "calibration": {
-      "film_base": {"explicit": [0.163, 0.080, 0.0377]},
-      "dmax": "fixed"
+      "film_base": {"explicit": [0.163, 0.080, 0.0377]}
     }
   },
   "reconstruction_result": {
     "curve": {
       "type": "exponential",
-      "dmax": {
-        "policy": "fixed",
-        "value": 1.3,
-        "provenance": "default"
-      },
       "anchor": {"mid-at-base-offset": 0.62},
       "anchor_value": 0.99236375
     }
@@ -1521,32 +1394,21 @@ pre-display master, `display-linear-bt2020-float-tiff` is display-rendered but
 pre-transfer. `content` states what
 the pixels contain; for `film-master` it names the intentional
 film/lens/development/scanner/reconstruction/curve rendering and explicitly
-disclaims physical scene recovery. It names *which* anchor placement the run made:
-the resolved roll-fixed `Dmax` one, a film-base-derived one that read no `Dmax`, the
-stock's own published curve under `characteristic` (which applies no placement rule at
-all), or none at all — exponential `dmax = none` under `white-at-dmax` places none. Keying that only on `calibration.dmax` would give a stated
-base-derived anchor and a genuinely unanchored run the same provenance, and let a
-render that never read `Dmax` claim the roll-fixed placement. `working_mapping` is repeated inside the block
+disclaims physical scene recovery. It names the placement per curve: "a
+film-base-derived anchor placement" under the exponential, and the stock's own
+published curve under `characteristic` ("no anchor rule ran"). `working_mapping` is repeated inside the block
 so a master's provenance is self-contained, and
 `reconstruction_schema_version` mirrors `reconstruction.schema_version`. The
 behavioral `pipeline_version` is a **separate** field owned by
 `conversion-versioning`; this build stamps none, so it is absent rather than
 guessed.
 
-The block above is the **default** shape: `curve.type` is `"exponential"` with the
-resolved `dmax` object plus two placement fields: `anchor` (the resolved placement
-*rule*) and `anchor_value` (the **derived** anchor — the corrected density this render
-mapped to `1.0`, hence the black floor at `10^(−contrast·anchor_value)`). `dmax.value`
-is the *reference*; under the default base-derived placement `anchor_value` does not
-depend on it at all — the render never read it — which is precisely why `anchor` has to
-be reported alongside it. Under `white-at-dmax` `anchor_value` equals `dmax.value`.
-For `"none"`, `dmax` is `{"policy":"none","value":null,"provenance":"recipe"}`. (Until
-`simple` retired the block carried a `type` tag; it has none now.) `policy` is one of
-`fixed|explicit|auto|none`, and `provenance` is one of
-`default|recipe|cli|auto-frame`. A scalar measured from a reference and frozen
-into a recipe has `policy = "explicit"` and `provenance = "recipe"`; its capture
-region remains estimate/report provenance rather than a runtime re-read
-directive. `reconstruction.schema_version = 1` versions the wire schema; it is
+The block above is the **default** shape: `curve.type` is `"exponential"` with two
+placement fields: `anchor` (the resolved placement *rule*) and `anchor_value` (the
+**derived** anchor — the corrected density this render mapped to `1.0`, hence the black
+floor at `10^(−contrast·anchor_value)`). (The block's `dmax` {policy, value, provenance}
+object retired with the reference in `nf-retire/dmax-machinery`.)
+`reconstruction.schema_version = 1` versions the wire schema; it is
 not the behavioral `pipeline_version`. The `conversion-versioning` task owns
 stamping and bumping `pipeline_version`, and does so only when default pixels
 change. Recipe/report
@@ -1562,20 +1424,13 @@ fields to `null`:
                     "above": [0.058473945, 0.051922057, 0.0] },
   "stock": { "name": "portra-400", "publication": "E-4050", "revision": "2025-01",
              "aims": [0.82, 1.18], "d_min": [0.2192, 0.646, 0.8665] },
-  "dmax": { "policy": "none", "value": null, "provenance": "default" },
   "anchor": null, "anchor_value": null
 }
 ```
 
-`dmax.policy` is `"none"` here whatever `calibration.dmax` states: this block is the
-*resolution*, and this curve reads no reference, so naming the configured policy
-would claim an anchor the render never placed. A stated reference is still visible in
-the echoed `recipe.calibration`, and a `--strict`-promotable warning says it was not
-read.
-
-`anchor` and `anchor_value` are `null` because this curve follows no placement rule and
-resolves no reference — mid-grey lands where the published response puts it — and naming one
-of the four rules there would document a knob the render never read. `out_of_table` is the
+`anchor` and `anchor_value` are `null` because this curve follows no placement rule —
+mid-grey lands where the published response puts it — and naming the exponential's rule
+there would document a knob the render never read. `out_of_table` is the
 fraction of the frame that fell past either end of each channel's table and was extrapolated
 along its end slope; it is emitted on every `convert` rather than only when it warns (a
 `roll` frame entry emits no `reconstruction_result` block at all, so on a roll only the
@@ -1633,7 +1488,7 @@ failed for another reason, whose entry carries both its `memory` block and its
 ### Example invocations
 
 ```bash
-# Default density conversion: fixed/roll nominal Dmax, gain-map JPEG, JSON report.
+# Default density conversion: base-derived anchor, gain-map JPEG, JSON report.
 # The curve flag is optional (it is the default); the film-base flag
 # is **not** — `calibration.film_base` has no default, so every `convert` must state
 # one of `--film-base` / `--base-region` / `--auto-base`. The `.jpg` suffix *is*
@@ -1653,14 +1508,13 @@ hanten convert in.tiff -o out.tiff \
 
 # The film master: unclamped 32-bit float linear ACEScg straight out of the
 # NC film RGB v1 mapping, ACEScg profile embedded, no print or display controls at
-# all. Reconstruction + the density curve + the roll-fixed Dmax placement ARE in
-# the master (that is the intentional film rendering); WB/exposure/black/range and
-# every display operation are not. A non-default print control alongside it is a
-# usage error, as is --auto-d-max or a measured --auto-balance-range. Never
-# silently dropped.
+# all. Reconstruction + the density curve + its anchor placement ARE in the master
+# (that is the intentional film rendering); WB/exposure/black/range and every
+# display operation are not. A non-default print control alongside it is a usage
+# error, as is a measured --auto-balance-range. Never silently dropped.
 hanten convert frame12.tiff -o frame12_master.tiff \
   --output-preset film-master \
-  --film-base 0.92,0.55,0.42 --d-max 1.64
+  --film-base 0.92,0.55,0.42
 # → report.output_render = { "preset": "film-master", "print_controls": false,
 #     "display_render": false, "encoding": "unclamped-linear-acescg-float-tiff",
 #     "working_mapping": "nc-film-rgb-v1", … }
@@ -1674,9 +1528,9 @@ hanten convert frame12.tiff -o frame12_pos.jpg \
   --params roll-A.json --print-exposure 0.15
 
 # Convert a whole roll from ONE shared, frozen recipe (batch-apply). The shared
-# recipe config (roll-fixed film base + Dmax) lives in roll-A.json and appears
+# recipe config (the roll-fixed film base) lives in roll-A.json and appears
 # once at the top of the roll report; each frame additionally echoes the resolved
-# base/Dmax it used. Per-frame outputs go to out/ as <stem>_positive.<ext>, the
+# base it used. Per-frame outputs go to out/ as <stem>_positive.<ext>, the
 # suffix following the resolved output preset.
 hanten roll frame01.tiff frame02.tiff frame03.tiff --out-dir out/ --params roll-A.json
 hanten roll scans/ --out-dir out/ --params roll-A.json   # a directory expands to its .tif/.tiff
@@ -1691,9 +1545,9 @@ hanten roll --frames frames.json --out-dir out/ --params roll-A.json
 # The roll report: { "command": "roll", "recipe": { …shared frozen recipe… },
 #   "warnings": [ …roll-level, e.g. base-not-frozen… ],
 #   "frames": [ { "input": …, "output": …, "status": "ok", "film_base": …,
-#     "dmax": …, "warnings": […], "overrides": … }, … ],
+#     "warnings": […], "overrides": … }, … ],
 #   "summary": { "total": 3, "succeeded": 3, "failed": 0 } }
-# (each frame's "film_base"/"dmax" is the *resolved* value it used, alongside the
+# (each frame's "film_base" is the *resolved* value it used, alongside the
 #  shared recipe config above — not a second copy of a per-frame-varying knob)
 # A frame's failure is recorded (status "failed" + error) and the roll continues;
 # the process then exits non-zero. Determinism: same batch + same recipe ⇒
@@ -1719,27 +1573,6 @@ hanten estimate reference.tiff --base-region 200,0,300,3600 --report json
 hanten convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159
 # …or write the calibration straight out and batch with it:
 hanten estimate reference.tiff --base-region 200,0,300,3600 | jq '{calibration}' > roll-cal.json
-
-# Calibrate the roll-fixed display-white anchor `Dmax` the same way: point
-# `--d-max-region` at a fully-exposed (near-opaque) reference frame — the
-# light-struck roll leader — with the roll's Dmin as --film-base. `estimate`
-# reduces that region's per-channel base-relative density D (= corrected density
-# under default density-scale/offset) to one scalar (a gray-density
-# reduction) and reports it in reusable forms: a --d-max flag and the matching
-# `calibration.dmax`. The region is recorded as provenance (dmax_region), NOT as a
-# re-read directive — the frozen recipe carries the scalar so the apply phase is
-# deterministic. `Dmax` is roll-fixed like `Dmin` (see §7.2/§9).
-hanten estimate leader.tiff --film-base 0.553,0.271,0.159 --d-max-region 200,0,300,3600 --report json
-# → { "film_base": { … },
-#     "dmax": 1.6428, "dmax_region": [200, 0, 300, 3600],
-#     "d_max_flag": "--d-max 1.6428",
-#     "calibration": { "film_base": { "explicit": [0.553, 0.271, 0.159] },
-#                      "dmax": { "explicit": 1.6428 } }, … }
-hanten convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159 --d-max 1.6428
-# …or take the whole `calibration` object as roll-A.json's calibration section —
-# both halves at once, no hand editing. With no reference frame, omit it: the
-# default `calibration.dmax = fixed` nominal anchor still renders a viewable
-# positive (darker frames stay faithfully darker).
 
 # On a dedicated blank frame, `estimate --grid` samples a fixed 5-cell grid
 # (corners + center) over the frame (or over --base-region) instead of a single
@@ -1909,11 +1742,11 @@ not specified here.
   (exit 4), before any frame is decoded.
 
 ### Measurement region (`measure`)
-Every statistic nc reads off a frame — `Dmin`/`Dmax`, content exposure and
-contrast, tiling uniformity — is read over the **effective area**, not the whole
-scan. An uncropped scan carries an opaque film holder that is maximum density, so a
-whole-frame statistic measures the holder rather than the picture (`DmaxSource::Auto`
-resolved 2.23–2.37 against a roll `Dmax` of 1.28–1.38 that way, rendering every
+Every statistic nc reads off a frame — `Dmin`, a roll's white balance
+(`hanten measure-roll`), content exposure and contrast, tiling uniformity — is read over
+the **effective area**, not the whole scan. An uncropped scan carries an opaque film
+holder that is maximum density, so a whole-frame statistic measures the holder rather
+than the picture (a per-frame density percentile taken that way once rendered every
 frame black).
 
 The area is **two cuts, in order — never one or the other**:
@@ -1957,7 +1790,7 @@ exactly as decoded.
 **Every command that decodes resolves the area and reports it**, under the report
 key `effective_area` — the resolved rectangle, the per-edge holder depths (with a
 per-edge `capped` and the frame-wide `converged`), `holder_applied`, and the applied
-inset — for a `roll`, inside each frame's entry, beside that frame's resolved `dmax`.
+inset — for a `roll`, inside each frame's entry.
 `convert` and every roll frame resolve it unconditionally so `--measure-inset` and
 the `measure.inset` recipe key (including a per-frame override) are observable rather
 than accepted-and-ignored. A `capped` edge or `converged: false` also emits a
@@ -1965,16 +1798,14 @@ than accepted-and-ignored. A `capped` edge or `converged: false` also emits a
 measurement, and a capped edge truncates the cut its *perpendicular* edges are
 measured over, so their depths may be artifacts rather than floors.
 
-Two narrower questions sit under "is the region used", and they have different
-answers. **Which region a measurement is taken over** is decided by
-`DmaxSource::Auto` alone, whatever the `AnchorPlacement` then does with the result —
-so the reported `dmax` has one meaning, and an *empty* region is a refusal for such
-a run (a warning, with no reported area, for a run that measures nothing).
-**Whether reading the IR plane changed a rendered pixel** is narrower: `Auto` under a
-reference-reading placement, since the base-derived rules discard the measured
-reference and render byte-identically. It is that narrower condition, together with
-`holder_applied` (the holder was measured *and* moved the rectangle), that decides
-whether the plane counts as used for the "IR preserved but not used" warning.
+**Nothing in `convert` measures over the area today** — its one consumer there, the
+per-frame reference density, retired with `nf-retire/dmax-machinery` — so an *empty*
+region is always a warning on `convert` (with no reported area), never a refusal.
+`measure.inset` stays live for `hanten measure-roll`, which samples each frame over the
+area. For the same reason `holder_applied` does not suppress `convert`'s "IR preserved
+but not used" warning: a marched holder moves the reported rectangle but no rendered
+pixel, so only the film-base stage consuming the plane (`BaseEstimate::ir_mask_applied`)
+counts as use. (`inspect`, which renders nothing, still counts the march.)
 
 ### Film base / Dmin (stage 2)
 The base source is a single mutually-exclusive choice, recipe key
@@ -2105,11 +1936,8 @@ crossover.
   `overridden` the paths a flag moved after the preset set them (what a flag won). The
   two answer opposite questions and neither substitutes for the other: `overridden` is
   empty exactly when the preset won.
-- **A preset writes no `calibration` key**, so the roll's measured base and reference
-  survive it untouched — there is nothing to carry. That is structural since
-  `core/calibration-recipe-section`; while the reference sat in `reconstruction.curve`
-  a preset replacing the curve object reset it, and the carry that patched it could not
-  cross a `characteristic` switch. An explicit `--d-max` still wins over the recipe.
+- **A preset writes no `calibration` key**, so the roll's measured base survives it
+  untouched — there is nothing to carry.
 - **Precedence: `defaults < --params recipe < --preset < flags`.** The preset sits
   *above* the recipe because nc writes every key explicitly, so one layered beneath a
   recipe nc produced would have nothing left to set.
@@ -2168,47 +1996,19 @@ crossover.
   `reconstruction.density.balance_range = {"explicit": [lo, hi]}`.
 - `--density-gamma <f>` ⇒ `reconstruction.curve.gamma` (default `2.0`), valid only
   when the resolved curve type is `exponential`.
-- The `--anchor-*` family ⇒ `reconstruction.curve.anchor` (the exponential's; default
-  `{"mid-at-base-offset": 0.62}`):
-  `--anchor-mid-fraction <f>` ⇒ `{"mid-at-dmax-fraction": f}`,
-  `--anchor-white-at-reference` ⇒ `"white-at-dmax"`,
-  `--anchor-black-floor <floor>` ⇒ `{"black-at-base": floor}`, and
-  `--anchor-mid-offset <d>` ⇒ `{"mid-at-base-offset": d}`. All four conflict (the
-  placement is one rule, not four independent fields); whichever is given replaces a
-  recipe's `anchor` entirely. Bounds: `--anchor-mid-fraction <f>` is finite and in
-  `(0, 1]` (`f ≤ 0` pins mid-grey at or below the film base; `f > 1` places it past
-  display white); `--anchor-black-floor <floor>` is in `(0, 1)`; `--anchor-mid-offset
-  <d>` is strictly positive. Every placement but `--anchor-white-at-reference` divides
-  by the slope, so validation **resolves the rule** and rejects a non-finite anchor,
-  naming `--density-gamma` — and separately rejects a finite anchor whose product with
-  the slope overflows (a silently black frame; `--anchor-mid-offset 2e38` reaches it at
-  the default gamma). Slope positivity is diagnosed first.
-- `Dmax` is owned by the tagged curve. Its target recipe key is
-  `calibration.dmax` (default `"fixed"`; see §7.2). It is a
-  **roll-fixed
-  calibration** like `Dmin`. The four flags conflict (passing more than one is a
-  usage error); whichever is given replaces a recipe's `dmax`:
-  - `--fixed-d-max` (default) ⇒ `"fixed"` — the roll-fixed **nominal** anchor: a
-    scene-independent corrected-density placement (`Dmax = 1.3`, in density units),
-    reused across the roll. The default when no reference / per-stock value has
-    been calibrated.
-  - `--d-max <d>` ⇒ `{ "explicit": <d> }` — the roll-fixed **calibrated** anchor: a
-    scalar measured once from a fully-exposed reference frame
-    (`estimate --d-max-region`, §8) or a known per-stock constant, reused across
-    the roll exactly like an explicit `--film-base`. This is the form a roll recipe
-    freezes.
-  - `--auto-d-max` ⇒ `"auto"` — measure the anchor **per frame** from the
-    corrected-density distribution (a high percentile). This is **per-frame
-    exposure normalization** (it brightens underexposed frames and breaks
-    roll-to-roll consistency), an opt-in grading convenience *demoted* from the
-    former default — not the faithful-conversion default.
-  - `--no-d-max` ⇒ `"none"` — choose unity exponential placement (base `1.0`,
-    detail above), reproducing the current pre-anchor film rendering
-    bit-for-bit **under the `white-at-dmax` placement**; `none` resolves the
-    reference to `0`, and the other rules still derive an anchor from the slope. This
-    is an unanchored film rendering, not a physical-scene recovery.
-  The default placement reads none of these: a stated value is carried and warned
-  about (`--strict`-promotable) rather than refused.
+- `--anchor-mid-offset <d>` ⇒ `reconstruction.curve.anchor = {"mid-at-base-offset": d}`
+  (the exponential's; default `0.62`), strictly positive; it replaces a recipe's
+  `anchor`. The placement divides by the slope, so validation **resolves the rule** and
+  rejects a non-finite anchor, naming `--density-gamma` — and separately rejects a
+  finite anchor whose product with the slope overflows (a silently black frame;
+  `--anchor-mid-offset 2e38` reaches it at the default gamma). Slope positivity is
+  diagnosed first.
+- **Retired reference-density flags.** `--anchor-mid-fraction`,
+  `--anchor-white-at-reference`, `--anchor-black-floor`, `--d-max`, `--fixed-d-max`,
+  `--auto-d-max` and `--no-d-max` (and `estimate --d-max-region`) went with the roll
+  reference density in `nf-retire/dmax-machinery`. They are hidden and exit 2 with a
+  message naming `--anchor-mid-offset`, on both chains; the old behaviour lives only in
+  the reference build.
 - Regional (shadow/highlight) color balance (see §7.2). "Shadow"/"highlight"
   name the **positive's** tone regions (low/high corrected density); a positive
   value brightens that channel in its region. Defaults `[0, 0, 0]` are identity
@@ -2232,10 +2032,8 @@ crossover.
       (`lo < hi`, both finite, and their difference representable in `f32`).
 - Both density curves share the `reconstruction.density` object, including
   regional balance. The curve variants have disjoint fields. After recipe/CLI merge,
-  `--density-gamma`, an `--anchor-*` flag, or a stock beside the curve that has no
-  such field fails as a usage error — never ignored. A `--*d-max` flag is **not** in
-  that list: it sets a roll measurement rather than a curve knob, so it is accepted
-  beside every look and warned about when the resolved look will not read it (§8).
+  `--density-gamma`, `--anchor-mid-offset`, or a stock beside the curve that has no
+  such field fails as a usage error — never ignored.
 
 ### Print / tone render
 - `--print-exposure <f>` — overall positive exposure.
@@ -2385,15 +2183,12 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   `output.output_profile` / `output.bigtiff`), are removed-value usage errors (§5).
   - `film-master`: an unclamped 32-bit float linear ACEScg TIFF taken directly from
     the NC film RGB v1 mapping with the ACEScg profile embedded and no transform.
-    After recipe/CLI merge it rejects the frame-local measurements
-    `auto` `Dmax` and (when a balance is actually applied) `auto`
-    `reconstruction.density.balance_range`, plus every non-default print control
-    (`print_exposure`, `black_point`, `white_balance`, `linear_range`) and a non-default
-    display headroom (`fit_range.headroom_stops`) whatever their source. There is no ignore-conflicting-controls
-    mode; the float export that applies those controls is `hdr-linear-tiff`. Supported
-    references: `fixed` (default), explicit/roll, or `none` (unity placement); `auto` is
-    accepted only under a placement that reads no reference, since the measurement then
-    reaches no pixel.
+    After recipe/CLI merge it rejects the frame-local measurement (when a balance is
+    actually applied) `auto` `reconstruction.density.balance_range`, plus every
+    non-default print control (`print_exposure`, `black_point`, `white_balance`,
+    `linear_range`) and a non-default display headroom (`fit_range.headroom_stops`)
+    whatever their source. There is no ignore-conflicting-controls mode; the float export
+    that applies those controls is `hdr-linear-tiff`.
   - `gain-map-hdr` and `ultra-hdr-v1` are the two gain-map JPEG presets, and are
     one render packaged twice: identical pixels, differing
     only in metadata. `gain-map-hdr` attaches ISO 21496-1 segments to **both** images
@@ -2502,9 +2297,8 @@ would cost a Unix-only code path for output that is reproducible by re-running.
 `display-p3` and `compatibility` are 16-bit losslessly stored TIFF; `hdr-pq` and
 `hdr-hlg` are AVIF, while the three shipped HDR TIFF policies provide
 linear-float or losslessly stored PQ/HLG interchange. `film-master` encodes NC
-film RGB v1 mapped unclamped linear ACEScg before print/display controls and
-rejects frame-local auto Dmax.
-It accepts supported `none` or fixed/roll placement. Named display presets use the SDR/HDR render
+film RGB v1 mapped unclamped linear ACEScg before print/display controls.
+Named display presets use the SDR/HDR render
 branches. The output path stays required; a suffix it states must match the
 resolved container and is never rewritten silently, and one it omits is completed
 from that container. After merge, `film-master` also rejects every
@@ -2568,29 +2362,24 @@ a message that says so. That is the intended workflow rather than a limitation:
 `Dmin` is measured once for the roll (`hanten estimate`) and frozen into the shared
 recipe as `calibration.film_base.explicit`, which is also the only source that keeps
 every frame on one base — see the roll-fixed invariant warnings below.
-The roll-fixed `Dmax` is stored at `calibration.dmax`, beside the base — one section
-for both roll measurements (§8). The shared recipe configuration
-appears once at the top of the roll report; each frame additionally reports
-the *resolved* base / `Dmax` it used — a redundant echo when the recipe pins an
-explicit base, but meaningful under an `auto`/`region` base that resolves per
-frame. Frame-local knobs are the per-frame `params` overrides. Roll-fixed
-invariant violations are **loud, `--strict`-promotable warnings** rather than
-hard errors, so a deliberate best-effort batch remains usable: (1) a shared
-`calibration.film_base` other than `explicit` re-estimates Dmin per frame; (2) the
-active Dmax key set to `auto` measures Dmax per frame; (3) a per-frame override
-that sets `film_base` changes that frame's Dmin; (4) a per-frame override
-that changes the active Dmax key changes that frame's placement; (5) a per-frame override
-that sets `reconstruction.curve.anchor` changes which *tone* that frame pins to the roll's
-reference density — a placement break that survives even when every frame shares one Dmax,
-and subtler than a different number because the frame renders on a different *rule*; and
-(6) a per-frame override that sets `output.preset` gives that frame a different output
-**policy** —
-a different branch out of the ACEScg boundary, so a different *image class* (unclamped
-linear master vs rendered TIFF), not merely a different rendering. (5) and (6) warn even when
-the override restates the shared preset, because `frames[].status` carries no
-`output_render` block (that is a `convert`-only report field), leaving the
-`frames[].overrides` echo as the only other trace. Shared `fixed`, explicit, or
-`none` Dmax policies remain deterministic across the roll. `input.export_ir` is rejected in roll mode (one
+The shared recipe configuration appears once at the top of the roll report; each
+frame additionally reports the *resolved* base it used — a redundant echo when the
+recipe pins an explicit base, but meaningful under an `auto`/`region` base that
+resolves per frame. Frame-local knobs are the per-frame `params` overrides. Roll-fixed
+invariant violations are **loud, `--strict`-promotable warnings** rather than hard
+errors, so a deliberate best-effort batch remains usable: (1) a shared
+`calibration.film_base` other than `explicit` re-estimates Dmin per frame; a per-frame
+override that sets (2) `calibration.film_base` changes that frame's Dmin, (3)
+`reconstruction.curve.anchor` places that frame's mid-grey on a different rule, (4)
+`reconstruction.curve.stock` reconstructs it through a different film's response, and
+(5) `output.preset` gives it a different output **policy** — a different branch out of
+the ACEScg boundary, so a different *image class* (unclamped linear master vs rendered
+TIFF), not merely a different rendering. The override warnings key on the key's
+presence, so they fire even when the override restates the shared value: `frames[]`
+carries no `output_render` block (a `convert`-only field), leaving the
+`frames[].overrides` echo as the only other trace. A per-frame `calibration.dmax`
+follows the recipe rule (§8): dropped at `"fixed"`, refused otherwise (under
+`--new-flow`, refused outright — no new-chain recipe ever carried it). `input.export_ir` is rejected in roll mode (one
 path, N frames). Determinism: same batch + same recipe ⇒ byte-identical output per
 frame.
 
@@ -2617,7 +2406,7 @@ affect the output bytes (telemetry on or off ⇒ byte-identical TIFF + sidecar).
 a future background uploader (§12, `telemetry/upload`) to drain and ship:
 ```json
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "timestamp_ms": 1752566400000,
   "nc_version": "0.1.0",
   "target": "aarch64-apple-darwin",
@@ -2636,15 +2425,15 @@ a future background uploader (§12, `telemetry/upload`) to drain and ship:
     "curve": "exponential",
     "params_hash": "92a827ffd2d0aebd",
     "film_base_source": { "explicit": [0.9, 0.55, 0.42] },
-    "dmax": 1.6195, "output_depth": "u16"
+    "output_depth": "u16"
   },
   "outcome": { "warnings": 1, "clipped": 3419, "non_finite": 0 }
 }
 ```
-`timing_ms.ir_export` is present only when `--export-ir` ran, and `conversion.dmax`
-only when the curve applied an anchor (schema v2 replaced v1's `conversion.algorithm`
-with the `reconstruction` + `curve` pair; v5 dropped `reconstruction` with `simple`
-and made `curve` always present).
+`timing_ms.ir_export` is present only when `--export-ir` ran (schema v2 replaced v1's
+`conversion.algorithm` with the `reconstruction` + `curve` pair; v5 dropped
+`reconstruction` with `simple` and made `curve` always present; v6 dropped
+`conversion.dmax` with the roll reference density).
 `conversion.preset` is the resolved `output.preset` — v3 added it, because without it
 two f32 TIFFs (`film-master`, `hdr-linear-tiff`) are indistinguishable. Records made
 before `nf-retire/legacy-custom` may carry the retired `legacy` / `custom`.
@@ -2836,7 +2625,7 @@ the NLP feature comparison, Phase 6).
    recipe (`--params`), with per-frame overrides via a `--frames` manifest and a
    roll-level JSON report (per-frame status + the shared recipe once). See §8.
    What remains: the auto-cascade that *generates* the shared recipe (detect the
-   film base / `Dmax` once for the roll and emit the frozen recipe roll applies) —
+   film base once for the roll and emit the frozen recipe roll applies) —
    the dependent `base-acquisition-planner` task — plus first-class named presets
    (film stock, neutral spots).
 7. **Optional color-correction QA harness.** Target-based fitting and ΔE2000 /
@@ -2914,31 +2703,20 @@ the NLP feature comparison, Phase 6).
     deterministic **apply** half has shipped as `hanten roll`: it converts a batch
     from one shared recipe, supports per-frame manifest overrides, and emits one
     roll report while preserving the single-frame conversion core. Roll-fixed
-    parameters (`Dmin`, `Dmax`) versus frame-local print controls remain the
+    parameters (`Dmin`) versus frame-local print controls remain the
     model. The open `base-acquisition-planner` owns the automatic **plan** half:
     an acquisition cascade (unexposed reference → rebate region → `--auto-base`
     → cross-frame agreement → drop-to-single; content estimation only on explicit
     opt-in) emits the frozen recipe and provenance that `hanten roll` replays.
     Tracked: shipped `roll-conversion`; open `base-acquisition-planner` and
     `film-base/content-fallback`.
-14. **Roll-fixed `Dmax` from a fully-exposed reference frame.** *(Implemented —
-    `dmax-reference`.)* Supersedes the frame-local `auto` default: `Dmax` is a
-    film+scanner calibration reused per roll like `Dmin`. The default
-    `calibration.dmax = fixed` resolves reference → per-stock constant → a nominal
-    corrected-density anchor (`Dmax = 1.3`, in density units — *not* base
-    transmission plus a range); a value measured once from the light-struck leader
-    (near-opaque in RGB, the max-density endpoint — always available) via
-    `estimate --d-max-region` is frozen as `{ "explicit": <d> }`. `--auto-d-max`
-    (per-frame exposure normalization) is demoted to opt-in. This changes the
-    default render, which is a `pipeline_version` bump — **discharged** by
-    `conversion-versioning` (item 16). Two boundaries, not one: making the density
-    conversion the default was the v0→v1 bump and `pipeline_version 1` records it
-    with the nominal at **2.0**; moving the nominal to **1.3** (with the sigmoid as
-    the default curve) is the v1→v2 bump, so an archived recipe's render is only
-    recoverable from the version its sidecar records. In the
-    replacement pipeline, Dmax belongs to the selected density curve: scalar
-    placement for exponential and curve shaping for sigmoid. SDR/HDR rendering
-    owns display reference white.
+14. **Roll-fixed `Dmax` from a fully-exposed reference frame.** *(Shipped as
+    `dmax-reference`, then retired by `nf-retire/dmax-machinery`.)* It made the display
+    anchor a roll-fixed reference density measured from the light-struck leader
+    (`pipeline_version` 1–2 record its nominal default). The base-derived
+    `mid-at-base-offset` placement replaced it as the default in
+    `nf-retire/sigmoid-and-simple`, and the reference, its flags and recipe key were
+    then removed; the reference build keeps the old behaviour comparable.
 15. **IR-assisted film-holder detection.** First consumer of the IR channel
     besides item 1. Chromogenic dyes are IR-transparent, so all such film (base,
     picture, even fully-exposed leader) is bright in IR while the opaque holder is

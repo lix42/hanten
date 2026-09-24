@@ -6,13 +6,9 @@
         0.24776074,
         0.14920272
       ]
-    },
-    "dmax": {
-      "explicit": 1.3816013
     }
   },
   "reconstruction": {
-    "type": "density",
     "curve": {
       "type": "exponential"
     }

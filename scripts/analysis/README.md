@@ -83,20 +83,14 @@ PYTHONPATH=scripts/analysis python3 -m nctool roll convert Ektar \
 It performs these operations:
 
 1. Finds the roll's single `unexposed` frame and all `real` frames in
-   `manifest.json` (and its single `leader` with `--measure-dmax`).
+   `manifest.json`.
 2. Verifies every source frame against its manifest SHA-256, so stale asset bytes
    cannot be attributed to a configuration change.
 3. Measures Dmin from the unexposed frame, over the center 80% (`x=10%`, `y=10%`,
    `width=80%`, `height=80%`) unless `--dmin-region` says otherwise. Dmin uses a
    five-cell grid by default; pass `--dmin-mode region` to aggregate its selected
-   region without the grid.
-   **Dmax is opt-in**, because the default anchor placement never reads it — a
-   frozen one would only warn on every frame and fail `--strict-roll`. Pass
-   `--measure-dmax` (with a recipe whose placement reads the reference, e.g. an
-   `anchor` of `{"mid-at-dmax-fraction": 0.5}`) to measure it from the leader,
-   `--dmax-region` to move its rectangle, or a deliberately chosen positive
-   `--d-max D` to freeze a value without measuring; calibration and tags record it
-   as `measured-reference`, `explicit-override`, or `not-frozen`.
+   region without the grid. No `Dmax` is measured: the roll reference density
+   retired with the placements that read it (`nf-retire/dmax-machinery`).
 4. Reads the tested binary's complete `hanten params` document, overlays the optional
    partial recipe, then freezes the measurements. This pins defaults such as the
    curve's anchor placement instead of letting a later build reinterpret an
@@ -116,8 +110,8 @@ non-empty destination is refused so a new run cannot silently mix with or
 overwrite an old configuration.
 
 Use `--recipe FILE` for the full configuration surface. It accepts a partial nc
-recipe or an image sidecar envelope; measured Dmin and Dmax deliberately replace
-any calibration values in it. `--output-preset`, `--print-exposure`, and
+recipe or an image sidecar envelope; the measured Dmin deliberately replaces
+any film base in it. `--output-preset`, `--print-exposure`, and
 `--film-type` are convenience overrides. `--strict-estimate` is recommended for
 calibration; `--strict-roll` is separate because a frozen explicit base on an IR
 scan can legitimately emit the documented unused-IR warning.
@@ -158,7 +152,7 @@ The run operand is a configuration ID or an explicit path to `tags.json`.
 choose another destination. The artifact contains:
 
 - the frozen recipe, calibration, build identity, and source checksums;
-- stable per-frame film-base, Dmax, input-semantics, output-statistics, clipping,
+- stable per-frame film-base, input-semantics, output-statistics, clipping,
   identity, status, and warning fields;
 - deterministic key and frame ordering.
 

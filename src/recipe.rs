@@ -139,12 +139,11 @@ pub struct FitGamut {}
 
 /// The new chain's roll calibration: the film base alone.
 ///
-/// Its own type rather than the current chain's [`CalibrationParams`], because that
-/// one also carries `dmax` — the reference density the fixed decode never reads
-/// (its anchor rule is reference-free). Sharing the struct would write
-/// `"dmax": "fixed"` into every new-flow recipe: a key claiming a reference the run
-/// does not use. The section stays open, as design-spec §8 describes it; a later
-/// measurement joins it with its own task.
+/// Its own type rather than the current chain's [`CalibrationParams`], which retires
+/// with that chain (`nf-core/default-flip`). The two had different shapes until the
+/// reference density `dmax` retired (`nf-retire/dmax-machinery`). The section stays
+/// open, as design-spec §8 describes it; a later measurement joins it with its own
+/// task.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Calibration {
@@ -226,18 +225,17 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
         "there is one fixed decode, so no algorithm to choose",
     ),
     (
+        &["calibration", "dmax"],
+        "the roll reference density retired with the placements that read it; the fixed \
+         decode's anchor rule is reference-free",
+    ),
+    (
         &["input", "color"],
         "it conflated transfer encoding with measurement meaning; use the independent \
          keys `input.transfer` (auto|linear) and `input.meaning` \
          (auto|scanner-device|colorimetric)",
     ),
 ];
-
-/// The current chain's `calibration` keys this recipe does not have.
-const OLD_CALIBRATION_KEYS: &[(&str, &str)] = &[(
-    "dmax",
-    "the fixed decode's anchor rule never reads a reference density",
-)];
 
 /// Refuse a recipe body written for the other chain, before serde sees it.
 ///
@@ -312,17 +310,12 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
              `{{\"explicit\": [r, g, b]}}`"
         ));
     }
-    for (section, table) in [
-        ("reconstruction", OLD_RECONSTRUCTION_KEYS),
-        ("calibration", OLD_CALIBRATION_KEYS),
-    ] {
-        if let Some((key, why)) = old_key(section, table) {
-            return usage(format!(
-                "`{section}.{key}` belongs to the current chain's recipe, not the new one's: \
-                 {why}. Drop it — the current chain reads it only in a recipe with no \
-                 `{VERSION_KEY}`"
-            ));
-        }
+    if let Some((key, why)) = old_key("reconstruction", OLD_RECONSTRUCTION_KEYS) {
+        return usage(format!(
+            "`reconstruction.{key}` belongs to the current chain's recipe, not the new \
+             one's: {why}. Drop it — the current chain reads it only in a recipe with no \
+             `{VERSION_KEY}`"
+        ));
     }
     Ok(())
 }
@@ -580,7 +573,6 @@ impl Recipe {
             input: self.input.clone(),
             calibration: CalibrationParams {
                 film_base: self.calibration.film_base.clone(),
-                ..CalibrationParams::default()
             },
             measure: self.measure.clone(),
             // The same section on both chains, so the projection states the user's value
@@ -811,7 +803,7 @@ mod tests {
             true,
         )
         .unwrap_err();
-        assert!(err.contains("calibration.dmax") && err.contains("never reads a reference"));
+        assert!(err.contains("calibration.dmax") && err.contains("reference-free"));
         // Overlays get the same diagnosis.
         let err = check(r#"{"print": {"print_exposure": 1}}"#, false).unwrap_err();
         assert!(err.contains("`print`"), "{err}");
@@ -866,7 +858,6 @@ mod tests {
                 .unwrap_or_else(|| panic!("`{section}` is neither shared nor diagnosed"));
             let table: &[(&str, &str)] = match section.as_str() {
                 "reconstruction" => OLD_RECONSTRUCTION_KEYS,
-                "calibration" => OLD_CALIBRATION_KEYS,
                 _ => &[],
             };
             for key in fields.as_object().unwrap().keys() {
@@ -1015,7 +1006,6 @@ mod tests {
         assert_eq!(cfg.measure.inset, 0.1);
         assert_eq!(cfg.input, r.input);
         let defaults = ResolvedConfig::default();
-        assert_eq!(cfg.calibration.dmax, defaults.calibration.dmax);
         assert_eq!(cfg.reconstruction, defaults.reconstruction);
         assert_eq!(cfg.print, defaults.print);
         assert_eq!(cfg.output, defaults.output);

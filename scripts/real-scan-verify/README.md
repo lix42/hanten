@@ -38,7 +38,7 @@ Stages (no argument runs `freeze → convert → ir → determinism → resource
 | Stage | What it does |
 |---|---|
 | `classify` | grid-classify every frame per roll → unexposed / fully-exposed / real |
-| `freeze` | measure per-roll `Dmin` (unexposed frame) + `Dmax` (leader), write `recipes/` |
+| `freeze` | measure per-roll `Dmin` (unexposed frame), write `recipes/` |
 | `convert` | roll-convert every real frame, 16-bit + float HDR, into the output dir |
 | `ir` | export the IR plane; check `--strict` promotes warnings to a hard error |
 | `determinism` | re-run byte-identical + `--dump-params` reload byte-identical |
@@ -90,7 +90,8 @@ acceptance.
   fills `ROLLS` from `python3 -m nctool manifest roles` (the
   [`asset-manifest`](../../docs/tasks/analysis/asset-manifest.md) task). To change what the
   harness converts, edit the frame `role`s in the manifest and regenerate — only
-  rolls with a complete unexposed+leader pair are emitted. If the manifest is
+  rolls with one unexposed frame and some real frames are emitted (a leader is no
+  longer required). If the manifest is
   missing, the harness fails loudly (exit 2) with the generate command to run.
 - Converted images are large and **not committed**; regenerate with `convert`.
 - `convert` renders into a fresh hidden staging directory under each roll output,

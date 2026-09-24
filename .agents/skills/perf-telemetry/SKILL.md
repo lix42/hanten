@@ -32,7 +32,7 @@ TelemetryRecord` (`src/telemetry.rs`). To add a field:
    or `OutcomeInfo` (or `TelemetryRecord` for run-context). They derive
    `Serialize`; the JSON key is the field name verbatim (no `rename`). Use
    `#[serde(skip_serializing_if = "Option::is_none")]` for a field that is absent in
-   some runs (as `timing_ms.ir_export` and `conversion.dmax` do).
+   some runs (as `timing_ms.ir_export` does).
 2. Feed it in: add a field to `RecordInputs<'a>` and set it in `build_record`; then
    populate it at the call site in `cli::emit_telemetry` (which gathers everything
    after the conversion has succeeded). If it's a new timing, measure it with an
@@ -96,7 +96,7 @@ N runs append N lines. `--telemetry-file <path>` overwrites (a single record).
 Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
 
 ```json
-{ "schema_version":5, "timestamp_ms":1752566400000,
+{ "schema_version":6, "timestamp_ms":1752566400000,
   "nc_version":"0.1.0", "target":"aarch64-apple-darwin", "cpu_count":14,
   "image":{"format":"hdri","width":502,"height":462,"megapixels":0.231924,
            "bit_depth":16,"channels":3,"ir_present":true,
@@ -106,15 +106,16 @@ Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
   "conversion":{"preset":"display-p3","curve":"exponential",
                 "params_hash":"92a827ffd2d0aebd",
                 "film_base_source":{"explicit":[0.9,0.55,0.42]},
-                "dmax":1.6195,"output_depth":"u16"},
+                "output_depth":"u16"},
   "outcome":{"warnings":1,"clipped":3419,"non_finite":0} }
 ```
 
-`timing_ms.ir_export` appears only when `--export-ir` ran, and `conversion.dmax`
-only when the curve applied an anchor. (Schema v2 replaced v1's
+`timing_ms.ir_export` appears only when `--export-ir` ran. (Schema v2 replaced v1's
 `conversion.algorithm` with the `reconstruction` + `curve` pair; **v5** dropped
 `reconstruction` when `simple` retired and made `curve` always present. Records
-written before it carry `reconstruction` and may name `simple` or `sigmoid`.)
+written before it carry `reconstruction` and may name `simple` or `sigmoid`. **v6**
+dropped `conversion.dmax` when the roll reference density retired; older records may
+carry it.)
 `conversion.preset` is the resolved `output.preset` (any name in
 `OutputPreset::ALL`) — **v3** added it, because without it a `film-master` run was
 indistinguishable from the since-retired `legacy` one except by file size. Records

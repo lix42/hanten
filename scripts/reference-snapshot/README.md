@@ -113,8 +113,10 @@ frame from step 3.
   `--auto-base` dumps `"auto"`, and the roll would re-measure every frame. Pass the
   number from step 2.
 - **`Dmax` stays at the fixed nominal 1.3**, which is what `sigmoid-knees` was reviewed
-  with. Measuring it from a leader (`estimate --d-max-region`) is optional; see the
-  guide's §4 step 3 and its §6 caveat before using one.
+  with. Measuring it from a leader (`estimate --d-max-region`) is optional; the
+  reference build's own guide documents that step and its caveat
+  (`git show origin/reserve:docs/using-nc.md`, §4 step 3 and §6) — the live guide
+  dropped them when the reference density retired.
 - **A reference recipe only means something to the reference binary.** The new chain
   refuses it because it has no `"recipe_version": 2`. Keep it beside the roll's output,
   not in the tree.

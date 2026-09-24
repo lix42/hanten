@@ -15,7 +15,7 @@ Remove the old paths once the reference build exists: `legacy`/`custom`, the bou
 
 Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration.md`).
 Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-09-23),
-**`display-tones`** (2026-09-24).
+**`display-tones`** (2026-09-24), **`dmax-machinery`** (2026-09-24).
 
 **What `legacy-custom` means for the rest of the epic.**
 
@@ -67,6 +67,21 @@ Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-
 - **Old sidecars carry `"display_tone": "shoulder"` and are refused**, the old default
   included (it replays differently) — so a pre-v7 sidecar needs that key deleted before it
   replays. `highlight_compress: 0` is stripped.
+
+**What `dmax-machinery` means for the rest of the epic.**
+
+- **No reference density exists on either chain.** `AnchorPlacement` has one variant,
+  `mid-at-base-offset`, still a tagged enum so `nf-calibration/anchor-comparison` can add
+  a content-referenced one that carries its own measured value (its four candidates are
+  all reachable as `--anchor-mid-offset` + `--density-gamma`). `calibration` holds only
+  `film_base`; `CalibrationParams` and `recipe::Calibration` now have the same shape.
+- **Retired recipe keys follow one rule, `strip_retired_keys_at_old_defaults`:** the value every
+  earlier build wrote by default is dropped on load, anything else is refused by
+  `reject_legacy_recipe_keys`. A later retirement adds its key there.
+- **The drift gate's `dmax=` line is a frozen literal** (`FROZEN_DMAX_LINE`); the text
+  must stay byte-identical to what the recorded rows hashed.
+- **The effective area has no `convert` consumer.** An empty region always warns, and
+  `holder_applied` no longer suppresses the IR note; a future consumer must decide both.
 
 ## legacy-custom
 
@@ -288,10 +303,89 @@ Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-
 
 ## dmax-machinery
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: retire the `dmax` anchor machinery.
+- 2026-09-24: **plan.** Decisions taken with the user before starting: (1) the three
+  placements other than `mid-at-base-offset` retire with the reference
+  (`anchor-rule`'s outcome), so `AnchorPlacement` keeps one variant; (2) an old recipe's
+  `calibration.dmax` is dropped at its old default `"fixed"` and refused otherwise, and
+  `reconstruction.curve.anchor` likewise accepts only the surviving placement; (3)
+  `nctool roll convert` loses `--measure-dmax` / `--d-max` / `--dmax-region` outright;
+  (4) the report's `Dmax` fields and telemetry's `conversion.dmax` go (telemetry schema
+  6); (5) no `pipeline_version` bump — the default reads no reference, so the drift
+  gate's `render` hash must reproduce and only `recipe` moves.
+- 2026-09-24: **done.**
+  - **Removed:** `DmaxSource`, `DmaxInput`, `CalibrationParams::dmax`; the placements
+    `WhiteAtDmax` / `MidAtDmaxFraction` / `BlackAtBase` and `reads_reference`;
+    `DensityCurve[Type]::consumes_reference`; `algo::density::{resolve_dmax, auto_dmax*,
+    reference_dmax, ReferenceDmax, NOMINAL_DMAX, MIN_PLAUSIBLE_REFERENCE_DMAX}` and
+    `ReconstructionReport::dmax`; in `cli`, `DmaxOverrides`, `DmaxReuseReady`,
+    `DmaxResolution` / `DmaxPolicy` / `DmaxProvenance` / `DmaxSetting`, `MasterAnchor`,
+    `measures_over_region`, `region_reaches_a_rendered_pixel`,
+    `render_reads_the_reference`, `unconsumed_dmax_warning`,
+    `explicit_dmax_domain_warning`, the reference plausibility warning, film-master's
+    auto-Dmax rule, roll's "Dmax NOT frozen" and per-frame `calibration.dmax` warnings,
+    `estimate`'s Dmax half, report `dmax` / `dmax_region` / `d_max_flag` /
+    `reconstruction_result.curve.dmax`, telemetry `conversion.dmax` (schema 6),
+    `SamplePlan::with_rect`, and `flow.rs`'s seven now-unreachable rows.
+  - **Migration:** `RemovedDmaxFlags` (hidden) → `removed_dmax_message`, shared by
+    `convert` and `estimate --d-max-region`, runs in `reject_removed_flags` on both
+    chains and names `--anchor-mid-offset`. Recipes: `REMOVED_ANCHOR_PLACEMENTS` in the
+    curve deserializer; `calibration.dmax` stripped at `"fixed"`, refused otherwise.
+    The sigmoid-flag remedies that named the retired placements now name
+    `--anchor-mid-offset`.
+  - **Goldens / drift gate:** the frozen reference captures (white pinned at 2.0 and at
+    1.8) are reached through `mid-at-base-offset` at an offset that hits the captured
+    anchor **bit-exactly** (`golden::offset_reaching`, asserted), so their bits did not
+    move; the `none` and `auto` goldens pinned retired placements and were deleted.
+    `render` (`752e701021a41307`) and `base` reproduced with the `dmax=` line frozen as
+    `3fa66666`; `recipe` refreshed in place (after rebasing onto `display-tones`, on the v7 row: `b518f436e7f4317a`).
+  - **Tests:** 768 unit, 231 integration, 387 nctool, all green. `tests/pipeline.rs`
+    lost ten Dmax-only tests, gained
+    `the_reference_density_and_retired_placements_are_migration_errors` (both chains,
+    `estimate`, recipe replay at `"fixed"`, roll per-frame override).
+  - **Memory, re-measured rather than assumed** (release builds of `95ee921` and this
+    change, 18.66 MP HDRi frame — no 74.65 MP scan was on hand): peak RSS identical
+    within 0.1% for `display-p3` (0.907 GB, model 1.079), `film-master` (0.683 / 0.821),
+    `hdr-pq` (1.523 / 1.765), a full-frame `--base-region` convert (1.056 / 1.336) and a
+    full-frame `estimate --base-region` (0.607 / 0.735); `gain-map-hdr` 1.69 GB on both
+    (model 1.851; one base run read 1.46, i.e. run-to-run noise). All four outputs
+    byte-identical across the two builds. The only rectangle removed,
+    `--d-max-region`, was estimate-only, so no profile constant moved.
+  - **Scripts / docs:** `nctool roll convert` lost `--measure-dmax` / `--d-max` /
+    `--dmax-region` (a reference build's `"dmax": "fixed"` is dropped when freezing);
+    `real-scan-verify` no longer measures the leader and its recipes dropped `dmax`
+    (the `.provenance.json` records keep theirs — they record what was measured);
+    `render-defaults-v2` now says it needs the reference build. The `--measure-inset`
+    over-maximum error still named `--auto-d-max`; fixed. design-spec moved the anchor
+    text from §7.3 (now sigmoid-only) to §7.2, and six `src/` citations followed.
+- 2026-09-24: **review round** (`/code-review`). All nine findings taken. Behaviour:
+  the removed-flag and sigmoid-placement remedies named `--anchor-mid-offset` /
+  `--density-gamma` unconditionally, which the characteristic curve refuses — they now
+  say "drop the flag" and scope those flags to the exponential; under `--new-flow` a
+  recipe's `calibration.dmax` was told the current chain still reads it (moved to
+  `recipe::RETIRED_KEYS`, "not a key of either chain"); a roll per-frame override is
+  echoed as written, so one that restated `"dmax": "fixed"` no longer reports
+  `{"calibration": {}}`; `nctool manifest roles` no longer requires a leader (the field
+  stays, empty when absent), so the harness covers every roll with an unexposed frame.
+  The `#[ignore]`d `shadow_metrics` probes read the leader `Dmax` from the recipes'
+  `.provenance.json` records, which keep it, instead of the recipes. Also: a rustdoc
+  left on the wrong function by the predicate deletion, stale test comments, and the
+  oracle README's `_DMAX` step.
+- 2026-09-24: **second review round** (`/code-review`). Taken: the `#[ignore]`d
+  `shadow_metrics` probes drop their `% of Dmax` column (reading it from provenance
+  records would break on the next harness freeze, which no longer writes it); the
+  hidden removed flags take any value or none (`num_args = 0..=1`,
+  `allow_hyphen_values`), so `--d-max` alone or `--d-max -1.5` reach the migration
+  message rather than clap's; `nctool roll convert` checksums only the frames it reads
+  (a missing leader no longer fails it); `film-master`'s auto-balance-range error and
+  five doc comments stopped citing the retired auto `Dmax`; the residual-inset floor
+  in `effective_area` is re-justified against `measure-roll`'s pooled p99 (a 1–2%
+  holder ring is the size of that tail) rather than dropped; `sample_region_at` is
+  private again. Declined: turning `SamplePlan` into an enum — its doc already says why
+  it stays a struct, and reshaping the memory model is not this task's.
 
 ## regional-balance
 

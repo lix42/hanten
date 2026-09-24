@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     rsub = roll.add_subparsers(dest="cmd", required=True)
 
     rconvert = rsub.add_parser(
-        "convert", help="measure Dmin (and optionally Dmax), freeze a recipe, and convert one roll")
+        "convert", help="measure Dmin, freeze a recipe, and convert one roll")
     rconvert.add_argument("roll", help="source roll name from manifest.json")
     _add_root(rconvert)
     rconvert.add_argument("--nc", required=True, help="path to the hanten binary to run")
@@ -116,16 +116,6 @@ def build_parser() -> argparse.ArgumentParser:
     rconvert.add_argument("--out-dir", help="output directory (default: converted/nc/CONFIG/ROLL)")
     rconvert.add_argument("--recipe", help="partial recipe or conversion sidecar to extend")
     rconvert.add_argument("--dmin-region", help="unexposed-frame X,Y,W,H (default: center 80%%)")
-    rconvert.add_argument("--measure-dmax", action="store_true",
-                          help="measure Dmax from the roll's leader frame and freeze it. Off "
-                               "by default: the default anchor placement never reads Dmax, "
-                               "so a frozen one only warns; use it with a recipe whose "
-                               "placement reads the reference")
-    rconvert.add_argument("--dmax-region",
-                          help="leader-frame X,Y,W,H for --measure-dmax (default: center 80%%)")
-    rconvert.add_argument("--d-max", type=float,
-                          help="explicit Dmax to freeze instead of measuring one (for a known "
-                               "or deliberately chosen value)")
     rconvert.add_argument("--dmin-mode", choices=("grid", "region"), default="grid",
                           help="measure Dmin with a five-cell grid or one region "
                                "aggregate (default: grid)")

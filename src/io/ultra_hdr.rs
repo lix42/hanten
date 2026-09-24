@@ -1123,10 +1123,6 @@ mod tests {
             )
         });
         let film_base = FilmBase::from(base);
-        let dmax: f32 = std::env::var("NC_ISO_SAMPLE_DMAX")
-            .expect("NC_ISO_SAMPLE_DMAX is required with NC_ISO_SAMPLE_INPUT")
-            .parse()
-            .expect("dmax");
         let ev: f32 = std::env::var("NC_ISO_SAMPLE_EV")
             .map(|value| value.parse().expect("ev"))
             .unwrap_or(0.0);
@@ -1136,25 +1132,14 @@ mod tests {
         // path, and the budget would otherwise also cap the TIFF read buffers.
         let (image, _) =
             crate::io::decode::decode_within(std::path::Path::new(&input), u64::MAX).unwrap();
-        let reconstruction = serde_json::from_value(serde_json::json!({
-            "type": "density",
-            "curve": { "type": "exponential" },
-        }))
-        .expect("reconstruction recipe");
-        let reconstruction: Reconstruction = reconstruction;
+        let reconstruction = Reconstruction::default();
         let print = PrintParams {
             print_exposure: ev,
             ..PrintParams::default()
         };
-        let source = stages::render_display_source(
-            &image,
-            &film_base,
-            &reconstruction,
-            &print,
-            crate::types::DmaxInput::new(crate::types::DmaxSource::Explicit(dmax)),
-        )
-        .expect("display source");
-        println!("oracle render: {input} at {ev:+} EV, dmax {dmax}");
+        let source = stages::render_display_source(&image, &film_base, &reconstruction, &print)
+            .expect("display source");
+        println!("oracle render: {input} at {ev:+} EV");
         gain_map::render(
             &source.shared,
             gain_map::GainMapConfig::ultra_hdr_v1(Headroom::default()),

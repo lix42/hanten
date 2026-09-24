@@ -82,8 +82,8 @@ fn tile_grid() -> (u32, u32) {
 }
 
 /// The three fixture rolls, locked with the user. Each names its frozen recipe stem
-/// under `scripts/real-scan-verify/recipes/` — the recipe supplies the roll's `Dmin`
-/// and `Dmax`, so a patch proposal is measured in the same density domain the baseline
+/// under `scripts/real-scan-verify/recipes/` — the recipe supplies the roll's `Dmin`,
+/// so a patch proposal is measured in the same density domain the baseline
 /// will use.
 ///
 /// The roll keys must match `../nc-assets/manifest.json`'s roll names; see
@@ -106,13 +106,15 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// The roll's frozen `Dmin` and `Dmax`, read from the committed recipe.
+/// The roll's frozen `Dmin`, read from the committed recipe. (It used to return the
+/// leader `Dmax` too, as a scale for printed percentages; that reference retired in
+/// `nf-retire/dmax-machinery`.)
 ///
-/// Parsed as loose JSON rather than through `cli`'s recipe types: this only needs two
-/// values, and going through the full resolver would couple a diagnostic to the CLI's
+/// Parsed as loose JSON rather than through `cli`'s recipe types: this only needs one
+/// value, and going through the full resolver would couple a diagnostic to the CLI's
 /// merge semantics. It fails loudly — a missing key here means the recipe was not
 /// frozen as expected, which must not be papered over with a default.
-fn frozen_reference(recipe: &Path) -> (FilmBase, f32) {
+fn frozen_reference(recipe: &Path) -> FilmBase {
     let text =
         std::fs::read_to_string(recipe).unwrap_or_else(|e| panic!("{}: {e}", recipe.display()));
     let v: serde_json::Value =
@@ -129,19 +131,11 @@ fn frozen_reference(recipe: &Path) -> (FilmBase, f32) {
     let rgb: Vec<f32> = base.iter().map(|x| x.as_f64().unwrap() as f32).collect();
     assert_eq!(rgb.len(), 3, "{}: film base is not RGB", recipe.display());
 
-    let dmax = v["calibration"]["dmax"]["explicit"]
-        .as_f64()
-        .unwrap_or_else(|| panic!("{}: calibration.dmax.explicit missing", recipe.display()))
-        as f32;
-
-    (
-        FilmBase {
-            r: rgb[0],
-            g: rgb[1],
-            b: rgb[2],
-        },
-        dmax,
-    )
+    FilmBase {
+        r: rgb[0],
+        g: rgb[1],
+        b: rgb[2],
+    }
 }
 
 /// Frames of one roll grouped by the manifest's `role`.
@@ -290,7 +284,7 @@ fn tiles_of(density: &[f32], width: u32, height: u32, channel: Option<usize>) ->
 /// Non-maximum suppression matters here: with small tiles the top-ranked cells are
 /// near-duplicates of each other on one surface, so an unfiltered "top 3" would offer a
 /// single choice dressed as three. Expects `cands` sorted best-first.
-fn report(label: &str, cands: Vec<&Tile>, n: usize, dmax: f32) {
+fn report(label: &str, cands: Vec<&Tile>, n: usize) {
     println!("    {label}:");
     let mut picked: Vec<&Tile> = Vec::with_capacity(n);
     for t in cands {
@@ -308,16 +302,8 @@ fn report(label: &str, cands: Vec<&Tile>, n: usize, dmax: f32) {
     }
     for t in picked {
         println!(
-            "      {:>5},{:>5},{:>4},{:>4}   D'p50 {:>7.4}  p05 {:>7.4}  p95 {:>7.4}  spread {:>6.4}  ({:>5.1}% of Dmax)",
-            t.x,
-            t.y,
-            t.w,
-            t.h,
-            t.p50,
-            t.p05,
-            t.p95,
-            t.spread,
-            100.0 * t.p50 / dmax
+            "      {:>5},{:>5},{:>4},{:>4}   D'p50 {:>7.4}  p05 {:>7.4}  p95 {:>7.4}  spread {:>6.4}",
+            t.x, t.y, t.w, t.h, t.p50, t.p05, t.p95, t.spread,
         );
     }
 }
@@ -343,9 +329,9 @@ fn propose_patches() {
     let params = DensityParams::default();
 
     for (roll, stem) in FIXTURES {
-        let (base, dmax) = frozen_reference(&recipes.join(format!("{stem}.json")));
+        let base = frozen_reference(&recipes.join(format!("{stem}.json")));
         println!(
-            "\n=== {roll}  Dmin=({:.6}, {:.6}, {:.6})  Dmax={dmax:.6}",
+            "\n=== {roll}  Dmin=({:.6}, {:.6}, {:.6})",
             base.r, base.g, base.b
         );
 
@@ -387,7 +373,7 @@ fn propose_patches() {
 
             let mut shadow = textured.clone();
             shadow.sort_by(|a, b| a.p50.total_cmp(&b.p50));
-            report("shadow (textured, lowest D')", shadow.clone(), 3, dmax);
+            report("shadow (textured, lowest D')", shadow.clone(), 3);
 
             let mut bright = textured.clone();
             bright.sort_by(|a, b| b.p50.total_cmp(&a.p50));
@@ -398,7 +384,6 @@ fn propose_patches() {
                 "diffuse white (textured, high D', top 2 dropped)",
                 diffuse.clone(),
                 3,
-                dmax,
             );
 
             let mut mid: Vec<&Tile> = ts.iter().collect();
@@ -407,7 +392,7 @@ fn propose_patches() {
                     .abs()
                     .total_cmp(&(b.p50 - frame_p50).abs())
             });
-            report("mid-tone (nearest frame median D')", mid.clone(), 3, dmax);
+            report("mid-tone (nearest frame median D')", mid.clone(), 3);
 
             // The Δ the datasheet predicts at 0.36 (0.40 for Gold 200). Printed for
             // orientation only, and it must NOT be read as Check A: the auto-proposed
@@ -443,9 +428,9 @@ fn characterise_reference_frames() {
     let params = DensityParams::default();
 
     for (roll, stem) in FIXTURES {
-        let (base, dmax) = frozen_reference(&recipes.join(format!("{stem}.json")));
+        let base = frozen_reference(&recipes.join(format!("{stem}.json")));
         let r = roles(&assets, roll);
-        println!("\n=== {roll}  frozen Dmax={dmax:.6}");
+        println!("\n=== {roll}");
 
         for (kind, list) in [("leader", &r.leader), ("unexposed", &r.unexposed)] {
             for frame in list.iter() {
@@ -490,8 +475,7 @@ fn characterise_reference_frames() {
                     }
                     println!(
                         "    {label}  D' tiles: min {:.4} med {:.4} max {:.4} (range {:.4})  \
-                         median in-tile spread {:.4}\n       gradient: L−R {:+.4}  T−B {:+.4}   \
-                         med/Dmax {:.1}%",
+                         median in-tile spread {:.4}\n       gradient: L−R {:+.4}  T−B {:+.4}",
                         p50s[0],
                         pct(&p50s, 0.5),
                         p50s[p50s.len() - 1],
@@ -499,7 +483,6 @@ fn characterise_reference_frames() {
                         pct(&spreads, 0.5),
                         mean(&l) - mean(&rt),
                         mean(&top) - mean(&bot),
-                        100.0 * pct(&p50s, 0.5) / dmax,
                     );
                 }
             }

@@ -75,7 +75,10 @@ use crate::types::{DensityCurveType, EncodeReport, FilmBaseSource, OutputPreset}
 /// v5: `conversion.reconstruction` is gone and `conversion.curve` is always present,
 /// because `simple` reconstruction retired (`nf-retire/sigmoid-and-simple`) and left
 /// one reconstruction; `sigmoid` left `conversion.curve` in the same change.
-pub const SCHEMA_VERSION: u32 = 5;
+///
+/// v6: `conversion.dmax` is gone — the roll reference density retired with the
+/// placements that read it (`nf-retire/dmax-machinery`).
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Default local JSONL log path, honoring `NC_TELEMETRY_LOG` then the platform
 /// data dir; `None` when no home/data dir can be located (the caller then warns
@@ -146,9 +149,9 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 ///
 /// Optional fields follow two wire conventions: an absent `cpu_count` /
 /// `image.input_bytes` / `image.output_bytes` serializes as JSON `null` (the key
-/// is always present, fixed shape), whereas `timing_ms.ir_export` and
-/// `conversion.dmax` are `skip_serializing_if = "Option::is_none"` and vanish from
-/// the JSON entirely when not applicable to the run.
+/// is always present, fixed shape), whereas `timing_ms.ir_export` is
+/// `skip_serializing_if = "Option::is_none"` and vanishes from the JSON entirely when
+/// not applicable to the run.
 #[derive(Clone, Debug, Serialize)]
 pub struct TelemetryRecord {
     /// Record schema version ([`SCHEMA_VERSION`]) for server forward-compat.
@@ -224,9 +227,6 @@ pub struct ConversionInfo {
     pub params_hash: String,
     /// Film-base provenance (`"auto"` / `{"region":…}` / `{"explicit":…}`).
     pub film_base_source: FilmBaseSource,
-    /// Resolved display-white anchor density the density render used, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dmax: Option<f32>,
     /// Whether HDR (32-bit float) output was written. Derived from
     /// [`OutputParams::depth`](crate::types::OutputParams::depth) — the single place
     /// a recipe becomes a depth — not from the `output.hdr` switch: under
@@ -272,7 +272,6 @@ pub struct RecordInputs<'a> {
     pub curve: DensityCurveType,
     pub params_hash: String,
     pub film_base_source: FilmBaseSource,
-    pub dmax: Option<f32>,
     pub output_depth: &'static str,
     pub warnings: usize,
 }
@@ -307,7 +306,6 @@ pub fn build_record(inputs: RecordInputs<'_>) -> TelemetryRecord {
             curve: inputs.curve,
             params_hash: inputs.params_hash,
             film_base_source: inputs.film_base_source,
-            dmax: inputs.dmax,
             output_depth: inputs.output_depth,
         },
         outcome: OutcomeInfo {
@@ -462,13 +460,12 @@ mod tests {
             curve: DensityCurveType::Exponential,
             params_hash: "deadbeef".into(),
             film_base_source: FilmBaseSource::Auto,
-            dmax: Some(1.8),
             preset: OutputPreset::DisplayP3,
             output_depth: "u16",
             warnings: 4,
         });
 
-        assert_eq!(rec.schema_version, 5);
+        assert_eq!(rec.schema_version, 6);
         assert_eq!(rec.image.width, 2000);
         assert_eq!(rec.image.height, 3000);
         // 2000 * 3000 = 6e6 pixels → 6.0 MP.
@@ -507,7 +504,6 @@ mod tests {
             curve: DensityCurveType::Exponential,
             params_hash: "0".into(),
             film_base_source: FilmBaseSource::Explicit([0.9, 0.5, 0.4]),
-            dmax: None,
             preset: OutputPreset::FilmMaster,
             output_depth: "f32",
             warnings: 0,
@@ -520,7 +516,6 @@ mod tests {
             !json.contains("ir_export"),
             "absent IR export must be omitted"
         );
-        assert!(!json.contains("\"dmax\""), "absent dmax must be omitted");
     }
 
     #[test]
@@ -668,7 +663,6 @@ mod tests {
                 curve: DensityCurveType::Exponential,
                 params_hash: "0123456789abcdef".into(),
                 film_base_source: FilmBaseSource::Explicit([0.5, 0.25, 0.125]),
-                dmax: Some(1.5),
                 output_depth: "u16",
             },
             outcome: OutcomeInfo {
@@ -678,7 +672,7 @@ mod tests {
             },
         };
         let expected_full = concat!(
-            r#"{"schema_version":5,"timestamp_ms":1700000000000,"nc_version":"9.9.9","#,
+            r#"{"schema_version":6,"timestamp_ms":1700000000000,"nc_version":"9.9.9","#,
             r#""target":"test-triple","cpu_count":8,"#,
             r#""image":{"format":"hdri","width":100,"height":200,"megapixels":0.25,"#,
             r#""bit_depth":16,"channels":3,"ir_present":true,"input_bytes":1000,"#,
@@ -687,13 +681,13 @@ mod tests {
             r#""color":8.0,"encode":4.0,"ir_export":2.0},"#,
             r#""conversion":{"preset":"display-p3","curve":"exponential","#,
             r#""params_hash":"0123456789abcdef","#,
-            r#""film_base_source":{"explicit":[0.5,0.25,0.125]},"dmax":1.5,"output_depth":"u16"},"#,
+            r#""film_base_source":{"explicit":[0.5,0.25,0.125]},"output_depth":"u16"},"#,
             r#""outcome":{"warnings":1,"clipped":2,"non_finite":0}}"#,
         );
         assert_eq!(serde_json::to_string(&full).unwrap(), expected_full);
 
         // Minimal: cpu_count / input_bytes / output_bytes serialize as null;
-        // ir_export and dmax are skipped entirely.
+        // ir_export is skipped entirely.
         let minimal = TelemetryRecord {
             schema_version: SCHEMA_VERSION,
             timestamp_ms: 0,
@@ -728,7 +722,6 @@ mod tests {
                 curve: DensityCurveType::Characteristic,
                 params_hash: "0".into(),
                 film_base_source: FilmBaseSource::Auto,
-                dmax: None,
                 output_depth: "f32",
             },
             outcome: OutcomeInfo {
@@ -738,7 +731,7 @@ mod tests {
             },
         };
         let expected_minimal = concat!(
-            r#"{"schema_version":5,"timestamp_ms":0,"nc_version":"9.9.9","#,
+            r#"{"schema_version":6,"timestamp_ms":0,"nc_version":"9.9.9","#,
             r#""target":"test-triple","cpu_count":null,"#,
             r#""image":{"format":"hdr","width":1,"height":1,"megapixels":0.0,"#,
             r#""bit_depth":16,"channels":3,"ir_present":false,"input_bytes":null,"#,

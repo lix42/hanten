@@ -159,8 +159,8 @@ PYTHONPATH=scripts/analysis python3 -m nctool manifest roles [--asset-root DIR]
 # emits: <roll>|<unexposed>.tif|<leader>.tif|<real1>.tif <real2>.tif …
 ```
 
-Only rolls with **exactly one** `unexposed` and one `leader` frame are emitted (a
-freezable Dmin/Dmax pair); all-`real` rolls like the NLP source are skipped. So the
-role assignments in `manifest.json` are what the harness converts — keep them
-accurate. Frozen recipes depend only on the Dmin/Dmax frames, so a manifest-driven
-run is byte-identical to the former hard-coded array.
+Only rolls with **exactly one** `unexposed` frame (the freezable Dmin) and some
+`real` frames are emitted; all-`real` rolls like the NLP source are skipped. The
+leader field names the roll's single `leader` and is empty otherwise — the harness
+stopped measuring it when the roll reference density retired. So the role
+assignments in `manifest.json` are what the harness converts — keep them accurate.
