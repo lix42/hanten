@@ -37,6 +37,16 @@ below land in it. It is the stage nc does not have today.
 - The report names the stage in both the empty and the configured case.
 - One recipe drives the same look through every destination that has one.
 
+## Outcome (2026-09-23)
+
+Closed as a decision task: the stage, its empty recipe section, its report entry
+and its identity guarantee already existed from `nf-core`. Settled here: one key
+per control under `look`; an empty look reports `"identity"`. Deferred, because
+nothing can reach them until a look knob and a second destination exist: the
+non-empty predicate (added by the first look control), the `film-master` refusal
+(verified by the first look control or `nf-destinations/preset-set`, whichever
+lands second), and one recipe through every destination (`preset-set`).
+
 ## Dependencies
 
 - [Scene correction as a named stage](../nf-scene-correction/stage.md)

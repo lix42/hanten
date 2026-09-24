@@ -1338,6 +1338,12 @@ top-level **document version** rather than per-object ones:
   as `2^EV`; each gain times it must be a normal `f32`. The report's
   `new_flow.scene_correction` states the gains applied, their provenance
   (`stated` / `estimated`, with the estimator and region), and the exposure.
+- **`look`** (`nf-look/stage`): the creative stage, scene-referred and linear,
+  between scene correction and the SDR/HDR branch. It has no keys yet; each control
+  will be **its own key**, added by its own task — not one CDL-style object, whose
+  slope and offset would restate white balance and the flare subtraction. Empty, it
+  is a bit-exact identity, and the report's `new_flow.stages` lists it as
+  `"applied": "identity"`.
 
 This section states the shape. Each stage's keys are specified by the task that
 ships the knob, not written here ahead of the code.

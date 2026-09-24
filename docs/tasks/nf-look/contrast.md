@@ -21,9 +21,8 @@ carries, pivoted at mid-grey and applied before the SDR/HDR branch.
   0.002, 0.99 at 0.01, 0.82 at mid — below mid the operator is a gain, not a
   curve. Everything a viewer reads as shadow contrast therefore arrives from this
   stage or from the decode's linearization.
-- **Spelling is shared with the per-channel grade.** One CDL-style object or
-  separate knobs is Part 2's open question, and answering it twice produces two
-  answers. Decide it in whichever of the two tasks runs first.
+- **Its own key under `look`.** `nf-look/stage` settled the container on
+  2026-09-23: one key per control, not one CDL-style object shared with the grade.
 
 ## Open questions
 
@@ -32,6 +31,9 @@ carries, pivoted at mid-grey and applied before the SDR/HDR branch.
   `nf-calibration`.
 - Whether contrast and the per-channel grade compose in a stated order, or the
   grade is defined as acting on the contrast's output.
+- **Its overlap with the grade.** A pivoted grade with equal exponents is this knob,
+  so the two can spell one operation twice. Decide who owns neutral contrast in
+  whichever of the two tasks runs first.
 
 ## How to Verify
 
@@ -40,6 +42,12 @@ carries, pivoted at mid-grey and applied before the SDR/HDR branch.
   it.
 - At matched lightness, a contrast change moves shadow separation where a fit
   range change does not — the measurement that motivates the knob's existence.
+- If this is the **first look control to land**: `LookParams` gains a "non-empty"
+  predicate, and `applied()` and any destination that runs no look (`film-master`,
+  once the new flow has one) read it — one rule, never one per knob
+  (`nf-look/stage`). A look key on a no-look destination refuses, naming the look
+  — if the new flow has one by then; otherwise `nf-destinations/preset-set`
+  verifies it.
 
 ## Dependencies
 

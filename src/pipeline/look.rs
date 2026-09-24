@@ -2,8 +2,10 @@
 //!
 //! The creative stage nc does not have today: contrast, the per-channel grade with
 //! a mid-grey pivot, highlight desaturation, and later print emulation and
-//! per-stock normalization. Scene-referred and linear. `nf-look/stage` fills it;
-//! the control tasks under `nf-look` land in it.
+//! per-stock normalization. Scene-referred and linear. Each control lands here
+//! with its own task under `nf-look`, as its own key in the recipe's `look`
+//! section — not one CDL-style object, whose slope and offset would duplicate white
+//! balance and the flare subtraction, which scene correction owns.
 //!
 //! **Its position is a constraint, not a preference.** The look sits after scene
 //! correction and *above* the SDR/HDR branch, because a gain map requires the two
@@ -17,9 +19,14 @@ use crate::pipeline::scene_correction::SceneReferredImage;
 use crate::pipeline::working_image::WorkingBuffer;
 use crate::types::Result;
 
-/// The look's knobs. Empty until `nf-look/stage` gives it a recipe section and
-/// the three controls land in it. See [`SceneCorrectionParams`] on why this is an
+/// The look's knobs — the recipe's `look` section, one key per control. Empty
+/// until the first control lands. See [`SceneCorrectionParams`] on why this is an
 /// empty struct rather than an `Option`.
+///
+/// **An empty look is a legitimate state, not an absent one.** Once the look has a
+/// knob, a destination that runs no look (`film-master`) is meant to refuse a
+/// *non-empty* one through a single predicate on this type rather than one rule per
+/// knob. Neither exists yet: the first control adds the predicate.
 ///
 /// [`SceneCorrectionParams`]: crate::pipeline::scene_correction::SceneCorrectionParams
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
