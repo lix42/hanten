@@ -96,7 +96,8 @@ white.
   as much cast as skin, and a per-frame auto white balance removes a sunset before the
   band can protect it. The intent (user, 2026-09-23) is to keep the scene's light and
   remove only the roll-constant cast, which is also why `s0` sits low. The roll white
-  comes from the roll's own top percentile, not the base or the leader.
+  comes from the roll's own top percentile, not the base or the leader — `hanten
+  measure-roll` measures it, and the recipe states it as `scene_correction.white_balance`.
 - **The threshold is scene-referred, and the spike's was not.** The throwaway operator
   started at *rendered* linear luminance 0.5 (≈ L\* 76), i.e. after fit range. The design
   requires the trigger at **diffuse white, pre-branch**. Once the decode pins mid — and
@@ -109,9 +110,8 @@ white.
   this task (only a render with a real highlight operator can rank the white placements),
   while this task needs an anchor that reaches white. The task graph stays acyclic and no
   edge records that second direction — the coupling is the hand-set contrast above.
-  Every other dependency is done; it waits only on
-  [`roll-white-balance`](../nf-scene-correction/roll-white-balance.md) (added 2026-09-23),
-  which can run now.
+  Every dependency is done as of 2026-09-23, the last being
+  [`roll-white-balance`](../nf-scene-correction/roll-white-balance.md).
 
 ## Open questions
 
@@ -180,8 +180,8 @@ white.
   `nf-calibration/anchor-comparison`'s, and it depends on this task
 - [Fit the desaturation band on more than one patch](desaturation-band-fit.md)
   — **done 2026-09-23**: the values, the measure, and the white-balance precondition
-- [A roll-level white balance](../nf-scene-correction/roll-white-balance.md) — the
-  saturation band measures distance from the neutral axis, which is distance from white
-  only once the roll's cast is gone
+- [A roll-level white balance](../nf-scene-correction/roll-white-balance.md) — **done
+  2026-09-23** (`hanten measure-roll`). The saturation band measures distance from the
+  neutral axis, which is distance from white only once the roll's cast is gone
 - [Separate the gamut map's share](../nf-display-stages/gamut-map-share.md)
   — **done 2026-09-23.** Near zero at the renders this task is built under; see Design

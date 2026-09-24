@@ -9,10 +9,11 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 6`, built at commit
-> `010f5a6cb789` plus the retirement of the sigmoid curve and `simple` reconstruction
-> (`nf-retire/sigmoid-and-simple`). The staleness signal is `pipeline_version`: if
-> `hanten --version` reports a different one, treat this document as suspect and
-> re-verify.
+> `510f7ecf945c` (the retirement of the sigmoid curve and `simple` reconstruction,
+> `nf-retire/sigmoid-and-simple`) plus `hanten measure-roll` and the new chain's retired
+> per-frame white balance (`nf-scene-correction/roll-white-balance`, §11). The
+> staleness signal is `pipeline_version`: if `hanten --version` reports a different
+> one, treat this document as suspect and re-verify.
 >
 > **Retired flags and presets** — `--reconstruction`, `--density-curve sigmoid`, the
 > `--sigmoid-*` flags, the `sigmoid-knees` / `sigmoid-flat` presets, and before them
@@ -115,7 +116,7 @@ guaranteed byte-identical within one build and architecture.
 
 ---
 
-## 3. The five commands
+## 3. The six commands
 
 | Command | Purpose | Writes an image? |
 |---|---|---|
@@ -124,6 +125,7 @@ guaranteed byte-identical within one build and architecture.
 | `hanten params` | Print the full default recipe as JSON — the scaffolding starting point. | No |
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
 | `hanten roll` | Convert many frames from **one shared frozen recipe**. | Yes |
+| `hanten measure-roll` | **"What white balance does this roll need?"** — measured once over the roll's frames, for the new chain (§11). Prints reuse-ready flag and recipe forms. | No |
 
 Every command except `params` emits a **JSON report on stdout** on success
 (`--report none` to suppress, `--report-file PATH` to redirect); `params` takes no
@@ -1729,38 +1731,85 @@ after the decode's 3×3, before the look — and clamps nothing:
 | Flag | Recipe key | |
 |---|---|---|
 | `--white-balance R,G,B` | `scene_correction.white_balance` = `{"explicit": [r, g, b]}` | stated gains (default `[1, 1, 1]`) |
-| `--auto-wb MODE` | `scene_correction.white_balance` = `"gray-world"` or `"percentile"` | gains estimated per frame, green-anchored |
 | `--exposure EV` | `scene_correction.exposure` | a gain of `2^EV` (default `0`) |
 
 `--exposure` is the new chain's spelling: under `--new-flow`, `--print-exposure` is
 refused with `Use --exposure`, and without the flag `--exposure` is refused naming
-`--print-exposure`. The white-balance flags keep one spelling on both chains, and
-precedence is by source: `--white-balance 1,1,1` over a recipe's auto mode means
-neutral gains, not a re-estimate. The recipe takes only the tagged form — a bare
-`[r, g, b]` array, which the current chain still accepts, is refused.
-
-An auto mode estimates over the **effective area** (the measurement region every run
-reports as `effective_area`), not the whole frame, so the film holder and rebate do
-not pull the estimate. The report says what it came to and where from:
+`--print-exposure`. `--white-balance` keeps its spelling on both chains. The recipe
+takes only the tagged form — a bare `[r, g, b]` array, which the current chain still
+accepts, is refused. The report states what was applied:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
-    --auto-wb percentile --exposure 0.5 | jq '.new_flow.scene_correction'
+    --white-balance 1.2,1,0.8 --exposure 0.5 | jq -c '.new_flow.scene_correction'
+{"white_balance":[1.2,1.0,0.8],"exposure":0.5}
+```
+
+**There is no per-frame auto white balance on this chain.** A frame's own statistics
+read a sunset as the cast and remove it, so the gains are measured once per roll
+with `hanten measure-roll` (below) and stated. `--auto-wb` is refused, and so is a
+recipe naming a per-frame mode:
+
+```console
+$ hanten convert … --new-flow --auto-wb percentile
+usage: --auto-wb has no meaning under `--new-flow`: the new flow has no counterpart
+for it, and will not gain one: a per-frame estimate reads a sunset as the cast and
+removes it before highlight desaturation can protect it, so white balance is
+measured once per roll (…). Use `hanten measure-roll`, then its gains as
+`--white-balance` (recipe `scene_correction.white_balance`), or run without
+`--new-flow`, where this knob has a meaning. …
+
+$ hanten convert … --new-flow --params wb.json   # "white_balance": "percentile"
+usage: recipe wb.json: `scene_correction.white_balance` "percentile" was a per-frame
+estimate, and the new chain has none: it read a sunset as the cast and removed it.
+Drop it, then state the gains `hanten measure-roll` reports for the roll, as
+`{"explicit": [r, g, b]}`
+```
+
+#### `measure-roll` — a roll's white balance, measured once
+
+It removes the cast a whole roll shares — the film, the development, the scanner —
+and keeps the scene's light: one sunset frame barely moves a statistic taken over
+every frame. Give it the roll's picture frames, its leader, and its explicit film base
+(from `estimate`, §4):
+
+```console
+$ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.471,0.232,0.108
 {
-  "white_balance": [0.97473544, 1.0, 0.7211308],
-  "provenance": "estimated",
-  "estimator": "percentile",
-  "region": [23, 23, 456, 416],
-  "exposure": 0.5
+  "command": "measure-roll",
+  "leader": { "median": [1.1094518, 0.8469106, 0.5191863], "guard_density": 0.1,
+              "ceiling": [0.70001674, 0.53436446, 0.32758445], … },
+  "frames": [ { "input": "frames/1774.tif", "region": [167, 167, 4579, 3009],
+                "sampled": 131072, "kept": 131066, "guarded": 6, "unusable": 0, … }, … ],
+  "white_balance": { "gains": [1.0021106, 1.0, 1.2774495], "percentile": 0.99,
+                     "pooled": 4542634 },
+  "reuse": { "flag": "--white-balance 1.0021106,1,1.2774495",
+             "recipe": { "scene_correction": { "white_balance":
+                         { "explicit": [1.0021106, 1.0, 1.2774495] } } } },
+  …
 }
 ```
 
-Stating those gains with `--white-balance` (or in the roll's recipe) reproduces the
-frame byte for byte — measure once, reuse across the roll. Stated gains report
-`"provenance": "stated"` and no region. Because an auto mode reads the region, an
-**empty** one (a holder and inset that cover the frame) is a refusal (exit 2) under
-`--auto-wb`, naming `--white-balance` as the way out; with stated gains it stays a
-warning.
+(Abridged; that is 35 frames of one roll.) Each frame is decoded under the new chain's
+decode and sampled over its **effective area** (§9); the gains equalize the pooled
+pixels' per-channel 99th percentile, green-anchored. Freeze them by pasting `reuse.flag`
+on `convert --new-flow`, or by merging `reuse.recipe` into the roll's recipe for
+`roll --new-flow`.
+
+- **Pass the leader.** Any pixel within 0.1 density of it is left out (`guarded`), so a
+  fully exposed frame mixed into the inputs cannot become the roll's white — measured,
+  it would move the gains 0.4–1.3 stops. Without `--leader` the run warns, and
+  `--strict` refuses it before decoding anything (exit 2).
+- **Only picture frames, each once.** Every input is pooled as picture; leave out the
+  unexposed base, the leader and any calibration frame. A frame named twice is
+  refused (exit 2) — it would weigh double — and so is the `--leader` file among the
+  inputs. A frame that contributes nothing, or whose
+  holder cut is not a measurement (the same warning `convert` gives), is warned about
+  by name, so `--strict` catches both.
+- **The base must be explicit** — `--film-base`, or `calibration.film_base` in a
+  `--params` recipe (the new chain's, `"recipe_version": 2`, whose `reconstruction`
+  it decodes under). A base estimated per frame would decode every frame differently,
+  so anything else is refused (exit 2) pointing at `estimate --grid`.
 
 What survives untouched is everything before the seam: `--film-base`,
 `--base-region`, `--auto-base`, `--measure-inset`, `--input-transfer`,

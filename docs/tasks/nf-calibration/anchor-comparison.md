@@ -22,7 +22,7 @@ The shortlist, from [the report](../../spike/white-placement.md):
 |---|---|---|---|
 | **A** fixed anchor | ✓ | ✗ | fixed |
 | **B** content white, level move | ✗ | ✓ | fixed |
-| **C** hybrid, contrast solved | ✓ | ✓ | 1.43–2.31× |
+| **C** hybrid, contrast solved | ✓ | ✓ | 1.43–3.67× (09-11 corrected) |
 | **D** C with a gamma ceiling, sliding toward B when it binds | ✓ | mostly | capped |
 
 The known failure modes of a content-referenced white (a blown frame, an underexposed
@@ -52,7 +52,11 @@ traded; one roll cannot show it.
 - **Which percentile defines `W`.** The spike used red p97 pooled toward the roll's
   upper end; p95 and p99 move the answer and the specular headroom with it.
 - **Whether the per-roll contrast is a recipe value or a measurement** the roll planner
-  derives — the first is reproducible, the second is convenient.
+  derives — the first is reproducible, the second is convenient. White balance chose the
+  first (`nf-scene-correction/roll-white-balance`): `hanten measure-roll` measures once
+  and the recipe carries the value. Its pooled measurement could report the roll white's
+  *level* as well, from the same pixels and leader guard — share that measurement, not a
+  parameter, if this lands on a measured `W`.
 - Whether an underexposed roll should be lifted at all, which is the faithfulness
   question the whole shortlist turns on and which no measurement decides.
 

@@ -11,7 +11,7 @@
 //!
 //! - **Per-stage**, so a failure is localized to the stage whose arithmetic moved.
 //! - **Threaded** through [`chain::render`], the only vectors that see the chain's
-//!   stages *wired together* — which params and region reach which stage, what the
+//!   stages *wired together* — which params reach which stage, what the
 //!   render reports, and the order the per-channel gains and the 3×3 run in (they do
 //!   not commute). They start at the mapped ACEScg, not at the decode: the hand-off
 //!   from the decode, and the recipe reaching `DecodeParams`, are the orchestrator's
@@ -53,7 +53,7 @@ use crate::pipeline::fit_gamut::{self, DestinationGamut, FitGamutParams};
 use crate::pipeline::fit_range::{self, FitRangeParams};
 use crate::pipeline::look::{self, LookParams};
 use crate::pipeline::scene_correction::{
-    self, SceneCorrection, SceneCorrectionParams, WhiteBalance, WhiteBalanceSource,
+    self, SceneCorrection, SceneCorrectionParams, WhiteBalance,
 };
 use crate::pipeline::working_space::{AcesCgImage, map_nc_film_rgb_v1};
 use crate::types::{FilmBase, LinearImage};
@@ -382,9 +382,6 @@ fn aces() -> AcesCgImage {
     map_nc_film_rgb_v1(film())
 }
 
-/// The first seven pixels of [`aces`] — the finite ones — for the auto white balance.
-const WB_REGION: [u32; 4] = [0, 0, 7, 1];
-
 const MAPPED: [u32; 24] = [
     0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3d393ec1, 0x3c825bc6, 0x3f48872e, 0x3f0d5cdc, 0x3d88563e,
     0x3ad1310b, 0x3f800000, 0x3f800000, 0x3f7fffff, 0x4065b8db, 0x40440fdb, 0x40257c3e, 0x00000000,
@@ -400,8 +397,8 @@ fn golden_working_space_mapping_is_bit_identical() {
     assert_eq!(out.ir(), Some(&FILM_IR[..]));
 }
 
-fn scene_correct(params: &SceneCorrectionParams, region: Option<[u32; 4]>) -> Vec<f32> {
-    let (out, _) = scene_correction::apply(aces(), params, region).unwrap();
+fn scene_correct(params: &SceneCorrectionParams) -> Vec<f32> {
+    let (out, _) = scene_correction::apply(aces(), params).unwrap();
     out.into_buffer().into_linear().rgb
 }
 
@@ -419,11 +416,7 @@ fn golden_scene_correction_stated_is_bit_identical() {
         white_balance: WhiteBalance::Explicit([1.25, 1.0, 0.5]),
         exposure: 1.0,
     };
-    assert_stage_bits(
-        "scene-correction",
-        &scene_correct(&params, None),
-        &SCENE_STATED,
-    );
+    assert_stage_bits("scene-correction", &scene_correct(&params), &SCENE_STATED);
 }
 
 const SCENE_FRACTIONAL: [u32; 24] = [
@@ -449,7 +442,7 @@ fn golden_scene_correction_fractional_exposure_is_correct_within_its_libm_window
         exposure: FRACTIONAL_EV,
     };
     let input = aces().rgb().to_vec();
-    let got = scene_correct(&params, None);
+    let got = scene_correct(&params);
     assert_eq!(got.len(), SCENE_FRACTIONAL.len());
     let mut widest = 0;
     for (i, (&g, &want)) in got.iter().zip(&SCENE_FRACTIONAL).enumerate() {
@@ -475,61 +468,11 @@ fn golden_scene_correction_fractional_exposure_is_correct_within_its_libm_window
     assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
 }
 
-const SCENE_GRAY_WORLD: [u32; 24] = [
-    0x3e149d56, 0x3e3851ed, 0x3e2f4ab7, 0x3d155c4a, 0x3c825bc6, 0x3f3eb4be, 0x3ee3f51f, 0x3d88563e,
-    0x3ac6f1f9, 0x3f4e68be, 0x3f800000, 0x3f7375fe, 0x403938be, 0x40440fdb, 0x401d6135, 0x00000000,
-    0x00000000, 0x00000000, 0x3b2df595, 0x3b7fc7d4, 0x3b0b9850, NAN, NAN, NAN,
-];
-const GAINS_GRAY_WORLD: [u32; 3] = [0x3f4e68be, 0x3f800000, 0x3f7375ff];
-const SCENE_PERCENTILE: [u32; 24] = [
-    0x3e1d4ffa, 0x3e3851ed, 0x3e5a606e, 0x3d1e1a1c, 0x3c825bc6, 0x3f6d945a, 0x3ef14c88, 0x3d88563e,
-    0x3af7d802, 0x3f5a7d4d, 0x3f800000, 0x3f97a685, 0x40440fdb, 0x40440fdb, 0x40440fdc, 0x00000000,
-    0x00000000, 0x00000000, 0x3b3823f5, 0x3b7fc7d4, 0x3b2de7e9, NAN, NAN, NAN,
-];
-const GAINS_PERCENTILE: [u32; 3] = [0x3f5a7d4d, 0x3f800000, 0x3f97a686];
-
-#[test]
-fn golden_scene_correction_auto_white_balance_is_bit_identical() {
-    // Sorts, a nearest-rank pick, a fixed-order f64 sum and f32 divisions: no libm, so
-    // the estimated gains and the pixels are pinned exactly.
-    for (mode, gains, pixels) in [
-        (WhiteBalance::GrayWorld, GAINS_GRAY_WORLD, &SCENE_GRAY_WORLD),
-        (
-            WhiteBalance::Percentile,
-            GAINS_PERCENTILE,
-            &SCENE_PERCENTILE,
-        ),
-    ] {
-        let params = SceneCorrectionParams {
-            white_balance: mode,
-            exposure: 0.0,
-        };
-        let (out, resolved) = scene_correction::apply(aces(), &params, Some(WB_REGION)).unwrap();
-        assert_eq!(
-            resolved.white_balance.map(f32::to_bits),
-            gains,
-            "stage `scene-correction` ({mode:?}): estimated gains"
-        );
-        assert!(matches!(
-            resolved.source,
-            WhiteBalanceSource::Estimated {
-                region: WB_REGION,
-                ..
-            }
-        ));
-        assert_stage_bits(
-            "scene-correction",
-            &out.into_buffer().into_linear().rgb,
-            pixels,
-        );
-    }
-}
-
 /// [`aces`] through scene correction, look and fit range at their defaults — the only
 /// way to mint fit gamut's input, and, today, three identities.
 fn through_fit_range() -> fit_range::RangeFittedImage {
     let (corrected, _) =
-        scene_correction::apply(aces(), &SceneCorrectionParams::default(), None).unwrap();
+        scene_correction::apply(aces(), &SceneCorrectionParams::default()).unwrap();
     let graded = look::apply(corrected, &LookParams::default()).unwrap();
     fit_range::apply(graded, &FitRangeParams::default()).unwrap()
 }
@@ -592,7 +535,7 @@ fn golden_the_chain_threaded_is_bit_identical() {
             target: DestinationGamut::DisplayP3,
         },
     };
-    let rendered = chain::render(aces(), &params, None).unwrap();
+    let rendered = chain::render(aces(), &params).unwrap();
     assert_eq!(
         rendered.applied,
         [
@@ -607,7 +550,6 @@ fn golden_the_chain_threaded_is_bit_identical() {
         rendered.scene_correction,
         SceneCorrection {
             white_balance: [1.25, 1.0, 0.5],
-            source: WhiteBalanceSource::Stated,
             exposure: -1.0,
         },
         "chain (threaded): the scene correction the render reports"
@@ -616,44 +558,4 @@ fn golden_the_chain_threaded_is_bit_identical() {
     assert_stage_bits("chain (threaded)", &out.rgb, &THREADED);
     assert_eq!(gamut, DestinationGamut::DisplayP3);
     assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..]));
-}
-
-const THREADED_AUTO: [u32; 24] = [
-    0x3d87b5b0, 0x3dbae9a5, 0x3daef066, 0xbb665208, 0x3b25183c, 0x3ec794f1, 0x3e97e8fb, 0x3ca89713,
-    0xba9d1dd6, 0x3ebc7c5a, 0x3f01cceb, 0x3ef2f88d, 0x3fb7d509, 0x3fc550a0, 0x3f9b8fa7, 0x00000000,
-    0x00000000, 0x00000000, 0x3a971aed, 0x3b037ad5, 0x3a863d34, NAN, NAN, NAN,
-];
-
-#[test]
-fn golden_the_chain_threaded_with_auto_white_balance_is_bit_identical() {
-    // The measurement region is a fact `chain::render` forwards, not a param, so only a
-    // threaded auto run pins that it reaches scene correction — and that the gains the
-    // report states are the ones estimated over it (the same as the per-stage golden's,
-    // since the region and input are the same).
-    let params = ChainParams {
-        scene_correction: SceneCorrectionParams {
-            white_balance: WhiteBalance::GrayWorld,
-            exposure: -1.0,
-        },
-        look: LookParams::default(),
-        fit_range: FitRangeParams::default(),
-        fit_gamut: FitGamutParams {
-            target: DestinationGamut::DisplayP3,
-        },
-    };
-    let rendered = chain::render(aces(), &params, Some(WB_REGION)).unwrap();
-    assert_eq!(
-        rendered.scene_correction,
-        SceneCorrection {
-            white_balance: GAINS_GRAY_WORLD.map(f32::from_bits),
-            source: WhiteBalanceSource::Estimated {
-                estimator: "gray-world",
-                region: WB_REGION,
-            },
-            exposure: -1.0,
-        },
-        "chain (threaded, auto): the scene correction the render reports"
-    );
-    let (out, _) = rendered.image.into_parts();
-    assert_stage_bits("chain (threaded, auto)", &out.rgb, &THREADED_AUTO);
 }

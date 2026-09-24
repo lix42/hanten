@@ -1058,6 +1058,7 @@ no interactive prompts.
 | `hanten roll` | Convert a batch of frames from one shared, frozen recipe (the batch-**apply** scaffold). Per-frame outputs into `--out-dir` + a roll-level JSON report. Single-frame `convert` is unchanged; roll is additive. |
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, candidate rebate regions (coordinates + spread, ready for `--base-region`), suggested `Dmin`. No output image. |
 | `hanten estimate` | Run only film-base/`Dmin` estimation; emit JSON with a reuse-ready `--film-base` flag and a `calibration` object in recipe shape. `--grid` adds 5-cell agreement-checked sampling for blank reference frames. `--d-max-region` additionally measures the roll-fixed display-white anchor `Dmax` from a fully-exposed reference frame, emitting a `--d-max` flag and the matching `calibration.dmax`. |
+| `hanten measure-roll` | Measure a roll's white balance once, for its new-chain recipe (`nf-scene-correction/roll-white-balance`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99 — as a reuse-ready `--white-balance` flag and a `scene_correction` recipe fragment. `--leader` leaves out any pixel within 0.1 density of the leader, so a fully exposed frame cannot become the roll's white; without it the run warns. |
 | `hanten params`  | Print the full default/effective parameter set as JSON (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
 ### Recipes (JSON in/out)
@@ -1250,13 +1251,14 @@ top-level **document version** rather than per-object ones:
 
 - **`scene_correction`** (`nf-scene-correction/stage`): per-channel gains on linear
   ACEScg, after the NC film RGB v1 3×3 and before the look. `white_balance` is
-  `{"explicit": [r, g, b]}` (`--white-balance`; finite and positive), `"gray-world"`
-  or `"percentile"` (`--auto-wb`) — an auto mode estimates green-anchored gains per
-  frame over the effective area, so an empty area is a refusal under it. `exposure`
+  `{"explicit": [r, g, b]}` (`--white-balance`; finite and positive) and nothing
+  else: a roll's gains are measured once by `hanten measure-roll` and stated here, so
+  every frame applies the same ones. The per-frame `"gray-world"` / `"percentile"`
+  modes and `--auto-wb` retired (`nf-scene-correction/roll-white-balance`) — a frame's
+  own statistics read a sunset as the cast — and are refused by name. `exposure`
   is in stops (`--exposure`, the new chain's spelling of `--print-exposure`), applied
   as `2^EV`; each gain times it must be a normal `f32`. The report's
-  `new_flow.scene_correction` states the gains applied, their provenance
-  (`stated` / `estimated`, with the estimator and region), and the exposure.
+  `new_flow.scene_correction` states the gains and the exposure applied.
 - **`look`** (`nf-look/stage`): the creative stage, scene-referred and linear,
   between scene correction and the SDR/HDR branch. It has no keys yet; each control
   will be **its own key**, added by its own task — not one CDL-style object, whose
@@ -1322,7 +1324,8 @@ preserved**: serde round-trips discard them, so Hanten writes an annotated file 
 and never rewrites a user's file in place.
 
 **Renames and removals.** `hanten estimate` becomes **`hanten calibrate`** (it resolves a
-roll, not one value) and `hanten params` becomes **`hanten profile`** (it authors a
+roll, not one value — `hanten measure-roll`, the first command that measures across a
+roll's frames, is the other half it would absorb) and `hanten params` becomes **`hanten profile`** (it authors a
 reusable look, not a parameter dump). `--dump-params` is **deleted** rather than
 aliased: it is byte-identical to the sidecar every conversion already writes, and
 it captures none of the measured values, so a "frozen" recipe produced by it still
@@ -1763,6 +1766,14 @@ hanten convert frame01.tiff -o frame01_pos.jpg --film-base 0.92,0.55,0.42 \
 # → { "white_balance": [1.083, 1.0, 0.941], ... }
 hanten convert frame02.tiff -o frame02_pos.jpg --film-base 0.92,0.55,0.42 \
   --white-balance 1.083,1.0,0.941
+
+# The new chain measures white balance once per roll instead: pool every picture
+# frame (the leader guards against a fully exposed one), then state the gains.
+hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47,0.23,0.11
+# → { "white_balance": { "gains": [1.002, 1.0, 1.277], "percentile": 0.99, ... },
+#     "reuse": { "flag": "--white-balance 1.002,1,1.277",
+#                "recipe": { "scene_correction": { "white_balance": { "explicit": [...] } } } } }
+hanten roll --new-flow frames/*.tif --params roll.json -o out/
 ```
 
 ## 9. Parameter reference (grouped by stage)
@@ -2716,7 +2727,8 @@ nc/
     │   ├── pixels.rs     # the parallel per-pixel map drivers (byte-identical to a loop)
     │   ├── memory.rs     # peak-memory sizing model + budget preflight
     │   ├── stages.rs     # stage wiring as pure functions
-    │   ├── white_balance.rs # auto white-balance estimators (both chains)
+    │   ├── white_balance.rs # white-balance statistics: the current chain's per-frame estimators, the roll's levels
+    │   ├── roll_white.rs    # `measure-roll`: a roll's pooled white, leader-guarded (new flow)
     │   ├── chain.rs           # the --new-flow chain, composed (look and fit range still identities)
     │   ├── working_image.rs   # the buffer every new-flow stage boundary carries
     │   ├── scene_correction.rs # new flow stage 1: WB, exposure, flare (scene-referred)

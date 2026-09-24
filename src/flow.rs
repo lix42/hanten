@@ -338,12 +338,27 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // the new chain spells differently.
     //
     // Every verdict here is `NotYet` except `--print-exposure`'s `Renamed` (its stage
-    // has landed, under another spelling) — including the two display tones
+    // has landed, under another spelling) and `--auto-wb`'s `Never` (the per-frame
+    // estimate itself retired, not just its spelling) — including the two display tones
     // `nf-retire/display-tones` removes outright. That is not a softer reading of
     // their fate: `Never` is a claim about the *knob*, and what a user needs to know
     // at this gate is that the stage which would carry any tone is empty. Whether
     // `shoulder` survives into it is that retirement's statement to make, not this
     // gate's, and stating it here would be a second place to keep it in step.
+    FlagEntry {
+        knob: "--auto-wb",
+        covers: &["--auto-wb"],
+        present: |args| args.print.auto_wb.is_some(),
+        availability: Availability::Never {
+            reason: "a per-frame estimate reads a sunset as the cast and removes it before \
+                     highlight desaturation can protect it, so white balance is measured \
+                     once per roll (`nf-scene-correction/roll-white-balance`)",
+            instead: Some(
+                "`hanten measure-roll`, then its gains as `--white-balance` (recipe \
+                 `scene_correction.white_balance`)",
+            ),
+        },
+    },
     FlagEntry {
         knob: "--print-exposure",
         covers: &["--print-exposure"],
@@ -508,7 +523,8 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     KeptEntry {
         covers: &["--measure-inset"],
         why: "it resolves the reported `effective_area`, which every decoding run \
-              reports on either flow, and which an auto white balance estimates over",
+              reports on either flow, and which `hanten measure-roll` pools a roll's \
+              white over",
     },
     // The decode's own knobs — the calibration and the anchor that
     // `algo::fixed::DecodeParams` carries, which is also the new recipe's
@@ -527,9 +543,9 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     // own spelling; white balance keeps the current chain's, since the knob means the
     // same thing on both — a per-channel gain on linear ACEScg, after the 3×3.
     KeptEntry {
-        covers: &["--white-balance", "--auto-wb"],
-        why: "scene correction's white balance (recipe `scene_correction.white_balance`); \
-              an auto mode estimates over the effective area",
+        covers: &["--white-balance"],
+        why: "scene correction's white balance (recipe `scene_correction.white_balance`) — \
+              stated gains, which `hanten measure-roll` measures once per roll",
     },
     KeptEntry {
         covers: &["--exposure"],
@@ -883,9 +899,6 @@ mod tests {
             ),
             ("--white-balance", &["--white-balance", "1.1,1,0.9"], |r| {
                 r.scene_correction.white_balance == WhiteBalance::Explicit([1.1, 1.0, 0.9])
-            }),
-            ("--auto-wb", &["--auto-wb", "percentile"], |r| {
-                r.scene_correction.white_balance == WhiteBalance::Percentile
             }),
             ("--exposure", &["--exposure", "-0.5"], |r| {
                 r.scene_correction.exposure == -0.5
