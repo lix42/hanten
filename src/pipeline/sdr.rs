@@ -11,6 +11,7 @@
 
 use serde::Serialize;
 
+use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::{
     ACESCG_TO_DISPLAY_P3, ACESCG_TO_SRGB, DISPLAY_P3_LUMA, SRGB_LUMA,
 };
@@ -231,10 +232,6 @@ fn mul(matrix: [[f32; 3]; 3], value: [f32; 3]) -> [f32; 3] {
         dot(matrix[1], value),
         dot(matrix[2], value),
     ]
-}
-
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 // AP1/D60 → XYZ, Bradford D60→D65, then XYZ → destination RGB. Reviewed,

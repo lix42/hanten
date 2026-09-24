@@ -22,6 +22,7 @@
 
 use std::fmt;
 
+use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::{ACESCG_TO_DISPLAY_P3, DISPLAY_P3_LUMA};
 use crate::pipeline::fit_range::RangeFittedImage;
 use crate::pipeline::pixels;
@@ -142,7 +143,7 @@ pub fn apply(image: RangeFittedImage, params: &FitGamutParams) -> Result<Display
         ];
         // Finite luminance implies finite channels: an infinite or NaN channel makes
         // the weighted sum infinite or NaN.
-        let luminance = luma[0] * rgb[0] + luma[1] * rgb[1] + luma[2] * rgb[2];
+        let luminance = dot(luma, rgb);
         if !luminance.is_finite() {
             return Err(NcError::Other(format!(
                 "fit gamut's change of primaries overflowed at pixel {index} ({px:?})"
@@ -335,7 +336,7 @@ mod tests {
     }
 
     fn luminance(rgb: [f32; 3]) -> f32 {
-        DISPLAY_P3_LUMA[0] * rgb[0] + DISPLAY_P3_LUMA[1] * rgb[1] + DISPLAY_P3_LUMA[2] * rgb[2]
+        dot(DISPLAY_P3_LUMA, rgb)
     }
 
     /// Out-of-gamut against a unit cube: a negative channel, one above the ceiling,

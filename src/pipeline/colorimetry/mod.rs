@@ -38,6 +38,13 @@
 //! harness; review the coefficient diff; then decide explicitly whether the
 //! change is representation-only or a pixel change needing a pipeline-version,
 //! fingerprint, and baseline review.
+//!
+//! ## The one runtime arithmetic helper
+//!
+//! [`dot`] is arithmetic over these numbers, not a derivation: every luminance a
+//! stage takes against a pinned luma vector goes through it, so the f32 order of a
+//! luminance is written once. `derive` keeps its own binary64 copy on purpose — a
+//! check that shared this one would validate nothing.
 
 pub mod definitions;
 pub mod pinned;
@@ -50,3 +57,15 @@ mod audit;
 
 #[cfg(test)]
 mod tests;
+
+/// `a · b` in f32, summed left to right: `a[0]·b[0] + a[1]·b[1] + a[2]·b[2]`.
+///
+/// Luminance is `dot(rgb, LUMA)` against a vector in [`pinned`], but it is not
+/// luma-only: the `mul` helpers in `sdr`, `hdr` and `gain_map` apply every gamut
+/// matrix row through it, so do not specialise it for positive luma weights. The
+/// order is part of the output — the goldens pin it bit for bit — so do not
+/// reassociate or fuse it.
+#[inline]
+pub fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}

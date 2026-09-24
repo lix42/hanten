@@ -49,6 +49,7 @@ use std::fmt;
 use serde::Serialize;
 
 use crate::algo::fixed::DIFFUSE_WHITE;
+use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::look::GradedImage;
 use crate::pipeline::pixels;
@@ -313,10 +314,6 @@ fn mid_grey_preserving_gain(white_point: f32) -> f64 {
     let inv_w2 = 1.0 / (f64::from(white_point) * f64::from(white_point));
     let k = 1.0 - MID_GREY;
     2.0 / (k + (k * k + 4.0 * MID_GREY * inv_w2).sqrt())
-}
-
-pub(in crate::pipeline) fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 #[cfg(test)]

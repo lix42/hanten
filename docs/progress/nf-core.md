@@ -1093,7 +1093,23 @@ boundary the SDR/HDR split will split *from*. Nothing about the no-flag path mov
 
 ## one-luma-dot
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-09-24
 
 - 2026-09-24: filed from the `path-to-white` review. Goal: one shared `dot` for luminance.
+- 2026-09-24: **done.** `pipeline::colorimetry::dot` is the one f32 definition, beside
+  the luma vectors its callers already import. The private copies in `sdr`, `hdr`,
+  `gain_map` and `fit_range` are deleted, and `look` imports it from `colorimetry`
+  instead of from fit range. Decisions:
+  - **The current chain's copies were replaced by the import, not left** — the
+    change is a deleted function and one `use` line each, and their `mul` helpers
+    (matrix × vector) are untouched, so `nf-retire` loses nothing by it.
+  - **Inline luma sums went through it too:** `fit_gamut::apply`'s hot loop and the
+    test helpers in `chain` and `fit_gamut`. Multiplication commutes exactly and the
+    sum stays left to right, so no bit moves.
+  - **Deliberately not shared:** `chain_golden`'s written-out sums (they are the
+    expected values the stages are checked against, so sharing `dot` would check it
+    against itself) and `colorimetry::derive`'s binary64 `dot3` (test-only
+    derivation math, independent by design).
+  - The inline matrix products in `chain`, `fit_gamut` and `color` are the same kind
+    of duplication, one level up; not in this task's scope.
