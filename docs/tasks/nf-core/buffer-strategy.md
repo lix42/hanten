@@ -24,8 +24,8 @@ memory decision as much as a structural one.
   because two live full-frame images is the design and three was the bug.
 - **The IR plane must ride through, and nothing today would notice if it didn't.**
   It is decoded onto the image and deliberately preserved-but-not-acted-on, so
-  carrying it is a design commitment (CLAUDE.md: "carry it through, don't consume
-  it") — with IR-based dust removal as the roadmap follow-up that would actually
+  carrying it is a design commitment (CLAUDE.md: "carried through, not
+  consumed") — with IR-based dust removal as the roadmap follow-up that would actually
   read it after the render. What makes that easy to lose is that **no current
   feature depends on the plane arriving at the end of the chain**: `--export-ir`
   writes from the *decoded* image, pre-render (which is also what makes

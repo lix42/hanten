@@ -61,8 +61,10 @@ used in your report.
 
 ## Project primer
 
-The checkout's own `CLAUDE.md` is the detailed, current version of all of this —
-read it in full before reviewing; where it disagrees with this summary, it wins.
+The checkout's own `CLAUDE.md` plus the `//!` docs of the modules a change
+touches (CLAUDE.md's "Where the detail lives" maps them) are the detailed, current
+version of all of this — read them before reviewing; where they disagree with
+this summary, they win.
 The load-bearing rules you review against:
 
 - **Pure-function pipeline, thin CLI.** `main`/`cli` are the only orchestrators;

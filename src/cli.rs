@@ -3884,9 +3884,17 @@ fn validate_explicit_film_base(base: &[f32; 3]) -> Result<()> {
 /// `convert` orchestrators must call **this**, not `validate` — a `merge` + `validate`
 /// pair silently omits the flag-presence rules. `roll` calls
 /// [`validate_with_remedy`]: it has no output flags at all, so there is nothing for the
-/// provenance rules above to see. `output/presets`
-/// must preserve the same rules when it adds roll-aware activation for the remaining
-/// named policies.
+/// provenance rules above to see.
+///
+/// **A presence rule rejects a flag only when it forces something the branch cannot
+/// produce** (the retired `--out-depth u16` beside an f32-only master). An identity
+/// value that renders byte-identically asks for nothing, and refusing it would break
+/// the flags-win reset that lets one recipe serve several branches.
+///
+/// **This also runs under `--new-flow`**, on [`Recipe::to_config`]'s projection, whose
+/// `print`/`output` are always defaults. A presence rule reading `cfg.print` or
+/// `cfg.output` must be gated on `Flow::Legacy`, or it refuses a flag the new flow
+/// keeps.
 ///
 /// **One provenance rule is deliberately *not* here**, so "complete" above means
 /// complete for everything reachable after `merge`:

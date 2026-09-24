@@ -17,7 +17,8 @@ their render only as prose in `output_render.content`, while `hdr-linear-tiff` e
   its consumer. Removing that allowance is the mechanical definition of done.
 - The `hdr_coded_tiff` block is the shape to follow. The tone field must reflect the
   *resolved* `display_tone` (`shoulder` / `none` / `reinhard` with its headroom), the
-  same fifth-spot rule CLAUDE.md records for prose claims.
+  same rule CLAUDE.md records for report prose: prose that names an operation is a
+  claim about the run.
 
 ## How to Verify
 

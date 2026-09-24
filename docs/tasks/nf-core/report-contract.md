@@ -13,7 +13,7 @@ inherited one optional section at a time.
   blocks. Every one is `Option`, so a new flow that simply omits them parses cleanly
   for any consumer tolerating a missing key. Silence is the failure mode, not a type
   error.
-- **Prose that names an operation is a claim about the run.** CLAUDE.md's recorded
+- **Prose that names an operation is a claim about the run.** The known
   defect is `output_render.content`, which asserted the reference-white-preserving
   shoulder "have all run" for a whole preset, so `--display-tone none` made one
   report contradict itself. A chain whose look stage may be an identity pass

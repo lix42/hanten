@@ -181,13 +181,14 @@ committed.
 - **Before pushing, match CI** (`.github/workflows/ci.yml`):
   `python3 scripts/check-vendored-native.py` → `cargo fmt --all --check` →
   `cargo clippy --all-targets --all-features -- -D warnings` →
-  `cargo build --all-targets --all-features` → the `nctool` suite
+  `cargo build --all-targets --all-features` →
+  `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` → the `nctool` suite
   (`scripts/analysis/CLAUDE.md`) → `cargo test --all-features`.
 - **Match CI's toolchain too.** CI takes the latest stable; `rustup check` first,
   since a newer clippy adds lints a local green run never saw.
-- **`cargo doc --no-deps` builds with zero warnings** — keep it that way. No CI
-  gate runs it, so a renamed item leaves dangling intra-doc links behind green
-  gates. Links to `#[cfg(test)]` items must be plain backticks.
+- **`cargo doc` warnings fail CI** (a renamed item leaves dangling intra-doc
+  links). Links to `#[cfg(test)]` items must be plain backticks, since rustdoc
+  builds without `cfg(test)`.
 - **`cargo test --lib` fails** (no `[lib]` target): use `cargo test --bin hanten
   <filter>` for in-`src` tests. A bare `cargo test <filter>` also runs
   `tests/pipeline.rs` and prints two `test result` lines — read both.
@@ -197,8 +198,7 @@ committed.
 - **Only `aarch64-apple-darwin` is installed**, so `#[cfg(target_os = "linux")]`
   code first compiles in CI. Gate only the I/O and keep logic in un-gated, tested
   helpers (`pipeline::memory` is the pattern).
-- **Item-level `allow(dead_code)` needs a comment naming its consumer.** Several
-  still name tasks that have shipped and may be removable.
+- **Item-level `allow(dead_code)` needs a comment naming its consumer.**
 - **The shell is zsh**: pass flag lists as arrays (`"${args[@]}"`), and quote a
   word starting with `=`.
 - `tools/review-app` has its own gates — see its `CLAUDE.md`.
@@ -235,8 +235,8 @@ committed.
   only from code. A knob spans the `*Overrides` field (`cli.rs`), the `*Params`
   field (`types.rs`), a `merge` arm with a merge test (a missing arm is a silent
   no-op), and usually a `validate` rule. Flags win over the recipe. Exceptions:
-  operational flags (`--report`, `--telemetry*`, `--max-memory`) never change
-  output and are not recipe keys; `--preset` is a CLI-only expansion; `--new-flow`
+  operational flags (`--report`, `--telemetry*`, `--max-memory`) never change the
+  image and are not recipe keys; `--preset` is a CLI-only expansion; `--new-flow`
   selects the chain.
 - **Recipe shape follows design-spec §9** (every struct is `deny_unknown_fields`).
   Mutually exclusive knobs are one enum field, never parallel `Option`s or bools.
@@ -267,12 +267,14 @@ committed.
   per-pixel goldens (`stages::golden`, `chain_golden`); never checksum a full
   frame, an encoded file or post-lcms2 pixels in a cross-platform gate. When a
   value cannot be pinned exactly, bound it by enumeration (`reachable_window`),
-  never by a rounding-margin argument.
+  never by a rounding-margin argument. One documented exception, to the *exit
+  status* only: the memory preflight's warn tier compares against detected RAM, so
+  under `--strict` the same run can pass on one machine and fail on another
+  (`pipeline/memory.rs`) — keep `--strict` tests to small fixtures.
 - **Changing a default render trips the drift gate** (`version::PIPELINE_FINGERPRINTS`):
   add a row, never edit a historical one.
 - **`cargo test` never runs the `#[ignore]`d asset probes.** After moving a
-  default, re-run them by hand (`cargo test --release -- --ignored`); they are
-  currently broken by renamed rolls (see their `FIXTURES` notes).
+  default, re-run them by hand (`cargo test --release -- --ignored`).
 - **`tests/pipeline.rs`'s `run()` passes arguments verbatim**: a test that writes
   a TIFF states its preset.
 
@@ -304,4 +306,4 @@ committed.
   different variants — never symlink one to the other.
 - **Agents** (`nc-reviewer`, `nc-fixer`) live in `.claude/agents/` only, never
   mirrored: Codex is the loop's other engine and must not inherit their primer.
-  Each summarises this file and defers to it.
+  Each summarises this file and the module docs, and defers to them.

@@ -86,8 +86,8 @@ fn tile_grid() -> (u32, u32) {
 /// and `Dmax`, so a patch proposal is measured in the same density domain the baseline
 /// will use.
 ///
-/// **Stale:** the roll keys are the pre-rename manifest names; today's asset folder
-/// names rolls by date (`2026-07-15-Ektar100`), so these probes panic looking them up.
+/// The roll keys must match `../nc-assets/manifest.json`; the undated ones predate
+/// its date-named rolls and fail the lookup (`analysis/probe-fixture-roll-names`).
 const FIXTURES: &[(&str, &str)] = &[
     ("2026-07-24-Gold200", "2026-07-24-Gold200"),
     ("Ektar", "Ektar"),

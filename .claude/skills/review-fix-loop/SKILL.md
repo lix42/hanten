@@ -274,7 +274,7 @@ describes; only diff-caused staleness goes to the fix agent.
 Spawn (or `SendMessage`-resume) a single named **`nc-fixer`** agent
 (`.claude/agents/nc-fixer.md`, `subagent_type: nc-fixer`) — never have the
 reviewers fix their own findings. Its definition already carries the standing
-constraints (add no commits, all four CI gates green in order,
+constraints (add no commits, every CI gate green in order,
 four-coupled-spots, design-spec is the sole design source, per-item report with
 verbatim gate results). Your prompt supplies:
 
