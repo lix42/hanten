@@ -187,7 +187,8 @@
 //! cannot reuse a freed buffer for a slightly larger one, and peak RSS climbs: 35
 //! frames of one roll measured 2.78 GB against 0.74 GB for one, while the *same* frame
 //! five times stays flat (0.62 GB), and `roll --new-flow` grows the same way (0.70 →
-//! 1.30 GB over five frames). The gate still judges each frame alone.
+//! 1.30 GB over five frames). The gate still judges each frame alone
+//! (`io/multi-frame-memory-growth`).
 //! Two sources of slack are visible and deliberate. Small frames run looser
 //! (+39.4% for the u16 18.66 MP run) because [`ALLOWANCE_FIXED_BYTES`] stops being negligible —
 //! harmless, since they are nowhere near any plausible budget. And `inspect` on

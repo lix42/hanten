@@ -201,6 +201,7 @@ graph TD
     io/transactional-output-writes
     io/memory-preflight
     io/streaming-tiled-io
+    io/multi-frame-memory-growth
     io/scanner-density-calibration
     io/gray-primary-decode
     io/positive-input-mode
@@ -398,6 +399,7 @@ graph TD
   core/pipeline-orchestration --> core/release-readiness
   core/pipeline-orchestration --> core/value-domain-terminology
   io/memory-preflight --> io/streaming-tiled-io
+  io/memory-preflight --> io/multi-frame-memory-growth
   analysis/real-scan-verification --> io/streaming-tiled-io
   film-base/estimation --> film-base/auto-base-redesign
   core/pipeline-orchestration --> film-base/estimate-reuse-output
@@ -651,6 +653,9 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `io/transactional-output-writes` (post-MVP, hardening): `core/pipeline-orchestration`
 - `io/memory-preflight` (post-MVP, hardening): `core/pipeline-orchestration`
 - `io/streaming-tiled-io` (post-MVP, **evaluate-first**): `io/memory-preflight`, `analysis/real-scan-verification`
+- `io/multi-frame-memory-growth` (hardening): `io/memory-preflight`
+  — the gate judges each frame alone, and a roll of slightly different frame sizes
+  peaks several times higher (0.6 → 2.8 GB over 35 frames)
 - `io/gray-primary-decode` (post-MVP): `io/silverfast-decode`
   — accept a 16-bit **grayscale primary** (IR page unchanged). Neither existing task owns it:
   `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and
@@ -1195,6 +1200,10 @@ the design in `docs/design-update.md`:
   Phase B (expensive, **evaluate-first**): strip/tile decode + streaming encode.
   STEP 0 gate — evaluate from measured peak whether this is needed at all; if data
   is insufficient, collect it first; proceed only if real scans exceed the budget.
+- [ ] [Multi-frame runs outgrow the per-frame memory
+  model](tasks/io/multi-frame-memory-growth.md) — `roll` and `measure-roll` peak at
+  2.3–2.8 GB over 35 frames against 0.6 GB for one, because frames of slightly
+  different sizes cannot reuse each other's freed buffers; the gate sees none of it
 
 ### film-base — [progress](progress/film-base.md)
 > `pipeline/film_base.rs` and the `hanten estimate` measurement surface: locating

@@ -34,6 +34,11 @@ nothing in the plan owns them.
   this task's rather than the retirement's is that `estimate` plus `nctool roll` is
   the calibrate-once workflow the guide documents end to end, so a removed region
   changes a *procedure*, not just a flag.
+- **`measure-roll` joins that workflow on the new chain**
+  (`nf-scene-correction/roll-white-balance`): the roll's white balance is measured once,
+  after the base, and frozen into the recipe as `scene_correction.white_balance`.
+  `nctool roll` calibrates with `estimate` alone today and renders on the current chain;
+  when it gains the new chain, its calibrate step runs `measure-roll` too.
 - **The error surface is a contract.** Retirement adds a class of removed-flag and
   removed-value errors, and design-spec §11 says which exit code each is. A rejected
   frame inside `roll` follows roll's own handling — recorded in the report entry,
