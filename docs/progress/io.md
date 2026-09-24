@@ -575,3 +575,15 @@ pre-change binary: byte-identical primary, sidecar differing only in
   through the display path with no reconstruction. `input-data-semantics` detects and
   refuses it today (exit 4) and deferred this "to file formally"; a positive roll is in
   the asset set.
+
+## multi-frame-memory-growth
+
+**Status:** not started
+**Updated:** 2026-09-24
+
+- 2026-09-24: filed from `nf-scene-correction/roll-white-balance`, which measured it while
+  calibrating `RunProfile::MeasureRoll`. One Gold200 frame peaks at 0.61 GB; 35 frames at
+  2.3–2.8 GB; the same frame repeated stays flat, and `roll --new-flow` grows the same way.
+  Frames of one roll differ by a few pixels, and the allocator cannot reuse a freed buffer
+  for a slightly larger one. macOS only so far.
+
