@@ -44,6 +44,10 @@ Open:
 - Whether hue preservation is a stated contract with a test, or an emergent
   property of the radial form, as it is today.
 
+- **The peak is not on fit range's boundary yet** (2026-09-23): `RangeFittedImage`
+  carries pixels only. If the ceiling needs the display's peak rather than each
+  pixel's luminance, add it there — fit range resolves it.
+
 ## How to Verify
 
 - One function; the three call sites pass their own ceiling and nothing else

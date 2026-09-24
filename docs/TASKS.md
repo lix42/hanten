@@ -1647,8 +1647,11 @@ the design in `docs/design-update.md`:
 > Fit range and fit gamut as real stages shared by both display branches, plus the
 > operator question the shadow end raises.
 
-- [ ] [Fit range as one stage](tasks/nf-display-stages/fit-range.md) — one
-  function both branches use, reinhard as the baseline setting
+- [x] [Fit range as one stage](tasks/nf-display-stages/fit-range.md) — **done
+  2026-09-23.** One reinhard with the display's peak as its argument; every peak agrees
+  bit for bit below diffuse white (`algo::fixed::DIFFUSE_WHITE`), and content above the
+  headroom exceeds the peak on every branch, counted at the encode. Knob
+  `fit_range.headroom_stops` (`--display-tone-headroom`); non-finite samples refused
 - [ ] [One gamut-mapping implementation](tasks/nf-display-stages/fit-gamut.md)
   — one implementation, where there are three near-copies today
 - [ ] [A parametric operator with a

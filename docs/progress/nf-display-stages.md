@@ -13,8 +13,15 @@ ones.
 
 Fit range and fit gamut as real stages, shared by both display branches, plus the operator question the shadow end raises.
 
-No stage has landed yet: the epic was created on 2026-09-19 as part of the new-flow
-migration plan (`docs/nf-migration.md`). One measurement task is done (below).
+The epic was created on 2026-09-19 as part of the new-flow migration plan
+(`docs/nf-migration.md`).
+
+**Fit range has landed** (`fit-range`, 2026-09-23): one reinhard with the display's
+peak as its argument, `Y′ = r(Y)·(1 + (P − 1)·s(Y))` on ACEScg luminance. Every peak
+agrees bit for bit below diffuse white (`algo::fixed::DIFFUSE_WHITE = 1.0`); above `W`
+the output exceeds the peak on every branch and the encoder counts it — the one open
+trade for an HDR destination. Knob `fit_range.headroom_stops` (`--display-tone-headroom`);
+the peak is the destination's. Non-finite samples are refused.
 
 **The gamut map's share of highlight desaturation is near zero where it matters**
 (`gamut-map-share`, done 2026-09-23; `docs/reports/gamut-map-share.md`). It moves no
@@ -32,10 +39,79 @@ float destination, never a per-channel clip.
 
 ## fit-range
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-23
 
 - 2026-09-19: created with the new-flow plan. Goal: fit range as one stage.
+- 2026-09-23: **done.** `pipeline::fit_range` is one operator with the display's peak
+  as its argument: `Y′ = r(Y)·(1 + (P − 1)·s(Y))` on ACEScg luminance, channels scaled
+  by `Y′/Y`. `r` is the mid-grey-preserving extended reinhard at `W = 2^headroom_stops`
+  (bit-identical to `display_tone::extended_reinhard`, pinned while both exist); `s` is
+  a smoothstep in stops from diffuse white to `W`. Decisions (user, 2026-09-23):
+  - **Both peaks in one function now**, though no HDR destination reaches it yet.
+    Chosen over legacy's HDR form (asymptotic base + lift): `P = 1` is exactly reinhard
+    and transcendental-free, and **every peak agrees bit for bit below diffuse white**
+    (legacy: within 0.03%). The price: `r`'s `v/W²` tail survives, so content above
+    `W` exceeds `P` on HDR as it exceeds `1.0` on SDR — `f(W) = P·r(W)`, 1.006·P at six
+    stops — clamped and counted at the encode. Legacy dropped the tail to hold HDR
+    strictly under its 1000-nit peak (measured: an unbounded base peaked 5.3–17.0
+    against 4.93 on seven frames). Revisit in `branch-contract` if an HDR destination
+    needs a hard ceiling.
+  - **Diffuse white is `algo::fixed::DIFFUSE_WHITE = 1.0`**, the value the decode
+    renders its anchor to (≈0.08 stop from the datasheets' diffuse white). The lift
+    starts there; `nf-look/path-to-white` reads the same constant.
+  - **Knob: `fit_range.headroom_stops`** (default 6, `0`–`24`, `0` the identity) via the
+    existing `--display-tone-headroom`, now kept under `--new-flow`. The peak is the
+    destination's (`chain_params(peak, gamut)`), never a recipe key. No selector:
+    `--display-tone` is refused at every value (`Never`), and `--sigmoid-shoulder`
+    became `Never`, pointing at the headroom.
+  - **Non-finite samples are refused**, naming the lowest pixel, at every headroom;
+    luminance ≤ 0 passes through untouched. Luminance uses a new pinned
+    `ACESCG_LUMA` (exact derivation, audited).
+  - Report: `new_flow.fit_range` = `{operator, headroom_stops, white_point,
+    display_peak}`; the stage list reads `reinhard-peak-lifted-v1`, or `identity` when
+    the white point is 1.
+  - Goldens (`chain_golden`): SDR bit-exact; HDR windowed over `log2` and asserting
+    bit-equality with SDR below white; threaded vectors recaptured at the shipped
+    headroom and moved to the seven finite pixels (the NaN pixel's refusal is its own
+    test). Mutation-checked: `MID_GREY` 0.1801 reds SDR, HDR and threaded; a linear
+    ramp in place of the smoothstep reds HDR.
+  - On `hdr-48bit.tif` at the guide's base: 0.12% of samples clipped at the default,
+    32.23% at zero headroom — byte-identical to the pre-task binary. The guide's quoted
+    9.88% for that command was already stale before this change.
+  - Not done here: fit gamut does not yet read the peak (`fit-gamut` adds it to
+    `RangeFittedImage` when its ceiling needs it); display black / a toe
+    (`parametric-operator`).
+- 2026-09-24: review round (`/code-review high`), all fixed:
+  - **Luminance ≤ 0 is no longer passed through unscaled.** `f(Y)/Y → gain` as
+    `Y → 0⁺` (≈1.22 at six stops), so scale 1 there stepped every channel ~22% where a
+    saturated colour's luminance crosses zero. Those pixels now take the limit, the
+    mid-grey gain (user decision) — continuous, still unclamped. No golden moved (the
+    fixtures hold no such pixel); a unit test pins the continuity.
+  - **The headroom rule is `types::headroom_fault`**, one predicate returning which
+    rule failed; the current chain's `check_headroom_stops` and the new chain's
+    `validate_fit_range` word their own messages from it, and the stage re-checks it.
+    `FitRangeParams::check` and the placeholder peak it needed are gone.
+  - **"Bit-reproducible across targets" was too strong**: `W = 2^stops` is an `exp2`
+    call, exact only at whole stops. The module doc now says so.
+  - `--display-tone-headroom`'s help names both chains' recipe keys; the stale "a
+    non-finite sample reaches the encoder" comments in `scene_correction`, `fit_gamut`
+    and `working_image` now say fit range refuses it; the goldens and tests state the
+    HDR peak themselves instead of importing `hdr::LINEAR_HEADROOM`, which retires.
+  - Declined: a v2 recipe saved before this renders differently (unversioned new-flow
+    output is `nf-verification/fingerprints`' gap); overflow of the scale at huge
+    luminance (finite for any f32 at the default); the reinhard duplicate of
+    `display_tone` (the migration rule; a test pins them bit-identical).
+- 2026-09-24: rebased onto `nf-retire/sigmoid-and-simple` (#151), which removed the
+  `--sigmoid-*` flags and `--reconstruction` outright. So the `--sigmoid-toe` /
+  `--sigmoid-shoulder` availability rows this task had reworded are gone with them;
+  instead the removed-flag message for both knees now names `--display-tone-headroom`
+  as the `--new-flow` remedy (it said "not yet available under `--new-flow`"), and its
+  test checks the new flow accepts that flag.
+- 2026-09-24: rebased onto `nf-scene-correction/roll-white-balance` (#152), which
+  retired the new chain's per-frame auto white balance and dropped `chain::render`'s
+  measurement region. The threaded auto-white-balance golden went with it; the fit-range
+  goldens, the finite-pixel input and the NaN-refusal test carry over unchanged.
 
 ## fit-gamut
 

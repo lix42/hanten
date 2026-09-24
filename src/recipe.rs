@@ -14,7 +14,8 @@
 //! input · calibration · measure      shared with the current chain (decode, film base)
 //! reconstruction                     the fixed decode — algo::fixed::DecodeParams
 //! scene_correction · look ·          one per rendering stage, each empty until its
-//! fit_range · fit_gamut                epic gives it a knob (scene correction has)
+//! fit_range · fit_gamut                epic gives it a knob (scene correction and fit
+//!                                      range have)
 //! ```
 //!
 //! **No per-section `schema_version`.** The current chain's tagged `reconstruction`
@@ -36,7 +37,7 @@ use crate::algo::fixed::{AnchorRule, DecodeFault, DecodeParams};
 use crate::cli::ResolvedConfig;
 use crate::pipeline::chain::ChainParams;
 use crate::pipeline::fit_gamut::{DestinationGamut, FitGamutParams};
-use crate::pipeline::fit_range::FitRangeParams;
+use crate::pipeline::fit_range::{DisplayPeak, FitRangeParams};
 use crate::pipeline::look::LookParams;
 use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
 use crate::types::{
@@ -74,7 +75,7 @@ pub struct Recipe {
     #[serde(default)]
     pub look: LookParams,
     #[serde(default)]
-    pub fit_range: FitRangeParams,
+    pub fit_range: FitRange,
     #[serde(default)]
     pub fit_gamut: FitGamut,
 }
@@ -99,6 +100,28 @@ impl<'de> Deserialize<'de> for RecipeVersion {
             Err(serde::de::Error::custom(format!(
                 "`{VERSION_KEY}` is {v}; this build reads only {RECIPE_VERSION}"
             )))
+        }
+    }
+}
+
+/// Fit range's recipe section: how much scene range above diffuse white it
+/// compresses.
+///
+/// Its own type rather than [`FitRangeParams`], for the reason [`FitGamut`] is: the
+/// stage's other parameter, the display's peak, is the **destination's** to state, and
+/// [`Recipe::chain_params`] adds it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FitRange {
+    /// In stops above diffuse white: reinhard's white point is `2^headroom_stops`, and
+    /// `0` is the identity.
+    pub headroom_stops: f32,
+}
+
+impl Default for FitRange {
+    fn default() -> Self {
+        Self {
+            headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
         }
     }
 }
@@ -137,11 +160,11 @@ const SECTIONS_WITH_NO_COUNTERPART: &[(&str, &str)] = &[
     (
         "print",
         "white balance and exposure are `scene_correction.white_balance` and \
-         `scene_correction.exposure`; the display tone goes to `fit_range` \
-         (`nf-display-stages/fit-range`), the black point splits between scene \
-         correction and fit range (`nf-scene-correction/flare-removal`), and \
-         `linear_range` has no home yet (`nf-scene-correction/levels-knob`) — none of \
-         those three has a key yet",
+         `scene_correction.exposure`; the display tone is fit range, whose one \
+         operator is reinhard and whose headroom is `fit_range.headroom_stops`; the \
+         black point splits between scene correction and fit range \
+         (`nf-scene-correction/flare-removal`), and `linear_range` has no home yet \
+         (`nf-scene-correction/levels-knob`) — neither of those two has a key yet",
     ),
     (
         "output",
@@ -364,6 +387,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     if let Some(stops) = args.scene.exposure {
         r.scene_correction.exposure = stops;
     }
+    if let Some(stops) = args.print.display_tone_headroom {
+        r.fit_range.headroom_stops = stops;
+    }
     r
 }
 
@@ -392,7 +418,10 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
     let name = |flag: &str, key: &str| knob_name(names, "reconstruction", flag, key);
     let d = &r.reconstruction;
     let message = match d.check() {
-        Ok(_) => return validate_scene_correction(&r.scene_correction, names),
+        Ok(_) => {
+            validate_scene_correction(&r.scene_correction, names)?;
+            return validate_fit_range(&r.fit_range, names);
+        }
         Err(DecodeFault::Offset { channel, value }) => format!(
             "{} must be finite on every channel, got {value} on channel {channel}",
             name("--density-offset", "offset")
@@ -458,15 +487,43 @@ fn validate_scene_correction(p: &SceneCorrectionParams, names: KnobNames) -> Res
     Err(NcError::Usage(message))
 }
 
+/// Fit range's value rule — the headroom's, [`crate::types::headroom_fault`], shared
+/// with the current chain's knob — rendered as a usage error for this recipe's key.
+fn validate_fit_range(p: &FitRange, names: KnobNames) -> Result<()> {
+    use crate::types::HeadroomFault;
+    let name = knob_name(
+        names,
+        "fit_range",
+        "--display-tone-headroom",
+        "headroom_stops",
+    );
+    let message = match crate::types::headroom_fault(p.headroom_stops) {
+        None => return Ok(()),
+        Some(HeadroomFault::Negative(stops)) => format!(
+            "{name} must be finite and non-negative, got {stops}. It is the scene range \
+             above diffuse white that fit range compresses, in stops; `0` is the identity"
+        ),
+        Some(HeadroomFault::TooLarge(stops)) => format!(
+            "{name} is {stops} stops, beyond the supported maximum of {}: above ~8 stops \
+             the operator converges on plain reinhard and the extra headroom buys nothing",
+            crate::types::MAX_HEADROOM_STOPS
+        ),
+    };
+    Err(NcError::Usage(message))
+}
+
 impl Recipe {
     /// The stages' parameters, in chain order, for `pipeline::chain::render` — the
-    /// recipe's sections plus the destination's gamut, which only the destination
-    /// states.
-    pub fn chain_params(&self, target: DestinationGamut) -> ChainParams {
+    /// recipe's sections plus the destination's peak and gamut, which only the
+    /// destination states.
+    pub fn chain_params(&self, peak: DisplayPeak, target: DestinationGamut) -> ChainParams {
         ChainParams {
             scene_correction: self.scene_correction.clone(),
             look: self.look.clone(),
-            fit_range: self.fit_range.clone(),
+            fit_range: FitRangeParams {
+                headroom_stops: self.fit_range.headroom_stops,
+                peak,
+            },
             fit_gamut: FitGamutParams { target },
         }
     }
@@ -549,13 +606,19 @@ mod tests {
         );
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         // A stage with no knob yet is present as an empty object, not absent or
-        // `null`; one with knobs writes each of them, at its identity default.
-        for stage in ["look", "fit_range", "fit_gamut"] {
+        // `null`; one with knobs writes each of them at its default — the identity for
+        // scene correction, and reinhard at six stops for fit range, which is the one
+        // stage whose default does something.
+        for stage in ["look", "fit_gamut"] {
             assert_eq!(json[stage], serde_json::json!({}), "{stage}");
         }
         assert_eq!(
             json["scene_correction"],
             serde_json::json!({"white_balance": {"explicit": [1.0, 1.0, 1.0]}, "exposure": 0.0})
+        );
+        assert_eq!(
+            json["fit_range"],
+            serde_json::json!({"headroom_stops": 6.0})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
@@ -803,6 +866,43 @@ mod tests {
         let msg = msg.message();
         assert!(msg.contains("`reconstruction.contrast`"), "{msg}");
         assert!(!msg.contains("--density-gamma"), "{msg}");
+    }
+
+    #[test]
+    fn validate_refuses_an_unusable_fit_range_headroom() {
+        let with = |stops: f32, names| {
+            let mut r = Recipe::default();
+            r.fit_range.headroom_stops = stops;
+            validate(&r, names).map_err(|e| e.message().to_string())
+        };
+        with(0.0, KnobNames::FlagAndKey).unwrap();
+        with(crate::types::MAX_HEADROOM_STOPS, KnobNames::FlagAndKey).unwrap();
+        for bad in [-1.0, f32::NAN, f32::INFINITY] {
+            let err = with(bad, KnobNames::FlagAndKey).unwrap_err();
+            assert!(
+                err.contains("--display-tone-headroom (recipe `fit_range.headroom_stops`)")
+                    && err.contains("non-negative"),
+                "{bad}: {err}"
+            );
+        }
+        let err = with(25.0, KnobNames::KeyOnly).unwrap_err();
+        assert!(err.contains("`fit_range.headroom_stops` is 25"), "{err}");
+        assert!(!err.contains("--display-tone-headroom"), "{err}");
+    }
+
+    #[test]
+    fn the_destination_states_fit_ranges_peak() {
+        // The recipe carries the headroom; the peak comes from the destination, so a
+        // recipe cannot name a peak its destination does not have.
+        let mut r = Recipe::default();
+        r.fit_range.headroom_stops = 4.0;
+        let p = r.chain_params(DisplayPeak::SDR, DestinationGamut::DisplayP3);
+        assert_eq!(p.fit_range.headroom_stops, 4.0);
+        assert_eq!(p.fit_range.peak, DisplayPeak::SDR);
+        let err = parse(r#"{"recipe_version": 2, "fit_range": {"peak": 4.9}}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("peak"), "{err}");
     }
 
     #[test]

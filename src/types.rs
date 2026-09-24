@@ -1116,35 +1116,56 @@ pub fn headroom_white_point(stops: f32) -> f32 {
     stops.exp2()
 }
 
-/// Check a specular headroom in stops, or refuse it.
-///
-/// The single definition of the rule, called from both gates that need it:
-/// `cli::validate` (so `roll` and every per-frame override inherit it *before* a decode)
-/// and `pipeline::display_tone::Headroom::new` (so a stage caller cannot skip it). The
-/// stage check is deliberately a duplicate, not a fallback — see that constructor.
+/// Which part of the headroom rule a value breaks — see [`headroom_fault`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HeadroomFault {
+    /// Negative or non-finite.
+    Negative(f32),
+    /// Above [`MAX_HEADROOM_STOPS`].
+    TooLarge(f32),
+}
+
+/// The specular-headroom rule, as data: the **single** definition both chains check,
+/// each wording the refusal for its own knob (the current chain's
+/// [`check_headroom_stops`], the new chain's `fit_range.headroom_stops`).
 ///
 /// A negative headroom is not loud on its own: `2^-40` is a white point of ~9e-13, which
 /// maps essentially every sample past the ceiling and turns the render into a solid
 /// white field at exit 0 with the clip merely *counted*.
-pub fn check_headroom_stops(stops: f32) -> Result<()> {
+pub fn headroom_fault(stops: f32) -> Option<HeadroomFault> {
     if !stops.is_finite() || stops < 0.0 {
-        return Err(NcError::Usage(format!(
+        Some(HeadroomFault::Negative(stops))
+    } else if stops > MAX_HEADROOM_STOPS {
+        Some(HeadroomFault::TooLarge(stops))
+    } else {
+        None
+    }
+}
+
+/// Check the current chain's specular headroom in stops, or refuse it.
+///
+/// [`headroom_fault`]'s rule, worded for `print.display_tone.reinhard.headroom_stops`
+/// and called from both gates that need it: `cli::validate` (so `roll` and every
+/// per-frame override inherit it *before* a decode) and
+/// `pipeline::display_tone::Headroom::new` (so a stage caller cannot skip it). The
+/// stage check is deliberately a duplicate, not a fallback — see that constructor.
+pub fn check_headroom_stops(stops: f32) -> Result<()> {
+    match headroom_fault(stops) {
+        None => Ok(()),
+        Some(HeadroomFault::Negative(_)) => Err(NcError::Usage(format!(
             "--display-tone-headroom / print.display_tone.reinhard.headroom_stops must \
              be finite and non-negative (got {stops}). It is specular headroom above \
              reference white in stops; `0` is the identity."
-        )));
-    }
-    if stops > MAX_HEADROOM_STOPS {
-        return Err(NcError::Usage(format!(
+        ))),
+        Some(HeadroomFault::TooLarge(_)) => Err(NcError::Usage(format!(
             "--display-tone-headroom / print.display_tone.reinhard.headroom_stops is \
              {stops} stops, beyond the supported maximum of {MAX_HEADROOM_STOPS}. Above \
              ~8 stops the operator converges on plain Reinhard and the extra headroom \
              buys nothing; the measured useful range is 4–8 (the default \
              {DEFAULT_HEADROOM_STOPS} is a white point of {}).",
             headroom_white_point(DEFAULT_HEADROOM_STOPS)
-        )));
+        ))),
     }
-    Ok(())
 }
 
 impl DisplayToneCurve {

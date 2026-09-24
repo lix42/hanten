@@ -124,6 +124,13 @@
   [1]    derived=0.6917385218365062       shipped=0.69173855       ulps=0
   [2]    derived=0.079286914093745        shipped=0.07928691       ulps=0
 
+[ACESCG_LUMA]
+  luminance row of acescg (ap1/aces white) normalized primary matrix (derived)
+  compared as f32
+  [0]    derived=0.27222871678091454      shipped=0.27222872       ulps=0
+  [1]    derived=0.6740817658111485       shipped=0.67408174       ulps=0
+  [2]    derived=0.05368951740793706      shipped=0.053689517      ulps=0
+
 [SRGB_LUMA]
   luminance row of rec709/d65 normalized primary matrix, SHIPPED ROUNDED TO 6 DECIMALS
   compared as f32

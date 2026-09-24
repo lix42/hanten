@@ -24,9 +24,9 @@ use crate::types::LinearImage;
 /// A full-frame working image in flight between two stages.
 ///
 /// Visible only inside `pipeline`: it is the boundary types' shared payload, never
-/// a value a caller outside the chain can hold. Values may be non-finite or leave
-/// `[0, 1]` — the working range is preserved all the way to the encoder, which is
-/// the only place clamping happens.
+/// a value a caller outside the chain can hold. Values may leave `[0, 1]` — the
+/// working range is preserved all the way to the encoder, which is the only place
+/// clamping happens — and may be non-finite until fit range, which refuses them.
 pub(in crate::pipeline) struct WorkingBuffer {
     width: u32,
     height: u32,

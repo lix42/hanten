@@ -38,6 +38,11 @@ Open:
 - How many parameters are exposed versus fixed per destination: an operator with
   four knobs is a look surface, and the look stage already owns contrast.
 
+- **Where a candidate plugs in** (2026-09-23): fit range is `r(Y)·(1 + (P − 1)·s(Y))`,
+  so a candidate replaces the base `r`. Keeping the peak lift on top keeps the exact
+  below-white agreement between branches; the report's `fit_range.operator` names
+  whichever runs.
+
 ## How to Verify
 
 - A review set at matched lightness across real frames, one decode held fixed, and

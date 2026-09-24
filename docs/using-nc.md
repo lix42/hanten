@@ -9,11 +9,11 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 6`, built at commit
-> `510f7ecf945c` (the retirement of the sigmoid curve and `simple` reconstruction,
-> `nf-retire/sigmoid-and-simple`) plus `hanten measure-roll` and the new chain's retired
-> per-frame white balance (`nf-scene-correction/roll-white-balance`, §11). The
-> staleness signal is `pipeline_version`: if `hanten --version` reports a different
-> one, treat this document as suspect and re-verify.
+> `df05b3e9a900` (`hanten measure-roll` and the new chain's retired per-frame white balance,
+> `nf-scene-correction/roll-white-balance`) plus fit range's operator under `--new-flow`
+> (`nf-display-stages/fit-range`, §11). The staleness signal is `pipeline_version`: if
+> `hanten --version` reports a different one, treat this document as suspect and
+> re-verify.
 >
 > **Retired flags and presets** — `--reconstruction`, `--density-curve sigmoid`, the
 > `--sigmoid-*` flags, the `sigmoid-knees` / `sigmoid-flat` presets, and before them
@@ -909,8 +909,9 @@ This is deliberate: a flag that quietly did nothing would be worse than a failur
 | `--display-tone-headroom STOPS` | Specular headroom above reference white, `reinhard` only (default `6` = a white point of 64) |
 | `--linear-range LOW,HIGH` | Affine black/white placement, applied last — **display presets only**, which includes the default (see §8) |
 
-(Under `--new-flow` exposure is spelled `--exposure` and white balance is scene
-correction's — §11.)
+(Under `--new-flow` exposure is spelled `--exposure`, white balance is scene
+correction's, and `--display-tone-headroom` is fit range's, with no `--display-tone`
+beside it — §11.)
 
 `--white-balance` and `--auto-wb` are the two faces of one setting and are mutually
 exclusive. The report tells you what was actually used:
@@ -1544,20 +1545,21 @@ choosing a chain is a choice of pixels. That is precisely why it must stay out o
 the recipe rather than merely out of the image.
 
 **It renders a minimal picture, not a finished one.** The fixed decode feeds the new
-chain. Scene correction applies white balance and exposure (below); the look and fit
-range are still identity passes, and fit gamut only converts into Display P3
-primaries. The result goes
+chain. Scene correction applies white balance and exposure, fit range compresses the
+scene's range into the display's (both below); the look is still an identity pass,
+and fit gamut only converts into Display P3 primaries. The result goes
 to **one destination, a Display P3 16-bit TIFF** — there is no other, and no way to
 choose one:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow
-hanten: warning: output lost 68772 clipped and 0 non-finite of 695772 samples (9.88%)
+hanten: warning: output lost 847 clipped and 0 non-finite of 695772 samples (0.12%)
 ```
 
-That writes `out.tiff`. Expect the clipping warning on most frames: with no fit range
-yet, anything above display white is clipped at the 16-bit encode (counted, and failed
-by `--strict`). Whether the picture *looks* right is not what this flow promises yet.
+That writes `out.tiff`. Some clipping is still expected: colours outside Display P3
+are clamped at the 16-bit encode until fit gamut maps them, and so is content brighter
+than fit range's headroom (counted, and failed by `--strict`). Whether the picture
+*looks* right is not what this flow promises yet.
 
 - **The suffix is judged against that destination**, on `convert` and on a `roll`
   manifest's explicit `output`: `.tif`/`.tiff` is kept as typed, a missing suffix is
@@ -1583,8 +1585,9 @@ by `--strict`). Whether the picture *looks* right is not what this flow promises
   what ran instead — the decode's resolved `anchor`, `contrast`, `scale` and `offset`,
   each stage with what it `applied` (scene correction's from what it resolved —
   `"identity"`, `"white-balance"`, `"exposure"` or `"white-balance+exposure"`;
-  `"identity"` for the look and fit range; `"acescg-to-display-p3-matrix"` for fit
-  gamut), scene correction's resolved values in `scene_correction`, the `destination`
+  `"identity"` for the look; fit range's operator; `"acescg-to-display-p3-matrix"` for
+  fit gamut), scene correction's resolved values in `scene_correction`, fit range's in
+  `fit_range` (below), the `destination`
   (`display-p3-u16-tiff`) and `"sidecar_written": false`. Its final shape is
   `nf-core/report-contract`'s to decide.
 
@@ -1651,7 +1654,7 @@ $ hanten params --new-flow
     "exposure": 0.0
   },
   "look": {},
-  "fit_range": {},
+  "fit_range": { "headroom_stops": 6.0 },
   "fit_gamut": {}
 }
 ```
@@ -1660,8 +1663,8 @@ $ hanten params --new-flow
 current chain's sections unchanged. `calibration` holds the film base only — the
 fixed decode reads no reference density. `reconstruction` spells the four decode
 knobs above (`--density-gamma` is `contrast` here). `scene_correction` holds white
-balance and exposure (below); the other three rendering stages are empty and refuse
-any key until their stage gains one. There is no `output` section:
+balance and exposure, `fit_range` its headroom (both below); the other two rendering
+stages are empty and refuse any key until their stage gains one. There is no `output` section:
 the new chain writes one fixed destination. `--dump-params` under `--new-flow` writes this
 document with your values resolved, and it reloads under the flag unchanged.
 
@@ -1699,22 +1702,23 @@ it only in a recipe with no `recipe_version`
 $ hanten convert … --new-flow --params print.json # "print": {…}
 usage: recipe print.json: `print` is a section of the current chain's recipe, not
 the new one's: white balance and exposure are `scene_correction.white_balance` and
-`scene_correction.exposure`; the display tone goes to `fit_range`
-(`nf-display-stages/fit-range`), the black point splits between scene correction
-and fit range (`nf-scene-correction/flare-removal`), and `linear_range` has no home
-yet (`nf-scene-correction/levels-knob`) — none of those three has a key yet. Drop it
-— the current chain reads it only in a recipe with no `recipe_version`
+`scene_correction.exposure`; the display tone is fit range, whose one operator is
+reinhard and whose headroom is `fit_range.headroom_stops`; the black point splits
+between scene correction and fit range (`nf-scene-correction/flare-removal`), and
+`linear_range` has no home yet (`nf-scene-correction/levels-knob`) — neither of those
+two has a key yet. Drop it — the current chain reads it only in a recipe with no
+`recipe_version`
 ```
 
-The rest of the print and output **flags** are refused as well, each naming the stage
-that will carry it:
+The rest of the print and output **flags** are refused as well, each saying where
+the knob went:
 
 | Refused | Where it goes |
 |---|---|
 | `--print-exposure` | renamed: `--exposure` (below) |
 | `--black-point` | split in two — flare/fog in scene correction, display black in fit range — which is why it is not a rename |
 | `--linear-range` | an affine levels remap needing a stage and a name; retiring it outright is a listed outcome |
-| `--display-tone`, `--display-tone-headroom` | the fit-range stage, which is an identity pass today |
+| `--display-tone` | every value, `reinhard` included: fit range has one operator, so there is nothing to select — use `--display-tone-headroom` alone |
 | `--highlight-compress` | the knee width of the `shoulder` tone specifically (`none` and `reinhard` refuse a non-default value outright); fit range compresses against the display's peak and has no knee width to set |
 | `--output-preset` | the new flow's destination set (`nf-destinations/preset-set`) — it writes one destination today, so there is no output policy to choose |
 | `--telemetry`, `--telemetry-file` | the new chain's report and telemetry shape — the record would name the current chain's preset and timing buckets |
@@ -1724,9 +1728,9 @@ resolves the documented default and is still refused. An
 identity value is normally left alone so a flag can clear what a recipe pinned, and
 the new chain's recipe has no `print` section, so there is nothing to clear.
 
-**Scene correction** is the first rendering stage, and the only one with knobs so
-far. It applies white balance and exposure as per-channel gains on linear ACEScg —
-after the decode's 3×3, before the look — and clamps nothing:
+**Scene correction** is the first rendering stage. It applies white balance and
+exposure as per-channel gains on linear ACEScg — after the decode's 3×3, before the
+look — and clamps nothing:
 
 | Flag | Recipe key | |
 |---|---|---|
@@ -1765,6 +1769,35 @@ estimate, and the new chain has none: it read a sunset as the cast and removed i
 Drop it, then state the gains `hanten measure-roll` reports for the roll, as
 `{"explicit": [r, g, b]}`
 ```
+
+**Fit range** fits the scene's range into the display's. It has one operator,
+reinhard, applied to luminance so all three channels scale together and hue is kept;
+mid-grey stays where the decode put it. Its one knob is how much range above diffuse
+white it compresses:
+
+| Flag | Recipe key | |
+|---|---|---|
+| `--display-tone-headroom STOPS` | `fit_range.headroom_stops` | `0`–`24`, default `6`; `0` is the identity |
+
+The flag keeps the current chain's spelling, but under `--new-flow` it needs no
+`--display-tone reinhard` beside it (that flag is refused, above). The display's peak
+is the operator's other argument and belongs to the destination, not the recipe — `1`
+for the one SDR destination. The report names what ran:
+
+```console
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
+    | jq '.new_flow.fit_range'
+{
+  "operator": "reinhard-peak-lifted-v1",
+  "headroom_stops": 6.0,
+  "white_point": 64.0,
+  "display_peak": 1.0
+}
+```
+
+At `0` the operator reads `"identity"` and the frame is written as before fit range
+existed, clipping everything above display white. A pixel with a non-finite channel
+is refused (exit 1, naming the pixel) rather than passed to the encoder.
 
 #### `measure-roll` — a roll's white balance, measured once
 
@@ -1825,7 +1858,8 @@ takes no conversion flags, so its knobs come from the shared recipe and the
 per-frame overrides. The shared recipe must be the new chain's document, and each
 override is merged onto it and rendered with it, so an override uses the new
 sections too (`{"reconstruction": {"contrast": 1.8}}`,
-`{"scene_correction": {"exposure": -1}}`) and one naming a
+`{"scene_correction": {"exposure": -1}}`, `{"fit_range": {"headroom_stops": 4}}`)
+and one naming a
 current-chain key is refused the same way — naming its frame — at exit 2.
 
 ---
