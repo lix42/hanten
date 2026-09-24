@@ -10833,7 +10833,11 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
     // Waiting for a rendering stage, and each remedy must name the stage that carries
     // it rather than a knob this flow also refuses.
     for (knob, arriving) in [
-        (vec!["--film-stock", "ektar-100"], "nf-look/stock-data-home"),
+        // Planned but unscheduled, so it names the capability rather than a task.
+        (
+            vec!["--film-stock", "ektar-100"],
+            "per-stock normalization in the look stage",
+        ),
         (
             vec!["--shadow-balance", "0.1,0,0"],
             "nf-look/per-channel-grade",

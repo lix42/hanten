@@ -14,13 +14,13 @@ this directory is nc's work.
 docs/datasheets/*.pdf
         │  python3 scripts/analysis/digitize_datasheets.py       (needs poppler; run by hand)
         ▼
-src/algo/film_stock/curves.json          ← the digitized extraction
+src/film_stock/curves.json               ← the digitized extraction
         │  …--emit-rust
         ▼
-src/algo/film_stock/curves.rs            ← the pinned literals the runtime inverts
+src/film_stock/curves.rs                 ← the pinned literals
 ```
 
-`algo::film_stock::tests::curves_match_the_digitized_json` audits the last arrow on every
+`film_stock::tests::curves_match_the_digitized_json` audits the last arrow on every
 `cargo test`, so the Rust literals cannot drift from the extraction. The first arrow needs
 poppler and is *not* in CI — re-run it by hand when a sheet is added or replaced, and commit
 both outputs. This mirrors `pipeline/colorimetry/`, where the generator is also manual and
@@ -30,7 +30,20 @@ Extraction works because the Kodak still-film sheets are **vector art with no ra
 the plot frame gives the density calibration and the axis ticks the exposure calibration, so
 the curves are read exactly rather than eyeballed.
 
-## Consumed by the registry
+## What reads them
+
+The registry's only runtime reader is the `characteristic` reconstruction curve, which
+inverts a stock's tables and retires with `nf-retire/characteristic`. The data stays after
+it (`nf-look/stock-data-home`), for two reasons:
+
+- **It is the evidence for the fixed decode's constants.** `algo::fixed::MID_ABOVE_BASE` is
+  `generic-c41`'s mid aim, and the case for fixed, stock-agnostic values rests on these
+  sheets' own spread (`docs/design-update.md` Part 1). `film_stock`'s tests check both on
+  every run, reading the tables forward so they outlive the inversion.
+- **Its natural future reader is the look stage**, as an optional per-stock normalization
+  — planned, not scheduled, and never again a per-stock decode.
+
+## In the registry
 
 | File | Publication | Stocks |
 |---|---|---|

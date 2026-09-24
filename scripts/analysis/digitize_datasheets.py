@@ -7,8 +7,8 @@ the density calibration (frame bottom is `D = 0.0`) and the axis ticks the expos
 calibration. Two independent extraction paths — the raw PDF content stream, and
 `pdftocairo -svg` — agree to ±0.002 density where both run.
 
-Output is `src/algo/film_stock/curves.json`, the intermediate that
-`algo::film_stock::curves`'s pinned Rust literals are audited against. Splitting it in two
+Output is `src/film_stock/curves.json`, the intermediate that
+`film_stock::curves`'s pinned Rust literals are audited against. Splitting it in two
 is deliberate, and mirrors `pipeline/colorimetry/`: extraction needs poppler and is run by
 hand, while *"the literals match the extraction"* is a plain `cargo test` that needs
 neither poppler nor network and therefore runs in CI.
@@ -43,7 +43,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SHEETS = REPO / "docs" / "datasheets"
-OUT = REPO / "src" / "algo" / "film_stock" / "curves.json"
+OUT = REPO / "src" / "film_stock" / "curves.json"
 
 LOG18 = math.log10(0.18)
 
@@ -446,7 +446,7 @@ def build_generic(stocks: dict) -> dict:
     }
 
 
-RUST_OUT = REPO / "src" / "algo" / "film_stock" / "curves.rs"
+RUST_OUT = REPO / "src" / "film_stock" / "curves.rs"
 
 RUST_HEADER = '''//! Pinned characteristic-curve data — the literals the runtime inverts.
 //!

@@ -1,5 +1,10 @@
 //! Reconstruction by inverting a film stock's published characteristic curve.
 //!
+//! **Retiring.** The fixed decode (`algo::fixed`) replaces this curve, and
+//! `nf-retire/characteristic` deletes this file whole. The tables it inverts are
+//! `crate::film_stock`'s and outlive it as the evidence for the decode's constants
+//! (`nf-look/stock-data-home`), so nothing here may be what that evidence depends on.
+//!
 //! # What this stage is
 //!
 //! The exponential curve *models* the film's response with a slope and an anchor. This
@@ -34,28 +39,12 @@
 //! `algo/reconstruction-render-curve-split`. The measured stocks have no shoulder at all
 //! within the density range a real scan occupies.
 
-pub mod curves;
-
 use rayon::prelude::*;
-
-use curves::{STOCKS, StockCurves};
 
 use crate::algo::FilmRgbImage;
 use crate::algo::density::{DensityImage, apply_curve_per_channel};
-use crate::types::{FilmStock, NcError, Result};
-
-/// The curve set for a resolved stock.
-///
-/// Infallible: [`FilmStock`] is an enum whose every variant is generated alongside the
-/// table, and `stocks_cover_every_film_stock_variant` pins that. An unknown *name* is
-/// rejected at the CLI boundary, where the error can list the accepted spellings.
-pub fn curves_for(stock: FilmStock) -> &'static StockCurves {
-    let name = stock.as_str();
-    STOCKS
-        .iter()
-        .find(|s| s.name == name)
-        .expect("every FilmStock variant has a pinned curve set")
-}
+use crate::film_stock::{AIM_SEPARATION_DECADES, FilmStock, curves_for};
+use crate::types::{NcError, Result};
 
 /// Relative log exposure for one channel's corrected density.
 ///
@@ -207,50 +196,9 @@ pub fn apply_curve(density: DensityImage, stock: FilmStock) -> Result<(FilmRgbIm
     ))
 }
 
-/// Decades between an 18 % grey card and a ~89 % paper white — `log10(0.89 / 0.18)`.
-///
-/// The interval the *Judging Negative Exposures* aim pair spans, and therefore the
-/// interval any comparison against the curve has to use. Shared by
-/// [`aim_red_scale`] and the sheet-consistency test rather than restated: they are the
-/// same measurement read two ways, and a divergence between them would be invisible.
-pub(crate) const AIM_SEPARATION_DECADES: f32 = 0.694;
-
-/// The sheets whose two published halves disagree by too much for the aim table to
-/// correct anything, with the measured reason.
-///
-/// **Not derived from a threshold.** The corpus contains sheets that disagree by 11 %
-/// and are still usable (Ektar 100, Ultramax 400), so any cut-off separating those from
-/// these two would be a number invented to fit the answer. These are named because the
-/// inconsistency was established per sheet: both tabulate `Δ = 0.25` against their own
-/// curves' ~0.36 rise (+44 %), which is a different kind of disagreement from a curve
-/// read slightly steep.
-const NO_USABLE_AIM_DELTA: &[&str] = &["portra-800", "ultramax-800"];
-
-impl StockCurves {
-    /// Density on one channel's published curve at relative log exposure `x`, linearly
-    /// interpolated between table points and extrapolated from the end segment outside
-    /// them — the forward direction of [`invert`].
-    pub(crate) fn density_at(&self, channel: usize, x: f32) -> f32 {
-        let t = self.channels[channel];
-        let i = t.partition_point(|p| p.0 <= x).clamp(1, t.len() - 1);
-        let ((x0, d0), (x1, d1)) = (t[i - 1], t[i]);
-        d0 + (x - x0) * (d1 - d0) / (x1 - x0)
-    }
-
-    /// The published `Δ` (paper white − grey card, Status M red), or `None` when this
-    /// sheet states none that can be used — the derived generic, which has no aim table
-    /// at all, and the two 800-speed sheets in [`NO_USABLE_AIM_DELTA`].
-    pub(crate) fn usable_aim_delta(&self) -> Option<f32> {
-        if NO_USABLE_AIM_DELTA.contains(&self.name) {
-            return None;
-        }
-        self.aims.map(|[grey, white]| white - grey)
-    }
-}
-
 /// The red-channel `--density-scale` factor that reconciles a stock's published
 /// characteristic curve with its own published aim table, or `None` when the sheet
-/// states no usable `Δ` (see [`StockCurves::usable_aim_delta`]).
+/// states no usable `Δ` (see [`StockCurves::usable_aim_delta`](crate::film_stock::curves::StockCurves::usable_aim_delta)).
 ///
 /// # What it corrects
 ///
@@ -279,7 +227,7 @@ impl StockCurves {
 ///
 /// Equivalently this is `1 + error/100` for the disagreement
 /// `aim_table_agrees_with_the_curve` reports, which is why the two share
-/// [`AIM_SEPARATION_DECADES`] and [`StockCurves::usable_aim_delta`].
+/// [`AIM_SEPARATION_DECADES`] and [`StockCurves::usable_aim_delta`](crate::film_stock::curves::StockCurves::usable_aim_delta).
 pub fn aim_red_scale(stock: FilmStock) -> Option<f32> {
     let sc = curves_for(stock);
     let tabulated = sc.usable_aim_delta()?;
@@ -330,30 +278,12 @@ pub fn check_tables(stock: FilmStock) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::film_stock::STOCK_MID_ABOVE_BASE;
+    use crate::film_stock::curves::StockCurves;
     use crate::types::{
         CharacteristicParams, DensityCurve, DensityCurveType, DensityParams, FilmBase, LinearImage,
         Reconstruction,
     };
-
-    /// `generic-c41`'s own mid-grey aim above base, red — the averaged curve's, not the
-    /// mean of the table below (0.617), which averages numbers rather than curves.
-    const GENERIC_MID_ABOVE_BASE: f32 = 0.624;
-
-    /// `mid aim − D-min` per stock, from the datasheets (progress log, 2026-09-04). These
-    /// are *not* read by the render — the curve carries the placement — so this table
-    /// exists only to prove the log-exposure axis was shifted correctly when the curves
-    /// were generated, and to bound the fixed decode's hand-frozen `d`.
-    const STOCK_MID_ABOVE_BASE: &[(&str, f32)] = &[
-        ("ektar-100", 0.611),
-        ("portra-160", 0.640),
-        ("portra-400", 0.600),
-        ("portra-160vc", 0.651),
-        ("portra-400vc", 0.651),
-        ("portra-800", 0.542),
-        ("gold-200", 0.699),
-        ("ultramax-400", 0.615),
-        ("ultramax-800", 0.542),
-    ];
 
     /// The stock's published curve read **forward** — log exposure → density — by the
     /// same linear interpolation [`invert`] runs backwards.
@@ -361,87 +291,13 @@ mod tests {
     /// The synthetic film model every test below builds its negatives with. Stating the
     /// round-trip property needs a forward model that is *not* the inverse under test.
     ///
-    /// Delegates to [`StockCurves::density_at`], which `aim_red_scale` made runtime code,
+    /// Delegates to [`StockCurves::density_at`], the data module's own forward reading,
     /// rather than carrying a second copy of the interpolation — two identical
-    /// interpolators in one file is a second source of truth by construction. The
+    /// interpolators in one crate is a second source of truth by construction. The
     /// round-trip property is unaffected: what is under test is `invert` / `apply_curve`,
     /// and this is still not that.
     fn forward(sc: &StockCurves, ch: usize, log_e: f32) -> f32 {
         sc.density_at(ch, log_e)
-    }
-
-    /// Every sheet's **own aim table** must agree with its **own curve**.
-    ///
-    /// The two halves of a datasheet are independent measurements of the same film: the
-    /// *Judging Negative Exposures* table gives the grey-card and paper-white densities, and
-    /// the characteristic curve gives density against exposure. A grey card and a paper white
-    /// are `log10(0.89/0.18) ≈ 0.694` decades apart, so `Δ / 0.694` must equal the curve's own
-    /// mid-scale slope. When it does not, the *sheet* disagrees with itself, and re-reading
-    /// the artwork cannot fix it — verified by extracting Ektar through two independent paths
-    /// (raw content stream and SVG), which agreed to 0.004.
-    ///
-    /// This test therefore documents the corpus rather than guarding the extraction: the two
-    /// sheets that fail are named with their measured error, so the state of the data is
-    /// visible in code instead of remembered.
-    ///
-    /// It is **not** a predictor of rendered colour. Portra 160 passes at +1% yet still shows
-    /// a measured green residual of +0.48 stops/density on real scans — see the 2026-09-06
-    /// entries in `docs/progress/algo.md` for what that points at.
-    #[test]
-    fn aim_table_agrees_with_the_curve() {
-        // Sheets whose two halves disagree by more than 10%, with the measured error. Named
-        // rather than skipped: an unexplained failure must not look like a tolerance choice.
-        const KNOWN_INCONSISTENT: &[(&str, i32)] = &[
-            ("ektar-100", 11),
-            // Its curve rises 11% more than its own aim table says across the aims' own
-            // separation, and its `γ_G/γ_R` is 1.002 against every other stock's 1.02-1.05
-            // — i.e. this sheet draws red and green as nearly parallel, so it predicts
-            // almost no green divergence (+0.22 stops/density) where the scans show the
-            // most of any stock (+1.26). Its aim table is also digit-for-digit Portra
-            // 400's, which a higher-contrast film should not share.
-
-            // The opposite direction, and untested by eye — no roll of it in the fixtures.
-            ("ultramax-400", -11),
-        ];
-        for sc in STOCKS {
-            // Skips the derived generic (no aim table) and the two 800-speed sheets,
-            // whose Δ is unusable — the same predicate `aim_red_scale` refuses on, so a
-            // sheet can never be correctable by one and unchecked by the other.
-            let Some(tabulated) = sc.usable_aim_delta() else {
-                continue;
-            };
-            // Compare the two published quantities **over the same interval**: the curve's
-            // own density rise across exactly the separation the aims span, starting at the
-            // grey aim (which the axis is built to put at `log10(0.18)`).
-            //
-            // Not a local slope. A first version measured gamma over ±0.35 decade around
-            // mid-grey and divided the tabulated Δ by 0.694; that made Ektar look 15% out
-            // with a `γ_G/γ_R` of 0.970 — both artefacts of a narrow window landing on a
-            // local wiggle in that one curve. Widening to ±0.5 decade moves Ektar's ratio
-            // to 1.002 and leaves every other stock unchanged, which is how the artefact
-            // was found. Interval-matched quantities have no such freedom.
-            let log18 = 0.18f32.log10();
-            let from_curve =
-                sc.density_at(0, log18 + AIM_SEPARATION_DECADES) - sc.density_at(0, log18);
-            let error_pct = (100.0 * (from_curve / tabulated - 1.0)).round() as i32;
-
-            match KNOWN_INCONSISTENT.iter().find(|(n, _)| *n == sc.name) {
-                Some((_, recorded)) => assert!(
-                    (error_pct - recorded).abs() <= 1,
-                    "{}: the recorded inconsistency moved from {recorded}% to {error_pct}% \
-                     — re-check the sheet and update the record",
-                    sc.name
-                ),
-                None => assert!(
-                    error_pct.abs() <= 10,
-                    "{}: the aim table gives Δ = {tabulated:.3} but its own curve rises \
-                     {from_curve:.3} over the same interval ({error_pct}%). Either the sheet \
-                     disagrees with itself — add it to KNOWN_INCONSISTENT with the measured \
-                     figure — or the extraction is wrong.",
-                    sc.name
-                ),
-            }
-        }
     }
 
     /// The aim-matched red scale reproduces the constants the review set was rendered
@@ -534,152 +390,11 @@ mod tests {
         }
     }
 
-    /// The pinned literals must match the digitized extraction they were generated from.
-    ///
-    /// This is the audit half of the `pipeline/colorimetry/` pattern: `curves.json` is
-    /// produced from the publications in `docs/datasheets/` by a script that needs poppler
-    /// and is run by hand; this test needs neither poppler nor network, so CI checks the
-    /// correspondence on every run. A hand-edited literal — or a regeneration that was
-    /// never carried across — fails here instead of quietly moving pixels.
-    #[test]
-    fn curves_match_the_digitized_json() {
-        let json: serde_json::Value =
-            serde_json::from_str(include_str!("curves.json")).expect("curves.json parses");
-        let object = json.as_object().expect("curves.json is an object");
-        assert_eq!(
-            object.len(),
-            STOCKS.len(),
-            "curves.json and the pinned table hold different stocks"
-        );
-        for sc in STOCKS {
-            let entry = object
-                .get(sc.name)
-                .unwrap_or_else(|| panic!("{} is missing from curves.json", sc.name));
-            assert_eq!(entry["publication"], sc.publication, "{}", sc.name);
-            assert_eq!(entry["revision"], sc.revision, "{}", sc.name);
-            match sc.aims {
-                Some([grey, white]) => {
-                    assert_eq!(
-                        entry["aim_grey_red"].as_f64().unwrap() as f32,
-                        grey,
-                        "{}",
-                        sc.name
-                    );
-                    assert_eq!(
-                        entry["aim_white_red"].as_f64().unwrap() as f32,
-                        white,
-                        "{}",
-                        sc.name
-                    );
-                }
-                None => assert!(entry["aim_grey_red"].is_null(), "{}", sc.name),
-            }
-            for (c, channel) in ["R", "G", "B"].iter().enumerate() {
-                let points = entry["channels"][channel]["points"]
-                    .as_array()
-                    .unwrap_or_else(|| panic!("{} channel {channel}: no points", sc.name));
-                assert_eq!(
-                    points.len(),
-                    sc.channels[c].len(),
-                    "{} channel {channel}: point count",
-                    sc.name
-                );
-                for (i, (want, got)) in points.iter().zip(sc.channels[c]).enumerate() {
-                    let (wx, wd) = (
-                        want[0].as_f64().unwrap() as f32,
-                        want[1].as_f64().unwrap() as f32,
-                    );
-                    assert_eq!(
-                        (wx, wd),
-                        *got,
-                        "{} channel {channel} point {i} drifted from curves.json",
-                        sc.name
-                    );
-                }
-            }
-        }
-    }
-
     #[test]
     fn every_shipped_table_is_invertible() {
         for stock in FilmStock::ALL {
             check_tables(*stock).unwrap_or_else(|e| panic!("{}: {e}", stock.as_str()));
         }
-    }
-
-    #[test]
-    fn stocks_cover_every_film_stock_variant() {
-        for stock in FilmStock::ALL {
-            let sc = curves_for(*stock);
-            assert_eq!(sc.name, stock.as_str());
-        }
-        assert_eq!(
-            STOCKS.len(),
-            FilmStock::ALL.len(),
-            "the pinned table and the enum have drifted apart"
-        );
-    }
-
-    /// The axis convention: a stock's published mid-grey aim must invert to 0.18. This is
-    /// what makes the curve self-anchoring, so it is the load-bearing property of the
-    /// generated data.
-    #[test]
-    fn published_mid_grey_inverts_to_eighteen_percent() {
-        for (name, mid_above_base) in STOCK_MID_ABOVE_BASE {
-            let sc = STOCKS.iter().find(|s| s.name == *name).unwrap();
-            let (log_e, ok) = invert(sc.channels[0], *mid_above_base);
-            assert!(ok, "{name}: the mid aim fell outside its own table");
-            let exposure = 10f32.powf(log_e);
-            assert!(
-                (exposure - 0.18).abs() < 0.006,
-                "{name}: mid-grey inverts to {exposure:.4}, not 0.18"
-            );
-        }
-    }
-
-    /// The derived generic must sit inside the spread of the stocks it averages, or it is
-    /// not an average — it is a ninth opinion.
-    #[test]
-    fn generic_sits_inside_the_measured_spread() {
-        let generic = curves_for(FilmStock::GenericC41);
-        let (log_e, _) = invert(generic.channels[0], GENERIC_MID_ABOVE_BASE);
-        assert!(
-            (10f32.powf(log_e) - 0.18).abs() < 0.01,
-            "the generic's own mid-above-base must invert to 0.18"
-        );
-        // Mid-scale gamma, red: the per-stock measurements run 0.50–0.61.
-        let d = |x: f32| forward(generic, 0, x);
-        let log18 = 0.18f32.log10();
-        let gamma = (d(log18 + 0.35) - d(log18 - 0.35)) / 0.7;
-        assert!(
-            (0.50..=0.61).contains(&gamma),
-            "generic red gamma {gamma:.3} is outside the measured per-stock range"
-        );
-    }
-
-    /// The fixed decode's `d` is this generic's mid aim, rounded — the provenance
-    /// `algo::fixed::MID_ABOVE_BASE` claims, checked here because only this module's tests
-    /// may read the datasheet figures. Moving the constant means restating its derivation
-    /// there and here, not loosening this.
-    #[test]
-    fn the_fixed_decode_mid_is_the_generic_aim() {
-        let d = crate::algo::fixed::MID_ABOVE_BASE;
-        assert_eq!(
-            d,
-            (GENERIC_MID_ABOVE_BASE * 100.0).round() / 100.0,
-            "the fixed decode's d is no longer the generic aim rounded"
-        );
-
-        // A convention for every stock, so it must sit inside what the stocks measure.
-        let (lo, hi) = STOCK_MID_ABOVE_BASE
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(lo, hi), (_, m)| {
-                (lo.min(*m), hi.max(*m))
-            });
-        assert!(
-            (lo..=hi).contains(&d),
-            "d {d} is outside the stocks' {lo}..={hi}"
-        );
     }
 
     /// The load-bearing property, end to end: build a **neutral** exposure ramp, run it
@@ -796,27 +511,6 @@ mod tests {
         assert!(!ok_below && !ok_above);
         assert!(below < t[0].0);
         assert!(above > t[t.len() - 1].0);
-    }
-
-    /// Every stock's blue layer is steeper than its red one — the property that makes a
-    /// single scalar contrast wrong, and the reason this stage exists. If a regenerated
-    /// table ever loses it, the data is wrong, not the film.
-    #[test]
-    fn blue_is_steeper_than_red_on_every_stock() {
-        for stock in FilmStock::ALL {
-            let sc = curves_for(*stock);
-            let log18 = 0.18f32.log10();
-            let gamma = |ch: usize| {
-                let at = |x: f32| forward(sc, ch, x);
-                (at(log18 + 0.35) - at(log18 - 0.35)) / 0.7
-            };
-            let (r, b) = (gamma(0), gamma(2));
-            assert!(
-                b > r * 1.05,
-                "{}: blue gamma {b:.3} is not meaningfully steeper than red {r:.3}",
-                stock.as_str()
-            );
-        }
     }
 
     // --- the wiring, end to end -----------------------------------------------

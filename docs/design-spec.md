@@ -2502,7 +2502,8 @@ nc/
     │   ├── mod.rs        # FilmRgbImage + reconstruct
     │   ├── density.rs    # density reconstruction + exponential curve
     │   ├── fixed.rs      # the new flow's fixed, stock-agnostic decode
-    │   └── film_stock/   # the digitized per-stock curves `--film-stock` inverts
+    │   └── characteristic.rs # inverts a stock's published curve (`--film-stock`); retiring
+    ├── film_stock/       # the digitized per-stock curves: evidence for the decode's constants
     ├── flow.rs           # the transitional --new-flow selector (deleted by the flip)
     ├── recipe.rs         # the new chain's recipe (recipe_version 2), one section per stage
     ├── telemetry.rs      # opt-in JSONL perf/context record (never perturbs output)

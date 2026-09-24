@@ -1079,7 +1079,8 @@ the design in `docs/design-update.md`:
   `nf-look/path-to-white`
 - `nf-retire/characteristic` (new flow): `nf-retire/sigmoid-and-simple`, `nf-look/stock-data-home`
   — the curve, `--film-stock`, three preset names and `default_scale_for`'s
-  per-curve case; the stock *data* is `nf-look/stock-data-home`'s call
+  per-curve case; the stock *data* stays (`nf-look/stock-data-home`) and becomes
+  `#[cfg(test)]`
 - `nf-core/report-contract` (new flow): `nf-core/stage-skeleton`
   — ~20 report sections and the per-stage timing buckets are keyed to the old
   chain, and `nctool` parses both
@@ -1663,9 +1664,10 @@ the design in `docs/design-update.md`:
 - [ ] [Re-express the `--preset` bundles](tasks/nf-look/look-presets.md) —
   every current `--preset` names a retiring curve and an exposure calibrated
   to the old chain
-- [ ] [A home for the film-stock data](tasks/nf-look/stock-data-home.md) — the
-  registry and datasheets lose their consumer when `characteristic` leaves the
-  decode
+- [x] [A home for the film-stock data](tasks/nf-look/stock-data-home.md) — the
+  data stays as `film_stock/`, the evidence for the fixed decode's constants; the
+  inversion is split into `algo/characteristic.rs` for its retirement, and
+  `--film-stock` leaves with the curve
 - [ ] [Spike: opt-in bounded scene-range
   mapping](tasks/nf-look/scene-range-mapping.md) — a spike: opt-in and
   bounded, never the default — roll consistency is the promise
@@ -1805,9 +1807,9 @@ the design in `docs/design-update.md`:
 - [ ] [Rename the `print.*` prefix](tasks/nf-retire/print-prefix-rename.md) —
   after the second implementation is gone, so nothing is renamed twice
 - [ ] [Retire the `characteristic` curve
-  path](tasks/nf-retire/characteristic.md) — the curve, `--film-stock`, three
-  preset names and `default_scale_for`'s per-curve case; the stock *data* is
-  `nf-look/stock-data-home`'s call
+  path](tasks/nf-retire/characteristic.md) — the curve (`algo/characteristic.rs`,
+  deleted whole), `--film-stock`, three preset names and `default_scale_for`'s
+  per-curve case; the stock *data* stays, and becomes `#[cfg(test)]`
 
 ### nf-docs — [progress](progress/nf-docs.md)
 > Fold the new design into the spec, the user guide and CLAUDE.md.

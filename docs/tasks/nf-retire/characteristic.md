@@ -10,7 +10,7 @@ actually true.
 
 - **What survives unowned today.** [Retire the sigmoid and `simple`](sigmoid-and-simple.md)
   removes two of the three `DensityCurve` members; the third, with
-  `CharacteristicParams`, the curve-inversion path in `src/algo/film_stock`,
+  `CharacteristicParams`, the curve-inversion path in `src/algo/characteristic.rs`,
   `--film-stock`, three `ConversionPreset` names (`characteristic-generic`,
   `-stock`, `-aim`) and `DensityParams::default_scale_for`'s `[1, 1, 1]` arm, is
   nobody's. This task is that third member.
@@ -23,10 +23,21 @@ actually true.
   delete the machinery, rather than leaving a one-armed match and a roll warning
   about a reset that can no longer happen.
 - **The stock *data* is not this task's to delete.**
-  [A home for the film-stock data](../nf-look/stock-data-home.md) owns the curve
-  tables, the registry and `docs/datasheets/` — and Part 1 quotes those tables as
-  the evidence for the decode's fixed constants. This task removes the inversion
-  *path*; the two must agree on `--film-stock`'s fate before either lands.
+  [A home for the film-stock data](../nf-look/stock-data-home.md) settled it
+  (2026-09-24): the tables, registry and `docs/datasheets/` stay as the evidence for
+  the decode's constants, in `src/film_stock/`. The inversion was split out for this
+  task into `src/algo/characteristic.rs` (`invert`, `apply_curve`, `OutOfTable`,
+  `check_tables`, `aim_red_scale`, and the tests of each), so it goes **whole** —
+  with its test-only readers, `algo::curve_probe` and `pipeline::stages`' characteristic
+  tests, which import `invert` directly. What
+  is left then: make `film_stock` `#[cfg(test)]` (its tests read the tables forward,
+  so they survive), drop `types`' re-export of `FilmStock` with its recipe use, and
+  drop the `{film_stock}` placeholder from `nctool review` and the preset-review
+  matrix.
+- **`--film-stock` leaves with the curve** — decided there, not kept as provenance
+  (`--film-type` already records chemistry). Per-stock normalization will bring its
+  own flag; update the `--new-flow` refusal row in `flow.rs` to match whatever this
+  task makes of the flag.
 - **Retiring a curve is mostly deleting conditions.** `DensityCurve::consumes_reference`,
   `cli::unconsumed_dmax_warning` and the `--film-stock` required-here/refused-there pair
   all exist to tell this curve from the parametric ones; each deletion is a rule that can
@@ -40,8 +51,6 @@ actually true.
 
 ## Open questions
 
-- Does `--film-stock` keep a meaning as recorded provenance, or go and return with
-  per-stock normalization? (Shared with `stock-data-home`; one answer, not two.)
 - Does the decode keep a `density.scale` default at all once it is not per-curve?
 
 ## How to Verify

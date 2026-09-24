@@ -6,6 +6,7 @@
 
 mod algo;
 mod cli;
+mod film_stock;
 mod flow;
 mod io;
 mod pipeline;

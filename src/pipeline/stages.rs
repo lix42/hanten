@@ -80,7 +80,7 @@ pub struct ConvertReport {
     /// only for the characteristic curve. Carried out so the orchestrator can warn: an
     /// out-of-table sample is extrapolated, not measured, and a frame with many of them is
     /// being rendered off the published data.
-    pub out_of_table: Option<crate::algo::film_stock::OutOfTable>,
+    pub out_of_table: Option<crate::algo::characteristic::OutOfTable>,
     /// The resolved regional-balance tone-ramp range `[lo, hi]` (corrected
     /// density), when the density reconstruction applied a shadow/highlight
     /// balance. `None` when both balances are the neutral
@@ -323,7 +323,7 @@ mod tests {
 #[cfg(test)]
 mod midtone_placement {
     use super::*;
-    use crate::algo::film_stock;
+    use crate::film_stock;
     use crate::pipeline::sdr::{self, SdrGamut};
     use crate::types::{
         CharacteristicParams, DensityParams, FilmBase, FilmStock, PrintParams, Reconstruction,
@@ -812,7 +812,8 @@ mod midtone_placement {
 #[cfg(test)]
 pub(crate) mod golden {
     use super::*;
-    use crate::algo::film_stock::{OutOfTable, curves_for, invert};
+    use crate::algo::characteristic::{OutOfTable, invert};
+    use crate::film_stock::curves_for;
     use crate::types::{
         AnchorPlacement, BalanceRange, CharacteristicParams, DensityCurve, DensityCurveType,
         DensityParams, ExponentialParams,
@@ -1046,8 +1047,8 @@ pub(crate) mod golden {
 
     // --- the characteristic curve -------------------------------------------
     //
-    // `algo/characteristic-curve-coverage`. Its tables are well covered in
-    // `algo::film_stock::tests`, and the full chain's *properties* are pinned there too.
+    // `algo/characteristic-curve-coverage`. Its tables are covered in `film_stock::tests`,
+    // and the full chain's *properties* are pinned in `algo::characteristic::tests`.
     // What follows is the bit-level half: captured numbers the code is measured against,
     // plus the argument for why they are portable.
 
@@ -1199,7 +1200,7 @@ pub(crate) mod golden {
     /// One wiring fault it **cannot** see, because this config cannot: stages 1–2 are
     /// `scale·d + offset`, and at the identity gain and zero offset that this curve
     /// resolves for itself the transposed spelling is arithmetically the same. That one
-    /// belongs to `algo::film_stock::tests::the_chain_applies_the_density_gain_before_the_offset`,
+    /// belongs to `algo::characteristic::tests::the_chain_applies_the_density_gain_before_the_offset`,
     /// which states it with an explicit non-neutral pair. The two halves of this task's
     /// coverage are complementary by design, not redundant.
     #[test]
