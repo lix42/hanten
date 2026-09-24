@@ -1532,7 +1532,7 @@ the design in `docs/design-update.md`:
   grid cell. Each config carries a `producer` block **derived** from what that binary reported
   about itself, never typed into the matrix — and a build that reports two identities in one
   run aborts it.
-- [ ] [Re-key the asset probes to today's roll names](tasks/analysis/probe-fixture-roll-names.md) — the `#[ignore]`d probes' `FIXTURES` use pre-rename roll names and panic before measuring
+- [x] [Re-key the asset probes to today's roll names](tasks/analysis/probe-fixture-roll-names.md) — the `#[ignore]`d probes' `FIXTURES` use pre-rename roll names and panic before measuring
 
 
 

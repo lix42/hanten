@@ -36,3 +36,16 @@ completion; the figures the docs cite either reproduce or are updated with a not
 ## Dependencies
 
 - `analysis/asset-manifest`
+
+## Outcome (2026-09-24)
+
+- **Re-keyed, same frames.** `Ektar` → `2026-07-15-Ektar100`, `Portra160-2026-07-22` →
+  `2026-07-23-Portra160`, and `WHOLE_ROLLS`' `2026-09-09-Ektar` → `2026-09-09-Ektar100`.
+  Each roll's `base.tif` and `leader.tif` re-measured over the frozen recipe's regions
+  reproduce its `Dmin` and `Dmax` to every printed digit, so the recipe stems stay.
+- **Dropped.** `Portra160`, `Portra400` and `Portra400-leica-flaw` are no longer in the
+  asset folder, so figures recorded over all six earlier fixtures do not reproduce.
+- **A roll missing from the manifest now skips** with a `SKIP roll …` line instead of
+  panicking, so a probe's output names what a figure excludes.
+- All 13 `#[ignore]`d tests pass with assets present.
+

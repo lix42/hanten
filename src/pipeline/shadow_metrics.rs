@@ -86,12 +86,12 @@ fn tile_grid() -> (u32, u32) {
 /// so a patch proposal is measured in the same density domain the baseline
 /// will use.
 ///
-/// The roll keys must match `../nc-assets/manifest.json`'s roll names; see
-/// `analysis/probe-fixture-roll-names` for the keys that no longer do.
+/// The roll key is `../nc-assets/manifest.json`'s name for the roll; the recipe stem keeps
+/// the name it was frozen under, and re-measures exactly on the renamed roll's frames.
 const FIXTURES: &[(&str, &str)] = &[
     ("2026-07-24-Gold200", "2026-07-24-Gold200"),
-    ("Ektar", "Ektar"),
-    ("Portra160-2026-07-22", "Portra160-2026-07-22"),
+    ("2026-07-15-Ektar100", "Ektar"),
+    ("2026-07-23-Portra160", "Portra160-2026-07-22"),
 ];
 
 /// The assets root, or `None` when it is absent (the skip case).
@@ -155,14 +155,15 @@ fn roles(assets: &Path, roll: &str) -> Roles {
     let path = assets.join("manifest.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let m: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let frames = m["rolls"][roll]["frames"]
-        .as_array()
-        .unwrap_or_else(|| panic!("{}: rolls.{roll}.frames missing", path.display()));
-
     let mut out = Roles {
         real: vec![],
         leader: vec![],
         unexposed: vec![],
+    };
+    // No such roll: none of each, with a `SKIP` line saying which roll a figure excludes.
+    let Some(frames) = m["rolls"][roll]["frames"].as_array() else {
+        eprintln!("SKIP roll {roll}: not in {}", path.display());
+        return out;
     };
     for f in frames {
         let rel = f["file"].as_str().unwrap();
