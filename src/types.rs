@@ -8,6 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The registry's stock key, defined beside the data it names. Re-exported because it is
+/// recipe vocabulary (`reconstruction.curve.stock`) until `nf-retire/characteristic`.
+pub use crate::film_stock::FilmStock;
+
 /// Linear scanner image in `f32`, interleaved RGB plus optional IR plane.
 ///
 /// Values are in a linear working space, range ~`[0, 1]`. `rgb` is interleaved
@@ -1053,116 +1057,6 @@ impl AnchorPlacement {
         match self {
             AnchorPlacement::MidAtBaseOffset(offset) => offset + MID_GREY_OUTPUT_DECADES / contrast,
         }
-    }
-}
-
-/// A film stock with a digitized characteristic curve
-/// (`reconstruction.curve.stock`, `--film-stock`).
-///
-/// One enum field rather than parallel options, per the project rule for mutually
-/// exclusive knobs. **Naming a stock is a refinement, never a precondition**: an unnamed
-/// stock resolves to [`Self::GenericC41`], which is the average of the nine measured
-/// stocks and renders correctly on any of them. A stock that is *named but unknown* is a
-/// loud usage error listing the accepted spellings — silently falling back would hide a
-/// typo behind a plausible render.
-///
-/// The variants are exactly the entries in `algo::film_stock::curves::STOCKS`; a test
-/// pins that correspondence, because a variant with no table would panic at render time.
-///
-/// `Serialize`/`Deserialize` are written by hand against [`FilmStock::as_str`] and
-/// [`FilmStock::parse`] rather than derived: serde's `kebab-case` renames `Portra400` to
-/// `portra400` (it splits on case boundaries, and there is none before a digit), which
-/// would give the recipe a *different* spelling from the CLI flag and the curve-table key.
-/// An emitted recipe would then fail to load back — the round-trip nc's determinism
-/// contract rests on. One spelling, one function.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum FilmStock {
-    /// The average of the nine measured stocks (ten ship; this one is derived) — red
-    /// mid-scale gamma 0.541 with mid-grey
-    /// 0.624 density above base. For scale: the per-stock spread is 0.50–0.61 and
-    /// 0.54–0.70, and ACES's own generic film model sits at 0.55 / 0.70.
-    #[default]
-    GenericC41,
-    Ektar100,
-    Portra160,
-    /// The discontinued vivid-colour Portra. Kept because its aim table is the evidence
-    /// that `Δ` is genuinely stock-dependent (0.41 against the NC pair's 0.36 at the same
-    /// speed), which a registry of only current stocks would not show.
-    Portra160vc,
-    Portra400,
-    Portra400vc,
-    /// Box speed (EI 800). The published push curves are a separate response and are not
-    /// in the registry — a pushed roll is a different development, not a different stock.
-    Portra800,
-    Gold200,
-    Ultramax400,
-    /// Box speed (EI 800). Digitizes to the **same curve as [`Self::Portra800`]** — D-min
-    /// and per-channel gamma agree to 0.003 — from a different publication, year and page,
-    /// which is an independent check on the extraction as much as a fact about the film.
-    Ultramax800,
-}
-
-impl FilmStock {
-    /// Every variant, in the order `--film-stock` and the parse diagnostics list them.
-    pub const ALL: &'static [FilmStock] = &[
-        FilmStock::GenericC41,
-        FilmStock::Ektar100,
-        FilmStock::Portra160,
-        FilmStock::Portra160vc,
-        FilmStock::Portra400,
-        FilmStock::Portra400vc,
-        FilmStock::Portra800,
-        FilmStock::Gold200,
-        FilmStock::Ultramax400,
-        FilmStock::Ultramax800,
-    ];
-
-    /// The wire spelling — the recipe value, the CLI value, and the key into the pinned
-    /// curve table, which is why it is one function rather than three.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            FilmStock::GenericC41 => "generic-c41",
-            FilmStock::Ektar100 => "ektar-100",
-            FilmStock::Portra160 => "portra-160",
-            FilmStock::Portra160vc => "portra-160vc",
-            FilmStock::Portra400 => "portra-400",
-            FilmStock::Portra400vc => "portra-400vc",
-            FilmStock::Portra800 => "portra-800",
-            FilmStock::Gold200 => "gold-200",
-            FilmStock::Ultramax400 => "ultramax-400",
-            FilmStock::Ultramax800 => "ultramax-800",
-        }
-    }
-
-    /// Parse a CLI/recipe spelling, listing the accepted names on failure.
-    pub fn parse(name: &str) -> std::result::Result<Self, String> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|s| s.as_str() == name)
-            .ok_or_else(|| {
-                format!(
-                    "unknown film stock `{name}` (accepted: {})",
-                    Self::ALL
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            })
-    }
-}
-
-impl Serialize for FilmStock {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for FilmStock {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        let name = String::deserialize(d)?;
-        FilmStock::parse(&name).map_err(serde::de::Error::custom)
     }
 }
 

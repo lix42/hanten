@@ -77,5 +77,5 @@ dropped from the page.
 
 The convention that is easy to get backwards — the aim-matched density scale being a
 *reciprocal*, since `--density-scale` multiplies the *scan's* density where the aim factor
-scales the *table's* — lives in `algo::film_stock::aim_red_scale`, checked by its own tests
+scales the *table's* — lives in `algo::characteristic::aim_red_scale`, checked by its own tests
 rather than by a comment.

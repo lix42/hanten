@@ -99,7 +99,7 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 /// It is **hand-frozen**, never read from the datasheets at runtime: a datasheet input
 /// would invite exactly the per-stock variation this constant exists to refuse, and the
 /// published `D-min` stays diagnostic-only (`algo/film-stock-profiles`, Constraint 1).
-/// `film_stock`'s `the_fixed_decode_mid_is_the_generic_aim` ties the two together.
+/// `crate::film_stock`'s `the_fixed_decode_mid_is_the_generic_aim` ties the two together.
 ///
 /// The value is today's pick, not a closed question: `nf-calibration/anchor-comparison`
 /// may move it. That changes every `--new-flow` render, and nothing versions it yet —

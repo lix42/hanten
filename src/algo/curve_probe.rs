@@ -31,9 +31,10 @@
 
 use std::path::{Path, PathBuf};
 
-use super::film_stock::curves::{STOCKS as PROBE_STOCKS, StockCurves};
-use super::film_stock::{curves_for, invert};
+use super::characteristic::invert;
 use crate::algo::density::to_density;
+use crate::film_stock::curves::{STOCKS as PROBE_STOCKS, StockCurves};
+use crate::film_stock::curves_for;
 use crate::types::{DensityParams, FilmBase, FilmStock, REFERENCE_CONTRAST};
 
 /// Same ceiling as the shipped 6 GiB default: a frame that converts normally measures here.

@@ -159,6 +159,7 @@ Read the module docs before changing these; they hold the traps.
 | new-flow flags and recipe | `src/flow.rs`, `src/recipe.rs` |
 | reconstruction, density scale, anchors | `types.rs` (`DensityParams::default_scale_for`, `AnchorPlacement`), `algo/fixed.rs` |
 | film base, IR holder mask, measurement region | `pipeline/film_base.rs` |
+| film-stock data and the retiring characteristic curve | `film_stock/` (evidence for the decode's constants; `docs/datasheets/`), `algo/characteristic.rs` |
 | display tone, SDR/HDR bounds | `pipeline/display_tone.rs`, `sdr.rs`, `hdr.rs`, `render_split.rs` |
 | gain map, Ultra HDR / ISO 21496-1 container | `pipeline/gain_map.rs`, `gain_map/iso.rs`, `io/ultra_hdr.rs`, `scripts/iso-decoder-oracle/`, `Cargo.toml` (`ultrahdr-sys`'s `jpeg-max-dimension`) |
 | AVIF / libaom | `io/avif.rs`, `Cargo.toml` comments |

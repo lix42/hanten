@@ -56,6 +56,14 @@ hand-set contrast must name `--display-tone reinhard`; left unstated it renders 
 `shoulder`, where the map does real work. It now also waits on
 `nf-scene-correction/roll-white-balance`.
 
+**`stock-data-home` is done (2026-09-24): the stock data stays as evidence, the
+inversion is split out to retire.** `src/film_stock/` holds the digitized tables and the
+registry — the provenance of the fixed decode's constants, checked by tests that read the
+tables forward — and becomes `#[cfg(test)]` once `nf-retire/characteristic` deletes
+`src/algo/characteristic.rs`, the inversion. `--film-stock` leaves with that curve;
+per-stock normalization is a planned, unscheduled look control that will bring its own
+flag. The datasheets stay in the repo.
+
 **`desaturation-band-fit` is done (2026-09-23)**
 ([`docs/spike/desaturation-band.md`](../spike/desaturation-band.md)): the band sits at
 **`s0 = 0.025`, `s1 = 0.055` of `log10(max/min) / gamma` on film RGB** — the negative's
@@ -422,10 +430,36 @@ visible by eye; the band's value is keeping the pull off colour.
 
 ## stock-data-home
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: a home for the film-stock data.
+- 2026-09-24: **decided per piece and split for the retirement** (with the user).
+  - **Tables, `curves.json`, the digitizer and the registry (`FilmStock`, `curves_for`)
+    stay**, moved to `src/film_stock/`. Consumer today: the `characteristic` curve.
+    Consumer after it: the evidence for the fixed decode's constants —
+    `the_fixed_decode_mid_is_the_generic_aim` (`fixed::MID_ABOVE_BASE`),
+    `generic_sits_inside_the_measured_spread`, `blue_is_steeper_than_red_on_every_stock`,
+    `aim_table_agrees_with_the_curve` — so the module becomes `#[cfg(test)]` then, until
+    per-stock normalization gives it a runtime reader again. `FilmStock` moved beside the
+    data; `types` re-exports it while it is recipe vocabulary.
+  - **The inversion is the retiring part**, split whole into `src/algo/characteristic.rs`
+    (`invert`, `apply_curve`, `OutOfTable`, `check_tables`, `aim_red_scale` and their
+    tests), so `nf-retire/characteristic` deletes one file. Two evidence tests read the
+    tables through `invert`; they now bracket the aim on the forward curve instead (the
+    aim lies between the densities at `0.18 ± tol`), which is the same condition because
+    the curve is increasing. Mutation-checked: moving an aim, the generic's mid or
+    `MID_ABOVE_BASE` reds the matching test. A new `every_table_rises_strictly_from_the_base`
+    states the two table invariants without `check_tables`, which retires.
+  - **`--film-stock` leaves with the curve** rather than lingering as provenance —
+    `--film-type` already records chemistry, and a key that gates nothing is the dead API
+    the waiver rule is about. Per-stock normalization, when it is built, brings its own
+    flag. The `--new-flow` refusal no longer names this task as the one bringing it.
+  - **The datasheet PDFs stay in the repo** (7.8 MB): the README's rule is that the file,
+    not a URL, is the provenance, and the assets folder is neither reachable from CI nor
+    meant for third-party documents.
+  - No pixel moved: 21 tests before and after (20 moved, 1 new), the generated
+    `curves.rs` is byte-identical to the emitter's output from the moved `curves.json`.
 
 ## scene-range-mapping
 

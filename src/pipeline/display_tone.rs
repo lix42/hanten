@@ -156,7 +156,7 @@ pub(crate) fn extended_reinhard_raw(value: f32, white_point: f32, gain: f64) -> 
 
 /// Scene mid-grey: an 18 % reflector on a correctly exposed frame.
 ///
-/// The reconstruction places it here by construction (`algo::film_stock` builds each
+/// The reconstruction places it here by construction (`algo::characteristic` builds each
 /// stock's exposure axis so its published grey aim inverts to this), so it is the tone
 /// operator's obligation to leave it alone.
 const MID_GREY: f64 = 0.18;

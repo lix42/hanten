@@ -1098,7 +1098,7 @@ pub enum ConversionPreset {
     CharacteristicStock,
     /// [`CharacteristicStock`](Self::CharacteristicStock) plus the aim-matched red
     /// density scale, which reconciles the stock's curve with its own published aim
-    /// table (`film_stock::aim_red_scale`). Requires `--film-stock`, and refuses a stock
+    /// table (`characteristic::aim_red_scale`). Requires `--film-stock`, and refuses a stock
     /// whose sheet states no usable `Δ`.
     ///
     /// Measured best on the corpus mean and **least consistent per frame** (0.020–0.333
@@ -1232,11 +1232,11 @@ impl ConversionPreset {
                 let stock = self.require_stock(stock)?;
                 // The reciprocal — `--density-scale` multiplies the *scan's* density
                 // before the table is inverted, while the factor that matches the aim
-                // table scales the *table's*. `film_stock::aim_red_scale` returns the
+                // table scales the *table's*. `characteristic::aim_red_scale` returns the
                 // flag-side value and its rustdoc carries the measurement; getting the
                 // direction backwards takes the green-magenta drift from +0.01 to +0.72
                 // stop per unit density, worse than applying nothing.
-                let red = crate::algo::film_stock::aim_red_scale(stock).ok_or_else(|| {
+                let red = crate::algo::characteristic::aim_red_scale(stock).ok_or_else(|| {
                     NcError::Usage(format!(
                         "`--preset characteristic-aim` derives a red density scale from \
                          the stock's published aim table, but `{}` states none that can \
@@ -1296,7 +1296,7 @@ impl ConversionPreset {
             .filter(|s| **s != FilmStock::GenericC41)
             .filter(|s| {
                 self != ConversionPreset::CharacteristicAim
-                    || crate::algo::film_stock::aim_red_scale(**s).is_some()
+                    || crate::algo::characteristic::aim_red_scale(**s).is_some()
             })
             .map(|s| s.as_str())
             .collect::<Vec<_>>()
@@ -1571,7 +1571,7 @@ pub struct StockResult {
     ///
     /// Their difference is `Δ`, and it does **not** always agree with the stock's own curve
     /// — Ektar 100's sheet disagrees with itself by 11%, UltraMax 400's by 11% the other
-    /// way. `algo::film_stock::tests::aim_table_agrees_with_the_curve` records which sheets
+    /// way. `film_stock::tests::aim_table_agrees_with_the_curve` records which sheets
     /// are internally consistent; the render uses the curve, not these.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aims: Option<[f32; 2]>,
@@ -1606,7 +1606,7 @@ pub struct CurveResult {
     /// `reconstruction_result` block (pre-existing roll report structure), so on a roll
     /// only the >20 % warning surfaces.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub out_of_table: Option<crate::algo::film_stock::OutOfTable>,
+    pub out_of_table: Option<crate::algo::characteristic::OutOfTable>,
     /// The film stock whose published response was inverted, with the publication it came
     /// from. The key is **absent** (not `null`) on the parametric curves, which have no
     /// stock.
@@ -1633,7 +1633,7 @@ pub struct CurveResult {
 fn reconstruction_result(
     reconstruction: &Reconstruction,
     curve_anchor: Option<f32>,
-    out_of_table: Option<crate::algo::film_stock::OutOfTable>,
+    out_of_table: Option<crate::algo::characteristic::OutOfTable>,
 ) -> ReconstructionResult {
     let curve = &reconstruction.curve;
     ReconstructionResult {
@@ -1646,7 +1646,7 @@ fn reconstruction_result(
             anchor_value: curve_anchor,
             stock: match curve {
                 DensityCurve::Characteristic(c) => {
-                    let sc = crate::algo::film_stock::curves_for(c.stock);
+                    let sc = crate::film_stock::curves_for(c.stock);
                     Some(StockResult {
                         name: c.stock,
                         publication: sc.publication,
@@ -4206,13 +4206,13 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
     //
     // The characteristic curve has neither a slope nor a placement rule to check — it
     // reads both off the published curve — so the rules below are **skipped** for it,
-    // and its tables are checked instead (`film_stock::check_tables`). Skipped, never
+    // and its tables are checked instead (`characteristic::check_tables`). Skipped, never
     // returned: this used to `return` out of the whole function, which silently
     // disabled every rule *after* this block for any `characteristic` config.
     let slope = match curve {
         DensityCurve::Exponential(e) => Some((e.gamma, "--density-gamma")),
         DensityCurve::Characteristic(c) => {
-            crate::algo::film_stock::check_tables(c.stock)?;
+            crate::algo::characteristic::check_tables(c.stock)?;
             None
         }
     };
@@ -8946,7 +8946,7 @@ mod tests {
         assert!(ektar[0] > 1.0 && gold[0] < 1.0, "{ektar:?} {gold:?}");
         assert_eq!(
             ektar[0],
-            crate::algo::film_stock::aim_red_scale(FilmStock::Ektar100).unwrap()
+            crate::algo::characteristic::aim_red_scale(FilmStock::Ektar100).unwrap()
         );
     }
 

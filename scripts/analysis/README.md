@@ -455,8 +455,8 @@ are informational and never decide the deterministic-statistics verdict.
 ## Datasheet digitization — `digitize_datasheets.py`
 
 Not part of `nctool`, and not stdlib-only: it reads the vector characteristic curves in
-`docs/datasheets/` and writes `src/algo/film_stock/curves.json`, the intermediate that
-`algo::film_stock::curves`'s pinned Rust literals are audited against.
+`docs/datasheets/` and writes `src/film_stock/curves.json`, the intermediate that
+`film_stock::curves`'s pinned Rust literals are audited against.
 
 ```sh
 python3 scripts/analysis/digitize_datasheets.py            # rewrite curves.json

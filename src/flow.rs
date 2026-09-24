@@ -185,11 +185,14 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
         covers: &["--film-stock"],
         present: |args| args.density.film_stock.is_some(),
         availability: Availability::NotYet {
-            arriving_with: "the look stage, as an optional per-stock normalization on top \
+            // Planned, not scheduled, and it will choose its own spelling:
+            // `nf-look/stock-data-home` settled that `--film-stock` leaves with the
+            // `characteristic` curve rather than lingering as provenance.
+            arriving_with: "an optional per-stock normalization in the look stage, on top \
                             of the fixed decode: inverting each stock's own curve returns \
                             every stock to the same scene contrast, which is a choice about \
                             how the picture should look rather than a decode of what the \
-                            negative holds (`nf-look/stock-data-home`)",
+                            negative holds",
         },
     },
     // The retired anchor placements and reference-density flags have no row: they are

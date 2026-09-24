@@ -12,7 +12,7 @@
 //!                              D'_c = B_c + shadow_balance_c · w_lo(D̄)
 //!                                         + highlight_balance_c · w_hi(D̄)
 //! 3. density curve:            exponential lin_c = 10^(gamma · (D'_c − A))
-//!                              (or a stock's characteristic curve — `algo::film_stock`)
+//!                              (or a stock's characteristic curve — `algo::characteristic`)
 //!                              → FilmRgbImage
 //! ```
 //!
@@ -155,8 +155,8 @@ pub(super) fn reconstruct(
         DensityCurve::Characteristic(ch) => {
             // No anchor to place: the published curve carries it, so the report's
             // `curve_anchor` is `None` rather than a derived number nothing consulted.
-            crate::algo::film_stock::check_tables(ch.stock)?;
-            let (film, out_of_table) = crate::algo::film_stock::apply_curve(density, ch.stock)?;
+            crate::algo::characteristic::check_tables(ch.stock)?;
+            let (film, out_of_table) = crate::algo::characteristic::apply_curve(density, ch.stock)?;
             characteristic_out_of_table = Some(out_of_table);
             (film, None)
         }

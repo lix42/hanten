@@ -19,8 +19,8 @@
 //! bit-identical to the pre-split monolithic converters' reconstruction half
 //! (pinned by the golden fixtures in `pipeline::stages`, `mod golden`).
 
+pub mod characteristic;
 pub mod density;
-pub mod film_stock;
 pub mod fixed;
 
 /// The probe that measured whether inverting the published curves removes the per-channel
@@ -152,7 +152,7 @@ pub struct ReconstructionReport {
     /// which keeps them ordered and finite, but they are **extrapolated**, not measured:
     /// a frame with a large fraction of them is being rendered off the published data, and
     /// the report has to say so instead of leaving it to be inferred from the picture.
-    pub out_of_table: Option<film_stock::OutOfTable>,
+    pub out_of_table: Option<characteristic::OutOfTable>,
 }
 
 /// Stage 3 — reconstruct the negative into the typed film positive

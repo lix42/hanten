@@ -1436,7 +1436,7 @@ refused:
 | Refused | Why |
 |---|---|
 | `--density-curve characteristic` | the curve is no longer a choice the decode offers |
-| `--film-stock` | per-stock normalization becomes an optional **rendering** step |
+| `--film-stock` | per-stock normalization becomes an optional **rendering** step — planned, not scheduled, and it will bring its own flag; `--film-stock` leaves with `--density-curve characteristic` |
 | `--shadow-balance`, `--highlight-balance` (non-zero) | a grade; it moves to the look stage's per-channel control |
 | `--preset` | a preset sets knobs on both sides of the decode/rendering boundary |
 | `--balance-range`, `--auto-balance-range` | they shape the regional balance's tone ramp, which is itself refused |
