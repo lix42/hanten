@@ -2,10 +2,10 @@
 //! green-anchored gains from a sample of a rendered positive.
 //!
 //! Owned by the new chain's scene correction (`pipeline::scene_correction`), which
-//! samples its measurement region. The current chain's two white-balance sites —
-//! the legacy print render (`algo::finish_print`) and the shared display controls
-//! (`render_split`) — reach the same estimator through [`resolve_print_gains`],
-//! which keeps their whole-frame sample, so their output is unchanged by the move.
+//! samples its measurement region. The current chain's white-balance site, the
+//! shared display controls (`render_split`), reaches the same estimator through
+//! [`resolve_print_gains`], which keeps its whole-frame sample, so its output is
+//! unchanged by the move.
 //!
 //! Pure statistics, no ML (the project's "AI-friendly ≠ ML" rule): same sample and
 //! estimator ⇒ identical gains.
@@ -195,7 +195,7 @@ pub(crate) fn estimate_gains(rgb: &[f32], estimator: Estimator) -> Result<[f32; 
 /// The current chain's white balance: explicit gains pass through; an auto mode is
 /// estimated over a whole-frame sample of `rgb`.
 ///
-/// Scaffolding for the two current-chain sites, deleted with `print.white_balance`
+/// Scaffolding for the current chain's display branch, deleted with `print.white_balance`
 /// by the retirement epic.
 pub(crate) fn resolve_print_gains(rgb: &[f32], source: WbSource) -> Result<[f32; 3]> {
     let estimator = match source {

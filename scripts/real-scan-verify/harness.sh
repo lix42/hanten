@@ -179,13 +179,13 @@ stage_freeze() {
     jmax=$($NC estimate --film-base "$dflag" --d-max-region "$freg" "$F" 2>"$ART/$roll.dmax.warn")
     dmax=$(echo "$jmax" | jq -r '.dmax')
     # `output.preset` is stated, not defaulted: the product default is `gain-map-hdr`
-    # (a JPEG) since pipeline_version 3, and this harness converts to TIFFs
-    # throughout. `output.depth` replaced the removed `output.hdr` bool, and is
-    # consulted only by the non-atomic presets — hence `legacy` on both.
+    # (a JPEG), and this harness converts to TIFFs throughout — a 16-bit SDR one
+    # (`display-p3`) and a float one (`hdr-linear-tiff`, the float TIFF that applies
+    # the print controls). Both were `legacy` until that preset retired.
     jq -n --argjson b "$dmin" --argjson d "$dmax" \
-      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]},dmax:{explicit:$d}},reconstruction:{type:"density",curve:{type:"exponential"}},output:{preset:"legacy"}}' > "$REC/$roll.json"
+      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]},dmax:{explicit:$d}},reconstruction:{type:"density",curve:{type:"exponential"}},output:{preset:"display-p3"}}' > "$REC/$roll.json"
     jq -n --argjson b "$dmin" --argjson d "$dmax" \
-      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]},dmax:{explicit:$d}},reconstruction:{type:"density",curve:{type:"exponential"}},output:{preset:"legacy",depth:"f32"}}' > "$REC/$roll.hdr.json"
+      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]},dmax:{explicit:$d}},reconstruction:{type:"density",curve:{type:"exponential"}},output:{preset:"hdr-linear-tiff"}}' > "$REC/$roll.hdr.json"
     jq -n --arg roll "$roll" --arg uf "$uf" --arg ureg "$ureg" --arg ff "$ff" --arg freg "$freg" \
       --argjson b "$dmin" --argjson d "$dmax" \
       --arg mw "$(tr '\n' ' ' <"$ART/$roll.dmin.warn")" --arg xw "$(tr '\n' ' ' <"$ART/$roll.dmax.warn")" '{

@@ -20,7 +20,7 @@
 //! | Rec.709 / ACEScg | published sRGB↔ACEScg Bradford matrix | this file |
 //! | BT.2020 | primaries re-typed from BT.2020-2, recovered through the transform | this file |
 //! | Display P3 | ICC-registry colorants and the registered D65 encoding | `pipeline::color` tests |
-//! | ProPhoto | none — no NC-derived matrix exists for it (Little CMS owns that colorimetry) | — |
+//! | ProPhoto | none — no NC-derived matrix exists for it, and nc no longer renders to it | — |
 //!
 //! The ICC serialization artifacts (`output/lossless-hdr-tiff`) are anchored the
 //! same way: `BT2020_TO_XYZ_D50` against the colorants Little CMS independently

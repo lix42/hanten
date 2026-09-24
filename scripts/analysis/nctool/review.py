@@ -68,6 +68,7 @@ PRESET_SUFFIX: dict[str, str] = {
     "ultra-hdr-v1": "jpg",
     "hdr-pq": "avif",
     "hdr-hlg": "avif",
+    # Retired from nc; kept for a reference-build arm that still names them.
     "legacy": "tiff",
     "custom": "tiff",
     "film-master": "tiff",

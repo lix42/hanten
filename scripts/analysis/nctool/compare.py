@@ -155,6 +155,8 @@ PRIMARY_DEPTH_BY_ENCODING = {
     "legacy-ultra-hdr-v1-xmp-mpf-jpeg": "u8",
     "rec2100-pq-10bit-444-avif": "u10",
     "rec2100-hlg-10bit-444-avif": "u10",
+    # `rendered-u16-tiff` / `transitional-rendered-float-tiff` are the retired
+    # `legacy` preset's encodings: kept so records made before it retired still read.
     "rendered-u16-tiff": "u16",
     "display-p3-u16-tiff": "u16",
     "srgb-u16-tiff": "u16",

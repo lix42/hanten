@@ -18,6 +18,6 @@
     }
   },
   "output": {
-    "preset": "legacy"
+    "preset": "display-p3"
   }
 }

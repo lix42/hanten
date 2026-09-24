@@ -18,7 +18,6 @@
     }
   },
   "output": {
-    "preset": "legacy",
-    "depth": "f32"
+    "preset": "hdr-linear-tiff"
   }
 }

@@ -52,11 +52,11 @@ hanten estimate reference.tiff --base-region 0,0,120,40
 hanten convert in.tiff -o out.tiff --reconstruction density \
   --film-base 0.92,0.55,0.42 --output-preset display-p3
 
-# Full HDR float output with explicit controls. `--density-gamma` is the
-# exponential curve's knob, so that curve is selected explicitly — the default
-# is the sigmoid, whose slope is `--sigmoid-contrast`.
-hanten convert in.tiff -o out.tiff --reconstruction density --out-depth f32 \
-  --film-base 0.92,0.55,0.42 --output-preset legacy \
+# Float output: display-linear BT.2020 with the print controls applied.
+# `--density-gamma` is the exponential curve's knob, so that curve is selected
+# explicitly — the default is the sigmoid, whose slope is `--sigmoid-contrast`.
+hanten convert in.tiff -o out.tiff --reconstruction density \
+  --film-base 0.92,0.55,0.42 --output-preset hdr-linear-tiff \
   --density-curve exponential --density-gamma 1.8 --print-exposure 0.0
 
 # Inspect a scan and emit machine-readable JSON.

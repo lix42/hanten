@@ -285,7 +285,14 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // named this case in advance. It is not the kind of change the paragraph above
         // worries about: a recipe written against the old shape does not render
         // differently, it is *rejected* with a migration error naming the new path.
-        recipe: "128cdee1d98587ef",
+        //
+        // **Refreshed in place a third time** by `nf-retire/legacy-custom`, which removed
+        // the `output.depth` / `output.output_profile` / `output.bigtiff` selectors with
+        // the only presets that read them. Every remaining preset resolves those itself,
+        // so the default document lost three keys and no default value moved; `render`
+        // and `base` held. The same shape as the second refresh: a recipe still naming a
+        // removed key is rejected with a migration error, not rendered differently.
+        recipe: "9ca8dcca192e605a",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -297,11 +304,15 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 /// **Why three fingerprints.** They answer different questions and fail for
 /// different reasons:
 ///
-/// - `render` — [`stable_hash`] over the default-path result of the curated
-///   per-pixel vectors in `pipeline::stages::golden` (`Reconstruction::default()` +
-///   `PrintParams::default()` over `golden::pixels()` / `golden::base()`): every
-///   output pixel's `f32` bit pattern plus the resolved `Dmax` / white-balance /
-///   balance-range diagnostics. This is the *arithmetic* of stages 3–4.
+/// - `render` — [`stable_hash`] over the default reconstruction of the curated
+///   per-pixel vectors in `pipeline::stages::golden` (`Reconstruction::default()`
+///   over `golden::pixels()` / `golden::base()`): every output pixel's `f32` bit
+///   pattern plus the resolved `Dmax` / balance-range diagnostics, and a
+///   `white_balance` line kept only for byte-identity with the recorded rows (it
+///   echoes the default's explicit gains). This is the *arithmetic* of stage 3 and
+///   nothing after it — no print control is covered. (Until `nf-retire/legacy-custom` it hashed
+///   `reconstruct_and_print`, whose print half was a bit-exact identity under
+///   default settings — so the text, and every recorded row, is unchanged.)
 /// - `base` — [`stable_hash`] over `film_base::estimate`'s result (the resolved
 ///   base's `f32` bit patterns plus its warnings) for [`FilmBaseSource::Auto`]
 ///   over the frozen synthetic scan in `pipeline::film_base::golden`. This is
@@ -312,9 +323,8 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 /// - `recipe` — [`stable_hash`] over the canonical JSON of
 ///   `cli::ResolvedConfig::default()`. This is the default *configuration*: it
 ///   covers default **values** the other two cannot see (`output.preset`,
-///   `output.depth`, `output.output_profile`, `calibration.film_base`, the `input`
-///   defaults). It is also the *only* fingerprint that moves when the default
-///   **preset** changes: `render` and `base` measure `reconstruct_and_print` and
+///   `calibration.film_base`, the `input` defaults). It is also the *only* fingerprint that moves when the default
+///   **preset** changes: `render` and `base` measure the reconstruction and
 ///   `film_base::estimate`, which the preset does not select — the v3 row is exactly
 ///   that case, and its evidence is `docs/reports/render-defaults-v3.md`. Note it
 ///   covers the *values*, never the code implementing them — `calibration.film_base`
@@ -383,7 +393,7 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   `stages::golden::reachable_window` is the tool for settling it — it enumerates
 ///   what a conforming libm can return — but note a fingerprint has no tolerance
 ///   window to absorb the answer the way a golden does.
-/// - It stops at `reconstruct_and_print`, i.e. **before** the lcms2 output color
+/// - It stops at the reconstruction, i.e. **before** the lcms2 output color
 ///   transform. No post-lcms2 pixel and no embedded ICC byte — both of which differ
 ///   by target — enters any of the hashes.
 /// - `base` hashes the output of a code path with **no transcendental at all** (no
@@ -589,10 +599,11 @@ mod drift_gate {
     use super::*;
     use crate::cli::ResolvedConfig;
     use crate::pipeline::film_base;
-    use crate::pipeline::stages::{golden, reconstruct_and_print};
+    use crate::pipeline::stages::golden;
+    use crate::pipeline::white_balance::resolve_print_gains;
     use crate::types::{
         DensityCurve, DensityParams, DmaxInput, DmaxSource, ExponentialParams, FilmBaseSource,
-        PrintParams, Reconstruction,
+        PrintParams, Reconstruction, WbSource,
     };
 
     /// Format an `f32` as its raw bit pattern in hex — no decimal formatting, so
@@ -612,7 +623,7 @@ mod drift_gate {
     /// Kept human-readable (rather than hashing raw bytes) so a gate failure can
     /// print it and a developer can *see* which pixel or diagnostic moved instead of
     /// only that a hash differs.
-    fn render_fingerprint_text(recon: &Reconstruction, print: &PrintParams) -> String {
+    fn render_fingerprint_text(recon: &Reconstruction, white_balance: WbSource) -> String {
         // The default reference, stated rather than inherited: `DmaxSource::Fixed`
         // with no region, which measures nothing off the frame. So this pins the
         // render as it always has — and note what that means: the gate cannot see the
@@ -622,14 +633,18 @@ mod drift_gate {
         // `recon`**, since `core/calibration-recipe-section`. The `recipe` fingerprint
         // still covers the default *value* (it hashes the whole default document); what
         // this one covers is the arithmetic that value drives.
-        let (out, report) = reconstruct_and_print(
-            &golden::pixels(),
-            &golden::base(),
-            recon,
-            print,
-            DmaxInput::new(DmaxSource::Fixed),
-        )
-        .expect("the render must succeed on the curated vectors");
+        let (out, report) = golden::reconstructed(recon, DmaxInput::new(DmaxSource::Fixed));
+        // The `white_balance` line **covers no arithmetic**: the default is explicit
+        // gains, so this only echoes a recipe value the `recipe` fingerprint already
+        // hashes. It is kept for one reason — the text must stay byte-identical to what
+        // the recorded rows hashed, when the retired legacy print stage reported the
+        // same resolution. Nothing in this gate exercises the shared print controls'
+        // arithmetic; where the new `render` hash stops is
+        // `nf-verification/fingerprints`' call.
+        let white_balance = Some(
+            resolve_print_gains(&out.rgb, white_balance)
+                .expect("the default white balance must resolve"),
+        );
         let rgb: Vec<String> = out.rgb.iter().copied().map(hex).collect();
         let opt = |v: Option<f32>| v.map_or_else(|| "-".to_string(), hex);
         let triple = |v: Option<[f32; 3]>| {
@@ -648,7 +663,7 @@ mod drift_gate {
             "rgb={}\ndmax={}\nwhite_balance={}\nbalance_range={}\n",
             rgb.join(","),
             opt(report.dmax),
-            triple(report.white_balance),
+            triple(white_balance),
             pair(report.balance_range)
         )
     }
@@ -691,7 +706,7 @@ mod drift_gate {
     fn recorded_row() -> &'static PipelineFingerprint {
         let render = stable_hash(&render_fingerprint_text(
             &Reconstruction::default(),
-            &PrintParams::default(),
+            PrintParams::default().white_balance,
         ));
         let base = stable_hash(&base_fingerprint_text(&FilmBaseSource::Auto));
         let recipe = stable_hash(&recipe_fingerprint_text());
@@ -719,7 +734,7 @@ mod drift_gate {
 
         let render = stable_hash(&render_fingerprint_text(
             &Reconstruction::default(),
-            &PrintParams::default(),
+            PrintParams::default().white_balance,
         ));
         assert_eq!(
             render,
@@ -733,9 +748,12 @@ mod drift_gate {
              behaviors, and every output already stamped with it becomes unattributable.\n\n\
              If instead you believe the default render is unchanged, the bit patterns say \
              otherwise — the sibling test \
-             `pipeline::stages::golden::golden_density_exponential_default_is_bit_identical` \
+             `pipeline::stages::golden::golden_new_default_is_bit_identical` \
              names the pixel that moved.\n\nfingerprint input was:\n{}",
-            render_fingerprint_text(&Reconstruction::default(), &PrintParams::default())
+            render_fingerprint_text(
+                &Reconstruction::default(),
+                PrintParams::default().white_balance
+            )
         );
 
         let base = stable_hash(&base_fingerprint_text(&FilmBaseSource::Auto));
@@ -760,7 +778,7 @@ mod drift_gate {
             recipe,
             row.recipe,
             "the DEFAULT RECIPE changed but PIPELINE_VERSION is still {PIPELINE_VERSION}.\n\n\
-             If a *default value* changed (output depth/profile, film-base source, an input \
+             If a *default value* changed (the output preset, film-base source, an input \
              default), default output changed with it — bump PIPELINE_VERSION and ADD a new \
              row.\n\n\
              If you only ADDED an opt-in knob whose default is neutral, no default pixel \
@@ -790,19 +808,23 @@ mod drift_gate {
         let row = recorded_row();
         let default_recon = Reconstruction::default();
 
-        // (a) the print side.
-        let perturbed_print = PrintParams {
-            print_exposure: PrintParams::default().print_exposure + f32::EPSILON,
-            ..PrintParams::default()
+        let default_wb = PrintParams::default().white_balance;
+
+        // (a) the white-balance line is wired to the default and not to a constant.
+        // This is **not** print-control coverage — the line only echoes explicit gains
+        // (see `render_fingerprint_text`) — it guards against the line going stale.
+        let WbSource::Explicit([r, g, b]) = default_wb else {
+            panic!("the default white balance is explicit gains")
         };
+        let perturbed_wb = WbSource::Explicit([r, g, b + f32::EPSILON]);
         assert_ne!(
-            stable_hash(&render_fingerprint_text(&default_recon, &perturbed_print)),
+            stable_hash(&render_fingerprint_text(&default_recon, perturbed_wb)),
             row.render,
-            "a perturbed default print knob must move the render fingerprint"
+            "the white_balance line must follow the default it echoes"
         );
 
-        // (b) the reconstruction side — a print-only perturbation leaves the density
-        // curve, the part `render` mostly exists to pin, unproven.
+        // (b) the reconstruction side — the density curve, the part `render` mostly
+        // exists to pin.
         let perturbed_recon = Reconstruction::Density {
             density: DensityParams::default(),
             curve: DensityCurve::Exponential(ExponentialParams {
@@ -811,10 +833,7 @@ mod drift_gate {
             }),
         };
         assert_ne!(
-            stable_hash(&render_fingerprint_text(
-                &perturbed_recon,
-                &PrintParams::default()
-            )),
+            stable_hash(&render_fingerprint_text(&perturbed_recon, default_wb)),
             row.render,
             "a perturbed density curve must move the render fingerprint"
         );
@@ -831,10 +850,7 @@ mod drift_gate {
         // And the unperturbed defaults DO match the row — so the assertions above
         // failed for the perturbation, not because the formatter never matches.
         assert_eq!(
-            stable_hash(&render_fingerprint_text(
-                &default_recon,
-                &PrintParams::default()
-            )),
+            stable_hash(&render_fingerprint_text(&default_recon, default_wb)),
             row.render
         );
         assert_eq!(

@@ -311,11 +311,10 @@ pub struct SharedDisplaySource {
 ///
 /// An explicit [`WbSource`](crate::types::WbSource) passes its gains straight through; an **auto** mode is
 /// estimated from a deterministic strided sample of the *mapped ACEScg* buffer
-/// with the same estimators the legacy print render uses
-/// (`white_balance::resolve_print_gains`). Note the domain difference this implies: the
-/// legacy estimate runs on pre-matrix film RGB, so an auto mode resolves to
-/// *different numbers* here — per-channel gains do not commute with the
-/// working-space matrix. That is the documented consequence of moving the
+/// (`white_balance::resolve_print_gains`). Note the domain this implies: the retired
+/// `legacy` preset estimated on pre-matrix film RGB, so an auto mode resolves to
+/// *different numbers* here than it did there — per-channel gains do not commute
+/// with the working-space matrix. That is the documented consequence of moving the
 /// controls after the ACEScg boundary, not a bug.
 ///
 /// Pure and deterministic: same buffer + same params ⇒ same controls. The only

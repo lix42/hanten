@@ -97,9 +97,9 @@ negative value means it sits below. This is a review step, not a formality:
 > before lcms2 by design (see CLAUDE.md), and the audit only compares pinned
 > artifacts against the derivation — neither looks at a profile.
 >
-> **So: if you touched `REC709`, `DISPLAY_P3`, `ACESCG`, or `PROPHOTO`, treat it
+> **So: if you touched `REC709`, `DISPLAY_P3`, `ACESCG`, or `BT2020`, treat it
 > as a pixel change and go to step 6 regardless of the ulp column.** Run the
-> before/after output comparison in step 5 including `--output-profile` for every
+> before/after output comparison in step 5 through every preset that embeds an
 > affected space. The luma vectors, cone-response matrices, and transfer
 > constants have no such second path; for those the ulp column is the whole
 > story.
@@ -124,9 +124,9 @@ Do a same-machine before/after comparison on real pixels for any change that
 reaches `pinned.rs` **or that touches one of the four colour spaces Little CMS
 consumes** (see the warning in step 4). Build the binary before and after — a
 `git worktree add --detach <tmp> <base>` gives you a clean "before" without
-disturbing your tree — convert the same fixture through `legacy`, `film-master`,
-`ultra-hdr-v1`, and an explicit `--output-profile` for each affected space, and
-compare output checksums.
+disturbing your tree — convert the same fixture through `film-master` (ACEScg),
+`display-p3` and `compatibility` (Display P3, sRGB), `hdr-linear-tiff` (BT.2020) and
+`ultra-hdr-v1`, and compare output checksums.
 
 ### 6. Decide: representation-only, or a pixel change?
 

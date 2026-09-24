@@ -137,12 +137,11 @@ its exceptions.
 
 A pure-function pipeline orchestrated by a thin CLI layer.
 
-**Current shipped architecture** — `stages::render` dispatches on the resolved
+**Current shipped architecture** — `cli::convert_frame` dispatches on the resolved
 `output.preset`:
 
 ```text
 decode → film-base → tagged reconstruction → FilmRgbImage
-  ├ legacy → finish_print → output color transform → encode
   ├ film-master → NC film RGB v1 → linear ACEScg → encode (unclamped f32, no transform)
   └ display presets → NC film RGB v1 → linear ACEScg → shared print controls
       ├ gain-map-hdr (default) / ultra-hdr-v1 → SDR + HDR + gain map → JPEG
@@ -152,16 +151,15 @@ decode → film-base → tagged reconstruction → FilmRgbImage
       └ hdr-linear-tiff         → HDR, no transfer → 32-bit float BT.2020 TIFF
 ```
 
-Twelve preset names are accepted today (`legacy`, `custom`, `film-master`,
-`gain-map-hdr`, `ultra-hdr-v1`,
+Ten preset names are accepted today (`film-master`, `gain-map-hdr`, `ultra-hdr-v1`,
 `display-p3`, `compatibility`, `hdr-pq`, `hdr-hlg`, `hdr-linear-tiff`,
-`hdr-pq-tiff`, `hdr-hlg-tiff`) — there is no planned-but-unaccepted tier left, so
-an unknown name always means a typo. Only the default migration remains in
-`output/presets`. **`custom` is the one named preset that is not atomic**: it
-accepts the depth/profile/container selectors, which is why atomicity is gated on
-`OutputPreset::is_atomic()` and not `is_named()` — three call sites, and a missed
-one silently re-opens the accepted-and-ignored bug. It resolves the same legacy
-branch and the same bytes as the no-preset state; the difference is provenance. `gain-map-hdr` and
+`hdr-pq-tiff`, `hdr-hlg-tiff`), so an unknown name always means a typo. **Every
+preset is atomic**: `legacy` and `custom` — the older TIFF path, print controls on
+film RGB before an ICC transform — retired in `nf-retire/legacy-custom`, and with
+them the `--out-depth` / `--output-profile` / `--bigtiff` selectors (recipe keys
+`output.depth` / `output_profile` / `bigtiff`) that only they read. All five names
+are removed-value errors naming the replacement (`REMOVED_OUTPUT_SELECTORS` for the
+selectors), and the old behaviour lives only in the reference build. `gain-map-hdr` and
 `ultra-hdr-v1` are **one render packaged twice** — identical pixels, differing
 only in metadata dialect (`Dialects::LegacyPlusIso` vs `LegacyUltraHdrV1`), and
 only the dual-dialect one decodes as HDR on Apple platforms. Keep this list,
@@ -191,9 +189,8 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   stocks in `algo/film_stock`, sheets in `docs/datasheets/`) and therefore resolves
   **no reference density and no anchor**, so `consumes_reference()` is `false` and
   `anchor()` returns `Option` — a `calibration.dmax` stated beside it is carried and
-  warned about, never refused);
-  `algo::finish_print` is the stage-4 print bridge. The old `Converter` trait and
-  `AlgoParams` are gone.
+  warned about, never refused).
+  The old `Converter` trait and `AlgoParams` are gone.
   **`density.scale`'s default is per-curve, and constructing one by hand is a trap.**
   `DensityParams::default_scale_for` is the single definition: `[1, 0.84, 0.73]` for the
   parametric curves (a scanner calibration — green and blue density rise ~19-37% faster
@@ -286,11 +283,9 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   plus `pipeline/colorimetry/` — the **single source of truth for every
   standards-based matrix and luma vector**; see the colorimetry note below
   (`film_base::estimate` is stage 2, resolved by the orchestrator before the
-  render; `stages::render` is the pure reconstruction→named-output core (stages
-  3–5a): it dispatches on the resolved `output.preset` into the frozen `legacy`
-  path (`reconstruct → finish_print → color::to_output`) or `film-master`
+  render; `stages::render_film_master` is the pure reconstruction→master core
   (`reconstruct → map_nc_film_rgb_v1 → render_split::film_master`, no colour
-  transform). The explicitly selected, `convert`-only display presets are the
+  transform, and no print parameter in its signature). The display presets are the
   CLI-reachable display (5b) consumers, all sharing one
   `stages::render_display_source`: `gain-map-hdr` / `ultra-hdr-v1` feed
   `pipeline::gain_map` over
@@ -344,7 +339,7 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   both refusals carry a `SuffixContext`, because the bare form handed a `roll` user
   "use `hanten roll --out-dir`" while they were running it, with no frame named. `required_extensions` is
   **complete and no longer optional**: every preset resolves a container, which is
-  what let `legacy` and `film-master` stop letting `hanten convert -o out.jpg`
+  what let `film-master` (and the since-retired `legacy`) stop letting `hanten convert -o out.jpg`
   write a TIFF named `.jpg`. It never drove the roll
   refusal — deriving "convert-only" from "pins a suffix" refused *every* preset
   once the table was completed and broke `hanten roll` outright — and **there is no
@@ -378,12 +373,11 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   display consumers (`ultra-hdr-v1`, `display-p3`, `compatibility`, `hdr-pq`,
   `hdr-hlg`, `hdr-linear-tiff`,
   `hdr-pq-tiff`, `hdr-hlg-tiff`) are wired; a non-default `print.linear_range` is
-  accepted only by those display presets (legacy ignores it — so it is rejected
-  there rather than silently dropped — and film-master rejects it);
+  accepted only by those display presets (film-master rejects it);
   `display_tone` resolves `print.display_tone` + `print.highlight_compress` into the
   one tone value both display renderers **read** — though not one both *accept*:
   three selectors ship (`shoulder`, `none`, `reinhard`) and **all three are accepted by
-  every display preset**; only `legacy`/`custom`/`film-master` refuse. The gain-map pair
+  every display preset**; only `film-master` refuses. The gain-map pair
   was the last admitted, and the condition is load-bearing: `gain_map::build` must ratio
   against the base **as stored** (`min(sdr, 1)`), because that is what a decoder
   multiplies and the encode clamps it — ratioing against the *rendered* SDR stored a gain
@@ -429,8 +423,8 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   genuinely needs the flag and stays in `validate_convert`.
   **`validate_output_preset`'s rules are ordered by how specific their diagnosis
   is**, and the reinhard-acceptance rule goes **last**: it also matches
-  `legacy`/`custom`/`film-master`, where its remedy ("use `--display-tone shoulder`
-  or `none` there") is advice those branches themselves refuse;
+  `film-master`, where its remedy ("use `--display-tone shoulder` or `none` there")
+  is advice that branch itself refuses;
   `memory::preflight` is the stage-0 peak-memory gate — see the memory note below),
   `pipeline/shadow_metrics.rs` (test-only diagnostic harness: `#[cfg(test)]`, every
   **asset-dependent** entry `#[ignore]`d and skipping with a message when
@@ -507,10 +501,8 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   when nc renders to nothing like it (`ADOBE_RGB` is the first, and is unused by the
   runtime on purpose): primaries living only in `scripts/analysis/nctool/metrics.py`
   would be a second source of truth by construction, and that file's tests re-read
-  this one. Note also that nc's ProPhoto output is a **pure 1.8** power law
-  (`color::build_profile` omits the ROMM toe), so a consumer applying the specified
-  piecewise curve disagrees with nc's own pixels below encoded 0.03125 — 1.3 stops
-  out at 0.01. Product policy (reference white, peak nits, shoulder, gain-map
+  this one — `PROPHOTO` is the second since its one renderer, the retired `legacy`
+  preset's `--output-profile prophoto`, went. Product policy (reference white, peak nits, shoulder, gain-map
   offsets) stays with its stage and refers to a *named* space instead of
   restating colorimetry. Workflow for changing any of it:
   `docs/colorimetry-maintenance.md`; `NC_COLORIMETRY_REGEN=1 cargo test
@@ -522,13 +514,13 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   out of a naive grep, and two luma vectors inline in a `match` arm). Four
   gotchas that have already cost time:
   - **`pinned.rs` is not the only runtime consumer of a definition.**
-    `pipeline::color` feeds `definitions::{REC709, DISPLAY_P3, ACESCG, PROPHOTO,
-    BT2020}` straight into Little CMS, so editing one of those **five** changes ICC
-    bytes and every lcms2-transformed pixel *even with `pinned.rs` untouched and
-    every audit `ulps` at 0*. (`BT2020` joined them with `hdr-linear-tiff`.)
-    Nothing automated catches it: `PIPELINE_FINGERPRINTS` stops before lcms2 and
-    the audit only compares pinned artifacts. Treat those five as a pixel change
-    regardless of the ulp column.
+    `pipeline::color` feeds `definitions::{REC709, DISPLAY_P3, ACESCG, BT2020}`
+    straight into Little CMS, so editing one of those **four** changes ICC bytes and
+    every lcms2-transformed pixel *even with `pinned.rs` untouched and every audit
+    `ulps` at 0*. (`BT2020` joined them with `hdr-linear-tiff`.) Nothing automated
+    catches it: `PIPELINE_FINGERPRINTS` stops before lcms2 and the audit only
+    compares pinned artifacts. Treat those four as a pixel change regardless of the
+    ulp column.
   - **The ICC PCS white is a *declared* triple, not a derived one.**
     `definitions::ICC_PCS_WHITE_XYZ` is ICC.1:2022's `[0.9642, 1, 0.8249]`; deriving
     XYZ from `D50`'s rounded four-decimal chromaticities gives
@@ -683,12 +675,12 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   later* phase because freed pages stay resident — the same retention rule that
   sums the encode buffers; treating it as a competing phase instead
   under-estimated a real run by 10%. Two images overlapping
-  is by design; three was the bug (`color::to_output` cloned; it now **consumes and
-  returns** the image, transforming those very buffers). If you add a full-frame
+  is by design; three was the bug (a colour stage that cloned — every colour transform
+  now runs in place on the buffers it is handed). If you add a full-frame
   buffer to any stage, update that model — **nothing tests it against the code**, so
   the gate silently under-approves until someone does. `decode` is
-  `decode_within(&Path, budget_bytes)`. `RunProfile::Convert` models the TIFF
-  paths; `RunProfile::UltraHdrV1` separately counts shared-source, dual-render,
+  `decode_within(&Path, budget_bytes)`. `RunProfile::Convert` models `film-master`
+  (and, at u16, the arithmetic `NewFlowSdrTiff` is measured against); `RunProfile::UltraHdrV1` separately counts shared-source, dual-render,
   gain-map, JPEG, native-copy, and package staging; `RunProfile::HdrAvif` counts one
   rendition plus a single lumped `AVIF_STAGING_BYTES_PER_PX` for everything libaom
   allocates; `RunProfile::HdrLinearTiff` and `HdrCodedTiff` count that same
@@ -736,6 +728,8 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   calibration), move the binary aside for the Python gate rather than reading it as a regression.
 - **The shell is zsh: an unquoted `$extra` holding `--flag value` is passed as ONE argument.** Use
   an array (`args=(--flag value); cmd "${args[@]}"`) in scripted loops.
+  And a bare word starting with `=` (`echo =====`) is zsh `=cmd` expansion, failing with
+  `== not found` — quote separators in scripted output.
 - **`cargo test --lib` fails here** — `nc` is a binary crate with no `[lib]` target, so it
   errors with "no library targets found". Use `cargo test --bin hanten <filter>` to run only
   the in-`src` unit tests; a bare `cargo test <filter>` also runs `tests/pipeline.rs`.
@@ -803,11 +797,10 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   executing code probing another. When a Python-side fix appears not to take, clear
   `__pycache__` (or run the gate with `PYTHONDONTWRITEBYTECODE=1`) before believing
   the failure — or the diagnosis.
-- **`tests/pipeline.rs`'s `run()` injects `--output-preset legacy`** into a
-  `convert` that names no preset, loads no `--params`, and writes `.tif`/`.tiff` —
-  ~87 tests predate the gain-map default and assert TIFF-path behaviour. A test
-  about what a *bare* invocation resolves must use `run_exact`, which injects
-  nothing.
+- **`tests/pipeline.rs`'s `run()` passes arguments verbatim** — a test that writes a
+  TIFF states its preset (`display-p3`, or `film-master` for f32). It used to inject
+  `--output-preset legacy` into ~87 preset-less `.tif` converts, which silently turned
+  a test of the default into a test of another path; that went with the preset.
 - **Determinism is per build/architecture, not cross-platform — write golden
   tests accordingly.** Tests run locally (macOS/aarch64) *and* in CI (x86_64
   Linux), so a green local `cargo test` is not proof CI is green. Reconstruction's
@@ -876,9 +869,9 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   window at all and a sample whose render differs across targets must be designed
   out of the vector before it enters `PIPELINE_FINGERPRINTS`.
   Note what `golden` therefore does **not** cover: `assert_golden` pins
-  `reconstruct_and_print`, i.e. **pre**-color-transform pixels. Nothing committed
-  guards `color::to_output`'s output across targets, so a change there is verified
-  by same-machine before/after comparison, not by a checked-in vector.
+  `algo::reconstruct`, i.e. pixels before any display stage or colour transform.
+  Nothing committed guards post-lcms2 output across targets, so a change there is
+  verified by same-machine before/after comparison, not by a checked-in vector.
 - **Only `aarch64-apple-darwin` is installed here, so `#[cfg(target_os = "linux")]`
   code never compiles locally** — all four gates pass green with a type error
   sitting in a Linux-only branch, and CI is the first place it builds
@@ -1089,6 +1082,10 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   mutually-exclusive knobs as **one enum field** (e.g. `FilmBaseSource`,
   `InputColor`), not parallel `Option`/bool fields: independent fields can encode
   illegal combinations and silently break the flags-win merge.
+  **Retiring a recipe key: accept its old default.** Every sidecar and `--dump-params`
+  document serializes every key, so a removed key sits at its default in every recipe
+  on disk; strip it at that value on load (`strip_old_default_output_selectors`) and
+  refuse only a non-default one, or no old recipe replays.
   The tagged reconstruction schema (§9's `reconstruction.*` paths) is the
   **shipped** schema: one tagged `reconstruction` object (`schema_version` 1)
   selects `simple`/`density` and the density curve. The legacy `algorithm` +
@@ -1182,28 +1179,21 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     sample into `EncodeReport` (`types.rs`) so the loss rides back to the
     orchestrator as a report warning (`--strict` promotes it) — never clamp
     silently anywhere.
-  - *Output-preset atomicity is deliberately asymmetric — don't unify it.* An atomic
-    preset rejects a **non-default resolved value** for `output.depth` /
-    `output_profile` / `bigtiff` (either provenance), but rejects the `--out-depth`
-    **flag** by presence. `--out-depth u16` resolves the documented *default*, so no
-    value rule can see it, yet it still *forces* a depth the preset cannot produce —
-    unlike `--bigtiff auto`, which genuinely asks for nothing. Collapsing the two
-    rules silently writes an f32 master when the user asked for 16-bit. This
-    asymmetry **survived** the `output.hdr` (bool + `--output-hdr`/`--output-sdr`) →
-    `output.depth` (`OutDepth` enum + `--out-depth`) rename: the enum removed the
-    parallel-fields shape and gave the value half a real recipe spelling, but the
-    presence hole is a property of "u16 is the default", not of the old modelling —
-    a first pass at the rename assumed it dissolved and was wrong.
+  - *Presence versus value.* The one presence rule this project had for an output
+    knob was `--out-depth u16` beside an atomic preset: it resolved the documented
+    default, so no value rule could see it, yet it forced a depth the preset could not
+    produce. The knob retired with `legacy`/`custom`, but the reasoning is the rule for
+    any new one.
     **The tiebreaker for any new rule** (two independent reviewers proposed widening
     it and both were wrong): reject by presence only when the flag *forces something
-    the branch cannot produce*, as `--out-depth u16` forces 16-bit from an f32-only
-    master. An identity value that renders byte-identically — `--bigtiff auto`,
-    `--highlight-compress 0`, `--display-tone shoulder` — asks for nothing, and
+    the branch cannot produce*, as `--out-depth u16` forced 16-bit from an f32-only
+    master. An identity value that renders byte-identically — `--highlight-compress
+    0`, `--display-tone shoulder` — asks for nothing, and
     rejecting it kills the flags-win reset that lets one recipe be re-used on another
     branch. **The exemption is conditional on that reset being possible**, which
     `--new-flow` is the first branch to break: its recipe has no `print` or `output`
     section, so no flag there can be clearing a pinned value, and
-    those same three identity values *are* rejected under it (`src/flow.rs`). Read the
+    those identity values *are* rejected under it (`src/flow.rs`). Read the
     rule as "spare an identity value where a recipe could have set the knob"; where no
     recipe can hold the knob, an identity value has to earn acceptance on its own.
     And when bounding *which rules can still fire* on such a branch, enumerate the
@@ -1260,8 +1250,9 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     control run so the assertion is falsifiable.
   - *Changing a default render trips the drift gate — read its failure message.*
     `version::PIPELINE_FINGERPRINTS` pairs each `pipeline_version` with hashes over
-    `film_base::estimate`, `reconstruct_and_print` on the curated `stages::golden`
-    vectors, and the default recipe JSON. Bumping is deliberately **not** free: a
+    `film_base::estimate`, the reconstruction of the curated `stages::golden` vectors
+    (`golden::reconstructed`, plus the default white balance's resolved gains), and
+    the default recipe JSON. Bumping is deliberately **not** free: a
     version with no recorded row panics. **The `base` fingerprint cannot see the IR
     path at all** — `golden::scan()` carries no IR plane, so any change to
     `ir_separability` / `ir_holder_mask` (i.e. to the film base of every HDRi

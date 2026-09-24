@@ -75,9 +75,9 @@ The load-bearing rules you review against:
   silent no-op; check all four for any new or changed knob. Note `validate` is
   **not** the whole `convert` gate: `validate_convert` composes it with the
   flag-presence checks, so a rule that must see flag *presence* (not just the
-  resolved value) belongs there. Output-preset atomicity is deliberately
-  asymmetric — value rules for `output.hdr`/`output_profile`/`bigtiff`, but
-  flag-presence for `--output-sdr`; a change that "unifies" them is a finding.
+  resolved value) belongs there. Reject by presence only when a flag *forces*
+  something the branch cannot produce; an identity value that asks for nothing
+  stays accepted where a recipe could have set the knob.
 - **Recipe shape mirrors design-spec §9** and structs use `deny_unknown_fields`,
   so a key in the wrong section silently rejects docs-shaped recipes. `params`
   is a reserved top-level key. Mutually-exclusive knobs are one enum field, not
@@ -87,7 +87,7 @@ The load-bearing rules you review against:
   output.
 - **Standards coefficients live only in `pipeline/colorimetry/`.** A matrix or
   luma literal added inline in a stage is a finding. Editing
-  `definitions::{REC709, DISPLAY_P3, ACESCG, PROPHOTO}` changes lcms2-transformed
+  `definitions::{REC709, DISPLAY_P3, ACESCG, BT2020}` changes lcms2-transformed
   pixels even with `pinned.rs` untouched — treat as a pixel change.
 - **Determinism is per build/architecture.** A checked-in bit-exact hash of a
   full frame, an encoded file, or post-lcms2 pixels breaks on the other CI
