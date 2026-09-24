@@ -37,7 +37,10 @@ distribution.
 pinned white per frame at p97, a level move. `path-to-white` is being built under a
 hand-set candidate C/D contrast ([`docs/spike/white-placement.md`](../../spike/white-placement.md)),
 which steepens everything below white and therefore changes which pixels land in the
-operator's range. Re-placing the band under the wrong white is the same work twice.
+operator's range. Re-placing the band under the wrong white is the same work twice. Name
+`--display-tone reinhard` there: the default `shoulder` tone lets the gamut map strip
+chroma from exactly the bright patches this task measures
+(`docs/reports/gamut-map-share.md`).
 
 ## Open questions
 

@@ -594,6 +594,10 @@ stage needs it explicitly rather than inheriting it from a reconstruction curve:
   white. The SDR renderer's gamut map already does something like this at the
   cube boundary (`sdr.rs:249-266`); this would make it a deliberate,
   parameterised part of the look instead of a side effect at the boundary.
+  (Measured 2026-09-23, `docs/reports/gamut-map-share.md`: under `none` and `reinhard`
+  in SDR it moves no marked white, though a few bright frames lose some top-end chroma;
+  it is heavy only under the `shoulder` tone. Today's clean whites are the sigmoid
+  shoulder's.)
 - **Parameterised, because it is a look.** How early it starts and how hard it
   pulls are choices, and "off" must stay available: it hides residual cast,
   which is useful for a print and wrong for a diagnostic.
@@ -974,6 +978,13 @@ why.
   `nf-reconstruction/anchor-spike`, which is done and did not separate them — nothing
   turns the gamut map off by flag, so every desaturation measurement so far reads
   shoulder-plus-gamut-map jointly.
+
+  **Separated on 2026-09-23: it is the per-channel shoulder.** Read on both sides of the
+  map in float, `sigmoid-knees` has the map touch 0.00% of top-end pixels on all four
+  measured rolls, and no marked white (`docs/reports/gamut-map-share.md`). The shoulder
+  is the cause by elimination rather than by a matched render: removing it also lifts
+  the whites by up to 60 L\*, so its convergence is not measured apart from its
+  luminance compression.
 - **"The Ektar green cast is a drift, not a hue."** The argument used
   `curve_probe::channel_drift`, which groups **ordinary picture pixels** by red
   density and reads the green/red ratio across the groups, with no grey patch. A

@@ -72,8 +72,9 @@ it — solve either way. The hybrid fixes `d` and solves `gamma = M / (W − d)`
 `A = W`; the level move fixes `gamma` and solves `d = W − M/gamma`, which at gamma 2.0 on
 Gold200's `W = 0.800` is 0.4276 — and `white-placement.md`'s own table already prints
 `d = 0.428 / 0.538 / 0.488` for the three rolls. So **all four are reachable on today's
-binary** as `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>`,
-which is also how
+binary** as `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>`
+(plus `--display-tone reinhard` for a render — left unstated it is `shoulder`, where the
+gamut map flattens the top end), which is also how
 [`nf-look/path-to-white`](../nf-look/path-to-white.md) is being built while this task is
 open, and why `--density-gamma` must stay reachable on the new flow.
 
@@ -87,10 +88,11 @@ mapping to white **on the straight line**, so on a knee'd curve the shoulder com
 above it and `A = W` does not put rendered white at 1.0 — the same extrapolation caveat
 `BlackAtBase`'s rustdoc already records for that curve. Worth knowing, because it means a
 highlight operator tuned only under the exponential is tuned on a render with **no
-per-channel shoulder** — one of the only two surviving candidates for the knee'd render's
-clean whites (design-update Appendix F). Whether the band must also be checked under a
-knee'd render is [`nf-display-stages/gamut-map-share`](../nf-display-stages/gamut-map-share.md)'s
-to inform.
+per-channel shoulder** — which is what makes the knee'd render's whites clean
+(design-update Appendix F; [`nf-display-stages/gamut-map-share`](../nf-display-stages/gamut-map-share.md)
+ruled the gamut map out on 2026-09-23). Whether the band must also be checked under a
+knee'd render — which the new flow's fixed decode no longer produces — is
+`nf-look/path-to-white`'s to decide, or to record why not.
 
 **So B/C/D need no decode change — they need a measurement of `W` and somewhere to put
 it.** The placement only grows a variant if it is to *consume* that measurement rather

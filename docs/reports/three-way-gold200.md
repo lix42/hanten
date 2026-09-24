@@ -315,10 +315,10 @@ luminance and multiply all three channels by the resulting ratio, so `shoulder`,
 `reinhard` and `none` alike leave every channel ratio invariant, however hard they
 compress. What follows them is not ratio-invariant: `gamut_map` runs *after* that
 multiply (`sdr.rs:266`) and converges radially as luminance approaches 1, with a ceiling
-that follows the rendered luminance — so the tone choice reaches it indirectly. How much
-of the convergence is the gamut map's is unseparated; nothing reachable by flag turns it
-off. It is deliberate: the SDR test
-is named `shoulder_rolls_highlights_without_a_channel_clip_kink`. The only per-channel
+that follows the rendered luminance — so the tone choice reaches it indirectly (its
+share was unseparated here; `gamut-map-share.md` since measured it near zero where it
+matters, with the knee'd whites the shoulder's). The tones' ratio invariance is
+deliberate: the SDR test is named `shoulder_rolls_highlights_without_a_channel_clip_kink`. The only per-channel
 nonlinearity nc has above diffuse white is the sigmoid's shoulder, in reconstruction,
 which the new design removes.
 

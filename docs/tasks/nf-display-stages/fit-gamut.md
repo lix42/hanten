@@ -29,10 +29,18 @@ What is known:
 
 Open:
 
-- **Does the look's highlight desaturation subsume part of this?** Design-update
-  Part 2 notes the SDR gamut map already pulls chroma out near white as a side
-  effect; once the look does it deliberately, the boundary behaviour may want to be
-  less aggressive. Decide which operator owns the path to white.
+- **Does the look's highlight desaturation subsume part of this?** Mostly answered
+  2026-09-23 by [`gamut-map-share`](gamut-map-share.md): the look owns the path to
+  white. Under today's `reinhard` and `none` in SDR the map moved no marked white on
+  four rolls, and every limit it hit was the cube's top. It does real work under a tone
+  that plateaus near display white (the current `shoulder`, which the new flow retires),
+  so the answer holds only if fit range's operator does not plateau there — re-check
+  once [the parametric operator](parametric-operator.md) is chosen, and for HDR, which
+  was not measured.
+- **No diagnostic off switch** (decided 2026-09-23). Should one ever be wanted, "off"
+  has to mean an unmapped **float** destination — a render that skips the map and then
+  quantizes has swapped the radial map for a per-channel clip, which is a gamut policy
+  of its own.
 - Whether hue preservation is a stated contract with a test, or an emergent
   property of the radial form, as it is today.
 
