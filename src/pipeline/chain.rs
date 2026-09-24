@@ -4,10 +4,10 @@
 //! The chain `--new-flow` selects (`docs/design-update.md` Part 2,
 //! `docs/nf-migration.md`), fed by the fixed decode (`algo::fixed`) and rendering
 //! into one destination (`cli::convert_frame`, `nf-core/minimal-end-to-end`). Scene
-//! correction applies white balance and exposure; the look is still an **identity
-//! pass** — its epic fills it — fit range compresses the scene's range against the
-//! destination's peak, and fit gamut applies only the change of primaries into the
-//! destination's gamut.
+//! correction applies white balance and exposure; the look desaturates near-neutral
+//! highlights (its first control — the rest of its epic fills it); fit range
+//! compresses the scene's range against the destination's peak, and fit gamut applies
+//! only the change of primaries into the destination's gamut.
 //!
 //! **The order is carried by the types, not by this function.** Each stage's
 //! input is the previous stage's output type, and each of those can be minted
@@ -27,7 +27,7 @@
 
 use crate::pipeline::fit_gamut::{self, DisplayReferredImage, FitGamutParams};
 use crate::pipeline::fit_range::{self, FitRange, FitRangeParams};
-use crate::pipeline::look::{self, LookParams};
+use crate::pipeline::look::{self, LookParams, LookSection};
 use crate::pipeline::scene_correction::{self, SceneCorrection, SceneCorrectionParams};
 use crate::pipeline::working_space::AcesCgImage;
 use crate::types::Result;
@@ -62,15 +62,17 @@ pub struct Rendered {
     pub applied: [(&'static str, &'static str); 4],
     /// Scene correction's values as applied to this frame.
     pub scene_correction: SceneCorrection,
+    /// The look's controls as applied.
+    pub look: LookSection,
     /// Fit range's operator and its arguments, as resolved.
     pub fit_range: FitRange,
 }
 
 /// Render an [`AcesCgImage`] through the new chain.
 ///
-/// **Today this is scene correction's per-channel gains, fit range's luminance
-/// operator and the destination's 3×3** — the look is an identity, and fit gamut
-/// applies only the change of primaries. Nothing is clamped: values outside `[0, 1]`
+/// **Today this is scene correction's per-channel gains, the look's highlight
+/// desaturation, fit range's luminance operator and the destination's 3×3** — fit
+/// gamut applies only the change of primaries. Nothing is clamped: values outside `[0, 1]`
 /// ride through to the encoder, which is the only place clamping happens. A
 /// non-finite sample is **refused** by fit range, naming the pixel.
 ///
@@ -105,6 +107,7 @@ pub fn render(image: AcesCgImage, params: &ChainParams) -> Result<Rendered> {
             ("fit_gamut", params.fit_gamut.applied()),
         ],
         scene_correction,
+        look: params.look.section,
         fit_range,
     })
 }
@@ -128,7 +131,7 @@ mod tests {
     fn params() -> ChainParams {
         ChainParams {
             scene_correction: SceneCorrectionParams::default(),
-            look: LookParams::default(),
+            look: LookParams::off(),
             fit_range: FitRangeParams {
                 headroom_stops: 0.0,
                 peak: DisplayPeak::SDR,

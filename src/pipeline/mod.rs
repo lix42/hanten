@@ -11,9 +11,11 @@
 //!
 //! `--new-flow` reaches the new chain (`nf-core/minimal-end-to-end`): the fixed decode
 //! (`algo::fixed`) feeds it, and it renders into one destination, a Display P3 16-bit
-//! TIFF. Scene correction applies white balance and exposure, the look is an identity
-//! pass, fit range compresses the scene's range against the destination's peak, and
-//! fit gamut applies only the change of primaries; the stage epics fill the rest. [`white_balance`] holds the auto estimators both chains use.
+//! TIFF. Scene correction applies white balance and exposure, the look highlight
+//! desaturation, fit range compresses the scene's range against the destination's peak,
+//! and fit gamut applies only the change of primaries; the stage epics fill the rest.
+//! [`white_balance`] holds the white-balance statistics: the current chain's per-frame
+//! estimators and the roll measurement's levels ([`roll_white`]).
 
 pub mod chain;
 /// Goldens for the new flow's stages (`nf-verification/stage-goldens`).

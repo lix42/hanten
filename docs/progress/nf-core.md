@@ -1090,3 +1090,10 @@ boundary the SDR/HDR split will split *from*. Nothing about the no-flag path mov
 **Updated:** 2026-09-19
 
 - 2026-09-19: filed after the plan review. Goal: stage seams, buffers and the IR plane.
+
+## one-luma-dot
+
+**Status:** not started
+**Updated:** 2026-09-24
+
+- 2026-09-24: filed from the `path-to-white` review. Goal: one shared `dot` for luminance.

@@ -32,8 +32,8 @@ below land in it. It is the stage nc does not have today.
 ## How to Verify
 
 - An empty look is a bit-exact identity through the stage.
-- `film-master` with any look knob stated refuses, with a message naming the look
-  rather than a downstream knob.
+- `film-master` with a look the user set — one that is neither the default nor
+  empty — refuses, with a message naming the look rather than a downstream knob.
 - The report names the stage in both the empty and the configured case.
 - One recipe drives the same look through every destination that has one.
 

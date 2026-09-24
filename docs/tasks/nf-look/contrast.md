@@ -42,12 +42,12 @@ carries, pivoted at mid-grey and applied before the SDR/HDR branch.
   it.
 - At matched lightness, a contrast change moves shadow separation where a fit
   range change does not — the measurement that motivates the knob's existence.
-- If this is the **first look control to land**: `LookParams` gains a "non-empty"
-  predicate, and `applied()` and any destination that runs no look (`film-master`,
-  once the new flow has one) read it — one rule, never one per knob
-  (`nf-look/stage`). A look key on a no-look destination refuses, naming the look
-  — if the new flow has one by then; otherwise `nf-destinations/preset-set`
-  verifies it.
+- The first look control has landed (`path-to-white`, highlight desaturation on by
+  default): `LookSection` carries two predicates, `is_empty` (moves no pixel — what
+  `applied()` reads) and `asks_for_a_look` (neither default nor empty — what a no-look
+  destination such as `film-master` reads to refuse: the default is spared because
+  every default recipe carries it, an empty look because it is an identity). This
+  control extends both.
 
 ## Dependencies
 

@@ -42,8 +42,8 @@ authoritative for status and dependencies.
   selects and `nf-core/minimal-end-to-end` connected it: the fixed decode feeds it and
   it writes one destination, a Display P3 16-bit TIFF. Scene correction has since
   gained white balance and exposure (`nf-scene-correction/stage`) and fit range its
-  reinhard operator (`nf-display-stages/fit-range`); the look is still an identity
-  pass. The availability refusals went live before the render did.
+  reinhard operator (`nf-display-stages/fit-range`), and the look highlight
+  desaturation (`nf-look/path-to-white`, on by default). The availability refusals went live before the render did.
 - **The container default is untouched by all of this**, so it moves once, when
   `nf-destinations/default-destination` says so.
 - **New stages are written fresh.** See CLAUDE.md's migration rule: structure for

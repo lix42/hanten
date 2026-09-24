@@ -20,10 +20,20 @@ control under `look`**, each named and added by its own task with a field on
 `LookParams`, a CLI flag (classified in `flow`, which must also refuse a new-flow-only
 flag on the current chain), a `recipe::merge` arm with a merge test, and a value rule.
 `contrast` and the grade overlap (equal pivoted exponents are contrast), so whichever
-lands first decides who owns neutral contrast. The first control also adds a "non-empty"
-predicate on `LookParams`, which `applied()` and `film-master`'s refusal read — never a
-rule per knob; the refusal is verified by that control or `nf-destinations/preset-set`,
-whichever lands second.
+lands first decides who owns neutral contrast. The section is `look::LookSection`, and
+the stage's `LookParams` adds what the section cannot state (the decode's contrast, via
+`Recipe::chain_params`). Two predicates, never a rule per knob: `is_empty` (moves no
+pixel — `applied()`) and `asks_for_a_look` (neither the default nor empty — what
+`film-master`'s refusal reads, in `nf-destinations/preset-set`); they differ because the
+default look is not the identity, and an empty look is spared because it is one.
+
+**`path-to-white` is done (2026-09-24): highlight desaturation, on by default at 0.8.**
+`look.highlight_desaturation` pulls near-neutral highlights to neutral, keyed on
+brightness (one stop below diffuse white up to it) and on a band `0.015 → 0.025` over
+`log10(max/min) / contrast` on ACEScg, luminance kept. It assumes the roll's white
+balance (`hanten measure-roll`). On real frames the effect is modest and one-sided:
+marked whites' chroma falls ~15% on average (visibly on bright clean-up cases), colours
+hold.
 **One spike is done and it settles what `path-to-white` ships**. `desaturation-spike`
 ([`docs/spike/highlight-desaturation.md`](../spike/highlight-desaturation.md)) chose a
 **chroma pull** over a per-channel curve — not on appearance, which is equivalent
@@ -289,8 +299,8 @@ visible by eye; the band's value is keeping the pull off colour.
 
 ## path-to-white
 
-**Status:** not started
-**Updated:** 2026-09-23
+**Status:** done
+**Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: highlight desaturation.
 - 2026-09-19: the gating spike moved to `nf-calibration/scale-ladder` and was
@@ -345,6 +355,56 @@ visible by eye; the band's value is keeping the pull off colour.
   white balance, now filed as `nf-scene-correction/roll-white-balance` and added to this
   task's dependencies. Its band edges miss by a little on both halves of the pair check
   (placed from patch medians, applied per pixel) — added to the task's open questions.
+- 2026-09-24: **started, on the new chain now that fit range (#153) renders a viewable
+  picture.** Decisions (user): the knob is `look.highlight_desaturation`; the saturation
+  measure is taken on **ACEScg**, not film RGB (no inverse matrix needed — on the band
+  fit's 29 patches it separates as well, 3 misclassified against 4, at ~0.72x the scale);
+  whether it ships on by default is decided after rendering it.
+
+  **Placement, per pixel** (`../temp/ptw/scripts/place.py`, the band fit's cached ACEScg
+  pixels at candidate-C contrast times the roll gains, the operator simulated on every
+  pixel of every in-range patch). The ambiguous zone is narrow — `s` ≈ 0.024–0.026 holds
+  two whites (1774 cloud, 1800 truck) and two colours (1815 sunset cloud, 1727 pastel
+  cloth) — so the band's position is a choice, and the user's intent (keep the sunset,
+  `s0` low) makes it: **`0.015 → 0.025`**, where colours keep 92–100% of their chroma and
+  whites at or below 0.016 lose 70–100%. `0.020 → 0.030` cleaned more but left the
+  sunset cloud at 57%. A smoothstep band ramp differed from a linear one by 0.001, so it
+  stays linear. Start stays one stop below diffuse white.
+
+  **Built:** the operator in `pipeline::look` (`rgb ← rgb + strength · b · w · (Y − rgb)`,
+  luminance kept, band tested on max/min ratios so only a pixel inside a ramp calls a
+  libm), `LookSection` as the recipe section with the `is_empty` predicate the first
+  control owed, `LookParams` adding the decode's contrast via `Recipe::chain_params`,
+  flags `--highlight-desaturation{,-start,-band}` (new-flow only, refused on the current
+  chain), `new_flow.look` in the report. Golden: one pixel per path (full pull —
+  bit-exact; band ramp — `log10` window; brightness ramp — `log2` window; colour —
+  untouched), mutation-checked on both ramps.
+
+  **Pair check through the binary** (`../temp/ptw/`: per roll a recipe with candidate-C
+  contrast and `measure-roll` gains, fit range at its default; 21 frames × strength
+  0/0.5/0.8/1.0). Mean patch C\* — whites 7.08 → 6.50 → 6.01 → 5.83, colours 17.31 →
+  17.19 → 17.11 → 17.10; luminance within 0.2 L\*. Colours hold (the sunset cloud 11.0 →
+  9.6 is the largest move); the best-cleaned whites are the 1810 cloud 9.1 → 5.4 and the
+  birds ~8 → ~5.5. Smaller than the simulation because most marked whites render a little
+  below diffuse white, where the brightness ramp is only partly in.
+
+  The sigmoid's retirement (#151) removes the knee'd render the Design asked to re-check
+  the band under, so that caution is closed rather than open.
+- 2026-09-24: **done — on by default at strength 0.8** (user decision after the review
+  set: "I cannot see the difference on most of the photos, but I do the diff at 1810 and
+  1735, and I like when it's on"). With a default that is not the identity, "the look is
+  empty" and "the look is the default" became two questions: `LookSection::is_empty`
+  (what `applied()` reports) and `is_default` (what a no-look destination reads to refuse
+  a look the user set — keying `film-master`'s refusal on emptiness would refuse every
+  default recipe). `nf-destinations/preset-set`, `contrast` and `per-channel-grade` now
+  say so. Still open for later: exact hue preservation, anything per branch above
+  diffuse white, and whether the minimal "direct" preset keeps it (`look-presets`).
+- 2026-09-24: **review correction — the refusal predicate is `asks_for_a_look`, not
+  `is_default`.** Keying `film-master`'s refusal on "not the default" would refuse
+  `--highlight-desaturation 0`, an identity that renders exactly what `film-master` does,
+  and with it the flags-win reset. The acceptance set is the default plus every empty
+  look, so `LookSection::is_default` became `asks_for_a_look` (`!is_empty() && != default`);
+  the three task files above and `nf-look/stage`'s verify line now say so.
 
 ## contrast
 

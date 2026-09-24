@@ -11629,7 +11629,7 @@ fn new_flow_renders_a_display_p3_tiff() {
             applied,
             [
                 "identity",
-                "identity",
+                "highlight-desaturation",
                 "reinhard-peak-lifted-v1",
                 "acescg-to-display-p3-matrix"
             ],
@@ -13622,21 +13622,27 @@ fn measure_roll_refuses_what_it_cannot_measure_under() {
         "the flag is at fault, not a frame: {err}"
     );
 
-    // The recipe's scene correction is what this command measures, so it is not read:
-    // a value `convert` would refuse there does not refuse the measurement.
-    let with_scene = write_file(
-        &tmp.path("scene.json"),
-        r#"{ "recipe_version": 2,
-             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
-             "scene_correction": { "exposure": 500 } }"#,
-    );
-    let (code, _, err) = run(&[
-        "measure-roll",
-        &frame,
-        "--params",
-        with_scene.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "{err}");
+    // The recipe's scene correction is what this command measures, and its look is
+    // never applied, so neither is read: a value `convert` would refuse there does not
+    // refuse the measurement.
+    for (name, section) in [
+        ("scene.json", r#""scene_correction": { "exposure": 500 }"#),
+        (
+            "look.json",
+            r#""look": { "highlight_desaturation": { "strength": 1.5 } }"#,
+        ),
+    ] {
+        let recipe = write_file(
+            &tmp.path(name),
+            &format!(
+                r#"{{ "recipe_version": 2,
+                     "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }},
+                     {section} }}"#
+            ),
+        );
+        let (code, _, err) = run(&["measure-roll", &frame, "--params", recipe.to_str().unwrap()]);
+        assert_eq!(code, 0, "{name}: {err}");
+    }
 
     // A retired per-frame mode is still refused at load, and the remedy works from
     // here too: drop it, then state the gains this command reports.
@@ -13700,4 +13706,174 @@ fn measure_roll_warns_when_a_frames_region_is_not_a_measurement() {
                 && w.as_str().unwrap().contains("cap")),
         "{warnings}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The look: highlight desaturation (`nf-look/path-to-white`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
+    let tmp = TempDir::new("look-desat");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--new-flow",
+            // Push the fixture's highlights past diffuse white, where the operator acts.
+            "--exposure",
+            "2",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        (std::fs::read(&out).unwrap(), json(&stdout))
+    };
+    let look = |r: &serde_json::Value| r["new_flow"]["stages"][1].clone();
+
+    // On by default at 0.8, and the report says so.
+    let (plain, report) = convert("plain.tiff", &[]);
+    assert_eq!(
+        look(&report)["applied"],
+        "highlight-desaturation",
+        "{report}"
+    );
+    assert_eq!(
+        report["new_flow"]["look"]["highlight_desaturation"],
+        serde_json::json!({"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]})
+    );
+    // Strength 0 is off: reported as the identity, different from the default, and with
+    // the other two knobs inert — a moved band or start changes nothing when off.
+    let (off, report) = convert("off.tiff", &["--highlight-desaturation", "0"]);
+    assert_eq!(look(&report)["applied"], "identity", "{report}");
+    assert_ne!(plain, off, "the default must move the fixture's highlights");
+    let (off_moved, _) = convert(
+        "off-moved.tiff",
+        &[
+            "--highlight-desaturation",
+            "0",
+            "--highlight-desaturation-start",
+            "-3",
+            "--highlight-desaturation-band",
+            "0.001,0.3",
+        ],
+    );
+    assert_eq!(off, off_moved, "off is off whatever the band and start");
+
+    // A stronger pull moves further.
+    let (on, report) = convert("on.tiff", &["--highlight-desaturation", "1"]);
+    assert_eq!(look(&report)["stage"], "look");
+    assert_ne!(plain, on, "strength must change the pixels");
+
+    // The recipe key is the same knob, and a dump writes it back.
+    let recipe = write_file(
+        &tmp.path("look.json"),
+        r#"{ "recipe_version": 2,
+             "look": { "highlight_desaturation": { "strength": 1 } } }"#,
+    );
+    let dump = tmp.path("dump.json");
+    let (from_recipe, _) = convert(
+        "recipe.tiff",
+        &[
+            "--params",
+            recipe.to_str().unwrap(),
+            "--dump-params",
+            dump.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(on, from_recipe, "the recipe key and the flag are one knob");
+    let dumped: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+    assert_eq!(dumped["look"]["highlight_desaturation"]["strength"], 1.0);
+
+    // A flag wins over the recipe, down to the identity: the recipe's pull is live
+    // (so the comparison can fail), and the flag resets it to off.
+    assert_ne!(
+        from_recipe, off,
+        "the recipe's strength must move the pixels"
+    );
+    let (reset, report) = convert(
+        "reset.tiff",
+        &[
+            "--params",
+            recipe.to_str().unwrap(),
+            "--highlight-desaturation",
+            "0",
+        ],
+    );
+    assert_eq!(
+        report["new_flow"]["look"]["highlight_desaturation"]["strength"], 0.0,
+        "{report}"
+    );
+    assert_eq!(reset, off, "the flag's 0 must win over the recipe's 1");
+
+    // A narrower band moves fewer pixels: the band is live.
+    let (narrow, _) = convert(
+        "narrow.tiff",
+        &[
+            "--highlight-desaturation",
+            "1",
+            "--highlight-desaturation-band",
+            "0.001,0.002",
+        ],
+    );
+    assert_ne!(narrow, on, "the band must change which pixels are pulled");
+}
+
+#[test]
+fn highlight_desaturation_is_refused_where_it_cannot_apply() {
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let tmp = TempDir::new("look-desat-refused");
+    let out = tmp.path("x.tiff");
+    let base = [
+        "convert",
+        input.as_str(),
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+    ];
+    // The current chain has no look stage.
+    for flag in [
+        ["--highlight-desaturation", "0.5"],
+        ["--highlight-desaturation-start", "-2"],
+        ["--highlight-desaturation-band", "0.01,0.02"],
+    ] {
+        let (code, _, err) = run(&[&base[..], &["--output-preset", "display-p3"], &flag].concat());
+        assert_eq!(code, 2, "{flag:?}: {err}");
+        assert!(
+            err.contains("--new-flow") && err.contains("no look stage"),
+            "{err}"
+        );
+    }
+    // Out-of-range values are refused naming the flag and the key.
+    for (flag, expect) in [
+        (["--highlight-desaturation", "1.5"], "within [0, 1]"),
+        // A negative value reaches the value rule rather than clap's parser.
+        (["--highlight-desaturation", "-0.5"], "within [0, 1]"),
+        (
+            ["--highlight-desaturation-band", "-0.01,0.02"],
+            "0 <= s0 < s1",
+        ),
+        (["--highlight-desaturation-start", "0"], "must be negative"),
+        (
+            ["--highlight-desaturation-band", "0.03,0.02"],
+            "0 <= s0 < s1",
+        ),
+    ] {
+        let (code, _, err) = run(&[&base[..], &["--new-flow"], &flag].concat());
+        assert_eq!(code, 2, "{flag:?}: {err}");
+        assert!(
+            err.contains(flag[0])
+                && err.contains("look.highlight_desaturation")
+                && err.contains(expect),
+            "{flag:?}: {err}"
+        );
+    }
 }

@@ -19,8 +19,10 @@
 //!
 //! **Which stages are bit-exact and which are windowed is decided by their libm
 //! calls.** The decode makes two (`log10`, `powf`), a fractional exposure one
-//! (`exp2`), and fit range one (`log2`) — but only for an HDR peak and only above
-//! diffuse white; all are pinned within a window [`reachable_window`] *derives* by
+//! (`exp2`), fit range one (`log2`) — but only for an HDR peak and only above
+//! diffuse white — and highlight desaturation one per pixel at most: `log10` inside
+//! its band's ramp, `log2` inside its brightness ramp (its constants' `powf` / `exp2`
+//! only classify, never enter the arithmetic); all are pinned within a window [`reachable_window`] *derives* by
 //! enumerating what a 1-ULP-accurate libm can return (CLAUDE.md, determinism). Every
 //! other stage here is IEEE `+ − × /` and `sqrt` with no FMA contraction — Rust never
 //! fuses implicitly — plus sorts and fixed-order sums, so it is pinned bit for bit.
@@ -57,7 +59,7 @@ use crate::pipeline::chain::{self, ChainParams};
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::{self, DestinationGamut, FitGamutParams};
 use crate::pipeline::fit_range::{self, DisplayPeak, FitRange, FitRangeParams};
-use crate::pipeline::look::{self, LookParams};
+use crate::pipeline::look::{self, HighlightDesaturation, LookParams, LookSection};
 use crate::pipeline::scene_correction::{
     self, SceneCorrection, SceneCorrectionParams, WhiteBalance,
 };
@@ -504,15 +506,15 @@ fn fit_range_params(headroom_stops: f32, peak: DisplayPeak) -> FitRangeParams {
 fn through_fit_range(params: &FitRangeParams) -> fit_range::RangeFittedImage {
     let (corrected, _) =
         scene_correction::apply(finite_aces(), &SceneCorrectionParams::default()).unwrap();
-    let graded = look::apply(corrected, &LookParams::default()).unwrap();
+    let graded = look::apply(corrected, &LookParams::off()).unwrap();
     fit_range::apply(graded, params).unwrap()
 }
 
 #[test]
 fn golden_look_and_zero_headroom_fit_range_are_bit_exact_identities() {
-    // The look is an identity today, and so is fit range at zero headroom — which is
-    // also how fit gamut's golden below enters its stage. The first look control
-    // under `nf-look` replaces the look's half with a captured vector of its own.
+    // An empty look is an identity, and so is fit range at zero headroom — which is
+    // also how fit gamut's golden below enters its stage. Highlight desaturation has its
+    // own golden below.
     let input = bits(finite_aces().rgb());
     let out = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR))
         .into_buffer()
@@ -615,6 +617,151 @@ fn golden_fit_range_hdr_agrees_below_white_and_is_correct_within_its_libm_window
 /// The one lifted pixel's three samples, correctly rounded.
 const FIT_RANGE_HDR_LIFTED: [u32; 3] = [0x3fc84f43, 0x3faaf58a, 0x3f904c23];
 
+// --- the look --------------------------------------------------------------------
+
+/// Film RGB for highlight desaturation, one pixel per path through the operator, each
+/// making at most one libm call: (a) full pull above white — none; (b) in the band's
+/// ramp above white — `log10` of the max/min ratio; (c) full pull in the brightness
+/// ramp — `log2(Y)`; (d) a coloured highlight past the band — untouched.
+const LOOK_FILM: [f32; 12] = [
+    1.25, 1.2, 1.18, 1.3, 1.21, 1.14, 0.8, 0.78, 0.77, 1.6, 1.2, 0.9,
+];
+
+fn look_params() -> LookParams {
+    LookParams {
+        section: LookSection {
+            highlight_desaturation: HighlightDesaturation {
+                strength: 0.8,
+                ..HighlightDesaturation::default()
+            },
+        },
+        decode_contrast: 2.0,
+    }
+}
+
+/// The look's input: [`LOOK_FILM`] through the mapper and an identity scene correction.
+fn look_input() -> AcesCgImage {
+    map_nc_film_rgb_v1(FilmRgbImage::fixture(
+        LinearImage::new(4, 1, LOOK_FILM.to_vec(), None).unwrap(),
+    ))
+}
+
+/// Highlight desaturation for one pixel, written out independently of the stage at
+/// [`look_params`], with its one libm result supplied: `log10(max/min)` for a pixel in
+/// the band's ramp, `log2(Y)` for one in the brightness ramp.
+fn look_pixel(px: [f32; 3], log10_ratio: Option<f32>, log2_luminance: Option<f32>) -> [f32; 3] {
+    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let [s0, s1] = HighlightDesaturation::default().band;
+    let key = log10_ratio.map_or(1.0, |l| ((s1 - l / 2.0) / (s1 - s0)).clamp(0.0, 1.0));
+    let brightness = log2_luminance.map_or(1.0, |l| {
+        let t = ((l + 1.0) / 1.0).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    });
+    let a = 0.8 * key * brightness;
+    px.map(|c| c + a * (y - c))
+}
+
+#[test]
+fn golden_look_highlight_desaturation_is_correct_within_its_libm_window() {
+    let (corrected, _) =
+        scene_correction::apply(look_input(), &SceneCorrectionParams::default()).unwrap();
+    let out = look::apply(corrected, &look_params())
+        .unwrap()
+        .into_buffer()
+        .into_linear()
+        .rgb;
+    let input = look_input().rgb().to_vec();
+    let px = |p: usize| [input[p * 3], input[p * 3 + 1], input[p * 3 + 2]];
+    let luminance =
+        |q: [f32; 3]| q[0] * ACESCG_LUMA[0] + q[1] * ACESCG_LUMA[1] + q[2] * ACESCG_LUMA[2];
+
+    for p in 0..4 {
+        assert_clear_of_look_edges(&format!("look pixel {p}"), px(p));
+    }
+    // (a) and (d) are pure IEEE: pinned exactly. (d) is also the input itself.
+    assert_stage_bits("look (full pull)", &out[0..3], &LOOK_FULL);
+    assert_eq!(
+        look_pixel(px(0), None, None).map(f32::to_bits),
+        LOOK_FULL,
+        "capture integrity"
+    );
+    assert_eq!(
+        bits(&out[9..12]),
+        bits(&input[9..12]),
+        "a coloured highlight is untouched"
+    );
+
+    // (b) and (c): each within the window its one libm call can reach.
+    let q = px(1);
+    let ratio = q[0].max(q[1]).max(q[2]) / q[0].min(q[1]).min(q[2]);
+    let y = luminance(px(2));
+    let mut widest = 0;
+    for p in [1, 2] {
+        let (host, rounded, captured) = if p == 1 {
+            (
+                ratio.log10(),
+                f64::from(ratio).log10() as f32,
+                LOOK_BAND_RAMP,
+            )
+        } else {
+            (y.log2(), f64::from(y).log2() as f32, LOOK_BRIGHTNESS_RAMP)
+        };
+        assert!(
+            ulps_between(host, rounded) <= LIBM_MAX_ERROR_ULPS,
+            "this host's libm is not conforming on pixel {p}"
+        );
+        for (c, &want) in captured.iter().enumerate() {
+            let render = |l: f32| {
+                if p == 1 {
+                    look_pixel(px(p), Some(l), None)[c]
+                } else {
+                    look_pixel(px(p), None, Some(l))[c]
+                }
+            };
+            assert_eq!(
+                render(rounded).to_bits(),
+                want,
+                "pixel {p} sample {c}: capture integrity"
+            );
+            let window = reachable_window(render, rounded, 0);
+            widest = widest.max(window);
+            let drift = ulps_between(out[p * 3 + c], f32::from_bits(want));
+            assert!(
+                drift <= window,
+                "stage `look` pixel {p} sample {c}: {drift} ULP from the capture, outside the \
+                 {window} ULP a conforming libm can reach"
+            );
+        }
+    }
+    assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
+}
+
+/// A pixel whose path through the look is pinned must sit clear of every threshold a
+/// conforming libm can move: the band edges `10^(contrast·s)` (`powf`) and the
+/// brightness start `2^start_stops` (`exp2`), each enumerated at the correctly rounded
+/// value and one ULP either side — otherwise a 1-ULP libm difference could send the
+/// pixel down another path.
+fn assert_clear_of_look_edges(label: &str, px: [f32; 3]) {
+    let [s0, s1] = HighlightDesaturation::default().band;
+    let ratio = px[0].max(px[1]).max(px[2]) / px[0].min(px[1]).min(px[2]);
+    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let start = HighlightDesaturation::default().start_stops;
+    for (name, value, edge) in [
+        ("band s0", ratio, 10f64.powf(f64::from(2.0 * s0)) as f32),
+        ("band s1", ratio, 10f64.powf(f64::from(2.0 * s1)) as f32),
+        ("start", y, f64::from(start).exp2() as f32),
+    ] {
+        assert!(
+            value < edge.next_down() || value > edge.next_up(),
+            "{label}: {value} is within one ULP of the {name} edge {edge}"
+        );
+    }
+}
+
+const LOOK_FULL: [u32; 3] = [0x3f9b5286, 0x3f9aa512, 0x3f9a2494];
+const LOOK_BAND_RAMP: [u32; 3] = [0x3f9f996c, 0x3f9c0a9a, 0x3f971ca4];
+const LOOK_BRIGHTNESS_RAMP: [u32; 3] = [0x3f498013, 0x3f48597c, 0x3f474de1];
+
 // --- fit gamut -------------------------------------------------------------------
 
 const FIT_GAMUT_P3: [u32; 21] = [
@@ -638,14 +785,16 @@ fn golden_fit_gamut_is_bit_identical() {
 // --- threaded ----------------------------------------------------------------
 
 /// Every stage at its shipped setting except scene correction, which is not an
-/// identity on purpose — see the threaded goldens.
+/// identity on purpose — see the threaded goldens — and the look, which is off: no
+/// pixel here is near-neutral after these gains, so it would change nothing. The look
+/// has its own threaded vector below.
 fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
     ChainParams {
         scene_correction: SceneCorrectionParams {
             white_balance,
             exposure: -1.0,
         },
-        look: LookParams::default(),
+        look: LookParams::off(),
         fit_range: fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR),
         fit_gamut: FitGamutParams {
             target: DestinationGamut::DisplayP3,
@@ -699,6 +848,63 @@ fn golden_the_chain_threaded_is_bit_identical() {
     assert_stage_bits("chain (threaded)", &out.rgb, &THREADED);
     assert_eq!(gamut, DestinationGamut::DisplayP3);
     assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
+}
+
+/// Two bright pixels for the look inside the chain: (0) near-neutral only *after* the
+/// threaded white balance, so the look pulls it; (1) near-neutral only *before* it, so
+/// the look leaves it. A look run ahead of scene correction swaps which one moves.
+const LOOK_THREADED_FILM: [f32; 6] = [0.72, 1.2, 2.5, 1.25, 1.2, 1.18];
+
+const THREADED_LOOK: [u32; 6] = [
+    0x3f185f16, 0x3f1766d7, 0x3f16d046, 0x3f520133, 0x3f122d2c, 0x3e8a4b94,
+];
+
+#[test]
+fn golden_the_look_threaded_runs_after_scene_correction() {
+    let input = || {
+        map_nc_film_rgb_v1(FilmRgbImage::fixture(
+            LinearImage::new(2, 1, LOOK_THREADED_FILM.to_vec(), None).unwrap(),
+        ))
+    };
+    let scene_correction = SceneCorrectionParams {
+        white_balance: WhiteBalance::Explicit([1.25, 1.0, 0.5]),
+        exposure: 0.0,
+    };
+    let params = |look| ChainParams {
+        scene_correction: scene_correction.clone(),
+        look,
+        fit_range: fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR),
+        fit_gamut: FitGamutParams {
+            target: DestinationGamut::DisplayP3,
+        },
+    };
+    // Both pixels take a pure-IEEE path (full pull, or untouched), so pin them exactly.
+    let (corrected, _) = scene_correction::apply(input(), &scene_correction).unwrap();
+    let corrected = corrected.into_buffer().into_linear().rgb;
+    for (p, q) in corrected.chunks(3).enumerate() {
+        assert_clear_of_look_edges(&format!("threaded look pixel {p}"), [q[0], q[1], q[2]]);
+    }
+
+    let on = chain::render(input(), &params(look_params())).unwrap();
+    assert_eq!(on.applied[1], ("look", "highlight-desaturation"));
+    let on = on.image.into_parts().0.rgb;
+    let off = chain::render(input(), &params(LookParams::off()))
+        .unwrap()
+        .image
+        .into_parts()
+        .0
+        .rgb;
+    assert_ne!(
+        bits(&on[0..3]),
+        bits(&off[0..3]),
+        "pixel 0 is near-neutral after the white balance: the look pulls it"
+    );
+    assert_eq!(
+        bits(&on[3..6]),
+        bits(&off[3..6]),
+        "pixel 1 is coloured after the white balance: the look leaves it"
+    );
+    assert_stage_bits("chain (threaded look)", &on, &THREADED_LOOK);
 }
 
 #[test]

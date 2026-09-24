@@ -1235,8 +1235,8 @@ top-level **document version** rather than per-object ones:
   decode reads no reference density. `reconstruction` is the fixed decode's
   parameters (`--density-scale`, `--density-offset`, `--density-gamma`,
   `--anchor-mid-offset`). `scene_correction` is white balance and exposure and
-  `fit_range` the operator's headroom (both below). The other two rendering stages
-  are present and empty until each stage's task gives it a knob, and refuse any key
+  `fit_range` the operator's headroom, and `look` highlight desaturation (all below).
+  `fit_gamut` is present and empty until its task gives it a knob, and refuses any key
   until then. There is no
   `output` section while the new chain writes one fixed destination.
 - **The version is the chain declaration.** `recipe_version` is required and is
@@ -1260,12 +1260,21 @@ top-level **document version** rather than per-object ones:
   is in stops (`--exposure`, the new chain's spelling of `--print-exposure`), applied
   as `2^EV`; each gain times it must be a normal `f32`. The report's
   `new_flow.scene_correction` states the gains and the exposure applied.
-- **`look`** (`nf-look/stage`): the creative stage, scene-referred and linear,
-  between scene correction and the SDR/HDR branch. It has no keys yet; each control
-  will be **its own key**, added by its own task — not one CDL-style object, whose
-  slope and offset would restate white balance and the flare subtraction. Empty, it
-  is a bit-exact identity, and the report's `new_flow.stages` lists it as
-  `"applied": "identity"`.
+- **`look`** (`nf-look`): the creative stage, scene-referred and linear, between scene
+  correction and fit range. Each control is **its own key**, added by its own task — not
+  one CDL-style object, whose slope and offset would restate white balance and the
+  flare subtraction. At every control's identity the stage is a bit-exact identity and
+  the report's `new_flow.stages` lists it as `"applied": "identity"`.
+  `highlight_desaturation`
+  (`nf-look/path-to-white`) = `{strength, start_stops, band: [s0, s1]}` —
+  `--highlight-desaturation`, `--highlight-desaturation-start`,
+  `--highlight-desaturation-band`, new-flow only. Per pixel on scene-referred ACEScg:
+  `rgb ← rgb + strength · b · w · (Y − rgb)`, where `b` is a smoothstep in stops from
+  `start_stops` (default −1) up to diffuse white, held above it, and `w` a linear band
+  over `s = log10(max/min) / reconstruction.contrast` — full pull at `s ≤ s0`, none at
+  `s ≥ s1` (default `0.015, 0.025`). Luminance is kept. `strength` is in `[0, 1]`,
+  default `0.8`; `0` is off, a bit-exact identity. It assumes a roll-level white
+  balance ahead of it. The report's `new_flow.look` echoes the section.
 - **`fit_range`** (`nf-display-stages/fit-range`): fits the scene's range into the
   display's, with the display's **peak** as the operator's one per-destination
   argument — the destination states it, never the recipe (`1.0` for the SDR TIFF).
@@ -2744,7 +2753,7 @@ nc/
     │   ├── stages.rs     # stage wiring as pure functions
     │   ├── white_balance.rs # white-balance statistics: the current chain's per-frame estimators, the roll's levels
     │   ├── roll_white.rs    # `measure-roll`: a roll's pooled white, leader-guarded (new flow)
-    │   ├── chain.rs           # the --new-flow chain, composed (the look still an identity)
+    │   ├── chain.rs           # the --new-flow chain, composed
     │   ├── working_image.rs   # the buffer every new-flow stage boundary carries
     │   ├── scene_correction.rs # new flow stage 1: WB, exposure, flare (scene-referred)
     │   ├── look.rs            # new flow stage 2: contrast, grade, highlight desaturation
