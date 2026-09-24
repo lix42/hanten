@@ -15,6 +15,9 @@
 //! epics fill the rest. [`white_balance`] holds the auto estimators both chains use.
 
 pub mod chain;
+/// Goldens for the new flow's stages (`nf-verification/stage-goldens`).
+#[cfg(test)]
+mod chain_golden;
 pub mod color;
 pub mod colorimetry;
 pub mod display_tone;

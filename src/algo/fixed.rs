@@ -152,7 +152,7 @@ pub const DENSITY_OFFSET: [f32; 3] = [0.0; 3];
 /// normal positives alike (`1e-6` is itself normal in f32). A **non-finite** sample is
 /// not floored: it propagates as `NaN`, so `io::encode`'s non-finite counter still
 /// surfaces corrupt input rather than seeing a plausible pixel.
-const SCAN_FLOOR: f32 = 1e-6;
+pub(crate) const SCAN_FLOOR: f32 = 1e-6;
 
 /// Which tone the decode pins, and at what density.
 ///

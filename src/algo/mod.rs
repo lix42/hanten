@@ -44,7 +44,8 @@ use crate::types::{DmaxInput, FilmBase, LinearImage, PrintParams, Reconstruction
 /// `pub(in crate::algo)`, so only the `algo` module tree's reconstruction
 /// paths can mint one — a raw scan or density buffer cannot impersonate film
 /// RGB downstream (the working-space mapper accepts `FilmRgbImage`, nothing
-/// else).
+/// else). The one exception is the test-only `FilmRgbImage::fixture`, which
+/// lets a test place chosen values at the mapper's input.
 ///
 /// Values are deliberately unclamped (HDR/scene-headroom preserved; range
 /// clamping happens only at the u16 encode step) and may be non-finite when
@@ -62,10 +63,11 @@ pub struct FilmRgbImage {
 }
 
 impl FilmRgbImage {
-    /// Sole constructor — restricted to the `algo` module tree (note:
+    /// The shipped constructor — restricted to the `algo` module tree (note:
     /// `pub(super)` would NOT do this: `algo` is a top-level module, so its
     /// `super` is the crate root and `pub(super)` would be crate-wide), so
-    /// [`reconstruct`]'s paths are the only producers. Takes an
+    /// [`reconstruct`]'s paths are the only producers outside tests (see
+    /// `FilmRgbImage::fixture` (test-only)). Takes an
     /// already-validated [`LinearImage`] so the buffer length invariants hold
     /// by construction.
     pub(in crate::algo) fn from_linear(image: LinearImage) -> Self {
@@ -75,6 +77,19 @@ impl FilmRgbImage {
             rgb: image.rgb,
             ir: image.ir,
         }
+    }
+
+    /// **Test fixture**: a film positive holding exactly `image`'s values, so a test
+    /// can place a chosen value — non-finite ones included — at the working-space
+    /// mapper's input without running a reconstruction.
+    ///
+    /// The one fixture for "a `FilmRgbImage` a test is not about": tests that reach
+    /// for `Reconstruction::Simple` over a pre-inverted scan to do this move here when
+    /// `simple` retires (`nf-retire/sigmoid-and-simple`), rather than each module
+    /// growing its own.
+    #[cfg(test)]
+    pub(crate) fn fixture(image: LinearImage) -> Self {
+        Self::from_linear(image)
     }
 
     // The read accessors below are the boundary's inspection API. `rgb` is

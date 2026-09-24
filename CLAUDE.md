@@ -761,6 +761,9 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   **compare against the baseline** — 16 pre-existing unresolved links live in
   `main.rs`/`io`/`colorimetry`/`version`/`stages`/`decode`/`cli`, so the count alone tells
   you nothing; what matters is whether your diff added any.
+  An intra-doc link from shipped code to a `#[cfg(test)]` item (a test fixture) is one of
+  these: `cargo doc` builds without `cfg(test)`, so name such an item in backticks, never
+  as a `[`link`]`.
 - **No gate reads prose, so a comment contradicting the code beneath it survives all of
   them.** Six of twenty findings in one review were exactly this, three being rustdocs
   directly above bodies doing the opposite. After changing behaviour, grep for the
@@ -817,6 +820,12 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   vectors in `pipeline::stages::golden` (captured from the reference code) — those
   specific values happen to agree across libm; never checksum a full frame, an
   encoded file, or post-lcms2 (color-transformed) pixels in a cross-platform gate.
+  **The new flow's goldens are `pipeline::chain_golden`** (decode through fit gamut,
+  per stage plus one threaded vector); it has its own `reachable_window`, so it
+  survives the legacy module's retirement. A fault can red goldens below its stage, so
+  read the most upstream red one — but a green downstream golden says nothing about the
+  stages above it: every vector below the decode enters past it (a test fixture), and
+  the per-stage ones below scene correction run its multiply only at identity.
   **When a value cannot be pinned bit-exactly, bound it by enumeration, never by
   inferring agreement from a rounding margin.** Two designs tried the inference here
   and both were unsound. Sizing a "safe" threshold as `E − 0.5` from a published
@@ -828,7 +837,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   "computed in double then rounded": that gives `~2^-27` ULP, seven orders tighter
   than the `2^-5` an attempt here produced by converting one quantity to a relative
   error twice.
-  What works is `stages::golden::reachable_window`: render every intermediate a
+  What works is `stages::golden::reachable_window` (and `chain_golden`'s copy): render every intermediate a
   1-ULP-accurate libm can return (`x.next_down()`, `x`, `x.next_up()` around the
   correctly-rounded value), take the widest excursion, and add one ULP for the final
   call. Any conforming target is inside it by construction, and the cost is nil —

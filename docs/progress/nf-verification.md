@@ -20,6 +20,11 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
   named by commit. `scripts/reference-snapshot/build.sh` builds and caches it, and its
   README pins the invocation, `--preset sigmoid-knees --output-preset display-p3`. In a
   review matrix, give the reference arm `expect_commit`.
+- **The new chain's stage goldens are `pipeline::chain_golden`** (`stage-goldens`,
+  2026-09-23). A task that changes a new-flow stage's arithmetic or a decode default
+  recaptures that stage's vector, and the threaded ones, in the same change.
+  `FilmRgbImage::fixture` is the test-only way to enter the chain with chosen values.
+  No decode pixel is provably bit-portable, which constrains `fingerprints`.
 - **A `--new-flow` cell cannot yet go in a review matrix**: the generator always passes
   `--output-preset`, which `--new-flow` refuses. Render that side by hand until
   `nf-destinations/preset-set`.
@@ -124,10 +129,104 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
 
 ## stage-goldens
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done (2026-09-23)
+**Updated:** 2026-09-23
 
 - 2026-09-19: created with the new-flow plan. Goal: goldens for the new stages.
+
+### 2026-09-23 — implemented
+
+- **Where:** `src/pipeline/chain_golden.rs` (`#[cfg(test)]`), written fresh, with its
+  own vectors and its own `reachable_window`. `stages::golden` is untouched: it pins
+  the legacy path and retires with it, and `golden::pixels()` stays with the historical
+  fingerprint rows. **User decisions:** per-stage vectors *and* one threaded vector;
+  `stages::golden` left alone; the fingerprint samples noted here rather than built.
+- **Entry without `simple`:** `FilmRgbImage::fixture` (`#[cfg(test)] pub(crate)`) places
+  exact film-RGB values at the mapper's input. It is the one fixture
+  `nf-retire/sigmoid-and-simple` can move the `Reconstruction::Simple`-over-a-pre-inverted-scan
+  helpers onto (`chain`'s and `scene_correction`'s `aces_from` among them). An
+  `AcesCgImage` still has no fixture: every downstream vector enters through the real
+  mapper, which is IEEE f64 and so bit-exact anyway.
+- **Bit-exact vs windowed is decided by libm calls.** The decode (`log10`, `powf`) and
+  a fractional exposure (`exp2`) are windowed. The mapping, stated/whole-stop scene
+  correction, auto white balance (sorts, nearest rank, fixed-order f64 sum), look, fit
+  range, fit gamut and the threaded vector are bit-exact. NaN is asserted as *a* NaN,
+  never by payload.
+- **Decode windows.** The captures are the correctly-rounded chain, and a test asserts
+  that. Windows derived at the shipped offset:
+  `[1,5,1, 5,3,3, 7,8,8, 1,1,1, 1,1,1, 4,6,6, 37,26,31]`. At `PROBE_OFFSET`:
+  `[1,1,1, 1,1,5, 6,9,10, 1,1,1, 1,1,1, 5,1,1, 30,28,22]`. The widest are the
+  floored dead pixels (density ≈ 6). Fractional exposure windows are 0–2.
+- **For `fingerprints` (D4): no decode pixel can be proved portable to the bit.**
+  That is structural, not measured: every window includes the final `powf`'s ULP. A hash through the decode therefore rests on *observed*
+  cross-target agreement, and must be designed so. The downstream stages are IEEE-only,
+  so they add no risk of their own. The base pixel (`D = 0`) and above-base pixels sit
+  at window 1: only the final call, with nothing amplified. They are the natural
+  candidates.
+- **Falsifiability, each fault by hand, reverted:**
+
+  | Fault | Goldens red | First in chain order |
+  |---|---|---|
+  | `MID_ABOVE_BASE` +1 ULP | decode golden and its integrity test | decode |
+  | base channel transposed in the decode | decode | decode |
+  | decode `+ offset` dropped | decode (probe-offset pass) | decode |
+  | mapper row 1 `g`/`b` swapped | 6 goldens | working-space |
+  | scene-correction gains channel-reversed | 3 scene-correction goldens + threaded | scene-correction |
+  | `AUTO_WB_PERCENTILE` 0.95 → 0.9 | auto white balance | scene-correction |
+  | look nudges every sample +1 ULP | look/fit-range, fit gamut, threaded | look |
+  | fit-gamut row 2 `g`/`b` swapped | fit gamut, threaded | fit-gamut |
+  | `chain::render` hands scene correction default params | threaded only | chain (threaded) |
+
+  The first matrix run showed a look fault reddening the scene-correction goldens as
+  well. They had been unwrapped *through* the identity stages. They now unwrap at their
+  own boundary. Fit gamut cannot do the same: its input type is minted only by fit
+  range. Hence the "read the most upstream red golden" rule in the module docs.
+- **Stage-order faults.** A reorder does not compile (`chain`'s boundary types). The
+  threaded vector is what catches wiring inside `chain::render`, as the last row shows.
+- Gates green locally (rustc 1.98.1, aarch64): fmt, clippy `-D warnings`, build, test
+  (864 + 245). `cargo doc` unresolved links stay at the baseline 16. **x86_64 Linux is
+  CI's to confirm.**
+
+### 2026-09-23 — review fixes
+
+- The threaded vector now also pins `rendered.scene_correction`. A second threaded
+  run (gray-world, `WB_REGION`) pins that `chain::render` forwards the measurement
+  region, and that the gains it reports are the ones it estimated.
+- The conformance test now checks the host's `powf` as well as its `log10`. Every
+  decode window assumes both.
+- Corrected an overclaim in the module docs and CLAUDE.md. A fault *can* red goldens
+  below its stage, but the downstream vectors bypass the decode and scene
+  correction's multiply, so a green one says nothing about those. The threaded
+  vectors start at ACEScg. The decode→chain hand-off and the recipe→`DecodeParams`
+  wiring are the orchestrator's, and stated as uncovered here.
+- `FilmRgbImage`'s "sole constructor" docs now name the test fixture.
+- **Not done:** sharing one window harness with `stages::golden`. That module
+  retires with the legacy path, and the two differ on purpose: this copy renders the
+  neighbours in correctly-rounded f64, so a window never depends on the host's `powf`.
+
+### 2026-09-23 — done
+
+- **Landed:** `pipeline::chain_golden` has 10 tests.
+  - The decode is windowed at two offsets, with a test checking that the captures
+    are correctly rounded and that the host's `log10` and `powf` conform.
+  - Pinned bit for bit: the mapping, scene correction (stated, and both auto modes),
+    the look/fit-range identities and fit gamut.
+  - Fractional exposure is windowed.
+  - Two threaded vectors run through `chain::render`, one stated and one auto with a
+    region.
+- **Verified:** the fault table above, and local gates green (aarch64 macOS). A Codex
+  review and `ship:diff-reviewer` found only doc wording, now fixed. x86_64 is left to
+  this PR's CI.
+- **For dependents:**
+  - `nf-retire/sigmoid-and-simple` should move the `Simple`-over-a-pre-inverted-scan
+    helpers onto `FilmRgbImage::fixture`.
+  - The first look control under `nf-look` (the look's knobs land one task per
+    control since `nf-look/stage` closed) and `nf-display-stages/fit-range` replace
+    `golden_look_and_fit_range_are_bit_exact_identities` with captured vectors, and
+    recapture `THREADED`/`THREADED_AUTO`.
+  - `nf-display-stages/fit-gamut` recaptures `FIT_GAMUT_P3` and the threaded vectors.
+  - `nf-calibration/offset-question` recaptures `DECODE_DEFAULT`. `PROBE_OFFSET` stays
+    as the non-zero witness.
 
 ## benchmark-set
 
