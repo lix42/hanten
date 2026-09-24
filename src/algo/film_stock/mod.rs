@@ -2,9 +2,9 @@
 //!
 //! # What this stage is
 //!
-//! The parametric curves ([`crate::algo::sigmoid`] and the exponential) *model* the
-//! film's response with a slope and an anchor. This one **reads it**: each dye layer's
-//! measured `density → log exposure` relation, digitized from the manufacturer's
+//! The exponential curve *models* the film's response with a slope and an anchor. This
+//! one **reads it**: each dye layer's measured `density → log exposure` relation,
+//! digitized from the manufacturer's
 //! characteristic curve, inverted per channel. The output is relative scene exposure with
 //! mid-grey at 0.18 by construction, so there is no anchor to resolve and no contrast to
 //! choose — both are properties of the curve the film actually has.
@@ -874,7 +874,7 @@ mod tests {
         want: &[[f32; 3]],
     ) -> (Vec<[f32; 3]>, crate::algo::ReconstructionReport) {
         let image = scan_for(density, want);
-        let config = Reconstruction::Density {
+        let config = Reconstruction {
             density: density.clone(),
             curve: DensityCurve::Characteristic(CharacteristicParams { stock }),
         };

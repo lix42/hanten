@@ -1036,24 +1036,16 @@ mod tests {
     /// container tests exercise the actual SDR base, ICC, and gain map rather
     /// than hand-rolled JPEGs.
     fn real_render() -> gain_map::GainMapRender {
-        use crate::algo::reconstruct;
+        use crate::algo::FilmRgbImage;
         use crate::pipeline::display_tone::DisplayTone;
         use crate::pipeline::render_split::display_source;
         use crate::pipeline::working_space::map_nc_film_rgb_v1;
-        use crate::types::{FilmBase, LinearImage, PrintParams, Reconstruction};
+        use crate::types::{LinearImage, PrintParams};
 
         let film_rgb = [
             0.05_f32, 0.4, 2.5, 2.5, 0.4, 0.05, 0.18, 0.3, 0.5, 1.0, 1.0, 1.0,
         ];
-        let scan = film_rgb.iter().map(|value| 1.0 - value).collect();
-        let image = LinearImage::new(4, 1, scan, None).unwrap();
-        let (film, _) = reconstruct(
-            &image,
-            &FilmBase::from([1.0; 3]),
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
+        let film = FilmRgbImage::fixture(LinearImage::new(4, 1, film_rgb.to_vec(), None).unwrap());
         let print = PrintParams::default();
         let shared = display_source(map_nc_film_rgb_v1(film), &print).unwrap();
         gain_map::render(
@@ -1188,7 +1180,7 @@ mod tests {
     /// and `NC_ISO_SAMPLE_EV`. The toy fixture and a default render both produce a
     /// **flat** gain map (measured `GainMapMax` 0.0039 log2 = 1.003x — under the
     /// exponential curve that was default when this was written, and re-measured at
-    /// ≈1.0027x under the sigmoid default that replaced it on 2026-08-08), which
+    /// ≈1.0027x under the sigmoid default of 2026-08-08 to 2026-09-23), which
     /// cannot discriminate an HDR reconstruction — the oracle needs content driven
     /// above the SDR shoulder knee, hence the EV.
     #[test]

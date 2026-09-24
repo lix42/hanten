@@ -72,7 +72,7 @@ per-channel median of the five cells, so a gradient leaves it mid-spread and usa
 
 The matrix is **data**, so comparing something new is a JSON edit, not code. Write copies;
 never edit `scripts/preset-review/presets.matrix.json` or
-`scripts/sigmoid-baseline/fixtures.json` in place — they describe a curated study and their
+`scripts/analysis/fixtures.json` in place — they describe a curated study and their
 roll names predate the asset rename.
 
 Two files, built by a short script kept beside the set. The frame lists come from
@@ -152,7 +152,7 @@ binary, and both rules apply to it verbatim:
   collide with itself.)
 
 **Smoke-test unusual flag combinations on one frame first.** A configuration Hanten refuses
-(`--print-exposure` on `sigmoid-knees`, say) is worth finding in 15 seconds rather than after
+(`--display-tone none` on a frame with highlights above white, say) is worth finding in 15 seconds rather than after
 a full run.
 
 ## 5. References from another tool

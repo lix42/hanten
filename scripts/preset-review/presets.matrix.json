@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "title": "The five conversion presets",
-  "description": "Each button is one `--preset`. All five are calibrated to the same target — scene mid-grey 0.18 delivered at 0.4525, the brightness approved on 2026-09-15 — so brightness is held constant and what differs is the reconstruction and the display tone. chr-generic is the proposed default. Two of them change the display stage as well as the curve: sig-knees applies no display tone at all (the sigmoid's own shoulder does that work), while the other four use extended Reinhard at 6 stops. Each button is `hanten convert --preset <name>` and nothing else — the exposure and the density scale come from the preset.",
+  "title": "The conversion presets",
+  "description": "Each button is one `--preset`. All three are calibrated to the same target — scene mid-grey 0.18 delivered at 0.4525, the brightness approved on 2026-09-15 — so brightness is held constant and what differs is the stock response. chr-generic is the proposed default. All use extended Reinhard at 6 stops. Each button is `hanten convert --preset <name>` and nothing else — the exposure and the density scale come from the preset. The retired sigmoid presets render only from the reference build (scripts/reference-snapshot/).",
 
   "output_dir": "../temp/preset-review",
   "output_preset": "gain-map-hdr",
@@ -33,18 +33,6 @@
       "label": "chr aim",
       "note": "characteristic-stock plus the aim-matched red density scale — --preset characteristic-aim",
       "args": ["--preset", "characteristic-aim", "--film-stock", "{film_stock}"]
-    },
-    {
-      "id": "sig-knees",
-      "label": "sig knees + linear",
-      "note": "sigmoid with its toe/shoulder, no display tone curve; brightness from the anchor — --preset sigmoid-knees",
-      "args": ["--preset", "sigmoid-knees"]
-    },
-    {
-      "id": "sig-flat",
-      "label": "sig flat + reinhard",
-      "note": "sigmoid with neither knee, character carried by extended Reinhard — --preset sigmoid-flat",
-      "args": ["--preset", "sigmoid-flat"]
     }
   ]
 }

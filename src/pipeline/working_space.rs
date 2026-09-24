@@ -4,8 +4,8 @@
 //! FilmRgbImage → NC film RGB v1 interpretation → linear ACEScg/AP1 at D60
 //! ```
 //!
-//! This is the one deterministic mapping shared by `simple` reconstruction and
-//! every density curve (exponential / sigmoid / characteristic). It expresses NC's
+//! This is the one deterministic mapping shared by every density curve
+//! (exponential / characteristic) and the fixed decode. It expresses NC's
 //! **film-rendering intent** — it does *not* claim to recover physically neutral
 //! scene color, and it deliberately preserves the differences caused by film
 //! stock, lens, development, scanner, and the selected density curve. It adds no
@@ -156,8 +156,8 @@ impl std::fmt::Debug for AcesCgImage {
 }
 
 /// Map a reconstructed [`FilmRgbImage`] through NC film RGB v1 into linear
-/// ACEScg/D60 (design-spec §7, stage 4). The **same** mapper for `simple` and for
-/// every density curve — it consumes the typed film-RGB
+/// ACEScg/D60 (design-spec §7, stage 4). The **same** mapper for every density
+/// curve — it consumes the typed film-RGB
 /// boundary and returns the typed ACEScg boundary, so the reconstruction path
 /// makes no difference to how the mapping is applied.
 ///
@@ -187,7 +187,8 @@ mod tests {
     use super::*;
     use crate::algo::reconstruct;
     use crate::types::{
-        DensityCurve, DensityParams, ExponentialParams, FilmBase, Reconstruction, SigmoidParams,
+        CharacteristicParams, DensityCurve, DensityParams, ExponentialParams, FilmBase,
+        Reconstruction,
     };
 
     // -- derivation helpers ----------------------------------------------------
@@ -218,35 +219,21 @@ mod tests {
 
     // -- fixtures --------------------------------------------------------------
 
-    /// Build a `FilmRgbImage` whose film-RGB values are *exactly* `rgb`.
-    /// Reconstruction is the only public producer, so drive `simple`
-    /// (`positive = 1 - scan/Dmin`) through a unit base with a pre-inverted scan
-    /// (`scan = 1 - target`), giving `1 - (1-target)/1 == target` bit-for-bit.
+    /// A `FilmRgbImage` whose film-RGB values are *exactly* `rgb`.
     fn film_from(width: u32, height: u32, rgb: Vec<f32>, ir: Option<Vec<f32>>) -> FilmRgbImage {
-        let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let scan: Vec<f32> = rgb.iter().map(|&t| 1.0 - t).collect();
-        let img = LinearImage::new(width, height, scan, ir).unwrap();
-        let (film, _) = reconstruct(
-            &img,
-            &base,
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
-        film
+        FilmRgbImage::fixture(LinearImage::new(width, height, rgb, ir).unwrap())
     }
 
     /// Every supported reconstruction config — all must use the same mapper.
-    fn all_configs() -> [Reconstruction; 3] {
+    fn all_configs() -> [Reconstruction; 2] {
         [
-            Reconstruction::Simple,
-            Reconstruction::Density {
+            Reconstruction {
                 density: DensityParams::default(),
                 curve: DensityCurve::Exponential(ExponentialParams::default()),
             },
-            Reconstruction::Density {
+            Reconstruction {
                 density: DensityParams::default(),
-                curve: DensityCurve::Sigmoid(SigmoidParams::default()),
+                curve: DensityCurve::Characteristic(CharacteristicParams::default()),
             },
         ]
     }
@@ -378,7 +365,7 @@ mod tests {
 
     #[test]
     fn every_reconstruction_path_uses_the_same_mapper_and_preserves_shape_ir() {
-        // simple, density/exponential, density/sigmoid all reach the mapper and
+        // the exponential and the characteristic curve both reach the mapper and
         // yield an `AcesCgImage` (compiler-enforced by the return type) with the
         // dimensions and IR plane intact.
         let scan = vec![0.5, 0.3, 0.2, 0.05, 0.03, 0.02];

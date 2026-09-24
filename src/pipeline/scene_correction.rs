@@ -311,23 +311,14 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::reconstruct;
+    use crate::algo::FilmRgbImage;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
-    use crate::types::{FilmBase, LinearImage, Reconstruction};
+    use crate::types::LinearImage;
 
-    /// An `AcesCgImage` whose *film RGB* was exactly `rgb` (see `chain`'s helper of
-    /// the same name for why `simple` over a pre-inverted scan places it exactly).
+    /// An `AcesCgImage` whose *film RGB* was exactly `rgb`.
     fn aces_from(width: u32, height: u32, rgb: &[f32]) -> AcesCgImage {
-        let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let scan: Vec<f32> = rgb.iter().map(|&t| 1.0 - t).collect();
-        let img = LinearImage::new(width, height, scan, None).unwrap();
-        let (film, _) = reconstruct(
-            &img,
-            &base,
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
+        let film =
+            FilmRgbImage::fixture(LinearImage::new(width, height, rgb.to_vec(), None).unwrap());
         map_nc_film_rgb_v1(film)
     }
 

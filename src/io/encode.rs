@@ -923,6 +923,35 @@ mod tests {
         assert!(report.any_loss());
     }
 
+    /// The film master writes a **negative** sample through unclamped, end to end from
+    /// film RGB to the file's bytes.
+    ///
+    /// No density reconstruction produces a negative positive, so no binary-level test
+    /// can reach this; it used to be pinned end to end through `simple`, which could.
+    /// Entered here with a fixture instead, so a clamp-to-zero anywhere on the branch —
+    /// the mapper, the split, or the f32 writer — reds it.
+    #[test]
+    fn the_film_master_branch_writes_a_negative_sample_unclamped() {
+        use crate::algo::FilmRgbImage;
+        use crate::pipeline::render_split::film_master;
+        use crate::pipeline::working_space::map_nc_film_rgb_v1;
+
+        // The NC film RGB v1 matrix is all-positive with rows summing to 1, so a neutral
+        // negative stays negative across it.
+        let film = FilmRgbImage::fixture(img(2, 1, vec![-0.25, -0.25, -0.25, 0.5, 0.5, 0.5], None));
+        let master = film_master(map_nc_film_rgb_v1(film));
+        let bytes = encode_bytes(&master, &out(OutDepth::F32, BigTiff::Off), None);
+        let mut dec = Decoder::new(Cursor::new(bytes)).unwrap();
+        let DecodingResult::F32(pixels) = dec.read_image().unwrap() else {
+            panic!("expected an f32 image");
+        };
+        assert!(
+            pixels[..3].iter().all(|v| *v < -0.2),
+            "the negative sample was clamped: {:?}",
+            &pixels[..3]
+        );
+    }
+
     #[test]
     fn u16_stats_are_the_means_of_the_written_clamped_samples() {
         // The mean is of what the *file* holds: the clamped, quantized values
@@ -1142,26 +1171,18 @@ mod tests {
     /// struct that could drift from the renderer's contract (the `io::avif` tests'
     /// `render_tiny` precedent).
     ///
-    /// `print_exposure` is the lever that reaches the HDR headroom: `simple`
-    /// reconstruction of a `1.0 - v` scan yields a positive in `[0, 1]`, so without
+    /// `print_exposure` is the lever that reaches the HDR headroom: the film
+    /// positives these tests pass sit in `[0, 1]`, so without
     /// exposure nothing would ever exceed reference white and a
     /// "highlights survive" assertion would pass vacuously. At 2.5 stops the
     /// samples span ≈1.13 up to exactly `LINEAR_HEADROOM`.
     fn render_linear_tiny(rgb: &[f32], w: u32, h: u32, print_exposure: f32) -> LinearBt2020Hdr {
-        use crate::algo::reconstruct;
+        use crate::algo::FilmRgbImage;
         use crate::pipeline::render_split::display_source;
         use crate::pipeline::working_space::map_nc_film_rgb_v1;
-        use crate::types::{FilmBase, PrintParams, Reconstruction};
+        use crate::types::PrintParams;
 
-        let scan = rgb.iter().map(|value| 1.0 - value).collect();
-        let image = LinearImage::new(w, h, scan, None).unwrap();
-        let (film, _) = reconstruct(
-            &image,
-            &FilmBase::from([1.0; 3]),
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
+        let film = FilmRgbImage::fixture(LinearImage::new(w, h, rgb.to_vec(), None).unwrap());
         let print = PrintParams {
             print_exposure,
             ..PrintParams::default()
@@ -1338,20 +1359,12 @@ mod tests {
         w: u32,
         h: u32,
     ) -> crate::pipeline::hdr::RenderedHdr {
-        use crate::algo::reconstruct;
+        use crate::algo::FilmRgbImage;
         use crate::pipeline::render_split::display_source;
         use crate::pipeline::working_space::map_nc_film_rgb_v1;
-        use crate::types::{FilmBase, PrintParams, Reconstruction};
+        use crate::types::PrintParams;
 
-        let scan = rgb.iter().map(|value| 1.0 - value).collect();
-        let image = LinearImage::new(w, h, scan, None).unwrap();
-        let (film, _) = reconstruct(
-            &image,
-            &FilmBase::from([1.0; 3]),
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
+        let film = FilmRgbImage::fixture(LinearImage::new(w, h, rgb.to_vec(), None).unwrap());
         let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
         crate::pipeline::hdr::render(&shared, transfer, DisplayTone::shoulder(0.75).unwrap())
             .unwrap()

@@ -57,7 +57,8 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// | 1 | every default change since that baseline, collapsed into one label: `film-base/dmax-reference` replaced the per-frame anchor with the roll-fixed nominal `Dmax = 2.0` **density**, `film-base/auto-base-redesign` replaced the auto film-base detector with the inward-scan rebate detector, and `core/input-semantics` added the stage-1b transfer/meaning resolution. The tagged-`reconstruction` split was proven bit-identical and is *not* part of the change. |
 /// | 3 | the output-preset default migration (2026-08-09, `output/presets`): the default `output.preset` became **`gain-map-hdr`**, a dual-dialect gain-map JPEG, where it was `legacy` (16-bit TIFF). This is a **container** change as much as a render one — `hanten convert -o out.tif` with no preset is now a usage error — and the pixels differ because the default path crosses the ACEScg boundary into the SDR/HDR display renderers instead of running `finish_print` before the ICC transform. `legacy` is unchanged and still reachable by name. The row's `render`/`base` fingerprints are **unmoved**: they measure `reconstruct_and_print` and `film_base::estimate`, neither of which the preset selects — which is exactly the coverage limit `PipelineFingerprint` documents, so this row's evidence is the report in `docs/reports/render-defaults-v3.md`, not the gate. |
 /// | 4 | the per-channel density gain `density.scale` `[1, 1, 1]` → **`[1, 0.90, 0.86]`** (2026-09-09, `algo/film-stock-profiles`). The scalar reconstruction path leaves `contrast · (D'_c − D'_R)`, so a channel whose density rises faster than red drifts against it across the tone scale; measured over 21 real frames, green ran +0.79 and blue +1.26 stops per unit density. This gain cancels both (green +0.02, blue +0.12). Blue's `0.860` is the manufacturers' published per-channel structure, which reproduces at 98%; green's `0.900` is calibrated from scans because the published `0.977` measured only 49% of the real drift. Every default pixel moves, and colour more than tone. Evidence: `algo::curve_probe::sigmoid_scale` and `docs/progress/algo.md`. |
-/// | 5 | **current** — the same gain again, `[1, 0.90, 0.86]` → **`[1, 0.84, 0.73]`** (2026-09-16, `io/scanner-density-calibration`). Calibrated from **31 hand-marked neutral patches** over five rolls instead of from the tone-scale slope: each roll's median nulling scale, averaged with equal weight per roll, gives green 0.837 and blue 0.733. Blue is the half that holds — every roll wants 0.68–0.78, so v4's `0.860`, taken from the manufacturers' published per-channel structure, overcorrects on this scanner. Green **splits by scan date** (July rolls 0.86–0.90, September ~0.77, consistent with a change of developer), so `0.84` is a deliberate compromise fitting neither group exactly. Shipped on a visual verdict over five rolls with an NLP reference beside them, where it beat v4 on every frame but one — `2026-07-15-Ektar100/991` reads green-yellow, which is the overshoot the July patches predict. Every default pixel moves, and colour more than tone. Evidence: `docs/progress/algo.md` (2026-09-16). |
+/// | 5 | the same gain again, `[1, 0.90, 0.86]` → **`[1, 0.84, 0.73]`** (2026-09-16, `io/scanner-density-calibration`). Calibrated from **31 hand-marked neutral patches** over five rolls instead of from the tone-scale slope: each roll's median nulling scale, averaged with equal weight per roll, gives green 0.837 and blue 0.733. Blue is the half that holds — every roll wants 0.68–0.78, so v4's `0.860`, taken from the manufacturers' published per-channel structure, overcorrects on this scanner. Green **splits by scan date** (July rolls 0.86–0.90, September ~0.77, consistent with a change of developer), so `0.84` is a deliberate compromise fitting neither group exactly. Shipped on a visual verdict over five rolls with an NLP reference beside them, where it beat v4 on every frame but one — `2026-07-15-Ektar100/991` reads green-yellow, which is the overshoot the July patches predict. Every default pixel moves, and colour more than tone. Evidence: `docs/progress/algo.md` (2026-09-16). |
+/// | 6 | **current** — the default density curve sigmoid → **exponential at the fixed decode's configuration** (2026-09-23, `nf-retire/sigmoid-and-simple`): contrast 2.0, mid-grey pinned 0.62 density above the film base (`mid-at-base-offset`), the same `[1, 0.84, 0.73]` gain. It is `algo::fixed`'s decode on the current chain, bit-identically (`the_fixed_decode_matches_the_equivalent_legacy_configuration`), so the two chains now render the same default reconstruction. The sigmoid's toe and shoulder were a rendering fused into the decode; the default anchor no longer reads the roll's reference density. Every default pixel moves, highlights most (nothing is compressed at white any more). `simple` retired in the same change, which moves no default pixel. |
 /// **Contested, and deliberately left at 3 — read this before assuming it settled.**
 /// `film-base/ir-usability-detection` (2026-09-04) turned the IR holder-mask
 /// detector from opt-in behind `--film-type chromogenic` into the default for every
@@ -124,7 +125,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// test fails until the fingerprints **and** this constant are updated together.
 /// Read `PipelineFingerprint` for exactly which stages those are — the gate is not
 /// whole-pipeline coverage and must not be described as if it were.
-pub const PIPELINE_VERSION: u32 = 5;
+pub const PIPELINE_VERSION: u32 = 6;
 
 /// The recorded ⟨`pipeline_version`, fingerprints, behavior⟩ rows — the
 /// machine-enforced half of "the behavioral version cannot silently drift" (see
@@ -293,6 +294,20 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // and `base` held. The same shape as the second refresh: a recipe still naming a
         // removed key is rejected with a migration error, not rendered differently.
         recipe: "9ca8dcca192e605a",
+        // Frozen literal, not `PIPELINE_BEHAVIOR`: the v6 bump took the constant over
+        // (see v1's to v4's rows for the same handover).
+        behavior: "gain-map-hdr default output (dual-dialect gain-map JPEG), roll-fixed \
+                   nominal Dmax 1.3 density, mid-grey-anchored sigmoid curve, \
+                   neutral-patch-calibrated per-channel density gain, no auto white balance",
+    },
+    // v6 — the default *render* changed: the sigmoid retired and the default curve became
+    // the exponential at the fixed decode's configuration (2026-09-23). `base` is
+    // unchanged: film-base estimation is upstream of the curve.
+    PipelineFingerprint {
+        pipeline_version: 6,
+        render: "752e701021a41307",
+        base: "01c5acccc36a3388",
+        recipe: "dbac245a916032f2",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -366,30 +381,26 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 /// - `render` hashes **exactly** the per-pixel values a `stages::golden` test
 ///   already pins as literal bit patterns, so hashing adds a version label without
 ///   widening the numeric surface by one value. Which test depends on the row: the
-///   **v2 and v3** render is the mid-grey-anchored sigmoid at `NOMINAL_DMAX =
-///   1.3`, pinned by `golden_new_default_is_bit_identical` — the two share it,
-///   because v3 changed the default *preset* and not the reconstruction; the **v1**
-///   render is
-///   the exponential straight line at gamma 1.0 / anchor 2.0, which is no longer a
-///   default but is still pinned by
-///   `golden_density_exponential_reference_is_bit_identical`.
+///   **v6** render is the exponential at the fixed decode's configuration, pinned by
+///   `golden_new_default_is_bit_identical`; the **v1** render is the exponential
+///   straight line at gamma 1.0 / anchor 2.0, still pinned by
+///   `golden_density_exponential_reference_is_bit_identical`. The v2–v5 renders were
+///   the retired sigmoid; their rows are history, and the golden that pinned them
+///   left with the curve.
 ///
-///   **The two rows' cross-platform claims are not equally strong, and saying so
-///   matters more than sounding confident.** The exponential vectors have been
-///   green on macOS/aarch64 *and* CI's x86_64 Linux runner for as long as this gate
-///   has existed — observed agreement, not an argument. The v2 vector has no such
-///   history: it was captured on this host on 2026-08-08, and the sigmoid evaluates
-///   `10f32.powf` and `log10` several times per sample (`algo::sigmoid`) where the
-///   exponential evaluated one `10^`, so there is more libm surface for a ~1-ULP
-///   divergence to land on. Its cross-target agreement is therefore a **prediction
-///   that CI's Linux runner validates**, not prior agreement being restated. If
-///   that runner ever reds on `golden_new_default_is_bit_identical`, the failure is
-///   the vector's — pick sample values that do agree, per CLAUDE.md's rule — not
-///   the gate's, and not a real behavior change. **And that is not a remote
-///   possibility:** `algo/characteristic-curve-coverage` established that x86_64 and
-///   macOS return different `f32` results from `log10f` on two samples of this very
-///   vector under the characteristic curve. Whether the sigmoid's own intermediates
-///   land anywhere similar is untested, so the v2/v4 watch item stands.
+///   **The two claims are not equally strong, and saying so matters more than
+///   sounding confident.** The v1 vectors have been green on macOS/aarch64 *and* CI's
+///   x86_64 Linux runner for as long as this gate has existed — observed agreement,
+///   not an argument. The v6 vector was captured on this host on 2026-09-23; it
+///   evaluates the same one `log10` and one `10^` per sample as v1, but at a different
+///   slope and anchor, so its cross-target agreement is a **prediction that CI's Linux
+///   runner validates**. If that runner ever reds on
+///   `golden_new_default_is_bit_identical`, the failure is the vector's — pick sample
+///   values that do agree, per CLAUDE.md's rule — not the gate's, and not a real
+///   behavior change. **And that is not a remote possibility:**
+///   `algo/characteristic-curve-coverage` established that x86_64 and macOS return
+///   different `f32` results from `log10f` on two samples of this very vector under
+///   the characteristic curve.
 ///   `stages::golden::reachable_window` is the tool for settling it — it enumerates
 ///   what a conforming libm can return — but note a fingerprint has no tolerance
 ///   window to absorb the answer the way a golden does.
@@ -435,7 +446,7 @@ pub struct PipelineFingerprint {
 /// row must carry *this* string, and no two rows may share a behavior — which fails
 /// for both ways of forgetting to update it.
 ///
-/// **Rewritten for v2, not amended.** This text describes whatever
+/// **Rewritten at each bump, not amended.** This text describes whatever
 /// [`PIPELINE_VERSION`] currently is, so a version bump replaces it outright: the
 /// v2 string below was written fresh for the 2026-08-08 default render, and v1's
 /// final text moved into its row in [`PIPELINE_FINGERPRINTS`] as a frozen literal.
@@ -449,8 +460,9 @@ pub struct PipelineFingerprint {
 /// step that is no longer part of any *default* render, there being no default).
 /// The v1 row records the outcome; read it before amending anything here.
 pub const PIPELINE_BEHAVIOR: &str = "gain-map-hdr default output (dual-dialect gain-map \
-     JPEG), roll-fixed nominal Dmax 1.3 density, mid-grey-anchored sigmoid curve, \
-     neutral-patch-calibrated per-channel density gain, no auto white balance";
+     JPEG), exponential density curve at the fixed decode's configuration (mid-grey 0.62 \
+     density above the film base, contrast 2.0), neutral-patch-calibrated per-channel \
+     density gain, no auto white balance";
 
 /// The short git commit hash, or `None` when the build could not determine it
 /// (source tarball / no `git` / not this package's repository). `None` is reported
@@ -825,7 +837,7 @@ mod drift_gate {
 
         // (b) the reconstruction side — the density curve, the part `render` mostly
         // exists to pin.
-        let perturbed_recon = Reconstruction::Density {
+        let perturbed_recon = Reconstruction {
             density: DensityParams::default(),
             curve: DensityCurve::Exponential(ExponentialParams {
                 gamma: 1.05,

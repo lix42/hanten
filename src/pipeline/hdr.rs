@@ -109,11 +109,11 @@ pub fn sdr_range_warning(content_light: ContentLightLevel) -> Option<String> {
             "HDR output carries an SDR-range signal: the brightest pixel measures {} nits, \
              at or below the {reference_white}-nit reference white, so nothing in this frame \
              uses the {:.0}-nit headroom the container and report advertise. Two common \
-             causes: the resolved Dmax anchor is too high for this roll, which darkens the \
-             whole render — measure the roll's own anchor with `hanten estimate --d-max-region` \
-             and pass it as `--d-max` — or the frame's content genuinely never rises above \
-             reference white, in which case an SDR preset delivers the same picture in a \
-             more compatible container.",
+             causes: the render is placed too dark for this roll — raise \
+             `--print-exposure`, which every display preset and curve accepts — or the \
+             frame's content genuinely \
+             never rises above reference white, in which case an SDR preset delivers the \
+             same picture in a more compatible container.",
             content_light.max_cll_nits, TARGET_PEAK_NITS,
         )
     })
@@ -475,11 +475,10 @@ fn above_range_error(index: usize, luminance: f32, tone: DisplayTone) -> NcError
          {LINEAR_HEADROOM}), which this mode has no curve to roll off. Note this \
          ceiling is the peak, not reference white: content between the two is exactly \
          the headroom an HDR rendition carries, and only what exceeds the peak fails. \
-         Three things reach here: the reconstruction may exceed the peak, a print \
-         control applied before this render may have lifted it there \
-         (--print-exposure, --white-balance / --auto-wb, --linear-range), or the \
-         shoulder may simply be wanted. So: keep the print controls neutral, bound the \
-         reconstruction, or {remedy}."
+         Two things reach here: the reconstruction may exceed the peak (no shipped \
+         curve is bounded), or a print control applied before this render may have \
+         lifted it there (--print-exposure, --white-balance / --auto-wb, \
+         --linear-range). So: lower --print-exposure until the frame fits, or {remedy}."
     ))
 }
 
@@ -751,26 +750,20 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::reconstruct;
+    use crate::algo::FilmRgbImage;
     use crate::pipeline::display_tone::Headroom;
     use crate::pipeline::render_split::{SharedDisplaySource, display_source};
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
-    use crate::types::{FilmBase, LinearImage, PrintParams, Reconstruction};
+    use crate::types::{LinearImage, PrintParams};
 
     fn close(actual: f32, expected: f32) {
         assert!((actual - expected).abs() < 2e-5, "{actual} != {expected}");
     }
 
     fn shared_from_film_rgb(rgb: &[f32]) -> SharedDisplaySource {
-        let scan = rgb.iter().map(|value| 1.0 - value).collect();
-        let image = LinearImage::new((rgb.len() / 3) as u32, 1, scan, None).unwrap();
-        let (film, _) = reconstruct(
-            &image,
-            &FilmBase::from([1.0; 3]),
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
+        let film = FilmRgbImage::fixture(
+            LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap(),
+        );
         display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap()
     }
 
@@ -1030,7 +1023,13 @@ mod tests {
         assert_eq!(at_white.max_cll_nits, REFERENCE_WHITE_NITS as u16);
         let message = sdr_range_warning(at_white).expect("a 203-nit peak must warn");
         assert!(message.contains("203"), "{message}");
-        assert!(message.contains("--d-max-region"), "{message}");
+        // The remedy names a lever every curve accepts; it used to advise measuring
+        // `--d-max`, which the base-derived default never consults.
+        assert!(message.contains("--print-exposure"), "{message}");
+        assert!(!message.contains("--d-max"), "{message}");
+        // Nor an `--anchor-*` flag: the characteristic curve refuses the whole family,
+        // and this warning cannot see which curve ran.
+        assert!(!message.contains("--anchor"), "{message}");
 
         // Darker still, obviously.
         let dark = render_linear(&shared_from_film_rgb(&[0.05; 3]), DisplayTone::DEFAULT)

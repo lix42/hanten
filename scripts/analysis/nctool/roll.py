@@ -1,8 +1,9 @@
 """Manifest-driven roll calibration, conversion, and analysis.
 
 This module turns the manual workflow in ``docs/using-nc.md`` into one command:
-measure Dmin from the manifest's unexposed frame, measure Dmax from its leader,
-freeze both into a partial recipe, and run ``hanten roll`` over every real frame.
+measure Dmin from the manifest's unexposed frame (and, on request, Dmax from its
+leader), freeze them into a partial recipe, and run ``hanten roll`` over every real
+frame. Dmax is opt-in because the default anchor placement never reads it.
 The durable ``tags.json`` and ``roll-report.json`` can be normalized into a
 deterministic ``analysis.json`` artifact. Ordinary diff tools can then compare
 configurations without opening their image pixels again.
@@ -66,7 +67,8 @@ def _asset_manifest(asset_root: Path) -> tuple[dict | None, str | None]:
     return data, None
 
 
-def _roll_frames(data: dict, roll: str) -> tuple[dict | None, str | None]:
+def _roll_frames(data: dict, roll: str,
+                 need_leader: bool = True) -> tuple[dict | None, str | None]:
     spec = data.get("rolls", {}).get(roll)
     if not isinstance(spec, dict):
         available = ", ".join(sorted(data.get("rolls", {}))) or "(none)"
@@ -82,9 +84,12 @@ def _roll_frames(data: dict, roll: str) -> tuple[dict | None, str | None]:
         if role not in by_role:
             return None, f"roll {roll!r} frame {frame['file']} has unsupported role {role!r}"
         by_role[role].append(frame)
-    if len(by_role["unexposed"]) != 1 or len(by_role["leader"]) != 1:
-        return None, (f"roll {roll!r} needs exactly one unexposed and one leader frame; "
-                      f"found {len(by_role['unexposed'])} and {len(by_role['leader'])}")
+    if len(by_role["unexposed"]) != 1:
+        return None, (f"roll {roll!r} needs exactly one unexposed frame; "
+                      f"found {len(by_role['unexposed'])}")
+    if need_leader and len(by_role["leader"]) != 1:
+        return None, (f"roll {roll!r} needs exactly one leader frame to measure Dmax; "
+                      f"found {len(by_role['leader'])}")
     if not by_role["real"]:
         return None, f"roll {roll!r} has no real frames to convert"
     return by_role, None
@@ -144,9 +149,9 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
     result = json.loads(json.dumps(base))
     for key, value in overlay.items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):
-            # Tagged recipe objects have disjoint key sets. Switching sigmoid to
-            # exponential while retaining the default sigmoid's contrast/toe/etc.
-            # would create a recipe nc correctly rejects as mixed-curve input.
+            # Tagged recipe objects have disjoint key sets. Switching exponential to
+            # characteristic while retaining the exponential's gamma/anchor would
+            # create a recipe nc correctly rejects as mixed-curve input.
             old_type, new_type = result[key].get("type"), value.get("type")
             result[key] = (json.loads(json.dumps(value))
                            if new_type is not None and old_type != new_type
@@ -156,7 +161,7 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
     return result
 
 
-def _freeze_recipe(base: dict, dmin: list[float], dmax: float,
+def _freeze_recipe(base: dict, dmin: list[float], dmax: float | None,
                    film_type: str | None, preset: str | None,
                    exposure: float | None) -> tuple[dict | None, str | None]:
     """Overlay measured calibration and the convenience flags on a partial recipe."""
@@ -168,17 +173,18 @@ def _freeze_recipe(base: dict, dmin: list[float], dmax: float,
     if not isinstance(calibration, dict):
         return None, "recipe `calibration` must be an object"
     calibration["film_base"] = {"explicit": dmin}
-    calibration["dmax"] = {"explicit": dmax}
+    # Only a measured or stated reference is frozen: the default placement reads none,
+    # and a frozen one it never reads warns on every frame (and fails `--strict`).
+    if dmax is not None:
+        calibration["dmax"] = {"explicit": dmax}
 
     reconstruction = recipe.setdefault("reconstruction", {})
     if not isinstance(reconstruction, dict):
         return None, "recipe `reconstruction` must be an object"
-    if reconstruction.get("type", "density") == "simple":
-        return None, "manifest roll conversion requires density reconstruction so Dmax can be frozen"
-    curve = reconstruction.setdefault("curve", {"type": "sigmoid"})
+    curve = reconstruction.setdefault("curve", {"type": "exponential"})
     if not isinstance(curve, dict):
         return None, "recipe `reconstruction.curve` must be an object"
-    curve.setdefault("type", "sigmoid")
+    curve.setdefault("type", "exponential")
 
     if film_type:
         input_cfg = recipe.setdefault("input", {})
@@ -235,7 +241,15 @@ def cmd_convert(args) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
     assert data is not None
-    roles, error = _roll_frames(data, args.roll)
+    if args.measure_dmax and args.d_max is not None:
+        print("error: --measure-dmax and --d-max are alternatives; pass one",
+              file=sys.stderr)
+        return 2
+    if args.dmax_region and not args.measure_dmax:
+        print("error: --dmax-region names the leader region --measure-dmax reads; "
+              "pass --measure-dmax with it", file=sys.stderr)
+        return 2
+    roles, error = _roll_frames(data, args.roll, need_leader=args.measure_dmax)
     if error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -249,24 +263,32 @@ def cmd_convert(args) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
     assert defaults is not None and partial is not None
+    # `hanten params` no longer writes `reconstruction.type`, so a recipe still
+    # spelling the old `"density"` tag would read as a variant switch in the merge and
+    # replace the whole default reconstruction. nc accepts the tag; drop it here.
+    reconstruction = partial.get("reconstruction")
+    if isinstance(reconstruction, dict) and reconstruction.get("type") == "density":
+        reconstruction.pop("type")
     base = _deep_merge(defaults, partial)
 
-    unexposed, leader = roles["unexposed"][0], roles["leader"][0]
+    unexposed = roles["unexposed"][0]
+    leader = roles["leader"][0] if args.measure_dmax else None
     dmin_region, error = _region(args.dmin_region, unexposed, "Dmin")
     if error:
         print(f"error: {error}", file=sys.stderr)
         return 2
-    dmax_region, error = _region(args.dmax_region, leader, "Dmax")
-    if error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
-    assert dmin_region and dmax_region
+    dmax_region = None
+    if leader is not None:
+        dmax_region, error = _region(args.dmax_region, leader, "Dmax")
+        if error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+    assert dmin_region
 
     operational = ["--max-memory", args.max_memory]
     strict = ["--strict"] if args.strict_estimate else []
     film_type = ["--film-type", args.film_type] if args.film_type else []
     unexposed_path = root / unexposed["file"]
-    leader_path = root / leader["file"]
     all_frames = roles["unexposed"] + roles["leader"] + roles["real"]
     sources = []
     for frame in all_frames:
@@ -304,16 +326,19 @@ def cmd_convert(args) -> int:
         print("error: Dmin report has no finite three-channel `film_base`", file=sys.stderr)
         return 1
 
+    dmax: float | None = None
+    dmax_report = None
+    dmax_source = "not-frozen"
     if args.d_max is not None:
         if not math.isfinite(args.d_max) or args.d_max <= 0:
             print("error: --d-max must be finite and greater than zero", file=sys.stderr)
             return 2
         dmax = args.d_max
-        dmax_report = None
         dmax_source = "explicit-override"
-    else:
+    elif leader is not None:
         dmax_report, error = _run_json(
-            [args.nc, "estimate", str(leader_path), "--film-base", ",".join(map(str, dmin)),
+            [args.nc, "estimate", str(root / leader["file"]), "--film-base",
+             ",".join(map(str, dmin)),
              "--d-max-region", dmax_region, *film_type, *strict, *operational],
             "Dmax estimation")
         if error:
@@ -326,7 +351,8 @@ def cmd_convert(args) -> int:
             return 1
         dmax_source = "measured-reference"
 
-    recipe, error = _freeze_recipe(base, dmin, float(dmax), args.film_type,
+    recipe, error = _freeze_recipe(base, dmin, None if dmax is None else float(dmax),
+                                   args.film_type,
                                    args.output_preset, args.print_exposure)
     if error:
         print(f"error: {error}", file=sys.stderr)
@@ -352,8 +378,10 @@ def cmd_convert(args) -> int:
         "roll": args.roll,
         "dmin": {"frame": unexposed["file"], "region": dmin_region,
                  "mode": args.dmin_mode, "value": dmin, "report": dmin_report},
-        "dmax": {"source": dmax_source, "frame": leader["file"], "region": dmax_region,
-                 "value": float(dmax), "report": dmax_report},
+        "dmax": {"source": dmax_source,
+                 "frame": leader["file"] if leader is not None else None,
+                 "region": dmax_region,
+                 "value": None if dmax is None else float(dmax), "report": dmax_report},
     }
     _write_json(recipe_path, recipe)
     _write_json(calibration_path, calibration)

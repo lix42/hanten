@@ -11,7 +11,7 @@ requirement that a single winner emerge.
 
 ## Fixtures
 
-Frozen in [`scripts/sigmoid-baseline/fixtures.json`](../../scripts/sigmoid-baseline/fixtures.json)
+Frozen in [`scripts/analysis/fixtures.json`](../../scripts/analysis/fixtures.json)
 (schema 1) — three rolls, ten `real` frames, with each patch's rectangle *and its
 user-confirmed semantics*. Reproduce with:
 

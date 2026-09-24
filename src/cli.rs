@@ -42,8 +42,8 @@ use crate::types::{
     DensityCurve, DensityCurveType, DensityParams, DisplayToneCurve, DmaxInput, DmaxSource,
     EncodeOutcome, EncodeReport, FilmBase, FilmBaseSource, FilmStock, FilmType, InputParams,
     LinearImage, MeaningAssertion, MeasureParams, NcError, OutDepth, OutputParams, OutputPreset,
-    OutputStats, PrintParams, Reconstruction, ReconstructionType, Result, SigmoidParams,
-    TransferAssertion, WbSource, check_measure_inset,
+    OutputStats, PrintParams, REMOVED_SIGMOID_CURVE, REMOVED_SIMPLE_RECONSTRUCTION, Reconstruction,
+    Result, TransferAssertion, WbSource, check_measure_inset,
 };
 use crate::version::{self, Identity};
 
@@ -252,15 +252,19 @@ pub struct ConvertArgs {
     /// suffix is never rewritten, so it must be one that preset accepts.
     #[arg(short = 'o', long, value_name = "PATH")]
     pub output: PathBuf,
-    /// Reconstruction type (default `density`).
-    #[arg(long, value_enum)]
-    pub reconstruction: Option<ReconstructionType>,
-    /// Density-to-positive curve (with `--reconstruction density`; default
-    /// `sigmoid`).
-    #[arg(long = "density-curve", value_enum)]
+    /// Removed with `simple` reconstruction: density is the only reconstruction.
+    /// Hidden, and kept only to emit a migration error — there is no alias.
+    #[arg(long, hide = true, value_name = "TYPE")]
+    pub reconstruction: Option<String>,
+    /// Density-to-positive curve: `exponential` (the default — the straight line in
+    /// density, mid-grey pinned 0.62 above the film base) or `characteristic` (invert
+    /// the stock's published curve; see --film-stock).
+    // A custom parser rather than `value_enum`, so the retired `sigmoid` gets a
+    // migration message instead of clap's generic unknown-value error.
+    #[arg(long = "density-curve", value_name = "CURVE", value_parser = parse_density_curve)]
     pub density_curve: Option<DensityCurveType>,
     /// Named reconstruction + display bundle: `characteristic-generic`,
-    /// `characteristic-stock`, `characteristic-aim`, `sigmoid-knees`, `sigmoid-flat`.
+    /// `characteristic-stock`, `characteristic-aim`.
     /// Sets the density curve, its per-channel gain, `--print-exposure` and
     /// `--display-tone` together, each carrying the exposure that keeps brightness steady
     /// when you switch; individual flags still win over it.
@@ -272,8 +276,8 @@ pub struct ConvertArgs {
     #[arg(long = "preset", value_name = "NAME")]
     pub preset: Option<String>,
     /// Removed: the pre-reconstruction algorithm selector. Kept hidden only to
-    /// emit a migration error pointing at `--reconstruction`/`--density-curve`
-    /// (nc is unreleased — no aliases).
+    /// emit a migration error pointing at `--density-curve` (nc is unreleased — no
+    /// aliases).
     #[arg(long, hide = true, value_name = "NAME")]
     pub algorithm: Option<String>,
 
@@ -288,7 +292,7 @@ pub struct ConvertArgs {
     #[command(flatten)]
     pub dmax: DmaxOverrides,
     #[command(flatten)]
-    pub sigmoid: SigmoidOverrides,
+    pub sigmoid: RemovedSigmoidFlags,
     #[command(flatten)]
     pub anchor: AnchorOverrides,
     #[command(flatten)]
@@ -497,7 +501,7 @@ pub struct MeasureOverrides {
 /// `reconstruction.density.scale`/`.offset`, the regional-balance flags ⇒ the
 /// same-named `reconstruction.density` fields, and `--density-gamma` ⇒
 /// `reconstruction.curve.gamma` (exponential curve only — a merge-time usage
-/// error under sigmoid, never ignored).
+/// error under the characteristic curve, never ignored).
 ///
 /// The two `balance_range` flags are mutually exclusive (clap rejects passing
 /// both), like the [`DmaxOverrides`] quartet: whichever is given replaces the
@@ -565,61 +569,50 @@ pub struct DmaxOverrides {
     /// underexposed frames and breaks roll consistency — grading, not conversion).
     #[arg(long = "auto-d-max", conflicts_with = "no_d_max")]
     pub auto_d_max: bool,
-    /// Disable the anchor — scene-referred output (base → 1.0, detail above).
+    /// No reference density (0). Scene-referred output (base → 1.0, detail above)
+    /// under `--anchor-white-at-reference`; the default anchor reads no reference.
     #[arg(long = "no-d-max")]
     pub no_d_max: bool,
 }
 
-/// Sigmoid-curve overrides (design-spec §7.3/§9, `density-curve = sigmoid`).
-/// The flags are `--sigmoid-*`-prefixed for namespacing; the recipe keys drop
-/// the prefix (`--sigmoid-contrast` ⇒ `reconstruction.curve.contrast`). Each is a
-/// merge-time usage error when the resolved curve is not sigmoid — never silently
-/// ignored. (`--d-max` is *not* one of these: it sets `calibration.dmax`, a roll
-/// measurement every reconstruction accepts.)
+/// The sigmoid curve's flags, removed with it (`nf-retire/sigmoid-and-simple`),
+/// including the two `--anchor-*` aliases that kept its prefix. Hidden, and kept only
+/// to emit a migration error — there is no alias.
 #[derive(Args, Debug, Default)]
-pub struct SigmoidOverrides {
-    /// Mid-density slope of the S-curve (the `--density-gamma` analogue).
-    #[arg(long)]
-    pub sigmoid_contrast: Option<f32>,
-    /// Toe (shadow) knee width in log10 density units; 0 disables the toe.
-    #[arg(long)]
-    pub sigmoid_toe: Option<f32>,
-    /// Shoulder (highlight) knee width in log10 density units; 0 disables it.
-    #[arg(long)]
-    pub sigmoid_shoulder: Option<f32>,
+pub struct RemovedSigmoidFlags {
+    #[arg(long, hide = true, value_name = "F")]
+    pub sigmoid_contrast: Option<String>,
+    #[arg(long, hide = true, value_name = "W")]
+    pub sigmoid_toe: Option<String>,
+    #[arg(long, hide = true, value_name = "W")]
+    pub sigmoid_shoulder: Option<String>,
+    #[arg(long, hide = true, value_name = "F")]
+    pub sigmoid_mid_fraction: Option<String>,
+    #[arg(long, hide = true)]
+    pub sigmoid_white_at_d_max: bool,
 }
 
 /// Anchor-placement overrides (design-spec §7.3/§9,
-/// `reconstruction.curve.anchor`) — **curve-neutral**, unlike the `--sigmoid-*`
-/// family above.
-///
-/// Placement is orthogonal to curve shape and both parametric curves carry the same
-/// [`AnchorPlacement`], so one flag family serves both rather than two parallel
-/// prefixed sets. The two original spellings stay as aliases: `--sigmoid-mid-fraction`
-/// and `--sigmoid-white-at-d-max` predate the sharing and appear in recipes and docs.
+/// `reconstruction.curve.anchor`) — the exponential's [`AnchorPlacement`].
 ///
 /// The four are mutually exclusive — a placement is one rule, not a set of fields.
 #[derive(Args, Debug, Default)]
 pub struct AnchorOverrides {
     /// Pin mid-grey (18%) at fraction F of the reference density, letting display
-    /// white fall above it — the sigmoid's default rule, F 0.5. Raising F renders
-    /// the roll darker, lowering it brighter.
+    /// white fall above it. Raising F renders the roll darker, lowering it brighter.
     #[arg(
         long = "anchor-mid-fraction",
-        alias = "sigmoid-mid-fraction",
         value_name = "F",
         conflicts_with_all = ["anchor_white_at_reference", "anchor_black_floor", "anchor_mid_offset"]
     )]
     pub anchor_mid_fraction: Option<f32>,
-    /// Pin display white *at* the reference density (the exponential's default and
-    /// the pre-2026-08 sigmoid rule). Kept as an explicit diagnostic: at a
-    /// photographic contrast it renders midtones 2.5–3.6 stops dark, because
-    /// steepening the slope pivots the line about white. Sensible only when the
-    /// reference is itself a diffuse white — and measuring that off frame content is
-    /// per-frame exposure correction, which the default must not do.
+    /// Pin display white *at* the reference density. Kept as an explicit
+    /// diagnostic: at a photographic contrast it renders midtones 2.5–3.6 stops dark,
+    /// because steepening the slope pivots the line about white. Sensible only when
+    /// the reference is itself a diffuse white — and measuring that off frame content
+    /// is per-frame exposure correction, which the default must not do.
     #[arg(
         long = "anchor-white-at-reference",
-        alias = "sigmoid-white-at-d-max",
         conflicts_with_all = ["anchor_black_floor", "anchor_mid_offset"]
     )]
     pub anchor_white_at_reference: bool,
@@ -634,7 +627,8 @@ pub struct AnchorOverrides {
     )]
     pub anchor_black_floor: Option<f32>,
     /// Pin mid-grey (18%) at density D *above the film base* rather than at a
-    /// fraction of the reference. Reference-free, like `--anchor-black-floor`.
+    /// fraction of the reference — the default rule, D 0.62. Reference-free, like
+    /// `--anchor-black-floor`.
     #[arg(long = "anchor-mid-offset", value_name = "D")]
     pub anchor_mid_offset: Option<f32>,
 }
@@ -704,11 +698,11 @@ pub struct PrintOverrides {
     /// Which tone curve the named display renderers apply (recipe key
     /// `print.display_tone`, default `shoulder`). `none` skips the display
     /// shoulder entirely, leaving the reconstruction to place every tone — gamut
-    /// mapping and the transfer encode still run. It suits a reconstruction that
-    /// is already bounded at the render's own ceiling — reference white on the SDR
-    /// presets, the 1000-nit mastering peak (≈4.93x reference white) on the HDR ones
-    /// — which a sigmoid curve with `shoulder > 0` and neutral print gains is.
-    /// Anything above that ceiling is then a loud error rather than a quiet clip. Display presets only, and it takes no knee
+    /// mapping and the transfer encode still run. Anything above the render's own
+    /// ceiling — reference white on the SDR presets, the 1000-nit mastering peak
+    /// (≈4.93x reference white) on the HDR ones — is a loud error rather than a quiet
+    /// clip; no shipped reconstruction is bounded at white, so on the SDR presets
+    /// lower --print-exposure until the frame fits. Display presets only, and it takes no knee
     /// width: a *non-default* `--highlight-compress` is rejected beside `none`
     /// rather than silently ignored (the default `0` asks for nothing and is
     /// accepted).
@@ -955,24 +949,21 @@ fn strip_old_default_output_selectors(v: &mut serde_json::Value) -> bool {
 /// # Why a name rather than four flags
 ///
 /// Every configuration worth shipping is a *bundle* whose numbers are meaningless
-/// separately. The `print_exposure` that lands one brightness runs **1.59 to 2.17**
-/// across the reconstructions — because they place mid-grey differently, not because
-/// anyone preferred a different look — and [`SigmoidKnees`](Self::SigmoidKnees) cannot
-/// use that knob at all. Handing a user four coupled numbers is handing them four ways
-/// to get one look wrong.
+/// separately. The `print_exposure` that lands one brightness runs **1.59 to 1.91**
+/// across the presets — because they place mid-grey differently, not because
+/// anyone preferred a different look. Handing a user four coupled numbers is handing
+/// them four ways to get one look wrong.
 ///
 /// Each carries the exposure that lands scene mid-grey (0.18) at 0.4525, solved on
 /// `portra-400` — the brightness approved on 2026-09-15. That is a **calibration
 /// convenience, not a promise about the render**: it means switching preset changes the
 /// look rather than the brightness, so a comparison is about the reconstruction and the
 /// display tone. It is *not* a claim that two presets agree, nor that mid-grey lands
-/// alike on every stock — on another film the parametric presets drift with how well they
-/// model it, by up to about half a stop, and that drift is a property of the
+/// alike on every stock — on another film the generic profile drifts with how well it
+/// models it, by up to about half a stop, and that drift is a property of the
 /// reconstruction rather than a defect to be tuned out.
 /// `pipeline::stages::midtone_placement::presets_land_the_calibration_target_on_the_calibration_stock`
-/// asserts the calibration stock and prints the rest;
-/// `each_candidate_look_needs_its_own_print_exposure` fails if the spread between the
-/// looks ever collapses to where one shared default would serve.
+/// asserts the calibration stock and prints the rest.
 ///
 /// # It is a CLI-only expansion, not a recipe key
 ///
@@ -996,6 +987,9 @@ fn strip_old_default_output_selectors(v: &mut serde_json::Value) -> bool {
 /// flags still win over the preset, which is what lets one be used as a starting point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
+// The variants spell the `--preset` names, which since the sigmoid retired all share a
+// prefix; `nf-retire/characteristic` removes the rest.
+#[allow(clippy::enum_variant_names)]
 pub enum ConversionPreset {
     /// The characteristic curve on the derived generic C-41 profile — no
     /// `--film-stock` needed, and the proposed future default
@@ -1014,23 +1008,11 @@ pub enum ConversionPreset {
     /// disagreeing with each other), which is why it is a named option rather than a
     /// candidate default.
     CharacteristicAim,
-    /// The shipped sigmoid with its toe and shoulder, rendered with **no display tone**
-    /// — the reconstruction's own knees carry the character.
-    ///
-    /// **Its brightness lives in the anchor, and that is forced.** `--display-tone none`
-    /// relies on the reconstruction being bounded at the render's ceiling, while
-    /// `print_exposure` is a scalar gain applied *after* the curve, so any positive value
-    /// pushes the shoulder past reference white and the range check refuses the frame
-    /// (measured on a real Ektar scan at `+0.70`: luminance 1.6236, exactly `2^0.70`).
-    /// Moving the anchor instead places mid-grey *within* the bounded range;
-    /// [`ANCHOR_MID_FRACTION`](Self::ANCHOR_MID_FRACTION) lands the shared target to
-    /// 0.027 stop.
-    SigmoidKnees,
-    /// The sigmoid with **neither** knee, the character carried by extended Reinhard —
-    /// the reconstruction/render split as `algo/reconstruction-render-curve-split`
-    /// measured it, on the parametric curve.
-    SigmoidFlat,
 }
+
+/// Preset names retired with the sigmoid curve (`nf-retire/sigmoid-and-simple`),
+/// refused by name rather than as unknown.
+const REMOVED_CONVERSION_PRESETS: [&str; 2] = ["sigmoid-knees", "sigmoid-flat"];
 
 /// What a [`ConversionPreset`] resolves to. Only the four knobs a preset owns: the
 /// recipe's other fields (regional balance, film base, white balance, output preset)
@@ -1061,19 +1043,11 @@ impl ConversionPreset {
     /// [`OutputPreset::ALL`] precedent, where two hand-written "accepted: …" lists both
     /// went stale the moment a preset shipped, hiding exactly the name the user reached
     /// for.
-    pub const ALL: [ConversionPreset; 5] = [
+    pub const ALL: [ConversionPreset; 3] = [
         ConversionPreset::CharacteristicGeneric,
         ConversionPreset::CharacteristicStock,
         ConversionPreset::CharacteristicAim,
-        ConversionPreset::SigmoidKnees,
-        ConversionPreset::SigmoidFlat,
     ];
-
-    /// The anchor placement [`SigmoidKnees`](Self::SigmoidKnees) takes its brightness
-    /// from, against the shipped default of 0.50 — swept and pinned by
-    /// `pipeline::stages::midtone_placement::the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor`.
-    /// A *lower* fraction renders brighter.
-    pub const ANCHOR_MID_FRACTION: f32 = 0.28;
 
     /// The wire name, matching the `--preset` spelling.
     pub fn name(self) -> &'static str {
@@ -1081,8 +1055,6 @@ impl ConversionPreset {
             ConversionPreset::CharacteristicGeneric => "characteristic-generic",
             ConversionPreset::CharacteristicStock => "characteristic-stock",
             ConversionPreset::CharacteristicAim => "characteristic-aim",
-            ConversionPreset::SigmoidKnees => "sigmoid-knees",
-            ConversionPreset::SigmoidFlat => "sigmoid-flat",
         }
     }
 
@@ -1090,6 +1062,12 @@ impl ConversionPreset {
     /// (the [`OutputPreset::parse`] precedent).
     pub fn parse(s: &str) -> Result<Self> {
         let name = s.trim().to_ascii_lowercase();
+        if REMOVED_CONVERSION_PRESETS.contains(&name.as_str()) {
+            return Err(NcError::Usage(format!(
+                "conversion preset `{name}` was removed with the sigmoid curve — accepted: {}",
+                Self::accepted_list()
+            )));
+        }
         Self::ALL
             .into_iter()
             .find(|p| p.name() == name)
@@ -1119,17 +1097,8 @@ impl ConversionPreset {
     pub fn needs_film_stock(self) -> bool {
         match self {
             ConversionPreset::CharacteristicStock | ConversionPreset::CharacteristicAim => true,
-            ConversionPreset::CharacteristicGeneric
-            | ConversionPreset::SigmoidKnees
-            | ConversionPreset::SigmoidFlat => false,
+            ConversionPreset::CharacteristicGeneric => false,
         }
-    }
-
-    /// Whether this preset's brightness comes from the anchor rather than
-    /// `print_exposure` — see [`SigmoidKnees`](Self::SigmoidKnees) for why the two knobs
-    /// are incompatible by construction on that bundle.
-    pub fn brightness_is_in_the_anchor(self) -> bool {
-        matches!(self, ConversionPreset::SigmoidKnees)
     }
 
     /// Resolve the preset against the `--film-stock` the command line named (`None` when
@@ -1147,13 +1116,12 @@ impl ConversionPreset {
         let characteristic =
             |stock: FilmStock| DensityCurve::Characteristic(CharacteristicParams { stock });
         // The characteristic curve's own per-channel default: it already carries each
-        // stock's channel structure, so the parametric curves' `[1, 0.84, 0.73]`
+        // stock's channel structure, so the exponential's `[1, 0.84, 0.73]`
         // calibration would correct it twice. Resolved through the shared definition
         // rather than spelled here — `DensityParams::default_scale_for` is the single
         // one, and a literal would be a second that could drift from it.
         let characteristic_scale =
             DensityParams::default_scale_for(DensityCurveType::Characteristic);
-        let sigmoid_scale = DensityParams::default_scale_for(DensityCurveType::Sigmoid);
 
         Ok(match self {
             ConversionPreset::CharacteristicGeneric => PresetExpansion {
@@ -1194,27 +1162,6 @@ impl ConversionPreset {
                     display_tone: reinhard,
                 }
             }
-            ConversionPreset::SigmoidKnees => PresetExpansion {
-                curve: DensityCurve::Sigmoid(SigmoidParams {
-                    anchor: AnchorPlacement::MidAtDmaxFraction(Self::ANCHOR_MID_FRACTION),
-                    ..SigmoidParams::default()
-                }),
-                density_scale: sigmoid_scale,
-                // Not a taste and not a rounding of 0.70: this bundle *cannot* take a
-                // scalar gain after the curve at all. Its brightness is the anchor above.
-                print_exposure: 0.0,
-                display_tone: DisplayToneCurve::None,
-            },
-            ConversionPreset::SigmoidFlat => PresetExpansion {
-                curve: DensityCurve::Sigmoid(SigmoidParams {
-                    toe: 0.0,
-                    shoulder: 0.0,
-                    ..SigmoidParams::default()
-                }),
-                density_scale: sigmoid_scale,
-                print_exposure: 2.17,
-                display_tone: reinhard,
-            },
         })
     }
 
@@ -1275,7 +1222,7 @@ impl ConversionPreset {
 /// "`characteristic-generic`" from "someone typed those four values".
 ///
 /// `overridden` is what keeps the name honest. Flags win over a preset, so
-/// `--preset characteristic-aim --density-curve sigmoid` renders a sigmoid — and a block
+/// `--preset characteristic-aim --density-curve exponential` renders the exponential — and a block
 /// that named the preset and stopped there would be a report contradicting its own
 /// recipe. Listing the recipe paths the flags moved is the alternative to either
 /// refusing the combination or lying about it.
@@ -1309,8 +1256,8 @@ pub struct ConversionPresetResult {
 ///
 /// A **diff against the resolved config**, not a record of which flags were passed:
 /// those are different questions, and only this one answers "did the render end up
-/// being the bundle". `--preset sigmoid-flat --sigmoid-shoulder 0` passes a flag and
-/// changes nothing, so it is correctly not an override.
+/// being the bundle". `--preset characteristic-generic --film-stock generic-c41`
+/// passes a flag and changes nothing, so it is correctly not an override.
 fn conversion_preset_result(
     args: &ConvertArgs,
     recipe: Option<&ResolvedConfig>,
@@ -1327,19 +1274,14 @@ fn conversion_preset_result(
         .map(|n| FilmStock::parse(n).map_err(NcError::Usage))
         .transpose()?;
     let expansion = preset.expand(stock)?;
-    let (curve, scale) = match &cfg.reconstruction {
-        Reconstruction::Density { curve, density } => (Some(*curve), Some(density.scale)),
-        // Unreachable through `merge`, which refuses a preset over `simple`. Reported
-        // as "everything moved" rather than panicking: a report is diagnostics, and a
-        // future caller that reaches this state should see it, not crash.
-        Reconstruction::Simple => (None, None),
-    };
-    let expected_curve = expansion.curve;
     let overridden = [
-        ("reconstruction.curve", curve != Some(expected_curve)),
+        (
+            "reconstruction.curve",
+            cfg.reconstruction.curve != expansion.curve,
+        ),
         (
             "reconstruction.density.scale",
-            scale != Some(expansion.density_scale),
+            cfg.reconstruction.density.scale != expansion.density_scale,
         ),
         (
             "print.print_exposure",
@@ -1377,10 +1319,6 @@ fn reconstruction_after_preset(
     let Some(name) = args.preset.as_deref() else {
         return Ok(recipe.clone());
     };
-    let Reconstruction::Density { density, .. } = recipe else {
-        // `merge` refuses this pairing outright; nothing to baseline.
-        return Ok(recipe.clone());
-    };
     let preset = ConversionPreset::parse(name)?;
     let stock = args
         .density
@@ -1389,10 +1327,10 @@ fn reconstruction_after_preset(
         .map(|n| FilmStock::parse(n).map_err(NcError::Usage))
         .transpose()?;
     let expansion = preset.expand(stock)?;
-    Ok(Reconstruction::Density {
+    Ok(Reconstruction {
         density: DensityParams {
             scale: expansion.density_scale,
-            ..*density
+            ..recipe.density.clone()
         },
         curve: expansion.curve,
     })
@@ -1406,19 +1344,12 @@ fn reconstruction_after_preset(
 /// density lives in `calibration.dmax`, which no preset writes, so a recipe that differs
 /// only in its calibration correctly reports nothing here.
 fn preset_replaced_paths(recipe: &ResolvedConfig, cfg: &ResolvedConfig) -> Vec<&'static str> {
-    let curve_of = |c: &ResolvedConfig| match &c.reconstruction {
-        Reconstruction::Density { curve, density } => Some((*curve, density.scale)),
-        Reconstruction::Simple => None,
-    };
-    let (before, after) = (curve_of(recipe), curve_of(cfg));
+    let (before, after) = (&recipe.reconstruction, &cfg.reconstruction);
     [
-        (
-            "reconstruction.curve",
-            before.map(|b| b.0) != after.map(|a| a.0),
-        ),
+        ("reconstruction.curve", before.curve != after.curve),
         (
             "reconstruction.density.scale",
-            before.map(|b| b.1) != after.map(|a| a.1),
+            before.density.scale != after.density.scale,
         ),
         (
             "print.print_exposure",
@@ -1546,13 +1477,11 @@ impl CalibrationFragment {
 }
 
 /// Resolution diagnostics for the reconstruction that ran (design-spec §8's
-/// report shape): `{"type":"simple"}`, or `{"type":"density","curve":{…}}`
-/// with the resolved curve type and `dmax` resolution. Serialize-only.
+/// report shape): `{"curve":{…}}` with the resolved curve type and `dmax`
+/// resolution. Serialize-only. (The `type` tag went with `simple` reconstruction.)
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum ReconstructionResult {
-    Simple,
-    Density { curve: CurveResult },
+pub struct ReconstructionResult {
+    pub curve: CurveResult,
 }
 
 /// The resolved film stock and where its curve data came from.
@@ -1593,7 +1522,7 @@ pub struct StockResult {
 /// The resolved curve inside a density [`ReconstructionResult`].
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct CurveResult {
-    /// The curve type that ran (`"exponential"` / `"sigmoid"` / `"characteristic"`).
+    /// The curve type that ran (`"exponential"` / `"characteristic"`).
     #[serde(rename = "type")]
     pub curve_type: DensityCurveType,
     /// How far this frame fell outside the stock's published curve, per channel. The key is
@@ -1618,9 +1547,9 @@ pub struct CurveResult {
     /// and because a future revision of the same publication may carry different curves.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stock: Option<StockResult>,
-    /// The resolved **reference** density — the roll calibration (`calibration.dmax`). Since
-    /// `algo/reference-anchored-sigmoid` this is not necessarily the density that rendered
-    /// to `1.0`; see `anchor` / `anchor_value`.
+    /// The resolved **reference** density — the roll calibration (`calibration.dmax`). This
+    /// is not necessarily the density that rendered to `1.0`, and the default
+    /// base-derived placement does not read it at all; see `anchor` / `anchor_value`.
     pub dmax: DmaxResolution,
     /// The curve's anchor **placement rule** — which tone the reference pins
     /// (design-spec §7.3). Emitted for both parametric curves, which carry a rule since
@@ -1633,8 +1562,8 @@ pub struct CurveResult {
     pub anchor: Option<AnchorPlacement>,
     /// The **derived** anchor: the corrected density this render mapped to `1.0`, which
     /// sets the black floor at `10^(−contrast·anchor_value)`. Equal to `dmax.value` under
-    /// the `white-at-dmax` placement on either curve; larger under the sigmoid's default
-    /// mid-grey placement, and independent of it under the base-derived rules.
+    /// the `white-at-dmax` placement, larger under `mid-at-dmax-fraction`, and
+    /// independent of it under the base-derived rules (the default).
     ///
     /// The key is always present, but its value is `null` for the exponential's
     /// `dmax = none` under `white-at-dmax` — the render applies exactly `A = 0.0` there,
@@ -1713,67 +1642,63 @@ fn reconstruction_result(
     out_of_table: Option<crate::algo::film_stock::OutOfTable>,
     setting: DmaxSetting,
 ) -> ReconstructionResult {
-    match reconstruction {
-        Reconstruction::Simple => ReconstructionResult::Simple,
-        Reconstruction::Density { curve, .. } => {
-            // The reference is `calibration.dmax`, not a curve knob, so it is passed
-            // in. Reported inside the curve block regardless: this block records what the
-            // *render* resolved, and the curve is what consumed it — `dmax.provenance`
-            // says where the setting came from.
-            //
-            // **A curve that consumes no reference reports `none`, whatever was stated.**
-            // This block is the *resolution*, not the configuration: `characteristic`
-            // reads its reference off the published response, so naming the configured
-            // policy here would claim an anchor the render never placed (the
-            // false-provenance class `MasterAnchor` exists to close). The stated value is
-            // still visible — `recipe.calibration.dmax` echoes it, and
-            // `unconsumed_dmax_warning` says out loud that it was not read.
-            let policy = if curve.consumes_reference() {
-                DmaxPolicy::from(dmax_source)
-            } else {
-                DmaxPolicy::None
-            };
-            let provenance = match (policy, setting) {
-                (DmaxPolicy::Auto, _) => DmaxProvenance::AutoFrame,
-                (_, DmaxSetting::Cli) => DmaxProvenance::Cli,
-                (_, DmaxSetting::Recipe) => DmaxProvenance::Recipe,
-                (_, DmaxSetting::Default) => DmaxProvenance::Default,
-            };
-            ReconstructionResult::Density {
-                curve: CurveResult {
-                    curve_type: curve.curve_type(),
-                    out_of_table,
-                    dmax: DmaxResolution {
-                        policy,
-                        value: resolved_dmax,
-                        provenance,
-                    },
-                    // The placement rule and the anchor it derived. Both are needed for
-                    // this block to be self-contained: `dmax.value` is the reference, and
-                    // for the default sigmoid placement the density that actually rendered
-                    // to 1.0 is a *different* number. Without them a consumer has to
-                    // re-derive the anchor from the echoed recipe to know what the render
-                    // did — which is what "diagnostics" is supposed to spare them. Both
-                    // curves report it: under a base-derived rule the render never read
-                    // `dmax` at all, and nothing else in the block says so.
-                    anchor: curve.anchor(),
-                    anchor_value: curve_anchor,
-                    stock: match curve {
-                        DensityCurve::Characteristic(c) => {
-                            let sc = crate::algo::film_stock::curves_for(c.stock);
-                            Some(StockResult {
-                                name: c.stock,
-                                publication: sc.publication,
-                                revision: sc.revision,
-                                aims: sc.aims,
-                                d_min: sc.d_min,
-                            })
-                        }
-                        _ => None,
-                    },
-                },
-            }
-        }
+    let curve = &reconstruction.curve;
+    // The reference is `calibration.dmax`, not a curve knob, so it is passed
+    // in. Reported inside the curve block regardless: this block records what the
+    // *render* resolved, and the curve is what consumed it — `dmax.provenance`
+    // says where the setting came from.
+    //
+    // **A curve that consumes no reference reports `none`, whatever was stated.**
+    // This block is the *resolution*, not the configuration: `characteristic`
+    // reads its reference off the published response, so naming the configured
+    // policy here would claim an anchor the render never placed (the
+    // false-provenance class `MasterAnchor` exists to close). The stated value is
+    // still visible — `recipe.calibration.dmax` echoes it, and
+    // `unconsumed_dmax_warning` says out loud that it was not read.
+    let policy = if curve.consumes_reference() {
+        DmaxPolicy::from(dmax_source)
+    } else {
+        DmaxPolicy::None
+    };
+    let provenance = match (policy, setting) {
+        (DmaxPolicy::Auto, _) => DmaxProvenance::AutoFrame,
+        (_, DmaxSetting::Cli) => DmaxProvenance::Cli,
+        (_, DmaxSetting::Recipe) => DmaxProvenance::Recipe,
+        (_, DmaxSetting::Default) => DmaxProvenance::Default,
+    };
+    ReconstructionResult {
+        curve: CurveResult {
+            curve_type: curve.curve_type(),
+            out_of_table,
+            dmax: DmaxResolution {
+                policy,
+                value: resolved_dmax,
+                provenance,
+            },
+            // The placement rule and the anchor it derived. Both are needed for
+            // this block to be self-contained: `dmax.value` is the reference, and
+            // under every placement but `white-at-dmax` the density that actually
+            // rendered to 1.0 is a *different* number. Without them a consumer has to
+            // re-derive the anchor from the echoed recipe to know what the render
+            // did — which is what "diagnostics" is supposed to spare them. Under a
+            // base-derived rule the render never read `dmax` at all, and nothing
+            // else in the block says so.
+            anchor: curve.anchor(),
+            anchor_value: curve_anchor,
+            stock: match curve {
+                DensityCurve::Characteristic(c) => {
+                    let sc = crate::algo::film_stock::curves_for(c.stock);
+                    Some(StockResult {
+                        name: c.stock,
+                        publication: sc.publication,
+                        revision: sc.revision,
+                        aims: sc.aims,
+                        d_min: sc.d_min,
+                    })
+                }
+                _ => None,
+            },
+        },
     }
 }
 
@@ -2090,8 +2015,8 @@ enum MasterAnchor {
     RollFixedDmax,
     /// An anchor was placed, but from the film base — no reference was read.
     BaseDerived,
-    /// No anchor at all: `simple` has no curve stage, and `white-at-dmax` over
-    /// `dmax = none` is the scene-referred unity placement (`A = 0` exactly).
+    /// No anchor at all: `white-at-dmax` over `dmax = none` is the scene-referred
+    /// unity placement (`A = 0` exactly).
     NoAnchor,
     /// The `characteristic` curve: mid-grey sits where the **stock's published
     /// response** puts it, so no placement *rule* ran and no reference was read.
@@ -2107,9 +2032,7 @@ enum MasterAnchor {
 }
 
 fn master_anchor(reconstruction: &Reconstruction, dmax: DmaxSource) -> MasterAnchor {
-    let Reconstruction::Density { curve, .. } = reconstruction else {
-        return MasterAnchor::NoAnchor;
-    };
+    let curve = &reconstruction.curve;
     // **Before** the reference-free test, deliberately: this curve answers `None` to
     // `anchor()`, so that test would classify it as base-derived and the report would
     // claim a placement rule that never ran.
@@ -2163,9 +2086,9 @@ fn output_render_result(cfg: &ResolvedConfig) -> OutputRenderResult {
             false,
             "unclamped-linear-acescg-float-tiff",
             // A `Dmax` placement is *supported*, not guaranteed: validation
-            // deliberately accepts `dmax = none` for the exponential curve (the
-            // scene-referred unity placement), `simple` has no anchor at all, and a
-            // base-derived placement anchors without reading `Dmax`. Claiming one
+            // deliberately accepts `dmax = none` (under `white-at-dmax`, the
+            // scene-referred unity placement), and a base-derived placement anchors
+            // without reading `Dmax`. Claiming one
             // unconditionally would be a false provenance statement on exactly the runs
             // a consumer most needs to distinguish.
             match master_anchor(&cfg.reconstruction, cfg.calibration.dmax) {
@@ -2601,8 +2524,8 @@ struct LoadedRecipe {
     /// carried one. Provenance only — never applied, only compared (see
     /// [`pipeline_version_warning`]).
     meta_pipeline_version: Option<u32>,
-    /// How far the recipe left the density curve unpinned (an omitted `curve`, or a
-    /// sigmoid without `reconstruction.curve.anchor`) — the witness behind
+    /// How far the recipe left the density curve unpinned (an omitted `curve`, or an
+    /// exponential without its `gamma` or `anchor`) — the witness behind
     /// [`curve_default_warning`].
     unpinned_curve: Option<UnpinnedCurve>,
 }
@@ -2942,28 +2865,22 @@ fn json_kind(v: &serde_json::Value) -> &'static str {
 /// warning, because a different amount moved underneath each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UnpinnedCurve {
-    /// The recipe tags `curve.type = "sigmoid"` but omits `anchor`: the curve
-    /// itself is pinned and only its **placement rule** floats.
-    AnchorOnly,
     /// The recipe omits `reconstruction.curve` entirely, so the **curve itself**
-    /// floats — and it moved on 2026-08-08.
+    /// floats — and it moved on 2026-08-08 and again on 2026-09-23.
     WholeCurve,
-    /// The recipe pins the curve *type* but leaves a value to this build's default:
-    /// the exponential's `gamma` (1.0 → 2.0 in `pipeline_version` 2), either curve's
-    /// `dmax` (nominal 2.0 → 1.3, same version), or the exponential's `anchor`, which
-    /// this build always writes and which is a rendering decision that can move
-    /// (`algo/exponential-anchor-placement`).
+    /// The recipe pins the exponential by *type* but leaves its `gamma` or `anchor` to
+    /// this build's default — both of which have moved: `gamma` 1.0 → 2.0 in
+    /// `pipeline_version` 2, and `anchor` `white-at-dmax` → `mid-at-base-offset` in 6.
     ///
     /// Narrower than [`WholeCurve`](Self::WholeCurve) — the curve is the one the
     /// author chose — and easy to miss for exactly that reason: the recipe *looks*
-    /// pinned. A recipe reading `{"curve":{"type":"exponential"}}` used to mean
-    /// gamma 1.0 at anchor 2.0 and now means gamma 2.0 at anchor 1.3, which is a
-    /// substantially different render with nothing in the file to show it.
+    /// pinned. A recipe reading `{"curve":{"type":"exponential"}}` has meant three
+    /// different renders with nothing in the file to show it.
     MovedDefaults,
     /// The recipe states a `reconstruction` block but leaves `density.scale` unstated,
-    /// so the **per-channel gain** floats — and it has moved twice for both parametric
-    /// curves: `pipeline_version` 4 (2026-09-09) took it from `[1, 1, 1]` to
-    /// `[1, 0.90, 0.86]`, and 5 (2026-09-16) to `[1, 0.84, 0.73]`.
+    /// so the **per-channel gain** floats — and it has moved twice for the
+    /// scalar-contrast curves: `pipeline_version` 4 (2026-09-09) took it from
+    /// `[1, 1, 1]` to `[1, 0.90, 0.86]`, and 5 (2026-09-16) to `[1, 0.84, 0.73]`.
     ///
     /// The one variant here that is not about the `curve` object, and the reason it is
     /// worth its own message: a recipe can pin every curve knob, *look* fully pinned,
@@ -2978,10 +2895,10 @@ enum UnpinnedCurve {
 /// defaults, a recipe that omitted the curve is indistinguishable from one that
 /// wrote today's default out in full.
 ///
-/// **An omitted `curve` counts, since 2026-08-08.** The default curve is now the
-/// sigmoid, so a `reconstruction` block with no `curve` resolves to a sigmoid at
-/// this build's default anchor — a different curve, a different placement rule *and*
-/// a different `Dmax` than the same file got before that date. That is exactly the
+/// **An omitted `curve` counts, since 2026-08-08.** The default curve moved then (to
+/// the sigmoid) and again in `pipeline_version` 6 (to the exponential at the fixed
+/// decode's configuration), so a `reconstruction` block with no `curve` resolves to a
+/// different curve and placement rule than the same file got when it was written. That is exactly the
 /// silent reinterpretation design-spec §7.3 promises not to do, and nothing else
 /// catches it: a bare `--params` recipe carries no `meta.pipeline_version`, so
 /// [`pipeline_version_warning`] never sees it. Answering "no warning" for a
@@ -3001,8 +2918,8 @@ enum UnpinnedCurve {
 /// exchange for a one-time migration aid.
 ///
 /// **`reconstruction.density.scale` is the second hole, since `pipeline_version` 4.**
-/// The per-channel gain moved `[1, 1, 1]` → `[1, 0.90, 0.86]` (2026-09-09) for both
-/// parametric curves, so a recipe that pins the whole curve object and stays silent
+/// The per-channel gain moved `[1, 1, 1]` → `[1, 0.90, 0.86]` (2026-09-09) for the
+/// scalar-contrast curves, so a recipe that pins the whole curve object and stays silent
 /// on the gain replays in a different **colour**. It is a hole in the same statement
 /// the `curve` checks read — an absent `density` block and a `density` block without
 /// `scale` are equally unproduceable by `--dump-params`, which writes every key — so
@@ -3010,18 +2927,13 @@ enum UnpinnedCurve {
 /// curve findings, which are the more specific diagnosis; a recipe floating both is
 /// told about the curve first and about the gain once the curve is pinned.
 ///
-/// Otherwise `None` only where the recipe rules the case out: `simple`
-/// reconstruction (no curve stage exists), the `characteristic` curve (it arrived
-/// *with* v4 and its own gain default is the identity, then and now), or a curve that
-/// pins every value this build would otherwise supply — including its `anchor`, on
-/// **either** curve — beside a stated gain.
+/// Otherwise `None` only where the recipe rules the case out: the `characteristic`
+/// curve (it arrived *with* v4 and its own gain default is the identity, then and
+/// now), or a curve that pins every value this build would otherwise supply —
+/// including its `anchor` — beside a stated gain. (A `simple` or `sigmoid` recipe is
+/// refused at load, so it never reaches here.)
 fn unpinned_curve(v: &serde_json::Value) -> Option<UnpinnedCurve> {
     let reconstruction = v.get("reconstruction")?;
-    // `simple` runs no curve stage, so no curve default can reach it. An absent
-    // `type` is `density` (the serde default), which does.
-    if reconstruction.get("type").and_then(|t| t.as_str()) == Some("simple") {
-        return None;
-    }
     let Some(curve) = reconstruction.get("curve") else {
         return Some(UnpinnedCurve::WholeCurve);
     };
@@ -3050,18 +2962,8 @@ fn unpinned_curve(v: &serde_json::Value) -> Option<UnpinnedCurve> {
     // exactly what `hanten estimate` emits without `--d-max-region`. Keeping the term
     // made both documented shapes warn, and fail under `--strict`.
     let curve_finding = match curve.get("type").and_then(|t| t.as_str()) {
-        Some("sigmoid") => {
-            if curve.get("anchor").is_none() {
-                Some(UnpinnedCurve::AnchorOnly)
-            } else {
-                None
-            }
-        }
-        // `anchor` counts here for the same reason it does under `sigmoid`: since
-        // `algo/exponential-anchor-placement` this build writes one for the exponential
-        // too, so a recipe without it is a shape this build cannot produce. It lands in
-        // `MovedDefaults` rather than `AnchorOnly` because that variant's message is
-        // about the 2026-08-03 sigmoid placement move, which never touched this curve.
+        // This build writes both `gamma` and `anchor`, so a recipe without either is a
+        // shape this build cannot produce.
         Some("exponential") => (curve.get("gamma").is_none() || curve.get("anchor").is_none())
             .then_some(UnpinnedCurve::MovedDefaults),
         // `characteristic` does parse, unlike the tags below, and still reports
@@ -3094,16 +2996,13 @@ fn unpinned_curve(v: &serde_json::Value) -> Option<UnpinnedCurve> {
 /// still apply, but a **default changed underneath them**. Two such moves are covered,
 /// and they are reported separately because the remedy differs:
 ///
-/// - [`UnpinnedCurve::AnchorOnly`] — `reconstruction.curve.anchor` was introduced by
-///   `algo/reference-anchored-sigmoid` (2026-08-03) with a default of mid-grey
-///   placement, replacing the previous white-at-Dmax behavior, so a recipe frozen
-///   before that date renders differently even with `contrast`, `toe`, `shoulder`
-///   and `dmax` all pinned.
-/// - [`UnpinnedCurve::WholeCurve`] — `algo/negative-reconstruction-density-curves`
-///   (2026-08-08, `pipeline_version` 2) made the sigmoid the default curve and moved
-///   the nominal `Dmax` to 1.3, so a curve-less recipe that used to mean "the
-///   exponential straight line at gamma 1.0, anchor 2.0" now means something else
-///   entirely. Bigger than the anchor case, and previously unwarned.
+/// - [`UnpinnedCurve::WholeCurve`] — the default curve moved twice:
+///   `algo/negative-reconstruction-density-curves` (2026-08-08, `pipeline_version` 2)
+///   made the sigmoid the default and moved the nominal `Dmax` to 1.3, and
+///   `nf-retire/sigmoid-and-simple` (2026-09-23, `pipeline_version` 6) retired the
+///   sigmoid for the exponential at the fixed decode's configuration.
+/// - [`UnpinnedCurve::MovedDefaults`] — the exponential pinned by type only, whose
+///   `gamma` and `anchor` defaults have both moved.
 /// - [`UnpinnedCurve::DensityScale`] — `algo/film-stock-profiles` (2026-09-09,
 ///   `pipeline_version` 4) moved `reconstruction.density.scale` from `[1, 1, 1]` to
 ///   `[1, 0.90, 0.86]`, and `io/scanner-density-calibration` (2026-09-16,
@@ -3139,34 +3038,28 @@ fn curve_default_warning(
         return None;
     }
     Some(match unpinned? {
-        UnpinnedCurve::AnchorOnly => "the loaded recipe selects the sigmoid curve without \
-         `reconstruction.curve.anchor`, so it takes this build's default placement \
-         (mid-grey at half the reference density). Recipes frozen before 2026-08-03 were \
-         produced when the anchor pinned display *white* at the reference, so this render \
-         will not match the original even with contrast/toe/shoulder pinned. Add an \
-         explicit `anchor` (`\"white-at-dmax\"` to reproduce the old placement) to pin it."
-            .to_string(),
         UnpinnedCurve::WholeCurve => "the loaded recipe omits `reconstruction.curve`, so the \
-         curve is whichever one this build defaults to — since 2026-08-08 that is the \
-         mid-grey-anchored sigmoid at the nominal Dmax of 1.3. The same file written before \
-         that date resolved to the exponential straight line at gamma 1.0 and Dmax 2.0, so \
-         this render will not match the original. Write an explicit tagged \
-         `reconstruction.curve` to pin the curve and its anchor (the reference is not a \
-         curve key — it is `calibration.dmax`)."
+         curve is whichever one this build defaults to — since 2026-09-23 \
+         (`pipeline_version` 6) that is the exponential with mid-grey pinned 0.62 density \
+         above the film base. The same file written earlier resolved to the \
+         mid-grey-anchored sigmoid (from 2026-08-08) or the exponential at gamma 1.0 and \
+         Dmax 2.0 (before that), so this render will not match the original. Write an \
+         explicit tagged `reconstruction.curve` to pin the curve and its anchor (the \
+         reference is not a curve key — it is `calibration.dmax`)."
             .to_string(),
         UnpinnedCurve::MovedDefaults => "the loaded recipe pins `reconstruction.curve.type` \
          but leaves a value to this build's default: the exponential's `gamma` went 1.0 → \
-         2.0 on 2026-08-08 (`pipeline_version` 2), and the exponential later gained an \
-         `anchor` placement rule whose default (`white-at-dmax`) is behaviour-preserving \
-         today but is itself a rendering decision. A recipe that pins only the curve type \
-         therefore looks pinned and is not — the same file can render differently than it \
-         did. Write the curve's `gamma` and its `anchor` explicitly to pin them."
+         2.0 on 2026-08-08 (`pipeline_version` 2), and its `anchor` went `white-at-dmax` → \
+         `{\"mid-at-base-offset\": 0.62}` on 2026-09-23 (`pipeline_version` 6). A recipe \
+         that pins only the curve type therefore looks pinned and is not — the same file \
+         can render differently than it did. Write the curve's `gamma` and its `anchor` \
+         explicitly to pin them."
             .to_string(),
         UnpinnedCurve::DensityScale => "the loaded recipe states a `reconstruction` \
          block but leaves `reconstruction.density.scale` to this build's default: the \
          per-channel density gain moved [1, 1, 1] → [1, 0.90, 0.86] on 2026-09-09 \
          (`pipeline_version` 4) and again → [1, 0.84, 0.73] on 2026-09-16 \
-         (`pipeline_version` 5) for the sigmoid and exponential curves — so a recipe \
+         (`pipeline_version` 5) for the scalar-contrast curves — so a recipe \
          silent on the gain now replays differently across two moves, not one. That moves \
          *colour*, not only tone, so this render will not match the original even with the \
          whole curve pinned. Write `reconstruction.density.scale` explicitly to pin it."
@@ -3274,15 +3167,13 @@ fn reject_legacy_recipe_keys(v: &serde_json::Value, context: &str) -> Result<()>
         .find(|k| v.get(k).is_some())
     {
         return Err(NcError::Usage(format!(
-            "{context}: top-level `{key}` is no longer supported — the algorithm \
-             selection moved into one tagged `reconstruction` object \
-             (schema_version 1). Use `reconstruction.type = \"simple\"` (no other \
-             fields) or `reconstruction.type = \"density\"` with density \
+            "{context}: top-level `{key}` is no longer supported — the reconstruction \
+             is one `reconstruction` object (schema_version 1; the `simple` and \
+             `sigmoid` algorithms were removed). Put density \
              correction under `reconstruction.density` ({{scale, offset, \
              shadow_balance, highlight_balance, balance_range}}) and exactly one \
              tagged curve under `reconstruction.curve` \
-             ({{\"type\":\"exponential\", gamma, anchor}}, \
-             {{\"type\":\"sigmoid\", contrast, toe, shoulder, anchor}}, or \
+             ({{\"type\":\"exponential\", gamma, anchor}} or \
              {{\"type\":\"characteristic\", stock}}); the roll's reference density is \
              `calibration.dmax`, not a curve knob. \
              See design-spec §8."
@@ -3414,7 +3305,6 @@ fn display_tone_switch_dropped_headroom(
 fn curve_type_spelling(curve: DensityCurveType) -> &'static str {
     match curve {
         DensityCurveType::Exponential => "exponential",
-        DensityCurveType::Sigmoid => "sigmoid",
         DensityCurveType::Characteristic => "characteristic",
     }
 }
@@ -3431,34 +3321,22 @@ fn curve_type_spelling(curve: DensityCurveType) -> &'static str {
 /// silence would change colour without saying so.
 ///
 /// Fires only when the dropped value was **not** the old curve's own default. A plain
-/// `--density-curve characteristic` over a default sigmoid recipe swaps one documented
+/// `--density-curve characteristic` over a default recipe swaps one documented
 /// default for the other and loses nothing chosen — warning there would fire on nearly
 /// every switch, the false-positive trap [`unpinned_curve`] records at length.
 fn curve_switch_dropped_density_scale(
     before: &Reconstruction,
     after: &Reconstruction,
 ) -> Option<String> {
-    let (
-        Reconstruction::Density {
-            density: before_density,
-            curve: before_curve,
-        },
-        Reconstruction::Density {
-            density: after_density,
-            curve: after_curve,
-        },
-    ) = (before, after)
-    else {
-        return None;
-    };
+    let (before_density, before_curve) = (&before.density, &before.curve);
+    let (after_density, after_curve) = (&after.density, &after.curve);
     if before_curve.curve_type() == after_curve.curve_type() {
         return None;
     }
     let dropped = before_density.scale;
     let after_default = crate::types::DensityParams::default_scale_for(after_curve.curve_type());
     // Nothing was lost if the value was its own curve's default (a plain swap of one
-    // documented default for another), or if the resolved config still carries it — the
-    // latter is the `now == Some(dropped)` clause in `curve_switch_dropped_anchor`, and it
+    // documented default for another), or if the resolved config still carries it — which
     // is what keeps this quiet when the user restated the gain themselves.
     if dropped == crate::types::DensityParams::default_scale_for(before_curve.curve_type())
         || after_density.scale == dropped
@@ -3480,76 +3358,39 @@ fn curve_switch_dropped_density_scale(
     ))
 }
 
-/// The warning for a **curve-type switch that discards a deliberately-chosen anchor
-/// placement**. `None` when nothing was lost.
+/// The warning for a switch **to the characteristic curve** that discards a
+/// deliberately-chosen anchor placement. `None` when nothing was lost.
 ///
-/// Both curve variants carry `dmax` *and* `anchor` since
-/// `algo/exponential-anchor-placement`, but only `dmax` is shared in **meaning**: it is a
-/// measured roll calibration, curve-independent by construction, which is why both switch
-/// sites carry it across. `anchor` is a *rendering rule* whose right value is per-curve —
-/// the exponential defaults to `white-at-dmax` (its bit-compatible diagnostic straight
-/// line) precisely where the sigmoid has moved off it, and `white-at-dmax` on the sigmoid
-/// is a documented diagnostic that renders midtones 2.5–3.6 stops dark. Carrying it would
-/// turn each curve's documented default into the other's accident, so a switch **resets**
-/// it — and now says so rather than dropping it in silence.
-///
-/// It fires only when the base placement was **not its own curve's default**. A plain
-/// `--density-curve exponential` over a default sigmoid recipe swaps one documented
-/// default for the other and loses nothing chosen; warning there would fire on nearly
-/// every switch, which is the false-positive trap [`unpinned_curve`] records at length.
-/// Callers suppress it when the user restated a placement themselves (an `--anchor-*` flag
-/// or an overlay `anchor` key) — that is not a silent drop, and on `roll` it already has
-/// its own warning.
+/// The characteristic curve reads its mid-grey placement off the film, so it has no
+/// placement to carry the exponential's into. That reset is legitimate, but a placement
+/// the user chose is theirs, so dropping it is said out loud. It fires only when the
+/// dropped placement was **not** the exponential's own default — a plain
+/// `--density-curve characteristic` over a default recipe loses nothing chosen, and
+/// warning there would fire on nearly every switch (the false-positive trap
+/// [`unpinned_curve`] records at length). Callers suppress it when the user restated a
+/// placement themselves (an `--anchor-*` flag or an overlay `anchor` key).
 fn curve_switch_dropped_anchor(before: &Reconstruction, after: &Reconstruction) -> Option<String> {
-    let (
-        Reconstruction::Density { curve: before, .. },
-        Reconstruction::Density { curve: after, .. },
-    ) = (before, after)
-    else {
-        return None;
-    };
+    let (before, after) = (&before.curve, &after.curve);
     if before.curve_type() == after.curve_type() {
         return None;
     }
-    // Nothing was dropped if the *old* curve had no placement rule to carry, which is the
-    // characteristic curve's case — it reads its mid-grey placement off the film.
-    let (Some(dropped), now) = (before.anchor(), after.anchor()) else {
+    // Nothing was dropped if the *old* curve had no placement rule to carry.
+    let (Some(dropped), None) = (before.anchor(), after.anchor()) else {
         return None;
     };
-    let was_default = match before {
-        DensityCurve::Exponential(_) => {
-            dropped == crate::types::ExponentialParams::default().anchor
-        }
-        DensityCurve::Sigmoid(_) => dropped == crate::types::SigmoidParams::default().anchor,
-        // Unreachable: `before.anchor()` is `None` for this variant and returned above.
-        DensityCurve::Characteristic(_) => true,
-    };
-    if was_default || now == Some(dropped) {
+    if dropped == crate::types::ExponentialParams::default().anchor {
         return None;
     }
-    // Switching *to* the characteristic curve drops the placement too, but for a different
-    // reason and with a different remedy — there is no key to restate, because the film's
-    // own curve now decides where mid-grey lands. Saying "restate it" there would send the
-    // user after a key the curve rejects.
-    let Some(now) = now else {
-        return Some(format!(
-            "the switch to the characteristic curve dropped \
-             `reconstruction.curve.anchor` ({}). That curve pins mid-grey where the \
-             stock's published response puts it, so there is no placement to restate — \
-             but this render therefore anchors differently than the recipe asked for. \
-             Drop the `anchor` key, or keep the parametric curve.",
-            anchor_spelling(dropped)
-        ));
-    };
-    let target = curve_type_spelling(after.curve_type());
+    // There is no key to restate, because the film's own curve now decides where
+    // mid-grey lands. Saying "restate it" would send the user after a key the curve
+    // rejects.
     Some(format!(
-        "the switch to the {target} curve reset `reconstruction.curve.anchor` from {} to \
-         that curve's default {}. Unlike the roll-fixed `dmax`, the anchor placement is \
-         per-curve and is not carried across a curve switch, so this render pins a \
-         different tone than the recipe asked for. Restate it (an `--anchor-*` flag, or a \
-         `curve.anchor` key alongside the new `type`) to keep the placement.",
-        anchor_spelling(dropped),
-        anchor_spelling(now)
+        "the switch to the characteristic curve dropped \
+         `reconstruction.curve.anchor` ({}). That curve pins mid-grey where the \
+         stock's published response puts it, so there is no placement to restate — \
+         but this render therefore anchors differently than the recipe asked for. \
+         Drop the `anchor` key, or keep the exponential curve.",
+        anchor_spelling(dropped)
     ))
 }
 
@@ -3570,50 +3411,13 @@ fn dmax_flag_given(o: &DmaxOverrides) -> bool {
     o.d_max.is_some() || o.fixed_d_max || o.auto_d_max || o.no_d_max
 }
 
-/// The first density-reconstruction / curve flag present on the command line, by
-/// name — for the merge's invalid-combination errors (e.g. a curve flag with
-/// `--reconstruction simple` must name the offending flag).
-///
-/// **The four `--*d-max` flags are deliberately absent.** They set
-/// `calibration.dmax`, which is a roll measurement outside `reconstruction`, so every
-/// reconstruction can hold one and none of them forces something a branch cannot
-/// produce — the project's presence-rule tiebreaker. A reference that the resolved
-/// reconstruction will not read is carried and warned about
-/// ([`unconsumed_dmax_warning`]), never refused; refusing it would break the whole
-/// point of the section, which is that one calibration composes with any profile.
-fn active_density_domain_flag(args: &ConvertArgs) -> Option<&'static str> {
-    let d = &args.density;
-    let s = &args.sigmoid;
-    let a = &args.anchor;
-    [
-        ("--density-scale", d.density_scale.is_some()),
-        ("--density-offset", d.density_offset.is_some()),
-        ("--density-gamma", d.density_gamma.is_some()),
-        ("--film-stock", d.film_stock.is_some()),
-        ("--shadow-balance", d.shadow_balance.is_some()),
-        ("--highlight-balance", d.highlight_balance.is_some()),
-        ("--balance-range", d.balance_range.is_some()),
-        ("--auto-balance-range", d.auto_balance_range),
-        ("--sigmoid-contrast", s.sigmoid_contrast.is_some()),
-        ("--sigmoid-toe", s.sigmoid_toe.is_some()),
-        ("--sigmoid-shoulder", s.sigmoid_shoulder.is_some()),
-        ("--anchor-mid-fraction", a.anchor_mid_fraction.is_some()),
-        ("--anchor-white-at-reference", a.anchor_white_at_reference),
-        ("--anchor-black-floor", a.anchor_black_floor.is_some()),
-        ("--anchor-mid-offset", a.anchor_mid_offset.is_some()),
-    ]
-    .into_iter()
-    .find_map(|(name, present)| present.then_some(name))
-}
-
 /// Resolve the `--anchor-*` family into a placement, or `None` if no flag was given.
 ///
 /// One mutually-exclusive rule (like `dmax`), so whichever flag is present replaces the
 /// resolved placement entirely rather than editing a field of it — clap enforces the
-/// exclusivity. Shared by the two **parametric** curve arms of [`merge`]: placement is
-/// orthogonal to curve shape, so the same flags mean the same thing under either of them.
-/// The characteristic curve carries no placement — it reads mid-grey off the published
-/// response — and its arm rejects any of these flags rather than resolving one.
+/// exclusivity. The characteristic curve carries no placement — it reads mid-grey off
+/// the published response — and [`merge`] rejects any of these flags there rather than
+/// resolving one.
 fn anchor_flag_placement(a: &AnchorOverrides) -> Option<AnchorPlacement> {
     if let Some(f) = a.anchor_mid_fraction {
         Some(AnchorPlacement::MidAtDmaxFraction(f))
@@ -3634,39 +3438,18 @@ fn anchor_flag_placement(a: &AnchorOverrides) -> Option<AnchorPlacement> {
 /// by passing `false`. (The removed `--algorithm`/simple-control and deprecated
 /// input flags are rejected before `merge`, so they never reach here.)
 ///
-/// Fallible where the old flat merge was total: the tagged `reconstruction`
-/// makes some flag/config combinations *invalid* rather than inert, and the
-/// design pins them as post-merge usage errors (exit 2), never ignored —
-/// a density/curve/`Dmax` flag with a resolved `simple` reconstruction, a
-/// sigmoid flag with a resolved `exponential` curve, `--density-gamma` with a
-/// resolved `sigmoid` curve (a customized gamma is a loud error, not the old
-/// warning), and `--density-curve` with `simple`.
+/// Fallible where the old flat merge was total: the tagged curve makes some
+/// flag/config combinations *invalid* rather than inert, and the design pins them as
+/// post-merge usage errors (exit 2), never ignored — a slope, placement or stock flag
+/// the resolved curve has no field for.
 pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConfig> {
     let usage = |m: String| NcError::Usage(m);
-
-    // --reconstruction: switch the type first, so the per-field flags below land
-    // on the switched-to config. `density` over an existing density recipe keeps
-    // its blocks (the flag is then a no-op assertion); switching from simple
-    // starts from the density defaults; `simple` always resolves to Simple
-    // (there is nothing to carry).
-    if let Some(t) = args.reconstruction {
-        cfg.reconstruction = match (t, cfg.reconstruction) {
-            (ReconstructionType::Simple, _) => Reconstruction::Simple,
-            (ReconstructionType::Density, d @ Reconstruction::Density { .. }) => d,
-            (ReconstructionType::Density, Reconstruction::Simple) => Reconstruction::default(),
-        };
-    }
 
     // --preset: a named bundle, applied before every *value* flag below so each of them
     // wins over it (`defaults < params < preset < flags`). It sits above the recipe
     // rather than under it because `hanten params` / `--dump-params` write every key
     // explicitly — a preset layered underneath would be inert against any recipe nc
     // produced.
-    //
-    // **After the `--reconstruction` arm above, deliberately.** A preset names a density
-    // curve, so it has to see the reconstruction type the command line actually resolved:
-    // placed before it, `--preset X --reconstruction simple` passed the guard below and
-    // then rendered a `simple` frame carrying the preset's exposure and tone.
     //
     // It writes only the four knobs it owns and never `output.preset`; see
     // `ConversionPreset` for why that separation is what lets a conversion default move
@@ -3688,99 +3471,44 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
             .map(|n| FilmStock::parse(n).map_err(usage))
             .transpose()?;
         let expansion = preset.expand(stock)?;
-        match &mut cfg.reconstruction {
-            Reconstruction::Density { density, curve } => {
-                // **The roll's reference is not in here to lose.** A preset names a *look*,
-                // and since `core/calibration-recipe-section` the reference density lives
-                // in `calibration.dmax`, which no preset writes — so replacing the curve
-                // wholesale is now simply correct. It was not before: the carry this
-                // replaced existed because `--params roll.json --preset sigmoid-flat`
-                // silently reset a measured `{explicit: 2.1}` to `fixed` and rendered the
-                // whole roll off its own calibration at exit 0. That carry could not cross
-                // a `characteristic` boundary, so the same reset still happened through a
-                // stock-curve preset; moving the value out closes both.
-                *curve = expansion.curve;
-                density.scale = expansion.density_scale;
-            }
-            // A preset names a density curve, which `simple` has no stage for. Refused
-            // rather than silently switched: the two answers ("give me the bundle" and
-            // "give me the direct inversion") contradict each other, and quietly picking
-            // one would render a `simple` frame reported as a preset it never ran.
-            Reconstruction::Simple => {
-                // The remedy has to name something the user can actually change, and that
-                // differs by where the `simple` came from: telling a recipe-driven run to
-                // "drop `--reconstruction simple`" names a flag it never passed.
-                let remedy = if args.reconstruction == Some(ReconstructionType::Simple) {
-                    "Drop `--reconstruction simple`, or drop the preset"
-                } else {
-                    "The recipe's `reconstruction.type` is `simple`; pass \
-                     `--reconstruction density` to switch it, or drop the preset"
-                };
-                return Err(usage(format!(
-                    "`--preset {}` selects a density curve and its display rendering, \
-                     but the resolved reconstruction is `simple` (the direct inversion \
-                     has no curve stage). {remedy}",
-                    preset.name()
-                )));
-            }
-        }
+        // **The roll's reference is not in here to lose.** A preset names a *look*, and
+        // since `core/calibration-recipe-section` the reference density lives in
+        // `calibration.dmax`, which no preset writes — so replacing the curve wholesale
+        // is simply correct.
+        cfg.reconstruction.curve = expansion.curve;
+        cfg.reconstruction.density.scale = expansion.density_scale;
         cfg.print.print_exposure = expansion.print_exposure;
         cfg.print.display_tone = expansion.display_tone;
     }
 
-    // --density-curve: switch between the three curve variants inside a density
-    // reconstruction. Same-type is a no-op (keeps the recipe's curve knobs); a switch takes
-    // the new variant's defaults for every knob. There is no roll calibration to carry:
-    // since `core/calibration-recipe-section` the reference density is `calibration.dmax`,
-    // outside the object being switched, so it survives every switch untouched — including
-    // the switches into and out of `characteristic` that the old carry could not cross.
-    // `anchor` is reset per variant, and only the parametric variants carry one —
-    // `curve_switch_dropped_anchor` explains why placement is not curve-independent and
-    // warns when the reset discards a stated rule, including the switch *to*
-    // `characteristic`, where there is no key to restate.
-    if let Some(c) = args.density_curve {
-        match &mut cfg.reconstruction {
-            Reconstruction::Simple => {
-                return Err(usage(
-                    "--density-curve selects the density-to-positive curve, but the \
-                     resolved reconstruction is `simple` (no curve stage); pass \
-                     --reconstruction density"
-                        .into(),
-                ));
+    // --density-curve: switch between the curve variants. Same-type is a no-op (keeps
+    // the recipe's curve knobs); a switch takes the new variant's defaults for every
+    // knob. The reference density is `calibration.dmax`, outside the object being
+    // switched, so it survives every switch untouched. `anchor` is reset per variant —
+    // `curve_switch_dropped_anchor` warns when the reset discards a stated rule.
+    if let Some(c) = args.density_curve
+        && cfg.reconstruction.curve.curve_type() != c
+    {
+        // The per-channel gain is per-curve for the same reason `anchor` is:
+        // `DensityParams::default_scale_for` documents that the exponential needs a gain
+        // covering the film's channel structure while the characteristic curve already
+        // carries it. An explicit `--density-scale` is merged *after* this and still
+        // wins, so the reset only replaces an unstated value — and
+        // `curve_switch_dropped_density_scale` warns when the value it replaced was one
+        // the user had chosen.
+        cfg.reconstruction.density.scale = crate::types::DensityParams::default_scale_for(c);
+        cfg.reconstruction.curve = match c {
+            DensityCurveType::Exponential => {
+                DensityCurve::Exponential(crate::types::ExponentialParams::default())
             }
-            Reconstruction::Density { curve, density } => {
-                if curve.curve_type() != c {
-                    // The per-channel gain is per-curve for the same reason `anchor` is:
-                    // `DensityParams::default_scale_for` documents that the parametric
-                    // curves need a gain covering the film's channel structure while the
-                    // characteristic curve already carries it. Carrying the old curve's
-                    // value across would make one curve's calibration the other's
-                    // double-correction. An explicit `--density-scale` is merged *after*
-                    // this and still wins, so the reset only replaces an unstated value —
-                    // and `curve_switch_dropped_density_scale` warns when the value it
-                    // replaced was one the user had chosen.
-                    density.scale = crate::types::DensityParams::default_scale_for(c);
-                    *curve = match c {
-                        DensityCurveType::Exponential => {
-                            DensityCurve::Exponential(crate::types::ExponentialParams::default())
-                        }
-                        DensityCurveType::Sigmoid => {
-                            DensityCurve::Sigmoid(crate::types::SigmoidParams::default())
-                        }
-                        // The stock is the generic profile, which is what naming no stock
-                        // means. There is nothing to preserve: reaching this arm requires
-                        // the resolved curve to differ from `c`, so it is not
-                        // `characteristic` and carries no stock. An explicit `--film-stock`
-                        // is merged after this and still wins.
-                        DensityCurveType::Characteristic => {
-                            DensityCurve::Characteristic(crate::types::CharacteristicParams {
-                                stock: crate::types::FilmStock::default(),
-                            })
-                        }
-                    };
-                }
+            // The stock is the generic profile, which is what naming no stock means. An
+            // explicit `--film-stock` is merged after this and still wins.
+            DensityCurveType::Characteristic => {
+                DensityCurve::Characteristic(crate::types::CharacteristicParams {
+                    stock: crate::types::FilmStock::default(),
+                })
             }
-        }
+        };
     }
 
     merge_shared_sections(
@@ -3790,163 +3518,79 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
         args,
     );
 
-    // Density-reconstruction, curve, and Dmax flags — all live inside the tagged
-    // `reconstruction`, so with a resolved `simple` any of them is an invalid
-    // combination (fail loudly, never a silent no-op).
-    match &mut cfg.reconstruction {
-        Reconstruction::Simple => {
-            if let Some(flag) = active_density_domain_flag(args) {
-                return Err(usage(format!(
-                    "{flag} configures density reconstruction, but the resolved \
-                     reconstruction is `simple` (the direct inversion has no density \
-                     correction and no curve); pass --reconstruction density"
-                )));
+    // density block: `--density-scale`/`--density-offset` ⇒
+    // `reconstruction.density.scale`/`.offset`; regional-balance flags ⇒ the
+    // same-named density fields.
+    let Reconstruction { density, curve } = &mut cfg.reconstruction;
+    if let Some(v) = args.density.density_scale {
+        density.scale = v;
+    }
+    if let Some(v) = args.density.density_offset {
+        density.offset = v;
+    }
+    if let Some(v) = args.density.shadow_balance {
+        density.shadow_balance = v;
+    }
+    if let Some(v) = args.density.highlight_balance {
+        density.highlight_balance = v;
+    }
+    // balance range: the two flags are mutually exclusive (clap-enforced);
+    // whichever is given replaces the recipe's
+    // `reconstruction.density.balance_range` entirely.
+    if let Some(v) = args.density.balance_range {
+        density.balance_range = BalanceRange::Explicit(v);
+    } else if args.density.auto_balance_range {
+        density.balance_range = BalanceRange::Auto;
+    }
+
+    // `--density-gamma` and the `--anchor-*` family ⇒ the exponential's `gamma` and
+    // `anchor`; refused, not ignored, under the characteristic curve, which carries
+    // neither — a flag that sets one is asking it to be a different curve.
+    match curve {
+        DensityCurve::Exponential(e) => {
+            if let Some(g) = args.density.density_gamma {
+                e.gamma = g;
+            }
+            if let Some(p) = anchor_flag_placement(&args.anchor) {
+                e.anchor = p;
             }
         }
-        Reconstruction::Density { density, curve } => {
-            // density block: `--density-scale`/`--density-offset` ⇒
-            // `reconstruction.density.scale`/`.offset`; regional-balance flags ⇒
-            // the same-named density fields.
-            if let Some(v) = args.density.density_scale {
-                density.scale = v;
-            }
-            if let Some(v) = args.density.density_offset {
-                density.offset = v;
-            }
-            if let Some(v) = args.density.shadow_balance {
-                density.shadow_balance = v;
-            }
-            if let Some(v) = args.density.highlight_balance {
-                density.highlight_balance = v;
-            }
-            // balance range: the two flags are mutually exclusive (clap-enforced);
-            // whichever is given replaces the recipe's
-            // `reconstruction.density.balance_range` entirely.
-            if let Some(v) = args.density.balance_range {
-                density.balance_range = BalanceRange::Explicit(v);
-            } else if args.density.auto_balance_range {
-                density.balance_range = BalanceRange::Auto;
-            }
-
-            // `--density-gamma` ⇒ `reconstruction.curve.gamma` — exponential
-            // only. A customized gamma under a resolved sigmoid curve is a loud
-            // usage error (the pre-reconstruction code warned-and-ignored; the
-            // tagged schema makes the invalid combination unrepresentable).
+        DensityCurve::Characteristic(_) => {
             if let Some(g) = args.density.density_gamma {
-                match curve {
-                    DensityCurve::Exponential(e) => e.gamma = g,
-                    DensityCurve::Sigmoid(_) => {
-                        // Two remedies stated as equals, deliberately. This used to
-                        // read "its mid-density slope is --sigmoid-contrast (or pass
-                        // --density-curve exponential)", ranking one as the answer and
-                        // parenthesising the other — and under `--new-flow` the ranked
-                        // one is refused while the parenthetical works. Reordering was
-                        // the obvious fix and is worse: on this chain
-                        // `--sigmoid-contrast` keeps the user on the curve they
-                        // resolved while switching curves does not, so promoting the
-                        // switch trades a dead lead on one flow for a more invasive one
-                        // here. Dropping the ranking costs neither.
-                        return Err(usage(format!(
-                            "--density-gamma ({g}) sets the exponential curve's gamma, \
-                             but the resolved curve is sigmoid. Either set the sigmoid's \
-                             mid-density slope with --sigmoid-contrast, or pass \
-                             --density-curve exponential to take the curve this gamma \
-                             belongs to"
-                        )));
-                    }
-                    DensityCurve::Characteristic(_) => {
-                        return Err(usage(format!(
-                            "--density-gamma ({g}) sets a curve slope, but the resolved \
-                             curve is characteristic — its slope is the film's own, read \
-                             off the stock's published response. Pass --density-curve \
-                             exponential to set a slope by hand"
-                        )));
-                    }
-                }
+                return Err(usage(format!(
+                    "--density-gamma ({g}) sets a curve slope, but the resolved \
+                     curve is characteristic — its slope is the film's own, read \
+                     off the stock's published response. Pass --density-curve \
+                     exponential to set a slope by hand"
+                )));
             }
-
-            // sigmoid flags ⇒ `reconstruction.curve.{contrast, toe, shoulder}` —
-            // sigmoid only; under exponential they are invalid, not inert. The
-            // `--anchor-*` family is **not** in this set: placement is shared by both
-            // curves (`AnchorPlacement`), so it is applied in both arms below.
-            let sig = &args.sigmoid;
-            let sigmoid_flag = [
-                ("--sigmoid-contrast", sig.sigmoid_contrast.is_some()),
-                ("--sigmoid-toe", sig.sigmoid_toe.is_some()),
-                ("--sigmoid-shoulder", sig.sigmoid_shoulder.is_some()),
-            ]
-            .into_iter()
-            .find_map(|(name, present)| present.then_some(name));
-            match curve {
-                DensityCurve::Sigmoid(s) => {
-                    if let Some(v) = sig.sigmoid_contrast {
-                        s.contrast = v;
-                    }
-                    if let Some(v) = sig.sigmoid_toe {
-                        s.toe = v;
-                    }
-                    if let Some(v) = sig.sigmoid_shoulder {
-                        s.shoulder = v;
-                    }
-                    if let Some(p) = anchor_flag_placement(&args.anchor) {
-                        s.anchor = p;
-                    }
-                }
-                DensityCurve::Exponential(e) => {
-                    if let Some(p) = anchor_flag_placement(&args.anchor) {
-                        e.anchor = p;
-                    }
-                    if let Some(flag) = sigmoid_flag {
-                        return Err(usage(format!(
-                            "{flag} configures the sigmoid curve, but the resolved \
-                             curve is exponential; pass --density-curve sigmoid \
-                             (its slope analogue for exponential is --density-gamma)"
-                        )));
-                    }
-                }
-                DensityCurve::Characteristic(_) => {
-                    // Both families are refused here rather than ignored, and each says
-                    // what replaces it: this curve carries no slope knobs and no placement
-                    // rule, so a flag that sets either is asking it to be a different
-                    // curve.
-                    if let Some(flag) = sigmoid_flag {
-                        return Err(usage(format!(
-                            "{flag} configures the sigmoid curve, but the resolved curve \
-                             is characteristic — its shape is the film's own, read off \
-                             the stock's published response. Pass --density-curve sigmoid \
-                             to shape a curve by hand, or --display-tone to shape the \
-                             render"
-                        )));
-                    }
-                    if anchor_flag_placement(&args.anchor).is_some() {
-                        return Err(usage(
-                            "the --anchor-* family places the display-white anchor on a \
-                             parametric curve, but the resolved curve is characteristic — \
-                             it pins mid-grey where the stock's published response puts \
-                             it, which is the placement the film itself defines. Pass \
-                             --density-curve sigmoid to place the anchor by hand"
-                                .into(),
-                        ));
-                    }
-                }
+            if anchor_flag_placement(&args.anchor).is_some() {
+                return Err(usage(
+                    "the --anchor-* family places the display-white anchor on the \
+                     exponential curve, but the resolved curve is characteristic — \
+                     it pins mid-grey where the stock's published response puts \
+                     it, which is the placement the film itself defines. Pass \
+                     --density-curve exponential to place the anchor by hand"
+                        .into(),
+                ));
             }
+        }
+    }
 
-            // `--film-stock` ⇒ `reconstruction.curve.stock`. Only the characteristic
-            // curve has a stock to refine; on the parametric curves the flag would be a
-            // silent no-op, which is the failure mode the tagged schema exists to prevent.
-            if let Some(name) = args.density.film_stock.as_deref() {
-                let stock = crate::types::FilmStock::parse(name).map_err(usage)?;
-                match curve {
-                    DensityCurve::Characteristic(c) => c.stock = stock,
-                    _ => {
-                        return Err(usage(format!(
-                            "--film-stock {name} selects a published film response, but \
-                             the resolved curve is {} — a stock has nothing to configure \
-                             there. Pass --density-curve characteristic",
-                            curve_type_spelling(curve.curve_type())
-                        )));
-                    }
-                }
+    // `--film-stock` ⇒ `reconstruction.curve.stock`. Only the characteristic curve has
+    // a stock to refine; on the exponential the flag would be a silent no-op, which is
+    // the failure mode the tagged schema exists to prevent.
+    if let Some(name) = args.density.film_stock.as_deref() {
+        let stock = crate::types::FilmStock::parse(name).map_err(usage)?;
+        match curve {
+            DensityCurve::Characteristic(c) => c.stock = stock,
+            _ => {
+                return Err(usage(format!(
+                    "--film-stock {name} selects a published film response, but \
+                     the resolved curve is {} — a stock has nothing to configure \
+                     there. Pass --density-curve characteristic",
+                    curve_type_spelling(curve.curve_type())
+                )));
             }
         }
     }
@@ -3954,11 +3598,10 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
     // Dmax reference ⇒ `calibration.dmax`: the four flags are mutually exclusive
     // (clap-enforced); whichever is given replaces the resolved value entirely.
     //
-    // **Outside the reconstruction match on purpose.** The reference is a roll
-    // measurement, so it is stated whatever curve — or `simple` — the look resolves
-    // to, and a `--params` calibration composes with any profile. Which configs
-    // actually *read* it is a separate question, and the answer is never a refusal:
-    // `unconsumed_dmax_warning` reports a stated reference that `simple` or the
+    // The reference is a roll measurement, so it is stated whatever curve the look
+    // resolves to, and a `--params` calibration composes with any profile. Which
+    // configs actually *read* it is a separate question, and the answer is never a
+    // refusal: `unconsumed_dmax_warning` reports a stated reference that the
     // characteristic curve will not consume, and `--strict` promotes it. `validate`
     // checks the *value* (an explicit reference must be finite and positive) whatever
     // reads it.
@@ -4056,26 +3699,18 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
 /// Pixels stay byte-identical under the base-derived placements
 /// (`black-at-base`, `mid-at-base-offset`) because the reference reaches nothing
 /// there — the same fact [`region_reaches_a_rendered_pixel`] relies on, used in the
-/// other direction. One consequence accepted deliberately:
-/// `sigmoid::apply_curve`'s finite-and-positive guard now sees the
-/// region-restricted value, so a genuinely degenerate measurement can newly fail
-/// loudly there.
+/// other direction.
 ///
 /// Today exactly one measurement reads it. As further consumers land
 /// (`film-base/holder-masked-measurement`,
 /// `algo/auto-anchor-interior-measurement`'s balance range) each adds its own
 /// condition here.
 fn measures_over_region(cfg: &ResolvedConfig) -> bool {
-    match &cfg.reconstruction {
-        Reconstruction::Simple => false,
-        // **Both halves.** The source alone is not enough now that it lives outside the
-        // curve: a `characteristic` render never calls `resolve_dmax` at all, so
-        // `calibration.dmax = auto` beside it measures nothing and a region resolved for
-        // it would report a measurement that never happened.
-        Reconstruction::Density { curve, .. } => {
-            cfg.calibration.dmax == DmaxSource::Auto && curve.consumes_reference()
-        }
-    }
+    // **Both halves.** The source alone is not enough now that it lives outside the
+    // curve: a `characteristic` render never calls `resolve_dmax` at all, so
+    // `calibration.dmax = auto` beside it measures nothing and a region resolved for it
+    // would report a measurement that never happened.
+    cfg.calibration.dmax == DmaxSource::Auto && cfg.reconstruction.curve.consumes_reference()
 }
 
 /// **Did reading the IR plane change a rendered pixel?** Whether the region the
@@ -4092,13 +3727,7 @@ fn measures_over_region(cfg: &ResolvedConfig) -> bool {
 fn region_reaches_a_rendered_pixel(cfg: &ResolvedConfig) -> bool {
     // Written as "measured, *and* the placement reads it" so the narrowing is
     // structural: a condition added to the measurement cannot be forgotten here.
-    measures_over_region(cfg)
-        && match &cfg.reconstruction {
-            Reconstruction::Simple => false,
-            Reconstruction::Density { curve, .. } => {
-                curve.anchor().is_some_and(|a| a.reads_reference())
-            }
-        }
+    measures_over_region(cfg) && render_reads_the_reference(&cfg.reconstruction)
 }
 
 /// The flag arms for the sections both chains read — `input`, the film base and
@@ -4312,25 +3941,16 @@ fn reject_conversion_preset_with_non_display_output(
     )))
 }
 
-/// The `--preset` rules that need **flag presence**, not the resolved value.
+/// The `--preset` rule that needs **flag presence**, not the resolved value.
 ///
 /// **Called from [`merge`]'s preset arm, not from [`validate_convert`]** — the one
 /// flag-presence rule that cannot live in the gate. `validate_convert` runs *after*
-/// `merge`, and merge's own `--film-stock` arm already refuses a stock beside a resolved
-/// parametric curve, so from there this rule was unreachable for the two sigmoid presets:
-/// `--preset sigmoid-flat --film-stock ektar-100` got "pass `--density-curve
-/// characteristic`", and following that remedy landed on *this* rule saying the preset has
-/// no stock — a two-step contradictory diagnosis. Running it beside the preset expansion
-/// makes the ordering structural rather than a property of where the call sits.
-///
-/// Deliberately **not** a value rule, and deliberately **not** general. The
-/// `sigmoid-knees` case looks like "`--display-tone none` plus a positive
-/// `print_exposure`", but that pair has no general rule and must not gain one: dark
-/// enough content renders under it at exit 0, so refusing the combination outright would
-/// reject valid frames. What is refused is stating a knob the *named bundle* does not
-/// use — a contradiction visible in the request itself.
+/// `merge`, whose own `--film-stock` arm writes the stock onto the preset's curve, so
+/// from there this rule could only see the damage after it was done. Running it beside
+/// the preset expansion makes the ordering structural rather than a property of where
+/// the call sits.
 fn reject_conversion_preset_conflicts(preset: ConversionPreset, args: &ConvertArgs) -> Result<()> {
-    // `--film-stock` next to a preset that reconstructs through the generic profile is
+    // `--film-stock` next to the preset that reconstructs through the generic profile is
     // accepted-and-ignored otherwise: the merge arm writes the stock onto a
     // `characteristic-generic` curve and the render silently becomes
     // `characteristic-stock` under the wrong name and the wrong exposure (1.91 against
@@ -4338,34 +3958,10 @@ fn reject_conversion_preset_conflicts(preset: ConversionPreset, args: &ConvertAr
     if args.density.film_stock.is_some() && !preset.needs_film_stock() {
         return Err(NcError::Usage(format!(
             "--film-stock names a published response, but `--preset {}` does not \
-             reconstruct through one{}. Use `--preset characteristic-stock` to \
+             reconstruct through one (it uses the derived generic C-41 profile, the \
+             average of nine published sheets). Use `--preset characteristic-stock` to \
              reconstruct through that stock's own curve, or drop `--film-stock`",
             preset.name(),
-            match preset {
-                ConversionPreset::CharacteristicGeneric =>
-                    " (it uses the derived generic C-41 profile, the average of nine \
-                     published sheets)",
-                _ => " (it reconstructs with a parametric curve, which has no stock)",
-            }
-        )));
-    }
-
-    // The one bundle whose brightness is structurally not in `print_exposure`.
-    // `0` is allowed: it is the value the preset itself resolves, so it forces nothing
-    // — the identity-value half of the presence-rule tiebreaker.
-    if preset.brightness_is_in_the_anchor()
-        && let Some(v) = args.print.print_exposure
-        && v != 0.0
-    {
-        return Err(NcError::Usage(format!(
-            "--print-exposure {v} cannot brighten `--preset {}`. That bundle renders \
-             with `--display-tone none`, which relies on the reconstruction staying \
-             inside the render's ceiling, and `print_exposure` is a scalar gain applied \
-             *after* the curve — any positive value pushes the shoulder past reference \
-             white and the frame is refused. Move mid-grey with `--anchor-mid-fraction` \
-             instead (the preset resolves {}; lower renders brighter)",
-            preset.name(),
-            ConversionPreset::ANCHOR_MID_FRACTION
         )));
     }
     Ok(())
@@ -4918,227 +4514,172 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
     // definition `film_base::effective_area` also calls.
     check_measure_inset(cfg.measure.inset)?;
 
-    // Reconstruction: the tagged config's value checks, per variant. `simple`
-    // carries no further knobs (its old WB/clip controls were removed — see
-    // `SimpleOverrides`), so only `density` has anything to check.
-    if let Reconstruction::Density { density, curve } = &cfg.reconstruction {
-        // Density block: per-channel gain must be positive; offset just finite.
-        positive("--density-scale", &density.scale)?;
-        finite("--density-offset", &density.offset)?;
+    // Reconstruction: the config's value checks.
+    let Reconstruction { density, curve } = &cfg.reconstruction;
+    // Density block: per-channel gain must be positive; offset just finite.
+    positive("--density-scale", &density.scale)?;
+    finite("--density-offset", &density.offset)?;
 
-        // Regional balance: the offsets are density deltas — any finite value
-        // (including negative) is meaningful. An explicit ramp range must be finite
-        // and ordered `lo < hi`: equal anchors would make the ramp divide by zero,
-        // and a recipe can smuggle values the CLI parser never saw.
-        finite("--shadow-balance", &density.shadow_balance)?;
-        finite("--highlight-balance", &density.highlight_balance)?;
-        if let BalanceRange::Explicit([lo, hi]) = density.balance_range {
-            finite("--balance-range", &[lo, hi])?;
-            if lo >= hi {
-                return Err(usage(format!(
-                    "--balance-range low ({lo}) must be < high ({hi})"
-                )));
-            }
-            // The span `hi - lo` divides the ramp; two individually-finite anchors
-            // can still overflow it to `+inf` (e.g. `-3e38,3e38`), which silently
-            // collapses `w_hi` to 0 for every pixel — the highlight balance would
-            // then never apply while the report claims the range was honored. A
-            // representable span is a hard requirement, not just `lo < hi`.
-            if !(hi - lo).is_finite() {
-                return Err(usage(format!(
-                    "--balance-range span (high {hi} − low {lo}) overflows f32; \
-                     use anchors whose difference is representable"
-                )));
-            }
+    // Regional balance: the offsets are density deltas — any finite value
+    // (including negative) is meaningful. An explicit ramp range must be finite
+    // and ordered `lo < hi`: equal anchors would make the ramp divide by zero,
+    // and a recipe can smuggle values the CLI parser never saw.
+    finite("--shadow-balance", &density.shadow_balance)?;
+    finite("--highlight-balance", &density.highlight_balance)?;
+    if let BalanceRange::Explicit([lo, hi]) = density.balance_range {
+        finite("--balance-range", &[lo, hi])?;
+        if lo >= hi {
+            return Err(usage(format!(
+                "--balance-range low ({lo}) must be < high ({hi})"
+            )));
         }
+        // The span `hi - lo` divides the ramp; two individually-finite anchors
+        // can still overflow it to `+inf` (e.g. `-3e38,3e38`), which silently
+        // collapses `w_hi` to 0 for every pixel — the highlight balance would
+        // then never apply while the report claims the range was honored. A
+        // representable span is a hard requirement, not just `lo < hi`.
+        if !(hi - lo).is_finite() {
+            return Err(usage(format!(
+                "--balance-range span (high {hi} − low {lo}) overflows f32; \
+                 use anchors whose difference is representable"
+            )));
+        }
+    }
 
-        match curve {
-            // The characteristic curve has no parametric value to bound: its slope and
-            // placement are the published curve's. The tables it will invert are checked
-            // instead, above.
-            DensityCurve::Characteristic(_) => {}
-            DensityCurve::Exponential(e) => {
-                positive("--density-gamma", &[e.gamma])?;
-            }
-            DensityCurve::Sigmoid(s) => {
-                // The S-curve is anchored on `[0, Dmax]` — both its white knee
-                // and its black floor derive from the anchor — so `dmax = none`
-                // (unity placement, no anchor) cannot drive it (design-spec §7.3).
-                if cfg.calibration.dmax == DmaxSource::None {
-                    return Err(usage(
-                        "the sigmoid curve needs a display-white anchor (the default \
-                         fixed anchor, --d-max <d>, or --auto-d-max); --no-d-max / \
-                         `calibration.dmax = none` is only supported by the exponential \
-                         curve"
-                            .into(),
-                    ));
-                }
-                // Contrast (mid-density slope) must be positive AND bounded above:
-                // an extreme slope collapses the S-curve into a hard black/white
-                // threshold whose knees silently launder the blow-out into a
-                // finite two-level image (highlights → exactly 1.0, shadows → the
-                // floor) that trips *neither* the clip nor the non-finite counter
-                // — a silent destruction the exponential curve avoids (it
-                // overflows to +inf, which is counted). Cap it; use
-                // `--density-curve exponential` for genuinely extreme contrast.
-                positive("--sigmoid-contrast", &[s.contrast])?;
-                if s.contrast > crate::algo::sigmoid::SIGMOID_CONTRAST_MAX {
+    match curve {
+        // The characteristic curve has no parametric value to bound: its slope and
+        // placement are the published curve's. The tables it will invert are checked
+        // instead, above.
+        DensityCurve::Characteristic(_) => {}
+        DensityCurve::Exponential(e) => {
+            positive("--density-gamma", &[e.gamma])?;
+        }
+    }
+
+    // Anchor placement — the exponential's. The characteristic curve carries none and
+    // is skipped below (its tables are checked instead).
+    //
+    // **Ordered after the slope check above, deliberately.** Every rule but
+    // `white-at-reference` divides by the slope, and diagnosing that division first
+    // reported a zero (or `nan`) slope as "too small to place the anchor" — neither is
+    // small — while steering the user to `--anchor-white-at-reference`, a remedy that
+    // then failed anyway on the positivity rule. Slope positivity is the more specific
+    // diagnosis, so it wins.
+    // The characteristic curve has neither a slope nor a placement rule to check —
+    // it reads both off the published curve — so both rules below are **skipped**
+    // for it, and its tables are checked instead
+    // (`film_stock::check_tables`). Skipped, never returned: this used to `return`
+    // out of the whole function, which silently disabled every rule *after* this
+    // block (the print value checks, `--linear-range`, `validate_output_preset`'s
+    // film-master and reinhard rules, and the
+    // trailing missing-film-base rule) for any `characteristic` config — a recipe
+    // reached exit 0 with configs those rules exist to refuse. Reachable only
+    // through `--params`, since the flag paths are caught earlier by
+    // `validate_convert`'s presence checks, which is what hid it.
+    let slope = match curve {
+        DensityCurve::Exponential(e) => Some((e.gamma, "--density-gamma")),
+        DensityCurve::Characteristic(c) => {
+            crate::algo::film_stock::check_tables(c.stock)?;
+            None
+        }
+    };
+    if let Some((slope, slope_flag)) = slope
+        && let Some(placement) = curve.anchor()
+    {
+        match placement {
+            AnchorPlacement::WhiteAtDmax => {}
+            // Finite and in (0, 1]. At 0 the anchor stops depending on the reference at
+            // all (mid-grey pinned at the density origin — the film base — rendering the
+            // whole frame above mid-grey); negative pushes it below the base, where no
+            // sample exists. Above 1 mid-grey sits *past* the roll's display-white
+            // reference, which is not a photographic rendering of anything. F = 1 is the
+            // legal edge: mid-grey lands on the reference and white above it.
+            AnchorPlacement::MidAtDmaxFraction(f) => {
+                finite("--anchor-mid-fraction", &[f])?;
+                if f <= 0.0 || f > 1.0 {
                     return Err(usage(format!(
-                        "--sigmoid-contrast ({}) must be <= {} (beyond this the \
-                         S-curve is a hard threshold that silently destroys tonal \
-                         detail; use --density-curve exponential)",
-                        s.contrast,
-                        crate::algo::sigmoid::SIGMOID_CONTRAST_MAX
+                        "--anchor-mid-fraction ({f}) must be in (0, 1] — it places \
+                         mid-grey at that fraction of the roll's reference density (0.5 \
+                         renders mid-grey halfway up the roll's range; 1 puts it on the \
+                         reference itself)"
                     )));
                 }
-                // Knee widths non-negative AND bounded above: 0 disables a knee, a
-                // negative width would silently be treated as "off" by the curve,
-                // and a huge *finite* width flattens the image into near-uniform
-                // tone (giant shoulder → all-black, giant toe → all-white) with
-                // samples that stay finite and in range — the same
-                // silent-destruction class the contrast cap closes. Reject both
-                // loudly.
-                finite("--sigmoid-toe/--sigmoid-shoulder", &[s.toe, s.shoulder])?;
-                let knee_max = crate::algo::sigmoid::SIGMOID_KNEE_MAX;
-                if s.toe < 0.0 || s.shoulder < 0.0 || s.toe > knee_max || s.shoulder > knee_max {
+            }
+            // A linear output value in (0, 1). Zero or negative has no logarithm, so the
+            // anchor would be non-finite; at 1 the film base renders *at* display white
+            // and the whole frame is white. The bound is the domain of the rule, not a
+            // taste judgement — 0.5 is legal and simply very pale.
+            AnchorPlacement::BlackAtBase(floor) => {
+                finite("--anchor-black-floor", &[floor])?;
+                if floor <= 0.0 || floor >= 1.0 {
                     return Err(usage(format!(
-                        "--sigmoid-toe ({}) and --sigmoid-shoulder ({}) must be in \
-                         [0, {knee_max}] (0 disables the knee; a larger width flattens \
-                         the image into near-uniform tone without tripping the \
-                         clip/non-finite counters)",
-                        s.toe, s.shoulder
+                        "--anchor-black-floor ({floor}) must be in (0, 1) — it is the \
+                         linear output the film base renders to, against the reference \
+                         white (0.005 encodes to about 16/255). At 0 there is no \
+                         logarithm to take; at 1 the base renders as display white"
                     )));
                 }
             }
+            // A density above the base, so strictly positive: at 0 mid-grey is pinned on
+            // the base itself (the base renders as mid-grey — the whole frame above it),
+            // and negative places it below the base where no sample exists.
+            AnchorPlacement::MidAtBaseOffset(offset) => {
+                positive("--anchor-mid-offset", &[offset])?;
+            }
         }
-
-        // Anchor placement — shared by the two parametric curves, so validated once here
-        // rather than in either arm. The characteristic curve carries none and is skipped
-        // below (its tables are checked instead).
+        // The guard is on the **resolved** anchor, not on a proxy quotient. Each rule
+        // divides something different by the slope, and `MID_GREY_OUTPUT_DECADES /
+        // slope` bounds only one of them: `black-at-base` divides `−log10(floor)`, which
+        // is unbounded as the floor shrinks, so a floor of 1e-45 at gamma 1e-37 passed
+        // the proxy (0.745/1e-37 is finite) with a real anchor of `inf` — and rendered
+        // an all-black frame at exit 0 with no warning at all. Resolving the rule is the
+        // only check that cannot drift from what the render will do.
         //
-        // **Ordered after the slope checks above, deliberately.** Every rule but
-        // `white-at-reference` divides by the slope, and diagnosing that division first
-        // reported `--sigmoid-contrast 0` (and `nan`) as "too small to place the anchor"
-        // — neither is small — while steering the user to `--anchor-white-at-reference`,
-        // a remedy that then failed anyway on the positivity rule the message had just
-        // talked them out of. Slope positivity is the more specific diagnosis, so it wins.
-        // The characteristic curve has neither a slope nor a placement rule to check —
-        // it reads both off the published curve — so both rules below are **skipped**
-        // for it, and its tables are checked instead
-        // (`film_stock::check_tables`). Skipped, never returned: this used to `return`
-        // out of the whole function, which silently disabled every rule *after* this
-        // block (the print value checks, `--linear-range`, `validate_output_preset`'s
-        // film-master and reinhard rules, and the
-        // trailing missing-film-base rule) for any `characteristic` config — a recipe
-        // reached exit 0 with configs those rules exist to refuse. Reachable only
-        // through `--params`, since the flag paths are caught earlier by
-        // `validate_convert`'s presence checks, which is what hid it.
-        let slope = match curve {
-            DensityCurve::Exponential(e) => Some((e.gamma, "--density-gamma")),
-            DensityCurve::Sigmoid(s) => Some((s.contrast, "--sigmoid-contrast")),
-            DensityCurve::Characteristic(c) => {
-                crate::algo::film_stock::check_tables(c.stock)?;
-                None
-            }
+        // `Auto` measures the reference per frame, so it is unknown here; `0.0` stands
+        // in. That does not weaken the check — the base-derived rules ignore the
+        // reference outright and the reference-derived ones only scale it by `f ≤ 1`, so
+        // every overflow this guard is about comes from the slope division.
+        let reference = match cfg.calibration.dmax {
+            DmaxSource::Explicit(d) => d,
+            DmaxSource::Fixed => crate::algo::density::NOMINAL_DMAX,
+            DmaxSource::Auto | DmaxSource::None => 0.0,
         };
-        if let Some((slope, slope_flag)) = slope
-            && let Some(placement) = curve.anchor()
-        {
-            match placement {
-                AnchorPlacement::WhiteAtDmax => {}
-                // Finite and in (0, 1]. At 0 the anchor stops depending on the reference at
-                // all (mid-grey pinned at the density origin — the film base — rendering the
-                // whole frame above mid-grey); negative pushes it below the base, where no
-                // sample exists. Above 1 mid-grey sits *past* the roll's display-white
-                // reference, which is not a photographic rendering of anything. F = 1 is the
-                // legal edge: mid-grey lands on the reference and white above it.
-                AnchorPlacement::MidAtDmaxFraction(f) => {
-                    finite("--anchor-mid-fraction", &[f])?;
-                    if f <= 0.0 || f > 1.0 {
-                        return Err(usage(format!(
-                            "--anchor-mid-fraction ({f}) must be in (0, 1] — it places \
-                             mid-grey at that fraction of the roll's reference density (0.5 \
-                             renders mid-grey halfway up the roll's range; 1 puts it on the \
-                             reference itself)"
-                        )));
-                    }
-                }
-                // A linear output value in (0, 1). Zero or negative has no logarithm, so the
-                // anchor would be non-finite; at 1 the film base renders *at* display white
-                // and the whole frame is white. The bound is the domain of the rule, not a
-                // taste judgement — 0.5 is legal and simply very pale.
-                AnchorPlacement::BlackAtBase(floor) => {
-                    finite("--anchor-black-floor", &[floor])?;
-                    if floor <= 0.0 || floor >= 1.0 {
-                        return Err(usage(format!(
-                            "--anchor-black-floor ({floor}) must be in (0, 1) — it is the \
-                             linear output the film base renders to, against the reference \
-                             white (0.005 encodes to about 16/255). At 0 there is no \
-                             logarithm to take; at 1 the base renders as display white"
-                        )));
-                    }
-                }
-                // A density above the base, so strictly positive: at 0 mid-grey is pinned on
-                // the base itself (the base renders as mid-grey — the whole frame above it),
-                // and negative places it below the base where no sample exists.
-                AnchorPlacement::MidAtBaseOffset(offset) => {
-                    positive("--anchor-mid-offset", &[offset])?;
-                }
-            }
-            // The guard is on the **resolved** anchor, not on a proxy quotient. Each rule
-            // divides something different by the slope, and `MID_GREY_OUTPUT_DECADES /
-            // slope` bounds only one of them: `black-at-base` divides `−log10(floor)`, which
-            // is unbounded as the floor shrinks, so a floor of 1e-45 at gamma 1e-37 passed
-            // the proxy (0.745/1e-37 is finite) with a real anchor of `inf` — and rendered
-            // an all-black frame at exit 0 with no warning at all. Resolving the rule is the
-            // only check that cannot drift from what the render will do.
-            //
-            // `Auto` measures the reference per frame, so it is unknown here; `0.0` stands
-            // in. That does not weaken the check — the base-derived rules ignore the
-            // reference outright and the reference-derived ones only scale it by `f ≤ 1`, so
-            // every overflow this guard is about comes from the slope division.
-            let reference = match cfg.calibration.dmax {
-                DmaxSource::Explicit(d) => d,
-                DmaxSource::Fixed => crate::algo::density::NOMINAL_DMAX,
-                DmaxSource::Auto | DmaxSource::None => 0.0,
-            };
-            let anchor = placement.anchor(reference, slope);
-            if !anchor.is_finite() {
-                return Err(usage(format!(
-                    // The remedy says only what this rule inspected. It used to end
-                    // "or --anchor-white-at-reference, which needs no such division",
-                    // recommending a placement whose availability it never checked —
-                    // and `--new-flow` refuses all three reference-reading placements.
-                    // (This rule no longer runs under `--new-flow` at all: the decode's
-                    // flags merge into the new chain's recipe, whose own guard is
-                    // `recipe::validate`.) It gets worse rather than better with time:
-                    // `nf-retire/dmax-machinery` deletes the flag outright. The *explanation* still names it, which is a fact about
-                    // the arithmetic rather than a recommendation, and is what lets a
-                    // legacy user pick a different placement if they want one.
-                    "the resolved anchor placement is not usable: it derives a non-finite \
-                     anchor ({anchor}) at {slope_flag} {slope:e}. Every placement but \
-                     --anchor-white-at-reference divides by the slope, and that quotient \
-                     overflows f32 for a very small slope (or, under --anchor-black-floor, a \
-                     very small floor). Use a photographic slope"
-                )));
-            }
-            // A finite anchor is not enough. The curve evaluates `slope · (density − anchor)`,
-            // and a large *finite* anchor overflows that **product** to −inf, whose `10^` is
-            // exactly 0.0 — an all-black frame at exit 0 with no clip and no non-finite
-            // count, the same laundering the check above exists to stop.
-            // `--anchor-mid-offset 2e38` reaches it at the shipped default gamma, so it needs
-            // no exotic slope. The bound is on the *overflow* only: a large offset whose
-            // product stays finite (offset 3e38 at gamma 1e-37 is −3e1) is honest arithmetic
-            // on absurd input and belongs to `algo/density-safety-bounds`, not here.
-            if !(slope * anchor).is_finite() {
-                return Err(usage(format!(
-                    "the resolved anchor placement is not usable: the anchor ({anchor:e}) is \
-                     finite, but the curve's exponent (slope × (density − anchor)) overflows \
-                     f32 at {slope_flag} {slope:e}, so every sample would render as exactly \
-                     0.0 — a silently black frame. Use a smaller anchor placement, or a \
-                     smaller slope"
-                )));
-            }
+        let anchor = placement.anchor(reference, slope);
+        if !anchor.is_finite() {
+            return Err(usage(format!(
+                // The remedy says only what this rule inspected. It used to end
+                // "or --anchor-white-at-reference, which needs no such division",
+                // recommending a placement whose availability it never checked —
+                // and `--new-flow` refuses all three reference-reading placements.
+                // (This rule no longer runs under `--new-flow` at all: the decode's
+                // flags merge into the new chain's recipe, whose own guard is
+                // `recipe::validate`.) It gets worse rather than better with time:
+                // `nf-retire/dmax-machinery` deletes the flag outright. The *explanation* still names it, which is a fact about
+                // the arithmetic rather than a recommendation, and is what lets a
+                // legacy user pick a different placement if they want one.
+                "the resolved anchor placement is not usable: it derives a non-finite \
+                 anchor ({anchor}) at {slope_flag} {slope:e}. Every placement but \
+                 --anchor-white-at-reference divides by the slope, and that quotient \
+                 overflows f32 for a very small slope (or, under --anchor-black-floor, a \
+                 very small floor). Use a photographic slope"
+            )));
+        }
+        // A finite anchor is not enough. The curve evaluates `slope · (density − anchor)`,
+        // and a large *finite* anchor overflows that **product** to −inf, whose `10^` is
+        // exactly 0.0 — an all-black frame at exit 0 with no clip and no non-finite
+        // count, the same laundering the check above exists to stop.
+        // `--anchor-mid-offset 2e38` reaches it at the shipped default gamma, so it needs
+        // no exotic slope. The bound is on the *overflow* only: a large offset whose
+        // product stays finite (offset 3e38 at gamma 1e-37 is −3e1) is honest arithmetic
+        // on absurd input and belongs to `algo/density-safety-bounds`, not here.
+        if !(slope * anchor).is_finite() {
+            return Err(usage(format!(
+                "the resolved anchor placement is not usable: the anchor ({anchor:e}) is \
+                 finite, but the curve's exponent (slope × (density − anchor)) overflows \
+                 f32 at {slope_flag} {slope:e}, so every sample would render as exactly \
+                 0.0 — a silently black frame. Use a smaller anchor placement, or a \
+                 smaller slope"
+            )));
         }
     }
 
@@ -5155,38 +4696,9 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
         )));
     }
     // Explicit gains must be positive; the auto modes carry no value to check
-    // here (estimated gains are guarded at the estimation point, exit 1). Whitelist
-    // the reconstruction that consumes the gains rather than blacklist `simple`: a
-    // future reconstruction that also skips the print stage must fail loudly here by
-    // default, not silently drop the requested estimation (exit 0, no gains) — the
-    // "forgotten coupled spot" trap.
-    //
-    // **The rule is broader than its original reason, deliberately, for now.** It was
-    // written when `simple` had no white-balance stage at all: the retired `legacy`
-    // path applied WB to density reconstructions only and passed simple's positive
-    // through untouched. A display preset is different — `render_split::resolve_shared_controls`
-    // applies WB whatever the reconstruction, and resolves an auto mode there through
-    // the same `white_balance::resolve_print_gains`, so `simple` + a display preset + `--auto-wb`
-    // would work. Relaxing it is a *behaviour* change (it newly accepts a combination)
-    // and wants its own evidence that the estimators read sensibly off simple's
-    // unclamped positive, so the rule stays and the message below states what is true
-    // rather than the stale reason.
-    match cfg.print.white_balance {
-        WbSource::Explicit(gains) => positive("--white-balance", &gains)?,
-        WbSource::GrayWorld | WbSource::Percentile
-            if !matches!(cfg.reconstruction, Reconstruction::Density { .. }) =>
-        {
-            return Err(usage(
-                "--auto-wb needs --reconstruction density: the auto estimators are \
-                 defined on the density path's corrected positive and Hanten does not \
-                 currently run them for `simple`. Note this is a restriction on \
-                 *estimation*, not on white balance itself — a display preset applies \
-                 explicit --white-balance gains to a simple reconstruction, so pass \
-                 gains instead, or switch reconstruction"
-                    .into(),
-            ));
-        }
-        WbSource::GrayWorld | WbSource::Percentile => {}
+    // here (estimated gains are guarded at the estimation point, exit 1).
+    if let WbSource::Explicit(gains) = cfg.print.white_balance {
+        positive("--white-balance", &gains)?;
     }
 
     // Range placement: the endpoints divide the affine, so they must be finite,
@@ -5367,18 +4879,15 @@ fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
     // adaptation only if the placement consumes what it measures. Under a base-derived
     // rule the measurement is discarded, so the master *is* cross-frame consistent and
     // rejecting it refuses a valid config.
-    if let Reconstruction::Density { curve, .. } = &cfg.reconstruction
-        && cfg.calibration.dmax == DmaxSource::Auto
-        && curve.anchor().is_some_and(|a| a.reads_reference())
-    {
+    if cfg.calibration.dmax == DmaxSource::Auto && render_reads_the_reference(&cfg.reconstruction) {
         return Err(usage(
             "--output-preset film-master rejects a frame-local auto display-white \
              anchor (--auto-d-max / calibration.dmax = \"auto\"): it measures \
              the anchor per frame, which normalizes exposure frame-by-frame and breaks \
              the cross-frame consistency the master exists to preserve. Use the \
              roll-fixed anchor — the default --fixed-d-max, an explicit --d-max <d> \
-             measured once with `hanten estimate --d-max-region`, or (exponential curve \
-             only) --no-d-max for the scene-referred unity placement."
+             measured once with `hanten estimate --d-max-region` — or a base-derived \
+             anchor (the default --anchor-mid-offset), which reads no reference at all."
                 .into(),
         ));
     }
@@ -5393,8 +4902,8 @@ fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
     // the neutral default — so the default `BalanceRange::Auto` is inert and must stay
     // accepted. `density::consults_balance_range` is that predicate, kept beside the
     // short-circuits it mirrors so the two cannot drift.
-    if let Reconstruction::Density { density, .. } = &cfg.reconstruction
-        && density.balance_range == BalanceRange::Auto
+    let density = &cfg.reconstruction.density;
+    if density.balance_range == BalanceRange::Auto
         && crate::algo::density::consults_balance_range(density)
     {
         return Err(usage(format!(
@@ -5807,12 +5316,20 @@ fn reject_deprecated_input_flags(o: &InputOverrides) -> Result<()> {
 fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
     if let Some(name) = &args.algorithm {
         return Err(NcError::Usage(format!(
-            "--algorithm {name} was removed: the selection is now the tagged \
-             reconstruction — use `--reconstruction simple|density`, plus \
-             `--density-curve exponential|sigmoid|characteristic` for the density curve \
-             (the old `--algorithm sigmoid` is `--reconstruction density \
-             --density-curve sigmoid`). Recipes select it via the one `reconstruction` object \
-             (design-spec §8)."
+            "--algorithm {name} was removed: density is the only reconstruction, and \
+             `--density-curve exponential|characteristic` selects its curve (recipe \
+             `reconstruction.curve`, design-spec §8). The `simple` and `sigmoid` \
+             algorithms were removed outright."
+        )));
+    }
+    if let Some(value) = &args.reconstruction {
+        return Err(NcError::Usage(format!(
+            "--reconstruction {value}: {REMOVED_SIMPLE_RECONSTRUCTION}."
+        )));
+    }
+    if let Some((flag, remedy)) = removed_sigmoid_flag(&args.sigmoid) {
+        return Err(NcError::Usage(format!(
+            "{flag} was removed with the sigmoid curve: {remedy}."
         )));
     }
     // The removed depth switch, and `--out-depth`, which replaced it and has since
@@ -5871,9 +5388,9 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
     ] {
         if present {
             return Err(NcError::Usage(format!(
-                "{flag} was removed: it is not a simple-reconstruction parameter — \
-                 simple reconstruction ends at the direct unclamped positive \
-                 `1 - scan/Dmin` (design-spec §7.1). It is a print control that now \
+                "{flag} was removed: it was never a reconstruction parameter — \
+                 the retired `simple` reconstruction ended at the direct unclamped \
+                 positive `1 - scan/Dmin`. It is a print control that now \
                  runs *after* the NC film RGB v1 working-space mapping, so use \
                  {replacement}. The value carries over; the pixels do not — \
                  per-channel gains and an affine range placement do not commute with \
@@ -5883,6 +5400,50 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The first retired sigmoid flag the user passed, with its remedy.
+fn removed_sigmoid_flag(flags: &RemovedSigmoidFlags) -> Option<(&'static str, &'static str)> {
+    // Each remedy must also hold under `--new-flow`, which refuses the anchor
+    // placements and the display tone the current chain offers.
+    const KNEE: &str = "the exponential has no knees, and highlight roll-off belongs to \
+                        the display tone (`--display-tone`; not yet available under \
+                        `--new-flow`)";
+    [
+        (
+            "--sigmoid-contrast",
+            flags.sigmoid_contrast.is_some(),
+            "the exponential's slope is `--density-gamma`",
+        ),
+        ("--sigmoid-toe", flags.sigmoid_toe.is_some(), KNEE),
+        ("--sigmoid-shoulder", flags.sigmoid_shoulder.is_some(), KNEE),
+        (
+            "--sigmoid-mid-fraction",
+            flags.sigmoid_mid_fraction.is_some(),
+            "the same placement is `--anchor-mid-fraction` (under `--new-flow`, the \
+             decode's one placement is `--anchor-mid-offset`)",
+        ),
+        (
+            "--sigmoid-white-at-d-max",
+            flags.sigmoid_white_at_d_max,
+            "the same placement is `--anchor-white-at-reference` (under `--new-flow`, \
+             the decode's one placement is `--anchor-mid-offset`)",
+        ),
+    ]
+    .into_iter()
+    .find(|(_, present, _)| *present)
+    .map(|(flag, _, remedy)| (flag, remedy))
+}
+
+/// `--density-curve`'s parser: the curve names, plus a migration message for the
+/// retired `sigmoid` rather than clap's generic unknown-value error.
+fn parse_density_curve(value: &str) -> std::result::Result<DensityCurveType, String> {
+    if value.eq_ignore_ascii_case("sigmoid") {
+        return Err(REMOVED_SIGMOID_CURVE.to_string());
+    }
+    <DensityCurveType as clap::ValueEnum>::from_str(value, true).map_err(|_| {
+        format!("unknown density curve `{value}` (accepted: exponential, characteristic)")
+    })
 }
 
 /// Which input axes were asserted via a **CLI flag** (vs the recipe) — threaded
@@ -6214,10 +5775,6 @@ fn convert_frame(
         film_base_source: Some(base_source.clone()),
         ..Report::default()
     };
-
-    // (A customized `--density-gamma` under a resolved sigmoid curve is now a
-    // merge-time usage error — the tagged curve made the old warned-and-ignored
-    // combination unrepresentable, so no warning lives here anymore.)
 
     // Domain guard for an explicit / reference-derived `Dmax` — see
     // `explicit_dmax_domain_warning`. Fires the (`--strict`-promotable) warning when
@@ -7370,32 +6927,29 @@ fn render_new_flow_frame(
 /// warns loudly (`--strict`-promotable) so the user re-measures the anchor under these
 /// density params (or resets them).
 ///
-/// **The parametric curves' own default scale is non-identity** (the `[1, 0.84, 0.73]`
+/// **The exponential's own default scale is non-identity** (the `[1, 0.84, 0.73]`
 /// scanner calibration), so this fires on the documented measure-once workflow — an
-/// `estimate`-measured `--d-max` reused on a sigmoid/exponential render — and that is
+/// `estimate`-measured `--d-max` reused under a placement that reads it — and that is
 /// the intent: the mismatch is real there (~14% high, ≈0.62 stop) and `estimate` has no
 /// density params to measure in the corrected domain with. It stays scoped to an
 /// *explicitly stated* anchor, so no default resolution ever trips it.
 ///
 /// `Fixed`/`Auto` are already in the corrected domain (the nominal is defined there;
-/// `Auto` measures the post-correction, post-balance buffer), and `simple` has no
-/// density domain at all, so the guard is scoped to an explicit anchor on a
-/// density reconstruction — either parametric curve; both subtract the anchor from `D′`
-/// (the characteristic curve resolves no reference at all, so `dmax` is never `Explicit`
-/// there and this never fires for it).
+/// `Auto` measures the post-correction, post-balance buffer), so the guard is scoped to
+/// an explicit reference that the placement actually reads (neither the characteristic
+/// curve nor a base-derived placement reads one — [`unconsumed_dmax_warning`] covers
+/// those).
 /// (Regional balance varies per-tone, so it cannot be *folded into* a scalar
 /// anchor — but a non-neutral balance still shifts `D′`, so a fixed anchor still
 /// mis-anchors; hence it belongs in this guard.)
 fn explicit_dmax_domain_warning(cfg: &ResolvedConfig) -> Option<String> {
-    let Reconstruction::Density { density, curve } = &cfg.reconstruction else {
-        return None;
-    };
+    let density = &cfg.reconstruction.density;
     if !matches!(cfg.calibration.dmax, DmaxSource::Explicit(_)) {
         return None;
     }
-    // A curve that reads no reference cannot mis-anchor on one; that config gets
+    // A render that reads no reference cannot mis-anchor on one; that config gets
     // `unconsumed_dmax_warning` instead, which is the accurate diagnosis.
-    if !curve.consumes_reference() {
+    if !render_reads_the_reference(&cfg.reconstruction) {
         return None;
     }
     // Compared against the **identity** correction, not `DensityParams::default()`.
@@ -7416,10 +6970,10 @@ fn explicit_dmax_domain_warning(cfg: &ResolvedConfig) -> Option<String> {
              --d-max-region` measures), but density-scale ({:?}) / density-offset ({:?}) / \
              regional balance (shadow {:?}, highlight {:?}) are not the identity — the \
              anchor is in a different density domain than the curve subtracts it \
-             from, uniformly mis-anchoring the frame. Note the parametric curves' \
+             from, uniformly mis-anchoring the frame. Note the exponential's \
              *default* scale is the non-identity scanner calibration, so a measured \
-             --d-max is systematically high there (about 14% at the shipped gain, ~0.62 \
-             stop darker at the default anchor placement); use the roll-fixed \
+             --d-max is systematically high there (about 14% at the shipped gain); use \
+             the roll-fixed \
              --fixed-d-max, re-measure --d-max under these density params, or set \
              --density-scale 1,1,1 to render in the measured domain",
             density.scale, density.offset, density.shadow_balance, density.highlight_balance
@@ -7429,59 +6983,73 @@ fn explicit_dmax_domain_warning(cfg: &ResolvedConfig) -> Option<String> {
     }
 }
 
+/// Whether the resolved reconstruction reads `calibration.dmax` at all: the curve must
+/// consume a reference *and* its placement must read one. Neither holds for the
+/// characteristic curve, and the second fails for the base-derived placements —
+/// including the default `mid-at-base-offset` since `pipeline_version` 6.
+///
+/// The **one** answer to that question: the two `Dmax` warnings, `film-master`'s
+/// auto-`Dmax` rule, the IR-note suppression (`region_reaches_a_rendered_pixel`) and
+/// roll's not-frozen warning all ask it here, so they cannot disagree.
+fn render_reads_the_reference(reconstruction: &Reconstruction) -> bool {
+    reconstruction
+        .curve
+        .anchor()
+        .is_some_and(|a| a.reads_reference())
+}
+
 /// A stated `calibration.dmax` that the resolved reconstruction will never read.
 ///
 /// **Accepted, carried and reported — never refused.** A roll calibration is meant to
 /// compose with any pipeline profile (`--params roll-cal.json --params look.jsonc`),
-/// and two looks read no reference: the `characteristic` curve, which takes its slope
-/// and its mid-grey placement from the stock's published response, and `simple`, which
-/// has no curve stage at all. Refusing the combination would make the calibration
-/// un-composable with exactly the profiles it is most useful beside; ignoring it
-/// silently would be the accepted-and-ignored defect this project keeps closing. So it
-/// warns, and `--strict` promotes it.
+/// and two kinds of look read no reference: the `characteristic` curve, which takes its
+/// slope and its mid-grey placement from the stock's published response, and the
+/// exponential under a base-derived placement — its default since `pipeline_version` 6.
+/// Refusing the combination would make the calibration un-composable with exactly the
+/// profiles it is most useful beside; ignoring it silently would be the
+/// accepted-and-ignored defect this project keeps closing. So it warns, and `--strict`
+/// promotes it.
 ///
 /// Only a **non-default** value warns. `"fixed"` is what an unstated reference resolves
-/// to, so warning on it would fire on every `--preset characteristic-stock` run and say
-/// nothing about the user's intent.
+/// to, so warning on it would fire on every default run and say nothing about the
+/// user's intent.
 ///
 /// Note this is *not* [`explicit_dmax_domain_warning`]'s question. That one fires when a
 /// reference **is** read but in the wrong density domain; this one fires when it is not
-/// read at all, and they are mutually exclusive by construction.
+/// read at all, and they are mutually exclusive by construction
+/// ([`render_reads_the_reference`] decides both).
 fn unconsumed_dmax_warning(cfg: &ResolvedConfig) -> Option<String> {
-    // **`--fixed-d-max` beside such a look is therefore silent, deliberately.** It is
-    // the one flag in the relaxed family that is now neither refused nor reported, and
-    // that follows the project's presence-rule tiebreaker rather than slipping through
-    // it: it resolves the documented default and forces nothing the branch cannot
-    // produce. Warning on it would fire on every
-    // `--preset characteristic-stock` run and say nothing about the user's intent.
-    if cfg.calibration.dmax == DmaxSource::default() {
+    // **`--fixed-d-max` beside such a look is therefore silent, deliberately.** It
+    // resolves the documented default and forces nothing the branch cannot produce —
+    // the project's presence-rule tiebreaker.
+    if cfg.calibration.dmax == DmaxSource::default()
+        || render_reads_the_reference(&cfg.reconstruction)
+    {
         return None;
     }
-    // **The remedy is per branch, and that is not decoration.** `--density-curve` is
-    // refused outright beside `simple` (`merge`: "the resolved reconstruction is
-    // `simple` (no curve stage); pass --reconstruction density"), so offering it there
-    // would hand the user a flag that exits 2 — the circular-advice defect this project
-    // has shipped four times. Each arm names a route its own branch accepts.
-    let (reason, remedy) = match &cfg.reconstruction {
-        Reconstruction::Simple => (
-            "the resolved reconstruction is `simple`, the direct inversion, which has no \
-             curve stage to place a reference with",
-            "Pass `--reconstruction density`, which resolves a curve that does read one,",
-        ),
-        Reconstruction::Density { curve, .. } if !curve.consumes_reference() => (
+    // **The remedy is per branch, and that is not decoration**: each arm names a route
+    // its own branch accepts — the circular-advice defect this project has shipped four
+    // times.
+    let (reason, remedy) = match &cfg.reconstruction.curve {
+        DensityCurve::Characteristic(_) => (
             "the resolved curve is characteristic — it reads its slope and its mid-grey \
              placement off the stock's published response, so it consults no reference",
             // **Names the stock too, and that is the load-bearing half.** `--film-stock`
-            // is the most natural way to reach this curve, and it is refused by every
-            // parametric one — so "pass `--density-curve sigmoid`" alone sends a user
-            // who typed a stock straight into `usage: --film-stock … Pass --density-curve
-            // characteristic`, back where they started. A remedy has to survive the
-            // command line that produced the warning, not just the config it inspected.
-            "Pass `--density-curve sigmoid` or `--density-curve exponential` to anchor \
-             the render by hand — dropping `--film-stock` with it, since only the \
-             characteristic curve accepts a stock —",
+            // is the most natural way to reach this curve, and the exponential refuses
+            // it — so naming the curve alone sends a user who typed a stock straight
+            // into `usage: --film-stock … Pass --density-curve characteristic`, back
+            // where they started.
+            "Pass `--density-curve exponential` with `--anchor-mid-fraction` or \
+             `--anchor-white-at-reference` to anchor the render on it — dropping \
+             `--film-stock` with it, since only the characteristic curve accepts a stock —",
         ),
-        Reconstruction::Density { .. } => return None,
+        DensityCurve::Exponential(_) => (
+            "the resolved anchor placement is base-derived (the default, \
+             `mid-at-base-offset`, or `black-at-base`) — it places the curve against the \
+             film base, so it consults no reference",
+            "Pass `--anchor-mid-fraction` or `--anchor-white-at-reference` to anchor the \
+             render on it,",
+        ),
     };
     Some(format!(
         "calibration.dmax is set, but this conversion does not read it: {reason}. The \
@@ -8163,8 +7731,8 @@ fn resolve_frame_output(
 /// - **Internally tagged** (the `reconstruction` object and its tagged
 ///   `curve`): a `"type"` field alongside the variant's own fields. Flipping
 ///   the `type` must not deep-merge either — the base's stale variant-specific
-///   fields would survive (`density`/`curve` under a switch to `simple`,
-///   `gamma` under a switch to `sigmoid`) and the fail-loud deserializer would
+///   fields would survive (`gamma` under a switch to `characteristic`) and the
+///   fail-loud deserializer would
 ///   reject the union. [`internally_tagged_switch`] replaces the object with
 ///   the overlay outright. **Nothing is carried**, and that is correct rather
 ///   than lossy: the one field that used to be (the roll's reference density)
@@ -8269,10 +7837,9 @@ fn is_variant_switch(base: &serde_json::Value, overlay: &serde_json::Value) -> b
 
 /// The internally-tagged variant switch: `base` and `overlay` are both objects
 /// carrying a `"type"` string discriminator with *different* values — in this
-/// recipe schema that is the `reconstruction` object (`simple`/`density`) and
-/// its tagged `curve` (`exponential`/`sigmoid`/`characteristic`); nothing else uses an
-/// internal
-/// tag. Returns the replacement object, or `None` when this isn't a type
+/// recipe schema that is the tagged `curve` (`exponential`/`characteristic`), plus the
+/// `reconstruction` object's retired selector (only `density` is still accepted, so no
+/// switch there can succeed); nothing else uses an internal tag. Returns the replacement object, or `None` when this isn't a type
 /// switch (same/absent tags fall through to the ordinary deep merge, so a
 /// same-variant partial override still keeps its siblings).
 ///
@@ -8280,7 +7847,7 @@ fn is_variant_switch(base: &serde_json::Value, overlay: &serde_json::Value) -> b
 /// roll's reference density used to be, on the grounds that it is a
 /// curve-independent calibration; since `core/calibration-recipe-section` it is one
 /// structurally, living at `calibration.dmax` outside this object, so a per-frame
-/// `{"curve":{"type":"sigmoid"}}` override keeps the roll's frozen reference
+/// `{"curve":{"type":"characteristic"}}` override keeps the roll's frozen reference
 /// without any carry at all. That also removes the carry's worst edge: it could not
 /// cross a `characteristic` boundary, so a frame switched to a stock curve and back
 /// silently lost the reference.
@@ -8606,17 +8173,12 @@ fn resolve_frames(
                         // shared config, so `density.scale` is present whether or not the
                         // overlay mentioned it and the `Deserialize` resolution above
                         // cannot fire. Without this a per-frame switch to
-                        // `characteristic` would carry the parametric curves' calibration
+                        // `characteristic` would carry the exponential's calibration
                         // onto a curve that already applies each stock's own per-channel
                         // response — see `DensityParams::default_scale_for`.
+                        let shared_curve = &shared.reconstruction.curve;
+                        let Reconstruction { density, curve } = &mut cfg.reconstruction;
                         if !sets_density_scale(&ov)
-                            && let (
-                                Reconstruction::Density {
-                                    curve: shared_curve,
-                                    ..
-                                },
-                                Reconstruction::Density { density, curve },
-                            ) = (&shared.reconstruction, &mut cfg.reconstruction)
                             && shared_curve.curve_type() != curve.curve_type()
                         {
                             let before = density.scale;
@@ -8894,9 +8456,8 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // …and only when the placement *reads* the reference. A base-derived rule discards
     // the per-frame measurement, so every frame still renders on one roll-level rule;
     // warning there is a false alarm, and under `--strict` a false failure.
-    if let Reconstruction::Density { curve, .. } = &shared.reconstruction
-        && shared.calibration.dmax == DmaxSource::Auto
-        && curve.anchor().is_some_and(|a| a.reads_reference())
+    if shared.calibration.dmax == DmaxSource::Auto
+        && render_reads_the_reference(&shared.reconstruction)
     {
         let msg = "roll Dmax is NOT frozen: calibration.dmax is `auto`, so every \
              frame measures its own display-white anchor — the roll is not \
@@ -9739,8 +9300,7 @@ fn emit_telemetry(
         loss,
         input_bytes: file_len(&args.input),
         output_bytes: file_len(output),
-        reconstruction: cfg.reconstruction.reconstruction_type(),
-        curve: cfg.reconstruction.curve_type(),
+        curve: cfg.reconstruction.curve.curve_type(),
         params_hash: telemetry::params_hash(recipe_json),
         // The report's copy is the source `convert_frame` actually resolved and
         // ran, so it cannot disagree with the conversion. It is always `Some`
@@ -9854,7 +9414,7 @@ mod tests {
         }
     }
 
-    use crate::types::{CharacteristicParams, ExponentialParams, SigmoidParams};
+    use crate::types::{CharacteristicParams, ExponentialParams};
 
     /// Parse a `convert` invocation (with the required input/output already set)
     /// and return its args, so merge can be tested against the real parser.
@@ -9876,9 +9436,7 @@ mod tests {
 
     /// The resolved (curve, density gain, exposure, tone) a merge produced.
     fn bundle_of(cfg: &ResolvedConfig) -> (DensityCurve, [f32; 3], f32, DisplayToneCurve) {
-        let Reconstruction::Density { curve, density } = &cfg.reconstruction else {
-            panic!("expected a density reconstruction");
-        };
+        let Reconstruction { curve, density } = &cfg.reconstruction;
         (
             *curve,
             density.scale,
@@ -9940,27 +9498,26 @@ mod tests {
     fn a_flag_overrides_the_preset_it_sits_beside() {
         let cfg = merged(&[
             "--preset",
-            "sigmoid-flat",
+            "characteristic-generic",
             "--print-exposure",
             "0.2",
             "--display-tone",
             "shoulder",
             "--density-scale",
-            "1,1,1",
-            "--sigmoid-toe",
-            "0.3",
+            "1.1,1,1",
         ])
         .unwrap();
         let (curve, scale, exposure, tone) = bundle_of(&cfg);
         assert_eq!(exposure, 0.2);
         assert_eq!(tone, DisplayToneCurve::Shoulder);
-        assert_eq!(scale, [1.0, 1.0, 1.0]);
-        let DensityCurve::Sigmoid(s) = curve else {
-            panic!("expected a sigmoid");
-        };
-        assert_eq!(s.toe, 0.3);
+        assert_eq!(scale, [1.1, 1.0, 1.0]);
         // Untouched by any flag, so still the preset's.
-        assert_eq!(s.shoulder, 0.0);
+        assert_eq!(
+            curve,
+            DensityCurve::Characteristic(CharacteristicParams {
+                stock: FilmStock::GenericC41
+            })
+        );
     }
 
     /// The preset wins over the recipe — the `params < preset` half.
@@ -9971,7 +9528,7 @@ mod tests {
     #[test]
     fn the_preset_overrides_a_recipe_that_stated_every_key() {
         let recipe = ResolvedConfig {
-            reconstruction: Reconstruction::Density {
+            reconstruction: Reconstruction {
                 density: DensityParams {
                     scale: [0.5, 0.5, 0.5],
                     ..DensityParams::default()
@@ -9985,14 +9542,18 @@ mod tests {
             },
             ..base_cfg()
         };
-        let cfg = merge(recipe, &parse_convert(&["--preset", "sigmoid-flat"])).unwrap();
+        let cfg = merge(
+            recipe,
+            &parse_convert(&["--preset", "characteristic-generic"]),
+        )
+        .unwrap();
         let (curve, scale, exposure, tone) = bundle_of(&cfg);
-        assert!(matches!(curve, DensityCurve::Sigmoid(_)));
+        assert!(matches!(curve, DensityCurve::Characteristic(_)));
         assert_eq!(
             scale,
-            DensityParams::default_scale_for(DensityCurveType::Sigmoid)
+            DensityParams::default_scale_for(DensityCurveType::Characteristic)
         );
-        assert_eq!(exposure, 2.17);
+        assert_eq!(exposure, 1.91);
         assert!(matches!(tone, DisplayToneCurve::Reinhard { .. }));
     }
 
@@ -10021,41 +9582,18 @@ mod tests {
         );
     }
 
-    /// A preset over `simple` is refused, whichever side resolved the `simple`.
+    /// The presets retired with the sigmoid are refused by name, not as unknown.
     #[test]
-    fn a_preset_over_simple_reconstruction_is_refused() {
-        // Named on the same command line — the case that needs `--preset` to be merged
-        // *after* the `--reconstruction` arm. Merged before it, this silently rendered a
-        // `simple` frame carrying the preset's exposure and tone.
-        let e = merged(&["--preset", "sigmoid-flat", "--reconstruction", "simple"])
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("no curve stage"), "{e}");
-        assert!(e.contains("Drop `--reconstruction simple`"), "{e}");
-
-        // Inherited from the recipe, where that remedy would name a flag never passed.
-        // Asserting only the shared diagnosis cannot see that, which is how the wrong
-        // remedy survived the first round.
-        let recipe = ResolvedConfig {
-            reconstruction: Reconstruction::Simple,
-            ..base_cfg()
-        };
-        let args = parse_convert(&["--preset", "sigmoid-flat"]);
-        let e = merge(recipe.clone(), &args).unwrap_err().to_string();
-        assert!(e.contains("no curve stage"), "{e}");
-        assert!(
-            !e.contains("Drop `--reconstruction simple`"),
-            "names a flag the user never passed: {e}"
-        );
-        assert!(e.contains("--reconstruction density"), "{e}");
-        // And that remedy works.
-        assert!(
-            merge(
-                recipe,
-                &parse_convert(&["--preset", "sigmoid-flat", "--reconstruction", "density"])
-            )
-            .is_ok()
-        );
+    fn the_sigmoid_presets_are_removed_by_name() {
+        for name in ["sigmoid-knees", "sigmoid-flat", "Sigmoid-Flat"] {
+            let e = merged(&["--preset", name]).unwrap_err().to_string();
+            assert!(
+                e.contains("was removed with the sigmoid curve"),
+                "{name}: {e}"
+            );
+            assert!(!e.contains("unknown conversion preset"), "{name}: {e}");
+            assert!(e.contains("`characteristic-generic`"), "{name}: {e}");
+        }
     }
 
     /// The two presets that reconstruct through a named stock say so, and name a remedy
@@ -10120,54 +9658,33 @@ mod tests {
     /// silently renders `characteristic-stock` at the wrong exposure.
     #[test]
     fn a_stock_beside_a_stockless_preset_is_refused() {
-        for name in ["characteristic-generic", "sigmoid-flat", "sigmoid-knees"] {
-            // Through `merge`, **not** by calling the rule directly. Called directly this
-            // passed while the real CLI path never reached the rule at all: merge's own
-            // `--film-stock` arm refuses a stock beside a resolved parametric curve, so
-            // the two sigmoid presets got that message instead and its remedy
-            // (`--density-curve characteristic`) led straight into this rule saying the
-            // opposite. A test that skips the path cannot see an ordering defect.
-            let e = merged(&["--preset", name, "--film-stock", "ektar-100"])
-                .unwrap_err()
-                .to_string();
-            assert!(e.contains(name), "{name} diagnosed by another rule: {e}");
-            // And specifically *not* the generic arm's message, whose remedy contradicts
-            // this one.
-            assert!(
-                !e.contains("Pass --density-curve characteristic"),
-                "{name} got the curve arm's contradictory remedy: {e}"
-            );
-            // The remedy this rule offers must itself run.
-            assert!(
-                merged(&[
-                    "--preset",
-                    "characteristic-stock",
-                    "--film-stock",
-                    "ektar-100"
-                ])
-                .is_ok()
-            );
-        }
-    }
-
-    /// `sigmoid-knees` takes its brightness from the anchor, so a non-zero
-    /// `--print-exposure` beside it is a usage error naming the knob that works.
-    ///
-    /// Scoped to the preset on purpose. The underlying pair (`--display-tone none` plus
-    /// a positive exposure) has **no** general rule and must not gain one: dark enough
-    /// content renders under it at exit 0, so a general refusal would reject valid
-    /// frames. What is refused is contradicting the bundle the user named.
-    #[test]
-    fn print_exposure_beside_the_anchor_brightened_preset_is_refused() {
-        let e = merged(&["--preset", "sigmoid-knees", "--print-exposure", "0.7"])
+        let name = "characteristic-generic";
+        // Through `merge`, **not** by calling the rule directly. Called directly this
+        // passed while the real CLI path never reached the rule at all: merge's own
+        // `--film-stock` arm refuses a stock beside a resolved parametric curve, so
+        // the (since retired) sigmoid presets got that message instead and its remedy
+        // (`--density-curve characteristic`) led straight into this rule saying the
+        // opposite. A test that skips the path cannot see an ordering defect.
+        let e = merged(&["--preset", name, "--film-stock", "ektar-100"])
             .unwrap_err()
             .to_string();
-        assert!(e.contains("--anchor-mid-fraction"), "{e}");
-        // The identity value asks for nothing — it is what the preset resolves anyway —
-        // so it is accepted, per the presence-rule tiebreaker.
-        assert!(merged(&["--preset", "sigmoid-knees", "--print-exposure", "0"]).is_ok());
-        // And the rule is preset-scoped: the same pair without the preset still merges.
-        assert!(merged(&["--display-tone", "none", "--print-exposure", "0.7"]).is_ok());
+        assert!(e.contains(name), "{name} diagnosed by another rule: {e}");
+        // And specifically *not* the generic arm's message, whose remedy contradicts
+        // this one.
+        assert!(
+            !e.contains("Pass --density-curve characteristic"),
+            "{name} got the curve arm's contradictory remedy: {e}"
+        );
+        // The remedy this rule offers must itself run.
+        assert!(
+            merged(&[
+                "--preset",
+                "characteristic-stock",
+                "--film-stock",
+                "ektar-100"
+            ])
+            .is_ok()
+        );
     }
 
     /// The parse diagnostic lists every accepted name, generated from `ALL`.
@@ -10185,8 +9702,8 @@ mod tests {
         }
         // Keywords, not paths.
         assert_eq!(
-            ConversionPreset::parse("  Sigmoid-Flat ").unwrap(),
-            ConversionPreset::SigmoidFlat
+            ConversionPreset::parse("  Characteristic-Generic ").unwrap(),
+            ConversionPreset::CharacteristicGeneric
         );
     }
 
@@ -10208,7 +9725,7 @@ mod tests {
             "--print-exposure",
             "0.1",
             "--density-curve",
-            "sigmoid",
+            "exponential",
         ]);
         let cfg = merge(base_cfg(), &args).unwrap();
         let result = conversion_preset_result(&args, None, &cfg)
@@ -10226,7 +9743,12 @@ mod tests {
         // A flag that restates what the preset already resolved is not an override: the
         // block is a diff against the resolved config, not a record of which flags were
         // typed.
-        let args = parse_convert(&["--preset", "sigmoid-flat", "--sigmoid-shoulder", "0"]);
+        let args = parse_convert(&[
+            "--preset",
+            "characteristic-generic",
+            "--density-curve",
+            "characteristic",
+        ]);
         let cfg = merge(base_cfg(), &args).unwrap();
         let result = conversion_preset_result(&args, None, &cfg)
             .unwrap()
@@ -10258,11 +9780,11 @@ mod tests {
     #[test]
     fn a_preset_leaves_the_roll_calibration_untouched() {
         let calibrated = ResolvedConfig {
-            reconstruction: Reconstruction::Density {
+            reconstruction: Reconstruction {
                 density: DensityParams::default(),
-                curve: DensityCurve::Sigmoid(SigmoidParams {
-                    contrast: 1.4,
-                    ..SigmoidParams::default()
+                curve: DensityCurve::Exponential(ExponentialParams {
+                    gamma: 1.4,
+                    ..ExponentialParams::default()
                 }),
             },
             calibration: CalibrationParams {
@@ -10294,21 +9816,15 @@ mod tests {
         // preset that does nothing at all.
         let cfg = merge(
             calibrated.clone(),
-            &parse_convert(&["--preset", "sigmoid-flat"]),
+            &parse_convert(&["--preset", "characteristic-generic"]),
         )
         .unwrap();
-        let DensityCurve::Sigmoid(s) = bundle_of(&cfg).0 else {
-            panic!("expected a sigmoid")
-        };
-        assert_eq!(
-            (s.contrast, s.shoulder),
-            (SigmoidParams::default().contrast, 0.0)
-        );
+        assert!(matches!(bundle_of(&cfg).0, DensityCurve::Characteristic(_)));
 
         // An explicit flag still wins over the recipe's value.
         let cfg = merge(
             calibrated,
-            &parse_convert(&["--preset", "sigmoid-flat", "--d-max", "1.5"]),
+            &parse_convert(&["--preset", "characteristic-generic", "--d-max", "1.5"]),
         )
         .unwrap();
         assert_eq!(cfg.calibration.dmax, DmaxSource::Explicit(1.5));
@@ -10324,7 +9840,7 @@ mod tests {
     #[test]
     fn the_report_separates_what_the_preset_replaced_from_what_a_flag_overrode() {
         let recipe = ResolvedConfig {
-            reconstruction: Reconstruction::Density {
+            reconstruction: Reconstruction {
                 density: DensityParams::default(),
                 curve: DensityCurve::Characteristic(CharacteristicParams {
                     stock: FilmStock::Ektar100,
@@ -10358,21 +9874,29 @@ mod tests {
         // A recipe that differs from the expansion only in its roll calibration must
         // read as neither replaced nor overridden: the preset never touches that
         // section, so nothing about the look moved.
+        let expansion = ConversionPreset::CharacteristicGeneric
+            .expand(None)
+            .unwrap();
         let recipe = ResolvedConfig {
-            reconstruction: Reconstruction::Density {
+            reconstruction: Reconstruction {
                 density: DensityParams {
-                    scale: DensityParams::default_scale_for(DensityCurveType::Sigmoid),
+                    scale: expansion.density_scale,
                     ..DensityParams::default()
                 },
-                curve: DensityCurve::Sigmoid(SigmoidParams::default()),
+                curve: expansion.curve,
             },
             calibration: CalibrationParams {
                 dmax: DmaxSource::Explicit(2.1),
                 ..base_cfg().calibration
             },
+            print: PrintParams {
+                print_exposure: expansion.print_exposure,
+                display_tone: expansion.display_tone,
+                ..base_cfg().print
+            },
             ..base_cfg()
         };
-        let args = parse_convert(&["--preset", "sigmoid-knees"]);
+        let args = parse_convert(&["--preset", "characteristic-generic"]);
         let cfg = merge(recipe.clone(), &args).unwrap();
         let r = conversion_preset_result(&args, Some(&recipe), &cfg)
             .unwrap()
@@ -10389,10 +9913,11 @@ mod tests {
     /// definition has moved.
     #[test]
     fn a_recipe_cannot_name_a_conversion_preset() {
-        let e = serde_json::from_str::<ResolvedConfig>(r#"{"preset":"sigmoid-flat"}"#).unwrap_err();
+        let e = serde_json::from_str::<ResolvedConfig>(r#"{"preset":"characteristic-generic"}"#)
+            .unwrap_err();
         assert!(e.to_string().contains("unknown field"), "{e}");
         let e = serde_json::from_str::<ResolvedConfig>(
-            r#"{"reconstruction":{"preset":"sigmoid-flat"}}"#,
+            r#"{"reconstruction":{"preset":"characteristic-generic"}}"#,
         )
         .unwrap_err();
         assert!(e.to_string().contains("unknown field"), "{e}");
@@ -10402,7 +9927,7 @@ mod tests {
     /// constructor — the tagged enum makes field-poking verbose otherwise).
     fn density_cfg(density: DensityParams, curve: DensityCurve) -> ResolvedConfig {
         ResolvedConfig {
-            reconstruction: Reconstruction::Density { density, curve },
+            reconstruction: Reconstruction { density, curve },
             ..base_cfg()
         }
     }
@@ -10423,47 +9948,21 @@ mod tests {
         density_cfg(DensityParams::default(), DensityCurve::Exponential(e))
     }
 
-    fn sigmoid_cfg(s: SigmoidParams) -> ResolvedConfig {
-        density_cfg(DensityParams::default(), DensityCurve::Sigmoid(s))
-    }
-
-    fn simple_cfg() -> ResolvedConfig {
-        ResolvedConfig {
-            reconstruction: Reconstruction::Simple,
-            ..base_cfg()
-        }
-    }
-
-    /// The density block of a resolved config (panics on `simple` — the tests
-    /// using it assert a density reconstruction).
+    /// The density block of a resolved config.
     fn density_of(cfg: &ResolvedConfig) -> &DensityParams {
-        match &cfg.reconstruction {
-            Reconstruction::Density { density, .. } => density,
-            Reconstruction::Simple => panic!("expected a density reconstruction"),
-        }
+        &cfg.reconstruction.density
     }
 
-    /// The resolved curve of a density config (panics on `simple`).
+    /// The resolved curve of a config.
     fn curve_of(cfg: &ResolvedConfig) -> &DensityCurve {
-        match &cfg.reconstruction {
-            Reconstruction::Density { curve, .. } => curve,
-            Reconstruction::Simple => panic!("expected a density reconstruction"),
-        }
+        &cfg.reconstruction.curve
     }
 
-    /// The exponential curve's gamma (panics on sigmoid/simple).
+    /// The exponential curve's gamma (panics on characteristic).
     fn gamma_of(cfg: &ResolvedConfig) -> f32 {
         match curve_of(cfg) {
             DensityCurve::Exponential(e) => e.gamma,
             other => panic!("expected the exponential curve, got {other:?}"),
-        }
-    }
-
-    /// The sigmoid curve's knobs (panics on exponential/simple).
-    fn sigmoid_of(cfg: &ResolvedConfig) -> SigmoidParams {
-        match curve_of(cfg) {
-            DensityCurve::Sigmoid(s) => *s,
-            other => panic!("expected the sigmoid curve, got {other:?}"),
         }
     }
 
@@ -10528,8 +10027,8 @@ mod tests {
         assert_eq!(gamma_of(&cfg), 1.5);
 
         // unspecified everywhere → that curve's own default. Selected explicitly
-        // because the *default* curve is the sigmoid, and this test's subject is
-        // the exponential's gamma-merge precedence, not which curve is default.
+        // because this test's subject is the exponential's gamma-merge precedence, not
+        // which curve is default.
         let cfg = merge(
             base_cfg(),
             &parse_convert(&["--density-curve", "exponential"]),
@@ -10618,17 +10117,20 @@ mod tests {
         let measures = |flags: &[&str]| measures_over_region(&resolved(flags));
         let renders = |flags: &[&str]| region_reaches_a_rendered_pixel(&resolved(flags));
 
+        let reading = ["--auto-d-max", "--anchor-mid-fraction", "0.5"];
         assert!(
-            measures(&["--auto-d-max"]) && renders(&["--auto-d-max"]),
-            "auto + the default reference-reading placement does both"
+            measures(&reading) && renders(&reading),
+            "auto + a reference-reading placement does both"
         );
 
         // The case that separates them: the measurement is taken over the region
         // (so the reported number means one thing), and no rendered pixel depends
         // on it (so the plane is still genuinely unused).
         for reference_free in [
-            ["--auto-d-max", "--anchor-black-floor", "0.05"],
-            ["--auto-d-max", "--anchor-mid-offset", "1.0"],
+            vec!["--auto-d-max", "--anchor-black-floor", "0.05"],
+            vec!["--auto-d-max", "--anchor-mid-offset", "1.0"],
+            // The default placement since `pipeline_version` 6.
+            vec!["--auto-d-max"],
         ] {
             assert!(
                 measures(&reference_free),
@@ -10640,7 +10142,7 @@ mod tests {
             );
         }
 
-        for none in [vec![], vec!["--reconstruction", "simple"]] {
+        for none in [vec![], vec!["--anchor-mid-fraction", "0.5"]] {
             assert!(
                 !measures(&none) && !renders(&none),
                 "nothing measures off the frame: {none:?}"
@@ -10679,33 +10181,17 @@ mod tests {
     }
 
     #[test]
-    fn merge_handles_reconstruction_and_array_flags() {
+    fn merge_handles_array_flags() {
         let cfg = merge(
             base_cfg(),
-            &parse_convert(&[
-                "--reconstruction",
-                "simple",
-                "--white-balance",
-                "1.1,1.0,0.9",
-            ]),
+            &parse_convert(&["--white-balance", "1.1,1.0,0.9"]),
         )
         .unwrap();
-        assert_eq!(cfg.reconstruction, Reconstruction::Simple);
         assert_eq!(cfg.print.white_balance, WbSource::Explicit([1.1, 1.0, 0.9]));
     }
 
     #[test]
-    fn merge_switches_reconstruction_and_curve_variants() {
-        // `--reconstruction density` over a simple recipe starts from the
-        // density defaults (there is nothing to carry).
-        let cfg = merge(
-            simple_cfg(),
-            &parse_convert(&["--reconstruction", "density"]),
-        )
-        .unwrap();
-        assert_eq!(cfg.reconstruction, Reconstruction::default());
-
-        // ...and over a density recipe keeps its blocks (a no-op assertion).
+    fn merge_switches_curve_variants() {
         let recipe = ResolvedConfig {
             calibration: CalibrationParams {
                 dmax: DmaxSource::Explicit(1.6),
@@ -10716,18 +10202,26 @@ mod tests {
                 anchor: AnchorPlacement::WhiteAtDmax,
             })
         };
+        // Same-type `--density-curve` is a no-op that keeps the recipe's knobs.
         let cfg = merge(
             recipe.clone(),
-            &parse_convert(&["--reconstruction", "density"]),
+            &parse_convert(&["--density-curve", "exponential"]),
         )
         .unwrap();
         assert_eq!(cfg.reconstruction, recipe.reconstruction);
 
-        // `--density-curve sigmoid` over an exponential recipe takes the sigmoid
-        // defaults outright — and the roll's reference survives untouched, because it
-        // is not inside the object being switched.
-        let cfg = merge(recipe, &parse_convert(&["--density-curve", "sigmoid"])).unwrap();
-        assert_eq!(sigmoid_of(&cfg), SigmoidParams::default());
+        // `--density-curve characteristic` takes that curve's defaults outright — and
+        // the roll's reference survives untouched, because it is not inside the object
+        // being switched.
+        let cfg = merge(
+            recipe,
+            &parse_convert(&["--density-curve", "characteristic"]),
+        )
+        .unwrap();
+        assert_eq!(
+            *curve_of(&cfg),
+            DensityCurve::Characteristic(CharacteristicParams::default())
+        );
         assert_eq!(cfg.calibration.dmax, DmaxSource::Explicit(1.6));
 
         // The reverse switch, same story.
@@ -10736,114 +10230,82 @@ mod tests {
                 dmax: DmaxSource::Auto,
                 ..base_cfg().calibration
             },
-            ..sigmoid_cfg(SigmoidParams {
-                contrast: 2.0,
-                ..SigmoidParams::default()
-            })
+            ..density_cfg(
+                DensityParams::default(),
+                DensityCurve::Characteristic(CharacteristicParams::default()),
+            )
         };
         let cfg = merge(recipe, &parse_convert(&["--density-curve", "exponential"])).unwrap();
         assert_eq!(
             *curve_of(&cfg),
-            DensityCurve::Exponential(ExponentialParams {
-                gamma: 2.0,
-                anchor: AnchorPlacement::WhiteAtDmax,
-            })
+            DensityCurve::Exponential(ExponentialParams::default())
         );
         assert_eq!(cfg.calibration.dmax, DmaxSource::Auto);
-
-        // Same-type `--density-curve` is a no-op that keeps the recipe's knobs.
-        let recipe = sigmoid_cfg(SigmoidParams {
-            contrast: 2.0,
-            toe: 0.05,
-            ..SigmoidParams::default()
-        });
-        let cfg = merge(
-            recipe.clone(),
-            &parse_convert(&["--density-curve", "sigmoid"]),
-        )
-        .unwrap();
-        assert_eq!(cfg.reconstruction, recipe.reconstruction);
     }
 
     #[test]
-    fn merge_rejects_invalid_tagged_combinations() {
-        // Every density/curve/Dmax flag with a resolved `simple` reconstruction
-        // is a post-merge usage error naming the flag — never a silent no-op.
+    fn merge_rejects_invalid_curve_combinations() {
+        // A slope or placement flag the characteristic curve has no field for is a
+        // loud usage error, never ignored — including when the curve comes from the
+        // recipe.
         for flags in [
-            ["--reconstruction", "simple", "--density-scale", "1,1,1"].as_slice(),
-            ["--reconstruction", "simple", "--density-gamma", "1.4"].as_slice(),
-            ["--reconstruction", "simple", "--film-stock", "portra-400"].as_slice(),
-            ["--reconstruction", "simple", "--shadow-balance", "0.1,0,0"].as_slice(),
-            ["--reconstruction", "simple", "--balance-range", "0.2,1.8"].as_slice(),
-            ["--reconstruction", "simple", "--auto-balance-range"].as_slice(),
-            ["--reconstruction", "simple", "--sigmoid-contrast", "1.2"].as_slice(),
             [
-                "--reconstruction",
-                "simple",
                 "--density-curve",
-                "exponential",
+                "characteristic",
+                "--density-gamma",
+                "1.4",
+            ]
+            .as_slice(),
+            [
+                "--density-curve",
+                "characteristic",
+                "--anchor-mid-offset",
+                "0.6",
             ]
             .as_slice(),
         ] {
             let err = merge(base_cfg(), &parse_convert(flags)).unwrap_err();
-            assert!(
-                matches!(err, NcError::Usage(_)),
-                "{flags:?} must be a usage error, got {err}"
-            );
-            // The message must name the offending flag: `active_density_domain_flag`
-            // is a hand-maintained list, and a flag missing from it is not rejected
-            // at all (`--film-stock` was, silently, for exactly that reason).
-            assert!(
-                err.to_string().contains(flags[2]),
-                "{flags:?} must name the flag, got {err}"
-            );
+            assert!(matches!(err, NcError::Usage(_)), "{flags:?}: {err}");
+            assert!(err.to_string().contains("characteristic"), "{err}");
         }
-
-        // A sigmoid flag with a resolved exponential curve is invalid, not inert.
-        // The curve is named explicitly since the sigmoid is now the default.
-        let err = merge(
-            base_cfg(),
-            &parse_convert(&[
-                "--density-curve",
-                "exponential",
-                "--sigmoid-contrast",
-                "1.2",
-            ]),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("--sigmoid-contrast"), "{err}");
-        assert!(err.to_string().contains("exponential"), "{err}");
-
-        // A customized gamma with a resolved sigmoid curve is a loud usage
-        // error, never ignored or downgraded to a warning.
-        let err = merge(
-            base_cfg(),
-            &parse_convert(&["--density-curve", "sigmoid", "--density-gamma", "1.4"]),
-        )
-        .unwrap_err();
-        assert!(matches!(err, NcError::Usage(_)));
-        assert!(err.to_string().contains("--sigmoid-contrast"), "{err}");
-        // ...including when the sigmoid curve comes from the recipe.
-        let recipe = sigmoid_cfg(SigmoidParams::default());
+        let recipe = density_cfg(
+            DensityParams::default(),
+            DensityCurve::Characteristic(CharacteristicParams::default()),
+        );
         let err = merge(recipe, &parse_convert(&["--density-gamma", "1.4"])).unwrap_err();
         assert!(matches!(err, NcError::Usage(_)));
+        // …and a stock the exponential has nothing to configure with.
+        let err = merge(base_cfg(), &parse_convert(&["--film-stock", "portra-400"]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--density-curve characteristic"), "{err}");
     }
 
     #[test]
     fn removed_algorithm_and_simple_flags_are_migration_errors() {
-        // `--algorithm` is rejected with guidance naming the replacement pair.
+        // `--algorithm` is rejected with guidance naming the replacement.
         let err = reject_removed_flags(&parse_convert(&["--algorithm", "sigmoid"])).unwrap_err();
         assert_eq!(err.exit_code(), 2);
-        assert!(err.to_string().contains("--reconstruction"), "{err}");
         assert!(err.to_string().contains("--density-curve"), "{err}");
         // The **whole** replacement surface, not a subset: a migrating user is exactly
-        // the reader who does not know the third curve exists. Asserted per spelling
+        // the reader who does not know which curves exist. Asserted per spelling
         // because the list is hand-written here, unlike the generated parse diagnostic.
         for curve in DensityCurveType::ALL {
             let name = curve_type_spelling(curve);
             assert!(
                 err.to_string().contains(name),
                 "the migration error must name `{name}`: {err}"
+            );
+        }
+
+        // `--reconstruction`, whatever its value — density is the only one left.
+        for value in ["simple", "density"] {
+            let err =
+                reject_removed_flags(&parse_convert(&["--reconstruction", value])).unwrap_err();
+            assert_eq!(err.exit_code(), 2, "{value}");
+            assert!(
+                err.to_string().contains(REMOVED_SIMPLE_RECONSTRUCTION),
+                "{value}: {err}"
             );
         }
 
@@ -10862,6 +10324,79 @@ mod tests {
         assert!(reject_removed_flags(&parse_convert(&[])).is_ok());
     }
 
+    /// Every flag the sigmoid owned is a migration error naming a remedy that exists,
+    /// and `--density-curve sigmoid` is refused at the parser with the shared message.
+    /// The refusal fires on both chains, so each message also says what works under
+    /// `--new-flow`, which refuses the anchor placements and the display tone.
+    #[test]
+    fn the_sigmoid_flags_are_migration_errors() {
+        use clap::CommandFactory;
+        const NOT_YET: &str = "not yet available under `--new-flow`";
+        for (flags, remedy, new_flow) in [
+            (
+                ["--sigmoid-contrast", "2"].as_slice(),
+                "--density-gamma",
+                "--density-gamma",
+            ),
+            (
+                ["--sigmoid-toe", "0.2"].as_slice(),
+                "--display-tone",
+                NOT_YET,
+            ),
+            (
+                ["--sigmoid-shoulder", "0"].as_slice(),
+                "--display-tone",
+                NOT_YET,
+            ),
+            (
+                ["--sigmoid-mid-fraction", "0.5"].as_slice(),
+                "--anchor-mid-fraction",
+                "--anchor-mid-offset",
+            ),
+            (
+                ["--sigmoid-white-at-d-max"].as_slice(),
+                "--anchor-white-at-reference",
+                "--anchor-mid-offset",
+            ),
+        ] {
+            let err = reject_removed_flags(&parse_convert(flags)).unwrap_err();
+            assert_eq!(err.exit_code(), 2, "{flags:?}");
+            let msg = err.to_string();
+            assert!(msg.contains("removed with the sigmoid"), "{flags:?}: {msg}");
+            assert!(msg.contains(remedy), "{flags:?}: {msg}");
+            assert!(msg.contains(new_flow), "{flags:?}: {msg}");
+            // What the message names for `--new-flow` is a flag that chain keeps.
+            if new_flow.starts_with("--") {
+                let mut argv = vec!["--new-flow"];
+                argv.push(new_flow);
+                argv.push("0.6");
+                let args = parse_convert(&argv);
+                assert!(
+                    flow::reject_unavailable_flags(Flow::New, &args).is_ok(),
+                    "{new_flow} is refused under --new-flow"
+                );
+            }
+            // The remedy must itself parse.
+            assert!(
+                Cli::command()
+                    .get_subcommands()
+                    .find(|c| c.get_name() == "convert")
+                    .unwrap()
+                    .get_arguments()
+                    .any(|a| a.get_long() == Some(remedy.trim_start_matches("--"))),
+                "{remedy} is not a flag"
+            );
+        }
+        let mut argv = vec!["hanten", "convert", "in.tiff", "-o", "out.tiff"];
+        argv.extend_from_slice(&["--density-curve", "sigmoid"]);
+        let err = Cli::try_parse_from(argv).unwrap_err().to_string();
+        assert!(err.contains(REMOVED_SIGMOID_CURVE), "{err}");
+        // …and the surviving names still parse, case-insensitively.
+        for name in ["exponential", "Characteristic"] {
+            parse_density_curve(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+    }
+
     #[test]
     fn legacy_recipe_forms_are_migration_errors() {
         // Each removed top-level selection form fails with guidance naming the
@@ -10876,6 +10411,11 @@ mod tests {
             let err = reject_legacy_recipe_keys(&v, "recipe r.json").unwrap_err();
             assert_eq!(err.exit_code(), 2, "{body}");
             assert!(err.to_string().contains("reconstruction"), "{body}: {err}");
+            // The remedy must not name the retired selector, which is itself refused.
+            assert!(
+                !err.to_string().contains("reconstruction.type"),
+                "{body}: advises a refused key: {err}"
+            );
             // Same rule as the flag-side migration error: the recipe mirror must state
             // every curve it is migrating the reader *to*. This list is hand-written.
             for curve in DensityCurveType::ALL {
@@ -10980,28 +10520,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_auto_wb_with_simple_reconstruction() {
-        // `simple` never reads `print.white_balance`, so an auto mode would be a
-        // silent no-op (exit 0, no estimation, no gains). A requested action must
-        // fail loudly instead — exit 2 (usage).
-        let mut cfg = simple_cfg();
-        for mode in [WbSource::GrayWorld, WbSource::Percentile] {
-            cfg.print.white_balance = mode;
-            assert!(
-                matches!(validate(&cfg), Err(NcError::Usage(_))),
-                "{mode:?} with simple must be rejected"
-            );
-        }
-        // Explicit gains under simple are fine (`print.white_balance` is inert
-        // there, but not an *action* silently dropped).
-        cfg.print.white_balance = WbSource::Explicit([1.1, 1.0, 0.9]);
-        validate(&cfg).unwrap();
-    }
-
-    #[test]
     fn validate_accepts_auto_wb_with_every_density_curve() {
-        // The whitelist's arm: density reconstruction under *any* curve must accept
-        // an auto mode (the counterpart to the simple rejection above).
+        // Every curve must accept an auto mode.
         //
         // `characteristic` is listed deliberately, not for completeness: it reaches
         // this rule by a different route (no slope, no anchor placement), and an
@@ -11009,7 +10529,6 @@ mod tests {
         // `the_characteristic_curve_reaches_every_validate_rule_after_the_anchor_block`.
         for curve in [
             DensityCurve::Exponential(ExponentialParams::default()),
-            DensityCurve::Sigmoid(SigmoidParams::default()),
             DensityCurve::Characteristic(CharacteristicParams::default()),
         ] {
             let mut cfg = density_cfg(
@@ -11041,7 +10560,7 @@ mod tests {
         // `validate_convert`'s presence checks, so a flag-driven test passes against
         // the broken code too. That masking is what hid the defect.
         //
-        // Each case is checked twice, on `characteristic` and on `sigmoid`, and the two
+        // Each case is checked twice, on `characteristic` and on `exponential`, and the two
         // messages must be *identical* — none of these rules is about the curve, so a
         // rule that fires under only one of them is exactly the defect. `absent` pins
         // out the losing rule's wording, because several of these configs also match a
@@ -11085,7 +10604,7 @@ mod tests {
             let mut refusals = Vec::new();
             for curve in [
                 DensityCurve::Characteristic(CharacteristicParams::default()),
-                DensityCurve::Sigmoid(SigmoidParams::default()),
+                DensityCurve::Exponential(ExponentialParams::default()),
             ] {
                 let kind = curve.curve_type();
                 let mut cfg = density_cfg(
@@ -11110,7 +10629,7 @@ mod tests {
             }
             assert_eq!(
                 refusals[0], refusals[1],
-                "{what}: the characteristic curve must be refused exactly as the sigmoid is"
+                "{what}: the characteristic curve must be refused exactly as the exponential is"
             );
         }
     }
@@ -11154,10 +10673,8 @@ mod tests {
         // reconstruction entirely. Including on `characteristic`, which reads no
         // reference: the value is carried (and warned about), never refused.
         for look in [
-            vec!["--density-curve", "sigmoid"],
             vec!["--density-curve", "exponential"],
             vec!["--density-curve", "characteristic"],
-            vec!["--reconstruction", "simple"],
         ] {
             let mut flags = look.clone();
             flags.extend_from_slice(&["--d-max", "1.4"]);
@@ -11191,96 +10708,11 @@ mod tests {
     }
 
     #[test]
-    fn merge_sigmoid_flags_override_recipe_else_keep_recipe() {
-        // Each flag maps to its field; a forgotten merge arm would leave the
-        // default and silently make the flag a no-op (the four-spot-wiring trap).
-        let cfg = merge(
-            base_cfg(),
-            &parse_convert(&[
-                "--density-curve",
-                "sigmoid",
-                "--sigmoid-contrast",
-                "1.6",
-                "--sigmoid-toe",
-                "0.1",
-                "--sigmoid-shoulder",
-                "0.35",
-            ]),
-        )
-        .unwrap();
-        let s = sigmoid_of(&cfg);
-        assert_eq!(s.contrast, 1.6);
-        assert_eq!(s.toe, 0.1);
-        assert_eq!(s.shoulder, 0.35);
-
-        // No flag keeps the recipe's values; a flag replaces only its own knob.
-        let recipe: ResolvedConfig = serde_json::from_str(
-            r#"{"reconstruction":{"curve":{"type":"sigmoid","contrast":2.0,"toe":0.05}}}"#,
-        )
-        .unwrap();
-        let cfg = merge(recipe, &parse_convert(&["--sigmoid-shoulder", "0.4"])).unwrap();
-        let s = sigmoid_of(&cfg);
-        assert_eq!(s.contrast, 2.0);
-        assert_eq!(s.toe, 0.05);
-        assert_eq!(s.shoulder, 0.4);
-    }
-
-    #[test]
-    fn merge_sigmoid_anchor_placement_flags() {
-        // The placement is one rule, so each flag replaces the whole variant. A
-        // missing merge arm here would be invisible: the default placement is
-        // already `MidAtDmaxFraction(0.5)`, so `--sigmoid-mid-fraction 0.5` would
-        // "work" by accident — hence asserting a *different* fraction.
-        let cfg = merge(
-            base_cfg(),
-            &parse_convert(&[
-                "--density-curve",
-                "sigmoid",
-                "--sigmoid-mid-fraction",
-                "0.65",
-            ]),
-        )
-        .unwrap();
-        assert_eq!(
-            sigmoid_of(&cfg).anchor,
-            AnchorPlacement::MidAtDmaxFraction(0.65)
-        );
-
-        let cfg = merge(
-            base_cfg(),
-            &parse_convert(&["--density-curve", "sigmoid", "--sigmoid-white-at-d-max"]),
-        )
-        .unwrap();
-        assert_eq!(sigmoid_of(&cfg).anchor, AnchorPlacement::WhiteAtDmax);
-
-        // Absent flags keep the recipe's placement (the flags-win merge never
-        // clobbers with a default), and `--sigmoid-white-at-d-max` is the escape
-        // hatch back from a recipe fraction.
-        let recipe: ResolvedConfig = serde_json::from_str(
-            r#"{"reconstruction":{"curve":{"type":"sigmoid","anchor":{"mid-at-dmax-fraction":0.6}}}}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            sigmoid_of(&merge(recipe, &parse_convert(&["--sigmoid-contrast", "2.0"])).unwrap())
-                .anchor,
-            AnchorPlacement::MidAtDmaxFraction(0.6)
-        );
-        let recipe: ResolvedConfig = serde_json::from_str(
-            r#"{"reconstruction":{"curve":{"type":"sigmoid","anchor":{"mid-at-dmax-fraction":0.6}}}}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            sigmoid_of(&merge(recipe, &parse_convert(&["--sigmoid-white-at-d-max"])).unwrap())
-                .anchor,
-            AnchorPlacement::WhiteAtDmax
-        );
-
-        // Placement is **curve-neutral** since `algo/exponential-anchor-placement`:
-        // the same flags reach the exponential's `anchor` field rather than being
-        // rejected as sigmoid-only. This is the inverse of the assertion that stood
-        // here before, so it is written as an equality on the resolved placement —
-        // a "does not error" check would still pass if the flag were silently inert,
-        // which is the failure mode the four-coupled-spots rule exists to catch.
+    fn merge_anchor_placement_flags() {
+        // The placement is one rule, so each flag replaces the whole variant. Written as
+        // an equality on the resolved placement — a "does not error" check would still
+        // pass if the flag were silently inert, which is the failure mode the
+        // four-coupled-spots rule exists to catch.
         for (argv, want) in [
             (
                 ["--anchor-mid-fraction", "0.6"].as_slice(),
@@ -11305,21 +10737,6 @@ mod tests {
                 panic!("expected exponential");
             };
             assert_eq!(e.anchor, want, "{argv:?}");
-        }
-        // The two original spellings stay accepted as aliases: they appear in
-        // committed recipes and in the docs, and the rename must not break them.
-        for (argv, want) in [
-            (
-                ["--sigmoid-mid-fraction", "0.6"].as_slice(),
-                AnchorPlacement::MidAtDmaxFraction(0.6),
-            ),
-            (
-                ["--sigmoid-white-at-d-max"].as_slice(),
-                AnchorPlacement::WhiteAtDmax,
-            ),
-        ] {
-            let cfg = merge(base_cfg(), &parse_convert(argv)).unwrap();
-            assert_eq!(sigmoid_of(&cfg).anchor, want, "{argv:?}");
         }
         // A flag must beat a **recipe-supplied** placement, not just a defaulted one.
         // The loops above start from this build's default, so a merge arm that never
@@ -11352,11 +10769,9 @@ mod tests {
                 "in.tiff",
                 "-o",
                 "out.tiff",
-                "--density-curve",
-                "sigmoid",
-                "--sigmoid-mid-fraction",
+                "--anchor-mid-fraction",
                 "0.6",
-                "--sigmoid-white-at-d-max",
+                "--anchor-white-at-reference",
             ])
             .is_err()
         );
@@ -11370,34 +10785,31 @@ mod tests {
         // usage error.
         // The quotient overflows below ~2.2e-39, so those are the values under test.
         for bad in [1e-40, 1e-44, 2.1e-39] {
-            let cfg = sigmoid_cfg(SigmoidParams {
-                contrast: bad,
+            let cfg = exponential_cfg(ExponentialParams {
+                gamma: bad,
                 anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
-                ..SigmoidParams::default()
             });
             let Err(err) = validate(&cfg) else {
-                panic!("contrast {bad} must be rejected")
+                panic!("gamma {bad} must be rejected")
             };
             assert!(matches!(err, NcError::Usage(_)), "{bad}: {err}");
-            assert!(err.to_string().contains("--sigmoid-contrast"), "{err}");
+            assert!(err.to_string().contains("--density-gamma"), "{err}");
         }
         // Just above the threshold the derivation stays finite and is therefore accepted —
         // the check guards the *overflow*, not "small contrast" in general. `f32::MIN_POSITIVE`
         // gives a finite anchor of ~6.3e37, and since `contrast * anchor` is then exactly
         // MID_GREY_OUTPUT_DECADES the render is a flat mid-grey rather than a broken one.
-        validate(&sigmoid_cfg(SigmoidParams {
-            contrast: f32::MIN_POSITIVE,
+        validate(&exponential_cfg(ExponentialParams {
+            gamma: f32::MIN_POSITIVE,
             anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
-            ..SigmoidParams::default()
         }))
         .unwrap();
         // `WhiteAtDmax` performs no division, so an overflowing slope is none of this rule's
         // business — it stays accepted, which is what makes the check targeted rather than
         // a blanket lower bound on contrast.
-        validate(&sigmoid_cfg(SigmoidParams {
-            contrast: 1e-40,
+        validate(&exponential_cfg(ExponentialParams {
+            gamma: 1e-40,
             anchor: AnchorPlacement::WhiteAtDmax,
-            ..SigmoidParams::default()
         }))
         .unwrap();
     }
@@ -11453,14 +10865,6 @@ mod tests {
         };
         assert!(matches!(err, NcError::Usage(_)), "{err}");
         assert!(err.to_string().contains("silently black"), "{err}");
-        // Shared by both curves, like every other placement rule.
-        assert!(matches!(
-            validate(&sigmoid_cfg(SigmoidParams {
-                anchor: AnchorPlacement::MidAtBaseOffset(2e38),
-                ..SigmoidParams::default()
-            })),
-            Err(NcError::Usage(_))
-        ));
         // Falsifiable, and the scope boundary: the same absurd offset against a slope
         // small enough to keep the product finite (`3e38 × 1e-37` = 3e1) is honest
         // arithmetic, and bounding *that* is `algo/density-safety-bounds`' job, not this
@@ -11479,7 +10883,7 @@ mod tests {
     #[test]
     fn film_master_accepts_auto_dmax_under_a_reference_free_placement() {
         let master = |anchor| ResolvedConfig {
-            reconstruction: Reconstruction::Density {
+            reconstruction: Reconstruction {
                 density: DensityParams::default(),
                 curve: DensityCurve::Exponential(ExponentialParams {
                     anchor,
@@ -11524,11 +10928,10 @@ mod tests {
         for bad in [0.0, f32::NAN, -1.0] {
             for (label, cfg) in [
                 (
-                    "--sigmoid-contrast",
-                    sigmoid_cfg(SigmoidParams {
-                        contrast: bad,
+                    "--density-gamma",
+                    exponential_cfg(ExponentialParams {
+                        gamma: bad,
                         anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
-                        ..SigmoidParams::default()
                     }),
                 ),
                 (
@@ -11552,10 +10955,9 @@ mod tests {
         // And the remedy the old message offered really is no remedy: white-at-reference
         // does not rescue a zero slope, which is why positivity must be diagnosed first.
         assert!(matches!(
-            validate(&sigmoid_cfg(SigmoidParams {
-                contrast: 0.0,
+            validate(&exponential_cfg(ExponentialParams {
+                gamma: 0.0,
                 anchor: AnchorPlacement::WhiteAtDmax,
-                ..SigmoidParams::default()
             })),
             Err(NcError::Usage(_))
         ));
@@ -11566,38 +10968,16 @@ mod tests {
         // The witness is a raw-JSON probe, so test it that way.
         let probe =
             |json: &str| unpinned_curve(&serde_json::from_str::<serde_json::Value>(json).unwrap());
-        // An archived sigmoid recipe with no `anchor` — the case that silently changed
-        // meaning on 2026-08-03. The curve itself is pinned, so only the placement moved.
-        assert_eq!(
-            probe(r#"{"reconstruction":{"curve":{"type":"sigmoid","contrast":1.0}}}"#),
-            Some(UnpinnedCurve::AnchorOnly)
-        );
-        // Pinned explicitly either way ⇒ nothing changed underneath it, no noise. The
-        // per-channel gain is stated too: since `pipeline_version` 4 it is one of the
-        // defaults that moved, so a recipe silent on it is not fully pinned (below).
-        assert_eq!(
-            probe(
-                r#"{"calibration":{"dmax":{"explicit":2.0}},"reconstruction":{"curve":{"type":"sigmoid","anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#
-            ),
-            None
-        );
-        assert_eq!(
-            probe(
-                r#"{"calibration":{"dmax":{"explicit":1.3}},"reconstruction":{"curve":{"type":"sigmoid","anchor":{"mid-at-dmax-fraction":0.5}},"density":{"scale":[1.0,1.0,1.0]}}}"#
-            ),
-            None
-        );
-        // A curve pinned by *type only* looks pinned and is not: on 2026-08-08 the
-        // exponential's gamma moved 1.0 → 2.0, so this file renders differently than it
+        // A curve pinned by *type only* looks pinned and is not: the exponential's gamma
+        // and anchor defaults have both moved, so this file renders differently than it
         // did with nothing in it to show that.
         assert_eq!(
             probe(r#"{"reconstruction":{"curve":{"type":"exponential"}}}"#),
             Some(UnpinnedCurve::MovedDefaults)
         );
         // Pinning every value this build would supply silences it — the falsifiable
-        // half. `anchor` is one of them since `algo/exponential-anchor-placement`:
-        // `--dump-params` writes it for this curve too, so a recipe without it was
-        // written by some other build.
+        // half. The per-channel gain is stated too: since `pipeline_version` 4 it is one
+        // of the defaults that moved, so a recipe silent on it is not fully pinned (below).
         assert_eq!(
             probe(
                 r#"{"calibration":{"dmax":{"explicit":2.0}},"reconstruction":{"curve":{"type":"exponential","gamma":1.0,"anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#
@@ -11613,51 +10993,43 @@ mod tests {
         }
         // **An absent `calibration` section is NOT a floating value** — this is the
         // documented pipeline-profile shape (design-spec §8), and the reference comes
-        // from another `--params` layer or a flag. Keeping the reference in the
-        // predicate made every look file warn, and fail under `--strict`; the recipes
-        // the term served (pre-move, spelling `reconstruction.curve.dmax`) are now
-        // rejected outright by the migration error, the more specific diagnosis.
+        // from another `--params` layer or a flag.
         for json in [
             // a profile: the whole look pinned, no calibration at all
-            r#"{"reconstruction":{"curve":{"type":"sigmoid","anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#,
             r#"{"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#,
             // a calibration that measured only a base — what `hanten estimate` emits
             // without `--d-max-region`
-            r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},"reconstruction":{"curve":{"type":"sigmoid","anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#,
+            r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#,
             // …and a stated reference is of course silent too
-            r#"{"calibration":{"dmax":"fixed"},"reconstruction":{"curve":{"type":"sigmoid","anchor":{"mid-at-dmax-fraction":0.5}},"density":{"scale":[1.0,1.0,1.0]}}}"#,
+            r#"{"calibration":{"dmax":"fixed"},"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":{"mid-at-base-offset":0.62}},"density":{"scale":[1.0,1.0,1.0]}}}"#,
         ] {
             assert_eq!(probe(json), None, "{json}");
         }
         // **The per-channel gain is the other moved default under a stated
-        // `reconstruction` block**: `pipeline_version` 4 took `density.scale` from
-        // `[1, 1, 1]` to `[1, 0.90, 0.86]` (2026-09-09) for both parametric curves. A
-        // recipe that pins the whole curve and says nothing about it therefore *looks*
-        // fully pinned and replays in a different **colour** — the second instance of
-        // the class `docs/tasks/core/recipe-replay-fidelity.md` tracks. Both spellings
-        // of "unstated" count, an absent `density` block and a `density` block without
-        // the key, because `--dump-params` writes it either way.
+        // `reconstruction` block.** A recipe that pins the whole curve and says nothing
+        // about it *looks* fully pinned and replays in a different **colour** — the
+        // class `docs/tasks/core/recipe-replay-fidelity.md` tracks. Both spellings of
+        // "unstated" count, an absent `density` block and a `density` block without the
+        // key, because `--dump-params` writes it either way.
         for json in [
-            r#"{"calibration":{"dmax":"fixed"},"reconstruction":{"curve":{"type":"sigmoid","anchor":"white-at-dmax"}}}"#,
-            r#"{"calibration":{"dmax":"fixed"},"reconstruction":{"curve":{"type":"sigmoid","anchor":"white-at-dmax"},"density":{"offset":[0.0,0.0,0.0]}}}"#,
+            r#"{"calibration":{"dmax":"fixed"},"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"}}}"#,
             r#"{"calibration":{"dmax":"fixed"},"reconstruction":{"type":"density","curve":{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"},"density":{"offset":[0.0,0.0,0.0]}}}"#,
         ] {
             assert_eq!(probe(json), Some(UnpinnedCurve::DensityScale), "{json}");
         }
         // Stating the gain silences it whatever the value — including one equal to this
-        // build's default, which is the same "warn only on shapes this build cannot
-        // produce" rule the `dmax` cases above follow.
-        for scale in ["[1.0,1.0,1.0]", "[1.0,0.9,0.86]"] {
+        // build's default, the same "warn only on shapes this build cannot produce" rule.
+        for scale in ["[1.0,1.0,1.0]", "[1.0,0.84,0.73]"] {
             let json = format!(
-                r#"{{"calibration":{{"dmax":"fixed"}},"reconstruction":{{"curve":{{"type":"sigmoid","anchor":"white-at-dmax"}},"density":{{"scale":{scale}}}}}}}"#
+                r#"{{"calibration":{{"dmax":"fixed"}},"reconstruction":{{"curve":{{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"}},"density":{{"scale":{scale}}}}}}}"#
             );
             assert_eq!(probe(&json), None, "{json}");
         }
         // A curve finding is the more specific diagnosis, so it is reported first: this
-        // recipe floats the placement *and* the gain.
+        // recipe floats the curve's defaults *and* the gain.
         assert_eq!(
-            probe(r#"{"reconstruction":{"curve":{"type":"sigmoid"}}}"#),
-            Some(UnpinnedCurve::AnchorOnly)
+            probe(r#"{"reconstruction":{"curve":{"type":"exponential"}}}"#),
+            Some(UnpinnedCurve::MovedDefaults)
         );
         // `characteristic` arrived *with* `pipeline_version` 4, and its own gain default
         // is the identity then and now, so nothing moved underneath a recipe naming it.
@@ -11665,11 +11037,10 @@ mod tests {
             probe(r#"{"reconstruction":{"curve":{"type":"characteristic","stock":"portra-400"}}}"#),
             None
         );
-        // A recipe with no `curve` section used to resolve to the exponential, and this
-        // probe used to stay silent for it. Since 2026-08-08 it resolves to the sigmoid
-        // at a different anchor rule and a different Dmax, so silence would be exactly
-        // the "archived recipe silently reinterpreted" case design-spec §7.3 forbids —
-        // and no `meta.pipeline_version` rides a bare recipe to catch it instead.
+        // A recipe with no `curve` section resolves to whichever curve is the default,
+        // which has moved twice — silence would be exactly the "archived recipe
+        // silently reinterpreted" case design-spec §7.3 forbids, and no
+        // `meta.pipeline_version` rides a bare recipe to catch it instead.
         assert_eq!(
             probe(r#"{"reconstruction":{"type":"density"}}"#),
             Some(UnpinnedCurve::WholeCurve)
@@ -11680,14 +11051,11 @@ mod tests {
         // here would fire on nearly every partial recipe and make `--strict` fail for all
         // of them permanently — see `unpinned_curve` for the full argument.
         assert_eq!(probe(r#"{"film_base":{"source":"auto"}}"#), None);
-        // `simple` runs no curve stage, so no curve default can reach it.
-        assert_eq!(probe(r#"{"reconstruction":{"type":"simple"}}"#), None);
 
         assert_eq!(curve_default_warning(None, None), None);
         // A recipe recording THIS build's version was produced by these defaults,
         // so nothing moved underneath it. Without this, a sidecar `--dump-params`
-        // just wrote fails its own `--strict` replay: the resolved default sigmoid
-        // spells `"dmax":"fixed"`, which is precisely what `MovedDefaults` flags.
+        // just wrote fails its own `--strict` replay.
         assert_eq!(
             curve_default_warning(
                 Some(UnpinnedCurve::MovedDefaults),
@@ -11703,9 +11071,9 @@ mod tests {
             )
             .is_some()
         );
-        assert!(curve_default_warning(Some(UnpinnedCurve::MovedDefaults), None).is_some());
-        let msg = curve_default_warning(Some(UnpinnedCurve::AnchorOnly), None).expect("must warn");
-        assert!(msg.contains("white-at-dmax"), "{msg}");
+        let msg =
+            curve_default_warning(Some(UnpinnedCurve::MovedDefaults), None).expect("must warn");
+        assert!(msg.contains("mid-at-base-offset"), "{msg}");
         let msg = curve_default_warning(Some(UnpinnedCurve::WholeCurve), None).expect("must warn");
         assert!(msg.contains("reconstruction.curve"), "{msg}");
         assert!(msg.contains("exponential"), "{msg}");
@@ -11730,7 +11098,7 @@ mod tests {
         ));
         // A restating override still counts (same rule as `sets_calibration_dmax`), and a frame
         // that touches only non-placement keys does not.
-        assert!(!probe(r#"{"reconstruction":{"curve":{"contrast":2.0}}}"#));
+        assert!(!probe(r#"{"reconstruction":{"curve":{"gamma":2.0}}}"#));
         assert!(!probe(r#"{"print":{"print_exposure":0.5}}"#));
     }
 
@@ -11745,11 +11113,8 @@ mod tests {
     /// `DensityParams::default_scale_for`.
     #[test]
     fn a_curve_switch_re_resolves_the_per_channel_gain() {
-        let scale_of = |cfg: &ResolvedConfig| match &cfg.reconstruction {
-            Reconstruction::Density { density, .. } => density.scale,
-            Reconstruction::Simple => unreachable!("density expected"),
-        };
-        let parametric = DensityParams::default_scale_for(DensityCurveType::Sigmoid);
+        let scale_of = |cfg: &ResolvedConfig| cfg.reconstruction.density.scale;
+        let parametric = DensityParams::default_scale_for(DensityCurveType::Exponential);
         let stock_curve = DensityParams::default_scale_for(DensityCurveType::Characteristic);
         assert_eq!(parametric, [1.0, 0.84, 0.73]);
         assert_eq!(stock_curve, [1.0, 1.0, 1.0]);
@@ -11762,7 +11127,11 @@ mod tests {
         .unwrap();
         assert_eq!(scale_of(&to_stock), stock_curve);
         // ...and back again takes the calibration, so the switch is not one-way.
-        let back = merge(to_stock, &parse_convert(&["--density-curve", "sigmoid"])).unwrap();
+        let back = merge(
+            to_stock,
+            &parse_convert(&["--density-curve", "exponential"]),
+        )
+        .unwrap();
         assert_eq!(scale_of(&back), parametric);
 
         // An explicit `--density-scale` is merged *after* the curve arm, so it still wins
@@ -11786,9 +11155,9 @@ mod tests {
                 scale: [1.1, 1.0, 0.9],
                 ..DensityParams::default()
             },
-            DensityCurve::Sigmoid(SigmoidParams::default()),
+            DensityCurve::Exponential(ExponentialParams::default()),
         );
-        let same = merge(kept, &parse_convert(&["--density-curve", "sigmoid"])).unwrap();
+        let same = merge(kept, &parse_convert(&["--density-curve", "exponential"])).unwrap();
         assert_eq!(scale_of(&same), [1.1, 1.0, 0.9]);
     }
 
@@ -11799,21 +11168,21 @@ mod tests {
     /// switch it would train the user to ignore it.
     #[test]
     fn the_gain_reset_warns_only_when_it_discards_a_chosen_value() {
-        let with = |scale, curve| Reconstruction::Density {
+        let with = |scale, curve| Reconstruction {
             density: DensityParams {
                 scale,
                 ..DensityParams::default()
             },
             curve,
         };
-        let sigmoid = DensityCurve::Sigmoid(SigmoidParams::default());
+        let exponential = DensityCurve::Exponential(ExponentialParams::default());
         let stock = DensityCurve::Characteristic(crate::types::CharacteristicParams::default());
-        let parametric = DensityParams::default_scale_for(DensityCurveType::Sigmoid);
+        let parametric = DensityParams::default_scale_for(DensityCurveType::Exponential);
         let identity = DensityParams::default_scale_for(DensityCurveType::Characteristic);
 
         // Chosen value dropped: warn, and name the value to restate.
         let msg = curve_switch_dropped_density_scale(
-            &with([1.2, 1.0, 0.8], sigmoid),
+            &with([1.2, 1.0, 0.8], exponential),
             &with(identity, stock),
         )
         .expect("a chosen gain was discarded");
@@ -11823,29 +11192,27 @@ mod tests {
 
         // One documented default for another: silent.
         assert!(
-            curve_switch_dropped_density_scale(&with(parametric, sigmoid), &with(identity, stock))
-                .is_none()
+            curve_switch_dropped_density_scale(
+                &with(parametric, exponential),
+                &with(identity, stock)
+            )
+            .is_none()
         );
         // Same curve type: nothing was switched, so nothing was dropped.
         assert!(
             curve_switch_dropped_density_scale(
-                &with([1.2, 1.0, 0.8], sigmoid),
-                &with([1.2, 1.0, 0.8], sigmoid)
+                &with([1.2, 1.0, 0.8], exponential),
+                &with([1.2, 1.0, 0.8], exponential)
             )
             .is_none()
         );
         // The value survived the switch (the user restated it): nothing lost.
         assert!(
             curve_switch_dropped_density_scale(
-                &with([1.2, 1.0, 0.8], sigmoid),
+                &with([1.2, 1.0, 0.8], exponential),
                 &with([1.2, 1.0, 0.8], stock)
             )
             .is_none()
-        );
-        // `simple` has no density block at all.
-        assert!(
-            curve_switch_dropped_density_scale(&Reconstruction::Simple, &with(identity, stock))
-                .is_none()
         );
     }
 
@@ -11861,7 +11228,8 @@ mod tests {
     /// (measured: 100 % clipped from a recipe pinning
     /// `{"type":"characteristic","stock":"portra-400"}`). Gating the carry on the curve
     /// type fixed that by *dropping* the reference instead — so a frame switched to a
-    /// stock curve and back silently lost the roll's calibration.
+    /// stock curve and back silently lost the roll's calibration. (The sigmoid named
+    /// here has since retired; the round trip is now through the exponential.)
     ///
     /// With the value at `calibration.dmax` there is nothing to carry and nothing to
     /// drop. This asserts the round trip a carry could never serve.
@@ -11878,61 +11246,30 @@ mod tests {
             merge(cfg, &parse_convert(&["--density-curve", to])).unwrap()
         };
 
-        // Out to the stock curve and back to each parametric one: the reference is the
-        // same measured value at every step, and every step validates.
+        // Out to the stock curve and back: the reference is the same measured value at
+        // every step, and every step validates.
         let stock = switch(calibrated, "characteristic");
         assert_eq!(stock.calibration.dmax, DmaxSource::Explicit(1.64));
-        for back in ["sigmoid", "exponential"] {
-            let round_trip = switch(stock.clone(), back);
-            assert_eq!(
-                round_trip.calibration.dmax,
-                DmaxSource::Explicit(1.64),
-                "switching back to {back} lost the roll's reference"
-            );
-            // The *look* is the target's default — the falsifiable half, so this cannot
-            // be passing on a switch that did nothing.
-            let (curve, curve_type) = match back {
-                "sigmoid" => (
-                    DensityCurve::Sigmoid(SigmoidParams::default()),
-                    DensityCurveType::Sigmoid,
-                ),
-                _ => (
-                    DensityCurve::Exponential(ExponentialParams::default()),
-                    DensityCurveType::Exponential,
-                ),
-            };
-            assert_eq!(
-                round_trip.reconstruction,
-                Reconstruction::Density {
-                    density: DensityParams {
-                        scale: DensityParams::default_scale_for(curve_type),
-                        ..DensityParams::default()
-                    },
-                    curve,
-                }
-            );
-            validate(&round_trip).expect("a switched-to curve resolves its own anchor");
-        }
+        let round_trip = switch(stock, "exponential");
+        assert_eq!(
+            round_trip.calibration.dmax,
+            DmaxSource::Explicit(1.64),
+            "switching back lost the roll's reference"
+        );
+        // The *look* is the target's default — the falsifiable half, so this cannot be
+        // passing on a switch that did nothing.
+        assert_eq!(round_trip.reconstruction, Reconstruction::default());
+        validate(&round_trip).expect("a switched-to curve resolves its own anchor");
     }
 
-    /// A curve-type switch **resets** the anchor placement to the target curve's default
-    /// rather than carrying it, and says so when that discards a stated one.
+    /// A switch to the characteristic curve **drops** the anchor placement, and says so
+    /// when that discards a stated one.
     ///
-    /// Both switch sites carry `dmax` and reset everything else. Since
-    /// `algo/exponential-anchor-placement` made `anchor` a *second* field both variants
-    /// accept, "everything else" silently includes a placement the user pinned — and on
-    /// `roll` the key-probe `sets_curve_anchor` cannot see it, because the overlay that
-    /// causes the drop names only `type`. This pins the chosen behaviour (reset, warned)
+    /// On `roll` the key-probe `sets_curve_anchor` cannot see it, because the overlay that
+    /// causes the drop names only `type`. This pins the chosen behaviour (dropped, warned)
     /// on both paths so neither can drift back to a silent drop.
     #[test]
-    fn a_curve_switch_resets_the_anchor_and_says_so() {
-        let stated = |anchor| {
-            sigmoid_cfg(SigmoidParams {
-                anchor,
-                ..SigmoidParams::default()
-            })
-            .reconstruction
-        };
+    fn a_curve_switch_drops_the_anchor_and_says_so() {
         let exponential = |anchor| {
             exponential_cfg(ExponentialParams {
                 anchor,
@@ -11940,59 +11277,36 @@ mod tests {
             })
             .reconstruction
         };
+        let stock = density_cfg(
+            DensityParams::default(),
+            DensityCurve::Characteristic(CharacteristicParams::default()),
+        )
+        .reconstruction;
 
         // The reported case: a stated non-default placement is dropped by the switch.
-        let msg = curve_switch_dropped_anchor(
-            &stated(AnchorPlacement::BlackAtBase(0.005)),
-            &exponential(AnchorPlacement::WhiteAtDmax),
-        )
-        .expect("dropping a stated placement must warn");
+        let msg =
+            curve_switch_dropped_anchor(&exponential(AnchorPlacement::BlackAtBase(0.005)), &stock)
+                .expect("dropping a stated placement must warn");
         assert!(msg.contains("black-at-base"), "{msg}");
-        assert!(msg.contains("white-at-dmax"), "{msg}");
-        assert!(msg.contains("exponential"), "{msg}");
-
-        // …and the same in the other direction, so neither curve is the special case.
-        assert!(
-            curve_switch_dropped_anchor(
-                &exponential(AnchorPlacement::MidAtBaseOffset(0.5)),
-                &stated(AnchorPlacement::MidAtDmaxFraction(0.5)),
-            )
-            .is_some()
-        );
+        assert!(msg.contains("characteristic"), "{msg}");
 
         // Silent where nothing chosen is lost — the false-positive half, and the reason
-        // this is not a blanket "the placement changed" warning. A plain
-        // `--density-curve exponential` over a *default* sigmoid recipe swaps one
-        // documented default for the other, which is every ordinary switch.
+        // this is not a blanket "the placement changed" warning.
         assert_eq!(
-            curve_switch_dropped_anchor(
-                &stated(SigmoidParams::default().anchor),
-                &exponential(ExponentialParams::default().anchor),
-            ),
+            curve_switch_dropped_anchor(&exponential(ExponentialParams::default().anchor), &stock),
             None
         );
         // Same curve type on both sides is not a switch at all.
         assert_eq!(
             curve_switch_dropped_anchor(
-                &stated(AnchorPlacement::BlackAtBase(0.005)),
-                &stated(AnchorPlacement::WhiteAtDmax),
-            ),
-            None
-        );
-        // A restated placement that survives the switch lost nothing.
-        assert_eq!(
-            curve_switch_dropped_anchor(
-                &stated(AnchorPlacement::BlackAtBase(0.005)),
                 &exponential(AnchorPlacement::BlackAtBase(0.005)),
+                &exponential(AnchorPlacement::WhiteAtDmax),
             ),
             None
         );
-        // `simple` has no curve stage, so there is no placement to drop.
+        // Out of the characteristic curve there was no placement to drop.
         assert_eq!(
-            curve_switch_dropped_anchor(
-                &Reconstruction::Simple,
-                &exponential(AnchorPlacement::WhiteAtDmax)
-            ),
+            curve_switch_dropped_anchor(&stock, &exponential(AnchorPlacement::WhiteAtDmax)),
             None
         );
 
@@ -12000,51 +11314,30 @@ mod tests {
         // describes. Nothing survives the switch; the roll's reference is untouched
         // because it lives in `calibration`, outside this object.
         let mut base = serde_json::json!({"curve": {
-            "type": "sigmoid", "contrast": 2.0,
+            "type": "exponential", "gamma": 2.0,
             "anchor": {"black-at-base": 0.005}}});
         merge_json(
             &mut base,
-            &serde_json::json!({"curve": {"type": "exponential"}}),
+            &serde_json::json!({"curve": {"type": "characteristic"}}),
         );
         assert_eq!(
             base,
-            serde_json::json!({"curve": {"type": "exponential"}}),
+            serde_json::json!({"curve": {"type": "characteristic"}}),
             "the switch must drop `anchor`"
         );
-
-        // And so does the CLI switch: `--density-curve exponential` over a recipe that
-        // pinned `black-at-base` resolves the exponential's default placement.
-        let cfg = merge(
-            sigmoid_cfg(SigmoidParams {
-                anchor: AnchorPlacement::BlackAtBase(0.005),
-                ..SigmoidParams::default()
-            }),
-            &parse_convert(&["--density-curve", "exponential"]),
-        )
-        .unwrap();
-        let DensityCurve::Exponential(e) = curve_of(&cfg) else {
-            panic!("expected exponential");
-        };
-        assert_eq!(e.anchor, ExponentialParams::default().anchor);
     }
 
-    /// Bounds for the two base-derived placements, on **both** curves — the rule is
-    /// shared, so validating it on only one would let the other through unchecked.
+    /// Bounds for the two base-derived placements.
     #[test]
-    fn validate_bounds_the_base_derived_placements_on_both_curves() {
+    fn validate_bounds_the_base_derived_placements() {
         // `BlackAtBase` is a linear output value in (0, 1): at or below 0 there is no
         // logarithm to take, and at 1 the film base renders as display white.
         for bad in [0.0, -0.005, 1.0, 1.5, f32::NAN, f32::INFINITY] {
-            for cfg in [
-                exponential_cfg(ExponentialParams {
+            {
+                let cfg = exponential_cfg(ExponentialParams {
                     anchor: AnchorPlacement::BlackAtBase(bad),
                     ..ExponentialParams::default()
-                }),
-                sigmoid_cfg(SigmoidParams {
-                    anchor: AnchorPlacement::BlackAtBase(bad),
-                    ..SigmoidParams::default()
-                }),
-            ] {
+                });
                 assert!(
                     matches!(validate(&cfg), Err(NcError::Usage(_))),
                     "floor {bad} should fail"
@@ -12053,23 +11346,18 @@ mod tests {
         }
         // `MidAtBaseOffset` is a density above the base, so strictly positive.
         for bad in [0.0, -0.5, f32::NAN, f32::INFINITY] {
-            for cfg in [
-                exponential_cfg(ExponentialParams {
+            {
+                let cfg = exponential_cfg(ExponentialParams {
                     anchor: AnchorPlacement::MidAtBaseOffset(bad),
                     ..ExponentialParams::default()
-                }),
-                sigmoid_cfg(SigmoidParams {
-                    anchor: AnchorPlacement::MidAtBaseOffset(bad),
-                    ..SigmoidParams::default()
-                }),
-            ] {
+                });
                 assert!(
                     matches!(validate(&cfg), Err(NcError::Usage(_))),
                     "offset {bad} should fail"
                 );
             }
         }
-        // Representative good values pass on both curves.
+        // Representative good values pass.
         for cfg in [
             exponential_cfg(ExponentialParams {
                 anchor: AnchorPlacement::BlackAtBase(0.005),
@@ -12079,24 +11367,17 @@ mod tests {
                 anchor: AnchorPlacement::MidAtBaseOffset(0.5),
                 ..ExponentialParams::default()
             }),
-            sigmoid_cfg(SigmoidParams {
-                anchor: AnchorPlacement::BlackAtBase(0.005),
-                ..SigmoidParams::default()
-            }),
-            sigmoid_cfg(SigmoidParams {
-                anchor: AnchorPlacement::MidAtBaseOffset(0.5),
-                ..SigmoidParams::default()
-            }),
         ] {
             validate(&cfg).unwrap();
         }
     }
 
-    /// The mid-fraction rule now also applies to the **exponential** curve, since
-    /// placement is shared. Its bounds must hold there too.
+    /// The mid-fraction rule: (0, 1]. 0 detaches the anchor from the reference entirely
+    /// (mid-grey on the film base), negative places it below the base, above 1 places
+    /// mid-grey past display white.
     #[test]
-    fn validate_bounds_mid_fraction_on_the_exponential_curve() {
-        for bad in [0.0, -0.5, 1.01, f32::NAN] {
+    fn validate_bounds_mid_fraction() {
+        for bad in [0.0, -0.5, 1.01, 2.0, f32::NAN, f32::INFINITY] {
             assert!(
                 matches!(
                     validate(&exponential_cfg(ExponentialParams {
@@ -12105,120 +11386,23 @@ mod tests {
                     })),
                     Err(NcError::Usage(_))
                 ),
-                "fraction {bad} should fail on exponential"
-            );
-        }
-        validate(&exponential_cfg(ExponentialParams {
-            anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
-            ..ExponentialParams::default()
-        }))
-        .unwrap();
-    }
-
-    #[test]
-    fn validate_rejects_bad_sigmoid_mid_fraction() {
-        // (0, 1]: 0 detaches the anchor from the reference entirely (mid-grey on
-        // the film base), negative places it below the base, above 1 places
-        // mid-grey past display white.
-        for bad in [0.0, -0.5, 1.01, 2.0, f32::NAN, f32::INFINITY] {
-            let cfg = sigmoid_cfg(SigmoidParams {
-                anchor: AnchorPlacement::MidAtDmaxFraction(bad),
-                ..SigmoidParams::default()
-            });
-            assert!(
-                matches!(validate(&cfg), Err(NcError::Usage(_))),
                 "fraction {bad} should fail"
             );
         }
-        // The default, the inclusive upper edge, and a very small positive
-        // fraction are all accepted.
+        // The inclusive upper edge and a very small positive fraction are accepted.
         for good in [0.5, 1.0, 1e-3] {
-            validate(&sigmoid_cfg(SigmoidParams {
+            validate(&exponential_cfg(ExponentialParams {
                 anchor: AnchorPlacement::MidAtDmaxFraction(good),
-                ..SigmoidParams::default()
+                ..ExponentialParams::default()
             }))
             .unwrap();
         }
-        // `WhiteAtDmax` carries no value, so nothing to range-check.
-        validate(&sigmoid_cfg(SigmoidParams {
-            anchor: AnchorPlacement::WhiteAtDmax,
-            ..SigmoidParams::default()
-        }))
-        .unwrap();
     }
 
+    /// `dmax = none` is valid beside every curve: the exponential renders its
+    /// scene-referred placement from it, and `characteristic` reads no reference at all.
     #[test]
-    fn validate_rejects_bad_sigmoid_params() {
-        // Contrast must be finite, positive, AND bounded above (an extreme slope
-        // silently collapses the curve into a hard threshold — see the const doc).
-        for bad in [
-            0.0,
-            -1.0,
-            f32::NAN,
-            f32::INFINITY,
-            crate::algo::sigmoid::SIGMOID_CONTRAST_MAX + 1.0,
-            1e30,
-        ] {
-            let cfg = sigmoid_cfg(SigmoidParams {
-                contrast: bad,
-                ..SigmoidParams::default()
-            });
-            assert!(
-                matches!(validate(&cfg), Err(NcError::Usage(_))),
-                "contrast {bad} should fail"
-            );
-        }
-        // The cap itself is accepted (boundary is inclusive).
-        validate(&sigmoid_cfg(SigmoidParams {
-            contrast: crate::algo::sigmoid::SIGMOID_CONTRAST_MAX,
-            ..SigmoidParams::default()
-        }))
-        .unwrap();
-        // Knee widths must be finite, >= 0, AND <= the cap (a negative width would
-        // silently read as "knee off"; a huge finite width flattens the image
-        // without tripping any counter). Both ends fail loudly.
-        let knee_max = crate::algo::sigmoid::SIGMOID_KNEE_MAX;
-        for (toe, shoulder) in [
-            (-0.1, 0.2),
-            (0.2, f32::NAN),
-            (0.2, f32::INFINITY),
-            (knee_max + 1.0, 0.2),
-            (0.2, knee_max + 1.0),
-            (10_000.0, 0.2),
-            (0.2, 10_000.0),
-        ] {
-            let cfg = sigmoid_cfg(SigmoidParams {
-                toe,
-                shoulder,
-                ..SigmoidParams::default()
-            });
-            assert!(
-                matches!(validate(&cfg), Err(NcError::Usage(_))),
-                "toe={toe} shoulder={shoulder} should fail"
-            );
-        }
-        // Zero widths (both knees off = the straight line) and the cap itself are
-        // valid (boundary inclusive).
-        validate(&sigmoid_cfg(SigmoidParams {
-            toe: 0.0,
-            shoulder: 0.0,
-            ..SigmoidParams::default()
-        }))
-        .unwrap();
-        validate(&sigmoid_cfg(SigmoidParams {
-            toe: knee_max,
-            shoulder: knee_max,
-            ..SigmoidParams::default()
-        }))
-        .unwrap();
-    }
-
-    #[test]
-    fn validate_rejects_sigmoid_without_a_dmax_anchor() {
-        // The S-curve is anchored on [0, Dmax]; `dmax = none` only works for
-        // the exponential curve's scene-referred output. The rule now pairs a
-        // `calibration` value with a `reconstruction` look, which is the shape every
-        // `Dmax`-policy rule takes since the reference moved out of the curve.
+    fn validate_accepts_no_dmax_on_every_curve() {
         let with = |cfg: ResolvedConfig, dmax| ResolvedConfig {
             calibration: CalibrationParams {
                 dmax,
@@ -12226,23 +11410,11 @@ mod tests {
             },
             ..cfg
         };
-        let sigmoid = || sigmoid_cfg(SigmoidParams::default());
-        let err = validate(&with(sigmoid(), DmaxSource::None)).unwrap_err();
-        assert!(matches!(err, NcError::Usage(_)));
-        // The message must name the new path, or it sends the user to a key that no
-        // longer exists.
-        assert!(err.message().contains("calibration.dmax"), "{err}");
-        // Auto and Explicit anchors are fine under sigmoid...
-        validate(&with(sigmoid(), DmaxSource::Auto)).unwrap();
-        validate(&with(sigmoid(), DmaxSource::Explicit(1.4))).unwrap();
-        // ...and `none` stays valid for the exponential curve.
         let exponential = exponential_cfg(ExponentialParams {
             gamma: 1.0,
             anchor: AnchorPlacement::WhiteAtDmax,
         });
         validate(&with(exponential, DmaxSource::None)).unwrap();
-        // ...and for `characteristic`, which reads no reference at all: a roll
-        // calibration composes with a stock-curve profile rather than being refused.
         let stock = merge(
             base_cfg(),
             &parse_convert(&["--density-curve", "characteristic"]),
@@ -12255,23 +11427,29 @@ mod tests {
     fn recipe_parses_tagged_curve_keys() {
         // §9 places the curve knobs under the tagged `reconstruction.curve`; with
         // `deny_unknown_fields` a misplaced key would silently reject the recipe,
-        // so pin the documented nesting for both variants.
+        // so pin the documented nesting.
         let cfg: ResolvedConfig = serde_json::from_str(
-            r#"{"reconstruction":{"type":"density",
-                "curve":{"type":"sigmoid","contrast":1.4,"toe":0.15,"shoulder":0.3}}}"#,
+            r#"{"reconstruction":{"curve":{"type":"exponential","gamma":1.4,
+                "anchor":{"mid-at-base-offset":0.5}}}}"#,
         )
         .unwrap();
-        let s = sigmoid_of(&cfg);
-        assert_eq!(s.contrast, 1.4);
-        assert_eq!(s.toe, 0.15);
-        assert_eq!(s.shoulder, 0.3);
+        assert_eq!(
+            *curve_of(&cfg),
+            DensityCurve::Exponential(ExponentialParams {
+                gamma: 1.4,
+                anchor: AnchorPlacement::MidAtBaseOffset(0.5),
+            })
+        );
         // A tagged-but-partial curve fills that variant's defaults.
-        let cfg: ResolvedConfig =
-            serde_json::from_str(r#"{"reconstruction":{"curve":{"type":"sigmoid","toe":0.0}}}"#)
-                .unwrap();
-        let s = sigmoid_of(&cfg);
-        assert_eq!(s.toe, 0.0);
-        assert_eq!(s.contrast, SigmoidParams::default().contrast);
+        let cfg: ResolvedConfig = serde_json::from_str(
+            r#"{"reconstruction":{"curve":{"type":"exponential","gamma":1.2}}}"#,
+        )
+        .unwrap();
+        assert_eq!(gamma_of(&cfg), 1.2);
+        assert_eq!(
+            curve_of(&cfg).anchor(),
+            Some(ExponentialParams::default().anchor)
+        );
     }
 
     #[test]
@@ -12489,8 +11667,14 @@ mod tests {
         for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             for (name, cfg) in [
                 ("exponential", exponential()),
-                ("sigmoid", sigmoid_cfg(SigmoidParams::default())),
-                ("simple", simple_cfg()),
+                ("default", base_cfg()),
+                (
+                    "characteristic",
+                    density_cfg(
+                        DensityParams::default(),
+                        DensityCurve::Characteristic(CharacteristicParams::default()),
+                    ),
+                ),
             ] {
                 assert!(
                     matches!(
@@ -12515,29 +11699,23 @@ mod tests {
 
     #[test]
     fn dump_params_round_trips_through_params() {
-        let cfg = merge(
-            base_cfg(),
-            // `--density-gamma` is the exponential curve's knob, and the default
-            // curve is the sigmoid, so the curve must be selected explicitly —
-            // otherwise `validate` correctly rejects the pair as a contradiction.
-            &parse_convert(&["--density-curve", "exponential", "--density-gamma", "1.8"]),
-        )
-        .unwrap();
+        let cfg = merge(base_cfg(), &parse_convert(&["--density-gamma", "1.8"])).unwrap();
         let json = serde_json::to_string(&cfg).unwrap();
         let back: ResolvedConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, back);
-        // The sigmoid form and the simple form round-trip too.
-        for cfg in [
-            merge(
-                base_cfg(),
-                &parse_convert(&["--density-curve", "sigmoid", "--sigmoid-toe", "0.1"]),
-            )
-            .unwrap(),
-            merge(base_cfg(), &parse_convert(&["--reconstruction", "simple"])).unwrap(),
-        ] {
-            let json = serde_json::to_string(&cfg).unwrap();
-            assert_eq!(serde_json::from_str::<ResolvedConfig>(&json).unwrap(), cfg);
-        }
+        // The characteristic form round-trips too.
+        let cfg = merge(
+            base_cfg(),
+            &parse_convert(&[
+                "--density-curve",
+                "characteristic",
+                "--film-stock",
+                "ektar-100",
+            ]),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert_eq!(serde_json::from_str::<ResolvedConfig>(&json).unwrap(), cfg);
     }
 
     #[test]
@@ -12547,8 +11725,8 @@ mod tests {
         // omitted input curve never survives normalization.
         let v = serde_json::to_value(base_cfg()).unwrap();
         assert_eq!(v["reconstruction"]["schema_version"], 1);
-        assert_eq!(v["reconstruction"]["type"], "density");
-        assert_eq!(v["reconstruction"]["curve"]["type"], "sigmoid");
+        assert!(v["reconstruction"].get("type").is_none(), "{v}");
+        assert_eq!(v["reconstruction"]["curve"]["type"], "exponential");
         assert!(
             v["reconstruction"]["curve"].get("dmax").is_none(),
             "the reference is a calibration, not a curve knob"
@@ -12567,14 +11745,7 @@ mod tests {
                 .unwrap();
         assert_eq!(*curve_of(&cfg), DensityCurve::default());
         let v = serde_json::to_value(&cfg).unwrap();
-        assert_eq!(v["reconstruction"]["curve"]["type"], "sigmoid");
-
-        // Simple emits schema_version + type and nothing else.
-        let v = serde_json::to_value(simple_cfg()).unwrap();
-        assert_eq!(
-            v["reconstruction"],
-            serde_json::json!({"schema_version": 1, "type": "simple"})
-        );
+        assert_eq!(v["reconstruction"]["curve"]["type"], "exponential");
 
         // An unsupported schema_version is rejected loudly through the recipe.
         assert!(
@@ -12585,27 +11756,16 @@ mod tests {
 
     #[test]
     fn reconstruction_result_serializes_the_documented_shapes() {
-        // The report's resolution diagnostics (design-spec §8): simple is exactly
-        // {"type":"simple"}; density carries curve type + the resolved dmax
-        // triple, with `value` always present (null for `none`).
+        // The report's resolution diagnostics (design-spec §8): the curve type, the
+        // resolved dmax triple with `value` always present (null for `none`), and the
+        // placement rule. Under `white-at-dmax` the reference *is* the anchor, so
+        // `anchor_value` mirrors `dmax.value`.
         let v = serde_json::to_value(reconstruction_result(
-            &Reconstruction::Simple,
-            DmaxSource::Fixed,
-            None,
-            None,
-            None,
-            DmaxSetting::Default,
-        ))
-        .unwrap();
-        assert_eq!(v, serde_json::json!({"type": "simple"}));
-
-        // The exponential curve, named explicitly since it is no longer the
-        // default. It reports its placement rule like the sigmoid does — both curves
-        // carry one since `algo/exponential-anchor-placement` — and under the
-        // `white-at-dmax` default the reference *is* the anchor, so `anchor_value`
-        // mirrors `dmax.value`.
-        let v = serde_json::to_value(reconstruction_result(
-            &exponential_cfg(ExponentialParams::default()).reconstruction,
+            &exponential_cfg(ExponentialParams {
+                gamma: 2.0,
+                anchor: AnchorPlacement::WhiteAtDmax,
+            })
+            .reconstruction,
             DmaxSource::Fixed,
             Some(2.0),
             Some(2.0),
@@ -12616,7 +11776,6 @@ mod tests {
         assert_eq!(
             v,
             serde_json::json!({
-                "type": "density",
                 "curve": {
                     "type": "exponential",
                     "dmax": {"policy": "fixed", "value": 2.0, "provenance": "default"},
@@ -12626,21 +11785,21 @@ mod tests {
             })
         );
 
-        // The default curve (sigmoid) additionally reports its placement rule,
-        // because it *has* one — that is the shape a default report now carries.
+        // The default curve reports its base-derived placement rule — the shape a
+        // default report carries.
         let v = serde_json::to_value(reconstruction_result(
             &Reconstruction::default(),
             DmaxSource::Fixed,
-            Some(2.0),
-            Some(2.0),
+            Some(1.3),
+            Some(0.99),
             None,
             DmaxSetting::Default,
         ))
         .unwrap();
-        assert_eq!(v["curve"]["type"], "sigmoid");
+        assert_eq!(v["curve"]["type"], "exponential");
         assert_eq!(
             v["curve"]["anchor"],
-            serde_json::json!({"mid-at-dmax-fraction": 0.5})
+            serde_json::to_value(AnchorPlacement::MidAtBaseOffset(0.62)).unwrap()
         );
 
         // `none` reports a null value; the recipe provenance rides through.
@@ -12665,20 +11824,23 @@ mod tests {
         // The auto policy always reports `auto-frame` — the value is a per-frame
         // measurement regardless of who selected the policy (this is the marker
         // that makes it master-incompatible).
-        let cfg = sigmoid_cfg(SigmoidParams::default());
+        let cfg = exponential_cfg(ExponentialParams {
+            anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
+            ..ExponentialParams::default()
+        });
         for setting in [DmaxSetting::Default, DmaxSetting::Recipe, DmaxSetting::Cli] {
             let v = serde_json::to_value(reconstruction_result(
                 &cfg.reconstruction,
                 DmaxSource::Auto,
                 Some(1.37),
-                // Default mid-grey placement: A = 0.5*1.37 + 0.745/2.0687 ≈ 1.045, so the
-                // derived anchor is deliberately NOT the reference here.
+                // Mid-grey placement: A = 0.5*1.37 + 0.745/2.0 ≈ 1.057, so the derived
+                // anchor is deliberately NOT the reference here.
                 Some(1.045),
                 None,
                 setting,
             ))
             .unwrap();
-            assert_eq!(v["curve"]["type"], "sigmoid");
+            assert_eq!(v["curve"]["type"], "exponential");
             // The placement rule and the derived anchor make this block self-contained:
             // `dmax.value` is the reference, `anchor_value` is what rendered to 1.0.
             assert_eq!(
@@ -12735,7 +11897,10 @@ mod tests {
         };
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["recipe"]["reconstruction"]["schema_version"], 1);
-        assert_eq!(v["recipe"]["reconstruction"]["type"], "density");
+        assert_eq!(
+            v["recipe"]["reconstruction"]["curve"]["type"],
+            "exponential"
+        );
         // Absent for non-convert reports.
         let v = serde_json::to_value(Report::default()).unwrap();
         assert!(v.get("recipe").is_none());
@@ -13990,7 +13155,7 @@ mod tests {
     #[test]
     fn film_master_rejects_frame_local_auto_dmax_and_pins_the_supported_anchors() {
         let master = |curve: DensityCurve, dmax| ResolvedConfig {
-            reconstruction: Reconstruction::Density {
+            reconstruction: Reconstruction {
                 density: DensityParams::default(),
                 curve,
             },
@@ -14000,13 +13165,20 @@ mod tests {
             },
             ..film_master_cfg()
         };
-        let exponential = DensityCurve::Exponential(ExponentialParams::default());
-        let sigmoid = DensityCurve::Sigmoid(SigmoidParams::default());
+        let reading = |anchor| {
+            DensityCurve::Exponential(ExponentialParams {
+                anchor,
+                ..ExponentialParams::default()
+            })
+        };
+        let white = reading(AnchorPlacement::WhiteAtDmax);
+        let mid = reading(AnchorPlacement::MidAtDmaxFraction(0.5));
 
         // Frame-local `auto` normalizes exposure per frame, which is exactly the
-        // cross-frame consistency the master exists to preserve — so it is rejected
-        // for *either* curve.
-        for curve in [exponential, sigmoid] {
+        // cross-frame consistency the master exists to preserve — so it is rejected for
+        // every placement that reads the reference. (The default placement reads none;
+        // `film_master_accepts_auto_dmax_under_a_reference_free_placement` covers it.)
+        for curve in [white, mid] {
             let msg = validate_err(&master(curve, DmaxSource::Auto));
             assert!(msg.contains("auto"), "{curve:?}: {msg}");
             assert!(msg.contains("film-master"), "{curve:?}: {msg}");
@@ -14014,36 +13186,18 @@ mod tests {
             assert!(msg.contains("--d-max"), "{curve:?}: {msg}");
         }
 
-        // Supported placements, pinned by curve type (design-spec §5):
-        //   exponential — fixed (default), explicit/roll, and `none` (unity);
-        //   sigmoid     — fixed (default) and explicit/roll; `none` is rejected for
-        //                 the S-curve regardless of preset, so it is not listed.
-        for (curve, dmax) in [
-            (exponential, DmaxSource::Fixed),
-            (exponential, DmaxSource::Explicit(1.64)),
-            (exponential, DmaxSource::None),
-            (sigmoid, DmaxSource::Fixed),
-            (sigmoid, DmaxSource::Explicit(1.64)),
-        ] {
-            validate(&master(curve, dmax))
-                .unwrap_or_else(|e| panic!("{curve:?} + {dmax:?} must be accepted: {e}"));
+        // Supported placements (design-spec §5): fixed (default), explicit/roll, and
+        // `none` (unity), on every rule.
+        for curve in [white, mid, DensityCurve::default()] {
+            for dmax in [
+                DmaxSource::Fixed,
+                DmaxSource::Explicit(1.64),
+                DmaxSource::None,
+            ] {
+                validate(&master(curve, dmax))
+                    .unwrap_or_else(|e| panic!("{curve:?} + {dmax:?} must be accepted: {e}"));
+            }
         }
-        // …and the *un*supported placement stays rejected under the preset too:
-        // `dmax = none` is invalid for the S-curve regardless of preset, so
-        // "supported anchors pinned by curve type" is only half-pinned without it.
-        // The rejection comes from the curve rule, which runs *before*
-        // `validate_output_preset` — pin it here so a reordering that let the preset
-        // path return first could not silently start accepting it.
-        let msg = validate_err(&master(sigmoid, DmaxSource::None));
-        assert!(msg.contains("--no-d-max"), "{msg}");
-        assert!(msg.contains("sigmoid"), "{msg}");
-
-        // `simple` has no Dmax at all, so the master accepts it unconditionally.
-        validate(&ResolvedConfig {
-            reconstruction: Reconstruction::Simple,
-            ..film_master_cfg()
-        })
-        .unwrap();
     }
 
     #[test]
@@ -14057,7 +13211,7 @@ mod tests {
         // `BalanceRange::Auto` is genuinely inert and must stay accepted, or every
         // default master would break.
         let master_with = |density: DensityParams| ResolvedConfig {
-            reconstruction: Reconstruction::Density {
+            reconstruction: Reconstruction {
                 density,
                 curve: DensityCurve::default(),
             },
@@ -14104,7 +13258,7 @@ mod tests {
         }
         // …and the same params without the preset are legal on a display preset.
         validate(&ResolvedConfig {
-            reconstruction: Reconstruction::Density {
+            reconstruction: Reconstruction {
                 density: DensityParams {
                     shadow_balance: [0.1, 0.0, 0.0],
                     highlight_balance: [0.0; 3],
@@ -14317,18 +13471,16 @@ mod tests {
         }
 
         // The master's content claim must not invent a Dmax placement it did not make:
-        // validation deliberately accepts exponential `dmax = none`, and `simple` has no
-        // anchor at all.
-        for (name, reconstruction) in [
-            ("simple", Reconstruction::Simple),
-            (
-                "exponential dmax=none",
-                Reconstruction::Density {
-                    density: DensityParams::default(),
-                    curve: DensityCurve::Exponential(ExponentialParams::default()),
-                },
-            ),
-        ] {
+        // validation deliberately accepts `dmax = none` under `white-at-dmax`.
+        {
+            let name = "exponential white-at-dmax, dmax=none";
+            let reconstruction = Reconstruction {
+                density: DensityParams::default(),
+                curve: DensityCurve::Exponential(ExponentialParams {
+                    anchor: AnchorPlacement::WhiteAtDmax,
+                    ..ExponentialParams::default()
+                }),
+            };
             let anchorless = value(&ResolvedConfig {
                 reconstruction,
                 calibration: CalibrationParams {
@@ -14348,10 +13500,30 @@ mod tests {
                 "{name}: {content}"
             );
         }
-        // …and the anchored default does claim it.
+        // …and the default claims its base-derived placement, never the roll's Dmax it
+        // does not read.
         assert!(
-            content.contains("resolved roll-fixed Dmax"),
-            "the default fixed anchor must be claimed: {content}"
+            content.contains("film-base-derived anchor placement"),
+            "the default's placement must be claimed: {content}"
+        );
+        assert!(!content.contains("roll-fixed Dmax"), "{content}");
+        // A reference-reading placement does claim the roll-fixed Dmax.
+        let reading = value(&ResolvedConfig {
+            reconstruction: Reconstruction {
+                density: DensityParams::default(),
+                curve: DensityCurve::Exponential(ExponentialParams {
+                    anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
+                    ..ExponentialParams::default()
+                }),
+            },
+            ..film_master_cfg()
+        });
+        assert!(
+            reading["content"]
+                .as_str()
+                .unwrap()
+                .contains("resolved roll-fixed Dmax"),
+            "{reading}"
         );
 
         // A base-derived placement is its own provenance, on both sides. Keying only on
@@ -14366,7 +13538,7 @@ mod tests {
             ),
         ] {
             let base_derived = value(&ResolvedConfig {
-                reconstruction: Reconstruction::Density {
+                reconstruction: Reconstruction {
                     density: DensityParams::default(),
                     curve: DensityCurve::Exponential(ExponentialParams {
                         anchor: AnchorPlacement::BlackAtBase(0.005),
@@ -14396,7 +13568,7 @@ mod tests {
         // answers `None` to `curve.anchor()`, which the reference-free test read as
         // base-derived — a report asserting an operation the run never performed.
         let film_curve = value(&ResolvedConfig {
-            reconstruction: Reconstruction::Density {
+            reconstruction: Reconstruction {
                 density: DensityParams {
                     scale: DensityParams::default_scale_for(DensityCurveType::Characteristic),
                     ..DensityParams::default()
@@ -14422,9 +13594,15 @@ mod tests {
         }
 
         // A display preset: the shared print controls and a display render both run,
-        // for `simple` as much as for a density reconstruction — the controls sit past
-        // the ACEScg boundary, where every reconstruction arrives the same way.
-        for cfg in [base_cfg(), simple_cfg()] {
+        // whatever the curve — the controls sit past the ACEScg boundary, where every
+        // reconstruction arrives the same way.
+        for cfg in [
+            base_cfg(),
+            density_cfg(
+                DensityParams::default(),
+                DensityCurve::Characteristic(CharacteristicParams::default()),
+            ),
+        ] {
             let sdr = value(&ResolvedConfig {
                 output: OutputParams {
                     preset: OutputPreset::DisplayP3,
@@ -14745,9 +13923,8 @@ mod tests {
         );
         assert!(matches!(validate(&cfg), Err(NcError::Usage(_))));
 
-        // A clean default (and the simple config) pass.
+        // A clean default passes.
         validate(&base_cfg()).unwrap();
-        validate(&simple_cfg()).unwrap();
     }
 
     #[test]
@@ -15144,24 +14321,22 @@ mod tests {
             "message must name regional balance: {msg}"
         );
 
-        // A non-neutral highlight balance alone (scale/offset default) also warns,
-        // and it warns under the sigmoid curve too (both curves subtract Dmax).
+        // A non-neutral highlight balance alone (scale/offset default) also warns.
         let cfg = explicit(DensityParams {
             highlight_balance: [0.0, 0.01, 0.0],
             ..DensityParams::default()
         });
         assert!(explicit_dmax_domain_warning(&cfg).is_some());
-        let cfg = calibrated_explicit(density_cfg(
-            DensityParams {
-                highlight_balance: [0.0, 0.01, 0.0],
-                ..DensityParams::default()
-            },
-            DensityCurve::Sigmoid(SigmoidParams::default()),
-        ));
-        assert!(explicit_dmax_domain_warning(&cfg).is_some());
 
-        // `simple` has no density domain — no warning.
-        assert!(explicit_dmax_domain_warning(&simple_cfg()).is_none());
+        // A placement that reads no reference cannot mis-anchor on one — the default
+        // since `pipeline_version` 6. That config gets `unconsumed_dmax_warning`
+        // instead, and exactly one of the two fires.
+        let cfg = calibrated_explicit(density_cfg(
+            DensityParams::default(),
+            DensityCurve::default(),
+        ));
+        assert!(explicit_dmax_domain_warning(&cfg).is_none());
+        assert!(unconsumed_dmax_warning(&cfg).is_some());
 
         // A `Fixed`/`Auto` anchor is already in the corrected domain — no warning
         // even with a non-neutral balance on a density reconstruction.
@@ -15743,19 +14918,19 @@ mod tests {
         // roll overlay entirely), and gating it on the target instead silently *dropped*
         // the roll's calibration on that switch. With the value at `calibration.dmax` it
         // is outside the object being switched, so both are structurally impossible.
-        // `anchor` is accepted by both parametric variants and is likewise not carried;
-        // the `curve_switch_*` tests below pin that and the warning it earns.
+        // `anchor` is likewise not carried; the `curve_switch_*` tests pin that and the
+        // warning it earns.
 
-        // Curve exponential → sigmoid: the overlay replaces the object outright.
+        // Curve exponential → characteristic: the overlay replaces the object outright.
         let mut base = serde_json::json!({"reconstruction": {"curve":
             {"type": "exponential", "gamma": 1.8}}});
-        let overlay =
-            serde_json::json!({"reconstruction": {"curve": {"type": "sigmoid", "contrast": 1.4}}});
+        let overlay = serde_json::json!({"reconstruction": {"curve":
+            {"type": "characteristic", "stock": "ektar-100"}}});
         merge_json(&mut base, &overlay);
         assert_eq!(
             base,
             serde_json::json!({"reconstruction": {"curve":
-                {"type": "sigmoid", "contrast": 1.4}}})
+                {"type": "characteristic", "stock": "ektar-100"}}})
         );
 
         // The switch `characteristic` sits on both sides of, which the old carry could
@@ -15764,12 +14939,12 @@ mod tests {
         let calibrated = serde_json::json!({"explicit": 1.6});
         for (from, to) in [
             (
-                serde_json::json!({"type": "sigmoid", "contrast": 2.0}),
+                serde_json::json!({"type": "exponential", "gamma": 2.0}),
                 serde_json::json!({"type": "characteristic", "stock": "portra-400"}),
             ),
             (
                 serde_json::json!({"type": "characteristic", "stock": "portra-400"}),
-                serde_json::json!({"type": "sigmoid"}),
+                serde_json::json!({"type": "exponential"}),
             ),
         ] {
             let mut base = serde_json::json!({
@@ -15798,28 +14973,25 @@ mod tests {
         assert_eq!(base, serde_json::json!({"calibration": {"dmax": "auto"}}));
 
         // A SAME-type curve override is not a switch: deep merge keeps siblings.
-        let mut base = serde_json::json!(
-            {"curve": {"type": "sigmoid", "contrast": 2.0, "toe": 0.05}});
-        let overlay = serde_json::json!({"curve": {"type": "sigmoid", "shoulder": 0.4}});
+        let mut base = serde_json::json!({"curve": {"type": "exponential", "gamma": 2.0}});
+        let overlay =
+            serde_json::json!({"curve": {"type": "exponential", "anchor": "white-at-dmax"}});
         merge_json(&mut base, &overlay);
         assert_eq!(
             base,
             serde_json::json!(
-                {"curve": {"type": "sigmoid", "contrast": 2.0, "toe": 0.05, "shoulder": 0.4}})
+                {"curve": {"type": "exponential", "gamma": 2.0, "anchor": "white-at-dmax"}})
         );
 
-        // Reconstruction density → simple: the stale `density`/`curve` blocks
-        // must not survive (simple takes neither) — and the merged JSON must
-        // deserialize back to a valid config.
+        // A per-frame override naming the retired `simple` reconstruction reaches the
+        // deserializer and is refused there by name, never silently merged away.
         let mut base = serde_json::to_value(base_cfg()).unwrap();
         let overlay = serde_json::json!({"reconstruction": {"type": "simple"}});
         merge_json(&mut base, &overlay);
-        assert_eq!(
-            base["reconstruction"],
-            serde_json::json!({"type": "simple"})
-        );
-        let cfg: ResolvedConfig = serde_json::from_value(base).unwrap();
-        assert_eq!(cfg.reconstruction, Reconstruction::Simple);
+        let err = serde_json::from_value::<ResolvedConfig>(base)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(REMOVED_SIMPLE_RECONSTRUCTION), "{err}");
     }
 
     #[test]
@@ -15833,9 +15005,9 @@ mod tests {
         std::fs::write(
             &manifest,
             r#"{"frames":[
-                 {"input":"a.tif","params":{"reconstruction":{"type":"simple"}}},
+                 {"input":"a.tif","params":{"reconstruction":{"type":"density"}}},
                  {"input":"b.tif",
-                  "params":{"reconstruction":{"curve":{"type":"sigmoid","contrast":1.4}}}}
+                  "params":{"reconstruction":{"curve":{"type":"characteristic","stock":"ektar-100"}}}}
                ]}"#,
         )
         .unwrap();
@@ -15862,19 +15034,22 @@ mod tests {
         let planned = planned.expect("per-frame type switches must apply, not error");
         assert_eq!(planned.len(), 2);
 
-        // Frame 1: density → simple (the stale density/curve blocks are gone).
-        assert_eq!(planned[0].cfg.reconstruction, Reconstruction::Simple);
+        // Frame 1: the retired `"type": "density"` at its old value changes nothing.
+        assert_eq!(planned[0].cfg.reconstruction, shared.reconstruction);
 
-        // Frame 2: exponential → sigmoid — the stale `gamma` is gone and unset sigmoid
-        // knobs take their defaults. The roll's reference is untouched because it is not
-        // in the object being switched.
+        // Frame 2: exponential → characteristic — the stale `gamma` is gone, and the
+        // per-channel gain is re-resolved for the new curve by hand (the overlay was merged
+        // onto the serialized shared config, where `scale` is always present). The roll's
+        // reference is untouched because it is not in the object being switched.
         assert_eq!(
             planned[1].cfg.reconstruction,
-            Reconstruction::Density {
-                density: DensityParams::default(),
-                curve: DensityCurve::Sigmoid(SigmoidParams {
-                    contrast: 1.4,
-                    ..SigmoidParams::default()
+            Reconstruction {
+                density: DensityParams {
+                    scale: DensityParams::default_scale_for(DensityCurveType::Characteristic),
+                    ..DensityParams::default()
+                },
+                curve: DensityCurve::Characteristic(CharacteristicParams {
+                    stock: FilmStock::Ektar100,
                 }),
             }
         );

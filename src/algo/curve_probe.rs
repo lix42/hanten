@@ -966,7 +966,10 @@ fn channel_drift() {
     );
 }
 
-/// **What per-channel `density.scale` should the sigmoid default to?**
+/// **What per-channel `density.scale` should a scalar-contrast curve default to?**
+///
+/// Named for the sigmoid, the default curve when it was written; it measures slopes in
+/// density and renders no curve, so it answers the same question for the exponential.
 ///
 /// The scalar path leaves `contrast · (D'_c − D'_R)`, so with `D'_c = s_c · D_c` each
 /// channel's drift against red density is **exactly linear in that channel's own scale**:
@@ -1088,7 +1091,7 @@ fn sigmoid_scale() {
     };
 
     println!(
-        "\nScalar (sigmoid) path drift, stops per unit density; 0 = neutral. {} frames, \
+        "\nScalar path drift, stops per unit density; 0 = neutral. {} frames, \
          {} rolls.\nClosed form verified against real renders to {:.4} stops/density.\n",
         frames_out.len(),
         FIXTURES.len(),

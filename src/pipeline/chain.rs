@@ -119,15 +119,15 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::reconstruct;
+    use crate::algo::{FilmRgbImage, reconstruct};
     use crate::pipeline::colorimetry::pinned::ACESCG_TO_DISPLAY_P3;
     use crate::pipeline::fit_gamut::DestinationGamut;
     use crate::pipeline::fit_range::RangeFittedImage;
     use crate::pipeline::scene_correction::WhiteBalance;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
     use crate::types::{
-        DensityCurve, DensityParams, ExponentialParams, FilmBase, LinearImage, Reconstruction,
-        SigmoidParams,
+        CharacteristicParams, DensityCurve, DensityParams, ExponentialParams, FilmBase,
+        LinearImage, Reconstruction,
     };
 
     fn params() -> ChainParams {
@@ -141,25 +141,11 @@ mod tests {
         }
     }
 
-    /// Build an `AcesCgImage` whose *film RGB* input was exactly `rgb`, through
-    /// the real `reconstruct → map_nc_film_rgb_v1` path — the only way to mint
-    /// one. `simple` with a unit base and a pre-inverted scan gives
-    /// `1 − (1 − target)/1 == target` bit-for-bit, which is what lets a test
-    /// place a chosen value — including a non-finite one — into the chain's
-    /// input. (`simple` is refused by `--new-flow` at the CLI; that is an
-    /// availability rule about what a *user* may ask for, and says nothing about
-    /// which producer a stage test may use.)
+    /// An `AcesCgImage` whose *film RGB* input was exactly `rgb` — including a
+    /// non-finite value — through the real working-space mapper.
     fn aces_from(width: u32, height: u32, rgb: &[f32], ir: Option<Vec<f32>>) -> AcesCgImage {
-        let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let scan: Vec<f32> = rgb.iter().map(|&t| 1.0 - t).collect();
-        let img = LinearImage::new(width, height, scan, ir).unwrap();
-        let (film, _) = reconstruct(
-            &img,
-            &base,
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
+        let film =
+            FilmRgbImage::fixture(LinearImage::new(width, height, rgb.to_vec(), ir).unwrap());
         map_nc_film_rgb_v1(film)
     }
 
@@ -339,14 +325,13 @@ mod tests {
         // takes (`algo::fixed`): the boundary is the type, so what produces it stays
         // free to change.
         let configs = [
-            Reconstruction::Simple,
-            Reconstruction::Density {
+            Reconstruction {
                 density: DensityParams::default(),
                 curve: DensityCurve::Exponential(ExponentialParams::default()),
             },
-            Reconstruction::Density {
+            Reconstruction {
                 density: DensityParams::default(),
-                curve: DensityCurve::Sigmoid(SigmoidParams::default()),
+                curve: DensityCurve::Characteristic(CharacteristicParams::default()),
             },
         ];
         for config in configs {

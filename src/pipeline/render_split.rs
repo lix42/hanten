@@ -124,8 +124,8 @@ impl ResolvedPrintControls {
     ///   crushes every product toward zero — `2^-140 · 0.5` is `3.6e-43`, a value that
     ///   is not literally `0.0` but quantizes to black and carries no recoverable tone,
     ///   and *that* trips neither the clip counter nor the non-finite counter. Only the
-    ///   low end is silent, and it is the same silent-destruction class the sigmoid
-    ///   contrast/knee caps close. `is_normal()` rejects zero, subnormal, infinite, and
+    ///   low end is silent, and it is the same silent-destruction class the anchor
+    ///   guards in `cli::validate` close. `is_normal()` rejects zero, subnormal, infinite, and
     ///   NaN in one predicate and matches the bound the message quotes;
     /// - each **`wb[c] · exposure_gain` product** is normal too. Neither factor alone is
     ///   enough: `--white-balance 1e-30,1e-30,1e-30 --print-exposure -100` passes both
@@ -390,44 +390,32 @@ pub fn display_source(aces: AcesCgImage, print: &PrintParams) -> Result<SharedDi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::reconstruct;
+    use crate::algo::{FilmRgbImage, reconstruct};
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
     use crate::types::{
-        DensityCurve, DensityParams, ExponentialParams, FilmBase, Reconstruction, SigmoidParams,
-        WbSource,
+        CharacteristicParams, DensityCurve, DensityParams, ExponentialParams, FilmBase,
+        Reconstruction, WbSource,
     };
 
-    /// Build an `AcesCgImage` whose *film RGB* input was exactly `rgb`, through
-    /// the real `reconstruct → map_nc_film_rgb_v1` path (the only way to mint
-    /// one). `simple` with a unit base and a pre-inverted scan gives
-    /// `1 − (1 − target)/1 == target` bit-for-bit, so the film RGB entering the
-    /// mapper is exactly `rgb` — the same trick `working_space`'s tests use.
+    /// An `AcesCgImage` whose *film RGB* input was exactly `rgb`, through the real
+    /// working-space mapper.
     fn aces_from(width: u32, height: u32, rgb: &[f32], ir: Option<Vec<f32>>) -> AcesCgImage {
-        let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let scan: Vec<f32> = rgb.iter().map(|&t| 1.0 - t).collect();
-        let img = LinearImage::new(width, height, scan, ir).unwrap();
-        let (film, _) = reconstruct(
-            &img,
-            &base,
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
+        let film =
+            FilmRgbImage::fixture(LinearImage::new(width, height, rgb.to_vec(), ir).unwrap());
         map_nc_film_rgb_v1(film)
     }
 
     /// Every supported reconstruction config — the split must be indifferent to
     /// which one produced the `AcesCgImage`.
-    fn all_configs() -> [Reconstruction; 3] {
+    fn all_configs() -> [Reconstruction; 2] {
         [
-            Reconstruction::Simple,
-            Reconstruction::Density {
+            Reconstruction {
                 density: DensityParams::default(),
                 curve: DensityCurve::Exponential(ExponentialParams::default()),
             },
-            Reconstruction::Density {
+            Reconstruction {
                 density: DensityParams::default(),
-                curve: DensityCurve::Sigmoid(SigmoidParams::default()),
+                curve: DensityCurve::Characteristic(CharacteristicParams::default()),
             },
         ]
     }

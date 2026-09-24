@@ -12,9 +12,7 @@ otherwise.
 | [`iso-decoder-oracle/`](iso-decoder-oracle/) | A macOS ImageIO interoperability oracle for ISO and legacy gain-map JPEGs. |
 | [`render-defaults-v2/`](render-defaults-v2/) | Reproduce the historical v1-to-v2 default-render measurements. |
 | [`render-defaults-v3/`](render-defaults-v3/) | Render and measure the legacy-TIFF-to-gain-map-JPEG default transition. |
-| [`sigmoid-baseline/`](sigmoid-baseline/) | Generate local visual-review pages used by the sigmoid calibration study. |
-| [`hdr-tone-review/`](hdr-tone-review/) | Render the gain-map JPEG review set for the display-tone study (macOS-only). |
-| [`preset-review/`](preset-review/) | The review **matrix** for the five proposed conversion presets; rendered by `nctool review generate`. |
+| [`preset-review/`](preset-review/) | The review **matrix** for the conversion presets; rendered by `nctool review generate`. |
 | `check-vendored-native.py` | Verify the checked-in libultrahdr and libjpeg-turbo source snapshots. |
 
 ## Vendored native-source check
@@ -63,13 +61,9 @@ exact old frame filenames** (e.g. `20260713-nikon-971.tif`) — they were
 *deliberately not updated* as part of this rename; fix them the next time you
 touch that tool:
 
-- [`sigmoid-baseline/fixtures.json`](sigmoid-baseline/fixtures.json) — every
+- [`analysis/fixtures.json`](analysis/fixtures.json) — every
   frame's `file`/`dmin_frame`/`dmax_frame`, plus the `Ektar`/`Portra160-2026-07-22`
-  roll keys
-- [`sigmoid-baseline/patch-review.sh`](sigmoid-baseline/patch-review.sh) — the
-  literal `mark|roll|roll|filename` table
-- [`sigmoid-baseline/build_candidate_review.py`](sigmoid-baseline/build_candidate_review.py)
-  — the `DS_MID` dict, keyed by old roll name
+  roll keys (moved from the retired `sigmoid-baseline/`)
 - [`preset-review/presets.matrix.json`](preset-review/presets.matrix.json) — the
   `rolls` block's `"2026-07-24-Gold200"`/`"Ektar"`/`"Portra160-2026-07-22"` keys
   (Gold200's key is still valid; Ektar/Portra160 are not)
@@ -83,5 +77,5 @@ touch that tool:
 ## Privacy boundary
 
 Most analysis commands consume only JSON metadata or stream files for hashing.
-The sigmoid review tools deliberately render personal photographs for a human,
+The review tools deliberately render personal photographs for a human,
 but write them only to local throwaway directories outside the repository.
