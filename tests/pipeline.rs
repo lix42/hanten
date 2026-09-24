@@ -561,10 +561,10 @@ fn single_rendition_hdr_presets_warn_when_the_signal_stays_below_reference_white
         ("hdr-hlg-tiff", "tif"),
         ("hdr-linear-tiff", "tif"),
     ] {
-        // At defaults the sigmoid asymptotes below display white, so this frame
-        // peaks at 201 nits — under reference white, in a container signalling HDR.
+        // Three stops down, this frame peaks under reference white — in a container
+        // signalling HDR.
         let low = tmp.path(&format!("{preset}-low.{ext}"));
-        let (code, stdout, err) = convert(preset, &low, &[]);
+        let (code, stdout, err) = convert(preset, &low, &["--print-exposure=-5"]);
         assert_eq!(code, 0, "{err}");
         assert!(
             warnings(&stdout).iter().any(|w| w.contains(MARKER)),
@@ -572,17 +572,13 @@ fn single_rendition_hdr_presets_warn_when_the_signal_stays_below_reference_white
             warnings(&stdout)
         );
 
-        // The falsifiable control: the same frame through the exponential curve does
-        // reach past the shoulder, so the warning must disappear. Without this the
+        // The falsifiable control: at the default exposure the same frame does reach
+        // past reference white, so the warning must disappear. Without this the
         // assertion above would pass equally for a warning that always fires. The
         // `--strict` here is a second assertion — `hdr-48bit.tif` is the IR-free
         // fixture, so exit 0 proves the run raised *no* promotable warning at all.
         let high = tmp.path(&format!("{preset}-high.{ext}"));
-        let (code, stdout, err) = convert(
-            preset,
-            &high,
-            &["--density-curve", "exponential", "--strict"],
-        );
+        let (code, stdout, err) = convert(preset, &high, &["--strict"]);
         assert_eq!(code, 0, "{err}");
         assert!(
             !warnings(&stdout).iter().any(|w| w.contains(MARKER)),
@@ -594,7 +590,8 @@ fn single_rendition_hdr_presets_warn_when_the_signal_stays_below_reference_white
     // `--strict` promotes it. One preset is enough: promotion is the shared
     // `push_warning_buf` path, not anything per-preset.
     let strict = tmp.path("strict.tif");
-    let (code, _stdout, err) = convert("hdr-pq-tiff", &strict, &["--strict"]);
+    let (code, _stdout, err) =
+        convert("hdr-pq-tiff", &strict, &["--print-exposure=-5", "--strict"]);
     assert_eq!(
         code, 1,
         "--strict must promote the SDR-range warning: {err}"
@@ -605,7 +602,7 @@ fn single_rendition_hdr_presets_warn_when_the_signal_stays_below_reference_white
     // low-headroom render yields an inert gain map rather than a mislabelled HDR
     // container. Different artifact, different diagnosis; this warning stays off it.
     let ultra = tmp.path("ultra.jpg");
-    let (code, stdout, err) = convert("ultra-hdr-v1", &ultra, &[]);
+    let (code, stdout, err) = convert("ultra-hdr-v1", &ultra, &["--print-exposure=-5"]);
     assert_eq!(code, 0, "{err}");
     assert!(
         !warnings(&stdout).iter().any(|w| w.contains(MARKER)),
@@ -639,10 +636,7 @@ fn hdr_linear_tiff_writes_a_bit_exact_display_linear_bt2020_master() {
             // The **exponential** curve, named explicitly. This test's subject is
             // the container — that samples above the 203-nit reference white
             // survive with no transfer or clamp applied — so the fixture has to
-            // produce some. The default sigmoid approaches display white `1.0`
-            // from strictly below and never reaches it for any finite density
-            // (`algo::sigmoid`, pinned by its own tests), which is correct for a
-            // print curve and useless for this assertion.
+            // produce some, whatever the default curve is.
             "--density-curve",
             "exponential",
             "--strict",
@@ -751,11 +745,10 @@ fn coded_hdr_tiffs_store_exact_codes_and_signal_cicp_in_the_profile() {
             "1,1,1",
             // The **exponential** curve, named explicitly. This test's subject is the
             // coded container, and it asserts exit 0 under `--strict` on the IR-free
-            // fixture — i.e. *no* promotable warning. At defaults the sigmoid keeps
-            // this frame's peak below the 203-nit reference white, which is a real
-            // condition with its own warning
+            // fixture — i.e. *no* promotable warning. A curve keeping this frame's
+            // peak below the 203-nit reference white would raise one
             // (`single_rendition_hdr_presets_warn_when_the_signal_stays_below_reference_white`)
-            // and nothing to do with PQ/HLG code storage.
+            // that has nothing to do with PQ/HLG code storage.
             "--density-curve",
             "exponential",
             "--strict",
@@ -1233,12 +1226,18 @@ fn ultra_hdr_v1_native_reconstruction_covers_odd_dimensions_and_hdr_vectors() {
     let tmp = TempDir::new("ultra-hdr-v1-native-odd");
     let input = tmp.path("odd.tiff");
     let output = tmp.path("odd.jpg");
+    // The film positives are placed exactly by inverting a stated exponential:
+    // `positive = 10^(4·(D − 2))` with `D = −log10(scan)` over a unit base, so a scan
+    // of `10^−(2 + log10(p)/4)` renders `p`. The film base itself renders `10^−8`,
+    // which is black. The slope is steep so the u16 scan resolves each target finely.
+    let scan = |p: f64| (65535.0 * 10f64.powf(-(2.0 + p.log10() / 4.0))).round() as u16;
+    let (black, white, peak) = (u16::MAX, scan(0.125), 0);
     let row = [
-        [u16::MAX; 3],                // black positive
-        [57_343; 3],                  // 0.125 positive; ×8 exposure = reference white
-        [0; 3],                       // neutral peak
-        [57_343, u16::MAX, u16::MAX], // saturated red at reference-white scale
-        [u16::MAX / 2; 3],            // mid gray
+        [black; 3],            // black positive
+        [white; 3],            // 0.125 positive; ×8 exposure = reference white
+        [peak; 3],             // neutral peak
+        [white, black, black], // saturated red at reference-white scale
+        [scan(0.5); 3],        // mid gray
     ];
     let pixels = row.into_iter().cycle().take(15).collect::<Vec<_>>();
     write_rgb48_pixels(&input, 5, 3, &pixels);
@@ -1249,10 +1248,15 @@ fn ultra_hdr_v1_native_reconstruction_covers_odd_dimensions_and_hdr_vectors() {
         output.to_str().unwrap(),
         "--output-preset",
         "ultra-hdr-v1",
-        "--reconstruction",
-        "simple",
         "--film-base",
         "1,1,1",
+        "--density-scale",
+        "1,1,1",
+        "--density-gamma",
+        "4",
+        "--anchor-white-at-reference",
+        "--d-max",
+        "2",
         "--print-exposure",
         "3",
     ]);
@@ -1456,8 +1460,8 @@ fn a_successful_run_leaves_no_staging_temps() {
 }
 
 #[test]
-fn convert_simple_writes_tiff_sidecar_and_report() {
-    let tmp = TempDir::new("simple");
+fn convert_writes_tiff_sidecar_and_report() {
+    let tmp = TempDir::new("convert-basic");
     let out = tmp.path("out.tiff");
     let (code, stdout, _err) = run(&[
         "convert",
@@ -1466,30 +1470,34 @@ fn convert_simple_writes_tiff_sidecar_and_report() {
         out.to_str().unwrap(),
         "--output-preset",
         "display-p3",
-        "--reconstruction",
-        "simple",
         // Real scans are holder → rebate → picture, so auto-base fails loudly;
         // supply an explicit base (the documented calibrate-once workflow).
         "--film-base",
         "0.9,0.55,0.42",
     ]);
-    assert_eq!(code, 0, "simple convert should succeed");
+    assert_eq!(code, 0, "convert should succeed");
     assert!(is_tiff(&out), "output must be a valid TIFF");
     // Effective-recipe sidecar next to the output, valid JSON — recipe body under
-    // `params`, beside the `meta` identity envelope.
+    // `params`, beside the `meta` identity envelope. The retired `type` selector is
+    // not written.
     let recipe = sidecar_params(&out);
-    assert_eq!(recipe["reconstruction"]["type"], "simple");
+    assert!(recipe["reconstruction"].get("type").is_none(), "{recipe}");
     assert_eq!(recipe["reconstruction"]["schema_version"], 1);
+    assert_eq!(recipe["reconstruction"]["curve"]["type"], "exponential");
 
     let report = json(&stdout);
     assert_eq!(report["command"], "convert");
+    assert!(report["reconstruction_result"].get("type").is_none());
     assert_eq!(
-        report["reconstruction_result"],
-        serde_json::json!({"type": "simple"})
+        report["reconstruction_result"]["curve"]["type"],
+        "exponential"
     );
-    assert_eq!(report["recipe"]["reconstruction"]["type"], "simple");
+    assert_eq!(
+        report["recipe"]["reconstruction"]["curve"]["type"],
+        "exponential"
+    );
     // The pinned working-space mapping is stamped on every convert report
-    // (design-spec §8), independent of reconstruction path — here `simple`.
+    // (design-spec §8), independent of reconstruction path.
     assert_eq!(report["working_mapping"], "nc-film-rgb-v1");
     assert_eq!(report["output"], out.to_str().unwrap());
     assert!(report["film_base"].is_object(), "film base reported");
@@ -1514,8 +1522,6 @@ fn u16_clipping_is_reported_and_strict_promotes_it() {
             "__OUT__",
             "--output-preset",
             "display-p3",
-            "--reconstruction",
-            "density",
             "--film-base",
             "0.9,0.55,0.42",
             "--print-exposure",
@@ -2136,8 +2142,6 @@ fn export_ir_writes_plane_for_hdri_and_errors_for_hdr() {
         out.to_str().unwrap(),
         "--output-preset",
         "display-p3",
-        "--reconstruction",
-        "simple",
         "--film-base",
         "0.9,0.55,0.42",
         "--export-ir",
@@ -2158,8 +2162,6 @@ fn export_ir_writes_plane_for_hdri_and_errors_for_hdr() {
         out_hdr.to_str().unwrap(),
         "--output-preset",
         "display-p3",
-        "--reconstruction",
-        "simple",
         "--export-ir",
         ir_hdr.to_str().unwrap(),
         "--auto-base",
@@ -2194,7 +2196,7 @@ fn bad_params_are_usage_errors() {
     assert!(!out.exists(), "no output on a usage error");
 
     // The removed simple clip controls are migration errors (exit 2), and the
-    // removed --algorithm selector points at --reconstruction/--density-curve.
+    // removed --algorithm selector points at --density-curve.
     let (code, _stdout, err) = run(&[
         "convert",
         fixture("hdr-48bit.tif").to_str().unwrap(),
@@ -2202,8 +2204,6 @@ fn bad_params_are_usage_errors() {
         out.to_str().unwrap(),
         "--output-preset",
         "display-p3",
-        "--reconstruction",
-        "simple",
         "--clip-low",
         "0.9",
     ]);
@@ -2220,7 +2220,7 @@ fn bad_params_are_usage_errors() {
     ]);
     assert_eq!(code, 2, "--algorithm must be a migration error: {err}");
     assert!(
-        err.contains("--reconstruction"),
+        err.contains("--density-curve"),
         "the migration error names the replacement: {err}"
     );
     assert!(!out.exists(), "no output on a usage error");
@@ -2268,7 +2268,7 @@ fn the_old_calibration_spellings_are_migration_errors() {
     // (b) `reconstruction.curve.dmax`, on each curve type. On `characteristic` the
     // cross-variant rule also matches — it must not win, or the user is told `dmax` is
     // "a parametric-curve key" and never learns it became a calibration.
-    for curve in ["exponential", "sigmoid", "characteristic"] {
+    for curve in ["exponential", "characteristic"] {
         let recipe = write_file(
             &tmp.path("curve.json"),
             &format!(
@@ -2344,11 +2344,12 @@ fn the_old_calibration_spellings_are_migration_errors() {
 fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
     let tmp = TempDir::new("calibration-split");
     let scan = fixture("hdr-48bit.tif");
+    // A placement that reads the reference, so the stated `dmax` reaches the pixels.
     let common = [
         "--output-preset",
         "display-p3",
-        "--density-curve",
-        "sigmoid",
+        "--anchor-mid-fraction",
+        "0.5",
     ];
 
     // A calibration is "a recipe with nothing else".
@@ -2389,8 +2390,8 @@ fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
     // half-written curve.
     let profile = write_file(
         &tmp.path("look.json"),
-        r#"{"reconstruction":{"type":"density",
-              "curve":{"type":"sigmoid","contrast":2.0,"toe":0.1,"shoulder":0.5,
+        r#"{"reconstruction":{
+              "curve":{"type":"exponential","gamma":2.0,
                        "anchor":{"mid-at-dmax-fraction":0.5}},
               "density":{"scale":[1.0,0.84,0.73]}},
             "output":{"preset":"display-p3"}}"#,
@@ -2442,10 +2443,13 @@ fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
     assert!(err.contains("no film base selected"), "{err}");
 }
 
-/// A stated reference that `simple` will never read is carried and warned about, and
-/// `--strict` promotes the warning.
+/// A stated reference that the default, base-derived placement will never read is
+/// carried and warned about, and `--strict` promotes the warning.
+///
+/// Since `pipeline_version` 6 this is the default configuration, so a roll calibration
+/// measured with `hanten estimate --d-max-region` is exactly the file that reaches it.
 #[test]
-fn a_reference_simple_cannot_read_is_warned_not_dropped() {
+fn a_reference_the_default_placement_cannot_read_is_warned_not_dropped() {
     let tmp = TempDir::new("unconsumed-dmax");
     let scan = fixture("hdr-48bit.tif");
     let args = |out: &str, strict: bool| {
@@ -2458,8 +2462,6 @@ fn a_reference_simple_cannot_read_is_warned_not_dropped() {
             "display-p3".to_string(),
             "--film-base".to_string(),
             "0.9,0.55,0.42".to_string(),
-            "--reconstruction".to_string(),
-            "simple".to_string(),
             "--d-max".to_string(),
             "1.45".to_string(),
         ];
@@ -2471,10 +2473,10 @@ fn a_reference_simple_cannot_read_is_warned_not_dropped() {
     let owned = args("a.tif", false);
     let argv: Vec<&str> = owned.iter().map(|s| &**s).collect();
     let (code, stdout, err) = run(&argv);
-    assert_eq!(code, 0, "a reference simple cannot read is accepted: {err}");
+    assert_eq!(code, 0, "an unread reference is accepted: {err}");
     assert!(err.contains("does not read it"), "{err}");
     assert!(
-        err.contains("`simple`"),
+        err.contains("base-derived"),
         "the reason must name the branch: {err}"
     );
     // Carried, so the same file still applies to a profile that does read one.
@@ -2490,17 +2492,16 @@ fn a_reference_simple_cannot_read_is_warned_not_dropped() {
     let (code, _, err) = run(&argv);
     assert_ne!(code, 0, "--strict must promote it: {err}");
 
-    // **The remedy must be a route this branch accepts.** `--density-curve` is refused
-    // outright beside `simple`, so offering it here would hand the user a flag that
-    // exits 2 — the circular-advice defect CLAUDE.md records four instances of. Assert
-    // the working remedy is named *and* that the refused one is not.
+    // **The remedy must be a route this branch accepts** — the circular-advice defect
+    // CLAUDE.md records four instances of. The curve already is the exponential, so
+    // switching curves is not the remedy; a reference-reading placement is.
     assert!(
-        err.contains("--reconstruction density"),
-        "the `simple` remedy must name a flag this branch accepts: {err}"
+        err.contains("--anchor-mid-fraction"),
+        "the remedy must name a flag this branch accepts: {err}"
     );
     assert!(
         !err.contains("--density-curve"),
-        "`--density-curve` exits 2 beside `simple`; it must not be advised: {err}"
+        "switching curves is not the remedy here: {err}"
     );
     // …and following it really does work: the flag is accepted, and *this* warning is
     // gone. Not asserted under `--strict`, deliberately — the remedied config trips the
@@ -2516,10 +2517,10 @@ fn a_reference_simple_cannot_read_is_warned_not_dropped() {
         "display-p3",
         "--film-base",
         "0.9,0.55,0.42",
-        "--reconstruction",
-        "density",
         "--d-max",
         "1.45",
+        "--anchor-mid-fraction",
+        "0.5",
     ]);
     assert_eq!(code, 0, "the advised remedy must be accepted: {err}");
     assert!(
@@ -2537,8 +2538,6 @@ fn a_reference_simple_cannot_read_is_warned_not_dropped() {
         "display-p3",
         "--film-base",
         "0.9,0.55,0.42",
-        "--reconstruction",
-        "simple",
         "--strict",
     ]);
     assert_eq!(code, 0, "{err}");
@@ -2634,8 +2633,6 @@ fn convert_is_deterministic() {
                 fixture("hdri-64bit.tif").to_str().unwrap().to_string(),
                 "-o".to_string(),
                 out.to_str().unwrap().to_string(),
-                "--reconstruction".to_string(),
-                "density".to_string(),
                 "--output-preset".to_string(),
                 preset.to_string(),
                 "--film-base".to_string(),
@@ -2746,8 +2743,6 @@ fn sidecar_recipe_round_trips_through_recipe_in() {
         fixture("hdri-64bit.tif").to_str().unwrap(),
         "-o",
         out_a.to_str().unwrap(),
-        "--reconstruction",
-        "density",
         "--output-preset",
         "film-master",
         "--film-base",
@@ -2785,63 +2780,6 @@ fn sidecar_recipe_round_trips_through_recipe_in() {
 }
 
 #[test]
-fn sigmoid_sidecar_recipe_round_trips_through_recipe_in() {
-    // Same measure-once-reuse workflow for `sigmoid`, with NON-default toe/shoulder
-    // so the round-trip actually exercises the sigmoid four-spot serialization +
-    // merge (a dropped `sigmoid.*` key or a forgotten merge arm would change the
-    // reloaded output). Run A writes the sidecar; run B consumes it and must be
-    // byte-identical.
-    let tmp = TempDir::new("sigmoid-recipe");
-    let out_a = tmp.path("a.tiff");
-    let (ca, _, err) = run(&[
-        "convert",
-        fixture("hdri-64bit.tif").to_str().unwrap(),
-        "-o",
-        out_a.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--density-curve",
-        "sigmoid",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--sigmoid-contrast",
-        "1.4",
-        "--sigmoid-toe",
-        "0.12",
-        "--sigmoid-shoulder",
-        "0.33",
-        "--report",
-        "none",
-    ]);
-    assert_eq!(ca, 0, "{err}");
-    let sidecar = sidecar_of(&out_a).display().to_string();
-    // The sidecar's recipe body carries the sigmoid section verbatim.
-    let recipe = sidecar_params(&out_a);
-    assert_eq!(recipe["reconstruction"]["curve"]["type"], "sigmoid");
-    assert_eq!(recipe["reconstruction"]["curve"]["contrast"], 1.4);
-    assert_eq!(recipe["reconstruction"]["curve"]["toe"], 0.12);
-    assert_eq!(recipe["reconstruction"]["curve"]["shoulder"], 0.33);
-
-    let out_b = tmp.path("b.tiff");
-    let (cb, _, err) = run(&[
-        "convert",
-        fixture("hdri-64bit.tif").to_str().unwrap(),
-        "-o",
-        out_b.to_str().unwrap(),
-        "--params",
-        &sidecar,
-        "--report",
-        "none",
-    ]);
-    assert_eq!(cb, 0, "sigmoid recipe reload should succeed:\n{err}");
-    assert_eq!(
-        std::fs::read(&out_a).unwrap(),
-        std::fs::read(&out_b).unwrap(),
-        "reloading the sigmoid sidecar recipe must reproduce the output"
-    );
-}
-
-#[test]
 fn unreadable_input_is_decode_error_exit_three() {
     let tmp = TempDir::new("decode");
     let bad = tmp.path("not-a.tiff");
@@ -2862,8 +2800,6 @@ fn unwritable_output_is_write_error_exit_five() {
         out.to_str().unwrap(),
         "--output-preset",
         "display-p3",
-        "--reconstruction",
-        "simple",
         "--film-base",
         "0.9,0.55,0.42",
     ]);
@@ -2886,8 +2822,6 @@ fn verbose_keeps_stdout_clean_json_and_logs_to_stderr() {
         out.to_str().unwrap(),
         "--output-preset",
         "display-p3",
-        "--reconstruction",
-        "simple",
         "--film-base",
         "0.9,0.55,0.42",
         "-v",
@@ -2920,8 +2854,6 @@ fn report_file_writes_json_off_stdout() {
         out.to_str().unwrap(),
         "--output-preset",
         "display-p3",
-        "--reconstruction",
-        "simple",
         "--film-base",
         "0.9,0.55,0.42",
         "--report-file",
@@ -3348,8 +3280,6 @@ fn ir_plane_bit_identical_across_input_resolution() {
         "display-p3",
         "--film-base",
         "0.9,0.55,0.42",
-        "--reconstruction",
-        "simple",
         "--export-ir",
         ir_auto.to_str().unwrap(),
     ]);
@@ -3366,8 +3296,6 @@ fn ir_plane_bit_identical_across_input_resolution() {
         "display-p3",
         "--film-base",
         "0.9,0.55,0.42",
-        "--reconstruction",
-        "simple",
         "--export-ir",
         ir_expl.to_str().unwrap(),
         "--input-transfer",
@@ -3726,7 +3654,7 @@ fn telemetry_file_writes_full_record() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
 
-    assert_eq!(record["schema_version"], 4);
+    assert_eq!(record["schema_version"], 5);
     assert!(record["timestamp_ms"].as_u64().unwrap() > 0);
     assert!(record["nc_version"].is_string());
     assert!(record["target"].is_string());
@@ -3768,8 +3696,9 @@ fn telemetry_file_writes_full_record() {
 
     let conv = &record["conversion"];
     assert_eq!(conv["preset"], "display-p3");
-    assert_eq!(conv["reconstruction"], "density");
-    assert_eq!(conv["curve"], "sigmoid");
+    // Schema 5 dropped the one-valued reconstruction type.
+    assert!(conv.get("reconstruction").is_none(), "{conv}");
+    assert_eq!(conv["curve"], "exponential");
     assert!(conv["params_hash"].as_str().unwrap().len() == 16);
     assert_eq!(
         conv["film_base_source"]["explicit"],
@@ -3898,7 +3827,7 @@ fn telemetry_log_appends_one_line_per_run() {
     // Each line is an independent, valid JSON object.
     for line in lines {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(v["schema_version"], 4);
+        assert_eq!(v["schema_version"], 5);
     }
 }
 
@@ -3953,8 +3882,6 @@ fn telemetry_does_not_perturb_output_or_sidecar() {
             out.to_str().unwrap().to_string(),
             "--output-preset".to_string(),
             "display-p3".to_string(),
-            "--reconstruction".to_string(),
-            "density".to_string(),
             "--film-base".to_string(),
             "0.9,0.55,0.42".to_string(),
             "--report".to_string(),
@@ -4010,8 +3937,6 @@ fn telemetry_write_failure_is_fail_soft_even_under_strict() {
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        "--reconstruction",
-        "density",
         "--output-preset",
         "film-master",
         "--film-base",
@@ -4142,7 +4067,7 @@ fn telemetry_file_dash_writes_json_to_stdout() {
     ]);
     assert_eq!(code, 0, "telemetry to stdout should succeed:\n{err}");
     let record = json(&stdout);
-    assert_eq!(record["schema_version"], 4);
+    assert_eq!(record["schema_version"], 5);
     assert_eq!(record["image"]["format"], "hdr");
 }
 
@@ -4248,8 +4173,6 @@ fn telemetry_outcome_reports_clipping_and_warnings() {
         out.to_str().unwrap(),
         "--output-preset",
         "display-p3",
-        "--reconstruction",
-        "density",
         "--film-base",
         "0.9,0.55,0.42",
         "--print-exposure",
@@ -4288,8 +4211,6 @@ fn telemetry_outcome_counts_ir_ignored_warning() {
         fixture("hdri-64bit.tif").to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        "--reconstruction",
-        "density",
         "--output-preset",
         "film-master", // f32 never clips, so the IR-ignored warning is isolated
         "--film-base",
@@ -4343,12 +4264,11 @@ fn telemetry_key_in_recipe_is_rejected() {
 }
 
 #[test]
-fn telemetry_records_sigmoid_curve_and_params_hash() {
-    // The record's conversion summary must handle the sigmoid curve: the
-    // reconstruction/curve pair serializes "density"/"sigmoid", and params_hash
-    // (over the effective recipe JSON) must cover the curve keys, so tweaking
-    // one changes the hash.
-    let tmp = TempDir::new("tel-sigmoid");
+fn telemetry_records_the_curve_and_params_hash() {
+    // The record's conversion summary names the resolved curve, and params_hash (over
+    // the effective recipe JSON) must cover the curve keys, so tweaking one changes the
+    // hash.
+    let tmp = TempDir::new("tel-curve");
     let fix = fixture("hdr-48bit.tif");
     let convert = |out: &Path, extra: &[&str]| -> serde_json::Value {
         let out = out.to_str().unwrap();
@@ -4359,8 +4279,6 @@ fn telemetry_records_sigmoid_curve_and_params_hash() {
             out,
             "--output-preset",
             "display-p3",
-            "--density-curve",
-            "sigmoid",
             "--film-base",
             "0.9,0.55,0.42",
             "--telemetry-file",
@@ -4370,41 +4288,26 @@ fn telemetry_records_sigmoid_curve_and_params_hash() {
         ];
         argv.extend_from_slice(extra);
         let (code, stdout, err) = run(&argv);
-        assert_eq!(code, 0, "sigmoid + telemetry should succeed:\n{err}");
+        assert_eq!(code, 0, "telemetry should succeed:\n{err}");
         json(&stdout)
     };
-    let a = tmp.path("a.tiff");
-    let b = tmp.path("b.tiff");
-    let ra = convert(&a, &[]);
-    let rb = convert(&b, &["--sigmoid-contrast", "1.5"]);
+    let ra = convert(&tmp.path("a.tiff"), &[]);
+    let rb = convert(&tmp.path("b.tiff"), &["--density-gamma", "1.5"]);
+    let rc = convert(&tmp.path("c.tiff"), &["--density-curve", "characteristic"]);
 
-    assert_eq!(
-        ra["conversion"]["reconstruction"], "density",
-        "the record names the reconstruction type: {ra}"
-    );
-    assert_eq!(
-        ra["conversion"]["curve"], "sigmoid",
-        "the record must name the sigmoid curve: {ra}"
-    );
-    // sigmoid shares the density anchor, so a resolved dmax still rides along.
-    assert!(
-        ra["conversion"]["dmax"]
-            .as_f64()
-            .is_some_and(f64::is_finite),
-        "sigmoid should report a resolved dmax anchor: {ra}"
-    );
+    assert_eq!(ra["conversion"]["curve"], "exponential", "{ra}");
+    assert_eq!(rc["conversion"]["curve"], "characteristic", "{rc}");
     assert_ne!(
         ra["conversion"]["params_hash"], rb["conversion"]["params_hash"],
-        "a changed sigmoid knob must change params_hash"
+        "a changed curve knob must change params_hash"
     );
 }
 
 #[test]
-fn convert_sigmoid_runs_end_to_end_and_reports_the_anchor() {
-    // `--density-curve sigmoid` selects the S-curve end to end: the JSON
-    // report names the resolved curve, carries the resolved Dmax anchor, and the
-    // sidecar recipe round-trips the tagged curve.
-    let tmp = TempDir::new("sigmoid");
+fn convert_reports_the_default_curve_and_its_base_derived_anchor() {
+    // The default render end to end: the report names the resolved curve and its
+    // placement, and the sidecar recipe carries the tagged curve.
+    let tmp = TempDir::new("default-curve");
     let out = tmp.path("out.tiff");
     let (code, stdout, err) = run(&[
         "convert",
@@ -4413,162 +4316,24 @@ fn convert_sigmoid_runs_end_to_end_and_reports_the_anchor() {
         out.to_str().unwrap(),
         "--output-preset",
         "display-p3",
-        "--density-curve",
-        "sigmoid",
         "--film-base",
         "0.9,0.55,0.42",
-        "--sigmoid-contrast",
-        "1.2",
     ]);
-    assert_eq!(code, 0, "sigmoid convert should succeed: {err}");
-    assert!(is_tiff(&out));
+    assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
-    assert_eq!(report["reconstruction_result"]["type"], "density");
-    assert_eq!(report["reconstruction_result"]["curve"]["type"], "sigmoid");
-    assert_eq!(
-        report["reconstruction_result"]["curve"]["dmax"]["policy"],
-        "fixed"
+    let curve = &report["reconstruction_result"]["curve"];
+    assert_eq!(curve["type"], "exponential");
+    assert!(
+        curve["anchor"].get("mid-at-base-offset").is_some(),
+        "{curve}"
     );
-    assert_eq!(
-        report["reconstruction_result"]["curve"]["dmax"]["provenance"],
-        "default"
-    );
-    // Same pinned mapping identifier on the density/sigmoid path as on simple.
+    // 0.62 + 0.745 / 2.0, the fixed decode's anchor.
+    let anchor = curve["anchor_value"].as_f64().expect("anchor_value");
+    assert!((anchor - 0.992_363_75).abs() < 1e-6, "{anchor}");
     assert_eq!(report["working_mapping"], "nc-film-rgb-v1");
-    assert!(
-        report["dmax"].as_f64().is_some_and(f64::is_finite),
-        "the shared anchor must be reported: {report}"
-    );
     let recipe = sidecar_params(&out);
-    assert_eq!(recipe["reconstruction"]["curve"]["type"], "sigmoid");
-    assert_eq!(recipe["reconstruction"]["curve"]["contrast"], 1.2);
-
-    // The anchored shoulder keeps every rendered sample at or below display
-    // white, so — unlike the straight line — the default u16 encode cannot
-    // clip highlights.
-    assert_eq!(
-        report["loss"]["clipped_high"], 0,
-        "the shoulder must prevent u16 highlight clipping: {report}"
-    );
-}
-
-#[test]
-fn sigmoid_small_anchor_does_not_clip_highlights() {
-    // Regression for the toe-lift overshoot bug: a small explicit anchor
-    // (`--d-max 0.1`) with the default toe (0.2) made the old shoulder-then-toe
-    // order lift the white asymptote to ≈ 1.056, so the u16 encode clipped
-    // highlights — defeating sigmoid's headline "shoulder means highlights can't
-    // clip" guarantee. With the toe-then-shoulder reorder the ceiling is
-    // inviolable: clipped_high must be 0.
-    let tmp = TempDir::new("sigmoid-smallanchor");
-    let out = tmp.path("out.tiff");
-    let (code, stdout, err) = run(&[
-        "convert",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--density-curve",
-        "sigmoid",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--d-max",
-        "0.1",
-    ]);
-    assert_eq!(
-        code, 0,
-        "sigmoid small-anchor convert should succeed: {err}"
-    );
-    let report = json(&stdout);
-    assert_eq!(
-        report["loss"]["clipped_high"], 0,
-        "a small anchor must not overshoot display white / clip highlights: {report}"
-    );
-}
-
-#[test]
-fn sigmoid_rejects_density_gamma_as_a_usage_error() {
-    // `gamma` exists only in the exponential curve variant, so `--density-gamma`
-    // with a resolved sigmoid curve is an invalid tagged combination — a loud
-    // post-merge usage error (exit 2), never the pre-reconstruction
-    // warned-and-ignored behavior. Flag *presence* is the trigger (even the
-    // default value 1.0 — the flag can only mean the exponential knob).
-    let tmp = TempDir::new("gamma-reject");
-    let fix = fixture("hdr-48bit.tif");
-    let gamma_run = |extra: &[&str], out: &Path| -> (i32, String) {
-        let mut argv = vec![
-            "convert",
-            fix.to_str().unwrap(),
-            "-o",
-            out.to_str().unwrap(),
-            "--output-preset",
-            "display-p3",
-            "--film-base",
-            "0.9,0.55,0.42",
-        ];
-        argv.extend_from_slice(extra);
-        let (code, _stdout, err) = run(&argv);
-        (code, err)
-    };
-
-    // sigmoid + custom gamma → usage error naming the analogue knob, no output.
-    let out = tmp.path("a.tiff");
-    let (code, err) = gamma_run(
-        &["--density-curve", "sigmoid", "--density-gamma", "1.5"],
-        &out,
-    );
-    assert_eq!(code, 2, "sigmoid + --density-gamma must exit 2: {err}");
-    assert!(
-        err.contains("--sigmoid-contrast"),
-        "the error names the sigmoid analogue: {err}"
-    );
-    assert!(!out.exists(), "no output on a usage error");
-
-    // ...even at the default value (the flag is exponential-only).
-    let (code, _err) = gamma_run(
-        &["--density-curve", "sigmoid", "--density-gamma", "1.0"],
-        &tmp.path("b.tiff"),
-    );
-    assert_eq!(code, 2, "flag presence is the trigger, not the value");
-
-    // The exponential curve consumes gamma normally. Selected explicitly: the
-    // default curve is the sigmoid, so a bare `--density-gamma` is now the
-    // contradiction asserted above, not the accepted case.
-    let (code, err) = gamma_run(
-        &["--density-curve", "exponential", "--density-gamma", "1.5"],
-        &tmp.path("c.tiff"),
-    );
-    assert_eq!(code, 0, "exponential consumes gamma: {err}");
-}
-
-#[test]
-fn sigmoid_rejects_no_d_max() {
-    // The S-curve is anchored on [0, Dmax]; --no-d-max must be a usage error.
-    let tmp = TempDir::new("sigmoid-nodmax");
-    let out = tmp.path("out.tiff");
-    let (code, _stdout, err) = run(&[
-        "convert",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--density-curve",
-        "sigmoid",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--no-d-max",
-    ]);
-    assert_eq!(code, 2, "sigmoid + --no-d-max must exit 2: {err}");
-    // Exit 2 alone is not enough: a second `--density-curve` was briefly added here
-    // by a sweep, and clap's duplicate-flag rejection made this pass without ever
-    // reaching the merge/validation path it exists to pin.
-    assert!(
-        err.contains("sigmoid"),
-        "must be the sigmoid anchor rejection, not a parse error: {err}"
-    );
-    assert!(!out.exists(), "no output on a usage error");
+    assert_eq!(recipe["reconstruction"]["curve"]["type"], "exponential");
+    assert_eq!(recipe["reconstruction"]["curve"]["gamma"], 2.0);
 }
 
 #[test]
@@ -4605,10 +4370,6 @@ fn density_report_carries_resolved_dmax() {
         "display-p3",
         "--film-base",
         "0.9,0.55,0.42",
-        // `--no-d-max` is exponential-only (the sigmoid is anchored on [0, Dmax]
-        // and cannot run without one), and the sigmoid is now the default curve.
-        "--density-curve",
-        "exponential",
         "--no-d-max",
     ]);
     assert_eq!(code, 0, "{err}");
@@ -5559,9 +5320,9 @@ fn roll_warns_on_per_frame_dmax_override() {
 
 #[test]
 fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
-    // The break reachable **without naming the key**: an override that sets only
-    // `curve.type` takes the new curve's default placement, so the roll's stated
-    // `anchor` is discarded — and `sets_curve_anchor`, a key probe, never sees it. Before
+    // The break reachable **without naming the key**: an override that switches only
+    // `curve.type` to the characteristic curve takes no placement at all, so the roll's
+    // stated `anchor` is discarded — and `sets_curve_anchor`, a key probe, never sees it. Before
     // this warning the frame rendered on a different tonal rule than the rest of the roll
     // with nothing in the report to show it. `hdr-48bit.tif` is IR-free so the `--strict`
     // half is about *this* warning and not the IR one.
@@ -5570,7 +5331,7 @@ fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
     let manifest_txt = format!(
         r#"{{ "frames": [
              {{ "input": {hdr:?},
-                "params": {{ "reconstruction": {{ "curve": {{ "type": "exponential" }} }} }} }}
+                "params": {{ "reconstruction": {{ "curve": {{ "type": "characteristic" }} }} }} }}
            ] }}"#,
         hdr = hdr.to_str().unwrap(),
     );
@@ -5590,14 +5351,13 @@ fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
         }
         a
     };
-    let dropped = "reset `reconstruction.curve.anchor`";
+    let dropped = "dropped `reconstruction.curve.anchor`";
 
     // A roll that pinned a non-default placement: the switch drops it, loudly.
     let stated = write_file(
         &tmp.path("stated.json"),
         r#"{ "reconstruction": {
-               "type": "density",
-               "curve": { "type": "sigmoid",
+               "curve": { "type": "exponential",
                           "anchor": { "black-at-base": 0.005 } } },
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
                               "dmax": { "explicit": 1.3 } },
@@ -5621,16 +5381,15 @@ fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
     assert!(err.contains(dropped), "warning echoed to stderr: {err}");
 
     // Falsifiable control: the identical switch over a roll whose placement is the
-    // sigmoid's own default loses nothing chosen, so it must stay silent — otherwise
+    // exponential's own default loses nothing chosen, so it must stay silent — otherwise
     // every ordinary `type` override would warn and `--strict` would fail for all of
     // them. Not run under `--strict`: this frame also clips, so a strict exit would
     // prove nothing about *this* warning.
     let defaulted = write_file(
         &tmp.path("defaulted.json"),
         r#"{ "reconstruction": {
-               "type": "density",
-               "curve": { "type": "sigmoid",
-                          "anchor": { "mid-at-dmax-fraction": 0.5 } } },
+               "curve": { "type": "exponential",
+                          "anchor": { "mid-at-base-offset": 0.62 } } },
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
                               "dmax": { "explicit": 1.3 } },
              "output": { "preset": "display-p3" } }"#,
@@ -5659,7 +5418,7 @@ fn roll_failed_frame_keeps_a_warning_raised_before_the_failure() {
         r#"{ "reconstruction": {
                "type": "density",
                "density": { "scale": [1.1, 1.0, 0.9] },
-               "curve": { "type": "exponential" } },
+               "curve": { "type": "exponential", "anchor": "white-at-dmax" } },
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
                               "dmax": { "explicit": 1.6 } } }"#,
     );
@@ -5973,12 +5732,10 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
         "film-master",
         "--film-base",
         "0.9,0.55,0.42",
-        // Exponential for the same reason as the hdr-linear-tiff test: this
-        // asserts the master is *unclamped*, which needs samples above 1.0, and
-        // the default sigmoid asymptotes below 1.0 by construction. The low
-        // `--d-max` then pushes plenty of content past the anchor.
-        "--density-curve",
-        "exponential",
+        // This asserts the master is *unclamped*, which needs samples above 1.0: a
+        // low `--d-max` read by a white-at-reference placement pushes plenty of
+        // content past the anchor.
+        "--anchor-white-at-reference",
         "--d-max",
         "0.2",
     ]);
@@ -6020,7 +5777,6 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
     assert!(content.contains("not a physical scene-linear"), "{content}");
     // …and the versions the master depends on are all recorded.
     assert_eq!(report["working_mapping"], "nc-film-rgb-v1");
-    assert_eq!(report["reconstruction_result"]["type"], "density");
     assert_eq!(
         report["reconstruction_result"]["curve"]["type"],
         "exponential"
@@ -6076,8 +5832,10 @@ fn film_master_never_silently_ignores_a_requested_adjustment() {
     let input = fixture("hdri-64bit.tif");
     let base = ["--film-base", "0.9,0.55,0.42"];
     for (extra, expect) in [
+        // A placement that reads the reference; the default does not, so `auto` beside
+        // it measures nothing and is accepted.
         (
-            vec!["--auto-d-max"],
+            vec!["--auto-d-max", "--anchor-mid-fraction", "0.5"],
             "rejects a frame-local auto display-white",
         ),
         (
@@ -6138,49 +5896,6 @@ fn film_master_never_silently_ignores_a_requested_adjustment() {
         "an explicit roll balance-range must be accepted:\n{err}"
     );
     assert_eq!(read_f32_tiff(&out).1, 32);
-}
-
-#[test]
-fn film_master_writes_a_negative_sample_through_unclamped() {
-    // "Unclamped" is only half-proven by samples above 1.0 (the other master test):
-    // an f32 clamp-to-zero, or a future gamut clamp anywhere on the branch, would be
-    // invisible to it. A film base *below* some pixels' transmission makes `simple`'s
-    // `1 − scan/Dmin` negative, and NC film RGB v1's matrix is all-positive with rows
-    // summing to 1, so those negatives survive the mapping — which is exactly the
-    // property being pinned.
-    let tmp = TempDir::new("film-master-negative");
-    let out = tmp.path("master.tiff");
-    let (code, stdout, err) = run(&[
-        "convert",
-        fixture("hdri-64bit.tif").to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--output-preset",
-        "film-master",
-        "--reconstruction",
-        "simple",
-        "--film-base",
-        "0.2,0.2,0.2",
-    ]);
-    assert_eq!(
-        code, 0,
-        "film-master convert should succeed:\n{stdout}\n{err}"
-    );
-    let (samples, bits, format) = read_f32_tiff(&out);
-    assert_eq!((bits, format), (32, 3));
-    let below_zero = samples.iter().filter(|v| **v < 0.0).count();
-    assert!(
-        below_zero > 0,
-        "the master must write negative samples through unclamped \
-         (min was {:?})",
-        samples.iter().cloned().fold(f32::INFINITY, f32::min)
-    );
-    // Note the report's `clipped_low`/`clipped_high` are structurally 0 on the f32
-    // path (only the u16 quantizer clamps), so they are NOT the unclamped proof —
-    // the sample values above are.
-    let report = json(&stdout);
-    assert_eq!(report["loss"]["clipped_low"], 0);
-    assert_eq!(report["loss"]["clipped_high"], 0);
 }
 
 #[test]
@@ -6322,7 +6037,7 @@ fn film_master_telemetry_names_the_preset_and_the_written_depth() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
     let conv = &record["conversion"];
-    assert_eq!(record["schema_version"], 4);
+    assert_eq!(record["schema_version"], 5);
     assert_eq!(conv["preset"], "film-master");
     assert_eq!(
         conv["output_depth"], "f32",
@@ -6366,9 +6081,9 @@ fn film_master_telemetry_names_the_preset_and_the_written_depth() {
 #[test]
 fn film_master_without_a_dmax_anchor_does_not_claim_one() {
     // The master's reported `content` must not invent a Dmax placement: validation
-    // deliberately accepts exponential `--no-d-max` (the scene-referred unity
-    // placement) and `simple` has no anchor at all. The other master e2e test only
-    // runs `--d-max 0.2`, so the anchorless wording was never exercised.
+    // deliberately accepts `--no-d-max` under `white-at-reference` (the scene-referred
+    // unity placement). The other master e2e test only runs `--d-max 0.2`, so the
+    // anchorless wording was never exercised.
     let tmp = TempDir::new("film-master-no-dmax");
     let input = fixture("hdri-64bit.tif");
     let convert = |name: &str, extra: &[&str]| -> serde_json::Value {
@@ -6390,13 +6105,11 @@ fn film_master_without_a_dmax_anchor_does_not_claim_one() {
         json(&stdout)
     };
 
-    for (name, extra) in [
-        (
+    {
+        let (name, extra) = (
             "no-dmax.tiff",
-            vec!["--density-curve", "exponential", "--no-d-max"],
-        ),
-        ("simple.tiff", vec!["--reconstruction", "simple"]),
-    ] {
+            vec!["--anchor-white-at-reference", "--no-d-max"],
+        );
         let report = convert(name, &extra);
         let content = report["output_render"]["content"].as_str().unwrap();
         assert!(
@@ -6412,12 +6125,17 @@ fn film_master_without_a_dmax_anchor_does_not_claim_one() {
         assert!(report.get("dmax").is_none(), "{name}: {report}");
     }
 
-    // The default fixed anchor DOES claim the placement — otherwise the assertions
+    // A placement that reads the fixed anchor DOES claim it — otherwise the assertions
     // above would pass against a message that never mentions Dmax at all.
-    let report = convert("fixed.tiff", &[]);
+    let report = convert("fixed.tiff", &["--anchor-mid-fraction", "0.5"]);
     let content = report["output_render"]["content"].as_str().unwrap();
     assert!(content.contains("resolved roll-fixed Dmax"), "{content}");
     assert!(report["dmax"].as_f64().is_some());
+    // …and the default, which reads none, claims its base-derived placement instead.
+    let report = convert("default.tiff", &[]);
+    let content = report["output_render"]["content"].as_str().unwrap();
+    assert!(content.contains("film-base-derived anchor"), "{content}");
+    assert!(!content.contains("roll-fixed Dmax"), "{content}");
 }
 
 #[test]
@@ -8373,12 +8091,19 @@ fn the_reinhard_display_tone_reaches_the_pixels_and_zero_headroom_is_the_identit
     // Zero stops is `W = 1`, where extended Reinhard is exactly `v` — so it must
     // produce the *same pixels* as applying no tone curve at all. The two still differ
     // in range policy (`none` refuses an overshoot, reinhard counts it), which is
-    // precisely why this identity is worth pinning rather than assuming.
+    // precisely why this identity is worth pinning rather than assuming. A stop down,
+    // so the frame sits under reference white and `none` renders rather than refusing.
     assert_eq!(
-        render("none", &["--display-tone", "none"]),
+        render("none", &["--display-tone", "none", "--print-exposure=-4"]),
         render(
             "zero",
-            &["--display-tone", "reinhard", "--display-tone-headroom", "0"]
+            &[
+                "--display-tone",
+                "reinhard",
+                "--display-tone-headroom",
+                "0",
+                "--print-exposure=-4"
+            ]
         ),
         "zero headroom is not the identity"
     );
@@ -8475,9 +8200,11 @@ fn roll_warns_when_a_per_frame_tone_switch_drops_the_shared_headroom() {
     let recipe = tmp.path("roll.json");
     std::fs::write(
         &recipe,
+        // A stop down, so `none` renders this frame rather than refusing its highlights.
         r#"{ "calibration": { "film_base": { "explicit": [0.9,0.55,0.42] } },
              "output": { "preset": "display-p3" },
-             "print": { "display_tone": { "reinhard": { "headroom_stops": 10.0 } } } }"#,
+             "print": { "print_exposure": -4.0,
+                        "display_tone": { "reinhard": { "headroom_stops": 10.0 } } } }"#,
     )
     .unwrap();
     let frames = tmp.path("frames.json");
@@ -8669,7 +8396,8 @@ fn a_tone_switch_that_drops_a_stated_headroom_warns_and_is_strict_promotable() {
         r#"{
   "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
   "output": { "preset": "display-p3" },
-  "print": { "display_tone": { "reinhard": { "headroom_stops": 10.0 } } }
+  "print": { "print_exposure": -4.0,
+             "display_tone": { "reinhard": { "headroom_stops": 10.0 } } }
 }"#,
     );
     let scan = fixture("hdr-48bit.tif");
@@ -9401,7 +9129,7 @@ fn the_default_output_is_the_dual_dialect_gain_map_jpeg() {
         report["output_render"]["encoding"],
         "dual-dialect-gain-map-jpeg"
     );
-    assert_eq!(report["identity"]["pipeline_version"], 5);
+    assert_eq!(report["identity"]["pipeline_version"], 6);
     let bytes = std::fs::read(&out).unwrap();
     assert_eq!(&bytes[..2], &[0xff, 0xd8], "the default writes a JPEG");
     assert!(
@@ -9480,6 +9208,10 @@ fn display_tone_none_changes_the_sdr_render_and_reports_which_curve_ran() {
         ("none", vec!["--display-tone", "none"]),
     ] {
         let out = tmp.path(&format!("{tag}.tiff"));
+        // Pulled down just far enough that `none` renders this frame rather than
+        // refusing its highlights (no shipped reconstruction is bounded at white), while
+        // the brightest content still reaches the shoulder's knee — measured: −2.1 to
+        // −2.3 stops is the window on this fixture.
         let mut args = vec![
             "convert",
             scan.to_str().unwrap(),
@@ -9489,6 +9221,7 @@ fn display_tone_none_changes_the_sdr_render_and_reports_which_curve_ran() {
             "display-p3",
             "--film-base",
             "0.9,0.6,0.5",
+            "--print-exposure=-2.2",
         ];
         args.extend(extra);
         let (code, stdout, err) = run(&args);
@@ -9552,6 +9285,8 @@ fn output_render_reports_the_tone_curve_that_actually_ran() {
                 preset,
                 "--film-base",
                 "0.9,0.6,0.5",
+                // Low enough that `none` renders rather than refusing the highlights.
+                "--print-exposure=-4",
             ];
             args.extend(extra);
             let (code, stdout, err) = run(&args);
@@ -9639,9 +9374,9 @@ fn display_tone_none_is_refused_where_no_display_tone_curve_runs() {
 
 #[test]
 fn display_tone_none_refuses_a_reconstruction_that_overshoots_reference_white() {
-    // The mode polices itself instead of needing a curve-type gate: `--sigmoid-shoulder
-    // 0` removes the reconstruction's own bound, and the render then fails naming the
-    // pixel rather than clipping it quietly.
+    // The mode polices itself instead of needing a curve-type gate: the default
+    // reconstruction is unbounded at white, and the render fails naming the pixel
+    // rather than clipping it quietly.
     let tmp = TempDir::new("display-tone-overshoot");
     let scan = fixture("hdr-48bit.tif");
     let out = tmp.path("overshoot.tiff");
@@ -9655,8 +9390,6 @@ fn display_tone_none_refuses_a_reconstruction_that_overshoots_reference_white() 
             "display-p3".to_string(),
             "--film-base".to_string(),
             "0.9,0.6,0.5".to_string(),
-            "--sigmoid-shoulder".to_string(),
-            "0".to_string(),
         ];
         args.extend(extra.into_iter().map(str::to_string));
         args
@@ -9695,9 +9428,9 @@ fn the_no_tone_curve_ceiling_is_per_branch_not_one_reference_white() {
             preset,
             "--display-tone",
             "none",
-            // A mild lift: enough to cross reference white, nowhere near the peak.
-            "--print-exposure",
-            "0.3",
+            // The default render, pulled down a little: still across reference white,
+            // comfortably inside the peak.
+            "--print-exposure=-0.2",
             "--film-base",
             "0.9,0.6,0.5",
         ]);
@@ -9805,9 +9538,11 @@ fn roll_renders_every_spelling_of_one_tone_identically() {
     let recipe = tmp.path("roll.json");
     std::fs::write(
         &recipe,
+        // A stop down, so `none` renders this frame rather than refusing its highlights.
         r#"{ "calibration": { "film_base": { "explicit": [0.9,0.55,0.42] } },
              "output": { "preset": "display-p3" },
-             "print": { "display_tone": { "reinhard": { "headroom_stops": 10.0 } } } }"#,
+             "print": { "print_exposure": -4.0,
+                        "display_tone": { "reinhard": { "headroom_stops": 10.0 } } } }"#,
     )
     .unwrap();
     let frames = tmp.path("frames.json");
@@ -9907,16 +9642,17 @@ fn a_curveless_tone_is_told_to_change_the_flag_it_passed() {
             "0.9,0.55,0.42",
             "--output-preset",
             "hdr-pq",
-            // Overshoots the peak, which is what the range check exists to catch.
-            "--sigmoid-shoulder",
-            "0",
+            // Overshoots the peak, which is what the range check exists to catch: the
+            // default reconstruction is unbounded, and a stop up puts its highlights well
+            // past 1000 nits.
+            "--print-exposure",
+            "1",
             // **Identity per-channel gain, deliberately.** This test is about the display
             // operator's ceiling and about each remedy naming the flag the user passed —
             // not about the colour calibration. Reading the shipped gain made it depend on
             // a value that moves: at `pipeline_version` 5's `[1, 0.84, 0.73]` the frame
-            // renders dark enough to sit *under* the ceiling, so the premise evaporated and
-            // the run exited 0. Stating identity restores the overshoot and keeps the next
-            // gain change from silently disarming this guard.
+            // rendered dark enough to sit *under* the ceiling, so the premise evaporated and
+            // the run exited 0.
             "--density-scale",
             "1,1,1",
             "-o",
@@ -10441,21 +10177,26 @@ fn strict_still_fails_when_an_auto_dmax_anchor_reads_no_reference() {
         (code, err)
     };
 
-    // Reference-reading placement (the default): the region is consumed, the march
-    // moved it, so the plane is genuinely used and `--strict` is satisfied.
-    let (code, err) = case(&[]);
+    // Reference-reading placement: the region is consumed, the march moved it, so the
+    // plane is genuinely used and `--strict` is satisfied.
+    let (code, err) = case(&["--anchor-mid-fraction", "0.5"]);
     assert_eq!(code, 0, "a consumed region must silence the note: {err}");
 
-    // Reference-free placement: the anchor discards the measurement, so no rendered
-    // pixel depends on the region and the note — and `--strict` — must stand. The
-    // region is still what the reference was measured over; that is the report's
-    // business, not this note's.
-    let (code, err) = case(&["--anchor-black-floor", "0.05"]);
-    assert_eq!(code, 1, "the note must still fail --strict: {err}");
-    assert!(
-        err.contains("preserved but not used"),
-        "and for the right reason: {err}"
-    );
+    // Reference-free placement — the default, and `black-at-base`: the anchor discards
+    // the measurement, so no rendered pixel depends on the region and the note — and
+    // `--strict` — must stand. The region is still what the reference was measured
+    // over; that is the report's business, not this note's.
+    for extra in [vec![], vec!["--anchor-black-floor", "0.05"]] {
+        let (code, err) = case(&extra);
+        assert_eq!(
+            code, 1,
+            "{extra:?}: the note must still fail --strict: {err}"
+        );
+        assert!(
+            err.contains("preserved but not used"),
+            "{extra:?}: and for the right reason: {err}"
+        );
+    }
 }
 
 /// The characteristic curve is reachable, self-anchoring, and reports its provenance.
@@ -10750,10 +10491,6 @@ fn the_characteristic_curve_refuses_parametric_knobs() {
     let base = ["--film-base", "0.5,0.25,0.15"];
     for (extra, expect) in [
         (
-            vec!["--sigmoid-contrast", "2.0"],
-            "its shape is the film's own",
-        ),
-        (
             vec!["--anchor-mid-fraction", "0.5"],
             "it pins mid-grey where the stock's published response puts it",
         ),
@@ -10777,14 +10514,11 @@ fn the_characteristic_curve_refuses_parametric_knobs() {
         let (code, _, err) = run(&args);
         assert_eq!(code, 2, "{extra:?} should be a usage error: {err}");
         assert!(err.contains(expect), "{extra:?} said: {err}");
-        // The remedy must be a route this curve does not itself refuse — a parametric
-        // curve that *has* the knob (gamma belongs to exponential, not sigmoid), or the
-        // display stage that owns tone. Advice a branch refuses is a defect this project
-        // has shipped three times.
+        // The remedy must be a route this curve does not itself refuse — the curve that
+        // *has* the knob. Advice a branch refuses is a defect this project has shipped
+        // three times.
         assert!(
-            err.contains("--density-curve sigmoid")
-                || err.contains("--density-curve exponential")
-                || err.contains("--display-tone"),
+            err.contains("--density-curve exponential"),
             "{extra:?} gave no usable remedy: {err}"
         );
     }
@@ -10891,7 +10625,7 @@ fn a_film_stock_without_the_characteristic_curve_is_rejected() {
         "ektar-100",
     ]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("the resolved curve is sigmoid"), "{err}");
+    assert!(err.contains("the resolved curve is exponential"), "{err}");
     assert!(err.contains("--density-curve characteristic"), "{err}");
 }
 
@@ -11060,8 +10794,8 @@ fn a_preset_does_not_warn_about_the_curve_switch_it_was_asked_to_make() {
     let recipe = tmp.path("recipe.json");
     std::fs::write(
         &recipe,
-        r#"{"reconstruction":{"schema_version":1,"type":"density",
-            "density":{"scale":[1.0,0.8,0.7]},"curve":{"type":"sigmoid"}},
+        r#"{"reconstruction":{"schema_version":1,
+            "density":{"scale":[1.0,0.8,0.7]},"curve":{"type":"exponential"}},
             "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
     )
     .unwrap();
@@ -12045,8 +11779,8 @@ fn new_flow_refuses_a_knob_whose_counterpart_has_not_landed() {
         "display-p3",
         "--film-base",
         "0.9,0.55,0.42",
-        "--sigmoid-toe",
-        "0.2",
+        "--shadow-balance",
+        "0.1,0,0",
         "--report",
         "none",
     ];
@@ -12054,7 +11788,10 @@ fn new_flow_refuses_a_knob_whose_counterpart_has_not_landed() {
     with_flow.push("--new-flow");
     let (code, _out, err) = run(&with_flow);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("--sigmoid-toe"), "names the knob typed: {err}");
+    assert!(
+        err.contains("--shadow-balance"),
+        "names the knob typed: {err}"
+    );
     assert!(err.contains("no counterpart for it yet"), "{err}");
     assert!(
         !err.contains("will not gain one"),
@@ -12071,13 +11808,10 @@ fn new_flow_refuses_a_knob_whose_counterpart_has_not_landed() {
 }
 
 #[test]
-fn new_flow_accepts_a_knee_flag_that_asks_for_no_knee() {
-    // The tiebreaker's other half, and the reason the knee rules read the *value* the
-    // user typed rather than mere presence: `--sigmoid-toe 0` asks for a knee-less
-    // curve, which is bit-exactly the straight line the new flow decodes with. An
-    // identity value asks for nothing, and refusing it would kill the flags-win reset
-    // that lets one recipe be re-used on the new chain.
-    let tmp = TempDir::new("new-flow-knee-zero");
+fn new_flow_accepts_the_curve_it_already_is() {
+    // The tiebreaker's other half: `--density-curve exponential` names the curve the
+    // new flow already decodes with, so it asks for nothing and is accepted.
+    let tmp = TempDir::new("new-flow-curve-identity");
     let (code, _out, err) = run(&[
         "convert",
         fixture("hdr-48bit.tif").to_str().unwrap(),
@@ -12085,21 +11819,18 @@ fn new_flow_accepts_a_knee_flag_that_asks_for_no_knee() {
         tmp.path("out.tif").to_str().unwrap(),
         "--film-base",
         "0.9,0.55,0.42",
-        "--sigmoid-toe",
-        "0",
-        "--sigmoid-shoulder",
-        "0",
+        "--density-curve",
+        "exponential",
         "--new-flow",
         "--report",
         "none",
     ]);
-    assert_eq!(code, 0, "a zero knee must not be refused: {err}");
+    assert_eq!(code, 0, "the identity curve must not be refused: {err}");
 }
 
 #[test]
 fn new_flow_refuses_a_knob_the_design_drops() {
-    // The value half, with the other verdict — and the other call site: this one is
-    // reached through the resolved config, so a recipe trips it as readily as a flag.
+    // The other verdict: a knob the new design drops for good names its replacement.
     let tmp = TempDir::new("new-flow-never");
     let (code, _out, err) = run(&[
         "convert",
@@ -12108,8 +11839,8 @@ fn new_flow_refuses_a_knob_the_design_drops() {
         tmp.path("out.tif").to_str().unwrap(),
         "--film-base",
         "0.9,0.55,0.42",
-        "--reconstruction",
-        "simple",
+        "--density-curve",
+        "characteristic",
         "--new-flow",
         "--report",
         "none",
@@ -12117,7 +11848,7 @@ fn new_flow_refuses_a_knob_the_design_drops() {
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("will not gain one"), "{err}");
     assert!(
-        err.contains("--reconstruction density"),
+        err.contains("--density-curve exponential"),
         "a `never` verdict names the replacement: {err}"
     );
     assert!(
@@ -12125,7 +11856,7 @@ fn new_flow_refuses_a_knob_the_design_drops() {
         "the losing verdict's wording must be absent: {err}"
     );
 
-    // Falsifiability.
+    // Falsifiability: the same knob renders on the current chain.
     let (code, _out, err) = run(&[
         "convert",
         fixture("hdr-48bit.tif").to_str().unwrap(),
@@ -12135,8 +11866,8 @@ fn new_flow_refuses_a_knob_the_design_drops() {
         "display-p3",
         "--film-base",
         "0.9,0.55,0.42",
-        "--reconstruction",
-        "simple",
+        "--density-curve",
+        "characteristic",
         "--report",
         "none",
     ]);
@@ -12152,7 +11883,10 @@ fn the_availability_gate_outranks_the_rules_it_would_confuse() {
     // selected" is the least-specific diagnosis in `validate`, and following it
     // would just earn the user this error on the next run.
     let tmp = TempDir::new("new-flow-order");
-    for knob in [["--reconstruction", "simple"], ["--sigmoid-toe", "0.2"]] {
+    for knob in [
+        ["--density-curve", "characteristic"],
+        ["--shadow-balance", "0.1,0,0"],
+    ] {
         let (code, _out, err) = run(&[
             "convert",
             fixture("hdr-48bit.tif").to_str().unwrap(),
@@ -12179,76 +11913,18 @@ fn the_availability_gate_outranks_the_rules_it_would_confuse() {
 #[test]
 fn the_availability_gate_outranks_a_merge_refusal_too() {
     // Ordering *across gates*, which is the half a value rule cannot reach on its own:
-    // `merge` refuses `--reconstruction simple` beside a `--preset` or a
-    // `--density-curve` before any value rule runs, so the new flow's refusal would
+    // `merge` refuses a stock beside the exponential, and a slope beside the
+    // characteristic curve, before any value rule runs, so the new flow's refusal would
     // arrive second — behind advice about a chain the user did not select. The flag
     // row pre-empts it. (Reported by the PR's Codex reviewer.)
     let tmp = TempDir::new("new-flow-merge-order");
     for extra in [
-        ["--preset", "sigmoid-flat"],
-        ["--density-curve", "exponential"],
+        vec!["--film-stock", "ektar-100"],
+        vec!["--density-curve", "characteristic", "--density-gamma", "2"],
     ] {
-        let (code, _out, err) = run(&[
-            "convert",
-            fixture("hdr-48bit.tif").to_str().unwrap(),
-            "-o",
-            tmp.path("out.tif").to_str().unwrap(),
-            "--film-base",
-            "0.9,0.55,0.42",
-            "--reconstruction",
-            "simple",
-            extra[0],
-            extra[1],
-            "--new-flow",
-            "--report",
-            "none",
-        ]);
-        assert_eq!(code, 2, "{err}");
-        assert!(
-            err.contains("has no meaning under `--new-flow`"),
-            "{extra:?}: the flow refusal must pre-empt merge: {err}"
-        );
-        assert!(
-            !err.contains("has no curve stage"),
-            "merge's legacy diagnosis must not win under the new flow: {err}"
-        );
-
-        // Falsifiability: without the flag, merge's diagnosis is still the right one.
-        let (code, _out, err) = run(&[
-            "convert",
-            fixture("hdr-48bit.tif").to_str().unwrap(),
-            "-o",
-            tmp.path("out.tif").to_str().unwrap(),
-            "--output-preset",
-            "display-p3",
-            "--film-base",
-            "0.9,0.55,0.42",
-            "--reconstruction",
-            "simple",
-            extra[0],
-            extra[1],
-            "--report",
-            "none",
-        ]);
-        assert_eq!(code, 2, "{err}");
-        assert!(err.contains("no curve stage"), "{extra:?}: {err}");
-    }
-}
-
-#[test]
-fn a_knee_flag_beside_a_knee_less_curve_is_refused_before_merge_can_loop() {
-    // Regression: the `--density-curve` availability row and `merge`'s knee rule
-    // closed a two-step advice loop. `--density-curve exponential --sigmoid-toe 0`
-    // got merge's "pass `--density-curve sigmoid`"; following it hit the flow row's
-    // "use `--density-curve exponential`"; and *neither* message ever stated the one
-    // action that works — drop the knee flag. A zero knee is accepted on its own (it
-    // asks for the straight line this flow already decodes with), so the pair is what
-    // has to be refused, pre-`merge`, where the remedy is "drop it".
-    let tmp = TempDir::new("new-flow-knee-pair");
-    let refuse = |extra: &[&str]| -> String {
-        let out = tmp.path("out.tif");
         let fixture_path = fixture("hdr-48bit.tif").display().to_string();
-        let mut argv: Vec<&str> = vec![
+        let out = tmp.path("out.tif");
+        let mut argv = vec![
             "convert",
             &fixture_path,
             "-o",
@@ -12259,64 +11935,36 @@ fn a_knee_flag_beside_a_knee_less_curve_is_refused_before_merge_can_loop() {
             "--report",
             "none",
         ];
-        argv.extend_from_slice(extra);
+        argv.extend_from_slice(&extra);
         let (code, _out, err) = run(&argv);
-        assert_eq!(code, 2, "{extra:?} must be refused: {err}");
-        err
-    };
-
-    for knee in ["--sigmoid-toe", "--sigmoid-shoulder"] {
-        let err = refuse(&["--density-curve", "exponential", knee, "0"]);
-        assert!(err.contains(knee), "names the knob typed: {err}");
-        assert!(err.contains("Drop it for now"), "{err}");
-        // The loop's other half: merge's remedy must never be what the user sees
-        // here, because following it lands on a curve this flow refuses.
+        assert_eq!(code, 2, "{err}");
         assert!(
-            !err.contains("--density-curve sigmoid"),
-            "merge's looping remedy must not win: {err}"
+            err.contains("has no meaning under `--new-flow`"),
+            "{extra:?}: the flow refusal must pre-empt merge: {err}"
         );
+        assert!(
+            !err.contains("the resolved curve is"),
+            "merge's legacy diagnosis must not win under the new flow: {err}"
+        );
+
+        // Falsifiability: without the flag, merge's diagnosis is still the right one.
+        let mut argv = vec![
+            "convert",
+            &fixture_path,
+            "-o",
+            out.to_str().unwrap(),
+            "--output-preset",
+            "display-p3",
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--report",
+            "none",
+        ];
+        argv.extend_from_slice(&extra);
+        let (code, _out, err) = run(&argv);
+        assert_eq!(code, 2, "{err}");
+        assert!(err.contains("the resolved curve is"), "{extra:?}: {err}");
     }
-
-    // Falsifiability, both directions. A zero knee *alone* is still the accepted
-    // identity value — that is the flags-win reset the rows exist to preserve — and
-    // the pair is still perfectly legal on the current chain.
-    let tmp2 = TempDir::new("new-flow-knee-pair-controls");
-    let (code, _out, err) = run(&[
-        "convert",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
-        "-o",
-        tmp2.path("bare.tif").to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--sigmoid-toe",
-        "0",
-        "--new-flow",
-        "--report",
-        "none",
-    ]);
-    assert_eq!(code, 0, "a zero knee alone stays accepted: {err}");
-
-    let (code, _out, err) = run(&[
-        "convert",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
-        "-o",
-        tmp2.path("legacy.tif").to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--density-curve",
-        "exponential",
-        "--sigmoid-toe",
-        "0",
-        "--report",
-        "none",
-    ]);
-    assert_eq!(code, 2, "{err}");
-    assert!(
-        err.contains("--density-curve sigmoid"),
-        "on the current chain merge's rule is exactly what fires: {err}"
-    );
 }
 
 #[test]
@@ -12361,8 +12009,7 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
         vec!["--anchor-white-at-reference"],
         vec!["--anchor-mid-fraction", "0.5"],
         vec!["--anchor-black-floor", "0.005"],
-        vec!["--sigmoid-contrast", "2.0"],
-        vec!["--density-curve", "sigmoid"],
+        vec!["--density-curve", "characteristic"],
     ] {
         let err = refuse(&knob);
         assert!(err.contains(knob[0]), "names the knob typed: {err}");
@@ -12385,7 +12032,10 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
             vec!["--highlight-balance", "0,0,0.1"],
             "nf-look/per-channel-grade",
         ),
-        (vec!["--preset", "sigmoid-knees"], "nf-look/look-presets"),
+        (
+            vec!["--preset", "characteristic-generic"],
+            "nf-look/look-presets",
+        ),
     ] {
         let err = refuse(&knob);
         assert!(err.contains(knob[0]), "names the knob typed: {err}");
@@ -12517,8 +12167,9 @@ fn the_fixed_decodes_own_knobs_reach_the_decode_under_the_new_flow() {
     }
 
     // Bare `--density-gamma` too. Before `nf-core/recipe-schema` the new flow merged
-    // its flags into the current chain's config, whose default curve is the sigmoid,
-    // so `merge` refused the flag unless `--density-curve exponential` came with it.
+    // its flags into the current chain's config, whose default curve was then the
+    // sigmoid, so `merge` refused the flag unless `--density-curve exponential` came
+    // with it.
     // The new chain's recipe has no curve to disagree with: the flag sets
     // `reconstruction.contrast` directly.
     let (code, d, err) = decode_of(&["--density-gamma", "1.8"], "bare-gamma.tiff");
@@ -13097,42 +12748,6 @@ fn the_anchor_guard_recommends_only_a_slope() {
 }
 
 #[test]
-fn the_gamma_arm_states_its_two_remedies_as_equals() {
-    // `nf-core/knob-availability-audit`, finding #1. `--sigmoid-contrast` was stated
-    // as *the* answer with `--density-curve exponential` parenthesised, and under
-    // `--new-flow` the ranked one is refused while the parenthetical works. Reordering
-    // would promote the more invasive option on the legacy chain, so the ranking is
-    // dropped instead — which needs no knowledge of the flow. (Under `--new-flow` the
-    // arm no longer runs: the flags merge into the new chain's recipe, which has no
-    // curve for `--density-gamma` to disagree with — see
-    // `the_fixed_decodes_own_knobs_stay_reachable_under_the_new_flow`.)
-    let tmp = TempDir::new("gamma-arm-remedy");
-    let out = tmp.path("out.tif");
-    let fixture_path = fixture("hdr-48bit.tif").display().to_string();
-    let argv: Vec<&str> = vec![
-        "convert",
-        &fixture_path,
-        "-o",
-        out.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--density-gamma",
-        "2.5",
-        "--report",
-        "none",
-    ];
-    let (code, _out, err) = run(&argv);
-    assert_eq!(code, 2, "{err}");
-    assert!(err.contains("--sigmoid-contrast"), "{err}");
-    assert!(err.contains("--density-curve exponential"), "{err}");
-    // The ranked wording, asserted absent: "its mid-density slope is X (or pass Y)".
-    assert!(
-        !err.contains("(or pass"),
-        "neither remedy may be parenthetical: {err}"
-    );
-}
-
-#[test]
 fn new_flow_writes_the_ir_export() {
     // The export is staged after the render at the destination's depth; the new flow's
     // destination is 16-bit, so the plane is written as u16 — the same samples the
@@ -13597,15 +13212,15 @@ fn roll_refuses_the_current_chains_keys_from_either_recipe_site() {
     let input = fixture("hdr-48bit.tif").display().to_string();
 
     // (1) the shared recipe.
-    let shared_simple = write_file(
+    let shared_typed = write_file(
         &tmp.path("shared.json"),
         r#"{
              "recipe_version": 2,
-             "reconstruction": { "type": "simple" },
+             "reconstruction": { "type": "density" },
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } }
            }"#,
     );
-    let (code, err) = roll(&[&input], &shared_simple, &out_dir, &["--new-flow"]);
+    let (code, err) = roll(&[&input], &shared_typed, &out_dir, &["--new-flow"]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("`reconstruction.type`"), "{err}");
 
@@ -13621,12 +13236,13 @@ fn roll_refuses_the_current_chains_keys_from_either_recipe_site() {
             &format!(r#"{{ "frames": [ {{ "input": {input:?}, "params": {params} }} ] }}"#),
         )
     };
-    let simple = manifest_with(
-        "simple.json",
-        r#"{ "reconstruction": { "type": "simple" } }"#,
+    // The current chain's retired selector, at the value every earlier sidecar wrote.
+    let typed = manifest_with(
+        "typed.json",
+        r#"{ "reconstruction": { "type": "density" } }"#,
     );
     let (code, err) = roll(
-        &["--frames", simple.to_str().unwrap()],
+        &["--frames", typed.to_str().unwrap()],
         &shared,
         &tmp.path("out2"),
         &["--new-flow"],
@@ -13701,9 +13317,10 @@ fn roll_refuses_the_current_chains_keys_from_either_recipe_site() {
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("only `--new-flow` reads"), "{err}");
 
-    // Falsifiability: the simple overlay runs on the current chain.
+    // Falsifiability: the same overlay runs on the current chain, where the old value
+    // is accepted as asking for nothing.
     let (code, err) = roll(
-        &["--frames", simple.to_str().unwrap()],
+        &["--frames", typed.to_str().unwrap()],
         &recipe,
         &tmp.path("out3"),
         &[],

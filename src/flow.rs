@@ -69,24 +69,6 @@ enum Availability {
     Renamed { to: &'static str, why: &'static str },
 }
 
-/// Whether the command line *names* a curve that has no knees.
-///
-/// The knee rows below accept a **zero** knee as an identity value, which is what
-/// keeps the flags-win reset usable. Beside a typed non-sigmoid curve that reading
-/// stops holding: the pair is a contradiction, and `merge` refuses it with "pass
-/// `--density-curve sigmoid`" — a curve this flow then refuses, closing a loop in
-/// which *neither* message states the action that works (drop the knee flag). So the
-/// rows fire on the pair too, pre-`merge`, where the generic "Drop it for now"
-/// remedy is the working one. Reads only flags the user typed, never a resolved
-/// value, so a recipe-pinned curve cannot trip it.
-fn a_curve_without_knees_is_typed(args: &ConvertArgs) -> bool {
-    matches!(
-        args.density_curve,
-        Some(crate::types::DensityCurveType::Exponential)
-            | Some(crate::types::DensityCurveType::Characteristic)
-    )
-}
-
 /// A knob refused by **flag presence**, checked before `merge`.
 struct FlagEntry {
     /// The knob as the user typed it.
@@ -143,41 +125,21 @@ const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which su
 /// Knobs with no new-flow meaning, keyed on the **flag the user typed**.
 ///
 /// Per CLAUDE.md's recorded tiebreaker: reject a flag when it *forces something the
-/// branch cannot produce*, and leave an identity value alone. A non-zero knee width
-/// forces a knee the fixed decode has no way to render, while a zero one asks for
-/// *less* shaping, toward the straight line the new flow decodes with — zeroing both
-/// knees reaches it exactly (`docs/design-update.md`, methods table). Zeroing one
-/// alone leaves the other at its default, so it is not by itself a knee-less curve;
-/// it is accepted because it asks for nothing this flow cannot do.
-///
-/// That is the *whole* reason, and the tiebreaker's usual second one does not apply
-/// here: "an identity value keeps the flags-win reset usable" presumes a recipe that
-/// pinned the knob, and the new chain's recipe (`crate::recipe`) has no knee to pin —
-/// its `reconstruction` is the fixed decode's, and a recipe stating the current
-/// chain's `curve` is refused at load. Where no recipe can hold the knob there is
-/// nothing left to reset, so an identity value has to earn its acceptance on its own
-/// — which the zero knee does and `--no-d-max` does not.
+/// branch cannot produce*, and leave an identity value alone — but only where a recipe
+/// could have pinned the knob. The new chain's recipe (`crate::recipe`) has no field for
+/// any knob refused here, so an identity value has to earn its acceptance on its own:
+/// `--density-curve exponential` does (it names the curve the decode already is), and
+/// `--no-d-max` does not.
 ///
 /// **How a knob the user never typed is handled**, which this table alone cannot do.
-/// It sees only the flag, so the same knee stated by a *recipe* or expanded from
-/// `--preset sigmoid-knees` is invisible here — and a value rule cannot be added
-/// beside it, because the shipped default sigmoid *has* knees (`toe: 0.2`), so
-/// "refuse a non-zero resolved knee" would refuse every `--new-flow` run. The fixed
-/// decode closes that from the other end: it reads its own [`DecodeParams`], which is
-/// the new chain's recipe section `reconstruction` field for field
-/// (`nf-core/recipe-schema`), so a recipe stating the current chain's keys there is
-/// refused at load and `--preset` is refused by presence. Nothing the user *asks
-/// for* in the new flow's **reconstruction** is silently dropped. (An identity flag
-/// — a zero knee, `--reconstruction density`, `--density-curve exponential` — sets
-/// nothing, because the new recipe has no field for it to set.)
-/// The rest of the surface is closed by the same schema: it has no `print` or
-/// `output` section, so a recipe stating either is refused by name, and every flag
-/// under them has a row below. The shared sections (`input`, `calibration`'s film
-/// base, `measure`) are read.
-/// The asymmetry that remains here is benign and deliberate: typing
-/// `--sigmoid-toe 0.2`, which resolves
-/// today's default, is refused while the same resolved config with no flag is simply
-/// not consulted.
+/// The fixed decode reads its own [`DecodeParams`], which is the new chain's recipe
+/// section `reconstruction` field for field (`nf-core/recipe-schema`), so a recipe
+/// stating the current chain's keys there is refused at load and `--preset` is refused
+/// by presence. Nothing the user *asks for* in the new flow's **reconstruction** is
+/// silently dropped. The rest of the surface is closed by the same schema: it has no
+/// `print` or `output` section, so a recipe stating either is refused by name, and
+/// every flag under them has a row below. The shared sections (`input`,
+/// `calibration`'s film base, `measure`) are read.
 ///
 /// [`DecodeParams`]: crate::algo::fixed::DecodeParams
 ///
@@ -201,57 +163,6 @@ const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which su
 /// [`Availability::Renamed`] in the same change (`--print-exposure` → `--exposure`),
 /// so a rename is only ever stated once the new flag exists.
 const FLAG_ENTRIES: &[FlagEntry] = &[
-    // The only rule `simple` needs. Its recipe spelling, `reconstruction.type`, is
-    // not a key of the new chain's recipe and is refused at load (`crate::recipe`),
-    // and the new flow merges its flags into that recipe rather than into the current
-    // chain's `reconstruction`, so no resolved value can carry it past this row. The
-    // flag has no identity value to protect — its other value is `density`, which
-    // names what this flow already does.
-    FlagEntry {
-        knob: "--reconstruction simple",
-        covers: &["--reconstruction"],
-        present: |args| {
-            matches!(
-                args.reconstruction,
-                Some(crate::types::ReconstructionType::Simple)
-            )
-        },
-        availability: Availability::Never {
-            reason: "`1 - T/T_base` is an affine inversion of transmission, not a decode of \
-                     anything a print sees, so the fixed decode has nothing to map it onto",
-            instead: Some("`--reconstruction density`"),
-        },
-    },
-    FlagEntry {
-        knob: "--sigmoid-toe",
-        covers: &["--sigmoid-toe"],
-        present: |args| {
-            args.sigmoid
-                .sigmoid_toe
-                .is_some_and(|w| w != 0.0 || a_curve_without_knees_is_typed(args))
-        },
-        availability: Availability::NotYet {
-            arriving_with: "the fit-range stage, which is where a toe belongs: shaping \
-                            the approach to black needs the display's range, and \
-                            reconstruction does not know it (`nf-display-stages/fit-range`; \
-                            whether its operator gains an explicit toe is \
-                            `nf-display-stages/parametric-operator`'s to decide)",
-        },
-    },
-    FlagEntry {
-        knob: "--sigmoid-shoulder",
-        covers: &["--sigmoid-shoulder"],
-        present: |args| {
-            args.sigmoid
-                .sigmoid_shoulder
-                .is_some_and(|w| w != 0.0 || a_curve_without_knees_is_typed(args))
-        },
-        availability: Availability::NotYet {
-            arriving_with: "the fit-range stage: compressing highlights inside \
-                            reconstruction is what discards the range an HDR rendition \
-                            exists to carry (`nf-display-stages/fit-range`)",
-        },
-    },
     // --- what the fixed decode strands (`nf-reconstruction/fixed-decode`) ----------
     //
     // These rows are the reconstruction half of `nf-core/knob-availability-audit`,
@@ -265,22 +176,19 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // `--anchor-mid-offset` are exactly the calibration and the anchor
     // `algo::fixed::DecodeParams` carries — the new chain's recipe section
     // `reconstruction`, into which `crate::recipe::merge` writes them and from which
-    // the decode reads. `--density-gamma` works bare: the new flow does not run the
-    // current chain's `merge`, whose sigmoid default used to refuse it unless
-    // `--density-curve exponential` came with it.
+    // the decode reads.
     FlagEntry {
         knob: "--density-curve",
         covers: &["--density-curve"],
         // `--density-curve exponential` names the curve this flow already decodes
         // with, so it forces nothing and stays accepted — the tiebreaker's identity
         // value. Not to preserve a reset: the new chain's recipe has no curve to pin,
-        // so there is none to preserve. The other two
-        // select a curve the fixed decode does not have.
+        // so there is none to preserve. `characteristic` selects a curve the fixed
+        // decode does not have.
         present: |args| {
             matches!(
                 args.density_curve,
-                Some(crate::types::DensityCurveType::Sigmoid)
-                    | Some(crate::types::DensityCurveType::Characteristic)
+                Some(crate::types::DensityCurveType::Characteristic)
             )
         },
         availability: Availability::Never {
@@ -300,15 +208,6 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
                             every stock to the same scene contrast, which is a choice about \
                             how the picture should look rather than a decode of what the \
                             negative holds (`nf-look/stock-data-home`)",
-        },
-    },
-    FlagEntry {
-        knob: "--sigmoid-contrast",
-        covers: &["--sigmoid-contrast"],
-        present: |args| args.sigmoid.sigmoid_contrast.is_some(),
-        availability: Availability::Never {
-            reason: "it is the sigmoid's slope, and the fixed decode is the straight line",
-            instead: Some("`--density-gamma`, this decode's own contrast"),
         },
     },
     // The three placements the one anchor rule replaces. `--anchor-mid-offset` is
@@ -507,8 +406,8 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
         // Fit range's operator is
         // parameterised by the display's peak, so there is no knee width for this to
         // configure however that stage lands. Zero is the documented default and
-        // still refused, because unlike a zeroed knee it does not ask for less
-        // shaping — it asks for a curve this flow has no knee on at all.
+        // still refused: it does not ask for less shaping — it asks for a curve this
+        // flow has no knee on at all.
         knob: "--highlight-compress",
         covers: &["--highlight-compress"],
         present: |args| args.print.highlight_compress.is_some(),
@@ -706,8 +605,8 @@ fn refusal(knob: &str, availability: Availability) -> NcError {
     // The trailing clause says only what this rule inspected. "…the current chain
     // still accepts it" was an unconditional claim about the *legacy* path made by a
     // rule that looked at the new one, and it is false whenever the same command line
-    // is independently invalid there (`--density-curve exponential --sigmoid-toe 0.3`
-    // is refused by the curve-mismatch rule; `--sigmoid-toe nan` by the finite check).
+    // is independently invalid there (`--density-curve characteristic
+    // --anchor-mid-offset 0.6` is refused by the legacy merge).
     // Sending the user to a branch that then refuses them is the circular-advice
     // defect this module's ordering exists to avoid.
     NcError::Usage(format!(
@@ -744,6 +643,12 @@ mod tests {
         // Removed-flag stubs: hidden args that exist only to emit a migration error on
         // the `--algorithm` precedent. Nothing resolves them, on either flow.
         "--algorithm",
+        "--reconstruction",
+        "--sigmoid-contrast",
+        "--sigmoid-toe",
+        "--sigmoid-shoulder",
+        "--sigmoid-mid-fraction",
+        "--sigmoid-white-at-d-max",
         "--assume-linear",
         "--input-profile",
         "--invert-white-balance",

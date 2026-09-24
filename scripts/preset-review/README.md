@@ -1,10 +1,10 @@
 # preset-review
 
-The visual-review matrix for the five conversion presets
+The visual-review matrix for the conversion presets
 ([`algo/conversion-presets`](../../docs/tasks/algo/conversion-presets.md), filed out of
 [`algo/film-stock-profiles`](../../docs/tasks/algo/film-stock-profiles.md)).
 
-`presets.matrix.json` is **data**, not a script: it names the five configurations and the
+`presets.matrix.json` is **data**, not a script: it names the configurations and the
 flags each one passes. The renderer is `nctool review generate`, which is shared with every
 other matrix.
 
@@ -20,13 +20,14 @@ PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review generate \
 … --no-metrics                                                # render only, no charts
 ```
 
-This matrix compares five *configurations* of one binary. To compare one configuration
+This matrix compares the *configurations* of one binary. (The two sigmoid presets retired
+in `nf-retire/sigmoid-and-simple`; they render only from the reference build.) To compare one configuration
 across two **binaries** instead, add a top-level `builds` block naming each one; see
 "Render" in the `render-review-set` skill.
 
 It writes a `review.json` for [`tools/review-app`](../../tools/review-app/README.md) and
 prints the command to open it. Frames and per-roll `Dmin` come from
-`scripts/sigmoid-baseline/fixtures.json` — the same declaration the metrics use, so the two
+`scripts/analysis/fixtures.json` — the same declaration the metrics use, so the two
 cannot drift.
 
 **Measuring is the one part that needs the venv**, because it reads pixels; the rest of

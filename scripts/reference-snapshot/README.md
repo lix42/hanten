@@ -152,12 +152,10 @@ own report is checked again as it renders. Any 7+ digit prefix works, and a dirt
 build of the right commit is refused too. When `reserve` moves, `build.sh` builds the
 new commit and says so; update `expect_commit` on purpose.
 
-Today a candidate `hanten` *without* `--new-flow` renders `sigmoid-knees` byte-identically
-to the reference, so such a set shows two identical cells. It becomes a comparison once
-the candidate's path differs.
-
-A config only one build accepts (a flag added after the tag) opts out of the other arm
-with `"builds": ["new"]`.
+A config only one build accepts opts out of the other arm — `"builds": ["new"]` for a
+flag added after the tag, `"builds": ["ref"]` for one retired since. `--preset
+sigmoid-knees` is the latter: the candidate refuses it since `nf-retire/sigmoid-and-simple`,
+so it renders only on the reference arm.
 
 **Known gap: a `--new-flow` cell cannot go in a matrix yet.** The generator passes
 `--output-preset <matrix output_preset>` to every cell, and `--new-flow` refuses that

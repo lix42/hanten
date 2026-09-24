@@ -1,13 +1,13 @@
 //! Negative reconstruction and density curves (design-spec §7).
 //!
-//! The tagged [`Reconstruction`] config drives one of two paths — `simple`
-//! (direct inversion) or `density` (Dmin-normalized corrected density `D′`
-//! mapped through a tagged exponential or sigmoid curve) — and **every path
-//! returns the typed [`FilmRgbImage`] boundary**:
+//! The [`Reconstruction`] config drives the current chain's one path —
+//! Dmin-normalized corrected density `D′` mapped through a tagged exponential or
+//! characteristic curve — and the new chain's fixed decode ([`fixed`]) is a second
+//! producer. **Both return the typed [`FilmRgbImage`] boundary**:
 //!
 //! ```text
 //! scan → Dmin normalization → corrected density D′   (density reconstruction)
-//!      → exponential | sigmoid density curve          (the curve stage)
+//!      → exponential | characteristic density curve   (the curve stage)
 //!      → FilmRgbImage                                  (typed boundary)
 //! ```
 //!
@@ -22,8 +22,6 @@
 pub mod density;
 pub mod film_stock;
 pub mod fixed;
-pub mod sigmoid;
-pub mod simple;
 
 /// The probe that measured whether inverting the published curves removes the per-channel
 /// cast a single scalar contrast leaves. Test-only, asset-gated, prints derived numbers
@@ -78,10 +76,8 @@ impl FilmRgbImage {
     /// can place a chosen value — non-finite ones included — at the working-space
     /// mapper's input without running a reconstruction.
     ///
-    /// The one fixture for "a `FilmRgbImage` a test is not about": tests that reach
-    /// for `Reconstruction::Simple` over a pre-inverted scan to do this move here when
-    /// `simple` retires (`nf-retire/sigmoid-and-simple`), rather than each module
-    /// growing its own.
+    /// The one fixture for "a `FilmRgbImage` a test is not about" — use it rather than
+    /// growing a module-local producer.
     #[cfg(test)]
     pub(crate) fn fixture(image: LinearImage) -> Self {
         Self::from_linear(image)
@@ -142,27 +138,25 @@ impl std::fmt::Debug for FilmRgbImage {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReconstructionReport {
     /// The resolved **reference** density (`calibration.dmax`) — the roll calibration, and
-    /// the value to freeze back into a recipe. `None` for `simple` (no curve stage) and
-    /// for the exponential curve with `dmax = none` (unity placement).
+    /// the value to freeze back into a recipe. `None` for the characteristic curve and
+    /// for `dmax = none`.
     ///
-    /// This is *not* necessarily the density that rendered to `1.0`: since
-    /// `algo/reference-anchored-sigmoid`, the sigmoid curve derives its anchor from this
-    /// reference through [`AnchorPlacement`](crate::types::AnchorPlacement). See
+    /// This is *not* necessarily the density that rendered to `1.0`: the curve derives
+    /// its anchor through [`AnchorPlacement`](crate::types::AnchorPlacement), and the
+    /// default base-derived placement does not read this reference at all. See
     /// [`Self::curve_anchor`] for what the curve actually used.
     pub dmax: Option<f32>,
     /// The **derived** anchor the curve used — the corrected density that rendered to
     /// `1.0`, and therefore what sets the black floor at `10^(−contrast·anchor)`.
     ///
-    /// Equal to [`Self::dmax`] under `AnchorPlacement::WhiteAtDmax` on **either** curve —
-    /// the placement rule is shared, so the exponential no longer implies the identity
-    /// (`algo/exponential-anchor-placement`). Every other rule derives an anchor that
-    /// differs from the reference, which is why reporting only the reference would
-    /// document a number the render did not use. `None` for `simple`, and for the
-    /// exponential's `dmax = none` under `WhiteAtDmax` (no anchor placed).
+    /// Equal to [`Self::dmax`] under `AnchorPlacement::WhiteAtDmax`. Every other rule
+    /// derives an anchor that differs from the reference, which is why reporting only
+    /// the reference would document a number the render did not use. `None` for the
+    /// characteristic curve, and for `dmax = none` under `WhiteAtDmax` (no anchor placed).
     pub curve_anchor: Option<f32>,
     /// The resolved regional-balance tone-ramp range `[lo, hi]` (corrected
-    /// density), when a shadow/highlight balance was applied. `None` for
-    /// `simple` or when both balances are the neutral `[0, 0, 0]`.
+    /// density), when a shadow/highlight balance was applied. `None` when both
+    /// balances are the neutral `[0, 0, 0]`.
     pub balance_range: Option<[f32; 2]>,
     /// How far the frame's densities fell outside the stock's published curve, per channel
     /// — `Some` only for the characteristic curve, `None` for every other path.
@@ -175,37 +169,23 @@ pub struct ReconstructionReport {
 }
 
 /// Stage 3 — reconstruct the negative into the typed film positive
-/// (design-spec §7): pure `(input, config) -> output`, dispatching on the
-/// tagged [`Reconstruction`]. Every supported path returns [`FilmRgbImage`];
-/// the IR plane is carried through untouched (Step-1 rule: preserve, don't
-/// consume). Total in its inputs: a degenerate film base or an unusable curve
-/// anchor surfaces as an [`NcError`](crate::types::NcError), never a
-/// silently-wrong image.
+/// (design-spec §7): pure `(input, config) -> output`. The IR plane is carried
+/// through untouched (Step-1 rule: preserve, don't consume). Total in its inputs: a
+/// degenerate film base or an unusable curve anchor surfaces as an
+/// [`NcError`](crate::types::NcError), never a silently-wrong image.
 pub fn reconstruct(
     image: &LinearImage,
     base: &FilmBase,
     config: &Reconstruction,
     dmax: DmaxInput,
 ) -> Result<(FilmRgbImage, ReconstructionReport)> {
-    match config {
-        // `simple` has no curve stage, so it reads no reference at all — `dmax` simply
-        // goes unread here. It is **not** refused at the CLI boundary: a roll calibration
-        // must compose with any profile, so `cli::unconsumed_dmax_warning` reports it
-        // (`--strict`-promotable) instead.
-        Reconstruction::Simple => Ok((
-            simple::reconstruct(image, base)?,
-            ReconstructionReport::default(),
-        )),
-        Reconstruction::Density { density, curve } => {
-            density::reconstruct(image, base, density, curve, dmax)
-        }
-    }
+    density::reconstruct(image, base, &config.density, &config.curve, dmax)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{DensityCurve, DensityParams, ExponentialParams, SigmoidParams};
+    use crate::types::{CharacteristicParams, DensityCurve, DensityParams};
 
     fn image() -> LinearImage {
         LinearImage::new(
@@ -221,17 +201,13 @@ mod tests {
         FilmBase::from([0.9, 0.55, 0.42])
     }
 
-    /// Every supported reconstruction config for exhaustive path checks.
-    fn all_configs() -> [Reconstruction; 3] {
+    /// Every supported curve, for exhaustive path checks.
+    fn all_configs() -> [Reconstruction; 2] {
         [
-            Reconstruction::Simple,
-            Reconstruction::Density {
+            Reconstruction::default(),
+            Reconstruction {
                 density: DensityParams::default(),
-                curve: DensityCurve::Exponential(ExponentialParams::default()),
-            },
-            Reconstruction::Density {
-                density: DensityParams::default(),
-                curve: DensityCurve::Sigmoid(SigmoidParams::default()),
+                curve: DensityCurve::Characteristic(CharacteristicParams::default()),
             },
         ]
     }
@@ -260,24 +236,20 @@ mod tests {
     // `trybuild` dev-dependency; the privacy annotation is the guarantee.)
 
     #[test]
-    fn simple_reports_no_curve_diagnostics() {
+    fn the_default_reports_its_reference_and_its_base_derived_anchor() {
         let (_, report) = reconstruct(
             &image(),
             &base(),
-            &Reconstruction::Simple,
+            &Reconstruction::default(),
             DmaxInput::default(),
         )
         .unwrap();
-        assert_eq!(report, ReconstructionReport::default());
-    }
-
-    #[test]
-    fn density_paths_report_their_resolved_anchor() {
-        for config in &all_configs()[1..] {
-            let (_, report) = reconstruct(&image(), &base(), config, DmaxInput::default()).unwrap();
-            // Both curves default to the fixed nominal anchor.
-            assert_eq!(report.dmax, Some(density::NOMINAL_DMAX), "{config:?}");
-            assert_eq!(report.balance_range, None, "{config:?}");
-        }
+        // The fixed nominal reference is still resolved and reported…
+        assert_eq!(report.dmax, Some(density::NOMINAL_DMAX));
+        // …but the default placement derives its anchor from the base, not from it.
+        let expected =
+            fixed::MID_ABOVE_BASE + crate::types::MID_GREY_OUTPUT_DECADES / fixed::CONTRAST;
+        assert_eq!(report.curve_anchor, Some(expected));
+        assert_eq!(report.balance_range, None);
     }
 }

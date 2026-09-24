@@ -189,20 +189,19 @@ fn render_pixel_checked(
 /// reconstruction that overshoots reference white fails naming the sample and every
 /// way out, instead of clipping quietly.
 ///
-/// **The print controls are named deliberately.** They run *before* this render, so
-/// the likeliest cause is a lift applied to an already-bounded reconstruction — and a
-/// message offering only "bound the reconstruction" tells such a user to fix the one
-/// thing that is not wrong.
+/// **The print controls are named deliberately.** No shipped reconstruction is bounded
+/// at white since the sigmoid retired, so ordinary highlights reach here — and the
+/// print controls, which run *before* this render, are the lever that brings them back
+/// under the ceiling.
 fn above_range_error(index: usize, luminance: f32) -> NcError {
     NcError::Other(format!(
         "SDR display rendering applied no display tone curve, but pixel {index} sits \
          above reference white (luminance {luminance}), which this mode has no curve to \
-         roll off. Three things reach here: the reconstruction may exceed reference \
-         white (a sigmoid curve with `shoulder > 0` does not), a print control applied \
-         before this render may have lifted it there (--print-exposure, --white-balance \
-         / --auto-wb, --linear-range), or the shoulder may simply be wanted. So: keep \
-         the print controls neutral, bound the reconstruction, or drop --display-tone \
-         none."
+         roll off. No shipped reconstruction is bounded at white, so ordinary \
+         highlights reach here, and a print control applied before this render \
+         (--print-exposure, --white-balance / --auto-wb, --linear-range) can lift more \
+         content there. So: lower --print-exposure until the frame fits, or drop \
+         --display-tone none to roll the highlights off."
     ))
 }
 
@@ -338,26 +337,20 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::reconstruct;
+    use crate::algo::FilmRgbImage;
     use crate::pipeline::display_tone::Headroom;
     use crate::pipeline::render_split::display_source;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
-    use crate::types::{FilmBase, PrintParams, Reconstruction};
+    use crate::types::PrintParams;
 
     fn close(a: f32, b: f32) {
         assert!((a - b).abs() < 2e-5, "{a} != {b}");
     }
 
     fn shared_from_film_rgb(rgb: &[f32], print: &PrintParams) -> SharedDisplaySource {
-        let scan = rgb.iter().map(|value| 1.0 - value).collect();
-        let image = LinearImage::new((rgb.len() / 3) as u32, 1, scan, None).unwrap();
-        let (film, _) = reconstruct(
-            &image,
-            &FilmBase::from([1.0; 3]),
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
+        let film = FilmRgbImage::fixture(
+            LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap(),
+        );
         display_source(map_nc_film_rgb_v1(film), print).unwrap()
     }
 

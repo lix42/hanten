@@ -14,7 +14,7 @@ ones.
 Remove the old paths once the reference build exists: `legacy`/`custom`, the bounded display tones, the sigmoid and `simple`, the `Dmax` anchor machinery, the regional balance, and the `print.*` prefix.
 
 Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration.md`).
-Landed so far: **`legacy-custom`** (2026-09-23).
+Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-09-23).
 
 **What `legacy-custom` means for the rest of the epic.**
 
@@ -32,6 +32,25 @@ Landed so far: **`legacy-custom`** (2026-09-23).
 - **Tests state their preset.** `tests/pipeline.rs` no longer injects one; a TIFF
   test names `display-p3` (u16) or `film-master` (f32), and a test that needs
   clipping uses `--display-tone reinhard`, the one tone that overshoots white.
+
+**What `sigmoid-and-simple` means for the rest of the epic.**
+
+- **The current chain's default is the fixed decode's configuration** — the exponential
+  at contrast 2.0 and `mid-at-base-offset(0.62)`, read from `algo::fixed`'s constants
+  (`pipeline_version` 6). Both chains render the same default reconstruction, so
+  `default-flip` no longer moves the decode, only the stages after it.
+- **The default reads no `Dmax`.** A stated reference is carried and warned about
+  (`unconsumed_dmax_warning`, keyed on `render_reads_the_reference`). What still reads one
+  is `--anchor-white-at-reference` / `--anchor-mid-fraction` — `dmax-machinery`'s whole
+  remaining surface. The report's `reconstruction_result.curve.dmax` still resolves
+  `fixed` / 1.3 under the default placement even though nothing read it; that is left
+  for `dmax-machinery` to remove rather than re-shaped here.
+- **No reconstruction is bounded at white any more**, so `--display-tone none` refuses
+  ordinary content on SDR; tests pull the fixture down with `--print-exposure`. That
+  sharpens `display-tones`' case rather than blocking it. The default gain map is live.
+- **`Reconstruction` is a struct** (`density` + tagged `curve`); `characteristic` is the
+  only other curve, so `DensityCurve` has two members and `ConversionPreset` three — both
+  `characteristic`'s to finish.
 
 ## legacy-custom
 
@@ -103,10 +122,85 @@ Landed so far: **`legacy-custom`** (2026-09-23).
 
 ## sigmoid-and-simple
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: retire the sigmoid and `simple`.
+- 2026-09-23: **plan.** Decisions taken with the user before starting: (1) the current
+  chain's default moves off the sigmoid to the exponential at the fixed decode's
+  configuration (`gamma` 2.0, `mid-at-base-offset(0.62)`, scale `[1, 0.84, 0.73]`), and
+  `ExponentialParams::default` moves with it — a `pipeline_version` 6 bump; (2)
+  `Reconstruction` collapses into a struct now, the wire's `"type": "density"` accepted at
+  its old default and `"simple"` refused; (3) `sigmoid-knees` / `sigmoid-flat` become
+  plain removed-value errors, and `scripts/sigmoid-baseline/` is deleted. Tests that used
+  `simple` as a cheap fixture move to `FilmRgbImage::fixture`; sigmoid goldens and probes
+  are deleted, not re-pointed.
+- 2026-09-23: **done.**
+  - **Default (v6).** `ExponentialParams::default` reads `algo::fixed::{CONTRAST,
+    MID_ABOVE_BASE}` and `default_scale_for(Exponential)` returns `fixed::DENSITY_SCALE`;
+    `fixed`'s `the_current_chains_default_is_this_decode` pins `Reconstruction::default()`
+    to its equivalent configuration. New `PIPELINE_FINGERPRINTS` row (render
+    `752e701021a41307`, recipe `dbac245a916032f2`, base unchanged); v5's behaviour frozen
+    as a literal. `golden_new_default` recaptured. Telemetry schema 5 (`reconstruction`
+    dropped, `curve` always present).
+  - **Removed:** `algo/{sigmoid,simple}.rs`, `SigmoidParams`, `REFERENCE_SHOULDER`,
+    `ReconstructionType`, `AnchorPlacement`'s `Default`, the sigmoid validate rules, the
+    `simple` merge/validate arms (`--auto-wb` under `simple`, preset-over-`simple`),
+    `active_density_domain_flag`, the `sigmoid-knees` rules
+    (`brightness_is_in_the_anchor`), and `UnpinnedCurve::AnchorOnly`. Migration errors:
+    `REMOVED_SIGMOID_CURVE` (recipe + a custom `--density-curve` parser),
+    `REMOVED_SIMPLE_RECONSTRUCTION` (recipe + hidden `--reconstruction`), hidden
+    `--sigmoid-*` flags naming `--density-gamma` / `--display-tone` / `--anchor-*`, and the
+    two presets by name. `reconstruction.type` is accepted only at `"density"`.
+  - **Tests:** the eleven module fixtures use `FilmRgbImage::fixture`; `all_configs`
+    loops cover exponential + characteristic. Deleted: the two sigmoid goldens, the
+    `simple` golden, `the_linear_rendered_sigmoid_takes_its_brightness_from_the_anchor`,
+    `each_candidate_look_needs_its_own_print_exposure` (without the sigmoid looks the
+    remaining three start within 0.125 stop of each other, under its 0.25 bar — the
+    per-look exposures now rest on 1.59–1.91 across the characteristic presets), and ten
+    `shadow_metrics` probes that rendered a sigmoid (`tone_map_review.html` with them).
+    `curve_probe::sigmoid_scale` stays: it measures density slopes and renders no curve.
+    In `tests/pipeline.rs`, `simple` fixtures were rebuilt on a stated exponential and
+    `--display-tone none` tests pull the fixture down 2.2–5 stops.
+  - **Found on the way:** with an unread default reference, the HDR SDR-range warning and
+    both over-range errors advised levers that no longer worked (`--d-max`, "bound the
+    reconstruction"); they now name `--print-exposure` / `--anchor-mid-offset`.
+    `explicit_dmax_domain_warning` would have fired on every default `--d-max` run; it and
+    `unconsumed_dmax_warning` now share `render_reads_the_reference`, so exactly one fires.
+  - **Scripts:** `scripts/sigmoid-baseline/` deleted except `fixtures.json`, moved to
+    `scripts/analysis/fixtures.json` (nctool's default and three docs read it).
+    `scripts/hdr-tone-review/` deleted too — beyond the agreed plan: its page is the
+    sigmoid study's measured findings, which a config swap would have left wrong.
+    Preset matrix, `benchmark.json` and nctool's roll freeze (default curve
+    `exponential`) updated.
+  - **Asset probes:** the `#[ignore]`d `curve_probe` / `shadow_metrics` set panics before
+    measuring on today's `../nc-assets`, whose rolls were renamed (`Ektar` →
+    `2026-07-15-Ektar100`); unrelated to this change, and not fixed here.
+- 2026-09-24: **review round** (`/code-review`). All ten findings taken. The ones that
+  change behaviour: the legacy-recipe migration error no longer advises the refused
+  `reconstruction.type = "simple"`; the HDR SDR-range warning names only
+  `--print-exposure` (the `--anchor-*` family is refused under `characteristic`); and
+  **`nctool roll convert` makes Dmax opt-in** (`--measure-dmax`, user decision) — it
+  froze a leader Dmax the default placement never reads, so every frame warned and
+  `--strict-roll` failed the roll. `--d-max` still freezes a stated value; the leader
+  frame is required only when measuring. Also: `REMOVED_SIGMOID_CURVE` no longer claims
+  the default sits "at the same anchor" (it names `--anchor-mid-fraction 0.5` as the old
+  placement); the film-master negative-sample guarantee is back, as
+  `io::encode`'s `the_film_master_branch_writes_a_negative_sample_unclamped` (fixture →
+  mapper → split → f32 bytes); every "does the render read `Dmax`" question now goes
+  through `render_reads_the_reference`; and stale `simple`/sigmoid prose went from
+  CLAUDE.md, `stages.rs`, `gain_map.rs`, `recipe.rs` and the design-spec example.
+- 2026-09-24: pre-ship review (Codex + local reviewer). The removed-sigmoid-flag
+  remedies fire on both chains (`reject_removed_flags` runs before the flow table), so
+  each now also names what works under `--new-flow` (`--anchor-mid-offset`; display
+  tone "not yet available"), with a test that the named new-flow flag is accepted.
+  `nctool roll convert` refuses `--dmax-region` without `--measure-dmax`, and drops a
+  partial recipe's retired `reconstruction.type = "density"` before merging — `hanten
+  params` no longer writes the tag, so the merge read it as a variant switch and
+  replaced the whole default reconstruction. Stale prose fixed: `--no-d-max` is unity
+  placement only under `--anchor-white-at-reference`; `--auto-d-max` *is* warned about
+  under the base-derived anchors; telemetry heading is schema 5; comments citing
+  deleted tests went. All gates green.
 
 ## dmax-machinery
 

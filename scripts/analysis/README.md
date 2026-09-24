@@ -82,22 +82,25 @@ PYTHONPATH=scripts/analysis python3 -m nctool roll convert Ektar \
 
 It performs these operations:
 
-1. Finds the roll's single `unexposed`, single `leader`, and all `real` frames in
-   `manifest.json`.
+1. Finds the roll's single `unexposed` frame and all `real` frames in
+   `manifest.json` (and its single `leader` with `--measure-dmax`).
 2. Verifies every source frame against its manifest SHA-256, so stale asset bytes
    cannot be attributed to a configuration change.
-3. Measures Dmin from the unexposed frame and Dmax from the leader. Both default
-   sample rectangles are the center 80% (`x=10%`, `y=10%`, `width=80%`,
-   `height=80%`). Override either with
-   `--dmin-region` or `--dmax-region`. Dmin uses a five-cell grid by default;
-   pass `--dmin-mode region` to aggregate its selected region without the grid.
-   If the leader is clipped beyond the scanner boundary, pass a deliberately
-   chosen positive `--d-max D` to skip leader estimation; calibration and tags
-   record it as an `explicit-override`, not a measured reference.
+3. Measures Dmin from the unexposed frame, over the center 80% (`x=10%`, `y=10%`,
+   `width=80%`, `height=80%`) unless `--dmin-region` says otherwise. Dmin uses a
+   five-cell grid by default; pass `--dmin-mode region` to aggregate its selected
+   region without the grid.
+   **Dmax is opt-in**, because the default anchor placement never reads it — a
+   frozen one would only warn on every frame and fail `--strict-roll`. Pass
+   `--measure-dmax` (with a recipe whose placement reads the reference, e.g. an
+   `anchor` of `{"mid-at-dmax-fraction": 0.5}`) to measure it from the leader,
+   `--dmax-region` to move its rectangle, or a deliberately chosen positive
+   `--d-max D` to freeze a value without measuring; calibration and tags record it
+   as `measured-reference`, `explicit-override`, or `not-frozen`.
 4. Reads the tested binary's complete `hanten params` document, overlays the optional
-   partial recipe, then freezes both measurements. This pins defaults such as the
-   sigmoid anchor instead of letting a later build reinterpret an underspecified
-   recipe.
+   partial recipe, then freezes the measurements. This pins defaults such as the
+   curve's anchor placement instead of letting a later build reinterpret an
+   underspecified recipe.
 5. Runs `hanten roll` over the real frames with that shared recipe.
 6. Writes `recipe.json`, `calibration.json`, `roll-report.json`, and `tags.json`
    beside the converted images.
@@ -414,7 +417,7 @@ example): it names the configurations, the flags each one passes, and the
 per-roll values those flags need. Every cell is one `hanten convert`; beside each
 rendition the command writes that image's metric record, so the app can draw the
 tone and cast charts next to the picture. Frames and per-roll `Dmin` come from
-`scripts/sigmoid-baseline/fixtures.json` — the same declaration the metrics read,
+`scripts/analysis/fixtures.json` — the same declaration the metrics read,
 so the two cannot drift.
 
 Four rules it holds to, each of which has a reason rather than a preference:

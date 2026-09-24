@@ -63,7 +63,7 @@
 //! | **film base** (`Dmin`) | per-roll transmission of unexposed film | measured from that roll's rebate | an input; `D′ = 0` by construction |
 //! | **leader `Dmax`** | film **saturation** density | `--d-max`, `estimate --d-max-region` | the legacy `curve.dmax`. **Not read here** |
 //! | **anchor `A`** | the corrected density that renders to `1.0` | derived: [`AnchorRule::anchor`] | `0.9924` at the defaults; reported |
-//! | **diffuse white** | scene white on a correctly exposed negative | the datasheets: `d + `[`REFERENCE_MID_TO_WHITE_DELTA`] | `0.98` — a reference number, not an input |
+//! | **diffuse white** | scene white on a correctly exposed negative | the datasheets: `d + types::REFERENCE_MID_TO_WHITE_DELTA` | `0.98` — a reference number, not an input |
 //! | **content white `W`** | a roll's bright end (red p97 of picture density) | `docs/spike/white-placement.md` | **not measured, not shipped** |
 //! | **specular headroom** | ~1 stop above diffuse white | where an HDR rendition lives | a consequence, not a knob |
 //!
@@ -82,8 +82,6 @@
 //! variant rather than a bare `f32` field: they add a variant, instead of silently
 //! changing what a number means. No white reference is measured, read or
 //! representable today.
-//!
-//! [`REFERENCE_MID_TO_WHITE_DELTA`]: crate::types::REFERENCE_MID_TO_WHITE_DELTA
 
 use crate::algo::{FilmRgbImage, density};
 use crate::pipeline::pixels;
@@ -467,11 +465,11 @@ mod tests {
     /// Distinct per channel, so a transposed channel reds it too.
     const PROBE_OFFSET: [f32; 3] = [-0.05, 0.02, 0.07];
 
-    /// The legacy configuration this decode reproduces: the exponential curve (the
-    /// sigmoid with both knees off, bit-exactly) at the same contrast, the same
-    /// calibration, and the same reference-free placement.
+    /// The current chain's configuration this decode reproduces: the exponential curve
+    /// at the same contrast, the same calibration, and the same reference-free
+    /// placement — its default since `pipeline_version` 6.
     fn equivalent_legacy(offset: [f32; 3]) -> Reconstruction {
-        Reconstruction::Density {
+        Reconstruction {
             density: DensityParams {
                 scale: DENSITY_SCALE,
                 offset,
@@ -633,7 +631,7 @@ mod tests {
         // vector. A reference-derived placement on the same curve must differ.
         let (img, b) = (scan(), base());
         let (fresh, _) = decode(&img, &b, &DecodeParams::default()).unwrap();
-        let other = Reconstruction::Density {
+        let other = Reconstruction {
             density: DensityParams {
                 scale: DENSITY_SCALE,
                 offset: DENSITY_OFFSET,
@@ -649,17 +647,12 @@ mod tests {
     }
 
     #[test]
-    fn the_fresh_constants_agree_with_the_legacy_defaults() {
-        // The decode declares its own calibration rather than importing the legacy
-        // default, so the two could drift and the equality tests above would follow
-        // the drift silently — they set both sides from *these* constants. This is
-        // the assertion that they still describe one calibration. It retires with
-        // the legacy path (`nf-retire/sigmoid-and-simple`), not before.
-        assert_eq!(
-            DENSITY_SCALE,
-            DensityParams::default_scale_for(crate::types::DensityCurveType::Exponential)
-        );
-        assert_eq!(DENSITY_OFFSET, DensityParams::default().offset);
+    fn the_current_chains_default_is_this_decode() {
+        // Since `pipeline_version` 6 the current chain's default reconstruction reads
+        // its curve constants from here, so the equality tests above describe *the*
+        // default rather than one configuration of it. This pins the part those
+        // constants do not reach: the offset default and the whole shape.
+        assert_eq!(Reconstruction::default(), equivalent_legacy(DENSITY_OFFSET));
         assert_eq!(SCAN_FLOOR, density::SCAN_EPSILON);
     }
 
@@ -686,8 +679,8 @@ mod tests {
     fn changing_the_anchor_is_a_pure_gain() {
         // On a straight line the anchor factors out as `10^(−contrast·A)`, identical
         // on every channel — which is why `d` is a calibration and brightness belongs
-        // to rendering. (It holds only without a shoulder; the legacy sigmoid's
-        // `anchor_is_a_pure_gain_only_without_the_shoulder` states both directions.)
+        // to rendering. (It holds only without a shoulder, which is part of why the
+        // sigmoid's knees retired.)
         let (img, b) = (scan(), base());
         let a = decode(&img, &b, &DecodeParams::default()).unwrap().0;
         let shifted = DecodeParams {

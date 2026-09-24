@@ -49,15 +49,14 @@ hanten estimate reference.tiff --base-region 0,0,120,40
 # black point and the colour balance. Use the measured value, or --auto-base to
 # detect the rebate band (best-effort; it fails loudly when it can't). A preset is
 # named explicitly because the default (`gain-map-hdr`) writes a JPEG.
-hanten convert in.tiff -o out.tiff --reconstruction density \
+hanten convert in.tiff -o out.tiff \
   --film-base 0.92,0.55,0.42 --output-preset display-p3
 
-# Float output: display-linear BT.2020 with the print controls applied.
-# `--density-gamma` is the exponential curve's knob, so that curve is selected
-# explicitly — the default is the sigmoid, whose slope is `--sigmoid-contrast`.
-hanten convert in.tiff -o out.tiff --reconstruction density \
+# Float output: display-linear BT.2020 with the print controls applied, and a
+# gentler slope on the default exponential curve.
+hanten convert in.tiff -o out.tiff \
   --film-base 0.92,0.55,0.42 --output-preset hdr-linear-tiff \
-  --density-curve exponential --density-gamma 1.8 --print-exposure 0.0
+  --density-gamma 1.8 --print-exposure 0.0
 
 # Inspect a scan and emit machine-readable JSON.
 hanten inspect in.tiff --report json

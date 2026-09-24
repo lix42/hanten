@@ -316,8 +316,8 @@ pub fn check_body_without_flag(body: &serde_json::Value, context: &str) -> Resul
 ///
 /// Every other conversion flag is either refused by presence before this runs
 /// (`flow::reject_unavailable_flags`) or names what the decode already does
-/// (`--reconstruction density`, `--density-curve exponential`), so it has nothing
-/// to set. `flow`'s `every_kept_flag_reaches_the_recipe` holds that each kept flag
+/// (`--density-curve exponential`), so it has nothing to set. (`--reconstruction` is
+/// refused on both chains, before either runs.) `flow`'s `every_kept_flag_reaches_the_recipe` holds that each kept flag
 /// has an arm here.
 pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     crate::cli::merge_shared_sections(

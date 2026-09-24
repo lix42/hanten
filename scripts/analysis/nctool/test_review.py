@@ -101,7 +101,7 @@ class TestUnknownKeys(unittest.TestCase):
     # labels, identical pixels, exit 0.
     def test_refuses_a_mistyped_config_key(self):
         with self.assertRaisesRegex(review.ReviewError, "unknown key arg;"):
-            load(configs=[{"id": "a", "arg": ["--preset", "sigmoid-flat"]}])
+            load(configs=[{"id": "a", "arg": ["--preset", "characteristic-generic"]}])
 
     # `insets` measures the whole frame — the film holder included, which is the
     # one thing the inset exists to keep out of the statistics.
@@ -138,8 +138,8 @@ class TestExpansion(unittest.TestCase):
             ["--film-base", "0.5,0.2,0.1", "--film-stock", "ektar-100"])
 
     def test_leaves_an_argument_with_no_placeholder_alone(self):
-        self.assertEqual(review.expand_args(["--preset", "sigmoid-flat"], {"dmin": "x"}),
-                         ["--preset", "sigmoid-flat"])
+        self.assertEqual(review.expand_args(["--preset", "characteristic-generic"], {"dmin": "x"}),
+                         ["--preset", "characteristic-generic"])
 
 
 class TestMetricsSpace(unittest.TestCase):
@@ -287,7 +287,7 @@ class TestOutputDirectory(unittest.TestCase):
             # CI builds only `target/debug/hanten`, and an earlier version of this
             # check reported "build the binary first" there instead.
             args = argparse.Namespace(
-                matrix=str(write(MATRIX)), fixtures="scripts/sigmoid-baseline/fixtures.json",
+                matrix=str(write(MATRIX)), fixtures="scripts/analysis/fixtures.json",
                 frames=None, nc="/nonexistent/nc", build=None,
                 asset_root="../nc-assets",
                 out=str(target), no_metrics=True, force=False)
@@ -405,7 +405,7 @@ class TestShippedMatrix(unittest.TestCase):
 
     def test_the_preset_matrix_loads(self):
         matrix = review.load_matrix(self.PATH)
-        self.assertEqual(len(matrix["configs"]), 5)
+        self.assertEqual(len(matrix["configs"]), 3)
         self.assertEqual(matrix["output_preset"], "gain-map-hdr")
 
     def test_every_roll_it_names_states_a_film_stock(self):
@@ -417,7 +417,7 @@ class TestShippedMatrix(unittest.TestCase):
         # The fixture declaration is the frame source, so a roll named only in
         # the matrix would silently lose every cell that needs its stock.
         fixtures = json.loads(
-            (self.PATH.parents[1] / "sigmoid-baseline" / "fixtures.json")
+            (self.PATH.parents[1] / "analysis" / "fixtures.json")
             .read_text(encoding="utf-8"))
         matrix = review.load_matrix(self.PATH)
         self.assertEqual(set(matrix["rolls"]) - set(fixtures["rolls"]), set())

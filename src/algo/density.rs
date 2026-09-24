@@ -11,8 +11,8 @@
 //!    regional balance:         D̄    = mean(B_r, B_g, B_b)   (scalar tone)
 //!                              D'_c = B_c + shadow_balance_c · w_lo(D̄)
 //!                                         + highlight_balance_c · w_hi(D̄)
-//! 3. density curve:            exponential lin_c = 10^(gamma · (D'_c − Dmax))
-//!                              (or the sigmoid S-curve — `algo::sigmoid`)
+//! 3. density curve:            exponential lin_c = 10^(gamma · (D'_c − A))
+//!                              (or a stock's characteristic curve — `algo::film_stock`)
 //!                              → FilmRgbImage
 //! ```
 //!
@@ -81,7 +81,7 @@
 
 use rayon::prelude::*;
 
-use crate::algo::{FilmRgbImage, ReconstructionReport, sigmoid};
+use crate::algo::{FilmRgbImage, ReconstructionReport};
 use crate::types::{
     AnchorPlacement, BalanceRange, DensityCurve, DensityParams, DmaxInput, DmaxSource, FilmBase,
     LinearImage, NcError, Result,
@@ -165,7 +165,7 @@ pub(super) fn reconstruct(
             // this curve had a placement rule. The base-derived placements ignore the
             // reference, so a `None` there is not a missing input.
             let anchor = exp.anchor.anchor(dmax.unwrap_or(0.0), gamma);
-            // Defense in depth, mirroring the sigmoid's guard. Two ways the exponent
+            // Defense in depth. Two ways the exponent
             // goes non-finite, and **both** render `10^(−inf) = 0.0` for every sample —
             // an all-black frame that trips neither the clip nor the non-finite counter:
             // the placement's division by the slope can overflow the *anchor* (a
@@ -196,7 +196,6 @@ pub(super) fn reconstruct(
             };
             (film, dmax, curve_anchor)
         }
-        DensityCurve::Sigmoid(sig) => sigmoid::apply_curve(density, sig, dmax)?,
         DensityCurve::Characteristic(ch) => {
             // No reference and no anchor to resolve: the published curve carries both, so
             // the report's `dmax` / `curve_anchor` are `None` rather than a derived number
@@ -487,10 +486,9 @@ pub(crate) fn apply_curve_per_channel(
 /// Stage 3 — apply a density curve `tone` (corrected density → positive
 /// linear) to every sample, minting the typed [`FilmRgbImage`] boundary.
 ///
-/// The producer path for the two **parametric** curves, which apply one function to
-/// every channel. It is not the only one: the characteristic curve mints its image
-/// through [`apply_curve_per_channel`], and `simple` reconstruction
-/// (`algo::simple::convert`) builds one directly, having no density stage at all.
+/// The producer path for the exponential, which applies one function to every
+/// channel. It is not the only one: the characteristic curve mints its image through
+/// [`apply_curve_per_channel`].
 ///
 /// Pure and unclamped; a non-finite density (or a curve output that overflows) rides
 /// through so `io::encode`'s counters surface it.
@@ -565,9 +563,7 @@ pub(crate) const NOMINAL_DMAX: f32 = 1.3;
 /// `Auto` (opt-in) measures a high percentile of the *finite* densities (scalar,
 /// pooled across channels — a per-channel anchor would double as color correction,
 /// which is the auto-WB modes' job, see [`white_balance::estimate_gains`](crate::pipeline::white_balance::estimate_gains)); `None` yields no
-/// anchor. Deterministic: same buffer + params ⇒ same value. `pub(crate)` because
-/// the sigmoid curve anchors its S-curve on the same resolved `Dmax` rather than
-/// inventing a second measurement.
+/// anchor. Deterministic: same buffer + params ⇒ same value.
 pub(crate) fn resolve_dmax(density: &DensityImage, dmax: DmaxInput) -> Option<f32> {
     match dmax.source {
         DmaxSource::None => None,
@@ -877,7 +873,7 @@ mod tests {
         curve: DensityCurve,
         dmax: DmaxSource,
     ) -> Result<Converted> {
-        let config = Reconstruction::Density { density, curve };
+        let config = Reconstruction { density, curve };
         let (film, rep) = reconstruct_config(img, base, &config, DmaxInput::new(dmax))?;
         Ok(Converted {
             out: film.into_linear(),

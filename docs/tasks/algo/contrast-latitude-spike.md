@@ -54,7 +54,7 @@ What none of that settles is **why**, because the independent variable is missin
 nobody has measured each frame's **scene** range. Without it, "nc is narrower" and
 "nc faithfully reproduces a narrower scene" are indistinguishable.
 
-An early attempt to fill that gap from `scripts/sigmoid-baseline/fixtures.json`
+An early attempt to fill that gap from `scripts/analysis/fixtures.json`
 patch densities was **wrong and should not be repeated**: the white patch is
 flagged `valid: false` on two of the three frames (a window opening; sky above the
 roll `Dmax`), and a three-patch spread is not comparable with a `p95 − p5` over 15

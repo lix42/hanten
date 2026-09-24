@@ -567,10 +567,10 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::reconstruct;
+    use crate::algo::FilmRgbImage;
     use crate::pipeline::render_split::display_source;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
-    use crate::types::{FilmBase, PrintParams, Reconstruction};
+    use crate::types::PrintParams;
 
     fn close(actual: f32, expected: f32) {
         assert!((actual - expected).abs() < 2e-5, "{actual} != {expected}");
@@ -582,15 +582,9 @@ mod tests {
     // `pub(super)` reaches exactly `gain_map` and its descendants, which is the
     // narrowest visibility that works.
     pub(super) fn shared_from_film_rgb(rgb: &[f32]) -> SharedDisplaySource {
-        let scan = rgb.iter().map(|value| 1.0 - value).collect();
-        let image = LinearImage::new((rgb.len() / 3) as u32, 1, scan, None).unwrap();
-        let (film, _) = reconstruct(
-            &image,
-            &FilmBase::from([1.0; 3]),
-            &Reconstruction::Simple,
-            crate::types::DmaxInput::default(),
-        )
-        .unwrap();
+        let film = FilmRgbImage::fixture(
+            LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap(),
+        );
         display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap()
     }
 
@@ -605,11 +599,11 @@ mod tests {
 
     /// What the unbounded tone actually buys the gain map — and it is **not** liveness.
     ///
-    /// `GainMapMax > 1.0` was reachable before this operator existed: turning the
-    /// reconstruction's own shoulder off (`--sigmoid-shoulder 0`) reaches 4.866x, because
-    /// the shoulder is what removes above-white content during reconstruction. Measured on
-    /// `tests/fixtures/hdr-48bit.tif`: shipped default 1.000x, `--sigmoid-shoulder 0` alone
-    /// **4.866x**, that plus `--display-tone reinhard` **3.354x**.
+    /// `GainMapMax > 1.0` was reachable before this operator existed: turning the (since
+    /// retired) sigmoid's own shoulder off reached 4.866x, because that shoulder removed
+    /// above-white content during reconstruction. Measured on `tests/fixtures/hdr-48bit.tif`
+    /// at the time: the sigmoid default 1.000x, shoulder off **4.866x**, that plus
+    /// `--display-tone reinhard` **3.354x**.
     ///
     /// The *lower* number is the better one, which is why the criterion is a conjunction and
     /// not a threshold. The shipped shoulder plateaus, so past its knee every input maps to

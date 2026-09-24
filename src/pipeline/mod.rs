@@ -34,7 +34,7 @@ pub mod pixels;
 pub mod render_split;
 pub mod scene_correction;
 pub mod sdr;
-/// Test-only diagnostic harness for `algo/reference-anchored-sigmoid`. `cfg(test)` so it
+/// Test-only diagnostic harness from `algo/reference-anchored-sigmoid`. `cfg(test)` so it
 /// never reaches the shipped binary; its asset-dependent entries are `#[ignore]`d.
 #[cfg(test)]
 pub mod shadow_metrics;

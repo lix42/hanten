@@ -1746,8 +1746,13 @@ the design in `docs/design-update.md`:
 - [ ] [Retire the `shoulder` and `none`
   tones](tasks/nf-retire/display-tones.md) — both exist for reconstructions
   already bounded at white
-- [ ] [Retire the sigmoid and `simple`](tasks/nf-retire/sigmoid-and-simple.md)
-  — `simple` is the cheap fixture in a dozen unrelated test modules
+- [x] [Retire the sigmoid and `simple`](tasks/nf-retire/sigmoid-and-simple.md) — **done
+  2026-09-23.** The current chain's default moved to the exponential at the fixed
+  decode's configuration (`pipeline_version` 6, new fingerprint row); `Reconstruction` is
+  a struct, `"type": "density"` is accepted at its old value, and `simple`, the sigmoid,
+  their flags and the two `sigmoid-*` presets are migration errors. Test fixtures moved to
+  `FilmRgbImage::fixture`; sigmoid goldens and probes deleted. The default gain map is
+  live (1.88 log2 on the fixture), and a stated `Dmax` is now unread by default
 - [ ] [Retire the `Dmax` anchor machinery](tasks/nf-retire/dmax-machinery.md)
   — the reconstruction anchor and the leader-measured reference; frame-range
   measurement may return as an opt-in

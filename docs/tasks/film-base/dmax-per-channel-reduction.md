@@ -136,7 +136,7 @@ compressing.
   for the investigation — do not read sample pixels into an agent context.
 - Reproduce the fixture measurements with the committed harness:
   `cargo test --release --bin hanten shadow_metrics::measure_candidates -- --ignored --nocapture --test-threads=1`
-  (fixtures: `scripts/sigmoid-baseline/fixtures.json`).
+  (fixtures: `scripts/analysis/fixtures.json`).
 - Watch the confound: the leader is a *uniform field at an uncontrolled level*. If
   the three layers have different contrast, the per-channel ratio measured at an
   unknown exposure level is not the ratio at a *different* level — so a ratio that

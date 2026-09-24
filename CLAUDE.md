@@ -181,42 +181,46 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   reduction happens only at the final encode. HDR is a first-class concern.
 - **Density conversion and print rendering are separate sub-stages** — the core
   color-fidelity rule. Don't collapse them.
-- Algorithms are pluggable behind the tagged `reconstruction` recipe object:
-  `algo::reconstruct` resolves it into `simple` or `density` reconstruction
-  (density selecting a `sigmoid` (default since `pipeline_version` 2), an
-  `exponential`, or a `characteristic` curve — the last inverts a named film stock's
-  *published* per-channel curve instead of modelling it (`--film-stock`, ten digitized
-  stocks in `algo/film_stock`, sheets in `docs/datasheets/`) and therefore resolves
-  **no reference density and no anchor**, so `consumes_reference()` is `false` and
-  `anchor()` returns `Option` — a `calibration.dmax` stated beside it is carried and
-  warned about, never refused).
-  The old `Converter` trait and `AlgoParams` are gone.
+- The current chain's reconstruction is the `reconstruction` recipe object, a
+  **struct** (`density` + one tagged `curve`) since `nf-retire/sigmoid-and-simple`
+  retired `simple` and the sigmoid (`pipeline_version` 6): the curve is the
+  `exponential` (the default, at the fixed decode's configuration — contrast 2.0,
+  `mid-at-base-offset(0.62)` — read from `algo::fixed`'s constants, so both chains
+  render the same default) or a `characteristic` curve, which inverts a named film
+  stock's *published* per-channel curve instead of modelling it (`--film-stock`, ten
+  digitized stocks in `algo/film_stock`, sheets in `docs/datasheets/`) and therefore
+  resolves **no reference density and no anchor**, so `consumes_reference()` is `false`
+  and `anchor()` returns `Option` — a `calibration.dmax` stated beside it is carried and
+  warned about, never refused. The wire's old `"type": "density"` is accepted and dropped
+  (every earlier sidecar carries it); `"simple"`, `"sigmoid"`, their flags and the two
+  `sigmoid-*` presets are removed-value errors (`REMOVED_SIMPLE_RECONSTRUCTION`,
+  `REMOVED_SIGMOID_CURVE`). The old `Converter` trait and `AlgoParams` are gone.
   **`density.scale`'s default is per-curve, and constructing one by hand is a trap.**
   `DensityParams::default_scale_for` is the single definition: `[1, 0.84, 0.73]` for the
-  parametric curves (a scanner calibration — green and blue density rise ~19-37% faster
-  than red in a scan; re-calibrated from 31 neutral patches on 2026-09-16, and the
-  earlier `[1, 0.90, 0.86]` stood here long after the code moved) and `[1, 1, 1]` for `characteristic`, which already carries each
+  exponential (a scanner calibration — green and blue density rise ~19-37% faster
+  than red in a scan; re-calibrated from 31 neutral patches on 2026-09-16) and `[1, 1, 1]`
+  for `characteristic`, which already carries each
   stock's per-channel structure and would otherwise be corrected twice (measured: channel
   means move 0.039 → 0.185 off neutral). It is resolved in **three** places — the recipe's
   `Deserialize` (reading key *presence* off the raw JSON, since the field is a concrete
   `[f32; 3]`), the `--density-curve` merge arm (which must stay *before* the
   `--density-scale` arm so an explicit gain still wins), and the `roll` planner by hand
   (the overlay is merged onto the **serialized** shared config, so the key is always
-  present and deserialize-time resolution cannot fire). A `Reconstruction::Density`
-  built in code gets none of that: pair a characteristic curve with
+  present and deserialize-time resolution cannot fire). A `Reconstruction` built in code
+  gets none of that: pair a characteristic curve with
   `default_scale_for(curve.curve_type())`, not `DensityParams::default()`.
-  Also `--display-tone none` **in practice refuses a `characteristic` render of ordinary
-  picture content** — the curve hands the display scene-referred exposure (p99.99 = +3.64
-  stops over diffuse white) and `pipeline::sdr`'s per-pixel range check rejects the frame.
-  It is a *content* refusal, not a `validate` rule: there is no combination rule at all,
-  and dark enough content (`--print-exposure=-3` on the test fixture) renders at exit 0.
-  **`AnchorPlacement` (`reconstruction.curve.anchor`) is carried by both *parametric*
-  curves** (`characteristic` reads its placement off the film and carries none),
-  reached by one curve-neutral `--anchor-*` family (`--sigmoid-mid-fraction` /
-  `--sigmoid-white-at-d-max` remain as aliases). Two of its four rules —
-  `black-at-base`, `mid-at-base-offset` — are **reference-free**: they never read the
-  resolved `Dmax`, which is what keeps the leader anchor's roll-to-roll error out of
-  the render. The exponential's default stays `white-at-dmax`.
+  **No shipped reconstruction is bounded at white any more**, so `--display-tone none`
+  refuses ordinary picture content on the SDR presets — the per-pixel range check in
+  `pipeline::sdr` rejects the frame. It is a *content* refusal, not a `validate` rule:
+  dark enough content renders at exit 0, and tests that exercise `none` pull the fixture
+  down with `--print-exposure` (−2 to −4 stops on `hdr-48bit.tif`).
+  **`AnchorPlacement` (`reconstruction.curve.anchor`) is the exponential's**, reached by
+  the `--anchor-*` family. Two of its four rules — `black-at-base` and the default
+  `mid-at-base-offset` — are **reference-free**: they never read the resolved `Dmax`,
+  which is what keeps the leader anchor's roll-to-roll error out of the render. So a
+  **stated `calibration.dmax` is unread by default**; `unconsumed_dmax_warning` says so
+  (`render_reads_the_reference` decides it and `explicit_dmax_domain_warning`'s
+  mutually exclusive twin), until `nf-retire/dmax-machinery` removes the reference.
 - The **IR channel** (HDRi 64-bit input) is decoded and, by default, **preserved
   but not acted on**; carry it through, don't consume it. The one exception is
   **IR-assisted film-holder detection** (`ir-holder-detection`): on a scan whose
@@ -410,9 +414,9 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   (white-to-mid ratio floors at 6.17; pinning both ends needs 5.56), and the gain is
   exactly 1 at `W = 1` so `--display-tone-headroom 0` stays byte-identical to `none`.
   A corollary worth knowing before adding a knob: `print_exposure` is a scalar gain
-  *after* the curve, so it is incompatible with `--display-tone none` on any bounded
-  reconstruction — any positive value pushes the output past reference white and the
-  range check refuses the frame. Brightness there comes from the anchor. Its `headroom_stops` is display-referred (`W = 2^stops`),
+  *after* the curve, so under `--display-tone none` it is the lever that brings an
+  unbounded reconstruction back under reference white — lowering it is the remedy the
+  range-check errors name. Its `headroom_stops` is display-referred (`W = 2^stops`),
   and the stops→white-point conversion, the `[0, 24]` bound and its check live **once**
   in `types.rs` (`headroom_white_point` / `MAX_HEADROOM_STOPS` /
   `check_headroom_stops`) precisely so `cli::validate` and the renderer cannot bound
@@ -428,16 +432,16 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   `memory::preflight` is the stage-0 peak-memory gate — see the memory note below),
   `pipeline/shadow_metrics.rs` (test-only diagnostic harness: `#[cfg(test)]`, every
   **asset-dependent** entry `#[ignore]`d and skipping with a message when
-  `../nc-assets` is absent (its `mod tests` / `mod window_tests` unit tests of the
+  `../nc-assets` is absent (its `mod tests` unit tests of the
   harness's own helpers are synthetic and deliberately run normally), so
   `cargo test` is green without assets and CI never needs them; in-crate because the
   SDR/HDR renderers are not CLI-reachable and nc has no `[lib]` target; prints derived
   numbers only, never pixels. **`cargo build` does not compile it** — use
   `cargo test --no-run` or `clippy --all-targets`. **A probe that derives its variants from
-  a shipped function stops measuring when that function changes**: `hdr_gain_probe` computed
-  each variant as `shipped(v)/f(v)`, so when the shipped base became asymptotic all three
-  collapsed onto it and the evidence *this file* cites stopped reproducing — silently, since
-  a probe only prints. Build each variant from its parts, and assert the one mirroring the
+  a shipped function stops measuring when that function changes**: `hdr_gain_probe` (since
+  deleted with the sigmoid) computed each variant as `shipped(v)/f(v)`, so when the shipped
+  base became asymptotic all three collapsed onto it and the evidence this file cited stopped
+  reproducing — silently, since a probe only prints. Build each variant from its parts, and assert the one mirroring the
   shipped design equals the shipped function. **Its sibling: a probe that uses a shipped
   *default* as a stand-in for identity breaks the moment that default moves.** Taking
   `DensityParams::default()` off `[1, 1, 1]` desynchronised five `#[ignore]`d probes that
@@ -449,12 +453,11 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   green through it**, because `cargo test` never runs an `#[ignore]`d probe — so moving a
   default means re-running the whole ignored set by hand (`cargo test --release -- --ignored`,
   ~5 min with assets), and one of these printed plausible numbers at exit 0 rather than
-  failing, which is how a figure this file quotes stops reproducing unnoticed. **A matched-exposure probe may solve the
-  anchor as a scalar gain only when `shoulder = 0`** — `t − floor` is `contrast·d`, so the
-  anchor factors out of the toe but *not* the shoulder's fixed-ceiling soft-min (69-81% off
-  at the default 0.6); `algo::sigmoid`'s `anchor_is_a_pure_gain_only_without_the_shoulder`
-  pins both directions),
-  `algo/{mod,simple,density,sigmoid,fixed}.rs`, `algo/film_stock/`, `telemetry.rs`,
+  failing, which is how a figure this file quotes stops reproducing unnoticed. **Those
+  asset probes also read `../nc-assets/manifest.json` by the pre-rename roll names**
+  (`Ektar`, …), so on today's asset folder they panic before measuring anything — fix the
+  names before trusting a re-run),
+  `algo/{mod,density,fixed}.rs`, `algo/film_stock/`, `telemetry.rs`,
   `version.rs`
   (build/pipeline identity + `stable_hash`, the crate's only params-hash
   implementation — `telemetry::params_hash` delegates to it so the core report
@@ -554,39 +557,26 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
     form, so deriving from primaries would put nc's forward transform ~2e-6 from
     every decoder's inverse. A test pins row 0 as the *same literal* as
     `BT2020_LUMA` so the two cannot desynchronize.
-- **Known issue — the default gain map is inert, and HDR is deliberately
-  deprioritised.** Under the default sigmoid the HDR rendition peaks at *exactly*
-  the 203-nit reference white, so `gain-map-hdr` (the default) writes a
-  structurally valid gain-map JPEG whose `GainMapMax` decodes as **1.0x**. This is
-  a **rendering** property, not a container defect: the reference-anchored sigmoid
-  pins mid-grey at half the reference density and rolls its shoulder so diffuse
-  white lands *at* reference white, so nothing exceeds it by construction. The
-  exponential curve on the same frame reaches **4.87x** — it has no shoulder and its
-  default placement pins white at `Dmax`, so contrast pushes values past reference
-  white. Both curves now carry an `AnchorPlacement`; the **shoulder** is what gates
-  whether any headroom exists (`--sigmoid-shoulder 0` also reaches 4.87x), and among
-  shoulder-less configs the anchor sizes it (`--d-max 2.0` drops it to 1.003x).
-  **The film is not the limitation.** Negative stock carries wide latitude; the
-  *print rendering* decides whether output exceeds diffuse white, and today's
-  default declines to. So HDR is a rendering-intent option, not a correctness gap —
-  it is **not a blocker** for the sigmoid path (user decision 2026-08-10). The HDR
-  presets stay first-class and stay the default *precisely* to keep that door open.
-  `algo/reconstruction-render-curve-split` **settled that split affirmatively on
-  2026-09-02** — the default reconstruction should shed both knees, leaving the
-  display operator to carry the character — but **no default has moved**, so the
-  paragraph above still describes what nc ships. Activation is
-  `algo/split-default-migration`, which **stopped depending on
-  `film-base/dmax-per-channel-reduction` on 2026-09-10**: the per-channel term turned
-  out to be a *slope*, carried by `density.scale` on the parametric curves and by each
-  stock's own tables on `characteristic` (the proposed default) — not the anchor that
-  task investigates — and the grey leader those 17-83% ratios were read off is
-  disqualified as a per-channel source. What gates the migration now is neutrality
-  measured against a **known-neutral reference** (`analysis/calibration-frame-capture`,
-  filed 2026-09-12); `io/scanner-density-calibration` is the remedy if that measurement
-  fails, not the gate — it produces the *fit*, not the reference frames the gate needs.
-  (`film-base/dmax-per-channel-reduction` was itself **parked 2026-09-13** wanting the same
-  frames, so that shoot now gates four tasks.) Do not "fix" this by widening the container
-  or by re-deriving headroom in the gain-map stage.
+- **The default gain map is live since `pipeline_version` 6 — it was inert before.**
+  Under the sigmoid default (v2–v5) the HDR rendition peaked at *exactly* the 203-nit
+  reference white, so `gain-map-hdr` wrote a structurally valid gain-map JPEG whose
+  `GainMapMax` decoded as **1.0x**: the reference-anchored sigmoid rolled its shoulder so
+  diffuse white landed *at* reference white, and nothing exceeded it by construction. The
+  **shoulder** was what gated headroom (`--sigmoid-shoulder 0` reached 4.87x). The default
+  reconstruction now sheds both knees — the split `algo/reconstruction-render-curve-split`
+  settled on 2026-09-02, activated here as the fixed decode's configuration rather than
+  `algo/split-default-migration`'s `characteristic-generic` — so highlights pass above
+  reference white and the display operator carries the character: `GainMapMax` measures
+  **1.88 (log2, ≈3.7x)** on `tests/fixtures/hdr-48bit.tif` at defaults.
+  **The film was never the limitation.** Negative stock carries wide latitude; the *print
+  rendering* decides whether output exceeds diffuse white. The HDR presets stayed
+  first-class and the default *precisely* to keep that door open. What still gates a
+  release-quality default is neutrality measured against a **known-neutral reference**
+  (`analysis/calibration-frame-capture`, filed 2026-09-12; the gate is
+  `nf-calibration/neutrality-gate`); `io/scanner-density-calibration` is the remedy if
+  that measurement fails, not the gate. (`film-base/dmax-per-channel-reduction` was
+  **parked 2026-09-13** wanting the same frames.) Do not "fix" headroom by widening the
+  container or by re-deriving it in the gain-map stage.
 - **nc writes the AVIF container itself; libaom only makes the codestream.**
   `io/avif.rs` is the `hdr-pq`/`hdr-hlg` encoder. There is **no libavif
   dependency** — no published crate ships libavif ≥ 1.4.2 (`libavif-sys` is
@@ -1085,12 +1075,18 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   **Retiring a recipe key: accept its old default.** Every sidecar and `--dump-params`
   document serializes every key, so a removed key sits at its default in every recipe
   on disk; strip it at that value on load (`strip_old_default_output_selectors`) and
-  refuse only a non-default one, or no old recipe replays.
-  The tagged reconstruction schema (§9's `reconstruction.*` paths) is the
-  **shipped** schema: one tagged `reconstruction` object (`schema_version` 1)
-  selects `simple`/`density` and the density curve. The legacy `algorithm` +
-  top-level `density`/`sigmoid`/`simple` forms are **rejected with migration
-  errors** — never re-add them as recipe keys or aliases.
+  refuse only a non-default one, or no old recipe replays. **The exception is a value
+  whose replay would render differently**: the old default `"sigmoid"` curve is refused,
+  not stripped, since stripping it would silently render the new default. And when nc
+  stops *serializing* a tag (`reconstruction.type`), `nctool roll`'s `_deep_merge` reads
+  an old recipe still spelling it as a variant switch and replaces the whole default
+  object — normalize the tag before merging.
+  The reconstruction schema (§9's `reconstruction.*` paths) is the **shipped**
+  schema: one `reconstruction` object (`schema_version` 1) holding the density block
+  and one tagged curve; its retired `type` selector is accepted only at `"density"`,
+  the old default (the rule above). The legacy `algorithm` + top-level
+  `density`/`sigmoid`/`simple` forms are **rejected with migration errors** — never
+  re-add them as recipe keys or aliases.
 - **Fail loudly.** Map errors to the documented exit codes (design spec §11);
   surface clipping / unsupported-input as explicit errors or report warnings,
   never a quietly wrong image.
@@ -1121,7 +1117,9 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     chain from a rule that read only the new one, and false whenever the same line is
     independently invalid there (`--density-curve exponential --sigmoid-toe 0.3`, a
     non-finite knee). Word the escape hatch so it survives the branch you did not
-    look at.
+    look at. `reject_removed_flags` runs **before** `flow::reject_unavailable_flags`, so
+    a removed flag's remedy fires on both chains and must name what works under
+    `--new-flow` too.
     **Bound by reachable *values*, not by knobs — a sixth instance, and the first that
     is a genuine cycle.** Two individually-correct rules can close one: under
     `--new-flow`, `merge` sent `--density-curve exponential --sigmoid-toe 0` to "pass
@@ -1155,7 +1153,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     the `auto-base-redesign` task, `film_base::estimate` **guards the resolved
     base finite-and-positive on every channel at birth** (a region on the dark
     holder → zero channel now errors loudly there, not silently downstream). The
-    per-algo guards (`algo/simple.rs`, `algo/density.rs`) remain as
+    per-algo guard in `algo/density.rs` remains as
     defense-in-depth for any base reaching a converter directly. **There is no
     default source**: `cli::validate` refuses an unstated `calibration.film_base` for
     `convert`/`roll` (exit 2), and `film_base::estimate` therefore takes a
@@ -1310,7 +1308,7 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
 - **Comparing renders by eye? Use `tools/review-app/`, don't build another page.**
   Asked for a "visual review", a comparison page, or a before/after of two render
   configurations, reach for that app rather than emitting one-off HTML — the ad-hoc
-  pages under `scripts/sigmoid-baseline/` are what it exists to replace. **Produce
+  pages the retired `scripts/sigmoid-baseline/` built are what it exists to replace. **Produce
   the set with `PYTHONPATH=scripts/analysis .venv/bin/python -m nctool review
   generate <matrix.json>`** (the spelling matters — `nctool` is not installed,
   and the measuring half wants the venv), don't render it by hand: the matrix is data (`scripts/preset-review/presets.matrix.json` is the

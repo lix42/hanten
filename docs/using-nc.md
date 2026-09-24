@@ -8,14 +8,17 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *intent* — but this document is verified against the binary, so it wins on
 > *what the CLI currently accepts*.
 >
-> **Verified against:** `hanten 0.1.0`, `pipeline_version 5`, built at commit
-> `9b1abf7fe7f2` plus the retirement of the `legacy` and `custom` presets
-> (`nf-retire/legacy-custom`, §8). The staleness signal
-> is `pipeline_version`: if `hanten --version` reports a different one, treat this
-> document as suspect and re-verify.
+> **Verified against:** `hanten 0.1.0`, `pipeline_version 6`, built at commit
+> `010f5a6cb789` plus the retirement of the sigmoid curve and `simple` reconstruction
+> (`nf-retire/sigmoid-and-simple`). The staleness signal is `pipeline_version`: if
+> `hanten --version` reports a different one, treat this document as suspect and
+> re-verify.
 >
-> **Known issue:** under the default render the gain map is inert (no HDR
-> headroom) — see the callout in §8.
+> **Retired flags and presets** — `--reconstruction`, `--density-curve sigmoid`, the
+> `--sigmoid-*` flags, the `sigmoid-knees` / `sigmoid-flat` presets, and before them
+> `legacy` / `custom` — are documented in the reference build's own guide
+> (`git show origin/reserve:docs/using-nc.md`; `scripts/reference-snapshot/README.md`
+> builds that binary). Here they are refused with a message naming the replacement.
 
 ---
 
@@ -31,11 +34,9 @@ shape every workflow below:
 - **Every knob is a CLI flag *and* a recipe key**, and nothing is reachable only
   from code. Passing a flag that doesn't apply to your selected *curve* or *preset*
   is a **loud error**, never a no-op. The print controls reach every display
-  preset whatever the reconstruction, `simple` included: white balance, exposure and
-  the black point run in the shared display stage, and `--highlight-compress` places
-  the knee inside each display renderer. `--auto-wb` is the exception: it requires
-  `--reconstruction density` and is a usage error under `simple` — pass explicit
-  `--white-balance` gains there.
+  preset whatever the curve: white balance, exposure and the black point run in the
+  shared display stage, and `--highlight-compress` places the knee inside each
+  display renderer.
 - **Calibrate once, apply many.** The film base (`Dmin`) and the reference density
   (`Dmax`) are properties of the *roll* — film stock, development, scanner — not
   of an individual frame. You measure them once and reuse them, which is what
@@ -76,18 +77,15 @@ renders to *black* in the positive.
 
 They are not two ends of one scale; don't conflate them.
 
-> **`Dmax` is a reference density, not automatically "display white".** Which tone
-> the reference *places* is a separate control:
+> **`Dmax` is a reference density, and the default render does not read it.** Which
+> tone the reference *places* is a separate control, the anchor rule (§6). The default
+> rule pins **mid-grey 0.62 density above the film base** — it is placed against the
+> base, so a stated `Dmax` is carried in the recipe but reaches no pixel, and Hanten
+> warns that it went unread. Only `--anchor-white-at-reference` and
+> `--anchor-mid-fraction` read it.
 >
-> - Under the **sigmoid** curve (the default), `Dmax` and the placement are
->   deliberately split. The default anchor puts **mid-grey at 0.5·Dmax** and lets
->   display white float above *that placement* rather than being pinned. See §6.
-> - Under the **exponential** curve, `Dmax` maps to display white *by default* — that
->   curve's default anchor is `white-at-dmax`. The anchor flags apply there too, so it
->   is a default, not a property of the curve.
->
-> Some CLI help text still calls `--d-max` a "display-white anchor" — that wording
-> predates the split and is accurate only for the exponential curve.
+> Some CLI help text still calls `--d-max` a "display-white anchor" — that wording is
+> accurate only under `--anchor-white-at-reference`.
 
 ---
 
@@ -238,6 +236,11 @@ failure instead of a value your pipeline silently bakes in.
 
 ### Step 3 — (Optional) Measure `Dmax`
 
+**Skip this on the default render: it does not read `Dmax`.** The default anchor rule
+places mid-grey against the film base (§6), so a measured reference is carried but
+unused, and `convert` warns that it went unread. Measure one only if you choose a
+placement that reads it (`--anchor-mid-fraction` or `--anchor-white-at-reference`).
+
 The reference density defaults to a **fixed nominal** value (1.3 density),
 scene-independent and reused across the roll. You can instead measure it from a
 **fully-exposed** reference frame — the light-struck roll leader — though see the
@@ -263,10 +266,10 @@ base was supplied and the reference measured. It is already in recipe shape, so
 `hanten estimate … | jq '{calibration}' > roll-cal.json` writes a reusable roll
 calibration with nothing to edit.
 
-> **Reusing it on a parametric curve mis-anchors the render.** The measured value is
-> a *raw* density; `sigmoid` / `exponential` subtract the anchor from the corrected
-> density, whose default per-channel scale is not the identity. `convert` warns when
-> you combine the two — see the domain caveat in §6.
+> **Reusing it under a reading placement mis-anchors the render.** The measured value
+> is a *raw* density; the exponential subtracts the anchor from the corrected density,
+> whose default per-channel scale is not the identity. `convert` warns when you combine
+> the two — see the domain caveat in §6.
 
 > **When a fully-exposed leader is beyond the scanner's visible-light range.**
 > An error saying a channel's transmission is `0` or at/below the scan floor
@@ -289,9 +292,10 @@ parameter choices beside it:
 
 ```jsonc
 {
-  "calibration": { "film_base": { "explicit": [0.163, 0.080, 0.0377] },
-                   "dmax": { "explicit": 0.391 } },
-  "reconstruction": { "curve": { "type": "sigmoid" } }
+  "calibration": { "film_base": { "explicit": [0.163, 0.080, 0.0377] } },
+  "reconstruction": { "curve": { "type": "exponential", "gamma": 2.0,
+                                 "anchor": { "mid-at-base-offset": 0.62 } },
+                      "density": { "scale": [1.0, 0.84, 0.73] } }
 }
 ```
 
@@ -341,7 +345,6 @@ hanten params
 {
   "reconstruction": {
     "schema_version": 1,
-    "type": "density",
     "density": {
       "scale": [1.0, 0.84, 0.73],
       "offset": [0.0, 0.0, 0.0],
@@ -349,9 +352,8 @@ hanten params
       "highlight_balance": [0.0, 0.0, 0.0],
       "balance_range": "auto"
     },
-    "curve": { "type": "sigmoid", "contrast": 2.0686874, "toe": 0.2,
-               "shoulder": 0.6,
-               "anchor": { "mid-at-dmax-fraction": 0.5 } }
+    "curve": { "type": "exponential", "gamma": 2.0,
+               "anchor": { "mid-at-base-offset": 0.62 } }
   },
   "input":       { "transfer": "auto", "meaning": "auto",
                    "film_type": "unknown", "export_ir": null },
@@ -372,27 +374,34 @@ an unstated base.
 ### Partial recipes are fine
 
 Omit any section and serde defaults fill the gap. This minimal recipe produces a
-**byte-identical** result to the full flag form:
+**byte-identical** result to `--film-base 0.163,0.080,0.0377`:
 
 ```json
 {
-  "calibration": { "film_base": { "explicit": [0.163, 0.080, 0.0377] },
-                   "dmax": { "explicit": 0.391 } },
-  "reconstruction": { "curve": { "type": "sigmoid" } }
+  "calibration": { "film_base": { "explicit": [0.163, 0.080, 0.0377] } }
 }
 ```
+
+Naming a curve by `"type"` alone also resolves to the default, but warns that its
+`gamma` and `anchor` were left to this build — both defaults have moved before.
 
 > **Gotcha:** the tagged objects need their tag. If you include
 > `reconstruction.curve` at all, you **must** include its `"type"` — omitting it
 > fails with `reconstruction.curve is missing 'type'`. Omitting the whole `curve`
 > object is fine.
 
-The `curve` object above is the **sigmoid** shape. Selecting the exponential curve
-resolves a different, smaller set of keys:
+The `curve` object above is the default **exponential** shape. The `characteristic`
+curve carries only its stock:
 
 ```json
-{ "type": "exponential", "gamma": 2.0, "anchor": "white-at-dmax" }
+{ "type": "characteristic", "stock": "portra-400" }
 ```
+
+A recipe from an earlier build still carries `"type": "density"` inside
+`reconstruction`; that old value is accepted and dropped. `"type": "simple"` and a
+`"sigmoid"` curve are refused with a migration error — including every sidecar and
+`--dump-params` written while the sigmoid was the default, because replaying one on
+another curve would render a different picture. Render those with the reference build.
 
 The reference density is **not** a curve key: it is a measurement of the roll, so
 it lives at `calibration.dmax` (`"fixed"` | `"auto"` | `"none"` |
@@ -415,7 +424,8 @@ that owns it (`--export-ir` ⇒ `input.export_ir`, not top level).
 
 Removed legacy forms produce a **migration error** explaining the replacement, never
 a silent alias. Those are a top-level `algorithm` or sibling
-`density`/`sigmoid`/`simple` sections, and the two paths the roll measurements moved
+`density`/`sigmoid`/`simple` sections, the retired `simple` reconstruction and
+`sigmoid` curve, and the two paths the roll measurements moved
 from — a top-level `film_base` section, and `reconstruction.curve.dmax`:
 
 ```
@@ -433,7 +443,7 @@ not re-estimation. With a [`--preset`](#-preset--pick-a-look-by-name) the full c
 `defaults < --params recipe < --preset < flags`.
 
 ```sh
-hanten convert scan.tif -o out.jpg --params roll-recipe.json --d-max 0.5
+hanten convert scan.tif -o out.jpg --params roll-recipe.json --print-exposure 0.5
 #                                                          ^ overrides the recipe
 ```
 
@@ -445,7 +455,7 @@ needed:
 ```json
 {
   "meta":   { "nc_version": "0.1.0", "git_commit": "e4a56bb2540d",
-              "pipeline_version": 5, "target": "aarch64-apple-darwin",
+              "pipeline_version": 6, "target": "aarch64-apple-darwin",
               "params_hash": "18b95264170ab67a" },
   "params": { ...the exact recipe... }
 }
@@ -504,15 +514,15 @@ discarded a value the recipe had stated; restate it inside the override to keep 
 
 ### `--preset` — pick a look by name
 
-The five settings below (curve, per-channel gain, print exposure, display tone) only
+The four settings below (curve, per-channel gain, print exposure, display tone) only
 mean anything **together**: the exposure that lands one brightness runs from 1.59 to
-2.17 depending on the reconstruction, because the curves place mid-grey differently.
+1.91 across the presets, because they place mid-grey differently.
 `--preset` names a bundle so you don't have to carry four coupled numbers.
 
 Each bundle's exposure is solved so that **switching preset changes the look, not the
 brightness** — what you compare is then the reconstruction and the display tone. That
-calibration is done on `portra-400`; on another stock the parametric presets drift with
-how closely they model it, by up to about half a stop. Presets are not meant to render
+calibration is done on `portra-400`; on another stock the generic profile drifts with
+how closely it models that film. Presets are not meant to render
 alike, so a brightness difference between two of them on your film is part of what they
 offer, not something to correct.
 
@@ -521,15 +531,16 @@ offer, not something to correct.
 | `characteristic-generic` | `characteristic`, the averaged generic C-41 profile | `reinhard` | — |
 | `characteristic-stock` | `characteristic`, the roll's own published response | `reinhard` | `--film-stock` |
 | `characteristic-aim` | `characteristic-stock` + the aim-matched red density scale | `reinhard` | `--film-stock` |
-| `sigmoid-knees` | `sigmoid` with its toe and shoulder | `none` | — |
-| `sigmoid-flat` | `sigmoid` with neither knee | `reinhard` | — |
+
+The `sigmoid-knees` and `sigmoid-flat` presets retired with the sigmoid curve and are
+refused by name; the reference build still renders them.
 
 ```sh
 hanten convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --preset characteristic-generic
 hanten convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --preset characteristic-stock --film-stock portra-400
 ```
 
-All five render scene mid-grey at the same brightness, so what you are comparing
+All three render scene mid-grey at the same brightness, so what you are comparing
 between them is the reconstruction and the tone, not "one is brighter".
 
 **A preset is a set of starting values, and individual flags still win over it.** The
@@ -547,8 +558,8 @@ underneath one would have nothing left to set. The report separates the two dire
 
 **A preset never touches the roll's measured `calibration`.** A preset names a *look*,
 and writes no `calibration` key at all, so a measured film base and `Dmax` survive it
-untouched and never appear in `replaced`. Everything in `curve` — contrast, knees,
-anchor, stock — is the look, and the preset does replace it.
+untouched and never appear in `replaced`. Everything in `curve` — slope, anchor,
+stock — is the look, and the preset does replace it.
 
 **It is a command-line shorthand, not a recipe key.** `--dump-params` writes the
 *expanded* values, so a recipe replays identically on any build — including one whose
@@ -561,23 +572,16 @@ hanten convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 \
 hanten roll frames/ --out-dir out/ --params roll.json
 ```
 
-Six combinations are refused rather than quietly doing something else:
+Four combinations are refused rather than quietly doing something else:
 
-- **`--film-stock` beside a preset that has no stock** (`characteristic-generic`,
-  either sigmoid) — otherwise it would silently render a different bundle at the wrong
-  exposure. Use `characteristic-stock`.
+- **`--film-stock` beside `characteristic-generic`**, which has no stock — otherwise it
+  would silently render a different bundle at the wrong exposure. Use
+  `characteristic-stock`.
 - **`characteristic-stock` / `-aim` with `--film-stock generic-c41`** — that profile is
   an average of nine sheets, not one film's response. Use `characteristic-generic`.
 - **`characteristic-aim` with `portra-800` or `ultramax-800`** — their datasheets
   tabulate an aim delta their own curves contradict, so there is no correction to
   derive. Use `characteristic-stock` for those.
-- **`--print-exposure` with `sigmoid-knees`** — that bundle renders with
-  `--display-tone none`, which relies on the reconstruction staying inside the render's
-  ceiling, and `--print-exposure` is a gain applied *after* the curve, so any positive
-  value pushes it past reference white and the frame is refused. Brighten it with
-  `--anchor-mid-fraction` instead (the preset resolves `0.28`; **lower is brighter**).
-- **A preset with `--reconstruction simple`** (or a recipe resolving `simple`) — the
-  direct inversion has no curve stage, so there is nothing for a bundle to configure.
 - **A preset with `--output-preset film-master`** — see below.
 
 A preset never *sets* `--output-preset`, but the two are not freely combinable: a
@@ -593,44 +597,33 @@ hanten convert scan.tif -o master.tif --film-base 0.9,0.55,0.42 \
    --output-preset film-master --density-curve characteristic --film-stock ektar-100
 ```
 
-Two reconstruction types, selected with `--reconstruction`:
-
-| Type | What it does |
-|---|---|
-| `density` *(default)* | Density-domain inversion (Cineon / negadoctor lineage). What you want for colour negative. |
-| `simple` | Direct channel inversion `1 − scan/Dmin` — **a debugging baseline**, not a production path. No density correction, curve, or `Dmax`, so it isolates decode plus film base. |
-
-> **`simple` is not the B&W path**, despite what `--reconstruction`'s help text
-> says. B&W film is still a density medium with its own characteristic curve, so
-> B&W support (`algo/bw-support`) runs through `density` too — what it adds is a
-> *mono colour model* that pools R,G,B into one gray, not a different
-> reconstruction.
->
-> The difference between the two is which domain the inversion happens in.
-> `simple` is affine in **transmission** (`1 − t/Dmin`); `density` goes through
-> the log domain and, with neutral correction, reduces to a **power law**
-> (`positive ∝ (t/Dmin)^(−gamma)`). Film density is logarithmic in exposure — that
-> is what a characteristic curve *is* — so the power law is the inversion that
-> corresponds to something physical. `1 − t/Dmin` corresponds to none: it
-> saturates toward 1 as the negative gets denser, compressing highlights by
-> accident rather than by a tone decision.
-
-Under `density`, three curves, selected with `--density-curve`:
+Reconstruction is density-domain inversion (Cineon / negadoctor lineage), with two
+curves selected by `--density-curve`:
 
 | Curve | Knobs | Defaults |
 |---|---|---|
-| `sigmoid` *(default)* | `--sigmoid-contrast` (mid-density slope), `--sigmoid-toe` / `--sigmoid-shoulder` (knee widths in log10 density; `0` disables), plus the anchor flags below | `contrast 2.0686874`, `toe 0.2`, `shoulder 0.6` |
-| `exponential` | `--density-gamma` — the straight line's slope, plus the anchor flags below | `gamma 2.0`, `anchor white-at-dmax` |
+| `exponential` *(default)* | `--density-gamma` — the straight line's slope, plus the anchor flags below | `gamma 2.0`, `anchor {"mid-at-base-offset": 0.62}` |
 | `characteristic` | `--film-stock` — and nothing else | `generic-c41` |
 
-Each curve takes **different recipe keys**, and mixing them is rejected — a
-sigmoid-only key under an exponential curve fails with *"`toe` is a sigmoid-curve key,
-but the curve type is "exponential" (its knobs are `gamma`, `dmax` and `anchor`)"*.
-`anchor` is **not** one of those: it is shared by the two parametric curves (see below).
+The default is the fixed decode's configuration: the same render `--new-flow` decodes
+with (§11). Each curve takes **different recipe keys**, and mixing them is rejected —
+*"`gamma` is a parametric-curve key, but the curve type is "characteristic", which
+reads its slope and its mid-grey placement off the stock's published curve. Its only
+key is `stock`"*.
+
+`simple` reconstruction and the `sigmoid` curve retired. `--reconstruction`,
+`--density-curve sigmoid` and the `--sigmoid-*` flags are refused, each naming what
+replaces it:
+
+```
+usage: --sigmoid-toe was removed with the sigmoid curve: the exponential has no knees,
+       and highlight roll-off belongs to the display tone (`--display-tone`; not yet
+       available under `--new-flow`).
+```
 
 ### `characteristic` — invert the film's own published curve
 
-The other two curves *model* the film with a slope and an anchor you choose. This one
+The exponential *models* the film with a slope and an anchor. This one
 **reads** it: each dye layer's measured density-to-log-exposure relation, digitized from
 the manufacturer's characteristic curve, inverted per channel. Mid-grey lands at 0.18 by
 construction, so there is nothing to anchor and no contrast to pick.
@@ -692,16 +685,15 @@ applies a 3×3 before its curves; Hanten does not yet) and it is tracked by
 `io/scanner-density-calibration`. Ektar's own sheet also disagrees with itself by 11 %
 between its aim table and its curve, which is a second, smaller factor for that stock.
 
-**It needs a display tone curve.** Unlike the default sigmoid, this curve does not bound
+**It needs a display tone curve.** Like the exponential, this curve does not bound
 itself at the render's ceiling — it hands the display scene-referred exposure, and measured
 picture content reaches p99.99 **+3.64 stops** over diffuse white. So `--display-tone none`
 in practice *refuses* a render of ordinary picture content: the per-pixel range check
 rejects the frame (verified: "pixel 14 sits above reference white"), while `shoulder`
 (the default) and `reinhard` both render. It is not a rejected *combination* — nothing
 validates the pair — so content dark enough to stay inside the ceiling still renders
-(`--print-exposure=-3` on the test fixture exits 0). If you want the reconstruction to
-shed its knees and the display operator to carry the character, `reinhard` is the
-pairing — see §7.
+(`--print-exposure=-3` on the test fixture exits 0). `reinhard` is the pairing
+that lets the display operator carry the character — see §7.
 
 Two further limits. The published curves are for *typical* processing, not your
 roll, so a heavily pushed or badly stored film will not match. And densities outside the
@@ -719,62 +711,48 @@ rendering one frame under every profile moved it only between 5.75 % and 6.55 %.
 much larger fraction (the warning fires above 20 %) means the image itself is being
 extrapolated.
 
-### Anchoring — where a curve pins a tone
+### Anchoring — where the curve pins a tone
 
-Both curves separate **which density is the reference** (`dmax`) from **which tone
-gets pinned, and where** (`anchor`). This split is the substantive outcome of
+The exponential separates **which density is the reference** (`dmax`) from **which
+tone gets pinned, and where** (`anchor`). This split is the substantive outcome of
 [`reports/sigmoid-reference-baseline.md`](reports/sigmoid-reference-baseline.md),
 and it exists because the two knobs otherwise fight: raising contrast pivots the
 line *about the pinned point*, so pinning white necessarily drags everything below
 it down.
 
-The `--anchor-*` flags work on **either curve** — placement is independent of curve
-shape:
-
 | Anchor | Flag | Recipe (`reconstruction.curve.anchor`) |
 |---|---|---|
-| Mid-grey at a fraction of the reference *(sigmoid default, F = 0.5)* | `--anchor-mid-fraction F` | `{"mid-at-dmax-fraction": 0.5}` |
-| Display white *at* the reference *(exponential default)* | `--anchor-white-at-reference` | `"white-at-dmax"` |
+| Mid-grey at density D **above the base** *(default, D = 0.62)* | `--anchor-mid-offset D` | `{"mid-at-base-offset": 0.62}` |
 | The **film base** at output FLOOR | `--anchor-black-floor FLOOR` | `{"black-at-base": 0.005}` |
-| Mid-grey at density D **above the base** | `--anchor-mid-offset D` | `{"mid-at-base-offset": 0.5}` |
+| Mid-grey at a fraction of the reference | `--anchor-mid-fraction F` | `{"mid-at-dmax-fraction": 0.5}` |
+| Display white *at* the reference | `--anchor-white-at-reference` | `"white-at-dmax"` |
 
-Raising `F` renders the roll **darker**; lowering it renders **brighter**.
+A larger `D` or `F` renders the roll **darker**; a smaller one renders **brighter**.
+(`--sigmoid-mid-fraction` and `--sigmoid-white-at-d-max`, the old spellings of the last
+two, retired with the sigmoid and name these flags when refused.)
 
-`--sigmoid-mid-fraction` and `--sigmoid-white-at-d-max` are the original spellings of
-the first two and still work.
-
-**Switching curves resets the placement.** `--density-curve` (and a `roll` per-frame
-override that sets `curve.type`) leaves the roll's `calibration` untouched — it is a
-separate section — but takes the new
-curve's *default* anchor, because the right placement differs per curve — the two
-defaults in the table are deliberately different, and `white-at-dmax` on the sigmoid is
-the diagnostic described below. If your recipe pinned a non-default placement, that is a
-loud, `--strict`-promotable warning naming what was dropped; restate the rule with an
-`--anchor-*` flag (or a `curve.anchor` key beside the new `type`) to keep it.
-
-**The last two rules never read the reference**, which matters because the reference
+**The first two rules never read the reference**, which matters because the reference
 is measured from a fully-exposed leader — film saturation, not a diffuse white — and
 it varies between rolls of the same stock far more than the film base does. Under
 `--anchor-white-at-reference` that variation reaches the picture at full strength;
 under `--anchor-mid-fraction 0.5`, at half; under the two base-derived rules, not at
-all. `FLOOR` is linear light against the reference white, not an sRGB code value:
-`0.005` encodes to about 16/255.
+all — which is why the default is one of them. `FLOOR` is linear light against the
+reference white, not an sRGB code value: `0.005` encodes to about 16/255.
 
-`--anchor-white-at-reference` is retained as an explicit **diagnostic**, not a
-recommended setting on the sigmoid: at a photographic contrast it renders midtones
-roughly 2.5–3.6 stops dark. It is kept reachable so the original defect can be
-reproduced on demand, and it is the exponential's default because that curve's role
-is to be the predictable straight-line reference.
+**Switching to the characteristic curve drops the placement**, since that curve reads
+its placement off the film. The roll's `calibration` is untouched — it is a separate
+section. If your recipe pinned a non-default placement, that is a loud,
+`--strict`-promotable warning naming what was dropped.
 
-> **Provisional values.** The measurement behind these defaults filters *methods*
-> rather than tuning parameters, so the numbers are not final. The mid fraction
-> `F = 0.5` rests on a chart read that is not a true Status M density (measured
-> α ≈ 0.48–0.57 across three stocks). The per-stock datasheet anchor — the better form
-> on the evidence — now ships as the `characteristic` curve above, but it is **opt-in**:
-> the sigmoid's own `contrast`/`toe`/`shoulder`/`anchor` still describe what a bare
-> `hanten convert` does. What *has* moved is the per-channel density gain beside them
-> (`--density-scale`, `pipeline_version` 4 and again 5 — see below); the curve shape has not.
-> Expect further movement, with a `pipeline_version` bump when it happens.
+`--anchor-white-at-reference` is retained as an explicit **diagnostic**: at a
+photographic contrast it renders midtones roughly 2.5–3.6 stops dark. It is kept
+reachable so the original defect can be reproduced on demand.
+
+> **Provisional values.** `D = 0.62` is the generic C-41 profile's mid-grey aim above
+> the base, rounded and frozen; what the anchor should be *referenced to* is
+> `nf-calibration/anchor-comparison`'s to decide. The per-channel density gain beside it
+> (`--density-scale`) has moved twice (`pipeline_version` 4 and 5 — see below). Expect
+> further movement, with a `pipeline_version` bump when it happens.
 
 ### Density correction (before the curve)
 
@@ -799,9 +777,9 @@ that date set the default on its own. It replaced `1,0.90,0.86` at `pipeline_ver
 
 Two things to know before relying on it:
 
-- **The default is per-curve, and you do not have to manage it.** `sigmoid` and
-  `exponential` apply one scalar contrast to every channel, so they have no per-channel
-  film model of their own and take `1,0.84,0.73`. The `characteristic` curve carries each
+- **The default is per-curve, and you do not have to manage it.** The `exponential`
+  applies one scalar contrast to every channel, so it has no per-channel film model of
+  its own and takes `1,0.84,0.73`. The `characteristic` curve carries each
   stock's published per-channel structure already, so the same gain would correct it twice
   — on ten reference frames that moves the channel means *away* from neutral
   (`|G/R − 1| + |B/R − 1|` rises from 0.04 to 0.19) — and it therefore defaults to
@@ -837,13 +815,16 @@ short-circuits and no range is reported at all.
 ### The `Dmax` reference density — four mutually exclusive choices
 
 Where the reference density comes from. (What it *places* is the anchor, above.)
+**The default anchor reads none of these**: any value you state is carried and warned
+about, and only reaches the pixels under `--anchor-mid-fraction` or
+`--anchor-white-at-reference`.
 
 | Flag | Behavior |
 |---|---|
-| *(none)* / `--fixed-d-max` | Fixed nominal reference (1.3 density), reused across the roll. **Default.** Darker frames render darker — faithful relative exposure. |
+| *(none)* / `--fixed-d-max` | Fixed nominal reference (1.3 density), reused across the roll. **Default.** |
 | `--d-max D` | Explicit roll-fixed reference — your measured calibration. |
-| `--auto-d-max` | Measure per frame, over the [effective area](#the-measurement-region-the-effective-area) rather than the whole scan (so the film holder no longer owns the top percentile) — always, whatever the anchor placement, so the reported `dmax` has one meaning. **Per-frame exposure normalization**: brightens underexposed frames and breaks roll consistency. Grading, not conversion. Inert *on the pixels* under the two base-derived anchors, which never read the reference — so it is neither warned about nor rejected there, though the measurement is still taken and reported. |
-| `--no-d-max` | No reference. Scene-referred output (base → 1.0, detail above) **under the default `white-at-dmax` placement** — it resolves the reference to 0, so any other `--anchor-*` rule still derives an anchor from the slope (`--anchor-mid-fraction 0.5` there pins mid-grey 0.37 above the base and clips ~99.9% of the frame). **Exponential only**: the sigmoid needs an anchor and rejects it (exit 2), so pair it with `--density-curve exponential`. |
+| `--auto-d-max` | Measure per frame, over the [effective area](#the-measurement-region-the-effective-area) rather than the whole scan (so the film holder no longer owns the top percentile) — always, whatever the anchor placement, so the reported `dmax` has one meaning. **Per-frame exposure normalization**: brightens underexposed frames and breaks roll consistency. Grading, not conversion. Inert *on the pixels* under the two base-derived anchors (the default among them), which never read the reference — the measurement is still taken and reported, and the unread value is warned about (`--strict` promotes it) rather than rejected. |
+| `--no-d-max` | No reference. Scene-referred output (base → 1.0, detail above) **under `--anchor-white-at-reference`** — it resolves the reference to 0, so any other reference-reading rule still derives an anchor from the slope (`--anchor-mid-fraction 0.5` there pins mid-grey 0.37 above the base). |
 
 > **A caveat on measuring `Dmax` from a leader** (§4 step 3). The baseline report
 > found leader-measured `Dmax` untrustworthy on three independent counts:
@@ -854,15 +835,14 @@ Where the reference density comes from. (What it *places* is the anchor, above.)
 > Treat a measured `Dmax` as better than nothing, not as a calibration you can
 > trust across rolls.
 
-> **A measured `Dmax` is in a different density domain than the parametric curves
-> render in.** `estimate --d-max-region` reports the **raw** base-relative density
-> `D = -log10(t/base)`, but `sigmoid` / `exponential` subtract the anchor from the
-> *corrected* density `D' = scale·D + offset`, and their default `density.scale` is
-> the non-identity scanner calibration `1,0.84,0.73`. So a measured value reused as
-> `--d-max` is systematically high — about 14% at that gain, roughly 0.62 stop darker
-> on every frame at the default anchor placement. `hanten convert` warns
-> (`--strict`-promotable) whenever an explicit `--d-max` is combined with a
-> non-identity scale/offset or a non-neutral regional balance. Your options: keep the
+> **A measured `Dmax` is in a different density domain than the exponential renders
+> in.** `estimate --d-max-region` reports the **raw** base-relative density
+> `D = -log10(t/base)`, but the exponential subtracts the anchor from the *corrected*
+> density `D' = scale·D + offset`, and its default `density.scale` is the non-identity
+> scanner calibration `1,0.84,0.73`. So a measured value reused as `--d-max` under a
+> placement that reads it is systematically high — about 14% at that gain.
+> `hanten convert` warns (`--strict`-promotable) whenever an explicit `--d-max` it reads
+> is combined with a non-identity scale/offset or a non-neutral regional balance. Your options: keep the
 > default `--fixed-d-max` (a nominal already defined in the corrected domain), render
 > with `--density-scale 1,1,1` so the measured domain *is* the render domain, or scale
 > the measured number yourself. `--density-curve characteristic` is unaffected — its
@@ -870,31 +850,33 @@ Where the reference density comes from. (What it *places* is the anchor, above.)
 
 ### Nothing is silently ignored
 
-Cross-curve and cross-type flags are **usage errors**:
+Cross-curve flags are **usage errors**:
 
 ```sh
-hanten convert … --density-curve sigmoid --density-gamma 1.8
-# usage: --density-gamma sets the exponential curve's gamma, but the resolved
-#        curve is sigmoid — its mid-density slope is --sigmoid-contrast
-
-hanten convert … --reconstruction simple --density-gamma 1.8
-# usage: --density-gamma configures density reconstruction, but the resolved
-#        reconstruction is `simple`
+hanten convert … --density-curve characteristic --density-gamma 1.8
+# usage: --density-gamma (1.8) sets a curve slope, but the resolved curve is
+#        characteristic — its slope is the film's own, read off the stock's published
+#        response. Pass --density-curve exponential to set a slope by hand
 
 hanten convert … --film-stock ektar-100
 # usage: --film-stock ektar-100 selects a published film response, but the resolved
-#        curve is sigmoid — a stock has nothing to configure there.
+#        curve is exponential — a stock has nothing to configure there.
 #        Pass --density-curve characteristic
-
-hanten convert … --reconstruction simple --film-stock portra-400
-# usage: --film-stock configures density reconstruction, but the resolved
-#        reconstruction is `simple` (the direct inversion has no density
-#        correction and no curve); pass --reconstruction density
 ```
 
 **A `--*d-max` flag is not in that family.** It sets `calibration.dmax`, a roll
-measurement rather than a curve knob, so every reconstruction accepts one — and a
-look that will not read it (`characteristic`, `simple`) says so instead of failing:
+measurement rather than a curve knob, so every look accepts one — and a look that will
+not read it (the default placement, or `characteristic`) says so instead of failing:
+
+```sh
+hanten convert … --d-max 1.3
+# hanten: warning: calibration.dmax is set, but this conversion does not read it:
+#         the resolved anchor placement is base-derived (the default,
+#         `mid-at-base-offset`, or `black-at-base`) — it places the curve against the
+#         film base, so it consults no reference. … Pass `--anchor-mid-fraction` or
+#         `--anchor-white-at-reference` to anchor the render on it, …
+```
+
 
 ```sh
 hanten convert … --density-curve characteristic --d-max 1.3
@@ -942,19 +924,17 @@ Feed that back as an explicit `--white-balance` to freeze it across a roll.
 ### `--display-tone` — choosing the display tone curve
 
 Display presets normally apply a Hermite shoulder that rolls highlights off to
-display white, with `--highlight-compress` moving its knee earlier. The default
-sigmoid *already* places every tone below reference white, so that shoulder
-compresses highlights a second time. `--display-tone none` skips it:
+display white, with `--highlight-compress` moving its knee earlier. `--display-tone
+none` skips it — and since the default reconstruction is not bounded at white, on the
+SDR presets that means pulling the frame under reference white yourself:
 
 ```sh
 hanten convert scan.tif -o out.tiff --output-preset display-p3 \
-  --film-base … --display-tone none
+  --film-base … --display-tone none --print-exposure=-2.5
 ```
 
-Measured over ten reference frames on the shipped default reconstruction, this
-reduced the share of the frame at absolute white on **every** frame (mean 6.5% →
-4.9%) and improved highlight separation most on the frames where it was worst.
-Midtones and shadows are untouched — only values above the knee change.
+Midtones and shadows are untouched by the choice of tone — only values above the knee
+change.
 
 The report says which one ran, in a block every preset emits:
 `.output_render.display_tone` is `"shoulder"`, `"none"`, or an object like
@@ -988,9 +968,10 @@ of 6 stops, exactly as `--display-tone reinhard` does. Reports and `--dump-param
 always write the explicit object, so a round trip normalizes to one form.
 
 What it does *not* skip: gamut mapping and the transfer encode still run, so this
-is "no tone curve", not "raw pixels out". And it needs a reconstruction bounded by
-the render's own ceiling — the default sigmoid (`--sigmoid-shoulder` above 0) with
-neutral print gains is. **The two ceilings differ**: the SDR presets stop at
+is "no tone curve", not "raw pixels out". And it needs content inside the render's
+own ceiling — which no shipped reconstruction guarantees, so on the test fixture the
+default render is refused and `--print-exposure=-2.5` renders. **The two ceilings
+differ**: the SDR presets stop at
 reference white, the HDR ones at the 1000-nit mastering peak (≈4.93x reference
 white), so the same overshoot can be refused on `display-p3` and render cleanly on
 `hdr-pq` — that headroom is exactly what an HDR rendition exists to carry. If
@@ -998,19 +979,18 @@ anything exceeds its branch's ceiling, the render **fails** naming the pixel rat
 than clipping it quietly:
 
 ```
-error: SDR display rendering applied no display tone curve, but pixel 9 sits above
-reference white (luminance 1.1606276). …
+error: SDR display rendering applied no display tone curve, but pixel 16 sits above
+reference white (luminance 1.0762885), which this mode has no curve to roll off. … So:
+lower --print-exposure until the frame fits, or drop --display-tone none to roll the
+highlights off.
 ```
 
-**"Neutral print gains" is part of the requirement, not a footnote — and the check
-is late.** The shared print controls run *before* the display render, so a
-non-neutral one can lift samples past reference white even under a bounded sigmoid:
-`--print-exposure 0.3`, `--white-balance 1.3,1,1`, `--auto-wb percentile` and
-`--linear-range 0,0.5` each trip the error above on the same frame that renders
-cleanly with neutral gains. Nothing is rejected up front, because the real condition
-is a pixel value rather than a flag combination — so `hanten` renders the whole frame
-first and *then* exits 1, writing no file. On a large scan, prove `--display-tone
-none` out with neutral print controls before adding grading on top.
+**The check is late.** The shared print controls run *before* the display render, so
+white balance, `--auto-wb` and `--linear-range` can lift samples past reference white
+too. Nothing is rejected up front, because the real condition is a pixel value rather
+than a flag combination — so `hanten` renders the whole frame first and *then* exits 1,
+writing no file. On a large scan, prove `--display-tone none` out on a small frame
+before adding grading on top.
 
 Two rules follow from the knob being display-only: `film-master` rejects it (it
 applies no display tone curve at all), and passing a
@@ -1020,8 +1000,8 @@ and asks for nothing, so it is accepted.
 
 #### `reinhard` — a real operator for a reconstruction that overshoots
 
-`none` suits a reconstruction already bounded at the render's ceiling. `reinhard`
-is for the opposite case: it compresses *globally* against a stated white point, so
+`none` suits content already inside the render's ceiling. `reinhard` is for the
+opposite case: it compresses *globally* against a stated white point, so
 content several stops above diffuse white stays distinguishable instead of landing
 flat on the ceiling.
 
@@ -1032,9 +1012,9 @@ hanten convert scan.tif -o out.tiff --output-preset display-p3 \
 
 `--display-tone-headroom` is **display-referred**: how many stops above reference
 white content may sit and still be told apart, so `W = 2^stops`. `6` stops is a
-white point of 64 — the value measured to beat the shipped sigmoid on both clipped
-fraction *and* highlight separation on all seven reference frames, with brightness
-matched so the comparison is not just "one render is darker".
+white point of 64 — the value measured to beat the (since retired) sigmoid on both
+clipped fraction *and* highlight separation on all seven reference frames, with
+brightness matched so the comparison is not just "one render is darker".
 
 What to know:
 
@@ -1048,7 +1028,7 @@ What to know:
   in `.loss`, and `--strict` turns it into a refusal. Read `.loss.clipped_high`
   against `.loss.total_samples` on a representative frame and raise
   `--display-tone-headroom` until the fraction is what you intend; the default `6`
-  is sized for the shipped sigmoid, not for an arbitrary curve.
+  was sized against the retired sigmoid, not against your curve.
 - **`0` stops is the exact identity, on every preset.** `W = 1` makes the operator
   `v`, so `--display-tone reinhard --display-tone-headroom 0` renders
   **byte-identically** to `--display-tone none` — verified on `display-p3`,
@@ -1096,83 +1076,25 @@ for the same reason it is beside `none`: there is no knee to place.
 construction.** The examples above use `display-p3`, but the default renders *both*
 branches: skipping the shoulder makes the SDR and HDR renditions carry the same
 luminance, so their ratio is exactly 1.0 everywhere. Hanten still writes a valid
-gain-map JPEG and exits 0 without a warning. That is the §8 known issue in its
-sharpest form — the shipped default already decodes at 1.0x — so it costs nothing
-today, but if you are reaching for `--display-tone none` *because* you want HDR
-headroom, an SDR preset is the honest container until a reconstruction that exceeds
-reference white exists to fill it.
+gain-map JPEG and exits 0 without a warning. If you want HDR headroom, keep a tone
+curve — `shoulder` or `reinhard`.
 
 ---
 
 ## 8. Output presets
 
-> ### ⚠️ Known issue: the default gain map is inert
+> ### The default gain map carries headroom — since `pipeline_version` 6
 >
-> Under the **default sigmoid**, the HDR rendition peaks at *exactly* the 203-nit
-> reference white, so `gain-map-hdr` writes a structurally valid gain-map JPEG
-> whose `GainMapMax` decodes as **1.0x** — no HDR headroom. Viewers show it as a
-> normal SDR image.
->
-> This is a **rendering** property, not a container defect. The
-> reference-anchored sigmoid pins mid-grey at half the reference density and rolls
-> its shoulder so diffuse white lands *at* reference white, so by construction
-> nothing exceeds it. The `exponential` curve on the same frame reaches 4.87x,
-> because its default placement pins white *at* `Dmax` and has no shoulder, so
-> contrast pushes values past reference white. The film is not the limitation — negative stock has
-> wide latitude; the *print rendering* decides whether output exceeds diffuse
-> white, and today's default declines to.
->
-> So HDR is a rendering-intent choice rather than a correctness gap, and it is
-> deliberately deprioritised. **Changing container does not help**: `hdr-pq` and
-> `hdr-hlg` consume the same shared display source and the same HDR renderer, so
-> under the default curve they too report their brightest pixel at or below 203
-> nits with none of the 1000-nit headroom used.
->
-> **The shoulder gates whether there is any headroom; the anchor sizes it.** The
-> figures below are `GainMapMax`, measured 2026-08-28 on
-> `tests/fixtures/hdr-48bit.tif` with `--film-base 1,1,1` — a *unity* base, so the
-> reference-derived ones move on a real scan (see the caveat after the table).
->
-> The sigmoid's shoulder runs during *reconstruction* and removes every above-white
-> value before either display branch sees it, so the two renditions are identical
-> and their ratio is 1.0 by construction. Remove it and headroom appears — and only
-> then does the anchor decide how much content exceeds white:
->
-> | config (all `--output-preset gain-map-hdr`) | `GainMapMax` |
-> |---|---|
-> | sigmoid, `--sigmoid-shoulder 0.6` (default) or `0.2` | 1.000x |
-> | sigmoid, `--sigmoid-shoulder 0` | 4.866x |
-> | `exponential`, default `white-at-dmax` at the nominal `Dmax` 1.3 | 4.866x |
-> | `exponential --anchor-black-floor 0.005` | 4.866x |
-> | `exponential --anchor-mid-offset 0.5` | 4.866x |
-> | `exponential --d-max 1.5` | 3.738x |
-> | `exponential --d-max 2.0` | 1.003x |
->
-> The first three shoulder-less rows agree at 4.866x because all three **saturate
-> the ceiling**, not because the anchor is irrelevant — raising it walks the number
-> back, as the last two rows show.
->
-> **Caveat: a realistic film base moves the reference-derived rows.** Re-measured
-> with `--film-base 0.9,0.55,0.42`, the exponential's default reads **2.620x** and
-> `--d-max 1.5` reads **1.052x**; the two base-derived anchors and `--d-max 2.0` are
-> unchanged, as is every sigmoid row. That is the whole point of the base-derived
-> rules — they carry no reference term — but it means the unity-base numbers above
-> are a controlled comparison, not what your scan will report.
->
-> **And the 4.87x is not usable headroom.** It is 98.8% of the 4.926x ceiling, with
-> *zero* separation among everything above reference white — the speculars arrive as
-> one flat blob rather than as detail. So do not reach for the `exponential` curve
-> or `--sigmoid-shoulder 0` expecting good HDR; you get a live gain map carrying a
-> clipped highlight. A real fix is tracked in
-> [`output/display-tone-mapping`](tasks/output/display-tone-mapping.md).
->
-> **`--display-tone reinhard` (§7) is the fix, and it now reaches every display
-> preset** — the gain-map pair and the AVIF ones included, each with its own ceiling.
-> It is what holds content several stops over diffuse white instead of flattening it,
-> so a gain map built over it carries information rather than a plateau. What has
-> *not* moved is the **default**: the shipped `shoulder` still removes the above-white
-> content, so you have to ask for this tone (and a shoulder-less reconstruction) to
-> see it.
+> Until the sigmoid retired, the HDR rendition peaked at *exactly* the 203-nit
+> reference white — the sigmoid rolled its shoulder so diffuse white landed *at*
+> reference white — and `gain-map-hdr` decoded at **1.0x**. The default reconstruction
+> now has no shoulder, so highlights pass above reference white and the display tone
+> decides what to do with them. Measured on `tests/fixtures/hdr-48bit.tif` with
+> `--film-base 0.9,0.55,0.42`, `GainMapMax` (log2) is **1.88 (≈3.7x)** at defaults and
+> 0.93 under `--display-tone reinhard`, which compresses globally rather than holding
+> a flat plateau at the ceiling. The single-rendition HDR presets likewise reach past
+> 203 nits; a frame that does not (a dark one, or a low `--print-exposure`) gets the
+> `HDR output carries an SDR-range signal` warning.
 
 `--output-preset` (recipe key `output.preset`) is an **atomic** policy choice: every
 preset resolves container, bit depth, and colour profile itself, and no other knob
@@ -1546,12 +1468,11 @@ Clipping is reported, never silent:
 Every encoder counts this, not just the TIFF ones — the gain-map JPEG and the
 AVIF paths build the same report when they quantize.
 
-Under the **default sigmoid the curve alone cannot clip**: its shoulder approaches
-display white asymptotically and never reaches it. So a clip warning means
-something downstream pushed samples past 1.0 — most often a **print control**
-(`--print-exposure 12` clips 100% of a default-curve frame), or the `exponential`
-curve, which hits white exactly at `Dmax` and exceeds it above. Check the print
-controls before reaching for the curve or `Dmax`.
+The default curve is unbounded, but the default `shoulder` tone rolls everything off
+below display white, so **a default render does not clip**. A clip warning therefore
+means something pushed samples past the tone's reach — most often a **print control**
+(`--print-exposure 12` clips 100% of a frame) or `--display-tone reinhard` with too
+little headroom for the content. Check those before anything else.
 
 `--strict` promotes warnings **that reach the JSON report** to a hard error
 (exit 1), after the report is emitted — the right default for scripts and CI.
@@ -1670,13 +1591,13 @@ refused (exit 2) rather than accepted and ignored, and the message says whether 
 counterpart is missing **yet** or for good:
 
 ```console
-$ hanten convert … --new-flow --sigmoid-shoulder 0.4
-usage: --sigmoid-shoulder has no meaning under `--new-flow`: the new flow has no
-counterpart for it yet — one arrives with the fit-range stage: …
+$ hanten convert … --new-flow --shadow-balance 0.1,0,0
+usage: --shadow-balance has no meaning under `--new-flow`: the new flow has no
+counterpart for it yet — one arrives with the look stage's per-channel grade: …
 
-$ hanten convert … --new-flow --reconstruction simple
-usage: --reconstruction simple has no meaning under `--new-flow`: the new flow has
-no counterpart for it, and will not gain one: … Use `--reconstruction density`, …
+$ hanten convert … --new-flow --density-curve characteristic
+usage: --density-curve has no meaning under `--new-flow`: the new flow has no
+counterpart for it, and will not gain one: … Use `--density-curve exponential`, …
 ```
 
 A knob can be refused by the **flag** you typed, or — in a recipe — by the new
@@ -1691,7 +1612,7 @@ refused:
 |---|---|
 | `--d-max`, `--fixed-d-max`, `--auto-d-max`, `--no-d-max` | the anchor rule never reads a reference density, so nothing resolves one. A `Dmax` measured from a leader is film *saturation* — neither diffuse white nor the density this decode pins |
 | `--anchor-white-at-reference`, `--anchor-mid-fraction`, `--anchor-black-floor` | the decode has one anchor rule |
-| `--density-curve sigmoid`, `--density-curve characteristic`, `--sigmoid-contrast` | the curve is no longer a choice the decode offers |
+| `--density-curve characteristic` | the curve is no longer a choice the decode offers |
 | `--film-stock` | per-stock normalization becomes an optional **rendering** step |
 | `--shadow-balance`, `--highlight-balance` (non-zero) | a grade; it moves to the look stage's per-channel control |
 | `--preset` | a preset sets knobs on both sides of the decode/rendering boundary |
@@ -1701,10 +1622,10 @@ And these still work, because they *are* the fixed decode's own calibration and
 anchor: `--density-scale`, `--density-offset`, `--density-gamma` (the decode's
 contrast) and `--anchor-mid-offset`. So does `--density-curve exponential`, which
 names what the new flow already decodes with, and a zero `--shadow-balance` /
-`--highlight-balance` / `--sigmoid-toe` / `--sigmoid-shoulder` — an identity value
-asks for nothing this flow cannot do. (It is *not* spared in order to let one recipe
+`--highlight-balance` — an identity value asks for nothing this flow cannot do. (It is *not* spared in order to let one recipe
 be re-used on either chain: the new chain's recipe has no key for any of them, so
-there is no pinned value for a flag to clear.)
+there is no pinned value for a flag to clear.) The retired sigmoid and `simple`
+flags are refused before any of this, on either chain.
 
 **A recipe for the new chain is its own document.** It states
 `"recipe_version": 2` and has one section per stage; `hanten params --new-flow`
@@ -1880,19 +1801,19 @@ Your rectangle mixes rebate with image content. Check the coordinates against
 `hanten inspect`, or use `estimate --grid` on a genuinely unexposed frame.
 
 **Heavy clipping in the report**
-You are on the `exponential` curve — the default sigmoid cannot clip highlights. Display
-white is probably placed too low, pushing content past it. Raise `--d-max`, move the
-anchor up (`--anchor-black-floor` resolves a higher anchor than `--anchor-mid-offset`
-does), switch to the default sigmoid, or use `--no-d-max` with an f32 output for a
-scene-referred float result. Note a *low* anchor on the exponential is severe: measured
-on real frames it blows ~21% of the frame to flat white, because that curve has no
-shoulder to roll highlights off with.
+The default `shoulder` tone does not clip, so something pushed content past it: a
+positive `--print-exposure`, `--display-tone reinhard` with too little
+`--display-tone-headroom`, or a low anchor (`--anchor-mid-offset` smaller than the
+default, or a small `--d-max` under a placement that reads it). The exponential has no
+shoulder of its own, so a low anchor is severe. Lower the exposure, raise the headroom,
+move the anchor up, or use an f32 output (`hdr-linear-tiff`, `film-master`) for an
+unclamped result.
 
 **"reconstruction.curve is missing `type`"**
 A partial recipe that includes the `curve` object must include its tag. Add the
-type you actually intended — normally `"sigmoid"`, the default. Adding
-`"type": "exponential"` also makes it parse, but it silently switches you to the
-other curve and changes your pixels.
+type you actually intended — normally `"exponential"`, the default. Adding
+`"type": "characteristic"` also makes it parse, but it switches you to the other curve
+and changes your pixels.
 
 **`--strict` fails on every frame of an IR scan**
 Expected — see §9: an unconsumed IR plane warns, and `--strict` promotes it. The
