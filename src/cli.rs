@@ -905,12 +905,27 @@ fn removed_output_selector(key: &str) -> &'static RemovedOutputSelector {
         .expect("a retired output selector is named by its recipe key")
 }
 
+/// The remedy for a retired selector, on the chain the command line selects. The
+/// preset advice holds only without `--new-flow`, which refuses every preset flag: there,
+/// the one destination is already a Display P3 16-bit TIFF, so dropping the flag works.
+fn removed_output_remedy(s: &RemovedOutputSelector, new_flow: bool) -> String {
+    if new_flow {
+        "drop it — under `--new-flow` the one destination is a Display P3 16-bit TIFF, and \
+         there is no output policy to choose yet"
+            .to_string()
+    } else {
+        s.replacement.to_string()
+    }
+}
+
 /// The migration message for a retired selector passed as a **flag**.
-fn removed_output_flag_message(s: &RemovedOutputSelector) -> String {
+fn removed_output_flag_message(s: &RemovedOutputSelector, new_flow: bool) -> String {
     format!(
         "{} (recipe key `output.{}`) was removed together with the `legacy` and `custom` \
          output presets, the only ones that read it: {}. There is no alias.",
-        s.flag, s.key, s.replacement
+        s.flag,
+        s.key,
+        removed_output_remedy(s, new_flow)
     )
 }
 
@@ -5810,7 +5825,7 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
         if present {
             return Err(NcError::Usage(format!(
                 "{flag} was removed, and so was `--out-depth`, which replaced it: {}.",
-                removed_output_selector("depth").replacement
+                removed_output_remedy(removed_output_selector("depth"), args.new_flow)
             )));
         }
     }
@@ -5818,7 +5833,10 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
         .iter()
         .find(|s| (s.present)(&args.output_opts))
     {
-        return Err(NcError::Usage(removed_output_flag_message(s)));
+        return Err(NcError::Usage(removed_output_flag_message(
+            s,
+            args.new_flow,
+        )));
     }
     // The removed simple-reconstruction controls. Their replacement print controls
     // now *exist* (`print.white_balance` shipped with auto-WB; `print.linear_range`

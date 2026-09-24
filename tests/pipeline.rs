@@ -1735,7 +1735,7 @@ fn estimate_emits_reuse_ready_output_that_round_trips() {
         "-o",
         out_recipe.to_str().unwrap(),
         // The fragment states only a film base, so the preset comes from the flag
-        // (the default `gain-map-hdr` is atomic and would refuse `--out-depth`).
+        // (the default `gain-map-hdr` writes a JPEG, not the f32 TIFF compared here).
         "--output-preset",
         "film-master",
         "--params",
@@ -11560,9 +11560,9 @@ fn without_new_flow_nothing_moves() {
     let tmp = TempDir::new("new-flow-params");
     let dump_off = tmp.path("off.json");
     let dump_on = tmp.path("on.json");
-    // `--output-preset legacy` rides in `flow` rather than the shared list: the new
-    // flow refuses that flag (it has one fixed destination), while the legacy run needs
-    // it to accept a `.tif` path.
+    // `--output-preset display-p3` rides in `flow` rather than the shared list: the new
+    // flow refuses that flag (it has one fixed destination), while the current-chain run
+    // needs it to accept a `.tif` path.
     let args = |dump: &Path, out: &Path, flow: &[&str]| -> Vec<String> {
         let mut v: Vec<String> = vec![
             "convert".into(),
@@ -12925,6 +12925,10 @@ fn new_flow_refuses_the_output_policy_flags() {
         assert!(err.contains(extra[0]), "{extra:?} must be named: {err}");
         if retired {
             assert!(err.contains("was removed"), "{extra:?}: {err}");
+            // The remedy must work on this chain: every preset flag is refused under
+            // `--new-flow`, so advice to pick one would only trade errors.
+            assert!(err.contains("drop it"), "{extra:?}: {err}");
+            assert!(!err.contains("`display-p3` preset"), "{extra:?}: {err}");
         } else {
             assert!(
                 err.contains("nf-destinations/preset-set"),

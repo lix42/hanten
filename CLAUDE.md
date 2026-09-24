@@ -728,6 +728,8 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   calibration), move the binary aside for the Python gate rather than reading it as a regression.
 - **The shell is zsh: an unquoted `$extra` holding `--flag value` is passed as ONE argument.** Use
   an array (`args=(--flag value); cmd "${args[@]}"`) in scripted loops.
+  And a bare word starting with `=` (`echo =====`) is zsh `=cmd` expansion, failing with
+  `== not found` — quote separators in scripted output.
 - **`cargo test --lib` fails here** — `nc` is a binary crate with no `[lib]` target, so it
   errors with "no library targets found". Use `cargo test --bin hanten <filter>` to run only
   the in-`src` unit tests; a bare `cargo test <filter>` also runs `tests/pipeline.rs`.
@@ -1080,6 +1082,10 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   mutually-exclusive knobs as **one enum field** (e.g. `FilmBaseSource`,
   `InputColor`), not parallel `Option`/bool fields: independent fields can encode
   illegal combinations and silently break the flags-win merge.
+  **Retiring a recipe key: accept its old default.** Every sidecar and `--dump-params`
+  document serializes every key, so a removed key sits at its default in every recipe
+  on disk; strip it at that value on load (`strip_old_default_output_selectors`) and
+  refuse only a non-default one, or no old recipe replays.
   The tagged reconstruction schema (§9's `reconstruction.*` paths) is the
   **shipped** schema: one tagged `reconstruction` object (`schema_version` 1)
   selects `simple`/`density` and the density curve. The legacy `algorithm` +

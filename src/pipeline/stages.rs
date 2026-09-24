@@ -1046,11 +1046,15 @@ mod midtone_placement {
 /// acceptance gate: the split is a structural refactor, the default pixels are the
 /// contract.
 ///
-/// **Two of the twelve are not reference captures**, and the claim has to be scoped
-/// or it stops being true. `golden_sigmoid_at_the_reference_anchor_is_numerically_exact`
-/// was recaptured on 2026-08-03 when the sigmoid's own defaults deliberately moved, and
+/// **Four of the ten are not reference captures**, and the claim has to be scoped or it
+/// stops being true. `golden_sigmoid_at_the_reference_anchor_is_numerically_exact` was
+/// recaptured on 2026-08-03 when the sigmoid's own defaults deliberately moved;
 /// `golden_new_default_is_bit_identical` was captured fresh from this build on
-/// 2026-08-08 for the new default render. Both honestly pin "this has not drifted
+/// 2026-08-08 for the new default render; and
+/// `golden_density_exponential_customized_is_bit_identical` and
+/// `golden_sigmoid_customized_is_numerically_exact` were recaptured on 2026-09-23
+/// without the retired print stage. (The characteristic golden is pinned by its own
+/// correctly-rounded derivation, not by a capture.) All four honestly pin "this has not drifted
 /// since it was set", which is strictly weaker than "matches the reference
 /// implementation" — no golden can claim the stronger thing about a value that was
 /// deliberately changed. Each says so at its own call site; read it before treating

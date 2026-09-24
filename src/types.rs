@@ -2633,8 +2633,7 @@ impl OutputParams {
     /// value becomes a depth, so encode, IR export, and color can't disagree:
     ///
     /// - `film-master` is **always** [`OutDepth::F32`] — the master is unclamped
-    ///   float linear ACEScg by definition, not by an `output.depth` value (which
-    ///   must stay at its default under the preset).
+    ///   float linear ACEScg by definition.
     /// - the gain-map presets resolve [`OutDepth::U16`] only for optional IR TIFF
     ///   export; their primary image is fixed 8-bit JPEG.
     /// - `hdr-pq` / `hdr-hlg` likewise resolve [`OutDepth::U16`] only for the IR

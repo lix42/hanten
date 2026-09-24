@@ -88,6 +88,11 @@ Landed so far: **`legacy-custom`** (2026-09-23).
   depends on row order. Also: `convert_is_deterministic` runs `display-p3` again (the
   one TIFF path through the parallel lcms2 transform), and the drift gate's
   `white_balance` line is documented as echo-only — it covers no print arithmetic.
+- 2026-09-23: **ship review** (diff-reviewer + Codex; Codex found nothing). The
+  retired-flag errors told a `--new-flow` user to pick a preset, which that chain
+  refuses; the remedy is now flow-aware ("drop it"), and the new-flow test asserts the
+  preset advice is absent. The golden module's "two of twelve are not reference
+  captures" became four of ten.
 
 ## display-tones
 
