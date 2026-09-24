@@ -27,16 +27,22 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::pipeline::pixels;
-use crate::pipeline::white_balance::{self, Estimator};
 use crate::pipeline::working_image::WorkingBuffer;
 use crate::pipeline::working_space::AcesCgImage;
 use crate::types::{NcError, Result};
 
-/// Where the white-balance gains come from: one mutually-exclusive choice, so
-/// precedence is by **source** — an explicit `--white-balance 1,1,1` over a recipe's
-/// auto mode means neutral gains, not a re-estimate.
+/// The white-balance gains, always **stated**: a roll's are measured once by
+/// `hanten measure-roll` (`pipeline::roll_white`) and frozen here, so every frame of
+/// the roll — and a lone `convert` of one — applies the same gains.
 ///
-/// Serialized as `{ "explicit": [r, g, b] }`, `"gray-world"` or `"percentile"`.
+/// There is no per-frame estimate. `gray-world` and `percentile` retired with
+/// `nf-scene-correction/roll-white-balance`: a frame's own statistics read a sunset
+/// as the cast and remove it before highlight desaturation can protect it
+/// (`docs/spike/desaturation-band.md`). `crate::recipe::check_body` refuses them by
+/// name, and `crate::flow` refuses `--auto-wb`.
+///
+/// Serialized as `{ "explicit": [r, g, b] }` — the tagged form is kept, one member or
+/// not, because it is the recipe contract every new-chain recipe already spells.
 /// Unlike the current chain's `print.white_balance` it accepts no bare `[r, g, b]`
 /// array: that form is a compatibility alias for recipes older than the tagged one,
 /// and this recipe has none.
@@ -45,28 +51,11 @@ use crate::types::{NcError, Result};
 pub enum WhiteBalance {
     /// Stated per-channel gains. The default `[1, 1, 1]` is neutral.
     Explicit([f32; 3]),
-    /// Estimated per frame over the measurement region: equalize the trimmed
-    /// channel means.
-    GrayWorld,
-    /// Estimated per frame over the measurement region: equalize the channels at a
-    /// near-white percentile.
-    Percentile,
 }
 
 impl Default for WhiteBalance {
     fn default() -> Self {
         WhiteBalance::Explicit([1.0, 1.0, 1.0])
-    }
-}
-
-impl WhiteBalance {
-    /// The estimator an auto mode runs, or `None` for stated gains.
-    pub fn estimator(self) -> Option<Estimator> {
-        match self {
-            WhiteBalance::Explicit(_) => None,
-            WhiteBalance::GrayWorld => Some(Estimator::GrayWorld),
-            WhiteBalance::Percentile => Some(Estimator::Percentile),
-        }
     }
 }
 
@@ -103,34 +92,27 @@ pub enum SceneFault {
     /// The exposure is not finite, or its gain `2^exposure` is not a normal `f32`.
     Exposure(f32),
     /// A gain times the exposure gain is not a positive normal `f32` — a channel
-    /// would render as `0`, `inf` or inverted. Reached from `check` only when each is
-    /// usable alone; from `apply`, also by a stated gain `check` never saw.
+    /// would render as `0`, `inf` or inverted, though each is usable alone.
     Combined { channel: usize, gain: f32 },
 }
 
 impl SceneCorrectionParams {
-    /// The value rules on these parameters as stated. Auto-estimated gains are
-    /// checked again when [`apply`] resolves them, where the same rule is a runtime
-    /// fault rather than a usage one.
+    /// The value rules on these parameters, which [`apply`] checks again: a
+    /// programmatic caller can reach it without `check`.
     pub fn check(&self) -> std::result::Result<(), SceneFault> {
-        if let WhiteBalance::Explicit(gains) = self.white_balance {
-            for (channel, &value) in gains.iter().enumerate() {
-                if !value.is_finite() || value <= 0.0 {
-                    return Err(SceneFault::WhiteBalance { channel, value });
-                }
-            }
-        }
-        let exposure_gain = exposure_gain(self.exposure)?;
-        if let WhiteBalance::Explicit(gains) = self.white_balance {
-            combined_gains(gains, exposure_gain)?;
-        }
-        Ok(())
+        self.gains().map(|_| ())
     }
 
-    /// Whether this stage measures anything over the frame's measurement region —
-    /// which makes an empty region fatal for the run rather than a warning.
-    pub fn measures_over_region(&self) -> bool {
-        self.white_balance.estimator().is_some()
+    /// The one per-channel multiplier the stage applies — white balance times
+    /// `2^exposure` — or the first rule it breaks.
+    fn gains(&self) -> std::result::Result<[f32; 3], SceneFault> {
+        let WhiteBalance::Explicit(gains) = self.white_balance;
+        for (channel, &value) in gains.iter().enumerate() {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(SceneFault::WhiteBalance { channel, value });
+            }
+        }
+        combined_gains(gains, exposure_gain(self.exposure)?)
     }
 }
 
@@ -163,28 +145,11 @@ fn combined_gains(
     Ok(gains)
 }
 
-/// Where the applied white-balance gains came from.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-#[serde(tag = "provenance", rename_all = "kebab-case")]
-pub enum WhiteBalanceSource {
-    /// Stated by the recipe or `--white-balance`.
-    Stated,
-    /// Estimated from this frame, over the measurement region `[x, y, w, h]`.
-    Estimated {
-        estimator: &'static str,
-        region: [u32; 4],
-    },
-}
-
-/// What scene correction applied to one frame: the values **as resolved**, which is
-/// what the report states and what a user copies into a recipe to reproduce an
-/// estimated frame exactly (`--white-balance` with these gains).
+/// What scene correction applied to one frame, for the report.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct SceneCorrection {
-    /// The white-balance gains applied, green-anchored when estimated.
+    /// The white-balance gains applied.
     pub white_balance: [f32; 3],
-    #[serde(flatten)]
-    pub source: WhiteBalanceSource,
     /// The exposure applied, in stops.
     pub exposure: f32,
 }
@@ -192,9 +157,9 @@ pub struct SceneCorrection {
 impl SceneCorrection {
     /// What the stage did, for the report's stage list. Derived from the resolved
     /// **gains**, by the same test [`apply`] uses to decide whether to touch a pixel,
-    /// so the report never names an operation that moved none: an estimate landing
-    /// exactly on neutral, an exposure too small to change `2^EV` from `1.0`, and a
-    /// white balance the exposure cancels all read as `"identity"`.
+    /// so the report never names an operation that moved none: an exposure too small
+    /// to change `2^EV` from `1.0`, and a white balance the exposure cancels, both
+    /// read as `"identity"`.
     pub fn applied(&self) -> &'static str {
         let exposure_gain = self.exposure.exp2();
         if self.white_balance.map(|wb| wb * exposure_gain) == [1.0, 1.0, 1.0] {
@@ -233,13 +198,7 @@ impl fmt::Debug for SceneReferredImage {
     }
 }
 
-/// Resolve and apply scene correction: `v_c ← v_c · wb_c · 2^exposure` per channel.
-///
-/// An auto white balance is estimated over `measure_region` (`[x, y, w, h]`, the
-/// frame's effective area), sampled from this stage's own input — so the estimate
-/// sees the same pixels the gains then multiply. `measure_region` is read only by
-/// an auto mode, and an auto mode without one is refused: the orchestrator refuses
-/// an empty region before the render, so reaching here without one is a wiring bug.
+/// Apply scene correction: `v_c ← v_c · wb_c · 2^exposure` per channel.
 ///
 /// The identity configuration returns the buffer untouched, bit for bit. Otherwise
 /// nothing is clamped (clamping happens only at the encoder) and a non-finite sample
@@ -247,50 +206,16 @@ impl fmt::Debug for SceneReferredImage {
 pub fn apply(
     image: AcesCgImage,
     params: &SceneCorrectionParams,
-    measure_region: Option<[u32; 4]>,
 ) -> Result<(SceneReferredImage, SceneCorrection)> {
-    let (white_balance, source) = match params.white_balance {
-        WhiteBalance::Explicit(gains) => (gains, WhiteBalanceSource::Stated),
-        auto => {
-            let estimator = auto.estimator().expect("an auto mode has an estimator");
-            let region = measure_region.ok_or_else(|| {
-                NcError::Other(format!(
-                    "auto white balance ({}) has no measurement region to estimate over",
-                    estimator.name()
-                ))
-            })?;
-            let sampled = white_balance::sample_region(image.rgb(), image.width(), region)?;
-            let gains = white_balance::estimate_gains(&sampled, estimator)?;
-            let source = WhiteBalanceSource::Estimated {
-                estimator: estimator.name(),
-                region,
-            };
-            (gains, source)
-        }
-    };
-    // `SceneCorrectionParams::check` has already refused every stated value this can
-    // fault on, so what reaches here is an *estimated* gain meeting the exposure.
-    let gains = exposure_gain(params.exposure)
-        .and_then(|e| combined_gains(white_balance, e))
-        .map_err(|fault| {
-            let why = match fault {
-                SceneFault::Combined { channel, gain } => format!(
-                    "white-balance gain {} on channel {channel} times the exposure \
-                     gain is {gain:e}, which is not a positive normal f32 — every \
-                     sample of that channel would render as 0, inf or inverted",
-                    white_balance[channel]
-                ),
-                SceneFault::Exposure(_) | SceneFault::WhiteBalance { .. } => {
-                    "the exposure gain 2^EV is not a normal f32".into()
-                }
-            };
-            NcError::Other(format!(
-                "scene correction cannot apply exposure {} EV to white balance \
-                 {white_balance:?}: {why}. Move the exposure (`--exposure` / \
-                 `scene_correction.exposure`) toward 0",
-                params.exposure
-            ))
-        })?;
+    let WhiteBalance::Explicit(white_balance) = params.white_balance;
+    let gains = params.gains().map_err(|_| {
+        NcError::Other(format!(
+            "scene correction cannot apply white balance {white_balance:?} at exposure {} \
+             EV: a gain would render as 0, inf or inverted. `SceneCorrectionParams::check` \
+             refuses these before a render, so reaching here is a wiring fault",
+            params.exposure
+        ))
+    })?;
 
     let mut buffer = WorkingBuffer::from_aces(image);
     if gains != [1.0, 1.0, 1.0] {
@@ -302,7 +227,6 @@ pub fn apply(
     }
     let resolved = SceneCorrection {
         white_balance,
-        source,
         exposure: params.exposure,
     };
     Ok((SceneReferredImage(buffer), resolved))
@@ -329,9 +253,8 @@ mod tests {
     fn run(
         image: AcesCgImage,
         params: &SceneCorrectionParams,
-        region: Option<[u32; 4]>,
     ) -> Result<(Vec<f32>, SceneCorrection)> {
-        let (out, resolved) = apply(image, params, region)?;
+        let (out, resolved) = apply(image, params)?;
         Ok((out.into_buffer().into_linear().rgb, resolved))
     }
 
@@ -350,10 +273,9 @@ mod tests {
         ];
         let aces = aces_from(3, 1, &rgb);
         let before = bits(aces.rgb());
-        let (out, resolved) = run(aces, &SceneCorrectionParams::default(), None).unwrap();
+        let (out, resolved) = run(aces, &SceneCorrectionParams::default()).unwrap();
         assert_eq!(bits(&out), before);
         assert_eq!(resolved.applied(), "identity");
-        assert_eq!(resolved.source, WhiteBalanceSource::Stated);
     }
 
     #[test]
@@ -364,7 +286,7 @@ mod tests {
             white_balance: WhiteBalance::Explicit([1.25, 1.0, 0.5]),
             exposure: 1.0,
         };
-        let (out, resolved) = run(aces, &params, None).unwrap();
+        let (out, resolved) = run(aces, &params).unwrap();
         // One multiply per sample by the folded gain `wb_c · 2^1`, exactly.
         let gains = [2.5f32, 2.0, 1.0];
         for (i, (&o, &v)) in out.iter().zip(&input).enumerate() {
@@ -399,73 +321,11 @@ mod tests {
             };
             let aces = aces_from(1, 1, &[0.3, 0.3, 0.3]);
             let before = bits(aces.rgb());
-            let (out, resolved) = run(aces, &params, None).unwrap();
+            let (out, resolved) = run(aces, &params).unwrap();
             assert_eq!(resolved.applied(), want, "{params:?}");
             // The label and the pixels agree: "identity" exactly when nothing moved.
             assert_eq!(want == "identity", bits(&out) == before, "{params:?}");
         }
-    }
-
-    #[test]
-    fn auto_white_balance_estimates_over_the_region_and_reports_its_provenance() {
-        // Left column neutral grey, right column a strong cast. A region covering only
-        // the left column must estimate neutral; the whole frame must not — which is
-        // what proves the region, and not the frame, was sampled.
-        let (w, h) = (2u32, 2u32);
-        let rgb = [
-            0.3, 0.3, 0.3, 0.9, 0.3, 0.1, //
-            0.3, 0.3, 0.3, 0.9, 0.3, 0.1,
-        ];
-        for mode in [WhiteBalance::GrayWorld, WhiteBalance::Percentile] {
-            let params = SceneCorrectionParams {
-                white_balance: mode,
-                exposure: 0.0,
-            };
-            let (_, left) = run(aces_from(w, h, &rgb), &params, Some([0, 0, 1, 2])).unwrap();
-            let (_, whole) = run(aces_from(w, h, &rgb), &params, Some([0, 0, 2, 2])).unwrap();
-            for c in 0..3 {
-                assert!(
-                    (left.white_balance[c] - 1.0).abs() < 1e-5,
-                    "{mode:?}: a neutral region estimates neutral, got {:?}",
-                    left.white_balance
-                );
-            }
-            assert_ne!(whole.white_balance, left.white_balance, "{mode:?}");
-            assert_eq!(
-                left.source,
-                WhiteBalanceSource::Estimated {
-                    estimator: mode.estimator().unwrap().name(),
-                    region: [0, 0, 1, 2],
-                }
-            );
-        }
-    }
-
-    #[test]
-    fn estimated_gains_are_the_ones_applied() {
-        // Reusing the reported gains as stated ones reproduces the render bit for
-        // bit — the "measure once, reuse" contract.
-        let rgb = [0.2, 0.3, 0.5, 0.4, 0.5, 0.7, 0.1, 0.2, 0.2, 0.6, 0.6, 0.9];
-        let auto = SceneCorrectionParams {
-            white_balance: WhiteBalance::GrayWorld,
-            exposure: 0.5,
-        };
-        let (estimated, resolved) = run(aces_from(2, 2, &rgb), &auto, Some([0, 0, 2, 2])).unwrap();
-        let stated = SceneCorrectionParams {
-            white_balance: WhiteBalance::Explicit(resolved.white_balance),
-            exposure: 0.5,
-        };
-        let (reused, _) = run(aces_from(2, 2, &rgb), &stated, None).unwrap();
-        assert_eq!(bits(&estimated), bits(&reused));
-    }
-
-    #[test]
-    fn auto_white_balance_without_a_region_is_refused() {
-        let params = SceneCorrectionParams {
-            white_balance: WhiteBalance::Percentile,
-            exposure: 0.0,
-        };
-        assert!(run(aces_from(1, 1, &[0.3, 0.3, 0.3]), &params, None).is_err());
     }
 
     #[test]
@@ -487,23 +347,11 @@ mod tests {
             };
             assert!(params.check().is_err(), "check must refuse {params:?}");
             assert!(
-                run(aces_from(1, 1, &[0.3, 0.3, 0.3]), &params, None).is_err(),
+                run(aces_from(1, 1, &[0.3, 0.3, 0.3]), &params).is_err(),
                 "apply must refuse {params:?}"
             );
         }
         assert_eq!(SceneCorrectionParams::default().check(), Ok(()));
-    }
-
-    #[test]
-    fn a_reported_estimator_name_loads_back_as_that_mode() {
-        // The report's `estimator` and the recipe's `white_balance` spell the same
-        // modes in two places; a user copying one into the other must get the mode
-        // back, so every auto mode's report name must deserialize to itself.
-        for mode in [WhiteBalance::GrayWorld, WhiteBalance::Percentile] {
-            let name = mode.estimator().unwrap().name();
-            let back: WhiteBalance = serde_json::from_value(serde_json::json!(name)).unwrap();
-            assert_eq!(back, mode, "{name}");
-        }
     }
 
     #[test]
@@ -521,9 +369,12 @@ mod tests {
             serde_json::from_str::<SceneCorrectionParams>(&json).unwrap(),
             params
         );
-        let auto: SceneCorrectionParams =
-            serde_json::from_str(r#"{"white_balance":"gray-world"}"#).unwrap();
-        assert_eq!(auto.white_balance, WhiteBalance::GrayWorld);
+        // The retired per-frame modes no longer load; `recipe::check_body` names
+        // their replacement before serde is reached.
+        for retired in [r#""gray-world""#, r#""percentile""#] {
+            let json = format!(r#"{{"white_balance":{retired}}}"#);
+            assert!(serde_json::from_str::<SceneCorrectionParams>(&json).is_err());
+        }
         assert!(
             serde_json::from_str::<SceneCorrectionParams>(r#"{"white_balance":[1,1,1]}"#).is_err()
         );

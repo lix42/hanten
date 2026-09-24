@@ -54,12 +54,11 @@ pub struct Rendered {
     pub image: DisplayReferredImage,
     /// Each stage, in the order `render` ran it, with what it applied — the report's
     /// account of the chain. Built inside `render` so a stage inserted, moved or
-    /// renamed there cannot leave the report listing the old chain, and read off
-    /// *resolved* values where a stage resolves any, so an estimate is reported as
-    /// what it came to.
+    /// renamed there cannot leave the report listing the old chain, and read off the
+    /// values each stage applied, so an operation that moved no pixel is reported as
+    /// `"identity"`.
     pub applied: [(&'static str, &'static str); 4],
-    /// Scene correction's values as resolved for this frame — the estimated gains
-    /// included, which is what makes an auto run reproducible from its report.
+    /// Scene correction's values as applied to this frame.
     pub scene_correction: SceneCorrection,
 }
 
@@ -89,18 +88,8 @@ pub struct Rendered {
 /// It splits *from* [`GradedImage`], whichever way it lands.
 ///
 /// [`GradedImage`]: crate::pipeline::look::GradedImage
-///
-/// `measure_region` is the frame's measurement region (`[x, y, w, h]`), for the
-/// stages that measure the frame they correct — today only an auto white balance.
-/// It is a fact about the frame, not a parameter, which is why it is not in
-/// [`ChainParams`].
-pub fn render(
-    image: AcesCgImage,
-    params: &ChainParams,
-    measure_region: Option<[u32; 4]>,
-) -> Result<Rendered> {
-    let (corrected, scene_correction) =
-        scene_correction::apply(image, &params.scene_correction, measure_region)?;
+pub fn render(image: AcesCgImage, params: &ChainParams) -> Result<Rendered> {
+    let (corrected, scene_correction) = scene_correction::apply(image, &params.scene_correction)?;
     let graded = look::apply(corrected, &params.look)?;
     let fitted = fit_range::apply(graded, &params.fit_range)?;
     let image = fit_gamut::apply(fitted, &params.fit_gamut)?;
@@ -159,7 +148,7 @@ mod tests {
     /// identities.
     fn through_fit_range(image: AcesCgImage) -> RangeFittedImage {
         let p = params();
-        let corrected = scene_correction::apply(image, &p.scene_correction, None)
+        let corrected = scene_correction::apply(image, &p.scene_correction)
             .unwrap()
             .0;
         let graded = look::apply(corrected, &p.look).unwrap();
@@ -245,7 +234,7 @@ mod tests {
         let aces = aces_from(3, 1, &AWKWARD, None);
         let expected = bits(&to_p3(aces.rgb()));
 
-        let (out, gamut) = render(aces, &params(), None).unwrap().image.into_parts();
+        let (out, gamut) = render(aces, &params()).unwrap().image.into_parts();
 
         assert_eq!(gamut, DestinationGamut::DisplayP3);
         assert_eq!(bits(&out.rgb), expected);
@@ -259,7 +248,7 @@ mod tests {
         // cube (which an unclamped decode can produce) lands outside P3 with a negative
         // channel. Clamping is the encoder's alone.
         let aces = aces_from(2, 1, &[4.0, 4.0, 4.0, 1.0, -0.5, -0.5], None);
-        let (out, _) = render(aces, &params(), None).unwrap().image.into_parts();
+        let (out, _) = render(aces, &params()).unwrap().image.into_parts();
 
         assert!(out.rgb.iter().all(|v| v.is_finite()));
         assert!(out.rgb[..3].iter().all(|v| *v > 1.0), "{:?}", &out.rgb[..3]);
@@ -278,7 +267,7 @@ mod tests {
             "the film-RGB neutral must reach the chain as an ACEScg neutral: {neutral:?}"
         );
 
-        let (out, _) = render(aces, &params(), None).unwrap().image.into_parts();
+        let (out, _) = render(aces, &params()).unwrap().image.into_parts();
         for c in 0..3 {
             assert!(
                 (out.rgb[c] - neutral[0]).abs() < 1e-5,
@@ -300,7 +289,7 @@ mod tests {
         let aces = aces_from(2, 2, &[0.25; 12], Some(ir.clone()));
         let expected = bits(&to_p3(aces.rgb()));
 
-        let (linear, _) = render(aces, &params(), None).unwrap().image.into_parts();
+        let (linear, _) = render(aces, &params()).unwrap().image.into_parts();
 
         assert_eq!(linear.width, 2);
         assert_eq!(linear.height, 2);
@@ -311,7 +300,7 @@ mod tests {
     #[test]
     fn an_ir_free_input_stays_ir_free() {
         // Falsifiability for the test above: the plane must be carried, not minted.
-        let (out, _) = render(aces_from(2, 2, &[0.5; 12], None), &params(), None)
+        let (out, _) = render(aces_from(2, 2, &[0.5; 12], None), &params())
             .unwrap()
             .image
             .into_parts();
@@ -342,7 +331,7 @@ mod tests {
             let aces = map_nc_film_rgb_v1(film);
             let expected = bits(&to_p3(aces.rgb()));
 
-            let (out, _) = render(aces, &params(), None).unwrap().image.into_parts();
+            let (out, _) = render(aces, &params()).unwrap().image.into_parts();
 
             assert_eq!(bits(&out.rgb), expected, "{config:?}");
         }
@@ -359,7 +348,7 @@ mod tests {
         let aces = aces_from(1, 1, &[0.2, 0.4, 0.6], None);
         let p = params();
 
-        let corrected = scene_correction::apply(aces, &p.scene_correction, None)
+        let corrected = scene_correction::apply(aces, &p.scene_correction)
             .unwrap()
             .0;
         let graded = look::apply(corrected, &p.look).unwrap();
@@ -391,7 +380,7 @@ mod tests {
         let mut p = params();
         p.scene_correction.white_balance = WhiteBalance::Explicit(gains);
 
-        let rendered = render(aces, &p, None).unwrap();
+        let rendered = render(aces, &p).unwrap();
         let (out, _) = rendered.image.into_parts();
 
         assert_eq!(bits(&out.rgb), bits(&to_p3(&balanced)));

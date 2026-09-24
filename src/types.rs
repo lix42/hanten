@@ -490,8 +490,8 @@ pub fn check_measure_inset(frac: f32) -> Result<()> {
              explicit measurement region to point at instead — `--base-region` sets \
              the film-base source, not the measured area — so if nothing should be \
              measured over that area, drop what measures it: `--auto-d-max` on the \
-             current chain, or under `--new-flow` an auto white balance (`--auto-wb`, \
-             or `scene_correction.white_balance` in the recipe).",
+             current chain. Under `--new-flow` a conversion measures nothing over it; \
+             `hanten measure-roll` reads it to pool a roll's white balance.",
             (frac * 2.0 * 100.0).min(100.0)
         )));
     }

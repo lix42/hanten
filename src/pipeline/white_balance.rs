@@ -1,11 +1,11 @@
-//! Auto white balance: deterministic per-channel statistics that estimate
-//! green-anchored gains from a sample of a rendered positive.
+//! White-balance statistics: deterministic per-channel levels and the
+//! green-anchored gains that equalize them.
 //!
-//! Owned by the new chain's scene correction (`pipeline::scene_correction`), which
-//! samples its measurement region. The current chain's white-balance site, the
-//! shared display controls (`render_split`), reaches the same estimator through
-//! [`resolve_print_gains`], which keeps its whole-frame sample, so its output is
-//! unchanged by the move.
+//! Two consumers. The roll white balance (`pipeline::roll_white`) samples each
+//! frame's measurement region and pools the samples over a roll. The current
+//! chain's per-frame auto modes reach [`estimate_gains`] through
+//! [`resolve_print_gains`], over a whole-frame sample; the new chain has no
+//! per-frame mode (`nf-scene-correction/roll-white-balance` retired it).
 //!
 //! Pure statistics, no ML (the project's "AI-friendly ≠ ML" rule): same sample and
 //! estimator ⇒ identical gains.
@@ -34,9 +34,10 @@ impl Estimator {
     }
 }
 
-/// Cap on how many *pixels* the statistics examine. ~1M pixels are statistically
-/// indistinguishable from the full population for a mean/percentile, and the cap
-/// bounds the analysis to a small transient buffer per channel on large scans.
+/// Cap on how many *pixels* a per-frame estimate examines. ~1M pixels are
+/// statistically indistinguishable from the full population for a
+/// mean/percentile, and the cap bounds the analysis to a small transient buffer
+/// per channel on large scans.
 const AUTO_WB_MAX_PIXELS: usize = 1 << 20;
 
 /// Percentile equalized by [`Estimator::Percentile`] (per channel, nearest rank).
@@ -51,19 +52,19 @@ const AUTO_WB_PERCENTILE: f32 = 0.95;
 const AUTO_WB_TRIM: f32 = 0.01;
 
 /// Deterministic pixel stride: the smallest that keeps the examined pixel count
-/// under [`AUTO_WB_MAX_PIXELS`]. Strides whole pixels, so every sampled pixel
-/// contributes all three channels.
-fn auto_wb_stride(pixels: usize) -> usize {
-    pixels.div_ceil(AUTO_WB_MAX_PIXELS).max(1)
+/// under `max_pixels`. Strides whole pixels, so every sampled pixel contributes
+/// all three channels.
+fn stride_for(pixels: usize, max_pixels: usize) -> usize {
+    pixels.div_ceil(max_pixels).max(1)
 }
 
-/// Sample a whole interleaved-RGB frame on the deterministic [`auto_wb_stride`].
+/// Sample a whole interleaved-RGB frame on the deterministic [`stride_for`].
 ///
 /// The current chain's sample. [`estimate_gains`] must not stride again: it
 /// examines exactly the set it is given.
 pub(crate) fn sample_frame(rgb: &[f32]) -> Vec<f32> {
     let pixels = rgb.len() / 3;
-    let stride = auto_wb_stride(pixels);
+    let stride = stride_for(pixels, AUTO_WB_MAX_PIXELS);
     let mut sampled = Vec::with_capacity(pixels.div_ceil(stride) * 3);
     for px in rgb.as_chunks::<3>().0.iter().step_by(stride) {
         sampled.extend_from_slice(px);
@@ -71,27 +72,39 @@ pub(crate) fn sample_frame(rgb: &[f32]) -> Vec<f32> {
     sampled
 }
 
-/// Sample the rectangle `[x, y, w, h]` of a `width`-wide interleaved-RGB frame on
-/// the same deterministic stride, taken over the region's own row-major pixel
-/// index — so the sample depends on the region, never on the frame around it.
+/// Sample the rectangle `[x, y, w, h]` of a `width`-wide interleaved-RGB frame:
+/// every pixel when it has at most `max_pixels`, otherwise exactly `max_pixels`
+/// spread evenly over the region's own row-major pixel index — so the sample depends
+/// on the region, never on the frame around it.
+///
+/// A fixed count rather than an integer stride: a stride halves the sample the
+/// moment a region passes a multiple of the cap (`max_pixels + 1` pixels would keep
+/// half as many as `max_pixels`), and the roll pool weighs frames by their samples.
 ///
 /// Fails on a region that is empty or leaves the frame: a caller that reaches
 /// here with one has resolved the wrong rectangle, and sampling what remains
 /// would estimate over pixels nobody chose.
-pub(crate) fn sample_region(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Vec<f32>> {
+pub(crate) fn sample_region(
+    rgb: &[f32],
+    width: u32,
+    region: [u32; 4],
+    max_pixels: usize,
+) -> Result<Vec<f32>> {
     let [x, y, w, h] = region.map(|v| v as usize);
     let width = width as usize;
     let height = (rgb.len() / 3).checked_div(width).unwrap_or(0);
     if w == 0 || h == 0 || x + w > width || y + h > height {
         return Err(NcError::Other(format!(
-            "auto white balance: the measurement region {region:?} is empty or leaves \
+            "white balance: the measurement region {region:?} is empty or leaves \
              the {width}x{height} frame"
         )));
     }
     let pixels = w * h;
-    let stride = auto_wb_stride(pixels);
-    let mut sampled = Vec::with_capacity(pixels.div_ceil(stride) * 3);
-    for i in (0..pixels).step_by(stride) {
+    let count = pixels.min(max_pixels);
+    let mut sampled = Vec::with_capacity(count * 3);
+    for k in 0..count {
+        // `k · pixels / count` in u128: exact, monotone, and `< pixels` for `k < count`.
+        let i = (k as u128 * pixels as u128 / count as u128) as usize;
         let at = ((y + i / w) * width + x + i % w) * 3;
         sampled.extend_from_slice(&rgb[at..at + 3]);
     }
@@ -145,6 +158,55 @@ fn trimmed_mean(sorted: &[f32], trim: f32) -> f32 {
 const STATE_GAINS_INSTEAD: &str = "state explicit gains instead (`--white-balance` on \
      `convert`, or the recipe's `white_balance` key as `{\"explicit\": [r, g, b]}`)";
 
+/// Per-channel nearest-rank percentile `p` of an **already-sampled** `rgb` over its
+/// finite samples; `NaN` for a channel with none. The caller judges usability, via
+/// [`green_anchored_gains`].
+pub(crate) fn percentile_levels(rgb: &[f32], p: f32) -> [f32; 3] {
+    channel_levels(rgb, |sorted| nearest_rank(sorted, p))
+}
+
+/// Per-channel `level(sorted finite samples)`; `NaN` for a channel with none — the
+/// one place an estimator's empty-channel rule lives.
+fn channel_levels(rgb: &[f32], level: impl Fn(&[f32]) -> f32) -> [f32; 3] {
+    let channels = wb_channel_samples(rgb);
+    std::array::from_fn(|c| {
+        if channels[c].is_empty() {
+            f32::NAN
+        } else {
+            level(&channels[c])
+        }
+    })
+}
+
+/// The gains `[g/r, 1, g/b]` that equalize per-channel `level`s — green-anchored,
+/// because white balance corrects colour and brightness is exposure's job.
+///
+/// Fails loudly ([`NcError::Other`], exit 1) when a level is unusable (non-finite
+/// or non-positive, which no multiplicative gain corrects) or a gain comes out
+/// non-finite, naming `what` measured it — never silently-neutral or garbage gains.
+pub(crate) fn green_anchored_gains(level: [f32; 3], what: &str) -> Result<[f32; 3]> {
+    for (l, name) in level.into_iter().zip(["red", "green", "blue"]) {
+        if !l.is_finite() || l <= 0.0 {
+            return Err(NcError::Other(format!(
+                "{what}: the {name} channel has no usable level (got {l}); \
+                 {STATE_GAINS_INSTEAD}"
+            )));
+        }
+    }
+    let gains = [level[1] / level[0], 1.0, level[1] / level[2]];
+    for (g, name) in gains.into_iter().zip(["red", "green", "blue"]) {
+        // Positive finite levels can still divide into inf/0 across an extreme
+        // dynamic range (subnormal denominators); guard the gains themselves.
+        if !g.is_finite() || g <= 0.0 {
+            return Err(NcError::Other(format!(
+                "{what}: estimated {name} gain is not a positive finite value \
+                 (got {g}); {STATE_GAINS_INSTEAD}"
+            )));
+        }
+    }
+    Ok(gains)
+}
+
 /// Estimate white-balance gains `[r, g, b]` from an **already-sampled** positive.
 ///
 /// Distribution extremes are excluded by construction (the percentile's top tail,
@@ -155,41 +217,11 @@ const STATE_GAINS_INSTEAD: &str = "state explicit gains instead (`--white-balanc
 /// level no multiplicative gain can correct) — never silently-neutral or garbage
 /// gains.
 pub(crate) fn estimate_gains(rgb: &[f32], estimator: Estimator) -> Result<[f32; 3]> {
-    let mode = estimator.name();
-    let level_of = |sorted: &[f32]| match estimator {
-        Estimator::GrayWorld => trimmed_mean(sorted, AUTO_WB_TRIM),
-        Estimator::Percentile => nearest_rank(sorted, AUTO_WB_PERCENTILE),
+    let level = match estimator {
+        Estimator::Percentile => percentile_levels(rgb, AUTO_WB_PERCENTILE),
+        Estimator::GrayWorld => channel_levels(rgb, |sorted| trimmed_mean(sorted, AUTO_WB_TRIM)),
     };
-
-    let channels = wb_channel_samples(rgb);
-    let mut level = [0.0f32; 3];
-    for (c, name) in ["red", "green", "blue"].into_iter().enumerate() {
-        let l = if channels[c].is_empty() {
-            f32::NAN // no usable sample in this channel
-        } else {
-            level_of(&channels[c])
-        };
-        if !l.is_finite() || l <= 0.0 {
-            return Err(NcError::Other(format!(
-                "auto white balance ({mode}): the {name} channel has no usable \
-                 level (got {l}); {STATE_GAINS_INSTEAD}"
-            )));
-        }
-        level[c] = l;
-    }
-
-    let gains = [level[1] / level[0], 1.0, level[1] / level[2]];
-    for (g, name) in gains.into_iter().zip(["red", "green", "blue"]) {
-        // Positive finite levels can still divide into inf/0 across an extreme
-        // dynamic range (subnormal denominators); guard the gains themselves.
-        if !g.is_finite() || g <= 0.0 {
-            return Err(NcError::Other(format!(
-                "auto white balance ({mode}): estimated {name} gain is not a \
-                 positive finite value (got {g}); {STATE_GAINS_INSTEAD}"
-            )));
-        }
-    }
-    Ok(gains)
+    green_anchored_gains(level, &format!("auto white balance ({})", estimator.name()))
 }
 
 /// The current chain's white balance: explicit gains pass through; an auto mode is
@@ -316,10 +348,10 @@ mod tests {
 
     #[test]
     fn auto_wb_stride_is_bounded() {
-        assert_eq!(auto_wb_stride(0), 1);
-        assert_eq!(auto_wb_stride(AUTO_WB_MAX_PIXELS), 1);
+        assert_eq!(stride_for(0, AUTO_WB_MAX_PIXELS), 1);
+        assert_eq!(stride_for(AUTO_WB_MAX_PIXELS, AUTO_WB_MAX_PIXELS), 1);
         let big = 7 * AUTO_WB_MAX_PIXELS + 3;
-        let stride = auto_wb_stride(big);
+        let stride = stride_for(big, AUTO_WB_MAX_PIXELS);
         assert!(big.div_ceil(stride) <= AUTO_WB_MAX_PIXELS);
     }
 
@@ -331,7 +363,7 @@ mod tests {
         let rgb: Vec<f32> = (0..width * height)
             .flat_map(|i| [i as f32, 0.0, 0.0])
             .collect();
-        let sampled = sample_region(&rgb, width, [1, 1, 2, 2]).unwrap();
+        let sampled = sample_region(&rgb, width, [1, 1, 2, 2], AUTO_WB_MAX_PIXELS).unwrap();
         let reds: Vec<f32> = sampled.as_chunks::<3>().0.iter().map(|p| p[0]).collect();
         assert_eq!(reds, [5.0, 6.0, 9.0, 10.0]);
     }
@@ -343,7 +375,7 @@ mod tests {
         let (width, height) = (5u32, 4u32);
         let rgb: Vec<f32> = (0..width * height * 3).map(|i| i as f32).collect();
         assert_eq!(
-            sample_region(&rgb, width, [0, 0, width, height]).unwrap(),
+            sample_region(&rgb, width, [0, 0, width, height], AUTO_WB_MAX_PIXELS).unwrap(),
             sample_frame(&rgb)
         );
     }
@@ -353,7 +385,7 @@ mod tests {
         let rgb = vec![0.5; 4 * 3 * 3];
         for region in [[0, 0, 0, 2], [0, 0, 2, 0], [3, 0, 2, 1], [0, 2, 1, 2]] {
             assert!(
-                sample_region(&rgb, 4, region).is_err(),
+                sample_region(&rgb, 4, region, AUTO_WB_MAX_PIXELS).is_err(),
                 "{region:?} must be refused"
             );
         }

@@ -19,6 +19,10 @@ move each knob under the stage that now owns it.
 - **Recipe shape mirrors design-spec §9, and every recipe struct uses
   `deny_unknown_fields`**, so a key that moves in the code but not in §9 silently
   rejects docs-shaped recipes. The structs, §9 and the guide move together.
+- **`--auto-wb` has no destination.** The new chain retired the per-frame estimate
+  (`nf-scene-correction/roll-white-balance`) and measures white balance once per roll
+  with `hanten measure-roll`, so `print.white_balance`'s `"gray-world"` /
+  `"percentile"` retire here rather than move; only the explicit gains carry over.
 - **Old spellings get a migration error, no aliases** — nc is unreleased, so this
   is cheap, and an alias would keep the legacy meaning readable forever.
 - One thing to carry into the new name: `print_exposure` is a scalar gain applied

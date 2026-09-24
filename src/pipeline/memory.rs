@@ -177,7 +177,17 @@
 //! | `--new-flow --export-ir` 14.45 MP (explicit base) | 0.799 GB | 0.618 GB | +29.3% |
 //! | `--new-flow` 18.66 MP (explicit base, no IR export) | 0.950 GB | 0.795 GB | +19.5% |
 //! | `--new-flow --export-ir` 18.66 MP (explicit base) | 0.992 GB | 0.795 GB | +24.9% |
+//! | `measure-roll`, one 16.43 MP frame (explicit base) | 0.739 GB | 0.606 GB | +22.0% |
+//! | `measure-roll`, one 18.66 MP frame (explicit base) | 0.821 GB | 0.685 GB | +19.7% |
 //!
+//! The two `measure-roll` rows (2026-09-23) calibrate [`RunProfile::MeasureRoll`]: its
+//! enumerated buffers are 0.87x of measured at both sizes, so the allowance covers
+//! real overhead. **The model is per frame, and a multi-frame run outgrows it** — on
+//! `roll` as much as here. Frames of one roll differ by a few pixels, the allocator
+//! cannot reuse a freed buffer for a slightly larger one, and peak RSS climbs: 35
+//! frames of one roll measured 2.78 GB against 0.74 GB for one, while the *same* frame
+//! five times stays flat (0.62 GB), and `roll --new-flow` grows the same way (0.70 →
+//! 1.30 GB over five frames). The gate still judges each frame alone.
 //! Two sources of slack are visible and deliberate. Small frames run looser
 //! (+39.4% for the u16 18.66 MP run) because [`ALLOWANCE_FIXED_BYTES`] stops being negligible —
 //! harmless, since they are nowhere near any plausible budget. And `inspect` on
@@ -462,6 +472,16 @@ pub enum RunProfile {
     },
     /// `inspect` / `estimate`: decode, then sample — no render, no encode.
     DecodeOnly,
+    /// `measure-roll`, per frame: the fixed decode into linear ACEScg, then a strided
+    /// sample of it — no chain, no encode.
+    ///
+    /// Holds [`NewFlowSdrTiff`](Self::NewFlowSdrTiff)'s render-phase buffers — the
+    /// decoded image and the decode's one output buffer with its cloned IR plane,
+    /// mapped into ACEScg in place — and nothing after them, so it peaks at the
+    /// **render** phase. The roll's pooled sample (~1.5 MB a frame,
+    /// `roll_white::FRAME_SAMPLE_PIXELS`) grows across frames and is not in this
+    /// per-frame model; a 36-frame roll pools ~57 MB.
+    MeasureRoll,
 }
 
 /// Which rectangles a run's film-base / reference sampling will gather into
@@ -863,6 +883,7 @@ pub fn estimate_peak(
     };
     let (render_bytes, encode_bytes) = match profile {
         RunProfile::DecodeOnly => (0, 0),
+        RunProfile::MeasureRoll => (sum(mul(image, 2)?, sampled)?, 0),
         RunProfile::Convert { depth, export_ir } => convert_phases(depth, export_ir)?,
         RunProfile::NewFlowSdrTiff { export_ir } => convert_phases(OutDepth::U16, export_ir)?,
         // One arm for both dialects: see `RunProfile::GainMapHdr`'s note on why they
@@ -1589,6 +1610,7 @@ mod tests {
                 "encode",
             ),
             (RunProfile::NewFlowSdrTiff { export_ir: false }, "encode"),
+            (RunProfile::MeasureRoll, "render"),
         ] {
             assert_eq!(peak_phase(profile), expected, "{profile:?}");
         }

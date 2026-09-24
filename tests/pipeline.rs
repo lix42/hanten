@@ -11041,9 +11041,10 @@ fn an_empty_measurement_region_only_refuses_a_run_that_measures_over_it() {
         "{err}"
     );
 
-    // The new flow's consumer is an auto white balance, and the remedy names it —
-    // `--auto-d-max` does not exist there. With stated gains the same region is only
-    // a warning, as above.
+    // On the new flow a conversion measures nothing over the region — its one
+    // per-frame measurement, an auto white balance, retired in favour of the roll's
+    // (`measure-roll`). So the empty region is a warning there too, whatever the
+    // white balance, and `--auto-wb` is refused by name before anything is decoded.
     let new_flow = |extra: &[&str], out: &std::path::Path| {
         let mut args = vec![
             "convert",
@@ -11061,31 +11062,24 @@ fn an_empty_measurement_region_only_refuses_a_run_that_measures_over_it() {
         args.extend(["-o", out.to_str().unwrap(), path.to_str().unwrap()]);
         run(&args)
     };
-    let (code, _, err) = new_flow(&["--auto-wb", "gray-world"], &dir.path("nf-read.tiff"));
-    assert_eq!(
-        code, 2,
-        "auto white balance with no region must fail loudly: {err}"
-    );
+    let (code, stdout, err) = new_flow(&["--white-balance", "1.1,1,0.9"], &dir.path("nf.tiff"));
+    assert_eq!(code, 0, "stated gains read no region: {err}");
+    assert!(json(&stdout)["effective_area"].is_null(), "{stdout}");
+    let (code, _, err) = new_flow(&["--auto-wb", "gray-world"], &dir.path("nf-auto.tiff"));
+    assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("measurement region is empty")
-            && err.contains("--white-balance")
-            && !err.contains("--auto-d-max"),
+        err.contains("--auto-wb") && err.contains("measure-roll"),
         "{err}"
     );
-    let (code, _, err) = new_flow(&["--white-balance", "1.1,1,0.9"], &dir.path("nf.tiff"));
-    assert_eq!(code, 0, "stated gains read no region: {err}");
 
-    // The inset's value bound is checked before any chain resolves, so its remedy has
-    // to name each chain's consumer — a new-flow user told only "drop --auto-d-max"
-    // is sent to a flag that flow refuses.
+    // The inset's value bound is checked before any chain resolves, so its remedy must
+    // not send a new-flow user to a flag that flow refuses.
     let bound_out = dir.path("nf-bound.tiff");
     let (code, _, err) = run(&[
         "convert",
         "--new-flow",
         "--film-base",
         "0.9,0.6,0.5",
-        "--auto-wb",
-        "gray-world",
         "--measure-inset",
         "0.5",
         "-o",
@@ -11094,43 +11088,41 @@ fn an_empty_measurement_region_only_refuses_a_run_that_measures_over_it() {
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("beyond the supported maximum") && err.contains("--auto-wb"),
+        err.contains("beyond the supported maximum")
+            && err.contains("measure-roll")
+            && !err.contains("--auto-wb"),
         "{err}"
     );
 
-    // At an inset that leaves a region, the IR plane's holder cut reaches the pixels
-    // exactly when auto white balance reads the region — so "IR preserved but not
-    // used" must go quiet then, and only then.
-    let ir_note = |extra: &[&str], name: &str| {
-        let out = dir.path(name);
-        let (code, stdout, err) = run(&[
-            &[
-                "convert",
-                "--new-flow",
-                "--film-base",
-                "0.9,0.6,0.5",
-                "--input-transfer",
-                "linear",
-                "--input-meaning",
-                "scanner-device",
-                "-o",
-                out.to_str().unwrap(),
-                path.to_str().unwrap(),
-            ][..],
-            extra,
-        ]
-        .concat());
-        assert_eq!(code, 0, "{extra:?}: {err}");
-        let report = json(&stdout);
-        assert_eq!(report["effective_area"]["holder_applied"], true, "{report}");
+    // At an inset that leaves a region, nothing on the new flow renders from the
+    // holder cut, so "IR preserved but not used" holds whatever the white balance.
+    let out = dir.path("nf-stated.tiff");
+    let (code, stdout, err) = run(&[
+        "convert",
+        "--new-flow",
+        "--film-base",
+        "0.9,0.6,0.5",
+        "--input-transfer",
+        "linear",
+        "--input-meaning",
+        "scanner-device",
+        "--white-balance",
+        "1.1,1,0.9",
+        "-o",
+        out.to_str().unwrap(),
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert_eq!(report["effective_area"]["holder_applied"], true, "{report}");
+    assert!(
         report["warnings"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|w| w.as_str().unwrap().contains("preserved but not used"))
-    };
-    assert!(!ir_note(&["--auto-wb", "gray-world"], "nf-auto.tiff"));
-    assert!(ir_note(&["--white-balance", "1.1,1,0.9"], "nf-stated.tiff"));
+            .any(|w| w.as_str().unwrap().contains("preserved but not used")),
+        "{report}"
+    );
 }
 
 /// A capped or unsettled holder march warns, so `--strict` can see it
@@ -11412,7 +11404,7 @@ fn channel_means(samples: &[u16]) -> [f64; 3] {
 #[test]
 fn new_flow_applies_scene_correction() {
     // `nf-scene-correction/stage` through the binary: each knob reaches the pixels,
-    // and the report states what was applied — as resolved, with its provenance.
+    // and the report states what was applied.
     let tmp = TempDir::new("new-flow-scene");
     let input = fixture("hdr-48bit.tif").display().to_string();
     let convert = |name: &str, extra: &[&str]| {
@@ -11435,9 +11427,11 @@ fn new_flow_applies_scene_correction() {
 
     let (plain, report) = convert("plain.tiff", &[]);
     let sc = &report["new_flow"]["scene_correction"];
-    assert_eq!(sc["white_balance"], serde_json::json!([1.0, 1.0, 1.0]));
-    assert_eq!(sc["provenance"], "stated");
-    assert_eq!(sc["exposure"], 0.0);
+    assert_eq!(
+        *sc,
+        serde_json::json!({"white_balance": [1.0, 1.0, 1.0], "exposure": 0.0}),
+        "the gains are always stated, so there is no provenance to report"
+    );
     assert_eq!(applied(&report), "identity");
     let plain_means = channel_means(&read_u16_tiff(&plain));
 
@@ -11453,48 +11447,19 @@ fn new_flow_applies_scene_correction() {
         );
     }
 
-    // Stated white balance: warms red against blue, and is reported as stated.
+    // Stated white balance: warms red against blue, and is reported as applied.
     let (warm, report) = convert("warm.tiff", &["--white-balance", "1.3,1,0.7"]);
     assert_eq!(applied(&report), "white-balance");
     let sc = &report["new_flow"]["scene_correction"];
-    assert_eq!(sc["provenance"], "stated");
-    assert!(sc.get("estimator").is_none(), "{sc}");
+    assert_eq!(
+        sc["white_balance"],
+        serde_json::json!([1.3, 1.0, 0.7]),
+        "{sc}"
+    );
     let warm_means = channel_means(&read_u16_tiff(&warm));
     assert!(
         warm_means[0] / warm_means[2] > plain_means[0] / plain_means[2],
         "{warm_means:?} vs {plain_means:?}"
-    );
-
-    // Auto: estimated over the effective area the same report carries, and the
-    // reported gains reproduce the image exactly when stated — measure once, reuse.
-    let (auto, report) = convert("auto.tiff", &["--auto-wb", "percentile"]);
-    let sc = &report["new_flow"]["scene_correction"];
-    assert_eq!(sc["provenance"], "estimated", "{sc}");
-    assert_eq!(sc["estimator"], "percentile");
-    assert_eq!(sc["region"], report["effective_area"]["region"], "{report}");
-    assert_eq!(sc["white_balance"][1], 1.0, "green-anchored");
-    // Not a vacuous reuse: the fixture's estimate is well off neutral.
-    assert_eq!(applied(&report), "white-balance", "{sc}");
-    // And the region steers it: the whole frame (no inset) estimates differently.
-    let (_, whole) = convert(
-        "whole.tiff",
-        &["--auto-wb", "percentile", "--measure-inset", "0"],
-    );
-    assert_ne!(
-        whole["new_flow"]["scene_correction"]["white_balance"], sc["white_balance"],
-        "the estimate must read the effective area, not the whole frame"
-    );
-    let gains: Vec<String> = sc["white_balance"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|g| g.to_string())
-        .collect();
-    let (reused, _) = convert("reused.tiff", &["--white-balance", &gains.join(",")]);
-    assert_eq!(
-        std::fs::read(&auto).unwrap(),
-        std::fs::read(&reused).unwrap(),
-        "stating the reported gains must reproduce the estimated render"
     );
 
     // The recipe spelling reaches the same knobs, and a dump writes them back.
@@ -12434,8 +12399,9 @@ fn new_flow_refuses_every_print_control() {
     // The print family, driven through the binary one flag at a time. Each names the
     // stage that will carry it — or, for `--print-exposure`, the flag that already
     // does — so the refusal tells a user where the knob went rather than only that it
-    // is gone. White balance is not here: scene correction reads it under its own
-    // spelling (`new_flow_applies_scene_correction`).
+    // is gone. Stated white balance is not here: scene correction reads it under its
+    // own spelling (`new_flow_applies_scene_correction`). The per-frame auto one is —
+    // retired, with the roll measurement named as its replacement.
     //
     // One of these resolves the documented **default** (`--highlight-compress 0`) and
     // is still refused, which is the tiebreaker applied
@@ -12462,6 +12428,7 @@ fn new_flow_refuses_every_print_control() {
             "nf-display-stages/fit-range",
         ),
         (&["--highlight-compress", "0"], "will not gain one"),
+        (&["--auto-wb", "percentile"], "hanten measure-roll"),
     ];
     for (i, (extra, expect)) in cases.iter().enumerate() {
         let out = tmp.path(&format!("out{i}.tif"));
@@ -13341,4 +13308,316 @@ fn help_documents_the_flag_as_transitional() {
             "{command} must say the flag is transitional: {stdout}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// measure-roll (`nf-scene-correction/roll-white-balance`)
+// ---------------------------------------------------------------------------
+
+/// A new-chain recipe for synthetic scans: they carry no SilverFast metadata, so the
+/// input's transfer and meaning are stated, as `convert` would take them by flag.
+fn roll_white_recipe(dir: &TempDir, base: &str) -> PathBuf {
+    write_file(
+        &dir.path("roll.json"),
+        &format!(
+            r#"{{ "recipe_version": 2,
+                 "input": {{ "transfer": "linear", "meaning": "scanner-device" }},
+                 "calibration": {{ "film_base": {{ "explicit": [{base}] }} }} }}"#
+        ),
+    )
+}
+
+#[test]
+fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
+    // The contract the command exists for: measure once, state the gains, and every
+    // frame renders under exactly them — by the reported flag and by the reported
+    // recipe fragment alike.
+    let tmp = TempDir::new("measure-roll-reuse");
+    let frame = fixture("hdr-48bit.tif").display().to_string();
+    let second = tmp.path("second.tif");
+    std::fs::copy(&frame, &second).unwrap();
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        &frame,
+        second.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert_eq!(report["command"], "measure-roll");
+    let gains = report["white_balance"]["gains"].as_array().unwrap().clone();
+    assert_eq!(gains[1], 1.0, "green-anchored: {report}");
+    assert_ne!(
+        report["white_balance"]["gains"],
+        serde_json::json!([1.0, 1.0, 1.0]),
+        "not vacuous: the fixture's roll white is off neutral"
+    );
+    assert_eq!(report["frames"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        report["frames"][0]["sampled"], report["frames"][0]["kept"],
+        "nothing guarded without a leader: {report}"
+    );
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("no --leader")),
+        "an unguarded run says so: {report}"
+    );
+    assert_eq!(report["decode"]["contrast"], 2.0, "{report}");
+
+    let by_flag = tmp.path("flag.tiff");
+    let flag = report["reuse"]["flag"].as_str().unwrap();
+    let flag_gains = flag.strip_prefix("--white-balance ").unwrap();
+    let (code, stdout, err) = run(&[
+        "convert",
+        &frame,
+        "--new-flow",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--white-balance",
+        flag_gains,
+        "-o",
+        by_flag.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        json(&stdout)["new_flow"]["scene_correction"]["white_balance"],
+        report["white_balance"]["gains"],
+        "the flag's text round-trips the gains exactly"
+    );
+
+    let mut recipe = report["reuse"]["recipe"].clone();
+    recipe["recipe_version"] = 2.into();
+    let recipe = write_file(&tmp.path("wb.json"), &recipe.to_string());
+    let by_recipe = tmp.path("recipe.tiff");
+    let (code, _, err) = run(&[
+        "convert",
+        &frame,
+        "--new-flow",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--params",
+        recipe.to_str().unwrap(),
+        "-o",
+        by_recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&by_flag).unwrap(),
+        std::fs::read(&by_recipe).unwrap(),
+        "the reported flag and recipe fragment are one knob"
+    );
+}
+
+#[test]
+fn measure_roll_keeps_a_fully_exposed_frame_out_of_the_white() {
+    // A roll of the picture fixture plus one fully exposed frame — a copy of the
+    // leader, mixed in (the leader itself as an input is refused below). Guarded by
+    // `--leader`, the gains are the picture's alone; unguarded, the exposed frame
+    // becomes the roll's white.
+    let tmp = TempDir::new("measure-roll-guard");
+    let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let leader = tmp.path("leader.tif");
+    // Dense, cast, and IR-transparent (so no holder is measured).
+    write_hdri_with_uniform_ir(&leader, 64, 64, [900, 700, 400], 40_000);
+    let blown = tmp.path("blown.tif");
+    std::fs::copy(&leader, &blown).unwrap();
+    let (frame, other) = (tmp.path("frame.tif"), tmp.path("other.tif"));
+    std::fs::copy(fixture("hdr-48bit.tif"), &frame).unwrap();
+    std::fs::copy(fixture("hdr-48bit.tif"), &other).unwrap();
+    let (frame, other, leader, blown) = (
+        frame.to_str().unwrap(),
+        other.to_str().unwrap(),
+        leader.to_str().unwrap(),
+        blown.to_str().unwrap(),
+    );
+    let params = recipe.to_str().unwrap();
+    let gains = |args: &[&str]| {
+        let (code, stdout, err) = run(&[&["measure-roll", "--params", params][..], args].concat());
+        assert_eq!(code, 0, "{args:?}: {err}");
+        json(&stdout)
+    };
+
+    let clean = gains(&[frame, other, "--leader", leader]);
+    let guarded = gains(&[frame, other, blown, "--leader", leader]);
+    let unguarded = gains(&[frame, other, blown]);
+    assert_eq!(
+        guarded["white_balance"]["gains"], clean["white_balance"]["gains"],
+        "{guarded}"
+    );
+    assert_eq!(guarded["frames"][2]["kept"], 0, "{guarded}");
+    assert!(
+        guarded["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("contributed no pixel")),
+        "{guarded}"
+    );
+    assert_ne!(
+        unguarded["white_balance"]["gains"], clean["white_balance"]["gains"],
+        "the guard must be what keeps it out: {unguarded}"
+    );
+    let ceiling = &clean["leader"]["ceiling"];
+    assert!(
+        ceiling.is_array() && clean["leader"]["guard_density"] == 0.1,
+        "{clean}"
+    );
+
+    // The leader itself among the frames is refused: its unguarded edges would pool.
+    let (code, _, err) = run(&[
+        "measure-roll",
+        "--params",
+        params,
+        frame,
+        leader,
+        "--leader",
+        leader,
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("is both the --leader and an input frame"),
+        "{err}"
+    );
+}
+
+#[test]
+fn measure_roll_refuses_what_it_cannot_measure_under() {
+    let tmp = TempDir::new("measure-roll-refusals");
+    let frame = fixture("hdr-48bit.tif").display().to_string();
+
+    // No stated base: a per-frame estimate would decode each frame differently.
+    let (code, stdout, err) = run(&["measure-roll", &frame]);
+    assert_eq!(code, 2, "{err}");
+    assert!(stdout.is_empty());
+    assert!(
+        err.contains("film base stated explicitly") && err.contains("estimate --grid"),
+        "{err}"
+    );
+
+    // A current-chain recipe is not the new chain's.
+    let legacy = write_file(
+        &tmp.path("legacy.json"),
+        r#"{ "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
+    );
+    let (code, _, err) = run(&["measure-roll", &frame, "--params", legacy.to_str().unwrap()]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("recipe_version"), "{err}");
+
+    // Refused before any decode, so the whole roll is not read for an answer known
+    // up front: `--strict` without a leader, a frame named twice, a bad inset — the
+    // last blamed on the flag, not on the first frame that would have measured it.
+    let base = ["--film-base", "0.9,0.55,0.42"];
+    for (extra, expect) in [
+        (
+            vec![frame.as_str(), "--strict"],
+            "--strict refuses an unguarded measurement",
+        ),
+        (vec![frame.as_str(), frame.as_str()], "is named twice"),
+        (
+            vec![frame.as_str(), "--measure-inset", "0.6"],
+            "beyond the supported maximum",
+        ),
+    ] {
+        let (code, stdout, err) = run(&[&["measure-roll"][..], &base, &extra].concat());
+        assert_eq!(code, 2, "{extra:?}: {err}");
+        assert!(stdout.is_empty(), "{extra:?}");
+        assert!(err.contains(expect), "{extra:?}: {err}");
+        assert!(
+            !err.contains("decoded"),
+            "{extra:?} must refuse before decoding: {err}"
+        );
+    }
+    let (_, _, err) = run(&[
+        &["measure-roll"][..],
+        &base,
+        &[&frame, "--measure-inset", "0.6"],
+    ]
+    .concat());
+    assert!(
+        !err.contains("hdr-48bit.tif:"),
+        "the flag is at fault, not a frame: {err}"
+    );
+
+    // The recipe's scene correction is what this command measures, so it is not read:
+    // a value `convert` would refuse there does not refuse the measurement.
+    let with_scene = write_file(
+        &tmp.path("scene.json"),
+        r#"{ "recipe_version": 2,
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
+             "scene_correction": { "exposure": 500 } }"#,
+    );
+    let (code, _, err) = run(&[
+        "measure-roll",
+        &frame,
+        "--params",
+        with_scene.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+
+    // A retired per-frame mode is still refused at load, and the remedy works from
+    // here too: drop it, then state the gains this command reports.
+    let retired = write_file(
+        &tmp.path("retired.json"),
+        r#"{ "recipe_version": 2, "scene_correction": { "white_balance": "percentile" } }"#,
+    );
+    let (code, _, err) = run(&[
+        "measure-roll",
+        &frame,
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--params",
+        retired.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("Drop it, then state the gains"), "{err}");
+}
+
+#[test]
+fn measure_roll_warns_when_a_frames_region_is_not_a_measurement() {
+    // The capped-march frame (`a_capped_holder_march_warns_and_strict_promotes_it`):
+    // its region keeps holder strips, which the pool would take as picture. The
+    // warning `convert` gives must reach this report too, so `--strict` can see it.
+    let dir = TempDir::new("measure-roll-capped");
+    let path = dir.path("deep.tif");
+    const W: u32 = 400;
+    const H: u32 = 400;
+    let mut rgb = vec![0u16; (W * H * 3) as usize];
+    let mut ir = vec![41_000u16; (W * H) as usize];
+    for y in 0..H {
+        for x in 0..W {
+            let i = ((y * W + x) * 3) as usize;
+            let holder = y < 120 || !(10..W - 10).contains(&x) || y >= H - 10;
+            rgb[i..i + 3].copy_from_slice(&if holder {
+                [655, 655, 655]
+            } else {
+                [12000, 7000, 4000]
+            });
+            if holder {
+                ir[(y * W + x) as usize] = 1_300;
+            }
+        }
+    }
+    write_hdri(&path, W, H, &rgb, &ir);
+    let recipe = roll_white_recipe(&dir, "0.9,0.6,0.5");
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        path.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let warnings = json(&stdout)["warnings"].clone();
+    assert!(
+        warnings
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("deep.tif: ")
+                && w.as_str().unwrap().contains("cap")),
+        "{warnings}"
+    );
 }

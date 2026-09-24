@@ -32,8 +32,9 @@ use crate::pipeline::input_semantics::{
     self, ContainerColorFacts, InputAssertions, InputColorReport, RawMode,
 };
 use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
+use crate::pipeline::working_space::AcesCgImage;
 use crate::pipeline::{
-    color, film_base, gain_map, hdr, scene_correction, sdr, stages, working_space,
+    color, film_base, gain_map, hdr, roll_white, scene_correction, sdr, stages, working_space,
 };
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::telemetry;
@@ -85,6 +86,8 @@ pub enum Command {
     Inspect(IoArgs),
     /// Run only film-base / Dmin estimation; emit JSON.
     Estimate(EstimateArgs),
+    /// Measure a roll's white balance once, for its recipe; emit JSON.
+    MeasureRoll(MeasureRollArgs),
     /// Print the full default parameter set as JSON (recipe scaffolding).
     Params(ParamsArgs),
 }
@@ -230,6 +233,44 @@ pub struct EstimateArgs {
     /// `Dmin` a roll is calibrated on, so a script baking the result into a
     /// recipe wants a plausible-looking-but-bad base to fail loudly rather than
     /// be echoed back.
+    #[arg(long)]
+    pub strict: bool,
+    #[command(flatten)]
+    pub memory: MemoryArgs,
+    #[command(flatten)]
+    pub report: ReportArgs,
+}
+
+/// `measure-roll`: the roll's picture frames, its leader, and the new chain's recipe
+/// they are decoded under (`nf-scene-correction/roll-white-balance`).
+#[derive(Args, Debug)]
+pub struct MeasureRollArgs {
+    /// The roll's picture frames (SilverFast HDR/HDRi TIFF). Leave out the unexposed
+    /// base, the leader and any calibration frame: every input is pooled as picture.
+    #[arg(required = true)]
+    pub inputs: Vec<PathBuf>,
+    /// The roll's leader — a fully exposed frame, decoded with the same base. Pixels
+    /// within 0.1 density of it are left out, so a fully exposed frame mixed into the
+    /// roll cannot become its white (measured: it would move the gains 0.4–1.3 stops).
+    /// Without it the run warns, and `--strict` refuses before decoding anything.
+    #[arg(long, value_name = "PATH")]
+    pub leader: Option<PathBuf>,
+    /// The roll's recipe for the new chain (`"recipe_version": 2`): the film base and
+    /// the decode the gains are measured under. Its `scene_correction` values are not
+    /// read — that is what this command measures — though the recipe must still load
+    /// (a retired or unknown key there is refused).
+    #[arg(long = "params", value_name = "JSON")]
+    pub recipe_in: Option<PathBuf>,
+    /// The roll's film base (Dmin) as `R,G,B`, over the recipe's. Required one way or
+    /// the other, and explicit: a base estimated per frame would measure each frame
+    /// under a different decode. Measure it once with `hanten estimate --grid` on the
+    /// unexposed base frame.
+    #[arg(long = "film-base", value_name = "R,G,B", value_parser = parse_rgb)]
+    pub film_base: Option<[f32; 3]>,
+    #[command(flatten)]
+    pub measure: MeasureOverrides,
+    /// Treat warnings (a capped holder march, decode notes) as a hard error, and
+    /// refuse to measure without `--leader`.
     #[arg(long)]
     pub strict: bool,
     #[command(flatten)]
@@ -659,8 +700,9 @@ impl From<AutoWb> for WbSource {
 /// The new chain's scene-correction overrides that have no current-chain flag
 /// (recipe section `scene_correction`, `nf-scene-correction/stage`).
 ///
-/// White balance keeps its spelling on both chains (`--white-balance` / `--auto-wb`,
-/// in [`PrintOverrides`]); only exposure is renamed, because `--print-exposure`
+/// `--white-balance` keeps its spelling on both chains (in [`PrintOverrides`]), and
+/// `--auto-wb` is the current chain's alone — the new chain measures white balance
+/// once per roll (`hanten measure-roll`). Only exposure is renamed, because `--print-exposure`
 /// names a print stage the new chain does not have. Refused without `--new-flow`
 /// (`flow::reject_unavailable_flags`), where the exposure is `--print-exposure`.
 #[derive(Args, Debug, Default)]
@@ -674,12 +716,13 @@ pub struct SceneCorrectionOverrides {
 
 /// Print / tone-render overrides (design-spec §9).
 ///
-/// `--white-balance` and `--auto-wb` are the two faces of one white-balance source —
-/// `print.white_balance` on the current chain, `scene_correction.white_balance` under
-/// `--new-flow` (`recipe::merge`) — mutually exclusive (clap rejects passing both);
-/// whichever is given replaces the recipe's choice entirely. Precedence is by
-/// **source**, not value: an explicit `--white-balance 1,1,1` over a recipe's
-/// auto mode means neutral gains, not re-estimation.
+/// `--white-balance` and `--auto-wb` are the two faces of the current chain's one
+/// white-balance source, `print.white_balance` — mutually exclusive (clap rejects
+/// passing both); whichever is given replaces the recipe's choice entirely.
+/// Precedence is by **source**, not value: an explicit `--white-balance 1,1,1` over a
+/// recipe's auto mode means neutral gains, not re-estimation. Under `--new-flow` only
+/// `--white-balance` exists, setting `scene_correction.white_balance`
+/// (`recipe::merge`); `--auto-wb` is refused there (`flow`).
 #[derive(Args, Debug, Default)]
 pub struct PrintOverrides {
     /// Overall positive exposure.
@@ -692,7 +735,9 @@ pub struct PrintOverrides {
     #[arg(long, value_name = "R,G,B", value_parser = parse_rgb,
           conflicts_with = "auto_wb")]
     pub white_balance: Option<[f32; 3]>,
-    /// Estimate the white-balance gains per frame from image statistics.
+    /// Estimate the white-balance gains per frame from image statistics. Not under
+    /// `--new-flow`, which measures white balance once per roll instead (`hanten
+    /// measure-roll`).
     #[arg(long = "auto-wb", value_enum, value_name = "MODE")]
     pub auto_wb: Option<AutoWb>,
     /// Which tone curve the named display renderers apply (recipe key
@@ -5174,6 +5219,7 @@ pub fn run() -> Result<()> {
         Command::Roll(args) => run_roll(args),
         Command::Inspect(args) => run_inspect(args),
         Command::Estimate(args) => run_estimate(args),
+        Command::MeasureRoll(args) => run_measure_roll(args),
     }
 }
 
@@ -5847,6 +5893,9 @@ fn convert_frame(
     // Stage 1 — decode. Per-stage wall clocks feed the telemetry record only
     // (they never touch the image/sidecar); measure them regardless of whether
     // telemetry is enabled so the render path is uniform.
+    // `decode_for_roll_white` (`measure-roll`) repeats this front half — preflight,
+    // decode, input semantics, positive-mode refusal, effective area and its warnings —
+    // up to the chain; a gate added here belongs there too.
     let stage_started = Instant::now();
     let (image, info) = decode_within(input, budget.bytes())?;
     let decode_ms = elapsed_ms(stage_started);
@@ -5984,19 +6033,15 @@ fn convert_frame(
     // `report.effective_area`, because there is no region to report. The knock-on is
     // that `--measure-inset` is inert on such a run; the warning is the observable.
     //
-    // On the new flow the question has a different answer, because a different
-    // measurement reads the region: an auto white balance, which estimates over it
-    // (`scene_correction::apply`). Its gains multiply every pixel, so there the two
-    // predicates coincide — measuring over the region *is* reaching a rendered pixel.
+    // On the new flow nothing renders from the region: its one per-frame measurement,
+    // an auto white balance, retired in favour of a roll's (`hanten measure-roll`,
+    // which reads the same effective area). So both predicates are false there.
     let (region_measured, region_reaches_a_pixel) = match chain {
         FrameChain::Legacy => (
             measures_over_region(cfg),
             region_reaches_a_rendered_pixel(cfg),
         ),
-        FrameChain::New(recipe) => {
-            let measured = recipe.scene_correction.measures_over_region();
-            (measured, measured)
-        }
+        FrameChain::New(_) => (false, false),
     };
     let measure_area = match film_base::effective_area(&image, cfg.measure.inset) {
         Ok(area) => {
@@ -6012,21 +6057,12 @@ fn convert_frame(
         Err(e) if region_measured => {
             // `validate_convert` refused an out-of-bound inset before the decode, so
             // the only error reachable here is the empty region — and the extra
-            // remedy is accurate for it.
-            let consumer = match chain {
-                FrameChain::Legacy => {
-                    "Alternatively drop --auto-d-max: the per-frame reference is what \
-                     measures over the region"
-                }
-                FrameChain::New(_) => {
-                    "Alternatively state the white-balance gains \
-                     (`scene_correction.white_balance` in the recipe, or --white-balance \
-                     on `convert`): the auto white balance is what measures over the region"
-                }
-            };
+            // remedy is accurate for it. Only the current chain gets here: nothing on
+            // the new one measures over the region.
             return Err(NcError::Usage(format!(
-                "{} {consumer}, and with nothing reading it an empty region is a \
-                 warning rather than a refusal.",
+                "{} Alternatively drop --auto-d-max: the per-frame reference is what \
+                 measures over the region, and with nothing reading it an empty region \
+                 is a warning rather than a refusal.",
                 e.message()
             )));
         }
@@ -6106,7 +6142,6 @@ fn convert_frame(
                 recipe,
                 image,
                 base: base.base,
-                measure_region: measured_region,
                 export_ir,
                 output,
                 report,
@@ -6737,10 +6772,6 @@ struct NewFlowFrame<'a> {
     recipe: &'a Recipe,
     image: LinearImage,
     base: FilmBase,
-    /// The effective area, handed on only when a stage measures over it — the same
-    /// gate the current chain's reference uses, so a region never reaches a run that
-    /// measures nothing.
-    measure_region: Option<[u32; 4]>,
     export_ir: Option<PathBuf>,
     output: &'a Path,
     report: Report,
@@ -6768,7 +6799,6 @@ fn render_new_flow_frame(
         recipe,
         image,
         base,
-        measure_region,
         export_ir,
         output,
         mut report,
@@ -6790,7 +6820,7 @@ fn render_new_flow_frame(
     // only a fault from *this* transform is counted.
     let _ = cms_error_occurred();
     let stage_started = Instant::now();
-    let rendered = chain::render(aces, &chain_params, measure_region)?;
+    let rendered = chain::render(aces, &chain_params)?;
     let (linear, gamut) = rendered.image.into_parts();
     let (encoded, icc) = color::encode_display_linear(linear, gamut)?;
     let color_ms = elapsed_ms(stage_started);
@@ -9239,6 +9269,363 @@ fn calibration_fragment(report: &Report) -> Option<CalibrationFragment> {
         dmax: report.dmax_reuse.as_ref().map(|r| r.dmax),
     };
     (!fragment.is_empty()).then_some(fragment)
+}
+
+// ---------------------------------------------------------------------------
+// measure-roll — the roll white balance (`nf-scene-correction/roll-white-balance`)
+// ---------------------------------------------------------------------------
+
+/// The `measure-roll` JSON report.
+#[derive(Debug, Serialize)]
+struct MeasureRollReport {
+    command: &'static str,
+    /// Which build measured the gains — they are frozen into a recipe and outlive it.
+    identity: Identity,
+    /// The film base every input was decoded with.
+    film_base: FilmBase,
+    /// The decode the gains belong to: they are measured at its output.
+    decode: fixed::DecodeReport,
+    /// The leader guard, when `--leader` was given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    leader: Option<MeasuredLeader>,
+    frames: Vec<MeasuredFrame>,
+    white_balance: RollWhiteBalance,
+    /// The gains in the two forms a user freezes them in.
+    reuse: WhiteBalanceReuse,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+    elapsed_ms: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct MeasuredLeader {
+    input: PathBuf,
+    #[serde(flatten)]
+    guard: roll_white::LeaderGuard,
+    memory: MemoryReport,
+}
+
+#[derive(Debug, Serialize)]
+struct MeasuredFrame {
+    input: PathBuf,
+    /// The effective area the frame was sampled over.
+    region: [u32; 4],
+    #[serde(flatten)]
+    counts: roll_white::FrameCounts,
+    memory: MemoryReport,
+}
+
+#[derive(Debug, Serialize)]
+struct RollWhiteBalance {
+    /// Green-anchored gains for `scene_correction.white_balance`.
+    gains: [f32; 3],
+    /// The per-channel percentile of the pooled pixels they equalize.
+    percentile: f32,
+    /// Pixels pooled over the whole roll.
+    pooled: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct WhiteBalanceReuse {
+    /// For `convert --new-flow`.
+    flag: String,
+    /// A partial recipe, to merge into the roll's.
+    recipe: WhiteBalanceFragment,
+}
+
+/// `{"scene_correction": {"white_balance": {"explicit": [r, g, b]}}}`, typed rather than
+/// built as a `serde_json::Value` so the gains print in their `f32` form — a `Value`
+/// widens them to `f64` digits the flag form does not show.
+#[derive(Debug, Serialize)]
+struct WhiteBalanceFragment {
+    scene_correction: WhiteBalanceSection,
+}
+
+#[derive(Debug, Serialize)]
+struct WhiteBalanceSection {
+    white_balance: scene_correction::WhiteBalance,
+}
+
+/// One input decoded into linear ACEScg at the new chain's decode, plus its effective
+/// area: the front half of `convert_frame`'s new-flow path, gated the same way
+/// (memory preflight, input semantics, positive-mode refusal) and stopping before
+/// scene correction — the point the roll's gains will be applied at.
+///
+/// **A copy, and it must stay in step.** `convert_frame`'s front half is tangled with
+/// its report and IR notes, so this repeats its gates rather than sharing them: a
+/// refusal or measurement-region warning added there belongs here too, or gains get
+/// frozen from frames `convert` would refuse.
+fn decode_for_roll_white(
+    input: &Path,
+    recipe: &Recipe,
+    base: &FilmBase,
+    budget: memory::Budget,
+    log: &Log,
+    warnings: &mut Vec<String>,
+) -> Result<(
+    AcesCgImage,
+    Result<film_base::EffectiveArea>,
+    fixed::DecodeReport,
+    MemoryReport,
+)> {
+    let memory = preflight_memory(
+        input,
+        RunProfile::MeasureRoll,
+        SamplePlan::none(),
+        budget,
+        memory::detect_total_ram(),
+        log,
+        warnings,
+    )?;
+    let (image, info) = decode_within(input, budget.bytes())?;
+    log.info(format_args!(
+        "decoded {} {}x{}",
+        input.display(),
+        info.width,
+        info.height
+    ));
+    for w in &info.warnings {
+        push_warning_buf(warnings, log, format!("{}: {w}", input.display()));
+    }
+    let input_meta = input_semantics::resolve(
+        &container_color_facts(&info),
+        &input_assertions(&recipe.to_config(), InputFromCli::none()),
+    )?;
+    if InputColorReport::from_metadata(&input_meta).icc_unparsable() {
+        push_warning_buf(
+            warnings,
+            log,
+            format!(
+                "{}: embedded ICC profile present but could not be parsed for a summary",
+                input.display()
+            ),
+        );
+    }
+    input_semantics::require_convertible(&input_meta)?;
+    reject_positive_mode(&info)?;
+    let area = film_base::effective_area(&image, recipe.measure.inset);
+    let (film, decoded) = fixed::decode(&image, base, &recipe.reconstruction)?;
+    drop(image);
+    Ok((
+        working_space::map_nc_film_rgb_v1(film),
+        area,
+        decoded,
+        memory,
+    ))
+}
+
+/// `hanten measure-roll` — measure a roll's white balance once, over its picture
+/// frames, and report the gains to freeze into its recipe.
+fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
+    let started = Instant::now();
+    let log = Log::new(&args.report);
+
+    let mut recipe = match load_recipe_for(args.recipe_in.as_deref(), Flow::New)?.doc {
+        RecipeDoc::New(r) => r,
+        RecipeDoc::Current(_) => unreachable!("loaded for the new flow"),
+    };
+    if let Some(b) = args.film_base {
+        recipe.calibration.film_base = Some(FilmBaseSource::Explicit(b));
+    }
+    if let Some(f) = args.measure.measure_inset {
+        recipe.measure.inset = f;
+    }
+    // Before any decode: a bad inset would otherwise surface from the first frame's
+    // effective area, blamed on that file.
+    check_measure_inset(recipe.measure.inset)?;
+    // What this command measures, so the recipe's value is not read — and must not
+    // refuse the run. Keys only: this command takes none of the conversion flags.
+    recipe.scene_correction = scene_correction::SceneCorrectionParams::default();
+    recipe::validate(&recipe, KnobNames::KeyOnly)?;
+    if args.strict && args.leader.is_none() {
+        return Err(NcError::Usage(
+            "--strict refuses an unguarded measurement: without --leader a fully exposed \
+             frame among the inputs would become the roll's white. Pass the roll's leader \
+             scan"
+                .into(),
+        ));
+    }
+    // A frame named twice would weigh twice in the pool — silently, since every
+    // frame contributes the same sample count. The leader named as a frame too (the
+    // natural glob when it sits beside them) would pool its unguarded edges.
+    let mut seen: Vec<(PathBuf, &Path)> = Vec::new();
+    if let Some(leader) = &args.leader {
+        let key = collision_key(leader);
+        if let Some(input) = args
+            .inputs
+            .iter()
+            .find(|i| keys_collide(&collision_key(i), &key))
+        {
+            return Err(NcError::Usage(format!(
+                "{} is both the --leader and an input frame; every input is pooled as \
+                 picture, so leave the leader out of the frames",
+                input.display()
+            )));
+        }
+    }
+    for input in &args.inputs {
+        let key = collision_key(input);
+        if let Some((_, first)) = seen.iter().find(|(k, _)| keys_collide(k, &key)) {
+            let spelled = if *first == input.as_path() {
+                String::new()
+            } else {
+                format!(" (also as {})", first.display())
+            };
+            return Err(NcError::Usage(format!(
+                "{} is named twice{spelled}; each frame is pooled once, so a repeat would \
+                 double its weight in the roll's white",
+                input.display()
+            )));
+        }
+        seen.push((key, input));
+    }
+    let base = match recipe.calibration.film_base {
+        Some(FilmBaseSource::Explicit(b)) => {
+            validate_explicit_film_base(&b)?;
+            FilmBase::from(b)
+        }
+        _ => {
+            return Err(NcError::Usage(
+                "measure-roll needs the roll's film base stated explicitly — `--film-base \
+                 R,G,B` or `calibration.film_base` as `{\"explicit\": [r, g, b]}` in the \
+                 recipe: a base estimated per frame would measure each frame under a \
+                 different decode. Measure it once with `hanten estimate --grid \
+                 <base.tif>`"
+                    .into(),
+            ));
+        }
+    };
+    if let Some(rf) = args.report.report_file.as_deref() {
+        let inputs: Vec<&Path> = args
+            .inputs
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(args.leader.as_deref())
+            .collect();
+        for input in inputs {
+            ensure_write_targets_distinct(input, &[("--report-file", rf)])?;
+        }
+    }
+
+    let budget = args.memory.budget();
+    let mut warnings = Vec::new();
+    let mut decode = None;
+
+    let leader = match &args.leader {
+        Some(path) => {
+            let (aces, _, _, memory) =
+                decode_for_roll_white(path, &recipe, &base, budget, &log, &mut warnings)?;
+            let guard = roll_white::leader_guard(
+                aces.rgb(),
+                aces.width(),
+                aces.height(),
+                recipe.reconstruction.contrast,
+            )
+            .map_err(|e| NcError::Other(format!("{}: {}", path.display(), e.message())))?;
+            Some(MeasuredLeader {
+                input: path.clone(),
+                guard,
+                memory,
+            })
+        }
+        None => {
+            push_warning_buf(
+                &mut warnings,
+                &log,
+                "no --leader: the measurement is unguarded, so a fully exposed frame among \
+                 the inputs would become the roll's white (measured: it moves the gains \
+                 0.4–1.3 stops). Pass the roll's leader scan"
+                    .into(),
+            );
+            None
+        }
+    };
+
+    let mut pool = Vec::new();
+    let mut frames = Vec::with_capacity(args.inputs.len());
+    for input in &args.inputs {
+        let (aces, area, decoded, memory) =
+            decode_for_roll_white(input, &recipe, &base, budget, &log, &mut warnings)?;
+        let area = area.map_err(|e| {
+            NcError::Usage(format!(
+                "{}: {} (every frame is measured over its effective area)",
+                input.display(),
+                e.message()
+            ))
+        })?;
+        // A capped or unsettled holder march leaves holder in the region, and the pool
+        // would take it as picture — the same warning `convert` gives, so `--strict`
+        // sees it.
+        for w in film_base::effective_area_warnings(&area) {
+            push_warning_buf(&mut warnings, &log, format!("{}: {w}", input.display()));
+        }
+        let counts = roll_white::pool_frame(
+            aces.rgb(),
+            aces.width(),
+            area.region,
+            leader.as_ref().map(|l| &l.guard),
+            &mut pool,
+        )?;
+        if counts.kept == 0 {
+            push_warning_buf(
+                &mut warnings,
+                &log,
+                format!(
+                    "{}: contributed no pixel ({} guarded, {} unusable) — is it a picture \
+                     frame of this roll?",
+                    input.display(),
+                    counts.guarded,
+                    counts.unusable
+                ),
+            );
+        }
+        frames.push(MeasuredFrame {
+            input: input.clone(),
+            region: area.region,
+            counts,
+            memory,
+        });
+        decode.get_or_insert(decoded);
+    }
+    let gains = roll_white::roll_gains(&pool)?;
+    log.info(format_args!("roll white balance {gains:?}"));
+
+    let report = MeasureRollReport {
+        command: "measure-roll",
+        identity: Identity::new(),
+        film_base: base,
+        decode: decode.expect("clap requires at least one input"),
+        leader,
+        frames,
+        white_balance: RollWhiteBalance {
+            gains,
+            percentile: roll_white::PERCENTILE,
+            pooled: pool.len() / 3,
+        },
+        reuse: WhiteBalanceReuse {
+            flag: format!("--white-balance {},{},{}", gains[0], gains[1], gains[2]),
+            recipe: WhiteBalanceFragment {
+                scene_correction: WhiteBalanceSection {
+                    white_balance: scene_correction::WhiteBalance::Explicit(gains),
+                },
+            },
+        },
+        warnings,
+        elapsed_ms: elapsed_ms(started),
+    };
+    emit_json(
+        &report,
+        args.report.report,
+        args.report.report_file.as_deref(),
+        &log,
+    )?;
+    if args.strict && !report.warnings.is_empty() {
+        return Err(NcError::Other(format!(
+            "--strict: {} warning(s) present (see report)",
+            report.warnings.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Whether this run should collect telemetry — opt-in via either flag.

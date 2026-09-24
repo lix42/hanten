@@ -33,7 +33,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::algo::fixed::{AnchorRule, DecodeFault, DecodeParams};
-use crate::cli::{AutoWb, ResolvedConfig};
+use crate::cli::ResolvedConfig;
 use crate::pipeline::chain::ChainParams;
 use crate::pipeline::fit_gamut::{DestinationGamut, FitGamutParams};
 use crate::pipeline::fit_range::FitRangeParams;
@@ -274,6 +274,21 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
             .find(|(key, _)| fields.contains_key(*key))
             .map(|(key, why)| (*key, *why))
     };
+    // Retired by `nf-scene-correction/roll-white-balance`. Named here rather than left
+    // to serde, whose "unknown variant" says nothing about where the mode went.
+    if let Some(mode) = body
+        .get("scene_correction")
+        .and_then(|s| s.get("white_balance"))
+        .and_then(|w| w.as_str())
+        .filter(|m| ["gray-world", "percentile"].contains(m))
+    {
+        return usage(format!(
+            "`scene_correction.white_balance` \"{mode}\" was a per-frame estimate, and the \
+             new chain has none: it read a sunset as the cast and removed it. Drop it, \
+             then state the gains `hanten measure-roll` reports for the roll, as \
+             `{{\"explicit\": [r, g, b]}}`"
+        ));
+    }
     for (section, table) in [
         ("reconstruction", OLD_RECONSTRUCTION_KEYS),
         ("calibration", OLD_CALIBRATION_KEYS),
@@ -341,16 +356,10 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     if let Some(d) = args.anchor.anchor_mid_offset {
         r.reconstruction.anchor = AnchorRule::MidAboveBase(d);
     }
-    // Scene correction. Precedence is by source: `--white-balance 1,1,1` over a
-    // recipe's auto mode means neutral gains, not a re-estimate (clap refuses both
-    // flags together).
+    // Scene correction. `--auto-wb` never reaches here: `flow` refuses it by
+    // presence, since this chain has no per-frame estimate.
     if let Some(gains) = args.print.white_balance {
         r.scene_correction.white_balance = WhiteBalance::Explicit(gains);
-    } else if let Some(mode) = args.print.auto_wb {
-        r.scene_correction.white_balance = match mode {
-            AutoWb::GrayWorld => WhiteBalance::GrayWorld,
-            AutoWb::Percentile => WhiteBalance::Percentile,
-        };
     }
     if let Some(stops) = args.scene.exposure {
         r.scene_correction.exposure = stops;
@@ -606,6 +615,31 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("nonsense"), "{err}");
+    }
+
+    #[test]
+    fn a_retired_per_frame_white_balance_names_the_roll_measurement() {
+        for mode in ["gray-world", "percentile"] {
+            let body = format!(r#"{{"scene_correction": {{"white_balance": "{mode}"}}}}"#);
+            let err = check(&body, false).unwrap_err();
+            assert!(
+                err.contains(mode) && err.contains("measure-roll") && err.contains("explicit"),
+                "{err}"
+            );
+        }
+        // Only the two retired names: any other string is a typo for serde to report,
+        // not "a per-frame estimate".
+        check(
+            r#"{"scene_correction": {"white_balance": "neutral"}}"#,
+            false,
+        )
+        .unwrap();
+        // Stated gains are the one form, and pass the schema check.
+        check(
+            r#"{"scene_correction": {"white_balance": {"explicit": [1.2, 1, 1.1]}}}"#,
+            false,
+        )
+        .unwrap();
     }
 
     #[test]

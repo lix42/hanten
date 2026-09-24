@@ -32,6 +32,7 @@ pub mod look;
 pub mod memory;
 pub mod pixels;
 pub mod render_split;
+pub mod roll_white;
 pub mod scene_correction;
 pub mod sdr;
 /// Test-only diagnostic harness from `algo/reference-anchored-sigmoid`. `cfg(test)` so it

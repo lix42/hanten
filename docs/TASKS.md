@@ -1599,10 +1599,12 @@ the design in `docs/design-update.md`:
 - [ ] [A home and a name for
   `linear_range`](tasks/nf-scene-correction/levels-knob.md) — `linear_range`
   is a levels remap, not fit range — decide whether it survives and where
-- [ ] [A roll-level white
+- [x] [A roll-level white
   balance](tasks/nf-scene-correction/roll-white-balance.md) — measured once per
   roll from its own top percentile, removing the roll-constant cast and keeping
-  the scene's light; `path-to-white`'s band needs it
+  the scene's light; `path-to-white`'s band needs it. **Done 2026-09-23**: `hanten
+  measure-roll` (pooled p99, leader guard), and per-frame auto white balance retired
+  on the new chain
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to
