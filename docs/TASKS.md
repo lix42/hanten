@@ -1005,7 +1005,7 @@ the design in `docs/design-update.md`:
 - `nf-display-stages/fit-range` (new flow): `nf-look/stage`
   — one function both branches use, reinhard as the baseline setting
 - `nf-display-stages/fit-gamut` (new flow): `nf-display-stages/fit-range`
-  — one implementation, where there are three near-copies today
+  — one implementation both chains call, each with its own ceiling
 - `nf-display-stages/parametric-operator` (new flow): `nf-display-stages/fit-range`
   — reinhard compresses upward only, so the shadow end is a subtraction;
   supersedes `algo/content-aware-sigmoid-toe`
@@ -1674,8 +1674,12 @@ the design in `docs/design-update.md`:
   bit for bit below diffuse white (`algo::fixed::DIFFUSE_WHITE`), and content above the
   headroom exceeds the peak on every branch, counted at the encode. Knob
   `fit_range.headroom_stops` (`--display-tone-headroom`); non-finite samples refused
-- [ ] [One gamut-mapping implementation](tasks/nf-display-stages/fit-gamut.md)
-  — one implementation, where there are three near-copies today
+- [x] [One gamut-mapping implementation](tasks/nf-display-stages/fit-gamut.md)
+  — **done 2026-09-24.** `fit_gamut::radial_to_boundary` is the one map; the legacy
+  `sdr`/`hdr`/`gain_map` call it with their own ceilings (byte-identical output), and
+  the new flow maps against `max(peak, Y)`, the peak riding on `RangeFittedImage`.
+  On 92 real frames the new flow's clipped samples went 336,106 → 0; no marked white
+  moved
 - [ ] [A parametric operator with a
   toe](tasks/nf-display-stages/parametric-operator.md) — reinhard compresses
   upward only, so the shadow end is a subtraction; supersedes

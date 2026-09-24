@@ -1097,8 +1097,12 @@ top-level **document version** rather than per-object ones:
   parameters (`--density-scale`, `--density-offset`, `--density-gamma`,
   `--anchor-mid-offset`). `scene_correction` is white balance and exposure and
   `fit_range` the operator's headroom, and `look` highlight desaturation (all below).
-  `fit_gamut` is present and empty until its task gives it a knob, and refuses any key
-  until then. There is no
+  `fit_gamut` is empty and has no knob: it changes primaries into the destination's
+  gamut and maps out-of-gamut colour radially toward neutral at constant luminance,
+  against the cube `[0, max(peak, Y)]` — the peak is fit range's, and content above
+  it renders neutral at its own luminance and clips, counted, at the encode. A pixel
+  whose destination luminance is `≤ 0` renders black. The report names it
+  `acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2`. There is no
   `output` section while the new chain writes one fixed destination.
 - **The version is the chain declaration.** `recipe_version` is required and is
   exactly `2`. Under `--new-flow` a recipe without it is refused; without the flag,
@@ -2509,10 +2513,9 @@ nc/
 The tree is the shipped module set, not a proposal — it had drifted by nine modules
 and is worth re-checking whenever one is added. The six new-flow modules are the
 migration's chain (`docs/design-update.md`, `docs/nf-migration.md`). `--new-flow`
-runs them — the fixed decode, scene correction's white balance and exposure, two
-identity stages, fit gamut's change of primaries, and one Display P3 16-bit TIFF
-destination — but nothing in this spec's pipeline
-runs through them yet.
+runs them — the fixed decode, scene correction's white balance and exposure, the
+identity look, fit range, fit gamut's radial map into Display P3, and one Display P3
+16-bit TIFF destination — but nothing in this spec's pipeline runs through them yet.
 
 ### Candidate crates
 

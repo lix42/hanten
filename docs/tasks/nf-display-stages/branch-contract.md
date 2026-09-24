@@ -32,7 +32,10 @@ Open:
   branch that is sometimes skipped is a second code path.
 - **What the contract says about the gamut map**, whose ceiling differs per branch
   by design (see [fit gamut](fit-gamut.md)): that is below-white-safe only if the
-  ceiling never bites below diffuse white. Confirm rather than assume.
+  ceiling never bites below diffuse white. Confirm rather than assume. **It does**
+  (2026-09-24, `fit-gamut`): a saturated colour under diffuse white with one P3 channel
+  above `1` is mapped against the SDR ceiling and left alone under the HDR one
+  (`fit_gamut::tests::the_ceiling_is_the_peak_fit_range_used`).
 - Whether the contract is a doc statement, a type (one shared source handed to both
   branches), or both.
 

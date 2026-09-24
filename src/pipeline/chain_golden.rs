@@ -344,7 +344,8 @@ fn the_decode_capture_is_correctly_rounded_and_the_host_conforms() {
 
 /// Film-RGB values for everything downstream of the decode: mid-grey, a saturated
 /// blue, a red with a negative channel (outside the film cube, which an unclamped
-/// reconstruction can produce, and outside Display P3 after fit gamut), diffuse white,
+/// reconstruction can produce, and outside Display P3 after the destination matrix, so
+/// fit gamut maps it), diffuse white,
 /// above white, black, a near-black, and a pixel with a NaN channel.
 const FILM_RGB: [f32; 24] = [
     0.18,
@@ -764,9 +765,14 @@ const LOOK_BRIGHTNESS_RAMP: [u32; 3] = [0x3f498013, 0x3f48597c, 0x3f474de1];
 
 // --- fit gamut -------------------------------------------------------------------
 
+/// Fit gamut against an SDR peak. The vector exercises every case the stage has: in
+/// gamut (untouched), a negative P3 channel (pixel 2), a channel just over the peak at
+/// luminance ≈ 1 (pixel 3), and a pixel above the peak, rendered neutral at its own
+/// luminance (pixel 4). Recaptured 2026-09-24 when the radial map landed
+/// (`nf-display-stages/fit-gamut`); before it the stage was the matrix alone.
 const FIT_GAMUT_P3: [u32; 21] = [
-    0x3e3851ed, 0x3e3851ed, 0x3e3851ec, 0x3b1a5990, 0x3b80e4f0, 0x3f51dddf, 0x3f3dad52, 0x3d0a3515,
-    0xbb26e27a, 0x3f800001, 0x3f800000, 0x3f7fffff, 0x4074a339, 0x40421fdb, 0x4023f4e7, 0x00000000,
+    0x3e3851ed, 0x3e3851ed, 0x3e3851ec, 0x3b1a5990, 0x3b80e4f0, 0x3f51dddf, 0x3f3bd908, 0x3d12b332,
+    0x00000000, 0x3f800000, 0x3f800000, 0x3f800000, 0x404b4c7b, 0x404b4c7b, 0x404b4c7b, 0x00000000,
     0x00000000, 0x00000000, 0x3b503e3d, 0x3b81fbfb, 0x3b0dae49,
 ];
 
@@ -802,9 +808,11 @@ fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
     }
 }
 
+/// Recaptured 2026-09-24 with fit gamut's radial map: pixel 2's negative channel and
+/// pixel 4's channel over 1 now land on the boundary.
 const THREADED: [u32; 21] = [
-    0x3e0b2f73, 0x3dc78824, 0x3d3fe5ca, 0x3cdcecf4, 0x3b9fc30d, 0x3e78815e, 0x3efe9e8d, 0x3c538910,
-    0xbb00ca33, 0x3f03c63e, 0x3ebce85e, 0x3e35ae16, 0x3f840a0c, 0x3f192bfd, 0x3e7733c4, 0x00000000,
+    0x3e0b2f73, 0x3dc78824, 0x3d3fe5ca, 0x3cdcecf4, 0x3b9fc30d, 0x3e78815e, 0x3efb981a, 0x3c6fe399,
+    0x00000000, 0x3f03c63e, 0x3ebce85e, 0x3e35ae16, 0x3f800000, 0x3f1ac0ab, 0x3e8eada9, 0x00000000,
     0x00000000, 0x00000000, 0x3b2f11a9, 0x3b1c7185, 0x3a1d5f9a,
 ];
 
@@ -822,7 +830,10 @@ fn golden_the_chain_threaded_is_bit_identical() {
             ("scene_correction", "white-balance+exposure"),
             ("look", "identity"),
             ("fit_range", fit_range::OPERATOR),
-            ("fit_gamut", "acescg-to-display-p3-matrix"),
+            (
+                "fit_gamut",
+                "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
+            ),
         ],
         "chain (threaded): the stage list the render reports"
     );

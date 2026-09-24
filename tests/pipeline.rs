@@ -10287,11 +10287,12 @@ fn new_flow_fits_the_scene_range_with_the_stated_headroom() {
         assert_eq!(code, 0, "{extra:?}: {err}");
         (out, json(&stdout))
     };
+    // A run that clipped nothing carries no `warnings` array at all.
     let clipped = |report: &serde_json::Value| {
         report["warnings"]
             .as_array()
-            .unwrap()
-            .iter()
+            .into_iter()
+            .flatten()
             .filter_map(|w| w.as_str())
             .find_map(|w| w.strip_prefix("output lost "))
             .and_then(|w| w.split(' ').next())
@@ -10403,7 +10404,7 @@ fn new_flow_renders_a_display_p3_tiff() {
                 "identity",
                 "highlight-desaturation",
                 "reinhard-peak-lifted-v1",
-                "acescg-to-display-p3-matrix"
+                "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
             ],
             "the report states what each stage did, identities included"
         );

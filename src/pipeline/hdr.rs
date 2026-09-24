@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::pipeline::colorimetry::definitions::transfer;
 use crate::pipeline::colorimetry::pinned::{ACESCG_TO_BT2020, BT2020_LUMA};
 use crate::pipeline::display_tone::Headroom;
+use crate::pipeline::fit_gamut::radial_to_boundary;
 use crate::pipeline::pixels;
 use crate::pipeline::render_split::SharedDisplaySource;
 use crate::types::{LinearImage, NcError, OutputPreset, Result};
@@ -352,7 +353,7 @@ pub fn encode_transfer(mut linear: LinearBt2020Hdr, transfer: HdrTransfer) -> Re
                 let display = px.map(|channel| channel / LINEAR_HEADROOM);
                 let scene = hlg_inverse_ootf(display);
                 let scene_luminance = dot(scene, BT2020_LUMA);
-                gamut_map(scene, scene_luminance, 1.0).map(hlg_oetf)
+                radial_to_boundary(scene, scene_luminance, 1.0).map(hlg_oetf)
             }
         };
         if !encoded.iter().all(|value| value.is_finite()) {
@@ -464,7 +465,7 @@ fn render_pixel_checked(aces: [f32; 3], index: usize, tone: Headroom) -> Result<
         // the rest, and it is not something this operator can fix.
         let rendered_luminance = tone.hdr(luminance, REFERENCE_WHITE_CROSSOVER, LINEAR_HEADROOM);
         let scale = rendered_luminance / luminance;
-        gamut_map(
+        radial_to_boundary(
             bt2020.map(|channel| channel * scale),
             rendered_luminance,
             LINEAR_HEADROOM,
@@ -487,36 +488,6 @@ fn render_pixel_checked(aces: [f32; 3], index: usize, tone: Headroom) -> Result<
         )));
     }
     Ok(rendered)
-}
-
-/// Same-luminance radial mapping to an RGB cube boundary. Every channel uses
-/// one common chroma scale, preserving the neutral axis and chroma direction.
-fn gamut_map(rgb: [f32; 3], luminance: f32, maximum: f32) -> [f32; 3] {
-    let neutral = f64::from(luminance);
-    let upper = f64::from(maximum);
-    let delta = rgb.map(|channel| f64::from(channel) - neutral);
-    let mut chroma_scale = 1.0_f64;
-    let mut limiting_boundary = None;
-    for (channel, d) in delta.into_iter().enumerate() {
-        if d > 0.0 {
-            let candidate = (upper - neutral) / d;
-            if candidate < chroma_scale {
-                chroma_scale = candidate;
-                limiting_boundary = Some((channel, maximum));
-            }
-        } else if d < 0.0 {
-            let candidate = -neutral / d;
-            if candidate < chroma_scale {
-                chroma_scale = candidate;
-                limiting_boundary = Some((channel, 0.0));
-            }
-        }
-    }
-    let mut output = delta.map(|d| (neutral + chroma_scale * d) as f32);
-    if let Some((channel, boundary)) = limiting_boundary {
-        output[channel] = boundary;
-    }
-    output
 }
 
 /// ST 2084 inverse EOTF for absolute luminance in cd/m².
@@ -773,7 +744,7 @@ mod tests {
     fn out_of_gamut_color_uses_one_chroma_scale_at_constant_luminance() {
         let input = [-0.4, 1.5, 0.3];
         let luminance = dot(input, BT2020_LUMA);
-        let output = gamut_map(input, luminance, LINEAR_HEADROOM);
+        let output = radial_to_boundary(input, luminance, LINEAR_HEADROOM);
         close(dot(output, BT2020_LUMA), luminance);
         let before = input.map(|channel| channel - luminance);
         let after = output.map(|channel| channel - luminance);
@@ -789,6 +760,35 @@ mod tests {
                 .iter()
                 .all(|value| (0.0..=LINEAR_HEADROOM).contains(value))
         );
+    }
+
+    #[test]
+    fn each_call_site_maps_against_its_own_ceiling() {
+        // Both call sites share `radial_to_boundary` with other renderers, so what
+        // pins each one is the ceiling it passes. The display render's is the linear
+        // headroom: a colour under reference white with a BT.2020 channel above 1 is
+        // inside the HDR cube and stays put (zero headroom, so no luminance scale).
+        let aces = [2.0, 0.2, 0.2];
+        let bt2020 = mul(ACESCG_TO_BT2020, aces);
+        assert!(
+            bt2020[0] > 1.0 && dot(bt2020, BT2020_LUMA) < 1.0,
+            "{bt2020:?}"
+        );
+        let rendered = render_pixel_checked(aces, 0, Headroom::new(0.0).unwrap()).unwrap();
+        assert_eq!(rendered, bt2020);
+
+        // HLG's is `1.0` in scene-linear light: a display colour whose inverse OOTF
+        // lands above 1 is mapped onto the cube, so its signal tops out at exactly 1.
+        let display = [4.5, 0.05, 0.05];
+        let scene = hlg_inverse_ootf(display.map(|channel| channel / LINEAR_HEADROOM));
+        assert!(scene[0] > 1.0, "{scene:?}");
+        let mut linear =
+            render_linear(&shared_from_film_rgb(&[0.18; 3]), Headroom::default()).unwrap();
+        linear.image = LinearImage::new(1, 1, display.to_vec(), None).unwrap();
+        let hlg = encode_transfer(linear, HdrTransfer::Hlg).unwrap();
+        let signal = hlg.image().rgb();
+        assert!(signal.iter().all(|&v| v <= 1.0), "{signal:?}");
+        assert!(signal.contains(&1.0), "{signal:?}");
     }
 
     #[test]

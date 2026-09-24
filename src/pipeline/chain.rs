@@ -6,8 +6,8 @@
 //! into one destination (`cli::convert_frame`, `nf-core/minimal-end-to-end`). Scene
 //! correction applies white balance and exposure; the look desaturates near-neutral
 //! highlights (its first control — the rest of its epic fills it); fit range
-//! compresses the scene's range against the destination's peak, and fit gamut applies
-//! only the change of primaries into the destination's gamut.
+//! compresses the scene's range against the destination's peak, and fit gamut maps
+//! into the destination's gamut, keeping hue.
 //!
 //! **The order is carried by the types, not by this function.** Each stage's
 //! input is the previous stage's output type, and each of those can be minted
@@ -71,13 +71,15 @@ pub struct Rendered {
 /// Render an [`AcesCgImage`] through the new chain.
 ///
 /// **Today this is scene correction's per-channel gains, the look's highlight
-/// desaturation, fit range's luminance operator and the destination's 3×3** — fit
-/// gamut applies only the change of primaries. Nothing is clamped: values outside `[0, 1]`
-/// ride through to the encoder, which is the only place clamping happens. A
-/// non-finite sample is **refused** by fit range, naming the pixel.
+/// desaturation, fit range's luminance operator, and the destination's 3×3 with the
+/// radial gamut map.** Nothing is clamped: content fit range left above the peak rides
+/// through to the encoder, which is the only place clamping happens. The gamut map is
+/// a policy, not a clamp, and what it discards (a colour at `Y ≤ 0`, written black) is
+/// not counted there. A non-finite sample is **refused**, naming the pixel: by fit
+/// range on input, by fit gamut if the change of primaries overflows.
 ///
 /// **Fallible by construction.** Every stage's signature returns a `Result` and so
-/// does this, although only scene correction and fit range can fail yet. That is the
+/// does this, and today every stage can fail. That is the
 /// point of settling the boundaries once: every stage this chain will host has a
 /// *fallible* counterpart in the shipped code — `render_split::display_source`,
 /// `sdr::render` (which errors on a non-finite sample) and `hdr::render_linear` all
@@ -116,7 +118,7 @@ pub fn render(image: AcesCgImage, params: &ChainParams) -> Result<Rendered> {
 mod tests {
     use super::*;
     use crate::algo::{FilmRgbImage, reconstruct};
-    use crate::pipeline::colorimetry::pinned::ACESCG_TO_DISPLAY_P3;
+    use crate::pipeline::colorimetry::pinned::{ACESCG_TO_DISPLAY_P3, DISPLAY_P3_LUMA};
     use crate::pipeline::fit_gamut::DestinationGamut;
     use crate::pipeline::fit_range::{DisplayPeak, RangeFittedImage};
     use crate::pipeline::scene_correction::WhiteBalance;
@@ -249,14 +251,31 @@ mod tests {
     }
 
     #[test]
-    fn the_chain_applies_the_destination_matrix_and_nothing_else() {
-        // What the whole chain does with every stage at its identity: the pinned
-        // ACEScg → Display P3 3×3, bit for bit, with nothing clamped.
-        let aces = aces_from(3, 1, &FINITE, None);
-        let expected = bits(&to_p3(aces.rgb()));
+    fn at_its_identities_the_chain_is_the_destination_matrix_then_the_gamut_map() {
+        // Every stage above fit gamut at its identity: a colour the pinned ACEScg →
+        // Display P3 3×3 puts inside `[0, max(1, Y)]` comes out bit for bit, and only
+        // the others move — onto the boundary, nothing clamped past it.
+        let rgb = [0.0, 0.18, 1.0, 0.2, 0.4, 0.6, 0.9, 0.05, -0.3];
+        let aces = aces_from(3, 1, &rgb, None);
+        let p3 = to_p3(aces.rgb());
         let (out, gamut) = render(aces, &params()).unwrap().image.into_parts();
         assert_eq!(gamut, DestinationGamut::DisplayP3);
-        assert_eq!(bits(&out.rgb), expected);
+        let (mut kept, mut mapped) = (0, 0);
+        for (px, want) in out.rgb.as_chunks::<3>().0.iter().zip(p3.as_chunks::<3>().0) {
+            let y = want[0] * DISPLAY_P3_LUMA[0]
+                + want[1] * DISPLAY_P3_LUMA[1]
+                + want[2] * DISPLAY_P3_LUMA[2];
+            let ceiling = y.max(1.0);
+            if want.iter().all(|v| (0.0..=ceiling).contains(v)) {
+                assert_eq!(bits(px), bits(want));
+                kept += 1;
+            } else {
+                assert!(px.iter().all(|v| (0.0..=ceiling).contains(v)), "{px:?}");
+                assert!(px.contains(&0.0) || px.contains(&ceiling), "{px:?}");
+                mapped += 1;
+            }
+        }
+        assert!(kept > 0 && mapped > 0, "{kept} kept, {mapped} mapped");
     }
 
     #[test]
@@ -311,17 +330,37 @@ mod tests {
     }
 
     #[test]
-    fn the_chain_leaves_both_sides_of_the_cube_unclamped() {
+    fn the_chain_maps_out_of_gamut_colour_and_clamps_nothing() {
         // Finite values only, so the assertions below cannot be satisfied by an
-        // infinity: a bright neutral lands above 1.0, and a colour outside the film-RGB
-        // cube (which an unclamped decode can produce) lands outside P3 with a negative
-        // channel. Clamping is the encoder's alone.
-        let aces = aces_from(2, 1, &[4.0, 4.0, 4.0, 1.0, -0.5, -0.5], None);
+        // infinity. A bright neutral lands above 1.0 and stays there — clamping is the
+        // encoder's alone — while a colour the matrix puts below zero in P3 is mapped
+        // onto the cube rather than left for the encoder's per-channel clip.
+        let rgb = [4.0, 4.0, 4.0, 0.9, 0.05, -0.3];
+        let aces = aces_from(2, 1, &rgb, None);
+        let p3 = to_p3(aces.rgb());
+        assert!(p3[3..].iter().any(|v| *v < 0.0), "{:?}", &p3[3..]);
         let (out, _) = render(aces, &params()).unwrap().image.into_parts();
 
         assert!(out.rgb.iter().all(|v| v.is_finite()));
         assert!(out.rgb[..3].iter().all(|v| *v > 1.0), "{:?}", &out.rgb[..3]);
-        assert!(out.rgb[3..].iter().any(|v| *v < 0.0), "{:?}", &out.rgb[3..]);
+        assert!(
+            out.rgb[3..].iter().all(|v| *v >= 0.0),
+            "{:?}",
+            &out.rgb[3..]
+        );
+        assert!(out.rgb[3..].contains(&0.0), "{:?}", &out.rgb[3..]);
+        // Mapped, not discarded: the luminance survives, so this is not the black a
+        // colour at `Y ≤ 0` gets.
+        let luminance = |px: &[f32]| {
+            px[0] * DISPLAY_P3_LUMA[0] + px[1] * DISPLAY_P3_LUMA[1] + px[2] * DISPLAY_P3_LUMA[2]
+        };
+        let y = luminance(&p3[3..]);
+        assert!(y > 0.05, "{y}");
+        assert!(
+            (luminance(&out.rgb[3..]) - y).abs() < 1e-6,
+            "{:?}",
+            &out.rgb[3..]
+        );
     }
 
     #[test]
@@ -490,7 +529,7 @@ mod tests {
             (
                 include_str!("fit_range.rs"),
                 "RangeFittedImage",
-                "pub struct RangeFittedImage(WorkingBuffer);",
+                "pub struct RangeFittedImage(WorkingBuffer, DisplayPeak);",
             ),
             (
                 include_str!("fit_gamut.rs"),
