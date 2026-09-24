@@ -20,7 +20,7 @@ What is known:
 - **Fit range and fit gamut stay adjacent but separate** (design-update Part 2):
   the ceiling is an output of the previous stage, which is exactly why they were
   fused and exactly why they should not be.
-- **The gain-map ceiling is the load-bearing one.** CLAUDE.md records what
+- **The gain-map ceiling is the load-bearing one.** `gain_map::build`'s docs record what
   ratioing against the rendered SDR rather than the stored one cost — so unifying
   the implementation must not unify the ceiling.
 - **Written fresh**, and the destination gamut is a parameter: Adobe RGB is a

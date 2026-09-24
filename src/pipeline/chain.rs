@@ -474,7 +474,9 @@ mod tests {
         // inside the module — a `pub(in crate::pipeline) fn new`, or an
         // `impl From<WorkingBuffer>` — would leave the declaration untouched. So count
         // the construction sites too: the tuple constructor may appear exactly twice —
-        // the declaration and `apply` — and never spelled `Self(…)`.
+        // the declaration and `apply` — and never spelled `Self(…)`. The `Self(` check
+        // is textual over the whole module, so a helper newtype there must be built by
+        // name (`DisplayPeak(1.0)`), not `Self(..)`.
         for (source, name, declaration) in [
             (
                 include_str!("scene_correction.rs"),

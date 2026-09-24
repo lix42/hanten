@@ -8,8 +8,9 @@
 //!
 //! ## What each entry must document
 //!
-//! Direction (which space is source), encoding domain (these are all *linear*
-//! transforms — no transfer function is folded in), the two white points, the
+//! Direction (which space is source), encoding domain (no transfer function is
+//! folded in; all are linear-light except [`BT2020_NCL_RGB_TO_YCBCR`], which
+//! multiplies transfer-encoded code values), the two white points, the
 //! chromatic-adaptation convention, and the measured deviation from the canonical
 //! `f64` re-derivation in `super::derive`.
 //!

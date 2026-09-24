@@ -754,7 +754,8 @@ fn transform_in_place(image: &mut LinearImage, input: &Profile, output: &Profile
     // shortcut constructors (`new`, `new_flags`) erase it, so the transform is built
     // through `new_flags_context` with the same null global context — identical
     // bytes, and Little CMS keeps reporting faults to the global handler `cli`
-    // installs.
+    // installs (a `ThreadContext` is equally `Sync`, but its faults would go to a
+    // per-context handler nothing reads).
     let transform: Transform<[f32; 3], [f32; 3], GlobalContext, DisallowCache> =
         Transform::new_flags_context(
             GlobalContext::new(),

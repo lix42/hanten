@@ -134,9 +134,9 @@ pub(super) fn reconstruct(
     dmax: DmaxInput,
 ) -> Result<(FilmRgbImage, ReconstructionReport)> {
     // `to_density` divides by the per-channel base, so a zero / negative /
-    // non-finite base would yield a silently-black or non-finite image. The CLI
-    // validates an *explicit* base, but an auto/region-estimated one is only
-    // guarded here — the base's consumption point. Fail loudly instead.
+    // non-finite base would yield a silently-black or non-finite image.
+    // `film_base::estimate` guards every source at birth; this is defense-in-depth
+    // for a base reaching the algorithm by another route. Fail loudly instead.
     check_base(base)?;
     let mut density = to_density(image, base, params);
 

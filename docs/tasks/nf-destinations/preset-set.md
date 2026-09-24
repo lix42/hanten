@@ -36,7 +36,7 @@ Open:
 
 - **Is a destination a name, or a small product of selectors?** Every preset is
   atomic since `custom` and `--out-depth` retired, and the presence-vs-value asymmetry
-  `--out-depth` needed is recorded in CLAUDE.md. A gamut selector on an otherwise
+  `--out-depth` needed is recorded in `cli::validate_convert`'s docs. A gamut selector on an otherwise
   atomic destination would reopen that; a name per combination reopens the thirteenth-name problem.
 - **What does a destination mean while `--new-flow` is off?** Either the names are
   new and only exist under the flag, or they are the same names resolving a

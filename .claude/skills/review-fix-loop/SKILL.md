@@ -192,9 +192,17 @@ adversarial subcommand — again by script, not by slash command:
 That path is the one that assembles the diff locally (`collectReviewContext`), so
 it *is* subject to the 24 KiB `MAX_UNTRACKED_BYTES` untracked-file cap and to
 `buildBranchComparison`'s two-dot `merge-base..HEAD` range under `--scope branch`
-— neither of which applies to plain `review`. Gotcha:
-if the review 400s on the reviewer model, the Codex CLI is too old / its default
-model needs a switch (see CLAUDE.md "Codex review on a worktree").
+— neither of which applies to plain `review`.
+
+Three Codex gotchas:
+
+- **A failed review still exits 0.** A spend-cap or auth failure prints
+  `Codex error: …` / `Reviewer failed to output a response` and returns success —
+  judge the run by its output, never its exit status.
+- **A 400 naming the reviewer model** means the Codex CLI is too old for its
+  default model: upgrade it or switch the model. `/codex:setup` checks install and
+  auth, not model support.
+- **A review routed through `/codex:rescue` is not tracked by `/codex:status`.**
 
 **`nc-reviewer`** (second engine) — the project's dedicated review agent
 (`.claude/agents/nc-reviewer.md`). Spawn it **named** via the Agent tool
@@ -266,7 +274,7 @@ describes; only diff-caused staleness goes to the fix agent.
 Spawn (or `SendMessage`-resume) a single named **`nc-fixer`** agent
 (`.claude/agents/nc-fixer.md`, `subagent_type: nc-fixer`) — never have the
 reviewers fix their own findings. Its definition already carries the standing
-constraints (add no commits, all four CI gates green in order,
+constraints (add no commits, every CI gate green in order,
 four-coupled-spots, design-spec is the sole design source, per-item report with
 verbatim gate results). Your prompt supplies:
 

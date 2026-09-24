@@ -207,7 +207,7 @@ pub const ADOBE_RGB: ColorSpace = ColorSpace {
 /// `color::hdr_linear_bt2020_icc` for the `hdr-linear-tiff` output — so an edit
 /// here changes embedded ICC bytes even when `pinned.rs` is untouched and every
 /// audit `ulps` is 0. See the module note's warning about the lcms2-consumed
-/// definitions; this is the fifth.
+/// definitions; this is one of the four.
 pub const BT2020: ColorSpace = ColorSpace {
     name: "bt2020",
     primaries: Primaries::new(xy(0.708, 0.292), xy(0.170, 0.797), xy(0.131, 0.046)),

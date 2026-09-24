@@ -14,7 +14,7 @@ actually true.
   `--film-stock`, three `ConversionPreset` names (`characteristic-generic`,
   `-stock`, `-aim`) and `DensityParams::default_scale_for`'s `[1, 1, 1]` arm, is
   nobody's. This task is that third member.
-- **Collapsing the curve set collapses `default_scale_for`.** CLAUDE.md records its
+- **Collapsing the curve set collapses `default_scale_for`.** `DensityParams::default_scale_for` records its
   per-curve default being resolved in **three** places — the recipe's `Deserialize`
   (off raw-JSON key *presence*), the `--density-curve` merge arm (which must stay
   before the `--density-scale` arm), and the `roll` planner by hand, because the

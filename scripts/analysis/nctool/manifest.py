@@ -84,7 +84,8 @@ SUFFIXES = ("_positive_hdr.tiff", "_positive.tiff", "_corr.tif", "_pos.tif",
 # Accepted `--version` banners. `hanten ` is current; `nc ` is the pre-rename
 # spelling and must stay, because the reference rendition comes from the pre-rename
 # reference build (scripts/reference-snapshot/), which still prints `nc`.
-# Dropping it fails silently: find_nc() would return None with no error.
+# Dropping it makes every command pointed at the reference build (--nc, $NC, a
+# review matrix's `builds`) refuse it. find_nc() is hanten-only by design.
 BANNERS = ("hanten ", "nc ")
 
 

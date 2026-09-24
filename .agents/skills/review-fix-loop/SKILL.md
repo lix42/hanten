@@ -84,9 +84,8 @@ let multiple agents edit concurrently. Give it the verified, itemized findings
 and these constraints:
 
 - Keep everything **uncommitted** (the user reviews before any commit/PR).
-- Finish with **all four CI gates green**, in order:
-  `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings` →
-  `cargo build` → `cargo test`.
+- Finish with **every CI gate green**, in order, with CI's flags — the list in
+  the checkout's `CLAUDE.md` ("Commands and gates").
 - `docs/design-spec.md` is the **sole maintained design source** — edit it there.
   The rendered HTML companion is retired and may be regenerated after the feature
   roadmap stabilizes; do not recreate or hand-edit it.

@@ -87,6 +87,12 @@ warm updates, but a same-size edit would go undetected).
 - New rolls/frames default `role: "real"`; mark `unexposed`/`leader` by editing
   `manifest.json` (preserved thereafter). Known nc rolls have seeded
   roles/stock for first-ever generation.
+- **A frame's `role` is the only way to keep a non-picture frame out of a
+  measurement.** Consumers filter on `role == "real"`; no density or span threshold
+  can do it, because a half-leader/half-base frame has the *largest* density span on
+  its roll — what it lacks is scene content. Give such a frame any non-`real` role
+  (`nctool manifest roles` warns on an unrecognised one and treats it as `real`,
+  which only affects the harness's grouping).
 - `converted/nc/*` buckets default `regenerable: true` (sha256 skipped, since the
   harness reproduces them) except `V0`; `nlp/*` and everything else are hashed.
 - `source_frame` for a converted output is resolved by matching its filename stem

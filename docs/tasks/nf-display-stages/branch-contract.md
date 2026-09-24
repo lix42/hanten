@@ -21,7 +21,7 @@ What is known:
   it — which is why the look's highlight desaturation is anchored at diffuse white
   too, and the HDR lift already uses that crossover.
 - **The agreement is checkable, not merely intended.** Nothing asserts it today;
-  the gain-map defect CLAUDE.md records was an agreement failure every counter read
+  the gain-map defect `gain_map::build` records was an agreement failure every counter read
   as zero.
 
 Open:

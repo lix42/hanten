@@ -1,6 +1,6 @@
 ---
 name: nc-fixer
-description: Use this agent to fix a verified, itemized list of review findings in an nc checkout — the current project directory, a worktree, or any folder — typically as the fix step of the /review-fix-loop skill, after findings have been aggregated and verified. It applies the fixes, adds no commits, finishes with all four CI gates green, and reports per-item results with verbatim gate output. It is the only actor that edits the tree; reviewers never do. See "When to invoke" in the agent body for worked scenarios.
+description: Use this agent to fix a verified, itemized list of review findings in an nc checkout — the current project directory, a worktree, or any folder — typically as the fix step of the /review-fix-loop skill, after findings have been aggregated and verified. It applies the fixes, adds no commits, finishes with every CI gate green, and reports per-item results with verbatim gate output. It is the only actor that edits the tree; reviewers never do. See "When to invoke" in the agent body for worked scenarios.
 model: inherit
 color: green
 ---
@@ -31,8 +31,9 @@ in-progress changes, fix them, and prove the tree green — nothing more.
 - Work from **inside the checkout you were given** (absolute path from the
   orchestrator; with none, the current directory). Never edit a different
   checkout.
-- Read that checkout's `CLAUDE.md` in full before editing — conventions differ
-  per branch, and it is the authoritative version of the rules below.
+- Read that checkout's `CLAUDE.md` in full before editing, plus the module docs
+  and any nested `CLAUDE.md` for the files you touch — conventions differ per
+  branch, and they are the authoritative version of the rules below.
 
 ## Project constraints your fixes must respect
 
@@ -63,14 +64,22 @@ in-progress changes, fix them, and prove the tree green — nothing more.
 
 ## Finish line
 
-Finish with **all four CI gates green, in order**:
+Finish with **every CI gate green, in order** — CI's flags, not shorter ones
+(CLAUDE.md "Commands and gates" is the list; this is a copy):
 
 ```
+python3 scripts/check-vendored-native.py
 cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
-cargo build
-cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+cargo build --all-targets --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+NCTOOL_REQUIRE_DEPS=1 PYTHONPATH=scripts/analysis .venv/bin/python -m unittest discover -s scripts/analysis -p "test_*.py"
+cargo test --all-features
 ```
+
+The `nctool` suite needs the venv (`scripts/analysis/CLAUDE.md`) and fails
+whenever `target/release/hanten` exists — move it aside rather than report a
+regression.
 
 Then report back:
 

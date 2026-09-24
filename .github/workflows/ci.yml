@@ -59,6 +59,13 @@ jobs:
       - name: Build
         run: cargo build --all-targets --all-features --verbose
 
+      # No other gate reads doc comments, so a renamed item's dangling intra-doc
+      # link would otherwise pass everything above.
+      - name: Docs (warnings = errors)
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       # Pinned to an exact release: this action publishes floating major tags only
       # through v7, so `@v10` would not resolve.
       - name: Install uv

@@ -171,7 +171,7 @@ class ColorimetrySource(unittest.TestCase):
         rounded non-constant-luminance coefficients an encoder applies to
         *transfer-encoded* values. Deriving from the primaries — which is what a
         luminance statistic needs — gives something ~2e-6 away. This test pins the
-        gap so nobody "corrects" one to match the other; CLAUDE.md records that
+        gap so nobody "corrects" one to match the other; `pinned.rs` records that
         the standard's rounding is deliberate and that decoders invert the rounded
         form.
         """

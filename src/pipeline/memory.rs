@@ -364,6 +364,12 @@ const RAM_WARN_PERCENT: u64 = 70;
 /// Which pipeline a preflight is sizing. The commands allocate very differently —
 /// `inspect`/`estimate` stop after decode, so gating them on the full-pipeline
 /// peak would reject inputs they could handle fine.
+///
+/// A new preset gets its own variant, calibrated before it ships: measure peak RSS
+/// on **two** frame sizes and solve for the per-pixel slope and the fixed cost (one
+/// size cannot separate them), and leave the enumerated `accounted` bytes slightly
+/// *under* measured — [`ALLOWANCE_PERCENT`] exists to cover allocator overhead, so
+/// padding the buffers as well double-counts it and rejects runs that fit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunProfile {
     /// `convert` / `roll` for `film-master` (always `f32`): decode → film-base →
@@ -911,8 +917,8 @@ pub fn estimate_peak(
             // `iso::encode_iso_gain_map` would add roughly 24 B/px of full-frame
             // buffers (f32 per-channel normalization plus its deinterleaved planes)
             // if it ever reaches a live path — the shipped presets both encode the
-            // *legacy* map and project ISO fields from it. Per CLAUDE.md, nothing
-            // tests this model against the code.
+            // *legacy* map and project ISO fields from it. Nothing tests this model
+            // against the code (module doc).
             let byte_staging = mul(pixels, 20)?;
             let ir_export = if export_ir && shape.ir_present {
                 mul(pixels, 2)?
@@ -1003,8 +1009,8 @@ pub fn estimate_peak(
             // legitimately lands on the render phase. If a future lossless TIFF
             // *compression* option is added, its codec buffers become a real term
             // and this comment stops being true — add it here rather than trusting
-            // the allowance to absorb it. Per CLAUDE.md, nothing tests this model
-            // against the code.
+            // the allowance to absorb it. Nothing tests this model against the
+            // code (module doc).
             // **`--export-ir` costs nothing here**, which is not an omission. This
             // preset resolves `OutDepth::F32`, and `export_ir_to_writer`'s f32 arms
             // hand `image.ir`'s existing `&[f32]` straight to `encode_planar` —

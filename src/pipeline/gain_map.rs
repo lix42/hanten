@@ -7,6 +7,10 @@
 //! independently re-deriving gains or unit conversions. The future serializer
 //! consumes [`GainMapRender`] directly; only a serializer inside this module (or
 //! a child module) may destructure its private fields.
+//!
+//! Headroom is decided upstream, by how far the print rendering carries content
+//! above reference white. A flat gain map is a rendering fact: never "fix" it by
+//! widening the container or re-deriving the gain here.
 
 use rayon::prelude::*;
 use serde::Serialize;

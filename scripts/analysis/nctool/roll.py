@@ -145,7 +145,11 @@ def _recipe_input(path: str | None) -> tuple[dict | None, str | None]:
 
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
-    """Recipe merge: objects recurse; every other overlay value replaces."""
+    """Recipe merge: objects recurse; every other overlay value replaces.
+
+    A differing `type` replaces the whole object, so when nc stops serializing a
+    tag (as it did `reconstruction.type`), normalize old recipes' spelling of it
+    before merging, or an old recipe reads as a variant switch."""
     result = json.loads(json.dumps(base))
     for key, value in overlay.items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):

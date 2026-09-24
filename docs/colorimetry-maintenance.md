@@ -59,6 +59,10 @@ Adding a colour space means: a `ColorSpace` in `definitions.rs`, an entry in
 `audit.rs`'s `catalog()`, a pinned artifact if the runtime needs a matrix for
 it, and an independent anchor in `tests.rs`.
 
+Migrating an existing coefficient *into* this module: inventory it by reading
+the consuming functions, not by grepping for `const`. Inline literals in a
+`match` arm, or spelled with digit separators (`0.178_832_77`), escape a grep.
+
 ### 3. Run the command in check mode
 
 ```sh
@@ -88,13 +92,13 @@ negative value means it sits below. This is a review step, not a formality:
 
 > ### ⚠ `pinned.rs` is not the only runtime consumer of a definition
 >
-> `pipeline::color` feeds `definitions::{REC709, DISPLAY_P3, ACESCG, PROPHOTO}`
+> `pipeline::color` feeds `definitions::{REC709, DISPLAY_P3, ACESCG, BT2020}`
 > **directly** into Little CMS profile construction. A change to one of those
 > four therefore alters embedded ICC bytes and every lcms2-transformed pixel
 > *even when every `ulps` column stays at 0* and `pinned.rs` never moves.
 >
 > Nothing automated will catch that. `version::PIPELINE_FINGERPRINTS` stops
-> before lcms2 by design (see CLAUDE.md), and the audit only compares pinned
+> before lcms2 by design (see `PipelineFingerprint`'s docs), and the audit only compares pinned
 > artifacts against the derivation — neither looks at a profile.
 >
 > **So: if you touched `REC709`, `DISPLAY_P3`, `ACESCG`, or `BT2020`, treat it

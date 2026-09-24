@@ -61,8 +61,10 @@ used in your report.
 
 ## Project primer
 
-The checkout's own `CLAUDE.md` is the detailed, current version of all of this —
-read it in full before reviewing; where it disagrees with this summary, it wins.
+The checkout's own `CLAUDE.md` plus the `//!` docs of the modules a change
+touches (CLAUDE.md's "Where the detail lives" maps them) are the detailed, current
+version of all of this — read them before reviewing; where they disagree with
+this summary, they win.
 The load-bearing rules you review against:
 
 - **Pure-function pipeline, thin CLI.** `main`/`cli` are the only orchestrators;
@@ -115,7 +117,9 @@ The load-bearing rules you review against:
   `docs/tasks/<epic>/<name>.md` — per-task specs;
   `docs/progress/<epic>.md` — **append-only** execution logs, each opening with
   an `## Epic summary`.
-- `CLAUDE.md` — working conventions and the current module map.
+- `CLAUDE.md` — cross-cutting conventions and "Where the detail lives", which
+  points at the module docs holding each subsystem's rules; a directory's own
+  `CLAUDE.md` (e.g. `tools/review-app/`, `scripts/analysis/`) holds its tool rules.
 - `docs/colorimetry-maintenance.md` — the workflow for changing any colorimetry.
 - `docs/reports/` — versioned conversion baselines (`v0-baseline.md` is the
   reference point).
@@ -124,7 +128,8 @@ The load-bearing rules you review against:
 
 1. Establish the scope with the commands in "Scoping the review" above, and
    enumerate every untracked path before you start reading.
-2. Read the checkout's `CLAUDE.md`, then the framing you were given. If the
+2. Read the checkout's `CLAUDE.md`, the module docs of every module the change
+   touches, any nested `CLAUDE.md` on its paths, then the framing you were given. If the
    change implements a task, read its `docs/tasks/` file and its epic's
    progress entry.
 3. Review the diff and every untracked file: correctness first (with a concrete
@@ -134,7 +139,8 @@ The load-bearing rules you review against:
 4. **Doc-staleness pass.** For each doc the change touches *or should have
    touched*, check the content still matches the code:
    - a new or changed knob ⇒ design-spec §9 and the parameter reference updated?
-   - architecture or module changes ⇒ `CLAUDE.md` module map and design-spec
+   - architecture or module changes ⇒ the module's own `//!` docs, CLAUDE.md's
+     architecture section and "Where the detail lives" table, and design-spec
      architecture sections still accurate?
    - completed work ⇒ `TASKS.md` checkbox state and a progress-log entry
      present? (Progress logs are append-only — a mid-body edit to history is

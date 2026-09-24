@@ -22,6 +22,13 @@
 //! window_tests` blocks are the deliberate exception: they are synthetic unit tests of
 //! this harness's own helpers, touch no asset, and run normally.
 //!
+//! **A probe must not follow what it measures.** Build each variant from its parts
+//! rather than deriving it from a shipped function (and assert the one mirroring the
+//! shipped design equals it), and state an identity rather than borrowing a shipped
+//! default for one — either way, moving the shipped value silently changes what the
+//! probe measures. Since `cargo test` never runs an `#[ignore]`d probe, moving a
+//! default means re-running the set by hand (`cargo test --release -- --ignored`).
+//!
 //! Run the patch proposal with:
 //!
 //! ```text
@@ -78,6 +85,9 @@ fn tile_grid() -> (u32, u32) {
 /// under `scripts/real-scan-verify/recipes/` — the recipe supplies the roll's `Dmin`
 /// and `Dmax`, so a patch proposal is measured in the same density domain the baseline
 /// will use.
+///
+/// The roll keys must match `../nc-assets/manifest.json`'s roll names; see
+/// `analysis/probe-fixture-roll-names` for the keys that no longer do.
 const FIXTURES: &[(&str, &str)] = &[
     ("2026-07-24-Gold200", "2026-07-24-Gold200"),
     ("Ektar", "Ektar"),
