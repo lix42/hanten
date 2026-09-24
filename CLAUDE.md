@@ -160,11 +160,11 @@ Read the module docs before changing these; they hold the traps.
 | reconstruction, density scale, anchors | `types.rs` (`DensityParams::default_scale_for`, `AnchorPlacement`), `algo/fixed.rs` |
 | film base, IR holder mask, measurement region | `pipeline/film_base.rs` |
 | display tone, SDR/HDR bounds | `pipeline/display_tone.rs`, `sdr.rs`, `hdr.rs`, `render_split.rs` |
-| gain map, Ultra HDR / ISO 21496-1 container | `pipeline/gain_map.rs`, `gain_map/iso.rs`, `io/ultra_hdr.rs`, `scripts/iso-decoder-oracle/` |
+| gain map, Ultra HDR / ISO 21496-1 container | `pipeline/gain_map.rs`, `gain_map/iso.rs`, `io/ultra_hdr.rs`, `scripts/iso-decoder-oracle/`, `Cargo.toml` (`ultrahdr-sys`'s `jpeg-max-dimension`) |
 | AVIF / libaom | `io/avif.rs`, `Cargo.toml` comments |
 | colorimetry | `pipeline/colorimetry/`, `docs/colorimetry-maintenance.md` |
 | memory preflight | `pipeline/memory.rs` |
-| lcms2 transforms and fault handler | `pipeline/color.rs` |
+| lcms2 transforms and fault handler | `pipeline/color.rs`; `cli.rs`'s `CMS_ERROR` handler, cleared before and checked after each render |
 | goldens, cross-platform bounds, drift gate | `stages::golden`, `pipeline/chain_golden.rs`, `version.rs` (`PipelineFingerprint`) |
 | diagnostic probes | `pipeline/shadow_metrics.rs`, `algo/curve_probe.rs` |
 | telemetry | `telemetry.rs`, the `perf-telemetry` skill |
@@ -182,7 +182,7 @@ committed.
   `python3 scripts/check-vendored-native.py` → `cargo fmt --all --check` →
   `cargo clippy --all-targets --all-features -- -D warnings` →
   `cargo build --all-targets --all-features` →
-  `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` → the `nctool` suite
+  `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` → the `nctool` suite
   (`scripts/analysis/CLAUDE.md`) → `cargo test --all-features`.
 - **Match CI's toolchain too.** CI takes the latest stable; `rustup check` first,
   since a newer clippy adds lints a local green run never saw.
@@ -256,9 +256,12 @@ committed.
   losing rule's wording is **absent** and go through the real path (`merge` or the
   binary), not the rule directly.
 - **Validate the resolved value, never a proxy for it.** Value rules go in
-  `validate` (shared with `roll` and per-frame overrides); flag-presence rules go
-  in `validate_convert`, and only when the flag forces something the branch cannot
-  produce.
+  `validate` (shared with `roll` and per-frame overrides). Flag-presence rules must
+  run before anything coarser can refuse: `--new-flow` availability in
+  `flow::reject_unavailable_flags` (before `merge`), the rest in `validate_convert`.
+  A presence rule refuses a flag only when it forces something the branch cannot
+  produce; an identity value is spared only where a recipe could have set the
+  knob.
 
 ### Determinism and tests
 

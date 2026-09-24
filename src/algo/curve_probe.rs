@@ -54,8 +54,8 @@ const BINS: usize = 10;
 /// The fixture rolls that have a digitized datasheet, as
 /// `(roll in the asset manifest, recipe stem, stock key in `curve_data`)`.
 ///
-/// The roll keys must match `../nc-assets/manifest.json`; the undated ones predate
-/// its date-named rolls and fail the lookup (`analysis/probe-fixture-roll-names`).
+/// The roll keys must match `../nc-assets/manifest.json`'s roll names; see
+/// `analysis/probe-fixture-roll-names` for the keys that no longer do.
 const FIXTURES: &[(&str, &str, &str)] = &[
     ("Ektar", "Ektar", "ektar-100"),
     ("Portra160-2026-07-22", "Portra160-2026-07-22", "portra-160"),

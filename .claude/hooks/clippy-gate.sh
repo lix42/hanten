@@ -13,9 +13,9 @@ fi
 
 # Only gate when there are changed or untracked .rs files in the tree.
 if git status --porcelain --untracked-files=all 2>/dev/null | grep -q '\.rs$'; then
-  if ! out=$(cargo clippy --all-targets --quiet -- -D warnings 2>&1); then
+  if ! out=$(cargo clippy --all-targets --all-features --quiet -- -D warnings 2>&1); then
     {
-      echo "clippy gate failed — CI runs \`cargo clippy --all-targets -- -D warnings\`."
+      echo "clippy gate failed — CI runs \`cargo clippy --all-targets --all-features -- -D warnings\`."
       echo "Fix these before finishing:"
       echo
       printf '%s\n' "$out"

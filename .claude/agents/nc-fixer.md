@@ -72,7 +72,7 @@ python3 scripts/check-vendored-native.py
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo build --all-targets --all-features
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 NCTOOL_REQUIRE_DEPS=1 PYTHONPATH=scripts/analysis .venv/bin/python -m unittest discover -s scripts/analysis -p "test_*.py"
 cargo test --all-features
 ```

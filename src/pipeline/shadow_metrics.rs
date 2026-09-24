@@ -86,8 +86,8 @@ fn tile_grid() -> (u32, u32) {
 /// and `Dmax`, so a patch proposal is measured in the same density domain the baseline
 /// will use.
 ///
-/// The roll keys must match `../nc-assets/manifest.json`; the undated ones predate
-/// its date-named rolls and fail the lookup (`analysis/probe-fixture-roll-names`).
+/// The roll keys must match `../nc-assets/manifest.json`'s roll names; see
+/// `analysis/probe-fixture-roll-names` for the keys that no longer do.
 const FIXTURES: &[(&str, &str)] = &[
     ("2026-07-24-Gold200", "2026-07-24-Gold200"),
     ("Ektar", "Ektar"),

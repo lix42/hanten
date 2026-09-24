@@ -4,10 +4,10 @@
 
 Make the `#[ignore]`d asset probes (`pipeline::shadow_metrics`, `algo::curve_probe`)
 run again against `../nc-assets`. Their `FIXTURES` tables look rolls up in
-`manifest.json` by names the asset folder no longer uses (`Ektar`, `Portra160`,
-`Portra400`, …); the folder now names rolls by date (`2026-07-15-Ektar100`), so
-those probes panic before measuring anything. `2026-07-24-Gold200` is already
-current.
+`manifest.json` by names the asset folder no longer uses, so those probes panic
+before measuring anything. As of 2026-09-24 the stale keys are `Ektar`,
+`Portra160`, `Portra400`, `Portra400-leica-flaw` and `Portra160-2026-07-22` (the
+manifest names that roll `2026-07-23-Portra160`); `2026-07-24-Gold200` is current.
 
 This matters because the probes are the evidence several docs cite, and moving a
 default is supposed to be followed by re-running them — which is impossible today.

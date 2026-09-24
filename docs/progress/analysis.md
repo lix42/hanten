@@ -1026,3 +1026,12 @@ What other epics need to know about `analysis`:
   (nothing above the pure `.ts` layer in that app is testable). Verified in a real
   browser — the button tooltip and the line under the picture both read the identity,
   and the line swaps with the config.
+
+## probe-fixture-roll-names
+
+**Status:** not started
+**Updated:** 2026-09-24
+
+- 2026-09-24: filed while restructuring CLAUDE.md. The `#[ignore]`d asset probes'
+  `FIXTURES` look rolls up by names `manifest.json` no longer uses, so they panic
+  before measuring; the task file lists the stale keys.
