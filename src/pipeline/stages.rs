@@ -1047,8 +1047,8 @@ pub(crate) mod golden {
 
     // --- the characteristic curve -------------------------------------------
     //
-    // `algo/characteristic-curve-coverage`. Its tables are well covered in
-    // `algo::characteristic::tests`, and the full chain's *properties* are pinned there too.
+    // `algo/characteristic-curve-coverage`. Its tables are covered in `film_stock::tests`,
+    // and the full chain's *properties* are pinned in `algo::characteristic::tests`.
     // What follows is the bit-level half: captured numbers the code is measured against,
     // plus the argument for why they are portable.
 

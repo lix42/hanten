@@ -16,8 +16,8 @@
 //! - **The evidence for the fixed decode's constants**, which is why the data outlives
 //!   that curve (`nf-look/stock-data-home`). `algo::fixed::MID_ABOVE_BASE` is
 //!   `generic-c41`'s mid aim, and `docs/design-update.md` Part 1 argues for fixed,
-//!   stock-agnostic values from these tables' own spread (`d` 0.542–0.699, red gamma
-//!   0.50–0.61). The tests below are that provenance, checked on every run.
+//!   stock-agnostic values from these tables' own spread (`d` 0.542–0.699, red film
+//!   gamma 0.53–0.61). The tests below are that provenance, checked on every run.
 //!
 //! Once the curve retires, this module has no runtime consumer and should become
 //! `#[cfg(test)]` — the `pipeline::colorimetry::derive` precedent — until **per-stock
@@ -377,13 +377,21 @@ mod tests {
         }
     }
 
-    /// The two invariants `curves` promises and anything reading a table relies on:
+    /// The invariants `curves` promises and anything reading a table relies on:
     /// **strictly increasing** in both coordinates (so the curve is single-valued either
-    /// way), and a **first point at `D′ = 0`** (the film base).
+    /// way), a **first point at `D′ = 0`** (the film base), and enough points to
+    /// interpolate — the same floor `algo::characteristic::check_tables` keeps, restated so
+    /// it survives that module.
     #[test]
     fn every_table_rises_strictly_from_the_base() {
         for sc in STOCKS {
             for (c, table) in sc.channels.iter().enumerate() {
+                assert!(
+                    table.len() >= 8,
+                    "{} ch{c}: only {} points",
+                    sc.name,
+                    table.len()
+                );
                 assert_eq!(table[0].1, 0.0, "{} ch{c}: must start at the base", sc.name);
                 for w in table.windows(2) {
                     assert!(
@@ -422,6 +430,12 @@ mod tests {
     fn published_mid_grey_sits_at_eighteen_percent() {
         for (name, mid_above_base) in STOCK_MID_ABOVE_BASE {
             let sc = STOCKS.iter().find(|s| s.name == *name).unwrap();
+            // Inside the table, or `density_at` extrapolates and the bracket is not data.
+            let red = sc.channels[0];
+            assert!(
+                red[0].0 <= 0.174f32.log10() && 0.186f32.log10() <= red[red.len() - 1].0,
+                "{name}: mid-grey falls outside its own table"
+            );
             let (lo, hi) = (red_density_at(sc, 0.174), red_density_at(sc, 0.186));
             assert!(
                 (lo..=hi).contains(mid_above_base),

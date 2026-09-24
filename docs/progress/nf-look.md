@@ -460,6 +460,14 @@ visible by eye; the band's value is keeping the pull off colour.
     meant for third-party documents.
   - No pixel moved: 21 tests before and after (20 moved, 1 new), the generated
     `curves.rs` is byte-identical to the emitter's output from the moved `curves.json`.
+- 2026-09-24: review follow-ups after rebasing onto #157/#158. The forward-bracket
+  rewrite of the mid-grey test was **not** the same condition at a table's edge:
+  `density_at` extrapolates, so it now also asserts the bracket lies inside the table,
+  which the old test's `in_table` flag did. The table-invariant test gained
+  `check_tables`' 8-point floor so that survives the retirement too. Stale pointers fixed
+  in `design-spec.md`'s module tree, `stages.rs` and `display_tone.rs`; the module doc
+  now quotes design-update's red gamma (0.53–0.61). Not changed: the `--film-stock` row
+  stays `NotYet` — the capability is planned, only the flag goes.
 
 ## scene-range-mapping
 

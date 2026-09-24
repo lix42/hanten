@@ -9,7 +9,7 @@ quietly become orphans.
 ## Design
 
 - **What exists.** Ten digitized stocks with their per-channel curves and a
-  registry (`src/algo/film_stock/`), reached by `--film-stock`, plus the sheets
+  registry (then `src/algo/film_stock/`, now `src/film_stock/`), reached by `--film-stock`, plus the sheets
   they were read from in `docs/datasheets/`. Their only runtime consumer is the
   `characteristic` reconstruction curve, which the fixed decode replaces.
 - **The data is also evidence.** Part 1 quotes the registry's per-stock spread
@@ -31,10 +31,11 @@ quietly become orphans.
 
 ## Open questions
 
-- Does `--film-stock` keep a meaning at all before per-stock normalization ships —
-  recorded provenance, or removed and re-introduced later?
-- Do the datasheet PDFs stay in the repo, or move to the assets folder with the
-  other measurement inputs?
+Both answered 2026-09-24 (`docs/progress/nf-look.md`):
+
+- `--film-stock` leaves with the `characteristic` curve; per-stock normalization will
+  bring its own flag.
+- The datasheet PDFs stay in the repo.
 
 ## How to Verify
 
