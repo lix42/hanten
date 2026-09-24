@@ -125,4 +125,7 @@ decode, not this stage.**
   against control measures shoulder-plus-gamut-map jointly. `--display-tone shoulder`
   failed as a separator: it drives top-end chroma to exactly 0.0 with 17–29° of rotation,
   which is flattening rather than shaping — independent support for the design retiring
-  it.
+  it. **Since settled** (`docs/reports/gamut-map-share.md`, 2026-09-23): under this
+  spike's reinhard control the map moved no marked patch. Its per-channel arms (reinhard
+  plus a print exposure, which can lift pixels past display white where the map greys
+  them) were not re-measured, so for those the share is still open.

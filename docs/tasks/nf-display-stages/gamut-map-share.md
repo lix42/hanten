@@ -51,6 +51,16 @@ What is known:
 
 ## How to Verify
 
+**Done 2026-09-23.** Result: [`docs/reports/gamut-map-share.md`](../../reports/gamut-map-share.md),
+trail in `docs/progress/nf-display-stages.md`. Measured by a throwaway in-crate probe
+reading both sides of the map in float (so "off" was unmapped, not clipped), bit-identical
+to `sdr::render` on every accepted render. The share is near zero where it matters, the
+knee'd whites are the shoulder's, and the decision is no off switch on either chain.
+The first criterion below is met in a changed form: the report gives the **absolute**
+C\* the map removes per roll rather than a share, because outside `sigmoid-knees` the map
+is the only thing converging chroma (a share would be 100% or 0/0), and inside it the
+2x2's other ordering needs a render the shipped path refuses.
+
 - A number, per roll: the share of top-end chroma convergence attributable to the gamut
   map, with the measurement's own method stated (patch or count).
 - The two candidates for the knee'd render's whites are separated, or the reason they

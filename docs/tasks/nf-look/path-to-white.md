@@ -37,16 +37,19 @@ white.
   reasons: **chroma** convergence must be pre-branch so the branches agree on white,
   while **luminance** compression must stay per-branch so HDR can carry more than SDR.
   Collapsing them into one per-channel fit-range operator gives up the second to get the
-  first. What should shrink instead is the gamut map's incidental share.
+  first. The gamut map's incidental share, which this bullet once expected to shrink, is
+  already near zero at the renders this task feeds it (see below).
 - **Parameterised, with "off" available.** How early it starts and how hard it
   pulls are look choices; off matters because desaturation *hides* residual cast,
   which is right for a print and wrong for a diagnostic render or for judging a
   decode (Part 3 makes the same point about comparing decodes).
-- **It must not double up with the gamut map** — which is also one of the two live
-  candidates for the knee'd render's whites (`sdr.rs:249-266`, radial near luminance
-  1.0, with a ceiling that follows the rendered luminance). Separating their shares is
-  [its own task](../nf-display-stages/gamut-map-share.md); this task then makes the
-  deliberate half deliberate.
+- **There is nothing to double up with** — measured 2026-09-23 by
+  [its own task](../nf-display-stages/gamut-map-share.md). Under the spike's control and
+  the hand-set C and D below, the gamut map moved no marked white on four rolls and
+  removed C\* 0–2.6 on average from the top 3%, all at the cube's top. It is also *not*
+  what makes the knee'd render's whites clean (0.00% of top pixels touched): that is the
+  per-channel shoulder. The one render where the map does real work is the `shoulder`
+  display tone, which is why the hand-set spelling below names `reinhard`.
 - **Build it under a hand-set contrast, and treat the band's numbers as provisional
   (decided 2026-09-22).** Under the base-referenced anchor the operator is inert — all
   three measured rolls land 0.55–1.28 stops below white
@@ -62,8 +65,8 @@ white.
   to choose, and it runs **after** this task
   ([`anchor-rule`](../nf-reconstruction/anchor-rule.md) froze only `d`). So this task is built and
   verified against a **hand-set per-roll contrast** — flags only, no new code:
-  `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>`, with `g`
-  computed per roll from that roll's measured base and its red p97 (the arithmetic and
+  `--density-curve exponential --anchor-mid-offset <d> --density-gamma <g>
+  --display-tone reinhard`, with `g` computed per roll from that roll's measured base and its red p97 (the arithmetic and
   the raw data are in the anchor spike's working directory). That reaches candidate C
   **exactly**, not approximately: `mid-at-base-offset` resolves
   `A = d + MID_GREY_OUTPUT_DECADES / gamma`, and C's `gamma = MID_GREY_OUTPUT_DECADES /
@@ -76,8 +79,9 @@ white.
   **A caution about tuning only there.** The exponential is the right control because `A`
   is the density mapping to white *on the straight line*, so a knee'd curve's shoulder
   compresses above it and `A = W` would not put rendered white at 1.0. But that means the
-  band is fitted on a render with **no per-channel shoulder** — one of the only two
-  surviving candidates for the knee'd render's clean whites (design-update Appendix F).
+  band is fitted on a render with **no per-channel shoulder** — which is what makes the
+  knee'd render's whites clean (design-update Appendix F; the gamut map was ruled out by
+  `nf-display-stages/gamut-map-share`).
   Check the fitted band under a knee'd render before shipping it, or record why not.
   (The sigmoid carries the same `AnchorPlacement`, and `--sigmoid-contrast` is the
   `--density-gamma` analogue, so the equivalent line exists.) The **shape** of the
@@ -146,7 +150,8 @@ white.
   picked up.
 - [Spike: what form should highlight desaturation take?](desaturation-spike.md)
   — **done 2026-09-21.** Settled the form (a chroma pull, keyed on brightness and
-  saturation) and left the gamut map's share unseparated; see Design
+  saturation) and left the gamut map's share unseparated (measured near zero since, by
+  `gamut-map-share`); see Design
 - [Spike: does a diffuse-white anchor earn its place?](../nf-reconstruction/anchor-spike.md)
   — **done 2026-09-21**, and it moved this task's premise: under the base-referenced
   anchor the operator is **inert**, so this task is built against a hand-set contrast
@@ -155,4 +160,4 @@ white.
 - [Fit the desaturation band on more than one patch](desaturation-band-fit.md)
   — the values this task ships
 - [Separate the gamut map's share](../nf-display-stages/gamut-map-share.md)
-  — how much of the convergence is already happening before this operator exists
+  — **done 2026-09-23.** Near zero at the renders this task is built under; see Design

@@ -39,7 +39,10 @@ per-roll `--density-gamma` computed from that roll's base and red p97 (candidate
 `docs/spike/white-placement.md`), and its band values are provisional until
 `nf-calibration/anchor-comparison` chooses the rule. Two tasks split out of it so they can
 run now against today's binary: `desaturation-band-fit` here, and
-`nf-display-stages/gamut-map-share`.
+`nf-display-stages/gamut-map-share` — done 2026-09-23, and it removes the double-up
+concern: at the renders `path-to-white` is built under the gamut map moves no marked
+white. The hand-set contrast must name `--display-tone reinhard`; left unstated it
+renders under `shoulder`, where the map does real work.
 
 ## stage
 

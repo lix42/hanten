@@ -969,7 +969,8 @@ the design in `docs/design-update.md`:
   balance
 - `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`, `nf-reconstruction/anchor-spike`, `nf-look/desaturation-spike`, `nf-look/desaturation-band-fit`, `nf-display-stages/gamut-map-share`
   — what makes whites read clean, made a deliberate control instead of a
-  gamut-map side effect. Built against a **hand-set** per-roll contrast (decided
+  side effect (of the sigmoid's shoulder today; `gamut-map-share` found the gamut map
+  moves no marked white under `none`/`reinhard`). Built against a **hand-set** per-roll contrast (decided
   2026-09-22): under the base-referenced anchor the operator is inert, and the
   rule that lifts white is `nf-calibration/anchor-comparison`'s, which follows this
   task — so the shape ships here and the values are re-fitted later
@@ -1088,7 +1089,8 @@ the design in `docs/design-update.md`:
   — filed 2026-09-22. Nothing turns the gamut map off by flag, so every
   desaturation measurement so far reads shoulder-plus-gamut-map jointly; it is also
   one of the two surviving candidates for the knee'd render's whites. Runs against
-  today's binary
+  today's binary. Done 2026-09-23: the map is not that candidate, and has near-zero
+  share at the renders `path-to-white` is built under
 - `nf-calibration/anchor-comparison` (new flow): `nf-look/path-to-white`, `nf-reconstruction/anchor-spike`
   — the spike costs the four white placements from the scans; only a render with a real
   highlight operator in the chain can rank them, and under the fixed anchor that
@@ -1611,8 +1613,8 @@ the design in `docs/design-update.md`:
   patch](tasks/nf-look/desaturation-band-fit.md) — the spike placed it from a
   single saturated patch on a single roll; runs against today's binary
 - [ ] [Highlight desaturation](tasks/nf-look/path-to-white.md) — what makes
-  whites read clean, made a deliberate control instead of a gamut-map side
-  effect; built against a hand-set per-roll contrast, because under the
+  whites read clean, made a deliberate control instead of a side effect of the
+  sigmoid's shoulder; built against a hand-set per-roll contrast, because under the
   base-referenced anchor the operator is inert
 - [ ] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
   `gamma`; supersedes `algo/contrast-latitude-spike`
@@ -1641,9 +1643,13 @@ the design in `docs/design-update.md`:
 - [ ] [The SDR/HDR branch
   contract](tasks/nf-display-stages/branch-contract.md) — where the branch
   happens and what each side may differ in
-- [ ] [Separate the gamut map's
-  share](tasks/nf-display-stages/gamut-map-share.md) — how much of the highlight
-  convergence is the gamut map already; nothing turns it off by flag
+- [x] [Separate the gamut map's
+  share](tasks/nf-display-stages/gamut-map-share.md) — **done 2026-09-23.** Near zero
+  where it matters: across 92 frames on four rolls the map moves no marked white under
+  `sigmoid-knees`, the spike's control, or `path-to-white`'s hand-set C and D, and 0.00%
+  of top-end pixels under knees — so the knee'd whites are the per-channel shoulder's.
+  It acts heavily only under the `shoulder` display tone. No off switch on either chain.
+  Report: [`docs/reports/gamut-map-share.md`](reports/gamut-map-share.md)
 
 ### nf-destinations — [progress](progress/nf-destinations.md)
 > Where a render can go: the destination set, the direct Adobe RGB combination,
