@@ -109,8 +109,9 @@ impl fmt::Debug for DisplayReferredImage {
 /// Move the pixels into the target gamut's primaries.
 ///
 /// A pure 3×3 per pixel, in place: unclamped, so a colour outside the target stays
-/// outside it for the encoder to count, and non-finite samples propagate rather than
-/// being repaired. Fallible by construction, not by need: see [`chain::render`].
+/// outside it for the encoder to count. Its input is finite — fit range refuses a
+/// non-finite sample — so nothing here has to decide what one would mean. Fallible
+/// by construction, not by need: see [`chain::render`].
 ///
 /// [`chain::render`]: crate::pipeline::chain::render
 pub fn apply(image: RangeFittedImage, params: &FitGamutParams) -> Result<DisplayReferredImage> {

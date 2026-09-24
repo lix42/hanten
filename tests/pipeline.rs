@@ -11492,6 +11492,77 @@ fn new_flow_applies_scene_correction() {
 }
 
 #[test]
+fn new_flow_fits_the_scene_range_with_the_stated_headroom() {
+    // `nf-display-stages/fit-range` through the binary: the headroom flag reaches the
+    // stage, the report names the operator and its arguments rather than describing
+    // them, and zero headroom is the identity — which clips far more of an unbounded
+    // decode at the encode than the default does.
+    let tmp = TempDir::new("new-flow-fit-range");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--new-flow",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        (out, json(&stdout))
+    };
+    let clipped = |report: &serde_json::Value| {
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|w| w.as_str())
+            .find_map(|w| w.strip_prefix("output lost "))
+            .and_then(|w| w.split(' ').next())
+            .map_or(0, |n| n.parse::<u64>().unwrap())
+    };
+
+    let (default, report) = convert("default.tiff", &[]);
+    assert_eq!(report["new_flow"]["fit_range"]["headroom_stops"], 6.0);
+    let default_clipped = clipped(&report);
+
+    let (four, report) = convert("four.tiff", &["--display-tone-headroom", "4"]);
+    let fr = &report["new_flow"]["fit_range"];
+    assert_eq!(fr["operator"], "reinhard-peak-lifted-v1", "{fr}");
+    assert_eq!(fr["headroom_stops"], 4.0);
+    assert_eq!(fr["white_point"], 16.0);
+    assert_ne!(read_u16_tiff(&four), read_u16_tiff(&default));
+
+    let (_, report) = convert("zero.tiff", &["--display-tone-headroom", "0"]);
+    assert_eq!(report["new_flow"]["fit_range"]["operator"], "identity");
+    assert_eq!(report["new_flow"]["stages"][2]["applied"], "identity");
+    assert!(
+        clipped(&report) > default_clipped,
+        "the identity must clip more than reinhard: {} vs {default_clipped}",
+        clipped(&report)
+    );
+
+    // A bad headroom is refused by its recipe key as well as its flag.
+    let (code, _out, err) = run(&[
+        "convert",
+        input.as_str(),
+        "-o",
+        tmp.path("bad.tiff").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--new-flow",
+        "--display-tone-headroom",
+        "-1",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`fit_range.headroom_stops`"), "{err}");
+}
+
+#[test]
 fn exposure_is_the_new_flows_spelling_and_each_chain_refuses_the_other() {
     let tmp = TempDir::new("exposure-spelling");
     let out = tmp.path("out.tif");
@@ -11559,10 +11630,20 @@ fn new_flow_renders_a_display_p3_tiff() {
             [
                 "identity",
                 "identity",
-                "identity",
+                "reinhard-peak-lifted-v1",
                 "acescg-to-display-p3-matrix"
             ],
             "the report states what each stage did, identities included"
+        );
+        assert_eq!(
+            nf["fit_range"],
+            serde_json::json!({
+                "operator": "reinhard-peak-lifted-v1",
+                "headroom_stops": 6.0,
+                "white_point": 64.0,
+                "display_peak": 1.0,
+            }),
+            "{stdout}"
         );
         // No legacy-chain section claims an operation this run did not perform, and no
         // sidecar or recipe echo describes a chain it did not select.
@@ -12401,7 +12482,9 @@ fn new_flow_refuses_every_print_control() {
     // does — so the refusal tells a user where the knob went rather than only that it
     // is gone. Stated white balance is not here: scene correction reads it under its
     // own spelling (`new_flow_applies_scene_correction`). The per-frame auto one is —
-    // retired, with the roll measurement named as its replacement.
+    // retired, with the roll measurement named as its replacement. Nor is
+    // `--display-tone-headroom`, which fit range reads
+    // (`new_flow_fits_the_scene_range_with_the_stated_headroom`).
     //
     // One of these resolves the documented **default** (`--highlight-compress 0`) and
     // is still refused, which is the tiebreaker applied
@@ -12419,13 +12502,10 @@ fn new_flow_refuses_every_print_control() {
             &["--linear-range", "0,1"],
             "nf-scene-correction/levels-knob",
         ),
+        // Even the tone fit range applies: its recipe has no selector to reset.
         (
             &["--display-tone", "reinhard"],
-            "nf-display-stages/fit-range",
-        ),
-        (
-            &["--display-tone-headroom", "6"],
-            "nf-display-stages/fit-range",
+            "Use `--display-tone-headroom` alone",
         ),
         (&["--highlight-compress", "0"], "will not gain one"),
         (&["--auto-wb", "percentile"], "hanten measure-roll"),

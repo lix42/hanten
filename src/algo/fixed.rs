@@ -107,6 +107,21 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 /// `nf-verification/fingerprints`'. It stays reachable as `--anchor-mid-offset`.
 pub const MID_ABOVE_BASE: f32 = 0.62;
 
+/// Where diffuse white sits in the decode's output: the value its anchor renders to.
+///
+/// `10^(contrast · (D′ − A))` is `1.0` at `D′ = A` by construction, and the anchor
+/// lands ≈0.08 stop from the datasheets' diffuse white (`tests::the_anchor_is_the_documented_number`)
+/// — so on this decode the value `1.0` **is** diffuse white, to that tolerance. A
+/// convention of the decode rather than a measurement of a frame: scene correction's
+/// exposure moves the picture, not this number.
+///
+/// **The one definition every rendering stage keys on.** It is scene-referred and
+/// common to both display branches, which is why fit range's HDR lift starts here and
+/// why the look's highlight desaturation (`nf-look/path-to-white`) anchors its
+/// threshold here too — a second spelling of it in either stage would let the two
+/// disagree about where white is.
+pub const DIFFUSE_WHITE: f32 = 1.0;
+
 /// The decode's contrast — **still both halves of `gamma` in one number.**
 ///
 /// Linearizing the film (≈1/0.55 ≈ 1.8) is calibration and stays in the decode;

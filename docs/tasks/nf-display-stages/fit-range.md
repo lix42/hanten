@@ -43,6 +43,21 @@ Open:
 - A report field says which operator and which peak were resolved, and a run with a
   non-default operator does not leave a stale prose claim behind it.
 
+## Outcome (2026-09-23)
+
+Done; trail in `docs/progress/nf-display-stages.md`. One function,
+`Y′ = r(Y)·(1 + (P − 1)·s(Y))`, with the display's peak `P` as the argument that
+differs per branch. The open questions came out as:
+
+- **Recipe home:** `fit_range.headroom_stops` (still spelled in stops; the flag keeps
+  `--display-tone-headroom`). The peak is the destination's, never a recipe key.
+- **`linear_range` and the black point** stayed out, as planned.
+- **The report names the operator**, `new_flow.fit_range`, with its arguments.
+- **"Called by both branches"** is true of the formula and tested at stage level for
+  both peaks, but the new chain has one (SDR) destination, so the two-branch check
+  moves to [the branch contract](branch-contract.md). Legacy `sdr`/`hdr` keep their
+  own tone until `nf-retire/display-tones`.
+
 ## Dependencies
 
 - [The look stage](../nf-look/stage.md) — fit range is the first stage after the

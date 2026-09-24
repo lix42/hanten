@@ -221,6 +221,12 @@ fn catalog() -> Vec<Artifact> {
             shipped: Shipped::vector_f32(pinned::DISPLAY_P3_LUMA),
         },
         Artifact {
+            name: "ACESCG_LUMA",
+            description: "luminance row of acescg (ap1/aces white) normalized primary matrix (derived)",
+            source: Source::LumaRow(ACESCG),
+            shipped: Shipped::vector_f32(pinned::ACESCG_LUMA),
+        },
+        Artifact {
             name: "SRGB_LUMA",
             description: "luminance row of rec709/d65 normalized primary matrix, SHIPPED ROUNDED TO 6 DECIMALS",
             source: Source::LumaRow(REC709),

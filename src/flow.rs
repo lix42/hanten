@@ -111,9 +111,6 @@ const DMAX_REASON: &str = "the anchor rule never reads a reference density, so n
      neither diffuse white nor the density this decode pins — it pins mid-grey a fixed \
      density above the film base, which every scan carries, so nothing has to be \
      stated in the reference's place";
-const FIT_RANGE_ARRIVES_WITH: &str = "the fit-range stage, which is the new home of every display tone — it exists \
-     as an identity pass today, so there is no operator yet for a tone selector or a \
-     headroom to configure (`nf-display-stages/fit-range`)";
 const DESTINATION_ARRIVES_WITH: &str = "the new flow's destination set: it renders into exactly one destination today \
      (a Display P3 16-bit TIFF), so there is no output policy to choose or describe \
      (`nf-destinations/preset-set`)";
@@ -323,7 +320,7 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // The whole `print.*` family, by the same argument the decode settled: a stage
     // that owns its parameters reads no resolved section, so accepting one of these
     // would be accepting-and-ignoring. `pipeline::chain`'s four stages each carry
-    // their own `Params`, so nothing under `print` reaches the new flow — which is
+    // their own `Params`, so no `print` *key* reaches the new flow — which is
     // why the recipe half needs no value rules either: the new chain's recipe has no
     // `print` section, and refuses one by name at load.
     //
@@ -334,17 +331,19 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // let a flag clear a value a *recipe* pinned, and the new chain's recipe has no
     // `print` section, so on this flow there is never a print value to
     // reset. With nothing to protect, presence is the honest rule: each of these names
-    // an operation whose stage is an identity pass, or — `--print-exposure` — a knob
-    // the new chain spells differently.
+    // an operation whose stage has not landed, a knob the new chain spells differently
+    // (`--print-exposure`), or a choice fit range does not offer (`--display-tone`,
+    // `--highlight-compress`). The one print knob the new flow keeps,
+    // `--display-tone-headroom`, is in `KEPT_FLAGS`: fit range landed with it.
     //
-    // Every verdict here is `NotYet` except `--print-exposure`'s `Renamed` (its stage
-    // has landed, under another spelling) and `--auto-wb`'s `Never` (the per-frame
-    // estimate itself retired, not just its spelling) — including the two display tones
-    // `nf-retire/display-tones` removes outright. That is not a softer reading of
-    // their fate: `Never` is a claim about the *knob*, and what a user needs to know
-    // at this gate is that the stage which would carry any tone is empty. Whether
-    // `shoulder` survives into it is that retirement's statement to make, not this
-    // gate's, and stating it here would be a second place to keep it in step.
+    // Verdicts: `NotYet` for a stage that has not landed, `Renamed` for
+    // `--print-exposure`, and `Never` for `--auto-wb` (the per-frame estimate itself
+    // retired, not just its spelling — `measure-roll` replaces it), `--display-tone`
+    // and `--highlight-compress`. `--display-tone` is `Never` because fit range has
+    // **one** operator, not because this gate rules on the legacy tones — removing
+    // `shoulder` and `none` from the current chain is `nf-retire/display-tones`'. Should
+    // `nf-display-stages/parametric-operator` add a second operator, it brings its own
+    // selector, and this row changes with it.
     FlagEntry {
         knob: "--auto-wb",
         covers: &["--auto-wb"],
@@ -397,19 +396,16 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
         },
     },
     FlagEntry {
+        // Every value, `reinhard` included: the new recipe has no selector key, so there
+        // is no pinned tone for the flag to reset (the tiebreaker's condition).
         knob: "--display-tone",
         covers: &["--display-tone"],
         present: |args| args.print.display_tone.is_some(),
-        availability: Availability::NotYet {
-            arriving_with: FIT_RANGE_ARRIVES_WITH,
-        },
-    },
-    FlagEntry {
-        knob: "--display-tone-headroom",
-        covers: &["--display-tone-headroom"],
-        present: |args| args.print.display_tone_headroom.is_some(),
-        availability: Availability::NotYet {
-            arriving_with: FIT_RANGE_ARRIVES_WITH,
+        availability: Availability::Never {
+            reason: "fit range has one operator, reinhard, so there is no tone to select — \
+                     `shoulder` and `none` exist for a reconstruction already bounded at \
+                     white, and the fixed decode is not",
+            instead: Some("`--display-tone-headroom` alone to set how much range it compresses"),
         },
     },
     FlagEntry {
@@ -551,6 +547,13 @@ const KEPT_FLAGS: &[KeptEntry] = &[
         covers: &["--exposure"],
         why: "scene correction's exposure (recipe `scene_correction.exposure`) — the new \
               chain's spelling of `--print-exposure`",
+    },
+    // Fit range (`nf-display-stages/fit-range`). The flag keeps its current spelling;
+    // renaming it is `nf-retire/print-prefix-rename`'s.
+    KeptEntry {
+        covers: &["--display-tone-headroom"],
+        why: "fit range's headroom (recipe `fit_range.headroom_stops`) — the same reinhard \
+              white point, `2^stops`, the current chain's `reinhard` tone reads",
     },
     KeptEntry {
         covers: &["--anchor-mid-offset"],
@@ -903,6 +906,11 @@ mod tests {
             ("--exposure", &["--exposure", "-0.5"], |r| {
                 r.scene_correction.exposure == -0.5
             }),
+            (
+                "--display-tone-headroom",
+                &["--display-tone-headroom", "4"],
+                |r| r.fit_range.headroom_stops == 4.0,
+            ),
         ];
         for entry in KEPT_FLAGS {
             for flag in entry.covers {

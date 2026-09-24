@@ -36,6 +36,14 @@ Open:
 - Whether the contract is a doc statement, a type (one shared source handed to both
   branches), or both.
 
+- **Fit range already gives exact agreement below diffuse white** (2026-09-23): its
+  lift is zero there and the base is shared, so the two peaks render the same bits.
+  What is open is **above**: the operator keeps reinhard's tail, so HDR content past
+  the headroom exceeds `P` (≈1.006·P at `W`, more beyond) and is clamped at the
+  encode, where legacy HDR stayed strictly under its 1000-nit peak by dropping the
+  tail — at the cost of the below-white agreement. Decide whether an HDR destination
+  needs the hard ceiling.
+
 ## How to Verify
 
 - A test renders both branches from one source and asserts they agree below diffuse

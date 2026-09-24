@@ -161,12 +161,13 @@ Lindbloom's printed 7-decimal inverse, and exists solely because
 one shifts it by 9.1e-8, which is a pixel change to a frozen identifier. Do not
 "tidy up" by collapsing them — a test fails loudly if you try.
 
-**The two luma vectors are different kinds of number.** `BT2020_LUMA` is
+**The luma vectors are different kinds of number.** `BT2020_LUMA` is
 transcribed from BT.2020's table and deliberately does *not* match a derivation
 from the BT.2020 primaries (they differ by ~2e-6, about 17 ulps). The standard
 rounds and encoders are expected to use the rounded values. `DISPLAY_P3_LUMA`
-has no tabulated form and *is* derived. Their verification rules differ
-accordingly, and a test pins the gap so nobody "corrects" the tabulated one.
+and `ACESCG_LUMA` have no tabulated form and *are* derived; `SRGB_LUMA` is the
+derivation rounded to six decimals. Their verification rules differ accordingly,
+and a test pins the gap so nobody "corrects" the tabulated one.
 
 ## Known deviation
 

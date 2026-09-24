@@ -28,6 +28,7 @@ use crate::io::{avif, encode, staged, ultra_hdr};
 use crate::pipeline::chain;
 use crate::pipeline::display_tone::DisplayTone;
 use crate::pipeline::fit_gamut::DestinationGamut;
+use crate::pipeline::fit_range::{self, DisplayPeak};
 use crate::pipeline::input_semantics::{
     self, ContainerColorFacts, InputAssertions, InputColorReport, RawMode,
 };
@@ -776,9 +777,10 @@ pub struct PrintOverrides {
         value_parser = clap::builder::PossibleValuesParser::new(DisplayToneCurve::NAMES)
     )]
     pub display_tone: Option<String>,
-    /// Specular headroom above reference white, in stops — `--display-tone reinhard`
-    /// only (recipe key `print.display_tone.reinhard.headroom_stops`, default 6 = a
-    /// white point of 64).
+    /// Specular headroom above reference white, in stops, default 6 (a white point of
+    /// 64). Needs `--display-tone reinhard` (recipe key
+    /// `print.display_tone.reinhard.headroom_stops`); under `--new-flow` it is fit
+    /// range's headroom on its own (recipe key `fit_range.headroom_stops`).
     // A negative headroom must reach `check_headroom_stops`, whose message names this
     // very flag: without this, clap refused `-1` as "unexpected argument" and the rule's
     // own negative branch was unreachable from the CLI. Same reason `--linear-range`
@@ -1970,6 +1972,9 @@ pub struct NewFlowResult {
     /// whether they were stated or estimated (and over which region), and the
     /// exposure. An estimated frame is reproduced exactly by stating these gains.
     pub scene_correction: scene_correction::SceneCorrection,
+    /// Fit range's operator by name, with the headroom, white point and display peak
+    /// it ran at — what a non-default `fit_range.headroom_stops` changes.
+    pub fit_range: fit_range::FitRange,
     /// The destination written — one today (`nf-destinations/preset-set` owns the set).
     pub destination: &'static str,
     /// The gamut the chain rendered into, read off its exit.
@@ -3883,7 +3888,13 @@ pub fn validate_convert(
     // trace of it. It also passes the presence-rule tiebreaker: unlike an identity value
     // that asks for nothing, a headroom *forces* a white point the named tone has no way
     // to produce.
-    if args.print.display_tone_headroom.is_some() && cfg.print.display_tone.white_point().is_none()
+    //
+    // Current chain only: under `--new-flow` the headroom is fit range's
+    // (`fit_range.headroom_stops`), which has no tone to select, and `cfg` is a
+    // projection whose `print` section is always the default.
+    if Flow::from_flag(args.new_flow) == Flow::Legacy
+        && args.print.display_tone_headroom.is_some()
+        && cfg.print.display_tone.white_point().is_none()
     {
         // The remedy is conditional on the preset, deliberately. "Add `--display-tone
         // reinhard`" is only advice a user can act on where the preset would accept that
@@ -5453,8 +5464,8 @@ fn removed_sigmoid_flag(flags: &RemovedSigmoidFlags) -> Option<(&'static str, &'
     // Each remedy must also hold under `--new-flow`, which refuses the anchor
     // placements and the display tone the current chain offers.
     const KNEE: &str = "the exponential has no knees, and highlight roll-off belongs to \
-                        the display tone (`--display-tone`; not yet available under \
-                        `--new-flow`)";
+                        the display tone (`--display-tone`; under `--new-flow`, fit \
+                        range's `--display-tone-headroom`)";
     [
         (
             "--sigmoid-contrast",
@@ -6765,6 +6776,9 @@ const NEW_FLOW_DESTINATION: &str = "display-p3-u16-tiff";
 /// The gamut the new flow's one destination renders into.
 const NEW_FLOW_GAMUT: DestinationGamut = DestinationGamut::DisplayP3;
 
+/// The peak fit range compresses against for that destination: an SDR display.
+const NEW_FLOW_PEAK: DisplayPeak = DisplayPeak::SDR;
+
 /// What [`convert_frame`] has resolved by the time the new flow's render takes
 /// over: everything up to and including the film base, which both flows share.
 struct NewFlowFrame<'a> {
@@ -6808,7 +6822,7 @@ fn render_new_flow_frame(
         read_inputs,
     } = frame;
     let decode_params = recipe.reconstruction;
-    let chain_params = recipe.chain_params(NEW_FLOW_GAMUT);
+    let chain_params = recipe.chain_params(NEW_FLOW_PEAK, NEW_FLOW_GAMUT);
 
     // Reconstruction: the fixed decode, then the pinned NC film RGB v1 3×3.
     let stage_started = Instant::now();
@@ -6839,6 +6853,7 @@ fn render_new_flow_frame(
             .applied
             .map(|(stage, applied)| NewFlowStageResult { stage, applied }),
         scene_correction: rendered.scene_correction,
+        fit_range: rendered.fit_range,
         destination: NEW_FLOW_DESTINATION,
         gamut: gamut.name(),
         sidecar_written: false,
@@ -10718,7 +10733,6 @@ mod tests {
     #[test]
     fn the_sigmoid_flags_are_migration_errors() {
         use clap::CommandFactory;
-        const NOT_YET: &str = "not yet available under `--new-flow`";
         for (flags, remedy, new_flow) in [
             (
                 ["--sigmoid-contrast", "2"].as_slice(),
@@ -10728,12 +10742,12 @@ mod tests {
             (
                 ["--sigmoid-toe", "0.2"].as_slice(),
                 "--display-tone",
-                NOT_YET,
+                "--display-tone-headroom",
             ),
             (
                 ["--sigmoid-shoulder", "0"].as_slice(),
                 "--display-tone",
-                NOT_YET,
+                "--display-tone-headroom",
             ),
             (
                 ["--sigmoid-mid-fraction", "0.5"].as_slice(),

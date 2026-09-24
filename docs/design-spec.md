@@ -1225,7 +1225,7 @@ top-level **document version** rather than per-object ones:
     "exposure": 0.0
   },
   "look": {},
-  "fit_range": {},
+  "fit_range": {"headroom_stops": 6.0},
   "fit_gamut": {}
 }
 ```
@@ -1234,9 +1234,10 @@ top-level **document version** rather than per-object ones:
   the current chain; `calibration` holds the film base alone, since the fixed
   decode reads no reference density. `reconstruction` is the fixed decode's
   parameters (`--density-scale`, `--density-offset`, `--density-gamma`,
-  `--anchor-mid-offset`). `scene_correction` is white balance and exposure (below).
-  The other three rendering stages are present and empty until each stage's task
-  gives it a knob, and refuse any key until then. There is no
+  `--anchor-mid-offset`). `scene_correction` is white balance and exposure and
+  `fit_range` the operator's headroom (both below). The other two rendering stages
+  are present and empty until each stage's task gives it a knob, and refuse any key
+  until then. There is no
   `output` section while the new chain writes one fixed destination.
 - **The version is the chain declaration.** `recipe_version` is required and is
   exactly `2`. Under `--new-flow` a recipe without it is refused; without the flag,
@@ -1265,6 +1266,20 @@ top-level **document version** rather than per-object ones:
   slope and offset would restate white balance and the flare subtraction. Empty, it
   is a bit-exact identity, and the report's `new_flow.stages` lists it as
   `"applied": "identity"`.
+- **`fit_range`** (`nf-display-stages/fit-range`): fits the scene's range into the
+  display's, with the display's **peak** as the operator's one per-destination
+  argument — the destination states it, never the recipe (`1.0` for the SDR TIFF).
+  One operator, reinhard: `Y′ = r(Y)·(1 + (P − 1)·s(Y))` on ACEScg luminance, all
+  three channels scaled by `Y′/Y`, where `r` is the mid-grey-preserving extended
+  reinhard at `W = 2^headroom_stops` and `s` a smoothstep in stops from diffuse white
+  (`1.0` on the fixed decode) to `W`. So `P = 1` is exactly reinhard, and every peak
+  agrees bit for bit below diffuse white. `headroom_stops` (`--display-tone-headroom`)
+  is finite, `0`–`24`, default `6`; `0` is the identity. Content above `W` exceeds
+  the peak on every branch and is clamped and counted at the encode. A non-finite
+  sample is refused, naming the pixel; a pixel with luminance ≤ 0 is scaled by the
+  curve's limit at black (the mid-grey gain), so the scale is continuous there.
+  The report's `new_flow.fit_range` names the operator (`reinhard-peak-lifted-v1`, or
+  `identity` at zero headroom) with its headroom, white point and display peak.
 
 This section states the shape. Each stage's keys are specified by the task that
 ships the knob, not written here ahead of the code.
@@ -2729,7 +2744,7 @@ nc/
     │   ├── stages.rs     # stage wiring as pure functions
     │   ├── white_balance.rs # white-balance statistics: the current chain's per-frame estimators, the roll's levels
     │   ├── roll_white.rs    # `measure-roll`: a roll's pooled white, leader-guarded (new flow)
-    │   ├── chain.rs           # the --new-flow chain, composed (look and fit range still identities)
+    │   ├── chain.rs           # the --new-flow chain, composed (the look still an identity)
     │   ├── working_image.rs   # the buffer every new-flow stage boundary carries
     │   ├── scene_correction.rs # new flow stage 1: WB, exposure, flare (scene-referred)
     │   ├── look.rs            # new flow stage 2: contrast, grade, highlight desaturation
