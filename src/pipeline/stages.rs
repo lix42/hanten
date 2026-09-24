@@ -971,7 +971,7 @@ pub(crate) mod golden {
     /// **Stated as a literal, never inherited from a default.** These vectors pin bit
     /// patterns; taking the value from `DmaxSource::default()` would silently rebase
     /// them the next time that default moves, which is exactly how a probe stops
-    /// measuring what it claims to (CLAUDE.md). `Explicit(2.0)` is arithmetically
+    /// measuring what it claims to (`shadow_metrics`' module docs). `Explicit(2.0)` is arithmetically
     /// identical to the `Fixed` these captures were taken under.
     pub(crate) fn frozen_reference_dmax() -> DmaxInput {
         DmaxInput::new(DmaxSource::Explicit(2.0))
@@ -1476,5 +1476,8 @@ pub(crate) mod golden {
     //
     // The per-pixel goldens above (a curated tonal-range + out-of-range vector with
     // dmax/balance-range/IR all pinned, captured from the pre-split code) are the
-    // portable bit-identity / no-`pipeline_version`-bump gate.
+    // portable bit-identity / no-`pipeline_version`-bump gate. They stop at
+    // `algo::reconstruct`: nothing committed guards display stages or post-lcms2
+    // output across targets, so a change there is verified by same-machine
+    // before/after comparison, never by a checked-in vector.
 }

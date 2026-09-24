@@ -17,6 +17,12 @@ use ultrahdr_sys as uhdr;
 /// The binary under test, provided by Cargo for integration tests.
 const NC: &str = env!("CARGO_BIN_EXE_hanten");
 
+/// A committed fixture by file name.
+///
+/// `hdri-64bit.tif` carries an IR plane, so every conversion of it warns that the plane
+/// is "preserved but not used", and any `--strict` run on it fails whatever else it
+/// tests. To prove a *specific* warning is strict-promotable, use the IR-free `hdr-48bit.tif` and add a
+/// no-override control run so the assertion is falsifiable.
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
@@ -2484,8 +2490,8 @@ fn a_reference_the_default_placement_cannot_read_is_warned_not_dropped() {
     let (code, _, err) = run(&argv);
     assert_ne!(code, 0, "--strict must promote it: {err}");
 
-    // **The remedy must be a route this branch accepts** — the circular-advice defect
-    // CLAUDE.md records four instances of. The curve already is the exponential, so
+    // **The remedy must be a route this branch accepts**, or the user is sent
+    // in a circle. The curve already is the exponential, so
     // switching curves is not the remedy; a reference-reading placement is.
     assert!(
         err.contains("--anchor-mid-fraction"),
@@ -4482,7 +4488,7 @@ fn auto_measured_balance_range_reproduces_the_output_when_reused() {
     // THE measure-once-reuse workflow, end-to-end: measure a frame's tone range
     // under Auto, freeze it, and replay it on the next frame of the roll. This
     // closes the loop the report/recipe tests only cover in halves and crosses
-    // the report-field ↔ recipe-key boundary CLAUDE.md flags as bug-prone —
+    // the report-field ↔ recipe-key boundary, which is bug-prone —
     // `Report.balance_range` must ride out as JSON text and feed straight back
     // in via `--balance-range` with no precision drift.
     let dir = TempDir::new("balreuse");
@@ -11331,7 +11337,7 @@ fn new_flow_refuses_a_knob_whose_counterpart_has_not_landed() {
     // The presence half of the availability gate, and its wording: "not yet" advises
     // waiting, where the other verdict advises replacing. Asserting the *losing*
     // wording is absent is the only way to tell the two rules apart — both name the
-    // knob (CLAUDE.md: `err.contains(<knob>)` cannot distinguish them).
+    // knob, so `err.contains(<knob>)` cannot distinguish them.
     let tmp = TempDir::new("new-flow-not-yet");
     let out = tmp.path("out.tif");
     let flags: &[&str] = &[

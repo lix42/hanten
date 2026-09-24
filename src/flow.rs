@@ -121,12 +121,15 @@ const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which su
 
 /// Knobs with no new-flow meaning, keyed on the **flag the user typed**.
 ///
-/// Per CLAUDE.md's recorded tiebreaker: reject a flag when it *forces something the
+/// The presence tiebreaker: reject a flag when it *forces something the
 /// branch cannot produce*, and leave an identity value alone — but only where a recipe
 /// could have pinned the knob. The new chain's recipe (`crate::recipe`) has no field for
 /// any knob refused here, so an identity value has to earn its acceptance on its own:
 /// `--density-curve exponential` does (it names the curve the decode already is), and
-/// `--no-d-max` does not.
+/// `--no-d-max` does not. When checking which refusals can still fire here, walk the
+/// reachable *values*, not the knobs: a refused knob's spared identity value is
+/// reachable too, and a `merge` refusal and a row here can otherwise send a user in a
+/// circle.
 ///
 /// **How a knob the user never typed is handled**, which this table alone cannot do.
 /// The fixed decode reads its own [`DecodeParams`], which is the new chain's recipe
@@ -538,8 +541,7 @@ const KEPT_FLAGS: &[KeptEntry] = &[
 ///
 /// Runs **before `merge`**, and that placement is load-bearing: a presence rule
 /// placed after it is unreachable whenever `merge` refuses the same command line
-/// first, and the user then gets a remedy pointing at a knob this flow rejects —
-/// the circular-advice defect CLAUDE.md records shipping four times.
+/// first, and the user then gets a remedy pointing at a knob this flow rejects.
 pub fn reject_unavailable_flags(flow: Flow, args: &ConvertArgs) -> Result<()> {
     if flow == Flow::Legacy {
         return reject_new_flow_only_flags(args);

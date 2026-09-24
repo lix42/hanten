@@ -20,8 +20,8 @@
 //!   [`ADVANCED_MAX_PIXELS`] and friends; outside them the file is still a valid
 //!   general-brand AVIF, and the omission is reported rather than hidden.
 //! * **Nothing time-varying or random is written.** No timestamps, no UUIDs, no
-//!   EXIF/XMP unless requested, and one encoder thread — so repeated encodes of
-//!   the same input on the same build are byte-identical.
+//!   EXIF/XMP unless requested, and a pinned worker count ([`AV1_THREADS`]) — so
+//!   repeated encodes of the same input on the same build are byte-identical.
 
 use std::ffi::{CStr, c_int, c_uint};
 use std::path::Path;
@@ -92,8 +92,8 @@ const ADVANCED_MAX_HEIGHT: u32 = 8_704;
 /// planes be allocated before init failed with a generic error.
 const AV1_MAX_DIMENSION: u32 = 65_536;
 
-/// Pinned encoder speed. Part of the byte-determinism contract, like the single
-/// thread and the disabled tiling — not a knob.
+/// Pinned encoder speed. Part of the byte-determinism contract, like the pinned
+/// thread count and the disabled tiling — not a knob.
 const CPU_USED: c_int = 6;
 
 /// Pinned constant-quality level, chosen by measurement.
@@ -126,7 +126,9 @@ const CQ_LEVEL: c_uint = 8;
 /// a 16.4 MP scan at 2, 4 and 8, and pinned by a test at 2 vs this constant), but a
 /// count of **1 switches row-mt off** inside libaom and produces different bytes.
 /// 8 is the measured 5x on a 14-core machine; a machine with fewer cores runs the
-/// same 8 workers more slowly and writes the same file.
+/// same 8 workers more slowly and writes the same file. libaom documents no such
+/// count-independence, so the tests — not the library — hold it across a
+/// `libaom-sys` bump.
 const AV1_THREADS: c_uint = 8;
 const _: () = assert!(AV1_THREADS >= 2, "one thread disables libaom row-mt");
 
@@ -136,7 +138,8 @@ pub enum AvifProfile {
     /// Within every Advanced Profile limit — `MA1A` is advertised.
     Advanced,
     /// Outside at least one limit. Still a valid AVIF, but `MA1A` is omitted and
-    /// the reason travels back to the caller for the report.
+    /// the reason travels back to the caller for the report. There is deliberately
+    /// no grid-item path to stay inside the limits.
     GeneralOnly {
         /// Human-readable statement of which limit was exceeded.
         reason: String,

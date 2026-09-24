@@ -53,6 +53,9 @@ const BINS: usize = 10;
 
 /// The fixture rolls that have a digitized datasheet, as
 /// `(roll in the asset manifest, recipe stem, stock key in `curve_data`)`.
+///
+/// **Stale:** the roll keys are the pre-rename manifest names; today's asset folder
+/// names rolls by date (`2026-07-15-Ektar100`), so these probes panic looking them up.
 const FIXTURES: &[(&str, &str, &str)] = &[
     ("Ektar", "Ektar", "ektar-100"),
     ("Portra160-2026-07-22", "Portra160-2026-07-22", "portra-160"),
@@ -286,7 +289,9 @@ fn measure_decoded(
         }
     }
     // Normalise at the middle bin: this is exactly what a white balance does, and it is
-    // what makes the *drift* the only thing compared.
+    // what makes the *drift* the only thing compared. It also makes the slopes
+    // base-immune: a wrong film base is a per-channel constant in density, which this
+    // subtracts. A level or offset read from this probe is not, and needs a measured base.
     let mid = BINS / 2;
     for slot in [
         &mut out.scalar_b,

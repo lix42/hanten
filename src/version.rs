@@ -376,7 +376,10 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   are the default;
 /// - the auto detector's behavior on **real** scans — `base` pins it on one frozen
 ///   synthetic layout, which catches a retuned constant but not a regression that
-///   only shows up on real rebate geometry.
+///   only shows up on real rebate geometry;
+/// - the IR holder mask (`film_base::ir_separability` / `ir_holder_mask`): `base`'s
+///   frozen scan carries no IR plane, so a change there moves the film base of every
+///   HDRi auto-base run and none of the three hashes.
 ///
 /// A change confined to those areas can move default output with every test green.
 /// The `scripts/real-scan-verify/` harness and `nctool compare` are the tools for

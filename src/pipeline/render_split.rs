@@ -35,8 +35,8 @@
 //! An **unclamped 32-bit float linear ACEScg** image containing the intentional
 //! film, lens, development, scanner, reconstruction, and density-curve rendering,
 //! including supported fixed/roll `Dmax` placement. It is **not** a physical
-//! scene-linear recovery, and it is **not** what `--output-hdr` produces (that is
-//! a transitional *rendered* float TIFF — the print controls already ran).
+//! scene-linear recovery, and it is **not** what the retired `--output-hdr` wrote
+//! (a *rendered* float TIFF — the print controls had already run).
 //! [`film_master`] therefore does exactly one thing: unwrap the mapped ACEScg
 //! buffer. Nothing is applied, nothing is clamped (range clamping stays at the
 //! u16 encode step, which `film-master` never uses), and non-finite samples ride

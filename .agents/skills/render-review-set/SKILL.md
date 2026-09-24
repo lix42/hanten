@@ -294,6 +294,9 @@ weeks later.
 ## Traps
 
 - **Never publish or commit a review set.** The images are personal photographs.
+- **A `--new-flow` cell cannot be generated yet**: the generator passes
+  `--output-preset` to every cell and `--new-flow` refuses it (exit 2). Render that side by
+  hand until `nf-destinations/preset-set` gives the new flow a destination to name.
 - **Nothing checks that a metric record describes the pixels beside it.** Re-render by hand
   and the charts go on describing the previous render; `nctool review generate` re-measures on
   checksum change, which is why it is the way to rebuild a set.

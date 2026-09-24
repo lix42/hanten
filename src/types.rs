@@ -821,6 +821,11 @@ impl DensityParams {
     /// merged onto an already-serialized config, where `scale` is present whether or not
     /// the overlay mentioned it, so the `Deserialize` resolution cannot fire and the
     /// default is re-applied by hand instead.
+    ///
+    /// A `Reconstruction` built in code gets none of the three: pair a characteristic curve
+    /// with `default_scale_for(curve.curve_type())`, and never use
+    /// `DensityParams::default()` to mean "no correction" — it is the exponential's
+    /// calibration, not the identity.
     pub fn default_scale_for(curve: DensityCurveType) -> [f32; 3] {
         match curve {
             DensityCurveType::Exponential => crate::algo::fixed::DENSITY_SCALE,
@@ -1495,8 +1500,8 @@ impl<'de> Deserialize<'de> for DensityCurve {
         // Before the unknown-field scan, and before any per-variant cross-key rule:
         // `dmax` used to live here, so "unknown field" / "`dmax` is a parametric-curve
         // key" are both true and both useless. A recipe written against the old schema
-        // needs the path it moved to (CLAUDE.md: diagnose the more specific fault
-        // first). nc is unreleased — this is a migration error, never an alias.
+        // needs the path it moved to (the more specific diagnosis goes first).
+        // nc is unreleased — this is a migration error, never an alias.
         if obj.contains_key("dmax") {
             return Err(D::Error::custom(
                 "`dmax` is no longer a `reconstruction.curve` key — the roll's reference \
@@ -1791,9 +1796,8 @@ impl EncodeReport {
 /// unknown-value error.
 ///
 /// Keep this list in step with `parse`, [`ALL`](Self::ALL), and
-/// `OutputOverrides::output_preset`'s help text — it has gone stale twice, and the
-/// help text is what `--help` shows. The diagnostics no longer restate it: they are
-/// generated from `ALL`.
+/// `OutputOverrides::output_preset`'s help text, which is what `--help` shows. The
+/// diagnostics do not restate it: they are generated from `ALL`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum OutputPreset {

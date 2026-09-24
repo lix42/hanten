@@ -304,9 +304,8 @@ pub struct RebateCandidate {
 /// the density divide `D = -log10(scan / base)`, so a zero / negative /
 /// non-finite channel is unusable and errors loudly here rather than poisoning
 /// the render (or, worse, being printed by `hanten estimate` as a trustworthy Dmin
-/// the user bakes into a recipe). This is the "reject degenerate bases at birth"
-/// guard the film-base gotcha in `CLAUDE.md` called for; the per-algo guards in
-/// `algo/*` remain as defense-in-depth.
+/// the user bakes into a recipe). The per-algo guards in `algo/*` remain as
+/// defense-in-depth.
 /// Takes an already-**resolved** [`FilmBaseSource`], not the params object: since
 /// `calibration.film_base` has no default, "unset" is an orchestration state the CLI
 /// resolves (reject for `convert`/`roll`, `Auto` for the measurement commands),
@@ -905,6 +904,9 @@ pub fn ir_holder_mask(image: &LinearImage) -> Result<Option<Vec<EdgeHolderMask>>
     // in practice: at the shallow probe depth a holder that wraps the whole frame
     // reads all-holder on all four edges (measured on 22 of 25 real chromogenic
     // frames), and the mask restricts along the edge only, not in depth.
+    //
+    // Ask `film_along_ranges` rather than "is every segment holder": a film segment
+    // lying wholly inside the corner trim also leaves an edge nothing to scan.
     if [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right]
         .iter()
         .all(|edge| film_along_ranges(Some(&masks), *edge, image, cap).is_empty())

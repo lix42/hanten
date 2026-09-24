@@ -10,6 +10,10 @@
 //! and attached by this module — the gain map's before packaging, the baseline's
 //! after, because libultrahdr rewrites the baseline's segments and appends the
 //! gain-map image verbatim.
+//!
+//! Verify any change to the container or the ISO bytes with the external decoder
+//! oracle, `scripts/iso-decoder-oracle/` (manual, macOS-only): exiftool and
+//! libultrahdr both accept files that no ISO-aware decoder parses.
 
 use std::ffi::{CStr, c_void};
 use std::path::Path;
@@ -39,7 +43,9 @@ pub enum Dialects {
     /// Reached from the `gain-map-hdr` preset. It is the only dialect Apple
     /// platforms read, so it is what makes a gain-map file actually HDR there;
     /// `ultra-hdr-v1` stays contractually ISO-free (a test asserts its bytes
-    /// contain no `21496`).
+    /// contain no `21496`). ISO 21496-1 is silent on coexisting with the legacy
+    /// XMP, so which dialect a dual-aware decoder prefers is observed behaviour,
+    /// never a conformance claim.
     LegacyPlusIso,
 }
 

@@ -1001,8 +1001,12 @@ fn removed_output_flag_message(s: &RemovedOutputSelector, new_flow: bool) -> Str
 /// anything was removed. A non-default value is left for [`reject_legacy_recipe_keys`]
 /// to refuse.
 ///
-/// `print.display_tone` is **not** stripped at its old default: `"shoulder"` replayed
-/// today would render differently, so it is refused like any other value.
+/// The rule for retiring any recipe key: every sidecar and `--dump-params` document
+/// serializes every key, so a retired key sits at its old default in every recipe on
+/// disk — strip it there, or no old recipe replays. The exception is an old default
+/// whose replay would now render differently: refuse it, since stripping it would
+/// silently render the new default. `print.display_tone`'s `"shoulder"` is one, so it is
+/// **not** stripped here.
 fn strip_retired_keys_at_old_defaults(v: &mut serde_json::Value) -> bool {
     let mut stripped = false;
     if let Some(output) = v.get_mut("output").and_then(|o| o.as_object_mut()) {
@@ -1492,6 +1496,11 @@ fn preset_replaced_paths(recipe: &ResolvedConfig, cfg: &ResolvedConfig) -> Vec<&
 /// (`schema_version` 1, design-spec §8): there are no sibling top-level
 /// `algorithm`/`density`/`sigmoid`/`simple` sections — the removed legacy forms
 /// are rejected with a migration error at recipe load (`load_recipe_for`).
+///
+/// Sections and key placement follow design-spec §9; under `deny_unknown_fields` a key
+/// placed differently from §9 rejects every docs-shaped recipe. `params` and `meta` are
+/// reserved top-level names: [`split_envelope`] tells a sidecar from a bare recipe by
+/// them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct ResolvedConfig {
@@ -1516,8 +1525,7 @@ pub struct ResolvedConfig {
 /// The reuse-ready forms of a measured film base, kept as one unit so the flag
 /// and the recipe value are both-present-or-both-absent — the illegal
 /// flag-without-recipe (or recipe-without-flag) state two parallel `Option`s
-/// would permit is unrepresentable (the parallel-`Option` anti-pattern in
-/// `CLAUDE.md`).
+/// would permit is unrepresentable.
 ///
 /// **The pairing is per measurement, not per section.** The flag half becomes the
 /// flat report key `film_base_flag`; the recipe half is copied into the report's
@@ -3538,6 +3546,8 @@ fn anchor_flag_placement(a: &AnchorOverrides) -> Option<AnchorPlacement> {
 /// flag/config combinations *invalid* rather than inert, and the design pins them as
 /// post-merge usage errors (exit 2), never ignored — a slope, placement or stock flag
 /// the resolved curve has no field for.
+///
+/// A knob with no arm here is a silent no-op flag; each new knob gets a merge test.
 pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConfig> {
     let usage = |m: String| NcError::Usage(m);
 
@@ -3748,9 +3758,6 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
     Ok(cfg)
 }
 
-/// Map the (clap-mutually-exclusive) film-base flags to a [`FilmBaseSource`],
-/// or `None` when none was passed. Shared by `convert`'s [`merge`] and
-/// `estimate`, so the two resolve the source identically.
 /// **Which region does the measurement use?** Whether this resolved
 /// reconstruction contains a measurement that should be taken over the effective
 /// area rather than the whole frame.
@@ -3839,6 +3846,9 @@ pub(crate) fn merge_shared_sections(
     }
 }
 
+/// Map the (clap-mutually-exclusive) film-base flags to a [`FilmBaseSource`],
+/// or `None` when none was passed. Shared by both chains' `convert` merge
+/// ([`merge_shared_sections`]) and `estimate`, so they resolve the source identically.
 fn film_base_source_override(o: &FilmBaseOverrides) -> Option<FilmBaseSource> {
     if let Some(v) = o.film_base {
         Some(FilmBaseSource::Explicit(v))
@@ -4460,9 +4470,10 @@ pub fn missing_film_base_message(remedy: FilmBaseRemedy) -> String {
 ///
 /// **Not the whole `convert` gate.** Every rule here reads only the resolved config, so
 /// it is shared verbatim by `convert` and `roll` (and by each `roll` per-frame
-/// override). `convert` has one additional rule that inspects flag *presence* and
-/// therefore cannot live here; [`validate_convert`] composes the two and is what a
-/// `convert` orchestrator must call.
+/// override). `convert` has further rules that inspect flag *presence* and therefore
+/// cannot live here; [`validate_convert`] composes them with this and is what a
+/// `convert` orchestrator must call. A rule that reads only a value belongs here, not
+/// there, or `roll` and its per-frame overrides never see it.
 ///
 /// This spelling reports the missing film base with [`FilmBaseRemedy::Flags`];
 /// `roll` calls [`validate_with_remedy`] so its users are pointed at the shared
@@ -4960,7 +4971,7 @@ fn emit_json<T: Serialize>(
 }
 
 // ---------------------------------------------------------------------------
-// lcms2 runtime-error handler (see CLAUDE.md's lcms2 gotcha)
+// lcms2 runtime-error handler
 // ---------------------------------------------------------------------------
 
 /// Set when lcms2 reports a runtime error through the process-global handler.
@@ -5221,6 +5232,9 @@ fn reject_deprecated_input_flags(o: &InputOverrides) -> Result<()> {
 /// tie alias activation to the complete `output/presets` migration (see the
 /// comment on the simple controls below). `reject_legacy_recipe_keys` is
 /// the recipe-side mirror.
+///
+/// Runs before [`flow::reject_unavailable_flags`], so it fires on **both** chains: every
+/// remedy here must name something that also works under `--new-flow`.
 fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
     if let Some(name) = &args.algorithm {
         return Err(NcError::Usage(format!(
@@ -6951,8 +6965,7 @@ fn unconsumed_dmax_warning(cfg: &ResolvedConfig) -> Option<String> {
         return None;
     }
     // **The remedy is per branch, and that is not decoration**: each arm names a route
-    // its own branch accepts — the circular-advice defect this project has shipped four
-    // times.
+    // its own branch accepts, or the user is sent in a circle.
     let (reason, remedy) = match &cfg.reconstruction.curve {
         DensityCurve::Characteristic(_) => (
             "the resolved curve is characteristic — it reads its slope and its mid-grey \
@@ -7038,7 +7051,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // Presence-keyed availability runs **before** `merge`, deliberately: `merge`
     // refuses some command lines itself, and a rule placed after it is unreachable
     // on exactly those — handing the user a remedy that names a knob this flow
-    // rejects (CLAUDE.md, ordering across gates).
+    // rejects.
     flow::reject_unavailable_flags(flow, &args)?;
     // The third provenance the two availability tables cannot see — a recipe
     // written for the other chain — is refused inside the load, before `merge`

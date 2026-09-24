@@ -31,8 +31,9 @@ in-progress changes, fix them, and prove the tree green — nothing more.
 - Work from **inside the checkout you were given** (absolute path from the
   orchestrator; with none, the current directory). Never edit a different
   checkout.
-- Read that checkout's `CLAUDE.md` in full before editing — conventions differ
-  per branch, and it is the authoritative version of the rules below.
+- Read that checkout's `CLAUDE.md` in full before editing, plus the module docs
+  and any nested `CLAUDE.md` for the files you touch — conventions differ per
+  branch, and they are the authoritative version of the rules below.
 
 ## Project constraints your fixes must respect
 
