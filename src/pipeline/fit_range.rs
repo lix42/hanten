@@ -59,6 +59,11 @@ use crate::types::{NcError, Result, headroom_fault, headroom_white_point};
 /// the version.
 pub const OPERATOR: &str = "reinhard-peak-lifted-v1";
 
+/// What the report names in place of an operator when the headroom leaves nothing to
+/// compress (`headroom_stops = 0`), so a report never names an operator that moved no
+/// pixel. Shared with the current chain's `display_tone`.
+pub const IDENTITY: &str = "identity";
+
 /// Scene mid-grey, which the operator leaves where the decode put it.
 const MID_GREY: f64 = 0.18;
 
@@ -127,7 +132,7 @@ impl FitRangeParams {
             // By the same test `apply` uses to skip the pixels, so the report never
             // names an operator that moved none.
             operator: if white_point == 1.0 {
-                "identity"
+                IDENTITY
             } else {
                 OPERATOR
             },

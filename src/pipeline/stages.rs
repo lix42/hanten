@@ -33,7 +33,7 @@ use std::time::Instant;
 
 use crate::algo;
 use crate::pipeline::color::{self, OutputSpace};
-use crate::pipeline::display_tone::DisplayTone;
+use crate::pipeline::display_tone::Headroom;
 use crate::pipeline::{render_split, sdr, working_space};
 use crate::types::{DmaxInput, FilmBase, LinearImage, PrintParams, Reconstruction, Result};
 
@@ -109,12 +109,10 @@ pub fn render_sdr_preset(
     film_base: &FilmBase,
     reconstruction: &Reconstruction,
     print: &PrintParams,
+    tone: Headroom,
     gamut: sdr::SdrGamut,
     dmax: DmaxInput,
 ) -> Result<Rendered> {
-    // Before the source render, so an unusable knee width fails without having paid
-    // for reconstruction and the print stage.
-    let tone = DisplayTone::resolve(print)?;
     let source = render_display_source(image, film_base, reconstruction, print, dmax)?;
     let mut timings = source.timings;
     let started = Instant::now();
@@ -343,7 +341,6 @@ mod tests {
 mod midtone_placement {
     use super::*;
     use crate::algo::film_stock;
-    use crate::pipeline::display_tone::{DisplayTone, Headroom, KneeWidth};
     use crate::pipeline::sdr::{self, SdrGamut};
     use crate::types::{
         CharacteristicParams, DensityParams, FilmBase, FilmStock, PrintParams, Reconstruction,
@@ -393,7 +390,7 @@ mod midtone_placement {
     fn delivered_by(
         reconstruction: &Reconstruction,
         stock: FilmStock,
-        tone: DisplayTone,
+        tone: Headroom,
         print: &PrintParams,
     ) -> Option<[f32; 3]> {
         let (image, base) = mid_grey_patch(stock);
@@ -420,7 +417,7 @@ mod midtone_placement {
     fn reinhard_is_free_at_mid_grey_and_priced_either_side_of_it() {
         let stock = FilmStock::Portra400;
         let print = PrintParams::default();
-        let reinhard = DisplayTone::ExtendedReinhard(Headroom::new(4.0).unwrap());
+        let reinhard = Headroom::new(4.0).unwrap();
         // Resolve the per-channel gain from the curve, exactly as the recipe and CLI paths
         // do. Constructing `DensityParams::default()` beside a characteristic curve would
         // apply the exponential's calibration on top of one that already carries each
@@ -457,17 +454,11 @@ mod midtone_placement {
             ),
         ];
         println!(
-            "\n{:30}{:>10}{:>12}{:>12}{:>10}",
-            "reconstruction", "no tone", "shoulder", "reinhard", "cost"
+            "\n{:30}{:>10}{:>12}{:>10}",
+            "reconstruction", "no tone", "reinhard", "cost"
         );
         for (name, reconstruction) in cases {
-            let none = delivered_by(&reconstruction, stock, DisplayTone::None, &print);
-            let shoulder = delivered_by(
-                &reconstruction,
-                stock,
-                DisplayTone::HermiteShoulder(KneeWidth::new(0.0).unwrap()),
-                &print,
-            );
+            let none = delivered_by(&reconstruction, stock, Headroom::new(0.0).unwrap(), &print);
             let rein = delivered_by(&reconstruction, stock, reinhard, &print);
             // Red: the tone channel, unaffected by `density.scale`'s per-channel gain.
             let cost = match (none, rein) {
@@ -478,12 +469,7 @@ mod midtone_placement {
                 Some(x) => format!("{:.4}", x[0]),
                 None => "refused".to_string(),
             };
-            println!(
-                "{name:30}{:>10}{:>12}{:>12}{cost:>10}",
-                fmt(none),
-                fmt(shoulder),
-                fmt(rein)
-            );
+            println!("{name:30}{:>10}{:>12}{cost:>10}", fmt(none), fmt(rein));
         }
         // The invariant worth pinning: free at the anchor, and monotone in the value it
         // is handed — so the sign of the cost tells you which side of 0.18 a
@@ -504,7 +490,7 @@ mod midtone_placement {
         );
     }
 
-    fn delivered(stock: FilmStock, tone: DisplayTone, print: &PrintParams) -> [f32; 3] {
+    fn delivered(stock: FilmStock, tone: Headroom, print: &PrintParams) -> [f32; 3] {
         let sc = film_stock::curves_for(stock);
         let [grey, _] = sc.aims.expect("a stock with a published aim table");
         let d_min = sc.d_min.expect("a measured stock");
@@ -560,16 +546,17 @@ mod midtone_placement {
     /// reconstruction's — it was extended Reinhard's, on *every* curve. That is why the
     /// fix went into the operator's own definition rather than into a default
     /// `--print-exposure`, and this asserts the end-to-end result: 0.18 in, 0.18
-    /// delivered, under every tone and at every headroom.
+    /// delivered, at every headroom.
     #[test]
-    fn mid_grey_lands_at_eighteen_percent_through_every_display_tone() {
+    fn mid_grey_lands_at_eighteen_percent_at_every_headroom() {
         let stock = FilmStock::Portra400;
         let print = PrintParams::default();
         // Red only: see `delivered`. Tone is the question here.
         let tone_of = |t, p: &PrintParams| delivered(stock, t, p)[0];
 
-        // No tone: gamut mapping and the range check still run, but nothing reshapes tone.
-        let none = tone_of(DisplayTone::None, &print);
+        // Zero headroom, the identity: gamut mapping and the range check still run, but
+        // nothing reshapes tone.
+        let none = tone_of(Headroom::new(0.0).unwrap(), &print);
         assert!(
             (none - 0.18).abs() < 0.01,
             "reconstruction placed the datasheet's mid-grey at {none:.4}, not 0.18 — the \
@@ -579,40 +566,23 @@ mod midtone_placement {
         // Extended Reinhard: free at mid-grey, at every headroom. Swept rather than
         // spot-checked because the gain is a function of the white point, so "independent
         // of the headroom" is the actual claim.
-        let reinhard = tone_of(
-            DisplayTone::ExtendedReinhard(Headroom::new(4.0).unwrap()),
-            &print,
-        );
+        let reinhard = tone_of(Headroom::new(4.0).unwrap(), &print);
         let stops = (none / reinhard).log2();
         assert!(
             stops.abs() < 0.02,
             "extended Reinhard cost {stops:.3} stop at mid-grey, expected none"
         );
         for headroom in [0.0f32, 1.0, 4.0, 6.0, 10.0] {
-            let at = tone_of(
-                DisplayTone::ExtendedReinhard(Headroom::new(headroom).unwrap()),
-                &print,
-            );
+            let at = tone_of(Headroom::new(headroom).unwrap(), &print);
             assert!(
                 (at - 0.18).abs() < 0.005,
                 "{headroom} stops of headroom delivered {at:.4}, not 0.18"
             );
         }
 
-        // The shipped shoulder tone: a knee placed well above mid-grey, so it never touched
-        // this in the first place — which is what made the loss diagnosable as the
-        // operator's rather than the pipeline's.
-        let shoulder = tone_of(
-            DisplayTone::HermiteShoulder(KneeWidth::new(0.0).unwrap()),
-            &print,
-        );
-        assert!(
-            (shoulder - 0.18).abs() < 0.01,
-            "the shoulder delivered {shoulder:.4}, not 0.18"
-        );
         println!(
-            "mid-grey delivered (red) — none {none:.4}, shoulder {shoulder:.4}, \
-             reinhard {reinhard:.4} ({stops:.3} stop)"
+            "mid-grey delivered (red) — identity {none:.4}, reinhard {reinhard:.4} \
+             ({stops:.3} stop)"
         );
     }
 
@@ -657,10 +627,9 @@ mod midtone_placement {
             let e = preset.expand(Some(stock)).ok()?;
             let print = PrintParams {
                 print_exposure: e.print_exposure,
-                display_tone: e.display_tone,
                 ..PrintParams::default()
             };
-            let tone = DisplayTone::resolve(&print).expect("a preset resolves its own tone");
+            let tone = Headroom::default();
             let reconstruction = Reconstruction {
                 density: DensityParams {
                     scale: e.density_scale,
@@ -764,7 +733,7 @@ mod midtone_placement {
         for (name, curve) in cases {
             let at = |density: DensityParams| {
                 let reconstruction = Reconstruction { density, curve };
-                delivered_by(&reconstruction, stock, DisplayTone::None, &print)
+                delivered_by(&reconstruction, stock, Headroom::new(0.0).unwrap(), &print)
             };
             let (Some(base), Some(now)) = (at(identity.clone()), at(DensityParams::default()))
             else {
@@ -802,7 +771,7 @@ mod midtone_placement {
                 delivered_by(
                     &Reconstruction { density, curve },
                     stock,
-                    DisplayTone::None,
+                    Headroom::new(0.0).unwrap(),
                     &print,
                 )
             };

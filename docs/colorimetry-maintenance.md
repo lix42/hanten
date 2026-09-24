@@ -15,7 +15,7 @@ The code lives in `src/pipeline/colorimetry/`:
 | `tests.rs` | **Verification** — tolerances, invariants, independent reference vectors | Always: a new artifact needs an independent anchor |
 | `derived-artifacts.txt` | Generated audit record | Never by hand — regenerate it |
 
-Product policy (reference white, peak luminance, shoulder, gamut policy,
+Product policy (reference white, peak luminance, display tone, gamut policy,
 gain-map offsets) deliberately stays with the stage that owns it. Those
 constants should *refer* to a named colour space, not restate its colorimetry.
 

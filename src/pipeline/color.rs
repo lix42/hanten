@@ -873,7 +873,7 @@ fn build_profile(space: &OutputSpace) -> Result<Profile> {
 mod tests {
     use super::*;
     use crate::algo::FilmRgbImage;
-    use crate::pipeline::display_tone::DisplayTone;
+    use crate::pipeline::display_tone::Headroom;
     use crate::pipeline::render_split::display_source;
     use crate::pipeline::sdr;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
@@ -895,7 +895,7 @@ mod tests {
             LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap(),
         );
         let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
-        sdr::render(&shared, gamut, DisplayTone::DEFAULT).unwrap()
+        sdr::render(&shared, gamut, Headroom::default()).unwrap()
     }
 
     #[test]

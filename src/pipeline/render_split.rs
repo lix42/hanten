@@ -551,7 +551,6 @@ mod tests {
             black_point: 0.25,
             white_balance: WbSource::Explicit([2.0, 1.0, 0.5]),
             linear_range: [0.5, 1.5],
-            ..PrintParams::default()
         };
         let shared = display_source(aces_from(1, 1, &[0.5, 0.5, 0.5], None), &print).unwrap();
         let got = shared.source.rgb();
@@ -609,7 +608,6 @@ mod tests {
             black_point: 0.02,
             white_balance: WbSource::Explicit([1.05, 1.0, 0.93]),
             linear_range: [0.01, 0.98],
-            ..PrintParams::default()
         };
         let mapped: Vec<f32> = aces_from(3, 1, &px, None).rgb().to_vec();
         let shared = display_source(aces_from(3, 1, &px, None), &print).unwrap();
@@ -783,7 +781,6 @@ mod tests {
                 black_point: 0.01,
                 white_balance: WbSource::Explicit([1.05, 1.0, 0.93]),
                 linear_range: [0.02, 0.95],
-                ..PrintParams::default()
             },
         ] {
             resolve_shared_controls(&aces_from(1, 1, &px, None), &print).unwrap();
@@ -791,15 +788,11 @@ mod tests {
     }
 
     #[test]
-    fn shared_stage_does_not_clamp_or_highlight_compress() {
-        // Highlight compression is branch-specific SDR policy, so a non-zero
-        // `highlight_compress` must NOT be applied by the shared stage: with
-        // otherwise-default controls the result stays the exact identity even for a
-        // sample far above 1.0 (the legacy soft-clip would have bounded it).
-        let print = PrintParams {
-            highlight_compress: 0.5,
-            ..PrintParams::default()
-        };
+    fn shared_stage_does_not_clamp_highlights() {
+        // Highlight compression is the display tone's, so the shared stage must not
+        // apply any: with default controls the result stays the exact identity even for
+        // a sample far above 1.0 (the legacy soft-clip would have bounded it).
+        let print = PrintParams::default();
         let shared = display_source(aces_from(1, 1, &[8.0, 8.0, 8.0], None), &print).unwrap();
         assert!(
             shared.source.rgb()[0] > 7.9,

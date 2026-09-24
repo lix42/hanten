@@ -30,7 +30,7 @@
 //!
 //! No tone shaping. The film's own toe is *inverted* here (the film compresses shadows, so
 //! recovering the scene expands them); any toe or shoulder the picture wants is display
-//! character and belongs to `print.display_tone`, per
+//! character and belongs to the display tone (`fit_range`), per
 //! `algo/reconstruction-render-curve-split`. The measured stocks have no shoulder at all
 //! within the density range a real scan occupies.
 

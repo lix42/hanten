@@ -802,7 +802,7 @@ impl From<tiff::TiffError> for NcError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::display_tone::DisplayTone;
+    use crate::pipeline::display_tone::Headroom;
     use std::io::Cursor;
     use tiff::decoder::{Decoder, DecodingResult};
 
@@ -1174,8 +1174,9 @@ mod tests {
     /// `print_exposure` is the lever that reaches the HDR headroom: the film
     /// positives these tests pass sit in `[0, 1]`, so without
     /// exposure nothing would ever exceed reference white and a
-    /// "highlights survive" assertion would pass vacuously. At 2.5 stops the
-    /// samples span ≈1.13 up to exactly `LINEAR_HEADROOM`.
+    /// "highlights survive" assertion would pass vacuously. Rendered at zero headroom
+    /// (the identity), so a sample above `LINEAR_HEADROOM` is refused rather than rolled
+    /// off — at 2.4 stops a `0.9` positive lands at ≈4.75, just under it.
     fn render_linear_tiny(rgb: &[f32], w: u32, h: u32, print_exposure: f32) -> LinearBt2020Hdr {
         use crate::algo::FilmRgbImage;
         use crate::pipeline::render_split::display_source;
@@ -1188,7 +1189,7 @@ mod tests {
             ..PrintParams::default()
         };
         let shared = display_source(map_nc_film_rgb_v1(film), &print).unwrap();
-        crate::pipeline::hdr::render_linear(&shared, DisplayTone::shoulder(0.75).unwrap()).unwrap()
+        crate::pipeline::hdr::render_linear(&shared, Headroom::new(0.0).unwrap()).unwrap()
     }
 
     fn temp_path(tag: &str) -> PathBuf {
@@ -1217,7 +1218,7 @@ mod tests {
             &[0.0, 0.0, 0.0, 0.2, 0.2, 0.2, 0.5, 0.5, 0.5, 0.9, 0.9, 0.9],
             4,
             1,
-            2.5,
+            2.4,
         );
         let expected = render.image().rgb.clone();
 
@@ -1228,8 +1229,8 @@ mod tests {
             "fixture has no values above reference white: {expected:?}"
         );
         assert!(
-            expected.contains(&crate::pipeline::hdr::LINEAR_HEADROOM),
-            "fixture never reaches the 1000-nit peak: {expected:?}"
+            expected.iter().any(|v| *v > 4.5),
+            "fixture never nears the 1000-nit peak: {expected:?}"
         );
         assert!(expected.contains(&0.0), "no black sample");
 
@@ -1366,8 +1367,7 @@ mod tests {
 
         let film = FilmRgbImage::fixture(LinearImage::new(w, h, rgb.to_vec(), None).unwrap());
         let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
-        crate::pipeline::hdr::render(&shared, transfer, DisplayTone::shoulder(0.75).unwrap())
-            .unwrap()
+        crate::pipeline::hdr::render(&shared, transfer, Headroom::new(0.0).unwrap()).unwrap()
     }
 
     fn decode_u16(bytes: &[u8]) -> (u32, u32, Vec<u16>) {

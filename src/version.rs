@@ -58,7 +58,8 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// | 3 | the output-preset default migration (2026-08-09, `output/presets`): the default `output.preset` became **`gain-map-hdr`**, a dual-dialect gain-map JPEG, where it was `legacy` (16-bit TIFF). This is a **container** change as much as a render one — `hanten convert -o out.tif` with no preset is now a usage error — and the pixels differ because the default path crosses the ACEScg boundary into the SDR/HDR display renderers instead of running `finish_print` before the ICC transform. `legacy` is unchanged and still reachable by name. The row's `render`/`base` fingerprints are **unmoved**: they measure `reconstruct_and_print` and `film_base::estimate`, neither of which the preset selects — which is exactly the coverage limit `PipelineFingerprint` documents, so this row's evidence is the report in `docs/reports/render-defaults-v3.md`, not the gate. |
 /// | 4 | the per-channel density gain `density.scale` `[1, 1, 1]` → **`[1, 0.90, 0.86]`** (2026-09-09, `algo/film-stock-profiles`). The scalar reconstruction path leaves `contrast · (D'_c − D'_R)`, so a channel whose density rises faster than red drifts against it across the tone scale; measured over 21 real frames, green ran +0.79 and blue +1.26 stops per unit density. This gain cancels both (green +0.02, blue +0.12). Blue's `0.860` is the manufacturers' published per-channel structure, which reproduces at 98%; green's `0.900` is calibrated from scans because the published `0.977` measured only 49% of the real drift. Every default pixel moves, and colour more than tone. Evidence: `algo::curve_probe::sigmoid_scale` and `docs/progress/algo.md`. |
 /// | 5 | the same gain again, `[1, 0.90, 0.86]` → **`[1, 0.84, 0.73]`** (2026-09-16, `io/scanner-density-calibration`). Calibrated from **31 hand-marked neutral patches** over five rolls instead of from the tone-scale slope: each roll's median nulling scale, averaged with equal weight per roll, gives green 0.837 and blue 0.733. Blue is the half that holds — every roll wants 0.68–0.78, so v4's `0.860`, taken from the manufacturers' published per-channel structure, overcorrects on this scanner. Green **splits by scan date** (July rolls 0.86–0.90, September ~0.77, consistent with a change of developer), so `0.84` is a deliberate compromise fitting neither group exactly. Shipped on a visual verdict over five rolls with an NLP reference beside them, where it beat v4 on every frame but one — `2026-07-15-Ektar100/991` reads green-yellow, which is the overshoot the July patches predict. Every default pixel moves, and colour more than tone. Evidence: `docs/progress/algo.md` (2026-09-16). |
-/// | 6 | **current** — the default density curve sigmoid → **exponential at the fixed decode's configuration** (2026-09-23, `nf-retire/sigmoid-and-simple`): contrast 2.0, mid-grey pinned 0.62 density above the film base (`mid-at-base-offset`), the same `[1, 0.84, 0.73]` gain. It is `algo::fixed`'s decode on the current chain, bit-identically (`the_fixed_decode_matches_the_equivalent_legacy_configuration`), so the two chains now render the same default reconstruction. The sigmoid's toe and shoulder were a rendering fused into the decode; the default anchor no longer reads the roll's reference density. Every default pixel moves, highlights most (nothing is compressed at white any more). `simple` retired in the same change, which moves no default pixel. |
+/// | 6 | the default density curve sigmoid → **exponential at the fixed decode's configuration** (2026-09-23, `nf-retire/sigmoid-and-simple`): contrast 2.0, mid-grey pinned 0.62 density above the film base (`mid-at-base-offset`), the same `[1, 0.84, 0.73]` gain. It is `algo::fixed`'s decode on the current chain, bit-identically (`the_fixed_decode_matches_the_equivalent_legacy_configuration`), so the two chains now render the same default reconstruction. The sigmoid's toe and shoulder were a rendering fused into the decode; the default anchor no longer reads the roll's reference density. Every default pixel moves, highlights most (nothing is compressed at white any more). `simple` retired in the same change, which moves no default pixel. |
+/// | 7 | **current** — the default display tone `shoulder` → **extended Reinhard at 6 stops of headroom** (2026-09-24, `nf-retire/display-tones`), fit range's operator. `shoulder` and `none` retired with `highlight_compress`; the headroom moved to `fit_range.headroom_stops`. Every default display pixel moves — the whole curve is compressed rather than only the top, with mid-grey held at 0.18 — while `render` and `base` are unmoved, since the gate stops before the display stages. Evidence: `docs/progress/nf-retire.md`. |
 /// **Contested, and deliberately left at 3 — read this before assuming it settled.**
 /// `film-base/ir-usability-detection` (2026-09-04) turned the IR holder-mask
 /// detector from opt-in behind `--film-type chromogenic` into the default for every
@@ -125,7 +126,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// test fails until the fingerprints **and** this constant are updated together.
 /// Read `PipelineFingerprint` for exactly which stages those are — the gate is not
 /// whole-pipeline coverage and must not be described as if it were.
-pub const PIPELINE_VERSION: u32 = 6;
+pub const PIPELINE_VERSION: u32 = 7;
 
 /// The recorded ⟨`pipeline_version`, fingerprints, behavior⟩ rows — the
 /// machine-enforced half of "the behavioral version cannot silently drift" (see
@@ -308,6 +309,21 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         render: "752e701021a41307",
         base: "01c5acccc36a3388",
         recipe: "dbac245a916032f2",
+        // Frozen literal, not `PIPELINE_BEHAVIOR`: the v7 bump took the constant over.
+        behavior: "gain-map-hdr default output (dual-dialect gain-map JPEG), exponential \
+                   density curve at the fixed decode's configuration (mid-grey 0.62 density \
+                   above the film base, contrast 2.0), neutral-patch-calibrated per-channel \
+                   density gain, no auto white balance",
+    },
+    // v7 — the default *display tone* changed: `shoulder` retired and the default became
+    // extended Reinhard at 6 stops (2026-09-24). `render` and `base` are unchanged — the
+    // gate stops at `algo::reconstruct`, before any display stage — so only `recipe`
+    // moved, and this row's evidence is the progress log, not the gate.
+    PipelineFingerprint {
+        pipeline_version: 7,
+        render: "752e701021a41307",
+        base: "01c5acccc36a3388",
+        recipe: "0314f0beb0fea722",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -462,7 +478,8 @@ pub struct PipelineFingerprint {
 pub const PIPELINE_BEHAVIOR: &str = "gain-map-hdr default output (dual-dialect gain-map \
      JPEG), exponential density curve at the fixed decode's configuration (mid-grey 0.62 \
      density above the film base, contrast 2.0), neutral-patch-calibrated per-channel \
-     density gain, no auto white balance";
+     density gain, no auto white balance, extended-Reinhard display tone at 6 stops of \
+     headroom";
 
 /// The short git commit hash, or `None` when the build could not determine it
 /// (source tarball / no `git` / not this package's repository). `None` is reported

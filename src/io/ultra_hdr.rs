@@ -531,7 +531,7 @@ fn check(status: uhdr::uhdr_error_info_t, action: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::display_tone::DisplayTone;
+    use crate::pipeline::display_tone::Headroom;
 
     #[test]
     fn base_quantization_counts_every_loss() {
@@ -1037,7 +1037,7 @@ mod tests {
     /// than hand-rolled JPEGs.
     fn real_render() -> gain_map::GainMapRender {
         use crate::algo::FilmRgbImage;
-        use crate::pipeline::display_tone::DisplayTone;
+        use crate::pipeline::display_tone::Headroom;
         use crate::pipeline::render_split::display_source;
         use crate::pipeline::working_space::map_nc_film_rgb_v1;
         use crate::types::{LinearImage, PrintParams};
@@ -1050,7 +1050,7 @@ mod tests {
         let shared = display_source(map_nc_film_rgb_v1(film), &print).unwrap();
         gain_map::render(
             &shared,
-            gain_map::GainMapConfig::ultra_hdr_v1(DisplayTone::resolve(&print).unwrap()),
+            gain_map::GainMapConfig::ultra_hdr_v1(Headroom::default()),
         )
         .unwrap()
     }
@@ -1151,7 +1151,7 @@ mod tests {
         println!("oracle render: {input} at {ev:+} EV, dmax {dmax}");
         gain_map::render(
             &source.shared,
-            gain_map::GainMapConfig::ultra_hdr_v1(DisplayTone::resolve(&print).unwrap()),
+            gain_map::GainMapConfig::ultra_hdr_v1(Headroom::default()),
         )
         .unwrap()
     }
@@ -1182,7 +1182,7 @@ mod tests {
     /// exponential curve that was default when this was written, and re-measured at
     /// ≈1.0027x under the sigmoid default of 2026-08-08 to 2026-09-23), which
     /// cannot discriminate an HDR reconstruction — the oracle needs content driven
-    /// above the SDR shoulder knee, hence the EV.
+    /// well above reference white, hence the EV.
     #[test]
     #[ignore = "writes sample files for external decoder verification"]
     fn iso_oracle_samples() {

@@ -1765,9 +1765,13 @@ the design in `docs/design-update.md`:
   moved: the drift gate now hashes `algo::reconstruct` and reproduced v5's `render`
   hash; only `recipe` was refreshed. `tests/pipeline.rs` states each preset;
   `benchmark.json` is a `display-p3` / `film-master` holding set
-- [ ] [Retire the `shoulder` and `none`
-  tones](tasks/nf-retire/display-tones.md) — both exist for reconstructions
-  already bounded at white
+- [x] [Retire the `shoulder` and `none`
+  tones](tasks/nf-retire/display-tones.md) — **done 2026-09-24.** Extended Reinhard is
+  the current chain's one display tone (`pipeline_version` 7); its headroom is
+  `fit_range.headroom_stops`, the new recipe's key. `--display-tone`,
+  `--highlight-compress` and `print.display_tone` are migration errors on both chains;
+  zero headroom is the self-policing identity. Fixed a latent gain-map defect on the way
+  (the legacy luminance map ratioed against the rendered, not stored, SDR)
 - [x] [Retire the sigmoid and `simple`](tasks/nf-retire/sigmoid-and-simple.md) — **done
   2026-09-23.** The current chain's default moved to the exponential at the fixed
   decode's configuration (`pipeline_version` 6, new fingerprint row); `Reconstruction` is

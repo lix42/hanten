@@ -8,16 +8,17 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *intent* — but this document is verified against the binary, so it wins on
 > *what the CLI currently accepts*.
 >
-> **Verified against:** `hanten 0.1.0`, `pipeline_version 6`, built at commit
-> `95ee921eb0c0` (through fit range's operator under `--new-flow`,
-> `nf-display-stages/fit-range`) plus the look's highlight desaturation
-> (`nf-look/path-to-white`, §11). The staleness signal is `pipeline_version`: if
+> **Verified against:** `hanten 0.1.0`, `pipeline_version 7`, built at commit
+> `aee4566d35fb` (through the look's highlight desaturation under `--new-flow`,
+> `nf-look/path-to-white`, §11) plus the retirement of the `shoulder` and `none` display
+> tones (`nf-retire/display-tones`, §7). The staleness signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
 >
-> **Retired flags and presets** — `--reconstruction`, `--density-curve sigmoid`, the
-> `--sigmoid-*` flags, the `sigmoid-knees` / `sigmoid-flat` presets, and before them
-> `legacy` / `custom` — are documented in the reference build's own guide
+> **Retired flags and presets** — `--display-tone` and `--highlight-compress`,
+> `--reconstruction`, `--density-curve sigmoid`, the `--sigmoid-*` flags, the
+> `sigmoid-knees` / `sigmoid-flat` presets, and before them `legacy` / `custom` — are
+> documented in the reference build's own guide
 > (`git show origin/reserve:docs/using-nc.md`; `scripts/reference-snapshot/README.md`
 > builds that binary). Here they are refused with a message naming the replacement.
 
@@ -36,8 +37,8 @@ shape every workflow below:
   from code. Passing a flag that doesn't apply to your selected *curve* or *preset*
   is a **loud error**, never a no-op. The print controls reach every display
   preset whatever the curve: white balance, exposure and the black point run in the
-  shared display stage, and `--highlight-compress` places the knee inside each
-  display renderer.
+  shared display stage, and `--display-tone-headroom` sizes the display tone inside
+  each display renderer.
 - **Calibrate once, apply many.** The film base (`Dmin`) and the reference density
   (`Dmax`) are properties of the *roll* — film stock, development, scanner — not
   of an individual frame. You measure them once and reuse them, which is what
@@ -363,8 +364,8 @@ hanten params
   "measure":     { "inset": 0.05 },
   "print":     { "print_exposure": 0.0, "black_point": 0.0,
                  "white_balance": { "explicit": [1.0, 1.0, 1.0] },
-                 "display_tone": "shoulder",
-                 "highlight_compress": 0.0, "linear_range": [0.0, 1.0] },
+                 "linear_range": [0.0, 1.0] },
+  "fit_range": { "headroom_stops": 6.0 },
   "output":    { "preset": "gain-map-hdr" }
 }
 ```
@@ -418,7 +419,7 @@ ignored:
 ```
 usage: invalid recipe t.json: unknown field `exposure`,
        expected one of `print_exposure`, `black_point`, `white_balance`,
-       `display_tone`, `highlight_compress`, `linear_range`
+       `linear_range`
 ```
 
 This means a **misplaced** key fails too — a key must live under the stage section
@@ -457,7 +458,7 @@ needed:
 ```json
 {
   "meta":   { "nc_version": "0.1.0", "git_commit": "e4a56bb2540d",
-              "pipeline_version": 6, "target": "aarch64-apple-darwin",
+              "pipeline_version": 7, "target": "aarch64-apple-darwin",
               "params_hash": "18b95264170ab67a" },
   "params": { ...the exact recipe... }
 }
@@ -516,13 +517,14 @@ discarded a value the recipe had stated; restate it inside the override to keep 
 
 ### `--preset` — pick a look by name
 
-The four settings below (curve, per-channel gain, print exposure, display tone) only
+The three settings below (curve, per-channel gain, print exposure) only
 mean anything **together**: the exposure that lands one brightness runs from 1.59 to
 1.91 across the presets, because they place mid-grey differently.
-`--preset` names a bundle so you don't have to carry four coupled numbers.
+`--preset` names a bundle so you don't have to carry three coupled numbers. It leaves the
+display tone alone: a recipe's `fit_range.headroom_stops` survives it.
 
 Each bundle's exposure is solved so that **switching preset changes the look, not the
-brightness** — what you compare is then the reconstruction and the display tone. That
+brightness** — what you compare is then the reconstruction. That
 calibration is done on `portra-400`; on another stock the generic profile drifts with
 how closely it models that film. Presets are not meant to render
 alike, so a brightness difference between two of them on your film is part of what they
@@ -619,8 +621,7 @@ replaces it:
 
 ```
 usage: --sigmoid-toe was removed with the sigmoid curve: the exponential has no knees,
-       and highlight roll-off belongs to the display tone (`--display-tone`; not yet
-       available under `--new-flow`).
+       and highlight roll-off belongs to the display tone (`--display-tone-headroom`).
 ```
 
 ### `characteristic` — invert the film's own published curve
@@ -687,15 +688,14 @@ applies a 3×3 before its curves; Hanten does not yet) and it is tracked by
 `io/scanner-density-calibration`. Ektar's own sheet also disagrees with itself by 11 %
 between its aim table and its curve, which is a second, smaller factor for that stock.
 
-**It needs a display tone curve.** Like the exponential, this curve does not bound
-itself at the render's ceiling — it hands the display scene-referred exposure, and measured
-picture content reaches p99.99 **+3.64 stops** over diffuse white. So `--display-tone none`
-in practice *refuses* a render of ordinary picture content: the per-pixel range check
-rejects the frame (verified: "pixel 14 sits above reference white"), while `shoulder`
-(the default) and `reinhard` both render. It is not a rejected *combination* — nothing
-validates the pair — so content dark enough to stay inside the ceiling still renders
-(`--print-exposure=-3` on the test fixture exits 0). `reinhard` is the pairing
-that lets the display operator carry the character — see §7.
+**It needs the display tone.** Like the exponential, this curve does not bound itself at
+the render's ceiling — it hands the display scene-referred exposure, and measured picture
+content reaches p99.99 **+3.64 stops** over diffuse white. So `--display-tone-headroom 0`
+(the identity) in practice *refuses* a render of ordinary picture content: the per-pixel
+range check rejects the frame (verified: "pixel 13 sits above reference white"), while any
+real headroom renders. It is not a rejected *combination* — nothing validates the pair —
+so content dark enough to stay inside the ceiling still renders (`--print-exposure=-3` on
+the test fixture exits 0). See §7.
 
 Two further limits. The published curves are for *typical* processing, not your
 roll, so a heavily pushed or badly stored film will not match. And densities outside the
@@ -904,14 +904,11 @@ This is deliberate: a flag that quietly did nothing would be worse than a failur
 | `--black-point F` | Paper black / shadow floor |
 | `--white-balance R,G,B` | Explicit highlight / neutral gains |
 | `--auto-wb MODE` | Estimate gains per frame — `gray-world` (≈ NLP Auto-AVG) or `percentile` (≈ NLP Auto-Neutral, more robust to a dominant scene colour) |
-| `--highlight-compress F` | Highlight roll-off — where the display shoulder's knee sits |
-| `--display-tone MODE` | `shoulder` (default), `none`, or `reinhard` — see below. **Display presets only**; `reinhard` is narrower still |
-| `--display-tone-headroom STOPS` | Specular headroom above reference white, `reinhard` only (default `6` = a white point of 64) |
+| `--display-tone-headroom STOPS` | The display tone's headroom above reference white (default `6` = a white point of 64; `0` is the identity) — see below. **Display presets only** |
 | `--linear-range LOW,HIGH` | Affine black/white placement, applied last — **display presets only**, which includes the default (see §8) |
 
-(Under `--new-flow` exposure is spelled `--exposure`, white balance is scene
-correction's, and `--display-tone-headroom` is fit range's, with no `--display-tone`
-beside it — §11.)
+(Under `--new-flow` exposure is spelled `--exposure` and white balance is scene
+correction's; `--display-tone-headroom` means the same on both chains — §11.)
 
 `--white-balance` and `--auto-wb` are the two faces of one setting and are mutually
 exclusive. The report tells you what was actually used:
@@ -924,33 +921,30 @@ hanten convert scan.tif -o out.jpg --film-base … --auto-wb percentile \
 
 Feed that back as an explicit `--white-balance` to freeze it across a roll.
 
-### `--display-tone` — choosing the display tone curve
+### The display tone and `--display-tone-headroom`
 
-Display presets normally apply a Hermite shoulder that rolls highlights off to
-display white, with `--highlight-compress` moving its knee earlier. `--display-tone
-none` skips it — and since the default reconstruction is not bounded at white, on the
-SDR presets that means pulling the frame under reference white yourself:
+Every display preset applies one tone: **extended Reinhard**, compressing the whole curve
+against a white point `W = 2^stops`, where `--display-tone-headroom` (recipe
+`fit_range.headroom_stops`, default `6`) is how many stops above reference white content
+may sit and still be told apart. It holds scene mid-grey (`0.18`) where it is at every
+headroom, so raising the headroom changes the highlights without darkening the midtones.
 
 ```sh
 hanten convert scan.tif -o out.tiff --output-preset display-p3 \
-  --film-base … --display-tone none --print-exposure=-2.5
+  --film-base … --display-tone-headroom 4
 ```
 
-Midtones and shadows are untouched by the choice of tone — only values above the knee
-change.
-
-The report says which one ran, in a block every preset emits:
-`.output_render.display_tone` is `"shoulder"`, `"none"`, or an object like
-`{"reinhard":{"headroom_stops":6.0}}` on a display preset, and absent on
-`film-master`, which has no display tone stage.
-
-On the HDR presets the per-preset block also states what the renderer *applied*, next
-to the luminance anchors no container can carry — `.avif.rendering` for
+The report says what ran, in a block every preset emits —
+`.output_render.display_tone` is `{"operator": "extended-reinhard-mid-preserving-v2",
+"headroom_stops": 6.0}` on a display preset — `"operator": "identity"` at zero headroom,
+where no pixel moved, matching the new chain — and absent on `film-master`, which has no
+display tone stage. On the HDR presets the per-preset block also states what the renderer
+applied, next to the luminance anchors no container can carry — `.avif.rendering` for
 `hdr-pq`/`hdr-hlg`, `.hdr_coded_tiff` and `.hdr_linear_tiff` for the TIFF pair:
 
 ```console
 $ hanten convert scan.tif -o out.avif --output-preset hdr-pq --film-base … \
-    --display-tone reinhard --report json | jq .avif.rendering
+    --report json | jq .avif.rendering
 {
   "reference_white_nits": 203.0,
   "target_peak_nits": 1000.0,
@@ -961,126 +955,76 @@ $ hanten convert scan.tif -o out.avif --output-preset hdr-pq --film-base … \
 }
 ```
 
-`shoulder_start` joins it only for a curve that *has* a knee, so its absence does not
-mean "no tone ran" — `tone_curve` is the field that says which one did.
-
-**In a recipe, the operator's name alone is enough.** `print.display_tone` accepts
-the bare `"reinhard"` and the empty `{"reinhard":{}}` as well as the explicit
-`{"reinhard":{"headroom_stops":6.0}}`; the first two resolve the documented default
-of 6 stops, exactly as `--display-tone reinhard` does. Reports and `--dump-params`
-always write the explicit object, so a round trip normalizes to one form.
-
-What it does *not* skip: gamut mapping and the transfer encode still run, so this
-is "no tone curve", not "raw pixels out". And it needs content inside the render's
-own ceiling — which no shipped reconstruction guarantees, so on the test fixture the
-default render is refused and `--print-exposure=-2.5` renders. **The two ceilings
-differ**: the SDR presets stop at
-reference white, the HDR ones at the 1000-nit mastering peak (≈4.93x reference
-white), so the same overshoot can be refused on `display-p3` and render cleanly on
-`hdr-pq` — that headroom is exactly what an HDR rendition exists to carry. If
-anything exceeds its branch's ceiling, the render **fails** naming the pixel rather
-than clipping it quietly:
-
-```
-error: SDR display rendering applied no display tone curve, but pixel 16 sits above
-reference white (luminance 1.0762885), which this mode has no curve to roll off. … So:
-lower --print-exposure until the frame fits, or drop --display-tone none to roll the
-highlights off.
-```
-
-**The check is late.** The shared print controls run *before* the display render, so
-white balance, `--auto-wb` and `--linear-range` can lift samples past reference white
-too. Nothing is rejected up front, because the real condition is a pixel value rather
-than a flag combination — so `hanten` renders the whole frame first and *then* exits 1,
-writing no file. On a large scan, prove `--display-tone none` out on a small frame
-before adding grading on top.
-
-Two rules follow from the knob being display-only: `film-master` rejects it (it
-applies no display tone curve at all), and passing a
-*non-default* `--highlight-compress` beside `none` is a usage error — a knee width
-describes nothing when there is no knee. `--highlight-compress 0` is the default
-and asks for nothing, so it is accepted.
-
-#### `reinhard` — a real operator for a reconstruction that overshoots
-
-`none` suits content already inside the render's ceiling. `reinhard` is for the
-opposite case: it compresses *globally* against a stated white point, so
-content several stops above diffuse white stays distinguishable instead of landing
-flat on the ceiling.
-
-```sh
-hanten convert scan.tif -o out.tiff --output-preset display-p3 \
-  --film-base … --display-tone reinhard --display-tone-headroom 6
-```
-
-`--display-tone-headroom` is **display-referred**: how many stops above reference
-white content may sit and still be told apart, so `W = 2^stops`. `6` stops is a
-white point of 64 — the value measured to beat the (since retired) sigmoid on both
-clipped fraction *and* highlight separation on all seven reference frames, with
-brightness matched so the comparison is not just "one render is darker".
-
 What to know:
 
-- **It is not bounded, by design — so the headroom has to be sized to the
-  reconstruction.** Content above the white point still exceeds the ceiling; that
-  loss is *counted* at the encode step and reported in `.loss` rather than refused,
-  which is the opposite policy from `none`, which relies on the range check being
-  the whole rule. Counted is not free: the loss raises a warning, and under
-  `--strict` that warning is a **failure** (exit 1). A reconstruction that overshoots
-  by more than the stated headroom therefore does not quietly land flat — it lands
-  in `.loss`, and `--strict` turns it into a refusal. Read `.loss.clipped_high`
-  against `.loss.total_samples` on a representative frame and raise
-  `--display-tone-headroom` until the fraction is what you intend; the default `6`
-  was sized against the retired sigmoid, not against your curve.
-- **`0` stops is the exact identity, on every preset.** `W = 1` makes the operator
-  `v`, so `--display-tone reinhard --display-tone-headroom 0` renders
-  **byte-identically** to `--display-tone none` — verified on `display-p3`,
-  `hdr-linear-tiff` and `hdr-pq-tiff`. On the SDR presets the two still differ in
-  range policy (`none` refuses an overshoot, this counts it), which is the only
-  reason both exist at that setting; on the HDR presets, where this tone is
-  range-checked, they match in that too.
-- **A tone switch does not carry the headroom.** `--display-tone none` (or
-  `shoulder`) over a recipe that pinned `headroom_stops` resolves the named
-  operator, dropping the stated headroom — the flags-win reset that makes such a
-  recipe re-runnable at all. That is legitimate, so it is a **warning**, not an
-  error, and `--strict` promotes it; restate
-  `--display-tone reinhard --display-tone-headroom <stops>` to keep the value.
-  Re-naming `reinhard` itself *preserves* it.
-- **Taken by every display preset** — the two SDR ones, all five single-rendition HDR
-  ones, and the gain-map pair. `film-master` applies no display tone curve at all and
-  refuses it by name.
-- **Mid-grey is preserved; diffuse white still costs about 0.86 stop.** The operator
-  carries an input gain solved so that scene mid-grey (`0.18`) comes out at `0.18` at
-  *every* headroom, so choosing this tone no longer darkens the midtones and there is no
-  exposure correction to remember. What remains is the compression above mid-grey, and that
-  is intrinsic to Reinhard rather than a bug: at the default 6 stops reference white `1.0`
-  renders `0.550`, i.e. **0.86 stop at diffuse white**, and raising
-  `--display-tone-headroom` does not recover it (0.858 stop at `W = 16`, 0.864 at
-  `W = 64`) — the compression is what buys the headroom. It relaxes only at the very
-  bottom of the range: 0.54 stop at 1 stop of headroom and **0.00 at `W = 1`**, the
-  identity case above. Below mid-grey the curve *lifts* slightly (0.09 renders 0.099).
-  This applies on every preset, SDR and HDR alike — the operator is global, not a
-  highlight knee.
-- **The HDR branches apply a different shape, not the same curve at a bigger ceiling.**
-  They lift highlights toward the 1000-nit peak over an *asymptotic* base, which is what
-  keeps the result **strictly inside** that peak so nothing clips on the way out.
-- **The gain-map presets take it too, and what made that safe is worth knowing.** A gain
-  map stores the ratio between the HDR rendition and the SDR base **as stored** — and the
-  encode clamps the base at white. `reinhard`'s SDR half deliberately runs past white, so
-  ratioing against the *rendered* base stored a gain short by whatever was clamped, and a
-  decoder reconstructed those highlights up to **23% dark** in a file that looked
-  structurally perfect. The fix was the ratio (`min(sdr, 1)`), never a relaxed check, so
-  the two renditions now agree as far as the container can express.
+- **On SDR it is not bounded, by design — so the headroom has to be sized to the
+  reconstruction.** Content above the white point still exceeds display white; that loss
+  is *counted* at the encode step and reported in `.loss` rather than refused. Counted is
+  not free: the loss raises a warning, and under `--strict` that warning is a **failure**
+  (exit 1). Read `.loss.clipped_high` against `.loss.total_samples` on a representative
+  frame and raise `--display-tone-headroom` until the fraction is what you intend; the
+  default `6` was sized against the retired sigmoid, not against your curve. **This is a
+  change for `--strict` at defaults since `pipeline_version` 7:** the retired `shoulder`
+  plateaued at display white and never clipped, so a frame with speculars far beyond the
+  headroom that passed `--strict` before can now exit 1. Neither test fixture clips at
+  defaults.
+- **The HDR presets apply a different shape, not the same curve at a bigger ceiling.**
+  They lift highlights toward the 1000-nit peak over an *asymptotic* base, which keeps the
+  result **strictly inside** that peak, so nothing clips on the way out.
+- **`0` stops is the exact identity, and it polices itself.** `W = 1` makes the operator
+  `v`, so nothing rolls an overshoot off — and anything above the render's own ceiling
+  **fails** naming the pixel rather than clipping quietly. The ceilings differ: the SDR
+  presets stop at reference white, the HDR ones at the 1000-nit mastering peak (≈4.93x
+  reference white), so the same overshoot is refused on `display-p3` and renders cleanly
+  on `hdr-pq-tiff` (verified at `--print-exposure=-0.2` on the test fixture). No shipped
+  reconstruction is bounded at white, so on SDR you pull the frame under reference white
+  yourself:
 
-`--highlight-compress` is a *knee* width, so it is a usage error beside `reinhard`
-for the same reason it is beside `none`: there is no knee to place.
+  ```
+  error: SDR display rendering ran at zero display-tone headroom (the identity), but
+  pixel 16 sits above reference white (luminance 1.0626428), which the identity has no
+  curve to roll off. … So: lower the print exposure (--print-exposure /
+  print.print_exposure) until the frame fits, or raise the headroom above 0
+  (--display-tone-headroom / fit_range.headroom_stops) to roll the highlights off.
+  ```
 
-**On the default `gain-map-hdr` preset, `none` makes the gain map inert by
-construction.** The examples above use `display-p3`, but the default renders *both*
-branches: skipping the shoulder makes the SDR and HDR renditions carry the same
-luminance, so their ratio is exactly 1.0 everywhere. Hanten still writes a valid
-gain-map JPEG and exits 0 without a warning. If you want HDR headroom, keep a tone
-curve — `shoulder` or `reinhard`.
+  **The check is late.** The shared print controls run *before* the display render, so
+  white balance, `--auto-wb` and `--linear-range` can lift samples past reference white
+  too, and `hanten` renders the whole frame before it exits 1 (writing no file). Prove
+  zero headroom out on a small frame first.
+- **Mid-grey is preserved; diffuse white still costs about 0.86 stop.** At the default
+  6 stops reference white `1.0` renders `0.550`, and raising the headroom does not recover
+  it (0.858 stop at `W = 16`, 0.864 at `W = 64`) — the compression is what buys the
+  headroom. It relaxes only at the very bottom of the range: 0.54 stop at 1 stop of
+  headroom and **0.00 at `W = 1`**. Below mid-grey the curve *lifts* slightly (0.09
+  renders 0.099).
+- **The gain-map presets ratio against the base as stored.** A gain map stores the ratio
+  between the HDR rendition and the SDR base, and the encode clamps the base at white.
+  Because the SDR half runs past white, ratioing against the *rendered* base would store a
+  gain short by whatever was clamped — highlights reconstructed dark, or, from one
+  extreme sample, a whole map with no precision left — in a file that looks structurally
+  perfect. Both the per-channel gains and the legacy luminance map ratio against
+  `min(sdr, 1)`.
+- **`film-master` applies no display tone**, so a non-default headroom there is a usage
+  error, whether it came from a flag or a recipe. The default is accepted, so
+  `--display-tone-headroom 6` resets a recipe's value on that preset.
+
+**`--display-tone` and `--highlight-compress` are gone.** The `shoulder` and `none` tones
+existed for reconstructions bounded at white, and none ships; with one operator left there
+is nothing to select. Both flags, and the recipe key `print.display_tone` at every value,
+are refused naming the replacement — `none`'s nearest is `--display-tone-headroom 0`:
+
+```
+usage: --display-tone was removed with the `shoulder` and `none` tones (recipe key
+`print.display_tone`): the nearest to `none` on a display preset is the identity,
+`--display-tone-headroom 0`.
+The tone's one parameter is `--display-tone-headroom` (recipe `fit_range.headroom_stops`).
+There is no alias.
+```
+
+A recipe's `print.display_tone` is refused even at the old default `"shoulder"`, because
+replaying it would render differently; `print.highlight_compress` at its old default `0`
+is dropped silently, so the rest of an old sidecar still loads.
 
 ---
 
@@ -1093,9 +1037,9 @@ curve — `shoulder` or `reinhard`.
 > reference white — and `gain-map-hdr` decoded at **1.0x**. The default reconstruction
 > now has no shoulder, so highlights pass above reference white and the display tone
 > decides what to do with them. Measured on `tests/fixtures/hdr-48bit.tif` with
-> `--film-base 0.9,0.55,0.42`, `GainMapMax` (log2) is **1.88 (≈3.7x)** at defaults and
-> 0.93 under `--display-tone reinhard`, which compresses globally rather than holding
-> a flat plateau at the ceiling. The single-rendition HDR presets likewise reach past
+> `--film-base 0.9,0.55,0.42`, `GainMapMax` (log2) is **0.93 (≈1.9x)** at defaults
+> (`pipeline_version` 7; it read 1.88 under the retired `shoulder` tone, whose plateau
+> held more content at the ceiling but none of it apart). The single-rendition HDR presets likewise reach past
 > 203 nits; a frame that does not (a dark one, or a low `--print-exposure`) gets the
 > `HDR output carries an SDR-range signal` warning.
 
@@ -1471,11 +1415,11 @@ Clipping is reported, never silent:
 Every encoder counts this, not just the TIFF ones — the gain-map JPEG and the
 AVIF paths build the same report when they quantize.
 
-The default curve is unbounded, but the default `shoulder` tone rolls everything off
-below display white, so **a default render does not clip**. A clip warning therefore
-means something pushed samples past the tone's reach — most often a **print control**
-(`--print-exposure 12` clips 100% of a frame) or `--display-tone reinhard` with too
-little headroom for the content. Check those before anything else.
+The default curve is unbounded, and the display tone overshoots display white only for
+content beyond its headroom — on both test fixtures **a default render does not clip**. A
+clip warning therefore means something pushed samples past the tone's reach — most often a
+**print control** (`--print-exposure 12` clips 100% of a frame) or a
+`--display-tone-headroom` too small for the content. Check those before anything else.
 
 `--strict` promotes warnings **that reach the JSON report** to a hard error
 (exit 1), after the report is emitted — the right default for scripts and CI.
@@ -1720,12 +1664,10 @@ the knob went:
 | `--print-exposure` | renamed: `--exposure` (below) |
 | `--black-point` | split in two — flare/fog in scene correction, display black in fit range — which is why it is not a rename |
 | `--linear-range` | an affine levels remap needing a stage and a name; retiring it outright is a listed outcome |
-| `--display-tone` | every value, `reinhard` included: fit range has one operator, so there is nothing to select — use `--display-tone-headroom` alone |
-| `--highlight-compress` | the knee width of the `shoulder` tone specifically (`none` and `reinhard` refuse a non-default value outright); fit range compresses against the display's peak and has no knee width to set |
 | `--output-preset` | the new flow's destination set (`nf-destinations/preset-set`) — it writes one destination today, so there is no output policy to choose |
 | `--telemetry`, `--telemetry-file` | the new chain's report and telemetry shape — the record would name the current chain's preset and timing buckets |
 
-Unlike the decode's knees, **no value is spared here** — `--highlight-compress 0`
+Unlike the decode's knees, **no value is spared here** — `--linear-range 0,1`
 resolves the documented default and is still refused. An
 identity value is normally left alone so a flag can clear what a recipe pinned, and
 the new chain's recipe has no `print` section, so there is nothing to clear.
@@ -1817,8 +1759,8 @@ white it compresses:
 |---|---|---|
 | `--display-tone-headroom STOPS` | `fit_range.headroom_stops` | `0`–`24`, default `6`; `0` is the identity |
 
-The flag keeps the current chain's spelling, but under `--new-flow` it needs no
-`--display-tone reinhard` beside it (that flag is refused, above). The display's peak
+The flag and the key are the same on both chains (`--display-tone` and
+`--highlight-compress` are removed on both — §7). The display's peak
 is the operator's other argument and belongs to the destination, not the recipe — `1`
 for the one SDR destination. The report names what ran:
 
@@ -1923,9 +1865,9 @@ Your rectangle mixes rebate with image content. Check the coordinates against
 `hanten inspect`, or use `estimate --grid` on a genuinely unexposed frame.
 
 **Heavy clipping in the report**
-The default `shoulder` tone does not clip, so something pushed content past it: a
-positive `--print-exposure`, `--display-tone reinhard` with too little
-`--display-tone-headroom`, or a low anchor (`--anchor-mid-offset` smaller than the
+The default display tone does not clip ordinary content, so something pushed content
+past it: a positive `--print-exposure`, too little `--display-tone-headroom`, or a low
+anchor (`--anchor-mid-offset` smaller than the
 default, or a small `--d-max` under a placement that reads it). The exponential has no
 shoulder of its own, so a low anchor is severe. Lower the exposure, raise the headroom,
 move the anchor up, or use an f32 output (`hdr-linear-tiff`, `film-master`) for an

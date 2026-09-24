@@ -203,11 +203,12 @@ rule above), reached today by `--new-flow`.
   present and deserialize-time resolution cannot fire). A `Reconstruction` built in code
   gets none of that: pair a characteristic curve with
   `default_scale_for(curve.curve_type())`, not `DensityParams::default()`.
-  **No shipped reconstruction is bounded at white any more**, so `--display-tone none`
-  refuses ordinary picture content on the SDR presets — the per-pixel range check in
-  `pipeline::sdr` rejects the frame. It is a *content* refusal, not a `validate` rule:
-  dark enough content renders at exit 0, and tests that exercise `none` pull the fixture
-  down with `--print-exposure` (−2 to −4 stops on `hdr-48bit.tif`).
+  **No shipped reconstruction is bounded at white any more**, so
+  `--display-tone-headroom 0` (the identity) refuses ordinary picture content on the SDR
+  presets — the per-pixel range check in `pipeline::sdr` rejects the frame. It is a
+  *content* refusal, not a `validate` rule: dark enough content renders at exit 0, and
+  tests that exercise zero headroom pull the fixture down with `--print-exposure` (−2 to
+  −4 stops on `hdr-48bit.tif`).
   **`AnchorPlacement` (`reconstruction.curve.anchor`) is the exponential's**, reached by
   the `--anchor-*` family. Two of its four rules — `black-at-base` and the default
   `mid-at-base-offset` — are **reference-free**: they never read the resolved `Dmax`,
@@ -313,7 +314,7 @@ rule above), reached today by `--new-flow`.
   second gamut transform. HDR returns either opaque display-linear BT.2020
   pixels (which gain-map work must convert to common linear Display P3 before
   ratio math) or opaque in-place Rec.2100 PQ/HLG pixels coupled to the fixed
-  203-nit reference-white / 1000-nit peak, shoulder, gamut, HLG OOTF, and CICP
+  203-nit reference-white / 1000-nit peak, display tone, gamut, HLG OOTF, and CICP
   contract. A new preset also calibrates its own `memory::RunProfile`.
   **`cli::container_for` is the only preset-shaped step in output-path *handling*** —
   it maps a preset to a `Container` (Tiff/Jpeg/Avif) with an exhaustive match that
@@ -377,58 +378,45 @@ rule above), reached today by `--new-flow`.
   `hdr-hlg`, `hdr-linear-tiff`,
   `hdr-pq-tiff`, `hdr-hlg-tiff`) are wired; a non-default `print.linear_range` is
   accepted only by those display presets (film-master rejects it);
-  `display_tone` resolves `print.display_tone` + `print.highlight_compress` into the
-  one tone value both display renderers **read** — though not one both *accept*:
-  three selectors ship (`shoulder`, `none`, `reinhard`) and **all three are accepted by
-  every display preset**; only `film-master` refuses. The gain-map pair
-  was the last admitted, and the condition is load-bearing: `gain_map::build` must ratio
-  against the base **as stored** (`min(sdr, 1)`), because that is what a decoder
-  multiplies and the encode clamps it — ratioing against the *rendered* SDR stored a gain
-  short by whatever was clamped, reconstructing up to 23% dark with every counter reading
-  zero. The fix is the ratio; never relax the check instead. The HDR branch applies a **lifted** form whose base is
-  asymptotic, so it sits strictly inside the 1000-nit peak; that is why
-  `bounds_sdr_output` and `bounds_hdr_output` are **two** predicates — the same tone
-  is unbounded on SDR and bounded on HDR, and one boolean asserted one of them
-  wrongly. It owns the shared
-  `0.5 + 0.25/(1 + hc)` knee formula (never restate it in a stage) and its
-  `KneeWidth` / `Headroom` newtypes are what keep an unchecked parameter
-  unrepresentable — a bare
-  `f32` payload let `hc = -1` render an infinite knee, i.e. a silent identity curve
-  at exit 0, and a negative headroom render a solid white field at exit 0 with the
-  clip merely counted. `DisplayToneCurve::None` skips *tone* only: gamut mapping, the transfer
-  encode and each renderer's range check still run, which is what makes the mode
-  self-policing instead of gated on a curve type — and those two ceilings **differ**
-  (`1.0` for SDR, `LINEAR_HEADROOM` ≈ 4.93 for HDR), so any message or doc about
-  overshoot must name its branch: the same **over-range sample** is refused on
-  `display-p3` and renders on `hdr-pq`, which is the headroom an HDR rendition exists to
-  carry. ("Lift" is avoided here on purpose — this change made it a named operator
-  component, so it would read as reinhard's lift rather than any upward push.)
-  `reinhard` is the one selector `bounds_sdr_output()` reports **false** for: it exists
-  to overshoot, so its loss is counted at the u16 encode boundary instead of
-  refused, and the SDR gamut ceiling follows the pixel above display white rather
-  than being pinned at `1.0`. **Since `extended-reinhard-mid-preserving-v2` it preserves
-  scene mid-grey rather than mapping `W` to `1.0`** — an input gain solved so
-  `f(0.18) = 0.18` at every white point, which is why `headroom_stops` is the curve's
-  *scale* and the unity point sits at `W / gain`. No member of the family can do both
-  (white-to-mid ratio floors at 6.17; pinning both ends needs 5.56), and the gain is
-  exactly 1 at `W = 1` so `--display-tone-headroom 0` stays byte-identical to `none`.
-  A corollary worth knowing before adding a knob: `print_exposure` is a scalar gain
-  *after* the curve, so under `--display-tone none` it is the lever that brings an
-  unbounded reconstruction back under reference white — lowering it is the remedy the
-  range-check errors name. Its `headroom_stops` is display-referred (`W = 2^stops`),
-  and the stops→white-point conversion, the `[0, 24]` bound and its check live **once**
-  in `types.rs` (`headroom_white_point` / `MAX_HEADROOM_STOPS` /
-  `check_headroom_stops`) precisely so `cli::validate` and the renderer cannot bound
-  the knob differently. That bound is a **value** rule and therefore belongs in
-  `validate`, not `validate_convert` — `roll` and per-frame overrides reach only the
-  former, and a stage-only check let a whole roll decode before failing per frame;
-  the headroom-*presence* rule (a headroom stated beside a tone with no white point)
-  genuinely needs the flag and stays in `validate_convert`, current chain only — under
-  `--new-flow` the headroom is fit range's and needs no tone.
-  **`validate_output_preset`'s rules are ordered by how specific their diagnosis
-  is**, and the reinhard-acceptance rule goes **last**: it also matches
-  `film-master`, where its remedy ("use `--display-tone shoulder` or `none` there")
-  is advice that branch itself refuses;
+  `display_tone` is the current chain's one display tone — extended Reinhard at
+  `fit_range.headroom_stops` (`--display-tone-headroom`), the new recipe's key, since
+  `nf-retire/display-tones` retired `shoulder`, `none` and `highlight_compress`
+  (`pipeline_version` 7). The resolved tone is a checked `Headroom` — a negative one
+  renders a solid white field at exit 0 with the clip merely counted, so the private
+  field is the gate. `--display-tone`, `--highlight-compress` and `print.display_tone`
+  are removed-value errors on both chains; `print.highlight_compress` is stripped at its
+  old `0`. Every display preset applies the tone; `film-master` refuses a non-default
+  headroom by **value**, so the default is still the flags-win reset there. The SDR
+  branch is fit range's operator bit-for-bit; the HDR branch applies a **lifted** form
+  whose base is asymptotic, so it sits strictly inside the 1000-nit peak — the same
+  headroom is **unbounded on SDR and bounded on HDR**. So on SDR the overshoot is counted
+  at the u16 encode boundary (and the gamut ceiling follows the pixel above display
+  white), while on HDR a sample past the peak is a renderer bug. **Zero headroom is the
+  identity on both, and refuses over-range content instead of counting it** — the
+  self-policing `none` used to provide, keyed on `Headroom::is_identity(crossover)`, and
+  the two ceilings **differ** (`1.0` for SDR, `LINEAR_HEADROOM` ≈ 4.93 for HDR): the same
+  over-range sample is refused on `display-p3` and renders on `hdr-pq`, which is the
+  headroom an HDR rendition exists to carry. **The gain-map pair must ratio against the
+  base as stored** (`min(sdr, 1)` per channel), because that is what a decoder multiplies
+  and the encode clamps it — in `gain_map::gain_pixel` *and* in the legacy luminance map
+  (`encode_legacy_gain_map`). The second was missed when reinhard was admitted and
+  surfaced when it became the default: one unbounded sample drove `GainMapMin` to
+  2^−42 and the decoded frame to garbage, with every counter at zero. Never relax the
+  check instead. **The tone preserves scene mid-grey rather than mapping `W` to `1.0`**
+  (`extended-reinhard-mid-preserving-v2`) — an input gain solved so `f(0.18) = 0.18` at
+  every white point, which is why `headroom_stops` is the curve's *scale* and the unity
+  point sits at `W / gain`. No member of the family can do both (white-to-mid ratio
+  floors at 6.17; pinning both ends needs 5.56), and the gain is exactly 1 at `W = 1`,
+  which keeps zero headroom the exact identity. `print_exposure` is a scalar gain
+  after the reconstruction curve and before the display tone, so at zero headroom it is the lever that brings an unbounded
+  reconstruction back under reference white — lowering it is the remedy the range-check
+  errors name. The stops→white-point conversion, the `[0, 24]` bound and its check live
+  **once** in `types.rs` (`headroom_white_point` / `MAX_HEADROOM_STOPS` /
+  `check_headroom_stops` / `headroom_fault`) so `cli::validate`, the renderer and the
+  new chain cannot bound the knob differently. That bound is a **value** rule and
+  therefore belongs in `validate`, not `validate_convert` — `roll` and per-frame
+  overrides reach only the former, and a stage-only check let a whole roll decode
+  before failing per frame;
   `memory::preflight` is the stage-0 peak-memory gate — see the memory note below),
   `pipeline/shadow_metrics.rs` (test-only diagnostic harness: `#[cfg(test)]`, every
   **asset-dependent** entry `#[ignore]`d and skipping with a message when
@@ -505,7 +493,7 @@ rule above), reached today by `--new-flow`.
   runtime on purpose): primaries living only in `scripts/analysis/nctool/metrics.py`
   would be a second source of truth by construction, and that file's tests re-read
   this one — `PROPHOTO` is the second since its one renderer, the retired `legacy`
-  preset's `--output-profile prophoto`, went. Product policy (reference white, peak nits, shoulder, gain-map
+  preset's `--output-profile prophoto`, went. Product policy (reference white, peak nits, display tone, gain-map
   offsets) stays with its stage and refers to a *named* space instead of
   restating colorimetry. Workflow for changing any of it:
   `docs/colorimetry-maintenance.md`; `NC_COLORIMETRY_REGEN=1 cargo test
@@ -568,7 +556,9 @@ rule above), reached today by `--new-flow`.
   settled on 2026-09-02, activated here as the fixed decode's configuration rather than
   `algo/split-default-migration`'s `characteristic-generic` — so highlights pass above
   reference white and the display operator carries the character: `GainMapMax` measures
-  **1.88 (log2, ≈3.7x)** on `tests/fixtures/hdr-48bit.tif` at defaults.
+  **0.93 (log2, ≈1.9x)** on `tests/fixtures/hdr-48bit.tif` at defaults since
+  `pipeline_version` 7 (1.88 under the retired `shoulder`, whose plateau held more content
+  at the ceiling but none of it apart).
   **The film was never the limitation.** Negative stock carries wide latitude; the *print
   rendering* decides whether output exceeds diffuse white. The HDR presets stayed
   first-class and the default *precisely* to keep that door open. What still gates a
@@ -1011,12 +1001,12 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
   (`types.rs`), a `merge` arm, and usually a `validate` check — a forgotten
   `merge` arm silently makes the flag a no-op, so add a merge test for new knobs.
   A knob that changes **what a stage does** has a fifth spot: the report's *prose*
-  claims. `output_render.content` asserted "the reference-white-preserving shoulder
-  … have all run" for a whole preset, so `--display-tone none` made one report
-  contradict itself. Prose that names an operation is a claim about the run; either
+  claims. `output_render.content` once asserted "the reference-white-preserving shoulder
+  … have all run" for a whole preset, so the since-retired `--display-tone none` made
+  one report contradict itself. Prose that names an operation is a claim about the run; either
   derive it from the resolved config or say the fact in a field instead.
   **`--preset` is the one conversion flag with no recipe key** — it is not a knob, it
-  only *sets* knobs (curve, `density.scale`, `print_exposure`, `display_tone`), all of
+  only *sets* knobs (curve, `density.scale`, `print_exposure`), all of
   which are both already, so `--dump-params` writes the **expanded** values and a recipe
   naming a preset is rejected. Two traps it left, both general: **a recipe path can be
   one object but several knobs, and they need not all have the same lifetime** —
@@ -1182,8 +1172,8 @@ the memory preflight's warn tier; Linux reads `/proc/meminfo` with no dep)
     **The tiebreaker for any new rule** (two independent reviewers proposed widening
     it and both were wrong): reject by presence only when the flag *forces something
     the branch cannot produce*, as `--out-depth u16` forced 16-bit from an f32-only
-    master. An identity value that renders byte-identically — `--highlight-compress
-    0`, `--display-tone shoulder` — asks for nothing, and
+    master. An identity value that renders byte-identically — `--linear-range 0,1`, the
+    default `--display-tone-headroom 6` on `film-master` — asks for nothing, and
     rejecting it kills the flags-win reset that lets one recipe be re-used on another
     branch. **The exemption is conditional on that reset being possible**, which
     `--new-flow` is the first branch to break: its recipe has no `print` or `output`

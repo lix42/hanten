@@ -533,26 +533,18 @@ fn validate_scene_correction(p: &SceneCorrectionParams, names: KnobNames) -> Res
 /// Fit range's value rule — the headroom's, [`crate::types::headroom_fault`], shared
 /// with the current chain's knob — rendered as a usage error for this recipe's key.
 fn validate_fit_range(p: &FitRange, names: KnobNames) -> Result<()> {
-    use crate::types::HeadroomFault;
+    let Some(fault) = crate::types::headroom_fault(p.headroom_stops) else {
+        return Ok(());
+    };
     let name = knob_name(
         names,
         "fit_range",
         "--display-tone-headroom",
         "headroom_stops",
     );
-    let message = match crate::types::headroom_fault(p.headroom_stops) {
-        None => return Ok(()),
-        Some(HeadroomFault::Negative(stops)) => format!(
-            "{name} must be finite and non-negative, got {stops}. It is the scene range \
-             above diffuse white that fit range compresses, in stops; `0` is the identity"
-        ),
-        Some(HeadroomFault::TooLarge(stops)) => format!(
-            "{name} is {stops} stops, beyond the supported maximum of {}: above ~8 stops \
-             the operator converges on plain reinhard and the extra headroom buys nothing",
-            crate::types::MAX_HEADROOM_STOPS
-        ),
-    };
-    Err(NcError::Usage(message))
+    Err(NcError::Usage(crate::types::headroom_fault_message(
+        fault, &name,
+    )))
 }
 
 impl Recipe {
@@ -575,7 +567,8 @@ impl Recipe {
     }
 
     /// The current chain's config carrying this recipe's **shared** sections, for the
-    /// stages both chains run: decode, the film base and the measurement region.
+    /// stages both chains run: decode, the film base and the measurement region — plus
+    /// `fit_range`, the one section both recipes spell identically.
     ///
     /// Scaffolding, deleted with `ResolvedConfig` by `nf-core/default-flip`. Every
     /// other section is left at its default, which is safe only because nothing past
@@ -590,6 +583,9 @@ impl Recipe {
                 ..CalibrationParams::default()
             },
             measure: self.measure.clone(),
+            // The same section on both chains, so the projection states the user's value
+            // rather than a default the run does not use.
+            fit_range: self.fit_range.clone(),
             ..ResolvedConfig::default()
         }
     }

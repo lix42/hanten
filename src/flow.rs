@@ -302,7 +302,7 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
         },
     },
     // A preset sets knobs on **both** sides of the decode/rendering boundary — the
-    // curve, `density.scale`, `print_exposure`, `display_tone` — so it cannot be
+    // curve, `density.scale`, `print_exposure` — so it cannot be
     // resolved against a chain whose rendering knobs do not exist yet. It is also the
     // one conversion flag with no recipe key, which is why it needs a presence row
     // rather than a value one.
@@ -326,24 +326,20 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     //
     // **Refused by presence, at every value, and the missing section is why.** The
     // tiebreaker would normally leave an identity value alone to keep the flags-win
-    // reset usable — `--highlight-compress 0` resolves the documented default and
+    // reset usable — `--linear-range 0,1` resolves the documented default and
     // renders byte-identically. But that exemption exists to
     // let a flag clear a value a *recipe* pinned, and the new chain's recipe has no
     // `print` section, so on this flow there is never a print value to
     // reset. With nothing to protect, presence is the honest rule: each of these names
-    // an operation whose stage has not landed, a knob the new chain spells differently
-    // (`--print-exposure`), or a choice fit range does not offer (`--display-tone`,
-    // `--highlight-compress`). The one print knob the new flow keeps,
+    // an operation whose stage has not landed, or a knob the new chain spells
+    // differently (`--print-exposure`). The one print knob the new flow keeps,
     // `--display-tone-headroom`, is in `KEPT_FLAGS`: fit range landed with it.
+    // `--display-tone` and `--highlight-compress` are removed flags on both chains
+    // (`nf-retire/display-tones`), so they need no row here.
     //
     // Verdicts: `NotYet` for a stage that has not landed, `Renamed` for
     // `--print-exposure`, and `Never` for `--auto-wb` (the per-frame estimate itself
-    // retired, not just its spelling — `measure-roll` replaces it), `--display-tone`
-    // and `--highlight-compress`. `--display-tone` is `Never` because fit range has
-    // **one** operator, not because this gate rules on the legacy tones — removing
-    // `shoulder` and `none` from the current chain is `nf-retire/display-tones`'. Should
-    // `nf-display-stages/parametric-operator` add a second operator, it brings its own
-    // selector, and this row changes with it.
+    // retired, not just its spelling — `measure-roll` replaces it).
     FlagEntry {
         knob: "--auto-wb",
         covers: &["--auto-wb"],
@@ -393,41 +389,6 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
                             name it takes there — retiring it outright is a listed outcome, \
                             so this is the one print knob that may not come back at all \
                             (`nf-scene-correction/levels-knob`)",
-        },
-    },
-    FlagEntry {
-        // Every value, `reinhard` included: the new recipe has no selector key, so there
-        // is no pinned tone for the flag to reset (the tiebreaker's condition).
-        knob: "--display-tone",
-        covers: &["--display-tone"],
-        present: |args| args.print.display_tone.is_some(),
-        availability: Availability::Never {
-            reason: "fit range has one operator, reinhard, so there is no tone to select — \
-                     `shoulder` and `none` exist for a reconstruction already bounded at \
-                     white, and the fixed decode is not",
-            instead: Some("`--display-tone-headroom` alone to set how much range it compresses"),
-        },
-    },
-    FlagEntry {
-        // `Never`, where the rest of the family is `NotYet`, and the difference is
-        // real: this is not a control that needs a stage built for it, it is the knee
-        // *width* of the `shoulder` tone. (`none` and `reinhard` both refuse a
-        // non-default value outright — `DisplayTone::resolve` says `none` "applies no
-        // shoulder to place" — so pairing it with `none` would misname its owner.)
-        // Fit range's operator is
-        // parameterised by the display's peak, so there is no knee width for this to
-        // configure however that stage lands. Zero is the documented default and
-        // still refused: it does not ask for less shaping — it asks for a curve this
-        // flow has no knee on at all.
-        knob: "--highlight-compress",
-        covers: &["--highlight-compress"],
-        present: |args| args.print.highlight_compress.is_some(),
-        availability: Availability::Never {
-            reason: "it is the knee width of the `shoulder` display tone, which exists \
-                     for a reconstruction already bounded at white — the fixed decode is \
-                     unbounded, so fit range compresses against the display's peak \
-                     instead and has no knee width to set",
-            instead: None,
         },
     },
     // --- output (`nf-core/knob-availability-audit`) --------------------------------
@@ -561,8 +522,9 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     // renaming it is `nf-retire/print-prefix-rename`'s.
     KeptEntry {
         covers: &["--display-tone-headroom"],
-        why: "fit range's headroom (recipe `fit_range.headroom_stops`) — the same reinhard \
-              white point, `2^stops`, the current chain's `reinhard` tone reads",
+        why: "fit range's headroom (recipe `fit_range.headroom_stops`) — the same key and \
+              the same reinhard white point, `2^stops`, the current chain's display tone \
+              reads",
     },
     KeptEntry {
         covers: &["--anchor-mid-offset"],
@@ -695,6 +657,8 @@ mod tests {
         "--out-depth",
         "--output-profile",
         "--bigtiff",
+        "--display-tone",
+        "--highlight-compress",
     ];
 
     /// Argument groups `ConvertArgs` flattens that carry no conversion knob.

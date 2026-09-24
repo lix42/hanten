@@ -65,13 +65,13 @@ the only way to produce one.
 | `NC_ISO_SAMPLE_DMAX` | — | explicit `Dmax` for the exponential curve; **required** with `_INPUT` |
 | `NC_ISO_SAMPLE_EV` | `0.0` | print exposure |
 
-**The EV is not optional in practice.** At defaults the gain map is flat —
+**The EV is not optional in practice.** Before `pipeline_version` 6 the gain map was flat at defaults —
 measured `GainMapMax` 0.0039 log2 = 1.003x on both the toy fixture and a real
 Ektar frame — because the exponential curve anchors display white at `Dmax` and
-ordinary content lands far below the SDR shoulder knee. A flat gain map cannot
+ordinary content lands at or below reference white. A flat gain map cannot
 discriminate an HDR reconstruction from an SDR one, so the oracle would report
 "present and correct" no matter what the reconstruction did. `+3 EV` pushes
-content over the knee (`GainMapMax` 1.095 log2 = 2.14x) and makes the check
+content over reference white (`GainMapMax` 1.095 log2 = 2.14x) and makes the check
 meaningful. (That the *default* render produces no HDR is a separate, recorded
 finding owned by `output/presets`.)
 
