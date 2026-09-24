@@ -320,6 +320,7 @@ graph TD
     nf-scene-correction/stage
     nf-scene-correction/flare-removal
     nf-scene-correction/levels-knob
+    nf-scene-correction/roll-white-balance
   end
   subgraph nf-look
     nf-look/desaturation-spike
@@ -569,6 +570,8 @@ graph TD
   nf-reconstruction/fixed-decode --> nf-scene-correction/stage
   nf-scene-correction/stage --> nf-scene-correction/flare-removal
   nf-scene-correction/stage --> nf-scene-correction/levels-knob
+  nf-scene-correction/stage --> nf-scene-correction/roll-white-balance
+  nf-scene-correction/roll-white-balance --> nf-look/path-to-white
   nf-scene-correction/stage --> nf-look/stage
   nf-look/stage --> nf-look/per-channel-grade
   nf-look/stage --> nf-look/path-to-white
@@ -960,13 +963,16 @@ the design in `docs/design-update.md`:
 - `nf-scene-correction/levels-knob` (new flow): `nf-scene-correction/stage`
   — `linear_range` is a levels remap, not fit range — decide whether it
   survives and where
+- `nf-scene-correction/roll-white-balance` (new flow): `nf-scene-correction/stage`
+  — one white balance per roll from the roll's own top percentile, keeping the
+  scene's light; the desaturation band is placeable only behind it
 - `nf-look/stage` (new flow): `nf-scene-correction/stage`
   — scene-referred and before the SDR/HDR branch, because a gain map needs
   agreement below diffuse white
 - `nf-look/per-channel-grade` (new flow): `nf-look/stage`
   — the tunable counterpart of the decode's `scale`; subsumes the regional
   balance
-- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`, `nf-reconstruction/anchor-spike`, `nf-look/desaturation-spike`, `nf-look/desaturation-band-fit`, `nf-display-stages/gamut-map-share`
+- `nf-look/path-to-white` (new flow): `nf-look/stage`, `nf-calibration/scale-ladder`, `nf-reconstruction/anchor-spike`, `nf-look/desaturation-spike`, `nf-look/desaturation-band-fit`, `nf-display-stages/gamut-map-share`, `nf-scene-correction/roll-white-balance`
   — what makes whites read clean, made a deliberate control instead of a
   side effect (of the sigmoid's shoulder today; `gamut-map-share` found the gamut map
   moves no marked white under `none`/`reinhard`). Built against a **hand-set** per-roll contrast (decided
@@ -1593,6 +1599,10 @@ the design in `docs/design-update.md`:
 - [ ] [A home and a name for
   `linear_range`](tasks/nf-scene-correction/levels-knob.md) — `linear_range`
   is a levels remap, not fit range — decide whether it survives and where
+- [ ] [A roll-level white
+  balance](tasks/nf-scene-correction/roll-white-balance.md) — measured once per
+  roll from its own top percentile, removing the roll-constant cast and keeping
+  the scene's light; `path-to-white`'s band needs it
 
 ### nf-look — [progress](progress/nf-look.md)
 > The creative stage the old chain never had: the per-channel grade, the path to
@@ -1608,13 +1618,17 @@ the design in `docs/design-update.md`:
 - [ ] [A per-channel grade with a mid-grey
   pivot](tasks/nf-look/per-channel-grade.md) — the tunable counterpart of the
   decode's `scale`; subsumes the regional balance
-- [ ] [Fit the desaturation band on more than one
+- [x] [Fit the desaturation band on more than one
   patch](tasks/nf-look/desaturation-band-fit.md) — the spike placed it from a
-  single saturated patch on a single roll; runs against today's binary
+  single saturated patch on a single roll; runs against today's binary. **Done
+  2026-09-23**: `s0`/`s1` = 0.025/0.055 on `log10(max/min)/gamma`, and only behind a
+  roll-level white balance ([`desaturation-band.md`](spike/desaturation-band.md))
 - [ ] [Highlight desaturation](tasks/nf-look/path-to-white.md) — what makes
   whites read clean, made a deliberate control instead of a side effect of the
   sigmoid's shoulder; built against a hand-set per-roll contrast, because under the
-  base-referenced anchor the operator is inert
+  base-referenced anchor the operator is inert, and only behind a roll-level
+  white balance, without which its saturation band cannot tell a cast white from
+  skin
 - [ ] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
   `gamma`; supersedes `algo/contrast-latitude-spike`
 - [ ] [Re-express the `--preset` bundles](tasks/nf-look/look-presets.md) —

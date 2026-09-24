@@ -34,15 +34,28 @@ white one. It is a highlight operator and cannot reach cast below about L\* 70.
 
 **`path-to-white` is built against a hand-set contrast (user decision 2026-09-22).**
 Under the base-referenced anchor at contrast 2.0 the operator is **inert** — all three
-measured rolls land 0.55–1.28 stops below white — so the task is developed with a
-per-roll `--density-gamma` computed from that roll's base and red p97 (candidate C/D in
-`docs/spike/white-placement.md`), and its band values are provisional until
-`nf-calibration/anchor-comparison` chooses the rule. Two tasks split out of it so they can
-run now against today's binary: `desaturation-band-fit` here, and
-`nf-display-stages/gamut-map-share` — done 2026-09-23, and it removes the double-up
-concern: at the renders `path-to-white` is built under the gamut map moves no marked
-white. The hand-set contrast must name `--display-tone reinhard`; left unstated it
-renders under `shoulder`, where the map does real work.
+measured rolls land 0.55–1.73 stops below white (09-11 corrected 2026-09-23) — so the
+task is developed with a per-roll `--density-gamma` computed from that roll's base and
+red p97 (candidate C/D in `docs/spike/white-placement.md`), and its band values are
+provisional until
+`nf-calibration/anchor-comparison` chooses the rule. Two tasks were split out of it to
+run against today's binary, and both are done: `desaturation-band-fit` here (below) and
+`nf-display-stages/gamut-map-share` (2026-09-23), which removes the double-up concern: at
+the renders `path-to-white` is built under the gamut map moves no marked white. The
+hand-set contrast must name `--display-tone reinhard`; left unstated it renders under
+`shoulder`, where the map does real work. It now also waits on
+`nf-scene-correction/roll-white-balance`.
+
+**`desaturation-band-fit` is done (2026-09-23)**
+([`docs/spike/desaturation-band.md`](../spike/desaturation-band.md)): the band sits at
+**`s0 = 0.025`, `s1 = 0.055` of `log10(max/min) / gamma` on film RGB** — the negative's
+density spread, since linear RGB is rescaled by each roll's contrast. It is placeable
+**only behind a roll-level white balance**: with none, Ektar's whites carry as much cast as
+skin; a per-frame auto WB removes sunsets before the band sees them. The intent is to keep
+the scene's light and remove only the roll-constant cast, measured from the roll's own top
+percentile — never the base (it neutralises black) or the leader (1.5–3.5 stops over white,
+gains the wrong way). Under that white balance the operator's extra cleaning was not
+visible by eye; the band's value is keeping the pull off colour.
 
 ## stage
 
@@ -277,7 +290,7 @@ renders under `shoulder`, where the map does real work.
 ## path-to-white
 
 **Status:** not started
-**Updated:** 2026-09-22
+**Updated:** 2026-09-23
 
 - 2026-09-19: created with the new-flow plan. Goal: highlight desaturation.
 - 2026-09-19: the gating spike moved to `nf-calibration/scale-ladder` and was
@@ -324,6 +337,14 @@ renders under `shoulder`, where the map does real work.
   of waiting three tasks for the look stage: `nf-look/desaturation-band-fit` (the band's
   numbers, fitted to one patch on one roll) and `nf-display-stages/gamut-map-share` (how
   much of the convergence is the gamut map already). Both are now dependencies.
+- 2026-09-23: **two inputs changed.** (1) The 2026-09-22 entry's "0.55–1.28 stops below
+  white" and 09-11's gamma 3.11 carried a calibration frame; corrected they are
+  **0.55–1.73** and **6.61** — see the correction in
+  [`white-placement.md`](../spike/white-placement.md). (2) `desaturation-band-fit` is done:
+  band `s0`/`s1` = 0.025/0.055 on `log10(max/min)/gamma`, placeable only behind a roll-level
+  white balance, now filed as `nf-scene-correction/roll-white-balance` and added to this
+  task's dependencies. Its band edges miss by a little on both halves of the pair check
+  (placed from patch medians, applied per pixel) — added to the task's open questions.
 
 ## contrast
 
@@ -355,8 +376,8 @@ renders under `shoulder`, where the map does real work.
 
 ## desaturation-band-fit
 
-**Status:** not started
-**Updated:** 2026-09-22
+**Status:** done
+**Updated:** 2026-09-23
 
 - 2026-09-22: filed. Goal: place the saturation band from a distribution of marked
   patches rather than from the single "sand beach" example on `2026-09-18-Gold200`. The
@@ -365,3 +386,179 @@ renders under `shoulder`, where the map does real work.
   binary — throwaway operator, anchor set by flag, patches marked in the review app — so
   it does not wait for the look stage. Measure under the hand-set candidate C/D contrast
   `path-to-white` will use, not the spike's per-frame p97 white.
+- 2026-09-23: started. Workspace `../temp/band-fit/` (uncommitted — the user's photographs).
+  **Four rolls, leave-one-roll-out** rather than one fixed hold-out: fit on three, test on
+  the fourth, rotate — so every roll is tested once, and holding out a Portra400 (two
+  rolls of one stock) tests roll-to-roll variation while holding out Gold200 or Ektar tests
+  a different stock. Brightness start held at **1 stop below diffuse white** throughout
+  the fit (it decides which patches are in range); revisit afterwards.
+
+  Control is candidate C by flags: `--density-curve exponential --anchor-mid-offset 0.62
+  --density-gamma g`, `W` = p90 over frames of per-frame red p97 (the anchor spike's
+  definition, reproduced to three decimals on its three rolls), `g = 0.7447 / (W − 0.62)`:
+
+  | roll | base (`estimate --grid`) | W | gamma |
+  |---|---|---|---|
+  | 2026-09-18-Gold200 | 0.4710, 0.2324, 0.1080 | 0.800 | 4.15 |
+  | 2026-09-14-Ektar100 | 0.3529, 0.1948, 0.1266 | 0.910 | 2.57 |
+  | 2026-09-11-Portra400 | 0.3469, 0.1626, 0.0934 | 0.860 | 3.11 |
+  | 2026-09-20-Portra400 | 0.4210, 0.1993, 0.1097 | 0.941 | **2.32** (new) |
+
+  The binary confirms `anchor_value` = W (0.7996 on Gold200). **The per-roll gamma spans
+  1.8x, which bears on the choice of measure**: a fixed cast of `Δd` density renders at
+  linear-RGB saturation `1 − 10^(−γ·Δd)`, so the same slightly warm white reads more
+  saturated on Gold200 than on 09-20. Alongside linear-RGB and a perceptual measure, the
+  fit therefore tries the log ratio divided by gamma — the negative's own chroma.
+
+  The fit itself needs no operator: `s0`/`s1` are placed from each patch's colour at the
+  operator's *input*, which a `film-master` render under the same flags gives directly.
+  The throwaway operator is needed only for the pair check, and is kept as a `.patch` in
+  the workspace this time (the spike's was reverted and is in no branch).
+
+- 2026-09-23: **the anchor spike's 09-11 numbers include a non-picture frame.** Its
+  Portra400 roll was measured over 12 frames, but the manifest gives that roll 11 of role
+  `real` — the twelfth is `calibration.tif`, whose red p97 is **1.524** against 0.45–0.87
+  for every picture. Dropping it moves `W` from **0.860 to 0.733**, and candidate C's
+  gamma from 3.11 to **6.61** — twice what the outside converters measured on Gold200.
+  So the 09-11 row of `docs/spike/white-placement.md` (`W`, "−0.88 stops short", the
+  `d` = 0.488 in the fixed-`d` spread) is contaminated; the other two rolls carry no
+  non-picture frame besides base and leader, which were excluded, so they stand. It also
+  makes 09-11 the first real case of C's known weakness (it cannot tell a flat or
+  underexposed roll from a wrong `d`, and pays in contrast). 09-11 is held out of marking
+  until its control is decided; the review set holds 101 picture frames of the other three.
+- 2026-09-23: **first measurement: 39 patches (27 new on three rolls, plus the spike's 12),
+  read at the operator's input** — a `film-master` render under the candidate-C flags
+  (linear ACEScg, diffuse white = 1.0), median per patch (`../temp/band-fit/
+  input-measurements.json`, `separation.json`). Only 17 of the 39 sit at or above the
+  brightness start (1 stop below white) — 11 W, 6 C, of which **1 C on Ektar and 2 on
+  Portra, both from one frame**. The rest are outside the operator's reach, so they do
+  not constrain the band. Findings, provisional on that count:
+
+  **(1) The spike's 0.30 → 0.45 does not carry, as the task predicted.** Under candidate
+  C, in-range whites read linear-RGB saturation 0.20–0.52 at the input (Gold200 up to
+  0.52): gamma multiplies the decode's cast in log space, and Gold200 gets 4.15.
+
+  **(2) The gamma-normalised log ratio is the steadiest measure; linear RGB the least.**
+  With no white balance, `s_log` misclassifies 2 of 17 at its best threshold (~0.10) and
+  separates Gold200 on its own (W ≤ 0.098, C ≥ 0.108); linear RGB overlaps by 0.27 across
+  rolls because each roll's gamma rescales it.
+
+  **(3) Per-frame auto white balance defeats the band before it acts.** With
+  `--auto-wb percentile` on 1815 the two sunset clouds drop to `s_log` 0.008 — the
+  estimator reads the sunset as the cast and removes it, so the operator then sees a
+  white and pulls it. Gray-world is the same. Both auto modes misclassify 3–4 of 17. This
+  is a scene-correction ↔ path-to-white interaction, not a band parameter.
+
+  **(4) An idealised per-roll WB (leave-one-patch-out over the roll's W patches) separates
+  Gold200 widely on every measure** (`s_log` W ≤ 0.034, C ≥ 0.056), but the same two
+  patches stay misclassified in every state: 1727 Ektar "cloth" (a pastel — C\* 23.6 at
+  the input, less than the Ektar whites) and 1880 Portra "cloud". Too few to say whether
+  they are the measure's failure or the marking's.
+- 2026-09-23: **second round: 52 patches, 29 in range (12 W, 17 C — 12 of the C on
+  Ektar).** 1727's C cloth was re-marked with a W beside it; 1880's cloud is `?` (shot at
+  5–6 PM, may be warm) and reported, not fitted. Still **no in-range Portra W**. Added a
+  realistic fifth input state, **auto-roll**: one gain per roll, the per-channel median of
+  per-frame `--auto-wb percentile` gains over every picture frame.
+
+  **The result is that the band measures distance from the roll's white, so it is only as
+  portable as the white is neutral.** Best single `s_log` threshold, misclassified of 29:
+
+  | input state | misclassified | why |
+  |---|---|---|
+  | none (the new chain's default) | 6 | Ektar whites carry C\* 16–38 of cast (`s_log` 0.065–0.097), as much as skin, sand and a leaf (0.067–0.080) |
+  | per-frame auto WB | 9–10 | removes sunsets on 1815 before the band sees them |
+  | auto-roll | 5 | separates **within** each roll, at different places: Gold200 ≤ 0.029 vs ≥ 0.039, Ektar ≤ 0.180 vs ≥ 0.160 — Ektar's roll gain (`[1.43, 1, 0.79]`) overshoots and lifts everything |
+  | ideal-roll (leave-one-out over W patches) | 3 | one band nearly fits both rolls: whites ≤ ~0.05, colours ≥ ~0.06 |
+
+  The three that ideal-roll still misses are the informative ones: 1738 "cloth" W at 0.077
+  (−0.87 stops, likely lit by coloured light), 1727 "cloth" C at 0.038 (a pastel) and 1730
+  "leaf" C at 0.025 (green, which the Ektar gain partly cancels). So even at best the
+  band's gap is ~0.01 of `s_log` wide, and it holds across rolls **only** if scene
+  correction has neutralised the roll first; under the default neutral WB it cannot be
+  placed for Ektar at all without flattening skin.
+
+  **Measure: `s_log` (log ratio / gamma) wins in every state**; linear RGB never separates
+  across rolls, because gamma rescales it per roll (Gold200 whites 0.33–0.52, Ektar
+  0.20–0.34 with no WB).
+- 2026-09-23: **which white the white balance should be measured on — a roll-level top
+  percentile, not the film.** The user's framing, adopted: there is no correct WB, only an
+  intent, and one global gain cannot keep a sunset on the sky while removing it from a
+  cloth — so the preference is to **keep the scene's light** (sunsets stay warm) and remove
+  only what is constant across the roll: film, process and scanner cast. That is what a
+  roll-level statistic estimates, since one sunset frame barely moves it; it also makes
+  1880's `?` cloud moot. The corollary for this task: `s0` should sit **low**, so the
+  operator only cleans the faint residual a roll WB leaves — a higher `s0` would start
+  neutralising sunset-lit whites, which is per-object colour removal by another route.
+
+  **The film cannot supply the white.** The base is already the decode's per-channel
+  divisor, so it neutralises black, where a multiplicative gain does nothing. The leader,
+  rendered under the control, sits **+1.5 to +3.5 stops above diffuse white** and asks for
+  gains the wrong way round (red 0.53–0.67, blue 1.8–2.6, against the W-patch gains' red
+  1.11–1.27, blue 1.18–1.65) — past the straight line, at an uncontrolled exposure, which is
+  why `film-base` had already disqualified it as a per-channel source.
+
+  **Estimators tried** (Python on cached `film-master` pixels, 5% inset; its 95th-percentile
+  gains match the binary's `--auto-wb percentile` to 0.01, median 0.0008, over 101 frames):
+  - Median of per-frame percentile gains: **p95 → p99 fixes Ektar's blue** (0.79 → 1.16–1.21,
+    ideal 1.28) — at p95 its top 5% is sky, not white. 5/29 → 4/29 misclassified.
+  - Pooled roll top percentile, excluding pixels within `m` density of the leader on any
+    channel (the user's guard against a fully exposed frame mixed into the roll): 2–6/29
+    for every sensible variant, thresholds 0.03–0.05. **No variant clearly wins at 29
+    patches.** The per-channel form is steadier across `q` than a median of the brightest
+    pixels. The leader guard removes 0–5% of pixels at `m = 0.1` and changes little here —
+    none of these rolls holds a blown frame, so its protective value is untested; at
+    `m = 0.2` it eats 16% of Ektar, whose white sits only 0.15 below its leader.
+  - Portra disagrees with its "ideal" on red under every estimator (0.86–1.03 vs 1.12), but
+    that ideal rests on two dim W patches and no in-range one; the user found no bright
+    whites on those frames, so **Portra's W side is a known gap** for now.
+
+  Working choice for the pair check: **pooled per-channel p99, leader margin 0.1**. The
+  estimator itself belongs to scene correction; its exact form is not this task's to settle.
+- 2026-09-23: **pair check rendered — the band does its job structurally.** Throwaway
+  operator saved as `../temp/band-fit/operator.patch` (binary `bin/hanten-ptw`, env
+  `NC_SPIKE_PTW="start,k,s0,s1,gamma"`; reverted from `src/`, never merged): a pull toward
+  `(Y, Y, Y)` after the shared controls, brightness ramp (smoothstep) from 1 stop below
+  diffuse white to white, max pull `k = 0.8`, band over `s_log` computed on film RGB (the
+  inverse of the v1 matrix) of the white-balanced pixel. Per-roll WB = pooled per-channel
+  p99, leader margin 0.1 (`roll-wb.json`). 22 frames, every in-range patch, SDR base:
+
+  | mean C\* | raw | + roll WB | + pull, no band | + band 0.025→0.055 | + band 0.020→0.035 |
+  |---|---|---|---|---|---|
+  | W (12) | 24.4 | 7.2 | 3.2 | 4.4 | 5.7 |
+  | C (17) | 30.6 | 17.0 | **7.2** | **16.1** | 16.8 |
+
+  **(1) White balance does most of the cleaning** (24.4 → 7.2); the operator's share on
+  top is 7.2 → 4.4 with the band. **(2) The band protects every C above `s1` exactly**
+  (100% of chroma kept at `s_log` ≥ 0.077, 96–99% at 0.061–0.070 where some pixels fall in
+  the ramp), where the unbanded pull flattens them to 7.2. **(3) The cost sits in the
+  ramp:** 1815's sunset clouds (0.034 / 0.041) keep only 50% / 64% under the main band and
+  82% / 99% under the narrow one, which in turn cleans whites less (5.7). Luminance held:
+  |ΔL\*| ≤ 0.17 between WB and band. Set: `review-pair.json`, for the user's eye.
+- 2026-09-23: **user's verdict on the pair check, and the task closes.** Band vs narrow
+  band on 1815/1810: "very small … I like 4 a little better" — so the wider **0.025 →
+  0.055** stands. WB vs WB + banded pull on the whites: "I cannot tell real difference" —
+  the operator's cleaning on top of a roll WB is invisible at strength 0.8, one stop start.
+  Pull vs band: little difference on skin, **observable on 1739's rock, band better**.
+
+  Held-out check, Gold200 vs Ektar (Portra has no in-range W): fitted on either alone the
+  band lands in the same zone; on the other, no `c` patch is fully pulled and one `w` is
+  treated as colour (Ektar 1738 cloth at 0.067, likely lit by coloured light).
+
+  Written up as [`docs/spike/desaturation-band.md`](../spike/desaturation-band.md);
+  `path-to-white` carries the values, the measure, the white-balance precondition, and a
+  new open question on whether the operator earns a default-on place. Open, not this
+  task's: Portra's white side; the roll-WB estimator (scene correction's); the 09-11
+  correction to `white-placement.md`.
+- 2026-09-23: follow-ups done after `/code-review`: the report now states that the whites
+  below `s0` do **not** clean identically (four of seven keep 0.7–1.6 C\* more with the
+  band, because a patch's pixels scatter across `s0`), and fixes three counts (52 patches
+  in all; 29 in range over three rolls; Ektar p99 blue 1.16–1.21 vs the pooled 1.25). Filed
+  `nf-scene-correction/roll-white-balance`, which `path-to-white` now depends on, and added
+  the 09-11 correction to `white-placement.md` and every task file quoting it.
+- 2026-09-23: second `/code-review` pass, all fixed. The pair check is only partly met on
+  **both** halves, not one — colours just above `s1` keep 96–99%, not all — and the task
+  stays **done by user decision**, with the band-edge placement carried to `path-to-white`
+  as an open question. Also: the chart legend's scale (12 characters per 0.02), the
+  1738 cloth white above `s1` stated in the placement, "upper bound" → "reference" for the
+  W-patch white balance (a pooled variant scored better at its own threshold), `s` stated
+  as computed on film RGB, and the 09-11 correction's two spread statistics told apart.

@@ -19,7 +19,7 @@ migration plan (`docs/nf-migration.md`).
 ## anchor-comparison
 
 **Status:** not started
-**Updated:** 2026-09-21
+**Updated:** 2026-09-23
 
 - 2026-09-21: filed to carry the rendered half of `nf-reconstruction/anchor-spike`,
   which costed four white placements from the scans but could not rank them: under the
@@ -27,6 +27,10 @@ migration plan (`docs/nf-migration.md`).
   per-channel highlight operator has nothing to act on and a render would compare four
   configurations of which one is inert. Waits on `nf-look/path-to-white`. A verdict of
   "keep the fixed anchor and move `d` instead" is a complete outcome.
+- 2026-09-23: the "0.55–1.28 stops short" above is **0.55–1.73** once 09-11's calibration
+  frame is excluded — see the correction in [`white-placement.md`](../spike/white-placement.md).
+  09-11 alone would ask candidate C for gamma 6.61, which makes it the natural test roll
+  for D's ceiling.
 
 ## scale-ladder
 
