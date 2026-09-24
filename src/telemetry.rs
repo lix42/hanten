@@ -69,6 +69,10 @@ use crate::types::{
 /// `output/sdr-preset-followups` still owns settling. `conversion.preset` accepts
 /// every name in `OutputPreset::ALL`; do not restate the list here, since that is
 /// exactly the rustdoc that went stale at v3.
+///
+/// **Removing** members is not a bump either: `legacy` and `custom` left
+/// `conversion.preset` with `nf-retire/legacy-custom` (2026-09-23). Records written
+/// before carry them and stay readable; no new record can.
 pub const SCHEMA_VERSION: u32 = 4;
 
 /// Default local JSONL log path, honoring `NC_TELEMETRY_LOG` then the platform
@@ -205,10 +209,10 @@ pub struct TimingInfo {
 /// carrying the whole recipe; a few high-signal knobs ride alongside it.
 #[derive(Clone, Debug, Serialize)]
 pub struct ConversionInfo {
-    /// Resolved output preset (`"legacy"` / `"film-master"`) — which branch out of
-    /// the NC film RGB v1 ACEScg boundary ran. Recorded because it is the single
-    /// biggest determinant of what the written pixels *are*, and without it a
-    /// `film-master` run is indistinguishable from a legacy `--output-hdr` one.
+    /// Resolved output preset (`"gain-map-hdr"` / `"film-master"` / …) — which branch
+    /// out of the NC film RGB v1 ACEScg boundary ran. Recorded because it is the
+    /// single biggest determinant of what the written pixels *are*: two f32 TIFFs
+    /// (`film-master`, `hdr-linear-tiff`) are otherwise indistinguishable.
     pub preset: OutputPreset,
     /// Reconstruction type (`"simple"` / `"density"`).
     pub reconstruction: ReconstructionType,
@@ -467,7 +471,7 @@ mod tests {
             params_hash: "deadbeef".into(),
             film_base_source: FilmBaseSource::Auto,
             dmax: Some(1.8),
-            preset: OutputPreset::Legacy,
+            preset: OutputPreset::DisplayP3,
             output_depth: "u16",
             warnings: 4,
         });
@@ -513,7 +517,7 @@ mod tests {
             params_hash: "0".into(),
             film_base_source: FilmBaseSource::Explicit([0.9, 0.5, 0.4]),
             dmax: None,
-            preset: OutputPreset::Legacy,
+            preset: OutputPreset::FilmMaster,
             output_depth: "f32",
             warnings: 0,
         });
@@ -669,7 +673,7 @@ mod tests {
                 ir_export: Some(2.0),
             },
             conversion: ConversionInfo {
-                preset: OutputPreset::Legacy,
+                preset: OutputPreset::DisplayP3,
                 reconstruction: ReconstructionType::Density,
                 curve: Some(DensityCurveType::Sigmoid),
                 params_hash: "0123456789abcdef".into(),
@@ -691,7 +695,7 @@ mod tests {
             r#""output_bytes":2000},"#,
             r#""timing_ms":{"total":30.0,"decode":5.0,"film_base":1.0,"algorithm":10.0,"#,
             r#""color":8.0,"encode":4.0,"ir_export":2.0},"#,
-            r#""conversion":{"preset":"legacy","reconstruction":"density","curve":"sigmoid","#,
+            r#""conversion":{"preset":"display-p3","reconstruction":"density","curve":"sigmoid","#,
             r#""params_hash":"0123456789abcdef","#,
             r#""film_base_source":{"explicit":[0.5,0.25,0.125]},"dmax":1.5,"output_depth":"u16"},"#,
             r#""outcome":{"warnings":1,"clipped":2,"non_finite":0}}"#,

@@ -424,6 +424,7 @@ def _depth(recipe: dict) -> str:
         return "u10"
     if preset in ("film-master", "hdr-linear-tiff"):
         return "f32"
+    # Retired presets, still read from reference-build sidecars.
     if preset in ("legacy", "custom") and output.get("depth") == "f32":
         return "f32"
     return "u16"

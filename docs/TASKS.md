@@ -25,10 +25,7 @@ Pure-function pipeline stages, orchestrated by the CLI layer:
 
 ```
 decode → validate input semantics → film-base → preset dispatch
-  ├→ legacy: stages::render
-  │    → tagged reconstruction (simple | density, including density curve)
-  │    → FilmRgbImage → finish_print → output ICC → TIFF encode
-  ├→ film-master: stages::render
+  ├→ film-master: stages::render_film_master
   │    → tagged reconstruction (simple | density, including density curve)
   │    → FilmRgbImage → NC film RGB v1 → linear ACEScg → TIFF encode
   └→ display presets: stages::render_display_source
@@ -54,8 +51,9 @@ separate retirement decision. All paths
 produce one typed `FilmRgbImage`; NC film RGB v1 interprets that rendering
 consistently as linear Rec.709/D65 and maps it into ACEScg/D60. This is
 film-rendering intent, not physical scene recovery. Optional measured correction
-profiles have no downstream blockers. The rendered float TIFF is now
-`--out-depth f32` on the `legacy` / `custom` path, and is not the master branch.
+profiles have no downstream blockers. The rendered float TIFF is
+`hdr-linear-tiff` (the `legacy` path's `--out-depth f32` retired with it), and is
+not the master branch.
 
 One bullet per epic below — the name is the epic id the task list is grouped
 under, and the parenthesized paths are the modules it owns.
@@ -73,8 +71,9 @@ under, and the parenthesized paths are the modules it owns.
   `reconstruction` recipe object into simple or density reconstruction. The
   reference-anchored sigmoid **is** the product default as of `pipeline_version` 2
   (2026-08-08) and owns floor/toe, midtone, and shoulder placement;
-  exponential/simple remain explicit advanced references. `algo::finish_print` is
-  the stage-4 print bridge.
+  exponential/simple remain explicit advanced references. The print controls run
+  past the ACEScg boundary (`render_split`); the film-RGB print stage retired with
+  `legacy`.
 - **output** (the encoders downstream of `color`) — the display renditions:
   Display P3 / SDR, BT.2020 PQ/HLG, explicit legacy Ultra HDR v1 gain-map JPEG
   (with final ISO metadata planned), AVIF, and the presets that resolve them
@@ -86,7 +85,7 @@ under, and the parenthesized paths are the modules it owns.
 ### Key choices
 - **Rust**, single static binary. Pure functions per stage; CLI is the only orchestrator.
 - **Normally 32-bit float linear image buffers:** scanner measurement coordinates before reconstruction, typed NC film RGB after the density curve, and linear ACEScg after the versioned working-space mapping; bit-depth reduction only at encode.
-- **Pluggable algorithms** behind the tagged `reconstruction` recipe object, resolved by `algo::reconstruct` / `algo::finish_print`, so more can be added later.
+- **Pluggable algorithms** behind the tagged `reconstruction` recipe object, resolved by `algo::reconstruct`, so more can be added later.
 - Density conversion and print rendering are **separate sub-stages** (core fidelity rule).
 - IR channel is **preserved and not acted on by the conversion path**, with one exception: on a marker-verified IR plane that *measures* able to separate holder from film on that frame (`film-base/ir-usability-detection`), `film_base::estimate` consumes IR to mask the opaque holder before the auto rebate search (`film-base/ir-holder-detection`). `--film-type` is provenance only and gates nothing. IR dust removal remains a roadmap follow-up.
 
@@ -1024,8 +1023,8 @@ the design in `docs/design-update.md`:
   — curated per-pixel vectors for the new stages; never a full-frame or
   post-transform hash
 - `nf-verification/benchmark-set` (new flow): `nf-verification/reference-snapshot`, `nf-core/minimal-end-to-end`
-  — every current case names `legacy`; comparability comes from the tagged
-  build
+  — the cases are a holding set since `legacy` retired; comparability comes from
+  the tagged build
 - `nf-verification/film-rgb-export` (new flow): `nf-reconstruction/fixed-decode`
   — the cleanest measurement point is before the 3×3, which nc cannot export
   today
@@ -1233,7 +1232,7 @@ the design in `docs/design-update.md`:
   references (HP5 frame 1330 is one). Convenience over the planner's one-reference-per-frame path
 
 ### algo — [progress](progress/algo.md)
-> `src/algo/`: the `reconstruct` / `finish_print` surface, negative
+> `src/algo/`: the `reconstruct` surface, negative
 > reconstruction, the density curves (exponential / sigmoid), and the tone,
 > white-balance, and color-model parameters of that stage. Deterministic
 > statistics only — no ML.
@@ -1704,8 +1703,9 @@ the design in `docs/design-update.md`:
   curated per-pixel vectors for the new stages; never a full-frame or
   post-transform hash
 - [ ] [A benchmark set for the new
-  flow](tasks/nf-verification/benchmark-set.md) — every current case names
-  `legacy`; comparability comes from the reference build
+  flow](tasks/nf-verification/benchmark-set.md) — the cases are a `display-p3` /
+  `film-master` holding set since `legacy` retired; comparability comes from the
+  reference build
 - [ ] [Export the pre-matrix film
   RGB](tasks/nf-verification/film-rgb-export.md) — the cleanest measurement
   point is before the 3×3, which nc cannot export today
@@ -1715,8 +1715,14 @@ the design in `docs/design-update.md`:
 > display tones, the sigmoid and `simple`, the `Dmax` anchor machinery, the regional
 > balance, and the `print.*` prefix.
 
-- [ ] [Retire `legacy` and `custom`](tasks/nf-retire/legacy-custom.md) —
-  removes the second implementation of the print controls
+- [x] [Retire `legacy` and `custom`](tasks/nf-retire/legacy-custom.md) — **done
+  2026-09-23.** Both presets and the `--out-depth` / `--output-profile` / `--bigtiff`
+  selectors (and their recipe keys) are removed-value errors; `to_output`, ProPhoto /
+  ICC-path output and the film-RGB print stage are gone, so every preset is atomic and
+  one implementation of the print controls is left. No pixel of any surviving preset
+  moved: the drift gate now hashes `algo::reconstruct` and reproduced v5's `render`
+  hash; only `recipe` was refreshed. `tests/pipeline.rs` states each preset;
+  `benchmark.json` is a `display-p3` / `film-master` holding set
 - [ ] [Retire the `shoulder` and `none`
   tones](tasks/nf-retire/display-tones.md) — both exist for reconstructions
   already bounded at white

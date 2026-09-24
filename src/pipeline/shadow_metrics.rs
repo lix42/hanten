@@ -1,9 +1,9 @@
 //! Test-only diagnostic harness for `algo/reference-anchored-sigmoid`.
 //!
 //! **Why this is test-only and in-crate.** The SDR and HDR renderers are not
-//! CLI-reachable — only `legacy`, `film-master` and `ultra-hdr-v1` presets parse, and
-//! [`crate::pipeline::sdr`] / [`crate::pipeline::hdr`] are pure stages awaiting
-//! `output/presets`. `nc` also has no `[lib]` target, so an integration test in
+//! CLI-reachable in isolation — the presets run them only inside a whole conversion,
+//! and [`crate::pipeline::sdr`] / [`crate::pipeline::hdr`] are pure stages. `nc` also
+//! has no `[lib]` target, so an integration test in
 //! `tests/` could only drive the binary. A `#[cfg(test)]` module is therefore the only
 //! way to measure the real render chain, and it keeps this diagnostic out of the
 //! shipped binary and adds no product surface that `output/presets` would have to undo.

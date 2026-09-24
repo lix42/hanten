@@ -1,5 +1,4 @@
-//! Working-space → output color transforms via lcms2; depth-aware default
-//! profile selection and the ICC blob to embed.
+//! Working-space → output color transforms via lcms2, and the ICC blobs to embed.
 //!
 //! ## Working space
 //! Step-1 decode produces "linear scanner RGB" with no input ICC, so the source
@@ -15,25 +14,22 @@
 //! deferred `post-reconstruction-color-characterization` task.
 //!
 //! ## Output spaces
-//! The tone curve is a property of the space, not the output depth, so every
-//! embedded profile self-describes its data:
+//! The tone curve is a property of the space, so every embedded profile
+//! self-describes its data:
 //! - `SRgb`      — Rec.709 / D65, sRGB curve   (display-referred)
-//! - `ProPhoto`  — ROMM    / D50, gamma 1.8     (display-referred)
-//! - `AcesCg`    — AP1     / ~D60, linear       (scene-referred)
+//! - `AcesCg`    — AP1     / ~D60, linear       (scene-referred; the `film-master` tag)
 //! - `DisplayP3` — P3      / D65, sRGB curve    (display-referred SDR)
-//! - `Custom`    — whatever the supplied ICC file declares
 //!
-//! Depth-aware default: `u16 → SRgb`, `f32 → AcesCg` (linear scene-referred to
-//! avoid clipping the extended range of HDR data).
+//! ProPhoto and user-supplied ICC paths retired with the `legacy` preset, the only
+//! path that selected an output space by name; an arbitrary destination returns,
+//! if at all, as a gamut-mapped destination of its own.
 //!
 //! Values may leave `[0, 1]` after a gamut remap; range clamping and clipping
 //! warnings are the encoder's job ("fail loudly" at encode), not this stage's.
 
-use std::path::PathBuf;
-
 use lcms2::{
-    CIExyY, CIExyYTRIPLE, ColorSpaceSignature, DisallowCache, Flags, GlobalContext, Intent,
-    PixelFormat, Profile, ToneCurve, Transform,
+    CIExyY, CIExyYTRIPLE, DisallowCache, Flags, GlobalContext, Intent, PixelFormat, Profile,
+    ToneCurve, Transform,
 };
 use rayon::prelude::*;
 
@@ -43,77 +39,27 @@ use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::hdr;
 use crate::pipeline::pixels;
 use crate::pipeline::sdr::{RenderedSdr, SdrGamut, SdrRenderMetadata};
-use crate::types::{LinearImage, NcError, OutDepth, OutputParams, Result};
+use crate::types::{LinearImage, NcError, Result};
 
 /// The output color space to transform into and tag the file with.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OutputSpace {
     SRgb,
-    ProPhoto,
     AcesCg,
     /// Display P3 SDR: P3 primaries, D65 encoding white, piecewise sRGB TRC.
     /// The standardized wide-gamut SDR destination (and the planned gain-map
     /// base).
     ///
-    /// **Shipped behavior:** like every output space, this transforms *from* the
-    /// linear Rec.709 working profile (see module docs). Little CMS
-    /// colorimetrically remaps those working values to the P3 primaries — lossless,
-    /// since Rec.709 ⊂ P3, so no gamut compression — and applies the sRGB TRC.
-    ///
-    /// **Target state (`sdr-display-rendering`):** once that task lands, its output
-    /// is already-rendered **linear Display P3**, and this space's transform becomes
-    /// a pure transfer-encode (identity P3→P3 primaries + sRGB TRC). The ACEScg→P3
-    /// render and all SDR tone/gamut mapping belong to `sdr-display-rendering`, not
-    /// here.
+    /// Every caller hands it pixels already in the P3 primaries, so its transform
+    /// is a pure transfer-encode (see [`display_p3_transfer_profiles`]).
     DisplayP3,
-    Custom(PathBuf),
-}
-
-impl OutputSpace {
-    /// Parse the `--output-profile` value: the case-insensitive keywords
-    /// `srgb`/`prophoto`/`acescg`/`display-p3`, otherwise a path to a user ICC
-    /// file.
-    ///
-    /// Fails loudly on a bare word that is neither a known keyword nor a path
-    /// (e.g. a misspelled `prophooto`) instead of deferring it to a confusing
-    /// "cannot read ICC profile" later. A value that looks like a path (contains
-    /// a separator or a `.`) is taken as `Custom`; the path itself is not checked
-    /// here — a bad path surfaces when the profile is loaded. The `display-p3`
-    /// keyword carries a `-` (not a path separator), so it is matched here and
-    /// never mistaken for a path.
-    pub fn parse(s: &str) -> Result<Self> {
-        let trimmed = s.trim();
-        match trimmed.to_ascii_lowercase().as_str() {
-            "srgb" => Ok(Self::SRgb),
-            "prophoto" => Ok(Self::ProPhoto),
-            "acescg" => Ok(Self::AcesCg),
-            "display-p3" | "displayp3" => Ok(Self::DisplayP3),
-            _ if trimmed.contains(['/', '\\', '.']) => Ok(Self::Custom(PathBuf::from(trimmed))),
-            _ => Err(NcError::Usage(format!(
-                "unknown output profile {trimmed:?}; expected srgb, prophoto, acescg, \
-                 display-p3, or a path to an ICC file"
-            ))),
-        }
-    }
-}
-
-/// Resolve the effective output space from an explicit choice + output depth.
-/// Explicit wins; otherwise the depth-aware default (`u16 → sRGB`,
-/// `f32 → ACEScg`).
-pub fn resolve_output_space(explicit: Option<OutputSpace>, depth: OutDepth) -> OutputSpace {
-    explicit.unwrap_or(match depth {
-        OutDepth::U16 => OutputSpace::SRgb,
-        OutDepth::F32 => OutputSpace::AcesCg,
-    })
 }
 
 /// The ICC bytes to embed for a given space, **without** building a transform.
 ///
-/// The legacy path gets its blob from [`to_output`] (which returns it alongside the
-/// transformed image), but the `film-master` branch has no transform to build — its
-/// pixels are already linear ACEScg — so `pipeline::stages`' film-master render calls
-/// this directly to fetch the tag that matches them. Byte-identical to what
-/// `to_output` would embed for the same space: both route through [`profile_icc`].
+/// The `film-master` branch has no transform to build — its pixels are already
+/// linear ACEScg — so `pipeline::stages`' film-master render calls this to fetch the
+/// tag that matches them.
 pub fn icc_profile(space: &OutputSpace) -> Result<Vec<u8>> {
     profile_icc(&build_profile(space)?)
 }
@@ -121,9 +67,8 @@ pub fn icc_profile(space: &OutputSpace) -> Result<Vec<u8>> {
 /// ICC header offset of the creation `dateTimeNumber` (ICC.1 §7.2, bytes 24–35).
 const ICC_HEADER_DATETIME: std::ops::Range<usize> = 24..36;
 
-/// Serialize an already-built profile to ICC bytes. Shared by `icc_profile` and
-/// `to_output` so the latter doesn't rebuild (and re-read from disk) a profile
-/// it already holds.
+/// Serialize an already-built profile to ICC bytes. Shared by every caller that
+/// already holds the profile, so none rebuilds it.
 ///
 /// Little CMS stamps profiles with the wall-clock creation time on synthesis, so
 /// two otherwise-identical runs seconds apart would embed different ICC bytes and
@@ -140,49 +85,10 @@ fn profile_icc(profile: &Profile) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Transform `image` from the linear working space into the output profile
-/// selected by `params`, returning it alongside the ICC blob to embed at encode
-/// time. The IR plane is not touched at all.
-///
-/// **Consumes and returns the same buffers** (`io/memory-preflight`): this stage
-/// used to clone the whole [`LinearImage`] — the RGB buffer *and* the
-/// never-transformed IR plane — which put a third full-frame image on the heap next
-/// to the orchestrator's decoded image and the algorithm's positive (~16 extra
-/// bytes per pixel, ~1.2 GiB on a 75 MP HDRi scan). The orchestrator has no use for
-/// the pre-transform values, so the copy bought nothing. Moving the image in and
-/// out costs nothing either (a `Vec` move is a handle move — no realloc, no copy)
-/// while keeping the stage a pure `(input, params) -> output` function and making
-/// the half-transformed state unrepresentable: the `Err` returns below take the
-/// caller's image with them, so a failure after the transform (`profile_icc` can
-/// fail *after* `transform_in_place` has run) cannot hand back a buffer whose
-/// values are neither working-space nor output-space.
-///
-/// The values are pixel-for-pixel identical to the old clone-based transform:
-/// `cmsDoTransform` is applied to the same values, and lcms2 supports in-place
-/// operation when the input and output pixel formats match (both `RGB_FLT` here).
-/// The transform runs on several bands of rows at once, which does not change them
-/// — it is per-pixel, and the cache that was its only shared mutable state is
-/// disabled (see `transform_in_place`).
-pub fn to_output(mut image: LinearImage, params: &OutputParams) -> Result<(LinearImage, Vec<u8>)> {
-    let explicit = params
-        .output_profile
-        .as_deref()
-        .map(OutputSpace::parse)
-        .transpose()?;
-    let space = resolve_output_space(explicit, params.depth());
-
-    let working = working_profile()?;
-    let output = build_profile(&space)?;
-    transform_in_place(&mut image, &working, &output)?;
-    let icc = profile_icc(&output)?;
-    Ok((image, icc))
-}
-
 /// Apply only the destination's sRGB transfer curve to an SDR-rendered linear
 /// image and return the matching ICC profile. The renderer already performed
-/// ACEScg → destination gamut conversion, so using [`to_output`] here would
-/// incorrectly treat those values as Rec.709 working RGB and remap them again.
-#[allow(dead_code)] // consumed next by standalone SDR activation in `output/presets`.
+/// ACEScg → destination gamut conversion, so the transform must not remap the
+/// primaries a second time.
 pub fn encode_rendered_sdr(
     rendered: RenderedSdr,
 ) -> Result<(LinearImage, Vec<u8>, SdrRenderMetadata)> {
@@ -197,13 +103,13 @@ pub fn encode_rendered_sdr(
 
 /// Apply only the destination's transfer curve to the new chain's output, which
 /// `fit_gamut` has already moved into the destination's primaries, and return the
-/// matching ICC profile — the new flow's counterpart of [`encode_rendered_sdr`], and
-/// for the same reason not [`to_output`]: a second gamut transform would remap
-/// values that are already in the destination's primaries.
+/// matching ICC profile — the new flow's counterpart of [`encode_rendered_sdr`], for
+/// the same reason: a second gamut transform would remap values that are already in
+/// the destination's primaries.
 ///
 /// The gamut is read off the chain's exit rather than chosen here, so the embedded
 /// profile names the primaries the pixels are actually in. Consumes and returns the
-/// image, like [`to_output`], so no second full-frame buffer exists.
+/// image, so no second full-frame buffer exists.
 pub fn encode_display_linear(
     mut image: LinearImage,
     gamut: DestinationGamut,
@@ -229,7 +135,7 @@ fn display_p3_transfer_profiles() -> Result<(Profile, Profile)> {
 ///
 /// **No transform runs here, and that is the whole point.** `pipeline::hdr` already
 /// rendered into BT.2020 primaries, so this only *describes* the samples the
-/// encoder writes verbatim. Routing them through [`to_output`] would treat
+/// encoder writes verbatim. A transform from the Rec.709 working profile would treat
 /// display-linear BT.2020 as Rec.709 working RGB and remap it a second time — the
 /// same trap [`encode_rendered_sdr`] documents for the SDR rendition.
 ///
@@ -247,8 +153,8 @@ fn display_p3_transfer_profiles() -> Result<(Profile, Profile)> {
 ///   4.926108 means 1000 cd/m²". The report and sidecar own those facts; the task
 ///   requires that this profile never be claimed to carry them.
 ///
-/// ⚠ This is the **fifth** runtime consumer of a `colorimetry::definitions` colour
-/// space (after `REC709`, `DISPLAY_P3`, `ACESCG` and `PROPHOTO`): editing
+/// ⚠ This is a runtime consumer of a `colorimetry::definitions` colour space
+/// (beside `REC709`, `DISPLAY_P3` and `ACESCG`): editing
 /// `definitions::BT2020` now changes ICC bytes and every lcms2-transformed pixel on
 /// this path *even with `pinned.rs` untouched and every audit ulp at 0*. Nothing
 /// automated catches it — `PIPELINE_FINGERPRINTS` stops before lcms2 and the audit
@@ -260,7 +166,7 @@ pub fn hdr_linear_bt2020_icc() -> Result<Vec<u8>> {
     // Little CMS's default `"RGB built-in"`, which is useless in an application's
     // profile list — and this profile is one a user picks out of such a list.
     //
-    // Deliberately **not** applied to the older sRGB/P3/ACEScg/ProPhoto builders:
+    // Deliberately **not** applied to the older sRGB/P3/ACEScg builders:
     // doing that in the shared `synth` helper would change the embedded ICC bytes of
     // already-shipped outputs, which is a separate reviewed decision.
     describe(&mut profile, "NC Display-Linear BT.2020 (D65)")?;
@@ -945,12 +851,6 @@ fn build_profile(space: &OutputSpace) -> Result<Profile> {
     match space {
         // Built-in sRGB: Rec.709 primaries, D65, sRGB TRC.
         OutputSpace::SRgb => Ok(Profile::new_srgb()),
-        // ProPhoto / ROMM RGB: D50, gamma 1.8. Modeled as pure 1.8 — the small
-        // ROMM linear toe near black is omitted (the common simplification).
-        OutputSpace::ProPhoto => {
-            let (white, primaries) = lcms_inputs(definitions::PROPHOTO);
-            synth(white, primaries, 1.8)
-        }
         // ACEScg: AP1 primaries, ACES white (~D60), linear.
         OutputSpace::AcesCg => {
             let (white, primaries) = lcms_inputs(definitions::ACESCG);
@@ -966,24 +866,6 @@ fn build_profile(space: &OutputSpace) -> Result<Profile> {
             let (white, primaries) = lcms_inputs(definitions::DISPLAY_P3);
             synth_curve(white, primaries, &srgb_trc()?)
         }
-        OutputSpace::Custom(path) => {
-            let bytes = std::fs::read(path).map_err(|e| {
-                NcError::Usage(format!("cannot read ICC profile {}: {e}", path.display()))
-            })?;
-            let profile = Profile::new_icc(&bytes).map_err(|e| {
-                NcError::Usage(format!("invalid ICC profile {}: {e}", path.display()))
-            })?;
-            // The working→output transform is RGB→RGB; a CMYK/Lab/gray profile
-            // would otherwise fail later with an opaque transform-build error.
-            let cs = profile.color_space();
-            if cs != ColorSpaceSignature::RgbData {
-                return Err(NcError::Usage(format!(
-                    "ICC profile {} is not an RGB profile (color space {cs:?})",
-                    path.display()
-                )));
-            }
-            Ok(profile)
-        }
     }
 }
 
@@ -995,11 +877,17 @@ mod tests {
     use crate::pipeline::render_split::display_source;
     use crate::pipeline::sdr;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
-    use crate::types::OutputPreset;
     use crate::types::{FilmBase, PrintParams, Reconstruction};
 
     fn gray_image(v: f32) -> LinearImage {
         LinearImage::new(1, 1, vec![v, v, v], None).unwrap()
+    }
+
+    /// The linear working → `space` transform, built and run the way the encoders
+    /// build and run theirs.
+    fn transform_to(mut image: LinearImage, space: &OutputSpace) -> Result<LinearImage> {
+        transform_in_place(&mut image, &working_profile()?, &build_profile(space)?)?;
+        Ok(image)
     }
 
     fn render_sdr(rgb: &[f32], gamut: SdrGamut) -> RenderedSdr {
@@ -1017,67 +905,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_depth_aware_defaults() {
-        assert_eq!(resolve_output_space(None, OutDepth::U16), OutputSpace::SRgb);
-        assert_eq!(
-            resolve_output_space(None, OutDepth::F32),
-            OutputSpace::AcesCg
-        );
-    }
-
-    #[test]
-    fn explicit_choice_overrides_default() {
-        assert_eq!(
-            resolve_output_space(Some(OutputSpace::ProPhoto), OutDepth::U16),
-            OutputSpace::ProPhoto
-        );
-        assert_eq!(
-            resolve_output_space(Some(OutputSpace::SRgb), OutDepth::F32),
-            OutputSpace::SRgb
-        );
-    }
-
-    #[test]
-    fn parse_keywords_and_path() {
-        assert_eq!(OutputSpace::parse("sRGB").unwrap(), OutputSpace::SRgb);
-        assert_eq!(
-            OutputSpace::parse("  prophoto ").unwrap(),
-            OutputSpace::ProPhoto
-        );
-        assert_eq!(OutputSpace::parse("ACEScg").unwrap(), OutputSpace::AcesCg);
-        // Display P3 keyword (both hyphenated and joined spellings); the `-` is
-        // not a path separator, so it is never mistaken for a `Custom` path.
-        assert_eq!(
-            OutputSpace::parse("Display-P3").unwrap(),
-            OutputSpace::DisplayP3
-        );
-        assert_eq!(
-            OutputSpace::parse(" displayp3 ").unwrap(),
-            OutputSpace::DisplayP3
-        );
-        assert_eq!(
-            OutputSpace::parse("/tmp/my.icc").unwrap(),
-            OutputSpace::Custom(PathBuf::from("/tmp/my.icc"))
-        );
-        assert_eq!(
-            OutputSpace::parse("profile.icc").unwrap(),
-            OutputSpace::Custom(PathBuf::from("profile.icc"))
-        );
-    }
-
-    #[test]
-    fn parse_rejects_misspelled_keyword() {
-        // A bare word that is neither a keyword nor path-like must fail loudly
-        // (exit 2) rather than become a `Custom` path that errors confusingly.
-        let err = OutputSpace::parse("prophooto").unwrap_err();
-        assert_eq!(err.exit_code(), 2);
-    }
-
-    #[test]
     fn neutral_gray_maps_to_srgb_encoded_value() {
         // Linear 0.5 in the working space → sRGB-encoded ~0.7353.
-        let params = OutputParams::default(); // u16 → sRGB
-        let (out, _icc) = to_output(gray_image(0.5), &params).unwrap();
+        let out = transform_to(gray_image(0.5), &OutputSpace::SRgb).unwrap();
         for &c in &out.rgb {
             assert!((c - 0.7353).abs() < 0.005, "got {c}, expected ~0.7353");
         }
@@ -1086,7 +916,7 @@ mod tests {
     #[test]
     fn srgb_round_trip_within_tolerance() {
         // working → sRGB, then sRGB → working should recover the input.
-        let (encoded, _) = to_output(gray_image(0.5), &OutputParams::default()).unwrap();
+        let encoded = transform_to(gray_image(0.5), &OutputSpace::SRgb).unwrap();
         let working = working_profile().unwrap();
         let srgb = Profile::new_srgb();
         let back: Transform<[f32; 3], [f32; 3]> = Transform::new(
@@ -1123,7 +953,6 @@ mod tests {
     fn icc_profile_bytes_are_valid_for_builtins() {
         for space in [
             OutputSpace::SRgb,
-            OutputSpace::ProPhoto,
             OutputSpace::AcesCg,
             OutputSpace::DisplayP3,
         ] {
@@ -1135,103 +964,14 @@ mod tests {
     }
 
     #[test]
-    fn custom_profile_loads_and_transforms_from_disk() {
-        // Write a valid sRGB ICC, then drive the full transform through the
-        // `Custom` branch (not just `icc_profile`).
-        let bytes = icc_profile(&OutputSpace::SRgb).unwrap();
-        let path = std::env::temp_dir().join("nc_color_test_custom.icc");
-        std::fs::write(&path, &bytes).unwrap();
-
-        let space = OutputSpace::parse(path.to_str().unwrap()).unwrap();
-        assert!(matches!(space, OutputSpace::Custom(_)));
-
-        let params = OutputParams {
-            preset: OutputPreset::Legacy,
-            output_profile: Some(path.to_string_lossy().into_owned()),
-            ..Default::default()
-        };
-        let (out, icc) = to_output(gray_image(0.5), &params).unwrap();
-        assert!(!icc.is_empty());
-        // Custom == that sRGB profile, so 0.5 linear → ~0.7353 encoded.
-        for &c in &out.rgb {
-            assert!((c - 0.7353).abs() < 0.005, "got {c}, expected ~0.7353");
-        }
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn missing_custom_profile_fails_loudly() {
-        let space = OutputSpace::Custom(PathBuf::from("/nonexistent/definitely-not-here.icc"));
-        let err = icc_profile(&space).unwrap_err();
-        assert_eq!(
-            err.exit_code(),
-            2,
-            "bad profile path should be a usage error"
-        );
-    }
-
-    #[test]
-    fn garbage_custom_profile_fails_loudly() {
-        // A present-but-invalid ICC hits the parse branch (distinct from the
-        // missing-file read branch) and must also be a usage error (exit 2).
-        let path = std::env::temp_dir().join("nc_color_test_garbage.icc");
-        std::fs::write(&path, b"not an icc profile at all").unwrap();
-        let space = OutputSpace::Custom(path.clone());
-        let err = icc_profile(&space).unwrap_err();
-        assert_eq!(err.exit_code(), 2);
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
     fn ir_plane_is_carried_through_untouched() {
         // The IR plane must survive the color transform byte-for-byte (it is
         // preserved, not consumed, in Step 1).
         let img = LinearImage::new(1, 1, vec![0.5, 0.5, 0.5], Some(vec![0.42])).unwrap();
-        let (out, _icc) = to_output(img, &OutputParams::default()).unwrap();
+        let out = transform_to(img, &OutputSpace::SRgb).unwrap();
         assert_eq!(out.width, 1);
         assert_eq!(out.height, 1);
         assert_eq!(out.ir, Some(vec![0.42]));
-    }
-
-    #[test]
-    fn transform_reuses_the_caller_buffers_and_leaves_the_ir_plane_alone() {
-        // The no-copy contract (`io/memory-preflight`): `to_output` transforms the
-        // image it was handed and gives back the *same* allocations — it must not
-        // clone a second full-frame image (RGB or IR) at peak — and it touches
-        // neither the IR plane's values nor the dimensions.
-        let ir = vec![0.42, 0.99];
-        let rgb = vec![0.5, 0.25, 0.75, 0.1, 0.2, 0.3];
-        let params = OutputParams::default();
-        // Reference values from an independent, identically-built image.
-        let (reference, ref_icc) = to_output(
-            LinearImage::new(2, 1, rgb.clone(), Some(ir.clone())).unwrap(),
-            &params,
-        )
-        .unwrap();
-
-        let img = LinearImage::new(2, 1, rgb, Some(ir.clone())).unwrap();
-        // Captured before the move: a `Vec` move keeps the same heap allocation, so
-        // these pointers must survive into the returned image. A re-introduced
-        // stage-local clone would change them.
-        let rgb_ptr = img.rgb.as_ptr();
-        let ir_ptr = img.ir.as_ref().unwrap().as_ptr();
-        let (out, icc) = to_output(img, &params).unwrap();
-
-        assert_eq!(out.rgb, reference.rgb, "values must match the reference");
-        assert_eq!(icc, ref_icc);
-        assert_eq!(
-            out.ir.as_deref(),
-            Some(&ir[..]),
-            "IR plane must be untouched"
-        );
-        assert_eq!((out.width, out.height), (2, 1));
-        assert_eq!(out.rgb.as_ptr(), rgb_ptr, "RGB buffer was reallocated");
-        assert_eq!(
-            out.ir.as_ref().unwrap().as_ptr(),
-            ir_ptr,
-            "IR plane was reallocated"
-        );
     }
 
     #[test]
@@ -1240,50 +980,26 @@ mod tests {
         // malformed buffer is reachable): `as_chunks_mut` would otherwise silently
         // drop the tail and leave those pixels un-transformed.
         //
-        // There is no "buffer untouched on the error path" half to assert anymore:
-        // `to_output` consumes the image, so a partially-transformed buffer is
-        // unobservable by construction — which is the point of the consuming
-        // signature.
         let mut img = LinearImage::new(1, 1, vec![0.5, 0.5, 0.5], None).unwrap();
         img.rgb.push(0.25); // len 4 — not a multiple of 3
-        let err = to_output(img, &OutputParams::default()).unwrap_err();
+        let err = transform_to(img, &OutputSpace::SRgb).unwrap_err();
         assert_eq!(err.exit_code(), 1);
         assert!(err.to_string().contains("not a multiple of 3"), "{err}");
     }
 
     #[test]
-    fn f32_default_runs_acescg_transform() {
-        // The depth-aware f32 default (AcesCg, linear) must actually build a
-        // transform and run, not just resolve to the right enum. AcesCg is
-        // linear and wider than the working gamut, so neutral gray stays a
-        // sensible near-0.5 value (no sRGB tone curve applied).
-        let params = OutputParams {
-            preset: OutputPreset::Legacy,
-            depth: OutDepth::F32, // → AcesCg
-            ..Default::default()
-        };
-        let (out, icc) = to_output(gray_image(0.5), &params).unwrap();
-        assert!(!icc.is_empty());
-        for &c in &out.rgb {
-            assert!(
-                (0.3..0.7).contains(&c),
-                "AcesCg gray {c} unexpectedly far from 0.5"
-            );
-        }
-    }
-
-    #[test]
     fn wide_gamut_remap_moves_saturated_red() {
-        // Gray hides primaries errors; a saturated color does not. Rec.709 red
-        // encoded into the wider AP1 gamut must pull R below 1.0 and lift G/B
-        // off 0 — this pins down the primaries/white-point, not just the TRC.
+        // The ACEScg profile is the tag `film-master` embeds, so its primaries must
+        // be real ones. Gray hides primaries errors; a saturated color does not.
+        // Rec.709 red encoded into the wider AP1 gamut must pull R below 1.0 and
+        // lift G/B off 0 — this pins down the primaries/white-point, not just the
+        // (linear) TRC.
+        let gray = transform_to(gray_image(0.5), &OutputSpace::AcesCg).unwrap();
+        for &c in &gray.rgb {
+            assert!((0.3..0.7).contains(&c), "AcesCg gray {c} far from 0.5");
+        }
         let img = LinearImage::new(1, 1, vec![1.0, 0.0, 0.0], None).unwrap();
-        let params = OutputParams {
-            preset: OutputPreset::Legacy,
-            depth: OutDepth::F32, // → AcesCg
-            ..Default::default()
-        };
-        let (out, _icc) = to_output(img, &params).unwrap();
+        let out = transform_to(img, &OutputSpace::AcesCg).unwrap();
         let [r, g, b] = [out.rgb[0], out.rgb[1], out.rgb[2]];
         assert!(r < 1.0, "expected R pulled below 1.0, got {r}");
         assert!(g > 0.0 && b > 0.0, "expected G/B lifted off 0, got {g}/{b}");
@@ -1755,7 +1471,7 @@ mod tests {
             );
             // `cicp` is only permitted for an RGB/YCbCr/XYZ data space in an Input
             // or Display profile, so the class and space are part of its validity.
-            assert_eq!(profile.color_space(), ColorSpaceSignature::RgbData);
+            assert_eq!(profile.color_space(), lcms2::ColorSpaceSignature::RgbData);
             assert_eq!(
                 profile.device_class(),
                 lcms2::ProfileClassSignature::DisplayClass
@@ -1897,63 +1613,6 @@ mod tests {
     }
 
     #[test]
-    fn to_output_display_p3_remaps_rec709_and_encodes() {
-        // The SHIPPED `to_output` path (not the isolation encode above): it sources
-        // the linear Rec.709 working profile, so selecting Display P3 does a
-        // lossless Rec.709→P3 primaries remap (Rec.709 ⊂ P3) PLUS the sRGB TRC.
-        let params = OutputParams {
-            preset: OutputPreset::Legacy,
-            output_profile: Some("display-p3".into()),
-            ..Default::default()
-        };
-
-        // Neutral gray is invariant under a D65-preserving matrix, so linear 0.5 →
-        // sRGB-encoded ~0.7353 pins only the TRC — necessary but not sufficient.
-        let (out, _icc) = to_output(gray_image(0.5), &params).unwrap();
-        for &c in &out.rgb {
-            assert!(
-                (c - 0.7353).abs() < 5e-3,
-                "P3 neutral got {c}, expected ~0.7353"
-            );
-        }
-
-        // A saturated Rec.709 red is the assertion with teeth against a matrix /
-        // extra-transform regression. Expected = sRGB-encode(Rec.709→P3 linear red)
-        // using the standard linear Rec.709→Display P3 matrix (both D65, no
-        // adaptation):
-        //   [0.822462 0.177538 0.000000]
-        //   [0.033194 0.966806 0.000000]
-        //   [0.017083 0.072397 0.910520]
-        // Red column → linear P3 (0.822462, 0.033194, 0.017083); encode each.
-        let lin_p3_red = [0.822462_f32, 0.033194, 0.017083];
-        let expect = lin_p3_red.map(srgb_encode); // ≈ (0.9175, 0.2004, 0.1385)
-        let img = LinearImage::new(1, 1, vec![1.0, 0.0, 0.0], None).unwrap();
-        let (out, _icc) = to_output(img, &params).unwrap();
-        let got = [out.rgb[0], out.rgb[1], out.rgb[2]];
-        for ch in 0..3 {
-            assert!(
-                (got[ch] - expect[ch]).abs() < 5e-3,
-                "channel {ch}: to_output got {} != expected {} (Rec.709→P3 remap + sRGB)",
-                got[ch],
-                expect[ch]
-            );
-        }
-        // Teeth: unlike the isolation test (identity P3 primaries → red stays
-        // [1,0,0]), the shipped Rec.709→P3 remap lifts G and B off zero and keeps R
-        // dominant. An accidental extra transform or a wrong matrix moves these.
-        assert!(
-            got[1] > 0.0 && got[2] > 0.0,
-            "Rec.709→P3 remap must lift G/B off 0, got {}/{}",
-            got[1],
-            got[2]
-        );
-        assert!(
-            got[0] > got[1] && got[0] > got[2],
-            "remapped red must stay dominant, got {got:?}"
-        );
-    }
-
-    #[test]
     fn display_p3_icc_is_deterministic_with_zeroed_datetime() {
         // Same determinism contract as the other synthesized profiles: the header
         // creation dateTime is zeroed and repeated generation is byte-identical.
@@ -1964,23 +1623,5 @@ mod tests {
         );
         let b = icc_profile(&OutputSpace::DisplayP3).unwrap();
         assert_eq!(a, b, "Display P3 must serialize to identical bytes");
-    }
-
-    #[test]
-    fn display_p3_end_to_end_embeds_p3_icc() {
-        // Selecting `display-p3` via the recipe/CLI string surface drives the full
-        // `to_output` path and embeds the generated P3 ICC (byte-identical to the
-        // standalone `icc_profile`), so the encoder tags the file correctly.
-        let params = OutputParams {
-            preset: OutputPreset::Legacy,
-            output_profile: Some("display-p3".into()),
-            ..Default::default()
-        };
-        let (_out, icc) = to_output(gray_image(0.5), &params).unwrap();
-        assert_eq!(
-            icc,
-            icc_profile(&OutputSpace::DisplayP3).unwrap(),
-            "embedded blob must be the generated Display P3 profile"
-        );
     }
 }

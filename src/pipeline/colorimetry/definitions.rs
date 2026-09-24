@@ -33,14 +33,15 @@
 //!
 //! ## The lcms2-consumed spaces are a pixel-change hazard
 //!
-//! [`REC709`], [`DISPLAY_P3`], [`ACESCG`], [`PROPHOTO`] and — since
-//! `hdr-linear-tiff` — [`BT2020`] are handed **directly to Little CMS** by
-//! `pipeline::color` to synthesize profiles. Editing any of those five changes
-//! embedded ICC bytes and every lcms2-transformed pixel on the affected path *even
-//! with `pinned.rs` untouched and every audit `ulps` at 0*, and **nothing
-//! automated catches it**: `version::PIPELINE_FINGERPRINTS` stops before lcms2 and
-//! the audit only compares pinned artifacts. Treat an edit to one of the five as a
-//! pixel change and verify by same-machine before/after comparison.
+//! [`REC709`], [`DISPLAY_P3`], [`ACESCG`] and — since `hdr-linear-tiff` —
+//! [`BT2020`] are handed **directly to Little CMS** by `pipeline::color` to
+//! synthesize profiles. Editing any of those four changes embedded ICC bytes and
+//! every lcms2-transformed pixel on the affected path *even with `pinned.rs`
+//! untouched and every audit `ulps` at 0*, and **nothing automated catches it**:
+//! `version::PIPELINE_FINGERPRINTS` stops before lcms2 and the audit only compares
+//! pinned artifacts. Treat an edit to one of the four as a pixel change and verify
+//! by same-machine before/after comparison. ([`PROPHOTO`] was a fifth until the
+//! `legacy` preset, the only path that rendered to it, retired.)
 //!
 //! The allow is scoped to `not(test)` so the lint stays **on** in a test build:
 //! a definition that nothing at all references — not even the audit — is still
@@ -215,10 +216,11 @@ pub const BT2020: ColorSpace = ColorSpace {
 
 /// ProPhoto / ROMM RGB, with its **D50** adopted white.
 ///
-/// Source: ISO 22028-2 (ROMM RGB). Only ever reached as a user-selected output
-/// ICC profile (`--output-profile prophoto`), where Little CMS does the
-/// colorimetry — NC derives no matrix for it, so it appears in the definitions
-/// but not in the pinned artifacts.
+/// Source: ISO 22028-2 (ROMM RGB). nc no longer renders to it: its one runtime
+/// consumer was the `--output-profile prophoto` ICC, which retired with the
+/// `legacy` preset. It stays for the [`ADOBE_RGB`] reason — `nctool metrics`
+/// measures ProPhoto exports and re-reads this file — and NC derives no matrix for
+/// it, so it appears in the definitions but not in the pinned artifacts.
 ///
 /// The blue primary sits at `y = 0.0001`, essentially on the x axis. That is
 /// ROMM's actual specification, not a typo, and it makes the space's blue

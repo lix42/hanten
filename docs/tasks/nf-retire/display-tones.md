@@ -16,7 +16,8 @@ Leave fit range as the one display operator: remove `shoulder` and `none` from
   display branches. So it cannot be deleted until the legacy retirement has
   landed: removing the display half first would leave the legacy meaning as the
   only one, and the knob would quietly change meaning instead of disappearing.
-  Its `KneeWidth` / `Headroom` newtypes leave with it.
+  Its `KneeWidth` / `Headroom` newtypes leave with it. (That retirement landed
+  2026-09-23: the knob now has only its display meaning.)
 - **Keep the over-range refusal, or state why not.** `none` is self-policing:
   gamut mapping, the transfer encode and each renderer's per-pixel range check
   still run under it, and the two ceilings differ (`1.0` for SDR,

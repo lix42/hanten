@@ -189,8 +189,8 @@ error. Supported: `srgb`, `linear-srgb`, `display-p3`, `linear-display-p3`,
 `linear-prophoto`, `linear-bt2020`, `linear-acescg` — which covers the usual
 Lightroom export choices. The two ProPhoto entries are deliberate: `prophoto` is
 ISO 22028-2 as specified, with the linear toe, and is right for a third-party
-export; `prophoto-gamma1.8` is the pure power law **nc itself writes** for
-`--output-profile prophoto`. They agree above encoded 0.03125 and diverge sharply
+export; `prophoto-gamma1.8` is the pure power law nc's retired
+`--output-profile prophoto` wrote (the reference build still writes it). They agree above encoded 0.03125 and diverge sharply
 below it, so the wrong one silently rewrites the deep-shadow statistics. PQ and HLG are
 recognized and refused with a reason: they are absolute or display-referred, so
 comparing them with an SDR rendition needs a reference-white normalization this
@@ -370,7 +370,7 @@ under-determined one is refused rather than defaulted:
 
 | preset | space | notes |
 |---|---|---|
-| `legacy`, `custom` (default profile) | `srgb` | |
+| `legacy`, `custom` (default profile) | `srgb` | retired presets, still read from reference-build renders |
 | `legacy`, `custom` + `--output-profile` | that profile's space | `prophoto` resolves to `prophoto-gamma1.8` |
 | `compatibility` | `srgb` | |
 | `display-p3` | `display-p3` | |
@@ -423,9 +423,9 @@ Four rules it holds to, each of which has a reason rather than a preference:
   restate it or any other flag the generator supplies (`-o`, `--report`), because
   `nc` takes the last occurrence of such a flag and the override would be silent.
 - **Each cell is measured in the space its own resolved recipe reports**, not in
-  whatever the preset's name usually implies — `legacy` and `custom` accept
-  `--output-profile`, and measuring ProPhoto pixels as sRGB yields a table where
-  every number is wrong and every number looks reasonable.
+  whatever the preset's name usually implies — the reference build's `legacy` and
+  `custom` accept `--output-profile`, and measuring ProPhoto pixels as sRGB yields a
+  table where every number is wrong and every number looks reasonable.
 - **A cell that fails costs only itself.** A roll that states no film stock loses
   the one column that needs it; a failed render leaves its config without a
   rendition, which the app draws as a visible gap.

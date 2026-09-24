@@ -14,15 +14,10 @@
 //! [`FilmRgbImage`]'s fields are private and its only constructor is
 //! `pub(in crate::algo)`, so [`reconstruct`]'s paths inside this module tree
 //! are the only producers — downstream stages that accept a `FilmRgbImage`
-//! (the future NC-film-RGB → ACEScg working-space mapper) can never be handed
-//! a raw scan or density buffer. [`finish_print`] is the **legacy no-preset
-//! bridge**: while the print controls still run before the output color
-//! transform (named presets later move them after the ACEScg boundary), it
-//! applies stage 4 to the film positive and returns the plain [`LinearImage`]
-//! the output transform consumes. The pixel arithmetic of
-//! `reconstruct → finish_print` is bit-identical to the pre-split monolithic
-//! converters (pinned by the golden fixtures in `pipeline::stages`, `mod
-//! golden`).
+//! (the NC-film-RGB → ACEScg working-space mapper) can never be handed a raw
+//! scan or density buffer. The pixel arithmetic of [`reconstruct`] is
+//! bit-identical to the pre-split monolithic converters' reconstruction half
+//! (pinned by the golden fixtures in `pipeline::stages`, `mod golden`).
 
 pub mod density;
 pub mod film_stock;
@@ -36,7 +31,7 @@ pub mod simple;
 #[cfg(test)]
 mod curve_probe;
 
-use crate::types::{DmaxInput, FilmBase, LinearImage, PrintParams, Reconstruction, Result};
+use crate::types::{DmaxInput, FilmBase, LinearImage, Reconstruction, Result};
 
 /// The typed film-rendering RGB boundary every reconstruction path produces:
 /// the unclamped linear positive in NC's film-rendering interpretation, plus
@@ -92,10 +87,10 @@ impl FilmRgbImage {
         Self::from_linear(image)
     }
 
-    // The read accessors below are the boundary's inspection API. `rgb` is
-    // consumed by the legacy print finishing; `width`/`height`/`ir` are only
-    // exercised by tests until the `film-rgb-working-space` mapper (the type's
-    // designed consumer) lands — a narrow documented allow per the house rule.
+    // The read accessors below are the boundary's inspection API, exercised only by
+    // tests: every production consumer takes the whole image across the boundary
+    // (`into_linear`, the working-space mapper) — a narrow documented allow per the
+    // house rule.
     #[allow(dead_code)]
     pub fn width(&self) -> u32 {
         self.width
@@ -106,7 +101,9 @@ impl FilmRgbImage {
         self.height
     }
 
-    /// Read-only view of the interleaved film positive.
+    /// Read-only view of the interleaved film positive. Test-only: every production
+    /// consumer takes the whole image across the boundary instead.
+    #[cfg(test)]
     pub fn rgb(&self) -> &[f32] {
         &self.rgb
     }
@@ -118,9 +115,9 @@ impl FilmRgbImage {
     }
 
     /// Unwrap into the plain working-space image type — the **read** direction
-    /// of the boundary, for the legacy no-preset path (and, later, the
-    /// working-space mapper). Constructing a `FilmRgbImage` stays restricted;
-    /// reading one out is not the invariant the type protects.
+    /// of the boundary, used by the working-space mapper. Constructing a
+    /// `FilmRgbImage` stays restricted; reading one out is not the invariant the
+    /// type protects.
     pub(crate) fn into_linear(self) -> LinearImage {
         // The fields came from a validated LinearImage and are never resized,
         // so the invariants hold; route through the validated constructor
@@ -205,44 +202,6 @@ pub fn reconstruct(
     }
 }
 
-/// Stage 4, legacy placement — resolve the print white-balance gains and run
-/// the print render on the reconstructed film positive; `simple` has no print
-/// stage, so its typed positive passes through unchanged. Returns the finished
-/// linear image plus the resolved gains (`None` when no print stage ran) for
-/// the JSON report.
-///
-/// This is the **no-preset bridge**: the print controls still run here, before
-/// the output color transform, exactly as the pre-split converters ordered
-/// them — named output presets later move these controls after the ACEScg
-/// working-space boundary (`film-master-render-pipeline`), behind a
-/// `pipeline_version` bump owned by `conversion-versioning`.
-///
-/// An auto WB mode ([`WbSource::GrayWorld`](crate::types::WbSource::GrayWorld)/
-/// [`Percentile`](crate::types::WbSource::Percentile))
-/// is estimated from a deterministic strided sample of the film positive — the
-/// same values the pre-split code produced by toning a strided sample of the
-/// density buffer (a per-sample map commutes with striding) — and applied
-/// through the standard stage-4 slot, so reusing the reported gains via
-/// `--white-balance` reproduces the output bit-for-bit.
-pub fn finish_print(
-    film: FilmRgbImage,
-    config: &Reconstruction,
-    print: &PrintParams,
-) -> Result<(LinearImage, Option<[f32; 3]>)> {
-    match config {
-        // `simple` consumes no print controls (`cli::validate` rejects the auto
-        // WB modes for it, and the explicit controls are inert as before).
-        Reconstruction::Simple => Ok((film.into_linear(), None)),
-        Reconstruction::Density { .. } => {
-            let wb = crate::pipeline::white_balance::resolve_print_gains(
-                film.rgb(),
-                print.white_balance,
-            )?;
-            Ok((density::render_print(film, wb, print), Some(wb)))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,35 +279,5 @@ mod tests {
             assert_eq!(report.dmax, Some(density::NOMINAL_DMAX), "{config:?}");
             assert_eq!(report.balance_range, None, "{config:?}");
         }
-    }
-
-    #[test]
-    fn finish_print_passes_simple_through_and_prints_density() {
-        // Simple: no print stage — the positive passes through bit-identically
-        // and no gains are reported, even with non-default print params.
-        let (film, _) = reconstruct(
-            &image(),
-            &base(),
-            &Reconstruction::Simple,
-            DmaxInput::default(),
-        )
-        .unwrap();
-        let expected = film.rgb().to_vec();
-        let print = PrintParams {
-            print_exposure: 1.0,
-            ..PrintParams::default()
-        };
-        let (out, wb) = finish_print(film, &Reconstruction::Simple, &print).unwrap();
-        assert_eq!(out.rgb, expected);
-        assert_eq!(wb, None);
-
-        // Density: the print stage runs (2^1 exposure doubles every sample)
-        // and the resolved (explicit, neutral) gains are reported.
-        let config = all_configs()[1].clone();
-        let (film, _) = reconstruct(&image(), &base(), &config, DmaxInput::default()).unwrap();
-        let expected: Vec<f32> = film.rgb().iter().map(|v| v * 2.0).collect();
-        let (out, wb) = finish_print(film, &config, &print).unwrap();
-        assert_eq!(out.rgb, expected);
-        assert_eq!(wb, Some([1.0, 1.0, 1.0]));
     }
 }

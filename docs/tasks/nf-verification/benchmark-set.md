@@ -7,11 +7,11 @@ so `nctool compare` keeps measuring what nc actually does.
 
 ## Design
 
-- **Every case in `scripts/analysis/benchmark.json` states `--output-preset
-  legacy` explicitly**, and its own note says why: the cases predate the
-  gain-map default and exist to stay comparable against records made before that
-  flip. The frozen roll recipes they reuse (`scripts/real-scan-verify/recipes/`)
-  name legacy too, so both halves move together.
+- **The cases are a holding set.** They stated `--output-preset legacy` until
+  `nf-retire/legacy-custom` retired it, which moved them — and the frozen roll
+  recipes they reuse (`scripts/real-scan-verify/recipes/`) — to `display-p3`, with
+  `film-master` for the f32 case. That kept `compare` running; it did not redesign
+  the set, which is this task.
 - **The constraint that froze the set is gone.** Cross-build comparability now
   comes from re-running the reference build, not from keeping legacy cases
   alive in the tree — so the set can be rebuilt on the new chain rather than

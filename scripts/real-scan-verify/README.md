@@ -71,7 +71,7 @@ PYTHONPATH=scripts/analysis python3 -m unittest discover -s scripts/analysis -p 
 
 `nctool.test_harness` creates a temporary one-roll asset tree from the committed
 TIFF fixtures and drives the real `nc` binary through `freeze` and `convert`. It
-checks the generated recipe shape, explicit legacy/f32 selections, TIFF magic,
+checks the generated recipe shape, explicit `display-p3`/`hdr-linear-tiff` selections, TIFF magic,
 sidecar `{meta, params}` envelopes, normalized report paths, and the success message. Fake binaries
 also cover wrong suffixes, TIFF-named non-TIFF content, directory-shaped final
 targets, and invalid strict-probe failures; the harness must reject those runs

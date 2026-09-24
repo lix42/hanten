@@ -21,8 +21,9 @@ built. Correct, at minimum:
   algorithms; verified by grep).
 - **Flag names in docs.** The original item said to replace `--out-depth` with
   `--output-hdr`; that is now backwards. `output/presets` (2026-08-09) removed
-  `--output-hdr`/`--output-sdr` and shipped `--out-depth u16|f32`, so
-  `pipeline-orchestration.md`'s `--out-depth f32` is correct again. Sweep the
+  `--output-hdr`/`--output-sdr` and shipped `--out-depth u16|f32`, which itself
+  retired with `legacy`/`custom` (2026-09-23) — the float TIFFs are now presets.
+  Sweep the
   user-facing docs and the open task files for `--output-hdr` shown as a *live* flag
   (the README quick-start carried one until 2026-09-14); done tasks' files and
   `docs/progress/` legitimately record the old name as history.

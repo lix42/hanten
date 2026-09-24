@@ -82,9 +82,9 @@
 //!
 //! Notes on the non-obvious entries:
 //!
-//! - **Two images at render, not one.** The in-place color transform removed the
-//!   third (`pipeline::color::to_output` used to clone), but the decoded image
-//!   still outlives the render, so `render` counts two.
+//! - **Two images at render, not one.** Every colour transform runs in place, so
+//!   there is no third, but the decoded image still outlives the render, so
+//!   `render` counts two.
 //! - **Freed is not gone: one retention rule, applied everywhere.** Peak RSS is a
 //!   high-water mark and the allocator does not return freed pages to the OS, so a
 //!   buffer freed mid-run still occupies the process at every later peak. Hence
@@ -355,7 +355,10 @@ const RAM_WARN_PERCENT: u64 = 70;
 /// peak would reject inputs they could handle fine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunProfile {
-    /// `convert` / `roll`: decode → film-base → render → encode.
+    /// `convert` / `roll` for `film-master` (always `f32`): decode → film-base →
+    /// render → encode. The `u16` arm is no longer reached by a preset — `legacy`
+    /// and `custom` retired — but stays the arithmetic
+    /// [`NewFlowSdrTiff`](Self::NewFlowSdrTiff) is measured against.
     Convert {
         /// Output depth — a `u16` encode stages a whole extra quantize buffer,
         /// `f32` writes the working buffer verbatim.

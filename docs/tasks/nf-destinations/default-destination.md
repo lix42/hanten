@@ -31,8 +31,9 @@ Open:
   precede the destination being the intended one. If so, say so plainly.
 - **What the before/after report measures** now that the legacy-measuring coverage
   is deliberately not preserved — the reference rendition comes from the tagged
-  binary, not a surviving branch. And which tests carry: `tests/pipeline.rs`'s
-  `run()` injects `--output-preset legacy` for ~87 of them, which go with legacy.
+  binary, not a surviving branch. `tests/pipeline.rs` states each test's preset
+  explicitly since `nf-retire/legacy-custom`, so moving the default does not silently
+  retarget them.
 
 ## How to Verify
 

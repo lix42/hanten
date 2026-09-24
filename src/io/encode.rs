@@ -47,10 +47,10 @@ const BIGTIFF_MARGIN_BYTES: u64 = 1 << 20; // 1 MiB
 /// whole file must stay within `u32::MAX` bytes (~4 GiB).
 const CLASSIC_TIFF_LIMIT: u64 = u32::MAX as u64;
 
-/// Encode `image` to a TIFF at `path` per `params` (depth, BigTIFF policy). `icc`
-/// is the output-profile blob to embed — produced by `pipeline::color::to_output`,
-/// so the encoder embeds exactly the profile the pixels were converted into rather
-/// than re-resolving it. `None` embeds no profile.
+/// Encode `image` to a TIFF at `path` at the depth `params`' preset resolves, with
+/// BigTIFF decided automatically. `icc` is the output-profile blob to embed —
+/// produced by the render, so the encoder embeds exactly the profile the pixels are
+/// in rather than re-resolving it. `None` embeds no profile.
 ///
 /// Returns an [`EncodeOutcome`]: the [`EncodeReport`] recording any quantization
 /// clipping so the caller can fold it into the JSON report (and `--strict` can
@@ -67,18 +67,18 @@ pub fn encode(
     // Flushing is `stage`'s job now — a `BufWriter` dropped unflushed silently
     // truncates, which is why neither layer may leave it implicit.
     staged::stage(path, |writer| {
-        encode_to_writer(writer, image, params.depth(), params.bigtiff, icc)
+        encode_to_writer(writer, image, params.depth(), BigTiff::Auto, icc)
     })
 }
 
 /// Encode `image` as a 16-bit integer TIFF — the new flow's destination encode.
 ///
 /// The same writer [`encode`] drives, reached without an [`OutputParams`]: that type
-/// resolves depth from the *legacy* output preset, a section the new flow does not
-/// read, so borrowing it would pick the depth through a preset name that says
-/// nothing about this destination. BigTIFF is decided automatically, as `--bigtiff
-/// auto` would, and the decision is **returned** rather than predicted by a second
-/// sizing call, so the caller reports exactly what was written.
+/// resolves depth from the current chain's output preset, a section the new flow
+/// does not read, so borrowing it would pick the depth through a preset name that
+/// says nothing about this destination. BigTIFF is decided automatically, and the
+/// decision is **returned** rather than predicted by a second sizing call, so the
+/// caller reports exactly what was written.
 pub fn encode_u16(
     image: &LinearImage,
     icc: &[u8],
@@ -102,12 +102,12 @@ pub fn encode_u16(
 
 /// Whether encoding `image` under `params` (with an `icc_len`-byte embedded
 /// profile) will produce a BigTIFF. Reuses the same sizing logic `encode` runs
-/// internally, so the orchestrator can report an `auto` promotion in the JSON
+/// internally, so the orchestrator can report an automatic promotion in the JSON
 /// report without duplicating the threshold — and without re-deciding it
 /// differently than the encoder does.
 pub fn plans_bigtiff(params: &OutputParams, image: &LinearImage, icc_len: usize) -> bool {
     resolve_bigtiff(
-        params.bigtiff,
+        BigTiff::Auto,
         image.width,
         image.height,
         3,
@@ -169,13 +169,24 @@ pub struct HdrLinearTiffSummary {
 /// TIFF writer, or in the flush leaves no partial file at `path`.
 pub fn encode_hdr_linear(
     render: LinearBt2020Hdr,
-    params: &OutputParams,
+    icc: &[u8],
+    path: &Path,
+) -> Result<(Staged, EncodeOutcome, HdrLinearTiffSummary)> {
+    encode_hdr_linear_with(render, BigTiff::Auto, icc, path)
+}
+
+/// [`encode_hdr_linear`] under a stated BigTIFF policy. The policy is not a knob any
+/// more (every written image uses `Auto`); it stays a parameter so a test can force
+/// both layouts on a tiny image and check the summary against the file.
+fn encode_hdr_linear_with(
+    render: LinearBt2020Hdr,
+    policy: BigTiff,
     icc: &[u8],
     path: &Path,
 ) -> Result<(Staged, EncodeOutcome, HdrLinearTiffSummary)> {
     let (image, linear, content_light) = render.into_parts();
     let big = resolve_bigtiff(
-        params.bigtiff,
+        policy,
         image.width,
         image.height,
         3,
@@ -278,19 +289,18 @@ pub struct HdrCodedTiffSummary {
 /// guarantees finite samples in `[0, 1]`, so this cannot fire today and is a
 /// tripwire for a future path that reaches the encoder with a numerical fault —
 /// which is why it names the offending pixel instead of quietly clamping. That is
-/// the opposite of the legacy `encode` path, where clipping is an expected outcome
+/// the opposite of the general `encode` path, where clipping is an expected outcome
 /// of an unclamped render and is *counted*; here a sample outside the domain means
 /// the transfer stage is broken.
 pub fn encode_hdr_coded(
     render: crate::pipeline::hdr::RenderedHdr,
-    params: &OutputParams,
     icc: &[u8],
     path: &Path,
 ) -> Result<(Staged, EncodeOutcome, HdrCodedTiffSummary)> {
     let (image, metadata) = render.into_parts();
     let (width, height) = (image.width(), image.height());
     let big = resolve_bigtiff(
-        params.bigtiff,
+        BigTiff::Auto,
         width,
         height,
         3,
@@ -793,7 +803,6 @@ impl From<tiff::TiffError> for NcError {
 mod tests {
     use super::*;
     use crate::pipeline::display_tone::DisplayTone;
-    use crate::types::OutputPreset;
     use std::io::Cursor;
     use tiff::decoder::{Decoder, DecodingResult};
 
@@ -801,16 +810,15 @@ mod tests {
         LinearImage::new(width, height, rgb, ir).unwrap()
     }
 
-    fn out(depth: OutDepth, bigtiff: BigTiff) -> OutputParams {
-        OutputParams {
-            // Stated, not defaulted: `output.depth` is consulted only by `legacy` /
-            // `custom`, and the default preset (`gain-map-hdr`) pins u16 — so these
-            // depth tests would silently all become u16 tests without it.
-            preset: OutputPreset::Legacy,
-            depth,
-            output_profile: None,
-            bigtiff,
-        }
+    /// The two writer inputs these tests vary, stated directly: the depth is no
+    /// longer a knob (a preset resolves it), and neither is the BigTIFF policy.
+    struct Out {
+        depth: OutDepth,
+        bigtiff: BigTiff,
+    }
+
+    fn out(depth: OutDepth, bigtiff: BigTiff) -> Out {
+        Out { depth, bigtiff }
     }
 
     /// Classic TIFF carries magic 42, BigTIFF carries 43, in the file's byte order
@@ -825,19 +833,19 @@ mod tests {
         }
     }
 
-    fn encode_bytes(image: &LinearImage, params: &OutputParams, icc: Option<&[u8]>) -> Vec<u8> {
+    fn encode_bytes(image: &LinearImage, params: &Out, icc: Option<&[u8]>) -> Vec<u8> {
         let mut buf = Cursor::new(Vec::new());
-        let _ = encode_to_writer(&mut buf, image, params.depth(), params.bigtiff, icc).unwrap();
+        let _ = encode_to_writer(&mut buf, image, params.depth, params.bigtiff, icc).unwrap();
         buf.into_inner()
     }
 
-    fn encode_report(image: &LinearImage, params: &OutputParams) -> EncodeReport {
+    fn encode_report(image: &LinearImage, params: &Out) -> EncodeReport {
         encode_outcome(image, params).loss
     }
 
-    fn encode_outcome(image: &LinearImage, params: &OutputParams) -> EncodeOutcome {
+    fn encode_outcome(image: &LinearImage, params: &Out) -> EncodeOutcome {
         let mut buf = Cursor::new(Vec::new());
-        encode_to_writer(&mut buf, image, params.depth(), params.bigtiff, None).unwrap()
+        encode_to_writer(&mut buf, image, params.depth, params.bigtiff, None).unwrap()
     }
 
     #[test]
@@ -1162,13 +1170,6 @@ mod tests {
         crate::pipeline::hdr::render_linear(&shared, DisplayTone::shoulder(0.75).unwrap()).unwrap()
     }
 
-    fn hdr_linear_params() -> OutputParams {
-        OutputParams {
-            preset: crate::types::OutputPreset::HdrLinearTiff,
-            ..OutputParams::default()
-        }
-    }
-
     fn temp_path(tag: &str) -> PathBuf {
         let path =
             std::env::temp_dir().join(format!("nc-hdr-linear-{tag}-{}.tiff", std::process::id()));
@@ -1213,8 +1214,7 @@ mod tests {
 
         let path = temp_path("roundtrip");
         let icc = crate::pipeline::color::hdr_linear_bt2020_icc().unwrap();
-        let (staged, outcome, summary) =
-            encode_hdr_linear(render, &hdr_linear_params(), &icc, &path).unwrap();
+        let (staged, outcome, summary) = encode_hdr_linear(render, &icc, &path).unwrap();
         staged.commit().unwrap();
 
         let (w, h, decoded) = decode_f32(&std::fs::read(&path).unwrap());
@@ -1245,7 +1245,7 @@ mod tests {
         let render = render_linear_tiny(&[0.25, 0.25, 0.25], 1, 1, 2.0);
         let path = temp_path("linear");
         let icc = crate::pipeline::color::hdr_linear_bt2020_icc().unwrap();
-        let (staged, _, _) = encode_hdr_linear(render, &hdr_linear_params(), &icc, &path).unwrap();
+        let (staged, _, _) = encode_hdr_linear(render, &icc, &path).unwrap();
         staged.commit().unwrap();
 
         let (_, _, decoded) = decode_f32(&std::fs::read(&path).unwrap());
@@ -1264,8 +1264,7 @@ mod tests {
         let render = render_linear_tiny(&[0.4, 0.3, 0.2], 1, 1, 1.0);
         let path = temp_path("icc");
         let icc = crate::pipeline::color::hdr_linear_bt2020_icc().unwrap();
-        let (staged, _, summary) =
-            encode_hdr_linear(render, &hdr_linear_params(), &icc, &path).unwrap();
+        let (staged, _, summary) = encode_hdr_linear(render, &icc, &path).unwrap();
         staged.commit().unwrap();
         assert_eq!(summary.icc_bytes, icc.len());
 
@@ -1285,13 +1284,9 @@ mod tests {
     fn hdr_linear_tiff_honours_the_bigtiff_policy_and_reports_it() {
         for (policy, want_big) in [(BigTiff::Off, false), (BigTiff::On, true)] {
             let render = render_linear_tiny(&[0.5, 0.5, 0.5], 1, 1, 1.0);
-            let params = OutputParams {
-                bigtiff: policy,
-                ..hdr_linear_params()
-            };
             let path = temp_path(&format!("big-{policy:?}"));
             let icc = crate::pipeline::color::hdr_linear_bt2020_icc().unwrap();
-            let (staged, _, summary) = encode_hdr_linear(render, &params, &icc, &path).unwrap();
+            let (staged, _, summary) = encode_hdr_linear_with(render, policy, &icc, &path).unwrap();
             staged.commit().unwrap();
             let bytes = std::fs::read(&path).unwrap();
             assert_eq!(summary.bigtiff, want_big, "{policy:?}: summary disagrees");
@@ -1362,13 +1357,6 @@ mod tests {
             .unwrap()
     }
 
-    fn coded_params(preset: crate::types::OutputPreset) -> OutputParams {
-        OutputParams {
-            preset,
-            ..OutputParams::default()
-        }
-    }
-
     fn decode_u16(bytes: &[u8]) -> (u32, u32, Vec<u16>) {
         let mut decoder = Decoder::new(Cursor::new(bytes)).unwrap();
         let (w, h) = decoder.dimensions().unwrap();
@@ -1383,10 +1371,7 @@ mod tests {
         // "Lossless relative to the quantized signal": whatever the single
         // quantization step produces, TIFF must give back bit-identically.
         use crate::pipeline::hdr::HdrTransfer;
-        for (transfer, preset) in [
-            (HdrTransfer::Pq, crate::types::OutputPreset::HdrPqTiff),
-            (HdrTransfer::Hlg, crate::types::OutputPreset::HdrHlgTiff),
-        ] {
+        for transfer in [HdrTransfer::Pq, HdrTransfer::Hlg] {
             let render = render_coded_tiny(
                 transfer,
                 &[0.0, 0.0, 0.0, 0.2, 0.5, 0.8, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0],
@@ -1409,8 +1394,7 @@ mod tests {
                 crate::pipeline::color::hdr_hlg_tiff_icc().unwrap()
             };
             let path = temp_path(&format!("coded-{transfer:?}"));
-            let (staged, outcome, summary) =
-                encode_hdr_coded(render, &coded_params(preset), &icc, &path).unwrap();
+            let (staged, outcome, summary) = encode_hdr_coded(render, &icc, &path).unwrap();
             staged.commit().unwrap();
 
             let (_, _, decoded) = decode_u16(&std::fs::read(&path).unwrap());
@@ -1495,7 +1479,7 @@ mod tests {
         // The renderer cannot produce these — `encode_transfer` fails first — so this
         // is a tripwire. It must *refuse*, not clamp: a clamped code would be a
         // silently wrong pixel, and this path has no legitimate clipping to count
-        // (unlike the unclamped legacy `encode`).
+        // (unlike the general `encode`, which counts it).
         for bad in [1.000_001_f32, -0.000_001, f32::NAN, f32::INFINITY] {
             let err = quantize_coded_u16(&[0.5, bad, 0.5]).unwrap_err();
             let message = err.to_string();
@@ -1526,8 +1510,7 @@ mod tests {
         let icc = crate::pipeline::color::hdr_linear_bt2020_icc().unwrap();
         let first = {
             let render = render_linear_tiny(&[0.3, 0.6, 0.9], 1, 1, 1.5);
-            let (staged, _, _) =
-                encode_hdr_linear(render, &hdr_linear_params(), &icc, &path).unwrap();
+            let (staged, _, _) = encode_hdr_linear(render, &icc, &path).unwrap();
             assert!(
                 !path.exists(),
                 "the output must appear only when the caller commits"
@@ -1538,8 +1521,7 @@ mod tests {
 
         let second_path = temp_path("staged-2");
         let render = render_linear_tiny(&[0.3, 0.6, 0.9], 1, 1, 1.5);
-        let (staged, _, _) =
-            encode_hdr_linear(render, &hdr_linear_params(), &icc, &second_path).unwrap();
+        let (staged, _, _) = encode_hdr_linear(render, &icc, &second_path).unwrap();
         staged.commit().unwrap();
         let second = std::fs::read(&second_path).unwrap();
 

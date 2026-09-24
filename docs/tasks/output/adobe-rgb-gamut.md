@@ -4,8 +4,8 @@
 
 Give Adobe RGB (1998) a first-class name on the SDR display path. nc supports sRGB,
 Display P3, ProPhoto and ACEScg; Adobe RGB is the one notable omission for a
-photography tool. It is usable today only via `--output-profile <path-to-icc>` on the
-legacy path.
+photography tool. It was reachable only via `--output-profile <path-to-icc>` on the
+`legacy` path, which retired on 2026-09-23 — so today it is not reachable at all.
 
 ## What is known
 

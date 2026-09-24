@@ -1,7 +1,7 @@
 //! `density` — density-domain reconstruction (Cineon / negadoctor style), the
-//! default, plus the exponential density curve and the shared stage-4 print
-//! render. Density reconstruction, the density curve, and print rendering are
-//! **separate** sub-stages (core fidelity rule from design-spec §3/§7.2):
+//! default, plus the exponential density curve. Density reconstruction and the
+//! density curve are **separate** sub-stages, and print rendering happens later,
+//! past the ACEScg boundary (core fidelity rule from design-spec §3/§7.2):
 //!
 //! ## Model (per channel `c`)
 //!
@@ -14,17 +14,13 @@
 //! 3. density curve:            exponential lin_c = 10^(gamma · (D'_c − Dmax))
 //!                              (or the sigmoid S-curve — `algo::sigmoid`)
 //!                              → FilmRgbImage
-//! 4. print render (legacy):    lin_c = white_balance_c · 2^print_exposure · lin_c
-//!                                      − black_point, then highlight soft-clip
 //! ```
 //!
 //! Stages 1–2 are [`to_density`] + [`regional_balance`] — **density
 //! reconstruction**, owned by [`reconstruct`], which then applies the tagged
 //! curve ([`apply_curve`], stage 3) to produce the typed
-//! [`FilmRgbImage`] boundary. Stage 4 is [`render_print`], reached through
-//! [`crate::algo::finish_print`] — the legacy no-preset placement, before the
-//! output color transform (named presets later move it after the ACEScg
-//! boundary).
+//! [`FilmRgbImage`] boundary. The print controls run downstream of it, in
+//! `pipeline::render_split`, after the NC film RGB v1 → ACEScg mapping.
 //!
 //! **Regional (shadow/highlight) color balance.** A color *crossover* — a cast
 //! that differs between shadows and highlights — is, in density space, a
@@ -69,18 +65,6 @@
 //! plain scalar, so a reference-derived anchor and an equal explicit `--d-max`
 //! render **identical** color (no per-channel term).
 //!
-//! **Auto neutral white balance (`WbSource`).** The stage-4 white-balance
-//! gains come from [`WbSource`](crate::types::WbSource): `Explicit` gains (the default, `[1,1,1]`) are
-//! applied directly; the `GrayWorld` / `Percentile` auto modes first
-//! *estimate* the gains from the neutrally-reconstructed film positive
-//! (deterministic statistics — trimmed channel means / matched near-white
-//! percentiles — over finite samples only), then apply them through the
-//! **same stage-4 slot**. Because application is the standard slot (not a
-//! post-hoc multiply after `black_point` / the soft-clip), a later run reusing
-//! the reported gains via `--white-balance` reproduces the output bit-for-bit
-//! — the measure-once-reuse-for-the-roll contract. Gains are green-anchored
-//! (`g = 1`): auto WB corrects color, not overall exposure.
-//!
 //! **Polarity.** With `D = -log10(scan/base)` the density is `≥ 0` and *grows*
 //! with the film's optical density: the unexposed base (scene black) sits at
 //! `D = 0`, and a dense negative area (a scene highlight) has a large `D`. A
@@ -93,15 +77,14 @@
 //! `1.0` (display-range-filling); with `--no-d-max` the base maps to `1.0` and
 //! exposed detail sits above it (HDR / **scene-referred**), consistent with the
 //! project's "don't clamp before encode" rule. Nothing is clamped here either
-//! way — the encode stage counts and reports any out-of-range samples. Keep the
-//! full HDR range with `--output-hdr` (typically alongside `--no-d-max`).
+//! way — the encode stage counts and reports any out-of-range samples.
 
 use rayon::prelude::*;
 
 use crate::algo::{FilmRgbImage, ReconstructionReport, sigmoid};
 use crate::types::{
     AnchorPlacement, BalanceRange, DensityCurve, DensityParams, DmaxInput, DmaxSource, FilmBase,
-    LinearImage, NcError, PrintParams, Result,
+    LinearImage, NcError, Result,
 };
 
 /// Floor applied to the scan transmission before the `log10`, so a zero / negative
@@ -140,9 +123,9 @@ pub(crate) struct DensityImage {
 /// Density reconstruction + the tagged curve (stages 1–3, design-spec §7.2):
 /// Dmin-normalize into corrected density `D′`, apply the regional balance,
 /// resolve the curve's display-white anchor, then map `D′` through the selected
-/// curve into the typed [`FilmRgbImage`]. Pure; the print render (stage 4) is
-/// deliberately **not** here — it stays a separately-parameterized stage
-/// ([`crate::algo::finish_print`]).
+/// curve into the typed [`FilmRgbImage`]. Pure; the print controls are
+/// deliberately **not** here — they run past the ACEScg boundary
+/// (`pipeline::render_split`).
 pub(super) fn reconstruct(
     image: &LinearImage,
     base: &FilmBase,
@@ -534,41 +517,6 @@ pub(crate) fn apply_curve(density: DensityImage, tone: impl Fn(f32) -> f32 + Syn
     )
 }
 
-/// Stage 4 — the print render (legacy no-preset placement), shared by both
-/// density curves via [`crate::algo::finish_print`]: the per-channel
-/// white-balance gains, an overall `2^print_exposure` gain (exposure in
-/// **stops**), the `black_point` floor subtraction, and the highlight
-/// soft-clip.
-///
-/// The white-balance gains arrive **resolved** (`[f32; 3]`), not as the
-/// `print.white_balance` [`WbSource`](crate::types::WbSource): an auto mode is estimated from the film
-/// positive *before* this call (via [`white_balance::estimate_gains`](crate::pipeline::white_balance::estimate_gains)) and applied here
-/// through the standard slot, so a later run reusing the reported gains via
-/// explicit `--white-balance` is bit-identical. `print.white_balance` itself is
-/// deliberately not read here.
-///
-/// Does not clamp; values may land outside `[0, 1]`. Consumes the
-/// `FilmRgbImage` (transformed in place; the IR plane is moved).
-pub(crate) fn render_print(
-    film: FilmRgbImage,
-    white_balance: [f32; 3],
-    print: &PrintParams,
-) -> LinearImage {
-    let exposure_gain = 2f32.powf(print.print_exposure);
-    let wb = white_balance;
-    let black = print.black_point;
-    let hc = print.highlight_compress;
-
-    let mut image = film.into_linear();
-    image.rgb.par_chunks_exact_mut(3).for_each(|px| {
-        for c in 0..3 {
-            let exposed = px[c] * wb[c] * exposure_gain;
-            px[c] = soft_clip(exposed - black, hc);
-        }
-    });
-    image
-}
-
 /// Percentile of the corrected-density distribution taken as the `Auto` anchor.
 /// High enough to sit at genuine scene white while ignoring the top fraction of a
 /// percent (specular sparkle, dust, hot pixels) that would otherwise anchor white
@@ -872,28 +820,6 @@ fn collect_region_samples(density: &DensityImage, rect: [u32; 4]) -> Vec<f32> {
     finite
 }
 
-/// Highlight soft-clip: a smooth roll-off of values above the nominal display
-/// white (`1.0`). Below white the value passes through unchanged; above it the
-/// excess is compressed with an exponential knee of width `amount`, so the output
-/// asymptotes to `1.0 + amount` instead of shooting off. `amount <= 0` disables it
-/// (the default — a plain identity), so highlights are preserved verbatim unless
-/// the user asks for compression.
-///
-/// The `1.0` threshold is the nominal white anchor — the definition of "highlight"
-/// — not a tunable hidden knob; `highlight_compress` is the exposed control.
-///
-/// Non-finite input (`NaN`/`±inf`, e.g. from an overflowed `10^(γD')`) passes
-/// through unchanged so `io::encode`'s non-finite counter still surfaces it —
-/// without the `is_finite` guard, `+inf` would roll off to a clean `1.0 + amount`
-/// and silently hide the overflow (consistent with [`to_density`] propagating NaN).
-fn soft_clip(x: f32, amount: f32) -> f32 {
-    const WHITE: f32 = 1.0;
-    if amount <= 0.0 || !x.is_finite() || x <= WHITE {
-        return x;
-    }
-    WHITE + amount * (1.0 - (-(x - WHITE) / amount).exp())
-}
-
 /// Reject a film base that would make the density conversion ill-defined: each
 /// per-channel value is a transmission in `(0, 1]`. Non-positive / non-finite
 /// values would divide into inf/NaN; values above `1.0` are impossible for a
@@ -914,8 +840,8 @@ pub(crate) fn check_base(base: &FilmBase) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::{finish_print, reconstruct as reconstruct_config};
-    use crate::types::{ExponentialParams, Reconstruction, WbSource};
+    use crate::algo::reconstruct as reconstruct_config;
+    use crate::types::{ExponentialParams, Reconstruction};
 
     fn approx(a: f32, b: f32, eps: f32) -> bool {
         (a - b).abs() <= eps
@@ -934,49 +860,37 @@ mod tests {
         })
     }
 
-    /// The result of a full density-path conversion (reconstruct + legacy print).
+    /// The result of a full density-path reconstruction.
     #[derive(Debug)]
     struct Converted {
         out: LinearImage,
         dmax: Option<f32>,
-        white_balance: Option<[f32; 3]>,
         balance_range: Option<[f32; 2]>,
     }
 
-    /// Run the full density path the orchestrator composes: `reconstruct`
-    /// (stages 1–3) then `finish_print` (legacy stage 4).
+    /// Run the full density path through the public entry point, `reconstruct`
+    /// (stages 1–3).
     fn run(
         img: &LinearImage,
         base: &FilmBase,
         density: DensityParams,
         curve: DensityCurve,
         dmax: DmaxSource,
-        print: PrintParams,
     ) -> Result<Converted> {
         let config = Reconstruction::Density { density, curve };
         let (film, rep) = reconstruct_config(img, base, &config, DmaxInput::new(dmax))?;
-        let (out, white_balance) = finish_print(film, &config, &print)?;
         Ok(Converted {
-            out,
+            out: film.into_linear(),
             dmax: rep.dmax,
-            white_balance,
             balance_range: rep.balance_range,
         })
     }
 
-    /// The pre-split exponential render (stages 3–4 on a prepared density
-    /// buffer): the anchored exponential curve then the print render — the same
-    /// composition `reconstruct`'s exponential arm + `finish_print` perform.
-    fn render(
-        density: DensityImage,
-        gamma: f32,
-        dmax: Option<f32>,
-        white_balance: [f32; 3],
-        print: &PrintParams,
-    ) -> LinearImage {
+    /// The anchored exponential curve on a prepared density buffer (stage 3) — the
+    /// same composition `reconstruct`'s exponential arm performs.
+    fn render(density: DensityImage, gamma: f32, dmax: Option<f32>) -> LinearImage {
         let anchor = dmax.unwrap_or(0.0);
-        let film = apply_curve(density, move |d| 10f32.powf(gamma * (d - anchor)));
-        render_print(film, white_balance, print)
+        apply_curve(density, move |d| 10f32.powf(gamma * (d - anchor))).into_linear()
     }
 
     // --- stage 1–2: to_density -------------------------------------------------
@@ -1071,7 +985,7 @@ mod tests {
             density: vec![1.0, 0.0, 2.0],
             ir: None,
         };
-        let out = render(d, 1.0, None, [1.0; 3], &PrintParams::default());
+        let out = render(d, 1.0, None);
         assert!(approx(out.rgb[0], 10.0, 1e-3));
         assert!(approx(out.rgb[1], 1.0, 1e-5));
         assert!(approx(out.rgb[2], 100.0, 1e-2));
@@ -1086,30 +1000,10 @@ mod tests {
             density: vec![1.0, 1.0, 1.0],
             ir: None,
         };
-        let out = render(d, 0.5, None, [1.0; 3], &PrintParams::default());
+        let out = render(d, 0.5, None);
         for c in 0..3 {
             assert!(approx(out.rgb[c], 10f32.powf(0.5), 1e-3), "channel {c}");
         }
-    }
-
-    #[test]
-    fn render_applies_wb_exposure_then_black() {
-        // D'=0 → paper=1. R: 1·wb(2)·2^exp(2) − black(0.5) = 4 − 0.5 = 3.5.
-        let d = DensityImage {
-            width: 1,
-            height: 1,
-            density: vec![0.0, 0.0, 0.0],
-            ir: None,
-        };
-        let print = PrintParams {
-            print_exposure: 1.0, // 2^1 = 2
-            black_point: 0.5,
-            ..PrintParams::default()
-        };
-        let out = render(d, 1.0, None, [2.0, 1.0, 0.5], &print);
-        assert!(approx(out.rgb[0], 3.5, 1e-4)); // 1·2·2 − 0.5
-        assert!(approx(out.rgb[1], 1.5, 1e-4)); // 1·1·2 − 0.5
-        assert!(approx(out.rgb[2], 0.5, 1e-4)); // 1·0.5·2 − 0.5
     }
 
     #[test]
@@ -1120,44 +1014,17 @@ mod tests {
             density: vec![0.3, 0.3, 0.3],
             ir: Some(vec![0.7]),
         };
-        let out = render(d, 1.0, None, [1.0; 3], &PrintParams::default());
+        let out = render(d, 1.0, None);
         assert_eq!(out.ir.as_deref(), Some(&[0.7_f32][..]));
-    }
-
-    // --- soft_clip -------------------------------------------------------------
-
-    #[test]
-    fn soft_clip_is_identity_when_disabled_or_below_white() {
-        assert_eq!(soft_clip(5.0, 0.0), 5.0); // disabled
-        assert_eq!(soft_clip(5.0, -1.0), 5.0); // disabled (non-positive)
-        assert_eq!(soft_clip(0.5, 1.0), 0.5); // below white, untouched
-        assert_eq!(soft_clip(1.0, 1.0), 1.0); // exactly white, untouched
-    }
-
-    #[test]
-    fn soft_clip_rolls_off_and_bounds_highlights() {
-        // Above white: compressed toward the 1.0 + amount asymptote, monotonically.
-        let a = 0.5;
-        let y2 = soft_clip(2.0, a);
-        let y10 = soft_clip(10.0, a);
-        assert!(y2 > 1.0 && y2 < 1.0 + a); // rolled off, below the asymptote
-        assert!(y10 > y2); // still monotonic increasing
-        assert!(y10 <= 1.0 + a); // bounded by 1 + amount (reached exactly in f32)
-        // Small excess ≈ identity to first order (knee is smooth at white).
-        assert!(approx(soft_clip(1.001, a), 1.001, 1e-4));
-        // Non-finite passes through (not masked to 1+amount) so encode can count it.
-        assert!(soft_clip(f32::INFINITY, a).is_infinite());
-        assert!(soft_clip(f32::NAN, a).is_nan());
     }
 
     // --- reconstruction: composition + polarity ---------------------------------
 
     // Wiring test: confirms the full path = `to_density` then the anchored
-    // exponential curve then `render_print`, with the right gamma threaded through
-    // (catches a dropped/wrong gamma or a swapped stage).
+    // exponential curve, with the right gamma threaded through (catches a
+    // dropped/wrong gamma or a swapped stage).
     #[test]
     fn full_path_equals_render_of_to_density() {
-        let wb = [1.0, 1.05, 1.1];
         let img = pixel([0.3, 0.15, 0.08], Some(0.5));
         let base = FilmBase::from([0.6, 0.3, 0.18]);
         let density = DensityParams {
@@ -1166,25 +1033,17 @@ mod tests {
             ..DensityParams::default()
         };
         let gamma = 1.4;
-        let print = PrintParams {
-            print_exposure: -1.0,
-            black_point: 0.01,
-            white_balance: WbSource::Explicit(wb),
-            highlight_compress: 0.2,
-            ..PrintParams::default()
-        };
         let via_config = run(
             &img,
             &base,
             density.clone(),
             exponential(gamma),
             DmaxSource::Auto,
-            print.clone(),
         )
         .unwrap();
         let dimg = to_density(&img, &base, &density);
         let anchor = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto));
-        let via_parts = render(dimg, gamma, anchor, wb, &print);
+        let via_parts = render(dimg, gamma, anchor);
         assert_eq!(via_config.out.rgb, via_parts.rgb);
         assert_eq!(via_config.out.ir, via_parts.ir);
     }
@@ -1203,7 +1062,6 @@ mod tests {
             DensityParams::default(),
             DensityCurve::default(),
             DmaxSource::Fixed,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -1233,7 +1091,6 @@ mod tests {
                 params,
                 DensityCurve::default(),
                 DmaxSource::Fixed,
-                PrintParams::default(),
             )
             .unwrap()
             .out
@@ -1313,29 +1170,6 @@ mod tests {
     }
 
     #[test]
-    fn render_applies_highlight_soft_clip_above_white() {
-        // Non-tautological render test of the soft-clip branch: exposed values
-        // above/at/below the 1.0 white anchor. gamma=1, neutral print but hc=0.5.
-        // R: 10^log10(2)=2.0 → soft_clip(2.0,0.5)=1+0.5(1−e^−2)≈1.4323
-        // G: 10^0=1.0 (== white) → unchanged.  B: 10^−log10(2)=0.5 → unchanged.
-        let d = DensityImage {
-            width: 1,
-            height: 1,
-            density: vec![(2.0f32).log10(), 0.0, -(2.0f32).log10()],
-            ir: None,
-        };
-        let print = PrintParams {
-            highlight_compress: 0.5,
-            ..PrintParams::default()
-        };
-        let out = render(d, 1.0, None, [1.0; 3], &print);
-        let expected_r = 1.0 + 0.5 * (1.0 - (-2.0f32).exp());
-        assert!(approx(out.rgb[0], expected_r, 1e-4), "got {}", out.rgb[0]);
-        assert!(approx(out.rgb[1], 1.0, 1e-5));
-        assert!(approx(out.rgb[2], 0.5, 1e-5));
-    }
-
-    #[test]
     fn convert_default_output_is_finite_no_blowup() {
         // "No channel blow-outs": a normal pixel under default params yields
         // finite, bounded output (not NaN/inf).
@@ -1347,7 +1181,6 @@ mod tests {
             DensityParams::default(),
             DensityCurve::default(),
             DmaxSource::Fixed,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -1373,7 +1206,6 @@ mod tests {
                 DensityParams::default(),
                 DensityCurve::default(),
                 DmaxSource::Fixed,
-                PrintParams::default(),
             )
             .unwrap_err();
             assert_eq!(err.exit_code(), 1, "base {bad:?} should fail loudly");
@@ -1386,7 +1218,6 @@ mod tests {
                 DensityParams::default(),
                 DensityCurve::default(),
                 DmaxSource::Fixed,
-                PrintParams::default(),
             )
             .is_ok()
         );
@@ -1406,7 +1237,7 @@ mod tests {
             density: vec![dmax, dmax, dmax],
             ir: None,
         };
-        let out = render(dimg, gamma, Some(dmax), [1.0; 3], &PrintParams::default());
+        let out = render(dimg, gamma, Some(dmax));
         for v in &out.rgb {
             assert!(v.is_finite(), "overflowed: {v}");
             assert!(approx(*v, 1.0, 1e-5), "scene white should be 1.0, got {v}");
@@ -1448,7 +1279,6 @@ mod tests {
             DensityParams::default(),
             DensityCurve::default(),
             DmaxSource::Fixed,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -1746,7 +1576,6 @@ mod tests {
             DensityParams::default(),
             exponential(1.0),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap();
         let rep_balanced = run(
@@ -1759,7 +1588,6 @@ mod tests {
             },
             exponential(1.0),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap();
         let (a, b) = (rep_neutral.dmax.unwrap(), rep_balanced.dmax.unwrap());
@@ -1782,7 +1610,6 @@ mod tests {
             DensityParams::default(),
             DensityCurve::default(),
             DmaxSource::Fixed,
-            PrintParams::default(),
         )
         .unwrap();
         assert_eq!(rep.balance_range, None);
@@ -1797,7 +1624,6 @@ mod tests {
             },
             DensityCurve::default(),
             DmaxSource::Fixed,
-            PrintParams::default(),
         )
         .unwrap();
         let [lo, hi] = rep.balance_range.expect("range reported");
@@ -1814,7 +1640,6 @@ mod tests {
             },
             DensityCurve::default(),
             DmaxSource::Fixed,
-            PrintParams::default(),
         )
         .unwrap();
         assert_eq!(rep.balance_range, Some([0.25, 1.75]));
@@ -1841,7 +1666,6 @@ mod tests {
             params.clone(),
             DensityCurve::default(),
             DmaxSource::Fixed,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -1851,7 +1675,6 @@ mod tests {
             params,
             DensityCurve::default(),
             DmaxSource::Fixed,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -1874,30 +1697,19 @@ mod tests {
             density: density.clone(),
             ir: None,
         };
-        let wb = [1.0, 1.05, 0.9];
-        let print = PrintParams {
-            print_exposure: -0.6,
-            black_point: 0.01,
-            white_balance: WbSource::Explicit(wb),
-            highlight_compress: 0.3,
-            ..PrintParams::default()
-        };
         let gamma = 1.3;
         assert_eq!(
             resolve_dmax(&one_row(&density), DmaxInput::new(DmaxSource::None)),
             None,
             "no anchor resolved for None"
         );
-        let out = render(dimg, gamma, None, wb, &print);
-        let exposure_gain = 2f32.powf(print.print_exposure);
+        let out = render(dimg, gamma, None);
         for (i, &d) in density.iter().enumerate() {
-            let c = i % 3;
-            let paper = 10f32.powf(gamma * d);
-            let expected = soft_clip(
-                paper * wb[c] * exposure_gain - print.black_point,
-                print.highlight_compress,
+            assert_eq!(
+                out.rgb[i],
+                10f32.powf(gamma * d),
+                "sample {i} not bit-exact"
             );
-            assert_eq!(out.rgb[i], expected, "sample {i} not bit-exact");
         }
     }
 
@@ -1917,7 +1729,7 @@ mod tests {
             resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Explicit(dmax))),
             Some(dmax)
         );
-        let out = render(dimg, gamma, Some(dmax), [1.0; 3], &PrintParams::default());
+        let out = render(dimg, gamma, Some(dmax));
         for c in 0..3 {
             assert!(
                 approx(out.rgb[c], 1.0, 1e-5),
@@ -1977,7 +1789,6 @@ mod tests {
             DensityParams::default(),
             exponential(1.0),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -1987,7 +1798,6 @@ mod tests {
             DensityParams::default(),
             exponential(1.0),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -2006,12 +1816,10 @@ mod tests {
             DensityParams::default(),
             exponential(1.0),
             DmaxSource::Explicit(1.25),
-            PrintParams::default(),
         )
         .unwrap();
         assert_eq!(rep.dmax, Some(1.25));
         // The (explicit, default-neutral) gains are surfaced too.
-        assert_eq!(rep.white_balance, Some([1.0, 1.0, 1.0]));
 
         // None → no anchor reported.
         let rep = run(
@@ -2020,7 +1828,6 @@ mod tests {
             DensityParams::default(),
             exponential(1.0),
             DmaxSource::None,
-            PrintParams::default(),
         )
         .unwrap();
         assert_eq!(rep.dmax, None);
@@ -2032,7 +1839,6 @@ mod tests {
             DensityParams::default(),
             exponential(1.0),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap();
         assert!(rep.dmax.is_some_and(f32::is_finite));
@@ -2044,7 +1850,6 @@ mod tests {
             DensityParams::default(),
             DensityCurve::default(),
             DmaxSource::Fixed,
-            PrintParams::default(),
         )
         .unwrap();
         assert_eq!(rep.dmax, Some(NOMINAL_DMAX));
@@ -2064,7 +1869,7 @@ mod tests {
         let img = LinearImage::new(4, 1, vec![0.2f32; 12], None).unwrap(); // scan < base ⇒ D > 0
         let dimg = to_density(&img, &base, &identity_gain());
         let resolved = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto));
-        let out = render(dimg, gamma, resolved, [1.0; 3], &PrintParams::default());
+        let out = render(dimg, gamma, resolved);
         let dmax = resolved.unwrap();
         assert!(
             dmax > 0.0,
@@ -2075,28 +1880,6 @@ mod tests {
                 approx(*v, 1.0, 1e-4),
                 "scene white → 1.0, got {v} (dmax {dmax})"
             );
-        }
-    }
-
-    #[test]
-    fn explicit_anchor_composes_with_print_exposure() {
-        // The anchor and print exposure fold into one multiplicative scalar: scene
-        // white (D' = Dmax) at `print_exposure = k` renders to exactly `2^k`
-        // (`10^(γ·(Dmax−Dmax)) · 1 · 2^k − 0`). Pins the composition at a known value.
-        let dmax = 1.2f32;
-        let dimg = DensityImage {
-            width: 1,
-            height: 1,
-            density: vec![dmax, dmax, dmax],
-            ir: None,
-        };
-        let print = PrintParams {
-            print_exposure: 2.0,
-            ..PrintParams::default()
-        };
-        let out = render(dimg, 1.5, Some(dmax), [1.0; 3], &print);
-        for c in 0..3 {
-            assert!(approx(out.rgb[c], 4.0, 1e-4), "chan {c}: {}", out.rgb[c]); // 2^2
         }
     }
 
@@ -2114,13 +1897,7 @@ mod tests {
         };
         let gamma = 1.0f32;
         let resolved = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto));
-        let out = render(
-            dimg.clone(),
-            gamma,
-            resolved,
-            [1.0; 3],
-            &PrintParams::default(),
-        );
+        let out = render(dimg.clone(), gamma, resolved);
         let dmax = resolved.unwrap();
         let gain = 10f32.powf(-gamma * dmax);
         for c in 0..3 {
@@ -2431,13 +2208,7 @@ mod tests {
             ir: None,
         };
         let gamma = 1.3f32;
-        let out = render(
-            dimg.clone(),
-            gamma,
-            Some(d),
-            [1.0; 3],
-            &PrintParams::default(),
-        );
+        let out = render(dimg.clone(), gamma, Some(d));
         let gain = 10f32.powf(-gamma * d); // the single scalar anchor gain
         for c in 0..3 {
             let expected = 10f32.powf(gamma * dimg.density[c]) * gain;
@@ -2447,299 +2218,5 @@ mod tests {
                 out.rgb[c]
             );
         }
-    }
-
-    #[test]
-    fn auto_wb_convert_neutralizes_a_cast_end_to_end() {
-        // Identity gain, for the reason given in `auto_wb_survives_scene_referred_no_dmax_render`.
-        // A wrong (neutral) base under an orange-mask scan leaves a constant
-        // per-channel cast in the positive; both auto modes must estimate gains
-        // that equalize the channels of this two-tone frame.
-        let base = FilmBase::from([0.8, 0.8, 0.8]); // deliberately ignores the mask
-        let cast = [0.5f32, 0.3, 0.2]; // orange-ish transmissions
-        let mut rgb = Vec::new();
-        for i in 0..64 {
-            let t = if i % 2 == 0 { 1.0 } else { 0.5 }; // two-tone content
-            rgb.extend_from_slice(&[cast[0] * t, cast[1] * t, cast[2] * t]);
-        }
-        let img = LinearImage::new(64, 1, rgb, None).unwrap();
-        for mode in [WbSource::GrayWorld, WbSource::Percentile] {
-            let converted = run(
-                &img,
-                &base,
-                identity_gain(),
-                // The **exponential** curve, named explicitly rather than taken
-                // from the default (which is now the sigmoid). This is not
-                // bookkeeping: the property under test only holds for a power law.
-                // A wrong base leaves a *constant per-channel density offset*, and
-                // `10^(gamma*(D' - Dmax))` turns that into a constant per-channel
-                // *factor* — so a stage-4 gain, applied after the curve, cancels it
-                // exactly. The sigmoid is nonlinear in the same log domain, so the
-                // cast does not survive as a single factor and no post-curve gain
-                // can fully neutralize it (measured: channels land 0.0595 / 0.0616
-                // / 0.0685 instead of equal).
-                //
-                // Consequence worth knowing rather than hiding: under the default
-                // sigmoid, auto-WB is a weaker corrector for a *wrong base* than it
-                // was under the exponential. It is not a regression in auto-WB —
-                // the estimator is unchanged — and it does not arise when the base
-                // is right, since then there is no constant cast to cancel.
-                DensityCurve::Exponential(ExponentialParams::default()),
-                DmaxSource::Fixed,
-                PrintParams {
-                    white_balance: mode,
-                    ..PrintParams::default()
-                },
-            )
-            .unwrap();
-            let gains = converted.white_balance.expect("gains reported");
-            assert_eq!(gains[1], 1.0, "{mode:?} green-anchored");
-            for px in converted.out.rgb.as_chunks::<3>().0 {
-                assert!(approx(px[0], px[1], 1e-4), "{mode:?}: {px:?}");
-                assert!(approx(px[1], px[2], 1e-4), "{mode:?}: {px:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn auto_wb_carries_ir_through_the_final_output() {
-        // The auto-WB analysis samples the film positive's RGB only; the final
-        // render must still carry the original IR plane through untouched.
-        let base = FilmBase::from([0.6, 0.6, 0.6]);
-        let img = pixel([0.2, 0.2, 0.2], Some(0.42));
-        let out = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-            PrintParams {
-                white_balance: WbSource::Percentile,
-                ..PrintParams::default()
-            },
-        )
-        .unwrap()
-        .out;
-        assert_eq!(out.ir.as_deref(), Some(&[0.42_f32][..]));
-    }
-
-    #[test]
-    fn auto_wb_output_is_bit_exact_with_explicit_rerun_of_reported_gains() {
-        // The measure-once-reuse-for-the-roll contract: a run that reuses the
-        // reported gains via explicit `--white-balance` must reproduce the auto
-        // run bit-for-bit — this is why application goes through the standard
-        // stage-4 slot and shares the resolved anchor, never a post-hoc multiply.
-        // Non-default print params prove the equality holds with black_point and
-        // the soft-clip in play.
-        let base = FilmBase::from([0.6, 0.35, 0.2]);
-        let img = LinearImage::new(
-            3,
-            2,
-            vec![
-                0.5, 0.3, 0.15, 0.3, 0.2, 0.1, 0.2, 0.1, 0.05, //
-                0.45, 0.25, 0.12, 0.1, 0.06, 0.03, 0.55, 0.32, 0.18,
-            ],
-            None,
-        )
-        .unwrap();
-        let print = PrintParams {
-            print_exposure: 0.3,
-            black_point: 0.02,
-            white_balance: WbSource::Percentile,
-            highlight_compress: 0.4,
-            ..PrintParams::default()
-        };
-        let auto = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-            print.clone(),
-        )
-        .unwrap();
-        let gains = auto.white_balance.expect("auto gains reported");
-
-        let explicit = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-            PrintParams {
-                white_balance: WbSource::Explicit(gains),
-                ..print
-            },
-        )
-        .unwrap();
-        assert_eq!(auto.out.rgb, explicit.out.rgb, "reuse must be bit-exact");
-        assert_eq!(explicit.white_balance, Some(gains));
-        assert_eq!(auto.dmax, explicit.dmax, "shared anchor");
-    }
-
-    #[test]
-    fn auto_wb_survives_scene_referred_no_dmax_render() {
-        // Identity gain: white balance is a single gain per channel, so it can equalize a
-        // flat cast but not the tone-dependent one a per-channel density gain introduces.
-        // Stating the identity keeps this a test of the estimator's robustness.
-        // Pins the AUTO_WB_TRIM / percentile robustness claim for scene-referred
-        // output: with `DmaxSource::None` the curve is unanchored (base → 1.0,
-        // detail far above — a wide dynamic range), so the analysis positive spans
-        // orders of magnitude. The extremes-excluding statistics must still yield
-        // finite, channel-equalizing, green-anchored gains rather than being
-        // dragged to inf by the brightest samples.
-        let base = FilmBase::from([0.9, 0.9, 0.9]); // neutral base ⇒ leaves a cast
-        // A wide density spread per pixel (thin → very dense), same per-channel
-        // cast ratio throughout, so correct gains equalize every pixel.
-        let cast = [0.6f32, 0.4, 0.25];
-        let mut rgb = Vec::new();
-        for i in 0..128 {
-            let t = 0.9f32.powi(i % 32); // transmissions from ~1 down to ~0.03
-            rgb.extend_from_slice(&[cast[0] * t, cast[1] * t, cast[2] * t]);
-        }
-        let img = LinearImage::new(128, 1, rgb, None).unwrap();
-        for mode in [WbSource::GrayWorld, WbSource::Percentile] {
-            let converted = run(
-                &img,
-                &base,
-                identity_gain(),
-                exponential(1.0),
-                DmaxSource::None,
-                PrintParams {
-                    white_balance: mode,
-                    ..PrintParams::default()
-                },
-            )
-            .unwrap();
-            assert_eq!(converted.dmax, None, "{mode:?}: no anchor for --no-d-max");
-            let gains = converted.white_balance.expect("gains reported");
-            assert_eq!(gains[1], 1.0, "{mode:?} green-anchored");
-            for g in gains {
-                assert!(g.is_finite() && g > 0.0, "{mode:?}: gain {g} not usable");
-            }
-            for px in converted.out.rgb.as_chunks::<3>().0 {
-                assert!(
-                    px.iter().all(|v| v.is_finite()),
-                    "{mode:?}: non-finite output {px:?}"
-                );
-                assert!(approx(px[0], px[1], 1e-3), "{mode:?}: {px:?}");
-                assert!(approx(px[1], px[2], 1e-3), "{mode:?}: {px:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn auto_wb_is_deterministic() {
-        // Same input + params ⇒ identical gains and identical output.
-        let base = FilmBase::from([0.7, 0.5, 0.3]);
-        let img = LinearImage::new(
-            2,
-            2,
-            vec![
-                0.4, 0.3, 0.2, 0.35, 0.22, 0.11, //
-                0.5, 0.4, 0.25, 0.1, 0.07, 0.04,
-            ],
-            None,
-        )
-        .unwrap();
-        let print = PrintParams {
-            white_balance: WbSource::GrayWorld,
-            ..PrintParams::default()
-        };
-        let a = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-            print.clone(),
-        )
-        .unwrap();
-        let b = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-            print,
-        )
-        .unwrap();
-        assert_eq!(a.white_balance, b.white_balance);
-        assert_eq!(a.out.rgb, b.out.rgb);
-    }
-
-    #[test]
-    fn auto_wb_measures_post_regional_balance_density() {
-        // The two features active together: `reconstruct` runs
-        // `regional_balance` FIRST (mutating the density), then the auto-WB gains
-        // are estimated on the *post-balance* film positive. Every other test
-        // isolates one feature (regional-balance tests use explicit unit WB;
-        // auto-WB tests use neutral balance), so nothing pins the ordering — a
-        // refactor that estimated WB on the *pre*-balance positive would leave
-        // every test green while silently changing this combined output. This
-        // closes that gap.
-        let base = FilmBase::from([0.6, 0.35, 0.2]);
-        let img = LinearImage::new(
-            3,
-            2,
-            vec![
-                0.5, 0.3, 0.15, 0.3, 0.2, 0.1, 0.2, 0.1, 0.05, //
-                0.45, 0.25, 0.12, 0.1, 0.06, 0.03, 0.55, 0.32, 0.18,
-            ],
-            None,
-        )
-        .unwrap();
-        // A tone-dependent crossover cast (shadows warm, highlights cool) so the
-        // regional pass reshapes the per-channel density ratios the WB estimator
-        // then reads — green untouched so it stays the WB anchor.
-        let balance = DensityParams {
-            shadow_balance: [-0.15, 0.0, 0.08],
-            highlight_balance: [0.15, 0.0, -0.08],
-            ..DensityParams::default()
-        };
-        let print = PrintParams {
-            white_balance: WbSource::Percentile,
-            ..PrintParams::default()
-        };
-
-        let rep_neutral = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-            print.clone(),
-        )
-        .unwrap();
-        let rep_balanced = run(
-            &img,
-            &base,
-            balance,
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-            print,
-        )
-        .unwrap();
-
-        // (a) The ordering guard: WB estimated on the post-balance density must
-        // differ from WB estimated with no balance applied.
-        let wb_neutral = rep_neutral.white_balance.expect("neutral gains reported");
-        let wb_balanced = rep_balanced.white_balance.expect("balanced gains reported");
-        assert_ne!(
-            wb_neutral, wb_balanced,
-            "auto-WB must be measured on the post-balance density"
-        );
-
-        // (b) Both fields present and internally consistent in the one report.
-        let [lo, hi] = rep_balanced.balance_range.expect("range reported");
-        assert!(
-            lo.is_finite() && hi.is_finite() && lo < hi,
-            "range [{lo}, {hi}]"
-        );
-        assert_eq!(wb_balanced[1], 1.0, "green-anchored");
-        assert!(
-            wb_balanced.iter().all(|g| g.is_finite() && *g > 0.0),
-            "usable gains {wb_balanced:?}"
-        );
     }
 }

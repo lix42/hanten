@@ -1251,6 +1251,8 @@ PRESET_SPACES: dict[str, str] = {
     # rendition an HDR-aware viewer shows.
     "gain-map-hdr": "display-p3",
     "ultra-hdr-v1": "display-p3",
+    # Retired from nc (`nf-retire/legacy-custom`), kept because the reference build
+    # still writes them and a review set measures its renders.
     "legacy": "srgb",
     "custom": "srgb",
     "compatibility": "srgb",

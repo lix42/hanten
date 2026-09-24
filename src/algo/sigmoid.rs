@@ -3,8 +3,7 @@
 //!
 //! One of the two tagged [`DensityCurve`](crate::types::DensityCurve) variants:
 //! it shares density reconstruction (stages 1–2, [`super::density::to_density`]
-//! plus the regional balance) and the legacy stage-4 print render with the
-//! exponential curve; only stage 3 — the corrected-density → positive-linear
+//! plus the regional balance) with the exponential curve; only stage 3 — the corrected-density → positive-linear
 //! curve — differs: the straight line `10^(contrast·(D'−Dmax))` becomes an
 //! S-curve with toe/shoulder control. Because regional balance is a stage-2
 //! operation on the corrected density, the `shadow_balance`/`highlight_balance`
@@ -29,11 +28,9 @@
 //! **Knee order matters.** The shoulder (soft-min with the log-output-`0`
 //! ceiling) is applied *last*, so nothing can lift the result back above white:
 //! for `shoulder > 0`, `v ≤ 0` for every finite density, hence this **stage-3
-//! output** is `≤ 1.0` by construction. (The stage-4 print render —
+//! output** is `≤ 1.0` by construction. (The print controls downstream —
 //! `print_exposure`/gains — can lift samples back above `1.0`, and a non-finite
-//! density is deliberately passed through unbounded; so u16 clipping is
-//! impossible only for finite densities under *neutral* print params, which is the
-//! default.) Applying the toe last instead — an earlier version of this curve —
+//! density is deliberately passed through unbounded.) Applying the toe last instead — an earlier version of this curve —
 //! lifted the white asymptote to `(1 + 10^(−contrast·Dmax/toe))^toe > 1.0`, which
 //! actually clips for a small anchor, e.g. `Dmax = 0.1`, default `toe = 0.2` →
 //! ≈ `1.056`; the reorder is the fix. `toe`/`shoulder` are the knee widths in log₁₀ density
@@ -101,12 +98,10 @@
 //! records how the roll was loaded rather than the film. Either way the anchor is
 //! a **roll-level** placement — nothing here reads frame content.
 //!
-//! **Interaction with `--highlight-compress`:** the print render's soft-clip
-//! also compresses highlights, but in linear space *after* exposure/WB; the
-//! shoulder compresses in density space *before* them. With the shoulder on,
-//! default print params keep everything below `1.0`, so the soft-clip (default
-//! off) never engages — but both knobs stay honored when set: they compose,
-//! neither silently disables the other.
+//! **Interaction with `--highlight-compress`:** that knob is the display
+//! renderers' knee width, applied downstream past the ACEScg boundary; this
+//! shoulder compresses in density space, before any print control. The two compose
+//! — neither disables the other.
 //!
 //! **Numerical care.** `log10(1 + 10^y)` is evaluated in the stable form
 //! `max(y, 0) + log10(1 + 10^(−|y|))` — the naive form overflows `10^y` to
@@ -345,10 +340,10 @@ pub(super) fn apply_curve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::{finish_print, reconstruct};
+    use crate::algo::reconstruct;
     use crate::types::{
         AnchorPlacement, BalanceRange, DensityCurve, DensityParams, ExponentialParams, FilmBase,
-        LinearImage, PrintParams, REFERENCE_CONTRAST, Reconstruction, WbSource,
+        LinearImage, REFERENCE_CONTRAST, Reconstruction,
     };
 
     fn approx(a: f32, b: f32, eps: f32) -> bool {
@@ -365,31 +360,27 @@ mod tests {
         10f32.powf(contrast * (d - anchor))
     }
 
-    /// The result of a full sigmoid-path conversion.
+    /// The result of a full sigmoid-path reconstruction.
     #[derive(Debug)]
     struct Converted {
         out: LinearImage,
         dmax: Option<f32>,
-        white_balance: Option<[f32; 3]>,
         balance_range: Option<[f32; 2]>,
     }
 
-    /// Run the full density path with a given curve (reconstruct + legacy print).
+    /// Run the full density path with a given curve (`reconstruct`, stages 1–3).
     fn run(
         img: &LinearImage,
         base: &FilmBase,
         density: DensityParams,
         curve: DensityCurve,
         dmax: DmaxSource,
-        print: PrintParams,
     ) -> crate::types::Result<Converted> {
         let config = Reconstruction::Density { density, curve };
         let (film, rep) = reconstruct(img, base, &config, DmaxInput::new(dmax))?;
-        let (out, white_balance) = finish_print(film, &config, &print)?;
         Ok(Converted {
-            out,
+            out: film.into_linear(),
             dmax: rep.dmax,
-            white_balance,
             balance_range: rep.balance_range,
         })
     }
@@ -619,7 +610,6 @@ mod tests {
                 anchor: AnchorPlacement::WhiteAtDmax,
             }),
             dmax,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -632,7 +622,6 @@ mod tests {
                 anchor: AnchorPlacement::WhiteAtDmax,
             }),
             dmax,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -665,7 +654,6 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(params),
             dmax,
-            PrintParams::default(),
         )
         .unwrap();
         let balanced = run(
@@ -678,7 +666,6 @@ mod tests {
             },
             sigmoid_curve(params),
             dmax,
-            PrintParams::default(),
         )
         .unwrap();
         assert_eq!(neutral.balance_range, None, "neutral: no range reported");
@@ -720,7 +707,6 @@ mod tests {
                 anchor: AnchorPlacement::WhiteAtDmax,
             }),
             dmax,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -733,7 +719,6 @@ mod tests {
                 anchor: AnchorPlacement::WhiteAtDmax,
             }),
             dmax,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -753,7 +738,6 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::None,
-            PrintParams::default(),
         )
         .unwrap_err();
         assert_eq!(err.exit_code(), 1);
@@ -779,7 +763,6 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap_err();
         assert_eq!(err.exit_code(), 1);
@@ -797,7 +780,6 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::Explicit(-0.5),
-            PrintParams::default(),
         )
         .unwrap_err()
         .to_string();
@@ -821,7 +803,6 @@ mod tests {
                 DensityParams::default(),
                 sigmoid_curve(SigmoidParams::default()),
                 DmaxSource::Auto,
-                PrintParams::default(),
             )
         };
         let err = run_it().unwrap_err();
@@ -855,7 +836,6 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::Explicit(1.2),
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -879,12 +859,9 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::Explicit(1.25),
-            PrintParams::default(),
         )
         .unwrap();
         assert_eq!(rep.dmax, Some(1.25));
-        // The default (neutral) print reports its resolved gains too.
-        assert_eq!(rep.white_balance, Some([1.0, 1.0, 1.0]));
 
         let rep = run(
             &img,
@@ -892,144 +869,9 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap();
         assert!(rep.dmax.is_some_and(f32::is_finite));
-    }
-
-    #[test]
-    fn auto_wb_convert_neutralizes_a_cast_end_to_end() {
-        // Mirror of the exponential end-to-end test for the sigmoid curve: a wrong
-        // (neutral) base leaves a constant per-channel cast in the positive, and
-        // both auto modes must estimate gains that equalize the channels. Knees
-        // off (toe = shoulder = 0) so stage 3 is the straight-line power form
-        // (which preserves the constant per-channel density offset across both
-        // tones); with the S-curve's non-linear knees on, the two tones would map
-        // by different channel ratios and per-pixel equalization wouldn't hold —
-        // the bit-exact reuse test below covers the knees-on path.
-        let base = FilmBase::from([0.8, 0.8, 0.8]); // deliberately ignores the mask
-        let cast = [0.5f32, 0.3, 0.2]; // orange-ish transmissions
-        let mut rgb = Vec::new();
-        for i in 0..64 {
-            let t = if i % 2 == 0 { 1.0 } else { 0.5 }; // two-tone content
-            rgb.extend_from_slice(&[cast[0] * t, cast[1] * t, cast[2] * t]);
-        }
-        let img = LinearImage::new(64, 1, rgb, None).unwrap();
-        let straight = SigmoidParams {
-            toe: 0.0,
-            shoulder: 0.0,
-            ..SigmoidParams::default()
-        };
-        // Identity per-channel gain, for the same reason the knees are off: white balance
-        // is one gain per channel, so it equalizes a *constant* cast. The default gain
-        // `[1, 0.84, 0.73]` scales density, i.e. adds a tone-dependent channel difference
-        // that no single gain can remove — a different property, and not this test's.
-        let identity_gain = DensityParams {
-            scale: [1.0, 1.0, 1.0],
-            ..DensityParams::default()
-        };
-        for mode in [WbSource::GrayWorld, WbSource::Percentile] {
-            let converted = run(
-                &img,
-                &base,
-                identity_gain.clone(),
-                DensityCurve::Sigmoid(straight),
-                DmaxSource::Fixed,
-                PrintParams {
-                    white_balance: mode,
-                    ..PrintParams::default()
-                },
-            )
-            .unwrap();
-            let gains = converted.white_balance.expect("gains reported");
-            assert_eq!(gains[1], 1.0, "{mode:?} green-anchored");
-            for px in converted.out.rgb.as_chunks::<3>().0 {
-                assert!(approx(px[0], px[1], 1e-4), "{mode:?}: {px:?}");
-                assert!(approx(px[1], px[2], 1e-4), "{mode:?}: {px:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn auto_wb_output_is_bit_exact_with_explicit_rerun_of_reported_gains() {
-        // The sigmoid measure-once-reuse contract: reusing the reported gains via
-        // explicit `--white-balance` reproduces the auto run bit-for-bit, because
-        // application goes through the same stage-4 slot sharing the resolved
-        // anchor. Non-default print + curve params prove it holds with black_point,
-        // the soft-clip, and the S-curve knees in play.
-        let base = FilmBase::from([0.6, 0.35, 0.2]);
-        let img = LinearImage::new(
-            3,
-            2,
-            vec![
-                0.5, 0.3, 0.15, 0.3, 0.2, 0.1, 0.2, 0.1, 0.05, //
-                0.45, 0.25, 0.12, 0.1, 0.06, 0.03, 0.55, 0.32, 0.18,
-            ],
-            None,
-        )
-        .unwrap();
-        let print = PrintParams {
-            print_exposure: 0.3,
-            black_point: 0.02,
-            white_balance: WbSource::Percentile,
-            highlight_compress: 0.4,
-            ..PrintParams::default()
-        };
-        let curve = DensityCurve::Sigmoid(SigmoidParams {
-            contrast: 1.4,
-            toe: 0.15,
-            shoulder: 0.3,
-            ..SigmoidParams::default()
-        });
-        let auto = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            curve,
-            DmaxSource::Fixed,
-            print.clone(),
-        )
-        .unwrap();
-        let gains = auto.white_balance.expect("auto gains reported");
-
-        let explicit = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            curve,
-            DmaxSource::Fixed,
-            PrintParams {
-                white_balance: WbSource::Explicit(gains),
-                ..print
-            },
-        )
-        .unwrap();
-        assert_eq!(auto.out.rgb, explicit.out.rgb, "reuse must be bit-exact");
-        assert_eq!(explicit.white_balance, Some(gains));
-        assert_eq!(auto.dmax, explicit.dmax, "shared anchor");
-    }
-
-    #[test]
-    fn auto_wb_carries_ir_through_the_final_output() {
-        // The auto-WB analysis samples the film positive's RGB only; the final
-        // render must still carry the original IR plane through untouched.
-        let base = FilmBase::from([0.6, 0.6, 0.6]);
-        let img = pixel([0.2, 0.2, 0.2], Some(0.42));
-        let out = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            DensityCurve::Sigmoid(SigmoidParams::default()),
-            DmaxSource::Fixed,
-            PrintParams {
-                white_balance: WbSource::Percentile,
-                ..PrintParams::default()
-            },
-        )
-        .unwrap()
-        .out;
-        assert_eq!(out.ir.as_deref(), Some(&[0.42_f32][..]));
     }
 
     #[test]
@@ -1041,7 +883,6 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -1053,7 +894,6 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap_err();
         assert_eq!(err.exit_code(), 1);
@@ -1071,7 +911,6 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
@@ -1102,80 +941,12 @@ mod tests {
             DensityParams::default(),
             sigmoid_curve(SigmoidParams::default()),
             DmaxSource::Auto,
-            PrintParams::default(),
         )
         .unwrap()
         .out;
         for (i, v) in out.rgb.iter().enumerate() {
             assert!(v.is_finite() && *v > 0.0 && *v <= 1.0, "sample {i}: {v}");
         }
-    }
-
-    #[test]
-    fn auto_wb_measures_post_regional_balance_density() {
-        // Sigmoid analogue of the exponential ordering guard: the auto-WB gains
-        // are estimated on the *post-balance* film positive under the sigmoid
-        // curve too. No other sigmoid test runs both features at once, so a
-        // refactor moving the WB estimate ahead of the balance would go unnoticed
-        // here too. Knees off (toe = shoulder = 0) so the analysis positive stays
-        // the straight-line power form, matching the other sigmoid auto-WB tests.
-        let base = FilmBase::from([0.6, 0.35, 0.2]);
-        let img = LinearImage::new(
-            3,
-            2,
-            vec![
-                0.5, 0.3, 0.15, 0.3, 0.2, 0.1, 0.2, 0.1, 0.05, //
-                0.45, 0.25, 0.12, 0.1, 0.06, 0.03, 0.55, 0.32, 0.18,
-            ],
-            None,
-        )
-        .unwrap();
-        let straight = DensityCurve::Sigmoid(SigmoidParams {
-            toe: 0.0,
-            shoulder: 0.0,
-            ..SigmoidParams::default()
-        });
-        // Tone-dependent crossover cast; green untouched so it stays the anchor.
-        let balance = DensityParams {
-            shadow_balance: [-0.15, 0.0, 0.08],
-            highlight_balance: [0.15, 0.0, -0.08],
-            ..DensityParams::default()
-        };
-        let print = PrintParams {
-            white_balance: WbSource::Percentile,
-            ..PrintParams::default()
-        };
-
-        let rep_neutral = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            straight,
-            DmaxSource::Fixed,
-            print.clone(),
-        )
-        .unwrap();
-        let rep_balanced = run(&img, &base, balance, straight, DmaxSource::Fixed, print).unwrap();
-
-        // (a) WB measured post-balance differs from WB with no balance applied.
-        let wb_neutral = rep_neutral.white_balance.expect("neutral gains reported");
-        let wb_balanced = rep_balanced.white_balance.expect("balanced gains reported");
-        assert_ne!(
-            wb_neutral, wb_balanced,
-            "auto-WB must be measured on the post-balance density under sigmoid"
-        );
-
-        // (b) Both fields present and internally consistent in the one report.
-        let [lo, hi] = rep_balanced.balance_range.expect("range reported");
-        assert!(
-            lo.is_finite() && hi.is_finite() && lo < hi,
-            "range [{lo}, {hi}]"
-        );
-        assert_eq!(wb_balanced[1], 1.0, "green-anchored");
-        assert!(
-            wb_balanced.iter().all(|g| g.is_finite() && *g > 0.0),
-            "usable gains {wb_balanced:?}"
-        );
     }
 
     /// The anchor is a **pure gain** exactly when `shoulder = 0` — the toe does not

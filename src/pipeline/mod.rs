@@ -2,7 +2,8 @@
 //! transforms, and the stage wiring that threads them together.
 //!
 //! **Two chains live here during the migration** (`docs/nf-migration.md`). The
-//! shipped one runs `stages::render` → `render_split` → `sdr`/`hdr`; the one
+//! shipped one runs `stages::render_display_source` (`render_split`) → `sdr`/`hdr`,
+//! or `stages::render_film_master` for the master; the one
 //! `--new-flow` selects is [`chain`], composing [`scene_correction`] → [`look`] →
 //! [`fit_range`] → [`fit_gamut`] over the shared buffer in [`working_image`].
 //! The new stages are named for the job they do rather than for the migration, so

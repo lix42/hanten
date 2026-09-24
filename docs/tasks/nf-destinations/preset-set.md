@@ -10,13 +10,14 @@ the list and the selection rules; the individual destinations are separate tasks
 
 What is known:
 
-- **Twelve preset names ship today** and two (`legacy`, `custom`) retire with the
-  print path, taking `to_output`, ProPhoto and arbitrary ICC with them.
+- **Ten preset names ship today**: `legacy` and `custom` retired with the print path
+  (`nf-retire/legacy-custom`, 2026-09-23), taking `to_output`, ProPhoto, arbitrary ICC
+  and the `--out-depth` / `--output-profile` / `--bigtiff` selectors with them.
   `film-master` is not a rendering destination at all — it is the reconstruction
   output, and runs no rendering stage.
 - **Two abilities move across from legacy**: Adobe RGB output is a must-have (it is
-  reachable today only through an ICC path on legacy), and a rendered float TIFF is
-  good to have. Retiring a path is a list of abilities to re-add, not a loss.
+  was reachable only through an ICC path on legacy, so today it is not reachable at
+  all), and a rendered float TIFF is good to have (`hdr-linear-tiff` is the current one). Retiring a path is a list of abilities to re-add, not a loss.
 - **`--new-flow` is scaffolding, not a feature** (`docs/nf-migration.md`): CLI-only,
   never a recipe key, and it dies when the default flips — so destination selection
   must not be built on it.
@@ -33,10 +34,10 @@ What is known:
 
 Open:
 
-- **Is a destination a name, or a small product of selectors?** Today `custom` is
-  the one non-atomic preset and the asymmetry around `--out-depth` exists because
-  of it (CLAUDE.md). A gamut selector on an otherwise atomic destination would
-  reopen that; a name per combination reopens the thirteenth-name problem.
+- **Is a destination a name, or a small product of selectors?** Every preset is
+  atomic since `custom` and `--out-depth` retired, and the presence-vs-value asymmetry
+  `--out-depth` needed is recorded in CLAUDE.md. A gamut selector on an otherwise
+  atomic destination would reopen that; a name per combination reopens the thirteenth-name problem.
 - **What does a destination mean while `--new-flow` is off?** Either the names are
   new and only exist under the flag, or they are the same names resolving a
   different chain — which changes what a recipe means between builds.

@@ -536,30 +536,6 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
             arriving_with: DESTINATION_ARRIVES_WITH,
         },
     },
-    FlagEntry {
-        knob: "--out-depth",
-        covers: &["--out-depth"],
-        present: |args| args.output_opts.out_depth.is_some(),
-        availability: Availability::NotYet {
-            arriving_with: DESTINATION_ARRIVES_WITH,
-        },
-    },
-    FlagEntry {
-        knob: "--output-profile",
-        covers: &["--output-profile"],
-        present: |args| args.output_opts.output_profile.is_some(),
-        availability: Availability::NotYet {
-            arriving_with: DESTINATION_ARRIVES_WITH,
-        },
-    },
-    FlagEntry {
-        knob: "--bigtiff",
-        covers: &["--bigtiff"],
-        present: |args| args.output_opts.bigtiff.is_some(),
-        availability: Availability::NotYet {
-            arriving_with: DESTINATION_ARRIVES_WITH,
-        },
-    },
     // Operational, and refused because the record names the resolved output preset,
     // the reconstruction and curve, and times the legacy chain's buckets (`algorithm` /
     // `color`) — so under `--new-flow` it would describe a chain the run did not take,
@@ -775,6 +751,9 @@ mod tests {
         "--clip-high",
         "--output-hdr",
         "--output-sdr",
+        "--out-depth",
+        "--output-profile",
+        "--bigtiff",
     ];
 
     /// Argument groups `ConvertArgs` flattens that carry no conversion knob.

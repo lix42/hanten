@@ -9,8 +9,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 5`, built at commit
-> `9a61136bfe6e` plus the new chain's scene correction (`nf-scene-correction/stage`,
-> §11). The staleness signal
+> `9b1abf7fe7f2` plus the retirement of the `legacy` and `custom` presets
+> (`nf-retire/legacy-custom`, §8). The staleness signal
 > is `pipeline_version`: if `hanten --version` reports a different one, treat this
 > document as suspect and re-verify.
 >
@@ -30,16 +30,12 @@ shape every workflow below:
   flag outside that promise: it chooses a whole rendering chain.)
 - **Every knob is a CLI flag *and* a recipe key**, and nothing is reachable only
   from code. Passing a flag that doesn't apply to your selected *curve* or *preset*
-  is a **loud error**, never a no-op. The exception is `--reconstruction simple`
-  **on the `legacy` / `custom` path**, which has no print stage: `--print-exposure`,
-  `--black-point`, `--highlight-compress` and `--white-balance` are accepted there
-  and silently do nothing (verified — the output is byte-identical). On a display
-  preset — including the default — they all reach the render whatever the
-  reconstruction, so they *do* change the picture: white balance, exposure and the
-  black point run in the shared display stage, and `--highlight-compress` places the
-  knee inside each display renderer. `--auto-wb` is the exception on both paths: it
-  still requires `--reconstruction density` and is a usage error under `simple`, even
-  on a display preset — pass explicit `--white-balance` gains there.
+  is a **loud error**, never a no-op. The print controls reach every display
+  preset whatever the reconstruction, `simple` included: white balance, exposure and
+  the black point run in the shared display stage, and `--highlight-compress` places
+  the knee inside each display renderer. `--auto-wb` is the exception: it requires
+  `--reconstruction density` and is a usage error under `simple` — pass explicit
+  `--white-balance` gains there.
 - **Calibrate once, apply many.** The film base (`Dmin`) and the reference density
   (`Dmax`) are properties of the *roll* — film stock, development, scanner — not
   of an individual frame. You measure them once and reuse them, which is what
@@ -365,8 +361,7 @@ hanten params
                  "white_balance": { "explicit": [1.0, 1.0, 1.0] },
                  "display_tone": "shoulder",
                  "highlight_compress": 0.0, "linear_range": [0.0, 1.0] },
-  "output":    { "preset": "gain-map-hdr", "depth": "u16",
-                 "output_profile": null, "bigtiff": "auto" }
+  "output":    { "preset": "gain-map-hdr" }
 }
 ```
 
@@ -487,7 +482,7 @@ hanten roll --frames frames.json --out-dir positives/ --params roll-recipe.json
 
 An explicit manifest `output` goes through the same suffix rule as `convert`: an
 extension it states must match the resolved preset's container — `.jpg` under the
-default, `.tiff` under `legacy`/`display-p3`/`film-master`, `.avif` under
+default, `.tiff` under `display-p3`/`film-master`, `.avif` under
 `hdr-pq`/`hdr-hlg` — and one it omits is completed from that container, so
 `"output": "chosen"` writes `chosen.jpg` on a default roll.
 
@@ -583,14 +578,14 @@ Six combinations are refused rather than quietly doing something else:
   `--anchor-mid-fraction` instead (the preset resolves `0.28`; **lower is brighter**).
 - **A preset with `--reconstruction simple`** (or a recipe resolving `simple`) — the
   direct inversion has no curve stage, so there is nothing for a bundle to configure.
-- **A preset with `--output-preset legacy` / `custom` / `film-master`** — see below.
+- **A preset with `--output-preset film-master`** — see below.
 
 A preset never *sets* `--output-preset`, but the two are not freely combinable: a
 conversion preset is a reconstruction **and display** bundle, so it needs an output preset
 that renders a display image. `display-p3`, `compatibility`, `gain-map-hdr`,
 `ultra-hdr-v1`, `hdr-pq`, `hdr-hlg`, `hdr-linear-tiff`, `hdr-pq-tiff` and `hdr-hlg-tiff`
-all work. The three that run no display stage — `legacy`, `custom`, `film-master` — refuse
-any `--preset` with a single message. For a film master, set the reconstruction knobs
+all work. `film-master`, which runs no display stage, refuses any `--preset` with a single
+message. For a film master, set the reconstruction knobs
 directly instead:
 
 ```sh
@@ -641,7 +636,7 @@ the manufacturer's characteristic curve, inverted per channel. Mid-grey lands at
 construction, so there is nothing to anchor and no contrast to pick.
 
 ```sh
-hanten convert scan.tif -o out.tif --output-preset legacy \
+hanten convert scan.tif -o out.tif --output-preset display-p3 \
   --film-base 0.5,0.25,0.15 --density-curve characteristic --film-stock portra-400
 ```
 
@@ -964,7 +959,7 @@ Midtones and shadows are untouched — only values above the knee change.
 The report says which one ran, in a block every preset emits:
 `.output_render.display_tone` is `"shoulder"`, `"none"`, or an object like
 `{"reinhard":{"headroom_stops":6.0}}` on a display preset, and absent on
-`legacy` / `custom` / `film-master`, which have no display tone stage.
+`film-master`, which has no display tone stage.
 
 On the HDR presets the per-preset block also states what the renderer *applied*, next
 to the luminance anchors no container can carry — `.avif.rendering` for
@@ -1017,8 +1012,8 @@ is a pixel value rather than a flag combination — so `hanten` renders the whol
 first and *then* exits 1, writing no file. On a large scan, prove `--display-tone
 none` out with neutral print controls before adding grading on top.
 
-Two rules follow from the knob being display-only: `legacy`, `custom` and
-`film-master` reject it (they apply no display tone curve at all), and passing a
+Two rules follow from the knob being display-only: `film-master` rejects it (it
+applies no display tone curve at all), and passing a
 *non-default* `--highlight-compress` beside `none` is a usage error — a knee width
 describes nothing when there is no knee. `--highlight-compress 0` is the default
 and asks for nothing, so it is accepted.
@@ -1069,8 +1064,8 @@ What to know:
   `--display-tone reinhard --display-tone-headroom <stops>` to keep the value.
   Re-naming `reinhard` itself *preserves* it.
 - **Taken by every display preset** — the two SDR ones, all five single-rendition HDR
-  ones, and the gain-map pair. `legacy`, `custom` and `film-master` apply no display
-  tone curve at all and refuse it by name.
+  ones, and the gain-map pair. `film-master` applies no display tone curve at all and
+  refuses it by name.
 - **Mid-grey is preserved; diffuse white still costs about 0.86 stop.** The operator
   carries an input gain solved so that scene mid-grey (`0.18`) comes out at `0.18` at
   *every* headroom, so choosing this tone no longer darkens the midtones and there is no
@@ -1179,11 +1174,11 @@ reference white exists to fill it.
 > content, so you have to ask for this tone (and a shoulder-less reconstruction) to
 > see it.
 
-`--output-preset` (recipe key `output.preset`) is an **atomic** policy choice: a
-named preset resolves container, bit depth, and colour profile itself. `custom` is
-the deliberate exception — see below.
+`--output-preset` (recipe key `output.preset`) is an **atomic** policy choice: every
+preset resolves container, bit depth, and colour profile itself, and no other knob
+states them.
 
-Twelve names are accepted, **every one resolves a container**, and there is no
+Ten names are accepted, **every one resolves a container**, and there is no
 planned-but-unaccepted tier left, so an unknown name always means a typo. The
 "Suffix" column is what a path may *state*; the **bold** spelling is the one
 `hanten` writes when you leave the suffix off:
@@ -1192,8 +1187,6 @@ planned-but-unaccepted tier left, so an unknown name always means a typo. The
 |---|---|---|---|---|
 | `gain-map-hdr` *(default)* | JPEG | **`.jpg`** / `.jpeg` | u8 base | SDR base + gain map, packaged **dual-dialect**: ISO 21496-1 segments *and* the legacy Ultra HDR v1 XMP/MPF. |
 | `ultra-hdr-v1` | JPEG | **`.jpg`** / `.jpeg` | u8 base | The **same pixels** as `gain-map-hdr`, legacy XMP/MPF only — no ISO claim. |
-| `legacy` | TIFF | `.tif` / **`.tiff`** | u16 / f32 | The transitional path: print controls run before the output ICC transform. |
-| `custom` | TIFF | `.tif` / **`.tiff`** | u16 / f32 | Same bytes as `legacy`; the difference is **provenance** — it says the combination was chosen. |
 | `film-master` | TIFF | `.tif` / **`.tiff`** | f32 | Unclamped **linear ACEScg**, straight from the NC film RGB v1 mapping. Bypasses every print/display control. |
 | `display-p3` | TIFF | `.tif` / **`.tiff`** | u16 | Modern-pipeline SDR render, losslessly stored in **Display P3**. |
 | `compatibility` | TIFF | `.tif` / **`.tiff`** | u16 | The same SDR render in **sRGB**, for broad compatibility. |
@@ -1205,8 +1198,8 @@ planned-but-unaccepted tier left, so an unknown name always means a typo. The
 
 > **The default writes a JPEG.** `hanten convert scan.tif -o out.tiff` *fails* —
 > with no `--output-preset`, `hanten` resolves `gain-map-hdr` and wants `.jpg`. For a
-> TIFF, name the preset: `--output-preset legacy` (or `display-p3`,
-> `compatibility`, `film-master`, …).
+> TIFF, name the preset: `--output-preset display-p3` (or `compatibility`,
+> `film-master`, `hdr-linear-tiff`, …).
 
 `gain-map-hdr` and `ultra-hdr-v1` are **one render packaged twice** — identical
 pixels, differing only in metadata dialect. Only the dual-dialect default decodes
@@ -1258,30 +1251,39 @@ With `-v`, `hanten` says on stderr when it completed a path.
 
 ### Preset interaction rules
 
-- An **atomic** preset rejects `--out-depth` / `--output-profile` / `--bigtiff`
-  (from a flag *or* the recipe), because it resolves those itself. For
-  `--output-profile` and `--bigtiff`, a value equal to the documented default —
-  like `--bigtiff auto` — is accepted. **`--out-depth` is rejected by flag
-  presence**, so even `--out-depth u16`, which *is* the default, errors alongside
-  a named preset.
-- **`custom` is the one named preset that is not atomic.** It accepts the
-  depth/profile/container selectors, resolving the same branch and the same bytes
-  as `legacy`. Use it to record that the combination was a decision.
-- **`--out-depth` replaces the old `--output-hdr` / `--output-sdr` pair**:
-  `u16` (default, archival) or `f32`. Only `legacy` and `custom` consult it.
-- `f32` there is the **transitional print-rendered** float TIFF in the selected
-  output space. It is not `film-master` (unclamped linear ACEScg, no print
-  controls) and not `hdr-linear-tiff` (display-linear BT.2020) — three different
-  f32 TIFFs.
-- `film-master` additionally rejects `--auto-d-max` / `--auto-balance-range` and
-  every non-default downstream control — it bypasses them, so accepting them
-  would be a lie. The `--auto-d-max` half is **conditional on the anchor**: under
+- `film-master` rejects `--auto-d-max` / `--auto-balance-range` and every
+  non-default downstream control — it bypasses them, so accepting them would be a
+  lie. The `--auto-d-max` half is **conditional on the anchor**: under
   `--anchor-black-floor` / `--anchor-mid-offset` the measured reference is discarded,
   so nothing frame-local reaches the master and the combination is accepted. Same rule
   for `roll`: it does not call such a recipe "Dmax not frozen", because it is.
-- `--linear-range` is consumed **only** by a display preset — which the default
-  now is, so it works out of the box. On `legacy` / `custom` it stays a loud error
-  rather than a silently ignored knob.
+- Every other preset consumes the print controls, `--linear-range` included.
+- The two f32 TIFFs are different images: `film-master` (unclamped linear ACEScg,
+  no print controls) and `hdr-linear-tiff` (display-linear BT.2020, print controls
+  and display rendering applied).
+
+### Retired: `legacy`, `custom` and the depth/profile/container knobs
+
+The `legacy` and `custom` presets — the older TIFF path, which ran the print controls
+on film RGB before an output ICC transform — are gone, and with them `--out-depth`,
+`--output-profile` and `--bigtiff` (recipe keys `output.depth`,
+`output.output_profile`, `output.bigtiff`), which only those two read. Each name is a
+usage error (exit 2) that says what replaced it:
+
+```console
+$ hanten convert scan.tif -o out.tiff --output-preset legacy --film-base 1,1,1
+usage: output preset `legacy` was removed together with the legacy print path — for a 16-bit TIFF use `display-p3` (or `compatibility` for sRGB); for a float TIFF, `film-master` (linear ACEScg before display rendering) or `hdr-linear-tiff` (display-linear BT.2020). The old rendering is reproducible only from the reference build (`scripts/reference-snapshot/`). There is no alias.
+```
+
+A recipe or sidecar written before the retirement still loads: every earlier build
+wrote those three keys at their defaults (`"depth": "u16"`, `"output_profile": null`,
+`"bigtiff": "auto"`), and a key at that value asked for nothing, so it is dropped. A
+non-default value is refused with the replacement and "Remove the key".
+
+BigTIFF is now always decided automatically, and ProPhoto or a user-supplied ICC
+profile has no replacement yet. To reproduce an old `legacy` render, build the
+reference binary (`scripts/reference-snapshot/README.md`); its own guide is
+`git show origin/reserve:docs/using-nc.md`.
 
 ### `roll` takes every preset
 
@@ -1290,16 +1292,6 @@ The old `convert`-only restriction is gone. `roll` derives
 `gain-map-hdr` roll writes `_positive.jpg` and an `hdr-pq` roll writes
 `_positive.avif`. An explicit manifest `output` path goes through the same rule
 `convert` uses — checked when it states a suffix, completed when it does not.
-
-### Depth, profile and container knobs
-
-These are consulted by `legacy` and `custom` only.
-
-| Flag | Values |
-|---|---|
-| `--out-depth` | `u16` (default, archival) or `f32` (written verbatim, values above 1.0 preserved) |
-| `--output-profile` | `sRGB`, `prophoto`, `acescg`, `display-p3`, or a path to an ICC file |
-| `--bigtiff` | `auto` (default — promote only when needed), `on`, `off` |
 
 ---
 
@@ -1801,7 +1793,7 @@ that will carry it:
 | `--linear-range` | an affine levels remap needing a stage and a name; retiring it outright is a listed outcome |
 | `--display-tone`, `--display-tone-headroom` | the fit-range stage, which is an identity pass today |
 | `--highlight-compress` | the knee width of the `shoulder` tone specifically (`none` and `reinhard` refuse a non-default value outright); fit range compresses against the display's peak and has no knee width to set |
-| `--output-preset`, `--out-depth`, `--output-profile`, `--bigtiff` | the new flow's destination set (`nf-destinations/preset-set`) — it writes one destination today, so there is no output policy to choose |
+| `--output-preset` | the new flow's destination set (`nf-destinations/preset-set`) — it writes one destination today, so there is no output policy to choose |
 | `--telemetry`, `--telemetry-file` | the new chain's report and telemetry shape — the record would name the current chain's preset and timing buckets |
 
 Unlike the decode's knees, **no value is spared here** — `--highlight-compress 0`

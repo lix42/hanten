@@ -103,10 +103,8 @@ class HarnessTest(unittest.TestCase):
         )
         self.assertEqual(scalar_shape(generated), scalar_shape(committed))
         self.assertEqual(scalar_shape(generated_hdr), scalar_shape(committed_hdr))
-        self.assertEqual(generated["output"], {"preset": "legacy"})
-        self.assertEqual(
-            generated_hdr["output"], {"preset": "legacy", "depth": "f32"}
-        )
+        self.assertEqual(generated["output"], {"preset": "display-p3"})
+        self.assertEqual(generated_hdr["output"], {"preset": "hdr-linear-tiff"})
 
         convert = self.run_harness("convert", nc)
         self.assertEqual(convert.returncode, 0, convert.stdout + convert.stderr)

@@ -19,8 +19,9 @@ local append-only JSONL log and/or a one-off file. It is **opt-in**,
 the success signal (there is no `outcome.success` field), so a run that exits
 non-zero — including a `--strict` warning promotion — writes **no** record. Full design: design-spec §9 (record shape) and §12
 (roadmap). Code: `src/telemetry.rs` (record + builder + sinks), wired from
-`cli::run_convert` / `cli::emit_telemetry`; per-stage timings come from
-`pipeline::stages::render` via `StageTimings`.
+`cli::run_convert` / `cli::emit_telemetry`; per-stage timings come from the
+`pipeline::stages` renders (`render_film_master`, `render_display_source`,
+`render_sdr_preset`) via `StageTimings`.
 
 ## 1. Adding telemetry when you build a feature
 
@@ -102,7 +103,7 @@ Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
            "input_bytes":2017230,"output_bytes":1392370},
   "timing_ms":{"total":30.0,"decode":5.0,"film_base":0.0,"algorithm":4.4,
                "color":18.4,"encode":1.0,"ir_export":0.6},
-  "conversion":{"preset":"legacy","reconstruction":"density","curve":"exponential",
+  "conversion":{"preset":"display-p3","reconstruction":"density","curve":"exponential",
                 "params_hash":"92a827ffd2d0aebd",
                 "film_base_source":{"explicit":[0.9,0.55,0.42]},
                 "dmax":1.6195,"output_depth":"u16"},
@@ -113,11 +114,11 @@ Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
 only for density reconstruction, and `conversion.dmax` only when the curve
 applied an anchor. (Schema v2 replaced v1's `conversion.algorithm` with the
 `reconstruction` + `curve` pair, mirroring the tagged recipe schema.)
-`conversion.preset` is the resolved `output.preset` (`legacy` | `film-master`) —
-**v3** added it, because without it a `film-master` run is indistinguishable from a
-legacy one except by file size. **v4** (2026-08-09) renamed `conversion.output_hdr` to
-`conversion.output_depth` (`u8`|`u10`|`u16`|`f32`), following the `output.hdr` →
-`output.depth` rename; it reports the **primary image's** depth
+`conversion.preset` is the resolved `output.preset` (any name in
+`OutputPreset::ALL`) — **v3** added it, because without it a `film-master` run was
+indistinguishable from the since-retired `legacy` one except by file size. Records
+written before `nf-retire/legacy-custom` may still carry `legacy` or `custom`. **v4** (2026-08-09) renamed `conversion.output_hdr` to
+`conversion.output_depth` (`u8`|`u10`|`u16`|`f32`); it reports the **primary image's** depth
 (`OutputParams::primary_depth_label`), which for the JPEG and AVIF presets is the
 container's fixed 8/10-bit.
 `params_hash` is a stable FNV-1a of the canonical effective-recipe JSON — the exact
