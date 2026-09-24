@@ -21,7 +21,7 @@ use std::time::Instant;
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
-use crate::algo::{density, fixed};
+use crate::algo::fixed;
 use crate::flow::{self, Flow};
 use crate::io::decode::{DecodeInfo, decode_within, probe};
 use crate::io::{avif, encode, staged, ultra_hdr};
@@ -41,11 +41,11 @@ use crate::recipe::{self, KnobNames, Recipe};
 use crate::telemetry;
 use crate::types::{
     AnchorPlacement, BalanceRange, CalibrationParams, CharacteristicParams, DEFAULT_MEASURE_INSET,
-    DensityCurve, DensityCurveType, DensityParams, DmaxInput, DmaxSource, EncodeOutcome,
-    EncodeReport, FilmBase, FilmBaseSource, FilmStock, FilmType, InputParams, LinearImage,
-    MeaningAssertion, MeasureParams, NcError, OutDepth, OutputParams, OutputPreset, OutputStats,
-    PrintParams, REMOVED_SIGMOID_CURVE, REMOVED_SIMPLE_RECONSTRUCTION, Reconstruction, Result,
-    TransferAssertion, WbSource, check_measure_inset,
+    DensityCurve, DensityCurveType, DensityParams, EncodeOutcome, EncodeReport, FilmBase,
+    FilmBaseSource, FilmStock, FilmType, InputParams, LinearImage, MeaningAssertion, MeasureParams,
+    NcError, OutDepth, OutputParams, OutputPreset, OutputStats, PrintParams, REMOVED_SIGMOID_CURVE,
+    REMOVED_SIMPLE_RECONSTRUCTION, Reconstruction, Result, TransferAssertion, WbSource,
+    check_measure_inset,
 };
 use crate::version::{self, Identity};
 
@@ -211,15 +211,10 @@ pub struct EstimateArgs {
     /// border detection).
     #[arg(long, conflicts_with_all = ["film_base", "auto_base"])]
     pub grid: bool,
-    /// Measure the roll-fixed display-white anchor `Dmax` from this region of a
-    /// **fully-exposed reference frame** (the light-struck roll leader), using the
-    /// resolved film base — the plan-phase mirror of `--base-region` for `Dmax`
-    /// (design-spec §8). Reports the measured scalar plus reuse-ready `--d-max` /
-    /// `calibration.dmax` forms to freeze into a roll recipe. Typically paired with an
-    /// explicit `--film-base` (the `Dmin` measured from the unexposed frame). The
-    /// region is recorded as provenance only, never re-read at apply time.
-    #[arg(long = "d-max-region", value_name = "X,Y,W,H", value_parser = parse_region)]
-    pub d_max_region: Option<[u32; 4]>,
+    /// Retired with the roll reference density (`nf-retire/dmax-machinery`). Hidden,
+    /// and kept only to emit a migration error.
+    #[arg(long = "d-max-region", hide = true, value_name = "X,Y,W,H", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub d_max_region: Option<String>,
     /// Declared film chemistry (`silver` | `chromogenic`). Provenance only: it does
     /// **not** gate IR-assisted film-holder detection, which measures the IR plane
     /// itself. See `convert --film-type`.
@@ -332,7 +327,7 @@ pub struct ConvertArgs {
     #[command(flatten)]
     pub density: DensityOverrides,
     #[command(flatten)]
-    pub dmax: DmaxOverrides,
+    pub dmax: RemovedDmaxFlags,
     #[command(flatten)]
     pub sigmoid: RemovedSigmoidFlags,
     #[command(flatten)]
@@ -399,7 +394,7 @@ pub struct ConvertArgs {
 /// frozen recipe (hand-authored or `hanten params`/`--dump-params`-produced) over N
 /// frames. It deliberately owns no auto-cascade that *generates* the recipe —
 /// that is the separate `base-acquisition-planner` task. Roll-fixed params (the
-/// film base, `calibration.dmax`) live in the shared `--params` recipe and appear
+/// film base) live in the shared `--params` recipe and appear
 /// once in the roll report; frame-local params can be overridden per frame via a
 /// `--frames` manifest.
 ///
@@ -426,7 +421,7 @@ pub struct RollArgs {
     #[arg(short = 'o', long = "out-dir", value_name = "DIR")]
     pub out_dir: PathBuf,
     /// Shared frozen recipe applied to every frame (the roll-fixed film base,
-    /// `calibration.dmax`, …). Same JSON shape as `convert --params`.
+    /// …). Same JSON shape as `convert --params`.
     #[arg(long = "params", value_name = "JSON")]
     pub recipe_in: Option<PathBuf>,
     /// Treat any frame's warnings as a hard error (after the roll report is
@@ -548,7 +543,7 @@ pub struct MeasureOverrides {
 /// error under the characteristic curve, never ignored).
 ///
 /// The two `balance_range` flags are mutually exclusive (clap rejects passing
-/// both), like the [`DmaxOverrides`] quartet: whichever is given replaces the
+/// both), like the [`FilmBaseOverrides`] trio: whichever is given replaces the
 /// recipe's `reconstruction.density.balance_range` entirely.
 #[derive(Args, Debug, Default)]
 pub struct DensityOverrides {
@@ -589,34 +584,28 @@ pub struct DensityOverrides {
     pub auto_balance_range: bool,
 }
 
-/// Display-white reference (`Dmax`) overrides (design-spec §9, `calibration.dmax` —
-/// a roll measurement, which is why it sits outside `reconstruction`; the curve stage
-/// owns only the placement *rule* that reads it).
-///
-/// One mutually-exclusive choice, like [`FilmBaseOverrides`]: the four flags
-/// conflict (clap rejects passing more than one) and whichever is given replaces
-/// the recipe curve's `dmax` entirely, whichever curve variant is resolved.
+/// The reference density's flags and the three anchor placements that read it or
+/// pinned black, removed together (`nf-retire/dmax-machinery`). Hidden, and kept only
+/// to emit a migration error — there is no alias. The valued ones take any value, or
+/// none, so the old spellings (`--d-max`, `--d-max -1.5`) reach that message instead
+/// of clap's generic one. (A bare one followed by another valued flag still swallows
+/// that flag and hits clap's error — loud, exit 2, and never a valid spelling.)
 #[derive(Args, Debug, Default)]
-pub struct DmaxOverrides {
-    /// Explicit roll-fixed display-white anchor density (`Dmax`); a scalar,
-    /// applied to all channels. The roll calibration: the value measured once from
-    /// a fully-exposed reference frame (`estimate --d-max-region`) or a known
-    /// per-stock constant, reused across the roll like an explicit `--film-base`.
-    #[arg(long = "d-max", value_name = "D",
-          conflicts_with_all = ["fixed_d_max", "auto_d_max", "no_d_max"])]
-    pub d_max: Option<f32>,
-    /// Use the fixed nominal roll anchor (the default behavior) — a
-    /// scene-independent corrected-density placement reused across the roll.
-    #[arg(long = "fixed-d-max", conflicts_with_all = ["auto_d_max", "no_d_max"])]
+pub struct RemovedDmaxFlags {
+    #[arg(long = "d-max", hide = true, value_name = "D", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub d_max: Option<String>,
+    #[arg(long = "fixed-d-max", hide = true)]
     pub fixed_d_max: bool,
-    /// Measure the anchor per frame (opt-in exposure normalization; brightens
-    /// underexposed frames and breaks roll consistency — grading, not conversion).
-    #[arg(long = "auto-d-max", conflicts_with = "no_d_max")]
+    #[arg(long = "auto-d-max", hide = true)]
     pub auto_d_max: bool,
-    /// No reference density (0). Scene-referred output (base → 1.0, detail above)
-    /// under `--anchor-white-at-reference`; the default anchor reads no reference.
-    #[arg(long = "no-d-max")]
+    #[arg(long = "no-d-max", hide = true)]
     pub no_d_max: bool,
+    #[arg(long = "anchor-mid-fraction", hide = true, value_name = "F", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub anchor_mid_fraction: Option<String>,
+    #[arg(long = "anchor-white-at-reference", hide = true)]
+    pub anchor_white_at_reference: bool,
+    #[arg(long = "anchor-black-floor", hide = true, value_name = "FLOOR", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub anchor_black_floor: Option<String>,
 }
 
 /// The sigmoid curve's flags, removed with it (`nf-retire/sigmoid-and-simple`),
@@ -636,43 +625,13 @@ pub struct RemovedSigmoidFlags {
     pub sigmoid_white_at_d_max: bool,
 }
 
-/// Anchor-placement overrides (design-spec §7.3/§9,
-/// `reconstruction.curve.anchor`) — the exponential's [`AnchorPlacement`].
-///
-/// The four are mutually exclusive — a placement is one rule, not a set of fields.
+/// Anchor-placement override (design-spec §7.2/§9, `reconstruction.curve.anchor`) —
+/// the exponential's [`AnchorPlacement`].
 #[derive(Args, Debug, Default)]
 pub struct AnchorOverrides {
-    /// Pin mid-grey (18%) at fraction F of the reference density, letting display
-    /// white fall above it. Raising F renders the roll darker, lowering it brighter.
-    #[arg(
-        long = "anchor-mid-fraction",
-        value_name = "F",
-        conflicts_with_all = ["anchor_white_at_reference", "anchor_black_floor", "anchor_mid_offset"]
-    )]
-    pub anchor_mid_fraction: Option<f32>,
-    /// Pin display white *at* the reference density. Kept as an explicit
-    /// diagnostic: at a photographic contrast it renders midtones 2.5–3.6 stops dark,
-    /// because steepening the slope pivots the line about white. Sensible only when
-    /// the reference is itself a diffuse white — and measuring that off frame content
-    /// is per-frame exposure correction, which the default must not do.
-    #[arg(
-        long = "anchor-white-at-reference",
-        conflicts_with_all = ["anchor_black_floor", "anchor_mid_offset"]
-    )]
-    pub anchor_white_at_reference: bool,
-    /// Pin the film base to output FLOOR, letting white fall where the slope puts
-    /// it. Reference-free, so unlike the two rules above it carries no roll-to-roll
-    /// error from the leader-measured reference. FLOOR is linear light against the
-    /// 203-nit reference white, not an sRGB code value (0.005 encodes to about 16/255).
-    #[arg(
-        long = "anchor-black-floor",
-        value_name = "FLOOR",
-        conflicts_with = "anchor_mid_offset"
-    )]
-    pub anchor_black_floor: Option<f32>,
-    /// Pin mid-grey (18%) at density D *above the film base* rather than at a
-    /// fraction of the reference — the default rule, D 0.62. Reference-free, like
-    /// `--anchor-black-floor`.
+    /// Pin mid-grey (18%) at density D above the film base, letting display white
+    /// fall where the slope puts it — the default rule, D 0.62. Reads no roll
+    /// reference density, so a leader's roll-to-roll error never reaches the render.
     #[arg(long = "anchor-mid-offset", value_name = "D")]
     pub anchor_mid_offset: Option<f32>,
 }
@@ -887,9 +846,9 @@ pub struct OutputOverrides {
     /// Every TIFF preset requires `.tif`/`.tiff`. Recipe key `output.preset`.
     ///
     /// Every preset resolves its own depth, profile and container. `film-master`
-    /// additionally rejects the frame-local measurements
-    /// `--auto-d-max`/`--auto-balance-range` plus every non-default downstream
-    /// control; every display preset consumes those controls instead.
+    /// additionally rejects a frame-local `--auto-balance-range` plus every
+    /// non-default downstream control; every display preset consumes those controls
+    /// instead.
     #[arg(long = "output-preset", value_name = "PRESET")]
     pub output_preset: Option<String>,
     /// Removed with the `legacy` and `custom` presets (recipe key `output.depth`).
@@ -997,16 +956,17 @@ fn removed_output_flag_message(s: &RemovedOutputSelector, new_flow: bool) -> Str
 }
 
 /// Drop the retired keys a recipe carries at the value every earlier build wrote by
-/// default — the output selectors and `print.highlight_compress` — returning whether
-/// anything was removed. A non-default value is left for [`reject_legacy_recipe_keys`]
-/// to refuse.
+/// default — the output selectors, `print.highlight_compress`, and `calibration.dmax`
+/// at `"fixed"` — returning whether anything was removed. A non-default value is left
+/// for [`reject_legacy_recipe_keys`] to refuse.
 ///
 /// The rule for retiring any recipe key: every sidecar and `--dump-params` document
 /// serializes every key, so a retired key sits at its old default in every recipe on
 /// disk — strip it there, or no old recipe replays. The exception is an old default
 /// whose replay would now render differently: refuse it, since stripping it would
 /// silently render the new default. `print.display_tone`'s `"shoulder"` is one, so it is
-/// **not** stripped here.
+/// **not** stripped here. `calibration.dmax`'s `"fixed"` is not one: the one placement
+/// left reads no reference, so it replays byte-identically.
 fn strip_retired_keys_at_old_defaults(v: &mut serde_json::Value) -> bool {
     let mut stripped = false;
     if let Some(output) = v.get_mut("output").and_then(|o| o.as_object_mut()) {
@@ -1023,6 +983,12 @@ fn strip_retired_keys_at_old_defaults(v: &mut serde_json::Value) -> bool {
             .is_some_and(|hc| hc.as_f64() == Some(0.0))
     {
         print.remove("highlight_compress");
+        stripped = true;
+    }
+    if let Some(calibration) = v.get_mut("calibration").and_then(|c| c.as_object_mut())
+        && calibration.get("dmax").and_then(serde_json::Value::as_str) == Some("fixed")
+    {
+        calibration.remove("dmax");
         stripped = true;
     }
     stripped
@@ -1150,11 +1116,11 @@ const REMOVED_CONVERSION_PRESETS: [&str; 2] = ["sigmoid-knees", "sigmoid-flat"];
 /// recipe's other fields (regional balance, film base, white balance, output preset)
 /// are untouched, which is what lets a preset be layered onto a roll calibration.
 ///
-/// **`curve` is one path but several knobs — all of them looks.** That is true only
-/// since `core/calibration-recipe-section` moved the roll's reference density out to
-/// `calibration.dmax`; while it sat in the curve, replacing the object wholesale reset a
-/// measured reference to `fixed` and rendered the roll off its own calibration at exit 0.
-/// A preset writes no `calibration` key, which is what lets it be layered onto one.
+/// **`curve` is one path but several knobs — all of them looks.** While the roll's
+/// reference density sat in the curve (until `core/calibration-recipe-section`),
+/// replacing the object wholesale reset a measured value and rendered the roll off its
+/// own calibration at exit 0. A preset writes no `calibration` key, which is what lets
+/// it be layered onto one.
 ///
 /// **A preset must never set `output.preset`.** `film-master` refuses any non-default
 /// `print_exposure`, so a preset that pinned an output branch would make a bare
@@ -1461,9 +1427,8 @@ fn reconstruction_after_preset(
 ///
 /// A plain recipe-versus-resolved diff over the three paths a preset writes. `curve` is
 /// compared as a whole because that is the granularity a preset replaces it at. It carries
-/// no roll calibration to preserve: since `core/calibration-recipe-section` the reference
-/// density lives in `calibration.dmax`, which no preset writes, so a recipe that differs
-/// only in its calibration correctly reports nothing here.
+/// no roll calibration to preserve — no preset writes `calibration` — so a recipe that
+/// differs only in its calibration correctly reports nothing here.
 fn preset_replaced_paths(recipe: &ResolvedConfig, cfg: &ResolvedConfig) -> Vec<&'static str> {
     let (before, after) = (&recipe.reconstruction, &cfg.reconstruction);
     [
@@ -1545,24 +1510,6 @@ pub struct ReuseReady {
     pub source: FilmBaseSource,
 }
 
-/// Reuse-ready forms of a measured roll-fixed `Dmax` (`estimate --d-max-region`),
-/// mirroring [`ReuseReady`]: a paste-ready `--d-max <d>` flag and the matching
-/// `calibration.dmax` value. Both present together, so the calibrate-once → reuse
-/// workflow (design-spec §8) is copy-paste smooth. The flag half is flattened into
-/// [`Report`] as `d_max_flag`; the value half is emitted inside
-/// [`Report::calibration`].
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct DmaxReuseReady {
-    /// Ready-to-paste `--d-max <d>` flag; the value round-trips to the measured `f32`.
-    #[serde(rename = "d_max_flag")]
-    pub flag: String,
-    /// The same measurement as the `calibration.dmax` value — always the tagged
-    /// `{ "explicit": <d> }` form. See [`ReuseReady::source`] for why it is not
-    /// serialized here.
-    #[serde(skip)]
-    pub dmax: DmaxSource,
-}
-
 /// The report's `calibration` object: the calibration values this invocation
 /// resolved, in exactly the recipe shape, so
 /// `hanten estimate … | jq '{calibration}' > roll-cal.json` writes a reusable roll
@@ -1573,11 +1520,10 @@ pub struct DmaxReuseReady {
 /// with `core/recipe-composition`; the shape emitted here is already what they take.
 ///
 /// **Partial by construction, and that is load-bearing.** It is not
-/// [`CalibrationParams`], which would emit `"dmax": "fixed"` for a run that
-/// measured no reference and so silently pin the default over a later `--params`
-/// layer. Every member is skipped when absent, and a member is added by adding one
-/// field here — the section is open (see [`CalibrationParams`]), so nothing may
-/// assume the set is exactly these two.
+/// [`CalibrationParams`]: every member is skipped when absent, so a run that measured
+/// nothing pins nothing over a later `--params` layer, and a member is added by adding
+/// one field here — the section is open (see [`CalibrationParams`]), so nothing may
+/// assume the set is exactly the one member it has today.
 ///
 /// It reports *what was measured here*, never "the roll's calibration": a complete
 /// one may need several invocations, and a future member is measured across many
@@ -1588,10 +1534,6 @@ pub struct CalibrationFragment {
     /// `film_base_flag` is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub film_base: Option<FilmBaseSource>,
-    /// The measured reference as `calibration.dmax` — present exactly when
-    /// `d_max_flag` is.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dmax: Option<DmaxSource>,
 }
 
 impl CalibrationFragment {
@@ -1604,8 +1546,8 @@ impl CalibrationFragment {
 }
 
 /// Resolution diagnostics for the reconstruction that ran (design-spec §8's
-/// report shape): `{"curve":{…}}` with the resolved curve type and `dmax`
-/// resolution. Serialize-only. (The `type` tag went with `simple` reconstruction.)
+/// report shape): `{"curve":{…}}` with the resolved curve type and its anchor.
+/// Serialize-only. (The `type` tag went with `simple` reconstruction.)
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ReconstructionResult {
     pub curve: CurveResult,
@@ -1674,142 +1616,32 @@ pub struct CurveResult {
     /// and because a future revision of the same publication may carry different curves.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stock: Option<StockResult>,
-    /// The resolved **reference** density — the roll calibration (`calibration.dmax`). This
-    /// is not necessarily the density that rendered to `1.0`, and the default
-    /// base-derived placement does not read it at all; see `anchor` / `anchor_value`.
-    pub dmax: DmaxResolution,
-    /// The curve's anchor **placement rule** — which tone the reference pins
-    /// (design-spec §7.3). Emitted for both parametric curves, which carry a rule since
-    /// `algo/exponential-anchor-placement`, because a base-derived placement is exactly
-    /// what a consumer cannot infer from `dmax` alone.
+    /// The curve's anchor **placement rule** (design-spec §7.2).
     ///
     /// `null` for the characteristic curve, which has no placement rule: mid-grey lands
-    /// where the stock's published response puts it. Naming one of the four rules there
-    /// would document a knob the render never read.
+    /// where the stock's published response puts it. Naming a rule there would document
+    /// a knob the render never read.
     pub anchor: Option<AnchorPlacement>,
     /// The **derived** anchor: the corrected density this render mapped to `1.0`, which
-    /// sets the black floor at `10^(−contrast·anchor_value)`. Equal to `dmax.value` under
-    /// the `white-at-dmax` placement, larger under `mid-at-dmax-fraction`, and
-    /// independent of it under the base-derived rules (the default).
-    ///
-    /// The key is always present, but its value is `null` for the exponential's
-    /// `dmax = none` under `white-at-dmax` — the render applies exactly `A = 0.0` there,
-    /// and reporting the reference's `None` verbatim is the shape that predates this
-    /// curve having a placement rule. Every other combination reports the derived
-    /// number.
+    /// sets the black floor at `10^(−contrast·anchor_value)`. `null` for the
+    /// characteristic curve.
     pub anchor_value: Option<f32>,
 }
 
-/// The resolved `Dmax` triple: which policy was configured, the value the curve
-/// actually used this run (`null` for `none`), and where the resolution came
-/// from. A reference-measured scalar frozen into a recipe reports
-/// `explicit`/`recipe`; its capture region stays in the `estimate` record
-/// (provenance, never a re-read directive).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-pub struct DmaxResolution {
-    pub policy: DmaxPolicy,
-    /// Always emitted — `null` for `policy = "none"` (fixed report shape).
-    pub value: Option<f32>,
-    pub provenance: DmaxProvenance,
-}
-
-/// The configured `Dmax` policy (`calibration.dmax`'s discriminator).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DmaxPolicy {
-    Fixed,
-    Explicit,
-    Auto,
-    None,
-}
-
-impl From<DmaxSource> for DmaxPolicy {
-    fn from(source: DmaxSource) -> Self {
-        match source {
-            DmaxSource::Fixed => DmaxPolicy::Fixed,
-            DmaxSource::Explicit(_) => DmaxPolicy::Explicit,
-            DmaxSource::Auto => DmaxPolicy::Auto,
-            DmaxSource::None => DmaxPolicy::None,
-        }
-    }
-}
-
-/// Where the resolved `Dmax` came from: the built-in default, the recipe file
-/// (or a roll per-frame override), a CLI flag — or, for the `auto` policy, the
-/// per-frame measurement itself (`"auto-frame"`), which is what makes that
-/// policy display-oriented and unsuitable for a film master.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DmaxProvenance {
-    Default,
-    Recipe,
-    Cli,
-    AutoFrame,
-}
-
-/// Where the `calibration.dmax` *setting* came from, tracked by the
-/// orchestrators (recipe-key presence / flag presence) and combined with the
-/// resolved policy into the report's [`DmaxProvenance`] — an `auto` policy
-/// always reports `auto-frame`, because the *value* is a per-frame measurement
-/// regardless of who selected the policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DmaxSetting {
-    Default,
-    Recipe,
-    Cli,
-}
-
-/// Build the report's `reconstruction_result` from the resolved config, the
-/// render's resolved anchor value, and the tracked `dmax` setting provenance.
+/// Build the report's `reconstruction_result` from the resolved config and the
+/// render's resolved anchor value.
 fn reconstruction_result(
     reconstruction: &Reconstruction,
-    dmax_source: DmaxSource,
-    resolved_dmax: Option<f32>,
     curve_anchor: Option<f32>,
     out_of_table: Option<crate::algo::film_stock::OutOfTable>,
-    setting: DmaxSetting,
 ) -> ReconstructionResult {
     let curve = &reconstruction.curve;
-    // The reference is `calibration.dmax`, not a curve knob, so it is passed
-    // in. Reported inside the curve block regardless: this block records what the
-    // *render* resolved, and the curve is what consumed it — `dmax.provenance`
-    // says where the setting came from.
-    //
-    // **A curve that consumes no reference reports `none`, whatever was stated.**
-    // This block is the *resolution*, not the configuration: `characteristic`
-    // reads its reference off the published response, so naming the configured
-    // policy here would claim an anchor the render never placed (the
-    // false-provenance class `MasterAnchor` exists to close). The stated value is
-    // still visible — `recipe.calibration.dmax` echoes it, and
-    // `unconsumed_dmax_warning` says out loud that it was not read.
-    let policy = if curve.consumes_reference() {
-        DmaxPolicy::from(dmax_source)
-    } else {
-        DmaxPolicy::None
-    };
-    let provenance = match (policy, setting) {
-        (DmaxPolicy::Auto, _) => DmaxProvenance::AutoFrame,
-        (_, DmaxSetting::Cli) => DmaxProvenance::Cli,
-        (_, DmaxSetting::Recipe) => DmaxProvenance::Recipe,
-        (_, DmaxSetting::Default) => DmaxProvenance::Default,
-    };
     ReconstructionResult {
         curve: CurveResult {
             curve_type: curve.curve_type(),
             out_of_table,
-            dmax: DmaxResolution {
-                policy,
-                value: resolved_dmax,
-                provenance,
-            },
-            // The placement rule and the anchor it derived. Both are needed for
-            // this block to be self-contained: `dmax.value` is the reference, and
-            // under every placement but `white-at-dmax` the density that actually
-            // rendered to 1.0 is a *different* number. Without them a consumer has to
-            // re-derive the anchor from the echoed recipe to know what the render
-            // did — which is what "diagnostics" is supposed to spare them. Under a
-            // base-derived rule the render never read `dmax` at all, and nothing
-            // else in the block says so.
+            // The placement rule and the anchor it derived, so a consumer need not
+            // re-derive the anchor from the echoed recipe to know what the render did.
             anchor: curve.anchor(),
             anchor_value: curve_anchor,
             stock: match curve {
@@ -2022,7 +1854,7 @@ pub struct HdrCodedTiffResult {
 ///
 /// **Provisional.** It exists so the new flow's report says something true while
 /// `nf-core/report-contract` decides the real shape; the legacy-chain sections
-/// (`reconstruction_result`, `output_render`, `dmax`, `white_balance`, …) are
+/// (`reconstruction_result`, `output_render`, `white_balance`, …) are
 /// omitted under the flag rather than filled with values that describe a chain the
 /// run did not take. Every field is a fact read off the resolved chain — no prose.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -2093,9 +1925,8 @@ pub struct OutputRenderResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_tone: Option<DisplayToneResult>,
     /// What the pixels contain. For `film-master` this states the intentional-film
-    /// content and explicitly disclaims physical scene recovery, and names which
-    /// anchor placement the run actually made — roll-fixed `Dmax`, film-base-derived,
-    /// the stock's published curve, or none at all (see [`MasterAnchor`]).
+    /// content and explicitly disclaims physical scene recovery, and names what
+    /// placed mid-grey — the film-base-derived anchor, or the stock's published curve.
     pub content: &'static str,
     /// The pinned working-space mapping identifier the pixels crossed
     /// (`"nc-film-rgb-v1"`), repeated inside this block so a master's provenance
@@ -2107,75 +1938,6 @@ pub struct OutputRenderResult {
     /// separate field owned by `core/conversion-versioning`; this build does not
     /// stamp one yet, so it is deliberately absent rather than guessed.
     pub reconstruction_schema_version: u32,
-}
-
-/// Which anchor placement the master's report may claim as provenance.
-///
-/// Three independent facts decide it — whether the curve carries a placement rule at all,
-/// whether a reference (`calibration.dmax`) resolved, and whether the rule *reads* that
-/// reference. Keying on the reference alone
-/// made two renders with different pixels — one carrying a stated roll-level
-/// base-derived anchor, one genuinely unanchored — emit the identical string, and
-/// symmetrically let a base-derived render claim a `Dmax` placement it never read.
-/// (`auto` cannot appear here: `validate_output_preset` rejects it under the preset.)
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MasterAnchor {
-    /// The anchor was derived from the resolved roll-fixed reference.
-    RollFixedDmax,
-    /// An anchor was placed, but from the film base — no reference was read.
-    BaseDerived,
-    /// No anchor at all: `white-at-dmax` over `dmax = none` is the scene-referred
-    /// unity placement (`A = 0` exactly).
-    NoAnchor,
-    /// The `characteristic` curve: mid-grey sits where the **stock's published
-    /// response** puts it, so no placement *rule* ran and no reference was read.
-    ///
-    /// Its own member rather than [`Self::BaseDerived`], which is what it used to
-    /// report: `DensityCurve::anchor` is `None` for this curve, so the reference-free
-    /// test below classified it as base-derived and the report claimed "a
-    /// film-base-derived anchor placement" — an operation that never happened, and
-    /// exactly the false-provenance class this enum exists to close. Nor is it
-    /// [`Self::NoAnchor`]: mid-grey *is* placed, and by the most roll-stable rule
-    /// available.
-    FilmCurve,
-}
-
-fn master_anchor(reconstruction: &Reconstruction, dmax: DmaxSource) -> MasterAnchor {
-    let curve = &reconstruction.curve;
-    // **Before** the reference-free test, deliberately: this curve answers `None` to
-    // `anchor()`, so that test would classify it as base-derived and the report would
-    // claim a placement rule that never ran.
-    if matches!(curve, DensityCurve::Characteristic(_)) {
-        return MasterAnchor::FilmCurve;
-    }
-    // A placement that is reference-free by construction, whatever `dmax` resolved to. One
-    // predicate, shared with the two `Dmax`-policy gates, so a fifth placement cannot be
-    // classified here and forgotten there.
-    //
-    // Tested as `Some(rule that reads nothing)`, **not** as `!is_some_and(reads_reference)`:
-    // the latter is also true for `None`, which would send a future placement-less curve
-    // here to claim a film-base-derived placement that never ran — the exact
-    // false-provenance class this enum exists to close, and the reason `NoAnchor` below has
-    // to stay reachable.
-    if matches!(curve.anchor(), Some(a) if !a.reads_reference()) {
-        return MasterAnchor::BaseDerived;
-    }
-    // No placement rule at all. Only `characteristic` answers `None` today and it is
-    // answered above, so this is the honest answer held open for a future placement-less
-    // curve: "no anchor" understates nothing, where `BaseDerived` would name an operation.
-    let Some(placement) = curve.anchor() else {
-        return MasterAnchor::NoAnchor;
-    };
-    // The rest distinguishes the two reference-*reading* rules. `none` resolves the
-    // reference to 0, which leaves `white-at-dmax` placing nothing — while the mid-grey
-    // rule still places `0.745/slope` above the film base, an anchor with no `Dmax` in
-    // it. A future reference-reading rule falls to `RollFixedDmax`, the conservative
-    // answer for anything that does consult the reference.
-    match placement {
-        AnchorPlacement::WhiteAtDmax if dmax == DmaxSource::None => MasterAnchor::NoAnchor,
-        _ if dmax == DmaxSource::None => MasterAnchor::BaseDerived,
-        _ => MasterAnchor::RollFixedDmax,
-    }
 }
 
 /// The display tone a display preset applied, for [`OutputRenderResult::display_tone`].
@@ -2202,33 +1964,19 @@ fn output_render_result(cfg: &ResolvedConfig) -> OutputRenderResult {
             false,
             false,
             "unclamped-linear-acescg-float-tiff",
-            // A `Dmax` placement is *supported*, not guaranteed: validation
-            // deliberately accepts `dmax = none` (under `white-at-dmax`, the
-            // scene-referred unity placement), and a base-derived placement anchors
-            // without reading `Dmax`. Claiming one
-            // unconditionally would be a false provenance statement on exactly the runs
-            // a consumer most needs to distinguish.
-            match master_anchor(&cfg.reconstruction, cfg.calibration.dmax) {
-                MasterAnchor::RollFixedDmax => {
-                    "intentional film rendering (film, lens, development, scanner, \
-                     reconstruction, density curve, and the resolved roll-fixed Dmax \
-                     placement); not a physical scene-linear recovery"
-                }
-                MasterAnchor::BaseDerived => {
+            // Named per curve: the characteristic curve runs no placement rule, so
+            // claiming the exponential's anchor there would be false provenance.
+            match cfg.reconstruction.curve {
+                DensityCurve::Exponential(_) => {
                     "intentional film rendering (film, lens, development, scanner, \
                      reconstruction, density curve, and a film-base-derived anchor \
-                     placement that read no Dmax); not a physical scene-linear recovery"
+                     placement); not a physical scene-linear recovery"
                 }
-                MasterAnchor::NoAnchor => {
-                    "intentional film rendering (film, lens, development, scanner, and \
-                     reconstruction; this run placed no Dmax anchor); not a physical \
-                     scene-linear recovery"
-                }
-                MasterAnchor::FilmCurve => {
+                DensityCurve::Characteristic(_) => {
                     "intentional film rendering (film, lens, development, scanner, \
                      reconstruction, and the stock's published characteristic curve, \
-                     whose own response places mid-grey; no anchor rule ran and no Dmax \
-                     was read); not a physical scene-linear recovery"
+                     whose own response places mid-grey; no anchor rule ran); not a \
+                     physical scene-linear recovery"
                 }
             },
         ),
@@ -2382,9 +2130,9 @@ pub struct Report {
     /// tagged reconstruction schema (design-spec §8's report shape).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe: Option<ResolvedConfig>,
-    /// Resolution diagnostics for the reconstruction that ran (`convert`):
-    /// `{"type":"simple"}`, or a density object carrying the resolved curve
-    /// type and its `dmax = {policy, value, provenance}` (design-spec §8).
+    /// Resolution diagnostics for the reconstruction that ran (`convert`): the
+    /// resolved curve type, its anchor placement and the anchor it derived
+    /// (design-spec §8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reconstruction_result: Option<ReconstructionResult>,
     /// Which `--preset` produced this conversion, and which of its knobs a flag moved
@@ -2452,27 +2200,6 @@ pub struct Report {
     /// Estimated / resolved film base (the `Dmin` anchor).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub film_base: Option<FilmBase>,
-    /// Resolved display-white anchor density (`Dmax`): for `convert`, the value
-    /// the density curve used (fixed nominal / explicit / auto-measured), absent
-    /// for `dmax = none` or simple reconstruction; for `estimate
-    /// --d-max-region`, the scalar measured from the fully-exposed reference
-    /// frame. Reported so a roll can freeze one calibration into `--d-max` /
-    /// `calibration.dmax` (design-spec §8/§9). The structured
-    /// `reconstruction_result` carries the same value with policy + provenance.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dmax: Option<f32>,
-    /// Reference region `[x, y, w, h]` sampled for the roll-fixed `Dmax`
-    /// (`estimate --d-max-region`) — **provenance only**, recorded so the
-    /// calibration is auditable, never a re-read directive baked into a recipe
-    /// (that would break the deterministic-apply contract; design-spec §8).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dmax_region: Option<[u32; 4]>,
-    /// Reuse-ready forms of the measured roll-fixed `Dmax` (`estimate
-    /// --d-max-region`): a paste-ready `--d-max <d>` flag, plus the recipe value
-    /// that is emitted inside [`Self::calibration`]. Flattened, so the flag is the
-    /// flat top-level key `d_max_flag`; `None` emits neither half.
-    #[serde(flatten)]
-    pub dmax_reuse: Option<DmaxReuseReady>,
     /// The calibration values this invocation measured, in recipe shape
     /// (`estimate`) — see [`CalibrationFragment`]. Absent when nothing measured.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2629,17 +2356,14 @@ fn parse_floats<const N: usize>(s: &str) -> std::result::Result<[f32; N], String
 // Recipe load / merge / validate (pure, unit-tested without the pipeline)
 // ---------------------------------------------------------------------------
 
-/// A loaded recipe plus the load-time facts the report needs: whether the file
-/// explicitly set `calibration.dmax` (after defaults fill in, a recipe
-/// that *wrote* `"fixed"` is indistinguishable from one that omitted it — the raw
-/// JSON is the only witness), and the `pipeline_version` an enveloped sidecar
-/// records for the build that produced it.
+/// A loaded recipe plus the load-time facts the report needs, read off the raw JSON
+/// (after defaults fill in, a stated default is indistinguishable from an omitted one),
+/// and the `pipeline_version` an enveloped sidecar records for the build that produced
+/// it.
 #[derive(Debug)]
 struct LoadedRecipe {
     doc: RecipeDoc,
-    calibration_dmax_present: bool,
-    /// Whether the file explicitly set `output.preset`. The same raw-JSON witness
-    /// problem as `calibration_dmax_present`: once the default became a *named* preset,
+    /// Whether the file explicitly set `output.preset`: once the default became a *named* preset,
     /// a resolved `gain-map-hdr` no longer says whether anyone chose it. The suffix
     /// diagnosis varies on that (see [`SuffixContext`]).
     output_preset_present: bool,
@@ -2701,7 +2425,7 @@ struct SidecarMeta<'a> {
 /// purpose: it is provenance, so an older build must not reject a newer build's
 /// extra `meta` fields, and nothing in it may influence the conversion. `params`
 /// is likewise raw here so the *identical* body checks (migration errors, the
-/// `calibration.dmax` witness, the typed `deny_unknown_fields` parse) apply to an
+/// presence witnesses, the typed `deny_unknown_fields` parse) apply to an
 /// enveloped and a bare recipe alike. `deny_unknown_fields` at this level keeps a
 /// third sibling key from being silently ignored.
 #[derive(Debug, Deserialize)]
@@ -2737,7 +2461,6 @@ fn load_recipe_for(path: Option<&Path>, flow: Flow) -> Result<LoadedRecipe> {
                 Flow::Legacy => RecipeDoc::Current(ResolvedConfig::default()),
                 Flow::New => RecipeDoc::New(Recipe::default()),
             },
-            calibration_dmax_present: false,
             output_preset_present: false,
             meta_pipeline_version: None,
             // No recipe file means nothing was archived and nothing is being
@@ -2750,7 +2473,7 @@ fn load_recipe_for(path: Option<&Path>, flow: Flow) -> Result<LoadedRecipe> {
             let txt = std::fs::read_to_string(p)
                 .map_err(|e| NcError::Usage(format!("cannot read recipe {}: {e}", p.display())))?;
             // Parse to a raw Value first to pick the shape and to run the
-            // migration checks / dmax-presence witness on the recipe *body*; the
+            // migration checks / presence witnesses on the recipe *body*; the
             // typed parse below still owns shape and unknown-key validation.
             // Unparseable JSON falls through to the typed parse's error (its
             // message names the recipe).
@@ -2775,8 +2498,8 @@ fn load_recipe_for(path: Option<&Path>, flow: Flow) -> Result<LoadedRecipe> {
                     None => (None, None),
                 };
             let mut value = value;
-            // Every document the current chain wrote before `legacy`/`custom` retired
-            // carries the three retired output selectors at their defaults (and
+            // Every document the current chain wrote before `legacy`/`custom` and the
+            // reference density retired carries their keys at the old defaults (and
             // `print.highlight_compress` at 0); drop those before the body is checked or
             // parsed, so an old sidecar gets as far as its first real migration error.
             let stripped = flow == Flow::Legacy
@@ -2800,9 +2523,6 @@ fn load_recipe_for(path: Option<&Path>, flow: Flow) -> Result<LoadedRecipe> {
                 };
                 return Ok(LoadedRecipe {
                     doc: RecipeDoc::New(r),
-                    // `recipe::check_body` refuses a `calibration.dmax`, so there is
-                    // no reference provenance to carry.
-                    calibration_dmax_present: false,
                     // No `output` section exists in this schema.
                     output_preset_present: false,
                     meta_pipeline_version,
@@ -2822,11 +2542,9 @@ fn load_recipe_for(path: Option<&Path>, flow: Flow) -> Result<LoadedRecipe> {
                 (None, Some(v)) if stripped => serde_json::from_value(v.clone()).map_err(usage)?,
                 (None, _) => serde_json::from_str(&txt).map_err(usage)?,
             };
-            let calibration_dmax_present = body.is_some_and(sets_calibration_dmax);
             let output_preset_present = body.is_some_and(sets_output_preset);
             Ok(LoadedRecipe {
                 doc: RecipeDoc::Current(cfg),
-                calibration_dmax_present,
                 output_preset_present,
                 meta_pipeline_version,
                 unpinned_curve: body.and_then(unpinned_curve),
@@ -3023,7 +2741,7 @@ enum UnpinnedCurve {
 /// the sigmoid) and again in `pipeline_version` 6 (to the exponential at the fixed
 /// decode's configuration), so a `reconstruction` block with no `curve` resolves to a
 /// different curve and placement rule than the same file got when it was written. That is exactly the
-/// silent reinterpretation design-spec §7.3 promises not to do, and nothing else
+/// silent reinterpretation design-spec §7.2 promises not to do, and nothing else
 /// catches it: a bare `--params` recipe carries no `meta.pipeline_version`, so
 /// [`pipeline_version_warning`] never sees it. Answering "no warning" for a
 /// curve-less `reconstruction` block was right while the curve-less resolution was
@@ -3068,23 +2786,8 @@ fn unpinned_curve(v: &serde_json::Value) -> Option<UnpinnedCurve> {
     // structurally free of false positives instead of tuned.
     // `recipe_dumped_by_this_build_replays_clean_under_strict` is the gate.
     //
-    // **An absent reference is deliberately *not* one of those shapes, since
-    // `core/calibration-recipe-section` — and that is a trade, not a free move.**
-    //
-    // The term this replaced fired on a curve that *omitted* `dmax`, which is precisely
-    // the population the migration error cannot see: that error catches the key being
-    // **present** at the old path. The two are disjoint, so a pre-move recipe silent on
-    // the reference now floats it unwarned. That residual gap belongs where the
-    // `"fixed"` one already sits — `core/conversion-versioning`'s per-version default
-    // table — and `pipeline_version_warning` does not cover it either, since a bare
-    // `--params` recipe carries no `meta.pipeline_version` (see this function's doc).
-    //
-    // It goes anyway, because keyed on `calibration.dmax` an absent reference is a
-    // **legitimate composition** rather than evidence of an older build. A pipeline
-    // profile is *defined* as a recipe with no `calibration` section (design-spec §8),
-    // and a roll calibration that measured only a base states one without `dmax` —
-    // exactly what `hanten estimate` emits without `--d-max-region`. Keeping the term
-    // made both documented shapes warn, and fail under `--strict`.
+    // An absent reference density was once one of those shapes; the reference retired
+    // (`nf-retire/dmax-machinery`), so there is nothing left to float.
     let curve_finding = match curve.get("type").and_then(|t| t.as_str()) {
         // This build writes both `gamma` and `anchor`, so a recipe without either is a
         // shape this build cannot produce.
@@ -3168,8 +2871,7 @@ fn curve_default_warning(
          above the film base. The same file written earlier resolved to the \
          mid-grey-anchored sigmoid (from 2026-08-08) or the exponential at gamma 1.0 and \
          Dmax 2.0 (before that), so this render will not match the original. Write an \
-         explicit tagged `reconstruction.curve` to pin the curve and its anchor (the \
-         reference is not a curve key — it is `calibration.dmax`)."
+         explicit tagged `reconstruction.curve` to pin the curve and its anchor."
             .to_string(),
         UnpinnedCurve::MovedDefaults => "the loaded recipe pins `reconstruction.curve.type` \
          but leaves a value to this build's default: the exponential's `gamma` went 1.0 → \
@@ -3235,9 +2937,12 @@ fn canonical_params_json(cfg: &ResolvedConfig) -> Result<String> {
 /// - the top-level `algorithm`/`density`/`sigmoid`/`simple` selection forms,
 ///   replaced by the one tagged `reconstruction` object (design-spec §8);
 /// - the top-level `film_base` section, whose contents moved into `calibration`
-///   (`core/calibration-recipe-section`). The other half of that move, the removed
-///   `reconstruction.curve.dmax`, is rejected by the curve's own deserializer, which
-///   is where its "unknown field" would otherwise be raised.
+///   (`core/calibration-recipe-section`). The removed `reconstruction.curve.dmax` is
+///   rejected by the curve's own deserializer, which is where its "unknown field" would
+///   otherwise be raised;
+/// - a stated `calibration.dmax`, the roll reference density that retired with the
+///   placements reading it (`nf-retire/dmax-machinery`). Its old default `"fixed"` is
+///   stripped before this runs.
 ///
 /// nc is unreleased, so all of these are rejected, never aliased.
 fn reject_legacy_recipe_keys(v: &serde_json::Value, context: &str) -> Result<()> {
@@ -3252,6 +2957,16 @@ fn reject_legacy_recipe_keys(v: &serde_json::Value, context: &str) -> Result<()>
              unchanged; only the path moved. A pipeline profile is a recipe with no \
              `calibration` section; a roll calibration is a recipe with nothing else. \
              See design-spec §8."
+        )));
+    }
+    if let Some(value) = v.get("calibration").and_then(|c| c.get("dmax")) {
+        return Err(NcError::Usage(format!(
+            "{context}: `calibration.dmax` ({value}) was removed: the roll reference \
+             density retired with the placements that read it, and the anchor is now \
+             placed from the film base (`reconstruction.curve.anchor = \
+             {{\"mid-at-base-offset\": <d>}}`). Remove the key — its old default \
+             `\"fixed\"` is still accepted, so a sidecar written before the retirement \
+             replays."
         )));
     }
     if v.get("input")
@@ -3314,9 +3029,7 @@ fn reject_legacy_recipe_keys(v: &serde_json::Value, context: &str) -> Result<()>
              shadow_balance, highlight_balance, balance_range}}) and exactly one \
              tagged curve under `reconstruction.curve` \
              ({{\"type\":\"exponential\", gamma, anchor}} or \
-             {{\"type\":\"characteristic\", stock}}); the roll's reference density is \
-             `calibration.dmax`, not a curve knob. \
-             See design-spec §8."
+             {{\"type\":\"characteristic\", stock}}). See design-spec §8."
         )));
     }
     Ok(())
@@ -3333,20 +3046,14 @@ fn sets_calibration_film_base(v: &serde_json::Value) -> bool {
         .is_some()
 }
 
-/// Whether a recipe/override JSON object explicitly carries `calibration.dmax` —
-/// the raw-JSON witness behind the report's `recipe` Dmax provenance.
-fn sets_calibration_dmax(v: &serde_json::Value) -> bool {
-    v.get("calibration").and_then(|c| c.get("dmax")).is_some()
-}
-
 /// Whether an override object explicitly carries `reconstruction.curve.stock` — the
 /// witness behind `roll`'s roll-consistency warning for the film stock.
 ///
 /// The stock is the most roll-fixed choice there is: it is a property of the physical roll
 /// that was in the camera, so a per-frame override says one frame was a different film.
 /// That is almost always a mistake, and it changes the frame's whole reconstruction — its
-/// per-channel contrast *and* where mid-grey lands — so it is a louder break than a
-/// different `dmax`. A raw-JSON key probe like [`sets_calibration_dmax`], for the same reason:
+/// per-channel contrast *and* where mid-grey lands. A raw-JSON key probe like
+/// [`sets_calibration_film_base`], for the same reason:
 /// an override that restates the shared value is still a per-frame declaration, and a
 /// resolved-value comparison cannot see it.
 fn sets_curve_stock(v: &serde_json::Value) -> bool {
@@ -3358,10 +3065,10 @@ fn sets_curve_stock(v: &serde_json::Value) -> bool {
 
 /// Whether a recipe/override JSON object explicitly carries
 /// `reconstruction.curve.anchor` — the witness behind `roll`'s roll-consistency warning
-/// for the anchor placement, which is a roll-level rule by design (design-spec §7.3): it
-/// decides which tone the roll's reference density pins, so a per-frame override changes
+/// for the anchor placement, which is a roll-level rule by design (design-spec §7.2): it
+/// decides where mid-grey lands, so a per-frame override changes
 /// that frame's tonal placement while every other frame keeps the roll's. A raw-JSON probe
-/// like [`sets_calibration_dmax`] for the same reason — a restating override is still a
+/// like [`sets_calibration_film_base`] for the same reason — a restating override is still a
 /// per-frame assertion.
 fn sets_curve_anchor(v: &serde_json::Value) -> bool {
     v.get("reconstruction")
@@ -3384,7 +3091,7 @@ fn sets_curve_anchor(v: &serde_json::Value) -> bool {
 /// non-object `reconstruction.density`, so the shape reaching `get("scale")` is the one
 /// this reads. Without that guard a positional-array `density` deserializes fine yet
 /// answers `None` here, and the reset below would silently discard a stated gain. The
-/// siblings ([`sets_curve_anchor`], [`sets_calibration_dmax`], [`sets_curve_stock`]) rely on
+/// siblings ([`sets_curve_anchor`], [`sets_curve_stock`]) rely on
 /// the same guarantee from `DensityCurve`'s deserializer — a plain derive on any of
 /// those sub-objects would reintroduce this class without a gate noticing.
 fn sets_density_scale(v: &serde_json::Value) -> bool {
@@ -3394,7 +3101,7 @@ fn sets_density_scale(v: &serde_json::Value) -> bool {
         .is_some()
 }
 
-/// The recipe spelling of a placement (`"white-at-dmax"`, `{"black-at-base":0.005}`) for
+/// The recipe spelling of a placement (`{"mid-at-base-offset":0.5}`) for
 /// a diagnostic message — what the user would have to write to restate it.
 fn anchor_spelling(a: AnchorPlacement) -> String {
     serde_json::to_string(&a).unwrap_or_else(|_| format!("{a:?}"))
@@ -3501,37 +3208,18 @@ fn curve_switch_dropped_anchor(before: &Reconstruction, after: &Reconstruction) 
 /// Whether a recipe/override JSON object explicitly carries `output.preset` — the
 /// witness behind `roll`'s roll-consistency warning for the output policy, and behind
 /// `convert`'s suffix diagnosis ([`SuffixContext`]). A raw-JSON probe like
-/// [`sets_calibration_dmax`], not a resolved-value comparison, because an override that
+/// [`sets_calibration_film_base`], not a resolved-value comparison, because an override that
 /// *restates* the shared preset is still a per-frame assertion of the output policy
 /// and the roll report has no other place to surface it.
 fn sets_output_preset(v: &serde_json::Value) -> bool {
     v.get("output").and_then(|o| o.get("preset")).is_some()
 }
 
-/// Whether any of the four (clap-mutually-exclusive) `Dmax` flags was passed —
-/// the CLI witness for the report's `Dmax` provenance, and the merge's "replace
-/// the recipe curve's `dmax`" trigger.
-fn dmax_flag_given(o: &DmaxOverrides) -> bool {
-    o.d_max.is_some() || o.fixed_d_max || o.auto_d_max || o.no_d_max
-}
-
-/// Resolve the `--anchor-*` family into a placement, or `None` if no flag was given.
-///
-/// One mutually-exclusive rule (like `dmax`), so whichever flag is present replaces the
-/// resolved placement entirely rather than editing a field of it — clap enforces the
-/// exclusivity. The characteristic curve carries no placement — it reads mid-grey off
-/// the published response — and [`merge`] rejects any of these flags there rather than
-/// resolving one.
+/// Resolve `--anchor-mid-offset` into a placement, or `None` if it was not given.
+/// The characteristic curve carries no placement, and [`merge`] rejects the flag there
+/// rather than resolving one.
 fn anchor_flag_placement(a: &AnchorOverrides) -> Option<AnchorPlacement> {
-    if let Some(f) = a.anchor_mid_fraction {
-        Some(AnchorPlacement::MidAtDmaxFraction(f))
-    } else if a.anchor_white_at_reference {
-        Some(AnchorPlacement::WhiteAtDmax)
-    } else if let Some(f) = a.anchor_black_floor {
-        Some(AnchorPlacement::BlackAtBase(f))
-    } else {
-        a.anchor_mid_offset.map(AnchorPlacement::MidAtBaseOffset)
-    }
+    a.anchor_mid_offset.map(AnchorPlacement::MidAtBaseOffset)
 }
 
 /// Apply CLI overrides on top of a (recipe or default) config; flags win.
@@ -3577,10 +3265,8 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
             .map(|n| FilmStock::parse(n).map_err(usage))
             .transpose()?;
         let expansion = preset.expand(stock)?;
-        // **The roll's reference is not in here to lose.** A preset names a *look*, and
-        // since `core/calibration-recipe-section` the reference density lives in
-        // `calibration.dmax`, which no preset writes — so replacing the curve wholesale
-        // is simply correct.
+        // A preset names a *look* and writes no `calibration` key, so replacing the
+        // curve wholesale loses no roll measurement.
         cfg.reconstruction.curve = expansion.curve;
         cfg.reconstruction.density.scale = expansion.density_scale;
         cfg.print.print_exposure = expansion.print_exposure;
@@ -3588,8 +3274,7 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
 
     // --density-curve: switch between the curve variants. Same-type is a no-op (keeps
     // the recipe's curve knobs); a switch takes the new variant's defaults for every
-    // knob. The reference density is `calibration.dmax`, outside the object being
-    // switched, so it survives every switch untouched. `anchor` is reset per variant —
+    // knob. `anchor` is reset per variant —
     // `curve_switch_dropped_anchor` warns when the reset discards a stated rule.
     if let Some(c) = args.density_curve
         && cfg.reconstruction.curve.curve_type() != c
@@ -3648,7 +3333,7 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
         density.balance_range = BalanceRange::Auto;
     }
 
-    // `--density-gamma` and the `--anchor-*` family ⇒ the exponential's `gamma` and
+    // `--density-gamma` and `--anchor-mid-offset` ⇒ the exponential's `gamma` and
     // `anchor`; refused, not ignored, under the characteristic curve, which carries
     // neither — a flag that sets one is asking it to be a different curve.
     match curve {
@@ -3671,11 +3356,11 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
             }
             if anchor_flag_placement(&args.anchor).is_some() {
                 return Err(usage(
-                    "the --anchor-* family places the display-white anchor on the \
-                     exponential curve, but the resolved curve is characteristic — \
-                     it pins mid-grey where the stock's published response puts \
-                     it, which is the placement the film itself defines. Pass \
-                     --density-curve exponential to place the anchor by hand"
+                    "--anchor-mid-offset places the exponential curve's anchor, but the \
+                     resolved curve is characteristic — it pins mid-grey where the \
+                     stock's published response puts it, which is the placement the \
+                     film itself defines. Pass --density-curve exponential to place \
+                     the anchor by hand"
                         .into(),
                 ));
             }
@@ -3698,26 +3383,6 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
                 )));
             }
         }
-    }
-
-    // Dmax reference ⇒ `calibration.dmax`: the four flags are mutually exclusive
-    // (clap-enforced); whichever is given replaces the resolved value entirely.
-    //
-    // The reference is a roll measurement, so it is stated whatever curve the look
-    // resolves to, and a `--params` calibration composes with any profile. Which
-    // configs actually *read* it is a separate question, and the answer is never a
-    // refusal: `unconsumed_dmax_warning` reports a stated reference that the
-    // characteristic curve will not consume, and `--strict` promotes it. `validate`
-    // checks the *value* (an explicit reference must be finite and positive) whatever
-    // reads it.
-    if let Some(v) = args.dmax.d_max {
-        cfg.calibration.dmax = DmaxSource::Explicit(v);
-    } else if args.dmax.fixed_d_max {
-        cfg.calibration.dmax = DmaxSource::Fixed;
-    } else if args.dmax.auto_d_max {
-        cfg.calibration.dmax = DmaxSource::Auto;
-    } else if args.dmax.no_d_max {
-        cfg.calibration.dmax = DmaxSource::None;
     }
 
     // print
@@ -3758,58 +3423,13 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
     Ok(cfg)
 }
 
-/// **Which region does the measurement use?** Whether this resolved
-/// reconstruction contains a measurement that should be taken over the effective
-/// area rather than the whole frame.
-///
-/// One flag used to answer this *and* [`region_reaches_a_rendered_pixel`], and the
-/// two questions have different answers: keyed on the narrower one, a base-derived
-/// placement measured the reference over the **whole frame** while the same report
-/// carried an `effective_area` asserting the holder was cut — one field with two
-/// meanings, and the contaminated value is the one the calibrate-once workflow has
-/// users copy into `--d-max`. So the region goes to the measurement whenever
-/// [`DmaxSource::Auto`] is resolved, whatever the placement does with the result.
-///
-/// Pixels stay byte-identical under the base-derived placements
-/// (`black-at-base`, `mid-at-base-offset`) because the reference reaches nothing
-/// there — the same fact [`region_reaches_a_rendered_pixel`] relies on, used in the
-/// other direction.
-///
-/// Today exactly one measurement reads it. As further consumers land
-/// (`film-base/holder-masked-measurement`,
-/// `algo/auto-anchor-interior-measurement`'s balance range) each adds its own
-/// condition here.
-fn measures_over_region(cfg: &ResolvedConfig) -> bool {
-    // **Both halves.** The source alone is not enough now that it lives outside the
-    // curve: a `characteristic` render never calls `resolve_dmax` at all, so
-    // `calibration.dmax = auto` beside it measures nothing and a region resolved for it
-    // would report a measurement that never happened.
-    cfg.calibration.dmax == DmaxSource::Auto && cfg.reconstruction.curve.consumes_reference()
-}
-
-/// **Did reading the IR plane change a rendered pixel?** Whether the region the
-/// measurement was taken over reaches the output, which is what decides whether
-/// consuming the IR plane counts as "using" it for the "IR preserved but not used"
-/// note and so for `--strict`.
-///
-/// Strictly narrower than [`measures_over_region`]: `dmax = auto` alone is not
-/// consumption, because a reference-free placement (`--anchor-black-floor`,
-/// `--anchor-mid-offset`) discards the measured anchor and the output is
-/// byte-identical to the non-auto run. Keying suppression on the source alone made
-/// `--strict` stop failing on exactly those configs; the same two conditions gate
-/// the `film-master` rejection and roll's not-frozen warning, for the same reason.
-fn region_reaches_a_rendered_pixel(cfg: &ResolvedConfig) -> bool {
-    // Written as "measured, *and* the placement reads it" so the narrowing is
-    // structural: a condition added to the measurement cannot be forgotten here.
-    measures_over_region(cfg) && render_reads_the_reference(&cfg.reconstruction)
-}
-
 /// The flag arms for the sections both chains read — `input`, the film base and
 /// `measure` — shared by [`merge`] and [`recipe::merge`], so the two chains cannot
 /// resolve the same flag differently.
 ///
 /// The film base is passed as its field rather than the section, because the two
-/// chains' `calibration` sections differ: the new one has no reference density.
+/// chains keep separate `calibration` types ([`CalibrationParams`] and
+/// `recipe::Calibration`).
 pub(crate) fn merge_shared_sections(
     input: &mut InputParams,
     film_base: &mut Option<FilmBaseSource>,
@@ -4530,20 +4150,6 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
         Some(FilmBaseSource::Region(_)) | Some(FilmBaseSource::Auto) | None => {}
     }
 
-    // Calibration reference: an explicit reference is a corrected density — scene
-    // white sits at a positive density above the base's `D = 0`, so a non-positive
-    // / non-finite value (e.g. a sign typo) would brighten past white or blow out.
-    // Reject it loudly; `Fixed`/`Auto`/`None` carry no value to check.
-    //
-    // A *value* rule over the whole config, not a per-curve one: `calibration.dmax`
-    // is stated independently of the look, so a bad number is a bad number whichever
-    // reconstruction is resolved — including one that will not read it. Whether it
-    // is read at all is `unconsumed_dmax_warning`'s question, and a warning rather
-    // than an error, so a roll calibration composes with any profile.
-    if let DmaxSource::Explicit(d) = cfg.calibration.dmax {
-        positive("--d-max", &[d])?;
-    }
-
     // Measurement region: a *value* rule, so it lives here rather than in
     // `validate_convert` — `roll` and every per-frame override reach only this
     // gate, and a stage-only check would let a whole roll decode before failing
@@ -4593,26 +4199,16 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
         }
     }
 
-    // Anchor placement — the exponential's. The characteristic curve carries none and
-    // is skipped below (its tables are checked instead).
+    // Anchor placement — the exponential's. **Ordered after the slope check above,
+    // deliberately:** the anchor divides by the slope, and diagnosing that division
+    // first reported a zero (or `nan`) slope as "too small to place the anchor" —
+    // neither is small. Slope positivity is the more specific diagnosis, so it wins.
     //
-    // **Ordered after the slope check above, deliberately.** Every rule but
-    // `white-at-reference` divides by the slope, and diagnosing that division first
-    // reported a zero (or `nan`) slope as "too small to place the anchor" — neither is
-    // small — while steering the user to `--anchor-white-at-reference`, a remedy that
-    // then failed anyway on the positivity rule. Slope positivity is the more specific
-    // diagnosis, so it wins.
-    // The characteristic curve has neither a slope nor a placement rule to check —
-    // it reads both off the published curve — so both rules below are **skipped**
-    // for it, and its tables are checked instead
-    // (`film_stock::check_tables`). Skipped, never returned: this used to `return`
-    // out of the whole function, which silently disabled every rule *after* this
-    // block (the print value checks, `--linear-range`, `validate_output_preset`'s
-    // film-master rules, and the
-    // trailing missing-film-base rule) for any `characteristic` config — a recipe
-    // reached exit 0 with configs those rules exist to refuse. Reachable only
-    // through `--params`, since the flag paths are caught earlier by
-    // `validate_convert`'s presence checks, which is what hid it.
+    // The characteristic curve has neither a slope nor a placement rule to check — it
+    // reads both off the published curve — so the rules below are **skipped** for it,
+    // and its tables are checked instead (`film_stock::check_tables`). Skipped, never
+    // returned: this used to `return` out of the whole function, which silently
+    // disabled every rule *after* this block for any `characteristic` config.
     let slope = match curve {
         DensityCurve::Exponential(e) => Some((e.gamma, "--density-gamma")),
         DensityCurve::Characteristic(c) => {
@@ -4624,39 +4220,6 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
         && let Some(placement) = curve.anchor()
     {
         match placement {
-            AnchorPlacement::WhiteAtDmax => {}
-            // Finite and in (0, 1]. At 0 the anchor stops depending on the reference at
-            // all (mid-grey pinned at the density origin — the film base — rendering the
-            // whole frame above mid-grey); negative pushes it below the base, where no
-            // sample exists. Above 1 mid-grey sits *past* the roll's display-white
-            // reference, which is not a photographic rendering of anything. F = 1 is the
-            // legal edge: mid-grey lands on the reference and white above it.
-            AnchorPlacement::MidAtDmaxFraction(f) => {
-                finite("--anchor-mid-fraction", &[f])?;
-                if f <= 0.0 || f > 1.0 {
-                    return Err(usage(format!(
-                        "--anchor-mid-fraction ({f}) must be in (0, 1] — it places \
-                         mid-grey at that fraction of the roll's reference density (0.5 \
-                         renders mid-grey halfway up the roll's range; 1 puts it on the \
-                         reference itself)"
-                    )));
-                }
-            }
-            // A linear output value in (0, 1). Zero or negative has no logarithm, so the
-            // anchor would be non-finite; at 1 the film base renders *at* display white
-            // and the whole frame is white. The bound is the domain of the rule, not a
-            // taste judgement — 0.5 is legal and simply very pale.
-            AnchorPlacement::BlackAtBase(floor) => {
-                finite("--anchor-black-floor", &[floor])?;
-                if floor <= 0.0 || floor >= 1.0 {
-                    return Err(usage(format!(
-                        "--anchor-black-floor ({floor}) must be in (0, 1) — it is the \
-                         linear output the film base renders to, against the reference \
-                         white (0.005 encodes to about 16/255). At 0 there is no \
-                         logarithm to take; at 1 the base renders as display white"
-                    )));
-                }
-            }
             // A density above the base, so strictly positive: at 0 mid-grey is pinned on
             // the base itself (the base renders as mid-grey — the whole frame above it),
             // and negative places it below the base where no sample exists.
@@ -4664,41 +4227,15 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
                 positive("--anchor-mid-offset", &[offset])?;
             }
         }
-        // The guard is on the **resolved** anchor, not on a proxy quotient. Each rule
-        // divides something different by the slope, and `MID_GREY_OUTPUT_DECADES /
-        // slope` bounds only one of them: `black-at-base` divides `−log10(floor)`, which
-        // is unbounded as the floor shrinks, so a floor of 1e-45 at gamma 1e-37 passed
-        // the proxy (0.745/1e-37 is finite) with a real anchor of `inf` — and rendered
-        // an all-black frame at exit 0 with no warning at all. Resolving the rule is the
-        // only check that cannot drift from what the render will do.
-        //
-        // `Auto` measures the reference per frame, so it is unknown here; `0.0` stands
-        // in. That does not weaken the check — the base-derived rules ignore the
-        // reference outright and the reference-derived ones only scale it by `f ≤ 1`, so
-        // every overflow this guard is about comes from the slope division.
-        let reference = match cfg.calibration.dmax {
-            DmaxSource::Explicit(d) => d,
-            DmaxSource::Fixed => crate::algo::density::NOMINAL_DMAX,
-            DmaxSource::Auto | DmaxSource::None => 0.0,
-        };
-        let anchor = placement.anchor(reference, slope);
+        // The guard is on the **resolved** anchor, not on a proxy quotient, so it cannot
+        // drift from what the render will do.
+        let anchor = placement.anchor(slope);
         if !anchor.is_finite() {
             return Err(usage(format!(
-                // The remedy says only what this rule inspected. It used to end
-                // "or --anchor-white-at-reference, which needs no such division",
-                // recommending a placement whose availability it never checked —
-                // and `--new-flow` refuses all three reference-reading placements.
-                // (This rule no longer runs under `--new-flow` at all: the decode's
-                // flags merge into the new chain's recipe, whose own guard is
-                // `recipe::validate`.) It gets worse rather than better with time:
-                // `nf-retire/dmax-machinery` deletes the flag outright. The *explanation* still names it, which is a fact about
-                // the arithmetic rather than a recommendation, and is what lets a
-                // legacy user pick a different placement if they want one.
                 "the resolved anchor placement is not usable: it derives a non-finite \
-                 anchor ({anchor}) at {slope_flag} {slope:e}. Every placement but \
-                 --anchor-white-at-reference divides by the slope, and that quotient \
-                 overflows f32 for a very small slope (or, under --anchor-black-floor, a \
-                 very small floor). Use a photographic slope"
+                 anchor ({anchor}) at {slope_flag} {slope:e}. The placement divides by \
+                 the slope, and that quotient overflows f32 for a very small slope. Use \
+                 a photographic slope"
             )));
         }
         // A finite anchor is not enough. The curve evaluates `slope · (density − anchor)`,
@@ -4714,7 +4251,7 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
                 "the resolved anchor placement is not usable: the anchor ({anchor:e}) is \
                  finite, but the curve's exponent (slope × (density − anchor)) overflows \
                  f32 at {slope_flag} {slope:e}, so every sample would render as exactly \
-                 0.0 — a silently black frame. Use a smaller anchor placement, or a \
+                 0.0 — a silently black frame. Use a smaller --anchor-mid-offset, or a \
                  smaller slope"
             )));
         }
@@ -4788,8 +4325,8 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
 /// Every preset is atomic — container, depth and profile are resolved from it, and
 /// no knob states them any more — so the one rule left is `film-master`'s: it bypasses
 /// every downstream control, so it rejects a non-default one rather than silently
-/// ignoring it, and rejects the two *frame-local measurements* — `auto` `Dmax` and an
-/// actually-consulted `auto` `balance_range` — which normalize per frame and break the
+/// ignoring it, and rejects the one *frame-local measurement* left — an
+/// actually-consulted `auto` `balance_range` — which normalizes per frame and breaks the
 /// cross-frame consistency a master exists to preserve. (A rule refusing the display tone
 /// on presets that could not carry it retired with the other tones: every display preset
 /// applies the one that is left.)
@@ -4804,30 +4341,10 @@ fn validate_output_preset(cfg: &ResolvedConfig) -> Result<()> {
 fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
     let usage = NcError::Usage;
 
-    // Rule 1a — frame-local auto Dmax. Checked before the control sweep because it
-    // is the master-specific reason, not a generic "non-default" complaint.
-    //
-    // Gated on `reads_reference`, not on the source alone: `auto` is frame-local
-    // adaptation only if the placement consumes what it measures. Under a base-derived
-    // rule the measurement is discarded, so the master *is* cross-frame consistent and
-    // rejecting it refuses a valid config.
-    if cfg.calibration.dmax == DmaxSource::Auto && render_reads_the_reference(&cfg.reconstruction) {
-        return Err(usage(
-            "--output-preset film-master rejects a frame-local auto display-white \
-             anchor (--auto-d-max / calibration.dmax = \"auto\"): it measures \
-             the anchor per frame, which normalizes exposure frame-by-frame and breaks \
-             the cross-frame consistency the master exists to preserve. Use the \
-             roll-fixed anchor — the default --fixed-d-max, an explicit --d-max <d> \
-             measured once with `hanten estimate --d-max-region` — or a base-derived \
-             anchor (the default --anchor-mid-offset), which reads no reference at all."
-                .into(),
-        ));
-    }
-
-    // Rule 1b — the *other* frame-local measurement, and the same hazard verbatim:
-    // an `auto` regional-balance range measures this frame's 0.5/99.5 corrected-density
-    // percentiles (`algo::density::measure_balance_range`), so two frames of one roll
-    // get different tone-ramp anchors and their masters are not mutually consistent.
+    // Rule 1a — a frame-local measurement: an `auto` regional-balance range measures
+    // this frame's 0.5/99.5 corrected-density percentiles
+    // (`algo::density::measure_balance_range`), so two frames of one roll get different
+    // tone-ramp anchors and their masters are not mutually consistent.
     //
     // Rejected only when the range is genuinely consulted: `regional_balance`
     // short-circuits before measuring whenever the two balances are equal — including
@@ -4844,8 +4361,8 @@ fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
              \"auto\") when a balance is actually applied (shadow_balance {:?} vs \
              highlight_balance {:?}): the ramp anchors are measured from this frame's \
              density percentiles, so two frames of a roll would be corrected against \
-             different anchors and their masters would not be mutually consistent — the \
-             same reason the master rejects auto Dmax. Measure the range once with `hanten \
+             different anchors and their masters would not be mutually consistent. \
+             Measure the range once with `hanten \
              convert` on a representative frame and reuse it via --balance-range LO,HI, \
              or leave the balances equal (an equal pair is a tone-independent offset and \
              consults no range).",
@@ -4853,7 +4370,7 @@ fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
         )));
     }
 
-    // Rule 1c — every non-default downstream control, named individually so the
+    // Rule 1b — every non-default downstream control, named individually so the
     // error says which one and where it came from. `film-master` encodes stage 4
     // directly, so each of these would otherwise be silently dropped.
     let d = PrintParams::default();
@@ -5262,6 +4779,9 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
             "{flag} was removed with the sigmoid curve: {remedy}."
         )));
     }
+    if let Some((flag, what)) = removed_dmax_flag(&args.dmax) {
+        return Err(NcError::Usage(removed_dmax_message(flag, what)));
+    }
     // The removed depth switch, and `--out-depth`, which replaced it and has since
     // retired too. The older pair is pointed straight at the preset, not at a flag
     // that no longer exists.
@@ -5368,6 +4888,10 @@ fn removed_sigmoid_flag(flags: &RemovedSigmoidFlags) -> Option<(&'static str, &'
     // placements and the display tone the current chain offers.
     const KNEE: &str = "the exponential has no knees, and highlight roll-off belongs to \
                         the display tone (`--display-tone-headroom`)";
+    const PLACEMENT: &str = "reference-based placement retired with the reference \
+                             density; the exponential's one placement is \
+                             `--anchor-mid-offset`, mid-grey a stated density above the \
+                             film base (the characteristic curve takes none)";
     [
         (
             "--sigmoid-contrast",
@@ -5379,19 +4903,62 @@ fn removed_sigmoid_flag(flags: &RemovedSigmoidFlags) -> Option<(&'static str, &'
         (
             "--sigmoid-mid-fraction",
             flags.sigmoid_mid_fraction.is_some(),
-            "the same placement is `--anchor-mid-fraction` (under `--new-flow`, the \
-             decode's one placement is `--anchor-mid-offset`)",
+            PLACEMENT,
         ),
         (
             "--sigmoid-white-at-d-max",
             flags.sigmoid_white_at_d_max,
-            "the same placement is `--anchor-white-at-reference` (under `--new-flow`, \
-             the decode's one placement is `--anchor-mid-offset`)",
+            PLACEMENT,
         ),
     ]
     .into_iter()
     .find(|(_, present, _)| *present)
     .map(|(flag, _, remedy)| (flag, remedy))
+}
+
+/// The first retired reference-density or anchor flag the user passed, with what it
+/// did.
+fn removed_dmax_flag(flags: &RemovedDmaxFlags) -> Option<(&'static str, &'static str)> {
+    const REFERENCE: &str = "set the roll reference density";
+    [
+        ("--d-max", flags.d_max.is_some(), REFERENCE),
+        ("--fixed-d-max", flags.fixed_d_max, REFERENCE),
+        ("--auto-d-max", flags.auto_d_max, REFERENCE),
+        ("--no-d-max", flags.no_d_max, REFERENCE),
+        (
+            "--anchor-white-at-reference",
+            flags.anchor_white_at_reference,
+            "pinned display white at the reference density",
+        ),
+        (
+            "--anchor-mid-fraction",
+            flags.anchor_mid_fraction.is_some(),
+            "pinned mid-grey at a fraction of the reference density",
+        ),
+        (
+            "--anchor-black-floor",
+            flags.anchor_black_floor.is_some(),
+            "pinned the film base to an output floor",
+        ),
+    ]
+    .into_iter()
+    .find(|(_, present, _)| *present)
+    .map(|(flag, _, what)| (flag, what))
+}
+
+/// The migration error for a retired reference-density or anchor flag — shared by
+/// `convert` and `estimate --d-max-region` so they say the same thing. The remedy is
+/// "drop the flag", which holds everywhere; the flags it then names are scoped to the
+/// exponential, the one curve that accepts them (on both chains), because the
+/// characteristic curve refuses both.
+fn removed_dmax_message(flag: &str, what: &str) -> String {
+    format!(
+        "{flag} was removed: it {what}. The roll reference density and the placements \
+         that read it are gone. Drop the flag: on the exponential curve the anchor is \
+         placed from the film base, mid-grey `--anchor-mid-offset D` density above it \
+         (default 0.62, slope `--density-gamma`); the characteristic curve places \
+         mid-grey from the stock's published response and takes neither."
+    )
 }
 
 /// `--density-curve`'s parser: the curve names, plus a migration message for the
@@ -5533,7 +5100,7 @@ fn preflight_memory(
 /// memory model's film-base phase: an explicit base reads no pixels, a region
 /// materializes exactly its rectangle, and `auto` materializes the frame interior
 /// (`film_base::auto_interior_pixels`, resolved inside the model against the probed
-/// shape). `estimate` adds its `--grid` / `--d-max-region` rectangles on top.
+/// shape). `estimate --grid` substitutes its own rectangle.
 fn sample_plan(source: &FilmBaseSource) -> SamplePlan {
     match source {
         FilmBaseSource::Explicit(_) => SamplePlan::none(),
@@ -5681,7 +5248,6 @@ fn convert_frame(
     cfg: &ResolvedConfig,
     chain: FrameChain<'_>,
     input_from_cli: InputFromCli,
-    dmax_setting: DmaxSetting,
     conversion_preset: Option<ConversionPresetResult>,
     // Files this run *read* besides the scan (`--params`, a roll's `--frames`), so a
     // cleanup never removes one — see `render_new_flow_frame`.
@@ -5734,20 +5300,6 @@ fn convert_frame(
         film_base_source: Some(base_source.clone()),
         ..Report::default()
     };
-
-    // Domain guard for an explicit / reference-derived `Dmax` — see
-    // `explicit_dmax_domain_warning`. Fires the (`--strict`-promotable) warning when
-    // the anchor's density domain no longer matches what the render subtracts it from.
-    if let Some(msg) = explicit_dmax_domain_warning(cfg) {
-        push_warning_buf(warnings, log, msg);
-    }
-
-    // A stated reference the resolved reconstruction will never read. Mutually
-    // exclusive with the domain guard above — that one needs the reference to *be*
-    // read — so at most one of the two fires.
-    if let Some(msg) = unconsumed_dmax_warning(cfg) {
-        push_warning_buf(warnings, log, msg);
-    }
 
     // Stage 0 — memory preflight, on a metadata-only header probe. This must run
     // *before* decode allocates: the whole point is to reject an oversized frame
@@ -5933,52 +5485,21 @@ fn convert_frame(
     // run-to-run noise even on an 18.7 MP frame, so there is nothing to save by
     // skipping it.
     //
-    // Whether anything *measures over* it is a separate question
-    // (`measures_over_region`): the region is handed to the render only then, so a
-    // run that measures nothing off the frame stays byte-identical.
-    //
-    // That same question decides whether an **empty** region is fatal. Refusing
-    // unconditionally contradicted the paragraph above: a run nothing measures over
-    // would produce byte-identical output, yet failed at exit 2 with nothing
-    // written, while `inspect`/`estimate` degraded the identical measurement to a
-    // warning at exit 0. So it is a refusal only for a run that has a consumer with
-    // no region to measure over, and a warning otherwise — with no
-    // `report.effective_area`, because there is no region to report. The knock-on is
-    // that `--measure-inset` is inert on such a run; the warning is the observable.
-    //
-    // On the new flow nothing renders from the region: its one per-frame measurement,
-    // an auto white balance, retired in favour of a roll's (`hanten measure-roll`,
-    // which reads the same effective area). So both predicates are false there.
-    let (region_measured, region_reaches_a_pixel) = match chain {
-        FrameChain::Legacy => (
-            measures_over_region(cfg),
-            region_reaches_a_rendered_pixel(cfg),
-        ),
-        FrameChain::New(_) => (false, false),
-    };
-    let measure_area = match film_base::effective_area(&image, cfg.measure.inset) {
+    // Nothing in a `convert` measures over it today — its one per-frame consumer, the
+    // auto reference density, retired (`nf-retire/dmax-machinery`), and on the new flow
+    // the roll's white balance is measured over it by `hanten measure-roll` instead —
+    // so an **empty** region is a warning rather than a refusal, with no
+    // `report.effective_area`, because there is no region to report. A consumer added
+    // here must decide whether an empty region becomes fatal for it.
+    match film_base::effective_area(&image, cfg.measure.inset) {
         Ok(area) => {
             report.effective_area = Some(area);
             for w in film_base::effective_area_warnings(&area) {
                 push_warning_buf(warnings, log, w);
             }
-            Some(area)
         }
-        // Both arms rebuild the message from the error's own text rather than
-        // `Display`, which prefixes the kind (`usage: …`) — a warning must not
-        // carry it, and a returned `NcError::Usage` would print it twice.
-        Err(e) if region_measured => {
-            // `validate_convert` refused an out-of-bound inset before the decode, so
-            // the only error reachable here is the empty region — and the extra
-            // remedy is accurate for it. Only the current chain gets here: nothing on
-            // the new one measures over the region.
-            return Err(NcError::Usage(format!(
-                "{} Alternatively drop --auto-d-max: the per-frame reference is what \
-                 measures over the region, and with nothing reading it an empty region \
-                 is a warning rather than a refusal.",
-                e.message()
-            )));
-        }
+        // Rebuilt from the error's own text rather than `Display`, which prefixes the
+        // kind (`usage: …`) — a warning must not carry it.
         Err(e) => {
             push_warning_buf(
                 warnings,
@@ -5990,20 +5511,8 @@ fn convert_frame(
                     e.message()
                 ),
             );
-            None
         }
-    };
-    // The region handed to whichever chain measures over it — resolved once, so
-    // `region_measured` stays the one gate and a region cannot reach a run that
-    // measures nothing on either chain.
-    let measured_region = measure_area
-        .filter(|_| region_measured)
-        .map(|area| area.region);
-    // The reconstruction stage's reference input: the roll's configured source plus
-    // the region an `auto` source measures over. Paired here rather than threaded as
-    // two arguments — see `types::DmaxInput`.
-    let mut dmax_input = DmaxInput::new(cfg.calibration.dmax);
-    dmax_input.region = measured_region;
+    }
 
     // Note an IR plane that's carried but not consumed. Keyed on what each stage
     // actually did, never on a prediction from the inputs: a marker-verified plane
@@ -6011,20 +5520,12 @@ fn convert_frame(
     // predicting consumption silently suppressed this warning — and so `--strict` —
     // on exactly that case.
     //
-    // The measurement area suppresses it only when **both** halves hold: the march
-    // moved the rectangle (`holder_applied` — "measured, no holder" moved nothing),
-    // *and* the region reaches a rendered pixel. Either alone leaves the plane
-    // genuinely unused in the render — which is why this reads
-    // `region_reaches_a_rendered_pixel` and not `measures_over_region`: the latter
-    // is true under a base-derived placement that discards the measurement, where
-    // the output is byte-identical to the non-auto run.
+    // The measurement area never suppresses it: nothing in the render reads the region,
+    // so a marched holder (`effective_area.holder_applied`) reaches no pixel. That is
+    // also why the wording is about the **conversion** and names `effective_area`:
+    // `convert` resolves the area unconditionally, so a run legitimately reports a
+    // measured `holder_applied: true` beside this note.
     //
-    // That is also why the wording is about the **conversion** and names
-    // `effective_area` rather than repeating `inspect`'s sentence: `convert`
-    // resolves the area unconditionally, so a default-anchor run legitimately
-    // reports a measured `holder_applied: true` beside this note. "Not used in
-    // Step 1" would contradict the field one line above it, and the same sentence
-    // would mean "not measured" on `inspect` and "never reached a pixel" here.
     // Not emitted when the plane is being exported
     // (`--export-ir` is the user handling it, so warning — and failing under
     // `--strict` — would be wrong; keeps `--strict --export-ir` usable on the
@@ -6033,7 +5534,6 @@ fn convert_frame(
     if info.ir_present
         && export_ir.is_none()
         && !base.ir_mask_applied
-        && !(region_reaches_a_pixel && measure_area.is_some_and(|a| a.holder_applied))
         && !shape_only_holder_note
         && !ir_unusable_note
     {
@@ -6108,13 +5608,8 @@ fn convert_frame(
                     )));
                 }
             };
-            let source = stages::render_display_source(
-                &image,
-                &base.base,
-                &cfg.reconstruction,
-                &cfg.print,
-                dmax_input,
-            )?;
+            let source =
+                stages::render_display_source(&image, &base.base, &cfg.reconstruction, &cfg.print)?;
             let convert = source.convert;
             let mut timings = source.timings;
             let display_started = Instant::now();
@@ -6135,13 +5630,8 @@ fn convert_frame(
             // The same shared display source as every other display preset, stopped
             // one stage earlier — `render_linear` without `encode_transfer`, so the
             // samples stay display-linear BT.2020 and no transfer is ever applied.
-            let source = stages::render_display_source(
-                &image,
-                &base.base,
-                &cfg.reconstruction,
-                &cfg.print,
-                dmax_input,
-            )?;
+            let source =
+                stages::render_display_source(&image, &base.base, &cfg.reconstruction, &cfg.print)?;
             let convert = source.convert;
             let mut timings = source.timings;
             let display_started = Instant::now();
@@ -6169,13 +5659,8 @@ fn convert_frame(
                     cfg.output.preset.name()
                 ))
             })?;
-            let source = stages::render_display_source(
-                &image,
-                &base.base,
-                &cfg.reconstruction,
-                &cfg.print,
-                dmax_input,
-            )?;
+            let source =
+                stages::render_display_source(&image, &base.base, &cfg.reconstruction, &cfg.print)?;
             let convert = source.convert;
             let mut timings = source.timings;
             let display_started = Instant::now();
@@ -6245,14 +5730,12 @@ fn convert_frame(
                 &cfg.print,
                 tone,
                 gamut,
-                dmax_input,
             )?)
         }
         OutputPreset::FilmMaster => FrameRender::Tiff(stages::render_film_master(
             &image,
             &base.base,
             &cfg.reconstruction,
-            dmax_input,
         )?),
     };
     // lcms2 transform/profile failures reach us only through the global handler
@@ -6263,16 +5746,12 @@ fn convert_frame(
         ));
     }
     let convert = rendered.convert();
-    report.dmax = convert.dmax;
     report.white_balance = convert.white_balance;
     report.balance_range = convert.balance_range;
     report.reconstruction_result = Some(reconstruction_result(
         &cfg.reconstruction,
-        cfg.calibration.dmax,
-        convert.dmax,
         convert.curve_anchor,
         convert.out_of_table,
-        dmax_setting,
     ));
     // The characteristic curve extrapolates beyond its published table rather than
     // clamping, which keeps out-of-range samples ordered and finite — but extrapolated is
@@ -6857,194 +6336,6 @@ fn render_new_flow_frame(
     })
 }
 
-/// Domain guard for an explicit / reference-derived `Dmax`: the warning message when
-/// the anchor's density domain no longer matches what the render subtracts it from,
-/// else `None`.
-///
-/// An explicit anchor is a **raw** base-relative density `D` (`estimate
-/// --d-max-region`, or a hand-set `--d-max`), but the render subtracts it from the
-/// corrected density `D′ = scale·D + offset + regional-balance ramps`. Anything that
-/// moves `D′` off the raw domain lands the anchor in a different density domain than
-/// the render subtracts it from, uniformly mis-anchoring every frame — silently. Two
-/// such knobs: a non-identity density-scale/offset, and a non-neutral regional
-/// (shadow/highlight) balance — the balance ramps add into `D′`
-/// (`D′_c = B_c + shadow_c·w_lo + highlight_c·w_hi`) before the `− Dmax`. The caller
-/// warns loudly (`--strict`-promotable) so the user re-measures the anchor under these
-/// density params (or resets them).
-///
-/// **The exponential's own default scale is non-identity** (the `[1, 0.84, 0.73]`
-/// scanner calibration), so this fires on the documented measure-once workflow — an
-/// `estimate`-measured `--d-max` reused under a placement that reads it — and that is
-/// the intent: the mismatch is real there (~14% high, ≈0.62 stop) and `estimate` has no
-/// density params to measure in the corrected domain with. It stays scoped to an
-/// *explicitly stated* anchor, so no default resolution ever trips it.
-///
-/// `Fixed`/`Auto` are already in the corrected domain (the nominal is defined there;
-/// `Auto` measures the post-correction, post-balance buffer), so the guard is scoped to
-/// an explicit reference that the placement actually reads (neither the characteristic
-/// curve nor a base-derived placement reads one — [`unconsumed_dmax_warning`] covers
-/// those).
-/// (Regional balance varies per-tone, so it cannot be *folded into* a scalar
-/// anchor — but a non-neutral balance still shifts `D′`, so a fixed anchor still
-/// mis-anchors; hence it belongs in this guard.)
-fn explicit_dmax_domain_warning(cfg: &ResolvedConfig) -> Option<String> {
-    let density = &cfg.reconstruction.density;
-    if !matches!(cfg.calibration.dmax, DmaxSource::Explicit(_)) {
-        return None;
-    }
-    // A render that reads no reference cannot mis-anchor on one; that config gets
-    // `unconsumed_dmax_warning` instead, which is the accurate diagnosis.
-    if !render_reads_the_reference(&cfg.reconstruction) {
-        return None;
-    }
-    // Compared against the **identity** correction, not `DensityParams::default()`.
-    // Since `algo/film-stock-profiles` the parametric default scale *is* the scanner
-    // calibration (now `[1, 0.84, 0.73]`), which made a `default()` comparison both dead and
-    // inverted: it could fire only when the user moved the scale away from that default,
-    // including `--density-scale 1,1,1` — the one combination where the raw measured
-    // anchor and the render's corrected domain actually agree.
-    const IDENTITY_SCALE: [f32; 3] = [1.0, 1.0, 1.0];
-    const NO_OFFSET: [f32; 3] = [0.0, 0.0, 0.0];
-    let default_density = DensityParams::default();
-    let nondefault_correction = density.scale != IDENTITY_SCALE || density.offset != NO_OFFSET;
-    let nonneutral_balance = density.shadow_balance != default_density.shadow_balance
-        || density.highlight_balance != default_density.highlight_balance;
-    if nondefault_correction || nonneutral_balance {
-        Some(format!(
-            "explicit --d-max is a raw base-relative density (what `hanten estimate \
-             --d-max-region` measures), but density-scale ({:?}) / density-offset ({:?}) / \
-             regional balance (shadow {:?}, highlight {:?}) are not the identity — the \
-             anchor is in a different density domain than the curve subtracts it \
-             from, uniformly mis-anchoring the frame. Note the exponential's \
-             *default* scale is the non-identity scanner calibration, so a measured \
-             --d-max is systematically high there (about 14% at the shipped gain); use \
-             the roll-fixed \
-             --fixed-d-max, re-measure --d-max under these density params, or set \
-             --density-scale 1,1,1 to render in the measured domain",
-            density.scale, density.offset, density.shadow_balance, density.highlight_balance
-        ))
-    } else {
-        None
-    }
-}
-
-/// Whether the resolved reconstruction reads `calibration.dmax` at all: the curve must
-/// consume a reference *and* its placement must read one. Neither holds for the
-/// characteristic curve, and the second fails for the base-derived placements —
-/// including the default `mid-at-base-offset` since `pipeline_version` 6.
-///
-/// The **one** answer to that question: the two `Dmax` warnings, `film-master`'s
-/// auto-`Dmax` rule, the IR-note suppression (`region_reaches_a_rendered_pixel`) and
-/// roll's not-frozen warning all ask it here, so they cannot disagree.
-fn render_reads_the_reference(reconstruction: &Reconstruction) -> bool {
-    reconstruction
-        .curve
-        .anchor()
-        .is_some_and(|a| a.reads_reference())
-}
-
-/// A stated `calibration.dmax` that the resolved reconstruction will never read.
-///
-/// **Accepted, carried and reported — never refused.** A roll calibration is meant to
-/// compose with any pipeline profile (`--params roll-cal.json --params look.jsonc`),
-/// and two kinds of look read no reference: the `characteristic` curve, which takes its
-/// slope and its mid-grey placement from the stock's published response, and the
-/// exponential under a base-derived placement — its default since `pipeline_version` 6.
-/// Refusing the combination would make the calibration un-composable with exactly the
-/// profiles it is most useful beside; ignoring it silently would be the
-/// accepted-and-ignored defect this project keeps closing. So it warns, and `--strict`
-/// promotes it.
-///
-/// Only a **non-default** value warns. `"fixed"` is what an unstated reference resolves
-/// to, so warning on it would fire on every default run and say nothing about the
-/// user's intent.
-///
-/// Note this is *not* [`explicit_dmax_domain_warning`]'s question. That one fires when a
-/// reference **is** read but in the wrong density domain; this one fires when it is not
-/// read at all, and they are mutually exclusive by construction
-/// ([`render_reads_the_reference`] decides both).
-fn unconsumed_dmax_warning(cfg: &ResolvedConfig) -> Option<String> {
-    // **`--fixed-d-max` beside such a look is therefore silent, deliberately.** It
-    // resolves the documented default and forces nothing the branch cannot produce —
-    // the project's presence-rule tiebreaker.
-    if cfg.calibration.dmax == DmaxSource::default()
-        || render_reads_the_reference(&cfg.reconstruction)
-    {
-        return None;
-    }
-    // **The remedy is per branch, and that is not decoration**: each arm names a route
-    // its own branch accepts, or the user is sent in a circle.
-    let (reason, remedy) = match &cfg.reconstruction.curve {
-        DensityCurve::Characteristic(_) => (
-            "the resolved curve is characteristic — it reads its slope and its mid-grey \
-             placement off the stock's published response, so it consults no reference",
-            // **Names the stock too, and that is the load-bearing half.** `--film-stock`
-            // is the most natural way to reach this curve, and the exponential refuses
-            // it — so naming the curve alone sends a user who typed a stock straight
-            // into `usage: --film-stock … Pass --density-curve characteristic`, back
-            // where they started.
-            "Pass `--density-curve exponential` with `--anchor-mid-fraction` or \
-             `--anchor-white-at-reference` to anchor the render on it — dropping \
-             `--film-stock` with it, since only the characteristic curve accepts a stock —",
-        ),
-        DensityCurve::Exponential(_) => (
-            "the resolved anchor placement is base-derived (the default, \
-             `mid-at-base-offset`, or `black-at-base`) — it places the curve against the \
-             film base, so it consults no reference",
-            "Pass `--anchor-mid-fraction` or `--anchor-white-at-reference` to anchor the \
-             render on it,",
-        ),
-    };
-    Some(format!(
-        "calibration.dmax is set, but this conversion does not read it: {reason}. The \
-         value is carried in the recipe (so the same calibration still applies to a \
-         profile that does read one) and it did not affect these pixels. {remedy} or \
-         drop the reference if you meant this look to place it."
-    ))
-}
-
-/// Plausibility warning for a measured reference `Dmax` (`estimate --d-max-region`), or
-/// `None` when it is a credible fully-exposed leader. Never a hard error (thin/unusual
-/// stock varies) — a `--strict`-promotable warning for the user's manual review, since
-/// a too-low anchor silently blows the roll too bright. Two distinct failure shapes, so
-/// at most one fires:
-///
-/// - (a) the gray mean itself is below the leader floor — the whole frame is thin (the
-///   weakest channel is necessarily low too, so this subsumes shape (b); report it as
-///   the frame-wide diagnosis);
-/// - (b) the gray mean is plausible, but the weakest channel sits barely above the base
-///   (essentially unexposed) — a colored / wrong region, which the scalar mean alone
-///   hides. A genuine leader is near-opaque in *every* channel, so the check is
-///   per-channel on the minimum, not just the average.
-fn reference_dmax_plausibility_warning(measured: &density::ReferenceDmax) -> Option<String> {
-    let dmax = measured.scalar;
-    let min_channel = measured
-        .per_channel
-        .iter()
-        .copied()
-        .fold(f32::INFINITY, f32::min);
-    if dmax < density::MIN_PLAUSIBLE_REFERENCE_DMAX {
-        Some(format!(
-            "measured reference Dmax {dmax} is implausibly low for a fully-exposed \
-             leader (expected ≳ {:.1} density) — the region may not be a fully-exposed \
-             leader; verify --d-max-region before freezing this anchor",
-            density::MIN_PLAUSIBLE_REFERENCE_DMAX
-        ))
-    } else if min_channel < density::MIN_PLAUSIBLE_REFERENCE_DMAX {
-        Some(format!(
-            "measured reference Dmax {dmax} is plausible on the gray average, but its \
-             weakest channel density ({min_channel}, per-channel {:?}) is implausibly \
-             low (expected ≳ {:.1}) — the region is colored or not a fully-exposed \
-             leader (a genuine leader is near-opaque in every channel); verify \
-             --d-max-region before freezing this anchor",
-            measured.per_channel,
-            density::MIN_PLAUSIBLE_REFERENCE_DMAX
-        ))
-    } else {
-        None
-    }
-}
-
 /// `hanten convert` — the full pipeline: decode → film-base → algorithm → output
 /// color transform → encode (+ sidecar, + optional IR export). Warnings are
 /// collected into the report and echoed to stderr; `--strict` promotes any of
@@ -7065,15 +6356,6 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // written for the other chain — is refused inside the load, before `merge`
     // reasons about values the selected chain never reads.
     let loaded = load_recipe_for(args.recipe_in.as_deref(), flow)?;
-    // Dmax provenance for the report: a CLI flag beats the recipe key beats the
-    // default — the same precedence the merge applies to the value itself.
-    let dmax_setting = if dmax_flag_given(&args.dmax) {
-        DmaxSetting::Cli
-    } else if loaded.calibration_dmax_present {
-        DmaxSetting::Recipe
-    } else {
-        DmaxSetting::Default
-    };
     let recipe_preset = if loaded.output_preset_present {
         RecipePreset::Stated
     } else {
@@ -7243,7 +6525,6 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
             transfer: args.input_opts.input_transfer.is_some(),
             meaning: args.input_opts.input_meaning.is_some(),
         },
-        dmax_setting,
         conversion_preset_result(&args, args.recipe_in.is_some().then_some(&recipe_cfg), &cfg)?,
         &args
             .recipe_in
@@ -7390,16 +6671,12 @@ struct PlannedFrame {
     /// report so a reader sees exactly what differed for this frame; `None` when
     /// the frame ran the shared recipe unchanged.
     overrides: Option<serde_json::Value>,
-    /// Where this frame's `calibration.dmax` setting came from (shared
-    /// recipe / per-frame override ⇒ `Recipe`, else `Default`; roll has no
-    /// per-frame flags) — the report's `Dmax` provenance.
-    dmax_setting: DmaxSetting,
 }
 
 /// The roll-level JSON report emitted on stdout (or `--report-file`): the shared
 /// frozen recipe *configuration* once, any roll-level warnings, the per-frame
 /// status list, and a summary. The shared recipe here is the config every frame
-/// was converted from; each frame additionally reports the *resolved* base/`Dmax`
+/// was converted from; each frame additionally reports the *resolved* base
 /// it used (a redundant echo when the recipe pins an explicit base, meaningful
 /// under an `auto`/`region` base that resolves per frame).
 #[derive(Debug, Serialize)]
@@ -7413,7 +6690,7 @@ struct RollReport {
     /// no CLI flag, no recipe key, no effect on a single output pixel.
     identity: Identity,
     /// The shared frozen recipe configuration every frame was converted from —
-    /// where the roll-fixed `film_base` / `calibration.dmax` config lives, once.
+    /// where the roll-fixed `film_base` config lives, once.
     /// Omitted under `--new-flow`, as on `convert`: this field's type is the legacy
     /// chain's config, and echoing the new chain's `Recipe` instead is
     /// `nf-core/report-contract`'s.
@@ -7473,21 +6750,18 @@ struct FrameReport {
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 enum FrameStatus {
-    /// A converted frame: the resolved anchors it used (mirrors the relevant
-    /// single-frame [`Report`] fields). Each is `None`/omitted when the algorithm
-    /// or settings didn't produce it (e.g. `simple` has no `dmax`).
+    /// A converted frame: the resolved values it used (mirrors the relevant
+    /// single-frame [`Report`] fields). Each is `None`/omitted when the settings
+    /// didn't produce it.
     Ok {
         #[serde(skip_serializing_if = "Option::is_none")]
         film_base: Option<FilmBase>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        dmax: Option<f32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         white_balance: Option<[f32; 3]>,
         #[serde(skip_serializing_if = "Option::is_none")]
         balance_range: Option<[f32; 2]>,
         /// The resolved effective measurement area — mirrors the single-frame
-        /// `Report` field, and sits beside `dmax` because it is the region that
-        /// `dmax` was measured over. Per-frame rather than roll-level: one shared
+        /// `Report` field. Per-frame rather than roll-level: one shared
         /// `measure.inset` meets a holder depth that is genuinely this frame's
         /// own, and a per-frame `params` override can change the inset too. It is
         /// also what makes `measure.inset` observable on `roll` at all, the same
@@ -7672,9 +6946,7 @@ fn resolve_frame_output(
 ///   reject the union. [`internally_tagged_switch`] replaces the object with
 ///   the overlay outright. **Nothing is carried**, and that is correct rather
 ///   than lossy: the one field that used to be (the roll's reference density)
-///   now lives in `calibration.dmax`, outside the object being switched, so it
-///   survives every switch untouched — including the switches into and out of
-///   `characteristic` the old carry could not cross. `anchor` is accepted by
+///   left the curve and has since retired. `anchor` is accepted by
 ///   both parametric variants but is per-curve in *meaning*
 ///   ([`curve_switch_dropped_anchor`] explains why, and warns when the reset
 ///   discards a stated placement).
@@ -7725,10 +6997,9 @@ fn is_variant_switch(base: &serde_json::Value, overlay: &serde_json::Value) -> b
 ///
 /// The replacement is the overlay itself — **no field is carried across**. The
 /// roll's reference density used to be, on the grounds that it is a
-/// curve-independent calibration; since `core/calibration-recipe-section` it is one
-/// structurally, living at `calibration.dmax` outside this object, so a per-frame
-/// `{"curve":{"type":"characteristic"}}` override keeps the roll's frozen reference
-/// without any carry at all. That also removes the carry's worst edge: it could not
+/// curve-independent calibration; it left the curve in `core/calibration-recipe-section`
+/// and has since retired, so a per-frame `{"curve":{"type":"characteristic"}}`
+/// override loses nothing. That also removed the carry's worst edge: it could not
 /// cross a `characteristic` boundary, so a frame switched to a stock curve and back
 /// silently lost the reference.
 ///
@@ -7821,7 +7092,7 @@ fn reject_roll_unsupported_input(cfg: &ResolvedConfig) -> Result<()> {
 /// override) and output path. Config errors (a bad override, an unsupported knob)
 /// fail loudly here, before any frame is converted; runtime errors (a bad decode,
 /// a degenerate base) surface per frame during conversion. A per-frame override
-/// that touches a roll-fixed choice (`film_base`, `calibration.dmax`,
+/// that touches a roll-fixed choice (`film_base`,
 /// `reconstruction.curve.anchor`, `reconstruction.curve.stock`, or `output.preset`) is
 /// not rejected — it is applied, with a loud roll-level warning
 /// pushed to `roll_warnings` (like the not-frozen warning), so a deliberate
@@ -7831,16 +7102,10 @@ fn resolve_frames(
     args: &RollArgs,
     shared: &ResolvedConfig,
     shared_recipe: Option<&Recipe>,
-    shared_dmax_present: bool,
     roll_warnings: &mut Vec<String>,
     log: &Log,
 ) -> Result<Vec<PlannedFrame>> {
     let out_dir = args.out_dir.as_path();
-    let shared_setting = if shared_dmax_present {
-        DmaxSetting::Recipe
-    } else {
-        DmaxSetting::Default
-    };
     let mut planned = Vec::new();
     match &args.frames {
         Some(manifest_path) => {
@@ -7861,7 +7126,7 @@ fn resolve_frames(
             }
             .map_err(|e| NcError::Other(format!("serializing shared recipe: {e}")))?;
             for mf in manifest.frames {
-                let (cfg, recipe, overrides, dmax_setting) = match mf.params {
+                let (cfg, recipe, overrides) = match mf.params {
                     Some(mut ov) => {
                         // A per-frame override carrying a removed legacy key gets
                         // the same pinned migration guidance as the shared recipe,
@@ -7869,6 +7134,9 @@ fn resolve_frames(
                         // `--new-flow`, the same refusal of the current chain's keys.
                         let context =
                             format!("frame {}: per-frame `params` override", mf.input.display());
+                        // Echoed in the report as the user wrote it: a retired key
+                        // stripped below still states what the manifest said.
+                        let written = ov.clone();
                         match shared_recipe {
                             Some(_) => recipe::check_body(&ov, false, &context)?,
                             None => {
@@ -7877,14 +7145,11 @@ fn resolve_frames(
                                 reject_legacy_recipe_keys(&ov, &context)?;
                             }
                         }
-                        // `calibration.film_base` and `calibration.dmax` are both roll
-                        // calibrations — one section, for exactly this reason: the whole
-                        // batch is meant to share one frozen
-                        // base (Dmin) and one display-white anchor (Dmax). A per-frame
-                        // override *may* still set either (a deliberate per-frame value
-                        // stays possible), but doing so gives this frame a different
-                        // Dmin / Dmax from the rest of the roll and breaks color
-                        // consistency — so warn loudly (roll-level,
+                        // `calibration.film_base` is a roll calibration: the whole batch
+                        // is meant to share one frozen base (Dmin). A per-frame override
+                        // *may* still set it (a deliberate per-frame value stays
+                        // possible), but doing so gives this frame a different Dmin from
+                        // the rest of the roll and breaks color consistency — so warn loudly (roll-level,
                         // `--strict`-promotable) and continue, applying the override,
                         // rather than rejecting.
                         if sets_calibration_film_base(&ov) {
@@ -7901,39 +7166,16 @@ fn resolve_frames(
                             log.warn(&msg);
                             roll_warnings.push(msg);
                         }
-                        // `calibration.dmax` became a roll-fixed calibration in the
-                        // `dmax-reference` task (default `Fixed`, or an `Explicit`
-                        // measured/per-stock anchor frozen into the recipe). A per-frame
-                        // override of it breaks roll consistency exactly like
-                        // `calibration.film_base` — they are the same section for exactly
-                        // this reason.
-                        if sets_calibration_dmax(&ov) {
-                            let msg = format!(
-                                "frame {}: a per-frame `params` override sets \
-                                 `calibration.dmax`, overriding the roll-fixed \
-                                 display-white anchor — this frame's Dmax differs from the \
-                                 rest of the roll, breaking color consistency. Set Dmax once \
-                                 in the shared --params recipe (and drop the per-frame \
-                                 `calibration.dmax`) if you want a frozen, \
-                                 consistent roll.",
-                                mf.input.display()
-                            );
-                            log.warn(&msg);
-                            roll_warnings.push(msg);
-                        }
                         // `reconstruction.curve.anchor` is roll-fixed for the same
-                        // reason, one level up: `calibration.dmax` is the roll's reference
-                        // density and the anchor placement decides which *tone* that
-                        // reference pins (design-spec §7.3). Overriding it per frame is
-                        // therefore a tonal-placement break even when every frame shares
-                        // one Dmax — the frame renders on a different rule, which is
-                        // subtler than a different number and would otherwise be silent.
+                        // reason: the placement decides where mid-grey lands (design-spec
+                        // §7.2), so overriding it per frame renders that frame brighter or
+                        // darker than the rest of the roll.
                         if sets_curve_anchor(&ov) {
                             let msg = format!(
                                 "frame {}: a per-frame `params` override sets \
                                  `reconstruction.curve.anchor`, overriding the roll-fixed \
-                                 anchor placement — this frame pins a different tone to the \
-                                 roll's reference density, breaking tonal consistency. Set \
+                                 anchor placement — this frame places mid-grey differently \
+                                 from the rest of the roll, breaking tonal consistency. Set \
                                  the placement once in the shared --params recipe (and drop \
                                  the per-frame `reconstruction.curve.anchor`) if you want a \
                                  frozen, consistent roll.",
@@ -7990,11 +7232,6 @@ fn resolve_frames(
                             log.warn(&msg);
                             roll_warnings.push(msg);
                         }
-                        let setting = if sets_calibration_dmax(&ov) {
-                            DmaxSetting::Recipe
-                        } else {
-                            shared_setting
-                        };
                         let invalid = |e: serde_json::Error| {
                             NcError::Usage(format!(
                                 "frame {}: invalid params override: {e}",
@@ -8089,9 +7326,9 @@ fn resolve_frames(
                                 roll_warnings.push(msg);
                             }
                         }
-                        (cfg, frame_recipe, Some(ov), setting)
+                        (cfg, frame_recipe, Some(written))
                     }
-                    None => (shared.clone(), shared_recipe.cloned(), None, shared_setting),
+                    None => (shared.clone(), shared_recipe.cloned(), None),
                 };
                 let output = resolve_frame_output(
                     mf.output.as_deref(),
@@ -8106,7 +7343,6 @@ fn resolve_frames(
                     cfg,
                     recipe,
                     overrides,
-                    dmax_setting,
                 });
             }
         }
@@ -8134,7 +7370,6 @@ fn resolve_frames(
                     cfg: shared.clone(),
                     recipe: shared_recipe.cloned(),
                     overrides: None,
-                    dmax_setting: shared_setting,
                 });
             }
         }
@@ -8176,7 +7411,6 @@ fn frame_report_ok(pf: &PlannedFrame, report: Report) -> FrameReport {
         output: Some(pf.output.clone()),
         status: FrameStatus::Ok {
             film_base: report.film_base,
-            dmax: report.dmax,
             white_balance: report.white_balance,
             balance_range: report.balance_range,
             effective_area: report.effective_area.map(Box::new),
@@ -8230,7 +7464,6 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // loudly before any frame is touched.
     let LoadedRecipe {
         doc,
-        calibration_dmax_present: shared_dmax_present,
         meta_pipeline_version,
         unpinned_curve: shared_unpinned_curve,
         // Roll's suffix diagnosis never takes the convert arms: a manifest path is
@@ -8307,40 +7540,14 @@ fn run_roll(args: RollArgs) -> Result<()> {
         roll_warnings.push(msg);
     }
 
-    // `calibration.dmax` is likewise a roll-fixed calibration by default:
-    // `Fixed` (the nominal constant), `Explicit` (a frozen scalar), and `None`
-    // (the bit-exact scene-referred escape hatch) all treat every frame
-    // identically. Only `Auto` (`--auto-d-max`) re-measures the display-white
-    // anchor from each frame's own pixels, so a shared recipe carrying it is not
-    // truly frozen — same warn-and-continue treatment as the base.
-    //
-    // …and only when the placement *reads* the reference. A base-derived rule discards
-    // the per-frame measurement, so every frame still renders on one roll-level rule;
-    // warning there is a false alarm, and under `--strict` a false failure.
-    if shared.calibration.dmax == DmaxSource::Auto
-        && render_reads_the_reference(&shared.reconstruction)
-    {
-        let msg = "roll Dmax is NOT frozen: calibration.dmax is `auto`, so every \
-             frame measures its own display-white anchor — the roll is not \
-             color-consistent and the shared recipe is not truly shared. Freeze Dmax \
-             once (e.g. `hanten estimate --d-max-region X,Y,W,H <reference-scan>`), then \
-             pass the reported anchor via `--d-max <d>` or a recipe with \
-             `calibration.dmax.explicit`, or accept the default fixed \
-             nominal anchor."
-            .to_string();
-        log.warn(&msg);
-        roll_warnings.push(msg);
-    }
-
     // Resolve the plan. A per-frame override that touches a roll-fixed calibration
-    // (`film_base` / `calibration.dmax`) appends its own roll-level
+    // (`film_base`) appends its own roll-level
     // warning here (warn-and-continue, like the not-frozen warnings above), so
     // `roll_warnings` is passed in to collect it.
     let planned = resolve_frames(
         &args,
         &shared,
         shared_recipe.as_ref(),
-        shared_dmax_present,
         &mut roll_warnings,
         &log,
     )?;
@@ -8412,7 +7619,6 @@ fn run_roll(args: RollArgs) -> Result<()> {
             &pf.cfg,
             FrameChain::of(pf.recipe.as_ref()),
             InputFromCli::none(),
-            pf.dmax_setting,
             // `roll` has no `--preset` flag — its shared recipe already carries the
             // expanded values, which is the whole point of the expansion being CLI-only.
             None,
@@ -8754,6 +7960,13 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
 
+    if args.d_max_region.is_some() {
+        return Err(NcError::Usage(removed_dmax_message(
+            "--d-max-region",
+            "measured the roll reference density off a light-struck leader",
+        )));
+    }
+
     // A bad `--measure-inset` is a *usage* error (exit 2), not a diagnostic that
     // degrades to a warning: these commands resolve no recipe, so `validate` never
     // sees the flag and the best-effort `effective_area` call below would swallow
@@ -8790,10 +8003,9 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     // decoded image and stops). Its film-base phase is the largest rectangle this
     // invocation will gather: the base source's own sample (`--grid` samples cells
     // of `--base-region`, or of the whole frame when it is absent — counted
-    // conservatively as the whole rectangle), plus any `--d-max-region`. They are
-    // gathered one at a time, so the model takes the largest.
+    // conservatively as the whole rectangle).
     let budget = args.memory.budget();
-    let mut sampling = if args.grid {
+    let sampling = if args.grid {
         match args.film_base.base_region {
             // `--grid` samples five cells of the rectangle, one at a time, so the
             // phase peaks at one cell — not at the whole rectangle.
@@ -8803,9 +8015,6 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     } else {
         sample_plan(&source)
     };
-    if let Some([_, _, w, h]) = args.d_max_region {
-        sampling = sampling.with_rect(w as u64 * h as u64);
-    }
     report.memory = Some(preflight_memory(
         &args.input,
         RunProfile::DecodeOnly,
@@ -8957,55 +8166,6 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     };
     report.film_base = Some(base);
 
-    // Optional roll-fixed `Dmax` measurement from a fully-exposed reference region
-    // (the plan-phase mirror of `--base-region` for `Dmax`, design-spec §8). Needs
-    // a usable base to compute base-relative density; a degenerate base (the grid
-    // path can produce one) is left to the existing degenerate-base handling below
-    // — measuring here would only mask that with a confusing secondary error.
-    if let Some(region) = args.d_max_region {
-        let base_arr = <[f32; 3]>::from(base);
-        // The density divide only needs a finite-positive base; a base outside
-        // `(0, 1]` still yields a (diagnostic) `Dmax`, but is *not* a valid explicit
-        // `--film-base` — see the reuse gating below.
-        let base_divisible = base_arr.iter().all(|v| v.is_finite() && *v > 0.0);
-        if base_divisible {
-            // Median transmission of the reference region (robust to dust on a
-            // near-opaque frame; see `film_base::sample_region_at`), reduced to the
-            // scalar `Dmax` — a base-relative density `D = -log10(t/base)` (raw `D`
-            // per §4; the render's corrected-density domain only under an *identity*
-            // density-scale/offset, which the parametric curves' default is not — see
-            // `explicit_dmax_domain_warning`, which warns on the mismatch). A degenerate
-            // / non-opaque region errors loudly inside `reference_dmax`.
-            let reference = film_base::sample_region_at(&image, region, 0.5)?;
-            let measured = density::reference_dmax(<[f32; 3]>::from(reference), &base)?;
-            let dmax = measured.scalar;
-            report.dmax = Some(dmax);
-            report.dmax_region = Some(region);
-            log.info(format_args!(
-                "measured roll-fixed Dmax {dmax} from {region:?}"
-            ));
-            // Plausibility for a fully-exposed leader — a loud, `--strict`-promotable
-            // warning (never a hard error: thin/unusual stock varies). See
-            // `reference_dmax_plausibility_warning`.
-            if let Some(msg) = reference_dmax_plausibility_warning(&measured) {
-                push_warning(&mut report, &log, msg);
-            }
-            // Reuse-ready `--d-max` / `calibration.dmax` forms are gated on the SAME
-            // base-usability check the film-base reuse uses (each channel in
-            // `(0, 1]`), not merely `base_divisible`: a base in `(1, ∞)` divides
-            // fine but is not a valid explicit `--film-base`, so advertising a
-            // `--d-max` measured against it as "reuse-ready" — while the film-base
-            // reuse is withheld — would be a footgun. The diagnostic `dmax` /
-            // `dmax_region` above still emit either way.
-            if validate_explicit_film_base(&base_arr).is_ok() {
-                report.dmax_reuse = Some(DmaxReuseReady {
-                    flag: format!("--d-max {dmax}"),
-                    dmax: DmaxSource::Explicit(dmax),
-                });
-            }
-        }
-    }
-
     // Reuse-ready forms — attached only when the measurement passes the
     // explicit-base validation `convert` applies: a base outside `(0, 1]` on any
     // channel is still reported as the measurement, but never as "reuse-ready".
@@ -9089,7 +8249,7 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
 /// **Derived, never assembled separately.** Each key is present exactly when its
 /// own reuse-ready pair is, so the pairing invariant is enforced by construction
 /// rather than by two call sites agreeing — and a measurement the reuse gates
-/// declined to advertise (a base outside `(0, 1]`, a `Dmax` measured against one)
+/// declined to advertise (a base outside `(0, 1]`)
 /// cannot leak into a fragment a user would pipe straight into `--params`.
 ///
 /// `None` when nothing was measured: an empty `{}` would pipe into `--params` as a
@@ -9097,7 +8257,6 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
 fn calibration_fragment(report: &Report) -> Option<CalibrationFragment> {
     let fragment = CalibrationFragment {
         film_base: report.reuse.as_ref().map(|r| r.source.clone()),
-        dmax: report.dmax_reuse.as_ref().map(|r| r.dmax),
     };
     (!fragment.is_empty()).then_some(fragment)
 }
@@ -9531,7 +8690,6 @@ fn emit_telemetry(
             .film_base_source
             .clone()
             .unwrap_or(FilmBaseSource::Auto),
-        dmax: report.dmax,
         preset: cfg.output.preset,
         // Via `depth()` — the single place a recipe value becomes a depth — so the
         // record cannot disagree with what `io::encode` actually wrote. Reading
@@ -9628,7 +8786,6 @@ mod tests {
         ResolvedConfig {
             calibration: CalibrationParams {
                 film_base: Some(FilmBaseSource::Auto),
-                ..CalibrationParams::default()
             },
             ..ResolvedConfig::default()
         }
@@ -9978,16 +9135,10 @@ mod tests {
 
     /// **A preset replaces the look; the roll calibration is not in its way.**
     ///
-    /// The inverse of the test this replaces. While the reference density lived inside
-    /// `reconstruction.curve`, a preset replacing the whole curve object silently reset a
-    /// recipe's measured `{explicit: 2.1}` to `fixed` — every frame of the roll rendered
-    /// off its own calibration at exit 0, with `overridden: []` asserting the render
-    /// *was* the bundle. That was patched with a carry, which could not cross a
-    /// `characteristic` boundary and so left the same hole through a stock-curve preset.
-    ///
-    /// Moving the value to `calibration.dmax` closes both, structurally: a preset writes
-    /// no `calibration` key at all. This asserts that on **every** preset, including the
-    /// characteristic ones the carry could not serve.
+    /// While the roll's reference density lived inside `reconstruction.curve`, a preset
+    /// replacing the whole curve object silently reset a measured value on every frame
+    /// of a roll at exit 0. A preset writes no `calibration` key at all; this asserts
+    /// that on **every** preset, against the calibration member that remains.
     #[test]
     fn a_preset_leaves_the_roll_calibration_untouched() {
         let calibrated = ResolvedConfig {
@@ -9999,8 +9150,7 @@ mod tests {
                 }),
             },
             calibration: CalibrationParams {
-                dmax: DmaxSource::Explicit(2.1),
-                ..base_cfg().calibration
+                film_base: Some(FilmBaseSource::Explicit([0.8, 0.5, 0.4])),
             },
             ..base_cfg()
         };
@@ -10016,9 +9166,9 @@ mod tests {
             }
             let cfg = merge(calibrated.clone(), &parse_convert(&flags)).unwrap();
             assert_eq!(
-                cfg.calibration.dmax,
-                DmaxSource::Explicit(2.1),
-                "`--preset {}` discarded the roll's measured reference",
+                cfg.calibration,
+                calibrated.calibration,
+                "`--preset {}` touched the roll's calibration",
                 preset.name()
             );
         }
@@ -10031,14 +9181,6 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(bundle_of(&cfg).0, DensityCurve::Characteristic(_)));
-
-        // An explicit flag still wins over the recipe's value.
-        let cfg = merge(
-            calibrated,
-            &parse_convert(&["--preset", "characteristic-generic", "--d-max", "1.5"]),
-        )
-        .unwrap();
-        assert_eq!(cfg.calibration.dmax, DmaxSource::Explicit(1.5));
     }
 
     /// **`overridden` and `replaced` answer opposite questions, and neither can stand in
@@ -10097,8 +9239,7 @@ mod tests {
                 curve: expansion.curve,
             },
             calibration: CalibrationParams {
-                dmax: DmaxSource::Explicit(2.1),
-                ..base_cfg().calibration
+                film_base: Some(FilmBaseSource::Explicit([0.8, 0.5, 0.4])),
             },
             print: PrintParams {
                 print_exposure: expansion.print_exposure,
@@ -10113,7 +9254,7 @@ mod tests {
             .unwrap();
         assert!(
             r.overridden.is_empty(),
-            "the carried reference read as a flag override: {:?}",
+            "the carried calibration read as a flag override: {:?}",
             r.overridden
         );
     }
@@ -10139,18 +9280,6 @@ mod tests {
         ResolvedConfig {
             reconstruction: Reconstruction { density, curve },
             ..base_cfg()
-        }
-    }
-
-    /// `cfg` with an explicit roll reference — the shape most `Dmax`-policy tests want
-    /// now that the value is a `calibration` key rather than a curve field.
-    fn calibrated_explicit(cfg: ResolvedConfig) -> ResolvedConfig {
-        ResolvedConfig {
-            calibration: CalibrationParams {
-                dmax: DmaxSource::Explicit(2.0),
-                ..cfg.calibration.clone()
-            },
-            ..cfg
         }
     }
 
@@ -10268,7 +9397,7 @@ mod tests {
         over.measure.inset = 0.5;
         let err = format!("{}", validate(&over).unwrap_err());
         assert!(
-            err.contains("lower the fraction") && err.contains("--auto-d-max"),
+            err.contains("lower the fraction") && !err.contains("--auto-d-max"),
             "{err}"
         );
         let mut ok = base_cfg();
@@ -10280,73 +9409,6 @@ mod tests {
         );
         ok.measure.inset = crate::types::MAX_MEASURE_INSET;
         assert!(validate(&ok).is_ok(), "the bound itself is inclusive");
-    }
-
-    #[test]
-    fn the_region_predicates_answer_two_different_questions() {
-        // Two questions, deliberately decoupled. "What region does the measurement
-        // use?" is answered by `DmaxSource::Auto` alone, so one report field has one
-        // meaning — keyed on the narrower predicate, a base-derived placement
-        // measured the reference over the whole frame while the same report's
-        // `effective_area` asserted the holder was cut. "Did the IR plane change a
-        // rendered pixel?" is the narrower one and stays narrow: a reference-free
-        // placement discards the measured anchor, so the output is byte-identical to
-        // the non-auto run, and keying suppression of the "IR preserved but not
-        // used" note on the source alone made `--strict` stop failing there. The
-        // same two conditions gate the `film-master` rejection and roll's
-        // not-frozen warning.
-        let resolved = |flags: &[&str]| merge(base_cfg(), &parse_convert(flags)).unwrap();
-        let measures = |flags: &[&str]| measures_over_region(&resolved(flags));
-        let renders = |flags: &[&str]| region_reaches_a_rendered_pixel(&resolved(flags));
-
-        let reading = ["--auto-d-max", "--anchor-mid-fraction", "0.5"];
-        assert!(
-            measures(&reading) && renders(&reading),
-            "auto + a reference-reading placement does both"
-        );
-
-        // The case that separates them: the measurement is taken over the region
-        // (so the reported number means one thing), and no rendered pixel depends
-        // on it (so the plane is still genuinely unused).
-        for reference_free in [
-            vec!["--auto-d-max", "--anchor-black-floor", "0.05"],
-            vec!["--auto-d-max", "--anchor-mid-offset", "1.0"],
-            // The default placement since `pipeline_version` 6.
-            vec!["--auto-d-max"],
-        ] {
-            assert!(
-                measures(&reference_free),
-                "the measurement is still taken over the region: {reference_free:?}"
-            );
-            assert!(
-                !renders(&reference_free),
-                "but a reference-free placement discards it: {reference_free:?}"
-            );
-        }
-
-        for none in [vec![], vec!["--anchor-mid-fraction", "0.5"]] {
-            assert!(
-                !measures(&none) && !renders(&none),
-                "nothing measures off the frame: {none:?}"
-            );
-        }
-
-        // **The second condition on the measurement half, which the source alone cannot
-        // carry.** `auto` beside a curve that reads no reference measures *nothing* —
-        // `density::reconstruct` never calls `resolve_dmax` on the characteristic arm —
-        // so resolving a region for it would report an `effective_area` for a run that
-        // took no measurement over it. Before the reference moved out of the curve this
-        // was structural: `curve.dmax()` answered `None` for that curve, so `== Auto` was
-        // false by construction. Now `calibration.dmax` is stated independently of the
-        // look and the condition has to be written down — this case is what keeps it
-        // there. (Verified falsifiable: replacing `curve.consumes_reference()` with
-        // `true` passes every other test in the suite.)
-        let stock = ["--density-curve", "characteristic", "--auto-d-max"];
-        assert!(
-            !measures(&stock),
-            "a curve that reads no reference measures nothing over the region"
-        );
-        assert!(!renders(&stock), "and therefore reaches no rendered pixel");
     }
 
     #[test]
@@ -10376,12 +9438,11 @@ mod tests {
     fn merge_switches_curve_variants() {
         let recipe = ResolvedConfig {
             calibration: CalibrationParams {
-                dmax: DmaxSource::Explicit(1.6),
-                ..base_cfg().calibration
+                film_base: Some(FilmBaseSource::Explicit([0.8, 0.5, 0.4])),
             },
             ..exponential_cfg(ExponentialParams {
                 gamma: 1.8,
-                anchor: AnchorPlacement::WhiteAtDmax,
+                anchor: AnchorPlacement::MidAtBaseOffset(0.5),
             })
         };
         // Same-type `--density-curve` is a no-op that keeps the recipe's knobs.
@@ -10393,10 +9454,10 @@ mod tests {
         assert_eq!(cfg.reconstruction, recipe.reconstruction);
 
         // `--density-curve characteristic` takes that curve's defaults outright — and
-        // the roll's reference survives untouched, because it is not inside the object
+        // the roll's calibration survives untouched, because it is not inside the object
         // being switched.
         let cfg = merge(
-            recipe,
+            recipe.clone(),
             &parse_convert(&["--density-curve", "characteristic"]),
         )
         .unwrap();
@@ -10404,25 +9465,26 @@ mod tests {
             *curve_of(&cfg),
             DensityCurve::Characteristic(CharacteristicParams::default())
         );
-        assert_eq!(cfg.calibration.dmax, DmaxSource::Explicit(1.6));
+        assert_eq!(cfg.calibration, recipe.calibration);
 
         // The reverse switch, same story.
         let recipe = ResolvedConfig {
-            calibration: CalibrationParams {
-                dmax: DmaxSource::Auto,
-                ..base_cfg().calibration
-            },
+            calibration: recipe.calibration,
             ..density_cfg(
                 DensityParams::default(),
                 DensityCurve::Characteristic(CharacteristicParams::default()),
             )
         };
-        let cfg = merge(recipe, &parse_convert(&["--density-curve", "exponential"])).unwrap();
+        let cfg = merge(
+            recipe.clone(),
+            &parse_convert(&["--density-curve", "exponential"]),
+        )
+        .unwrap();
         assert_eq!(
             *curve_of(&cfg),
             DensityCurve::Exponential(ExponentialParams::default())
         );
-        assert_eq!(cfg.calibration.dmax, DmaxSource::Auto);
+        assert_eq!(cfg.calibration, recipe.calibration);
     }
 
     #[test]
@@ -10509,7 +9571,7 @@ mod tests {
     /// Every flag the sigmoid owned is a migration error naming a remedy that exists,
     /// and `--density-curve sigmoid` is refused at the parser with the shared message.
     /// The refusal fires on both chains, so each message also says what works under
-    /// `--new-flow`, which refuses the anchor placements and the display tone.
+    /// `--new-flow`, which refuses the display tone.
     #[test]
     fn the_sigmoid_flags_are_migration_errors() {
         use clap::CommandFactory;
@@ -10531,12 +9593,12 @@ mod tests {
             ),
             (
                 ["--sigmoid-mid-fraction", "0.5"].as_slice(),
-                "--anchor-mid-fraction",
+                "--anchor-mid-offset",
                 "--anchor-mid-offset",
             ),
             (
                 ["--sigmoid-white-at-d-max"].as_slice(),
-                "--anchor-white-at-reference",
+                "--anchor-mid-offset",
                 "--anchor-mid-offset",
             ),
         ] {
@@ -10834,91 +9896,71 @@ mod tests {
     }
 
     #[test]
-    fn merge_dmax_flags_map_to_the_source_enum() {
-        // Each flag maps to its variant on `calibration.dmax`; a forgotten merge
-        // arm would leave the default and silently make the flag a no-op (the
-        // four-spot-wiring trap).
-        let dmax = |flags: &[&str]| {
-            merge(base_cfg(), &parse_convert(flags))
-                .unwrap()
-                .calibration
-                .dmax
-        };
-        assert_eq!(dmax(&["--d-max", "1.75"]), DmaxSource::Explicit(1.75));
-        assert_eq!(dmax(&["--no-d-max"]), DmaxSource::None);
-        assert_eq!(dmax(&["--auto-d-max"]), DmaxSource::Auto);
-        assert_eq!(dmax(&["--fixed-d-max"]), DmaxSource::Fixed);
-
-        // The flags land the same way whatever the resolved look is — the reference is
-        // a roll measurement, not curve-stage state, so it is written outside the
-        // reconstruction entirely. Including on `characteristic`, which reads no
-        // reference: the value is carried (and warned about), never refused.
-        for look in [
-            vec!["--density-curve", "exponential"],
-            vec!["--density-curve", "characteristic"],
+    fn the_reference_density_and_retired_anchor_flags_are_migration_errors() {
+        // Every one is refused before `merge`, on both chains, with a remedy naming the
+        // one placement left — and the named remedy must itself be accepted, or the
+        // message sends the user in a circle.
+        for flags in [
+            vec!["--d-max", "1.5"],
+            vec!["--fixed-d-max"],
+            vec!["--auto-d-max"],
+            vec!["--no-d-max"],
+            vec!["--anchor-white-at-reference"],
+            vec!["--anchor-mid-fraction", "0.5"],
+            vec!["--anchor-black-floor", "0.005"],
         ] {
-            let mut flags = look.clone();
-            flags.extend_from_slice(&["--d-max", "1.4"]);
-            assert_eq!(
-                merge(base_cfg(), &parse_convert(&flags))
-                    .unwrap()
-                    .calibration
-                    .dmax,
-                DmaxSource::Explicit(1.4),
-                "{look:?}"
-            );
+            for new_flow in [false, true] {
+                let mut argv = flags.clone();
+                if new_flow {
+                    argv.push("--new-flow");
+                }
+                let err = reject_removed_flags(&parse_convert(&argv)).unwrap_err();
+                assert_eq!(err.exit_code(), 2, "{argv:?}");
+                let msg = err.to_string();
+                assert!(
+                    msg.contains(flags[0]) && msg.contains("was removed"),
+                    "{msg}"
+                );
+                assert!(msg.contains("--anchor-mid-offset"), "{msg}");
+                // The characteristic curve refuses `--anchor-mid-offset`, so the named
+                // flag is scoped to the exponential and the remedy is to drop the flag.
+                assert!(
+                    msg.contains("Drop the flag") && msg.contains("characteristic curve"),
+                    "{msg}"
+                );
+            }
         }
-
-        // No flag keeps the recipe's choice; a flag replaces it (flags win).
-        let recipe = ResolvedConfig {
-            calibration: CalibrationParams {
-                dmax: DmaxSource::Explicit(2.0),
-                ..base_cfg().calibration
-            },
-            ..base_cfg()
-        };
-        let merged = |r: ResolvedConfig, flags: &[&str]| {
-            merge(r, &parse_convert(flags)).unwrap().calibration.dmax
-        };
-        assert_eq!(merged(recipe.clone(), &[]), DmaxSource::Explicit(2.0));
-        assert_eq!(merged(recipe.clone(), &["--no-d-max"]), DmaxSource::None);
-        // `--fixed-d-max` overrides a recipe's explicit/auto back to the default
-        // fixed anchor (the flags-win escape hatch, since the default is Fixed and
-        // an absent flag never clobbers a recipe value).
-        assert_eq!(merged(recipe, &["--fixed-d-max"]), DmaxSource::Fixed);
+        // Every old spelling reaches the migration message, not clap's generic error:
+        // no value, and a negative value that would otherwise read as a flag.
+        for argv in [
+            vec!["--d-max"],
+            vec!["--d-max", "-1.5"],
+            vec!["--anchor-mid-fraction", "-0.5"],
+            vec!["--anchor-black-floor"],
+        ] {
+            let err = reject_removed_flags(&parse_convert(&argv)).unwrap_err();
+            assert!(err.to_string().contains("was removed"), "{argv:?}: {err}");
+        }
+        let remedy = parse_convert(&["--anchor-mid-offset", "0.5"]);
+        reject_removed_flags(&remedy).unwrap();
+        flow::reject_unavailable_flags(
+            Flow::New,
+            &parse_convert(&["--anchor-mid-offset", "0.5", "--new-flow"]),
+        )
+        .unwrap();
+        merge(base_cfg(), &remedy).unwrap();
     }
 
     #[test]
     fn merge_anchor_placement_flags() {
-        // The placement is one rule, so each flag replaces the whole variant. Written as
-        // an equality on the resolved placement — a "does not error" check would still
-        // pass if the flag were silently inert, which is the failure mode the
-        // four-coupled-spots rule exists to catch.
-        for (argv, want) in [
-            (
-                ["--anchor-mid-fraction", "0.6"].as_slice(),
-                AnchorPlacement::MidAtDmaxFraction(0.6),
-            ),
-            (
-                ["--anchor-white-at-reference"].as_slice(),
-                AnchorPlacement::WhiteAtDmax,
-            ),
-            (
-                ["--anchor-black-floor", "0.005"].as_slice(),
-                AnchorPlacement::BlackAtBase(0.005),
-            ),
-            (
-                ["--anchor-mid-offset", "0.5"].as_slice(),
-                AnchorPlacement::MidAtBaseOffset(0.5),
-            ),
-        ] {
-            let full = [&["--density-curve", "exponential"][..], argv].concat();
-            let cfg = merge(base_cfg(), &parse_convert(&full)).unwrap();
-            let DensityCurve::Exponential(e) = curve_of(&cfg) else {
-                panic!("expected exponential");
-            };
-            assert_eq!(e.anchor, want, "{argv:?}");
-        }
+        // Written as an equality on the resolved placement — a "does not error" check
+        // would still pass if the flag were silently inert, which is the failure mode
+        // the four-coupled-spots rule exists to catch.
+        let cfg = merge(base_cfg(), &parse_convert(&["--anchor-mid-offset", "0.5"])).unwrap();
+        let DensityCurve::Exponential(e) = curve_of(&cfg) else {
+            panic!("expected exponential");
+        };
+        assert_eq!(e.anchor, AnchorPlacement::MidAtBaseOffset(0.5));
         // A flag must beat a **recipe-supplied** placement, not just a defaulted one.
         // The loops above start from this build's default, so a merge arm that never
         // ran would still look right there; only a recipe that states a *different*
@@ -10929,33 +9971,19 @@ mod tests {
         });
         let cfg = merge(
             recipe.clone(),
-            &parse_convert(&["--anchor-black-floor", "0.005"]),
+            &parse_convert(&["--anchor-mid-offset", "0.7"]),
         )
         .unwrap();
         let DensityCurve::Exponential(e) = curve_of(&cfg) else {
             panic!("expected exponential");
         };
-        assert_eq!(e.anchor, AnchorPlacement::BlackAtBase(0.005));
+        assert_eq!(e.anchor, AnchorPlacement::MidAtBaseOffset(0.7));
         // …and with no flag the recipe's own placement survives untouched.
         let cfg = merge(recipe, &parse_convert(&[])).unwrap();
         let DensityCurve::Exponential(e) = curve_of(&cfg) else {
             panic!("expected exponential");
         };
         assert_eq!(e.anchor, AnchorPlacement::MidAtBaseOffset(0.25));
-        // And they are mutually exclusive at the clap layer.
-        assert!(
-            Cli::try_parse_from([
-                "hanten",
-                "convert",
-                "in.tiff",
-                "-o",
-                "out.tiff",
-                "--anchor-mid-fraction",
-                "0.6",
-                "--anchor-white-at-reference",
-            ])
-            .is_err()
-        );
     }
 
     #[test]
@@ -10968,7 +9996,7 @@ mod tests {
         for bad in [1e-40, 1e-44, 2.1e-39] {
             let cfg = exponential_cfg(ExponentialParams {
                 gamma: bad,
-                anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
+                anchor: AnchorPlacement::MidAtBaseOffset(0.5),
             });
             let Err(err) = validate(&cfg) else {
                 panic!("gamma {bad} must be rejected")
@@ -10982,42 +10010,7 @@ mod tests {
         // MID_GREY_OUTPUT_DECADES the render is a flat mid-grey rather than a broken one.
         validate(&exponential_cfg(ExponentialParams {
             gamma: f32::MIN_POSITIVE,
-            anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
-        }))
-        .unwrap();
-        // `WhiteAtDmax` performs no division, so an overflowing slope is none of this rule's
-        // business — it stays accepted, which is what makes the check targeted rather than
-        // a blanket lower bound on contrast.
-        validate(&exponential_cfg(ExponentialParams {
-            gamma: 1e-40,
-            anchor: AnchorPlacement::WhiteAtDmax,
-        }))
-        .unwrap();
-    }
-
-    /// The guard is on the **resolved** anchor, not on `MID_GREY_OUTPUT_DECADES / slope`.
-    /// That proxy bounds only the mid-grey rules: `black-at-base` divides
-    /// `−log10(floor)`, which is unbounded as the floor shrinks, so a floor of 1e-45 at
-    /// gamma 1e-37 passed the proxy (`0.745/1e-37` is finite) with a real anchor of `inf`
-    /// — and rendered an all-black frame at exit 0, no clip count, no warning.
-    #[test]
-    fn validate_rejects_an_overflowing_anchor_the_slope_quotient_does_not_catch() {
-        let cfg = exponential_cfg(ExponentialParams {
-            gamma: 1e-37,
-            anchor: AnchorPlacement::BlackAtBase(1e-45),
-        });
-        // The proxy the guard replaced would have accepted this: it is finite.
-        assert!((crate::types::MID_GREY_OUTPUT_DECADES / 1e-37f32).is_finite());
-        let Err(err) = validate(&cfg) else {
-            panic!("an infinite derived anchor must be rejected")
-        };
-        assert!(matches!(err, NcError::Usage(_)), "{err}");
-        assert!(err.to_string().contains("non-finite anchor"), "{err}");
-        // Falsifiable: the same tiny gamma with a floor whose logarithm the quotient can
-        // carry stays accepted — the rule bounds the overflow, not small gammas.
-        validate(&exponential_cfg(ExponentialParams {
-            gamma: 1e-2,
-            anchor: AnchorPlacement::BlackAtBase(1e-45),
+            anchor: AnchorPlacement::MidAtBaseOffset(0.5),
         }))
         .unwrap();
     }
@@ -11036,10 +10029,8 @@ mod tests {
             ..ExponentialParams::default()
         });
         // The round-1 guard passes this: the anchor itself is perfectly finite.
-        let anchor = AnchorPlacement::MidAtBaseOffset(2e38).anchor(
-            crate::algo::density::NOMINAL_DMAX,
-            ExponentialParams::default().gamma,
-        );
+        let anchor =
+            AnchorPlacement::MidAtBaseOffset(2e38).anchor(ExponentialParams::default().gamma);
         assert!(anchor.is_finite(), "{anchor}");
         let Err(err) = validate(&cfg) else {
             panic!("an overflowing exponent must be rejected")
@@ -11057,91 +10048,25 @@ mod tests {
         .unwrap();
     }
 
-    /// The two `Dmax`-policy gates must ask whether the placement *reads* the reference,
-    /// not what `DmaxSource` says. A base-derived placement discards the per-frame
-    /// measurement, so `auto` under it is deterministic and cross-frame consistent —
-    /// `film-master` rejecting it refuses a valid config.
-    #[test]
-    fn film_master_accepts_auto_dmax_under_a_reference_free_placement() {
-        let master = |anchor| ResolvedConfig {
-            reconstruction: Reconstruction {
-                density: DensityParams::default(),
-                curve: DensityCurve::Exponential(ExponentialParams {
-                    anchor,
-                    ..ExponentialParams::default()
-                }),
-            },
-            calibration: CalibrationParams {
-                dmax: DmaxSource::Auto,
-                ..film_master_cfg().calibration
-            },
-            ..film_master_cfg()
-        };
-        for anchor in [
-            AnchorPlacement::BlackAtBase(0.005),
-            AnchorPlacement::MidAtBaseOffset(0.5),
-        ] {
-            validate_output_preset(&master(anchor))
-                .unwrap_or_else(|e| panic!("{anchor:?} reads no reference: {e}"));
-        }
-        // Falsifiable: the rejection still stands for the rules that do read it —
-        // otherwise this would pass against a gate that had simply been deleted.
-        for anchor in [
-            AnchorPlacement::WhiteAtDmax,
-            AnchorPlacement::MidAtDmaxFraction(0.5),
-        ] {
-            assert!(
-                matches!(
-                    validate_output_preset(&master(anchor)),
-                    Err(NcError::Usage(_))
-                ),
-                "{anchor:?} does read the reference and must still be rejected"
-            );
-        }
-    }
-
     /// Slope positivity is diagnosed **before** the anchor's division by it. Ordering
     /// the division first called `0` and `nan` "too small to place the anchor" — neither
-    /// is small — and pointed at `--anchor-white-at-reference`, a remedy that then failed
-    /// anyway on the positivity rule the message had steered the user away from.
+    /// is small.
     #[test]
     fn validate_diagnoses_a_non_positive_slope_before_the_anchor_division() {
         for bad in [0.0, f32::NAN, -1.0] {
-            for (label, cfg) in [
-                (
-                    "--density-gamma",
-                    exponential_cfg(ExponentialParams {
-                        gamma: bad,
-                        anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
-                    }),
-                ),
-                (
-                    "--density-gamma",
-                    exponential_cfg(ExponentialParams {
-                        gamma: bad,
-                        anchor: AnchorPlacement::MidAtBaseOffset(0.5),
-                    }),
-                ),
-            ] {
-                let Err(err) = validate(&cfg) else {
-                    panic!("{label} {bad} must be rejected")
-                };
-                let msg = err.to_string();
-                assert!(msg.contains(label), "{bad}: {msg}");
-                assert!(msg.contains("must be finite and > 0"), "{bad}: {msg}");
-                // Not the anchor-division diagnosis, whose remedy does not apply here.
-                assert!(!msg.contains("non-finite anchor"), "{bad}: {msg}");
-            }
+            let cfg = exponential_cfg(ExponentialParams {
+                gamma: bad,
+                anchor: AnchorPlacement::MidAtBaseOffset(0.5),
+            });
+            let Err(err) = validate(&cfg) else {
+                panic!("--density-gamma {bad} must be rejected")
+            };
+            let msg = err.to_string();
+            assert!(msg.contains("--density-gamma"), "{bad}: {msg}");
+            assert!(msg.contains("must be finite and > 0"), "{bad}: {msg}");
+            // Not the anchor-division diagnosis, whose remedy does not apply here.
+            assert!(!msg.contains("non-finite anchor"), "{bad}: {msg}");
         }
-        // And the remedy the old message offered really is no remedy: white-at-reference
-        // does not rescue a zero slope, which is why positivity must be diagnosed first.
-        assert!(matches!(
-            validate(&exponential_cfg(ExponentialParams {
-                gamma: 0.0,
-                anchor: AnchorPlacement::WhiteAtDmax,
-            })),
-            Err(NcError::Usage(_))
-        ));
     }
 
     #[test]
@@ -11161,14 +10086,14 @@ mod tests {
         // of the defaults that moved, so a recipe silent on it is not fully pinned (below).
         assert_eq!(
             probe(
-                r#"{"calibration":{"dmax":{"explicit":2.0}},"reconstruction":{"curve":{"type":"exponential","gamma":1.0,"anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#
+                r#"{"reconstruction":{"curve":{"type":"exponential","gamma":1.0,"anchor":{"mid-at-base-offset":0.62}},"density":{"scale":[1.0,1.0,1.0]}}}"#
             ),
             None
         );
         // Either of the two alone still floats the other.
         for json in [
             r#"{"reconstruction":{"curve":{"type":"exponential","gamma":1.0},"density":{"scale":[1.0,1.0,1.0]}}}"#,
-            r#"{"reconstruction":{"curve":{"type":"exponential","anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#,
+            r#"{"reconstruction":{"curve":{"type":"exponential","anchor":{"mid-at-base-offset":0.62}},"density":{"scale":[1.0,1.0,1.0]}}}"#,
         ] {
             assert_eq!(probe(json), Some(UnpinnedCurve::MovedDefaults), "{json}");
         }
@@ -11177,12 +10102,9 @@ mod tests {
         // from another `--params` layer or a flag.
         for json in [
             // a profile: the whole look pinned, no calibration at all
-            r#"{"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#,
+            r#"{"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":{"mid-at-base-offset":0.62}},"density":{"scale":[1.0,1.0,1.0]}}}"#,
             // a calibration that measured only a base — what `hanten estimate` emits
-            // without `--d-max-region`
-            r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"},"density":{"scale":[1.0,1.0,1.0]}}}"#,
-            // …and a stated reference is of course silent too
-            r#"{"calibration":{"dmax":"fixed"},"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":{"mid-at-base-offset":0.62}},"density":{"scale":[1.0,1.0,1.0]}}}"#,
+            r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":{"mid-at-base-offset":0.62}},"density":{"scale":[1.0,1.0,1.0]}}}"#,
         ] {
             assert_eq!(probe(json), None, "{json}");
         }
@@ -11193,8 +10115,8 @@ mod tests {
         // "unstated" count, an absent `density` block and a `density` block without the
         // key, because `--dump-params` writes it either way.
         for json in [
-            r#"{"calibration":{"dmax":"fixed"},"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"}}}"#,
-            r#"{"calibration":{"dmax":"fixed"},"reconstruction":{"type":"density","curve":{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"},"density":{"offset":[0.0,0.0,0.0]}}}"#,
+            r#"{"reconstruction":{"curve":{"type":"exponential","gamma":2.0,"anchor":{"mid-at-base-offset":0.62}}}}"#,
+            r#"{"reconstruction":{"type":"density","curve":{"type":"exponential","gamma":2.0,"anchor":{"mid-at-base-offset":0.62}},"density":{"offset":[0.0,0.0,0.0]}}}"#,
         ] {
             assert_eq!(probe(json), Some(UnpinnedCurve::DensityScale), "{json}");
         }
@@ -11202,7 +10124,7 @@ mod tests {
         // build's default, the same "warn only on shapes this build cannot produce" rule.
         for scale in ["[1.0,1.0,1.0]", "[1.0,0.84,0.73]"] {
             let json = format!(
-                r#"{{"calibration":{{"dmax":"fixed"}},"reconstruction":{{"curve":{{"type":"exponential","gamma":2.0,"anchor":"white-at-dmax"}},"density":{{"scale":{scale}}}}}}}"#
+                r#"{{"reconstruction":{{"curve":{{"type":"exponential","gamma":2.0,"anchor":{{"mid-at-base-offset":0.62}}}},"density":{{"scale":{scale}}}}}}}"#
             );
             assert_eq!(probe(&json), None, "{json}");
         }
@@ -11220,7 +10142,7 @@ mod tests {
         );
         // A recipe with no `curve` section resolves to whichever curve is the default,
         // which has moved twice — silence would be exactly the "archived recipe
-        // silently reinterpreted" case design-spec §7.3 forbids, and no
+        // silently reinterpreted" case design-spec §7.2 forbids, and no
         // `meta.pipeline_version` rides a bare recipe to catch it instead.
         assert_eq!(
             probe(r#"{"reconstruction":{"type":"density"}}"#),
@@ -11272,12 +10194,12 @@ mod tests {
             sets_curve_anchor(&serde_json::from_str::<serde_json::Value>(json).unwrap())
         };
         assert!(probe(
-            r#"{"reconstruction":{"curve":{"anchor":"white-at-dmax"}}}"#
+            r#"{"reconstruction":{"curve":{"anchor":{"mid-at-base-offset":0.62}}}}"#
         ));
         assert!(probe(
-            r#"{"reconstruction":{"curve":{"anchor":{"mid-at-dmax-fraction":0.6}}}}"#
+            r#"{"reconstruction":{"curve":{"anchor":{"mid-at-base-offset":0.4}}}}"#
         ));
-        // A restating override still counts (same rule as `sets_calibration_dmax`), and a frame
+        // A restating override still counts (same rule as `sets_calibration_film_base`), and a frame
         // that touches only non-placement keys does not.
         assert!(!probe(r#"{"reconstruction":{"curve":{"gamma":2.0}}}"#));
         assert!(!probe(r#"{"print":{"print_exposure":0.5}}"#));
@@ -11397,52 +10319,6 @@ mod tests {
         );
     }
 
-    /// A curve-type switch **never touches the roll's reference** — in either direction,
-    /// including across `characteristic`.
-    ///
-    /// The structural replacement for a defect the old schema needed two patches for.
-    /// While the reference lived in `reconstruction.curve`, a switch had to *carry* it,
-    /// and the carry could not cross `characteristic`: that curve reported
-    /// `DmaxSource::None` to mean "reads no reference", which under a parametric curve
-    /// means `--no-d-max`, scene-referred. Carrying it out made `sigmoid`'s guard refuse
-    /// an anchorless curve, and `exponential` render a fully clipped frame at exit 0
-    /// (measured: 100 % clipped from a recipe pinning
-    /// `{"type":"characteristic","stock":"portra-400"}`). Gating the carry on the curve
-    /// type fixed that by *dropping* the reference instead — so a frame switched to a
-    /// stock curve and back silently lost the roll's calibration. (The sigmoid named
-    /// here has since retired; the round trip is now through the exponential.)
-    ///
-    /// With the value at `calibration.dmax` there is nothing to carry and nothing to
-    /// drop. This asserts the round trip a carry could never serve.
-    #[test]
-    fn a_curve_switch_never_touches_the_roll_reference() {
-        let calibrated = ResolvedConfig {
-            calibration: CalibrationParams {
-                dmax: DmaxSource::Explicit(1.64),
-                ..base_cfg().calibration
-            },
-            ..base_cfg()
-        };
-        let switch = |cfg: ResolvedConfig, to: &str| {
-            merge(cfg, &parse_convert(&["--density-curve", to])).unwrap()
-        };
-
-        // Out to the stock curve and back: the reference is the same measured value at
-        // every step, and every step validates.
-        let stock = switch(calibrated, "characteristic");
-        assert_eq!(stock.calibration.dmax, DmaxSource::Explicit(1.64));
-        let round_trip = switch(stock, "exponential");
-        assert_eq!(
-            round_trip.calibration.dmax,
-            DmaxSource::Explicit(1.64),
-            "switching back lost the roll's reference"
-        );
-        // The *look* is the target's default — the falsifiable half, so this cannot be
-        // passing on a switch that did nothing.
-        assert_eq!(round_trip.reconstruction, Reconstruction::default());
-        validate(&round_trip).expect("a switched-to curve resolves its own anchor");
-    }
-
     /// A switch to the characteristic curve **drops** the anchor placement, and says so
     /// when that discards a stated one.
     ///
@@ -11465,10 +10341,12 @@ mod tests {
         .reconstruction;
 
         // The reported case: a stated non-default placement is dropped by the switch.
-        let msg =
-            curve_switch_dropped_anchor(&exponential(AnchorPlacement::BlackAtBase(0.005)), &stock)
-                .expect("dropping a stated placement must warn");
-        assert!(msg.contains("black-at-base"), "{msg}");
+        let msg = curve_switch_dropped_anchor(
+            &exponential(AnchorPlacement::MidAtBaseOffset(0.5)),
+            &stock,
+        )
+        .expect("dropping a stated placement must warn");
+        assert!(msg.contains("mid-at-base-offset"), "{msg}");
         assert!(msg.contains("characteristic"), "{msg}");
 
         // Silent where nothing chosen is lost — the false-positive half, and the reason
@@ -11480,23 +10358,25 @@ mod tests {
         // Same curve type on both sides is not a switch at all.
         assert_eq!(
             curve_switch_dropped_anchor(
-                &exponential(AnchorPlacement::BlackAtBase(0.005)),
-                &exponential(AnchorPlacement::WhiteAtDmax),
+                &exponential(AnchorPlacement::MidAtBaseOffset(0.5)),
+                &exponential(AnchorPlacement::MidAtBaseOffset(0.7)),
             ),
             None
         );
         // Out of the characteristic curve there was no placement to drop.
         assert_eq!(
-            curve_switch_dropped_anchor(&stock, &exponential(AnchorPlacement::WhiteAtDmax)),
+            curve_switch_dropped_anchor(
+                &stock,
+                &exponential(AnchorPlacement::MidAtBaseOffset(0.5))
+            ),
             None
         );
 
         // The JSON switch site really does reset it — the behaviour the warning
-        // describes. Nothing survives the switch; the roll's reference is untouched
-        // because it lives in `calibration`, outside this object.
+        // describes. Nothing survives the switch.
         let mut base = serde_json::json!({"curve": {
             "type": "exponential", "gamma": 2.0,
-            "anchor": {"black-at-base": 0.005}}});
+            "anchor": {"mid-at-base-offset": 0.5}}});
         merge_json(
             &mut base,
             &serde_json::json!({"curve": {"type": "characteristic"}}),
@@ -11508,23 +10388,9 @@ mod tests {
         );
     }
 
-    /// Bounds for the two base-derived placements.
+    /// Bounds for the placement.
     #[test]
-    fn validate_bounds_the_base_derived_placements() {
-        // `BlackAtBase` is a linear output value in (0, 1): at or below 0 there is no
-        // logarithm to take, and at 1 the film base renders as display white.
-        for bad in [0.0, -0.005, 1.0, 1.5, f32::NAN, f32::INFINITY] {
-            {
-                let cfg = exponential_cfg(ExponentialParams {
-                    anchor: AnchorPlacement::BlackAtBase(bad),
-                    ..ExponentialParams::default()
-                });
-                assert!(
-                    matches!(validate(&cfg), Err(NcError::Usage(_))),
-                    "floor {bad} should fail"
-                );
-            }
-        }
+    fn validate_bounds_the_placement() {
         // `MidAtBaseOffset` is a density above the base, so strictly positive.
         for bad in [0.0, -0.5, f32::NAN, f32::INFINITY] {
             {
@@ -11539,69 +10405,11 @@ mod tests {
             }
         }
         // Representative good values pass.
-        for cfg in [
-            exponential_cfg(ExponentialParams {
-                anchor: AnchorPlacement::BlackAtBase(0.005),
-                ..ExponentialParams::default()
-            }),
-            exponential_cfg(ExponentialParams {
-                anchor: AnchorPlacement::MidAtBaseOffset(0.5),
-                ..ExponentialParams::default()
-            }),
-        ] {
-            validate(&cfg).unwrap();
-        }
-    }
-
-    /// The mid-fraction rule: (0, 1]. 0 detaches the anchor from the reference entirely
-    /// (mid-grey on the film base), negative places it below the base, above 1 places
-    /// mid-grey past display white.
-    #[test]
-    fn validate_bounds_mid_fraction() {
-        for bad in [0.0, -0.5, 1.01, 2.0, f32::NAN, f32::INFINITY] {
-            assert!(
-                matches!(
-                    validate(&exponential_cfg(ExponentialParams {
-                        anchor: AnchorPlacement::MidAtDmaxFraction(bad),
-                        ..ExponentialParams::default()
-                    })),
-                    Err(NcError::Usage(_))
-                ),
-                "fraction {bad} should fail"
-            );
-        }
-        // The inclusive upper edge and a very small positive fraction are accepted.
-        for good in [0.5, 1.0, 1e-3] {
-            validate(&exponential_cfg(ExponentialParams {
-                anchor: AnchorPlacement::MidAtDmaxFraction(good),
-                ..ExponentialParams::default()
-            }))
-            .unwrap();
-        }
-    }
-
-    /// `dmax = none` is valid beside every curve: the exponential renders its
-    /// scene-referred placement from it, and `characteristic` reads no reference at all.
-    #[test]
-    fn validate_accepts_no_dmax_on_every_curve() {
-        let with = |cfg: ResolvedConfig, dmax| ResolvedConfig {
-            calibration: CalibrationParams {
-                dmax,
-                ..cfg.calibration.clone()
-            },
-            ..cfg
-        };
-        let exponential = exponential_cfg(ExponentialParams {
-            gamma: 1.0,
-            anchor: AnchorPlacement::WhiteAtDmax,
-        });
-        validate(&with(exponential, DmaxSource::None)).unwrap();
-        let stock = merge(
-            base_cfg(),
-            &parse_convert(&["--density-curve", "characteristic"]),
-        )
+        validate(&exponential_cfg(ExponentialParams {
+            anchor: AnchorPlacement::MidAtBaseOffset(0.5),
+            ..ExponentialParams::default()
+        }))
         .unwrap();
-        validate(&with(stock, DmaxSource::None)).unwrap();
     }
 
     #[test]
@@ -11772,109 +10580,45 @@ mod tests {
     }
 
     #[test]
-    fn recipe_parses_calibration_dmax_key() {
-        // The recipe key lives at the top-level `calibration.dmax`; with
-        // `deny_unknown_fields` at every level a misplaced key would silently reject,
-        // so pin the documented (§9) nesting and all four wire-forms through
-        // `ResolvedConfig`.
-        let cfg: ResolvedConfig =
-            serde_json::from_str(r#"{"calibration":{"dmax":{"explicit":1.5}}}"#).unwrap();
-        assert_eq!(cfg.calibration.dmax, DmaxSource::Explicit(1.5));
-        for (wire, expected) in [
-            ("\"none\"", DmaxSource::None),
-            ("\"auto\"", DmaxSource::Auto),
-            ("\"fixed\"", DmaxSource::Fixed),
-        ] {
-            let cfg: ResolvedConfig =
-                serde_json::from_str(&format!(r#"{{"calibration":{{"dmax":{wire}}}}}"#)).unwrap();
-            assert_eq!(cfg.calibration.dmax, expected, "{wire}");
-        }
-        // Omitted, it takes the roll-fixed nominal default — unchanged by the move.
-        let cfg: ResolvedConfig = serde_json::from_str(r#"{"calibration":{}}"#).unwrap();
-        assert_eq!(cfg.calibration.dmax, DmaxSource::Fixed);
-
+    fn the_calibration_section_is_closed_and_names_its_members() {
         // The section is `deny_unknown_fields`, and the error names it. Falsifiable
         // control for the strictness the open-section design relies on: a member is
         // added by adding a field, never by the section quietly accepting one.
-        let err = serde_json::from_str::<ResolvedConfig>(r#"{"calibration":{"dmxa":"fixed"}}"#)
+        let err = serde_json::from_str::<ResolvedConfig>(r#"{"calibration":{"flim_base":"auto"}}"#)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("dmxa"), "{err}");
-        // It lists the section's members, which is how a user sees what the section
-        // does accept — and what makes adding one a deliberate edit rather than a
-        // silent acceptance.
+        assert!(err.contains("flim_base"), "{err}");
         assert!(err.contains("film_base"), "{err}");
-        assert!(err.contains("dmax"), "{err}");
     }
 
+    /// A recipe's retired `calibration.dmax`: its old default `"fixed"` is on every
+    /// sidecar and `--dump-params` document an earlier build wrote, so it is dropped
+    /// on load and the recipe replays; any other value asked for a reference this
+    /// build no longer reads, and is refused with the key named.
     #[test]
-    fn mutually_exclusive_dmax_flags_are_rejected() {
-        for pair in [
-            ["--d-max", "1.5", "--no-d-max"].as_slice(),
-            ["--d-max", "1.5", "--auto-d-max"].as_slice(),
-            ["--d-max", "1.5", "--fixed-d-max"].as_slice(),
-            ["--fixed-d-max", "--auto-d-max"].as_slice(),
-            ["--fixed-d-max", "--no-d-max"].as_slice(),
-            ["--auto-d-max", "--no-d-max"].as_slice(),
+    fn a_recipes_retired_dmax_is_dropped_at_its_old_default_and_refused_otherwise() {
+        let mut old = serde_json::json!({"calibration": {"film_base": "auto", "dmax": "fixed"}});
+        assert!(strip_retired_keys_at_old_defaults(&mut old));
+        assert_eq!(
+            old,
+            serde_json::json!({"calibration": {"film_base": "auto"}})
+        );
+        reject_legacy_recipe_keys(&old, "recipe").unwrap();
+
+        for stated in [
+            serde_json::json!({"explicit": 1.5}),
+            serde_json::json!("auto"),
+            serde_json::json!("none"),
         ] {
-            let mut argv = vec!["hanten", "convert", "i", "-o", "o"];
-            argv.extend_from_slice(pair);
+            let mut v = serde_json::json!({"calibration": {"dmax": stated.clone()}});
+            assert!(!strip_retired_keys_at_old_defaults(&mut v), "{stated}");
+            let err = reject_legacy_recipe_keys(&v, "recipe")
+                .unwrap_err()
+                .to_string();
             assert!(
-                Cli::try_parse_from(argv).is_err(),
-                "{pair:?} should conflict"
+                err.contains("calibration.dmax") && err.contains("mid-at-base-offset"),
+                "{err}"
             );
-        }
-    }
-
-    #[test]
-    fn validate_rejects_bad_explicit_dmax() {
-        // A recipe can smuggle a non-positive / non-finite anchor past clap's
-        // value parser, so validate is the only guard once it's in the config.
-        let exponential = || {
-            exponential_cfg(ExponentialParams {
-                gamma: 1.0,
-                anchor: AnchorPlacement::WhiteAtDmax,
-            })
-        };
-        let with = |cfg: ResolvedConfig, dmax| ResolvedConfig {
-            calibration: CalibrationParams {
-                dmax,
-                ..cfg.calibration.clone()
-            },
-            ..cfg
-        };
-        // The value rule is over the whole config, not per curve: a bad number is a bad
-        // number whichever look is resolved — including one that will not read it.
-        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-            for (name, cfg) in [
-                ("exponential", exponential()),
-                ("default", base_cfg()),
-                (
-                    "characteristic",
-                    density_cfg(
-                        DensityParams::default(),
-                        DensityCurve::Characteristic(CharacteristicParams::default()),
-                    ),
-                ),
-            ] {
-                assert!(
-                    matches!(
-                        validate(&with(cfg, DmaxSource::Explicit(bad))),
-                        Err(NcError::Usage(_))
-                    ),
-                    "explicit d-max {bad} should fail ({name})"
-                );
-            }
-        }
-        // A positive explicit anchor, and Fixed / Auto / None, all validate on
-        // the exponential curve.
-        for src in [
-            DmaxSource::Explicit(1.8),
-            DmaxSource::None,
-            DmaxSource::Auto,
-            DmaxSource::Fixed,
-        ] {
-            validate(&with(exponential(), src)).unwrap();
         }
     }
 
@@ -11908,11 +10652,8 @@ mod tests {
         assert_eq!(v["reconstruction"]["schema_version"], 1);
         assert!(v["reconstruction"].get("type").is_none(), "{v}");
         assert_eq!(v["reconstruction"]["curve"]["type"], "exponential");
-        assert!(
-            v["reconstruction"]["curve"].get("dmax").is_none(),
-            "the reference is a calibration, not a curve knob"
-        );
-        assert_eq!(v["calibration"]["dmax"], "fixed");
+        assert!(v["reconstruction"]["curve"].get("dmax").is_none(), "{v}");
+        assert!(v["calibration"].get("dmax").is_none(), "{v}");
         // `f32` literals, not `[1.0, 1.0, 1.0]`: the default gain is `[1, 0.84, 0.73]`
         // and `0.84f32` widens to `0.8399999737739563` as an `f64`.
         assert_eq!(
@@ -11938,20 +10679,11 @@ mod tests {
     #[test]
     fn reconstruction_result_serializes_the_documented_shapes() {
         // The report's resolution diagnostics (design-spec §8): the curve type, the
-        // resolved dmax triple with `value` always present (null for `none`), and the
-        // placement rule. Under `white-at-dmax` the reference *is* the anchor, so
-        // `anchor_value` mirrors `dmax.value`.
+        // placement rule and the anchor it derived.
         let v = serde_json::to_value(reconstruction_result(
-            &exponential_cfg(ExponentialParams {
-                gamma: 2.0,
-                anchor: AnchorPlacement::WhiteAtDmax,
-            })
-            .reconstruction,
-            DmaxSource::Fixed,
-            Some(2.0),
-            Some(2.0),
+            &Reconstruction::default(),
+            Some(0.99),
             None,
-            DmaxSetting::Default,
         ))
         .unwrap();
         assert_eq!(
@@ -11959,113 +10691,22 @@ mod tests {
             serde_json::json!({
                 "curve": {
                     "type": "exponential",
-                    "dmax": {"policy": "fixed", "value": 2.0, "provenance": "default"},
-                    "anchor": "white-at-dmax",
-                    "anchor_value": 2.0
+                    "anchor": {"mid-at-base-offset": 0.62f32},
+                    "anchor_value": 0.99f32
                 }
             })
         );
 
-        // The default curve reports its base-derived placement rule — the shape a
-        // default report carries.
-        let v = serde_json::to_value(reconstruction_result(
-            &Reconstruction::default(),
-            DmaxSource::Fixed,
-            Some(1.3),
-            Some(0.99),
-            None,
-            DmaxSetting::Default,
-        ))
-        .unwrap();
-        assert_eq!(v["curve"]["type"], "exponential");
-        assert_eq!(
-            v["curve"]["anchor"],
-            serde_json::to_value(AnchorPlacement::MidAtBaseOffset(0.62)).unwrap()
+        // The characteristic curve places no anchor, so both keys serialize `null`.
+        let stock = density_cfg(
+            DensityParams::default(),
+            DensityCurve::Characteristic(CharacteristicParams::default()),
         );
-
-        // `none` reports a null value; the recipe provenance rides through.
-        let cfg = exponential_cfg(ExponentialParams {
-            gamma: 1.0,
-            anchor: AnchorPlacement::WhiteAtDmax,
-        });
-        let v = serde_json::to_value(reconstruction_result(
-            &cfg.reconstruction,
-            DmaxSource::None,
-            None,
-            None,
-            None,
-            DmaxSetting::Recipe,
-        ))
-        .unwrap();
-        assert_eq!(
-            v["curve"]["dmax"],
-            serde_json::json!({"policy": "none", "value": null, "provenance": "recipe"})
-        );
-
-        // The auto policy always reports `auto-frame` — the value is a per-frame
-        // measurement regardless of who selected the policy (this is the marker
-        // that makes it master-incompatible).
-        let cfg = exponential_cfg(ExponentialParams {
-            anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
-            ..ExponentialParams::default()
-        });
-        for setting in [DmaxSetting::Default, DmaxSetting::Recipe, DmaxSetting::Cli] {
-            let v = serde_json::to_value(reconstruction_result(
-                &cfg.reconstruction,
-                DmaxSource::Auto,
-                Some(1.37),
-                // Mid-grey placement: A = 0.5*1.37 + 0.745/2.0 ≈ 1.057, so the derived
-                // anchor is deliberately NOT the reference here.
-                Some(1.045),
-                None,
-                setting,
-            ))
-            .unwrap();
-            assert_eq!(v["curve"]["type"], "exponential");
-            // The placement rule and the derived anchor make this block self-contained:
-            // `dmax.value` is the reference, `anchor_value` is what rendered to 1.0.
-            assert_eq!(
-                v["curve"]["anchor"],
-                serde_json::json!({"mid-at-dmax-fraction": 0.5})
-            );
-            // Approximate: an f32 widens to f64 in JSON (1.045f32 is 1.0449999570846558),
-            // so an exact literal comparison would be asserting f32 representation.
-            let got = v["curve"]["anchor_value"].as_f64().expect("anchor_value");
-            assert!((got - 1.045).abs() < 1e-6, "{got}");
-            assert_eq!(v["curve"]["dmax"]["policy"], "auto");
-            assert_eq!(
-                v["curve"]["dmax"]["provenance"], "auto-frame",
-                "{setting:?}"
-            );
-        }
-
-        // A reference-measured scalar frozen into a recipe: explicit / recipe.
-        let cfg = exponential_cfg(ExponentialParams {
-            gamma: 1.0,
-            anchor: AnchorPlacement::WhiteAtDmax,
-        });
-        let v = serde_json::to_value(reconstruction_result(
-            &cfg.reconstruction,
-            DmaxSource::Explicit(1.64),
-            Some(1.64),
-            Some(1.64),
-            None,
-            DmaxSetting::Recipe,
-        ))
-        .unwrap();
-        assert_eq!(v["curve"]["dmax"]["policy"], "explicit");
-        assert_eq!(v["curve"]["dmax"]["provenance"], "recipe");
-        // ...and a CLI-passed one reports `cli`.
-        let v = serde_json::to_value(reconstruction_result(
-            &cfg.reconstruction,
-            DmaxSource::Explicit(1.64),
-            Some(1.64),
-            Some(1.64),
-            None,
-            DmaxSetting::Cli,
-        ))
-        .unwrap();
-        assert_eq!(v["curve"]["dmax"]["provenance"], "cli");
+        let v =
+            serde_json::to_value(reconstruction_result(&stock.reconstruction, None, None)).unwrap();
+        assert_eq!(v["curve"]["type"], "characteristic");
+        assert!(v["curve"]["anchor"].is_null() && v["curve"]["anchor_value"].is_null());
+        assert!(v["curve"].get("dmax").is_none(), "{v}");
     }
 
     #[test]
@@ -13030,7 +11671,7 @@ mod tests {
     fn load_recipe_records_whether_the_file_stated_an_output_preset() {
         // The witness behind the test above. `output.preset` resolves to a *named*
         // default, so only the raw JSON distinguishes "the recipe chose it" from
-        // "nobody did" — the same reason `calibration_dmax_present` exists.
+        // "nobody did" — a stated default is invisible once the config resolves.
         let stated =
             load_recipe_body("preset-stated", r#"{"output":{"preset":"display-p3"}}"#).unwrap();
         assert!(stated.output_preset_present);
@@ -13067,57 +11708,8 @@ mod tests {
     }
 
     #[test]
-    fn film_master_rejects_frame_local_auto_dmax_and_pins_the_supported_anchors() {
-        let master = |curve: DensityCurve, dmax| ResolvedConfig {
-            reconstruction: Reconstruction {
-                density: DensityParams::default(),
-                curve,
-            },
-            calibration: CalibrationParams {
-                dmax,
-                ..film_master_cfg().calibration
-            },
-            ..film_master_cfg()
-        };
-        let reading = |anchor| {
-            DensityCurve::Exponential(ExponentialParams {
-                anchor,
-                ..ExponentialParams::default()
-            })
-        };
-        let white = reading(AnchorPlacement::WhiteAtDmax);
-        let mid = reading(AnchorPlacement::MidAtDmaxFraction(0.5));
-
-        // Frame-local `auto` normalizes exposure per frame, which is exactly the
-        // cross-frame consistency the master exists to preserve — so it is rejected for
-        // every placement that reads the reference. (The default placement reads none;
-        // `film_master_accepts_auto_dmax_under_a_reference_free_placement` covers it.)
-        for curve in [white, mid] {
-            let msg = validate_err(&master(curve, DmaxSource::Auto));
-            assert!(msg.contains("auto"), "{curve:?}: {msg}");
-            assert!(msg.contains("film-master"), "{curve:?}: {msg}");
-            // …and the message points at the roll-fixed alternatives.
-            assert!(msg.contains("--d-max"), "{curve:?}: {msg}");
-        }
-
-        // Supported placements (design-spec §5): fixed (default), explicit/roll, and
-        // `none` (unity), on every rule.
-        for curve in [white, mid, DensityCurve::default()] {
-            for dmax in [
-                DmaxSource::Fixed,
-                DmaxSource::Explicit(1.64),
-                DmaxSource::None,
-            ] {
-                validate(&master(curve, dmax))
-                    .unwrap_or_else(|e| panic!("{curve:?} + {dmax:?} must be accepted: {e}"));
-            }
-        }
-    }
-
-    #[test]
     fn film_master_rejects_a_measured_balance_range_only_when_it_is_consulted() {
-        // The other frame-local measurement, and the same cross-frame hazard as auto
-        // Dmax: an `auto` regional-balance range is measured from *this* frame's density
+        // A frame-local measurement: an `auto` regional-balance range is measured from *this* frame's density
         // percentiles, so two frames of a roll get different ramp anchors.
         //
         // But `regional_balance` short-circuits before measuring whenever the two
@@ -13241,14 +11833,13 @@ mod tests {
 
     #[test]
     fn roll_frame_override_of_output_preset_is_flagged_as_a_consistency_break() {
-        // `output.preset` is the third roll-fixed choice, alongside `film_base` and
-        // `calibration.dmax`, and the coarsest: it changes which branch out of
-        // the ACEScg boundary a frame takes, so the frame is a different image class.
-        // It was the only one of the three that warned about nothing.
+        // `output.preset` is a roll-fixed choice, like `film_base`, and the coarsest:
+        // it changes which branch out of the ACEScg boundary a frame takes, so the frame
+        // is a different image class. It once was the only one that warned about nothing.
         let probe = |json: &str| sets_output_preset(&serde_json::from_str(json).unwrap());
         assert!(probe(r#"{"output":{"preset":"display-p3"}}"#));
         assert!(probe(r#"{"output":{"preset":"film-master"}}"#));
-        // A raw-JSON probe like `sets_calibration_dmax`: an override that merely *restates*
+        // A raw-JSON probe like `sets_calibration_film_base`: an override that merely *restates*
         // the shared preset is still a per-frame assertion, and the roll report has
         // nowhere else to surface it (`FrameStatus` carries no `output_render`).
         assert!(!probe(r#"{"output":{}}"#));
@@ -13366,103 +11957,15 @@ mod tests {
             }
         }
 
-        // The master's content claim must not invent a Dmax placement it did not make:
-        // validation deliberately accepts `dmax = none` under `white-at-dmax`.
-        {
-            let name = "exponential white-at-dmax, dmax=none";
-            let reconstruction = Reconstruction {
-                density: DensityParams::default(),
-                curve: DensityCurve::Exponential(ExponentialParams {
-                    anchor: AnchorPlacement::WhiteAtDmax,
-                    ..ExponentialParams::default()
-                }),
-            };
-            let anchorless = value(&ResolvedConfig {
-                reconstruction,
-                calibration: CalibrationParams {
-                    dmax: DmaxSource::None,
-                    ..film_master_cfg().calibration
-                },
-                ..film_master_cfg()
-            });
-            let content = anchorless["content"].as_str().unwrap();
-            assert!(
-                content.contains("placed no Dmax anchor"),
-                "{name}: {content}"
-            );
-            assert!(!content.contains("roll-fixed Dmax"), "{name}: {content}");
-            assert!(
-                content.contains("not a physical scene-linear"),
-                "{name}: {content}"
-            );
-        }
-        // …and the default claims its base-derived placement, never the roll's Dmax it
-        // does not read.
+        // The default claims its base-derived placement.
         assert!(
             content.contains("film-base-derived anchor placement"),
             "the default's placement must be claimed: {content}"
         );
-        assert!(!content.contains("roll-fixed Dmax"), "{content}");
-        // A reference-reading placement does claim the roll-fixed Dmax.
-        let reading = value(&ResolvedConfig {
-            reconstruction: Reconstruction {
-                density: DensityParams::default(),
-                curve: DensityCurve::Exponential(ExponentialParams {
-                    anchor: AnchorPlacement::MidAtDmaxFraction(0.5),
-                    ..ExponentialParams::default()
-                }),
-            },
-            ..film_master_cfg()
-        });
-        assert!(
-            reading["content"]
-                .as_str()
-                .unwrap()
-                .contains("resolved roll-fixed Dmax"),
-            "{reading}"
-        );
-
-        // A base-derived placement is its own provenance, on both sides. Keying only on
-        // `calibration.dmax` made a stated roll-level base-derived anchor read identically to
-        // a genuinely unanchored run, and symmetrically let a render that never touched
-        // `Dmax` claim the roll-fixed placement.
-        for (name, dmax) in [
-            ("base-derived, no reference", DmaxSource::None),
-            (
-                "base-derived, reference present but unread",
-                DmaxSource::Fixed,
-            ),
-        ] {
-            let base_derived = value(&ResolvedConfig {
-                reconstruction: Reconstruction {
-                    density: DensityParams::default(),
-                    curve: DensityCurve::Exponential(ExponentialParams {
-                        anchor: AnchorPlacement::BlackAtBase(0.005),
-                        ..ExponentialParams::default()
-                    }),
-                },
-                calibration: CalibrationParams {
-                    dmax,
-                    ..film_master_cfg().calibration
-                },
-                ..film_master_cfg()
-            });
-            let content = base_derived["content"].as_str().unwrap();
-            assert!(
-                content.contains("film-base-derived anchor placement"),
-                "{name}: {content}"
-            );
-            assert!(!content.contains("roll-fixed Dmax"), "{name}: {content}");
-            assert!(
-                !content.contains("placed no Dmax anchor"),
-                "{name}: {content}"
-            );
-        }
 
         // The characteristic curve places mid-grey off the film's published response
-        // and applies no placement *rule*, so it claims neither of the two above. It
-        // answers `None` to `curve.anchor()`, which the reference-free test read as
-        // base-derived — a report asserting an operation the run never performed.
+        // and applies no placement *rule*, so it must not claim the exponential's
+        // base-derived one — a report asserting an operation the run never performed.
         let film_curve = value(&ResolvedConfig {
             reconstruction: Reconstruction {
                 density: DensityParams {
@@ -13478,16 +11981,10 @@ mod tests {
             content.contains("published characteristic curve"),
             "the characteristic curve must claim the film's own placement: {content}"
         );
-        for wrong in [
-            "film-base-derived",
-            "roll-fixed Dmax",
-            "placed no Dmax anchor",
-        ] {
-            assert!(
-                !content.contains(wrong),
-                "must not claim `{wrong}`: {content}"
-            );
-        }
+        assert!(
+            !content.contains("film-base-derived"),
+            "must not claim the exponential's placement: {content}"
+        );
 
         // A display preset: the shared print controls and a display render both run,
         // whatever the curve — the controls sit past the ACEScg boundary, where every
@@ -13785,7 +12282,7 @@ mod tests {
         // Exponential gamma must be positive.
         let cfg = exponential_cfg(ExponentialParams {
             gamma: 0.0,
-            anchor: AnchorPlacement::WhiteAtDmax,
+            ..ExponentialParams::default()
         });
         assert!(matches!(validate(&cfg), Err(NcError::Usage(_))));
 
@@ -14024,103 +12521,33 @@ mod tests {
         // into `--params -` is the target shape, not today's).
         let fragment = CalibrationFragment {
             film_base: Some(FilmBaseSource::Explicit([0.553, 0.271, 0.159])),
-            dmax: Some(DmaxSource::Explicit(1.2734)),
         };
         let json = serde_json::to_string(&fragment).unwrap();
-        assert_eq!(
-            json,
-            r#"{"film_base":{"explicit":[0.553,0.271,0.159]},"dmax":{"explicit":1.2734}}"#
-        );
+        assert_eq!(json, r#"{"film_base":{"explicit":[0.553,0.271,0.159]}}"#);
         let recipe: ResolvedConfig =
             serde_json::from_str(&format!(r#"{{"calibration":{json}}}"#)).unwrap();
         assert_eq!(
             recipe.calibration.film_base,
             Some(FilmBaseSource::Explicit([0.553, 0.271, 0.159]))
         );
-        assert_eq!(recipe.calibration.dmax, DmaxSource::Explicit(1.2734));
         validate(&recipe).unwrap();
     }
 
-    /// **Each member is emitted only when it was measured, and never defaulted.**
-    ///
-    /// `CalibrationFragment` is deliberately not `CalibrationParams`: that struct's
-    /// `dmax` has a default, so serializing it would write `"dmax":"fixed"` for a run
-    /// that measured no reference — and piping *that* into `--params` pins the default
-    /// over whatever a later layer states. The section is open, so this is asserted
-    /// per member rather than as "the two keys".
+    /// **Each member is emitted only when it was measured, and never defaulted**, so a
+    /// fragment piped into `--params` pins nothing a later layer states.
     #[test]
     fn the_calibration_fragment_omits_what_was_not_measured() {
         let base_only = CalibrationFragment {
             film_base: Some(FilmBaseSource::Auto),
-            dmax: None,
         };
-        let json = serde_json::to_string(&base_only).unwrap();
-        assert_eq!(json, r#"{"film_base":"auto"}"#);
-        assert!(
-            !json.contains("dmax"),
-            "an unmeasured reference must not appear"
+        assert_eq!(
+            serde_json::to_string(&base_only).unwrap(),
+            r#"{"film_base":"auto"}"#
         );
-
-        let dmax_only = CalibrationFragment {
-            film_base: None,
-            dmax: Some(DmaxSource::Explicit(1.2734)),
-        };
-        let json = serde_json::to_string(&dmax_only).unwrap();
-        assert_eq!(json, r#"{"dmax":{"explicit":1.2734}}"#);
-        assert!(
-            !json.contains("film_base"),
-            "an unmeasured base must not appear"
-        );
-
         // Nothing measured is `None`, not `{}`: an empty object would pipe into
         // `--params` as a no-op a user could mistake for a calibration.
         assert!(CalibrationFragment::default().is_empty());
         assert!(calibration_fragment(&Report::default()).is_none());
-    }
-
-    /// The pairing is **per measurement**: each key appears exactly when its own
-    /// reuse-ready flag does.
-    ///
-    /// Not a section-wide both-present rule — a future calibration value measured
-    /// across many frames would have no flag form at all, and a section-wide invariant
-    /// would forbid it.
-    #[test]
-    fn the_calibration_fragment_pairs_each_key_with_its_flag() {
-        let report = Report {
-            reuse: Some(ReuseReady {
-                flag: "--film-base 0.5,0.3,0.2".into(),
-                source: FilmBaseSource::Explicit([0.5, 0.3, 0.2]),
-            }),
-            dmax_reuse: None,
-            ..Report::default()
-        };
-        let v = serde_json::to_value(Report {
-            calibration: calibration_fragment(&report),
-            ..report.clone()
-        })
-        .unwrap();
-        assert!(v.get("film_base_flag").is_some());
-        assert!(v["calibration"].get("film_base").is_some());
-        assert!(v.get("d_max_flag").is_none());
-        assert!(v["calibration"].get("dmax").is_none());
-
-        let report = Report {
-            dmax_reuse: Some(DmaxReuseReady {
-                flag: "--d-max 1.25".into(),
-                dmax: DmaxSource::Explicit(1.25),
-            }),
-            ..report
-        };
-        let v = serde_json::to_value(Report {
-            calibration: calibration_fragment(&report),
-            ..report
-        })
-        .unwrap();
-        assert!(v.get("d_max_flag").is_some());
-        assert_eq!(
-            v["calibration"]["dmax"],
-            serde_json::json!({"explicit": 1.25})
-        );
     }
 
     #[test]
@@ -14134,141 +12561,6 @@ mod tests {
         assert_eq!(parse_rgb(value).unwrap(), rgb);
         // The two forms carry the same value — never allowed to drift.
         assert_eq!(source, FilmBaseSource::Explicit(rgb));
-    }
-
-    #[test]
-    fn estimate_parses_d_max_region() {
-        // The plan-phase `--d-max-region` mirror of `--base-region` parses into an
-        // [x,y,w,h] rectangle and coexists with an explicit `--film-base`.
-        let cli = Cli::try_parse_from([
-            "hanten",
-            "estimate",
-            "leader.tiff",
-            "--film-base",
-            "0.9,0.55,0.42",
-            "--d-max-region",
-            "10,20,30,40",
-        ])
-        .unwrap();
-        match cli.command {
-            Command::Estimate(a) => {
-                assert_eq!(a.d_max_region, Some([10, 20, 30, 40]));
-                assert_eq!(a.film_base.film_base, Some([0.9, 0.55, 0.42]));
-            }
-            _ => unreachable!("expected estimate"),
-        }
-    }
-
-    #[test]
-    fn explicit_dmax_domain_warning_fires_on_nonneutral_regional_balance() {
-        // Baseline: an explicit anchor with default density correction and neutral
-        // balance is already in the curve's domain — no warning.
-        let explicit = |density: DensityParams| {
-            calibrated_explicit(density_cfg(
-                density,
-                DensityCurve::Exponential(ExponentialParams {
-                    gamma: 1.0,
-                    anchor: AnchorPlacement::WhiteAtDmax,
-                }),
-            ))
-        };
-        // Baseline is the **identity** correction, not `DensityParams::default()`: the
-        // parametric curves default to the non-identity `[1, 0.84, 0.73]` scanner gain,
-        // and a measured (raw-domain) anchor reused under it really is mis-anchored.
-        let identity = DensityParams {
-            scale: [1.0, 1.0, 1.0],
-            ..DensityParams::default()
-        };
-        assert!(explicit_dmax_domain_warning(&explicit(identity)).is_none());
-
-        // B0: the shipped parametric default. This is the regression the guard exists
-        // for and the one it had stopped catching — comparing against `default()` made
-        // it dead here and, worse, made it fire on `identity` above, where the two
-        // domains agree. The message must name the scale and point at a remedy.
-        let msg = explicit_dmax_domain_warning(&explicit(DensityParams::default()))
-            .expect("the default non-identity scanner gain must warn beside an explicit --d-max");
-        assert!(
-            msg.contains("1.0, 0.84, 0.73"),
-            "must name the scale: {msg}"
-        );
-        assert!(msg.contains("--fixed-d-max"), "must offer a remedy: {msg}");
-
-        // B1: a non-neutral regional balance shifts D′ (the corrected density the
-        // curve subtracts the anchor from: D′_c = B_c + shadow·w_lo + highlight·w_hi),
-        // so a reused explicit anchor mis-anchors even with default scale/offset. Warn,
-        // and name regional balance in the message.
-        let cfg = explicit(DensityParams {
-            shadow_balance: [0.05, 0.0, -0.02],
-            ..DensityParams::default()
-        });
-        let msg = explicit_dmax_domain_warning(&cfg).expect("non-neutral shadow balance must warn");
-        assert!(
-            msg.contains("regional balance"),
-            "message must name regional balance: {msg}"
-        );
-
-        // A non-neutral highlight balance alone (scale/offset default) also warns.
-        let cfg = explicit(DensityParams {
-            highlight_balance: [0.0, 0.01, 0.0],
-            ..DensityParams::default()
-        });
-        assert!(explicit_dmax_domain_warning(&cfg).is_some());
-
-        // A placement that reads no reference cannot mis-anchor on one — the default
-        // since `pipeline_version` 6. That config gets `unconsumed_dmax_warning`
-        // instead, and exactly one of the two fires.
-        let cfg = calibrated_explicit(density_cfg(
-            DensityParams::default(),
-            DensityCurve::default(),
-        ));
-        assert!(explicit_dmax_domain_warning(&cfg).is_none());
-        assert!(unconsumed_dmax_warning(&cfg).is_some());
-
-        // A `Fixed`/`Auto` anchor is already in the corrected domain — no warning
-        // even with a non-neutral balance on a density reconstruction.
-        let cfg = density_cfg(
-            DensityParams {
-                shadow_balance: [0.05, 0.0, -0.02],
-                ..DensityParams::default()
-            },
-            DensityCurve::default(),
-        );
-        assert!(explicit_dmax_domain_warning(&cfg).is_none());
-    }
-
-    #[test]
-    fn reference_dmax_plausibility_warns_on_a_weak_channel_a_plausible_scalar_hides() {
-        // B2, colored-region example: base [1,1,1], transmissions ≈ [0.001,0.99,0.99]
-        // → per-channel densities ≈ [3.0, 0.004, 0.004]. The gray mean ≈ 1.0 clears
-        // MIN_PLAUSIBLE_REFERENCE_DMAX, so the scalar-only check passes, yet green and
-        // blue are essentially unexposed base — not a leader. The per-channel minimum
-        // check must fire the (weak-channel) warning.
-        let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let measured = density::reference_dmax([0.001, 0.99, 0.99], &base).unwrap();
-        assert!(
-            measured.scalar >= density::MIN_PLAUSIBLE_REFERENCE_DMAX,
-            "the gray average alone must pass the scalar check ({})",
-            measured.scalar
-        );
-        let msg = reference_dmax_plausibility_warning(&measured)
-            .expect("a plausible scalar hiding a weak channel must warn");
-        assert!(
-            msg.contains("weakest channel"),
-            "the weak-channel warning must fire, not the thin-frame one: {msg}"
-        );
-
-        // A genuine near-opaque leader (dense in every channel) → no warning.
-        let measured = density::reference_dmax([0.01, 0.01, 0.01], &base).unwrap();
-        assert!(reference_dmax_plausibility_warning(&measured).is_none());
-
-        // A uniformly-thin frame (scalar below the floor) → the frame-wide warning.
-        let measured = density::reference_dmax([0.3, 0.3, 0.3], &base).unwrap();
-        let msg = reference_dmax_plausibility_warning(&measured)
-            .expect("a sub-floor gray mean must warn");
-        assert!(
-            msg.contains("implausibly low for a fully-exposed leader"),
-            "the thin-frame warning must fire: {msg}"
-        );
     }
 
     #[test]
@@ -14327,10 +12619,9 @@ mod tests {
 
     #[test]
     fn load_recipe_maps_failures_to_usage() {
-        // No path → defaults, infallibly, with no dmax provenance.
+        // No path → defaults, infallibly.
         let loaded = load_recipe(None).unwrap();
         assert_eq!(*loaded.cfg(), ResolvedConfig::default());
-        assert!(!loaded.calibration_dmax_present);
 
         // Missing file → Usage (exit 2), not Other.
         let missing = std::env::temp_dir().join("nc-no-such-recipe-xyz.json");
@@ -14358,8 +12649,7 @@ mod tests {
             );
         }
 
-        // A valid partial recipe loads, fills defaults, and records whether the
-        // file set `calibration.dmax` (the report's provenance witness).
+        // A valid partial recipe loads and fills defaults.
         let p = std::env::temp_dir().join(format!("nc-recipe-ok-{}.json", std::process::id()));
         std::fs::write(
             &p,
@@ -14370,17 +12660,6 @@ mod tests {
         std::fs::remove_file(&p).ok();
         assert_eq!(gamma_of(got.cfg()), 1.8);
         assert_eq!(got.cfg().print, PrintParams::default());
-        assert!(!got.calibration_dmax_present, "gamma alone sets no dmax");
-
-        let p = std::env::temp_dir().join(format!("nc-recipe-dmax-{}.json", std::process::id()));
-        std::fs::write(
-            &p,
-            r#"{"calibration":{"dmax":{"explicit":1.6}},"reconstruction":{"curve":{"type":"exponential"}}}"#,
-        )
-        .unwrap();
-        let got = load_recipe(Some(&p)).unwrap();
-        std::fs::remove_file(&p).ok();
-        assert!(got.calibration_dmax_present);
     }
 
     /// Write `body` to a temp recipe, load it, clean up, return the result.
@@ -14416,17 +12695,25 @@ mod tests {
         // applied — only compared (see `pipeline_version_warning`).
         assert_eq!(flat.meta_pipeline_version, None);
         assert_eq!(wrapped.meta_pipeline_version, Some(7));
-        // The `calibration.dmax` witness is computed from the recipe *body* either way.
-        assert!(!wrapped.calibration_dmax_present);
-        let with_dmax = load_recipe_body(
-            "env-dmax",
+        // The retired `calibration.dmax` is handled on the recipe *body* either way:
+        // dropped at its old default, refused otherwise.
+        for body in [
+            r#"{"calibration":{"film_base":"auto","dmax":"fixed"}}"#,
+            r#"{"meta":{},"params":{"calibration":{"film_base":"auto","dmax":"fixed"}}}"#,
+        ] {
+            let got = load_recipe_body("env-dmax-fixed", body).unwrap();
+            assert_eq!(got.cfg().calibration.film_base, Some(FilmBaseSource::Auto));
+        }
+        for body in [
+            r#"{"calibration":{"dmax":{"explicit":1.6}}}"#,
             r#"{"meta":{},"params":{"calibration":{"dmax":{"explicit":1.6}}}}"#,
-        )
-        .unwrap();
-        assert!(
-            with_dmax.calibration_dmax_present,
-            "an enveloped recipe's dmax must still be witnessed"
-        );
+        ] {
+            let err = load_recipe_body("env-dmax", body).unwrap_err();
+            assert!(
+                matches!(&err, NcError::Usage(m) if m.contains("calibration.dmax")),
+                "{body}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -14687,7 +12974,6 @@ mod tests {
         for base in [
             serde_json::json!({"explicit": [0.9, 0.55, 0.42]}), // FilmBaseSource / WbSource
             serde_json::json!({"region": [1, 2, 3, 4]}),        // FilmBaseSource::Region
-            serde_json::json!({"explicit": 1.35}),              // DmaxSource::Explicit
             serde_json::json!({"explicit": [0.0, 1.0]}),        // BalanceRange::Explicit
         ] {
             let tag = base.as_object().unwrap().keys().next().unwrap().clone();
@@ -14750,8 +13036,8 @@ mod tests {
         // (inserting `dmax` there produced "`dmax` is a parametric-curve key", blaming
         // the user for a key this merge had added, and made the curve unreachable from a
         // roll overlay entirely), and gating it on the target instead silently *dropped*
-        // the roll's calibration on that switch. With the value at `calibration.dmax` it
-        // is outside the object being switched, so both are structurally impossible.
+        // the roll's calibration on that switch. The value left the curve and has since
+        // retired, so both are structurally impossible.
         // `anchor` is likewise not carried; the `curve_switch_*` tests pin that and the
         // warning it earns.
 
@@ -14768,9 +13054,9 @@ mod tests {
         );
 
         // The switch `characteristic` sits on both sides of, which the old carry could
-        // serve in neither direction. The roll's reference is untouched by both, and
+        // serve in neither direction. The roll's calibration is untouched by both, and
         // both results deserialize — the property the carry's bug broke.
-        let calibrated = serde_json::json!({"explicit": 1.6});
+        let calibrated = serde_json::json!({"explicit": [0.5, 0.25, 0.125]});
         for (from, to) in [
             (
                 serde_json::json!({"type": "exponential", "gamma": 2.0}),
@@ -14782,7 +13068,7 @@ mod tests {
             ),
         ] {
             let mut base = serde_json::json!({
-                "calibration": {"film_base": "auto", "dmax": calibrated},
+                "calibration": {"film_base": calibrated},
                 "reconstruction": {"curve": from},
             });
             let overlay = serde_json::json!({"reconstruction": {"curve": to.clone()}});
@@ -14792,29 +13078,34 @@ mod tests {
                 "the switch replaces the look"
             );
             assert_eq!(
-                base["calibration"]["dmax"], calibrated,
-                "a curve switch must not touch the roll's reference"
+                base["calibration"]["film_base"], calibrated,
+                "a curve switch must not touch the roll's calibration"
             );
             let resolved: ResolvedConfig = serde_json::from_value(base).unwrap();
-            assert_eq!(resolved.calibration.dmax, DmaxSource::Explicit(1.6));
+            assert_eq!(
+                resolved.calibration.film_base,
+                Some(FilmBaseSource::Explicit([0.5, 0.25, 0.125]))
+            );
         }
 
-        // An overlay may still override the reference itself — it is an ordinary
+        // An overlay may still override the calibration itself — it is an ordinary
         // key-by-key merge on a section that has no `type` discriminator.
-        let mut base = serde_json::json!({"calibration": {"dmax": {"explicit": 1.6}}});
-        let overlay = serde_json::json!({"calibration": {"dmax": "auto"}});
+        let mut base = serde_json::json!({"calibration": {"film_base": calibrated}});
+        let overlay = serde_json::json!({"calibration": {"film_base": "auto"}});
         merge_json(&mut base, &overlay);
-        assert_eq!(base, serde_json::json!({"calibration": {"dmax": "auto"}}));
+        assert_eq!(
+            base,
+            serde_json::json!({"calibration": {"film_base": "auto"}})
+        );
 
         // A SAME-type curve override is not a switch: deep merge keeps siblings.
         let mut base = serde_json::json!({"curve": {"type": "exponential", "gamma": 2.0}});
-        let overlay =
-            serde_json::json!({"curve": {"type": "exponential", "anchor": "white-at-dmax"}});
+        let overlay = serde_json::json!({"curve": {"type": "exponential", "anchor": {"mid-at-base-offset": 0.5}}});
         merge_json(&mut base, &overlay);
         assert_eq!(
             base,
             serde_json::json!(
-                {"curve": {"type": "exponential", "gamma": 2.0, "anchor": "white-at-dmax"}})
+                {"curve": {"type": "exponential", "gamma": 2.0, "anchor": {"mid-at-base-offset": 0.5}}})
         );
 
         // A per-frame override naming the retired `simple` reconstruction reaches the
@@ -14832,7 +13123,7 @@ mod tests {
     fn per_frame_override_switches_variants_and_keeps_the_roll_fixed_dmax() {
         // Through `resolve_frames`: a per-frame reconstruction/curve type switch
         // is a legitimate override — it must APPLY (deserialize cleanly), and a
-        // curve switch must keep the shared recipe's roll-fixed anchor.
+        // curve switch must keep the shared recipe's roll calibration.
         let dir = std::env::temp_dir().join(format!("nc-roll-typeswitch-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let manifest = dir.join("frames.json");
@@ -14857,13 +13148,12 @@ mod tests {
         };
         let mut shared = exponential_cfg(ExponentialParams {
             gamma: 1.8,
-            anchor: AnchorPlacement::WhiteAtDmax,
+            anchor: AnchorPlacement::MidAtBaseOffset(0.5),
         });
-        shared.calibration.dmax = DmaxSource::Explicit(1.6);
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         let mut warnings = Vec::new();
         let log = Log::new(&args.report);
-        let planned = resolve_frames(&args, &shared, None, true, &mut warnings, &log);
+        let planned = resolve_frames(&args, &shared, None, &mut warnings, &log);
         std::fs::remove_dir_all(&dir).ok();
         let planned = planned.expect("per-frame type switches must apply, not error");
         assert_eq!(planned.len(), 2);
@@ -14874,7 +13164,7 @@ mod tests {
         // Frame 2: exponential → characteristic — the stale `gamma` is gone, and the
         // per-channel gain is re-resolved for the new curve by hand (the overlay was merged
         // onto the serialized shared config, where `scale` is always present). The roll's
-        // reference is untouched because it is not in the object being switched.
+        // calibration is untouched because it is not in the object being switched.
         assert_eq!(
             planned[1].cfg.reconstruction,
             Reconstruction {
@@ -14887,12 +13177,7 @@ mod tests {
                 }),
             }
         );
-        assert_eq!(planned[1].cfg.calibration.dmax, DmaxSource::Explicit(1.6));
-        // No dmax override was written, so no roll-fixed-anchor warning fires.
-        assert!(
-            !warnings.iter().any(|w| w.contains("display-white anchor")),
-            "a curve switch that keeps the shared anchor must not warn: {warnings:?}"
-        );
+        assert_eq!(planned[1].cfg.calibration, shared.calibration);
     }
 
     #[test]
@@ -14924,13 +13209,12 @@ mod tests {
         let shared = ResolvedConfig {
             calibration: CalibrationParams {
                 film_base: Some(FilmBaseSource::Region([10, 10, 20, 20])),
-                ..base_cfg().calibration
             },
             ..base_cfg()
         };
         let mut warnings = Vec::new();
         let log = Log::new(&args.report);
-        let planned = resolve_frames(&args, &shared, None, false, &mut warnings, &log);
+        let planned = resolve_frames(&args, &shared, None, &mut warnings, &log);
         std::fs::remove_dir_all(&dir).ok();
         let planned = planned.expect("region→explicit override should apply, not error");
         assert_eq!(planned.len(), 1);
@@ -14947,14 +13231,13 @@ mod tests {
     #[test]
     fn per_frame_override_keeps_shared_roll_fixed_params() {
         // The manifest per-frame merge path: a partial override changes only its
-        // own knob and keeps the shared roll-fixed params (film base, Dmax) — the
+        // own knob and keeps the shared roll-fixed params (the film base) — the
         // "frame-local override applies to just that frame" guarantee at the
         // config level. Mirrors `resolve_frames`' merge.
         let mut shared = exponential_cfg(ExponentialParams {
             gamma: 1.0,
-            anchor: AnchorPlacement::WhiteAtDmax,
+            anchor: AnchorPlacement::MidAtBaseOffset(0.5),
         });
-        shared.calibration.dmax = DmaxSource::Explicit(1.6);
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         let mut v = serde_json::to_value(&shared).unwrap();
         let ov: serde_json::Value =
@@ -14966,7 +13249,7 @@ mod tests {
             cfg.calibration.film_base,
             Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]))
         );
-        assert_eq!(cfg.calibration.dmax, DmaxSource::Explicit(1.6));
+        assert_eq!(cfg.reconstruction, shared.reconstruction);
     }
 
     #[test]
@@ -14994,7 +13277,7 @@ mod tests {
         };
         let mut warnings = Vec::new();
         let log = Log::new(&args.report);
-        let got = resolve_frames(&args, &base_cfg(), None, false, &mut warnings, &log);
+        let got = resolve_frames(&args, &base_cfg(), None, &mut warnings, &log);
         std::fs::remove_dir_all(&dir).ok();
         let err = got.expect_err("a legacy per-frame override must be rejected");
         assert_eq!(err.exit_code(), 2);
@@ -15240,15 +13523,14 @@ mod tests {
     fn roll_report_puts_the_shared_recipe_once() {
         // The shared recipe *configuration* appears once at the top of the roll
         // report — carrying the tagged reconstruction — and each frame
-        // additionally echoes the *resolved* base/Dmax it used (a redundant echo
+        // additionally echoes the *resolved* base it used (a redundant echo
         // here since the recipe pins an explicit base). The per-frame entry is
         // the data-carrying `FrameStatus` — an "ok" frame serializes the flat
         // `"status":"ok"` with its payload as sibling keys.
         let mut shared = exponential_cfg(ExponentialParams {
             gamma: 1.0,
-            anchor: AnchorPlacement::WhiteAtDmax,
+            anchor: AnchorPlacement::MidAtBaseOffset(0.5),
         });
-        shared.calibration.dmax = DmaxSource::Explicit(1.6);
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         let roll = RollReport {
             command: "roll",
@@ -15260,7 +13542,6 @@ mod tests {
                 output: Some(PathBuf::from("out/f1_positive.tiff")),
                 status: FrameStatus::Ok {
                     film_base: Some(FilmBase::from([0.9, 0.55, 0.42])),
-                    dmax: Some(1.6),
                     white_balance: None,
                     balance_range: None,
                     effective_area: None,
@@ -15301,14 +13582,7 @@ mod tests {
                 && (fb[2] - 0.42).abs() < 1e-6
         );
         assert_eq!(v["recipe"]["reconstruction"]["schema_version"], 1);
-        assert!(
-            (v["recipe"]["calibration"]["dmax"]["explicit"]
-                .as_f64()
-                .unwrap()
-                - 1.6)
-                .abs()
-                < 1e-6
-        );
+        assert!(v["recipe"]["calibration"].get("dmax").is_none());
         assert_eq!(v["summary"]["succeeded"], 1);
         // The flattened `FrameStatus::Ok` still serializes the flat `status`
         // discriminator and its payload as sibling keys of the frame entry.
@@ -15321,7 +13595,7 @@ mod tests {
             .map(|x| x.as_f64().unwrap())
             .collect();
         assert_eq!(ffb.len(), 3);
-        assert!((v["frames"][0]["dmax"].as_f64().unwrap() - 1.6).abs() < 1e-6);
+        assert!(v["frames"][0].get("dmax").is_none());
     }
 
     #[test]
@@ -15336,7 +13610,6 @@ mod tests {
             cfg: base_cfg(),
             recipe: None,
             overrides: None,
-            dmax_setting: DmaxSetting::Default,
         };
         let warnings = vec!["a warning raised before the failure".to_string()];
         let mem = memory::preflight(

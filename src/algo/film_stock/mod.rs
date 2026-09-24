@@ -878,13 +878,8 @@ mod tests {
             density: density.clone(),
             curve: DensityCurve::Characteristic(CharacteristicParams { stock }),
         };
-        let (film, report) = crate::algo::reconstruct(
-            &image,
-            &test_base(),
-            &config,
-            crate::types::DmaxInput::default(),
-        )
-        .expect("the characteristic reconstruction must succeed");
+        let (film, report) = crate::algo::reconstruct(&image, &test_base(), &config)
+            .expect("the characteristic reconstruction must succeed");
         let (pixels, rest) = film.rgb().as_chunks::<3>();
         debug_assert!(rest.is_empty(), "an RGB buffer is a whole number of pixels");
         (pixels.to_vec(), report)
@@ -1007,10 +1002,6 @@ mod tests {
                 forward(sc, 2, log18),
             ]];
             let (out, report) = reconstruct_densities(stock, &characteristic_density(), &want);
-            assert_eq!(
-                report.dmax, None,
-                "{name}: this curve resolves no reference"
-            );
             assert_eq!(
                 report.curve_anchor, None,
                 "{name}: this curve places no anchor"

@@ -34,14 +34,14 @@
 //! ## What `film-master` is (and is not)
 //! An **unclamped 32-bit float linear ACEScg** image containing the intentional
 //! film, lens, development, scanner, reconstruction, and density-curve rendering,
-//! including supported fixed/roll `Dmax` placement. It is **not** a physical
-//! scene-linear recovery, and it is **not** what the retired `--output-hdr` wrote
-//! (a *rendered* float TIFF — the print controls had already run).
+//! including its anchor placement. It is **not** a physical scene-linear recovery,
+//! and it is **not** what the retired `--output-hdr` wrote (a *rendered* float TIFF —
+//! the print controls had already run).
 //! [`film_master`] therefore does exactly one thing: unwrap the mapped ACEScg
 //! buffer. Nothing is applied, nothing is clamped (range clamping stays at the
 //! u16 encode step, which `film-master` never uses), and non-finite samples ride
-//! through to `io::encode`'s counter. The strict rejection of `auto` `Dmax` and of
-//! every non-default downstream control happens at the CLI boundary
+//! through to `io::encode`'s counter. The strict rejection of a frame-local
+//! measurement and of every non-default downstream control happens at the CLI boundary
 //! (`cli::validate`), after recipe/flag merge — never silently here.
 //!
 //! ## The shared display controls
@@ -487,8 +487,7 @@ mod tests {
         let base = FilmBase::from([0.9, 0.55, 0.42]);
         for config in all_configs() {
             let img = LinearImage::new(2, 1, scan.clone(), Some(vec![0.1, 0.9])).unwrap();
-            let (film, _) =
-                reconstruct(&img, &base, &config, crate::types::DmaxInput::default()).unwrap();
+            let (film, _) = reconstruct(&img, &base, &config).unwrap();
             let master = film_master(map_nc_film_rgb_v1(film));
             assert_eq!(master.rgb.len(), 6, "{config:?}");
             assert_eq!(
@@ -498,8 +497,7 @@ mod tests {
             );
 
             let img = LinearImage::new(2, 1, scan.clone(), None).unwrap();
-            let (film, _) =
-                reconstruct(&img, &base, &config, crate::types::DmaxInput::default()).unwrap();
+            let (film, _) = reconstruct(&img, &base, &config).unwrap();
             let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
             assert_eq!(shared.source.rgb().len(), 6, "{config:?}");
         }

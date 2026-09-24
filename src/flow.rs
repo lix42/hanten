@@ -94,23 +94,6 @@ struct FlagEntry {
 }
 
 /// Shared refusal reasons, so rows that say the same thing cannot drift apart.
-///
-/// The anchor family needs **two** of them, because "reference-free" does not
-/// discriminate all three placements it refuses:
-/// [`AnchorPlacement::reads_reference`](crate::types::AnchorPlacement::reads_reference)
-/// is `false` for `BlackAtBase` too, so telling a `--anchor-black-floor` user that the
-/// decode's rule was chosen for being reference-free names a property their own rule
-/// has. For that row the reason is simply that there is one rule.
-const ANCHOR_RULE_REASON: &str = "the decode has one anchor rule — mid-grey pinned a fixed density above the film \
-     base — so which tone the decode pins is no longer a choice it offers";
-const ANCHOR_REFERENCE_REASON: &str = "the decode has one anchor rule — mid-grey pinned a fixed density above the film \
-     base — and it is reference-free, so a leader measurement's roll-to-roll error \
-     cannot reach the render";
-const DMAX_REASON: &str = "the anchor rule never reads a reference density, so nothing in the new flow \
-     resolves one; a `Dmax` measured from a leader is film saturation, which is \
-     neither diffuse white nor the density this decode pins — it pins mid-grey a fixed \
-     density above the film base, which every scan carries, so nothing has to be \
-     stated in the reference's place";
 const DESTINATION_ARRIVES_WITH: &str = "the new flow's destination set: it renders into exactly one destination today \
      (a Display P3 16-bit TIFF), so there is no output policy to choose or describe \
      (`nf-destinations/preset-set`)";
@@ -125,11 +108,10 @@ const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which su
 /// branch cannot produce*, and leave an identity value alone — but only where a recipe
 /// could have pinned the knob. The new chain's recipe (`crate::recipe`) has no field for
 /// any knob refused here, so an identity value has to earn its acceptance on its own:
-/// `--density-curve exponential` does (it names the curve the decode already is), and
-/// `--no-d-max` does not. When checking which refusals can still fire here, walk the
-/// reachable *values*, not the knobs: a refused knob's spared identity value is
-/// reachable too, and a `merge` refusal and a row here can otherwise send a user in a
-/// circle.
+/// `--density-curve exponential` does (it names the curve the decode already is). When
+/// checking which refusals can still fire here, walk the reachable *values*, not the
+/// knobs: a refused knob's spared identity value is reachable too, and a `merge` refusal
+/// and a row here can otherwise send a user in a circle.
 ///
 /// **How a knob the user never typed is handled**, which this table alone cannot do.
 /// The fixed decode reads its own [`DecodeParams`], which is the new chain's recipe
@@ -210,77 +192,10 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
                             negative holds (`nf-look/stock-data-home`)",
         },
     },
-    // The three placements the one anchor rule replaces. `--anchor-mid-offset` is
-    // absent from this table on purpose: it *is* the rule's `d`.
-    FlagEntry {
-        knob: "--anchor-white-at-reference",
-        covers: &["--anchor-white-at-reference"],
-        present: |args| args.anchor.anchor_white_at_reference,
-        availability: Availability::Never {
-            reason: ANCHOR_REFERENCE_REASON,
-            instead: Some("`--anchor-mid-offset`, the one rule the decode has"),
-        },
-    },
-    FlagEntry {
-        knob: "--anchor-mid-fraction",
-        covers: &["--anchor-mid-fraction"],
-        present: |args| args.anchor.anchor_mid_fraction.is_some(),
-        availability: Availability::Never {
-            reason: ANCHOR_REFERENCE_REASON,
-            instead: Some("`--anchor-mid-offset`, the one rule the decode has"),
-        },
-    },
-    FlagEntry {
-        knob: "--anchor-black-floor",
-        covers: &["--anchor-black-floor"],
-        present: |args| args.anchor.anchor_black_floor.is_some(),
-        availability: Availability::Never {
-            reason: ANCHOR_RULE_REASON,
-            instead: Some("`--anchor-mid-offset`, the one rule the decode has"),
-        },
-    },
-    // The reference-density family. **All four**, including `--no-d-max`, and that is
-    // the tiebreaker applied rather than waived: an identity value is one that asks
-    // for nothing *of a knob this flow has*, and the fixed decode has no reference
-    // density at all — so "resolve it from nowhere" is a statement about a quantity
-    // that does not exist here, not a reset of one. Nothing in the new flow would
-    // read what any of them resolved.
-    FlagEntry {
-        knob: "--d-max",
-        covers: &["--d-max"],
-        present: |args| args.dmax.d_max.is_some(),
-        availability: Availability::Never {
-            reason: DMAX_REASON,
-            instead: None,
-        },
-    },
-    FlagEntry {
-        knob: "--fixed-d-max",
-        covers: &["--fixed-d-max"],
-        present: |args| args.dmax.fixed_d_max,
-        availability: Availability::Never {
-            reason: DMAX_REASON,
-            instead: None,
-        },
-    },
-    FlagEntry {
-        knob: "--auto-d-max",
-        covers: &["--auto-d-max"],
-        present: |args| args.dmax.auto_d_max,
-        availability: Availability::Never {
-            reason: DMAX_REASON,
-            instead: None,
-        },
-    },
-    FlagEntry {
-        knob: "--no-d-max",
-        covers: &["--no-d-max"],
-        present: |args| args.dmax.no_d_max,
-        availability: Availability::Never {
-            reason: DMAX_REASON,
-            instead: None,
-        },
-    },
+    // The retired anchor placements and reference-density flags have no row: they are
+    // removed on both chains (`nf-retire/dmax-machinery`), and `reject_removed_flags`
+    // refuses them before this table runs. `--anchor-mid-offset` is absent on purpose
+    // too: it *is* the rule's `d`.
     // The regional balance. Zero is identity and stays accepted; the range flags are
     // consulted only when a balance is non-zero, so alone they force nothing and are
     // deliberately not listed.
@@ -649,6 +564,13 @@ mod tests {
         "--sigmoid-shoulder",
         "--sigmoid-mid-fraction",
         "--sigmoid-white-at-d-max",
+        "--d-max",
+        "--fixed-d-max",
+        "--auto-d-max",
+        "--no-d-max",
+        "--anchor-white-at-reference",
+        "--anchor-mid-fraction",
+        "--anchor-black-floor",
         "--assume-linear",
         "--input-profile",
         "--invert-white-balance",

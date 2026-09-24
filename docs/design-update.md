@@ -218,8 +218,9 @@ not settle; today all of them are flags and recipe keys.
   `--print-exposure`. Brightness is set in rendering.
 - **`Dmax` leaves the default path.** This rule never reads the reference, so
   `--d-max`, `--auto-d-max` and `estimate --d-max-region` stop mattering for the
-  decode, and the four `--anchor-*` flags collapse to one number. The reference
-  stays alive for the `sigmoid-knees` comparison only.
+  decode, and the four `--anchor-*` flags collapse to one number. The reference and
+  the other three placements retired in `nf-retire/dmax-machinery`; the reference
+  build keeps them for comparison.
 - **`offset` defaults to `[0, 0, 0]` for now — a pick, not a closed question.**
   It is not a duplicate of the measured base: it is the gap between density
   measured from the rebate and the density where the three layers correspond to

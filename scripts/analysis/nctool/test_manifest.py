@@ -103,8 +103,19 @@ class TestRoles(Base):
         self.assertEqual(rc, 0)
         self.assertTrue(out.strip().endswith("|zzz.tif aaa.tif"))
 
+    def test_a_roll_without_a_leader_is_emitted_with_an_empty_leader_field(self):
+        # The leader is no longer measured, so it is not required; the field stays so
+        # the harness's row format does not move.
+        self.write_manifest({"schema_version": 1, "rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/u.tif", "role": "unexposed"},
+            {"file": "rolls/RollA/r1.tif", "role": "real"},
+        ]}}})
+        rc, out, _ = self.roles()
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "RollA|u.tif||r1.tif")
+
     def test_all_real_roll_skipped(self):
-        # A roll with no unexposed/leader (e.g. the NLP source) emits no triple.
+        # A roll with no unexposed frame (e.g. the NLP source) emits no row.
         self.write_manifest({"schema_version": 1, "rolls": {"NlpSrc": {"frames": [
             {"file": "rolls/NlpSrc/a.tif", "role": "real"},
             {"file": "rolls/NlpSrc/b.tif", "role": "real"},

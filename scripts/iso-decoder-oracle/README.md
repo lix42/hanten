@@ -41,7 +41,7 @@ Every command below runs from the **repo root**.
 mkdir -p /tmp/iso-oracle
 NC_ISO_SAMPLE_DIR=/tmp/iso-oracle \
 NC_ISO_SAMPLE_INPUT=../nc-assets/rolls/<roll>/<frame>.tif \
-NC_ISO_SAMPLE_BASE=<r,g,b> NC_ISO_SAMPLE_DMAX=<dmax> NC_ISO_SAMPLE_EV=3.0 \
+NC_ISO_SAMPLE_BASE=<r,g,b> NC_ISO_SAMPLE_EV=3.0 \
   cargo test --bin hanten iso_oracle_samples -- --ignored --nocapture
 
 # 3. read them back
@@ -62,21 +62,21 @@ the only way to produce one.
 | `NC_ISO_SAMPLE_DIR` | the system temp dir | where the three files are written (must exist) |
 | `NC_ISO_SAMPLE_INPUT` | unset → the toy in-test fixture | a real scan to render instead |
 | `NC_ISO_SAMPLE_BASE` | — | film base `r,g,b`; **required** with `_INPUT` |
-| `NC_ISO_SAMPLE_DMAX` | — | explicit `Dmax` for the exponential curve; **required** with `_INPUT` |
 | `NC_ISO_SAMPLE_EV` | `0.0` | print exposure |
 
-**The EV is not optional in practice.** Before `pipeline_version` 6 the gain map was flat at defaults —
-measured `GainMapMax` 0.0039 log2 = 1.003x on both the toy fixture and a real
-Ektar frame — because the exponential curve anchors display white at `Dmax` and
-ordinary content lands at or below reference white. A flat gain map cannot
+**The EV was not optional when this gate was written.** At that build's defaults
+the gain map was flat — measured `GainMapMax` 0.0039 log2 = 1.003x on both the toy
+fixture and a real Ektar frame — because the exponential curve then anchored display
+white at the reference density and ordinary content landed at or below reference
+white. The default gain map has been live since `pipeline_version` 6, so
+re-measure before relying on the figures below. A flat gain map cannot
 discriminate an HDR reconstruction from an SDR one, so the oracle would report
 "present and correct" no matter what the reconstruction did. `+3 EV` pushes
 content over reference white (`GainMapMax` 1.095 log2 = 2.14x) and makes the check
-meaningful. (That the *default* render produces no HDR is a separate, recorded
-finding owned by `output/presets`.)
+meaningful.
 
-Measure `_BASE` and `_DMAX` once per roll the usual way — `hanten estimate`, or the
-frozen `scripts/real-scan-verify/recipes/<roll>.json`.
+Measure `_BASE` once per roll the usual way — `hanten estimate`, or the frozen
+`scripts/real-scan-verify/recipes/<roll>.json`.
 
 ## Reading the output
 

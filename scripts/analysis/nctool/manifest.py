@@ -14,7 +14,7 @@ Commands (dispatched from `python -m nctool manifest …`):
 - `validate` — report drift (checksum mismatch), orphans (on disk, not in the
   manifest), and missing (in the manifest, not on disk). REPORTS only; never
   deletes.
-- `roles` — emit the per-roll `roll|unexposed|leader|real…` triples the real-scan
+- `roles` — emit the per-roll `roll|unexposed|leader|real…` rows the real-scan
   harness needs, sourced from the manifest instead of a hard-coded array.
 """
 from __future__ import annotations
@@ -787,10 +787,12 @@ def cmd_validate(args) -> int:
 
 
 def cmd_roles(args) -> int:
-    """Emit `roll|unexposed|leader|real1 real2 …` triples for the real-scan harness,
-    sourced from the manifest. Only rolls with exactly one unexposed and one leader
-    frame are emitted (a calibration pair the harness can freeze); all-real rolls
-    like the NLP source are skipped."""
+    """Emit `roll|unexposed|leader|real1 real2 …` rows for the real-scan harness,
+    sourced from the manifest. A roll needs exactly one unexposed frame (the base the
+    harness freezes); all-real rolls like the NLP source are skipped. The leader field
+    names the roll's single leader and is empty otherwise: the harness stopped
+    measuring it when the roll reference density retired (`nf-retire/dmax-machinery`),
+    and the field stays so the row format does not move."""
     A = _asset_root(args)
     mpath = os.path.join(A, "manifest.json")
     data, err = load_manifest(mpath)
@@ -824,16 +826,15 @@ def cmd_roles(args) -> int:
                 role = "real"
             by_role[role].append(fr)
         un, ld, reals = by_role["unexposed"], by_role["leader"], by_role["real"]
-        if len(un) != 1 or len(ld) != 1:
-            print(f"note: skipping roll {roll!r} (unexposed={len(un)}, leader={len(ld)}; "
-                  "need exactly one of each to freeze a calibration recipe)",
-                  file=sys.stderr)
+        if len(un) != 1:
+            print(f"note: skipping roll {roll!r} (unexposed={len(un)}; need exactly one "
+                  "to freeze a calibration recipe)", file=sys.stderr)
             continue
         if not reals:
-            # A calibration pair with no `real` frames has nothing for the harness
+            # A calibration frame with no `real` frames has nothing for the harness
             # to convert; emitting `roll|un|ld|` (empty 4th field) would drive the
             # convert / ir / determinism stages over an empty frame list.
-            print(f"note: skipping roll {roll!r} (unexposed+leader pair but no real "
+            print(f"note: skipping roll {roll!r} (unexposed frame but no real "
                   "frames to convert)", file=sys.stderr)
             continue
         # Order IR-capable frames first so the harness's IR stage (which takes the
@@ -841,7 +842,8 @@ def cmd_roles(args) -> int:
         # is stable, so a roll whose real frames all share `ir_present` (the common
         # case) keeps its manifest order unchanged.
         reals.sort(key=lambda f: not f.get("ir_present", False))
-        un_name, ld_name = os.path.basename(un[0]["file"]), os.path.basename(ld[0]["file"])
+        un_name = os.path.basename(un[0]["file"])
+        ld_name = os.path.basename(ld[0]["file"]) if len(ld) == 1 else ""
         real_basenames = [os.path.basename(f["file"]) for f in reals]
         # The output row is `|`-joined with a space-delimited real-frame field by
         # design; a basename containing whitespace would make that field ambiguous
@@ -860,7 +862,7 @@ def cmd_roles(args) -> int:
     for row in ir_rows + non_ir_rows:
         print(row)
     if not ir_rows and not non_ir_rows:
-        print("error: no roll had a complete unexposed+leader calibration pair",
+        print("error: no roll had an unexposed calibration frame and real frames",
               file=sys.stderr)
         return 1
     return 0

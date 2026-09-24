@@ -395,8 +395,7 @@ mod tests {
         for config in configs {
             let base = FilmBase::from([0.5, 0.5, 0.5]);
             let img = LinearImage::new(2, 1, vec![0.1, 0.2, 0.3, 0.4, 0.2, 0.1], None).unwrap();
-            let (film, _) =
-                reconstruct(&img, &base, &config, crate::types::DmaxInput::default()).unwrap();
+            let (film, _) = reconstruct(&img, &base, &config).unwrap();
             let aces = map_nc_film_rgb_v1(film);
             let expected = bits(&to_p3(aces.rgb()));
 

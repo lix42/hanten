@@ -29,7 +29,7 @@ pub mod fixed;
 #[cfg(test)]
 mod curve_probe;
 
-use crate::types::{DmaxInput, FilmBase, LinearImage, Reconstruction, Result};
+use crate::types::{FilmBase, LinearImage, Reconstruction, Result};
 
 /// The typed film-rendering RGB boundary every reconstruction path produces:
 /// the unclamped linear positive in NC's film-rendering interpretation, plus
@@ -137,22 +137,9 @@ impl std::fmt::Debug for FilmRgbImage {
 /// resolved values, not new knobs (controls live in [`Reconstruction`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReconstructionReport {
-    /// The resolved **reference** density (`calibration.dmax`) — the roll calibration, and
-    /// the value to freeze back into a recipe. `None` for the characteristic curve and
-    /// for `dmax = none`.
-    ///
-    /// This is *not* necessarily the density that rendered to `1.0`: the curve derives
-    /// its anchor through [`AnchorPlacement`](crate::types::AnchorPlacement), and the
-    /// default base-derived placement does not read this reference at all. See
-    /// [`Self::curve_anchor`] for what the curve actually used.
-    pub dmax: Option<f32>,
     /// The **derived** anchor the curve used — the corrected density that rendered to
     /// `1.0`, and therefore what sets the black floor at `10^(−contrast·anchor)`.
-    ///
-    /// Equal to [`Self::dmax`] under `AnchorPlacement::WhiteAtDmax`. Every other rule
-    /// derives an anchor that differs from the reference, which is why reporting only
-    /// the reference would document a number the render did not use. `None` for the
-    /// characteristic curve, and for `dmax = none` under `WhiteAtDmax` (no anchor placed).
+    /// `None` for the characteristic curve, which places no anchor.
     pub curve_anchor: Option<f32>,
     /// The resolved regional-balance tone-ramp range `[lo, hi]` (corrected
     /// density), when a shadow/highlight balance was applied. `None` when both
@@ -177,9 +164,8 @@ pub fn reconstruct(
     image: &LinearImage,
     base: &FilmBase,
     config: &Reconstruction,
-    dmax: DmaxInput,
 ) -> Result<(FilmRgbImage, ReconstructionReport)> {
-    density::reconstruct(image, base, &config.density, &config.curve, dmax)
+    density::reconstruct(image, base, &config.density, &config.curve)
 }
 
 #[cfg(test)]
@@ -218,7 +204,7 @@ mod tests {
         // `FilmRgbImage` (enforced by `reconstruct`'s signature — this test
         // exercises all paths) with the dimensions and IR plane intact.
         for config in all_configs() {
-            let (film, _) = reconstruct(&image(), &base(), &config, DmaxInput::default()).unwrap();
+            let (film, _) = reconstruct(&image(), &base(), &config).unwrap();
             assert_eq!((film.width(), film.height()), (2, 1), "{config:?}");
             assert_eq!(film.rgb().len(), 6, "{config:?}");
             assert_eq!(film.ir(), Some(&[0.25_f32, 0.75][..]), "{config:?}");
@@ -236,17 +222,8 @@ mod tests {
     // `trybuild` dev-dependency; the privacy annotation is the guarantee.)
 
     #[test]
-    fn the_default_reports_its_reference_and_its_base_derived_anchor() {
-        let (_, report) = reconstruct(
-            &image(),
-            &base(),
-            &Reconstruction::default(),
-            DmaxInput::default(),
-        )
-        .unwrap();
-        // The fixed nominal reference is still resolved and reported…
-        assert_eq!(report.dmax, Some(density::NOMINAL_DMAX));
-        // …but the default placement derives its anchor from the base, not from it.
+    fn the_default_reports_its_base_derived_anchor() {
+        let (_, report) = reconstruct(&image(), &base(), &Reconstruction::default()).unwrap();
         let expected =
             fixed::MID_ABOVE_BASE + crate::types::MID_GREY_OUTPUT_DECADES / fixed::CONTRAST;
         assert_eq!(report.curve_anchor, Some(expected));

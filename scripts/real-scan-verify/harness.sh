@@ -8,7 +8,7 @@
 #
 # Stages (pass a stage name to run one; default runs B..E):
 #   classify  - grid-classify every frame per roll (unexposed / full-exp / real)
-#   freeze    - measure per-roll Dmin (unexposed) + Dmax (leader), freeze recipes
+#   freeze    - measure per-roll Dmin (unexposed), freeze recipes
 #   convert   - roll-convert every real frame, 16-bit + float HDR
 #   ir        - export IR plane, check --strict behaviour
 #   determinism - byte-identical re-run + --params reload
@@ -27,13 +27,13 @@ REC=${REC:-$HERE/recipes}
 ART=${ART:-/private/tmp/rsv-artifacts}   # per-run report JSON (not committed)
 mkdir -p "$REC" "$ART" "$OUTDIR"
 
-# roll | unexposed(Dmin) | fully-exposed(Dmax) | real frames (space sep)
+# roll | unexposed(Dmin) | fully-exposed leader (unused since the reference density
+# retired, and empty when the roll has none) | real frames (space sep)
 #
 # These calibration triples now come from the asset manifest via `nctool`, not a
 # hard-coded list — one source of truth (docs/tasks/analysis/asset-manifest.md). `nctool`
-# emits a triple only for rolls with a complete unexposed+leader pair, so the
-# NLP-source roll (all `real`) is skipped and the original five-roll set is
-# reproduced. Because frozen recipes depend only on the Dmin/Dmax frames, the
+# emits a row for every roll with one unexposed frame and some real frames, so the
+# NLP-source roll (all `real`) is skipped. Because frozen recipes depend only on the Dmin frame, the
 # `freeze`-stage `recipes/` are byte-identical to the former hard-coded array;
 # the convert/ir/determinism stages instead run over every `real` frame the
 # manifest lists (a larger/different set than the old curated list). A `while
@@ -172,28 +172,27 @@ stage_classify() {
 
 stage_freeze() {
   for row in "${ROLLS[@]}"; do IFS='|' read -r roll uf ff reals <<<"$row"
-    U="$A/rolls/$roll/$uf"; F="$A/rolls/$roll/$ff"
-    ureg=$(center_region "$U"); freg=$(center_region "$F")
+    U="$A/rolls/$roll/$uf"
+    # The leader frame (`$ff`) is no longer measured: the roll reference density it
+    # supplied retired with the placements that read it (`nf-retire/dmax-machinery`).
+    ureg=$(center_region "$U")
     jmin=$($NC estimate --base-region "$ureg" "$U" 2>"$ART/$roll.dmin.warn")
-    dmin=$(echo "$jmin" | jq -c '.film_base'); dflag=$(echo "$jmin" | jq -r '.film_base_flag' | sed 's/--film-base //')
-    jmax=$($NC estimate --film-base "$dflag" --d-max-region "$freg" "$F" 2>"$ART/$roll.dmax.warn")
-    dmax=$(echo "$jmax" | jq -r '.dmax')
+    dmin=$(echo "$jmin" | jq -c '.film_base')
     # `output.preset` is stated, not defaulted: the product default is `gain-map-hdr`
     # (a JPEG), and this harness converts to TIFFs throughout — a 16-bit SDR one
     # (`display-p3`) and a float one (`hdr-linear-tiff`, the float TIFF that applies
     # the print controls). Both were `legacy` until that preset retired.
-    jq -n --argjson b "$dmin" --argjson d "$dmax" \
-      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]},dmax:{explicit:$d}},reconstruction:{type:"density",curve:{type:"exponential"}},output:{preset:"display-p3"}}' > "$REC/$roll.json"
-    jq -n --argjson b "$dmin" --argjson d "$dmax" \
-      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]},dmax:{explicit:$d}},reconstruction:{type:"density",curve:{type:"exponential"}},output:{preset:"hdr-linear-tiff"}}' > "$REC/$roll.hdr.json"
-    jq -n --arg roll "$roll" --arg uf "$uf" --arg ureg "$ureg" --arg ff "$ff" --arg freg "$freg" \
-      --argjson b "$dmin" --argjson d "$dmax" \
-      --arg mw "$(tr '\n' ' ' <"$ART/$roll.dmin.warn")" --arg xw "$(tr '\n' ' ' <"$ART/$roll.dmax.warn")" '{
+    jq -n --argjson b "$dmin" \
+      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]}},reconstruction:{curve:{type:"exponential"}},output:{preset:"display-p3"}}' > "$REC/$roll.json"
+    jq -n --argjson b "$dmin" \
+      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]}},reconstruction:{curve:{type:"exponential"}},output:{preset:"hdr-linear-tiff"}}' > "$REC/$roll.hdr.json"
+    jq -n --arg roll "$roll" --arg uf "$uf" --arg ureg "$ureg" \
+      --argjson b "$dmin" \
+      --arg mw "$(tr '\n' ' ' <"$ART/$roll.dmin.warn")" '{
         roll:$roll, dmin:{frame:$uf,region:$ureg,base:$b,warnings:$mw},
-        dmax:{frame:$ff,region:$freg,scalar:$d,warnings:$xw},
-        note:"center 40% region excludes film holder; scalars frozen for deterministic apply"
+        note:"center 40% region excludes film holder; the base is frozen for deterministic apply"
       }' > "$REC/$roll.provenance.json"
-    echo "froze $roll: Dmin=$dmin Dmax=$dmax"
+    echo "froze $roll: Dmin=$dmin"
   done
 }
 

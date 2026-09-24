@@ -1784,9 +1784,13 @@ the design in `docs/design-update.md`:
   their flags and the two `sigmoid-*` presets are migration errors. Test fixtures moved to
   `FilmRgbImage::fixture`; sigmoid goldens and probes deleted. The default gain map is
   live (1.88 log2 on the fixture), and a stated `Dmax` is now unread by default
-- [ ] [Retire the `Dmax` anchor machinery](tasks/nf-retire/dmax-machinery.md)
-  — the reconstruction anchor and the leader-measured reference; frame-range
-  measurement may return as an opt-in
+- [x] [Retire the `Dmax` anchor machinery](tasks/nf-retire/dmax-machinery.md) — **done
+  2026-09-24.** The roll reference density (`calibration.dmax`, `--d-max` family,
+  `estimate --d-max-region`) and the three other placements are gone; `AnchorPlacement`
+  keeps `mid-at-base-offset`. Removed flags are migration errors on both chains; a
+  recipe's `"dmax": "fixed"` is dropped on load, anything else refused. No pixel moved
+  (`render`/`base` reproduced, `recipe` refreshed; telemetry schema 6); the effective
+  area is still reported but nothing in `convert` measures over it
 - [ ] [Retire the regional balance](tasks/nf-retire/regional-balance.md) —
   subsumed by the look's grade, and non-monotone at large values
 - [ ] [Rename the `print.*` prefix](tasks/nf-retire/print-prefix-rename.md) —

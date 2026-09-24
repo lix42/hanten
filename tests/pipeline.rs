@@ -31,11 +31,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 /// Synthesize a uniform 16-bit RGB TIFF (the `RGB(16)` chunky layout the decoder
-/// accepts) with every pixel set to `rgb`, at `path`. Stands in for a fully-exposed
-/// reference leader frame in the roll-fixed `Dmax` tests — the real light-struck
-/// leaders (Ektar/Phoenix) aren't committed, and the reference path must be
-/// exercised with a realistic near-opaque *non-zero* transmission (an all-zero
-/// region is now a hard error). Encodes into memory then writes the whole buffer,
+/// accepts) with every pixel set to `rgb`, at `path`. Encodes into memory then writes the whole buffer,
 /// so the file can't be left truncated by a dropped writer.
 fn write_uniform_rgb48(path: &Path, rgb: [u16; 3], w: u32, h: u32) {
     let mut data = Vec::with_capacity((w * h * 3) as usize);
@@ -1257,9 +1253,9 @@ fn ultra_hdr_v1_native_reconstruction_covers_odd_dimensions_and_hdr_vectors() {
         "1,1,1",
         "--density-gamma",
         "4",
-        "--anchor-white-at-reference",
-        "--d-max",
-        "2",
+        // Mid-grey 1.8138 above the base puts the anchor at `1.8138 + 0.7447/4 = 2`.
+        "--anchor-mid-offset",
+        "1.8138181",
         "--print-exposure",
         "3",
     ]);
@@ -1513,7 +1509,7 @@ fn u16_clipping_is_reported_and_strict_promotes_it() {
     // Force guaranteed u16 clipping with a large positive `--print-exposure`
     // (2^12× gain blows every highlight past 1.0), so this test pins the
     // clip-reporting + `--strict` mechanism *independently* of the density
-    // default's baseline exposure (which the dmax-white-anchor task tunes).
+    // default's baseline exposure.
     // The HDR fixture carries no IR plane, so the only warning is the clipping —
     // proving clipping alone drives the strict failure.
     let tmp = TempDir::new("u16-clip");
@@ -1756,283 +1752,6 @@ fn estimate_emits_reuse_ready_output_that_round_trips() {
 }
 
 #[test]
-fn estimate_measures_roll_fixed_dmax_from_a_reference_region_and_it_round_trips() {
-    // The roll-fixed `Dmax` calibration (dmax-reference, design-spec §8): point
-    // `estimate --d-max-region` at a fully-exposed (near-opaque) reference frame,
-    // with an explicit `--film-base` (the `Dmin` from the unexposed frame), and it
-    // measures a single positive scalar `Dmax`, records the region as provenance,
-    // and emits reuse-ready `--d-max` / `reconstruction.curve.dmax` forms. Feeding the frozen
-    // scalar back to `convert` reproduces it exactly (deterministic apply).
-    //
-    // A synthesized near-opaque leader stands in for the real one (no real leader
-    // frame is committed — real-leader verification, Ektar/Phoenix, is deferred to
-    // the user per the task). Uniform ~2% transmission (u16 1311/65535 ≈ 0.0200,
-    // within the real leader's ~0.016–0.039 luma), so against the base below it
-    // yields a plausible positive scalar `Dmax` (≈ 1.4) — the reference path is
-    // exercised with a realistic value, and it clears the plausibility floor (no
-    // warning). An all-zero region would now hard-error as degenerate.
-    let tmp = TempDir::new("dmaxref");
-    let leader = tmp.path("leader.tiff");
-    write_uniform_rgb48(&leader, [1311, 1311, 1311], 64, 64);
-    let (code, stdout, err) = run(&[
-        "estimate",
-        leader.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--d-max-region",
-        "0,0,16,16",
-    ]);
-    assert_eq!(code, 0, "reference Dmax estimate should succeed: {err}");
-    let report = json(&stdout);
-    let dmax = report["dmax"].as_f64().expect("a scalar Dmax is reported");
-    assert!(
-        dmax > 0.0 && dmax.is_finite(),
-        "Dmax must be positive: {report}"
-    );
-    // Provenance: the sampled region, not a re-read directive.
-    assert_eq!(
-        report["dmax_region"],
-        serde_json::json!([0, 0, 16, 16]),
-        "the reference region is recorded as provenance: {report}"
-    );
-    // Reuse-ready forms carry exactly the measured scalar.
-    let flag = report["d_max_flag"].as_str().expect("d_max_flag emitted");
-    let value = flag.strip_prefix("--d-max ").expect("flag prefix");
-    assert_eq!(
-        report["calibration"]["dmax"]["explicit"], report["dmax"],
-        "the calibration must carry the measured scalar: {report}"
-    );
-    // The base half is present too — it was supplied rather than measured, and
-    // `estimate` echoes a usable base into the reuse forms either way. So this one
-    // report carries a complete calibration, which is the copy-paste the workflow
-    // wants; the *omission* case is covered by the base-only estimate above.
-    assert_eq!(
-        report["calibration"]["film_base"]["explicit"],
-        serde_json::json!([0.9, 0.55, 0.42]),
-        "{report}"
-    );
-
-    // Freeze A: the `--d-max` flag value fed to `convert` reproduces the anchor.
-    let out = tmp.path("flag.tiff");
-    let (code, stdout, err) = run(&[
-        "convert",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-        // Both freezes must name the same curve, or the byte-identity assertion
-        // below compares two different renders. The recipe fragment written for
-        // Freeze B is tagged `exponential`, so pin it here too.
-        "--density-curve",
-        "exponential",
-        "--d-max",
-        value,
-    ]);
-    assert_eq!(code, 0, "{err}");
-    assert_eq!(
-        json(&stdout)["dmax"],
-        report["dmax"],
-        "the frozen --d-max scalar must reproduce the measured anchor"
-    );
-
-    // Freeze B: the reported `calibration` object, pasted into a roll recipe
-    // unedited, loads and reproduces the same anchor (deterministic apply from the
-    // frozen recipe). The look is named separately — that is the split.
-    let recipe = tmp.path("roll.json");
-    std::fs::write(
-        &recipe,
-        serde_json::json!({
-            "calibration": report["calibration"],
-            "reconstruction": { "curve": { "type": "exponential" } },
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let out2 = tmp.path("recipe.tiff");
-    let (code, stdout, err) = run(&[
-        "convert",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
-        "-o",
-        out2.to_str().unwrap(),
-        // The fragment carries only reconstruction, so name the TIFF preset here.
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--params",
-        recipe.to_str().unwrap(),
-    ]);
-    assert_eq!(
-        code, 0,
-        "the dmax fragment must load as a valid recipe: {err}"
-    );
-    assert_eq!(
-        json(&stdout)["dmax"],
-        report["dmax"],
-        "the frozen calibration.dmax must reproduce the measured anchor"
-    );
-    assert_eq!(
-        std::fs::read(&out).unwrap(),
-        std::fs::read(&out2).unwrap(),
-        "flag and recipe freeze must produce byte-identical outputs"
-    );
-}
-
-#[test]
-fn convert_default_uses_the_fixed_roll_anchor_not_per_frame_auto() {
-    // dmax-reference changed the default render: the anchor is the roll-fixed
-    // nominal `Fixed` (NOMINAL_DMAX, 1.3 since 2026-08-08), not the demoted
-    // per-frame `Auto`. Pin
-    // the default's reported anchor, and that `--auto-d-max` (opt-in) differs from
-    // it — proving the default no longer normalizes exposure per frame.
-    let tmp = TempDir::new("dmaxdefault");
-    let fix = fixture("hdr-48bit.tif");
-    let base = ["--film-base", "0.9,0.55,0.42"];
-
-    let out = tmp.path("default.tiff");
-    let mut args = vec![
-        "convert",
-        fix.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-    ];
-    args.extend_from_slice(&base);
-    let (code, stdout, err) = run(&args);
-    assert_eq!(code, 0, "{err}");
-    let default_dmax = json(&stdout)["dmax"].as_f64().expect("dmax reported");
-    assert!(
-        (default_dmax - 1.3).abs() < 1e-6,
-        "default anchor must be the fixed nominal 1.3, got {default_dmax}"
-    );
-
-    let out2 = tmp.path("auto.tiff");
-    let mut args = vec![
-        "convert",
-        fix.to_str().unwrap(),
-        "-o",
-        out2.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--auto-d-max",
-    ];
-    args.extend_from_slice(&base);
-    let (code, stdout, err) = run(&args);
-    assert_eq!(code, 0, "{err}");
-    let auto_dmax = json(&stdout)["dmax"].as_f64().expect("dmax reported");
-    assert!(
-        (auto_dmax - default_dmax).abs() > 1e-3,
-        "opt-in --auto-d-max ({auto_dmax}) must differ from the fixed default ({default_dmax})"
-    );
-}
-
-#[test]
-fn estimate_d_max_region_rejects_a_degenerate_all_black_region() {
-    // A reference region on the all-black fixture (transmission 0 → floored) is a
-    // degenerate / clipped sample, not a fully-exposed leader. `reference_dmax`
-    // must hard-error (exit 1) rather than launder the floor into a huge density
-    // and freeze a black-rendering anchor — the Dmin "dark holder → zero channel"
-    // gotcha, applied to Dmax. (This is exactly what the all-black fixture used to
-    // stand in for as a "leader"; that stand-in is now a guarded error.)
-    let fix = fixture("black-48bit.tif");
-    let (code, _stdout, err) = run(&[
-        "estimate",
-        fix.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--d-max-region",
-        "0,0,16,16",
-    ]);
-    assert_eq!(
-        code, 1,
-        "a degenerate (all-black) reference region must fail loudly: {err}"
-    );
-    assert!(
-        err.contains("reference Dmax"),
-        "the error names the reference-Dmax failure: {err}"
-    );
-}
-
-#[test]
-fn estimate_d_max_region_warns_on_an_implausibly_low_reference() {
-    // A mid-tone region only somewhat denser than base yields a valid but
-    // implausibly-low anchor for a fully-exposed leader. `estimate` must not reject
-    // it (thin/unusual stock varies) but must emit a loud, `--strict`-promotable
-    // warning for the user's manual review.
-    let tmp = TempDir::new("dmaxlow");
-    let leader = tmp.path("midtone.tiff");
-    // Uniform 30% transmission (u16 19660/65535 ≈ 0.300): denser than base on every
-    // channel (base min 0.42 > 0.30 ⇒ per-channel density > 0, so no hard error),
-    // but the gray-mean density (≈ 0.30) is well below the plausibility floor (1.0).
-    write_uniform_rgb48(&leader, [19660, 19660, 19660], 32, 32);
-    let region = [
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--d-max-region",
-        "0,0,16,16",
-    ];
-
-    let mut args = vec!["estimate", leader.to_str().unwrap()];
-    args.extend_from_slice(&region);
-    let (code, stdout, err) = run(&args);
-    assert_eq!(
-        code, 0,
-        "implausibly-low reference must not hard-fail: {err}"
-    );
-    let report = json(&stdout);
-    let dmax = report["dmax"].as_f64().expect("a dmax is still measured");
-    assert!(dmax > 0.0 && dmax < 1.0, "a low positive anchor: {dmax}");
-    let warnings = report["warnings"].as_array().expect("warnings present");
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().unwrap().contains("implausibly low")),
-        "a plausibility warning must be present: {report}"
-    );
-
-    // `--strict` promotes the warning to a failing exit.
-    let mut sargs = vec!["estimate", leader.to_str().unwrap()];
-    sargs.extend_from_slice(&region);
-    sargs.push("--strict");
-    let (scode, _s, serr) = run(&sargs);
-    assert_eq!(
-        scode, 1,
-        "--strict promotes the plausibility warning: {serr}"
-    );
-}
-
-#[test]
-fn estimate_d_max_region_skipped_on_a_degenerate_grid_base() {
-    // When the resolved base is degenerate (a `--grid` on the all-black fixture),
-    // the `--d-max-region` measurement is skipped — measuring against an unusable
-    // base would only mask the degenerate-base error with a confusing secondary
-    // one. The report carries no `dmax`, and the run still hard-errors on the
-    // degenerate base itself (exit 1), same as without `--d-max-region`.
-    let fix = fixture("black-48bit.tif");
-    let (code, stdout, err) = run(&[
-        "estimate",
-        fix.to_str().unwrap(),
-        "--grid",
-        "--d-max-region",
-        "0,0,16,16",
-    ]);
-    assert_eq!(code, 1, "the degenerate grid base still hard-errors: {err}");
-    let report = json(&stdout);
-    assert!(
-        report["dmax"].is_null(),
-        "no Dmax is measured against a degenerate base: {report}"
-    );
-    assert!(
-        err.contains("finite and positive"),
-        "the error is the degenerate-base one, not a secondary Dmax error: {err}"
-    );
-}
-
-#[test]
 fn estimate_grid_reports_spread_and_strict_promotes_disagreement() {
     // `--grid` samples 5 fixed cells; on a real (non-blank) frame the cells
     // disagree, which must be reported loudly — per-cell evidence in the
@@ -2266,7 +1985,7 @@ fn the_old_calibration_spellings_are_migration_errors() {
 
     // (b) `reconstruction.curve.dmax`, on each curve type. On `characteristic` the
     // cross-variant rule also matches — it must not win, or the user is told `dmax` is
-    // "a parametric-curve key" and never learns it became a calibration.
+    // "a parametric-curve key" and never learns the reference retired.
     for curve in ["exponential", "characteristic"] {
         let recipe = write_file(
             &tmp.path("curve.json"),
@@ -2285,8 +2004,9 @@ fn the_old_calibration_spellings_are_migration_errors() {
         ]);
         assert_eq!(code, 2, "{curve}: {err}");
         assert!(
-            err.contains(r#""calibration": {"dmax": {"explicit": <d>}}"#),
-            "{curve}: the remedy must name the new path: {err}"
+            err.contains("no longer a `reconstruction.curve` key")
+                && err.contains("mid-at-base-offset"),
+            "{curve}: the remedy must name the placement left: {err}"
         );
         // The losing rules, asserted absent: naming the key is not enough to tell two
         // rules apart when both mention it.
@@ -2310,7 +2030,7 @@ fn the_old_calibration_spellings_are_migration_errors() {
         ),
         (
             r#"{"reconstruction":{"curve":{"dmax":{"explicit":2.4}}}}"#,
-            r#""calibration": {"dmax": {"explicit": <d>}}"#,
+            "no longer a `reconstruction.curve` key",
         ),
     ] {
         let manifest = write_file(
@@ -2343,19 +2063,12 @@ fn the_old_calibration_spellings_are_migration_errors() {
 fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
     let tmp = TempDir::new("calibration-split");
     let scan = fixture("hdr-48bit.tif");
-    // A placement that reads the reference, so the stated `dmax` reaches the pixels.
-    let common = [
-        "--output-preset",
-        "display-p3",
-        "--anchor-mid-fraction",
-        "0.5",
-    ];
+    let common = ["--output-preset", "display-p3"];
 
     // A calibration is "a recipe with nothing else".
     let calibration = write_file(
         &tmp.path("roll-cal.json"),
-        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]},
-                           "dmax":{"explicit":1.45}}}"#,
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
     );
     let from_recipe = tmp.path("recipe.tif");
     let (code, _, err) = {
@@ -2372,7 +2085,7 @@ fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
         let mut a = vec!["convert", scan.to_str().unwrap(), "-o"];
         a.push(from_flags.to_str().unwrap());
         a.extend_from_slice(&common);
-        a.extend_from_slice(&["--film-base", "0.9,0.55,0.42", "--d-max", "1.45"]);
+        a.extend_from_slice(&["--film-base", "0.9,0.55,0.42"]);
         run(&a)
     };
     assert_eq!(code, 0, "{err}");
@@ -2391,7 +2104,7 @@ fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
         &tmp.path("look.json"),
         r#"{"reconstruction":{
               "curve":{"type":"exponential","gamma":2.0,
-                       "anchor":{"mid-at-dmax-fraction":0.5}},
+                       "anchor":{"mid-at-base-offset":0.62}},
               "density":{"scale":[1.0,0.84,0.73]}},
             "output":{"preset":"display-p3"}}"#,
     );
@@ -2440,107 +2153,6 @@ fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
     ]);
     assert_eq!(code, 2, "an unstated base must still be refused: {err}");
     assert!(err.contains("no film base selected"), "{err}");
-}
-
-/// A stated reference that the default, base-derived placement will never read is
-/// carried and warned about, and `--strict` promotes the warning.
-///
-/// Since `pipeline_version` 6 this is the default configuration, so a roll calibration
-/// measured with `hanten estimate --d-max-region` is exactly the file that reaches it.
-#[test]
-fn a_reference_the_default_placement_cannot_read_is_warned_not_dropped() {
-    let tmp = TempDir::new("unconsumed-dmax");
-    let scan = fixture("hdr-48bit.tif");
-    let args = |out: &str, strict: bool| {
-        let mut a = vec![
-            "convert".to_string(),
-            scan.to_str().unwrap().to_string(),
-            "-o".to_string(),
-            tmp.path(out).to_str().unwrap().to_string(),
-            "--output-preset".to_string(),
-            "display-p3".to_string(),
-            "--film-base".to_string(),
-            "0.9,0.55,0.42".to_string(),
-            "--d-max".to_string(),
-            "1.45".to_string(),
-        ];
-        if strict {
-            a.push("--strict".to_string());
-        }
-        a
-    };
-    let owned = args("a.tif", false);
-    let argv: Vec<&str> = owned.iter().map(|s| &**s).collect();
-    let (code, stdout, err) = run(&argv);
-    assert_eq!(code, 0, "an unread reference is accepted: {err}");
-    assert!(err.contains("does not read it"), "{err}");
-    assert!(
-        err.contains("base-derived"),
-        "the reason must name the branch: {err}"
-    );
-    // Carried, so the same file still applies to a profile that does read one.
-    assert_eq!(
-        json(&stdout)["recipe"]["calibration"]["dmax"]["explicit"]
-            .as_f64()
-            .expect("the reference is echoed"),
-        1.45
-    );
-
-    let owned = args("b.tif", true);
-    let argv: Vec<&str> = owned.iter().map(|s| &**s).collect();
-    let (code, _, err) = run(&argv);
-    assert_ne!(code, 0, "--strict must promote it: {err}");
-
-    // **The remedy must be a route this branch accepts**, or the user is sent
-    // in a circle. The curve already is the exponential, so
-    // switching curves is not the remedy; a reference-reading placement is.
-    assert!(
-        err.contains("--anchor-mid-fraction"),
-        "the remedy must name a flag this branch accepts: {err}"
-    );
-    assert!(
-        !err.contains("--density-curve"),
-        "switching curves is not the remedy here: {err}"
-    );
-    // …and following it really does work: the flag is accepted, and *this* warning is
-    // gone. Not asserted under `--strict`, deliberately — the remedied config trips the
-    // separate `explicit_dmax_domain_warning` (a measured reference under the
-    // non-identity default gain), which is a different, correct complaint. Asserting
-    // exit 0 under `--strict` here would be asserting that unrelated warning away.
-    let (code, _, err) = run(&[
-        "convert",
-        scan.to_str().unwrap(),
-        "-o",
-        tmp.path("remedy.tif").to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--d-max",
-        "1.45",
-        "--anchor-mid-fraction",
-        "0.5",
-    ]);
-    assert_eq!(code, 0, "the advised remedy must be accepted: {err}");
-    assert!(
-        !err.contains("does not read it"),
-        "the advised remedy must resolve the warning it was given for: {err}"
-    );
-
-    // Falsifiable control: no reference stated, no warning.
-    let (code, _, err) = run(&[
-        "convert",
-        scan.to_str().unwrap(),
-        "-o",
-        tmp.path("c.tif").to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--strict",
-    ]);
-    assert_eq!(code, 0, "{err}");
-    assert!(!err.contains("does not read it"), "{err}");
 }
 
 /// An array-shaped `reconstruction.density` in a recipe is a usage error, and the object
@@ -3653,7 +3265,7 @@ fn telemetry_file_writes_full_record() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
 
-    assert_eq!(record["schema_version"], 5);
+    assert_eq!(record["schema_version"], 6);
     assert!(record["timestamp_ms"].as_u64().unwrap() > 0);
     assert!(record["nc_version"].is_string());
     assert!(record["target"].is_string());
@@ -3822,7 +3434,7 @@ fn telemetry_log_appends_one_line_per_run() {
     // Each line is an independent, valid JSON object.
     for line in lines {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(v["schema_version"], 5);
+        assert_eq!(v["schema_version"], 6);
     }
 }
 
@@ -4062,7 +3674,7 @@ fn telemetry_file_dash_writes_json_to_stdout() {
     ]);
     assert_eq!(code, 0, "telemetry to stdout should succeed:\n{err}");
     let record = json(&stdout);
-    assert_eq!(record["schema_version"], 5);
+    assert_eq!(record["schema_version"], 6);
     assert_eq!(record["image"]["format"], "hdr");
 }
 
@@ -4328,50 +3940,6 @@ fn convert_reports_the_default_curve_and_its_base_derived_anchor() {
 }
 
 #[test]
-fn density_report_carries_resolved_dmax() {
-    // The auto-measured anchor must ride into the convert report (merge-time
-    // wiring of Converter::convert_reported), and disappear with --no-d-max.
-    let dir = TempDir::new("dmaxreport");
-    let fix = fixture("hdr-48bit.tif");
-    let out = dir.path("out.tiff");
-    let (code, stdout, err) = run(&[
-        "convert",
-        fix.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-    ]);
-    assert_eq!(code, 0, "{err}");
-    let report = json(&stdout);
-    assert!(
-        report["dmax"].as_f64().is_some_and(f64::is_finite),
-        "auto anchor must be reported: {report}"
-    );
-
-    let out2 = dir.path("out2.tiff");
-    let (code, stdout, err) = run(&[
-        "convert",
-        fix.to_str().unwrap(),
-        "-o",
-        out2.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--no-d-max",
-    ]);
-    assert_eq!(code, 0, "{err}");
-    let report = json(&stdout);
-    assert!(
-        report.get("dmax").is_none_or(|v| v.is_null()),
-        "no anchor must be reported for --no-d-max: {report}"
-    );
-}
-
-#[test]
 fn auto_wb_reports_gains_that_reproduce_the_output_when_reused() {
     // The measure-once-reuse-for-the-roll contract, end to end: an `--auto-wb`
     // run reports the resolved gains, and a second run feeding them back through
@@ -4600,7 +4168,7 @@ fn write_file(path: &Path, contents: &str) -> PathBuf {
     path.to_path_buf()
 }
 
-/// A hand-authored frozen roll recipe: explicit roll-fixed film base + Dmax, so
+/// A hand-authored frozen roll recipe: an explicit roll-fixed film base, so
 /// every frame converts deterministically without auto-base (real scans are
 /// holder → rebate → picture, where auto-base fails loudly).
 /// The shared roll recipe these tests convert with.
@@ -4614,8 +4182,7 @@ fn write_file(path: &Path, contents: &str) -> PathBuf {
 /// `roll_checks_explicit_manifest_suffixes_and_derives_per_frame_preset_names`.
 const ROLL_RECIPE: &str = r#"{
   "calibration": {
-    "film_base": { "explicit": [0.9, 0.55, 0.42] },
-    "dmax": { "explicit": 1.6 }
+    "film_base": { "explicit": [0.9, 0.55, 0.42] }
   },
   "reconstruction": {
     "type": "density",
@@ -4650,8 +4217,8 @@ fn roll_converts_a_batch_from_a_shared_frozen_recipe() {
 
     let report = json(&stdout);
     assert_eq!(report["command"], "roll");
-    // The shared frozen recipe (roll-fixed Dmin/Dmax) appears once, at the top.
-    // f32 round-trips through JSON as f64, so compare the anchors approximately.
+    // The shared frozen recipe (roll-fixed Dmin) appears once, at the top.
+    // f32 round-trips through JSON as f64, so compare the base approximately.
     let fb: Vec<f64> = report["recipe"]["calibration"]["film_base"]["explicit"]
         .as_array()
         .unwrap()
@@ -4662,14 +4229,7 @@ fn roll_converts_a_batch_from_a_shared_frozen_recipe() {
         (fb[0] - 0.9).abs() < 1e-6 && (fb[1] - 0.55).abs() < 1e-6 && (fb[2] - 0.42).abs() < 1e-6,
         "recipe film base: {fb:?}"
     );
-    assert!(
-        (report["recipe"]["calibration"]["dmax"]["explicit"]
-            .as_f64()
-            .unwrap()
-            - 1.6)
-            .abs()
-            < 1e-6
-    );
+    assert!(report["recipe"]["calibration"].get("dmax").is_none());
     assert_eq!(report["summary"]["total"], 2);
     assert_eq!(report["summary"]["succeeded"], 2);
     assert_eq!(report["summary"]["failed"], 0);
@@ -4981,66 +4541,6 @@ fn roll_warns_when_film_base_is_not_frozen() {
 }
 
 #[test]
-fn roll_does_not_call_dmax_unfrozen_when_the_placement_reads_no_reference() {
-    // `dmax: "auto"` measures the reference per frame, but `black-at-base` discards it:
-    // every frame still renders on one roll-level rule, so the roll IS consistent and the
-    // not-frozen warning is a false alarm (and, under `--strict`, a false failure).
-    let tmp = TempDir::new("roll-auto-basederived");
-    let recipe = |name: &str, anchor: &str| {
-        write_file(
-            &tmp.path(name),
-            &format!(
-                r#"{{ "reconstruction": {{ "type": "density",
-                       "curve": {{ "type": "exponential", "gamma": 2.0,
-                                   "anchor": {anchor} }} }},
-                     "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }},
-                                       "dmax": "auto" }},
-                     "output": {{ "preset": "display-p3" }} }}"#
-            ),
-        )
-    };
-    let roll = |params: &std::path::Path, out: &str| {
-        run(&[
-            "roll",
-            fixture("hdr-48bit.tif").to_str().unwrap(),
-            "--out-dir",
-            tmp.path(out).to_str().unwrap(),
-            "--params",
-            params.to_str().unwrap(),
-        ])
-    };
-    let unfrozen = "Dmax is NOT frozen";
-
-    // Reference-free: no not-frozen warning anywhere.
-    let base_derived = recipe("base.json", r#"{ "black-at-base": 0.005 }"#);
-    let (code, stdout, err) = roll(&base_derived, "out-base");
-    assert_eq!(code, 0, "the roll converts:\n{stdout}\n{err}");
-    let report = json(&stdout);
-    assert_eq!(report["summary"]["succeeded"], 1);
-    assert!(
-        !report["warnings"]
-            .as_array()
-            .is_some_and(|w| w.iter().any(|m| m.as_str().unwrap().contains(unfrozen))),
-        "a base-derived placement reads no reference, so the roll is frozen: {report}"
-    );
-    assert!(!err.contains(unfrozen), "stderr: {err}");
-
-    // Falsifiable control: the identical recipe with a reference-*reading* placement
-    // still warns — otherwise this would pass against a deleted gate.
-    let reference_reading = recipe("ref.json", r#""white-at-dmax""#);
-    let (code, stdout, err) = roll(&reference_reading, "out-ref");
-    assert_eq!(code, 0, "the control roll converts:\n{stdout}\n{err}");
-    let report = json(&stdout);
-    assert!(
-        report["warnings"]
-            .as_array()
-            .is_some_and(|w| w.iter().any(|m| m.as_str().unwrap().contains(unfrozen))),
-        "a reference-reading placement under `auto` is genuinely not frozen: {report}"
-    );
-    assert!(err.contains(unfrozen), "control stderr: {err}");
-}
-
-#[test]
 fn roll_strict_promotes_a_warning_while_still_emitting_the_report() {
     // `--strict` turns the not-frozen roll-level warning into a non-zero exit, but
     // the machine-readable report still lands on stdout first (pairs with the
@@ -5234,82 +4734,6 @@ fn roll_warns_on_per_frame_film_base_override() {
 }
 
 #[test]
-fn roll_warns_on_per_frame_dmax_override() {
-    // reconstruction.curve.dmax is a roll-fixed calibration (like film_base) since the
-    // dmax-reference task, but a per-frame override that sets it is applied (the
-    // frame converts with its overridden anchor) with a loud, `--strict`-promotable
-    // warning — not rejected. Mirrors `roll_warns_on_per_frame_film_base_override`.
-    let tmp = TempDir::new("roll-dmax-override");
-    let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
-    let hdr = fixture("hdr-48bit.tif");
-    let manifest_txt = format!(
-        r#"{{ "frames": [
-             {{ "input": {hdr:?},
-                "params": {{ "calibration": {{ "dmax": {{ "explicit": 2.4 }} }} }} }}
-           ] }}"#,
-        hdr = hdr.to_str().unwrap(),
-    );
-    let manifest = write_file(&tmp.path("frames.json"), &manifest_txt);
-    let roll_args = |out: &str, strict: bool| -> Vec<String> {
-        let mut a = vec![
-            "roll".to_string(),
-            "--frames".to_string(),
-            manifest.to_str().unwrap().to_string(),
-            "--out-dir".to_string(),
-            tmp.path(out).to_str().unwrap().to_string(),
-            "--params".to_string(),
-            recipe.to_str().unwrap().to_string(),
-        ];
-        if strict {
-            a.push("--strict".to_string());
-        }
-        a
-    };
-
-    // Without --strict: the frame converts (exit 0) with a loud roll-level warning.
-    let args = roll_args("out", false);
-    let (code, stdout, err) = run(&args.iter().map(String::as_str).collect::<Vec<_>>());
-    assert_eq!(
-        code, 0,
-        "an override warns, it does not fail:\n{stdout}\n{err}"
-    );
-    let report = json(&stdout);
-    assert_eq!(
-        report["summary"]["succeeded"], 1,
-        "the frame still converts"
-    );
-    let w = report["warnings"]
-        .as_array()
-        .expect("roll-level warnings array");
-    assert!(
-        w.iter().any(|m| m
-            .as_str()
-            .unwrap()
-            .contains("overriding the roll-fixed display-white anchor")),
-        "the per-frame reconstruction.curve.dmax override warns loudly: {report}"
-    );
-    assert!(
-        err.contains("overriding the roll-fixed display-white anchor"),
-        "warning echoed to stderr: {err}"
-    );
-
-    // With --strict: the same warning promotes to a non-zero exit, report still emits.
-    let args = roll_args("out-strict", true);
-    let (code, stdout, err) = run(&args.iter().map(String::as_str).collect::<Vec<_>>());
-    assert_eq!(
-        code, 1,
-        "--strict promotes the override warning to a failing exit"
-    );
-    let report = json(&stdout);
-    assert_eq!(
-        report["summary"]["failed"], 0,
-        "the frame converted; the exit is the strict gate"
-    );
-    assert!(!report["warnings"].as_array().unwrap().is_empty());
-    assert!(err.contains("strict"), "stderr should explain: {err}");
-}
-
-#[test]
 fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
     // The break reachable **without naming the key**: an override that switches only
     // `curve.type` to the characteristic curve takes no placement at all, so the roll's
@@ -5349,9 +4773,8 @@ fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
         &tmp.path("stated.json"),
         r#"{ "reconstruction": {
                "curve": { "type": "exponential",
-                          "anchor": { "black-at-base": 0.005 } } },
-             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
-                              "dmax": { "explicit": 1.3 } },
+                          "anchor": { "mid-at-base-offset": 0.5 } } },
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
              "output": { "preset": "display-p3" } }"#,
     );
     let args = roll_args(&stated, "out", false);
@@ -5381,8 +4804,7 @@ fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
         r#"{ "reconstruction": {
                "curve": { "type": "exponential",
                           "anchor": { "mid-at-base-offset": 0.62 } } },
-             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
-                              "dmax": { "explicit": 1.3 } },
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
              "output": { "preset": "display-p3" } }"#,
     );
     let args = roll_args(&defaulted, "out-control", false);
@@ -5400,25 +4822,30 @@ fn roll_warns_when_a_per_frame_curve_switch_drops_the_roll_anchor() {
 
 #[test]
 fn roll_failed_frame_keeps_a_warning_raised_before_the_failure() {
-    // A frame that warns (an explicit --d-max combined with non-default
-    // density-scale fires the pre-decode anchor-domain warning) and *then* fails
-    // (missing input → decode error) still reports the earlier warning.
+    // A frame that warns (a non-uniform `--base-region` sample, raised by the film-base
+    // estimate) and *then* fails (its output path is an existing directory, so the write
+    // fails after the render) still reports the earlier warning.
     let tmp = TempDir::new("roll-warn-then-fail");
     let recipe = write_file(
-        &tmp.path("dmax-domain.json"),
-        r#"{ "reconstruction": {
-               "type": "density",
-               "density": { "scale": [1.1, 1.0, 0.9] },
-               "curve": { "type": "exponential", "anchor": "white-at-dmax" } },
-             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
-                              "dmax": { "explicit": 1.6 } } }"#,
+        &tmp.path("warn-then-fail.json"),
+        r#"{ "calibration": { "film_base": { "region": [0, 0, 40, 40] } },
+             "output": { "preset": "display-p3" } }"#,
     );
-    let missing = tmp.path("does-not-exist.tif");
+    let out = tmp.path("out");
+    std::fs::create_dir_all(out.join("frame.tiff")).unwrap();
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(
+            r#"{{ "frames": [ {{ "input": {:?}, "output": "frame.tiff" }} ] }}"#,
+            fixture("hdr-48bit.tif").to_str().unwrap()
+        ),
+    );
     let (code, stdout, _err) = run(&[
         "roll",
-        missing.to_str().unwrap(),
+        "--frames",
+        manifest.to_str().unwrap(),
         "--out-dir",
-        tmp.path("out").to_str().unwrap(),
+        out.to_str().unwrap(),
         "--params",
         recipe.to_str().unwrap(),
     ]);
@@ -5432,7 +4859,7 @@ fn roll_failed_frame_keeps_a_warning_raised_before_the_failure() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|w| w.as_str().unwrap().contains("re-measure --d-max")),
+            .any(|w| w.as_str().unwrap().contains("is not uniform")),
         "the warning raised before the failure survives in the report: {f}"
     );
 }
@@ -5708,10 +5135,9 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
     // in the report exactly what it is: no print controls, no display render,
     // NC film RGB v1 provenance, and no claim of physical scene recovery.
     //
-    // `--d-max 0.2` is a *reconstruction* control (roll-fixed explicit anchor, which
-    // the master accepts) chosen so the placement pushes every sample well above
-    // 1.0 — that is what makes the unclamped round-trip observable instead of
-    // vacuous. Value magnitudes only; no whole-file or post-transform checksum.
+    // A steep slope and a low anchor are *reconstruction* controls (which the master
+    // accepts), chosen so the placement pushes most samples well above 1.0 — that is
+    // what makes the unclamped round-trip observable instead of vacuous. Value magnitudes only; no whole-file or post-transform checksum.
     let tmp = TempDir::new("film-master");
     let out = tmp.path("master.tiff");
     let (code, stdout, err) = run(&[
@@ -5724,11 +5150,12 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
         "--film-base",
         "0.9,0.55,0.42",
         // This asserts the master is *unclamped*, which needs samples above 1.0: a
-        // low `--d-max` read by a white-at-reference placement pushes plenty of
-        // content past the anchor.
-        "--anchor-white-at-reference",
-        "--d-max",
-        "0.2",
+        // steep slope with mid-grey just above the base puts the anchor at
+        // `0.05 + 0.745/5 ≈ 0.2`, pushing plenty of content past it.
+        "--density-gamma",
+        "5",
+        "--anchor-mid-offset",
+        "0.05",
     ]);
     assert_eq!(
         code, 0,
@@ -5772,11 +5199,16 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
         report["reconstruction_result"]["curve"]["type"],
         "exponential"
     );
-    assert_eq!(
-        report["reconstruction_result"]["curve"]["dmax"],
-        serde_json::json!({"policy": "explicit", "value": 0.2, "provenance": "cli"})
+    let anchor = report["reconstruction_result"]["curve"]["anchor_value"]
+        .as_f64()
+        .expect("the derived anchor is reported");
+    assert!((anchor - 0.198_945_5).abs() < 1e-5, "{anchor}");
+    assert!(
+        report["reconstruction_result"]["curve"]
+            .get("dmax")
+            .is_none()
     );
-    assert_eq!(report["dmax"], 0.2);
+    assert!(report.get("dmax").is_none());
     // No white-balance stage ran, so the master claims no resolved gains.
     assert!(report.get("white_balance").is_none());
     // The pre-release name must appear nowhere in the report.
@@ -5812,8 +5244,8 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
 
 #[test]
 fn film_master_never_silently_ignores_a_requested_adjustment() {
-    // Every rejection the master owes the user, through the real binary: the two
-    // frame-local measurements and each non-default downstream control. All are
+    // Every rejection the master owes the user, through the real binary: the
+    // frame-local measurement and each non-default downstream control. All are
     // usage errors (exit 2) — never a quietly-adjusted or quietly-unadjusted image.
     //
     // Each `expect` is a phrase distinctive to *this* rule: `contains("auto")` alone
@@ -5823,12 +5255,6 @@ fn film_master_never_silently_ignores_a_requested_adjustment() {
     let input = fixture("hdri-64bit.tif");
     let base = ["--film-base", "0.9,0.55,0.42"];
     for (extra, expect) in [
-        // A placement that reads the reference; the default does not, so `auto` beside
-        // it measures nothing and is accepted.
-        (
-            vec!["--auto-d-max", "--anchor-mid-fraction", "0.5"],
-            "rejects a frame-local auto display-white",
-        ),
         (
             vec!["--shadow-balance", "0.1,0,0", "--auto-balance-range"],
             "rejects a frame-local auto regional-balance range",
@@ -6031,7 +5457,7 @@ fn film_master_telemetry_names_the_preset_and_the_written_depth() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
     let conv = &record["conversion"];
-    assert_eq!(record["schema_version"], 5);
+    assert_eq!(record["schema_version"], 6);
     assert_eq!(conv["preset"], "film-master");
     assert_eq!(
         conv["output_depth"], "f32",
@@ -6073,12 +5499,11 @@ fn film_master_telemetry_names_the_preset_and_the_written_depth() {
 }
 
 #[test]
-fn film_master_without_a_dmax_anchor_does_not_claim_one() {
-    // The master's reported `content` must not invent a Dmax placement: validation
-    // deliberately accepts `--no-d-max` under `white-at-reference` (the scene-referred
-    // unity placement). The other master e2e test only runs `--d-max 0.2`, so the
-    // anchorless wording was never exercised.
-    let tmp = TempDir::new("film-master-no-dmax");
+fn film_master_content_names_the_placement_it_made() {
+    // The master's reported `content` names what placed mid-grey: the exponential's
+    // film-base-derived anchor, or the characteristic curve's own response — never
+    // the other one, and never a reference density that no longer exists.
+    let tmp = TempDir::new("film-master-content");
     let input = fixture("hdri-64bit.tif");
     let convert = |name: &str, extra: &[&str]| -> serde_json::Value {
         let out = tmp.path(name);
@@ -6099,37 +5524,20 @@ fn film_master_without_a_dmax_anchor_does_not_claim_one() {
         json(&stdout)
     };
 
-    {
-        let (name, extra) = (
-            "no-dmax.tiff",
-            vec!["--anchor-white-at-reference", "--no-d-max"],
-        );
-        let report = convert(name, &extra);
-        let content = report["output_render"]["content"].as_str().unwrap();
-        assert!(
-            content.contains("placed no Dmax anchor"),
-            "{name}: {content}"
-        );
-        assert!(!content.contains("roll-fixed Dmax"), "{name}: {content}");
-        assert!(
-            content.contains("not a physical scene-linear"),
-            "{name}: {content}"
-        );
-        // No anchor was resolved, so none is reported either.
-        assert!(report.get("dmax").is_none(), "{name}: {report}");
-    }
-
-    // A placement that reads the fixed anchor DOES claim it — otherwise the assertions
-    // above would pass against a message that never mentions Dmax at all.
-    let report = convert("fixed.tiff", &["--anchor-mid-fraction", "0.5"]);
-    let content = report["output_render"]["content"].as_str().unwrap();
-    assert!(content.contains("resolved roll-fixed Dmax"), "{content}");
-    assert!(report["dmax"].as_f64().is_some());
-    // …and the default, which reads none, claims its base-derived placement instead.
     let report = convert("default.tiff", &[]);
     let content = report["output_render"]["content"].as_str().unwrap();
     assert!(content.contains("film-base-derived anchor"), "{content}");
-    assert!(!content.contains("roll-fixed Dmax"), "{content}");
+    assert!(content.contains("not a physical scene-linear"), "{content}");
+    assert!(!content.contains("Dmax"), "{content}");
+
+    // Falsifiable: the characteristic curve claims its own placement instead.
+    let report = convert("stock.tiff", &["--density-curve", "characteristic"]);
+    let content = report["output_render"]["content"].as_str().unwrap();
+    assert!(
+        content.contains("published characteristic curve"),
+        "{content}"
+    );
+    assert!(!content.contains("film-base-derived"), "{content}");
 }
 
 #[test]
@@ -6230,7 +5638,7 @@ fn roll_accepts_a_film_master_recipe() {
 
 #[test]
 fn roll_frame_override_of_output_preset_warns_and_is_strict_promotable() {
-    // `output.preset` is roll-fixed like `film_base` and `reconstruction.curve.dmax`,
+    // `output.preset` is roll-fixed like `film_base` and `reconstruction.curve.anchor`,
     // and it is the coarsest of the three: overriding it per frame emits a frame of a
     // different *image class* (a rendered u16 TIFF among unclamped linear ACEScg
     // masters). Its two siblings each warn; this one silently produced the odd frame.
@@ -7056,8 +6464,7 @@ fn roll_warns_about_a_version_skewed_shared_recipe() {
         r#"{ "meta": { "pipeline_version": 9999 },
              "params": { "reconstruction": { "type": "density",
                             "curve": { "type": "exponential" } },
-                         "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] },
-                                          "dmax": { "explicit": 1.6 } } } }"#,
+                         "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } } }"#,
     );
     let out_dir = tmp.path("out");
     let (code, stdout, err) = run(&[
@@ -8306,8 +7713,7 @@ fn roll_refuses_an_out_of_range_headroom_in_the_shared_recipe() {
         &tmp.path("roll.json"),
         r#"{
   "calibration": {
-    "film_base": { "explicit": [0.9, 0.55, 0.42] },
-    "dmax": { "explicit": 1.6 }
+    "film_base": { "explicit": [0.9, 0.55, 0.42] }
   },
   "reconstruction": {
     "type": "density",
@@ -9647,16 +9053,12 @@ fn convert_always_reports_the_measurement_region_and_the_inset_flag_moves_it() {
 }
 
 /// `--strict` must keep failing on the "IR preserved but not used" note when the
-/// plane never reaches a pixel. `dmax = auto` alone is not consumption: a
-/// reference-free placement discards the measured anchor, so the region changes
-/// nothing **in the render** — the measurement is still taken over it and still
-/// reported, which is why `measures_over_region` and
-/// `region_reaches_a_rendered_pixel` are two predicates. Keying suppression on the
-/// source alone made `--strict` pass here while the output stayed byte-identical to
-/// the non-auto run.
+/// plane never reaches a pixel — even when the effective-area march *measured* a
+/// holder with it. Nothing in a `convert` render reads the region (its one consumer,
+/// the auto reference density, retired), so a marched holder is reported, never used.
 #[test]
-fn strict_still_fails_when_an_auto_dmax_anchor_reads_no_reference() {
-    let dir = TempDir::new("auto-dmax-strict");
+fn strict_still_fails_when_the_ir_marched_region_reaches_no_pixel() {
+    let dir = TempDir::new("ir-region-strict");
     let path = dir.path("ringed.tif");
     const W: u32 = 200;
     const H: u32 = 200;
@@ -9690,11 +9092,9 @@ fn strict_still_fails_when_an_auto_dmax_anchor_reads_no_reference() {
             "linear",
             "--input-meaning",
             "scanner-device",
-            "--auto-d-max",
             // Under white, so the display tone's by-design overshoot adds no clipping
             // warning of its own to trip `--strict`: the IR note is the only candidate.
             "--print-exposure=-3",
-            "--strict",
         ];
         args.extend(extra);
         args.extend(["-o", out.to_str().unwrap(), path.to_str().unwrap()]);
@@ -9702,26 +9102,18 @@ fn strict_still_fails_when_an_auto_dmax_anchor_reads_no_reference() {
         (code, err)
     };
 
-    // Reference-reading placement: the region is consumed, the march moved it, so the
-    // plane is genuinely used and `--strict` is satisfied.
-    let (code, err) = case(&["--anchor-mid-fraction", "0.5"]);
-    assert_eq!(code, 0, "a consumed region must silence the note: {err}");
+    // Falsifiable control: without `--strict` the same run succeeds, so the failure
+    // below is the note being promoted and nothing else.
+    let (code, err) = case(&[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("preserved but not used"), "{err}");
 
-    // Reference-free placement — the default, and `black-at-base`: the anchor discards
-    // the measurement, so no rendered pixel depends on the region and the note — and
-    // `--strict` — must stand. The region is still what the reference was measured
-    // over; that is the report's business, not this note's.
-    for extra in [vec![], vec!["--anchor-black-floor", "0.05"]] {
-        let (code, err) = case(&extra);
-        assert_eq!(
-            code, 1,
-            "{extra:?}: the note must still fail --strict: {err}"
-        );
-        assert!(
-            err.contains("preserved but not used"),
-            "{extra:?}: and for the right reason: {err}"
-        );
-    }
+    let (code, err) = case(&["--strict"]);
+    assert_eq!(code, 1, "the note must still fail --strict: {err}");
+    assert!(
+        err.contains("preserved but not used"),
+        "and for the right reason: {err}"
+    );
 }
 
 /// The characteristic curve is reachable, self-anchoring, and reports its provenance.
@@ -9756,12 +9148,11 @@ fn the_characteristic_curve_renders_and_reports_its_stock_provenance() {
     assert_eq!(curve["stock"]["name"], "portra-400");
     assert_eq!(curve["stock"]["publication"], "E-4050");
     assert!(curve["stock"]["revision"].is_string());
-    // No reference and no placement rule — and the report says so rather than naming a
-    // number the render never consulted.
+    // No placement rule — and the report says so rather than naming a number the
+    // render never consulted.
     assert!(curve["anchor"].is_null(), "{curve}");
     assert!(curve["anchor_value"].is_null(), "{curve}");
-    assert_eq!(curve["dmax"]["policy"], "none");
-    assert!(curve["dmax"]["value"].is_null());
+    assert!(curve.get("dmax").is_none(), "{curve}");
     // The recipe spelling must match the flag spelling, or the emitted recipe cannot be
     // fed back — serde's kebab-case would have written `portra400`.
     assert_eq!(
@@ -10016,7 +9407,7 @@ fn the_characteristic_curve_refuses_parametric_knobs() {
     let base = ["--film-base", "0.5,0.25,0.15"];
     for (extra, expect) in [
         (
-            vec!["--anchor-mid-fraction", "0.5"],
+            vec!["--anchor-mid-offset", "0.5"],
             "it pins mid-grey where the stock's published response puts it",
         ),
         (
@@ -10047,62 +9438,6 @@ fn the_characteristic_curve_refuses_parametric_knobs() {
             "{extra:?} gave no usable remedy: {err}"
         );
     }
-
-    // **The reference is the exception, and deliberately so.** `calibration.dmax` is a
-    // roll measurement rather than a curve knob, so it is *accepted* beside this curve —
-    // that is what lets one calibration compose with a stock-curve profile — and warned
-    // about rather than silently dropped. Refusing it would break the composition the
-    // `calibration` section exists for.
-    for extra in [vec!["--d-max", "1.3"], vec!["--auto-d-max"]] {
-        let mut args = vec![
-            "convert",
-            "tests/fixtures/hdr-48bit.tif",
-            "-o",
-            out.to_str().unwrap(),
-            "--output-preset",
-            "display-p3",
-            "--density-curve",
-            "characteristic",
-        ];
-        args.extend_from_slice(&base);
-        args.extend_from_slice(&extra);
-        let (code, stdout, err) = run(&args);
-        assert_eq!(code, 0, "{extra:?} must be accepted: {err}");
-        assert!(
-            err.contains("does not read it"),
-            "{extra:?} must warn that the reference was not consumed: {err}"
-        );
-        // The report says the same thing structurally: no anchor was placed.
-        let curve = &json(&stdout)["reconstruction_result"]["curve"];
-        assert_eq!(curve["dmax"]["policy"], "none", "{curve}");
-        assert!(curve["dmax"]["value"].is_null(), "{curve}");
-        // …and the stated value survives in the echoed recipe, so the same file still
-        // applies to a profile that does read one.
-        assert!(
-            json(&stdout)["recipe"]["calibration"].get("dmax").is_some(),
-            "the calibration must be carried, not dropped"
-        );
-    }
-
-    // Falsifiable control: with no reference stated, the same command is silent. Without
-    // this the warning could be firing on every characteristic render.
-    let mut args = vec![
-        "convert",
-        "tests/fixtures/hdr-48bit.tif",
-        "-o",
-        out.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--density-curve",
-        "characteristic",
-    ];
-    args.extend_from_slice(&base);
-    let (code, _, err) = run(&args);
-    assert_eq!(code, 0, "{err}");
-    assert!(
-        !err.contains("does not read it"),
-        "an unstated reference must not warn: {err}"
-    );
 }
 
 /// A named-but-unknown stock fails loudly and lists what is accepted. Falling back to the
@@ -10191,7 +9526,7 @@ fn roll_warns_on_a_per_frame_film_stock_override() {
     // that was in the camera. A per-frame override is applied — the frame converts — but
     // it swaps the whole measured response for that frame (per-channel contrast *and*
     // mid-grey placement), so it warns loudly and `--strict` promotes it. Same contract as
-    // the film-base and Dmax overrides. `hdr-48bit.tif` is IR-free, so the `--strict` half
+    // the film-base and anchor overrides. `hdr-48bit.tif` is IR-free, so the `--strict` half
     // is about *this* warning and not the IR one.
     let tmp = TempDir::new("roll-stock-override");
     // `print_exposure: -4` is what makes the `--strict` half falsifiable, not a
@@ -10362,93 +9697,13 @@ fn a_preset_does_not_warn_about_the_curve_switch_it_was_asked_to_make() {
     );
 }
 
-/// The reported `dmax` is measured over the effective area whatever the anchor
-/// placement does with it, so one report field has one meaning
-/// (`film-base/holder-depth-mask` ship review, M3).
-///
-/// The calibrate-once workflow (§4) has users copy a `--auto-d-max` reading into
-/// `--d-max`. Keyed on the narrower "does a rendered pixel depend on it" predicate,
-/// a base-derived placement measured the reference over the **whole frame** — the
-/// 2.23–2.37 figure the effective area exists to eliminate — while the same report's
-/// `effective_area` asserted the holder had been cut. Pixels are unaffected either
-/// way, which is what makes this a report-honesty rule rather than a render change.
+/// An empty measurement region is a warning on `convert`, never a refusal
+/// (`film-base/holder-depth-mask` ship review, M1): nothing in a conversion measures
+/// over it since the auto reference density retired, so refusing would fail a run at
+/// exit 2 over a measurement no stage read — while `inspect`/`estimate` degrade the
+/// identical measurement to a warning at exit 0.
 #[test]
-fn the_reported_auto_dmax_follows_the_measurement_region_under_every_placement() {
-    let dir = TempDir::new("auto-dmax-region-report");
-    let read = |extra: &[&str], out: &std::path::Path| -> (f32, serde_json::Value, Vec<u8>) {
-        let mut args = vec![
-            "convert",
-            "--output-preset",
-            "display-p3",
-            "--film-base",
-            "0.9,0.9,0.9",
-            "--auto-d-max",
-        ];
-        args.extend(extra);
-        args.extend(["-o", out.to_str().unwrap(), "tests/fixtures/hdr-48bit.tif"]);
-        let (code, stdout, err) = run(&args);
-        assert_eq!(code, 0, "{err}");
-        let report = json(&stdout);
-        (
-            report["reconstruction_result"]["curve"]["dmax"]["value"]
-                .as_f64()
-                .expect("an auto reference reports its measured value") as f32,
-            report["effective_area"]["region"].clone(),
-            std::fs::read(out).unwrap(),
-        )
-    };
-
-    // The default reference-reading placement: the region moves, the number moves.
-    // Falsifiability for the assertion below — the fixture's measurement really is
-    // region-sensitive.
-    let (wide, wide_region, _) = read(&[], &dir.path("wide.tif"));
-    let (narrow, narrow_region, _) = read(&["--measure-inset", "0.4"], &dir.path("narrow.tif"));
-    assert_ne!(wide_region, narrow_region, "the region must actually move");
-    assert_ne!(
-        wide, narrow,
-        "the reference must follow it: {wide} vs {narrow}"
-    );
-
-    // A base-derived placement discards the reference for the *render*, and the
-    // number is still measured over the region it is reported beside.
-    let floor = ["--anchor-black-floor", "0.005"];
-    let (bf_wide, bf_wide_region, bytes_wide) = read(&floor, &dir.path("bf-wide.tif"));
-    let mut narrow_floor = floor.to_vec();
-    narrow_floor.extend(["--measure-inset", "0.4"]);
-    let (bf_narrow, bf_narrow_region, bytes_narrow) =
-        read(&narrow_floor, &dir.path("bf-narrow.tif"));
-
-    assert_eq!(bf_wide_region, wide_region);
-    assert_eq!(bf_narrow_region, narrow_region);
-    // Equality with the reference-reading rows, not merely `bf_wide != bf_narrow`:
-    // the same region was measured either way, so the placement must not change the
-    // number *at all*. Asserting only that the two differ would stay green on any
-    // value that happens to move with the region — "one field, one meaning" is an
-    // equality, and before the fix both of these read 1.6848611 (the whole frame)
-    // while the rows above read 1.6883355 and 1.7025654.
-    assert_eq!(
-        (bf_wide, bf_narrow),
-        (wide, narrow),
-        "a base-derived placement must report the same measured reference as a \
-         reference-reading one, or `dmax` means the effective area under one \
-         placement and the whole frame under another"
-    );
-
-    // And the render is untouched, which is why this can be fixed as reporting.
-    assert_eq!(
-        bytes_wide, bytes_narrow,
-        "a base-derived anchor discards the reference, so no pixel may move"
-    );
-}
-
-/// An empty measurement region is fatal only for a run that measures over it
-/// (`film-base/holder-depth-mask` ship review, M1).
-///
-/// Refusing unconditionally failed a conversion at exit 2, with nothing written,
-/// over a measurement no stage read — on a run whose output would have been
-/// byte-identical, and which `inspect`/`estimate` degrade to a warning at exit 0.
-#[test]
-fn an_empty_measurement_region_only_refuses_a_run_that_measures_over_it() {
+fn an_empty_measurement_region_is_a_warning_not_a_refusal() {
     let dir = TempDir::new("empty-measure-region");
     let path = dir.path("ringed.tif");
     const W: u32 = 200;
@@ -10556,14 +9811,6 @@ fn an_empty_measurement_region_only_refuses_a_run_that_measures_over_it() {
     assert!(
         empty.contains("Lower the inset fraction") && !empty.contains("state a region"),
         "{empty}"
-    );
-
-    // Something measures over it: a loud refusal, naming a second working remedy.
-    let (code, _, err) = convert_with(&["--auto-d-max"], &dir.path("read.tif"));
-    assert_eq!(code, 2, "a consumer with no region must fail loudly: {err}");
-    assert!(
-        err.contains("measurement region is empty") && err.contains("drop --auto-d-max"),
-        "{err}"
     );
 
     // On the new flow a conversion measures nothing over the region — its one
@@ -11542,8 +10789,8 @@ fn the_availability_gate_outranks_a_merge_refusal_too() {
 fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
     // The reconstruction half of the availability inventory, driven through the
     // binary. Each row is asserted to name the knob the user typed **and** to carry
-    // the verdict its design earns: the reference density and the other anchor
-    // placements are gone for good, the per-stock curve and the regional balance are
+    // the verdict its design earns: the per-stock curve as a curve is gone for good,
+    // the per-stock curve as a look and the regional balance are
     // waiting for a rendering stage. Asserting the losing verdict's wording is absent
     // is the only thing that tells two rules apart when both name the knob.
     let tmp = TempDir::new("new-flow-stranded");
@@ -11568,20 +10815,11 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
         err
     };
 
-    // Gone for good — a leader `Dmax` is film saturation, which is neither diffuse
-    // white nor the density this decode pins. All four spellings, `--no-d-max`
-    // included: "resolve the reference from nowhere" is a statement about a quantity
-    // the fixed decode does not have, not an identity value of one it does.
-    for knob in [
-        vec!["--d-max", "1.6"],
-        vec!["--fixed-d-max"],
-        vec!["--auto-d-max"],
-        vec!["--no-d-max"],
-        vec!["--anchor-white-at-reference"],
-        vec!["--anchor-mid-fraction", "0.5"],
-        vec!["--anchor-black-floor", "0.005"],
-        vec!["--density-curve", "characteristic"],
-    ] {
+    // Gone for good. (The reference density and the retired anchor placements are
+    // removed on both chains — see
+    // `the_reference_density_and_retired_placements_are_migration_errors`.)
+    {
+        let knob = ["--density-curve", "characteristic"];
         let err = refuse(&knob);
         assert!(err.contains(knob[0]), "names the knob typed: {err}");
         assert!(err.contains("will not gain one"), "{knob:?}: {err}");
@@ -11615,6 +10853,180 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
         assert!(
             !err.contains("will not gain one"),
             "the losing verdict's wording must be absent: {err}"
+        );
+    }
+}
+
+/// The reference density and the three anchor placements that read it (or pinned
+/// black) retired together (`nf-retire/dmax-machinery`), on both chains: every flag is
+/// a usage error naming the one placement left, a recipe's `calibration.dmax` replays
+/// at its old default and is refused otherwise, and a retired `anchor` in a recipe is
+/// refused by name.
+#[test]
+fn the_reference_density_and_retired_placements_are_migration_errors() {
+    let tmp = TempDir::new("dmax-retired");
+    let scan = fixture("hdr-48bit.tif");
+    let out = tmp.path("out.tif");
+
+    // (a) Each removed flag, on each chain. The remedy must itself be accepted there.
+    for flags in [
+        vec!["--d-max", "1.6"],
+        vec!["--fixed-d-max"],
+        vec!["--auto-d-max"],
+        vec!["--no-d-max"],
+        vec!["--anchor-white-at-reference"],
+        vec!["--anchor-mid-fraction", "0.5"],
+        vec!["--anchor-black-floor", "0.005"],
+    ] {
+        for new_flow in [false, true] {
+            let mut argv = vec![
+                "convert",
+                scan.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+                "--film-base",
+                "0.9,0.55,0.42",
+            ];
+            argv.push(if new_flow {
+                "--new-flow"
+            } else {
+                "--output-preset"
+            });
+            if !new_flow {
+                argv.push("display-p3");
+            }
+            argv.extend_from_slice(&flags);
+            let (code, _, err) = run(&argv);
+            assert_eq!(code, 2, "{flags:?} (new flow {new_flow}): {err}");
+            assert!(
+                err.contains(flags[0]) && err.contains("was removed"),
+                "{flags:?}: {err}"
+            );
+            assert!(err.contains("--anchor-mid-offset"), "{flags:?}: {err}");
+            assert!(!out.exists(), "{flags:?}: nothing may be written");
+        }
+    }
+    for new_flow in [false, true] {
+        let mut argv = vec![
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--anchor-mid-offset",
+            "0.5",
+            "--report",
+            "none",
+        ];
+        argv.extend(if new_flow {
+            vec!["--new-flow"]
+        } else {
+            vec!["--output-preset", "display-p3"]
+        });
+        let (code, _, err) = run(&argv);
+        assert_eq!(
+            code, 0,
+            "the named remedy must work (new flow {new_flow}): {err}"
+        );
+        std::fs::remove_file(&out).ok();
+    }
+
+    // (b) `estimate`'s reference half.
+    let (code, _, err) = run(&[
+        "estimate",
+        scan.to_str().unwrap(),
+        "--d-max-region",
+        "0,0,1,1",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--d-max-region") && err.contains("was removed"),
+        "{err}"
+    );
+
+    // (c) A recipe's `calibration.dmax`: the old default replays, anything else is
+    // refused — on `convert` and on a roll per-frame override alike.
+    let convert_with = |name: &str, body: &str| {
+        let recipe = write_file(&tmp.path(name), body);
+        let o = tmp.path(&format!("{name}.tif"));
+        let r = run(&[
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            o.to_str().unwrap(),
+            "--output-preset",
+            "display-p3",
+            "--params",
+            recipe.to_str().unwrap(),
+            "--report",
+            "none",
+        ]);
+        (r.0, r.2)
+    };
+    let (code, err) = convert_with(
+        "fixed.json",
+        r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]},"dmax":"fixed"}}"#,
+    );
+    assert_eq!(
+        code, 0,
+        "an old sidecar's default reference must replay: {err}"
+    );
+    for (name, dmax) in [
+        ("explicit.json", r#"{"explicit":1.5}"#),
+        ("auto.json", r#""auto""#),
+        ("none.json", r#""none""#),
+    ] {
+        let (code, err) = convert_with(
+            name,
+            &format!(
+                r#"{{"calibration":{{"film_base":{{"explicit":[0.9,0.55,0.42]}},"dmax":{dmax}}}}}"#
+            ),
+        );
+        assert_eq!(code, 2, "{dmax}: {err}");
+        assert!(err.contains("calibration.dmax"), "{dmax}: {err}");
+        assert!(err.contains("mid-at-base-offset"), "{dmax}: {err}");
+    }
+    let shared = write_file(&tmp.path("shared.json"), ROLL_RECIPE);
+    for (dmax, want) in [(r#""fixed""#, 0), (r#"{"explicit":1.5}"#, 2)] {
+        let manifest = write_file(
+            &tmp.path("frames.json"),
+            &format!(
+                r#"{{ "frames": [ {{ "input": {scan:?},
+                        "params": {{ "calibration": {{ "dmax": {dmax} }} }} }} ] }}"#,
+                scan = scan.to_str().unwrap()
+            ),
+        );
+        let (code, _, err) = run(&[
+            "roll",
+            "--frames",
+            manifest.to_str().unwrap(),
+            "--out-dir",
+            tmp.path(&format!("roll-{want}")).to_str().unwrap(),
+            "--params",
+            shared.to_str().unwrap(),
+            "--report",
+            "none",
+        ]);
+        assert_eq!(code, want, "per-frame {dmax}: {err}");
+        if want == 2 {
+            assert!(err.contains("calibration.dmax"), "{err}");
+        }
+    }
+
+    // (d) A retired placement in a recipe, in both of the spellings serde wrote.
+    for anchor in [r#""white-at-dmax""#, r#"{"black-at-base":0.005}"#] {
+        let (code, err) = convert_with(
+            "anchor.json",
+            &format!(
+                r#"{{"calibration":{{"film_base":{{"explicit":[0.9,0.55,0.42]}}}},
+                    "reconstruction":{{"curve":{{"type":"exponential","anchor":{anchor}}}}}}}"#
+            ),
+        );
+        assert_eq!(code, 2, "{anchor}: {err}");
+        assert!(
+            err.contains("was removed") && err.contains("mid-at-base-offset"),
+            "{anchor}: {err}"
         );
     }
 }
@@ -11748,13 +11160,13 @@ fn the_fixed_decodes_own_knobs_reach_the_decode_under_the_new_flow() {
     assert!(close(&d["contrast"], 1.8), "{d}");
 }
 
-/// `--new-flow` refuses a recipe-stated `calibration.dmax` exactly as it refuses the
-/// `--d-max` flag — and still accepts `calibration.film_base`.
+/// `--new-flow` refuses a recipe-stated `calibration.dmax` — and still accepts
+/// `calibration.film_base`.
 ///
 /// The new chain's `calibration` section holds the film base alone, since the fixed
 /// decode's anchor rule reads no reference density. A recipe stating `dmax` there is
-/// refused at load by name (`crate::recipe::check_body`), with the same reason the flag
-/// gives — and so is a `roll` per-frame overlay, which runs the same check.
+/// refused at load by name (`crate::recipe::check_body`) — and so is a `roll`
+/// per-frame overlay, which runs the same check.
 #[test]
 fn convert_under_the_new_flow_refuses_a_recipe_calibration_dmax() {
     let tmp = TempDir::new("new-flow-calibration");
@@ -11782,8 +11194,7 @@ fn convert_under_the_new_flow_refuses_a_recipe_calibration_dmax() {
     );
     assert_eq!(code, 2, "a recipe-stated reference must be refused: {err}");
     assert!(err.contains("`calibration.dmax`"), "{err}");
-    // The same reason the flag gives, so the two cannot drift into different stories.
-    assert!(err.contains("never reads a reference density"), "{err}");
+    assert!(err.contains("reference-free"), "{err}");
 
     // Falsifiable both ways. The base half is still read, so it renders…
     let (code, err) = run_with(
@@ -11822,11 +11233,12 @@ fn convert_under_the_new_flow_refuses_a_recipe_calibration_dmax() {
     assert_eq!(code, 2, "a per-frame override must be refused too: {err}");
     assert!(err.contains("`calibration.dmax`"), "{err}");
 
-    // …and the same reference is perfectly fine without the flag.
+    // …while the current chain still replays the key at its old default `"fixed"`,
+    // which every sidecar it wrote carries.
     let recipe = write_file(
         &tmp.path("legacy.json"),
         r#"{"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]},
-                           "dmax":{"explicit":1.45}},
+                           "dmax":"fixed"},
             "output":{"preset":"display-p3"}}"#,
     );
     let (code, _out, err) = run(&[

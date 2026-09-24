@@ -38,32 +38,16 @@
 //! density a *highlight* — and positive polarity (below) means a positive
 //! balance value brightens that channel in its region. The range anchors come
 //! from [`BalanceRange`]: `Auto` measures robust percentiles of the per-pixel
-//! tone in a deterministic two-pass within stage 2 (it cannot anchor on the
-//! `Auto` `Dmax`, which is measured *after* stage 2 — that would be circular);
-//! `Explicit` short-circuits the measuring pass for roll reuse. The neutral
-//! `[0,0,0]` defaults skip the pass entirely — bit-exact with the unbalanced
-//! output. `Dmax` (`Auto`) is then measured from the *post-balance* densities,
-//! keeping the display-white anchor consistent with what is rendered.
+//! tone in a deterministic two-pass within stage 2; `Explicit` short-circuits
+//! the measuring pass for roll reuse. The neutral `[0,0,0]` defaults skip the
+//! pass entirely — bit-exact with the unbalanced output.
 //!
-//! **Display-white anchor (`Dmax`) — owned by the curve stage.** The
-//! exponential curve renders density *relative to* the scene-white density
-//! `Dmax`: scene white (`D' = Dmax`) maps to `1.0` and the base (`D' = 0`) to
-//! `10^(−γ·Dmax) ≈ 0`, so the default u16 encode fills the display range
-//! instead of leaving every real sample above `1.0`. `10^(γ·(D'−Dmax))`
-//! factors into `10^(γ·D')` times a constant gain `10^(−γ·Dmax)`, so the
-//! anchor composes with `print_exposure` as one multiplicative scalar. The
-//! anchor source is [`DmaxSource`], carried by the curve variant: `Fixed`
-//! (default) uses the roll-fixed nominal [`NOMINAL_DMAX`]; `Explicit` fixes it
-//! to a measured-reference / per-stock scalar; `Auto` (demoted, opt-in)
-//! measures it per frame from the corrected-density distribution; `None`
-//! (exponential only) disables it (gain `1.0`) and reproduces the unanchored
-//! render bit-for-bit. Like the `Dmin` base, `Dmax` is a **roll-fixed**
-//! calibration by default (a film + scanner property) — `Auto`'s per-frame
-//! measurement is exposure normalization, not the faithful-conversion default
-//! (see [`DmaxSource`] / the `dmax-reference` task). A `Dmax` measured once
-//! from a fully-exposed reference frame is [`reference_dmax`]; it reduces to a
-//! plain scalar, so a reference-derived anchor and an equal explicit `--d-max`
-//! render **identical** color (no per-channel term).
+//! **Anchor — owned by the curve stage.** The exponential renders density
+//! relative to an anchor `A`: `10^(γ·(D′ − A))`, so `D′ = A` maps to `1.0`. `A`
+//! comes from [`AnchorPlacement`], whose one rule pins mid-grey a stated density
+//! above the film base. It reads nothing off the frame and no roll reference
+//! density, so the render carries no leader's roll-to-roll error, and darker
+//! frames render darker (faithful relative exposure).
 //!
 //! **Polarity.** With `D = -log10(scan/base)` the density is `≥ 0` and *grows*
 //! with the film's optical density: the unexposed base (scene black) sits at
@@ -73,18 +57,16 @@
 //! increases with film density (verified against its source: denser negative →
 //! brighter print).
 //!
-//! Output is linear. With the default `Fixed` anchor scene white lands near
-//! `1.0` (display-range-filling); with `--no-d-max` the base maps to `1.0` and
-//! exposed detail sits above it (HDR / **scene-referred**), consistent with the
-//! project's "don't clamp before encode" rule. Nothing is clamped here either
-//! way — the encode stage counts and reports any out-of-range samples.
+//! Output is linear, and nothing is clamped here — the encode stage counts and
+//! reports any out-of-range samples.
 
 use rayon::prelude::*;
 
 use crate::algo::{FilmRgbImage, ReconstructionReport};
+#[cfg(doc)]
+use crate::types::AnchorPlacement;
 use crate::types::{
-    AnchorPlacement, BalanceRange, DensityCurve, DensityParams, DmaxInput, DmaxSource, FilmBase,
-    LinearImage, NcError, Result,
+    BalanceRange, DensityCurve, DensityParams, FilmBase, LinearImage, NcError, Result,
 };
 
 /// Floor applied to the scan transmission before the `log10`, so a zero / negative
@@ -122,7 +104,7 @@ pub(crate) struct DensityImage {
 
 /// Density reconstruction + the tagged curve (stages 1–3, design-spec §7.2):
 /// Dmin-normalize into corrected density `D′`, apply the regional balance,
-/// resolve the curve's display-white anchor, then map `D′` through the selected
+/// place the curve's anchor, then map `D′` through the selected
 /// curve into the typed [`FilmRgbImage`]. Pure; the print controls are
 /// deliberately **not** here — they run past the ACEScg boundary
 /// (`pipeline::render_split`).
@@ -131,7 +113,6 @@ pub(super) fn reconstruct(
     base: &FilmBase,
     params: &DensityParams,
     curve: &DensityCurve,
-    dmax: DmaxInput,
 ) -> Result<(FilmRgbImage, ReconstructionReport)> {
     // `to_density` divides by the per-channel base, so a zero / negative /
     // non-finite base would yield a silently-black or non-finite image.
@@ -140,76 +121,49 @@ pub(super) fn reconstruct(
     check_base(base)?;
     let mut density = to_density(image, base, params);
 
-    // Regional (shadow/highlight) balance completes stage 2 *before* the curve
-    // resolves an Auto `Dmax`, so the anchor is measured from the post-balance
-    // densities (see the module doc for why the Auto anchor cannot precede the
-    // balance).
     let balance_range = regional_balance(&mut density, params)?;
 
     let mut characteristic_out_of_table = None;
-    let (film, dmax, curve_anchor) = match curve {
+    let (film, curve_anchor) = match curve {
         DensityCurve::Exponential(exp) => {
-            // Resolve the anchor once, from the (post-balance) corrected
-            // densities. It is applied **in the exponent** — `10^(γ·(D' −
-            // Dmax))` — not as a separate `10^(−γ·Dmax)` gain: mathematically
-            // equivalent, but the factored form overflows `f32` when `γ·D'`
-            // alone exceeds the pow10 range even though the anchored exponent
-            // is small (e.g. `γ = 5`, EPS-clamped `D' ≈ 8`), turning scene
-            // white into `inf` instead of `1.0`. A `None` anchor is applied as
-            // exactly `0.0`, so it reproduces the unanchored render bit-for-bit
-            // (`d − 0.0 == d` for every `f32`).
-            let dmax = resolve_dmax(&density, dmax);
+            // The anchor is applied **in the exponent** — `10^(γ·(D' − A))` — not as a
+            // separate `10^(−γ·A)` gain: mathematically equivalent, but the factored
+            // form overflows `f32` when `γ·D'` alone exceeds the pow10 range even
+            // though the anchored exponent is small (e.g. `γ = 5`, EPS-clamped
+            // `D' ≈ 8`), turning white into `inf` instead of `1.0`.
             let gamma = exp.gamma;
-            // `WhiteAtDmax` over a `None` reference resolves `A = 0.0`, reproducing the
-            // unanchored render bit-for-bit exactly as `dmax.unwrap_or(0.0)` did before
-            // this curve had a placement rule. The base-derived placements ignore the
-            // reference, so a `None` there is not a missing input.
-            let anchor = exp.anchor.anchor(dmax.unwrap_or(0.0), gamma);
-            // Defense in depth. Two ways the exponent
-            // goes non-finite, and **both** render `10^(−inf) = 0.0` for every sample —
-            // an all-black frame that trips neither the clip nor the non-finite counter:
-            // the placement's division by the slope can overflow the *anchor* (a
-            // positive-but-tiny gamma), and a large-but-finite anchor can overflow the
-            // *product* `gamma · anchor` (reachable at the shipped default gamma). Only
-            // those two: `A = 0.0` is the legitimate unity placement on this curve, and a
-            // finite product is honest arithmetic whatever it renders.
+            let anchor = exp.anchor.anchor(gamma);
+            // Defense in depth. Two ways the exponent goes non-finite, and **both**
+            // render `10^(−inf) = 0.0` for every sample — an all-black frame that trips
+            // neither the clip nor the non-finite counter: the placement's division by
+            // the slope can overflow the *anchor* (a positive-but-tiny gamma), and a
+            // large-but-finite anchor can overflow the *product* `gamma · anchor`.
             // `validate` rejects both at the CLI boundary, naming the flag; a
             // programmatic caller reaches here first.
             if !anchor.is_finite() || !(gamma * anchor).is_finite() {
                 return Err(NcError::Other(format!(
                     "the exponential anchor placement derived a non-usable anchor \
-                     ({anchor:e}) from reference {} at gamma {gamma}: the curve's exponent \
+                     ({anchor:e}) at gamma {gamma}: the curve's exponent \
                      `gamma · (density − anchor)` is not finite, so every sample would \
                      render as exactly 0.0. Use a photographic gamma and a smaller anchor \
-                     placement",
-                    dmax.unwrap_or(0.0)
+                     offset"
                 )));
             }
             let film = apply_curve(density, move |d| 10f32.powf(gamma * (d - anchor)));
-            // Under `WhiteAtDmax` the reference *is* the anchor, so `curve_anchor`
-            // carries the reference verbatim — including its `None` — which is what the
-            // report emitted before placement existed. Any other rule derives an anchor
-            // that differs from the reference, and the report must show the derived one.
-            let curve_anchor = match exp.anchor {
-                AnchorPlacement::WhiteAtDmax => dmax,
-                _ => Some(anchor),
-            };
-            (film, dmax, curve_anchor)
+            (film, Some(anchor))
         }
         DensityCurve::Characteristic(ch) => {
-            // No reference and no anchor to resolve: the published curve carries both, so
-            // the report's `dmax` / `curve_anchor` are `None` rather than a derived number
-            // that nothing consulted.
+            // No anchor to place: the published curve carries it, so the report's
+            // `curve_anchor` is `None` rather than a derived number nothing consulted.
             crate::algo::film_stock::check_tables(ch.stock)?;
             let (film, out_of_table) = crate::algo::film_stock::apply_curve(density, ch.stock)?;
             characteristic_out_of_table = Some(out_of_table);
-            (film, None, None)
+            (film, None)
         }
     };
     Ok((
         film,
         ReconstructionReport {
-            dmax,
             curve_anchor,
             balance_range,
             out_of_table: characteristic_out_of_table,
@@ -271,15 +225,15 @@ pub(crate) fn to_density(
 /// `Auto` ramp anchors `[lo, hi]`. Symmetric and deliberately robust: the bottom
 /// and top half-percent (dust shadows, specular sparkle, hot pixels) are ignored
 /// so an outlier can't stretch the ramp and flatten the weights over the real
-/// tonal range. `hi` mirrors [`AUTO_DMAX_PERCENTILE`]'s robustness intent.
+/// tonal range.
 const BALANCE_LO_PERCENTILE: f32 = 0.005;
 const BALANCE_HI_PERCENTILE: f32 = 0.995;
 
-/// Cap on how many per-pixel tones the `Auto` range measurement examines — the
-/// same bound (and rationale) as [`AUTO_DMAX_MAX_SAMPLES`]: percentiles over ~1M
-/// samples are statistically indistinguishable from the full population, and the
-/// cap keeps the measuring pass to a small transient buffer. The stride walks
-/// whole RGB pixels (chunks of 3), so no channel-bias adjustment is needed.
+/// Cap on how many per-pixel tones the `Auto` range measurement examines:
+/// percentiles over ~1M samples are statistically indistinguishable from the full
+/// population, and the cap keeps the measuring pass to a small transient buffer.
+/// The stride walks whole RGB pixels (chunks of 3), so no channel-bias adjustment
+/// is needed.
 const BALANCE_MAX_SAMPLES: usize = 1 << 20;
 
 /// Clamped cubic smoothstep: `0` at `t <= 0`, `1` at `t >= 1`, `t²(3 − 2t)`
@@ -515,307 +469,6 @@ pub(crate) fn apply_curve(density: DensityImage, tone: impl Fn(f32) -> f32 + Syn
     )
 }
 
-/// Percentile of the corrected-density distribution taken as the `Auto` anchor.
-/// High enough to sit at genuine scene white while ignoring the top fraction of a
-/// percent (specular sparkle, dust, hot pixels) that would otherwise anchor white
-/// too bright and leave the image dim. Mirrors the robustness intent of
-/// `film_base`'s sampling percentile, applied to the density (not transmission)
-/// distribution.
-const AUTO_DMAX_PERCENTILE: f32 = 0.995;
-
-/// Nominal roll-fixed display-white anchor density — the [`DmaxSource::Fixed`]
-/// default. A scene-independent placement expressed **in corrected-density (`D′`)
-/// units** (where the base is `0`), *not* a base transmission plus a range (mixing
-/// transmission and density is a unit error). It is the last tier of the fixed
-/// resolution ladder (measured reference → per-stock constant → this nominal): the
-/// value used when no reference / per-stock `Dmax` has been calibrated, so the
-/// default u16 encode fills the display range while keeping relative exposure
-/// faithful (darker frames stay darker).
-///
-/// **`1.3`, a rounded nominal chosen against measurement (2026-08-08).** The seven
-/// rolls measured in this repo span **0.90 to 1.74**, median ≈1.34: Harman Phoenix
-/// 0.8976 at the bottom and Portra 400 1.7383 at the top, with Gold 200 1.2758,
-/// Ektar 1.2933 and Portra 160 1.3816 clustered in between. `1.3` is that median
-/// rounded to one decimal — deliberately **not** presented as calibrated, and
-/// deliberately not restated to more precision than n=7 rolls supports.
-///
-/// The previous `2.0` sat above *every* one of those rolls, and because the
-/// exponential curve renders `10^(γ·(D′ − Dmax))`, an anchor 0.7 too high darkens
-/// the whole frame by that many decades: on the Ektar reference frame it rendered
-/// 5.09x darker in linear terms than the roll's own measured anchor (encoded means
-/// 0.104 vs 0.259). A default no real roll reaches is not a conservative default,
-/// it is a wrong one. Measured in `docs/reports/render-defaults-v2.md`.
-///
-/// Phoenix's 0.8976 is counted in that spread on purpose: it is the **worst case,
-/// showing what the floor of the population looks like**, not an outlier excluded
-/// to flatter the number. Whether a calibrated constant should exclude such stocks
-/// is `film-base/dmax-anchor-reliability`'s call — that task still owns the number,
-/// and it is open precisely because the leader-measured anchor's *level* is
-/// uncontrolled (two rolls of one stock 0.295 apart while their bases agree to
-/// 0.0005). Measure a stock-specific value with `estimate --d-max-region` (see
-/// [`reference_dmax`]) and pass it via `--d-max` whenever accuracy matters;
-/// per-stock constants belong to `algo/film-stock-profiles`.
-pub(crate) const NOMINAL_DMAX: f32 = 1.3;
-
-/// Resolve the display-white anchor density for a corrected-density buffer.
-/// `Fixed` returns the roll-fixed nominal [`NOMINAL_DMAX`] (scene-independent, so
-/// the buffer is not consulted); `Explicit` returns the given roll-fixed value;
-/// `Auto` (opt-in) measures a high percentile of the *finite* densities (scalar,
-/// pooled across channels — a per-channel anchor would double as color correction,
-/// which is the auto-WB modes' job, see [`white_balance::estimate_gains`](crate::pipeline::white_balance::estimate_gains)); `None` yields no
-/// anchor. Deterministic: same buffer + params ⇒ same value.
-pub(crate) fn resolve_dmax(density: &DensityImage, dmax: DmaxInput) -> Option<f32> {
-    match dmax.source {
-        DmaxSource::None => None,
-        DmaxSource::Fixed => Some(NOMINAL_DMAX),
-        DmaxSource::Explicit(d) => Some(d),
-        DmaxSource::Auto => Some(auto_dmax(density, dmax.region)),
-    }
-}
-
-/// Smallest gray density a measured reference is *expected* to reach for a
-/// genuinely fully-exposed leader. A light-struck leader is the film's max-density
-/// endpoint — typically `≈ 2–3` density (its transmission is a few percent of the
-/// base or less). A measured reference much below this is more likely a mid-tone
-/// frame than a leader, so it yields a too-low anchor that silently blows the roll
-/// too bright. We do **not** hard-reject it (thin / unusual stock and short
-/// development legitimately vary), but flag it as a loud, `--strict`-promotable
-/// warning for the user's manual review. `1.0` is deliberately conservative — a
-/// full density decade below the base, well under a real leader's `≈ 2–3` — so it
-/// fires only on clearly-implausible regions and does not false-alarm on a thin
-/// but real leader.
-pub(crate) const MIN_PLAUSIBLE_REFERENCE_DMAX: f32 = 1.0;
-
-/// A measured reference `Dmax`: the roll-fixed scalar anchor plus the per-channel
-/// base-relative densities it was reduced from. The `scalar` is the value frozen
-/// into a recipe / passed via `--d-max`; `per_channel` exists so the caller's
-/// plausibility check can look at the *weakest* channel — a colored/wrong region
-/// can average to a plausible gray density while one channel is essentially
-/// unexposed base, which the scalar alone hides (see [`reference_dmax`]).
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ReferenceDmax {
-    /// The gray-mean anchor (mean of `per_channel`) — the scalar `Dmax`.
-    pub scalar: f32,
-    /// Per-channel base-relative densities `[r, g, b]` (`D_c = -log10(t_c/base_c)`).
-    pub per_channel: [f32; 3],
-}
-
-/// Measure the roll-fixed display-white anchor `Dmax` (a scalar density) from a
-/// **fully-exposed reference frame** (the light-struck roll leader — near-opaque
-/// in every channel, always present, the film's max-density endpoint). This is the
-/// *plan-phase* measurement behind `estimate --d-max-region`; the resolved scalar
-/// is frozen into a roll recipe as `calibration.dmax = {"explicit": <d>}`
-/// and reused across the roll exactly like an explicit `Dmin` base — the reference
-/// frame / region is recorded only as report provenance, never as a re-read
-/// directive (that would break the deterministic-apply contract).
-///
-/// `reference` is the reference region's representative per-channel transmission
-/// (a robust central measure — the median — over the region's interior, sampled by
-/// the caller). Each channel is converted to **base-relative density**
-/// `D_c = -log10(t_c / base_c)` (raw `D` per design-spec §4; this equals the
-/// corrected density only under an *identity* `scale = 1` / `offset = 0`, which the
-/// parametric curves' default scale is not — `cli::explicit_dmax_domain_warning`
-/// warns when a measured value is reused across that mismatch), then the
-/// three are averaged to one **scalar** (a gray/luma reduction). Keeping `Dmax`
-/// scalar is deliberate: a per-channel anchor would apply three different gains in
-/// `10^(γ·(D′−Dmax))`, i.e. a white balance, which is the print-render stage's
-/// job, not the anchor's (density conversion ≠ print rendering).
-///
-/// **Domain caveats (the anchor is only in the curve's domain under the defaults).**
-/// The curve subtracts `Dmax` from the *corrected* density `D′ = scale·D + offset`
-/// (then regional balance), but this measurement is raw `D`. So a frozen `--d-max`
-/// is in the curve's domain only when `scale = 1` / `offset = 0` **and** the
-/// shadow/highlight balance is neutral. Non-default `scale`/`offset` shift the
-/// whole domain (a uniform, foldable offset — `cli::run_convert` warns,
-/// `--strict`-promotable, when an explicit `--d-max` is combined with non-default
-/// `scale`/`offset`); a non-neutral regional balance is **spatial**
-/// (tone-dependent) and cannot fold into any scalar anchor at all — re-measure the
-/// reference under the same density params, or keep them at their defaults.
-///
-/// `base` is the resolved `Dmin` and must be finite-and-positive per channel (the
-/// caller guarantees this via `film_base`'s guard). Fails loudly ([`NcError::Other`],
-/// exit 1) — never launders a degenerate region into a silently-wrong anchor —
-/// when, on **any** channel:
-/// - the transmission is non-finite or at/below the `SCAN_EPSILON` floor (an
-///   effectively-zero sample: dead sensor, clipped black, or the dark holder beside
-///   the leader). Unlike [`to_density`]'s dead-pixel floor, a *reference* region is
-///   a calibration input, so a floored channel is a hard error here — it must not
-///   manufacture a huge density and freeze a black-rendering anchor (mirrors the
-///   `Dmin` "dark holder → zero channel errors loudly" guard); or
-/// - the base-relative density is not positive — the region out-transmits the film
-///   base on that channel, so it is not a fully-exposed reference (a leader is
-///   denser than the base in **every** channel, not just on the gray average — a
-///   colored/wrong region can average positive while one channel out-transmits).
-///
-/// A measured `Dmax` that is positive-but-implausibly-low for a leader is *not*
-/// rejected here (stock/development vary); the caller warns via
-/// [`MIN_PLAUSIBLE_REFERENCE_DMAX`]. The plausibility check is **per-channel**: a
-/// colored/wrong region can average to a plausible gray density while one channel
-/// sits barely above the base (essentially unexposed), so [`ReferenceDmax`] carries
-/// the per-channel densities alongside the scalar for the caller to test the
-/// weakest channel — a genuine leader is dense in *every* channel, not just on the
-/// gray average.
-pub(crate) fn reference_dmax(reference: [f32; 3], base: &FilmBase) -> Result<ReferenceDmax> {
-    let base = [base.r, base.g, base.b];
-    let mut per_channel = [0.0f32; 3];
-    for (c, name) in ["red", "green", "blue"].into_iter().enumerate() {
-        let t = reference[c];
-        // (a) An effectively-zero / non-finite reference channel is a degenerate
-        // sample, not a leader — hard error rather than let the floor manufacture a
-        // density (the Dmin "dark holder → zero channel" gotcha, applied to Dmax).
-        if !t.is_finite() || t <= SCAN_EPSILON {
-            return Err(NcError::Other(format!(
-                "reference Dmax: the {name} channel transmission ({t}) is non-finite or \
-                 at/below the scan floor ({SCAN_EPSILON}) — an effectively-zero / clipped \
-                 sample (dead sensor, clipped black, or the dark holder beside the leader), \
-                 not a fully-exposed reference; sample the light-struck roll leader's \
-                 interior, or pass an explicit --d-max"
-            )));
-        }
-        // (b) Validate density per channel before the gray reduction: a leader is
-        // denser than the base on every channel. A colored/wrong region can average
-        // positive while one channel out-transmits the base — reject it loudly.
-        let d = -(t / base[c]).log10();
-        if !d.is_finite() || d <= 0.0 {
-            return Err(NcError::Other(format!(
-                "reference Dmax: the {name} channel density ({d}) is not positive — the \
-                 region out-transmits the film base on this channel, so it is not a \
-                 fully-exposed reference (a leader is denser than the base in every \
-                 channel); sample the light-struck roll leader's interior, or pass an \
-                 explicit --d-max"
-            )));
-        }
-        per_channel[c] = d;
-    }
-    // Each channel is finite and `> 0`, so the gray mean is finite and `> 0` too
-    // (three finite positives, bounded well below overflow: `t > SCAN_EPSILON` and
-    // `base ≤ 1` cap each `D` near `6`).
-    let scalar = (per_channel[0] + per_channel[1] + per_channel[2]) / 3.0;
-    debug_assert!(
-        scalar.is_finite() && scalar > 0.0,
-        "per-channel guards ensure this"
-    );
-    Ok(ReferenceDmax {
-        scalar,
-        per_channel,
-    })
-}
-
-/// Cap on how many density samples the `Auto` anchor examines. A 99.5th
-/// percentile over ~1M samples is statistically indistinguishable from the full
-/// population for anchoring purposes, and the cap bounds the measuring pass to a
-/// ~4 MB transient buffer instead of a second image-sized allocation on large
-/// scans (the curve itself applies in-place).
-const AUTO_DMAX_MAX_SAMPLES: usize = 1 << 20;
-
-/// Deterministic sampling stride for a density buffer of `len` samples: the
-/// smallest stride that keeps the sample count under [`AUTO_DMAX_MAX_SAMPLES`],
-/// bumped off multiples of 3 — the buffer is interleaved RGB, so a stride
-/// divisible by 3 would sample a single channel and bias the pooled percentile.
-fn auto_dmax_stride(len: usize) -> usize {
-    let stride = len.div_ceil(AUTO_DMAX_MAX_SAMPLES).max(1);
-    if stride > 1 && stride.is_multiple_of(3) {
-        stride + 1
-    } else {
-        stride
-    }
-}
-
-/// The [`AUTO_DMAX_PERCENTILE`] of the finite corrected densities, by nearest-rank
-/// over a deterministic strided sample (see [`auto_dmax_stride`]).
-///
-/// Non-finite densities (`NaN` from corrupt/overflowed input) are excluded rather
-/// than ranked, so a stray non-finite pixel can't become the anchor. An empty /
-/// all-non-finite buffer yields `0.0` — a neutral anchor rather than a panic; the
-/// encoder's non-finite counter still surfaces the underlying fault.
-/// Uses `select_nth_unstable` (O(n)) — the returned order-statistic value is
-/// independent of tie ordering — and a fixed stride derived only from the buffer
-/// length, so the result stays deterministic: same buffer ⇒ same anchor.
-fn auto_dmax(density: &DensityImage, region: Option<[u32; 4]>) -> f32 {
-    match region {
-        // No region → the whole interleaved buffer, on exactly the walk this
-        // function has always used. Kept as its own arm rather than expressed as a
-        // full-frame rectangle so the unrestricted result stays *bit-identical*: a
-        // programmatic `Auto` with no region must not move because a region
-        // parameter was added.
-        None => auto_dmax_strided(&density.density),
-        Some(rect) => auto_dmax_over(collect_region_samples(density, rect)),
-    }
-}
-
-/// [`AUTO_DMAX_PERCENTILE`] of the finite densities in `densities`, by nearest
-/// rank over the deterministic stride [`auto_dmax_stride`] defines.
-fn auto_dmax_strided(densities: &[f32]) -> f32 {
-    let stride = auto_dmax_stride(densities.len());
-    let mut finite: Vec<f32> = Vec::with_capacity(densities.len().div_ceil(stride));
-    finite.extend(
-        densities
-            .iter()
-            .step_by(stride)
-            .copied()
-            .filter(|v| v.is_finite()),
-    );
-    auto_dmax_over(finite)
-}
-
-/// The percentile core: nearest-rank [`AUTO_DMAX_PERCENTILE`] of an
-/// already-collected, already-finite-filtered sample.
-///
-/// An empty sample yields `0.0` — a neutral anchor rather than a panic; the
-/// encoder's non-finite counter still surfaces the underlying fault.
-/// `select_nth_unstable` is O(n) and the returned order statistic is independent
-/// of tie ordering, so the result is a function of the sample alone.
-fn auto_dmax_over(mut finite: Vec<f32>) -> f32 {
-    if finite.is_empty() {
-        return 0.0;
-    }
-    let rank = ((finite.len() - 1) as f32 * AUTO_DMAX_PERCENTILE).round() as usize;
-    let (_, nth, _) = finite.select_nth_unstable_by(rank, f32::total_cmp);
-    *nth
-}
-
-/// The finite corrected densities inside `rect`, on the same deterministic stride
-/// the whole-frame walk uses.
-///
-/// A region **restricts the walk** rather than adding one: the stride is taken over
-/// the samples actually visited, so the sample budget and the ~4 MB transient
-/// buffer are unchanged and `pipeline::memory` owes this no new term.
-///
-/// Why a region at all: the opaque film holder sits at the [`SCAN_EPSILON`] floor,
-/// so its corrected density is enormous and it **owns** the top percentile of a
-/// whole-frame read — measured resolving 2.23-2.37 against a roll `Dmax` of
-/// 1.28-1.38, with every frame rendering black
-/// (`algo/auto-anchor-interior-measurement`).
-///
-/// `rect` is clamped to the frame rather than trusted: it is resolved from the
-/// *scan*, and a caller that hands over one computed for different dimensions must
-/// not index out of bounds.
-fn collect_region_samples(density: &DensityImage, rect: [u32; 4]) -> Vec<f32> {
-    let (w, h) = (density.width as usize, density.height as usize);
-    let [x, y, rw, rh] = {
-        let [rx, ry, cw, ch] = rect;
-        let (x, y) = ((rx as usize).min(w), (ry as usize).min(h));
-        [x, y, (cw as usize).min(w - x), (ch as usize).min(h - y)]
-    };
-    let visited = rw * rh * 3;
-    let stride = auto_dmax_stride(visited);
-    let mut finite: Vec<f32> = Vec::with_capacity(visited.div_ceil(stride));
-    // One `step_by` over the region's rows chained end to end, so the stride keeps a
-    // single phase across row boundaries and the visited set is a function of the
-    // rectangle and the dimensions alone.
-    finite.extend(
-        (y..y + rh)
-            .flat_map(|row| {
-                let start = (row * w + x) * 3;
-                density.density[start..start + rw * 3].iter()
-            })
-            .step_by(stride)
-            .copied()
-            .filter(|v| v.is_finite()),
-    );
-    finite
-}
-
 /// Reject a film base that would make the density conversion ill-defined: each
 /// per-channel value is a transmission in `(0, 1]`. Non-positive / non-finite
 /// values would divide into inf/NaN; values above `1.0` are impossible for a
@@ -837,7 +490,7 @@ pub(crate) fn check_base(base: &FilmBase) -> Result<()> {
 mod tests {
     use super::*;
     use crate::algo::reconstruct as reconstruct_config;
-    use crate::types::{ExponentialParams, Reconstruction};
+    use crate::types::{AnchorPlacement, ExponentialParams, Reconstruction};
 
     fn approx(a: f32, b: f32, eps: f32) -> bool {
         (a - b).abs() <= eps
@@ -848,11 +501,11 @@ mod tests {
         LinearImage::new(1, 1, rgb.to_vec(), ir.map(|v| vec![v])).unwrap()
     }
 
-    /// The exponential curve carrying `gamma`, at its default placement.
-    fn exponential(gamma: f32) -> DensityCurve {
+    /// The exponential curve carrying `gamma`, with mid-grey `offset` above the base.
+    fn exponential(gamma: f32, offset: f32) -> DensityCurve {
         DensityCurve::Exponential(ExponentialParams {
             gamma,
-            anchor: AnchorPlacement::WhiteAtDmax,
+            anchor: AnchorPlacement::MidAtBaseOffset(offset),
         })
     }
 
@@ -860,7 +513,7 @@ mod tests {
     #[derive(Debug)]
     struct Converted {
         out: LinearImage,
-        dmax: Option<f32>,
+        curve_anchor: Option<f32>,
         balance_range: Option<[f32; 2]>,
     }
 
@@ -871,21 +524,19 @@ mod tests {
         base: &FilmBase,
         density: DensityParams,
         curve: DensityCurve,
-        dmax: DmaxSource,
     ) -> Result<Converted> {
         let config = Reconstruction { density, curve };
-        let (film, rep) = reconstruct_config(img, base, &config, DmaxInput::new(dmax))?;
+        let (film, rep) = reconstruct_config(img, base, &config)?;
         Ok(Converted {
             out: film.into_linear(),
-            dmax: rep.dmax,
+            curve_anchor: rep.curve_anchor,
             balance_range: rep.balance_range,
         })
     }
 
     /// The anchored exponential curve on a prepared density buffer (stage 3) — the
     /// same composition `reconstruct`'s exponential arm performs.
-    fn render(density: DensityImage, gamma: f32, dmax: Option<f32>) -> LinearImage {
-        let anchor = dmax.unwrap_or(0.0);
+    fn render(density: DensityImage, gamma: f32, anchor: f32) -> LinearImage {
         apply_curve(density, move |d| 10f32.powf(gamma * (d - anchor))).into_linear()
     }
 
@@ -981,7 +632,7 @@ mod tests {
             density: vec![1.0, 0.0, 2.0],
             ir: None,
         };
-        let out = render(d, 1.0, None);
+        let out = render(d, 1.0, 0.0);
         assert!(approx(out.rgb[0], 10.0, 1e-3));
         assert!(approx(out.rgb[1], 1.0, 1e-5));
         assert!(approx(out.rgb[2], 100.0, 1e-2));
@@ -996,7 +647,7 @@ mod tests {
             density: vec![1.0, 1.0, 1.0],
             ir: None,
         };
-        let out = render(d, 0.5, None);
+        let out = render(d, 0.5, 0.0);
         for c in 0..3 {
             assert!(approx(out.rgb[c], 10f32.powf(0.5), 1e-3), "channel {c}");
         }
@@ -1010,7 +661,7 @@ mod tests {
             density: vec![0.3, 0.3, 0.3],
             ir: Some(vec![0.7]),
         };
-        let out = render(d, 1.0, None);
+        let out = render(d, 1.0, 0.0);
         assert_eq!(out.ir.as_deref(), Some(&[0.7_f32][..]));
     }
 
@@ -1029,16 +680,10 @@ mod tests {
             ..DensityParams::default()
         };
         let gamma = 1.4;
-        let via_config = run(
-            &img,
-            &base,
-            density.clone(),
-            exponential(gamma),
-            DmaxSource::Auto,
-        )
-        .unwrap();
+        let curve = exponential(gamma, 0.5);
+        let via_config = run(&img, &base, density.clone(), curve).unwrap();
         let dimg = to_density(&img, &base, &density);
-        let anchor = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto));
+        let anchor = curve.anchor().unwrap().anchor(gamma);
         let via_parts = render(dimg, gamma, anchor);
         assert_eq!(via_config.out.rgb, via_parts.rgb);
         assert_eq!(via_config.out.ir, via_parts.ir);
@@ -1057,7 +702,6 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
-            DmaxSource::Fixed,
         )
         .unwrap()
         .out;
@@ -1081,15 +725,9 @@ mod tests {
         // because a regression in either is a colour bug that no other test sees.
         let base = FilmBase::from([0.5, 0.25, 0.15]);
         let neutral_out = |img, params| {
-            run(
-                &img,
-                &base,
-                params,
-                DensityCurve::default(),
-                DmaxSource::Fixed,
-            )
-            .unwrap()
-            .out
+            run(&img, &base, params, DensityCurve::default())
+                .unwrap()
+                .out
         };
 
         // (a) Under the identity gain, equal base fractions still reconstruct neutral —
@@ -1176,7 +814,6 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
-            DmaxSource::Fixed,
         )
         .unwrap()
         .out;
@@ -1201,7 +838,6 @@ mod tests {
                 &FilmBase::from(bad),
                 DensityParams::default(),
                 DensityCurve::default(),
-                DmaxSource::Fixed,
             )
             .unwrap_err();
             assert_eq!(err.exit_code(), 1, "base {bad:?} should fail loudly");
@@ -1213,55 +849,29 @@ mod tests {
                 &FilmBase::from([0.5, 0.5, 0.5]),
                 DensityParams::default(),
                 DensityCurve::default(),
-                DmaxSource::Fixed,
             )
             .is_ok()
         );
     }
 
     #[test]
-    fn anchored_exponent_survives_extreme_gamma_and_dmax() {
-        // Regression (PR review): the anchor used to be a separate 10^(−γ·Dmax)
+    fn anchored_exponent_survives_extreme_gamma_and_anchor() {
+        // Regression (PR review): the anchor used to be a separate 10^(−γ·A)
         // gain, so γ·D' alone could overflow f32 before the gain cancelled it
-        // (γ = 5, D' = 8 ⇒ 10^40 = inf ⇒ scene white rendered inf/NaN). With the
-        // anchored exponent, D' = Dmax maps to exactly 1.0 regardless of scale.
+        // (γ = 5, D' = 8 ⇒ 10^40 = inf ⇒ white rendered inf/NaN). With the
+        // anchored exponent, D' = A maps to exactly 1.0 regardless of scale.
         let gamma = 5.0f32;
-        let dmax = 8.0f32;
+        let anchor = 8.0f32;
         let dimg = DensityImage {
             width: 1,
             height: 1,
-            density: vec![dmax, dmax, dmax],
+            density: vec![anchor, anchor, anchor],
             ir: None,
         };
-        let out = render(dimg, gamma, Some(dmax));
+        let out = render(dimg, gamma, anchor);
         for v in &out.rgb {
             assert!(v.is_finite(), "overflowed: {v}");
             assert!(approx(*v, 1.0, 1e-5), "scene white should be 1.0, got {v}");
-        }
-    }
-
-    #[test]
-    fn auto_dmax_stride_is_bounded_and_channel_unbiased() {
-        // Small buffers are sampled exhaustively.
-        assert_eq!(auto_dmax_stride(0), 1);
-        assert_eq!(auto_dmax_stride(3 * 100), 1);
-        assert_eq!(auto_dmax_stride(AUTO_DMAX_MAX_SAMPLES), 1);
-        // Large buffers are strided to stay under the cap...
-        let big = 10 * AUTO_DMAX_MAX_SAMPLES;
-        let stride = auto_dmax_stride(big);
-        assert!(big.div_ceil(stride) <= AUTO_DMAX_MAX_SAMPLES + 1);
-        // ...and the stride is never a multiple of 3 (interleaved RGB — a
-        // 3-divisible stride would sample one channel only).
-        for len in [
-            big,
-            3 * AUTO_DMAX_MAX_SAMPLES,
-            6 * AUTO_DMAX_MAX_SAMPLES + 5,
-        ] {
-            let s = auto_dmax_stride(len);
-            assert!(
-                s == 1 || !s.is_multiple_of(3),
-                "len {len}: stride {s} is 3-divisible"
-            );
         }
     }
 
@@ -1274,7 +884,6 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
-            DmaxSource::Fixed,
         )
         .unwrap()
         .out;
@@ -1555,45 +1164,6 @@ mod tests {
     }
 
     #[test]
-    fn auto_dmax_is_measured_after_the_regional_balance() {
-        // Ordering contract (module doc): with `dmax = auto` the display-white
-        // anchor is resolved from the *post-balance* densities, so it tracks
-        // what is actually rendered. A uniform balance (+0.5 on every channel
-        // at every tone) shifts every density by +0.5, so the reported Auto
-        // anchor must shift by the same amount versus the neutral run.
-        let base = FilmBase::from([0.6, 0.6, 0.6]);
-        let img = LinearImage::new(2, 1, vec![0.5, 0.5, 0.5, 0.05, 0.05, 0.05], None).unwrap();
-        // Explicit `Auto`: the default is the roll-fixed `Fixed` anchor, which
-        // ignores the buffer — this test pins the `Auto` measurement's
-        // post-balance ordering, so it must opt into `Auto`.
-        let rep_neutral = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            exponential(1.0),
-            DmaxSource::Auto,
-        )
-        .unwrap();
-        let rep_balanced = run(
-            &img,
-            &base,
-            DensityParams {
-                shadow_balance: [0.5, 0.5, 0.5],
-                highlight_balance: [0.5, 0.5, 0.5], // tone-independent +0.5
-                ..DensityParams::default()
-            },
-            exponential(1.0),
-            DmaxSource::Auto,
-        )
-        .unwrap();
-        let (a, b) = (rep_neutral.dmax.unwrap(), rep_balanced.dmax.unwrap());
-        assert!(
-            approx(b - a, 0.5, 1e-5),
-            "auto dmax must be measured post-balance: neutral {a}, balanced {b}"
-        );
-    }
-
-    #[test]
     fn reconstruct_surfaces_the_balance_range() {
         let base = FilmBase::from([0.6, 0.6, 0.6]);
         // Two-tone image so an Auto range is measurable.
@@ -1605,7 +1175,6 @@ mod tests {
             &base,
             DensityParams::default(),
             DensityCurve::default(),
-            DmaxSource::Fixed,
         )
         .unwrap();
         assert_eq!(rep.balance_range, None);
@@ -1619,7 +1188,6 @@ mod tests {
                 ..DensityParams::default()
             },
             DensityCurve::default(),
-            DmaxSource::Fixed,
         )
         .unwrap();
         let [lo, hi] = rep.balance_range.expect("range reported");
@@ -1635,7 +1203,6 @@ mod tests {
                 ..DensityParams::default()
             },
             DensityCurve::default(),
-            DmaxSource::Fixed,
         )
         .unwrap();
         assert_eq!(rep.balance_range, Some([0.25, 1.75]));
@@ -1656,148 +1223,36 @@ mod tests {
             highlight_balance: [-0.1, 0.02, 0.0],
             ..DensityParams::default()
         };
-        let a = run(
-            &img,
-            &base,
-            params.clone(),
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-        )
-        .unwrap()
-        .out;
-        let b = run(
-            &img,
-            &base,
-            params,
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-        )
-        .unwrap()
-        .out;
+        let a = run(&img, &base, params.clone(), DensityCurve::default())
+            .unwrap()
+            .out;
+        let b = run(&img, &base, params, DensityCurve::default())
+            .unwrap()
+            .out;
         assert_eq!(a.rgb, b.rgb);
         assert_eq!(a.ir.as_deref(), Some(&[0.1f32, 0.2, 0.3][..]));
     }
 
-    // --- Dmax white anchor -----------------------------------------------------
+    // --- the anchor ------------------------------------------------------------
 
     #[test]
-    fn none_anchor_is_bit_exact_with_pre_anchor_render() {
-        // A `None` anchor must reproduce the unanchored render bit-for-bit: the
-        // anchor term is exactly 0.0 and `d − 0.0 == d` for every f32, so every
-        // output sample must equal the direct pre-anchor arithmetic to the bit
-        // (HDR f32 workflows depend on this). Uses `assert_eq!`, not an epsilon.
-        let density = vec![0.7f32, -0.3, 1.2, 0.0, 2.0, -1.1];
-        let dimg = DensityImage {
-            width: 2,
-            height: 1,
-            density: density.clone(),
-            ir: None,
-        };
-        let gamma = 1.3;
-        assert_eq!(
-            resolve_dmax(&one_row(&density), DmaxInput::new(DmaxSource::None)),
-            None,
-            "no anchor resolved for None"
-        );
-        let out = render(dimg, gamma, None);
-        for (i, &d) in density.iter().enumerate() {
-            assert_eq!(
-                out.rgb[i],
-                10f32.powf(gamma * d),
-                "sample {i} not bit-exact"
-            );
-        }
-    }
-
-    #[test]
-    fn explicit_anchor_maps_that_density_to_display_white() {
-        // With a neutral print, the pixel at `D' = Dmax` (scene white) renders to
-        // exactly 1.0, and the base (`D' = 0`) to `10^(−γ·Dmax) < 1` (near black).
-        let dmax = 1.5f32;
+    fn the_anchor_density_maps_to_display_white() {
+        // The pixel at `D' = A` renders to exactly 1.0, and the base (`D' = 0`) to
+        // `10^(−γ·A) < 1` (near black).
+        let anchor = 1.5f32;
         let gamma = 2.0f32;
         let dimg = DensityImage {
             width: 2,
             height: 1,
-            density: vec![dmax, dmax, dmax, 0.0, 0.0, 0.0],
+            density: vec![anchor, anchor, anchor, 0.0, 0.0, 0.0],
             ir: None,
         };
-        assert_eq!(
-            resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Explicit(dmax))),
-            Some(dmax)
-        );
-        let out = render(dimg, gamma, Some(dmax));
+        let out = render(dimg, gamma, anchor);
         for c in 0..3 {
-            assert!(
-                approx(out.rgb[c], 1.0, 1e-5),
-                "scene white → 1.0 (chan {c})"
-            );
-            assert!(approx(out.rgb[3 + c], 10f32.powf(-gamma * dmax), 1e-6));
+            assert!(approx(out.rgb[c], 1.0, 1e-5), "anchor → 1.0 (chan {c})");
+            assert!(approx(out.rgb[3 + c], 10f32.powf(-gamma * anchor), 1e-6));
             assert!(out.rgb[3 + c] < 1.0, "base below white (chan {c})");
         }
-    }
-
-    #[test]
-    fn auto_dmax_high_percentile_resists_outliers() {
-        // 200 samples at 1.0 plus one blown 1000.0 (< 0.5% of the data): the
-        // 99.5th percentile stays on the bulk value, not the specular/dust outlier.
-        let mut d = vec![1.0f32; 200];
-        d.push(1000.0);
-        assert!(
-            approx(auto_dmax_strided(&d), 1.0, 1e-6),
-            "got {}",
-            auto_dmax_strided(&d)
-        );
-    }
-
-    #[test]
-    fn auto_dmax_nearest_rank_matches_the_percentile_index() {
-        // Distinct values pin the exact nearest-rank index `round((n−1)·p)` in both
-        // directions (a constant-bulk test would pass for any rank ≤ the top).
-        // 1000 values 0..=999: index = round(999·0.995) = round(994.005) = 994.
-        let d: Vec<f32> = (0..1000).map(|i| i as f32).collect();
-        assert_eq!(auto_dmax_strided(&d), 994.0);
-    }
-
-    #[test]
-    fn auto_dmax_ignores_non_finite() {
-        // Non-finite densities are excluded from the rank, never returned.
-        let d = vec![f32::NAN, 0.5, f32::INFINITY, 0.5, f32::NEG_INFINITY, 0.5];
-        assert!(approx(auto_dmax_strided(&d), 0.5, 1e-6));
-        // All-non-finite / empty → 0.0 neutral fallback (gain 1.0), not a panic.
-        assert_eq!(auto_dmax_strided(&[f32::NAN, f32::INFINITY]), 0.0);
-        assert_eq!(auto_dmax_strided(&[]), 0.0);
-    }
-
-    #[test]
-    fn auto_anchor_is_deterministic() {
-        // Same input + params ⇒ identical output (the determinism contract).
-        let base = FilmBase::from([0.6, 0.3, 0.18]);
-        let img = LinearImage::new(
-            3,
-            1,
-            vec![0.5, 0.25, 0.15, 0.3, 0.15, 0.09, 0.1, 0.05, 0.03],
-            None,
-        )
-        .unwrap();
-        let a = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            exponential(1.0),
-            DmaxSource::Auto,
-        )
-        .unwrap()
-        .out;
-        let b = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            exponential(1.0),
-            DmaxSource::Auto,
-        )
-        .unwrap()
-        .out;
-        assert_eq!(a.rgb, b.rgb);
     }
 
     #[test]
@@ -1805,414 +1260,15 @@ mod tests {
         let base = FilmBase::from([0.6, 0.6, 0.6]);
         let img = pixel([0.2, 0.2, 0.2], None);
 
-        // Explicit → reports exactly that value.
-        let rep = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            exponential(1.0),
-            DmaxSource::Explicit(1.25),
-        )
-        .unwrap();
-        assert_eq!(rep.dmax, Some(1.25));
-        // The (explicit, default-neutral) gains are surfaced too.
+        // The exponential reports the anchor its placement derived…
+        let curve = exponential(1.0, 0.5);
+        let rep = run(&img, &base, DensityParams::default(), curve).unwrap();
+        assert_eq!(rep.curve_anchor, Some(curve.anchor().unwrap().anchor(1.0)));
 
-        // None → no anchor reported.
-        let rep = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            exponential(1.0),
-            DmaxSource::None,
-        )
-        .unwrap();
-        assert_eq!(rep.dmax, None);
-
-        // Auto → a finite measured anchor.
-        let rep = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            exponential(1.0),
-            DmaxSource::Auto,
-        )
-        .unwrap();
-        assert!(rep.dmax.is_some_and(f32::is_finite));
-
-        // Fixed (the default) → the nominal roll-fixed anchor, reported verbatim.
-        let rep = run(
-            &img,
-            &base,
-            DensityParams::default(),
-            DensityCurve::default(),
-            DmaxSource::Fixed,
-        )
-        .unwrap();
-        assert_eq!(rep.dmax, Some(NOMINAL_DMAX));
-    }
-
-    #[test]
-    fn auto_anchor_maps_measured_scene_white_to_display_white() {
-        // Identity gain: this asserts *every* channel lands on 1.0, which is a statement
-        // about the anchor. The default per-channel gain makes the three densities differ,
-        // so only one channel could — a different property, pinned elsewhere.
-        // End-to-end: a uniform-density image has one density value, so the auto
-        // percentile equals it and the curve maps it to display white ≈ 1.0. Ties
-        // the measured percentile to the curve gain (catches an anchor sign error
-        // the explicit test's separate path could miss).
-        let gamma = 1.8f32;
-        let base = FilmBase::from([0.8, 0.8, 0.8]);
-        let img = LinearImage::new(4, 1, vec![0.2f32; 12], None).unwrap(); // scan < base ⇒ D > 0
-        let dimg = to_density(&img, &base, &identity_gain());
-        let resolved = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto));
-        let out = render(dimg, gamma, resolved);
-        let dmax = resolved.unwrap();
-        assert!(
-            dmax > 0.0,
-            "measured scene-white density should be positive"
-        );
-        for v in &out.rgb {
-            assert!(
-                approx(*v, 1.0, 1e-4),
-                "scene white → 1.0, got {v} (dmax {dmax})"
-            );
-        }
-    }
-
-    #[test]
-    fn auto_anchor_is_a_scalar_pooled_across_channels() {
-        // Channel-asymmetric densities (R high, B low): the anchor is a single
-        // pooled scalar — the *same* gain on every channel — so it can't double as
-        // color correction (that's the auto-WB modes' job). Prove the per-channel
-        // ratio `out_c / 10^(γ·D'_c)` is identical across channels (== anchor gain).
-        let dimg = DensityImage {
-            width: 2,
-            height: 1,
-            density: vec![2.0, 1.0, 0.1, 2.0, 1.0, 0.1],
-            ir: None,
-        };
-        let gamma = 1.0f32;
-        let resolved = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto));
-        let out = render(dimg.clone(), gamma, resolved);
-        let dmax = resolved.unwrap();
-        let gain = 10f32.powf(-gamma * dmax);
-        for c in 0..3 {
-            let expected = 10f32.powf(gamma * dimg.density[c]) * gain;
-            assert!(
-                approx(out.rgb[c], expected, 1e-4),
-                "chan {c}: {}",
-                out.rgb[c]
-            );
-        }
-    }
-
-    // --- Dmax: fixed nominal + roll-fixed reference ----------------------------
-
-    /// A flat interleaved density buffer as a one-row [`DensityImage`], for the
-    /// anchor-source tests that care about the *source* rather than the geometry.
-    /// The length must be a multiple of 3 (one row of `len / 3` pixels).
-    fn one_row(densities: &[f32]) -> DensityImage {
-        assert_eq!(densities.len() % 3, 0, "interleaved RGB");
-        DensityImage {
-            width: (densities.len() / 3) as u32,
-            height: 1,
-            density: densities.to_vec(),
-            ir: None,
-        }
-    }
-
-    /// A frame with an opaque border: the `SCAN_EPSILON`-floor holder ring that
-    /// owns the top percentile of a whole-frame read, plus a dim picture interior.
-    /// Synthetic and committed, so the regression is caught with no external assets.
-    fn frame_with_opaque_border(w: u32, h: u32, border: u32) -> DensityImage {
-        let mut density = Vec::with_capacity((w * h * 3) as usize);
-        for y in 0..h {
-            for x in 0..w {
-                let on_border = x < border || y < border || x >= w - border || y >= h - border;
-                // The holder's corrected density is enormous (it blocked all light);
-                // the picture sits well below the roll's real Dmax.
-                let d = if on_border { 2.4 } else { 0.9 };
-                density.extend_from_slice(&[d, d, d]);
-            }
-        }
-        DensityImage {
-            width: w,
-            height: h,
-            density,
-            ir: None,
-        }
-    }
-
-    #[test]
-    fn a_region_keeps_the_opaque_border_out_of_the_auto_anchor() {
-        // The defect this wiring exists to fix: `Auto` over the whole frame is owned
-        // by the holder. Measured on the fixture rolls it resolved 2.23-2.37 against
-        // a roll Dmax of 1.28-1.38, rendering every frame black
-        // (`algo/auto-anchor-interior-measurement`).
-        let dimg = frame_with_opaque_border(200, 200, 20);
-
-        let whole = resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto)).unwrap();
-        assert!(
-            whole > 2.0,
-            "falsifiability: the whole-frame read must still be contaminated, got {whole}"
-        );
-
-        // The same frame measured over its interior lands in the picture.
-        let inside = resolve_dmax(
-            &dimg,
-            DmaxInput {
-                source: DmaxSource::Auto,
-                region: Some([20, 20, 160, 160]),
-            },
-        )
-        .unwrap();
-        assert!(
-            (inside - 0.9).abs() < 1e-6,
-            "the interior read must be the picture density, got {inside}"
-        );
-    }
-
-    #[test]
-    fn a_none_region_is_bit_identical_to_the_unrestricted_walk() {
-        // The `None` arm is deliberately its own path rather than a full-frame
-        // rectangle, so that adding the region parameter moved no existing result.
-        //
-        // Pinned against a **literal** captured from the pre-region code (`2.4`, the
-        // holder density this fixture's border carries), not against
-        // `auto_dmax_strided`: the `None` arm *is* a call to that function, so
-        // comparing the two asserts nothing and would stay green if a refactor
-        // re-expressed `None` as a full-frame rectangle. The frame's densities are
-        // exact f32 literals and the percentile is an order statistic, so there is
-        // no transcendental in the chain and the bits are the same on every target.
-        let dimg = frame_with_opaque_border(64, 48, 5);
-        assert_eq!(
-            resolve_dmax(&dimg, DmaxInput::new(DmaxSource::Auto))
-                .unwrap()
-                .to_bits(),
-            2.4f32.to_bits(),
-            "the unrestricted result must still be the pre-region walk's value"
-        );
-
-        // And the full-frame *rectangle* agrees, which is the invariant that makes
-        // the separate arm an optimization rather than a second behaviour.
-        assert_eq!(
-            resolve_dmax(
-                &dimg,
-                DmaxInput {
-                    source: DmaxSource::Auto,
-                    region: Some([0, 0, 64, 48])
-                }
-            )
-            .unwrap()
-            .to_bits(),
-            2.4f32.to_bits()
-        );
-    }
-
-    #[test]
-    fn a_region_is_clamped_to_the_frame_rather_than_trusted() {
-        // A region resolved for different dimensions must not index out of bounds.
-        let dimg = frame_with_opaque_border(40, 30, 3);
-        for rect in [
-            [0, 0, 10_000, 10_000],
-            [39, 29, 100, 100],
-            [10_000, 10_000, 5, 5],
-            [0, 0, 0, 0],
-        ] {
-            let got = resolve_dmax(
-                &dimg,
-                DmaxInput {
-                    source: DmaxSource::Auto,
-                    region: Some(rect),
-                },
-            );
-            assert!(got.is_some(), "no panic and an anchor for {rect:?}");
-        }
-    }
-
-    #[test]
-    fn a_region_does_not_enlarge_the_sample_budget() {
-        // The region restricts the walk rather than adding one, which is why
-        // `pipeline::memory` owes this no term. A region can never visit more
-        // samples than the frame does.
-        let dimg = frame_with_opaque_border(300, 200, 10);
-        let full = collect_region_samples(&dimg, [0, 0, 300, 200]).len();
-        let part = collect_region_samples(&dimg, [10, 10, 280, 180]).len();
-        assert!(part <= full, "region {part} must not exceed frame {full}");
-        assert!(full <= AUTO_DMAX_MAX_SAMPLES, "the cap still holds: {full}");
-    }
-
-    #[test]
-    fn fixed_anchor_resolves_to_the_nominal_constant() {
-        // The default `Fixed` anchor is scene-independent: it ignores the buffer
-        // and always resolves to NOMINAL_DMAX, so it is roll-fixed (every frame
-        // gets the same anchor), unlike `Auto`.
-        assert_eq!(
-            resolve_dmax(&one_row(&[]), DmaxInput::new(DmaxSource::Fixed)),
-            Some(NOMINAL_DMAX)
-        );
-        // A wildly different density distribution resolves to the same value.
-        assert_eq!(
-            resolve_dmax(
-                &one_row(&[0.1, 0.2, 0.3]),
-                DmaxInput::new(DmaxSource::Fixed)
-            ),
-            resolve_dmax(
-                &one_row(&[5.0, 6.0, 7.0]),
-                DmaxInput::new(DmaxSource::Fixed)
-            )
-        );
-    }
-
-    #[test]
-    fn reference_dmax_is_the_gray_mean_of_base_relative_density() {
-        // A near-opaque reference at transmission t against base b gives per
-        // channel D = -log10(t/b); the scalar Dmax is their mean. Base = 1 so
-        // D = -log10(t): t = [0.01, 0.001, 0.1] → D = [2, 3, 1] → mean 2.0.
-        let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let d = reference_dmax([0.01, 0.001, 0.1], &base).unwrap().scalar;
-        assert!(approx(d, 2.0, 1e-5), "got {d}");
-        // Orange base: a neutral (per-channel-equal fraction of base) reference
-        // yields equal per-channel densities, so the mean equals that density —
-        // the scalar carries no per-channel (white-balance) term.
-        let base = FilmBase::from([0.5, 0.25, 0.15]);
-        let frac = 0.05f32; // reference transmits 5% of each channel's base
-        let d = reference_dmax([0.5 * frac, 0.25 * frac, 0.15 * frac], &base)
-            .unwrap()
-            .scalar;
-        assert!(approx(d, -(frac.log10()), 1e-5), "got {d}");
-    }
-
-    #[test]
-    fn reference_dmax_rejects_a_non_opaque_region() {
-        // A region that is *brighter* than the base on every channel (transmission
-        // above base) yields a non-positive density on every channel — not a
-        // fully-exposed reference. Fail loudly (exit 1), never a silently-wrong anchor.
-        let base = FilmBase::from([0.3, 0.3, 0.3]);
-        let err = reference_dmax([0.6, 0.6, 0.6], &base).unwrap_err();
-        assert_eq!(err.exit_code(), 1);
-        // A non-finite reference sample also fails loudly rather than laundering.
-        assert!(reference_dmax([f32::NAN, 0.01, 0.01], &base).is_err());
-    }
-
-    #[test]
-    fn reference_dmax_rejects_a_floored_or_zero_channel() {
-        // A channel at/below the SCAN_EPSILON floor (dead sensor, clipped black, or
-        // the dark holder beside the leader) must NOT be laundered by the floor into
-        // a huge density (≈ 6) that passes the positivity check and freezes a
-        // black-rendering anchor — the Dmin "dark holder → zero channel" gotcha.
-        let base = FilmBase::from([0.9, 0.55, 0.42]);
-        // Exactly zero, and a subnormal below the floor: both hard-error.
-        assert_eq!(
-            reference_dmax([0.0, 0.02, 0.02], &base)
-                .unwrap_err()
-                .exit_code(),
-            1
-        );
-        assert!(reference_dmax([0.02, SCAN_EPSILON, 0.02], &base).is_err());
-        assert!(reference_dmax([0.02, 0.02, SCAN_EPSILON / 2.0], &base).is_err());
-        // A negative transmission (noise) is degenerate too.
-        assert!(reference_dmax([0.02, 0.02, -0.01], &base).is_err());
-    }
-
-    #[test]
-    fn reference_dmax_rejects_a_per_channel_out_transmitting_region() {
-        // A colored/wrong region can average to a *positive* gray density while one
-        // channel out-transmits the base — the per-channel guard (before the gray
-        // reduction) must still reject it. base = 1 so D = -log10(t):
-        // t = [2, 0.1, 0.1] → D ≈ [-0.30, 1, 1], mean ≈ 0.57 > 0, but the red
-        // channel out-transmits the base, so this is not a leader.
-        let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let mean = ((-2.0f32.log10()) + 1.0 + 1.0) / 3.0;
-        assert!(mean > 0.0, "the gray average alone would pass ({mean})");
-        let err = reference_dmax([2.0, 0.1, 0.1], &base).unwrap_err();
-        assert_eq!(err.exit_code(), 1, "per-channel guard must reject it");
-    }
-
-    #[test]
-    fn reference_dmax_below_plausible_threshold_still_returns_for_the_caller_to_warn() {
-        // A mid-tone region only somewhat denser than base (e.g. transmission ≈ 30%
-        // of base → D ≈ 0.5) is a *valid* positive scalar but implausibly low for a
-        // fully-exposed leader. `reference_dmax` returns it (thin stock varies); the
-        // value sits below MIN_PLAUSIBLE_REFERENCE_DMAX so the CLI warns.
-        let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let d = reference_dmax([0.3, 0.3, 0.3], &base).unwrap().scalar;
-        assert!(d > 0.0 && d < MIN_PLAUSIBLE_REFERENCE_DMAX, "got {d}");
-        // A genuine near-opaque leader clears the threshold.
-        let d = reference_dmax([0.01, 0.01, 0.01], &base).unwrap().scalar;
-        assert!(
-            d >= MIN_PLAUSIBLE_REFERENCE_DMAX,
-            "leader should clear: {d}"
-        );
-    }
-
-    #[test]
-    fn reference_dmax_exposes_a_weak_channel_a_plausible_scalar_hides() {
-        // Codex's colored-region example: base [1,1,1], transmissions
-        // ≈ [0.001, 0.99, 0.99] → per-channel densities ≈ [3.0, 0.004, 0.004].
-        // The gray mean ≈ 1.0 clears MIN_PLAUSIBLE_REFERENCE_DMAX, yet green and
-        // blue are essentially unexposed base — not a leader. The per-channel
-        // densities expose the weak channels so the caller can warn on the minimum.
-        let base = FilmBase::from([1.0, 1.0, 1.0]);
-        let measured = reference_dmax([0.001, 0.99, 0.99], &base).unwrap();
-        assert!(
-            measured.scalar >= MIN_PLAUSIBLE_REFERENCE_DMAX,
-            "the gray average alone would pass the plausibility check ({})",
-            measured.scalar
-        );
-        let min_channel = measured
-            .per_channel
-            .iter()
-            .copied()
-            .fold(f32::INFINITY, f32::min);
-        assert!(
-            min_channel < MIN_PLAUSIBLE_REFERENCE_DMAX,
-            "the weakest channel must be implausibly low ({min_channel})"
-        );
-        // The scalar is still the mean of the per-channel densities.
-        let mean = measured.per_channel.iter().sum::<f32>() / 3.0;
-        assert!(
-            approx(measured.scalar, mean, 1e-6),
-            "got {}",
-            measured.scalar
-        );
-    }
-
-    #[test]
-    fn reference_derived_dmax_introduces_no_per_channel_correction() {
-        // The dmax-reference core guarantee: a reference-derived `Dmax` is a plain
-        // scalar, so it applies the *same* gain on every channel — a
-        // reference-derived anchor and an equal explicit `--d-max` scalar render
-        // identical color. Prove it directly: with the reference-derived anchor the
-        // per-channel ratio `out_c / 10^(γ·D'_c)` is identical across channels
-        // (== the anchor gain `10^(−γ·Dmax)`), so no channel is scaled differently.
-        let base = FilmBase::from([0.6, 0.35, 0.2]);
-        // A near-opaque reference: a few % of each channel's base (dense/neutral).
-        let refl = [0.6 * 0.03, 0.35 * 0.03, 0.2 * 0.03];
-        let d = reference_dmax(refl, &base).unwrap().scalar;
-        assert!(
-            d > 0.0,
-            "reference Dmax should be a positive scalar, got {d}"
-        );
-
-        // Channel-asymmetric corrected densities so a hidden per-channel term
-        // would show up as unequal ratios.
-        let dimg = DensityImage {
-            width: 2,
-            height: 1,
-            density: vec![2.0, 1.0, 0.1, 2.0, 1.0, 0.1],
-            ir: None,
-        };
-        let gamma = 1.3f32;
-        let out = render(dimg.clone(), gamma, Some(d));
-        let gain = 10f32.powf(-gamma * d); // the single scalar anchor gain
-        for c in 0..3 {
-            let expected = 10f32.powf(gamma * dimg.density[c]) * gain;
-            assert!(
-                approx(out.rgb[c], expected, 1e-4),
-                "chan {c}: {}",
-                out.rgb[c]
-            );
-        }
+        // …and the characteristic curve, which places none, reports none.
+        let characteristic =
+            DensityCurve::Characteristic(crate::types::CharacteristicParams::default());
+        let rep = run(&img, &base, DensityParams::default(), characteristic).unwrap();
+        assert_eq!(rep.curve_anchor, None);
     }
 }

@@ -18,6 +18,10 @@ cargo build --release
 python3 scripts/render-defaults-v2/measure.py
 ```
 
+**It needs the reference build, not today's binary** (`scripts/reference-snapshot/`,
+passed by editing `NC`): v2 is the retired sigmoid default, and v1 states `--d-max`,
+which retired with the roll reference density (`nf-retire/dmax-machinery`).
+
 The frame list and film-base values are intentionally frozen in the script. This
 is a historical report reproducer, not the general configuration-comparison
 interface; use `nctool roll convert|analyze` for new studies.

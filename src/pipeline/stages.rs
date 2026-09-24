@@ -35,14 +35,14 @@ use crate::algo;
 use crate::pipeline::color::{self, OutputSpace};
 use crate::pipeline::display_tone::Headroom;
 use crate::pipeline::{render_split, sdr, working_space};
-use crate::types::{DmaxInput, FilmBase, LinearImage, PrintParams, Reconstruction, Result};
+use crate::types::{FilmBase, LinearImage, PrintParams, Reconstruction, Result};
 
 /// The in-memory pipeline result the orchestrator hands to the encoder: the
 /// output image and the ICC blob to embed alongside it.
 pub struct Rendered {
     pub image: LinearImage,
     pub icc: Vec<u8>,
-    /// Resolved-value diagnostics (e.g. the `Dmax` anchor the curve used) for
+    /// Resolved-value diagnostics (e.g. the anchor the curve used) for
     /// the JSON report.
     pub convert: ConvertReport,
     /// Wall-clock per-stage timings measured around the render's stages, for
@@ -66,18 +66,9 @@ pub struct DisplaySource {
 /// the recipe structs).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ConvertReport {
-    /// The resolved **reference** density (`calibration.dmax`) — the roll calibration, and the
-    /// value to freeze back into a recipe. `None` for the characteristic curve and for
-    /// `dmax = none`.
-    ///
-    /// Not necessarily the density that rendered to `1.0`: the anchor comes from
-    /// `AnchorPlacement`, and the default base-derived rule does not read this reference
-    /// at all. See [`Self::curve_anchor`].
-    pub dmax: Option<f32>,
     /// The **derived** anchor the curve used — the corrected density that rendered to
-    /// `1.0`, hence the black floor at `10^(−contrast·curve_anchor)`. Equal to
-    /// [`Self::dmax`] under `white-at-dmax`; independent of it under the default
-    /// base-derived placement (≈0.99 against a reported 1.3).
+    /// `1.0`, hence the black floor at `10^(−contrast·curve_anchor)`. `None` for the
+    /// characteristic curve.
     pub curve_anchor: Option<f32>,
     /// The resolved white-balance gains `[r, g, b]` the shared print controls
     /// applied — the explicit gains, or the auto-estimated ones
@@ -92,7 +83,7 @@ pub struct ConvertReport {
     pub out_of_table: Option<crate::algo::film_stock::OutOfTable>,
     /// The resolved regional-balance tone-ramp range `[lo, hi]` (corrected
     /// density), when the density reconstruction applied a shadow/highlight
-    /// balance. `None` for `simple` or when both balances are the neutral
+    /// balance. `None` when both balances are the neutral
     /// `[0, 0, 0]`. Reported so a roll can reuse one frame's measured range via
     /// `--balance-range` (design-spec §9).
     pub balance_range: Option<[f32; 2]>,
@@ -111,9 +102,8 @@ pub fn render_sdr_preset(
     print: &PrintParams,
     tone: Headroom,
     gamut: sdr::SdrGamut,
-    dmax: DmaxInput,
 ) -> Result<Rendered> {
-    let source = render_display_source(image, film_base, reconstruction, print, dmax)?;
+    let source = render_display_source(image, film_base, reconstruction, print)?;
     let mut timings = source.timings;
     let started = Instant::now();
     let rendered = sdr::render(&source.shared, gamut, tone)?;
@@ -136,16 +126,14 @@ pub fn render_display_source(
     film_base: &FilmBase,
     reconstruction: &Reconstruction,
     print: &PrintParams,
-    dmax: DmaxInput,
 ) -> Result<DisplaySource> {
     let started = Instant::now();
-    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, dmax)?;
+    let (film, recon) = algo::reconstruct(image, film_base, reconstruction)?;
     let shared = render_split::display_source(working_space::map_nc_film_rgb_v1(film), print)?;
     let algorithm_ms = ms_since(started);
 
     Ok(DisplaySource {
         convert: ConvertReport {
-            dmax: recon.dmax,
             curve_anchor: recon.curve_anchor,
             white_balance: Some(shared.controls.white_balance()),
             balance_range: recon.balance_range,
@@ -178,16 +166,15 @@ pub fn render_display_source(
 /// [`ConvertReport::white_balance`] stays `None` here by construction: no
 /// white-balance stage ran, and reporting resolved gains for a master that
 /// applied none would be a false provenance claim. The reconstruction's own
-/// resolved diagnostics (`dmax`, `balance_range`) *are* reported — they are part
+/// resolved diagnostics (`curve_anchor`, `balance_range`) *are* reported — they are part
 /// of what the master contains.
 pub fn render_film_master(
     image: &LinearImage,
     film_base: &FilmBase,
     reconstruction: &Reconstruction,
-    dmax: DmaxInput,
 ) -> Result<Rendered> {
     let started = Instant::now();
-    let (film, recon) = algo::reconstruct(image, film_base, reconstruction, dmax)?;
+    let (film, recon) = algo::reconstruct(image, film_base, reconstruction)?;
     let master = render_split::film_master(working_space::map_nc_film_rgb_v1(film));
     let algorithm_ms = ms_since(started);
 
@@ -200,7 +187,6 @@ pub fn render_film_master(
         image: master,
         icc,
         convert: ConvertReport {
-            dmax: recon.dmax,
             curve_anchor: recon.curve_anchor,
             white_balance: None,
             balance_range: recon.balance_range,
@@ -279,11 +265,9 @@ mod tests {
         // the mapper directly.
         let img = synthetic_negative(8, 8);
         let base = FilmBase::from([0.9, 0.55, 0.42]);
-        let out =
-            render_film_master(&img, &base, &density_default(), DmaxInput::default()).unwrap();
+        let out = render_film_master(&img, &base, &density_default()).unwrap();
 
-        let (film, _) =
-            algo::reconstruct(&img, &base, &density_default(), DmaxInput::default()).unwrap();
+        let (film, _) = algo::reconstruct(&img, &base, &density_default()).unwrap();
         let want = working_space::map_nc_film_rgb_v1(film).into_linear();
         let bits = |v: &[f32]| -> Vec<u32> { v.iter().map(|x| x.to_bits()).collect() };
         assert_eq!(bits(&out.image.rgb), bits(&want.rgb));
@@ -296,7 +280,7 @@ mod tests {
         // The master applied no white balance, so it claims none…
         assert_eq!(out.convert.white_balance, None);
         // …but the reconstruction's own resolved anchor IS part of the master.
-        assert_eq!(out.convert.dmax, Some(crate::algo::density::NOMINAL_DMAX));
+        assert!(out.convert.curve_anchor.is_some());
     }
 
     #[test]
@@ -306,8 +290,7 @@ mod tests {
         let img = synthetic_negative(8, 8);
         let base = FilmBase::from([0.9, 0.55, 0.42]);
         for reconstruction in [density_default(), characteristic_default()] {
-            let out =
-                render_film_master(&img, &base, &reconstruction, DmaxInput::default()).unwrap();
+            let out = render_film_master(&img, &base, &reconstruction).unwrap();
             assert_eq!(out.image.rgb.len(), 8 * 8 * 3, "{reconstruction:?}");
             assert_eq!(out.convert.white_balance, None, "{reconstruction:?}");
         }
@@ -320,7 +303,7 @@ mod tests {
         // divide by zero — exit 1, never a silently-wrong image.
         let img = synthetic_negative(20, 20);
         let base = FilmBase::from([0.0, 0.55, 0.42]);
-        match render_film_master(&img, &base, &density_default(), DmaxInput::default()) {
+        match render_film_master(&img, &base, &density_default()) {
             Err(e) => assert_eq!(e.exit_code(), 1),
             Ok(_) => panic!("expected a degenerate-base error"),
         }
@@ -394,9 +377,7 @@ mod midtone_placement {
         print: &PrintParams,
     ) -> Option<[f32; 3]> {
         let (image, base) = mid_grey_patch(stock);
-        let shared =
-            render_display_source(&image, &base, reconstruction, print, DmaxInput::default())
-                .ok()?;
+        let shared = render_display_source(&image, &base, reconstruction, print).ok()?;
         let out = sdr::render(&shared.shared, SdrGamut::DisplayP3, tone).ok()?;
         let rgb = &out.image().rgb;
         Some([rgb[0], rgb[1], rgb[2]])
@@ -528,9 +509,7 @@ mod midtone_placement {
             },
             curve: crate::types::DensityCurve::Characteristic(CharacteristicParams { stock }),
         };
-        let shared =
-            render_display_source(&image, &base, &reconstruction, print, DmaxInput::default())
-                .unwrap();
+        let shared = render_display_source(&image, &base, &reconstruction, print).unwrap();
         let out = sdr::render(&shared.shared, SdrGamut::DisplayP3, tone).unwrap();
         // **Red, not green.** The patch is uniform, so any channel reads the same *tone* —
         // but only red's `density.scale` gain is 1, so only red measures the tone question
@@ -836,7 +815,7 @@ pub(crate) mod golden {
     use crate::algo::film_stock::{OutOfTable, curves_for, invert};
     use crate::types::{
         AnchorPlacement, BalanceRange, CharacteristicParams, DensityCurve, DensityCurveType,
-        DensityParams, DmaxSource, ExponentialParams,
+        DensityParams, ExponentialParams,
     };
 
     /// Five pixels spanning the tonal range plus out-of-range finite values,
@@ -897,9 +876,8 @@ pub(crate) mod golden {
     /// report. Shared with the drift gate, so both measure the same call.
     pub(crate) fn reconstructed(
         reconstruction: &Reconstruction,
-        dmax: DmaxInput,
     ) -> (LinearImage, algo::ReconstructionReport) {
-        let (film, report) = algo::reconstruct(&pixels(), &base(), reconstruction, dmax)
+        let (film, report) = algo::reconstruct(&pixels(), &base(), reconstruction)
             .expect("the reconstruction must succeed on the curated vectors");
         (film.into_linear(), report)
     }
@@ -908,15 +886,18 @@ pub(crate) mod golden {
     /// captured bits exactly.
     fn assert_golden(
         reconstruction: Reconstruction,
-        dmax: DmaxInput,
         expected_rgb_bits: &[u32],
-        expected_dmax_bits: Option<u32>,
+        expected_anchor_bits: Option<u32>,
         expected_range_bits: Option<[u32; 2]>,
     ) {
-        let (out, report) = reconstructed(&reconstruction, dmax);
+        let (out, report) = reconstructed(&reconstruction);
         let got: Vec<u32> = out.rgb.iter().map(|v| v.to_bits()).collect();
         assert_eq!(got, expected_rgb_bits, "pixel bits drifted");
-        assert_eq!(report.dmax.map(f32::to_bits), expected_dmax_bits, "dmax");
+        assert_eq!(
+            report.curve_anchor.map(f32::to_bits),
+            expected_anchor_bits,
+            "anchor"
+        );
         assert_eq!(
             report.balance_range.map(|r| r.map(f32::to_bits)),
             expected_range_bits,
@@ -944,37 +925,46 @@ pub(crate) mod golden {
         }
     }
 
+    /// The mid-above-base offset whose anchor at `gamma` is **exactly** `anchor`.
+    ///
+    /// The reference captures below were taken with the anchor stated directly, under a
+    /// placement that pinned white at a reference density (retired with it,
+    /// `nf-retire/dmax-machinery`). The curve reads only the anchor, so reaching the same
+    /// `f32` anchor through the one placement left renders the same bits — which is what
+    /// keeps them captures of the reference arithmetic rather than re-descriptions of
+    /// this build. Searched rather than solved, because `offset + 0.745/gamma` rounds; the
+    /// assertion is what makes "exactly" a checked claim.
+    fn offset_reaching(anchor: f32, gamma: f32) -> f32 {
+        let mut offset = anchor - crate::types::MID_GREY_OUTPUT_DECADES / gamma;
+        for _ in 0..8 {
+            let got = AnchorPlacement::MidAtBaseOffset(offset).anchor(gamma);
+            if got.to_bits() == anchor.to_bits() {
+                return offset;
+            }
+            offset = if got < anchor {
+                offset.next_up()
+            } else {
+                offset.next_down()
+            };
+        }
+        panic!("no offset reaches anchor {anchor} at gamma {gamma} exactly")
+    }
+
     /// The configuration the vectors below were captured under: the exponential
-    /// straight line at gamma **1.0** with the anchor pinned at the old
-    /// `NOMINAL_DMAX` of **2.0**.
+    /// straight line at gamma **1.0** with the anchor at **2.0** (the nominal
+    /// reference density of the day, pinned at white).
     ///
     /// Pinned **explicitly** rather than through `DensityCurve::default()`, because
-    /// the default has moved twice since (`pipeline_version` 2 and 6), and so have
-    /// `NOMINAL_DMAX` and this curve's own gamma and anchor. A golden vector that silently follows the
-    /// default stops pinning anything the moment the default moves — it just
-    /// re-describes whatever the build now does. Naming the configuration keeps
-    /// every bit below exactly as captured from the reference code, and the *new*
-    /// default gets its own golden (`golden_new_default_...`).
-    ///
-    /// `Explicit(2.0)` is arithmetically identical to the old `Fixed`: both resolve
-    /// to the same anchor value, so these are the original captures, not a rebase.
+    /// the default has moved twice since (`pipeline_version` 2 and 6). A golden vector
+    /// that silently follows the default stops pinning anything the moment the default
+    /// moves — it just re-describes whatever the build now does. Naming the
+    /// configuration keeps every bit below exactly as captured from the reference
+    /// code, and the *new* default gets its own golden (`golden_new_default_...`).
     fn frozen_reference_curve() -> DensityCurve {
         DensityCurve::Exponential(ExponentialParams {
             gamma: 1.0,
-            anchor: AnchorPlacement::WhiteAtDmax,
+            anchor: AnchorPlacement::MidAtBaseOffset(offset_reaching(2.0, 1.0)),
         })
-    }
-
-    /// The reference [`frozen_reference_curve`] is rendered against, which left the
-    /// curve for `calibration.dmax` in `core/calibration-recipe-section`.
-    ///
-    /// **Stated as a literal, never inherited from a default.** These vectors pin bit
-    /// patterns; taking the value from `DmaxSource::default()` would silently rebase
-    /// them the next time that default moves, which is exactly how a probe stops
-    /// measuring what it claims to (`shadow_metrics`' module docs). `Explicit(2.0)` is arithmetically
-    /// identical to the `Fixed` these captures were taken under.
-    pub(crate) fn frozen_reference_dmax() -> DmaxInput {
-        DmaxInput::new(DmaxSource::Explicit(2.0))
     }
 
     /// `Reconstruction::default()`'s density knobs with [`frozen_reference_curve`].
@@ -985,81 +975,11 @@ pub(crate) mod golden {
         }
     }
 
-    /// The defining property of `BlackAtBase`: the film base renders to exactly the
-    /// stated floor, whatever the slope.
-    ///
-    /// Asserted as a property rather than as captured bits, because captured bits for a
-    /// rule introduced in the same commit only re-describe the build. Pixel 5 of
-    /// [`pixels`] *is* the base, so its corrected density is exactly 0 and its rendered
-    /// value is the floor by construction — which is what makes this falsifiable: a sign
-    /// error in `−log10(floor)/contrast` moves it immediately.
-    #[test]
-    fn black_at_base_renders_the_film_base_to_the_stated_floor() {
-        for floor in [0.002f32, 0.005, 0.05] {
-            for gamma in [1.0f32, 2.0, 2.5] {
-                let reconstruction = Reconstruction {
-                    density: DensityParams::default(),
-                    curve: DensityCurve::Exponential(ExponentialParams {
-                        gamma,
-                        anchor: AnchorPlacement::BlackAtBase(floor),
-                    }),
-                };
-                let (out, _) = reconstructed(&reconstruction, crate::types::DmaxInput::default());
-                // Pixel 5 (rgb offsets 12..15) is exactly the base.
-                for c in 0..3 {
-                    let got = out.rgb[12 + c];
-                    assert!(
-                        (got - floor).abs() <= floor * 1e-5,
-                        "floor {floor} gamma {gamma} channel {c}: rendered {got}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// `BlackAtBase` is not a new curve — it is the same straight line at a derived
-    /// anchor, so it must be **bit-identical** to `WhiteAtDmax` at that anchor.
-    ///
-    /// This is what keeps the exponential usable as the debuggable reference: the two
-    /// spellings cannot diverge. It also pins the anchors the 2026-08-03 candidate retest
-    /// recorded (floor 0.002 → 1.349, 0.005 → 1.151 at contrast 2.0).
-    #[test]
-    fn black_at_base_equals_white_at_dmax_at_the_derived_anchor() {
-        let gamma = 2.0f32;
-        for floor in [0.002f32, 0.005] {
-            let derived = -floor.log10() / gamma;
-            let render = |anchor| {
-                let reconstruction = Reconstruction {
-                    density: DensityParams::default(),
-                    curve: DensityCurve::Exponential(ExponentialParams { gamma, anchor }),
-                };
-                // The reference is only read under `WhiteAtDmax`; `BlackAtBase` derives
-                // its anchor from the floor and ignores it. Stating the derived value
-                // here is what makes the two sides comparable.
-                let dmax = crate::types::DmaxInput::new(
-                    if matches!(anchor, AnchorPlacement::WhiteAtDmax) {
-                        DmaxSource::Explicit(derived)
-                    } else {
-                        DmaxSource::Fixed
-                    },
-                );
-                let (out, _) = reconstructed(&reconstruction, dmax);
-                out.rgb.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
-            };
-            assert_eq!(
-                render(AnchorPlacement::BlackAtBase(floor)),
-                render(AnchorPlacement::WhiteAtDmax),
-                "floor {floor} (derived anchor {derived})"
-            );
-        }
-    }
-
     #[test]
     fn golden_new_default_is_bit_identical() {
         // THE default path as of `pipeline_version` 6 (2026-09-23): the exponential at the
         // fixed decode's configuration — contrast 2.0, mid-grey pinned 0.62 above the film
-        // base, gain `[1, 0.84, 0.73]`. The resolved reference is still reported (the
-        // fixed nominal 1.3) although the base-derived placement never reads it.
+        // base, gain `[1, 0.84, 0.73]`.
         //
         // Captured from THIS build, not from the reference implementation — so it pins
         // "the default has not drifted since it was set", which is what a default golden
@@ -1069,13 +989,12 @@ pub(crate) mod golden {
         // verify. The v2–v5 captures were the sigmoid's and left with it.
         assert_golden(
             Reconstruction::default(),
-            DmaxInput::default(),
             &[
                 0x3c3e41ab, 0x3c472c7f, 0x3c4467a7, 0x3dbeeaca, 0x3d8a8882, 0x3d841ca2, 0x41a7cc5e,
                 0x40ccbdff, 0x403537ec, 0x3b745fb9, 0x4c2dff42, 0x49cd08c6, 0x3c29b443, 0x3c29b443,
                 0x3c29b443,
             ],
-            Some(0x3fa66666), // NOMINAL_DMAX = 1.3
+            Some(0x3f7e0b8d), // 0.62 + 0.745/2
             None,
         );
     }
@@ -1088,7 +1007,6 @@ pub(crate) mod golden {
         // `frozen_reference_curve`), so it is named here instead.
         assert_golden(
             frozen_reference_config(),
-            frozen_reference_dmax(),
             &[
                 0x3c2d7a46, 0x3c343958, 0x3c35161a, 0x3cf5c28f, 0x3cfa4fa3, 0x3d0f5c2a, 0x3ee66668,
                 0x3eeaaaab, 0x3eeeeef1, 0x3bc49ba7, 0x45abdfff, 0x45833ffb, 0x3c23d70a, 0x3c23d70a,
@@ -1113,10 +1031,9 @@ pub(crate) mod golden {
                 density: custom_density(),
                 curve: DensityCurve::Exponential(ExponentialParams {
                     gamma: 1.4,
-                    anchor: AnchorPlacement::WhiteAtDmax,
+                    anchor: AnchorPlacement::MidAtBaseOffset(offset_reaching(1.8, 1.4)),
                 }),
             },
-            DmaxInput::new(DmaxSource::Explicit(1.8)),
             &[
                 0x3b952b3e, 0x3b622ad1, 0x3b332991, 0x3cb28033, 0x3c6d3ed9, 0x3c40dcef, 0x3f87e170,
                 0x3f2900bc, 0x3ea6cf04, 0x3ab43eb3, 0x48a5a519, 0x46f463df, 0x3b88998c, 0x3b45ea62,
@@ -1124,50 +1041,6 @@ pub(crate) mod golden {
             ],
             Some(0x3fe66666),               // 1.8
             Some([0x3e4ccccd, 0x3fcccccd]), // [0.2, 1.6]
-        );
-    }
-
-    #[test]
-    fn golden_density_exponential_no_anchor_is_bit_identical() {
-        // `dmax = none` — the scene-referred unity placement (base → 1.0).
-        assert_golden(
-            Reconstruction {
-                density: frozen_density(),
-                curve: DensityCurve::Exponential(ExponentialParams {
-                    gamma: 1.0,
-                    anchor: AnchorPlacement::WhiteAtDmax,
-                }),
-            },
-            DmaxInput::new(DmaxSource::None),
-            &[
-                0x3f878787, 0x3f8ccccd, 0x3f8d7943, 0x403fffff, 0x40438e38, 0x40600000, 0x42340001,
-                0x42375556, 0x423aaaac, 0x3f199999, 0x490646ff, 0x48cd13f9, 0x3f800000, 0x3f800000,
-                0x3f800000,
-            ],
-            None,
-            None,
-        );
-    }
-
-    #[test]
-    fn golden_density_exponential_auto_anchor_is_bit_identical() {
-        // `dmax = auto` — the demoted per-frame percentile measurement.
-        assert_golden(
-            Reconstruction {
-                density: frozen_density(),
-                curve: DensityCurve::Exponential(ExponentialParams {
-                    gamma: 1.0,
-                    anchor: AnchorPlacement::WhiteAtDmax,
-                }),
-            },
-            DmaxInput::new(DmaxSource::Auto),
-            &[
-                0x3601318e, 0x360637c0, 0x3606dc23, 0x36b70634, 0x36ba69df, 0x36d58734, 0x38ab95cf,
-                0x38aec33f, 0x38b1f0b1, 0x35926b56, 0x3f800000, 0x3f437da7, 0x35f40842, 0x35f40842,
-                0x35f40842,
-            ],
-            Some(1085780237), // the measured per-frame anchor, captured verbatim
-            None,
         );
     }
 
@@ -1338,8 +1211,7 @@ pub(crate) mod golden {
         let stock = curves_for(params.stock);
         let rounded = correctly_rounded_densities(&density);
 
-        let (out, report) =
-            reconstructed(&characteristic_config(), crate::types::DmaxInput::default());
+        let (out, report) = reconstructed(&characteristic_config());
         // `zip` below truncates, so the length is asserted rather than assumed.
         assert_eq!(out.rgb.len(), CHARACTERISTIC_EXPECTED.len());
 
@@ -1359,10 +1231,9 @@ pub(crate) mod golden {
             );
         }
 
-        // This curve reads its reference and its placement off the film, so both are
-        // absent — the property that makes it self-anchoring, asserted where a curve that
-        // quietly acquired one would be caught.
-        assert_eq!(report.dmax, None);
+        // This curve reads its placement off the film, so no anchor is reported — the
+        // property that makes it self-anchoring, asserted where a curve that quietly
+        // acquired one would be caught.
         assert_eq!(report.curve_anchor, None);
         assert_eq!(report.balance_range, None);
         // The extrapolation statistic is part of this render's output, and no other
@@ -1453,7 +1324,6 @@ pub(crate) mod golden {
                 },
                 curve: frozen_reference_curve(),
             },
-            frozen_reference_dmax(),
             &[
                 0x3c42a1d5, 0x3c3439a6, 0x3c2cf03a, 0x3d084c85, 0x3cfa994a, 0x3d093901, 0x3eea9e5a,
                 0x3eecf423, 0x3ee8a619, 0x3baf3a23, 0x45afe0e9, 0x45833ffb, 0x3c37d4dc, 0x3c23d70a,
@@ -1475,7 +1345,7 @@ pub(crate) mod golden {
     // byte-identity per build/architecture (design-spec §8), not across hosts.
     //
     // The per-pixel goldens above (a curated tonal-range + out-of-range vector with
-    // dmax/balance-range/IR all pinned, captured from the pre-split code) are the
+    // anchor/balance-range/IR all pinned, captured from the pre-split code) are the
     // portable bit-identity / no-`pipeline_version`-bump gate. They stop at
     // `algo::reconstruct`: nothing committed guards display stages or post-lcms2
     // output across targets, so a change there is verified by same-machine

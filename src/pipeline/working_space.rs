@@ -373,8 +373,7 @@ mod tests {
         let base = FilmBase::from([0.9, 0.55, 0.42]);
         for config in all_configs() {
             let img = LinearImage::new(2, 1, scan.clone(), ir.clone()).unwrap();
-            let (film, _) =
-                reconstruct(&img, &base, &config, crate::types::DmaxInput::default()).unwrap();
+            let (film, _) = reconstruct(&img, &base, &config).unwrap();
             let aces = map_nc_film_rgb_v1(film);
             assert_eq!((aces.width(), aces.height()), (2, 1), "{config:?}");
             assert_eq!(aces.rgb().len(), 6, "{config:?}");
@@ -397,8 +396,7 @@ mod tests {
         for config in all_configs() {
             let run = || {
                 let img = LinearImage::new(3, 1, scan.clone(), None).unwrap();
-                let (film, _) =
-                    reconstruct(&img, &base, &config, crate::types::DmaxInput::default()).unwrap();
+                let (film, _) = reconstruct(&img, &base, &config).unwrap();
                 map_nc_film_rgb_v1(film)
                     .rgb()
                     .iter()
