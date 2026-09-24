@@ -1048,4 +1048,18 @@ What other epics need to know about `analysis`:
   described as ~32 frames a roll; the pruned rolls hold 12 and 11.
   Not done: `nctool/manifest.py`'s `SEED_ROLES` has no seeds under the dated roll names,
   so a from-scratch manifest generation would lose those rolls' roles.
+- 2026-09-24: review follow-up. A skipped roll now prints `SKIP roll …` on **stdout**,
+  before any header, and `sigmoid_scale` counts only rolls that contributed frames. A
+  roll present but malformed still panics. Rows labelled "shipped" now read
+  `algo::fixed::DENSITY_SCALE`, and `[1, 1, 1]` is labelled "identity". Figures quoted
+  from the six-roll corpus carry a note. The `SEED_ROLES` gap is filed as
+  `analysis/manifest-seed-roles`.
+
+## manifest-seed-roles
+
+**Status:** not started
+**Updated:** 2026-09-24
+
+- 2026-09-24: filed from `probe-fixture-roll-names`. No `SEED_ROLES` entry matches a
+  date-named roll, so a from-scratch generation would mark reference frames `real`.
 

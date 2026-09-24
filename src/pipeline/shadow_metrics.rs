@@ -160,11 +160,18 @@ fn roles(assets: &Path, roll: &str) -> Roles {
         leader: vec![],
         unexposed: vec![],
     };
-    // No such roll: none of each, with a `SKIP` line saying which roll a figure excludes.
-    let Some(frames) = m["rolls"][roll]["frames"].as_array() else {
-        eprintln!("SKIP roll {roll}: not in {}", path.display());
+    // No such roll: none of each, announced on stdout — where the figures go — so a record
+    // says which roll a figure excludes. A present but malformed roll still panics.
+    let Some(entry) = m["rolls"].get(roll) else {
+        println!(
+            "SKIP roll {roll}: not in {}; figures below exclude it",
+            path.display()
+        );
         return out;
     };
+    let frames = entry["frames"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{}: rolls.{roll}.frames is not a list", path.display()));
     for f in frames {
         let rel = f["file"].as_str().unwrap();
         let p = assets.join(rel);
@@ -331,13 +338,16 @@ fn propose_patches() {
 
     for (roll, stem) in FIXTURES {
         let base = frozen_reference(&recipes.join(format!("{stem}.json")));
+        // `real` frames only — see `Roles`. Looked up before the header, so a skipped roll
+        // prints its `SKIP` line and no header.
+        let frames = roles(&assets, roll).real;
+        if frames.is_empty() {
+            continue;
+        }
         println!(
             "\n=== {roll}  Dmin=({:.6}, {:.6}, {:.6})",
             base.r, base.g, base.b
         );
-
-        // `real` frames only — see `Roles`.
-        let frames = roles(&assets, roll).real;
 
         for frame in &frames {
             let name = frame.file_name().unwrap().to_string_lossy().to_string();
@@ -431,6 +441,9 @@ fn characterise_reference_frames() {
     for (roll, stem) in FIXTURES {
         let base = frozen_reference(&recipes.join(format!("{stem}.json")));
         let r = roles(&assets, roll);
+        if r.real.is_empty() && r.leader.is_empty() && r.unexposed.is_empty() {
+            continue;
+        }
         println!("\n=== {roll}");
 
         for (kind, list) in [("leader", &r.leader), ("unexposed", &r.unexposed)] {
