@@ -19,10 +19,11 @@ const NC: &str = env!("CARGO_BIN_EXE_hanten");
 
 /// A committed fixture by file name.
 ///
-/// `hdri-64bit.tif` carries an IR plane, so every conversion of it warns that the plane
-/// is "preserved but not used", and any `--strict` run on it fails whatever else it
-/// tests. To prove a *specific* warning is strict-promotable, use the IR-free `hdr-48bit.tif` and add a
-/// no-override control run so the assertion is falsifiable.
+/// `hdri-64bit.tif` carries an IR plane, so every conversion of it without
+/// `--export-ir` warns that the plane is "preserved but not used", and a `--strict` run
+/// then fails whatever else it tests. To prove a *specific* warning is strict-promotable,
+/// use the IR-free `hdr-48bit.tif` (or pass `--export-ir` when the test needs the plane)
+/// and add a no-override control run so the assertion is falsifiable.
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
