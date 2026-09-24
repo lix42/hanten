@@ -544,6 +544,15 @@ const KEPT_FLAGS: &[KeptEntry] = &[
               stated gains, which `hanten measure-roll` measures once per roll",
     },
     KeptEntry {
+        covers: &[
+            "--highlight-desaturation",
+            "--highlight-desaturation-start",
+            "--highlight-desaturation-band",
+        ],
+        why: "the look's highlight desaturation (recipe `look.highlight_desaturation`), \
+              new-flow only",
+    },
+    KeptEntry {
         covers: &["--exposure"],
         why: "scene correction's exposure (recipe `scene_correction.exposure`) — the new \
               chain's spelling of `--print-exposure`",
@@ -590,6 +599,14 @@ fn reject_new_flow_only_flags(args: &ConvertArgs) -> Result<()> {
             "--exposure sets the new chain's scene-correction exposure (recipe \
              `scene_correction.exposure`) and has no meaning without `--new-flow`; the \
              current chain's exposure is `--print-exposure`"
+                .into(),
+        ));
+    }
+    if args.look.any() {
+        return Err(NcError::Usage(
+            "--highlight-desaturation and its -start / -band flags set the new chain's \
+             look (recipe `look.highlight_desaturation`) and have no meaning without \
+             `--new-flow`: the current chain has no look stage"
                 .into(),
         ));
     }
@@ -906,6 +923,21 @@ mod tests {
             ("--exposure", &["--exposure", "-0.5"], |r| {
                 r.scene_correction.exposure == -0.5
             }),
+            (
+                "--highlight-desaturation",
+                &["--highlight-desaturation", "0.5"],
+                |r| r.look.highlight_desaturation.strength == 0.5,
+            ),
+            (
+                "--highlight-desaturation-start",
+                &["--highlight-desaturation-start", "-2"],
+                |r| r.look.highlight_desaturation.start_stops == -2.0,
+            ),
+            (
+                "--highlight-desaturation-band",
+                &["--highlight-desaturation-band", "0.01,0.03"],
+                |r| r.look.highlight_desaturation.band == [0.01, 0.03],
+            ),
             (
                 "--display-tone-headroom",
                 &["--display-tone-headroom", "4"],

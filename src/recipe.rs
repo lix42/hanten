@@ -14,8 +14,8 @@
 //! input · calibration · measure      shared with the current chain (decode, film base)
 //! reconstruction                     the fixed decode — algo::fixed::DecodeParams
 //! scene_correction · look ·          one per rendering stage, each empty until its
-//! fit_range · fit_gamut                epic gives it a knob (scene correction and fit
-//!                                      range have)
+//! fit_range · fit_gamut                epic gives it a knob (scene correction, the look
+//!                                      and fit range have)
 //! ```
 //!
 //! **No per-section `schema_version`.** The current chain's tagged `reconstruction`
@@ -38,7 +38,7 @@ use crate::cli::ResolvedConfig;
 use crate::pipeline::chain::ChainParams;
 use crate::pipeline::fit_gamut::{DestinationGamut, FitGamutParams};
 use crate::pipeline::fit_range::{DisplayPeak, FitRangeParams};
-use crate::pipeline::look::LookParams;
+use crate::pipeline::look::{DesaturationFault, LookParams, LookSection, MAX_START_STOPS};
 use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
 use crate::types::{
     CalibrationParams, FilmBaseSource, InputParams, MeasureParams, NcError, Result,
@@ -73,7 +73,7 @@ pub struct Recipe {
     #[serde(default)]
     pub scene_correction: SceneCorrectionParams,
     #[serde(default)]
-    pub look: LookParams,
+    pub look: LookSection,
     #[serde(default)]
     pub fit_range: FitRange,
     #[serde(default)]
@@ -387,6 +387,16 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     if let Some(stops) = args.scene.exposure {
         r.scene_correction.exposure = stops;
     }
+    let desat = &mut r.look.highlight_desaturation;
+    if let Some(v) = args.look.highlight_desaturation {
+        desat.strength = v;
+    }
+    if let Some(v) = args.look.highlight_desaturation_start {
+        desat.start_stops = v;
+    }
+    if let Some(v) = args.look.highlight_desaturation_band {
+        desat.band = v;
+    }
     if let Some(stops) = args.print.display_tone_headroom {
         r.fit_range.headroom_stops = stops;
     }
@@ -420,6 +430,7 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
     let message = match d.check() {
         Ok(_) => {
             validate_scene_correction(&r.scene_correction, names)?;
+            validate_look(&r.look, names)?;
             return validate_fit_range(&r.fit_range, names);
         }
         Err(DecodeFault::Offset { channel, value }) => format!(
@@ -456,6 +467,38 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
                 name("--anchor-mid-offset", "anchor"),
             )
         }
+    };
+    Err(NcError::Usage(message))
+}
+
+/// The look's value rules ([`HighlightDesaturation::check`]), rendered as a usage
+/// error naming the knob the way `names` says the command spells it.
+///
+/// [`HighlightDesaturation::check`]: crate::pipeline::look::HighlightDesaturation::check
+fn validate_look(p: &LookSection, names: KnobNames) -> Result<()> {
+    let name = |flag: &str, key: &str| {
+        knob_name(
+            names,
+            "look",
+            flag,
+            &format!("highlight_desaturation.{key}"),
+        )
+    };
+    let message = match p.highlight_desaturation.check() {
+        Ok(()) => return Ok(()),
+        Err(DesaturationFault::Strength(v)) => format!(
+            "{} must be within [0, 1] (0 is off), got {v}",
+            name("--highlight-desaturation", "strength")
+        ),
+        Err(DesaturationFault::Start(v)) => format!(
+            "{} must be negative and at most {MAX_START_STOPS} stops below diffuse white — \
+             it is a highlight operator, and midtone cast is the grade's — got {v}",
+            name("--highlight-desaturation-start", "start_stops")
+        ),
+        Err(DesaturationFault::Band([s0, s1])) => format!(
+            "{} must be finite with 0 <= s0 < s1, got [{s0}, {s1}]",
+            name("--highlight-desaturation-band", "band")
+        ),
     };
     Err(NcError::Usage(message))
 }
@@ -519,7 +562,10 @@ impl Recipe {
     pub fn chain_params(&self, peak: DisplayPeak, target: DestinationGamut) -> ChainParams {
         ChainParams {
             scene_correction: self.scene_correction.clone(),
-            look: self.look.clone(),
+            look: LookParams {
+                section: self.look,
+                decode_contrast: self.reconstruction.contrast,
+            },
             fit_range: FitRangeParams {
                 headroom_stops: self.fit_range.headroom_stops,
                 peak,
@@ -607,11 +653,13 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         // A stage with no knob yet is present as an empty object, not absent or
         // `null`; one with knobs writes each of them at its default — the identity for
-        // scene correction, and reinhard at six stops for fit range, which is the one
-        // stage whose default does something.
-        for stage in ["look", "fit_gamut"] {
-            assert_eq!(json[stage], serde_json::json!({}), "{stage}");
-        }
+        // scene correction, highlight desaturation at 0.8 for the look, and reinhard at
+        // six stops for fit range.
+        assert_eq!(json["fit_gamut"], serde_json::json!({}));
+        assert_eq!(
+            serde_json::to_string(&Recipe::default().look).unwrap(),
+            r#"{"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}}"#
+        );
         assert_eq!(
             json["scene_correction"],
             serde_json::json!({"white_balance": {"explicit": [1.0, 1.0, 1.0]}, "exposure": 0.0})
@@ -639,11 +687,32 @@ mod tests {
     }
 
     #[test]
+    fn the_look_is_handed_the_decodes_contrast() {
+        // Highlight desaturation's measure is normalised by the contrast that shaped
+        // its input; the look section cannot state it, so `chain_params` must.
+        let r = parse(
+            r#"{"recipe_version": 2, "reconstruction": {"contrast": 3.1},
+                "look": {"highlight_desaturation": {"strength": 0.5}}}"#,
+        )
+        .unwrap();
+        let look = r
+            .chain_params(DisplayPeak::SDR, DestinationGamut::DisplayP3)
+            .look;
+        assert_eq!(look.decode_contrast, 3.1);
+        assert_eq!(look.section.highlight_desaturation.strength, 0.5);
+        assert_eq!(
+            look.section.highlight_desaturation.band,
+            LookSection::default().highlight_desaturation.band,
+            "an omitted key takes its default"
+        );
+    }
+
+    #[test]
     fn a_partial_recipe_takes_the_defaults_it_omits() {
         let r = parse(r#"{"recipe_version": 2, "reconstruction": {"contrast": 1.8}}"#).unwrap();
         assert_eq!(r.reconstruction.contrast, 1.8);
         assert_eq!(r.reconstruction.scale, DecodeParams::default().scale);
-        assert_eq!(r.look, LookParams::default());
+        assert_eq!(r.look, LookSection::default());
     }
 
     #[test]

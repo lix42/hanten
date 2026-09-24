@@ -169,6 +169,7 @@ graph TD
   nf-display-stages --> nf-retire
   nf-reconstruction --> nf-retire
   nf-look --> nf-retire
+  nf-look --> nf-core
   nf-scene-correction --> nf-retire
   nf-core --> nf-docs
   nf-core --> analysis
@@ -308,6 +309,7 @@ graph TD
     nf-core/minimal-end-to-end
     nf-core/knob-availability-audit
     nf-core/default-flip
+    nf-core/one-luma-dot
   end
   subgraph nf-reconstruction
     nf-reconstruction/anchor-spike
@@ -629,6 +631,7 @@ graph TD
   nf-core/stage-skeleton --> nf-core/recipe-schema
   nf-core/minimal-end-to-end --> nf-core/subcommands
   nf-core/stage-skeleton --> nf-core/buffer-strategy
+  nf-look/path-to-white --> nf-core/one-luma-dot
   nf-calibration/scale-ladder --> nf-look/path-to-white
   nf-calibration/scale-ladder --> nf-calibration/scale-gamma-loop
 ```
@@ -1081,6 +1084,8 @@ the design in `docs/design-update.md`:
 - `nf-core/buffer-strategy` (new flow): `nf-core/stage-skeleton`
   — the GPU spike decided the seams are the existing typed boundaries, not one
   per stage; a buffer per stage is ≈0.9 GB each at 74.6 MP
+- `nf-core/one-luma-dot` (new flow): `nf-look/path-to-white`
+  — `dot` is copied in four stages, and the look imports fit range's
 - `nf-docs/reference-sweep` (new flow): none
   — about a dozen `src/` and doc pointers still assert an inactive task is
   live or owns a decision
@@ -1566,6 +1571,9 @@ the design in `docs/design-update.md`:
   plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams
   are the existing typed boundaries, not one per stage; a buffer per stage is
   ≈0.9 GB each at 74.6 MP
+- [ ] [One luminance dot product](tasks/nf-core/one-luma-dot.md) — `dot` is
+  copied privately in four stages and the look imports fit range's; share one copy
+  with no pixel change
 
 ### nf-reconstruction — [progress](progress/nf-reconstruction.md)
 > The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`,
@@ -1634,12 +1642,12 @@ the design in `docs/design-update.md`:
   single saturated patch on a single roll; runs against today's binary. **Done
   2026-09-23**: `s0`/`s1` = 0.025/0.055 on `log10(max/min)/gamma`, and only behind a
   roll-level white balance ([`desaturation-band.md`](spike/desaturation-band.md))
-- [ ] [Highlight desaturation](tasks/nf-look/path-to-white.md) — what makes
+- [x] [Highlight desaturation](tasks/nf-look/path-to-white.md) — what makes
   whites read clean, made a deliberate control instead of a side effect of the
-  sigmoid's shoulder; built against a hand-set per-roll contrast, because under the
-  base-referenced anchor the operator is inert, and only behind a roll-level
-  white balance, without which its saturation band cannot tell a cast white from
-  skin
+  sigmoid's shoulder; placed under a hand-set per-roll contrast (the base-referenced
+  anchor then left the operator inert) and behind a roll-level white balance,
+  without which its saturation band cannot tell a cast white from skin. **Done
+  2026-09-24**: on by default at 0.8, band `0.015 → 0.025` on ACEScg
 - [ ] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
   `gamma`; supersedes `algo/contrast-latitude-spike`
 - [ ] [Re-express the `--preset` bundles](tasks/nf-look/look-presets.md) —

@@ -9,9 +9,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 6`, built at commit
-> `df05b3e9a900` (`hanten measure-roll` and the new chain's retired per-frame white balance,
-> `nf-scene-correction/roll-white-balance`) plus fit range's operator under `--new-flow`
-> (`nf-display-stages/fit-range`, §11). The staleness signal is `pipeline_version`: if
+> `95ee921eb0c0` (through fit range's operator under `--new-flow`,
+> `nf-display-stages/fit-range`) plus the look's highlight desaturation
+> (`nf-look/path-to-white`, §11). The staleness signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
 >
@@ -1545,9 +1545,9 @@ choosing a chain is a choice of pixels. That is precisely why it must stay out o
 the recipe rather than merely out of the image.
 
 **It renders a minimal picture, not a finished one.** The fixed decode feeds the new
-chain. Scene correction applies white balance and exposure, fit range compresses the
-scene's range into the display's (both below); the look is still an identity pass,
-and fit gamut only converts into Display P3 primaries. The result goes
+chain. Scene correction applies white balance and exposure, the look desaturates
+near-white highlights, fit range compresses the scene's range into the display's (all
+below), and fit gamut only converts into Display P3 primaries. The result goes
 to **one destination, a Display P3 16-bit TIFF** — there is no other, and no way to
 choose one:
 
@@ -1585,7 +1585,7 @@ than fit range's headroom (counted, and failed by `--strict`). Whether the pictu
   what ran instead — the decode's resolved `anchor`, `contrast`, `scale` and `offset`,
   each stage with what it `applied` (scene correction's from what it resolved —
   `"identity"`, `"white-balance"`, `"exposure"` or `"white-balance+exposure"`;
-  `"identity"` for the look; fit range's operator; `"acescg-to-display-p3-matrix"` for
+  `"highlight-desaturation"` for the look, or `"identity"` at strength 0; fit range's operator; `"acescg-to-display-p3-matrix"` for
   fit gamut), scene correction's resolved values in `scene_correction`, fit range's in
   `fit_range` (below), the `destination`
   (`display-p3-u16-tiff`) and `"sidecar_written": false`. Its final shape is
@@ -1653,7 +1653,9 @@ $ hanten params --new-flow
     "white_balance": { "explicit": [1.0, 1.0, 1.0] },
     "exposure": 0.0
   },
-  "look": {},
+  "look": {
+    "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] }
+  },
   "fit_range": { "headroom_stops": 6.0 },
   "fit_gamut": {}
 }
@@ -1663,8 +1665,8 @@ $ hanten params --new-flow
 current chain's sections unchanged. `calibration` holds the film base only — the
 fixed decode reads no reference density. `reconstruction` spells the four decode
 knobs above (`--density-gamma` is `contrast` here). `scene_correction` holds white
-balance and exposure, `fit_range` its headroom (both below); the other two rendering
-stages are empty and refuse any key until their stage gains one. There is no `output` section:
+balance and exposure, `look` highlight desaturation, `fit_range` its headroom (all
+below); `fit_gamut` is empty and refuses any key until its stage gains one. There is no `output` section:
 the new chain writes one fixed destination. `--dump-params` under `--new-flow` writes this
 document with your values resolved, and it reloads under the flag unchanged.
 
@@ -1770,6 +1772,42 @@ Drop it, then state the gains `hanten measure-roll` reports for the roll, as
 `{"explicit": [r, g, b]}`
 ```
 
+**The look** is the stage between scene correction and fit range. Its one control so
+far is **highlight desaturation**: bright surfaces that are nearly neutral are pulled
+the rest of the way to neutral, so a white that still carries a trace of cast after the
+roll's white balance reads clean. It is **on by default** at strength 0.8.
+
+| Flag | Recipe key | |
+|---|---|---|
+| `--highlight-desaturation STRENGTH` | `look.highlight_desaturation.strength` | `0`–`1`; default `0.8`, `0` is off |
+| `--highlight-desaturation-start STOPS` | `look.highlight_desaturation.start_stops` | where the pull begins, in stops below diffuse white (default `-1`) |
+| `--highlight-desaturation-band S0,S1` | `look.highlight_desaturation.band` | the saturation band (default `0.015,0.025`) |
+
+- **It only touches near-neutral highlights.** Its strength rises from `start_stops`
+  up to diffuse white, and falls to nothing across the band: a pixel whose channels
+  differ by more than `S1` (measured as `log10(max/min)` over the decode's contrast)
+  is left alone. So a sunset, sand or skin keeps its colour; a cast white does not.
+- **It assumes the roll's white balance.** "Near-neutral" means near R = G = B, which
+  is near white only after `measure-roll`'s gains have removed the roll's cast.
+- **Luminance is kept**; only chroma moves. `--highlight-desaturation 0` is the exact
+  identity, the way to see the roll's raw cast.
+- The report says what ran:
+
+  ```console
+  $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
+      | jq -c '{look: .new_flow.look, stage: .new_flow.stages[1]}'
+  {"look":{"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"highlight-desaturation"}}
+  ```
+
+- The flags are new-flow only — the current chain has no look stage — and an
+  out-of-range value is refused naming the flag and the key:
+
+  ```console
+  $ hanten convert … --new-flow --highlight-desaturation 1.5
+  usage: --highlight-desaturation (recipe `look.highlight_desaturation.strength`) must be
+  within [0, 1] (0 is off), got 1.5
+  ```
+
 **Fit range** fits the scene's range into the display's. It has one operator,
 reinhard, applied to luminance so all three channels scale together and hue is kept;
 mid-grey stays where the decode put it. Its one knob is how much range above diffuse
@@ -1795,8 +1833,8 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
 }
 ```
 
-At `0` the operator reads `"identity"` and the frame is written as before fit range
-existed, clipping everything above display white. A pixel with a non-finite channel
+At `0` the operator reads `"identity"`: fit range passes the scene through unchanged,
+and everything above display white is clipped at the encode. A pixel with a non-finite channel
 is refused (exit 1, naming the pixel) rather than passed to the encoder.
 
 #### `measure-roll` — a roll's white balance, measured once
@@ -1841,8 +1879,9 @@ on `convert --new-flow`, or by merging `reuse.recipe` into the roll's recipe for
   by name, so `--strict` catches both.
 - **The base must be explicit** — `--film-base`, or `calibration.film_base` in a
   `--params` recipe (the new chain's, `"recipe_version": 2`, whose `reconstruction`
-  it decodes under). A base estimated per frame would decode every frame differently,
-  so anything else is refused (exit 2) pointing at `estimate --grid`.
+  it decodes under; its `scene_correction`, which this measures, and its `look` are
+  not read). A base estimated per frame would decode every frame differently, so
+  anything else is refused (exit 2) pointing at `estimate --grid`.
 
 What survives untouched is everything before the seam: `--film-base`,
 `--base-region`, `--auto-base`, `--measure-inset`, `--input-transfer`,

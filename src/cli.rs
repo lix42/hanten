@@ -35,7 +35,7 @@ use crate::pipeline::input_semantics::{
 use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
 use crate::pipeline::working_space::AcesCgImage;
 use crate::pipeline::{
-    color, film_base, gain_map, hdr, roll_white, scene_correction, sdr, stages, working_space,
+    color, film_base, gain_map, hdr, look, roll_white, scene_correction, sdr, stages, working_space,
 };
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::telemetry;
@@ -341,6 +341,8 @@ pub struct ConvertArgs {
     pub print: PrintOverrides,
     #[command(flatten)]
     pub scene: SceneCorrectionOverrides,
+    #[command(flatten)]
+    pub look: LookOverrides,
     #[command(flatten)]
     pub simple: SimpleOverrides,
     #[command(flatten)]
@@ -713,6 +715,53 @@ pub struct SceneCorrectionOverrides {
     /// `--new-flow` only; the current chain's exposure is `--print-exposure`.
     #[arg(long, allow_hyphen_values = true, conflicts_with = "print_exposure")]
     pub exposure: Option<f32>,
+}
+
+/// The new chain's look overrides (recipe section `look`, `nf-look`). `--new-flow`
+/// only; refused without it (`flow::reject_unavailable_flags`).
+#[derive(Args, Debug, Default)]
+pub struct LookOverrides {
+    /// Highlight desaturation's strength, in [0, 1]: how far a bright, near-neutral
+    /// pixel is pulled toward neutral (recipe key
+    /// `look.highlight_desaturation.strength`, default 0.8; 0 is off). It keys on
+    /// brightness and on distance from the neutral axis, so coloured highlights keep
+    /// their colour; it assumes the roll's white balance (`hanten measure-roll`).
+    /// `--new-flow` only.
+    #[arg(
+        long = "highlight-desaturation",
+        value_name = "STRENGTH",
+        allow_hyphen_values = true
+    )]
+    pub highlight_desaturation: Option<f32>,
+    /// Where highlight desaturation starts, in stops relative to diffuse white
+    /// (negative; recipe key `look.highlight_desaturation.start_stops`, default -1).
+    /// `--new-flow` only.
+    #[arg(
+        long = "highlight-desaturation-start",
+        value_name = "STOPS",
+        allow_hyphen_values = true
+    )]
+    pub highlight_desaturation_start: Option<f32>,
+    /// Highlight desaturation's saturation band `S0,S1`: full pull at or below `S0`,
+    /// none at or above `S1`, on `log10(max/min)` of the pixel's ACEScg channels over
+    /// the decode's contrast (recipe key `look.highlight_desaturation.band`, default
+    /// `0.015,0.025`). `--new-flow` only.
+    #[arg(
+        long = "highlight-desaturation-band",
+        value_name = "S0,S1",
+        value_parser = parse_lo_hi,
+        allow_hyphen_values = true
+    )]
+    pub highlight_desaturation_band: Option<[f32; 2]>,
+}
+
+impl LookOverrides {
+    /// Whether any look flag was typed.
+    pub(crate) fn any(&self) -> bool {
+        self.highlight_desaturation.is_some()
+            || self.highlight_desaturation_start.is_some()
+            || self.highlight_desaturation_band.is_some()
+    }
 }
 
 /// Print / tone-render overrides (design-spec §9).
@@ -1968,10 +2017,11 @@ pub struct NewFlowResult {
     pub decode: fixed::DecodeReport,
     /// Each stage of the new chain in order, with what it applied.
     pub stages: [NewFlowStageResult; 4],
-    /// Scene correction's resolved values: the white-balance gains applied and
-    /// whether they were stated or estimated (and over which region), and the
-    /// exposure. An estimated frame is reproduced exactly by stating these gains.
+    /// Scene correction's values: the white-balance gains and the exposure applied.
     pub scene_correction: scene_correction::SceneCorrection,
+    /// The look's controls as applied — highlight desaturation's strength, start and
+    /// band.
+    pub look: look::LookSection,
     /// Fit range's operator by name, with the headroom, white point and display peak
     /// it ran at — what a non-default `fit_range.headroom_stops` changes.
     pub fit_range: fit_range::FitRange,
@@ -6853,6 +6903,7 @@ fn render_new_flow_frame(
             .applied
             .map(|(stage, applied)| NewFlowStageResult { stage, applied }),
         scene_correction: rendered.scene_correction,
+        look: rendered.look,
         fit_range: rendered.fit_range,
         destination: NEW_FLOW_DESTINATION,
         gamut: gamut.name(),
@@ -9448,9 +9499,11 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     // Before any decode: a bad inset would otherwise surface from the first frame's
     // effective area, blamed on that file.
     check_measure_inset(recipe.measure.inset)?;
-    // What this command measures, so the recipe's value is not read — and must not
-    // refuse the run. Keys only: this command takes none of the conversion flags.
+    // What this command measures, and the look it never applies, so neither is read —
+    // and neither may refuse the run. Keys only: this command takes none of the
+    // conversion flags.
     recipe.scene_correction = scene_correction::SceneCorrectionParams::default();
+    recipe.look = look::LookSection::default();
     recipe::validate(&recipe, KnobNames::KeyOnly)?;
     if args.strict && args.leader.is_none() {
         return Err(NcError::Usage(

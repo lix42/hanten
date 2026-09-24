@@ -273,7 +273,9 @@ decode → film-base → tagged reconstruction + density curve → FilmRgbImage
   reached by `--new-flow` since `nf-core/minimal-end-to-end`: `algo::fixed` feeds it,
   `scene_correction` applies stated white balance and exposure (a roll's gains are
   measured once by `hanten measure-roll`, `pipeline/roll_white.rs`; the new chain has
-  no per-frame estimate), the look is an identity pass, `fit_range` compresses the
+  no per-frame estimate), the look applies highlight desaturation (on by default at
+  0.8; keyed on brightness and on a saturation band normalised by the decode's contrast,
+  which `Recipe::chain_params` hands it), `fit_range` compresses the
   scene's range with one reinhard whose argument is the destination's display peak
   (exact agreement between peaks below diffuse white, `algo::fixed::DIFFUSE_WHITE`; it
   refuses a non-finite sample), `fit_gamut` applies only the change of primaries into its

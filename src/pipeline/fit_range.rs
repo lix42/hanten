@@ -304,7 +304,7 @@ fn mid_grey_preserving_gain(white_point: f32) -> f64 {
     2.0 / (k + (k * k + 4.0 * MID_GREY * inv_w2).sqrt())
 }
 
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+pub(in crate::pipeline) fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 

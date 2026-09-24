@@ -83,9 +83,9 @@ white.
   band is fitted on a render with **no per-channel shoulder** — which is what makes the
   knee'd render's whites clean (design-update Appendix F; the gamut map was ruled out by
   `nf-display-stages/gamut-map-share`).
-  Check the fitted band under a knee'd render before shipping it, or record why not.
-  (The sigmoid carries the same `AnchorPlacement`, and `--sigmoid-contrast` is the
-  `--density-gamma` analogue, so the equivalent line exists.) The **shape** of the
+  Check the fitted band under a knee'd render before shipping it, or record why not —
+  **closed 2026-09-24:** the sigmoid retired (`nf-retire/sigmoid-and-simple`), so no
+  knee'd render is left to check against. The **shape** of the
   operator is what this task ships; its parameters are re-fitted once the anchor rule is
   chosen. Do not bank the band values against the spike's per-frame p97 white, which is
   a *level* move: a contrast move steepens everything below white too, so a different
@@ -119,23 +119,17 @@ white.
 
 ## Open questions
 
-- **The functional form.** A linear band, full pull below `s0` and off above `s1`.
-  [Its fit](desaturation-band-fit.md) (report:
-  [`docs/spike/desaturation-band.md`](../../spike/desaturation-band.md)) placed it at
-  **`s0 = 0.025`, `s1 = 0.055` of `log10(max/min) / gamma` on film RGB** — the negative's
-  density spread, not linear RGB, which the per-roll contrast rescales. Provisional until
-  the anchor rule is chosen.
-- **Whether the operator earns a default-on place.** Under a roll-level white balance its
-  extra cleaning was **not visible** (whites C\* 7.2 → 4.4); the white balance does the
-  cleaning and the band keeps the pull off colour. Strength and start were held at 0.8
-  and one stop below white, so a stronger setting is still open.
-- **Where the band's edges sit against pixel scatter.** The fit placed `s0`/`s1` from
-  patch *medians*, but the band acts per pixel, and a patch's pixels scatter across both
-  edges: whites just below `s0` kept 0.7–1.6 C\* more with the band than without it, and
-  colours just above `s1` kept 96–99% rather than all of their chroma. Invisible in the
-  pair check, but it is the pair check failing on both halves. The remedy is a margin
-  sized from the scatter, a softer ramp, or placing the edges on a per-pixel distribution
-  rather than on medians — `desaturation-band.md` has the numbers.
+- ~~**The functional form.**~~ **Settled 2026-09-24:** a linear band over
+  `log10(max/min) / contrast` measured on **ACEScg** (user decision — no inverse matrix,
+  and it separates the band fit's patches as well as film RGB did, at ~0.72x the scale),
+  placed at **`0.015 → 0.025`** from the per-pixel study. Provisional until the anchor
+  rule is chosen.
+- ~~**Whether the operator earns a default-on place.**~~ **Settled 2026-09-24: on, at
+  strength 0.8** (user decision, after judging off / 0.5 / 0.8 / 1.0 on 21 frames — no
+  visible difference on most, a wanted one on 1810 and 1735).
+- ~~**Where the band's edges sit against pixel scatter.**~~ **Settled 2026-09-24** by
+  placing the edges from every pixel of every in-range patch rather than from medians; a
+  smoothstep ramp differed from a linear one by 0.001, so it stays linear.
 - **Whether the pull should preserve hue exactly.** The spike's lerp toward `(Y, Y, Y)`
   holds luminance to 3e-3 but still rotates hue 4.3°, because a straight line to the
   achromatic point in linear ACEScg is not a constant-hue path in CIELAB. Nothing
@@ -148,6 +142,14 @@ white.
   it lived in fit range it would not have been one.
 
 ## How to Verify
+
+**Done 2026-09-24.** `look.highlight_desaturation` (`--highlight-desaturation{,-start,-band}`),
+on by default at 0.8, band `0.015 → 0.025`, start one stop below diffuse white. Off is a
+bit-exact identity (unit test and end to end); the effect is monotone in strength; the
+pair check through the binary on 21 frames of three rolls moved marked whites' mean C\*
+7.08 → 6.01 at 0.8 and colours' 17.31 → 17.11, luminance within 0.2 L\*; the golden pins
+one pixel per path, mutation-checked. Both renditions agree below diffuse white by
+construction: the operator is pre-branch, and fit range agrees exactly there.
 
 - Off is a bit-exact identity.
 - A saturated near-white patch desaturates monotonically as the parameter rises.
