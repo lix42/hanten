@@ -9,6 +9,7 @@
 use serde::Serialize;
 
 use crate::pipeline::colorimetry::definitions::transfer;
+use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::{ACESCG_TO_BT2020, BT2020_LUMA};
 use crate::pipeline::display_tone::Headroom;
 use crate::pipeline::fit_gamut::radial_to_boundary;
@@ -597,10 +598,6 @@ fn mul(matrix: [[f32; 3]; 3], value: [f32; 3]) -> [f32; 3] {
         dot(matrix[1], value),
         dot(matrix[2], value),
     ]
-}
-
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 // AP1/D60 → XYZ, Bradford D60→D65, then XYZ → BT.2020, plus the BT.2020 luma

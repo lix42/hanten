@@ -1094,7 +1094,8 @@ the design in `docs/design-update.md`:
   — the GPU spike decided the seams are the existing typed boundaries, not one
   per stage; a buffer per stage is ≈0.9 GB each at 74.6 MP
 - `nf-core/one-luma-dot` (new flow): `nf-look/path-to-white`
-  — `dot` is copied in four stages, and the look imports fit range's
+  — `dot` is copied in four stages, and the look imports fit range's. Done
+  2026-09-24: one copy in `pipeline::colorimetry`
 - `nf-docs/reference-sweep` (new flow): none
   — about a dozen `src/` and doc pointers still assert an inactive task is
   live or owns a decision
@@ -1582,9 +1583,9 @@ the design in `docs/design-update.md`:
   plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams
   are the existing typed boundaries, not one per stage; a buffer per stage is
   ≈0.9 GB each at 74.6 MP
-- [ ] [One luminance dot product](tasks/nf-core/one-luma-dot.md) — `dot` is
-  copied privately in four stages and the look imports fit range's; share one copy
-  with no pixel change
+- [x] [One luminance dot product](tasks/nf-core/one-luma-dot.md) — **done
+  2026-09-24.** `colorimetry::dot` is the one f32 copy; the four private ones are
+  gone and the look no longer imports fit range's. No pixel moved, no golden edited
 
 ### nf-reconstruction — [progress](progress/nf-reconstruction.md)
 > The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`,

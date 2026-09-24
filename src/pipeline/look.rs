@@ -18,8 +18,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::algo::fixed::DIFFUSE_WHITE;
+use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
-use crate::pipeline::fit_range::dot;
 use crate::pipeline::pixels;
 use crate::pipeline::scene_correction::SceneReferredImage;
 use crate::pipeline::working_image::WorkingBuffer;

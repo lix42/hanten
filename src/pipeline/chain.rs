@@ -118,6 +118,7 @@ pub fn render(image: AcesCgImage, params: &ChainParams) -> Result<Rendered> {
 mod tests {
     use super::*;
     use crate::algo::{FilmRgbImage, reconstruct};
+    use crate::pipeline::colorimetry::dot;
     use crate::pipeline::colorimetry::pinned::{ACESCG_TO_DISPLAY_P3, DISPLAY_P3_LUMA};
     use crate::pipeline::fit_gamut::DestinationGamut;
     use crate::pipeline::fit_range::{DisplayPeak, RangeFittedImage};
@@ -262,9 +263,7 @@ mod tests {
         assert_eq!(gamut, DestinationGamut::DisplayP3);
         let (mut kept, mut mapped) = (0, 0);
         for (px, want) in out.rgb.as_chunks::<3>().0.iter().zip(p3.as_chunks::<3>().0) {
-            let y = want[0] * DISPLAY_P3_LUMA[0]
-                + want[1] * DISPLAY_P3_LUMA[1]
-                + want[2] * DISPLAY_P3_LUMA[2];
+            let y = dot(*want, DISPLAY_P3_LUMA);
             let ceiling = y.max(1.0);
             if want.iter().all(|v| (0.0..=ceiling).contains(v)) {
                 assert_eq!(bits(px), bits(want));
@@ -351,9 +350,7 @@ mod tests {
         assert!(out.rgb[3..].contains(&0.0), "{:?}", &out.rgb[3..]);
         // Mapped, not discarded: the luminance survives, so this is not the black a
         // colour at `Y ≤ 0` gets.
-        let luminance = |px: &[f32]| {
-            px[0] * DISPLAY_P3_LUMA[0] + px[1] * DISPLAY_P3_LUMA[1] + px[2] * DISPLAY_P3_LUMA[2]
-        };
+        let luminance = |px: &[f32]| dot([px[0], px[1], px[2]], DISPLAY_P3_LUMA);
         let y = luminance(&p3[3..]);
         assert!(y > 0.05, "{y}");
         assert!(
