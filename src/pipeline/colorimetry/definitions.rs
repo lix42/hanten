@@ -329,11 +329,11 @@ pub const BT2020_LUMA_TABULATED: [f64; 3] = [0.2627, 0.6780, 0.0593];
 ///
 /// - The PQ constants and the HLG system gamma are ratios of small integers, so
 ///   they are exactly representable in both widths.
-/// - [`hlg::OETF_A`] is not, but `0.178_832_77` as `f32` and `0.178_832_77_f64 as
+/// - [`hlg::OETF_A`](transfer::hlg::OETF_A) is not, but `0.178_832_77` as `f32` and `0.178_832_77_f64 as
 ///   f32` have the same bit pattern (`3e371ff0`), so the single `f64` definition
 ///   narrows to the literal `pipeline::hdr` previously carried.
 ///
-/// The [`srgb`] parameters are consumed as `f64` and are written as the
+/// The [`srgb`](transfer::srgb) parameters are consumed as `f64` and are written as the
 /// standard's own quotients rather than pre-evaluated decimals, so the values
 /// handed to Little CMS are bit-for-bit what they were when the expressions sat
 /// inline.

@@ -32,7 +32,7 @@
 //! the sole producer, and that half is **compiler-enforced**. The named-output split
 //! (`pipeline::render_split`: the `film-master` branch and the shared display
 //! controls) accepts an `AcesCgImage` and nothing else, so a raw
-//! [`FilmRgbImage`](crate::algo::FilmRgbImage) cannot *enter* a named output branch
+//! [`FilmRgbImage`] cannot *enter* a named output branch
 //! without first crossing this mapper. This is the working-space analogue of
 //! `FilmRgbImage`'s own construction restriction.
 //!
@@ -82,7 +82,7 @@ pub const WORKING_MAPPING_ID: &str = "nc-film-rgb-v1";
 /// job).
 ///
 /// `Debug` prints only the dimensions (never the pixel buffers), matching
-/// [`FilmRgbImage`](crate::algo::FilmRgbImage).
+/// [`FilmRgbImage`].
 pub struct AcesCgImage {
     width: u32,
     height: u32,
