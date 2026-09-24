@@ -14,12 +14,12 @@ nc-adjacent scripts, not JavaScript.
 ```json
 {
   "schema_version": 1,
-  "title": "Display tone: shoulder vs none",
+  "title": "Display tone: 6 stops vs the identity",
   "description": "Same reconstruction on both; only the display stage differs.",
 
   "configs": [
-    { "id": "shoulder", "label": "shoulder", "note": "shipped Hermite shoulder" },
-    { "id": "none", "label": "none", "note": "--display-tone none" }
+    { "id": "w6", "label": "6 stops", "note": "the default headroom" },
+    { "id": "w0", "label": "identity", "note": "--display-tone-headroom 0" }
   ],
 
   "images": [
@@ -28,11 +28,11 @@ nc-adjacent scripts, not JavaScript.
       "label": "E1 — Ektar 100 · 20260713-nikon-971.tif",
       "note": "blown 6.86% → 5.65% · code sep 11.6 → 15.2",
       "renditions": {
-        "shoulder": "E1-shoulder.jpg",
-        "none": {
-          "src": "E1-none.jpg",
-          "preview": "E1-none-thumb.jpg",
-          "metrics": "E1-none.jpg.metrics.json"
+        "w6": "E1-w6.jpg",
+        "w0": {
+          "src": "E1-w0.jpg",
+          "preview": "E1-w0-thumb.jpg",
+          "metrics": "E1-w0.jpg.metrics.json"
         }
       }
     }

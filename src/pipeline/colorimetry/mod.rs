@@ -15,7 +15,7 @@
 //!    colour-space update starts.
 //! 2. **Derived artifacts** ([`pinned`]) — the reviewed, checked-in RGB↔RGB
 //!    matrices and luma weights the runtime actually uses.
-//! 3. **Product policy** — reference white, peak luminance, shoulder, gamut
+//! 3. **Product policy** — reference white, peak luminance, display tone, gamut
 //!    policy, gain-map limits. These deliberately **stay with the stage that owns
 //!    them** (`pipeline::hdr`, `pipeline::gain_map`); they merely refer to the
 //!    named colour space here instead of repeating its colorimetry.

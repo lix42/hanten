@@ -14,7 +14,7 @@ use serde::Serialize;
 pub(crate) mod iso;
 
 use crate::pipeline::colorimetry::pinned::{BT2020_TO_DISPLAY_P3, DISPLAY_P3_LUMA};
-use crate::pipeline::display_tone::DisplayTone;
+use crate::pipeline::display_tone::Headroom;
 use crate::pipeline::hdr::{LINEAR_HEADROOM, LinearBt2020Hdr, REFERENCE_WHITE_NITS, render_linear};
 use crate::pipeline::pixels;
 use crate::pipeline::render_split::SharedDisplaySource;
@@ -36,17 +36,17 @@ const ULTRA_HDR_V1_OFFSET: f32 = 1.0 / 64.0;
 /// user-facing conversion controls.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GainMapConfig {
-    pub tone: DisplayTone,
+    pub tone: Headroom,
     pub offset_sdr: [f32; 3],
     pub offset_hdr: [f32; 3],
     pub gain_gamma: [f32; 3],
 }
 
 impl GainMapConfig {
-    /// Fixed public Ultra HDR v1 construction policy. Only the display tone
-    /// remains a resolved print control; offsets and encoding gamma are format
+    /// Fixed public Ultra HDR v1 construction policy. Only the display tone's headroom
+    /// is a resolved conversion control; offsets and encoding gamma are format
     /// constants, not conversion knobs.
-    pub fn ultra_hdr_v1(tone: DisplayTone) -> Self {
+    pub fn ultra_hdr_v1(tone: Headroom) -> Self {
         Self {
             tone,
             offset_sdr: [ULTRA_HDR_V1_OFFSET; 3],
@@ -224,7 +224,11 @@ pub(crate) fn encode_legacy_gain_map(render: &GainMapRender) -> Result<EncodedGa
                 .par_iter(),
         )
         .map(|(sdr, hdr)| {
-            let sdr_luma = dot(*sdr, DISPLAY_P3_LUMA);
+            // The base as *stored* — clamped per channel, as `gain_pixel` ratios — since
+            // that is what a decoder multiplies. Against the rendered SDR, one sample far
+            // above white (the display tone overshoots it by design) drove the frame's
+            // minimum gain to 2^-42 and left the 8-bit map no precision anywhere else.
+            let sdr_luma = dot(sdr.map(|c| c.min(1.0)), DISPLAY_P3_LUMA);
             let hdr_luma = dot(*hdr, DISPLAY_P3_LUMA);
             (hdr_luma + policy.offset_hdr[0]) / (sdr_luma + policy.offset_sdr[0])
         })
@@ -332,8 +336,8 @@ fn validate_config(config: GainMapConfig) -> Result<()> {
     // `build` (`min(sdr, 1)`). A gate here would have made the tone permanently
     // inadmissible for a reason that no longer holds.
     //
-    // The tone's *knee width* needs no check either: `DisplayTone` validates it at
-    // construction and both renderers are handed the same resolved value.
+    // The headroom needs no check either: `Headroom` validates it at construction and
+    // both renderers are handed the same resolved value.
     for (name, values) in [("SDR", config.offset_sdr), ("HDR", config.offset_hdr)] {
         for (channel, value) in values.into_iter().enumerate() {
             if !value.is_finite() || value <= 0.0 {
@@ -590,83 +594,55 @@ mod tests {
 
     pub(super) fn config() -> GainMapConfig {
         GainMapConfig {
-            tone: DisplayTone::DEFAULT,
+            tone: Headroom::default(),
             offset_sdr: [1.0 / 64.0; 3],
             offset_hdr: [1.0 / 64.0; 3],
             gain_gamma: [1.0; 3],
         }
     }
 
-    /// What the unbounded tone actually buys the gain map — and it is **not** liveness.
+    /// What the tone buys the gain map is **separation**, not liveness.
     ///
-    /// `GainMapMax > 1.0` was reachable before this operator existed: turning the (since
-    /// retired) sigmoid's own shoulder off reached 4.866x, because that shoulder removed
-    /// above-white content during reconstruction. Measured on `tests/fixtures/hdr-48bit.tif`
-    /// at the time: the sigmoid default 1.000x, shoulder off **4.866x**, that plus
-    /// `--display-tone reinhard` **3.354x**.
+    /// The retired `shoulder` tone plateaued, so past its knee every input mapped to one
+    /// output: film RGB 8, 16 and 64 all rendered an HDR peak of exactly 4.92611 — the
+    /// speculars arrived as a single flat blob at 98.8% of the ceiling, with a gain map
+    /// that was live but carried no highlight detail. The lifted Reinhard keeps them apart.
     ///
-    /// The *lower* number is the better one, which is why the criterion is a conjunction and
-    /// not a threshold. The shipped shoulder plateaus, so past its knee every input maps to
-    /// one output: film RGB 8, 16 and 64 all render an HDR peak of exactly 4.92611 and a gain
-    /// of exactly 4.8657 — the speculars arrive as a single flat blob at 98.8% of the
-    /// ceiling. That is what "no usable headroom" means, and asserting **separation** rather
-    /// than peak magnitude is what distinguishes the two operators.
-    ///
-    /// Scope, established by mutation and worth knowing before trusting this: it fails when
-    /// the tone degenerates to a plateau or a hard clip, and it does **not** guard the
-    /// asymptotic-vs-hard-clamped *base* — clamping the base still separates below `W`, and
-    /// above `W` the asymptotic form's own separation is under 0.4%, itself below one 8-bit
-    /// code step. That choice is pinned by `display_tone`'s ceiling tests and by the
-    /// seven-frame `shadow_metrics` probe, not here.
+    /// Scope, established by mutation: it fails when the tone degenerates to a plateau or
+    /// a hard clip, and it does **not** guard the asymptotic-vs-hard-clamped *base* —
+    /// clamping the base still separates below `W`, and above `W` the asymptotic form's own
+    /// separation is under 0.4%, itself below one 8-bit code step. That choice is pinned by
+    /// `display_tone`'s ceiling tests and the seven-frame `shadow_metrics` probe, not here.
     #[test]
-    fn the_unbounded_tone_separates_highlights_where_the_shoulder_plateaus() {
-        let reinhard = DisplayTone::ExtendedReinhard(
-            crate::pipeline::display_tone::Headroom::new(6.0).unwrap(),
-        );
-        // Three stops of specular, all past the shipped shoulder's knee.
-        let peaks = |tone: DisplayTone| {
-            [8.0f32, 16.0, 64.0].map(|v| {
-                let src = shared_from_film_rgb(&[v, v, v, 0.18, 0.18, 0.18]);
-                crate::pipeline::hdr::render_linear(&src, tone)
-                    .unwrap()
-                    .image()
-                    .rgb
-                    .iter()
-                    .copied()
-                    .fold(0.0f32, f32::max)
-            })
-        };
+    fn the_tone_separates_highlights_instead_of_plateauing() {
+        // Three stops of specular, all above reference white.
+        let peaks = [8.0f32, 16.0, 64.0].map(|v| {
+            let src = shared_from_film_rgb(&[v, v, v, 0.18, 0.18, 0.18]);
+            crate::pipeline::hdr::render_linear(&src, Headroom::default())
+                .unwrap()
+                .image()
+                .rgb
+                .iter()
+                .copied()
+                .fold(0.0f32, f32::max)
+        });
         let ceiling = crate::pipeline::hdr::LINEAR_HEADROOM;
-        let shouldered = peaks(DisplayTone::DEFAULT);
-        let lifted = peaks(reinhard);
-
-        // The shoulder: every one of the three lands on the ceiling, indistinguishably.
-        for peak in shouldered {
-            assert!(
-                (peak - ceiling).abs() < 1e-4,
-                "expected the shoulder to plateau at {ceiling}, got {shouldered:?}"
-            );
-        }
-        // The lifted form: strictly increasing, and never arriving at the ceiling.
-        for pair in lifted.windows(2) {
+        // Strictly increasing, and never arriving at the ceiling.
+        for pair in peaks.windows(2) {
             assert!(
                 pair[1] > pair[0] * 1.05,
-                "the lifted tone must keep separating these stops, got {lifted:?}"
+                "the lifted tone must keep separating these stops, got {peaks:?}"
             );
         }
         assert!(
-            lifted.iter().all(|&p| p < ceiling),
-            "the lifted tone must stay under {ceiling}, got {lifted:?}"
+            peaks.iter().all(|&p| p < ceiling),
+            "the lifted tone must stay under {ceiling}, got {peaks:?}"
         );
-
-        // Both are live on such a source — stated so the weaker claim is not mistaken for
-        // this test's point.
-        for tone in [DisplayTone::DEFAULT, reinhard] {
-            let src = shared_from_film_rgb(&[16.0, 16.0, 16.0, 0.18, 0.18, 0.18]);
-            let render = render(&src, GainMapConfig { tone, ..config() }).unwrap();
-            let gain = render.metadata.gain_max.into_iter().fold(0.0f32, f32::max);
-            assert!(gain > 1.0, "{tone:?}: gain {gain}");
-        }
+        // And the gain map carries it.
+        let src = shared_from_film_rgb(&[16.0, 16.0, 16.0, 0.18, 0.18, 0.18]);
+        let render = render(&src, config()).unwrap();
+        let gain = render.metadata.gain_max.into_iter().fold(0.0f32, f32::max);
+        assert!(gain > 1.0, "gain {gain}");
     }
 
     /// The gain is ratioed against the base **as stored**, which is the invariant that
@@ -675,8 +651,8 @@ mod tests {
     /// A decoder computes `base × gain`, and the base it has is the clamped one. Ratioing
     /// against a rendered SDR above reference white stores a gain short by exactly what
     /// was clamped, so the highlight reconstructs *dark* — 23% at a 1.30 sample — with no
-    /// counter and no warning anywhere. Falsifiable below: the two bounded tones are
-    /// unaffected, because for them the clamp is an identity.
+    /// counter and no warning anywhere. Falsifiable below: a sample at or under reference
+    /// white is unaffected, because for it the clamp is an identity.
     #[test]
     fn the_gain_is_ratioed_against_the_stored_base_not_the_rendered_one() {
         let offset = ULTRA_HDR_V1_OFFSET;
@@ -702,18 +678,12 @@ mod tests {
             100.0 * dark
         );
 
-        // And for a bounded tone the clamp changes nothing at all.
+        // And at or under reference white the clamp changes nothing at all.
         for sdr in [0.0f32, 0.18, 0.5, 1.0] {
             assert_eq!(sdr.min(1.0).to_bits(), sdr.to_bits(), "sdr = {sdr}");
         }
-        // Every tone now passes the config gate; the arithmetic is what protects the pair.
-        for tone in [
-            DisplayTone::DEFAULT,
-            DisplayTone::None,
-            DisplayTone::ExtendedReinhard(
-                crate::pipeline::display_tone::Headroom::new(6.0).unwrap(),
-            ),
-        ] {
+        // Every headroom passes the config gate; the arithmetic is what protects the pair.
+        for tone in [Headroom::default(), Headroom::new(0.0).unwrap()] {
             validate_config(GainMapConfig { tone, ..config() })
                 .unwrap_or_else(|e| panic!("{tone:?}: {e}"));
         }
@@ -721,42 +691,32 @@ mod tests {
 
     #[test]
     fn equal_reference_white_with_equal_offsets_has_unit_gain() {
+        // At zero headroom both renditions are the identity, so the gain is exactly 1.
         let shared = shared_from_film_rgb(&[1.0; 3]);
-        let output = render(&shared, config()).unwrap();
+        let output = render(
+            &shared,
+            GainMapConfig {
+                tone: Headroom::new(0.0).unwrap(),
+                ..config()
+            },
+        )
+        .unwrap();
         for gain in output.gain().rgb() {
             close(*gain, 1.0);
         }
     }
 
     #[test]
-    fn without_a_display_tone_curve_a_bounded_source_gains_exactly_unity() {
-        // Today the SDR shoulder *lifts* highlights above the untouched HDR
-        // rendition, so the default gain map is below unity above the knee. Remove
-        // the curve and both renditions carry the same luminance, so the map is
-        // exactly flat — the inert default becomes inert by construction rather than
-        // by the shoulder's arithmetic. Worth pinning: it is the interaction a reader
-        // would otherwise have to derive.
+    fn below_reference_white_both_renditions_agree_to_within_a_gain_code_step() {
+        // Below the crossover the HDR lift is zero, so the renditions differ only by the
+        // base's dropped `v/W²` tail — a fraction of one 8-bit gain code step (≈1.00627).
         let ramp: Vec<f32> = [0.0, 0.18, 0.5, 0.9, 1.0]
             .into_iter()
             .flat_map(|v| [v; 3])
             .collect();
-        let shared = shared_from_film_rgb(&ramp);
-        let shouldered = render(&shared, config()).unwrap();
-        assert!(
-            shouldered.gain().rgb().iter().any(|gain| *gain < 0.99),
-            "the shipped shoulder should move some gains off unity"
-        );
-
-        let linear = render(
-            &shared,
-            GainMapConfig {
-                tone: DisplayTone::None,
-                ..config()
-            },
-        )
-        .unwrap();
-        for gain in linear.gain().rgb() {
-            close(*gain, 1.0);
+        let output = render(&shared_from_film_rgb(&ramp), config()).unwrap();
+        for gain in output.gain().rgb() {
+            assert!((gain - 1.0).abs() < 1e-3, "gain {gain}");
         }
     }
 
@@ -928,6 +888,22 @@ mod tests {
         assert_eq!(first.metadata.gain_max, [first.metadata.gain_max[0]; 3]);
         assert!(first.metadata.gain_min[0] > 0.0);
         assert!(first.metadata.gain_max[0] > first.metadata.gain_min[0]);
+    }
+
+    #[test]
+    fn the_legacy_luminance_gain_ratios_against_the_stored_base() {
+        // A sample far above white — the display tone overshoots it on SDR by design, and
+        // an unbounded reconstruction supplies one — must not set the frame's gain range.
+        // The minimum gain is bounded below by the offsets once the SDR base is clamped
+        // the way the JPEG stores it: `(0 + 1/64) / (1 + 1/64)`, about 2^-6.
+        let shared = shared_from_film_rgb(&[0.18, 0.18, 0.18, 1e9, 1e9, 1e9]);
+        let encoded = encode_legacy_gain_map(&render(&shared, config()).unwrap()).unwrap();
+        let floor = ULTRA_HDR_V1_OFFSET / (1.0 + ULTRA_HDR_V1_OFFSET);
+        assert!(
+            encoded.metadata.gain_min[0] >= floor,
+            "gain_min {} is below the stored-base floor {floor}",
+            encoded.metadata.gain_min[0]
+        );
     }
 
     #[test]

@@ -14,7 +14,8 @@ ones.
 Remove the old paths once the reference build exists: `legacy`/`custom`, the bounded display tones, the sigmoid and `simple`, the `Dmax` anchor machinery, the regional balance, and the `print.*` prefix.
 
 Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration.md`).
-Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-09-23).
+Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-09-23),
+**`display-tones`** (2026-09-24).
 
 **What `legacy-custom` means for the rest of the epic.**
 
@@ -51,6 +52,21 @@ Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-
 - **`Reconstruction` is a struct** (`density` + tagged `curve`); `characteristic` is the
   only other curve, so `DensityCurve` has two members and `ConversionPreset` three — both
   `characteristic`'s to finish.
+
+**What `display-tones` means for the rest of the epic.**
+
+- **The display tone's one knob already lives at its final key**, `fit_range.headroom_stops`,
+  on both chains (`ResolvedConfig::fit_range` is `recipe::FitRange`). `print-prefix-rename`
+  has no display-tone key left to move — `print` is now exposure, black point, white
+  balance and `linear_range` only.
+- **`ConversionPreset` sets three knobs** (curve, `density.scale`, `print_exposure`), not
+  the tone; the presets' old reinhard-at-6 is simply the default.
+- **The current chain's SDR tone is fit range's operator bit-for-bit; its HDR form is not**
+  (asymptotic base, strictly under the peak). `default-flip` retires `pipeline::sdr`/`hdr`
+  and with them that difference. Zero headroom reports `"identity"` on both chains.
+- **Old sidecars carry `"display_tone": "shoulder"` and are refused**, the old default
+  included (it replays differently) — so a pre-v7 sidecar needs that key deleted before it
+  replays. `highlight_compress: 0` is stripped.
 
 ## legacy-custom
 
@@ -115,10 +131,78 @@ Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-
 
 ## display-tones
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: retire the `shoulder` and `none` tones.
+- 2026-09-24: **plan.** Decisions taken with the user before starting:
+  1. **`pipeline_version` 7.** The default tone moves from `shoulder` to reinhard at 6
+     stops, which moves every default display render; the drift gate stops before the
+     display stages, so the `render` hash is unchanged and only `recipe` moves.
+  2. **No selector survives.** `fit-range` settled reinhard as the one operator, so
+     `--display-tone` is a removed flag at every value (`reinhard` included — it is
+     always applied), and `print.display_tone` is a migration error at every value
+     (`shoulder` is the old default but replays differently; carrying a `reinhard`
+     headroom across would be an alias). The headroom moves to `fit_range.headroom_stops`
+     in `ResolvedConfig` — the new recipe's key, so neither `print-prefix-rename` nor
+     `default-flip` renames it again. `--highlight-compress` is removed; the recipe key
+     is stripped at its old default `0` and refused otherwise. `KneeWidth` goes;
+     `Headroom` stays (it is the white point). Legacy HDR keeps its asymptotic-base
+     `highlight_lifted_reinhard` until the flip — only SDR is fit range's operator
+     bit-for-bit.
+  3. **The over-range refusal survives on zero headroom.** `--display-tone-headroom 0` is
+     the identity, and it now refuses an over-range sample on SDR as `none` did (HDR
+     already did). A non-zero headroom keeps counting the SDR overshoot at the encode.
+  4. **Report fields** `shoulder_start` / `highlight_compress` and `NO_TONE_CURVE` go.
+- 2026-09-24: **implemented; all gates green, not yet reviewed.**
+  - `DisplayToneCurve`, `KneeWidth`, the Hermite shoulders, `tone_curve_id` and the
+    `bounds_*` predicates are gone; the renderers take a `Headroom`, and
+    `Headroom::is_identity(crossover)` keys the zero-headroom refusal on both branches.
+    `accepts_reinhard_tone` folded into `applies_display_tone`, and
+    `validate_output_preset`'s rule 2 went with it.
+  - **No presence rule for the headroom.** `film-master`'s value sweep catches a
+    non-default headroom from either provenance, and a presence rule would have refused
+    the flags-win reset (`--display-tone-headroom 6` over a recipe's value).
+  - Conversion presets no longer own the tone (their expansion was reinhard at the
+    default, which is now simply the default), so a recipe's headroom survives `--preset`.
+  - The roll overlay guard `names_the_same_externally_tagged_variant` existed only for the
+    reinhard struct variant and is deleted, as is the tone-switch headroom warning.
+  - **A latent gain-map defect, found because this made reinhard the default.**
+    `encode_legacy_gain_map` ratioed its luminance gain against the *rendered* SDR, not the
+    stored `min(sdr, 1)` that `gain_pixel` uses. One far-over-white sample (a scan value of
+    0 in `ultra_hdr_v1_native_reconstruction_covers_odd_dimensions_and_hdr_vectors`)
+    drove `GainMapMin` to log2 −42 and the libultrahdr decode to garbage (white → PQ 0)
+    at exit 0. Reproduced on `main` with `--display-tone reinhard`; fixed and pinned by
+    `the_legacy_luminance_gain_ratios_against_the_stored_base` (mutation-checked).
+  - Default `GainMapMax` on `hdr-48bit.tif` (`--film-base 0.9,0.55,0.42`): 1.88 → 0.93
+    log2. **`--strict` at defaults can now fail** where it passed: the shoulder never
+    clipped, while reinhard's SDR overshoot beyond the headroom is counted and warned
+    (neither fixture clips at defaults; documented in `using-nc.md` §7). The task file's
+    "`Headroom` leaves with `highlight_compress`" was wrong — `Headroom` is the white
+    point and stays.
+- 2026-09-24: **code review** (`/code-review`, 10 findings, all taken). Zero headroom now
+  reports `"identity"` as the operator (report and both renderers' `tone_curve`), the new
+  chain's rule via `fit_range::IDENTITY`; `Headroom` resolves the white point and gain once
+  per frame instead of per pixel, and `convert_frame` resolves it once; the two chains'
+  headroom refusals share `types::headroom_fault_message`; the zero-headroom errors name
+  `fit_range.headroom_stops` beside the flag, since `roll` takes no flags;
+  `Recipe::to_config` carries `fit_range`; three stale comments fixed.
+- 2026-09-24: **ship review** (`ship:diff-reviewer` + Codex; Codex found nothing). Taken:
+  CLAUDE.md's default `GainMapMax` (1.88 → 0.93); the `reinhard` recipe migration no
+  longer claims a lost render (moving the headroom renders identically — only `shoulder`
+  and `none` point at the reference build); the `none` remedy is scoped to display
+  presets; `design-update.md`'s "Today" column and several stale sentences. **Declined:**
+  stripping `"shoulder"` from `film-master` sidecars (it replays identically there). The
+  recipe is loaded before the final preset is known — a flag can change it — so the strip
+  would have to be preset-aware at load; the refusal is loud and its remedy is one key.
+- 2026-09-24: **done.** Verified: all CI gates green (fmt, clippy `-D warnings`, build,
+  801 unit + 236 integration tests after rebasing onto #155/#156, 392 `nctool` tests),
+  `cargo doc` with no warnings, and `docs/using-nc.md` re-verified against the binary. The task's three checks
+  hold: removed names get removed-value errors on flag and recipe, on both chains
+  (`the_retired_display_tone_flags_are_refused_with_a_migration_error`, unit and binary);
+  no rule, field or message names a retired tone except as history; zero headroom refuses
+  over-range on SDR and renders it on HDR
+  (`the_zero_headroom_ceiling_is_per_branch_not_one_reference_white`).
 
 ## sigmoid-and-simple
 

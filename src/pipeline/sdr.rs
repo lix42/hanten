@@ -1,21 +1,20 @@
 //! Deterministic SDR display rendering from the shared adjusted ACEScg source.
 //!
 //! This stage owns the display rendering only: ACEScg/D60 → destination-linear
-//! RGB, whichever tone curve `print.display_tone` resolved to, and neutral-axis gamut
-//! mapping. Transfer encoding and ICC attachment remain in [`super::color`].
+//! RGB, extended Reinhard at the resolved headroom, and neutral-axis gamut mapping.
+//! Transfer encoding and ICC attachment remain in [`super::color`].
 //!
-//! The tone is **selected, not fixed**: the reference-white-preserving Hermite shoulder
-//! is the default, `none` skips tone entirely, and extended Reinhard compresses globally
-//! against a stated white point — and that last one is deliberately *not*
-//! reference-white-preserving, which is what `DisplayTone::bounds_sdr_output` reports and
-//! why the output range check here is a property of the tone rather than of SDR.
+//! The operator is deliberately *not* reference-white-preserving: content above its unity
+//! point overshoots display white, and that loss is counted at `io::encode` rather than
+//! refused. The exception is zero headroom, where the operator is the identity and a
+//! sample above reference white is refused instead — see [`render`].
 
 use serde::Serialize;
 
 use crate::pipeline::colorimetry::pinned::{
     ACESCG_TO_DISPLAY_P3, ACESCG_TO_SRGB, DISPLAY_P3_LUMA, SRGB_LUMA,
 };
-use crate::pipeline::display_tone::{self, DisplayTone};
+use crate::pipeline::display_tone::Headroom;
 use crate::pipeline::pixels;
 use crate::pipeline::render_split::SharedDisplaySource;
 use crate::types::{LinearImage, NcError, Result};
@@ -34,11 +33,6 @@ pub enum SdrGamut {
 pub struct SdrRenderMetadata {
     pub gamut: SdrGamut,
     pub reference_white_nits: f32,
-    /// The resolved knee width and where the shoulder began — both `None` when no
-    /// display tone curve was applied, since neither exists in that render. They
-    /// travel together: a knee width without a shoulder describes nothing.
-    pub highlight_compress: Option<f32>,
-    pub shoulder_start: Option<f32>,
     pub tone_curve: &'static str,
     pub gamut_mapping: &'static str,
     pub linear_domain: &'static str,
@@ -82,27 +76,23 @@ impl RenderedSdr {
 
 /// Render the shared adjusted source into destination-linear SDR.
 ///
-/// Adjusted `1.0` is reference white (203 cd/m²). Under
-/// [`DisplayTone::HermiteShoulder`] the shoulder begins below reference white and
-/// lands at `1.0` with zero slope; values above reference white remain at the
-/// display peak. Under [`DisplayTone::None`] tone is left alone and input above
-/// reference white is a loud error instead — the reconstruction is then the only
-/// thing placing the highlights, which is the point. Under
-/// [`DisplayTone::ExtendedReinhard`] the whole curve is compressed against a stated
-/// white point; that operator is **not** bounded by reference white, so its overshoot
-/// is carried to `io::encode` and counted there rather than refused. Negativity stays
-/// a hard error under all three.
+/// Adjusted `1.0` is reference white (203 cd/m²). The whole curve is compressed
+/// against the headroom's white point; the operator is **not** bounded by reference
+/// white, so its overshoot is carried to `io::encode` and counted there rather than
+/// refused. **Zero headroom is the identity**, which has nothing to roll an overshoot
+/// off, so there a sample above reference white is a loud error naming the way out
+/// instead of a counted clip. Negativity is a hard error at every headroom.
 ///
 /// Out-of-gamut colour is moved
 /// radially toward the same-luminance neutral axis until it reaches the
 /// destination gamut boundary, rather than clipping channels independently, in
 /// every mode. Above display white that boundary follows the pixel's own rendered
-/// luminance — reachable only under the unbounded tone — which keeps it continuous
+/// luminance, which keeps it continuous
 /// across the crossing; see [`render_destination_pixel`].
 pub fn render(
     shared: &SharedDisplaySource,
     gamut: SdrGamut,
-    tone: DisplayTone,
+    tone: Headroom,
 ) -> Result<RenderedSdr> {
     let rgb = pixels::try_map(shared.source.rgb(), |index, px| {
         render_pixel_checked(px, index, gamut, tone)
@@ -113,16 +103,7 @@ pub fn render(
         metadata: SdrRenderMetadata {
             gamut,
             reference_white_nits: 203.0,
-            highlight_compress: tone.highlight_compress(),
-            // In this domain the normalized knee position *is* the shoulder start:
-            // SDR rolls off within `[0, 1]`, so no scaling separates the two. Absent
-            // for any tone without a knee.
-            shoulder_start: tone.knee_position(),
-            tone_curve: match tone {
-                DisplayTone::HermiteShoulder(_) => "reference-white-hermite-shoulder-v1",
-                DisplayTone::None => display_tone::NO_TONE_CURVE,
-                DisplayTone::ExtendedReinhard(_) => display_tone::EXTENDED_REINHARD,
-            },
+            tone_curve: tone.operator(1.0),
             gamut_mapping: "neutral-axis-radial-boundary-v1",
             linear_domain: "display-linear-relative-to-203-nit-reference-white",
             required_transfer: "srgb",
@@ -138,7 +119,7 @@ fn render_pixel_checked(
     aces: [f32; 3],
     index: usize,
     gamut: SdrGamut,
-    tone: DisplayTone,
+    tone: Headroom,
 ) -> Result<[f32; 3]> {
     if !aces.iter().all(|value| value.is_finite()) {
         return Err(NcError::Other(format!(
@@ -152,11 +133,12 @@ fn render_pixel_checked(
             "SDR display rendering produced a non-finite sample at pixel {index}"
         )));
     }
-    // Diagnosed here rather than left to the range check below. Without a tone
-    // curve nothing pulls luminance down, and the gamut map holds it constant, so
-    // the cube violation the range check would report is a *consequence* — this
-    // says which sample was already over reference white before rendering.
-    if matches!(tone, DisplayTone::None) && luminance > 1.0 {
+    // Diagnosed here rather than left to the range check below. At zero headroom
+    // nothing pulls luminance down, and the gamut map holds it constant, so the cube
+    // violation the range check would report is a *consequence* — this says which
+    // sample was already over reference white before rendering.
+    let identity = tone.is_identity(1.0);
+    if identity && luminance > 1.0 {
         return Err(above_range_error(index, luminance));
     }
     let rendered = render_destination_pixel(rgb, luminance, tone);
@@ -165,13 +147,12 @@ fn render_pixel_checked(
             "SDR display rendering produced a non-finite sample at pixel {index}"
         )));
     }
-    // The bound is a property of the resolved tone, not of SDR. A tone that bounds its
-    // own output escaping the ceiling is a renderer bug and must fail loudly — that is
-    // what makes `--display-tone none` self-policing. Extended Reinhard is *expected*
-    // past the ceiling, so there the loss rides to `io::encode`, which counts every
+    // At zero headroom the check above already bounded the input, so an output past the
+    // ceiling is a renderer bug and must fail loudly. Otherwise the operator is
+    // *expected* past the ceiling, so the loss rides to `io::encode`, which counts every
     // clamped sample into `EncodeReport`; only negativity stays a hard error, since
     // nothing downstream is defined below black.
-    if tone.bounds_sdr_output() {
+    if identity {
         if !rendered.iter().all(|value| (0.0..=1.0).contains(value)) {
             return Err(NcError::Other(format!(
                 "SDR display rendering produced an out-of-range sample at pixel {index}"
@@ -185,28 +166,28 @@ fn render_pixel_checked(
     Ok(rendered)
 }
 
-/// The loud half of "a linear render is self-policing": with no tone curve, a
+/// The loud half of "an identity render is self-policing": at zero headroom, a
 /// reconstruction that overshoots reference white fails naming the sample and every
 /// way out, instead of clipping quietly.
 ///
 /// **The print controls are named deliberately.** No shipped reconstruction is bounded
-/// at white since the sigmoid retired, so ordinary highlights reach here — and the
-/// print controls, which run *before* this render, are the lever that brings them back
-/// under the ceiling.
+/// at white, so ordinary highlights reach here — and the print controls, which run
+/// *before* this render, are the lever that brings them back under the ceiling.
 fn above_range_error(index: usize, luminance: f32) -> NcError {
     NcError::Other(format!(
-        "SDR display rendering applied no display tone curve, but pixel {index} sits \
-         above reference white (luminance {luminance}), which this mode has no curve to \
-         roll off. No shipped reconstruction is bounded at white, so ordinary \
-         highlights reach here, and a print control applied before this render \
-         (--print-exposure, --white-balance / --auto-wb, --linear-range) can lift more \
-         content there. So: lower --print-exposure until the frame fits, or drop \
-         --display-tone none to roll the highlights off."
+        "SDR display rendering ran at zero display-tone headroom (the identity), but \
+         pixel {index} sits above reference white (luminance {luminance}), which the \
+         identity has no curve to roll off. No shipped reconstruction is bounded at \
+         white, so ordinary highlights reach here, and a print control applied before \
+         this render (exposure, white balance, linear range) can lift more content \
+         there. So: lower the print exposure (--print-exposure / print.print_exposure) \
+         until the frame fits, or raise the headroom above 0 (--display-tone-headroom / \
+         fit_range.headroom_stops) to roll the highlights off."
     ))
 }
 
 #[cfg(test)]
-fn render_pixel(aces: [f32; 3], gamut: SdrGamut, tone: DisplayTone) -> [f32; 3] {
+fn render_pixel(aces: [f32; 3], gamut: SdrGamut, tone: Headroom) -> [f32; 3] {
     let (rgb, weights) = destination_rgb(aces, gamut);
     render_destination_pixel(rgb, dot(rgb, weights), tone)
 }
@@ -226,20 +207,11 @@ fn destination_rgb(aces: [f32; 3], gamut: SdrGamut) -> ([f32; 3], [f32; 3]) {
     (mul(matrix, aces), weights)
 }
 
-fn render_destination_pixel(mut rgb: [f32; 3], luminance: f32, tone: DisplayTone) -> [f32; 3] {
+fn render_destination_pixel(mut rgb: [f32; 3], luminance: f32, tone: Headroom) -> [f32; 3] {
     if luminance <= 0.0 {
         return [0.0; 3];
     }
-    let rendered_luminance = match tone {
-        DisplayTone::HermiteShoulder(_) => shoulder(
-            luminance,
-            tone.knee_position().expect("a shoulder has a knee"),
-        ),
-        DisplayTone::None => luminance,
-        DisplayTone::ExtendedReinhard(headroom) => {
-            display_tone::extended_reinhard(luminance, headroom.white_point())
-        }
-    };
+    let rendered_luminance = tone.sdr(luminance);
     let scale = rendered_luminance / luminance;
     for channel in &mut rgb {
         *channel *= scale;
@@ -259,27 +231,8 @@ fn render_destination_pixel(mut rgb: [f32; 3], luminance: f32, tone: DisplayTone
     // (reinhard `W = 2`, sRGB direction `[3, 1, 0.1]`), rendered luminance 0.9998 gives
     // `[1.000, 1.000, 1.000]` and 1.0000 gives `[2.913, 0.532, 0.000]` — green and blue
     // *fall* as scene luminance rises, a hard ring around every bright saturated
-    // highlight. Under the two bounded tones the `max` is always `1.0`, so their path is
-    // unchanged.
+    // highlight.
     gamut_map(rgb, rendered_luminance, rendered_luminance.max(1.0))
-}
-
-/// C¹-continuous cubic shoulder from `(start, start, slope=1)` to
-/// `(1, 1, slope=0)`, followed by the documented display-peak plateau.
-fn shoulder(value: f32, start: f32) -> f32 {
-    if value <= 0.0 {
-        0.0
-    } else if value <= start {
-        value
-    } else if value >= 1.0 {
-        1.0
-    } else {
-        let span = 1.0 - start;
-        let t = (value - start) / span;
-        let t2 = t * t;
-        let t3 = t2 * t;
-        (2.0 * t3 - 3.0 * t2 + 1.0) * start + (t3 - 2.0 * t2 + t) * span + (-2.0 * t3 + 3.0 * t2)
-    }
 }
 
 /// Same-luminance radial mapping to the RGB cube boundary. Because every
@@ -338,7 +291,7 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 mod tests {
     use super::*;
     use crate::algo::FilmRgbImage;
-    use crate::pipeline::display_tone::Headroom;
+    use crate::pipeline::display_tone;
     use crate::pipeline::render_split::display_source;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
     use crate::types::PrintParams;
@@ -354,36 +307,35 @@ mod tests {
         display_source(map_nc_film_rgb_v1(film), print).unwrap()
     }
 
+    /// Zero headroom: the identity tone, for tests about the gamut half of the render.
+    fn identity() -> Headroom {
+        Headroom::new(0.0).unwrap()
+    }
+
     #[test]
-    fn neutral_ramp_is_neutral_monotonic_and_pins_black_and_reference_white() {
+    fn neutral_ramp_is_neutral_monotonic_and_preserves_black_and_mid_grey() {
         for gamut in [SdrGamut::DisplayP3, SdrGamut::SRgb] {
             let mut previous = 0.0;
             for value in [0.0, 0.18, 0.5, 0.75, 0.9, 1.0, 2.0] {
-                let px = render_pixel([value; 3], gamut, DisplayTone::DEFAULT);
+                let px = render_pixel([value; 3], gamut, Headroom::default());
                 close(px[0], px[1]);
                 close(px[1], px[2]);
                 assert!(px[0] >= previous);
                 previous = px[0];
             }
-            close(render_pixel([0.0; 3], gamut, DisplayTone::DEFAULT)[0], 0.0);
-            close(render_pixel([1.0; 3], gamut, DisplayTone::DEFAULT)[0], 1.0);
+            close(render_pixel([0.0; 3], gamut, Headroom::default())[0], 0.0);
+            close(render_pixel([0.18; 3], gamut, Headroom::default())[0], 0.18);
+            // The identity pins reference white too; the default compresses it.
+            close(render_pixel([1.0; 3], gamut, identity())[0], 1.0);
+            assert!(render_pixel([1.0; 3], gamut, Headroom::default())[0] < 1.0);
         }
-    }
-
-    #[test]
-    fn shoulder_rolls_highlights_without_a_channel_clip_kink() {
-        let a = shoulder(0.90, 0.75);
-        let b = shoulder(0.95, 0.75);
-        let c = shoulder(0.99, 0.75);
-        assert!(0.90 < a && a < b && b < c && c < 1.0);
-        assert!((1.0 - c) < (c - b));
     }
 
     #[test]
     fn synthetic_out_of_gamut_vectors_are_finite_and_reach_boundary_radially() {
         for gamut in [SdrGamut::DisplayP3, SdrGamut::SRgb] {
             for input in [[1.0, 0.0, 0.0], [0.0, 1.2, -0.2], [4.0, 0.1, 2.0]] {
-                let out = render_pixel(input, gamut, DisplayTone::DEFAULT);
+                let out = render_pixel(input, gamut, Headroom::default());
                 assert!(out.iter().all(|v| v.is_finite()));
                 assert!(out.iter().all(|v| (0.0..=1.0).contains(v)));
                 assert!(out.iter().any(|v| *v == 0.0 || *v == 1.0));
@@ -418,9 +370,11 @@ mod tests {
 
     #[test]
     fn golden_vectors_pin_both_destination_gamuts() {
+        // At the identity tone, so the vectors pin the gamut transform alone (captured
+        // under the retired shoulder, which was the identity below its knee).
         let aces = [0.42, 0.18, 0.07];
-        let p3 = render_pixel(aces, SdrGamut::DisplayP3, DisplayTone::DEFAULT);
-        let srgb = render_pixel(aces, SdrGamut::SRgb, DisplayTone::DEFAULT);
+        let p3 = render_pixel(aces, SdrGamut::DisplayP3, identity());
+        let srgb = render_pixel(aces, SdrGamut::SRgb, identity());
         for (actual, expected) in p3
             .into_iter()
             .zip([0.518_749_9, 0.164_785_43, 0.064_243_82])
@@ -437,16 +391,13 @@ mod tests {
 
     #[test]
     fn public_renderer_is_deterministic_and_returns_complete_resolved_metadata() {
-        let print = PrintParams {
-            highlight_compress: 0.4,
-            ..PrintParams::default()
-        };
+        let print = PrintParams::default();
         let shared = shared_from_film_rgb(&[0.18, 0.18, 0.18, 1.4, 0.5, 0.1], &print);
         for (gamut, profile) in [
             (SdrGamut::DisplayP3, "display-p3"),
             (SdrGamut::SRgb, "srgb"),
         ] {
-            let tone = DisplayTone::resolve(&print).unwrap();
+            let tone = Headroom::default();
             let first = render(&shared, gamut, tone).unwrap();
             let second = render(&shared, gamut, tone).unwrap();
             assert_eq!(
@@ -472,71 +423,15 @@ mod tests {
             );
             let metadata = first.metadata();
             assert_eq!(metadata.reference_white_nits, 203.0);
-            assert_eq!(metadata.highlight_compress, Some(0.4));
+            assert_eq!(metadata.tone_curve, display_tone::EXTENDED_REINHARD);
             assert_eq!(metadata.required_transfer, "srgb");
             assert_eq!(metadata.required_profile, profile);
         }
     }
 
     #[test]
-    fn highlight_control_adds_bounded_rolloff_to_the_mandatory_baseline() {
-        let shared = shared_from_film_rgb(&[0.7, 0.7, 0.7], &PrintParams::default());
-        let baseline = render(&shared, SdrGamut::SRgb, DisplayTone::DEFAULT).unwrap();
-        let stronger =
-            render(&shared, SdrGamut::SRgb, DisplayTone::shoulder(4.0).unwrap()).unwrap();
-
-        close(baseline.metadata().shoulder_start.unwrap(), 0.75);
-        close(stronger.metadata().shoulder_start.unwrap(), 0.55);
-        close(baseline.image().rgb[0], 0.7);
-        assert!(stronger.image().rgb[0] > baseline.image().rgb[0]);
-        assert!(stronger.image().rgb[0] < 1.0);
-
-        let maximum = render(
-            &shared,
-            SdrGamut::SRgb,
-            DisplayTone::shoulder(f32::MAX).unwrap(),
-        )
-        .unwrap();
-        assert!((0.5..=0.75).contains(&maximum.metadata().shoulder_start.unwrap()));
-    }
-
-    #[test]
-    fn no_tone_curve_passes_tone_through_and_only_differs_above_the_knee() {
-        // Everything from black to reference white, straddling the 0.75 knee.
-        let ramp: Vec<f32> = [0.0, 0.18, 0.5, 0.75, 0.9, 1.0]
-            .into_iter()
-            .flat_map(|v| [v; 3])
-            .collect();
-        let shared = shared_from_film_rgb(&ramp, &PrintParams::default());
-        let shouldered = render(&shared, SdrGamut::SRgb, DisplayTone::DEFAULT).unwrap();
-        let linear = render(&shared, SdrGamut::SRgb, DisplayTone::None).unwrap();
-
-        for (index, input) in [0.0, 0.18, 0.5, 0.75, 0.9, 1.0].into_iter().enumerate() {
-            let (with, without) = (
-                shouldered.image().rgb[index * 3],
-                linear.image().rgb[index * 3],
-            );
-            // No tone curve means exactly that: the adjusted value survives.
-            close(without, input);
-            // The knee itself is a fixed point of the shoulder, so it belongs with
-            // the identical region rather than the compressed one.
-            if input <= 0.75 {
-                assert_eq!(with.to_bits(), without.to_bits(), "at {input}");
-            } else if input < 1.0 {
-                // The shoulder is *above* the identity line — it lifts highlights
-                // toward white, which is the separation this mode gives back.
-                assert!(with > without, "at {input}: {with} !> {without}");
-            }
-        }
-        // Both still land black on black and reference white on reference white.
-        close(shouldered.image().rgb[15], 1.0);
-        close(linear.image().rgb[15], 1.0);
-    }
-
-    #[test]
-    fn no_tone_curve_accepts_diffuse_white_sitting_exactly_on_the_bound() {
-        // The intended pairing places diffuse white *at* reference white, so the
-        // brightest pixel of a bounded reconstruction lands exactly on this mode's
+    fn zero_headroom_accepts_diffuse_white_sitting_exactly_on_the_bound() {
+        // Diffuse white placed *at* reference white lands exactly on the identity's
         // bound rather than below it. Measured: film RGB `[1,1,1]`'s destination
         // luminance rounds to exactly `1.0` on both gamuts — **zero ulps** over, so it
         // passes `> 1.0` with nothing to spare. Display P3's red channel is itself one
@@ -550,7 +445,7 @@ mod tests {
         // after paying for the whole render.
         for gamut in [SdrGamut::DisplayP3, SdrGamut::SRgb] {
             let shared = shared_from_film_rgb(&[1.0; 3], &PrintParams::default());
-            let rendered = render(&shared, gamut, DisplayTone::None)
+            let rendered = render(&shared, gamut, identity())
                 .unwrap_or_else(|e| panic!("{gamut:?}: diffuse white must not be refused: {e}"));
             for value in &rendered.image().rgb {
                 close(*value, 1.0);
@@ -568,39 +463,36 @@ mod tests {
     }
 
     #[test]
-    fn no_tone_curve_reports_no_knee() {
-        let shared = shared_from_film_rgb(&[0.5; 3], &PrintParams::default());
-        let metadata = *render(&shared, SdrGamut::DisplayP3, DisplayTone::None)
-            .unwrap()
-            .metadata();
-        assert_eq!(metadata.highlight_compress, None);
-        assert_eq!(metadata.shoulder_start, None);
-        assert_eq!(metadata.tone_curve, display_tone::NO_TONE_CURVE);
-        // The rest of the policy is untouched: only tone was skipped.
-        assert_eq!(metadata.gamut_mapping, "neutral-axis-radial-boundary-v1");
-        assert_eq!(metadata.required_transfer, "srgb");
-    }
-
-    #[test]
-    fn no_tone_curve_refuses_input_above_reference_white_naming_the_pixel() {
+    fn zero_headroom_refuses_input_above_reference_white_naming_the_pixel() {
         // Reference white, then a sample a third of a stop over it.
         let shared =
             shared_from_film_rgb(&[1.0, 1.0, 1.0, 1.25, 1.25, 1.25], &PrintParams::default());
-        // The shouldered render accepts it — this is the mode's own bound, not a
+        // The default headroom renders it — this is the identity's own bound, not a
         // property of the source.
-        assert!(render(&shared, SdrGamut::DisplayP3, DisplayTone::DEFAULT).is_ok());
+        assert!(render(&shared, SdrGamut::DisplayP3, Headroom::default()).is_ok());
 
-        let err = render(&shared, SdrGamut::DisplayP3, DisplayTone::None).unwrap_err();
+        let err = render(&shared, SdrGamut::DisplayP3, identity()).unwrap_err();
+        // What renders at zero headroom reports no operator, as the new chain does.
+        let within = shared_from_film_rgb(&[0.5; 3], &PrintParams::default());
+        assert_eq!(
+            render(&within, SdrGamut::DisplayP3, identity())
+                .unwrap()
+                .metadata()
+                .tone_curve,
+            crate::pipeline::fit_range::IDENTITY
+        );
         let message = err.to_string();
         assert!(message.contains("pixel 1"), "{message}");
         assert!(message.contains("above reference white"), "{message}");
-        assert!(message.contains("no display tone curve"), "{message}");
+        assert!(message.contains("zero display-tone headroom"), "{message}");
+        // Both provenances of the remedy: `roll` takes no conversion flags.
+        assert!(message.contains("fit_range.headroom_stops"), "{message}");
     }
 
     #[test]
     fn extreme_finite_input_fails_if_render_arithmetic_overflows() {
         for (index, input) in [(17, [f32::MAX; 3]), (23, [-f32::MAX; 3])] {
-            let err = render_pixel_checked(input, index, SdrGamut::DisplayP3, DisplayTone::DEFAULT)
+            let err = render_pixel_checked(input, index, SdrGamut::DisplayP3, Headroom::default())
                 .unwrap_err();
             assert!(err.to_string().contains(&format!("pixel {index}")), "{err}");
             assert!(err.to_string().contains("produced a non-finite"), "{err}");
@@ -634,7 +526,7 @@ mod tests {
         //
         // A saturated direction is essential: on a neutral ramp both ceilings agree, so
         // the same sweep in grey passes either way and proves nothing.
-        let tone = DisplayTone::ExtendedReinhard(Headroom::new(1.0).unwrap());
+        let tone = Headroom::new(1.0).unwrap();
         // `W = 2` puts the crossing in easy reach — rendered luminance passes 1.0 near
         // `t = 1.35` on this direction — instead of needing an absurd input scale.
         let direction = [3.0f32, 1.0, 0.1];
@@ -696,17 +588,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unbounded_tone_carries_over_range_output_to_the_encode_boundary() {
-        // The `!bounds_sdr_output()` half of `render_pixel_checked`'s postcondition. A
-        // bounded tone escaping `[0, 1]` is a renderer bug and fails loudly; extended
-        // Reinhard is *expected* past the ceiling, so the overshoot rides to
-        // `io::encode`, which counts every clamped sample into `EncodeReport`.
+    fn a_non_zero_headroom_carries_over_range_output_to_the_encode_boundary() {
+        // The non-identity half of `render_pixel_checked`'s postcondition. At zero
+        // headroom an output escaping `[0, 1]` is a renderer bug and fails loudly;
+        // otherwise the operator is *expected* past the ceiling, so the overshoot rides
+        // to `io::encode`, which counts every clamped sample into `EncodeReport`.
         let shared = shared_from_film_rgb(&[1.0, 1.0, 1.0, 4.0, 4.0, 4.0], &PrintParams::default());
-        // `none` refuses the same source — so this is the tone's range policy, not a
-        // property of the input.
-        assert!(render(&shared, SdrGamut::DisplayP3, DisplayTone::None).is_err());
+        // The identity refuses the same source — so this is the headroom's range policy,
+        // not a property of the input.
+        assert!(render(&shared, SdrGamut::DisplayP3, identity()).is_err());
 
-        let tone = DisplayTone::ExtendedReinhard(Headroom::new(1.0).unwrap());
+        let tone = Headroom::new(1.0).unwrap();
         let rendered = render(&shared, SdrGamut::DisplayP3, tone)
             .unwrap_or_else(|e| panic!("an unbounded tone must not be refused: {e}"));
         let rgb = &rendered.image().rgb;
@@ -727,17 +619,16 @@ mod tests {
             ok.unwrap().iter().all(|v| *v >= 0.0),
             "the gamut map is what keeps the output non-negative"
         );
-        // The metadata names the operator rather than reporting a knee it has none of.
-        let metadata = *rendered.metadata();
-        assert_eq!(metadata.tone_curve, display_tone::EXTENDED_REINHARD);
-        assert_eq!(metadata.highlight_compress, None);
-        assert_eq!(metadata.shoulder_start, None);
+        assert_eq!(
+            rendered.metadata().tone_curve,
+            display_tone::EXTENDED_REINHARD
+        );
     }
 
     #[test]
     fn finite_non_positive_luminance_maps_to_black() {
         assert_eq!(
-            render_pixel_checked([-1.0; 3], 0, SdrGamut::DisplayP3, DisplayTone::DEFAULT).unwrap(),
+            render_pixel_checked([-1.0; 3], 0, SdrGamut::DisplayP3, Headroom::default()).unwrap(),
             [0.0; 3]
         );
     }

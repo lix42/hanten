@@ -26,7 +26,7 @@ use crate::flow::{self, Flow};
 use crate::io::decode::{DecodeInfo, decode_within, probe};
 use crate::io::{avif, encode, staged, ultra_hdr};
 use crate::pipeline::chain;
-use crate::pipeline::display_tone::DisplayTone;
+use crate::pipeline::display_tone::Headroom;
 use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range::{self, DisplayPeak};
 use crate::pipeline::input_semantics::{
@@ -41,11 +41,11 @@ use crate::recipe::{self, KnobNames, Recipe};
 use crate::telemetry;
 use crate::types::{
     AnchorPlacement, BalanceRange, CalibrationParams, CharacteristicParams, DEFAULT_MEASURE_INSET,
-    DensityCurve, DensityCurveType, DensityParams, DisplayToneCurve, DmaxInput, DmaxSource,
-    EncodeOutcome, EncodeReport, FilmBase, FilmBaseSource, FilmStock, FilmType, InputParams,
-    LinearImage, MeaningAssertion, MeasureParams, NcError, OutDepth, OutputParams, OutputPreset,
-    OutputStats, PrintParams, REMOVED_SIGMOID_CURVE, REMOVED_SIMPLE_RECONSTRUCTION, Reconstruction,
-    Result, TransferAssertion, WbSource, check_measure_inset,
+    DensityCurve, DensityCurveType, DensityParams, DmaxInput, DmaxSource, EncodeOutcome,
+    EncodeReport, FilmBase, FilmBaseSource, FilmStock, FilmType, InputParams, LinearImage,
+    MeaningAssertion, MeasureParams, NcError, OutDepth, OutputParams, OutputPreset, OutputStats,
+    PrintParams, REMOVED_SIGMOID_CURVE, REMOVED_SIMPLE_RECONSTRUCTION, Reconstruction, Result,
+    TransferAssertion, WbSource, check_measure_inset,
 };
 use crate::version::{self, Identity};
 
@@ -307,9 +307,9 @@ pub struct ConvertArgs {
     pub density_curve: Option<DensityCurveType>,
     /// Named reconstruction + display bundle: `characteristic-generic`,
     /// `characteristic-stock`, `characteristic-aim`.
-    /// Sets the density curve, its per-channel gain, `--print-exposure` and
-    /// `--display-tone` together, each carrying the exposure that keeps brightness steady
-    /// when you switch; individual flags still win over it.
+    /// Sets the density curve, its per-channel gain and `--print-exposure` together, the
+    /// exposure keeping brightness steady when you switch; individual flags still win
+    /// over it.
     /// `characteristic-stock` / `-aim` need `--film-stock`.
     /// A CLI-only expansion — the recipe records the expanded values, not the name.
     // A plain `String` rather than a `value_enum`: the parse error then lists the
@@ -790,46 +790,22 @@ pub struct PrintOverrides {
     /// measure-roll`).
     #[arg(long = "auto-wb", value_enum, value_name = "MODE")]
     pub auto_wb: Option<AutoWb>,
-    /// Which tone curve the named display renderers apply (recipe key
-    /// `print.display_tone`, default `shoulder`). `none` skips the display
-    /// shoulder entirely, leaving the reconstruction to place every tone — gamut
-    /// mapping and the transfer encode still run. Anything above the render's own
-    /// ceiling — reference white on the SDR presets, the 1000-nit mastering peak
-    /// (≈4.93x reference white) on the HDR ones — is a loud error rather than a quiet
-    /// clip; no shipped reconstruction is bounded at white, so on the SDR presets
-    /// lower --print-exposure until the frame fits. Display presets only, and it takes no knee
-    /// width: a *non-default* `--highlight-compress` is rejected beside `none`
-    /// rather than silently ignored (the default `0` asks for nothing and is
-    /// accepted).
-    /// `reinhard` compresses globally against a white point set by
-    /// `--display-tone-headroom` and can hold content several stops over diffuse
-    /// white. Unlike the other two it deliberately overshoots, so its loss is counted
-    /// at the encode boundary rather than refused. Taken by every display preset;
-    /// `film-master` applies no display tone curve at all.
-    /// `--display-tone-headroom 0` makes it the exact identity, matching `none` in tone.
-    /// It preserves scene mid-grey (18%) at every headroom, so raising the headroom
-    /// changes the highlights without darkening the midtones; the trade is that the
-    /// headroom value itself lands a little above reference white rather than exactly on
-    /// it.
-    // A plain `String` rather than a `value_enum`: `reinhard` carries a payload, which
-    // `clap::ValueEnum` cannot derive over, so the selector parses through
-    // `DisplayToneCurve::parse`. An implementation note, kept out of the doc comment
-    // because clap promotes that verbatim into `--help`.
-    //
-    // The accepted spellings are still restored to `--help` and to shell completion by
-    // generating the parser's candidates from `DisplayToneCurve::NAMES` — the same list
-    // the parse diagnostic is built from, so the two cannot disagree. Dropping the
-    // derive had silently taken the `[possible values: …]` line with it.
-    #[arg(
-        long = "display-tone",
-        value_name = "MODE",
-        value_parser = clap::builder::PossibleValuesParser::new(DisplayToneCurve::NAMES)
-    )]
+    /// Removed with the `shoulder` and `none` tones (recipe key `print.display_tone`):
+    /// the display tone is always extended Reinhard. Hidden, and kept only to emit a
+    /// migration error.
+    #[arg(long = "display-tone", hide = true, value_name = "MODE")]
     pub display_tone: Option<String>,
-    /// Specular headroom above reference white, in stops, default 6 (a white point of
-    /// 64). Needs `--display-tone reinhard` (recipe key
-    /// `print.display_tone.reinhard.headroom_stops`); under `--new-flow` it is fit
-    /// range's headroom on its own (recipe key `fit_range.headroom_stops`).
+    /// Specular headroom above reference white for the display tone, in stops, default
+    /// 6 (a white point of 64; recipe key `fit_range.headroom_stops`). The tone is
+    /// extended Reinhard, which compresses the whole curve against that white point
+    /// while holding scene mid-grey (18%) where it is, so raising the headroom changes
+    /// the highlights without darkening the midtones. It deliberately overshoots
+    /// reference white on the SDR presets, where the loss is counted at the encode
+    /// boundary; the HDR presets hold it under their 1000-nit peak. `0` is the exact
+    /// identity, and then anything above the render's own ceiling — reference white on
+    /// SDR, the 1000-nit peak (≈4.93x reference white) on HDR — is a loud error rather
+    /// than a clip: lower --print-exposure until the frame fits. Display presets only;
+    /// `film-master` applies no display tone.
     // A negative headroom must reach `check_headroom_stops`, whose message names this
     // very flag: without this, clap refused `-1` as "unexpected argument" and the rule's
     // own negative branch was unreachable from the CLI. Same reason `--linear-range`
@@ -840,9 +816,10 @@ pub struct PrintOverrides {
         allow_hyphen_values = true
     )]
     pub display_tone_headroom: Option<f32>,
-    /// Highlight roll-off amount; named SDR/HDR branches resolve their own knee.
-    #[arg(long)]
-    pub highlight_compress: Option<f32>,
+    /// Removed with the `shoulder` tone, whose knee it placed (recipe key
+    /// `print.highlight_compress`). Hidden, and kept only to emit a migration error.
+    #[arg(long, hide = true, value_name = "AMOUNT", allow_hyphen_values = true)]
+    pub highlight_compress: Option<String>,
     /// Black/white-range placement endpoints for the shared display stage: the
     /// exact affine `(x - LOW)/(HIGH - LOW)` applied last, after white balance,
     /// exposure, and the black point (recipe key `print.linear_range`, default
@@ -1019,21 +996,76 @@ fn removed_output_flag_message(s: &RemovedOutputSelector, new_flow: bool) -> Str
     )
 }
 
-/// Drop the retired output selectors a recipe carries at the value every earlier build
-/// wrote by default, returning whether anything was removed. A non-default value is left
-/// for [`reject_legacy_recipe_keys`] to refuse.
-fn strip_old_default_output_selectors(v: &mut serde_json::Value) -> bool {
-    let Some(output) = v.get_mut("output").and_then(|o| o.as_object_mut()) else {
-        return false;
-    };
+/// Drop the retired keys a recipe carries at the value every earlier build wrote by
+/// default — the output selectors and `print.highlight_compress` — returning whether
+/// anything was removed. A non-default value is left for [`reject_legacy_recipe_keys`]
+/// to refuse.
+///
+/// `print.display_tone` is **not** stripped at its old default: `"shoulder"` replayed
+/// today would render differently, so it is refused like any other value.
+fn strip_retired_keys_at_old_defaults(v: &mut serde_json::Value) -> bool {
     let mut stripped = false;
-    for s in &REMOVED_OUTPUT_SELECTORS {
-        if output.get(s.key).is_some_and(s.is_old_default) {
-            output.remove(s.key);
-            stripped = true;
+    if let Some(output) = v.get_mut("output").and_then(|o| o.as_object_mut()) {
+        for s in &REMOVED_OUTPUT_SELECTORS {
+            if output.get(s.key).is_some_and(s.is_old_default) {
+                output.remove(s.key);
+                stripped = true;
+            }
         }
     }
+    if let Some(print) = v.get_mut("print").and_then(|p| p.as_object_mut())
+        && print
+            .get("highlight_compress")
+            .is_some_and(|hc| hc.as_f64() == Some(0.0))
+    {
+        print.remove("highlight_compress");
+        stripped = true;
+    }
     stripped
+}
+
+/// The migration message for a retired `print.display_tone` recipe value.
+///
+/// Every value is refused, `reinhard` included: the tone is always applied now, and
+/// carrying a stated headroom across to `fit_range.headroom_stops` would be an alias.
+/// Only `shoulder` and `none` are lost renders; a `reinhard` recipe renders identically
+/// once its headroom moves, so its message says so rather than pointing at the reference
+/// build.
+fn removed_display_tone_recipe_message(value: &serde_json::Value, context: &str) -> String {
+    let headroom = value
+        .get("reinhard")
+        .and_then(|r| r.get("headroom_stops"))
+        .and_then(serde_json::Value::as_f64);
+    const LOST: &str = "The old rendering is reproducible only from the reference build.";
+    const KEPT: &str = "The render is unchanged.";
+    let (remedy, outcome) = match (value.as_str(), headroom) {
+        (Some("shoulder"), _) => (
+            "the recipe's `shoulder` has no replacement: remove the key to take the default \
+             (6 stops of headroom)"
+                .to_string(),
+            LOST,
+        ),
+        (Some("none"), _) => (
+            "the nearest to `none` on a display preset is the identity, \
+             `\"fit_range\": {\"headroom_stops\": 0}`"
+                .to_string(),
+            LOST,
+        ),
+        (_, Some(stops)) => (
+            format!("move the headroom to `\"fit_range\": {{\"headroom_stops\": {stops}}}`"),
+            KEPT,
+        ),
+        _ => (
+            "remove the key — the default headroom is what `reinhard` resolved".to_string(),
+            KEPT,
+        ),
+    };
+    format!(
+        "{context}: recipe key `print.display_tone` ({value}) was removed with the \
+         `shoulder` and `none` tones: the display tone is always extended Reinhard, whose \
+         one parameter is `fit_range.headroom_stops` (`--display-tone-headroom`). So {remedy}. \
+         There is no alias. {outcome}"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,8 +1097,8 @@ fn strip_old_default_output_selectors(v: &mut serde_json::Value) -> bool {
 ///
 /// The **documented exception** to "every conversion knob is a CLI flag *and* a recipe
 /// key": a preset is not itself a knob, it only sets knobs, and every one of those
-/// (`reconstruction.curve`, `reconstruction.density.scale`, `print.print_exposure`,
-/// `print.display_tone`) is already both. So `--dump-params` writes the **expanded
+/// (`reconstruction.curve`, `reconstruction.density.scale`, `print.print_exposure`) is
+/// already both. So `--dump-params` writes the **expanded
 /// values** and a recipe naming a preset is rejected as an unknown field.
 ///
 /// That is deliberate, and the alternative was rejected on evidence: a recipe key that
@@ -1110,7 +1142,7 @@ pub enum ConversionPreset {
 /// refused by name rather than as unknown.
 const REMOVED_CONVERSION_PRESETS: [&str; 2] = ["sigmoid-knees", "sigmoid-flat"];
 
-/// What a [`ConversionPreset`] resolves to. Only the four knobs a preset owns: the
+/// What a [`ConversionPreset`] resolves to. Only the three knobs a preset owns: the
 /// recipe's other fields (regional balance, film base, white balance, output preset)
 /// are untouched, which is what lets a preset be layered onto a roll calibration.
 ///
@@ -1120,8 +1152,8 @@ const REMOVED_CONVERSION_PRESETS: [&str; 2] = ["sigmoid-knees", "sigmoid-flat"];
 /// measured reference to `fixed` and rendered the roll off its own calibration at exit 0.
 /// A preset writes no `calibration` key, which is what lets it be layered onto one.
 ///
-/// **A preset must never set `output.preset`.** `film-master` refuses `reinhard`
-/// outright and any non-default `print_exposure`, so a preset that pinned an output branch would make a bare
+/// **A preset must never set `output.preset`.** `film-master` refuses any non-default
+/// `print_exposure`, so a preset that pinned an output branch would make a bare
 /// `hanten convert --output-preset film-master` fail. Keeping the two axes separate is what
 /// lets the conversion default move later without touching the master path.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1129,7 +1161,6 @@ pub struct PresetExpansion {
     pub curve: DensityCurve,
     pub density_scale: [f32; 3],
     pub print_exposure: f32,
-    pub display_tone: DisplayToneCurve,
 }
 
 impl ConversionPreset {
@@ -1206,9 +1237,6 @@ impl ConversionPreset {
     /// arm that would set the stock runs. The arm still runs afterwards and writes the
     /// same value, which is a no-op.
     pub fn expand(self, stock: Option<FilmStock>) -> Result<PresetExpansion> {
-        let reinhard = DisplayToneCurve::Reinhard {
-            headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
-        };
         let characteristic =
             |stock: FilmStock| DensityCurve::Characteristic(CharacteristicParams { stock });
         // The characteristic curve's own per-channel default: it already carries each
@@ -1224,13 +1252,11 @@ impl ConversionPreset {
                 curve: characteristic(FilmStock::GenericC41),
                 density_scale: characteristic_scale,
                 print_exposure: 1.91,
-                display_tone: reinhard,
             },
             ConversionPreset::CharacteristicStock => PresetExpansion {
                 curve: characteristic(self.require_stock(stock)?),
                 density_scale: characteristic_scale,
                 print_exposure: 1.82,
-                display_tone: reinhard,
             },
             ConversionPreset::CharacteristicAim => {
                 let stock = self.require_stock(stock)?;
@@ -1255,7 +1281,6 @@ impl ConversionPreset {
                     curve: characteristic(stock),
                     density_scale: [red, characteristic_scale[1], characteristic_scale[2]],
                     print_exposure: 1.59,
-                    display_tone: reinhard,
                 }
             }
         })
@@ -1383,10 +1408,6 @@ fn conversion_preset_result(
             "print.print_exposure",
             cfg.print.print_exposure != expansion.print_exposure,
         ),
-        (
-            "print.display_tone",
-            cfg.print.display_tone != expansion.display_tone,
-        ),
     ]
     .into_iter()
     .filter_map(|(path, moved)| moved.then_some(path))
@@ -1434,7 +1455,7 @@ fn reconstruction_after_preset(
 
 /// The preset-owned recipe paths whose value the preset replaced.
 ///
-/// A plain recipe-versus-resolved diff over the four paths a preset writes. `curve` is
+/// A plain recipe-versus-resolved diff over the three paths a preset writes. `curve` is
 /// compared as a whole because that is the granularity a preset replaces it at. It carries
 /// no roll calibration to preserve: since `core/calibration-recipe-section` the reference
 /// density lives in `calibration.dmax`, which no preset writes, so a recipe that differs
@@ -1450,10 +1471,6 @@ fn preset_replaced_paths(recipe: &ResolvedConfig, cfg: &ResolvedConfig) -> Vec<&
         (
             "print.print_exposure",
             recipe.print.print_exposure != cfg.print.print_exposure,
-        ),
-        (
-            "print.display_tone",
-            recipe.print.display_tone != cfg.print.display_tone,
         ),
     ]
     .into_iter()
@@ -1483,6 +1500,12 @@ pub struct ResolvedConfig {
     pub calibration: CalibrationParams,
     pub measure: MeasureParams,
     pub print: PrintParams,
+    /// The display tone's headroom — the new chain's `fit_range` section, shared so the
+    /// key is not renamed again when the current chain retires. On the current chain the
+    /// SDR presets apply fit range's operator bit-for-bit, while the HDR presets keep
+    /// their own asymptotic-base form (`display_tone::highlight_lifted_reinhard`) until
+    /// the flip.
+    pub fit_range: crate::recipe::FitRange,
     pub output: OutputParams,
 }
 
@@ -1848,9 +1871,9 @@ pub struct AvifResult {
 /// consumer deciding how to tone-map these files has the same problem the coded and
 /// linear TIFF blocks already solve by stating it, and this states it the same way.
 ///
-/// `tone_curve` is the renderer's **pinned identifier**, not the recipe selector:
-/// `output_render.display_tone` already says what was *asked for* on every preset, and
-/// this says what the renderer *applied*. That is the same pairing the coded- and
+/// `tone_curve` is the renderer's **pinned identifier**, straight from its metadata;
+/// `output_render.display_tone` states the same resolved operator in the block every
+/// preset emits. This is the same pairing the coded- and
 /// linear-TIFF blocks carry, and the AVIF block lacking it was the anomaly — two AVIFs
 /// with byte-identical `cicp`, `profile` and `level` can hold materially different
 /// renditions, and the artifact block should be self-sufficient about which.
@@ -1866,13 +1889,6 @@ pub struct AvifRenderingResult {
     /// Which display tone curve produced these pixels, straight from the renderer's
     /// metadata.
     pub tone_curve: &'static str,
-    /// Resolved highlight-shoulder control and where the shoulder begins. Both are
-    /// **absent** for any tone without a knee — no curve at all, or the unbounded
-    /// one — so their presence is not a proxy for "a tone ran"; `tone_curve` is.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub highlight_compress: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shoulder_start: Option<f32>,
     /// Pinned gamut-mapping and linear-domain identifiers, from the renderer.
     pub gamut_mapping: &'static str,
     pub linear_domain: &'static str,
@@ -1921,13 +1937,6 @@ pub struct HdrLinearTiffResult {
     /// largest value the renderer will produce, and the reason this output cannot
     /// be a 16-bit integer TIFF.
     pub linear_headroom: f32,
-    /// Resolved highlight-shoulder control and where the shoulder begins. Both are
-    /// **absent** when the render applied no display tone curve — there is no knee
-    /// then, and `tone_curve` is what says which of the two happened.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub highlight_compress: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shoulder_start: Option<f32>,
     /// Pinned tone-curve / gamut-mapping / linear-domain identifiers, straight from
     /// the renderer's own metadata rather than restated here.
     pub tone_curve: &'static str,
@@ -1975,10 +1984,7 @@ pub struct HdrCodedTiffResult {
     pub reference_white_nits: f32,
     pub target_peak_nits: f32,
     /// Which display tone curve produced these pixels, straight from the renderer's
-    /// own metadata — the same identifier `hdr_linear_tiff` reports, and the field
-    /// that distinguishes a shouldered rendition from one whose tone came only from
-    /// the reconstruction (`print.display_tone`). Everything else in this block is
-    /// identical between the two.
+    /// own metadata — the same identifier `hdr_linear_tiff` reports.
     pub tone_curve: &'static str,
     /// This frame's **measured** peak and average light levels in cd/m², for PQ.
     ///
@@ -2060,10 +2066,9 @@ pub struct OutputRenderResult {
     /// `linear_range`) **ran at all** — not whether their values were non-default.
     /// `false` only for `film-master`, which never reaches the stage.
     ///
-    /// The display tone curve is **not** one of these: it is applied inside each
-    /// display renderer rather than in the shared stage, so it is reported by
-    /// [`display_tone`](Self::display_tone) and this flag stays `true` under
-    /// `display_tone = none`.
+    /// The display tone is **not** one of these: it is applied inside each display
+    /// renderer rather than in the shared stage, so it is reported by
+    /// [`display_tone`](Self::display_tone).
     pub print_controls: bool,
     /// Whether any display rendering — tone mapping, destination gamut mapping, or
     /// a transfer/display encoding — ran. Always `false` for `film-master` (its
@@ -2071,18 +2076,14 @@ pub struct OutputRenderResult {
     pub display_render: bool,
     /// The encoding the preset resolved to, as a stable identifier.
     pub encoding: &'static str,
-    /// Which display tone curve the branch applied, straight from the resolved
-    /// `print.display_tone` selector.
+    /// The display tone the branch applied: the operator by name and its headroom.
     ///
     /// Absent when the branch has no display tone stage **at all** — `film-master`'s
-    /// bypass — which is a different
-    /// fact from having one and skipping it, and the reason this is an `Option`
-    /// rather than a defaulted selector. It is the only statement of tone policy
-    /// the SDR presets and the AVIF pair emit (neither writes a per-preset
-    /// contract block), so `content` states what the branch does *besides* tone
-    /// and never names a curve.
+    /// bypass. It is the only statement of tone policy the SDR presets and the AVIF
+    /// pair emit (neither writes a per-preset contract block), so `content` states what
+    /// the branch does *besides* tone and never names a curve.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_tone: Option<DisplayToneCurve>,
+    pub display_tone: Option<DisplayToneResult>,
     /// What the pixels contain. For `film-master` this states the intentional-film
     /// content and explicitly disclaims physical scene recovery, and names which
     /// anchor placement the run actually made — roll-fixed `Dmax`, film-base-derived,
@@ -2169,16 +2170,24 @@ fn master_anchor(reconstruction: &Reconstruction, dmax: DmaxSource) -> MasterAnc
     }
 }
 
+/// The display tone a display preset applied, for [`OutputRenderResult::display_tone`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct DisplayToneResult {
+    /// The operator's pinned identifier, or `"identity"` at zero headroom — the new
+    /// chain's `new_flow.fit_range.operator` rule, so both chains name identical pixels
+    /// identically.
+    pub operator: &'static str,
+    /// `fit_range.headroom_stops`; `0` is the identity.
+    pub headroom_stops: f32,
+}
+
 /// Build the report's `output_render` from the resolved config. Pure derivation
 /// (like [`reconstruction_result`]): the branch and what it applies are fully
-/// determined by the preset, the reconstruction, and the resolved
-/// `print.display_tone` selector, so there is nothing to thread back from the
-/// render.
+/// determined by the preset, the reconstruction, and the resolved headroom, so there
+/// is nothing to thread back from the render.
 ///
-/// That third input is not optional bookkeeping. Deriving the block from the preset
-/// alone let `content` assert a shoulder the run had skipped, contradicting the
-/// per-preset block's own `tone_curve` in the same report — so tone is reported as a
-/// field and kept out of the prose.
+/// Tone is reported as a field and kept out of the prose: deriving it from the preset
+/// alone once let `content` assert a shoulder the run had skipped.
 fn output_render_result(cfg: &ResolvedConfig) -> OutputRenderResult {
     let (print_controls, display_render, encoding, content) = match cfg.output.preset {
         OutputPreset::FilmMaster => (
@@ -2303,10 +2312,8 @@ fn output_render_result(cfg: &ResolvedConfig) -> OutputRenderResult {
              a rendered display image, not a film master",
         ),
     };
-    // Sourced from the resolved selector, never inferred from the preset: a display
-    // branch applies whichever curve `print.display_tone` named. Matched
-    // exhaustively so a new preset has to state whether it has a display tone stage
-    // rather than inheriting one silently.
+    // Matched exhaustively so a new preset has to state whether it has a display tone
+    // stage rather than inheriting one silently.
     let display_tone = match cfg.output.preset {
         OutputPreset::FilmMaster => None,
         OutputPreset::GainMapHdr
@@ -2317,7 +2324,15 @@ fn output_render_result(cfg: &ResolvedConfig) -> OutputRenderResult {
         | OutputPreset::HdrHlg
         | OutputPreset::HdrLinearTiff
         | OutputPreset::HdrPqTiff
-        | OutputPreset::HdrHlgTiff => Some(cfg.print.display_tone),
+        | OutputPreset::HdrHlgTiff => Some(DisplayToneResult {
+            // `validate` has already checked the headroom; reference white is both
+            // branches' identity crossover.
+            operator: Headroom::new(cfg.fit_range.headroom_stops)
+                .map_or(crate::pipeline::display_tone::EXTENDED_REINHARD, |h| {
+                    h.operator(1.0)
+                }),
+            headroom_stops: cfg.fit_range.headroom_stops,
+        }),
     };
     OutputRenderResult {
         preset: cfg.output.preset,
@@ -2753,13 +2768,14 @@ fn load_recipe_for(path: Option<&Path>, flow: Flow) -> Result<LoadedRecipe> {
                 };
             let mut value = value;
             // Every document the current chain wrote before `legacy`/`custom` retired
-            // carries the three retired output selectors at their defaults; drop those
-            // before the body is checked or parsed, so an old sidecar still replays.
+            // carries the three retired output selectors at their defaults (and
+            // `print.highlight_compress` at 0); drop those before the body is checked or
+            // parsed, so an old sidecar gets as far as its first real migration error.
             let stripped = flow == Flow::Legacy
                 && envelope_body
                     .as_mut()
                     .or(value.as_mut())
-                    .is_some_and(strip_old_default_output_selectors);
+                    .is_some_and(strip_retired_keys_at_old_defaults);
             // The recipe *body*: an envelope's `params`, else the whole document.
             let body = envelope_body.as_ref().or(value.as_ref());
             let usage = |e| NcError::Usage(format!("invalid recipe {}: {e}", p.display()));
@@ -3248,8 +3264,24 @@ fn reject_legacy_recipe_keys(v: &serde_json::Value, context: &str) -> Result<()>
             removed_output_selector("depth").replacement
         )));
     }
+    let print = v.get("print");
+    if let Some(value) = print.and_then(|p| p.get("display_tone")) {
+        return Err(NcError::Usage(removed_display_tone_recipe_message(
+            value, context,
+        )));
+    }
+    // Only a non-zero width reaches here; the load path strips the old default.
+    if let Some(value) = print.and_then(|p| p.get("highlight_compress")) {
+        return Err(NcError::Usage(format!(
+            "{context}: recipe key `print.highlight_compress` ({value}) was removed with \
+             the `shoulder` display tone, whose knee it placed. The remaining tone, \
+             extended Reinhard, has no knee: its shape is `fit_range.headroom_stops` \
+             (`--display-tone-headroom`). Remove the key — its old default `0` is still \
+             accepted, so a sidecar written before the retirement replays that far."
+        )));
+    }
     // Only a non-default value reaches here: the load path strips the old defaults
-    // first (`strip_old_default_output_selectors`), so what is left asked for something
+    // first (`strip_retired_keys_at_old_defaults`), so what is left asked for something
     // no preset can do by that name.
     for s in &REMOVED_OUTPUT_SELECTORS {
         if let Some(value) = v.get("output").and_then(|o| o.get(s.key)) {
@@ -3358,42 +3390,6 @@ fn sets_density_scale(v: &serde_json::Value) -> bool {
 /// a diagnostic message — what the user would have to write to restate it.
 fn anchor_spelling(a: AnchorPlacement) -> String {
     serde_json::to_string(&a).unwrap_or_else(|_| format!("{a:?}"))
-}
-
-/// The warning for a `--display-tone` reset that silently discarded a stated headroom.
-///
-/// Same shape and same reasoning as [`curve_switch_dropped_anchor`]: the flags-win reset
-/// is *legitimate* — it is what makes a recipe carrying `reinhard` re-runnable under
-/// another tone, and under `film-master` at all — so it cannot be an error. But the
-/// operator's parameter is not carried across a switch, so the render pins a different
-/// tone than the recipe asked for, and the report truthfully states the new one. That
-/// combination is precisely what a warning is for.
-///
-/// Only fires on an **operator change**, and only when the dropped headroom was
-/// non-default: `reinhard → reinhard` keeps the value (by design — see the merge), and a
-/// default headroom asserts nothing to lose. Deliberately *not* an error, unlike a knee
-/// width stated beside a knee-less tone: there both halves are on one command line and
-/// contradict each other, while here the two came from different places and the later
-/// one wins by documented policy.
-fn display_tone_switch_dropped_headroom(
-    before: DisplayToneCurve,
-    after: DisplayToneCurve,
-) -> Option<String> {
-    let DisplayToneCurve::Reinhard { headroom_stops } = before else {
-        return None;
-    };
-    if matches!(after, DisplayToneCurve::Reinhard { .. })
-        || headroom_stops == crate::types::DEFAULT_HEADROOM_STOPS
-    {
-        return None;
-    }
-    Some(format!(
-        "the switch to `--display-tone {after}` dropped the recipe's \
-         `print.display_tone.reinhard.headroom_stops` ({headroom_stops}). The headroom \
-         belongs to the `reinhard` operator and is not carried across a tone switch, so \
-         this render applies `{after}` and the report states it. Restate \
-         `--display-tone reinhard --display-tone-headroom {headroom_stops}` to keep it."
-    ))
 }
 
 /// The `--density-curve` value that selects a curve type — the spelling both switch
@@ -3578,7 +3574,6 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
         cfg.reconstruction.curve = expansion.curve;
         cfg.reconstruction.density.scale = expansion.density_scale;
         cfg.print.print_exposure = expansion.print_exposure;
-        cfg.print.display_tone = expansion.display_tone;
     }
 
     // --density-curve: switch between the curve variants. Same-type is a no-op (keeps
@@ -3731,37 +3726,9 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
     } else if let Some(mode) = args.print.auto_wb {
         cfg.print.white_balance = mode.into();
     }
-    // `--display-tone` / `--display-tone-headroom` ⇒ `print.display_tone`. Naming the
-    // operator resolves that variant's own default rather than carrying another's
-    // parameter across; the headroom flag alone refines a reinhard the recipe already
-    // selected. Same shape as the density curve's switch.
-    if let Some(name) = args.print.display_tone.as_deref() {
-        let selected = DisplayToneCurve::parse(name)?;
-        cfg.print.display_tone = match (selected, args.print.display_tone_headroom) {
-            (DisplayToneCurve::Reinhard { .. }, Some(stops)) => DisplayToneCurve::Reinhard {
-                headroom_stops: stops,
-            },
-            // Re-naming the operator the recipe already selected must not silently reset
-            // a stated headroom to the default.
-            (DisplayToneCurve::Reinhard { headroom_stops }, None) => DisplayToneCurve::Reinhard {
-                headroom_stops: match cfg.print.display_tone {
-                    DisplayToneCurve::Reinhard { headroom_stops } => headroom_stops,
-                    _ => headroom_stops,
-                },
-            },
-            (other, _) => other,
-        };
-    } else if let Some(stops) = args.print.display_tone_headroom {
-        // No operator named: refine the recipe's reinhard. Against any other curve this
-        // is a usage error rather than an implicit switch — `validate_convert` says so.
-        if let DisplayToneCurve::Reinhard { .. } = cfg.print.display_tone {
-            cfg.print.display_tone = DisplayToneCurve::Reinhard {
-                headroom_stops: stops,
-            };
-        }
-    }
-    if let Some(v) = args.print.highlight_compress {
-        cfg.print.highlight_compress = v;
+    // `--display-tone-headroom` ⇒ `fit_range.headroom_stops`.
+    if let Some(stops) = args.print.display_tone_headroom {
+        cfg.fit_range.headroom_stops = stops;
     }
     // `--linear-range LOW,HIGH` ⇒ `print.linear_range`: an atomic pair (both
     // endpoints at once), so it replaces the recipe's pair entirely. Passing the
@@ -3900,14 +3867,12 @@ fn validate_explicit_film_base(base: &[f32; 3]) -> Result<()> {
 
 /// The **complete** `convert` parameter gate: everything [`validate`] checks, plus every
 /// rule that needs a knob's *provenance* rather than its resolved value — the
-/// conversion-preset check, the display-tone-headroom presence check, and the suffix
-/// diagnosis, which must know
+/// conversion-preset check and the suffix diagnosis, which must know
 /// whether anyone actually selected the preset it is about to name
 /// ([`reject_output_suffix_mismatch`]).
 ///
 /// `convert` orchestrators must call **this**, not `validate` — a `merge` + `validate`
-/// pair silently omits the flag-presence rules, and with them a headroom `merge`
-/// dropped without trace. `roll` calls
+/// pair silently omits the flag-presence rules. `roll` calls
 /// [`validate_with_remedy`]: it has no output flags at all, so there is nothing for the
 /// provenance rules above to see. `output/presets`
 /// must preserve the same rules when it adds roll-aware activation for the remaining
@@ -3933,59 +3898,6 @@ pub fn validate_convert(
     // typed and explains the whole contradiction, where every rule below would otherwise
     // report one disassembled piece of the bundle at a time.
     reject_conversion_preset_with_non_display_output(cfg, args)?;
-    // A headroom given while the resolved tone has no white point is silently dropped by
-    // `merge` — the one shape a value rule cannot see, since the resolved config keeps no
-    // trace of it. It also passes the presence-rule tiebreaker: unlike an identity value
-    // that asks for nothing, a headroom *forces* a white point the named tone has no way
-    // to produce.
-    //
-    // Current chain only: under `--new-flow` the headroom is fit range's
-    // (`fit_range.headroom_stops`), which has no tone to select, and `cfg` is a
-    // projection whose `print` section is always the default.
-    if Flow::from_flag(args.new_flow) == Flow::Legacy
-        && args.print.display_tone_headroom.is_some()
-        && cfg.print.display_tone.white_point().is_none()
-    {
-        // The remedy is conditional on the preset, deliberately. "Add `--display-tone
-        // reinhard`" is only advice a user can act on where the preset would accept that
-        // tone; on `film-master`, following it just trades this error for
-        // `validate_output_preset`'s — the same circular-advice defect that ordering
-        // rule 2 last fixed, reappearing in the one rule that legitimately runs before
-        // it.
-        let remedy = if cfg.output.preset.accepts_reinhard_tone() {
-            "Add `--display-tone reinhard`, or drop the headroom.".to_string()
-        } else {
-            // Names **both** actions, and that is the whole point: switching preset alone
-            // leaves the tone at its default, so the user lands straight on this same rule's
-            // accepting branch. Advice that fixes only half of a two-part cause is the
-            // circular-remedy defect wearing a different hat.
-            //
-            // The accepted set is generated from `accepts_reinhard_tone`, never written out.
-            // This was the **third** hand-written copy of that list, and it was already wrong
-            // (it named two presets where nine qualify); `types.rs`'s note on the predicate
-            // records that the previous two went stale the same way.
-            format!(
-                "The `{}` preset does not apply `reinhard` at all — its render cannot \
-                 carry an unbounded tone to the encode boundary — so the headroom has \
-                 nothing to configure here. Either drop it, or convert with a preset that \
-                 applies the tone **and** select the tone there \
-                 (`--display-tone reinhard`); switching the preset alone leaves the tone \
-                 at its default and fails again. Presets that apply it: {}.",
-                cfg.output.preset.name(),
-                OutputPreset::ALL
-                    .into_iter()
-                    .filter(|p| p.accepts_reinhard_tone())
-                    .map(|p| format!("`{}`", p.name()))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-        return Err(NcError::Usage(format!(
-            "--display-tone-headroom sets the white point of the `reinhard` display \
-             tone, but the resolved tone is `{}`. {remedy}",
-            cfg.print.display_tone
-        )));
-    }
     // The output path's suffix is likewise a property of *this invocation*, so it
     // outranks `validate`'s value rules — and specifically outranks the
     // missing-base rule, which `validate` deliberately reports last because an
@@ -3999,18 +3911,25 @@ pub fn validate_convert(
     Ok(())
 }
 
+/// The presets that apply the display tone, backticked and comma-separated. Generated
+/// from [`OutputPreset::applies_display_tone`], never written out: every hand-kept copy
+/// of an accepted-preset list in this file went stale.
+fn display_tone_presets() -> String {
+    OutputPreset::ALL
+        .into_iter()
+        .filter(|p| p.applies_display_tone())
+        .map(|p| format!("`{}`", p.name()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// A `--preset` beside an output branch with no display stage.
 ///
-/// Every conversion preset is a reconstruction **and display** bundle: all five set
-/// `print.display_tone` and four set `print.print_exposure`, which is precisely what
-/// `film-master` refuses (as `legacy` / `custom` did before they retired). Without this
+/// Every conversion preset is a reconstruction **and display** bundle: each sets
+/// `print.print_exposure`, which is precisely what `film-master` refuses. Without this
 /// rule every pairing was already refused — but by the *generic* value rules, so every
-/// message blamed a flag the
-/// user never typed (`--display-tone`, `--print-exposure`) and none named `--preset`.
-/// `film-master` was worse: its rule reports one offender at a time, so the bundle came
-/// apart over three runs (`--print-exposure 0`, then `--display-tone shoulder`) and the
-/// fourth succeeded with the report still claiming the preset's name over a render that
-/// had none of it left.
+/// message blamed a flag the user never typed (`--print-exposure`) and none named
+/// `--preset`.
 ///
 /// Ordered before every other rule in [`validate_convert`] because it is the only one that
 /// can state the actual contradiction rather than a symptom of it.
@@ -4025,17 +3944,10 @@ fn reject_conversion_preset_with_non_display_output(
         return Ok(());
     }
     let preset = ConversionPreset::parse(name)?;
-    // Generated, never written out: a hand-kept list here would be the fourth copy of an
-    // accepted-preset list in this file, and the previous three all went stale.
-    let display_presets = OutputPreset::ALL
-        .into_iter()
-        .filter(|p| p.applies_display_tone())
-        .map(|p| format!("`{}`", p.name()))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let display_presets = display_tone_presets();
     Err(NcError::Usage(format!(
-        "`--preset {}` is a reconstruction **and display** bundle — it sets the display \
-         tone (and its print exposure) that make the look — but `--output-preset {}` runs \
+        "`--preset {}` is a reconstruction **and display** bundle — it sets the print \
+         exposure that places its look on the display — but `--output-preset {}` runs \
          no display stage, so there is nothing for that half of the bundle to configure. \
          Either convert with an output preset that renders a display image ({}), or drop \
          `--preset` and set the reconstruction knobs directly (`--density-curve`, \
@@ -4677,7 +4589,7 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
     // (`film_stock::check_tables`). Skipped, never returned: this used to `return`
     // out of the whole function, which silently disabled every rule *after* this
     // block (the print value checks, `--linear-range`, `validate_output_preset`'s
-    // film-master and reinhard rules, and the
+    // film-master rules, and the
     // trailing missing-film-base rule) for any `characteristic` config — a recipe
     // reached exit 0 with configs those rules exist to refuse. Reachable only
     // through `--params`, since the flag paths are caught earlier by
@@ -4789,18 +4701,9 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
         }
     }
 
-    // Print: exposure / black point finite; gains positive. Highlight roll-off is a
-    // non-negative amount — 0 disables it, and a negative value would be silently
-    // ignored by the density render's soft-clip, so reject it loudly here.
+    // Print: exposure / black point finite; gains positive.
     finite("--print-exposure", &[cfg.print.print_exposure])?;
     finite("--black-point", &[cfg.print.black_point])?;
-    finite("--highlight-compress", &[cfg.print.highlight_compress])?;
-    if cfg.print.highlight_compress < 0.0 {
-        return Err(usage(format!(
-            "--highlight-compress must be >= 0 (got {})",
-            cfg.print.highlight_compress
-        )));
-    }
     // Explicit gains must be positive; the auto modes carry no value to check
     // here (estimated gains are guarded at the estimation point, exit 1).
     if let WbSource::Explicit(gains) = cfg.print.white_balance {
@@ -4827,49 +4730,13 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
 
     validate_output_preset(cfg)?;
 
-    // The display tone's own parameter — today the `reinhard` headroom. A **value**
-    // rule and therefore here rather than in `validate_convert`: `roll` and every
-    // per-frame override reach only `validate`, and without this they decoded the whole
-    // roll before `DisplayTone::resolve` refused the same number, once per frame. The
-    // headroom-*presence* rule (a headroom stated beside a tone that has no white point)
-    // genuinely needs the flag, so it stays in `validate_convert`.
-    cfg.print.display_tone.check_parameters()?;
-
-    // A knee width describes where a shoulder starts, so it says nothing when no
-    // shoulder runs. Rejected rather than ignored — a user who set both stated two
-    // things and only one of them can happen, and the render would silently honour
-    // the other. (`DisplayTone::resolve` repeats this for stage callers.)
-    //
-    // Keyed on `has_knee`, not on `== None`: `reinhard` has no knee either — its shape
-    // comes from the headroom — so a width stated beside it would be just as silently
-    // dropped. Spelling the predicate as "the shoulder is the only curve with a knee"
-    // means the next operator has to answer the question rather than fall through.
-    //
-    // **After `validate_output_preset`, deliberately.** This rule reasons about the
-    // *display* meaning of `highlight_compress`, so a rule naming the branch itself
-    // (film-master's control sweep) is the more specific diagnosis and must win.
-    // Ordering by specificity, like the film-base rule below.
-    if !cfg.print.display_tone.has_knee()
-        && cfg.print.highlight_compress != PrintParams::default().highlight_compress
-    {
-        let remedy = match cfg.print.display_tone {
-            DisplayToneCurve::Reinhard { .. } => {
-                "`reinhard` has no knee at all — its shape is set by \
-                 --display-tone-headroom — so drop the knee width, or select \
-                 `--display-tone shoulder` to place one"
-            }
-            _ => {
-                "keep `--display-tone none` for a render whose tone comes only from \
-                  the reconstruction, or drop it to place the knee"
-            }
-        };
-        return Err(usage(format!(
-            "--highlight-compress / print.highlight_compress ({}) places the display \
-             shoulder's knee, but --display-tone / print.display_tone = {} applies \
-             no shoulder to place. Drop one: {remedy}.",
-            cfg.print.highlight_compress, cfg.print.display_tone
-        )));
-    }
+    // The display tone's headroom. A **value** rule and therefore here rather than in
+    // `validate_convert`: `roll` and every per-frame override reach only `validate`, and
+    // without this they decoded the whole roll before `Headroom::new` refused the same
+    // number, once per frame. There is deliberately no presence rule beside it:
+    // `film-master`'s value sweep refuses a non-default headroom from either provenance,
+    // and a presence rule would refuse the flags-win reset to the default.
+    crate::types::check_headroom_stops(cfg.fit_range.headroom_stops)?;
 
     // Last, deliberately: `calibration.film_base` has no default, and `Dmin` is the
     // divisor of the density conversion, so falling into auto-detection by
@@ -4900,81 +4767,21 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
 /// with `--print-exposure 0`).
 ///
 /// Every preset is atomic — container, depth and profile are resolved from it, and
-/// no knob states them any more — so there is no atomicity rule left to check here.
-/// The two that remain are checked **in order of how specific their diagnosis is**:
-/// rule 1's `film-master` sweep reaches a config rule 2 would also match, and names
-/// the branch the user actually chose. Rule 2 therefore runs last; putting it first
-/// made `film-master` recommend a tone that branch refuses in turn.
-///
-/// 1. **`film-master` bypasses every downstream control, so it rejects a
-///    non-default one** rather than silently ignoring it, and rejects the two
-///    *frame-local measurements* — `auto` `Dmax` and an actually-consulted `auto`
-///    `balance_range` — which normalize per frame and break the cross-frame
-///    consistency a master exists to preserve.
-/// 2. **The extended-Reinhard tone is rejected by every preset whose render cannot
-///    carry it** ([`OutputPreset::accepts_reinhard_tone`]). The other two tones are
-///    bounded by the branch's own ceiling and every display preset takes them, while
-///    this one deliberately overshoots and needs a render that carries the overshoot
-///    to the encode boundary.
+/// no knob states them any more — so the one rule left is `film-master`'s: it bypasses
+/// every downstream control, so it rejects a non-default one rather than silently
+/// ignoring it, and rejects the two *frame-local measurements* — `auto` `Dmax` and an
+/// actually-consulted `auto` `balance_range` — which normalize per frame and break the
+/// cross-frame consistency a master exists to preserve. (A rule refusing the display tone
+/// on presets that could not carry it retired with the other tones: every display preset
+/// applies the one that is left.)
 fn validate_output_preset(cfg: &ResolvedConfig) -> Result<()> {
-    let usage = NcError::Usage;
-    let preset = cfg.output.preset;
-
-    if preset == OutputPreset::FilmMaster {
+    if cfg.output.preset == OutputPreset::FilmMaster {
         return validate_film_master(cfg);
     }
-
-    // Rule 2 — the **extended-Reinhard** tone is narrower than the other two: it is the
-    // one that deliberately overshoots the branch's ceiling, so it needs a render that
-    // can carry the overshoot to the encode boundary. It refuses the one operator the
-    // *display* branches cannot all apply, rather than letting an HDR preset silently
-    // render the SDR shape at the wrong ceiling.
-    //
-    // **Last, deliberately** — after the film-master rules, which reach this same config
-    // with a more specific diagnosis. Placed first, it told a `film-master` user to "use
-    // `--display-tone shoulder` or `none` there", advice that branch refuses in turn: it
-    // bypasses every print control (rule 1). Ordering by specificity, like the
-    // knee-width and film-base rules in `validate`.
-    //
-    // Consequently it is **unreachable today**, and that is the intended end state rather
-    // than dead code: `accepts_reinhard_tone` is false only for `film-master`, already
-    // answered above. It stays as the enforcement half of that predicate's
-    // exhaustiveness — a preset added tomorrow that answers `false` is refused here instead
-    // of silently rendering a tone its branch cannot carry — and
-    // `the_reinhard_display_tone_is_refused_where_the_render_cannot_carry_it` asserts the
-    // earlier rules keep answering, so this going live is a signal, not a regression.
-    //
-    // Its message is therefore written to survive that: it names the accepted set from the
-    // predicate and says nothing about *why* a particular preset is excluded. The previous
-    // wording asserted "the gain-map pair does not [take it]", which the predicate it gates
-    // on had already stopped agreeing with — a diagnostic that would have printed a false
-    // reason the first time it ever fired.
-    if matches!(cfg.print.display_tone, DisplayToneCurve::Reinhard { .. })
-        && !preset.accepts_reinhard_tone()
-    {
-        return Err(usage(format!(
-            "--display-tone reinhard is not applied by the `{}` preset, whose render \
-             cannot carry a tone that deliberately overshoots its ceiling. Accepted by: \
-             {}. Use one of those, or a bounded tone (`--display-tone shoulder`, or \
-             `none` for a reconstruction already inside the ceiling) on this preset.",
-            preset.name(),
-            OutputPreset::ALL
-                .into_iter()
-                .filter(|p| p.accepts_reinhard_tone())
-                .map(|p| format!("`{}`", p.name()))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
-
     Ok(())
 }
 
-/// Rule 1 of [`validate_output_preset`] — everything `film-master` refuses.
-///
-/// Split out so the caller's rule ordering is readable: these are the most specific
-/// diagnoses available for a `film-master` config, so they must run before the
-/// preset-agnostic rule 2 rather than after it.
+/// Everything `film-master` refuses — [`validate_output_preset`]'s one rule.
 fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
     let usage = NcError::Usage;
 
@@ -5039,8 +4846,6 @@ fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
         print_exposure,
         black_point,
         white_balance,
-        display_tone,
-        highlight_compress,
         linear_range,
     } = &cfg.print;
     let offender = [
@@ -5060,19 +4865,15 @@ fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
             format!("{white_balance:?}"),
         ),
         (
-            "--display-tone / print.display_tone",
-            *display_tone != d.display_tone,
-            display_tone.described(),
-        ),
-        (
-            "--highlight-compress / print.highlight_compress",
-            *highlight_compress != d.highlight_compress,
-            format!("{highlight_compress}"),
-        ),
-        (
             "--linear-range / print.linear_range",
             *linear_range != d.linear_range,
             format!("{linear_range:?}"),
+        ),
+        // Not a print control, but a display one the master bypasses just the same.
+        (
+            "--display-tone-headroom / fit_range.headroom_stops",
+            cfg.fit_range.headroom_stops != crate::recipe::FitRange::default().headroom_stops,
+            format!("{}", cfg.fit_range.headroom_stops),
         ),
     ]
     .into_iter()
@@ -5453,6 +5254,36 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
             )));
         }
     }
+    // The retired display tones. The remedy holds on both chains: the headroom flag is
+    // the one the new flow keeps, and `reinhard` is what both apply.
+    if let Some(value) = &args.print.display_tone {
+        let why = match value.as_str() {
+            "reinhard" => "extended Reinhard is now the only display tone and is always \
+                           applied, so there is nothing to select — drop the flag"
+                .to_string(),
+            "none" => "the nearest to `none` on a display preset is the identity, \
+                 `--display-tone-headroom 0`"
+                .to_string(),
+            "shoulder" => "`shoulder` has no replacement — drop the flag for the default \
+                           tone"
+                .to_string(),
+            other => format!("`{other}` was never a tone — drop the flag"),
+        };
+        return Err(NcError::Usage(format!(
+            "--display-tone was removed with the `shoulder` and `none` tones (recipe key \
+             `print.display_tone`): {why}. The tone's one parameter is \
+             `--display-tone-headroom` (recipe `fit_range.headroom_stops`). There is no alias."
+        )));
+    }
+    if args.print.highlight_compress.is_some() {
+        return Err(NcError::Usage(
+            "--highlight-compress was removed with the `shoulder` display tone, whose knee \
+             it placed (recipe key `print.highlight_compress`). The remaining tone, extended \
+             Reinhard, has no knee: its shape is `--display-tone-headroom` (recipe \
+             `fit_range.headroom_stops`). There is no alias."
+                .to_string(),
+        ));
+    }
     if let Some(s) = REMOVED_OUTPUT_SELECTORS
         .iter()
         .find(|s| (s.present)(&args.output_opts))
@@ -5514,8 +5345,7 @@ fn removed_sigmoid_flag(flags: &RemovedSigmoidFlags) -> Option<(&'static str, &'
     // Each remedy must also hold under `--new-flow`, which refuses the anchor
     // placements and the display tone the current chain offers.
     const KNEE: &str = "the exponential has no knees, and highlight roll-off belongs to \
-                        the display tone (`--display-tone`; under `--new-flow`, fit \
-                        range's `--display-tone-headroom`)";
+                        the display tone (`--display-tone-headroom`)";
     [
         (
             "--sigmoid-contrast",
@@ -6223,6 +6053,11 @@ fn convert_frame(
     // an identical rendition into different containers). An `if let Some(transfer) =
     // transfer_for(..)` chain would silently hand the TIFF presets to the AVIF
     // encoder, so the compiler is made to enumerate the cases instead.
+    //
+    // The display tone is resolved once, before any render: an unusable headroom then
+    // fails without having paid for the reconstruction and print stage. `film-master`
+    // applies none, and `validate` has held its headroom at the default.
+    let tone = Headroom::new(cfg.fit_range.headroom_stops)?;
     let rendered = match cfg.output.preset {
         OutputPreset::UltraHdrV1 | OutputPreset::GainMapHdr => {
             // One render for both gain-map presets. They differ only in which
@@ -6251,9 +6086,6 @@ fn convert_frame(
                     )));
                 }
             };
-            // Resolved before the source is rendered: an unusable knee width then
-            // fails without having paid for the reconstruction and print stage.
-            let tone = DisplayTone::resolve(&cfg.print)?;
             let source = stages::render_display_source(
                 &image,
                 &base.base,
@@ -6281,7 +6113,6 @@ fn convert_frame(
             // The same shared display source as every other display preset, stopped
             // one stage earlier — `render_linear` without `encode_transfer`, so the
             // samples stay display-linear BT.2020 and no transfer is ever applied.
-            let tone = DisplayTone::resolve(&cfg.print)?;
             let source = stages::render_display_source(
                 &image,
                 &base.base,
@@ -6316,7 +6147,6 @@ fn convert_frame(
                     cfg.output.preset.name()
                 ))
             })?;
-            let tone = DisplayTone::resolve(&cfg.print)?;
             let source = stages::render_display_source(
                 &image,
                 &base.base,
@@ -6391,6 +6221,7 @@ fn convert_frame(
                 &base.base,
                 &cfg.reconstruction,
                 &cfg.print,
+                tone,
                 gamut,
                 dmax_input,
             )?)
@@ -6590,8 +6421,6 @@ fn convert_frame(
                 target_peak_nits: summary.metadata.linear.target_peak_nits,
                 linear_headroom: summary.metadata.linear.linear_headroom,
                 tone_curve: summary.metadata.linear.tone_curve,
-                highlight_compress: summary.metadata.linear.highlight_compress,
-                shoulder_start: summary.metadata.linear.shoulder_start,
                 gamut_mapping: summary.metadata.linear.gamut_mapping,
                 linear_domain: summary.metadata.linear.linear_domain,
                 hlg_system_gamma: summary.metadata.hlg_system_gamma,
@@ -6676,8 +6505,6 @@ fn convert_frame(
             reference_white_nits: linear.reference_white_nits,
             target_peak_nits: linear.target_peak_nits,
             linear_headroom: linear.linear_headroom,
-            highlight_compress: linear.highlight_compress,
-            shoulder_start: linear.shoulder_start,
             tone_curve: linear.tone_curve,
             gamut_mapping: linear.gamut_mapping,
             linear_domain: linear.linear_domain,
@@ -7237,7 +7064,6 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // replaced. `merge` consumes it, and the resolved config alone cannot answer that.
     let recipe_cfg = loaded.doc.config().into_owned();
     let recipe_reconstruction = recipe_cfg.reconstruction.clone();
-    let recipe_display_tone = recipe_cfg.print.display_tone;
     // Under `--new-flow` the flags merge into the new chain's recipe, whose decode
     // section the current chain's `merge` does not have; `cfg` is then its projection,
     // for the stages both chains run. The decode's value rules run here, ahead of
@@ -7383,13 +7209,6 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // is then the user's own choice rather than a silent reset.
     if args.density.density_scale.is_none()
         && let Some(msg) = curve_switch_dropped_density_scale(&warn_baseline, &cfg.reconstruction)
-    {
-        push_warning_buf(&mut warnings, &log, msg);
-    }
-    // Same policy for the display tone's own parameter: a `--display-tone` reset takes
-    // the named operator's default, so a recipe that pinned a headroom loses it.
-    if let Some(msg) =
-        display_tone_switch_dropped_headroom(recipe_display_tone, cfg.print.display_tone)
     {
         push_warning_buf(&mut warnings, &log, msg);
     }
@@ -7850,9 +7669,6 @@ fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
         *base = switched;
         return;
     }
-    if names_the_same_externally_tagged_variant(base, overlay) {
-        return;
-    }
     match (base, overlay) {
         (serde_json::Value::Object(b), serde_json::Value::Object(o)) => {
             for (k, v) in o {
@@ -7861,59 +7677,6 @@ fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
         }
         (b, o) => *b = o.clone(),
     }
-}
-
-/// Whether the overlay names the base's **own** externally-tagged variant as a bare
-/// string, stating no parameters — in which case it changes nothing and the base's
-/// parameters survive.
-///
-/// serde's externally-tagged form spells a parameterless selection as a bare string, which
-/// is why `"reinhard"`, `{"reinhard": {}}` and `{"reinhard": {"headroom_stops": 6}}` are all
-/// accepted for one variant. Without this, only the *object* spellings deep-merged: a bare
-/// string fell through to the wholesale-replace arm, so a `roll` overlay of `"reinhard"` over
-/// a recipe's `{"reinhard": {"headroom_stops": 10}}` resolved the serde default of 6 —
-/// different pixels from `{"reinhard": {}}`, which kept 10, for two spellings the guide calls
-/// interchangeable, and with no warning because
-/// `display_tone_switch_dropped_headroom` sees `Reinhard → Reinhard` and reports nothing.
-///
-/// A bare string naming a *different* variant is still a switch and still replaces — that is
-/// `is_variant_switch`'s job for objects and the fallthrough's for strings, and the warning
-/// fires there.
-///
-/// Deliberately **narrower** than "same tag": the base's payload must be an object, so this
-/// reaches serde *struct* variants only. See the body for why a newtype variant's bare tag
-/// is incomplete input rather than a partial override — an earlier version of this guard
-/// omitted that clause and silently converted a malformed per-frame `film_base` override
-/// into an inherit at exit 0.
-fn names_the_same_externally_tagged_variant(
-    base: &serde_json::Value,
-    overlay: &serde_json::Value,
-) -> bool {
-    let (serde_json::Value::Object(b), serde_json::Value::String(tag)) = (base, overlay) else {
-        return false;
-    };
-    if b.len() != 1 {
-        return false;
-    }
-    let Some((key, payload)) = b.iter().next() else {
-        return false;
-    };
-    // The payload must be an **object**, i.e. a serde *struct* variant with named fields.
-    // That is what makes "same variant, nothing stated" coherent: there are fields the
-    // overlay could have stated and chose not to, so keeping the base's is a partial
-    // override. `Reinhard { headroom_stops }` is the only recipe variant of that shape, and
-    // its bare string is independently valid precisely because the field is defaulted.
-    //
-    // Every other externally-tagged recipe variant is a *newtype* carrying a positional
-    // payload — `FilmBaseSource::{Region([u32;4]), Explicit([f32;3])}`,
-    // `WbSource::Explicit([f32;3])`, `DmaxSource::Explicit(f32)`,
-    // `BalanceRange::Explicit([f32;2])`. There a bare tag states nothing *and there is
-    // nothing it could have stated*, so it is incomplete input rather than a partial
-    // override, and serde rejecting it is the correct outcome. Without this clause the
-    // guard turned a per-frame `{"film_base": {"source": "explicit"}}` from a loud
-    // rejection into a silent inherit at exit 0 — trading this project's fail-loudly rule
-    // for a convenience nobody asked for.
-    key == tag && payload.is_object()
 }
 
 /// The externally-tagged-enum-variant-switch signature: `base` and `overlay` are
@@ -8088,7 +7851,7 @@ fn resolve_frames(
                         match shared_recipe {
                             Some(_) => recipe::check_body(&ov, false, &context)?,
                             None => {
-                                strip_old_default_output_selectors(&mut ov);
+                                strip_retired_keys_at_old_defaults(&mut ov);
                                 recipe::check_body_without_flag(&ov, &context)?;
                                 reject_legacy_recipe_keys(&ov, &context)?;
                             }
@@ -8304,25 +8067,6 @@ fn resolve_frames(
                                 log.warn(&msg);
                                 roll_warnings.push(msg);
                             }
-                        }
-                        // The display-tone twin of the rule above: an overlay that names
-                        // a different tone takes that
-                        // tone's default, so a roll-level `headroom_stops` it does not
-                        // restate is dropped. Unlike `curve.anchor` this needs no key
-                        // probe — there is no separate "overlay sets `display_tone`"
-                        // warning to double up with, and the overlay naming the tone *is*
-                        // the case that drops the headroom.
-                        if let Some(why) = display_tone_switch_dropped_headroom(
-                            shared.print.display_tone,
-                            cfg.print.display_tone,
-                        ) {
-                            let msg = format!(
-                                "frame {}: a per-frame `params` override switches \
-                                 `print.display_tone`, and {why}",
-                                mf.input.display()
-                            );
-                            log.warn(&msg);
-                            roll_warnings.push(msg);
                         }
                         (cfg, frame_recipe, Some(ov), setting)
                     }
@@ -9889,18 +9633,13 @@ mod tests {
         merge(base_cfg(), &parse_convert(extra))
     }
 
-    /// The resolved (curve, density gain, exposure, tone) a merge produced.
-    fn bundle_of(cfg: &ResolvedConfig) -> (DensityCurve, [f32; 3], f32, DisplayToneCurve) {
+    /// The resolved (curve, density gain, exposure) a merge produced.
+    fn bundle_of(cfg: &ResolvedConfig) -> (DensityCurve, [f32; 3], f32) {
         let Reconstruction { curve, density } = &cfg.reconstruction;
-        (
-            *curve,
-            density.scale,
-            cfg.print.print_exposure,
-            cfg.print.display_tone,
-        )
+        (*curve, density.scale, cfg.print.print_exposure)
     }
 
-    /// Every preset resolves the four knobs it owns, and **only** those four.
+    /// Every preset resolves the three knobs it owns, and **only** those three.
     ///
     /// The values themselves are calibrated and pinned by
     /// `pipeline::stages::midtone_placement::presets_land_the_calibration_target_on_the_calibration_stock`;
@@ -9919,11 +9658,12 @@ mod tests {
             let expansion = preset
                 .expand(preset.needs_film_stock().then_some(FilmStock::Portra400))
                 .unwrap();
-            let (curve, scale, exposure, tone) = bundle_of(&cfg);
+            let (curve, scale, exposure) = bundle_of(&cfg);
             assert_eq!(curve, expansion.curve, "{}", preset.name());
             assert_eq!(scale, expansion.density_scale, "{}", preset.name());
             assert_eq!(exposure, expansion.print_exposure, "{}", preset.name());
-            assert_eq!(tone, expansion.display_tone, "{}", preset.name());
+            // The display tone is not the preset's: its headroom stays the recipe's.
+            assert_eq!(cfg.fit_range, base_cfg().fit_range, "{}", preset.name());
             // The knobs a preset must leave alone. `output.preset` is the load-bearing
             // one: pinning an output branch here would make a bare
             // `hanten convert --output-preset film-master` fail, which is exactly what a
@@ -9956,15 +9696,12 @@ mod tests {
             "characteristic-generic",
             "--print-exposure",
             "0.2",
-            "--display-tone",
-            "shoulder",
             "--density-scale",
             "1.1,1,1",
         ])
         .unwrap();
-        let (curve, scale, exposure, tone) = bundle_of(&cfg);
+        let (curve, scale, exposure) = bundle_of(&cfg);
         assert_eq!(exposure, 0.2);
-        assert_eq!(tone, DisplayToneCurve::Shoulder);
         assert_eq!(scale, [1.1, 1.0, 1.0]);
         // Untouched by any flag, so still the preset's.
         assert_eq!(
@@ -9992,7 +9729,6 @@ mod tests {
             },
             print: PrintParams {
                 print_exposure: -2.0,
-                display_tone: DisplayToneCurve::Shoulder,
                 ..base_cfg().print
             },
             ..base_cfg()
@@ -10002,14 +9738,13 @@ mod tests {
             &parse_convert(&["--preset", "characteristic-generic"]),
         )
         .unwrap();
-        let (curve, scale, exposure, tone) = bundle_of(&cfg);
+        let (curve, scale, exposure) = bundle_of(&cfg);
         assert!(matches!(curve, DensityCurve::Characteristic(_)));
         assert_eq!(
             scale,
             DensityParams::default_scale_for(DensityCurveType::Characteristic)
         );
         assert_eq!(exposure, 1.91);
-        assert!(matches!(tone, DisplayToneCurve::Reinhard { .. }));
     }
 
     /// `characteristic-aim` derives its red scale from the stock, not from a table of
@@ -10346,7 +10081,6 @@ mod tests {
             },
             print: PrintParams {
                 print_exposure: expansion.print_exposure,
-                display_tone: expansion.display_tone,
                 ..base_cfg().print
             },
             ..base_cfg()
@@ -10426,34 +10160,6 @@ mod tests {
         // Catches clap derive mistakes (duplicate flags, bad value parsers).
         use clap::CommandFactory;
         Cli::command().debug_assert();
-    }
-
-    #[test]
-    fn display_tone_help_enumerates_every_accepted_name() {
-        // Dropping the `ValueEnum` derive silently took `--help`'s `[possible values: …]`
-        // line and the shell-completion candidates with it. The candidates are generated
-        // from `DisplayToneCurve::NAMES`, so this pins that they stay in step with what
-        // `DisplayToneCurve::parse` accepts rather than being a second hand-written list.
-        use clap::CommandFactory;
-        let cmd = Cli::command();
-        let convert = cmd
-            .get_subcommands()
-            .find(|c| c.get_name() == "convert")
-            .expect("convert subcommand");
-        let arg = convert
-            .get_arguments()
-            .find(|a| a.get_long() == Some("display-tone"))
-            .expect("--display-tone");
-        let offered: Vec<String> = arg
-            .get_possible_values()
-            .iter()
-            .map(|v| v.get_name().to_string())
-            .collect();
-        assert_eq!(offered, DisplayToneCurve::NAMES, "help lost a spelling");
-        // Falsifiable in the other direction: every offered name really parses.
-        for name in DisplayToneCurve::NAMES {
-            DisplayToneCurve::parse(name).unwrap_or_else(|e| panic!("{name}: {e}"));
-        }
     }
 
     #[test]
@@ -12386,7 +12092,7 @@ mod tests {
             let replacement = removed_output_selector(key).replacement;
             assert!(msg.contains(replacement), "{flag}: {msg}");
             let mut recipe = serde_json::json!({ "output": { key: value } });
-            if strip_old_default_output_selectors(&mut recipe) {
+            if strip_retired_keys_at_old_defaults(&mut recipe) {
                 // The value every earlier build wrote by default: dropped, not refused.
                 assert!(recipe["output"].get(key).is_none(), "{key}: {recipe}");
                 reject_legacy_recipe_keys(&recipe, "recipe").unwrap();
@@ -12639,116 +12345,120 @@ mod tests {
     }
 
     #[test]
-    fn merge_display_tone_flag_replaces_the_recipe_selector() {
-        // The merge arm — a forgotten one silently makes `--display-tone` a no-op.
-        let cfg = merge(base_cfg(), &parse_convert(&["--display-tone", "none"])).unwrap();
-        assert_eq!(cfg.print.display_tone, DisplayToneCurve::None);
-        // Absent flag → the recipe's selector survives.
+    fn the_retired_display_tone_flags_are_refused_with_a_migration_error() {
+        // On both chains: `reject_removed_flags` runs before the availability table, so
+        // each remedy must hold under `--new-flow` too — and every one names only the
+        // headroom flag, which both chains keep.
+        for new_flow in [false, true] {
+            let run = |extra: &[&str]| {
+                let mut argv = extra.to_vec();
+                if new_flow {
+                    argv.push("--new-flow");
+                }
+                reject_removed_flags(&parse_convert(&argv))
+                    .unwrap_err()
+                    .to_string()
+            };
+            for (value, remedy) in [
+                ("shoulder", "has no replacement"),
+                ("none", "--display-tone-headroom 0"),
+                ("reinhard", "always"),
+                ("sigmoid", "was never a tone"),
+            ] {
+                let msg = run(&["--display-tone", value]);
+                assert!(msg.contains("--display-tone was removed"), "{value}: {msg}");
+                assert!(msg.contains(remedy), "{value}: {msg}");
+                assert!(msg.contains("fit_range.headroom_stops"), "{value}: {msg}");
+            }
+            let msg = run(&["--highlight-compress", "0"]);
+            assert!(msg.contains("--highlight-compress was removed"), "{msg}");
+            assert!(msg.contains("--display-tone-headroom"), "{msg}");
+        }
+        // Falsifiable: the headroom flag itself is not a removed flag.
+        reject_removed_flags(&parse_convert(&["--display-tone-headroom", "4"])).unwrap();
+    }
+
+    #[test]
+    fn the_retired_display_tone_recipe_keys_are_refused_with_a_migration_error() {
+        // Every `print.display_tone` value is refused, the old default included: replaying
+        // `"shoulder"` would render differently, so stripping it would be a silent change.
+        for (value, remedy) in [
+            (serde_json::json!("shoulder"), "has no replacement"),
+            (serde_json::json!("none"), "\"headroom_stops\": 0"),
+            (
+                serde_json::json!({"reinhard": {"headroom_stops": 4.0}}),
+                "\"headroom_stops\": 4",
+            ),
+            (serde_json::json!("reinhard"), "remove the key"),
+        ] {
+            let mut v = serde_json::json!({"print": {"display_tone": value}});
+            assert!(!strip_retired_keys_at_old_defaults(&mut v), "{value}");
+            let msg = reject_legacy_recipe_keys(&v, "recipe r.json")
+                .unwrap_err()
+                .to_string();
+            assert!(msg.contains("`print.display_tone`"), "{value}: {msg}");
+            assert!(msg.contains(remedy), "{value}: {msg}");
+            // Only the two retired tones are lost renders; a moved `reinhard` is not.
+            let lost = matches!(value.as_str(), Some("shoulder" | "none"));
+            assert_eq!(msg.contains("reference build"), lost, "{value}: {msg}");
+            assert_eq!(msg.contains("render is unchanged"), !lost, "{value}: {msg}");
+        }
+        // `highlight_compress` at its old default is stripped, so a sidecar replays past
+        // it; any other width is refused.
+        let mut v = serde_json::json!({"print": {"highlight_compress": 0.0}});
+        assert!(strip_retired_keys_at_old_defaults(&mut v));
+        reject_legacy_recipe_keys(&v, "recipe r.json").unwrap();
+        let mut v = serde_json::json!({"print": {"highlight_compress": 0.4}});
+        assert!(!strip_retired_keys_at_old_defaults(&mut v));
+        let msg = reject_legacy_recipe_keys(&v, "recipe r.json")
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("`print.highlight_compress`"), "{msg}");
+    }
+
+    #[test]
+    fn merge_display_tone_headroom_sets_fit_range() {
+        // The merge arm — a forgotten one silently makes the flag a no-op.
+        let cfg = merge(
+            base_cfg(),
+            &parse_convert(&["--display-tone-headroom", "3"]),
+        )
+        .unwrap();
+        assert_eq!(cfg.fit_range.headroom_stops, 3.0);
+        // Absent flag → the recipe's value survives.
         let recipe: ResolvedConfig =
-            serde_json::from_str(r#"{"print":{"display_tone":"none"}}"#).unwrap();
+            serde_json::from_str(r#"{"fit_range":{"headroom_stops":10.0}}"#).unwrap();
         assert_eq!(
             merge(recipe.clone(), &parse_convert(&[]))
                 .unwrap()
-                .print
-                .display_tone,
-            DisplayToneCurve::None
+                .fit_range
+                .headroom_stops,
+            10.0
         );
-        // Passing the documented default is the flags-win *reset* of a recipe's
-        // non-default selector — what makes such a recipe usable under `film-master`.
+        // The flag wins over the recipe.
         assert_eq!(
-            merge(recipe, &parse_convert(&["--display-tone", "shoulder"]))
+            merge(recipe, &parse_convert(&["--display-tone-headroom", "3"]))
                 .unwrap()
-                .print
-                .display_tone,
-            DisplayToneCurve::Shoulder
+                .fit_range
+                .headroom_stops,
+            3.0
         );
-        // No flag, no recipe key → the shipped shoulder.
+        // No flag, no recipe key → the documented default.
         assert_eq!(
-            merge(base_cfg(), &parse_convert(&[]))
-                .unwrap()
-                .print
-                .display_tone,
-            DisplayToneCurve::Shoulder
+            base_cfg().fit_range.headroom_stops,
+            crate::types::DEFAULT_HEADROOM_STOPS
         );
     }
 
     #[test]
-    fn merge_display_tone_headroom_refines_the_selected_reinhard() {
-        // The operator's parameter is the knob's own fourth coupled spot, and its two
-        // interesting merge arms are unreachable from the selector test above: neither
-        // is exercised by naming a tone alone, so collapsing either one broke no test.
-        //
-        // **The semantics chosen, recorded because they differ from the flags-win
-        // *reset* idiom this same flag family uses for the selector:** re-naming an
-        // operator the recipe already selected **preserves** its stated parameter.
-        // `--display-tone reinhard` says "use reinhard", not "use reinhard at the
-        // default headroom" — the reset spelling is the explicit
-        // `--display-tone-headroom`, which is one flag away. Silently resetting it would
-        // render a recipe's `headroom_stops: 10` at 6, at exit 0, with the report
-        // truthfully saying 6.
-        let reinhard = |stops: f32| DisplayToneCurve::Reinhard {
-            headroom_stops: stops,
-        };
-        let at_10: ResolvedConfig = serde_json::from_str(
-            r#"{"print":{"display_tone":{"reinhard":{"headroom_stops":10.0}}}}"#,
-        )
-        .unwrap();
-        let tone = |cfg: ResolvedConfig, args: &[&str]| {
-            merge(cfg, &parse_convert(args)).unwrap().print.display_tone
-        };
-
-        // Arm 1 — naming the operator the recipe already selected keeps its headroom.
-        assert_eq!(
-            tone(at_10.clone(), &["--display-tone", "reinhard"]),
-            reinhard(10.0),
-            "re-naming the operator reset the recipe's stated headroom"
-        );
-        // Arm 2 — the headroom flag alone refines an already-selected reinhard.
-        assert_eq!(
-            tone(at_10.clone(), &["--display-tone-headroom", "3"]),
-            reinhard(3.0)
-        );
-        // Both together: the flag wins over the recipe's value, as flags do.
-        assert_eq!(
-            tone(
-                at_10,
-                &["--display-tone", "reinhard", "--display-tone-headroom", "3"]
-            ),
-            reinhard(3.0)
-        );
-        // Naming it where the recipe selected something else resolves the *documented
-        // default*, not another operator's parameter — there is none to carry across.
-        assert_eq!(
-            tone(base_cfg(), &["--display-tone", "reinhard"]),
-            reinhard(crate::types::DEFAULT_HEADROOM_STOPS)
-        );
-        // A headroom alone against a tone that has no white point is left untouched by
-        // `merge` — the resolved config keeps no trace of it, which is exactly why
-        // `validate_convert` rejects it by flag presence instead.
-        assert_eq!(
-            tone(base_cfg(), &["--display-tone-headroom", "3"]),
-            DisplayToneCurve::Shoulder
-        );
-        let args = parse_convert(&["--display-tone-headroom", "3"]);
-        let cfg = merge(base_cfg(), &args).unwrap();
-        let err = validate_convert(&cfg, &args, RecipePreset::Unstated)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("--display-tone-headroom"), "{err}");
-    }
-
-    #[test]
-    fn the_reinhard_headroom_is_a_value_rule_so_roll_inherits_it() {
+    fn the_headroom_is_a_value_rule_so_roll_inherits_it() {
         // `roll` and every per-frame override reach `validate`, never `validate_convert`
-        // — so a bound that lives only in `DisplayTone::resolve` is no gate at all for
-        // them: a 36-frame roll decoded and reconstructed 36 times before failing.
-        // `validate` must refuse the number itself, before anything is opened.
+        // — so a bound that lives only in `Headroom::new` is no gate at all for them: a
+        // 36-frame roll decoded and reconstructed 36 times before failing. `validate`
+        // must refuse the number itself, before anything is opened.
         let cfg = |stops: f32| ResolvedConfig {
-            print: PrintParams {
-                display_tone: DisplayToneCurve::Reinhard {
-                    headroom_stops: stops,
-                },
-                ..PrintParams::default()
+            fit_range: crate::recipe::FitRange {
+                headroom_stops: stops,
             },
             output: OutputParams {
                 preset: OutputPreset::DisplayP3,
@@ -12758,6 +12468,7 @@ mod tests {
         for bad in [-1.0, f32::NAN, f32::INFINITY, 30.0] {
             let msg = validate_err(&cfg(bad));
             assert!(msg.contains("--display-tone-headroom"), "{bad}: {msg}");
+            assert!(Headroom::new(bad).is_err(), "{bad}");
         }
         // Falsifiable: the endpoints of the accepted range validate clean, and the
         // renderer agrees with the gate on every one of them — the single-definition
@@ -12768,320 +12479,48 @@ mod tests {
             crate::types::MAX_HEADROOM_STOPS,
         ] {
             validate(&cfg(good)).unwrap_or_else(|e| panic!("{good}: {e}"));
-            DisplayTone::resolve(&cfg(good).print).unwrap_or_else(|e| panic!("{good}: {e}"));
-        }
-        for bad in [-1.0, f32::NAN, f32::INFINITY, 30.0] {
-            assert!(DisplayTone::resolve(&cfg(bad).print).is_err(), "{bad}");
+            Headroom::new(good).unwrap_or_else(|e| panic!("{good}: {e}"));
         }
     }
 
     #[test]
-    fn a_knee_width_beside_the_reinhard_tone_is_rejected_not_dropped() {
-        // `reinhard` has no knee either — its shape comes from the headroom — so the
-        // contradiction rule must key on "this curve has a knee", not on `== none`.
-        let cfg = ResolvedConfig {
-            print: PrintParams {
-                display_tone: DisplayToneCurve::Reinhard {
-                    headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
-                },
-                highlight_compress: 1.0,
-                ..PrintParams::default()
-            },
-            output: OutputParams {
-                preset: OutputPreset::DisplayP3,
-            },
-            ..base_cfg()
-        };
-        let msg = validate_err(&cfg);
-        assert!(msg.contains("highlight_compress"), "{msg}");
-        assert!(msg.contains("no shoulder to place"), "{msg}");
-        assert!(msg.contains("--display-tone-headroom"), "{msg}");
-        // Falsifiable: the default knee width asks for nothing and is accepted.
-        let mut ok = cfg;
-        ok.print.highlight_compress = PrintParams::default().highlight_compress;
-        validate(&ok).unwrap();
-    }
-
-    #[test]
-    fn a_knee_width_beside_no_tone_curve_is_rejected_not_dropped() {
-        // `highlight_compress` places the shoulder's knee, so it describes nothing
-        // without a shoulder. Rejected loudly rather than silently ignored.
-        let cfg = ResolvedConfig {
-            print: PrintParams {
-                display_tone: DisplayToneCurve::None,
-                highlight_compress: 1.0,
-                ..PrintParams::default()
-            },
-            output: OutputParams {
-                preset: OutputPreset::UltraHdrV1,
-            },
-            ..base_cfg()
-        };
-        let msg = validate_err(&cfg);
-        assert!(msg.contains("highlight_compress"), "{msg}");
-        assert!(msg.contains("no shoulder to place"), "{msg}");
-
-        // Falsifiable: each half alone is fine on a display preset.
-        let mut ok = cfg.clone();
-        ok.print.highlight_compress = 0.0;
-        validate(&ok).unwrap();
-        let mut ok = cfg;
-        ok.print.display_tone = DisplayToneCurve::Shoulder;
-        validate(&ok).unwrap();
-    }
-
-    #[test]
-    fn the_default_knee_width_is_accepted_beside_no_tone_curve() {
-        // `--display-tone none --highlight-compress 0` is **correct** to accept, and
-        // this pins it so a later "the flag was passed, reject it" tightening trips a
-        // test instead of shipping.
-        //
-        // `0` is the identity for that knob: it asks for nothing the render would not
-        // already do, so it contradicts nothing — unlike a presence rule's classic case,
-        // a flag that forces something the branch cannot produce, a zero knee width
-        // forces no knee. Rejecting it by presence would also kill the
-        // documented flags-win reset (`merge_display_tone_flag_replaces_the_recipe_selector`):
-        // a recipe carrying a knee width could never be re-run with `none`.
-        let cfg = |highlight_compress: f32| ResolvedConfig {
-            print: PrintParams {
-                display_tone: DisplayToneCurve::None,
-                highlight_compress,
-                ..PrintParams::default()
-            },
-            output: OutputParams {
-                preset: OutputPreset::DisplayP3,
-            },
-            ..base_cfg()
-        };
-        assert_eq!(PrintParams::default().highlight_compress, 0.0);
-        validate(&cfg(0.0)).unwrap();
-        // The flag provenance is accepted too — the rule reads the resolved value, so
-        // typing the default must behave exactly like omitting it.
-        let merged = merge(
-            base_cfg(),
-            &parse_convert(&[
-                "--output-preset",
-                "display-p3",
-                "--display-tone",
-                "none",
-                "--highlight-compress",
-                "0",
-            ]),
-        )
-        .unwrap();
-        validate(&merged).unwrap();
-        // Falsifiable: a non-zero width beside `none` is still the loud contradiction.
-        assert!(
-            validate_err(&cfg(1.0)).contains("no shoulder to place"),
-            "a non-default knee width must still be rejected"
-        );
-    }
-
-    #[test]
-    fn the_default_tone_selector_is_accepted_on_every_non_display_branch() {
-        // `--display-tone shoulder` on `film-master` is **correct** to accept: rule 1
-        // is a resolved-*value* rule, and `shoulder` is the documented default, so it
-        // asserts nothing that branch contradicts.
-        //
-        // It is also the idiom that makes a recipe carrying `display_tone: none`
-        // usable on it at all — the flags-win reset
-        // `merge_display_tone_flag_replaces_the_recipe_selector` documents. A presence
-        // rule here would remove that escape hatch and would have to be mirrored for
-        // recipe keys to keep the two provenances indistinguishable, which is the
-        // trade `validate_output_preset`'s rustdoc declines.
+    fn film_master_refuses_a_non_default_headroom_and_accepts_the_reset() {
+        // The master applies no display tone, so a stated headroom would be silently
+        // ignored — refused by the resolved *value*, whichever provenance set it.
         let recipe: ResolvedConfig =
-            serde_json::from_str(r#"{"print":{"display_tone":"none"}}"#).unwrap();
-        let cfg = merge(
-            recipe,
-            &parse_convert(&[
-                "--output-preset",
-                "film-master",
-                "--display-tone",
-                "shoulder",
-                "--auto-base",
-            ]),
-        )
-        .unwrap();
-        assert_eq!(cfg.print.display_tone, DisplayToneCurve::Shoulder);
-        validate(&cfg).unwrap();
-    }
-
-    #[test]
-    fn display_tone_is_consumed_only_by_the_display_presets() {
-        // Same shape as `linear_range_is_consumed_only_by_the_display_preset`, and for
-        // the same reason: `film-master` bypasses display rendering entirely.
-        let cfg_with = |preset: OutputPreset| ResolvedConfig {
-            print: PrintParams {
-                display_tone: DisplayToneCurve::None,
-                ..PrintParams::default()
-            },
-            output: OutputParams { preset },
-            ..base_cfg()
+            serde_json::from_str(r#"{"fit_range":{"headroom_stops":3.0}}"#).unwrap();
+        let master = |recipe: ResolvedConfig, extra: &[&str]| {
+            let mut argv = vec!["--output-preset", "film-master", "--auto-base"];
+            argv.extend_from_slice(extra);
+            merge(recipe, &parse_convert(&argv)).unwrap()
         };
-        let msg = validate_err(&cfg_with(OutputPreset::FilmMaster));
-        assert!(msg.contains("display_tone"), "{msg}");
-        assert!(
-            msg.contains("bypasses all print and display controls"),
-            "{msg}"
-        );
-        // Every display preset accepts it — including the SDR pair, which is where it
-        // changes pixels today.
+        for cfg in [
+            master(recipe.clone(), &[]),
+            master(base_cfg(), &["--display-tone-headroom", "3"]),
+        ] {
+            let msg = validate_err(&cfg);
+            assert!(msg.contains("fit_range.headroom_stops"), "{msg}");
+            assert!(
+                msg.contains("bypasses all print and display controls"),
+                "{msg}"
+            );
+        }
+        // The flags-win reset: typing the default clears a recipe's value, which is what
+        // lets one recipe serve every preset. A presence rule would kill it.
+        validate(&master(recipe, &["--display-tone-headroom", "6"])).unwrap();
+        // Every display preset takes a non-default headroom.
         for preset in OutputPreset::ALL {
-            if preset != OutputPreset::FilmMaster {
-                validate(&cfg_with(preset)).unwrap_or_else(|e| panic!("{preset:?}: {e}"));
+            if preset.applies_display_tone() {
+                let cfg = ResolvedConfig {
+                    fit_range: crate::recipe::FitRange {
+                        headroom_stops: 3.0,
+                    },
+                    output: OutputParams { preset },
+                    ..base_cfg()
+                };
+                validate(&cfg).unwrap_or_else(|e| panic!("{preset:?}: {e}"));
             }
         }
-        // The default selector is fine everywhere.
-        validate(&base_cfg()).unwrap();
-        validate(&film_master_cfg()).unwrap();
-    }
-
-    #[test]
-    fn the_branch_and_master_rules_outrank_the_reinhard_acceptance_rule() {
-        // Rule 2 matches `film-master` too — it does not accept the tone — but its
-        // remedy ("use `--display-tone shoulder` or `none` there") is *false advice*
-        // there: film-master bypasses every print control, so `none` is itself an error.
-        // Placed first in the function, rule 2 won and the user was sent in a circle.
-        //
-        // Distinguishing wording, not `contains("display-tone")`: every one of these
-        // messages names the flag, so a laxer assertion is satisfied by the wrong rule
-        // — which is exactly how the mis-ordering shipped green.
-        let reinhard = |preset: OutputPreset, headroom_stops: f32| ResolvedConfig {
-            print: PrintParams {
-                display_tone: DisplayToneCurve::Reinhard { headroom_stops },
-                ..PrintParams::default()
-            },
-            output: OutputParams { preset },
-            ..base_cfg()
-        };
-        const RULE_2: &str = "is not applied by the";
-        let msg = validate_err(&reinhard(OutputPreset::FilmMaster, 6.0));
-        assert!(
-            msg.contains("bypasses all print and display controls"),
-            "{msg}"
-        );
-        assert!(!msg.contains(RULE_2), "rule 2 pre-empted rule 1: {msg}");
-
-        // Where rule 2 *is* the right diagnosis — a display preset that does not apply the
-        // tone — it must still fire; the ordering must not have silenced it. Driven off
-        // `accepts_reinhard_tone` rather than a written-out list, so flipping a preset
-        // cannot leave this test asserting the previous answer (which is exactly what
-        // happened when the single-rendition HDR presets were admitted).
-        for preset in OutputPreset::ALL {
-            if preset.accepts_reinhard_tone() {
-                validate(&reinhard(preset, 6.0)).unwrap_or_else(|e| panic!("{preset:?}: {e}"));
-                continue;
-            }
-            // The rule that outranks it owns its own preset, checked above.
-            if preset == OutputPreset::FilmMaster {
-                continue;
-            }
-            let msg = validate_err(&reinhard(preset, 6.0));
-            assert!(msg.contains(RULE_2), "{preset:?}: {msg}");
-            assert!(msg.contains(preset.name()), "{preset:?}: {msg}");
-        }
-        // Falsifiable both ways: the accepting set is non-empty and the refusing set is too.
-        assert!(OutputPreset::ALL.iter().any(|p| p.accepts_reinhard_tone()));
-        assert!(OutputPreset::ALL.iter().any(|p| !p.accepts_reinhard_tone()));
-
-        // The "non-default control" message must report the *value*, not just the
-        // operator name: `Display` is the bare flag spelling, so two configs differing
-        // only in headroom otherwise produce word-for-word identical errors.
-        let at_6 = validate_err(&reinhard(OutputPreset::FilmMaster, 6.0));
-        let at_24 = validate_err(&reinhard(OutputPreset::FilmMaster, 24.0));
-        assert_ne!(at_6, at_24, "the message hides the headroom");
-        assert!(at_6.contains("6 stops of headroom"), "{at_6}");
-    }
-
-    #[test]
-    fn a_tone_switch_warns_that_it_dropped_a_stated_headroom() {
-        // One class of dropped knob had three loudness levels. The keep-on-same-operator
-        // half is right; the reset half was silent (exit 0, no warning, headroom gone);
-        // and a knee width stated beside a knee-less tone is a hard error. This aligns
-        // the reset half with the `curve_switch_dropped_anchor` precedent — a warning,
-        // because the reset is documented policy and cannot be refused, but the report
-        // then states a tone the recipe did not ask for.
-        let reinhard = |stops: f32| DisplayToneCurve::Reinhard {
-            headroom_stops: stops,
-        };
-        for after in [DisplayToneCurve::Shoulder, DisplayToneCurve::None] {
-            let msg = display_tone_switch_dropped_headroom(reinhard(10.0), after)
-                .unwrap_or_else(|| panic!("{after}: the drop was silent"));
-            assert!(msg.contains("headroom_stops"), "{after}: {msg}");
-            assert!(msg.contains("10"), "{after}: {msg}");
-            // The remedy must be the spelling that keeps it, not a restatement of what
-            // was lost.
-            assert!(msg.contains("--display-tone-headroom 10"), "{after}: {msg}");
-        }
-        // Silent, correctly, in three cases: the same operator keeps its value (the
-        // documented merge arm), a default headroom asserts nothing to lose, and a
-        // recipe that never named `reinhard` has no parameter to drop.
-        assert_eq!(
-            display_tone_switch_dropped_headroom(reinhard(10.0), reinhard(10.0)),
-            None
-        );
-        assert_eq!(
-            display_tone_switch_dropped_headroom(reinhard(10.0), reinhard(3.0)),
-            None,
-            "an explicit new headroom is a replacement, not a drop"
-        );
-        assert_eq!(
-            display_tone_switch_dropped_headroom(
-                reinhard(crate::types::DEFAULT_HEADROOM_STOPS),
-                DisplayToneCurve::None
-            ),
-            None
-        );
-        assert_eq!(
-            display_tone_switch_dropped_headroom(
-                DisplayToneCurve::Shoulder,
-                DisplayToneCurve::None
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn a_stray_headroom_never_recommends_a_tone_the_preset_would_refuse() {
-        // The same circular-advice defect as the sibling test above, in the one rule
-        // that legitimately runs *before* `validate_output_preset`: `validate_convert`'s
-        // headroom-presence check. Its remedy said "Add `--display-tone reinhard`" on
-        // every preset — and on all but two, following it trades this error for that
-        // preset's own refusal.
-        let args = parse_convert(&["--display-tone-headroom", "6"]);
-        let cfg = |preset: OutputPreset| ResolvedConfig {
-            output: OutputParams { preset },
-            ..base_cfg()
-        };
-        const ADD_IT: &str = "Add `--display-tone reinhard`";
-        // Driven off `accepts_reinhard_tone`, not a written-out list. When the
-        // single-rendition HDR presets were admitted, a hardcoded refusing set left this
-        // test asserting that `hdr-pq` must *not* be told to add the tone — advice that had
-        // become correct. A list here does not just go stale, it inverts.
-        let (mut accepting, mut refusing) = (0, 0);
-        for preset in OutputPreset::ALL {
-            let msg = validate_convert(&cfg(preset), &args, RecipePreset::Unstated)
-                .unwrap_err()
-                .to_string();
-            assert!(msg.contains("--display-tone-headroom"), "{preset:?}: {msg}");
-            if preset.accepts_reinhard_tone() {
-                // The short remedy is the right one: naming the tone here works.
-                assert!(msg.contains(ADD_IT), "{preset:?}: {msg}");
-                accepting += 1;
-            } else {
-                assert!(
-                    !msg.contains(ADD_IT),
-                    "{preset:?}: recommends a tone this preset refuses: {msg}"
-                );
-                assert!(msg.contains(preset.name()), "{preset:?}: {msg}");
-                // The advice it does give must be actionable — the presets that *do* take
-                // the tone are named, so the user has somewhere to go.
-                assert!(msg.contains("display-p3"), "{preset:?}: {msg}");
-                refusing += 1;
-            }
-        }
-        // Falsifiable in both directions rather than vacuous in one.
-        assert!(accepting > 0 && refusing > 0, "{accepting} / {refusing}");
     }
 
     #[test]
@@ -13732,7 +13171,7 @@ mod tests {
         // error, never silently dropped. Exhaustive over the print struct — the
         // destructuring in `validate_output_preset` makes a newly added control fail
         // to compile there, and this test pins the behaviour for each existing one.
-        let cases: [(&str, PrintParams); 5] = [
+        let cases: [(&str, PrintParams); 4] = [
             (
                 "print_exposure",
                 PrintParams {
@@ -13758,13 +13197,6 @@ mod tests {
                 "white_balance",
                 PrintParams {
                     white_balance: WbSource::Percentile,
-                    ..PrintParams::default()
-                },
-            ),
-            (
-                "highlight_compress",
-                PrintParams {
-                    highlight_compress: 0.2,
                     ..PrintParams::default()
                 },
             ),
@@ -13883,45 +13315,34 @@ mod tests {
         );
 
         // A branch with no display tone stage omits `display_tone` entirely — the key
-        // set above is that assertion. A display preset carries the resolved selector,
-        // and its `content` states what the branch does *besides* tone rather than
-        // naming a curve that may not have run.
-        //
-        // The **parameterized** variant is covered here with its full serialized shape,
-        // not with `tone.to_string()`: `Display` is deliberately the bare flag spelling
-        // (`reinhard`), so an expectation written that way is satisfied by a report that
-        // has dropped the headroom from every run. Pin the object.
+        // set above is that assertion. A display preset names the operator and its
+        // headroom, and its `content` states what the branch does *besides* tone rather
+        // than naming a curve.
         for preset in [OutputPreset::DisplayP3, OutputPreset::HdrLinearTiff] {
-            for (tone, expected) in [
-                (DisplayToneCurve::Shoulder, serde_json::json!("shoulder")),
-                (DisplayToneCurve::None, serde_json::json!("none")),
-                (
-                    DisplayToneCurve::Reinhard {
-                        headroom_stops: 10.0,
-                    },
-                    serde_json::json!({"reinhard": {"headroom_stops": 10.0}}),
-                ),
-            ] {
+            for stops in [0.0f32, 6.0, 10.0] {
                 let block = value(&ResolvedConfig {
-                    print: PrintParams {
-                        display_tone: tone,
-                        ..PrintParams::default()
+                    fit_range: crate::recipe::FitRange {
+                        headroom_stops: stops,
                     },
                     output: OutputParams { preset },
                     ..base_cfg()
                 });
-                assert_eq!(block["display_tone"], expected, "{preset:?} {tone}");
+                let operator = if stops == 0.0 {
+                    crate::pipeline::fit_range::IDENTITY
+                } else {
+                    crate::pipeline::display_tone::EXTENDED_REINHARD
+                };
+                assert_eq!(
+                    block["display_tone"],
+                    serde_json::json!({ "operator": operator, "headroom_stops": stops }),
+                    "{preset:?} {stops}"
+                );
                 let content = block["content"].as_str().unwrap();
                 assert!(
-                    !content.contains("shoulder"),
+                    !content.contains("reinhard") && !content.contains("shoulder"),
                     "{preset:?}: content names a tone curve: {content}"
                 );
             }
-        }
-        // The two unbounded-parameter-free variants keep their bare-string spellings,
-        // which is what makes `Display` usable in a diagnostic the user can retype.
-        for tone in [DisplayToneCurve::Shoulder, DisplayToneCurve::None] {
-            assert_eq!(serde_json::to_value(tone).unwrap(), tone.to_string());
         }
 
         // The master's content claim must not invent a Dmax placement it did not make:
@@ -14356,16 +13777,6 @@ mod tests {
         let mut cfg = base_cfg();
         cfg.print.white_balance = WbSource::Explicit([1.0, 0.0, 1.0]);
         assert!(matches!(validate(&cfg), Err(NcError::Usage(_))));
-
-        // Negative highlight compression is rejected (the print render silently
-        // treats it as "off", so a wrong-sign value must fail loudly, not no-op).
-        let mut cfg = base_cfg();
-        cfg.print.highlight_compress = -0.3;
-        assert!(matches!(validate(&cfg), Err(NcError::Usage(_))));
-        // Zero is valid (disables the roll-off).
-        let mut cfg = base_cfg();
-        cfg.print.highlight_compress = 0.0;
-        validate(&cfg).unwrap();
 
         // Non-positive density scale is rejected.
         let cfg = density_cfg(
@@ -15244,57 +14655,14 @@ mod tests {
         assert!(Cli::try_parse_from(["hanten", "roll", "a.tif"]).is_err());
     }
 
-    /// A bare-string overlay naming the base's own variant preserves the base's parameters.
-    ///
-    /// The regression: `roll`'s per-frame `{"print": {"display_tone": "reinhard"}}` over a
-    /// recipe's `{"reinhard": {"headroom_stops": 10.0}}` used to resolve serde's default of
-    /// 6 — a *different render* from `{"reinhard": {}}`, which kept 10, for two spellings
-    /// documented as interchangeable. No warning fired, because the switch warning sees
-    /// `Reinhard → Reinhard` and correctly reports nothing.
+    /// A bare tag over a newtype variant **replaces** it, so serde rejects the incomplete
+    /// override. Every externally-tagged recipe variant is a newtype carrying a positional
+    /// payload, where a bare tag states nothing *and there is nothing it could state*. A
+    /// guard that once kept the base on a matching tag (for the since-retired
+    /// `print.display_tone` struct variant) silently turned a malformed per-frame
+    /// `{"film_base": {"source": "explicit"}}` into an inherit at exit 0.
     #[test]
-    fn a_bare_tag_overlay_keeps_the_base_variants_parameters() {
-        let pinned = || serde_json::json!({"reinhard": {"headroom_stops": 10.0}});
-
-        // The three spellings the guide calls interchangeable now agree.
-        for overlay in [
-            serde_json::json!("reinhard"),
-            serde_json::json!({"reinhard": {}}),
-        ] {
-            let mut base = pinned();
-            merge_json(&mut base, &overlay);
-            assert_eq!(base, pinned(), "overlay {overlay} should change nothing");
-        }
-
-        // A bare string naming a *different* variant is still a switch, and still replaces —
-        // otherwise the reset that makes a reinhard recipe re-runnable under another tone
-        // would stop working, and its warning would have nothing to report.
-        let mut base = pinned();
-        merge_json(&mut base, &serde_json::json!("none"));
-        assert_eq!(base, serde_json::json!("none"));
-
-        // And an explicit value still wins, so the merge is not simply refusing overlays.
-        let mut base = pinned();
-        merge_json(
-            &mut base,
-            &serde_json::json!({"reinhard": {"headroom_stops": 2.0}}),
-        );
-        assert_eq!(
-            base,
-            serde_json::json!({"reinhard": {"headroom_stops": 2.0}})
-        );
-    }
-
-    /// The guard reaches serde **struct** variants only, and that boundary is the point.
-    ///
-    /// `Reinhard { headroom_stops }` is the one recipe variant with named fields, so "same
-    /// variant, nothing stated" is a coherent partial override there. Every other
-    /// externally-tagged recipe variant is a newtype carrying a positional payload, where a
-    /// bare tag states nothing *and there is nothing it could state* — incomplete input,
-    /// which serde must keep rejecting. A first version of the guard tested only "same tag"
-    /// and silently turned a malformed per-frame `{"film_base": {"source": "explicit"}}`
-    /// into an inherit at exit 0, trading fail-loudly for nothing.
-    #[test]
-    fn the_bare_tag_guard_does_not_reach_newtype_variants() {
+    fn a_bare_tag_overlay_replaces_a_newtype_variant() {
         for base in [
             serde_json::json!({"explicit": [0.9, 0.55, 0.42]}), // FilmBaseSource / WbSource
             serde_json::json!({"region": [1, 2, 3, 4]}),        // FilmBaseSource::Region
@@ -15311,15 +14679,6 @@ mod tests {
                  rejects the incomplete override rather than silently inheriting"
             );
         }
-
-        // The struct variant keeps its parameters — the behaviour the guard exists for,
-        // asserted here too so the two halves cannot drift apart.
-        let mut merged = serde_json::json!({"reinhard": {"headroom_stops": 10.0}});
-        merge_json(&mut merged, &serde_json::json!("reinhard"));
-        assert_eq!(
-            merged,
-            serde_json::json!({"reinhard": {"headroom_stops": 10.0}})
-        );
     }
 
     #[test]

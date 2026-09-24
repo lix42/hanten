@@ -189,8 +189,8 @@ line the anchor factors out as a pure gain: all four placement rules give the
 same shape and differ only in brightness. Under the knee'd sigmoid the knees sit
 relative to the anchor against a fixed 0–1 range, so moving it changes the
 *shape*, which is why the anchor is the lever `sigmoid-knees` has. (Its
-*refusal* of `--print-exposure` is a different mechanism: that bundle resolves
-`display_tone: none`, and a scalar gain after a bounded curve pushes past
+*refusal* of `--print-exposure` is a different mechanism: that bundle resolved
+the since-retired `display_tone: none`, and a scalar gain after a bounded curve pushes past
 reference white, where the renderer's range check rejects the frame.)
 
 ### Decisions
@@ -492,7 +492,7 @@ reconstruction (the fixed decode)
 |---|---|---|
 | **scene correction** | Photographic corrections toward what the scene was: white balance, exposure, flare/fog removal. Scene-referred, linear. | `render_split::display_source` (`apply_shared_controls`): WB → exposure → black point → `linear_range` |
 | **look** | Creative and optional: contrast, per-channel colour grading, saturation, print or paper emulation, per-stock normalization. Scene-referred. | Doesn't exist as a stage |
-| **fit range** | Fit the scene's dynamic range into the display's range, with parameters from the display's peak (SDR vs HDR). The industry term is *tone mapping*: "tone" means brightness levels, not colour. | `print.display_tone` in `pipeline::sdr` / `pipeline::hdr` |
+| **fit range** | Fit the scene's dynamic range into the display's range, with parameters from the display's peak (SDR vs HDR). The industry term is *tone mapping*: "tone" means brightness levels, not colour. | `fit_range.headroom_stops` (`display_tone::Headroom`) in `pipeline::sdr` / `pipeline::hdr`; `pipeline::fit_range` under `--new-flow` |
 | **fit gamut** | Move out-of-gamut colour to the display's boundary, keeping hue. | `gamut_map` (`neutral-axis-radial-boundary-v1`) |
 | **encode** | Transfer function (sRGB, PQ or HLG), quantization, counting clipped samples | `color`, `io::encode`, `io::avif` |
 | **package** | Container (TIFF / AVIF / gain-map JPEG), ICC profile or CICP, metadata | `io::*` |
@@ -523,9 +523,8 @@ Constraints the order carries:
   remap, not fit range, so it needs a new name and a stage to live in.
 - **Fit range uses reinhard.** `shoulder` and `none` are retired: both exist for
   reconstructions already bounded at white, and `shoulder` flattens everything
-  above 1.0. Their knob `highlight_compress` goes with them. They're retired
-  after `algo/split-default-migration`, since `shoulder` is still the default
-  tone. "Fit range" rather than "highlight compression", because reinhard holds
+  above 1.0. Their knob `highlight_compress` goes with them. (Done in
+  `nf-retire/display-tones`, `pipeline_version` 7.) "Fit range" rather than "highlight compression", because reinhard holds
   mid-grey and reshapes everything above it, costing ≈0.86 stop at diffuse white
   — but note what it does *not* do: below mid it is a pure gain (see "The shadow
   end" below).

@@ -1178,7 +1178,7 @@ fn content_light_level(metadata: &hdr::HdrRenderMetadata) -> Option<(u16, u16)> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::display_tone::DisplayTone;
+    use crate::pipeline::display_tone::Headroom;
 
     /// Parse a minimal box tree into `(type, size, body offset)` triples.
     fn boxes(buf: &[u8]) -> Vec<(String, usize, usize)> {
@@ -1225,7 +1225,7 @@ mod tests {
 
         let film = FilmRgbImage::fixture(LinearImage::new(w, h, rgb.to_vec(), None).unwrap());
         let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
-        hdr::render(&shared, transfer, DisplayTone::shoulder(0.75).unwrap()).unwrap()
+        hdr::render(&shared, transfer, Headroom::new(0.0).unwrap()).unwrap()
     }
 
     fn pq_metadata() -> hdr::HdrRenderMetadata {
