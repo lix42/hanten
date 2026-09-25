@@ -11,7 +11,7 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 7`, built at commit
 > `7d5524b` plus `nf-reconstruction/gamma-split` (under `--new-flow` the decode's
 > slope is `reconstruction.linearization` and print contrast is `look.contrast` /
-> `--contrast`, §11). The staleness
+> `--contrast`, §11) and `nf-look/per-channel-grade` (`--channel-grade`). The staleness
 > signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
@@ -1404,8 +1404,9 @@ this flow promises yet.
   what ran instead — the decode's resolved `anchor`, `linearization`, `scale` and `offset`,
   each stage with what it `applied` (scene correction's from what it resolved —
   `"identity"`, `"white-balance"`, `"exposure"` or `"white-balance+exposure"`;
-  for the look `"contrast"`, `"highlight-desaturation"`, both
-  (`"contrast+highlight-desaturation"`, the default) or `"identity"`; fit range's
+  for the look the controls that ran joined by `+` in the order they run —
+  `"contrast"`, `"channel-grade"`, `"highlight-desaturation"` — so the default is
+  `"contrast+highlight-desaturation"`, or `"identity"` when none ran; fit range's
   operator; `"acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"` for fit
   gamut), scene correction's resolved values in `scene_correction`, fit range's in
   `fit_range` (below), the `destination` (`display-p3-u16-tiff`) and
@@ -1419,7 +1420,13 @@ counterpart is missing **yet** or for good:
 ```console
 $ hanten convert … --new-flow --shadow-balance 0.1,0,0
 usage: --shadow-balance has no meaning under `--new-flow`: the new flow has no
-counterpart for it yet — one arrives with the look stage's per-channel grade: …
+counterpart for it, and will not gain one: the regional balance (density offsets ramped
+over a measured tone range) is not ported. … Use --channel-grade R,B (recipe
+`look.channel_grade`), …
+
+$ hanten convert … --new-flow --output-preset display-p3
+usage: --output-preset has no meaning under `--new-flow`: the new flow has no
+counterpart for it yet — one arrives with the new flow's destination set: …
 
 $ hanten convert … --new-flow --density-curve characteristic
 usage: --density-curve has no meaning under `--new-flow`: the new flow has no
@@ -1438,7 +1445,7 @@ refused:
 |---|---|
 | `--density-curve characteristic` | the curve is no longer a choice the decode offers |
 | `--film-stock` | per-stock normalization becomes an optional **rendering** step — planned, not scheduled, and it will bring its own flag; `--film-stock` leaves with `--density-curve characteristic` |
-| `--shadow-balance`, `--highlight-balance` (non-zero) | a grade; it moves to the look stage's per-channel control |
+| `--shadow-balance`, `--highlight-balance` (non-zero) | a grade; the look's per-channel grade replaces it — `--channel-grade R,B` (recipe `look.channel_grade`) |
 | `--preset` | a preset sets knobs on both sides of the decode/rendering boundary |
 | `--balance-range`, `--auto-balance-range` | they shape the regional balance's tone ramp, which is itself refused |
 
@@ -1474,6 +1481,7 @@ $ hanten params --new-flow
   },
   "look": {
     "contrast": 1.1111112,
+    "channel_grade": [1.0, 1.0],
     "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] }
   },
   "fit_range": { "headroom_stops": 6.0 },
@@ -1485,7 +1493,7 @@ $ hanten params --new-flow
 current chain's sections unchanged. `calibration` holds the film base only — the
 fixed decode reads no reference density. `reconstruction` spells the four decode
 knobs above (`--density-gamma` is `linearization` here). `scene_correction` holds white
-balance and exposure, `look` contrast and highlight desaturation, `fit_range` its
+balance and exposure, `look` contrast, the per-channel grade and highlight desaturation, `fit_range` its
 headroom (all below); `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
 from the destination. There is no `output` section:
 the new chain writes one fixed destination. `--dump-params` under `--new-flow` writes this
@@ -1518,9 +1526,9 @@ refused naming it, and where its knobs went:
 $ hanten convert … --new-flow --params old.json   # "reconstruction": {"density": {…}}
 usage: recipe old.json: `reconstruction.density` belongs to the current chain's
 recipe, not the new one's: `density.scale` and `density.offset` are
-`reconstruction.scale` and `reconstruction.offset`; the regional balances have no
-counterpart yet (`nf-look/per-channel-grade`). Drop it — the current chain reads
-it only in a recipe with no `recipe_version`
+`reconstruction.scale` and `reconstruction.offset`; the regional balances are
+replaced by the look's per-channel grade, `look.channel_grade`. Drop it — the
+current chain reads it only in a recipe with no `recipe_version`
 
 $ hanten convert … --new-flow --params print.json # "print": {…}
 usage: recipe print.json: `print` is a section of the current chain's recipe, not
@@ -1610,15 +1618,17 @@ contrast, write `look.contrast`: 1.1111112 and leave `reconstruction.linearizati
 its default 1.8
 ```
 
-**The look** is the stage between scene correction and fit range. It runs two
-controls, in this order: **contrast**, then **highlight desaturation**, which pulls
-bright surfaces that are nearly neutral the rest of the way to neutral, so a white that
-still carries a trace of cast after the roll's white balance reads clean. Both are
-**on by default**.
+**The look** is the stage between scene correction and fit range. It runs three
+controls, in this order: **contrast**; the **per-channel grade**, which removes (or
+adds) a cast that grows away from mid-grey; then **highlight desaturation**, which
+pulls bright surfaces that are nearly neutral the rest of the way to neutral, so a
+white that still carries a trace of cast after the roll's white balance reads clean.
+Contrast and highlight desaturation are **on by default**; the grade is off.
 
 | Flag | Recipe key | |
 |---|---|---|
 | `--contrast CONTRAST` | `look.contrast` | print contrast, pivoted at mid-grey; default `2.0/1.8`, `1` is the identity, must be positive |
+| `--channel-grade R,B` | `look.channel_grade` | red and blue exponents pivoted at mid-grey, green fixed at 1; default `1,1` (off); both positive, with the spread over `R,1,B` under 1 |
 | `--highlight-desaturation STRENGTH` | `look.highlight_desaturation.strength` | `0`–`1`; default `0.8`, `0` is off |
 | `--highlight-desaturation-start STOPS` | `look.highlight_desaturation.start_stops` | where the pull begins, in stops below diffuse white (default `-1`) |
 | `--highlight-desaturation-band S0,S1` | `look.highlight_desaturation.band` | the saturation band (default `0.015,0.025`) |
@@ -1636,15 +1646,24 @@ still carries a trace of cast after the roll's white balance reads clean. Both a
   RGB 3×3 rather than after it. It runs after scene correction, so `--exposure 1` at
   contrast 1.11 moves the picture 1.11 stops: exposure is in stops of the
   reconstructed scene.
-- **Luminance is kept** by highlight desaturation; only chroma moves.
-  `--highlight-desaturation 0` turns it off — with `--contrast 1` the look is the exact
-  identity, the way to see the roll's raw cast.
+- **The grade is for crossover** — a cast that differs between shadows and
+  highlights, which one set of white-balance gains cannot remove. Each of red and blue
+  becomes `0.18 · (v / 0.18)^R` (or `^B`), and the pixel's luminance is then put back,
+  so mid-grey stays neutral, the cast it adds grows with distance from mid in both
+  directions, and neutral contrast is untouched — that stays `--contrast`'s. Below 1
+  a channel is pulled down in the highlights and up in the shadows; above 1 the
+  reverse. It runs after contrast, so the same values act more strongly on a
+  contrastier picture. It does not replace the roll's white balance, which should be
+  set first, or the decode's calibrated `--density-scale`.
+- **Luminance is kept** by the grade and by highlight desaturation; only chroma moves.
+  `--highlight-desaturation 0` turns desaturation off — with `--contrast 1` and the
+  grade at `1,1` the look is the exact identity, the way to see the roll's raw cast.
 - The report says what ran:
 
   ```console
   $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
       | jq -c '{look: .new_flow.look, stage: .new_flow.stages[1]}'
-  {"look":{"contrast":1.1111112,"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+highlight-desaturation"}}
+  {"look":{"contrast":1.1111112,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+highlight-desaturation"}}
   ```
 
 - The flags are new-flow only — the current chain has no look stage — and an

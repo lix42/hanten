@@ -35,6 +35,10 @@ values.
 - Interaction with the decode's `offset`, which is also an additive density-domain
   term — they are not the same quantity, and the report should not let them read
   as one.
+- **It is the first producer of negative channels**, which the look's per-channel grade
+  passes through whole (`nf-look/per-channel-grade`'s guard decision): continuous along
+  exposure but not across colour, so noisy deep shadows straddling zero would render as
+  salt and pepper. Revisit that guard when this lands.
 
 ## How to Verify
 

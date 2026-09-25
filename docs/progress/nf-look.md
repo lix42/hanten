@@ -43,6 +43,16 @@ headrooms ≥ 2 stops it moves by under 0.003, and from 0 (fit range off) up by 
 highlight desaturation, and its cast grows with contrast; its form (how it stays off
 neutral contrast) is `per-channel-grade`'s.
 
+**`per-channel-grade` is done (2026-09-25): `look.channel_grade` / `--channel-grade R,B`.**
+A pivoted power on red and blue (green fixed at 1, since equal exponents would be a
+hidden saturation knob), then the pixel's ACEScg luminance restored — so a neutral's
+luminance slope is the contrast exactly and the grade is a colour operator. Runs between
+contrast and highlight desaturation; exponent spread over `[r, 1, b]` under 1 keeps it
+monotone; a pixel is graded whole or not at all — any channel ≤ 0 or non-finite (or a
+luminance that is not finite and positive) passes the whole pixel through, since the
+restore couples the channels. Desaturation's band is not adjusted for it. The balance flags now refuse under
+`--new-flow` with it as the remedy.
+
 **`path-to-white` is done (2026-09-24): highlight desaturation, on by default at 0.8.**
 `look.highlight_desaturation` pulls near-neutral highlights to neutral, keyed on
 brightness (one stop below diffuse white up to it) and on a band `0.015 → 0.025` over
@@ -128,14 +138,79 @@ visible by eye; the band's value is keeping the pull off colour.
 
 ## per-channel-grade
 
-**Status:** not started
-**Updated:** 2026-09-24
+**Status:** done
+**Updated:** 2026-09-25
 
 - 2026-09-19: created with the new-flow plan. Goal: a per-channel grade with a mid-grey pivot.
 - 2026-09-24: decisions from `nf-look/contrast` recorded in the task file: the grade runs
   after contrast and before highlight desaturation, its cast grows with contrast, and its
   form (how it stays off neutral contrast, which contrast owns) is still this task's.
   Also opened: whether desaturation's band should account for the grade.
+- 2026-09-24: **started; form decided (user, on a plan).** Pivoted per-channel power
+  then a luminance restore, spelled `look.channel_grade = [r, b]` with green at 1; a
+  channel ≤ 0 or non-finite passes the power, the restore is skipped on a non-positive
+  luminance; exponents positive with spread under 1 (monotone); desaturation's band
+  unchanged. The measurement that ruled out the restore-free form (neutral slope 0.95–1.05
+  at a 0.4 exponent spread) and the reasons are in the task file's Decisions.
+- 2026-09-24: **built.** `look.channel_grade` / `--channel-grade R,B` (key named
+  `channel_grade` because `pipeline::chain` already calls the whole look "grading").
+  Plumbing as for contrast: `LookOverrides`, `recipe::merge` arm, `validate_look` rule
+  (flag-and-key and key-only wording), `flow`'s new-flow-only row, `applied` joining the
+  controls that ran. Golden: three pixels, window enumerated over both `powf` results
+  (they enter one restore, so a one-argument `reachable_window` does not cover it).
+  **Synthetic check through the binary** (`nctool metrics image --space display-p3`): a
+  neutral wedge with red/blue scale off +8%/−6% about the anchor's mid (D′ = 0.62), so
+  the cast is a pure crossover — mean chroma 4.55 → 1.47 at `0.95,1.05`, worst band
+  7.07 → 2.51; `0.92,1.07` 3.71 and `0.9,1.1` 4.75 bracket it. A first fixture with the
+  error applied from the base carried a level cast at mid too, which no pivoted grade can
+  remove — that is white balance's, the same division of labour the task file states.
+  **Gotchas:** at unit exponents the restore's ratio is exactly 1 (both luminances come
+  from the same arithmetic), so the identity holds even without the skip; the balance
+  refusals were `NotYet` naming this task and are now `Never` with `--channel-grade` as
+  the remedy — two integration tests used `--shadow-balance` as their "not yet" example
+  and now use `--preset`.
+- 2026-09-24: **review round.** Both review engines found a gamut-edge defect, latent
+  today (the fixed decode emits `10^x > 0` and the v1 3×3 and scene-correction gains are
+  positive, but the planned flare subtraction will produce negatives): passing a
+  non-positive channel through the power while it still entered the restore's
+  luminance let the powered luminance approach zero — `[0.05, −0.011346323, 0]` at
+  `[1.45, 0.55]` came out near `[3.6e5, −1.5e5, 0]` — flip the output's luminance sign,
+  or jump across a luminance of zero; a finite pixel whose power overflowed came out
+  infinite. **Guard changed to whole-pixel pass-through** (a pixel is graded only when
+  all three channels and both luminances are finite and positive, and the result
+  finite; otherwise it is untouched, bit for bit). On an all-positive pixel the restore
+  is a weighted mean of per-channel ratios, so it is bounded, and since exposure never
+  flips a channel's sign a pixel is graded along its whole exposure ray or not at all —
+  monotone for every pixel. This departs from contrast's per-channel pass-through on
+  purpose. Tests: every repro passes through bitwise; a sign/magnitude grid near zero
+  stays finite, keeps luminance on graded pixels and bounds each channel by `Y / w_c`;
+  mutation-checked against the old guard. The golden's pixels are all positive, so it
+  did not move. Doc fixes: the balance refusal now speaks of the regional balance as a
+  whole (it is printed for the range flags too); design-spec §9 gains `channel_grade`
+  in the v2 example and the `look` list; `docs/using-nc.md`'s refusal example and
+  refused-knobs table name `--channel-grade`; design-update notes the as-built form and
+  marks the look's spelling settled; the task file's decisions are prose.
+- 2026-09-24: **review round 2.** The guard's result-finite branch had no test; a pixel
+  near `f32::MAX` (`[5e37, 3.3e38, 1]` at `[0.5, 1.0]`: finite luminances, ratio ≈ 1.06,
+  green overflows) now covers it, mutation-checked. The first candidate,
+  `[3e38, 3e38, 3e38]`, never reaches the branch: `3e38 / MID_GREY` overflows, so the
+  powered luminance is already infinite and the luminance check catches it. The guard's statement in the
+  field doc and design-spec §9 now includes "the result is finite". Recorded the
+  whole-pixel guard's trade-off: continuous along exposure, not across colour — a
+  channel at +ε is graded and its neighbour at −ε is not, so noisy deep shadows holding
+  negatives would read as salt and pepper (at −6 stops a red exponent of 1.1 moves red
+  about 34%). Latent until `nf-scene-correction/flare-removal`, the first producer of
+  negatives, which must revisit it; its task file now says so.
+- 2026-09-25: **done.** Landed as `look.channel_grade` / `--channel-grade R,B`: a pivoted
+  power on red and blue with green at 1, then the ACEScg luminance restore, graded whole
+  or not at all (every channel, both luminances and the result finite and positive).
+  Verified by unit tests, a two-`powf`-window golden, binary tests and the synthetic
+  crossover read back with `nctool metrics`; reviewed by two engines plus the ship
+  review (Codex and `ship:diff-reviewer` clean on the final tree). For dependents:
+  `nf-retire/regional-balance` can now remove the balances from the current chain — the
+  new flow already refuses them naming the grade; `nf-look/look-presets` decides whether a
+  preset sets the grade; `nf-scene-correction/
+  flare-removal` must revisit the whole-pixel guard once it produces negative channels.
 
 ## desaturation-spike
 

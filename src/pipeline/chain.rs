@@ -5,9 +5,9 @@
 //! `docs/nf-migration.md`), fed by the fixed decode (`algo::fixed`) and rendering
 //! into one destination (`cli::convert_frame`, `nf-core/minimal-end-to-end`). Scene
 //! correction applies white balance and exposure; the look applies print contrast and
-//! desaturates near-neutral highlights (the rest of its epic fills it); fit range
-//! compresses the scene's range against the destination's peak, and fit gamut maps
-//! into the destination's gamut, keeping hue.
+//! the per-channel grade and desaturates near-neutral highlights (the rest of its epic
+//! fills it); fit range compresses the scene's range against the destination's peak,
+//! and fit gamut maps into the destination's gamut, keeping hue.
 //!
 //! **The order is carried by the types, not by this function.** Each stage's
 //! input is the previous stage's output type, and each of those can be minted
@@ -127,10 +127,11 @@ pub struct RenderedPair {
 
 /// Render an [`AcesCgImage`] through the new chain, for one destination.
 ///
-/// **Today this is scene correction's per-channel gains, the look's print contrast and
-/// highlight desaturation, fit range's luminance operator, and the destination's 3×3 with the
-/// radial gamut map.** Nothing is clamped: content fit range left above the peak rides
-/// through to the encoder, which is the only place clamping happens. The gamut map is
+/// **Today this is scene correction's per-channel gains, the look's print contrast,
+/// per-channel grade and highlight desaturation, fit range's luminance operator, and
+/// the destination's 3×3 with the radial gamut map.** Nothing is clamped: content fit
+/// range left above the peak rides through to the encoder, which is the only place
+/// clamping happens. The gamut map is
 /// a policy, not a clamp, and what it discards (a colour at `Y ≤ 0`, written black) is
 /// not counted there. A non-finite sample is **refused**, naming the pixel: by fit
 /// range on input, by fit gamut if the change of primaries overflows.

@@ -10598,8 +10598,8 @@ fn new_flow_refuses_a_knob_whose_counterpart_has_not_landed() {
         "display-p3",
         "--film-base",
         "0.9,0.55,0.42",
-        "--shadow-balance",
-        "0.1,0,0",
+        "--preset",
+        "characteristic-generic",
         "--report",
         "none",
     ];
@@ -10607,10 +10607,7 @@ fn new_flow_refuses_a_knob_whose_counterpart_has_not_landed() {
     with_flow.push("--new-flow");
     let (code, _out, err) = run(&with_flow);
     assert_eq!(code, 2, "{err}");
-    assert!(
-        err.contains("--shadow-balance"),
-        "names the knob typed: {err}"
-    );
+    assert!(err.contains("--preset"), "names the knob typed: {err}");
     assert!(err.contains("no counterpart for it yet"), "{err}");
     assert!(
         !err.contains("will not gain one"),
@@ -10830,6 +10827,26 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
         );
     }
 
+    // Replaced by a look control that has landed (`nf-look/per-channel-grade`): not
+    // ported, and the remedy is the grade, a flag this flow accepts.
+    for knob in [
+        ["--shadow-balance", "0.1,0,0"],
+        ["--highlight-balance", "0,0,0.1"],
+        ["--balance-range", "0.2,1.2"],
+    ] {
+        let err = refuse(&knob);
+        assert!(err.contains(knob[0]), "names the knob typed: {err}");
+        assert!(err.contains("will not gain one"), "{knob:?}: {err}");
+        assert!(
+            err.contains("Use --channel-grade R,B (recipe `look.channel_grade`)"),
+            "{knob:?}: {err}"
+        );
+        assert!(
+            !err.contains("no counterpart for it yet"),
+            "the losing verdict's wording must be absent: {err}"
+        );
+    }
+
     // Waiting for a rendering stage, and each remedy must name the stage that carries
     // it rather than a knob this flow also refuses.
     for (knob, arriving) in [
@@ -10837,14 +10854,6 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
         (
             vec!["--film-stock", "ektar-100"],
             "per-stock normalization in the look stage",
-        ),
-        (
-            vec!["--shadow-balance", "0.1,0,0"],
-            "nf-look/per-channel-grade",
-        ),
-        (
-            vec!["--highlight-balance", "0,0,0.1"],
-            "nf-look/per-channel-grade",
         ),
         (
             vec!["--preset", "characteristic-generic"],
@@ -12902,6 +12911,113 @@ fn the_look_contrast_is_refused_where_it_cannot_apply() {
         assert!(
             err.contains("--density-gamma (recipe `reconstruction.linearization`)")
                 && err.contains("--contrast (recipe `look.contrast`)"),
+            "{err}"
+        );
+    }
+}
+
+/// The look's per-channel grade (`nf-look/per-channel-grade`): reachable by flag and by
+/// recipe, one knob, the flag winning down to the identity, reported as it ran; and
+/// refused where it cannot apply.
+#[test]
+fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
+    let tmp = TempDir::new("look-channel-grade");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--new-flow",
+            // Contrast and desaturation off, so `applied` reads the grade alone.
+            "--contrast",
+            "1",
+            "--highlight-desaturation",
+            "0",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        (std::fs::read(&out).unwrap(), json(&stdout))
+    };
+    let applied = |r: &serde_json::Value| r["new_flow"]["stages"][1]["applied"].clone();
+
+    let (identity, report) = convert("identity.tiff", &[]);
+    assert_eq!(applied(&report), "identity", "{report}");
+    assert_eq!(
+        report["new_flow"]["look"]["channel_grade"],
+        serde_json::json!([1.0, 1.0]),
+        "{report}"
+    );
+
+    let (graded, report) = convert("graded.tiff", &["--channel-grade", "1.2,0.85"]);
+    assert_eq!(applied(&report), "channel-grade", "{report}");
+    assert_ne!(graded, identity, "the grade must move the pixels");
+
+    let recipe = write_file(
+        &tmp.path("look.json"),
+        r#"{ "recipe_version": 2, "look": { "channel_grade": [1.2, 0.85] } }"#,
+    );
+    let (from_recipe, _) = convert("recipe.tiff", &["--params", recipe.to_str().unwrap()]);
+    assert_eq!(
+        graded, from_recipe,
+        "the recipe key and the flag are one knob"
+    );
+    let (reset, report) = convert(
+        "reset.tiff",
+        &[
+            "--params",
+            recipe.to_str().unwrap(),
+            "--channel-grade",
+            "1,1",
+        ],
+    );
+    assert_eq!(applied(&report), "identity", "{report}");
+    assert_eq!(
+        reset, identity,
+        "the flag's 1,1 must win over the recipe's grade"
+    );
+}
+
+#[test]
+fn the_channel_grade_is_refused_where_it_cannot_apply() {
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let tmp = TempDir::new("look-channel-grade-refused");
+    let out = tmp.path("x.tiff");
+    let base = [
+        "convert",
+        input.as_str(),
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+    ];
+    // The current chain has no look stage.
+    let (code, _, err) = run(&[
+        &base[..],
+        &[
+            "--output-preset",
+            "display-p3",
+            "--channel-grade",
+            "1.1,0.9",
+        ],
+    ]
+    .concat());
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--channel-grade") && err.contains("no look stage"),
+        "{err}"
+    );
+    // A non-positive exponent, and a spread that would fold the tone scale.
+    for value in ["0,1", "1.1,-0.5", "1.6,0.5"] {
+        let (code, _, err) = run(&[&base[..], &["--new-flow", "--channel-grade", value]].concat());
+        assert_eq!(code, 2, "{value}: {err}");
+        assert!(
+            err.contains("--channel-grade (recipe `look.channel_grade`)"),
             "{err}"
         );
     }

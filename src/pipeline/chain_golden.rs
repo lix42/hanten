@@ -20,7 +20,8 @@
 //! **Which stages are bit-exact and which are windowed is decided by their libm
 //! calls.** The decode makes two (`log10`, `powf`), a fractional exposure one
 //! (`exp2`), fit range one (`log2`) — but only for an HDR peak and only above
-//! diffuse white — the look's contrast one `powf` per positive channel, and highlight
+//! diffuse white — the look's contrast one `powf` per positive channel, its per-channel
+//! grade one on red and one on blue (both entering its luminance restore), and highlight
 //! desaturation one per pixel at most: `log10` inside
 //! its band's ramp, `log2` inside its brightness ramp (its constants' `powf` / `exp2`
 //! only classify, never enter the arithmetic); all are pinned within a window [`reachable_window`] *derives* by
@@ -639,6 +640,7 @@ fn look_params() -> LookParams {
     LookParams {
         section: LookSection {
             contrast: 1.0,
+            channel_grade: look::IDENTITY_CHANNEL_GRADE,
             highlight_desaturation: HighlightDesaturation {
                 strength: 0.8,
                 ..HighlightDesaturation::default()
@@ -828,6 +830,93 @@ fn golden_look_contrast_is_correct_within_its_libm_window() {
             "stage `look` (contrast) sample {i}: {drift} ULP from the capture, outside \
              the {window} ULP a conforming libm can reach"
         );
+    }
+    assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
+}
+
+/// Film RGB for the per-channel grade: a shadow, a saturated midtone and a highlight
+/// above diffuse white. Each pixel makes two libm calls (`powf` on red and on blue;
+/// green's exponent is 1 and skips it), and both enter the luminance restore.
+const LOOK_GRADE_FILM: [f32; 9] = [0.02, 0.018, 0.015, 0.5, 0.3, 0.1, 2.0, 1.6, 1.2];
+
+/// The grade alone: contrast 1, desaturation off.
+const LOOK_GRADE_EXPONENTS: [f32; 2] = [1.15, 0.9];
+
+/// Captured 2026-09-24 when the grade landed (`nf-look/per-channel-grade`).
+const LOOK_GRADE: [u32; 9] = [
+    0x3c6fcf1b, 0x3c9f3bc7, 0x3cad901d, 0x3ee50fda, 0x3e98656e, 0x3e039e33, 0x401414ca, 0x3fb9e398,
+    0x3f6db006,
+];
+
+/// The grade for one pixel, written out independently of the stage, with its two libm
+/// results supplied: `(x_r / MID_GREY)^r` and `(x_b / MID_GREY)^b`.
+fn look_grade_pixel(px: [f32; 3], red: f32, blue: f32) -> [f32; 3] {
+    let luminance =
+        |q: [f32; 3]| q[0] * ACESCG_LUMA[0] + q[1] * ACESCG_LUMA[1] + q[2] * ACESCG_LUMA[2];
+    let powered = [look::MID_GREY * red, px[1], look::MID_GREY * blue];
+    let restore = luminance(px) / luminance(powered);
+    powered.map(|c| c * restore)
+}
+
+#[test]
+fn golden_look_channel_grade_is_correct_within_its_libm_window() {
+    let input = map_nc_film_rgb_v1(FilmRgbImage::fixture(
+        LinearImage::new(3, 1, LOOK_GRADE_FILM.to_vec(), None).unwrap(),
+    ));
+    let before = input.rgb().to_vec();
+    let (corrected, _) = scene_correction::apply(input, &SceneCorrectionParams::default()).unwrap();
+    let mut params = LookParams::off();
+    params.section.channel_grade = LOOK_GRADE_EXPONENTS;
+    assert_eq!(params.applied(), "channel-grade");
+    let out = look::apply(corrected, &params)
+        .unwrap()
+        .into_buffer()
+        .into_linear()
+        .rgb;
+    let [r, b] = LOOK_GRADE_EXPONENTS;
+    let mut widest = 0;
+    for p in 0..3 {
+        let px = [before[p * 3], before[p * 3 + 1], before[p * 3 + 2]];
+        assert!(
+            px.iter().all(|&c| c > 0.0),
+            "pixel {p} must reach both powers"
+        );
+        let libm = |x: f32, g: f32| {
+            let base = x / look::MID_GREY;
+            let rounded = f64::from(base).powf(f64::from(g)) as f32;
+            assert!(
+                ulps_between(base.powf(g), rounded) <= LIBM_MAX_ERROR_ULPS,
+                "this host's `powf` is not conforming on pixel {p}"
+            );
+            rounded
+        };
+        let (red, blue) = (libm(px[0], r), libm(px[2], b));
+        let centre = look_grade_pixel(px, red, blue);
+        for c in 0..3 {
+            // Both libm results move independently: enumerate each at its correctly
+            // rounded value and one ULP either side.
+            let window = [red.next_down(), red, red.next_up()]
+                .into_iter()
+                .flat_map(|rv| {
+                    [blue.next_down(), blue, blue.next_up()]
+                        .map(|bv| ulps_between(look_grade_pixel(px, rv, bv)[c], centre[c]))
+                })
+                .max()
+                .unwrap();
+            widest = widest.max(window);
+            let want = LOOK_GRADE[p * 3 + c];
+            assert_eq!(
+                centre[c].to_bits(),
+                want,
+                "pixel {p} sample {c}: capture integrity"
+            );
+            let drift = ulps_between(out[p * 3 + c], f32::from_bits(want));
+            assert!(
+                drift <= window,
+                "stage `look` (channel grade) pixel {p} sample {c}: {drift} ULP from the \
+                 capture, outside the {window} ULP a conforming libm can reach"
+            );
+        }
     }
     assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
 }

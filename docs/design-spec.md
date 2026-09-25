@@ -1089,6 +1089,7 @@ top-level **document version** rather than per-object ones:
   },
   "look": {
     "contrast": 1.1111112,
+    "channel_grade": [1.0, 1.0],
     "highlight_desaturation": {"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]}
   },
   "fit_range": {"headroom_stops": 6.0},
@@ -1106,8 +1107,8 @@ top-level **document version** rather than per-object ones:
   the curve, pinned by the convention `scale_r = 1`. The pre-split
   `reconstruction.contrast` is refused by name at every value, with the `look.contrast`
   that would keep it as the whole contrast. `scene_correction` is white balance and
-  exposure and `fit_range` the operator's headroom, and `look` contrast and highlight
-  desaturation (all below).
+  exposure and `fit_range` the operator's headroom, and `look` contrast, the
+  per-channel grade and highlight desaturation (all below).
   `fit_gamut` is empty and has no knob: it changes primaries into the destination's
   gamut and maps out-of-gamut colour radially toward neutral at constant luminance,
   against the cube `[0, max(peak, Y)]` — the peak is fit range's, and content above
@@ -1150,6 +1151,16 @@ top-level **document version** rather than per-object ones:
   saturated colour differs slightly, because the power acts after the NC film RGB v1
   3×3 and the decode's slope before it. Scene correction runs first, so an exposure
   of `e` stops leaves the look as `e · contrast` stops.
+  `channel_grade` (`nf-look/per-channel-grade`, `--channel-grade R,B`, new-flow only)
+  = `[r, b]` — red and blue exponents of a power pivoted at mid-grey,
+  `p_c = 0.18 · (x_c / 0.18)^g_c` with `g = [r, 1, b]` (green fixed at 1: a common
+  exponent under the restore would be a saturation knob), then the ACEScg luminance
+  restored, `out = p · Y(x) / Y(p)`, so it never moves neutral contrast and a neutral
+  mid-grey stays exactly neutral while a cast grows away from it. Both exponents
+  finite and positive and the spread over `[r, 1, b]` under 1, which keeps it monotone
+  in exposure; `[1, 1]` is the identity. A pixel is graded only when all three
+  channels and both luminances are finite and positive and the result is finite; any
+  other pixel passes through whole, bit for bit. It replaces the current chain's regional balance.
   `highlight_desaturation`
   (`nf-look/path-to-white`) = `{strength, start_stops, band: [s0, s1]}` —
   `--highlight-desaturation`, `--highlight-desaturation-start`,

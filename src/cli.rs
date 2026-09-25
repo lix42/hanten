@@ -692,6 +692,18 @@ pub struct LookOverrides {
     /// with the rest of the picture. `--new-flow` only.
     #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
     pub contrast: Option<f32>,
+    /// The per-channel grade `R,B`: red and blue exponents pivoted at mid-grey, green
+    /// fixed at 1, with each pixel's ACEScg luminance restored afterwards — a cast that
+    /// grows away from mid in both directions without moving neutral contrast (recipe
+    /// key `look.channel_grade`, default `1,1`, the identity). Both positive, with the
+    /// spread over `R,1,B` under 1. Runs after `--contrast`. `--new-flow` only.
+    #[arg(
+        long = "channel-grade",
+        value_name = "R,B",
+        value_parser = parse_lo_hi,
+        allow_hyphen_values = true
+    )]
+    pub channel_grade: Option<[f32; 2]>,
     /// Highlight desaturation's strength, in [0, 1]: how far a bright, near-neutral
     /// pixel is pulled toward neutral (recipe key
     /// `look.highlight_desaturation.strength`, default 0.8; 0 is off). It keys on
@@ -730,6 +742,7 @@ impl LookOverrides {
     /// Whether any look flag was typed.
     pub(crate) fn any(&self) -> bool {
         self.contrast.is_some()
+            || self.channel_grade.is_some()
             || self.highlight_desaturation.is_some()
             || self.highlight_desaturation_start.is_some()
             || self.highlight_desaturation_band.is_some()
