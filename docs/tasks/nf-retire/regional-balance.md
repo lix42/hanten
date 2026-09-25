@@ -22,6 +22,10 @@ per-channel grade.
   a fixed 0.18 and needs no measurement at all. Say that in the migration note
   rather than describing the grade as a rename — it is one fewer per-frame
   measurement in the decode, which is the direction the design pushes.
+- **The grade exists** (`nf-look/per-channel-grade`, 2026-09-24): `look.channel_grade` /
+  `--channel-grade R,B`. Under `--new-flow` the balance flags and the old recipe's
+  `density` key already refuse with it as the replacement (`flow`'s
+  `BALANCE_REPLACED_BECAUSE`); the current chain's removal is what remains.
 - Removal follows the `algorithm` precedent: a migration error, no aliases, and
   the report loses its measured-range field rather than reporting a constant.
 

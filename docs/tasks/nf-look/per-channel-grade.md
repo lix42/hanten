@@ -40,7 +40,8 @@ channels after the 3×3.
   powers alike at the gamut edge. A wide-gamut linear working space contains
   negative components, and a fractional power of a negative is NaN. Decide the
   behaviour deliberately — clamp, reflect through the pivot, or pass through — and
-  report which; a NaN reaching the encoder is only counted, not explained.
+  report which; a NaN reaching the encoder is only counted, not explained. (Settled
+  under Decisions: the whole pixel passes through.)
 
 ## Open questions
 
@@ -61,6 +62,36 @@ channels after the 3×3.
 - The pivot: contrast fixes it at `look::MID_GREY`, the value the decode's anchor pins
   mid at; the grade should share that pivot.
 
+## Decisions (user, 2026-09-24)
+
+- **Form: a pivoted per-channel power, then a luminance restore.** Constraining the
+  exponents instead (a luminance-weighted mean of 1) holds a neutral's slope only at
+  mid and bends it into an S-curve elsewhere — it moves contrast, which contrast owns.
+  Restoring the pixel's ACEScg luminance makes the neutral slope the contrast exactly,
+  and the grade a colour operator, like highlight desaturation.
+- **Spelling: `look.channel_grade`, red and blue only, green fixed at 1**
+  (`--channel-grade R,B`). Under the restore, equal exponents leave a neutral alone but
+  expand chroma — a hidden saturation knob — so the common part is not a degree of
+  freedom. Named `channel_grade` because `pipeline::chain` already calls the whole look
+  "grading". Lift and gain are not offered: gain is white balance and lift the flare
+  offset, both scene correction's.
+- **Guard: a pixel is graded whole or not at all** (revised in review, 2026-09-24).
+  Only a pixel whose channels are all finite and positive, with a finite positive
+  luminance before and after the power, is graded; any other passes through bit for bit.
+  The restore couples the channels, so a per-channel pass-through (contrast's) lets a
+  non-positive channel drive the restore without bound. Since exposure never flips a
+  channel's sign, the whole-pixel rule keeps the grade monotone for every pixel.
+  The trade-off, latent while nothing upstream produces negatives: it is continuous
+  along exposure but not across colour — a channel at +ε is graded, its neighbour at −ε
+  is not — so noisy deep shadows holding negatives would read as salt and pepper.
+  `nf-scene-correction/flare-removal`, the first producer of negatives, must revisit it.
+- **Value rule: exponents finite and positive, their spread (green included) under 1.**
+  That bounds every channel's slope in exposure away from zero, so the grade is
+  monotone — which the regional balance it replaces was not.
+- **Desaturation's band is left alone.** It assumes the cast is removed upstream, and a
+  tone-dependent cast is what the grade removes, so classifying the graded pixel is right.
+  The cost, accepted: a deliberate highlight cast is partly pulled back.
+
 ## How to Verify
 
 - Unit exponents are a bit-exact identity.
@@ -74,6 +105,19 @@ channels after the 3×3.
   destination such as `film-master` reads to refuse: the default is spared because
   every default recipe carries it, an empty look because it is an identity). This
   control extends both.
+
+## Outcome (2026-09-24)
+
+- **Built as decided**, in `pipeline::look`, between contrast and highlight
+  desaturation; the report's `applied` names it and both `LookSection` predicates cover
+  it. No default pixel moves: the default grade is the identity.
+- **Verified** by unit tests against every How-to-Verify point, a `chain_golden` pin,
+  and a synthetic crossover through the binary read back with `nctool metrics`: the cast
+  shrinks at the matching grade and comes back when overshot. Measurements are in the
+  progress log.
+- **The balances now point at it:** under `--new-flow` the regional-balance flags and the
+  old recipe's `density` key refuse as not ported, with `--channel-grade` as the remedy.
+  `nf-retire/regional-balance` removes them from the current chain.
 
 ## Dependencies
 

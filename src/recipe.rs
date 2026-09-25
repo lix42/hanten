@@ -39,7 +39,7 @@ use crate::pipeline::chain::{ChainParams, DisplayTarget, SharedParams};
 use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::fit_range::DisplayPeak;
 use crate::pipeline::look::{
-    ContrastFault, DesaturationFault, LookParams, LookSection, MAX_START_STOPS,
+    ChannelGradeFault, ContrastFault, DesaturationFault, LookParams, LookSection, MAX_START_STOPS,
 };
 use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
 use crate::types::{
@@ -200,8 +200,8 @@ const OLD_RECONSTRUCTION_KEYS: &[(&str, &str)] = &[
     (
         "density",
         "`density.scale` and `density.offset` are `reconstruction.scale` and \
-         `reconstruction.offset`; the regional balances have no counterpart yet \
-         (`nf-look/per-channel-grade`)",
+         `reconstruction.offset`; the regional balances are replaced by the look's \
+         per-channel grade, `look.channel_grade`",
     ),
 ];
 
@@ -421,6 +421,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     if let Some(v) = args.look.contrast {
         r.look.contrast = v;
     }
+    if let Some(v) = args.look.channel_grade {
+        r.look.channel_grade = v;
+    }
     let desat = &mut r.look.highlight_desaturation;
     if let Some(v) = args.look.highlight_desaturation {
         desat.strength = v;
@@ -510,8 +513,8 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
 }
 
 /// The look's value rules ([`LookSection::check_contrast`],
-/// [`HighlightDesaturation::check`]), rendered as a usage error naming the knob the
-/// way `names` says the command spells it.
+/// [`LookSection::check_channel_grade`], [`HighlightDesaturation::check`]), rendered as
+/// a usage error naming the knob the way `names` says the command spells it.
 ///
 /// [`HighlightDesaturation::check`]: crate::pipeline::look::HighlightDesaturation::check
 fn validate_look(p: &LookSection, names: KnobNames) -> Result<()> {
@@ -519,6 +522,14 @@ fn validate_look(p: &LookSection, names: KnobNames) -> Result<()> {
         return Err(NcError::Usage(format!(
             "{} must be finite and positive (1 is the identity), got {v}",
             knob_name(names, "look", "--contrast", "contrast")
+        )));
+    }
+    if let Err(ChannelGradeFault([r, b])) = p.check_channel_grade() {
+        return Err(NcError::Usage(format!(
+            "{} must be two finite, positive exponents whose spread with green's 1 is \
+             under 1 (1,1 is the identity; a wider spread can fold the tone scale), got \
+             [{r}, {b}]",
+            knob_name(names, "look", "--channel-grade", "channel_grade")
         )));
     }
     let name = |flag: &str, key: &str| {
@@ -724,14 +735,14 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         // A stage with no knob is present as an empty object, not absent or `null`;
         // one with knobs writes each of them at its default — the identity for scene
-        // correction, contrast 2.0/1.8 and highlight desaturation at 0.8 for the look
-        // (the contrast first, as the stage applies it), and reinhard at six
+        // correction, contrast 2.0/1.8, the identity grade and highlight desaturation at
+        // 0.8 for the look (in the order the stage applies them), and reinhard at six
         // stops for fit range. (Fit gamut's map runs at every setting; it simply has
         // nothing for a recipe to set.)
         assert_eq!(json["fit_gamut"], serde_json::json!({}));
         assert_eq!(
             serde_json::to_string(&Recipe::default().look).unwrap(),
-            r#"{"contrast":1.1111112,"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}}"#
+            r#"{"contrast":1.1111112,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}}"#
         );
         assert_eq!(
             json["scene_correction"],
@@ -1060,6 +1071,38 @@ mod tests {
         }
         let mut r = Recipe::default();
         r.look.contrast = 1.0;
+        validate(&r, KnobNames::FlagAndKey).unwrap();
+    }
+
+    #[test]
+    fn validate_refuses_an_unusable_channel_grade() {
+        for bad in [
+            [0.0, 1.0],
+            [1.0, -0.2],
+            [f32::NAN, 1.0],
+            [2.0, 1.0],
+            [1.5, 0.5],
+        ] {
+            let mut r = Recipe::default();
+            r.look.channel_grade = bad;
+            let msg = validate(&r, KnobNames::FlagAndKey).unwrap_err();
+            let msg = msg.message();
+            assert!(
+                msg.contains("--channel-grade (recipe `look.channel_grade`)"),
+                "{bad:?}: {msg}"
+            );
+            // The most specific rule speaks, not a neighbour's.
+            assert!(!msg.contains("--contrast"), "{msg}");
+            let msg = validate(&r, KnobNames::KeyOnly).unwrap_err();
+            assert!(
+                msg.message().contains("`look.channel_grade`")
+                    && !msg.message().contains("--channel-grade"),
+                "{}",
+                msg.message()
+            );
+        }
+        let mut r = Recipe::default();
+        r.look.channel_grade = [1.4, 0.6];
         validate(&r, KnobNames::FlagAndKey).unwrap();
     }
 

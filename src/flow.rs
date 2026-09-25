@@ -97,10 +97,11 @@ struct FlagEntry {
 const DESTINATION_ARRIVES_WITH: &str = "the new flow's destination set: it renders into exactly one destination today \
      (a Display P3 16-bit TIFF), so there is no output policy to choose or describe \
      (`nf-destinations/preset-set`)";
-const BALANCE_ARRIVES_WITH: &str = "the look stage's per-channel grade, which subsumes it: adjusting channels by tone \
-     region is a grade, and it is also the one term in the old chain that could be \
-     non-monotone, so it cannot sit in a decode that loses nothing by construction \
-     (`nf-look/per-channel-grade`)";
+const BALANCE_REPLACED_BECAUSE: &str = "the regional balance (density offsets ramped over a \
+     measured tone range) is not ported. Adjusting channels by tone region is the look's \
+     per-channel grade, pivoted at mid-grey so it needs no measured range, and unlike the \
+     regional balance it cannot fold the tone scale";
+const BALANCE_INSTEAD: &str = "--channel-grade R,B (recipe `look.channel_grade`)";
 
 /// Knobs with no new-flow meaning, keyed on the **flag the user typed**.
 ///
@@ -206,8 +207,9 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
         knob: "--shadow-balance",
         covers: &["--shadow-balance"],
         present: |args| args.density.shadow_balance.is_some_and(|b| b != [0.0; 3]),
-        availability: Availability::NotYet {
-            arriving_with: BALANCE_ARRIVES_WITH,
+        availability: Availability::Never {
+            reason: BALANCE_REPLACED_BECAUSE,
+            instead: Some(BALANCE_INSTEAD),
         },
     },
     FlagEntry {
@@ -218,8 +220,9 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
                 .highlight_balance
                 .is_some_and(|b| b != [0.0; 3])
         },
-        availability: Availability::NotYet {
-            arriving_with: BALANCE_ARRIVES_WITH,
+        availability: Availability::Never {
+            reason: BALANCE_REPLACED_BECAUSE,
+            instead: Some(BALANCE_INSTEAD),
         },
     },
     // A preset sets knobs on **both** sides of the decode/rendering boundary — the
@@ -350,8 +353,9 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
         knob: "--balance-range / --auto-balance-range",
         covers: &["--balance-range", "--auto-balance-range"],
         present: |args| args.density.balance_range.is_some() || args.density.auto_balance_range,
-        availability: Availability::NotYet {
-            arriving_with: BALANCE_ARRIVES_WITH,
+        availability: Availability::Never {
+            reason: BALANCE_REPLACED_BECAUSE,
+            instead: Some(BALANCE_INSTEAD),
         },
     },
 ];
@@ -432,6 +436,10 @@ const KEPT_FLAGS: &[KeptEntry] = &[
               `nf-reconstruction/gamma-split` moved out of the decode, new-flow only",
     },
     KeptEntry {
+        covers: &["--channel-grade"],
+        why: "the look's per-channel grade (recipe `look.channel_grade`), new-flow only",
+    },
+    KeptEntry {
         covers: &[
             "--highlight-desaturation",
             "--highlight-desaturation-start",
@@ -505,12 +513,13 @@ const NEW_FLOW_ONLY_FLAGS: &[NewFlowOnlyEntry] = &[
     NewFlowOnlyEntry {
         covers: &[
             "--contrast",
+            "--channel-grade",
             "--highlight-desaturation",
             "--highlight-desaturation-start",
             "--highlight-desaturation-band",
         ],
         present: |args| args.look.any(),
-        message: "the look's flags (--contrast, --highlight-desaturation, \
+        message: "the look's flags (--contrast, --channel-grade, --highlight-desaturation, \
                   --highlight-desaturation-start, --highlight-desaturation-band) set the \
                   new chain's look (recipe `look`) and have no meaning without \
                   `--new-flow`: the current chain has no look stage. Its contrast is the \
@@ -841,6 +850,9 @@ mod tests {
             }),
             ("--contrast", &["--contrast", "1.3"], |r| {
                 r.look.contrast == 1.3
+            }),
+            ("--channel-grade", &["--channel-grade", "1.1,0.9"], |r| {
+                r.look.channel_grade == [1.1, 0.9]
             }),
             (
                 "--highlight-desaturation",

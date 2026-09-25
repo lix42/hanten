@@ -1651,9 +1651,11 @@ the design in `docs/design-update.md`:
   reference does the other
 - [x] [The look stage](tasks/nf-look/stage.md) — scene-referred and before the
   SDR/HDR branch, because a gain map needs agreement below diffuse white
-- [ ] [A per-channel grade with a mid-grey
+- [x] [A per-channel grade with a mid-grey
   pivot](tasks/nf-look/per-channel-grade.md) — the tunable counterpart of the
-  decode's `scale`; subsumes the regional balance
+  decode's `scale`; subsumes the regional balance. **Done 2026-09-25**:
+  `look.channel_grade` / `--channel-grade R,B`, red/blue pivoted at mid-grey with the
+  luminance restored, so it never moves neutral contrast
 - [x] [Fit the desaturation band on more than one
   patch](tasks/nf-look/desaturation-band-fit.md) — the spike placed it from a
   single saturated patch on a single roll; runs against today's binary. **Done

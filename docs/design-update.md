@@ -566,6 +566,10 @@ working-space channels directly:
 out_c = mid · (in_c / mid)^k_c        mid = 0.18
 ```
 
+As built (`nf-look/per-channel-grade`), green is fixed at 1 and the ACEScg luminance
+is restored after the power, so the grade is a colour operator that never moves
+neutral contrast; the task's decision records why.
+
 - **The pivot matters.** Without it a per-channel power moves neutral
   everywhere; pivoted at mid-grey, a neutral mid stays neutral and the cast
   grows away from mid in both directions — which is the thing white balance
@@ -685,9 +689,10 @@ artifact on which a reconstruction is measured. Caveats:
   parameters could hold both mid-grey and diffuse white, which reinhard can't,
   and could shape the approach to black instead of leaving it to a subtraction.
   Add it only if it beats reinhard at matched lightness.
-- **How contrast and the per-channel grade are spelled** — one CDL-style object,
-  or separate knobs — and whether the "direct" preset is a named output preset
-  or a rendering profile.
+- **How contrast and the per-channel grade are spelled** — *settled*: separate keys
+  under `look` (`look.contrast`, `look.channel_grade`), not one CDL-style object.
+  Still open: whether the "direct" preset is a named output preset or a rendering
+  profile.
 - **The black point is two jobs:** a small flare/fog subtraction (scene
   correction) and display black / toe (fit range). Today it's one linear
   subtraction, and 0.019 crushed 0.69–8.66% of frames to code 0.
