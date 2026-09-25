@@ -36,8 +36,9 @@
 //!   clamped and counted (`nf-display-stages/branch-contract` has the measurement; for
 //!   a gain map the destination clamps and counts, since `gain_ratio` does not).
 //!
-//! **Reinhard compresses upward only**: below mid-grey it is a gain, not a curve, so
-//! the approach to black is left to the decode's linearization and the look's contrast.
+//! **Reinhard compresses upward only**: below mid-grey it is nearly a gain (log-log
+//! slope 1.00 at 0.002, 0.94 near 0.05), so the approach to black is left to the
+//! decode's linearization and the look's contrast.
 //! A toe belongs here, where the display's range is known; whether the operator earns
 //! one is `nf-display-stages/parametric-operator`'s question.
 //!
@@ -438,12 +439,14 @@ mod tests {
 
     #[test]
     fn reinhard_compresses_upward_only() {
-        // Below mid-grey the curve is a gain, not a curve: its log-log slope is 1 there
-        // (design-update Part 2, "The shadow end") — the shadow end the parametric
-        // operator exists to question. Pinned so a change there is a decision.
+        // Below mid-grey the curve is nearly a gain: its log-log slope is 1 deep in the
+        // shadows and still 0.94 near 0.05 (design-update Part 2, "The shadow end") —
+        // the shadow end the parametric operator exists to question. Pinned so a
+        // change there is a decision.
         let o = op(DEFAULT_HEADROOM_STOPS, 1.0);
         let slope = |v: f32| (o.apply(v * 1.001) / o.apply(v)).ln() / 1.001f32.ln();
         assert!((slope(0.002) - 1.0).abs() < 0.01, "{}", slope(0.002));
+        assert!((slope(0.05) - 0.94).abs() < 0.01, "{}", slope(0.05));
         assert!((slope(1.0) - 0.45).abs() < 0.02, "{}", slope(1.0));
     }
 

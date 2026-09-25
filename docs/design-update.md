@@ -532,7 +532,7 @@ Constraints the order carries:
   above 1.0. Their knob `highlight_compress` goes with them. (Done in
   `nf-retire/display-tones`, `pipeline_version` 7.) "Fit range" rather than "highlight compression", because reinhard holds
   mid-grey and reshapes everything above it, costing ≈0.86 stop at diffuse white
-  — but note what it does *not* do: below mid it is a pure gain (see "The shadow
+  — but note what it does *not* do: below mid it is nearly a gain (see "The shadow
   end" below).
 - **Retire `legacy` and `custom`.** This removes the second implementation of
   the print controls: `density::render_print` runs them on film RGB before the
@@ -617,8 +617,10 @@ stage needs it explicitly rather than inheriting it from a reconstruction curve:
 
 Measured on the shipped operator at the default 6 stops of headroom (input gain
 1.2194): the local slope is **1.00 at 0.002 and 0.99 at 0.01**, 0.82 at mid-grey,
-0.45 at diffuse white and 0.10 an octave above. So below mid-grey reinhard is a
-gain, not a curve, and all of its compression is above.
+0.45 at diffuse white and 0.10 an octave above. So below mid-grey reinhard is
+nearly a gain — 0.94 near 0.05, costing 1–3% of shadow slope
+(`chain::tests::contrast_not_fit_range_decides_shadow_separation`) — and almost all
+of its compression is above.
 
 That leaves the dark end to whatever else is in the chain:
 

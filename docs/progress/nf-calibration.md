@@ -19,7 +19,7 @@ migration plan (`docs/nf-migration.md`).
 ## anchor-comparison
 
 **Status:** not started
-**Updated:** 2026-09-23
+**Updated:** 2026-09-24
 
 - 2026-09-21: filed to carry the rendered half of `nf-reconstruction/anchor-spike`,
   which costed four white placements from the scans but could not rank them: under the
@@ -31,6 +31,11 @@ migration plan (`docs/nf-migration.md`).
   frame is excluded — see the correction in [`white-placement.md`](../spike/white-placement.md).
   09-11 alone would ask candidate C for gamma 6.61, which makes it the natural test roll
   for D's ceiling.
+- 2026-09-24: from `nf-look/contrast` (user). **`W` is held at red p97 for the
+  renders**; the final percentile, and whether it is a code constant or a recipe value,
+  stays this task's to settle or hand on explicitly. **Where C/D's per-roll contrast
+  lands is settled**: it is `look.contrast` itself, one knob, with the decode's anchor
+  unchanged — only how it reaches the recipe (`measure-roll` or by hand) stays open.
 
 ## scale-ladder
 
