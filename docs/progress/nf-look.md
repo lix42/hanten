@@ -19,19 +19,29 @@ entry already existed from `nf-core`; what it settled is the spelling — **one 
 control under `look`**, each named and added by its own task with a field on
 `LookParams`, a CLI flag (classified in `flow`, which must also refuse a new-flow-only
 flag on the current chain), a `recipe::merge` arm with a merge test, and a value rule.
-`contrast` and the grade overlap (equal pivoted exponents are contrast), so whichever
-lands first decides who owns neutral contrast. The section is `look::LookSection`, and
+`contrast` and the grade overlap (equal pivoted exponents are contrast): contrast owns
+neutral contrast, and the grade must not be able to move it. The section is `look::LookSection`, and
 the stage's `LookParams` adds what the section cannot state (the decode's linearization, via
 `Recipe::chain_params`). Two predicates, never a rule per knob: `is_empty` (moves no
 pixel — `applied()`) and `asks_for_a_look` (neither the default nor empty — what
 `film-master`'s refusal reads, in `nf-destinations/preset-set`); they differ because the
 default look is not the identity, and an empty look is spared because it is one.
 
-**Print contrast exists (`look.contrast`, 2026-09-24)**, landed by
-`nf-reconstruction/gamma-split` ahead of `contrast`: a power pivoted at mid-grey, default
-2.0/1.8, applied first in the stage. Highlight desaturation's band divides by the whole
-contrast (the decode's linearization × this), so it is unchanged whichever stage carries
-a roll's contrast.
+**`contrast` is done (2026-09-24): print contrast is `look.contrast`**, landed early by
+`nf-reconstruction/gamma-split` — a power pivoted at mid-grey, applied first in the
+stage. Highlight desaturation's band divides by the whole contrast (the decode's
+linearization × this), so it is unchanged whichever stage carries a roll's contrast. It
+stays **one knob** holding whatever makes the roll right: under
+`nf-calibration/anchor-comparison`'s C (or D below its cap) the solved per-roll value
+*is* `look.contrast`, with the decode's anchor unchanged; taste is editing that number.
+The default `2.0 / 1.8` is provisional; look presets must not set contrast; `--exposure`
+is a level, not a contrast control (it moves the shadow slope only through reinhard's
+mild curvature below mid). `W`'s percentile stays `anchor-comparison`'s. Measured
+through the chain: shadow slope is the contrast (0.98–0.99× under reinhard); across
+headrooms ≥ 2 stops it moves by under 0.003, and from 0 (fit range off) up by at most
+~0.023 (≈2%, reinhard switching on). The grade runs after contrast and before
+highlight desaturation, and its cast grows with contrast; its form (how it stays off
+neutral contrast) is `per-channel-grade`'s.
 
 **`path-to-white` is done (2026-09-24): highlight desaturation, on by default at 0.8.**
 `look.highlight_desaturation` pulls near-neutral highlights to neutral, keyed on
@@ -119,9 +129,13 @@ visible by eye; the band's value is keeping the pull off colour.
 ## per-channel-grade
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: a per-channel grade with a mid-grey pivot.
+- 2026-09-24: decisions from `nf-look/contrast` recorded in the task file: the grade runs
+  after contrast and before highlight desaturation, its cast grows with contrast, and its
+  form (how it stays off neutral contrast, which contrast owns) is still this task's.
+  Also opened: whether desaturation's band should account for the grade.
 
 ## desaturation-spike
 
@@ -422,7 +436,7 @@ visible by eye; the band's value is keeping the pull off colour.
 
 ## contrast
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: the print-contrast knob.
@@ -432,13 +446,43 @@ visible by eye; the band's value is keeping the pull off colour.
   divides by linearization × contrast). The task file is rewritten to what remains —
   the default and the overlap with the grade. Contrast landed first, so it owns neutral
   contrast. Details in `docs/progress/nf-reconstruction.md`, `gamma-split`.
+- 2026-09-24: **the default question is settled as a set of decisions (user).**
+  `look.contrast` stays **one knob** holding whatever makes the roll right — no
+  `k_roll × k_taste` split, since `linearization × contrast` is already one product a
+  reader must carry. Under `anchor-comparison`'s candidate C (or D below its cap) the
+  solved per-roll value *is* `look.contrast`, and the decode's anchor does not move:
+  the decode still sends `d` to 0.18 and the look's power about 0.18 lifts the roll's
+  white to 1.0 (the spike's "anchor 0.800" for C is the whole chain's white in the
+  pre-split framing, not a decode setting). Taste is editing that number per roll.
+  `--exposure` is **not** the taste substitute: it is a level move, whose effect on the
+  shadow slope comes only from reinhard's mild curvature below mid (a few percent,
+  growing as exposure lifts shadows toward mid); contrast sets the slope 1:1. The
+  default stays `2.0 / 1.8` as a provisional value this task does not move. Look
+  presets must not set contrast (recorded in `look-presets`). `W`'s percentile, and whether it is a
+  constant or a recipe value, is out of scope here; `anchor-comparison` owns it.
+  Remaining: the shadow-separation measurement and the grade overlap.
+- 2026-09-24: **done.** Shadow separation measured on a synthetic neutral ramp through
+  `chain::render` (`chain::tests::contrast_not_fit_range_decides_shadow_separation`):
+  mid-grey renders at 0.18 in every cell, so lightness is matched for free. The log-log
+  slope from 0.005 to 0.05 is the contrast exactly with fit range off, and 0.98–0.99×
+  it at headrooms 2/3/6 (0.977 / 1.091 / 1.487 at contrast 1 / 1.11 / 1.5, six stops);
+  across headrooms ≥ 2 stops it moves by under 0.003 (from 0 up, at most ~0.023 at
+  contrast 1: reinhard switching on). Reinhard being on at all costs 1–3% of slope, as a
+  near-constant shadow gain. Real frames skipped: both operators are per-pixel, so a
+  frame's neutrals show the same function. Grade overlap (user): the grade's form is
+  `per-channel-grade`'s; it runs after contrast and before highlight desaturation, and
+  its cast grows with contrast (a decode crossover is an exponent mismatch the contrast
+  multiplies too) — recorded in that task file. `chain.rs`'s two doc lines that still
+  described the look as highlight desaturation alone now name contrast.
 
 ## look-presets
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: re-express the `--preset` bundles.
+- 2026-09-24: recorded in the task file from `nf-look/contrast`: a preset does not set
+  `look.contrast`.
 
 ## stock-data-home
 

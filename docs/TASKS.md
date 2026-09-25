@@ -1665,9 +1665,11 @@ the design in `docs/design-update.md`:
   anchor then left the operator inert) and behind a roll-level white balance,
   without which its saturation band cannot tell a cast white from skin. **Done
   2026-09-24**: on by default at 0.8, band `0.015 → 0.025` on ACEScg
-- [~] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
-  `gamma`; supersedes `algo/contrast-latitude-spike`. The knob itself landed with
-  `gamma-split`; what remains is its default and its overlap with the grade
+- [x] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
+  `gamma`; supersedes `algo/contrast-latitude-spike`. The knob landed with
+  `gamma-split`. **Done 2026-09-24**: one knob (a per-roll contrast under
+  `anchor-comparison`'s C/D *is* its value), default `2.0 / 1.8` provisional, presets do
+  not set it; shadow separation is the contrast's, not fit range's
 - [ ] [Re-express the `--preset` bundles](tasks/nf-look/look-presets.md) —
   every current `--preset` names a retiring curve and an exposure calibrated
   to the old chain

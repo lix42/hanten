@@ -49,14 +49,17 @@ traded; one roll cannot show it.
 
 ## Open questions
 
-- **Which percentile defines `W`.** The spike used red p97 pooled toward the roll's
-  upper end; p95 and p99 move the answer and the specular headroom with it.
-- **Whether the per-roll contrast is a recipe value or a measurement** the roll planner
-  derives — the first is reproducible, the second is convenient. White balance chose the
-  first (`nf-scene-correction/roll-white-balance`): `hanten measure-roll` measures once
-  and the recipe carries the value. Its pooled measurement could report the roll white's
-  *level* as well, from the same pixels and leader guard — share that measurement, not a
-  parameter, if this lands on a measured `W`.
+- **`W` is held at red p97** (pooled toward the roll's upper end, as the spike measured
+  it) for the renders. Which percentile finally defines `W` — p95 and p99 move C's
+  contrast, its noise and the specular headroom — and whether it is a code constant or
+  a recipe value is this task's to settle, or to hand on explicitly.
+- **How the per-roll contrast reaches the recipe.** Where it lands is settled
+  (`nf-look/contrast`, 2026-09-24): under C, or D where its cap does not bind, it is
+  `look.contrast` itself — one knob, no separate taste factor. Whether `hanten
+  measure-roll` computes it or the user writes it is open. White balance chose a measured
+  value the recipe carries (`nf-scene-correction/roll-white-balance`); its pooled
+  measurement could report the roll white's *level* as well, from the same pixels and
+  leader guard — share that measurement, not a parameter.
 - Whether an underexposed roll should be lifted at all, which is the faithfulness
   question the whole shortlist turns on and which no measurement decides.
 

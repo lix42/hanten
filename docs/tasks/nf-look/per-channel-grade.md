@@ -23,7 +23,21 @@ channels after the 3×3.
   is a monotonicity win as well as a simplification.
 - **It does not replace the calibration.** Without a measured `scale` every roll
   needs hand-grading; this is a grade on top of a calibrated decode.
-- **Needs a guard at and below zero.** A wide-gamut linear working space contains
+- **Settled by `nf-look/contrast` (2026-09-24):**
+  - **It runs after contrast and before highlight desaturation** (user). Against
+    contrast the order is free — two pivoted powers compose by multiplying exponents, so
+    channel `c` ends at `contrast · g_c`. Against desaturation it is not: running first
+    suits the grade's main job, fixing crossover, at the cost that a deliberate creative
+    highlight cast is partly pulled back toward neutral.
+  - **A grade's cast grows with contrast**, and should: the grade's exponents compose
+    with the contrast's, so the channel difference they make is multiplied by it too. A
+    crossover the decode leaves is an exponent mismatch between layers, which the
+    look's contrast multiplies too, so a grade that scales with it tracks the error;
+    dividing by contrast would under-correct a high-contrast roll. Under a per-roll contrast (`anchor-comparison`'s C/D,
+    1.43–3.67×) the same grade values therefore read stronger on a contrastier roll.
+- **Needs a guard at and below zero.** Contrast passes non-positive and non-finite
+  samples through untouched (`look::apply_contrast`); matching that keeps the look's two
+  powers alike at the gamut edge. A wide-gamut linear working space contains
   negative components, and a fractional power of a negative is NaN. Decide the
   behaviour deliberately — clamp, reflect through the pivot, or pass through — and
   report which; a NaN reaching the encoder is only counted, not explained.
@@ -34,11 +48,16 @@ channels after the 3×3.
   lift/gamma/gain triple per channel? The container is settled (`nf-look/stage`,
   2026-09-23): one key per control under `look`, not one CDL object — CDL's slope
   is white balance and its offset the flare subtraction, both scene correction's.
-- **Its overlap with contrast.** Equal exponents on all three channels, pivoted at
-  mid, *are* contrast — the same duplication that ruled out CDL. Contrast landed first
-  (`look.contrast`, `nf-reconstruction/gamma-split`) and owns neutral contrast, so the
-  grade must not also move it — e.g. constrained to keep a neutral neutral, or defined
-  relative to one channel. Which?
+- **How it stays off neutral contrast.** Equal exponents on all three channels, pivoted
+  at mid, *are* contrast — the same duplication that ruled out CDL. Contrast owns
+  neutral contrast (`nf-look/contrast`), so the grade must not be able to move it: a
+  neutral's luminance slope must stay at the contrast. Constraints that weight the
+  channels equally (exponents multiplying to 1, or held relative to green) do not meet
+  that, since luminance weights the channels unequally. Which form does is this task's
+  (user, 2026-09-24).
+- **Should desaturation's band account for the grade?** The band divides
+  `log10(max/min)` by linearization × contrast only (`look`'s `Pull`); running between
+  the two, the grade changes channel ratios before the band classifies a pixel.
 - The pivot: contrast fixes it at `look::MID_GREY`, the value the decode's anchor pins
   mid at; the grade should share that pivot.
 

@@ -11,8 +11,8 @@ lightness.
 Why the question exists:
 
 - **Reinhard compresses upward only.** Measured on the shipped operator at the
-  default headroom, the local slope is 1.00 at 0.002 (design-update Part 2, "The
-  shadow end") — below mid it is a gain, not a curve.
+  default headroom, the local slope is 1.00 at 0.002 and 0.94 near 0.05
+  (design-update Part 2, "The shadow end") — below mid it is nearly a gain.
 - **So the shadow end is shaped by a black-point subtraction, which crushes** —
   reaching black by taking light away is exactly what a toe exists to avoid. The
   same section records the measured share of frames driven to code 0.

@@ -4,8 +4,8 @@
 //! The chain `--new-flow` selects (`docs/design-update.md` Part 2,
 //! `docs/nf-migration.md`), fed by the fixed decode (`algo::fixed`) and rendering
 //! into one destination (`cli::convert_frame`, `nf-core/minimal-end-to-end`). Scene
-//! correction applies white balance and exposure; the look desaturates near-neutral
-//! highlights (its first control — the rest of its epic fills it); fit range
+//! correction applies white balance and exposure; the look applies print contrast and
+//! desaturates near-neutral highlights (the rest of its epic fills it); fit range
 //! compresses the scene's range against the destination's peak, and fit gamut maps
 //! into the destination's gamut, keeping hue.
 //!
@@ -127,8 +127,8 @@ pub struct RenderedPair {
 
 /// Render an [`AcesCgImage`] through the new chain, for one destination.
 ///
-/// **Today this is scene correction's per-channel gains, the look's highlight
-/// desaturation, fit range's luminance operator, and the destination's 3×3 with the
+/// **Today this is scene correction's per-channel gains, the look's print contrast and
+/// highlight desaturation, fit range's luminance operator, and the destination's 3×3 with the
 /// radial gamut map.** Nothing is clamped: content fit range left above the peak rides
 /// through to the encoder, which is the only place clamping happens. The gamut map is
 /// a policy, not a clamp, and what it discards (a colour at `Y ≤ 0`, written black) is
@@ -1023,5 +1023,59 @@ mod tests {
         assert_eq!(bits(&sdr.rgb), bits(&hdr.rgb));
         let range = gain_ratio::between(&sdr, &hdr, 1.0 / 64.0).unwrap().range();
         assert!(range.flat, "{range:?}");
+    }
+
+    /// **Contrast, not fit range, decides shadow separation** — the measurement the
+    /// look's contrast exists for (`nf-look/contrast`). A neutral ramp from 5.2 to 1.9
+    /// stops below mid-grey, through the whole chain, at matched lightness: mid-grey
+    /// renders at 0.18 in every cell, since contrast pivots there and reinhard keeps it.
+    /// With fit range off the shadow log-log slope is the contrast exactly. At headrooms of
+    /// 2, 3 and 6 stops the test bounds it at no more than 3% below the contrast, and its
+    /// spread (max − min) across those headrooms under 0.005 (measured: 0.98–0.99× and
+    /// under 0.003): below mid reinhard is nearly a gain, costing 1–3% of slope over this
+    /// ramp (`fit_range::tests::reinhard_compresses_upward_only`). The bound covers
+    /// headroom ≥ 2 only; from 0 up, reinhard switching on costs up to ~0.023 (≈2%) at
+    /// contrast 1. A toe in fit range would fail this, which is the point — it would be a
+    /// decision.
+    #[test]
+    fn contrast_not_fit_range_decides_shadow_separation() {
+        let xs = [0.005_f32, 0.05, 0.18];
+        let render_ramp = |contrast: f32, headroom_stops: f32| {
+            let rgb: Vec<f32> = xs.iter().flat_map(|&v| [v, v, v]).collect();
+            let mut p = params();
+            p.shared.look.section.contrast = contrast;
+            p.shared.headroom_stops = headroom_stops;
+            let out = render(aces_from(3, 1, &rgb, None), &p).unwrap();
+            let y: Vec<f32> = out
+                .image
+                .into_parts()
+                .0
+                .rgb
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|px| dot(*px, DISPLAY_P3_LUMA))
+                .collect();
+            assert!((y[2] - 0.18).abs() < 1e-5, "mid-grey moved: {y:?}");
+            (y[1] / y[0]).ln() / (xs[1] / xs[0]).ln()
+        };
+        for contrast in [1.0, look::DEFAULT_CONTRAST, 1.5] {
+            // Fit range off: the slope is the contrast, exactly.
+            assert!((render_ramp(contrast, 0.0) - contrast).abs() < 1e-4);
+            let slopes = [2.0, 3.0, 6.0].map(|h| render_ramp(contrast, h));
+            for slope in slopes {
+                assert!(
+                    (0.97 * contrast..=contrast).contains(&slope),
+                    "contrast {contrast}: shadow slope {slope}"
+                );
+            }
+            let max = slopes.iter().copied().fold(f32::MIN, f32::max);
+            let min = slopes.iter().copied().fold(f32::MAX, f32::min);
+            let spread = max - min;
+            assert!(
+                spread < 0.005,
+                "contrast {contrast}: headroom moved the slope {spread}"
+            );
+        }
     }
 }
