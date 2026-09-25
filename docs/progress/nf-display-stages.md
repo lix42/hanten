@@ -336,6 +336,18 @@ float destination, never a per-channel clip.
   HDR to its peak and count it (`gain_ratio::between` clamps only to ≥ 0). For
   `nf-destinations/memory-profiles`: a pair holds two full-frame buffers, the IR
   plane included.
+- 2026-09-24: rebased onto `nf-reconstruction/gamma-split` (#164), which gives the look
+  a print contrast by default (`look::DEFAULT_CONTRAST`). Only the test fixture's
+  `LookParams` moved (`linearization` replaces `decode_contrast`); nothing of this
+  change was dropped. **The grid now has `both_bound` pixels** (33 of 471 below
+  white, against 187 re-derived exactly): contrast pushes its most saturated blues
+  onto a face of the HDR cube too — the black face, or the peak itself at ACEScg blue
+  ≈ 6.7 with a luminance under white. Permitted, so the grid test bounds them
+  (`both_bound < sdr_bound`) instead of pinning 0. Real frames re-measured, 92 frames
+  at headroom 6 / 3 / 2 / 0: **0 violations and 0 `both_bound` at every headroom**;
+  SDR-bound 0.010% / 0.011% / 0.012% / 0.197% of below-white pixels; HDR above the
+  peak 0 / 57 (max 1.21·P) / 0.0014% (max 2.00·P) / 381 on 9 frames (max 3.03·P).
+  The no-ceiling decision stands.
 
 ## gamut-map-share
 

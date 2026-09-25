@@ -42,7 +42,8 @@ Answered (2026-09-24; the contract is `pipeline::chain`'s module doc):
 - **An HDR destination gets no hard ceiling above `W`** (user decision 2026-09-24).
   At a 1000/203 peak, 92 frames, no sample exceeds the peak at the default six stops;
   57 samples on 4 frames at three stops; 0.0014% of samples on 21 frames (max 2.01·P)
-  at two; 393 on 9 frames (max 3.05·P) at zero. The encoder clamps and counts them —
+  at two; 381 on 9 frames (max 3.03·P) at zero (re-measured under the look's print
+  contrast, `nf-reconstruction/gamma-split`). The encoder clamps and counts them —
   for a gain map that is the destination's job, since `gain_ratio::between` clamps HDR
   only to `≥ 0` (recorded in `nf-destinations/preset-set`).
 

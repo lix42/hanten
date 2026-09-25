@@ -839,9 +839,13 @@ mod tests {
             agreement.identical > 100 && agreement.sdr_bound > 0,
             "{agreement:?}"
         );
-        // Every difference is re-derived exactly from the HDR pixel: none needs the
-        // loose rule for a pixel both cubes bind.
-        assert_eq!(agreement.both_bound, 0, "{agreement:?}");
+        // Most differences are re-derived exactly from the HDR pixel. The rest are the
+        // grid's most saturated blues, which the look's print contrast pushes onto a face
+        // of the HDR cube too (the black face, or the peak at ACEScg blue ≈ 6.7 with a
+        // luminance under white), so only the loose rule applies. Real frames have none
+        // (`pipeline::branch_probe` asserts it); a bound, not a count, because `powf`
+        // differs by target.
+        assert!(agreement.both_bound < agreement.sdr_bound, "{agreement:?}");
         let differing_samples = sdr
             .rgb
             .iter()
