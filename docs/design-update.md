@@ -538,9 +538,10 @@ Constraints the order carries:
   the print controls: `density::render_print` runs them on film RGB before the
   NC film RGB v1 mapping, while the display presets run them on ACEScg.
   - **Features that exist only on legacy move into the new pipeline:** Adobe RGB
-    output is a **must have** (today reachable only via an ICC path on legacy;
-    see `output/adobe-rgb-gamut`), and a rendered float TIFF (`--out-depth f32`)
-    is good to have.
+    output is a **must have** (it was reachable only via an ICC path on legacy;
+    the new chain's gamut, profile and encode are `output/adobe-rgb-gamut`, a
+    destination selecting it `nf-destinations/direct-preset`), and a rendered
+    float TIFF (`--out-depth f32`) is good to have.
   - **The legacy-measuring coverage is not preserved across the redesign** — the
     golden vectors, the ~87 legacy-injected integration tests and the
     benchmark's legacy cases. A regression gate measuring legacy would only pin

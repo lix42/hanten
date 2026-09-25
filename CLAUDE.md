@@ -40,6 +40,7 @@ assistance is opt-in and sits *around* a deterministic core.
 | `README.md`, `docs/design-spec.md`, `docs/using-nc.md`, `docs/TASKS.md`, progress-log titles | titles and opening prose |
 | the binary, and every command line in a **live** doc, skill or script | anything written before 2026-09-21 spells it `nc` |
 | clap's `about` line | do **not** also prefix `version_string()` — it would print `hanten Hanten 0.1.0` |
+| the `(Hanten)` suffix in the Adobe RGB ICC description (`pipeline::color`) | a profile name is user-visible; like the `(nc)` one it is in every file's bytes once written, so it is an identifier too — don't "tidy" it to `(nc)` |
 | the stderr prefix (`hanten: warning:`) | `scripts/real-scan-verify/harness.sh` greps the *message*, never the prefix |
 
 `nctool` must keep accepting the pre-rename `nc` banner — see
@@ -140,7 +141,7 @@ Rules every stage keeps:
   `--film-type`.
 - **Every standards-based matrix, luma vector and transfer constant lives in
   `pipeline/colorimetry/`** — never a literal in a stage. Editing `REC709`,
-  `DISPLAY_P3`, `ACESCG` or `BT2020` changes ICC bytes and pixels even with
+  `DISPLAY_P3`, `ACESCG`, `ADOBE_RGB` or `BT2020` changes ICC bytes and pixels even with
   `pinned.rs` untouched, and no gate catches it.
 - **Per-pixel maps go through `pipeline/pixels`**; floating-point reductions run
   in a fixed order, or output stops being byte-identical.

@@ -30,7 +30,9 @@
 use std::fmt;
 
 use crate::pipeline::colorimetry::dot;
-use crate::pipeline::colorimetry::pinned::{ACESCG_TO_DISPLAY_P3, DISPLAY_P3_LUMA};
+use crate::pipeline::colorimetry::pinned::{
+    ACESCG_TO_ADOBE_RGB, ACESCG_TO_DISPLAY_P3, ADOBE_RGB_LUMA, DISPLAY_P3_LUMA,
+};
 use crate::pipeline::fit_range::RangeFittedImage;
 use crate::pipeline::pixels;
 use crate::pipeline::working_image::WorkingBuffer;
@@ -38,14 +40,29 @@ use crate::types::{LinearImage, NcError, Result};
 
 /// The gamut a destination renders into — which primaries the chain's output is in.
 ///
-/// One variant, because there is one destination (`nf-core/minimal-end-to-end`);
-/// `nf-destinations/preset-set` adds the rest, Adobe RGB among them. An enum rather
-/// than a matrix field so the value can travel with the image to the encoder, which
-/// reads it off [`DisplayReferredImage`] instead of re-deriving it from a preset.
+/// **Display-referred encodings with a bounded range only** — the cube fit gamut maps
+/// into ends at the display's peak. A scene-referred or unbounded working space
+/// (ACEScg, ProPhoto as nc used it) does not qualify, however often editors use it;
+/// `film-master` is the output for those. **Which destination renders into which gamut
+/// is `nf-destinations/preset-set`'s**, not this type's. An enum rather than a matrix
+/// field so the value can travel with the image to the encoder, which reads it off
+/// [`DisplayReferredImage`] instead of re-deriving it from a preset.
+///
+/// **Adding a variant** means a pinned ACEScg → destination matrix and luma row
+/// (`docs/colorimetry-maintenance.md`), an arm in each method here, and one in
+/// `color::encode_display_linear`, which owns the destination's transfer and ICC
+/// profile. Each match is exhaustive, so a missed arm fails to compile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DestinationGamut {
     /// Display P3 primaries, D65 white.
     DisplayP3,
+    /// Adobe RGB (1998) primaries, D65 white — Rec.709's red and blue with a wider
+    /// green. It qualifies as a display encoding (bounded at white, a fixed transfer);
+    /// that editors expect it is why `nf-destinations/direct-preset` wants it, not
+    /// why it belongs here.
+    // Constructed only by tests until `nf-destinations/direct-preset` selects it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    AdobeRgb,
 }
 
 impl DestinationGamut {
@@ -53,6 +70,7 @@ impl DestinationGamut {
     fn acescg_matrix(self) -> [[f32; 3]; 3] {
         match self {
             DestinationGamut::DisplayP3 => ACESCG_TO_DISPLAY_P3,
+            DestinationGamut::AdobeRgb => ACESCG_TO_ADOBE_RGB,
         }
     }
 
@@ -61,6 +79,7 @@ impl DestinationGamut {
     pub(in crate::pipeline) fn luma(self) -> [f32; 3] {
         match self {
             DestinationGamut::DisplayP3 => DISPLAY_P3_LUMA,
+            DestinationGamut::AdobeRgb => ADOBE_RGB_LUMA,
         }
     }
 
@@ -68,6 +87,7 @@ impl DestinationGamut {
     pub fn name(self) -> &'static str {
         match self {
             DestinationGamut::DisplayP3 => "display-p3",
+            DestinationGamut::AdobeRgb => "adobe-rgb",
         }
     }
 }
@@ -86,6 +106,9 @@ impl FitGamutParams {
         match self.target {
             DestinationGamut::DisplayP3 => {
                 "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
+            }
+            DestinationGamut::AdobeRgb => {
+                "acescg-to-adobe-rgb-matrix+neutral-axis-radial-boundary-v2"
             }
         }
     }
@@ -237,9 +260,22 @@ mod tests {
     }
 
     fn render(film_rgb: &[f32], peak: DisplayPeak) -> (Vec<f32>, Vec<[f32; 3]>) {
+        render_into(film_rgb, peak, DestinationGamut::DisplayP3)
+    }
+
+    /// Fit gamut into `gamut`, and the destination values before the map — the pinned
+    /// matrix written out here, independently of the stage.
+    fn render_into(
+        film_rgb: &[f32],
+        peak: DisplayPeak,
+        gamut: DestinationGamut,
+    ) -> (Vec<f32>, Vec<[f32; 3]>) {
         let (image, aces) = fitted(film_rgb, peak);
-        let m = ACESCG_TO_DISPLAY_P3;
-        let p3 = aces
+        let m = match gamut {
+            DestinationGamut::DisplayP3 => ACESCG_TO_DISPLAY_P3,
+            DestinationGamut::AdobeRgb => ACESCG_TO_ADOBE_RGB,
+        };
+        let pre_map = aces
             .as_chunks::<3>()
             .0
             .iter()
@@ -251,11 +287,72 @@ mod tests {
                 ]
             })
             .collect();
-        let params = FitGamutParams {
-            target: DestinationGamut::DisplayP3,
-        };
-        let (out, _) = apply(image, &params).unwrap().into_parts();
-        (out.rgb, p3)
+        let params = FitGamutParams { target: gamut };
+        let (out, stated) = apply(image, &params).unwrap().into_parts();
+        assert_eq!(stated, gamut);
+        (out.rgb, pre_map)
+    }
+
+    /// Film RGB that the NC film RGB v1 mapping takes to the colour `rgb` states in
+    /// `space` — so a test can name a colour by the gamut it is saturated in.
+    fn film_for(
+        rgb: [f64; 3],
+        space: crate::pipeline::colorimetry::definitions::ColorSpace,
+    ) -> [f32; 3] {
+        use crate::pipeline::colorimetry::definitions::{ACESCG, BRADFORD};
+        use crate::pipeline::colorimetry::derive::{inverse, rgb_to_rgb, transform};
+        use crate::pipeline::colorimetry::pinned::NC_FILM_RGB_V1_TO_ACESCG;
+        let aces = transform(rgb_to_rgb(space, ACESCG, BRADFORD), rgb);
+        transform(inverse(NC_FILM_RGB_V1_TO_ACESCG), aces).map(|v| v as f32)
+    }
+
+    #[test]
+    fn each_gamut_maps_what_it_cannot_hold_and_keeps_what_it_can() {
+        // A render into Adobe RGB is gamut-mapped, not tagged: a red P3 holds and Adobe
+        // RGB cannot (P3's red primary is the more saturated), and a green Adobe RGB
+        // holds and P3 cannot. Each comes out of its own gamut untouched and is mapped
+        // onto the other's boundary at its own luminance, with its hue direction kept.
+        use crate::pipeline::colorimetry::definitions::{ADOBE_RGB, DISPLAY_P3};
+        let cases = [
+            (
+                film_for([0.9, 0.01, 0.01], DISPLAY_P3),
+                DestinationGamut::DisplayP3,
+                DestinationGamut::AdobeRgb,
+            ),
+            (
+                film_for([0.06, 0.8, 0.1], ADOBE_RGB),
+                DestinationGamut::AdobeRgb,
+                DestinationGamut::DisplayP3,
+            ),
+        ];
+        for (film, holds, cannot) in cases {
+            let (kept, inside) = render_into(&film, DisplayPeak::SDR, holds);
+            let inside = inside[0];
+            assert!(
+                inside.iter().all(|v| (0.0..=1.0).contains(v)),
+                "{holds:?}: {inside:?}"
+            );
+            assert_eq!(kept, inside.to_vec(), "{holds:?} moved a colour it holds");
+
+            let (mapped, outside) = render_into(&film, DisplayPeak::SDR, cannot);
+            let outside = outside[0];
+            assert!(
+                outside.iter().any(|v| !(0.0..=1.0).contains(v)),
+                "{cannot:?} holds {outside:?}; the case does not test the map"
+            );
+            let mapped: [f32; 3] = mapped.try_into().unwrap();
+            assert!(mapped.iter().all(|v| (0.0..=1.0).contains(v)), "{mapped:?}");
+            assert!(mapped.contains(&0.0) || mapped.contains(&1.0), "{mapped:?}");
+            let y = dot(cannot.luma(), outside);
+            assert!((dot(cannot.luma(), mapped) - y).abs() < 1e-6, "{mapped:?}");
+            let scales: Vec<f32> = (0..3).map(|c| (mapped[c] - y) / (outside[c] - y)).collect();
+            assert!(
+                scales
+                    .iter()
+                    .all(|s| (s - scales[0]).abs() < 1e-4 && *s > 0.0 && *s < 1.0),
+                "{cannot:?}: hue direction moved, scales {scales:?}"
+            );
+        }
     }
 
     #[test]

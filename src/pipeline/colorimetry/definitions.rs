@@ -33,14 +33,15 @@
 //!
 //! ## The lcms2-consumed spaces are a pixel-change hazard
 //!
-//! [`REC709`], [`DISPLAY_P3`], [`ACESCG`] and — since `hdr-linear-tiff` —
-//! [`BT2020`] are handed **directly to Little CMS** by `pipeline::color` to
-//! synthesize profiles. Editing any of those four changes embedded ICC bytes and
+//! [`REC709`], [`DISPLAY_P3`], [`ACESCG`], [`ADOBE_RGB`] and — since
+//! `hdr-linear-tiff` — [`BT2020`] are handed **directly to Little CMS** by
+//! `pipeline::color` to synthesize profiles. Editing any of those five changes
+//! embedded ICC bytes and
 //! every lcms2-transformed pixel on the affected path *even with `pinned.rs`
 //! untouched and every audit `ulps` at 0*, and **nothing automated catches it**:
 //! `version::PIPELINE_FINGERPRINTS` stops before lcms2 and the audit only compares
-//! pinned artifacts. Treat an edit to one of the four as a pixel change and verify
-//! by same-machine before/after comparison. ([`PROPHOTO`] was a fifth until the
+//! pinned artifacts. Treat an edit to one of the five as a pixel change and verify
+//! by same-machine before/after comparison. ([`PROPHOTO`] was also one until the
 //! `legacy` preset, the only path that rendered to it, retired.)
 //!
 //! The allow is scoped to `not(test)` so the lint stays **on** in a test build:
@@ -180,18 +181,23 @@ pub const DISPLAY_P3: ColorSpace = ColorSpace {
 /// Source: Adobe RGB (1998) Color Image Encoding (Adobe, version 2005-05); IEC
 /// 61966-2-5 adopts the same primaries and white point. The transfer function is
 /// a pure `563/256` power law with no linear segment, which this type does not
-/// model.
+/// model; it is [`transfer::adobe_rgb::GAMMA`].
 ///
 /// Its red and blue primaries are **identical to [`REC709`]'s**; only green moves
 /// (0.300, 0.600) -> (0.210, 0.710). That is the whole difference between the two
 /// gamuts, and it is also the easiest pair to transcribe wrongly, so the tests
 /// assert both halves of the relationship rather than just the values.
 ///
-/// nc itself does not render to this space. It is defined here because
-/// `scripts/analysis/nctool/metrics.py` measures Adobe RGB exports against nc's
-/// output, and colorimetry has exactly one home in this repository — a set of
-/// primaries transcribed into the Python instead would be a second source of
-/// truth by definition. That analysis tool's tests re-read this file.
+/// Two consumers. The new chain renders into it (`fit_gamut::DestinationGamut`'s
+/// Adobe RGB arm, through the pinned `ACESCG_TO_ADOBE_RGB`), and
+/// `scripts/analysis/nctool/metrics.py` measures Adobe RGB output against it. That
+/// analysis tool's tests re-read this file, because a set of primaries transcribed
+/// into the Python would be a second source of truth.
+///
+/// ⚠ **Also fed straight to Little CMS**, by the Adobe RGB profile
+/// `color::encode_display_linear` embeds — so an edit here changes ICC bytes even
+/// when `pinned.rs` is untouched and every audit `ulps` is 0. See the module note's
+/// warning about the lcms2-consumed definitions; this is one of the five.
 pub const ADOBE_RGB: ColorSpace = ColorSpace {
     name: "adobe-rgb",
     primaries: Primaries::new(xy(0.640, 0.330), xy(0.210, 0.710), xy(0.150, 0.060)),
@@ -207,7 +213,7 @@ pub const ADOBE_RGB: ColorSpace = ColorSpace {
 /// `color::hdr_linear_bt2020_icc` for the `hdr-linear-tiff` output — so an edit
 /// here changes embedded ICC bytes even when `pinned.rs` is untouched and every
 /// audit `ulps` is 0. See the module note's warning about the lcms2-consumed
-/// definitions; this is one of the four.
+/// definitions; this is one of the five.
 pub const BT2020: ColorSpace = ColorSpace {
     name: "bt2020",
     primaries: Primaries::new(xy(0.708, 0.292), xy(0.170, 0.797), xy(0.131, 0.046)),
@@ -218,9 +224,9 @@ pub const BT2020: ColorSpace = ColorSpace {
 ///
 /// Source: ISO 22028-2 (ROMM RGB). nc no longer renders to it: its one runtime
 /// consumer was the `--output-profile prophoto` ICC, which retired with the
-/// `legacy` preset. It stays for the [`ADOBE_RGB`] reason — `nctool metrics`
-/// measures ProPhoto exports and re-reads this file — and NC derives no matrix for
-/// it, so it appears in the definitions but not in the pinned artifacts.
+/// `legacy` preset. It stays because `nctool metrics` measures ProPhoto exports
+/// and re-reads this file (one of [`ADOBE_RGB`]'s two reasons), and NC derives no
+/// matrix for it, so it appears in the definitions but not in the pinned artifacts.
 ///
 /// The blue primary sits at `y = 0.0001`, essentially on the x axis. That is
 /// ROMM's actual specification, not a typo, and it makes the space's blue
@@ -394,5 +400,17 @@ pub mod transfer {
         pub const C: f64 = 1.0 / 12.92;
         /// `d` — encoded breakpoint between the linear and power segments.
         pub const D: f64 = 0.04045;
+    }
+
+    /// The Adobe RGB (1998) transfer: a pure power law, `Y = X^GAMMA` in the
+    /// decode direction, with no linear segment.
+    ///
+    /// Source: Adobe RGB (1998) Color Image Encoding (version 2005-05), which states
+    /// the exponent as `2 51/256`. That is `563/256 = 2.19921875` exactly — the
+    /// value Adobe's own profile stores as the `u8Fixed8Number` curve `0x0233` —
+    /// not the rounded `2.2` often quoted for it.
+    pub mod adobe_rgb {
+        /// The decode exponent.
+        pub const GAMMA: f64 = 563.0 / 256.0;
     }
 }

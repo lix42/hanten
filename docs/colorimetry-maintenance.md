@@ -92,20 +92,22 @@ negative value means it sits below. This is a review step, not a formality:
 
 > ### ⚠ `pinned.rs` is not the only runtime consumer of a definition
 >
-> `pipeline::color` feeds `definitions::{REC709, DISPLAY_P3, ACESCG, BT2020}`
-> **directly** into Little CMS profile construction. A change to one of those
-> four therefore alters embedded ICC bytes and every lcms2-transformed pixel
+> `pipeline::color` feeds `definitions::{REC709, DISPLAY_P3, ACESCG, ADOBE_RGB,
+> BT2020}` **directly** into Little CMS profile construction. A change to one of
+> those five therefore alters embedded ICC bytes and every lcms2-transformed pixel
 > *even when every `ulps` column stays at 0* and `pinned.rs` never moves.
 >
 > Nothing automated will catch that. `version::PIPELINE_FINGERPRINTS` stops
 > before lcms2 by design (see `PipelineFingerprint`'s docs), and the audit only compares pinned
 > artifacts against the derivation — neither looks at a profile.
 >
-> **So: if you touched `REC709`, `DISPLAY_P3`, `ACESCG`, or `BT2020`, treat it
-> as a pixel change and go to step 6 regardless of the ulp column.** Run the
-> before/after output comparison in step 5 through every preset that embeds an
-> affected space. The luma vectors, cone-response matrices, and transfer
-> constants have no such second path; for those the ulp column is the whole
+> **So: if you touched `REC709`, `DISPLAY_P3`, `ACESCG`, `ADOBE_RGB`, or
+> `BT2020`, treat it as a pixel change and go to step 6 regardless of the ulp
+> column.** Run the before/after output comparison in step 5 through every preset
+> that embeds an affected space. The same holds for the **transfer constants**:
+> `transfer::srgb`, `transfer::adobe_rgb` and the PQ/HLG constants build profile
+> curves, and none of them is in the audit. The luma vectors and cone-response
+> matrices have no such second path; for those the ulp column is the whole
 > story.
 
 Calibration for judging "how big is big": the chromaticities are specified to
@@ -125,12 +127,15 @@ because it compares your derivation against your own definitions. If you added a
 space, make sure you added an anchor that does not share a source with it.
 
 Do a same-machine before/after comparison on real pixels for any change that
-reaches `pinned.rs` **or that touches one of the four colour spaces Little CMS
+reaches `pinned.rs` **or that touches one of the five colour spaces Little CMS
 consumes** (see the warning in step 4). Build the binary before and after — a
 `git worktree add --detach <tmp> <base>` gives you a clean "before" without
 disturbing your tree — convert the same fixture through `film-master` (ACEScg),
 `display-p3` and `compatibility` (Display P3, sRGB), `hdr-linear-tiff` (BT.2020) and
-`ultra-hdr-v1`, and compare output checksums.
+`ultra-hdr-v1`, and compare output checksums. Adobe RGB has no preset yet: until a
+destination selects it (`nf-destinations/direct-preset`), build each side with
+`cli::NEW_FLOW_GAMUT` temporarily set to `DestinationGamut::AdobeRgb` — never
+committed — and compare `hanten convert --new-flow` outputs.
 
 ### 6. Decide: representation-only, or a pixel change?
 
@@ -175,7 +180,7 @@ and a test pins the gap so nobody "corrects" the tabulated one.
 
 ## Known deviation
 
-Three of the 36 shipped matrix entries sit exactly **+1 `f32` ulp** from the
+Three of the 45 shipped matrix entries sit exactly **+1 `f32` ulp** from the
 canonical derivation: `ACESCG_TO_SRGB[2][1]`, `ACESCG_TO_DISPLAY_P3[2][0]`, and
 `BT2020_TO_DISPLAY_P3[0][2]`. All three are negative values, so the derivation
 being one ulp *above* the shipped literal means it has the smaller magnitude. Reaching those values needs a ~3e-9 relative shift

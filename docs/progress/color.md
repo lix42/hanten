@@ -122,14 +122,16 @@ What other epics need to know about `color`:
   allowance); **(c)** the pinned-vs-derived tolerance is ±1 `f32` ulp, measured
   against the chromaticities' own three-decimal rounding moving entries ~3,500
   ulps; **(d) `pinned.rs` is not the only runtime consumer of a definition** —
-  `pipeline::color` feeds `definitions::{REC709, DISPLAY_P3, ACESCG, PROPHOTO,
-  BT2020}` straight into Little CMS (BT2020 joined with `hdr-linear-tiff`), so
-  editing one of those **five** is a pixel change even with `pinned.rs` untouched
-  and every audit ulp at 0, and nothing automated catches it (the drift gate stops
-  before lcms2; the audit only compares pinned artifacts). A colour space the
-  *analysis tool* needs is defined here first even when nc renders to nothing
-  like it — `ADOBE_RGB` is the first (unused by the runtime), so
-  `scripts/analysis/nctool/metrics.py` cannot become a second source of truth.
+  `pipeline::color` feeds `definitions::{REC709, DISPLAY_P3, ACESCG, ADOBE_RGB,
+  BT2020}` straight into Little CMS (BT2020 joined with `hdr-linear-tiff`,
+  ADOBE_RGB with `output/adobe-rgb-gamut`; PROPHOTO left with `legacy`), and so do
+  the `transfer` constants, so editing one of those is a pixel change even with
+  `pinned.rs` untouched and every audit ulp at 0, and nothing automated catches it
+  (the drift gate stops before lcms2; the audit only compares pinned artifacts). A
+  colour space the *analysis tool* needs is defined here first even when nc renders
+  to nothing like it — `PROPHOTO` is one (and `ADOBE_RGB` was, until the new chain
+  rendered to it), so `scripts/analysis/nctool/metrics.py` cannot become a second
+  source of truth.
 - **nc's ProPhoto output is a pure 1.8 power law** (`color::build_profile`
   omits the ROMM linear toe near black), so a consumer applying the specified
   piecewise curve disagrees with nc's own pixels below encoded 0.03125 — 1.3
@@ -506,3 +508,19 @@ second static string.
   residual 2^-23. A first attempt swept 33 evenly-spaced values instead and
   understated the peak by 8x, because the residual is a rounding artifact that
   peaks near 0.5 rather than growing with the input.
+- 2026-09-24 (`output/adobe-rgb-gamut`, per `docs/colorimetry-maintenance.md`):
+  **Added two artifacts, `pinned::ACESCG_TO_ADOBE_RGB` and `ADOBE_RGB_LUMA`**, and the
+  transfer constant `transfer::adobe_rgb::GAMMA = 563/256` (Adobe RGB (1998) Color
+  Image Encoding, 2005-05, which writes it `2 51/256`). The source is the existing
+  `definitions::ADOBE_RGB`, unchanged. All 12 new entries audit at `ulps = 0`, and no
+  existing artifact or definition moved, so this is an **addition, not a pixel
+  change**: the default render does not reach it (the new flow's destination stays
+  Display P3), and no `pipeline_version` decision is owed. `ADOBE_RGB` becomes the
+  **fifth Little-CMS-consumed space** (its profile is synthesized from the
+  definition), so an edit to it is now a pixel change even at `ulps = 0`.
+  Independent anchors: the luma against the Y row Adobe's specification prints (five
+  decimals); the profile's colorants against Adobe's own `AdobeRGB1998.icc`
+  (Bradford D50); and a structural one — Adobe RGB shares Rec.709's red, blue and
+  white, so `ACESCG_TO_ADOBE_RGB`'s green row is bit-identical to the
+  externally-anchored `ACESCG_TO_SRGB`'s and only red and blue move. That pins red,
+  blue and white; a mistyped green is caught by the luma anchor.

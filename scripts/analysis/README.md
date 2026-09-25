@@ -345,8 +345,9 @@ Two things the numbers mean, which are easy to misread:
 Colorimetry is not restated here: the primaries, white points and Bradford matrix
 are transcribed from `src/pipeline/colorimetry/definitions.rs`, and the tests
 re-read that file and the generated `derived-artifacts.txt` and fail if the
-Python drifts from either. To support a new space, define it there first — that
-is why `definitions::ADOBE_RGB` exists although nc renders to no such space.
+Python drifts from either. To support a new space, define it there first — which
+is how `definitions::ADOBE_RGB` came to exist before nc rendered to it, and why
+`definitions::PROPHOTO` stays although nc no longer does.
 
 ### A whole roll at once
 
