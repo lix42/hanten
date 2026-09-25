@@ -34,8 +34,8 @@
 use std::fmt::Write as _;
 
 use super::definitions::{
-    self, ACESCG, BRADFORD, BRADFORD_PUBLISHED_INVERSE, BT2020, Chromaticity, ColorSpace,
-    ConeResponse, DISPLAY_P3, REC709,
+    self, ACESCG, ADOBE_RGB, BRADFORD, BRADFORD_PUBLISHED_INVERSE, BT2020, Chromaticity,
+    ColorSpace, ConeResponse, DISPLAY_P3, REC709,
 };
 use super::derive;
 use super::pinned;
@@ -195,6 +195,16 @@ fn catalog() -> Vec<Artifact> {
             shipped: Shipped::matrix_f32(pinned::ACESCG_TO_DISPLAY_P3),
         },
         Artifact {
+            name: "ACESCG_TO_ADOBE_RGB",
+            description: "acescg/aces-white -> adobe-rgb/d65, cone=bradford",
+            source: Source::RgbToRgb {
+                source: ACESCG,
+                destination: ADOBE_RGB,
+                cone: BRADFORD,
+            },
+            shipped: Shipped::matrix_f32(pinned::ACESCG_TO_ADOBE_RGB),
+        },
+        Artifact {
             name: "ACESCG_TO_BT2020",
             description: "acescg/aces-white -> bt2020/d65, cone=bradford",
             source: Source::RgbToRgb {
@@ -219,6 +229,12 @@ fn catalog() -> Vec<Artifact> {
             description: "luminance row of display-p3/d65 normalized primary matrix (derived)",
             source: Source::LumaRow(DISPLAY_P3),
             shipped: Shipped::vector_f32(pinned::DISPLAY_P3_LUMA),
+        },
+        Artifact {
+            name: "ADOBE_RGB_LUMA",
+            description: "luminance row of adobe-rgb/d65 normalized primary matrix (derived)",
+            source: Source::LumaRow(ADOBE_RGB),
+            shipped: Shipped::vector_f32(pinned::ADOBE_RGB_LUMA),
         },
         Artifact {
             name: "ACESCG_LUMA",

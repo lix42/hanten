@@ -16,7 +16,7 @@
 //!
 //! ## Why the deviations are stated in `f32` ulps
 //!
-//! 33 of the 36 matrix entries below reproduce the canonical derivation
+//! 42 of the 45 matrix entries below reproduce the canonical derivation
 //! **bit-exactly**. Three are exactly **+1 `f32` ulp** away, and they are named
 //! individually in the docs below. (The audit reports `ulps` as
 //! `derived − shipped` on a monotonic ordering, so `+1` means the derivation
@@ -107,6 +107,25 @@ pub const ACESCG_TO_DISPLAY_P3: [[f32; 3]; 3] = [
     [1.379_214_2, -0.308_864_15, -0.070_349_984],
     [-0.069_334_86, 1.082_296_7, -0.012_961_888],
     [-0.002_159_009_7, -0.045_459_326, 1.047_618_4],
+];
+
+/// Linear ACEScg/ACES white → linear Adobe RGB (1998)/D65, used by
+/// `pipeline::fit_gamut`.
+///
+/// - **Direction**: ACEScg → Adobe RGB. **Domain**: linear; the Adobe RGB
+///   `563/256` power law is applied downstream, by the encoder.
+/// - **Whites**: ACES (~D60) → D65, adapted. **Adaptation**: canonical
+///   [`BRADFORD`](super::definitions::BRADFORD).
+/// - **Order**: `inverse(NPM_AdobeRGB) · ( CAT(ACES→D65) · NPM_AP1 )`.
+/// - **Deviation**: **9/9 entries exact.**
+///
+/// Row `[1]` (green) equals [`ACESCG_TO_SRGB`]'s: Adobe RGB shares Rec.709's red and
+/// blue primaries and white, and a channel's coefficient depends only on the plane
+/// the *other two* primaries span and on the white. Only the red and blue rows move.
+pub const ACESCG_TO_ADOBE_RGB: [[f32; 3]; 3] = [
+    [1.182_218_9, -0.119_673_41, -0.062_545_5],
+    [-0.130_256_41, 1.140_804_8, -0.010_548_319],
+    [-0.028_376_94, -0.076_702_62, 1.105_079_5],
 ];
 
 /// Linear ACEScg/ACES white → linear BT.2020/D65.
@@ -281,6 +300,14 @@ pub const BT2020_NCL_RGB_TO_YCBCR: [[f32; 3]; 3] = [
 /// luminance (Y) row of the Display P3 normalized primary matrix at D65. All
 /// three entries reproduce the canonical derivation exactly.
 pub const DISPLAY_P3_LUMA: [f32; 3] = [0.228_974_57, 0.691_738_55, 0.079_286_91];
+
+/// Adobe RGB (1998) luma weights, used by `pipeline::fit_gamut`.
+///
+/// Derived like [`DISPLAY_P3_LUMA`]: the luminance (Y) row of the Adobe RGB
+/// normalized primary matrix at D65. Adobe's encoding specification prints a
+/// rounded form of the same row (`0.29734, 0.62736, 0.07529`); this is the
+/// derivation, and all three entries reproduce it exactly.
+pub const ADOBE_RGB_LUMA: [f32; 3] = [0.297_344_98, 0.627_363_56, 0.075_291_455];
 
 /// ACEScg luma weights, used by `pipeline::fit_range`.
 ///

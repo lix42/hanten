@@ -857,6 +857,28 @@ fn golden_fit_gamut_is_bit_identical() {
     assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
 }
 
+/// [`FIT_GAMUT_P3`]'s input into Adobe RGB, which runs the same map through a
+/// different pinned matrix and luma row. The cases are P3's except one: diffuse white
+/// (pixel 3) lands just *inside* the Adobe RGB cube, so it passes untouched here where
+/// P3 maps it. Captured 2026-09-24 when the gamut landed (`output/adobe-rgb-gamut`).
+const FIT_GAMUT_ADOBE_RGB: [u32; 21] = [
+    0x3e3851ec, 0x3e3851ee, 0x3e3851ea, 0x3b286ac0, 0x3b8311ce, 0x3f5cf55c, 0x3f1aabc1, 0x3cab980d,
+    0x00000000, 0x3f800000, 0x3f800000, 0x3f7ffffe, 0x404b4c7b, 0x404b4c7b, 0x404b4c7b, 0x00000000,
+    0x00000000, 0x00000000, 0x3b57470b, 0x3b831270, 0x3b087799,
+];
+
+#[test]
+fn golden_fit_gamut_adobe_rgb_is_bit_identical() {
+    let fitted = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR));
+    let params = FitGamutParams {
+        target: DestinationGamut::AdobeRgb,
+    };
+    let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
+    assert_stage_bits("fit-gamut-adobe-rgb", &out.rgb, &FIT_GAMUT_ADOBE_RGB);
+    assert_eq!(gamut, DestinationGamut::AdobeRgb);
+    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
+}
+
 // --- threaded ----------------------------------------------------------------
 
 /// The new flow's one destination today: an SDR display in Display P3.

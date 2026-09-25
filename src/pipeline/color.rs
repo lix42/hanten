@@ -20,6 +20,11 @@
 //! - `AcesCg`    — AP1     / ~D60, linear       (scene-referred; the `film-master` tag)
 //! - `DisplayP3` — P3      / D65, sRGB curve    (display-referred SDR)
 //!
+//! The new chain's destinations are not `OutputSpace`s: `fit_gamut` has already moved
+//! the pixels into the destination's primaries, so [`encode_display_linear`] applies
+//! only the transfer, and the profile is chosen by `DestinationGamut` — Display P3 as
+//! above, or Adobe RGB (1998): its primaries, D65, the pure `563/256` power law.
+//!
 //! ProPhoto and user-supplied ICC paths retired with the `legacy` preset, the only
 //! path that selected an output space by name; an arbitrary destination returns,
 //! if at all, as a gamut-mapped destination of its own.
@@ -116,6 +121,7 @@ pub fn encode_display_linear(
 ) -> Result<(LinearImage, Vec<u8>)> {
     let (linear, output) = match gamut {
         DestinationGamut::DisplayP3 => display_p3_transfer_profiles()?,
+        DestinationGamut::AdobeRgb => adobe_rgb_transfer_profiles()?,
     };
     transform_in_place(&mut image, &linear, &output)?;
     Ok((image, profile_icc(&output)?))
@@ -129,6 +135,29 @@ fn display_p3_transfer_profiles() -> Result<(Profile, Profile)> {
         synth(white, primaries, 1.0)?,
         build_profile(&OutputSpace::DisplayP3)?,
     ))
+}
+
+/// The Adobe RGB profile's `profileDescriptionTag`.
+///
+/// **Not** plain `"Adobe RGB (1998)"`: that names Adobe's own profile, and this one is
+/// synthesized from the published encoding, so it says it is compatible — the
+/// convention other tools' equivalents follow. `(Hanten)`, not the coded-HDR
+/// profiles' `(nc)`: theirs stays only because it already shipped in file bytes, and
+/// a user-visible name is Hanten (CLAUDE.md). Once a destination writes it, this
+/// string is in every file's bytes too, so it is an identifier from then on.
+const ADOBE_RGB_DESCRIPTION: &str = "Adobe RGB (1998) compatible (Hanten)";
+
+/// Linear Adobe RGB → the Adobe RGB output profile: the same primaries on both sides,
+/// so the transform applies the `563/256` power law and nothing else.
+///
+/// Named, unlike the Display P3 profile's `"RGB built-in"` (whose bytes already
+/// shipped, see [`hdr_linear_bt2020_icc`]): this destination exists for a workflow
+/// that continues in an editor, where the profile is what the user sees.
+fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
+    let (white, primaries) = lcms_inputs(definitions::ADOBE_RGB);
+    let mut output = synth(white, primaries, transfer::adobe_rgb::GAMMA)?;
+    describe(&mut output, ADOBE_RGB_DESCRIPTION)?;
+    Ok((synth(white, primaries, 1.0)?, output))
 }
 
 /// The ICC blob for the `hdr-linear-tiff` output: linear BT.2020 / D65.
@@ -154,7 +183,7 @@ fn display_p3_transfer_profiles() -> Result<(Profile, Profile)> {
 ///   requires that this profile never be claimed to carry them.
 ///
 /// ⚠ This is a runtime consumer of a `colorimetry::definitions` colour space
-/// (beside `REC709`, `DISPLAY_P3` and `ACESCG`): editing
+/// (beside `REC709`, `DISPLAY_P3`, `ACESCG` and `ADOBE_RGB`): editing
 /// `definitions::BT2020` now changes ICC bytes and every lcms2-transformed pixel on
 /// this path *even with `pinned.rs` untouched and every audit ulp at 0*. Nothing
 /// automated catches it — `PIPELINE_FINGERPRINTS` stops before lcms2 and the audit
@@ -1337,6 +1366,7 @@ mod tests {
             hdr_linear_bt2020_icc().unwrap(),
             hdr_pq_tiff_icc().unwrap(),
             hdr_hlg_tiff_icc().unwrap(),
+            adobe_rgb_icc(),
         ] {
             assert_eq!(
                 mluc_locale(&icc, b"desc"),
@@ -1605,6 +1635,108 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Adobe RGB (1998), the new chain's second destination gamut
+    // -----------------------------------------------------------------------
+
+    /// The Adobe RGB profile's bytes, as [`encode_display_linear`] embeds them.
+    fn adobe_rgb_icc() -> Vec<u8> {
+        let image = LinearImage::new(1, 1, vec![0.5; 3], None).unwrap();
+        encode_display_linear(image, DestinationGamut::AdobeRgb)
+            .unwrap()
+            .1
+    }
+
+    /// Colorant XYZ (Bradford D65→D50) of Adobe's own `AdobeRGB1998.icc` — external
+    /// values a profile synthesized from the published primaries must reproduce,
+    /// re-typed from that profile and not from `definitions::ADOBE_RGB`.
+    const ADOBE_RGB_RED_COLORANT: [f64; 3] = [0.60974, 0.31111, 0.01947];
+    const ADOBE_RGB_GREEN_COLORANT: [f64; 3] = [0.20528, 0.62567, 0.06087];
+    const ADOBE_RGB_BLUE_COLORANT: [f64; 3] = [0.14919, 0.06322, 0.74457];
+
+    /// How far a synthesized colorant may sit from Adobe's: measured at most 1.74e-5
+    /// (blue Z), which is the sum of three roundings — the profile's `s15Fixed16`
+    /// step (1.5e-5), the published values' five decimals, and `definitions::D65`
+    /// spelled to four decimals where Adobe's derivation used five. Moving any primary
+    /// coordinate by 1e-3 moves a colorant by 1e-3 to 1.7e-3, twenty times this bound.
+    const ADOBE_RGB_COLORANT_TOLERANCE: f64 = 5e-5;
+
+    /// The Adobe RGB encode (linear → encoded), the oracle for the profile's curve.
+    ///
+    /// The exponent is typed here as the encoding specification writes it (`2 51/256`),
+    /// deliberately **not** read from `definitions::transfer::adobe_rgb::GAMMA`: this is
+    /// the independent check on that constant, for the reason [`srgb_encode`] gives.
+    fn adobe_rgb_encode(l: f32) -> f32 {
+        l.powf(1.0 / (2.0 + 51.0 / 256.0))
+    }
+
+    #[test]
+    fn adobe_rgb_colorants_match_adobes_profile() {
+        use lcms2::{Tag, TagSignature};
+        let profile = Profile::new_icc(&adobe_rgb_icc()).unwrap();
+        for (sig, want) in [
+            (TagSignature::RedColorantTag, ADOBE_RGB_RED_COLORANT),
+            (TagSignature::GreenColorantTag, ADOBE_RGB_GREEN_COLORANT),
+            (TagSignature::BlueColorantTag, ADOBE_RGB_BLUE_COLORANT),
+        ] {
+            let Tag::CIEXYZ(c) = profile.read_tag(sig) else {
+                panic!("missing colorant tag {sig:?}");
+            };
+            for (got, want) in [c.X, c.Y, c.Z].into_iter().zip(want) {
+                assert!(
+                    (got - want).abs() < ADOBE_RGB_COLORANT_TOLERANCE,
+                    "{sig:?} colorant {got} != Adobe's {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adobe_rgb_encode_applies_only_the_563_256_power_law() {
+        // As for Display P3: `fit_gamut` already moved the pixels into Adobe RGB, so the
+        // encode applies the transfer and nothing else. The tolerance is tight enough to
+        // tell `563/256` from the `2.2` it is often rounded to, and the near-black
+        // sample tells a pure power law from a curve with a linear toe.
+        let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
+        let image = LinearImage::new(3, 1, linear.to_vec(), Some(vec![0.1, 0.2, 0.3])).unwrap();
+        let (encoded, icc) = encode_display_linear(image, DestinationGamut::AdobeRgb).unwrap();
+        assert_eq!(icc, adobe_rgb_icc());
+        assert_eq!(encoded.ir, Some(vec![0.1, 0.2, 0.3]));
+        // Little CMS evaluates the parametric curve in float, measured within 4e-9.
+        const TOLERANCE: f32 = 1e-6;
+        for (got, inp) in encoded.rgb.iter().zip(linear) {
+            let want = adobe_rgb_encode(inp);
+            assert!(
+                (got - want).abs() < TOLERANCE,
+                "{got} != Adobe RGB-encoded {want} (input {inp})"
+            );
+            assert!(
+                (want - inp.powf(1.0 / 2.2)).abs() > 10.0 * TOLERANCE,
+                "input {inp} cannot tell 563/256 from 2.2"
+            );
+        }
+    }
+
+    #[test]
+    fn adobe_rgb_profile_is_named_deterministic_and_distinct_from_display_p3() {
+        let icc = adobe_rgb_icc();
+        assert!(
+            icc[24..36].iter().all(|&b| b == 0),
+            "Adobe RGB ICC creation dateTime must be zeroed for determinism"
+        );
+        assert_eq!(icc, adobe_rgb_icc(), "must serialize to identical bytes");
+        assert_ne!(icc, icc_profile(&OutputSpace::DisplayP3).unwrap());
+        let profile = Profile::new_icc(&icc).unwrap();
+        let lcms2::Tag::MLU(desc) = profile.read_tag(lcms2::TagSignature::ProfileDescriptionTag)
+        else {
+            panic!("missing description");
+        };
+        assert_eq!(
+            desc.text(lcms2::Locale::new("en_US")).unwrap(),
+            ADOBE_RGB_DESCRIPTION
+        );
     }
 
     #[test]

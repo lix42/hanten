@@ -15,9 +15,15 @@ What is known:
   and the `--out-depth` / `--output-profile` / `--bigtiff` selectors with them.
   `film-master` is not a rendering destination at all — it is the reconstruction
   output, and runs no rendering stage.
-- **Two abilities move across from legacy**: Adobe RGB output is a must-have (it is
-  was reachable only through an ICC path on legacy, so today it is not reachable at
-  all), and a rendered float TIFF is good to have (`hdr-linear-tiff` is the current one). Retiring a path is a list of abilities to re-add, not a loss.
+- **Two abilities move across from legacy**: Adobe RGB output is a must-have (it
+  was reachable only through an ICC path on legacy), and a rendered float TIFF is
+  good to have (`hdr-linear-tiff` is the current one). Retiring a path is a list of abilities to re-add, not a loss.
+- **The Adobe RGB render exists; nothing selects it yet**
+  ([`output/adobe-rgb-gamut`](../output/adobe-rgb-gamut.md), 2026-09-24):
+  `DestinationGamut::AdobeRgb` through fit gamut, and `color::encode_display_linear`
+  applies its `563/256` curve and embeds a named profile. A destination picks it by
+  passing that gamut in its `DisplayTarget`; the new flow's one destination still
+  passes `NEW_FLOW_GAMUT` (Display P3). Its `nctool` row is this task's.
 - **`--new-flow` is scaffolding, not a feature** (`docs/nf-migration.md`): CLI-only,
   never a recipe key, and it dies when the default flips — so destination selection
   must not be built on it.

@@ -62,7 +62,7 @@ use super::pinned;
 /// Largest permitted disagreement between a shipped `f32` literal and the
 /// canonical derivation.
 ///
-/// **One ulp, and the justification is measured, not assumed.** Three of the 36
+/// **One ulp, and the justification is measured, not assumed.** Three of the 45
 /// shipped matrix entries sit exactly one ulp from the canonical derivation (see
 /// [`pinned`] for which, and why the historical route is unrecoverable). Tightening
 /// this to zero would mean re-pinning those three — a pixel change. Loosening it
@@ -107,6 +107,11 @@ fn pinned_display_matrices_reproduce_the_canonical_derivation() {
         "ACESCG_TO_DISPLAY_P3",
         rgb_to_rgb(ACESCG, DISPLAY_P3, BRADFORD),
         pinned::ACESCG_TO_DISPLAY_P3,
+    );
+    assert_matrix_within_tolerance(
+        "ACESCG_TO_ADOBE_RGB",
+        rgb_to_rgb(ACESCG, ADOBE_RGB, BRADFORD),
+        pinned::ACESCG_TO_ADOBE_RGB,
     );
     assert_matrix_within_tolerance(
         "ACESCG_TO_BT2020",
@@ -255,7 +260,7 @@ fn every_white_adapted_matrix_maps_neutral_to_neutral() {
     // Rows summing to 1 is exactly "source white maps to destination white". A
     // missing or wrong chromatic adaptation tints white, and this catches it
     // without reference to any derivation.
-    let matrices: [(&str, [[f64; 3]; 3]); 5] = [
+    let matrices: [(&str, [[f64; 3]; 3]); 6] = [
         ("NC_FILM_RGB_V1_TO_ACESCG", pinned::NC_FILM_RGB_V1_TO_ACESCG),
         (
             "ACESCG_TO_SRGB",
@@ -264,6 +269,10 @@ fn every_white_adapted_matrix_maps_neutral_to_neutral() {
         (
             "ACESCG_TO_DISPLAY_P3",
             pinned::ACESCG_TO_DISPLAY_P3.map(|r| r.map(|v| v as f64)),
+        ),
+        (
+            "ACESCG_TO_ADOBE_RGB",
+            pinned::ACESCG_TO_ADOBE_RGB.map(|r| r.map(|v| v as f64)),
         ),
         (
             "ACESCG_TO_BT2020",
@@ -292,6 +301,10 @@ fn matrices_round_trip_through_their_inverses() {
         (
             "ACESCG_TO_DISPLAY_P3",
             rgb_to_rgb(ACESCG, DISPLAY_P3, BRADFORD),
+        ),
+        (
+            "ACESCG_TO_ADOBE_RGB",
+            rgb_to_rgb(ACESCG, ADOBE_RGB, BRADFORD),
         ),
         ("ACESCG_TO_BT2020", rgb_to_rgb(ACESCG, BT2020, BRADFORD)),
         (
@@ -406,6 +419,47 @@ fn display_p3_luma_is_the_derived_luminance_row() {
     }
 }
 
+#[test]
+fn adobe_rgb_luma_is_the_derived_luminance_row() {
+    let derived = derive::luma_row(ADOBE_RGB);
+    for (i, (&derived, &shipped)) in derived.iter().zip(&pinned::ADOBE_RGB_LUMA).enumerate() {
+        let ulps = ulps_f32(derived as f32, shipped);
+        assert!(
+            ulps.abs() <= MAX_ULPS,
+            "ADOBE_RGB_LUMA[{i}]: shipped {shipped} is {ulps} ulps from derived {}",
+            derived as f32,
+        );
+    }
+}
+
+#[test]
+fn adobe_rgb_luma_matches_the_row_adobe_publishes() {
+    // An anchor that shares no source with `definitions::ADOBE_RGB`: the Y row of
+    // the RGB → XYZ matrix printed in Adobe RGB (1998) Color Image Encoding
+    // (version 2005-05), to its five decimals. Re-typed from the document on
+    // purpose, for the reason `transformed_primaries_recover_the_standards_chromaticities`
+    // gives — pointing this at the definition would compare it with itself.
+    //
+    // The bound is the publication's own rounding (half of its last decimal) plus
+    // room for the shipped value to sit anywhere `MAX_ULPS` allows: one `f32` ulp
+    // is at most `f32::EPSILON` below 1, and the derivation already lands 4.98e-6
+    // from `0.29734`, so the rounding half-width alone would refuse a legitimate
+    // re-pin one ulp up. Compared in `f64`, so the published values carry no `f32`
+    // rounding of their own.
+    const PUBLISHED_Y_ROW: [f64; 3] = [0.29734, 0.62736, 0.07529];
+    const TOLERANCE: f64 = 5e-6 + 2.0 * f32::EPSILON as f64;
+    for (i, (&shipped, &published)) in pinned::ADOBE_RGB_LUMA
+        .iter()
+        .zip(&PUBLISHED_Y_ROW)
+        .enumerate()
+    {
+        assert!(
+            (f64::from(shipped) - published).abs() <= TOLERANCE,
+            "ADOBE_RGB_LUMA[{i}] = {shipped}, Adobe publishes {published}"
+        );
+    }
+}
+
 /// Largest permitted disagreement for [`pinned::SRGB_LUMA`].
 ///
 /// This vector gets its own tolerance because it is neither an exact derivation
@@ -482,6 +536,7 @@ fn luma_vectors_sum_to_one() {
     for (name, v) in [
         ("BT2020_LUMA", pinned::BT2020_LUMA),
         ("DISPLAY_P3_LUMA", pinned::DISPLAY_P3_LUMA),
+        ("ADOBE_RGB_LUMA", pinned::ADOBE_RGB_LUMA),
         ("SRGB_LUMA", pinned::SRGB_LUMA),
     ] {
         let sum: f32 = v.iter().sum();
@@ -948,6 +1003,22 @@ fn adobe_rgb_differs_from_rec709_in_green_only() {
     // sits further from the white point than Rec.709's.
     let reach = |c: Chromaticity| (c.x - D65.x).hypot(c.y - D65.y);
     assert!(reach(ADOBE_RGB.primaries.green) > reach(REC709.primaries.green));
+}
+
+#[test]
+fn adobe_rgb_shares_the_srgb_green_row_and_moves_the_other_two() {
+    // A consequence of `adobe_rgb_differs_from_rec709_in_green_only`, checked on the
+    // two *pinned* matrices rather than the definitions: a channel's coefficient
+    // depends only on the plane the other two primaries span and on the white, so
+    // with red, blue and white shared the green rows must agree and the red and blue
+    // rows must not. That ties `ACESCG_TO_ADOBE_RGB` to `ACESCG_TO_SRGB`, which
+    // `acescg_to_srgb_matches_the_externally_published_matrix` anchors to a published
+    // matrix, so a red, blue or white that drifted from Rec.709's in either space
+    // fails here. A mistyped *green* moves only the rows this cannot compare;
+    // `adobe_rgb_luma_matches_the_row_adobe_publishes` is the anchor for that.
+    assert_eq!(pinned::ACESCG_TO_ADOBE_RGB[1], pinned::ACESCG_TO_SRGB[1]);
+    assert_ne!(pinned::ACESCG_TO_ADOBE_RGB[0], pinned::ACESCG_TO_SRGB[0]);
+    assert_ne!(pinned::ACESCG_TO_ADOBE_RGB[2], pinned::ACESCG_TO_SRGB[2]);
 }
 
 #[test]

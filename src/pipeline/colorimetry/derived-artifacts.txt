@@ -91,6 +91,19 @@
   [2][1] derived=-0.0454593248373156      shipped=-0.045459326     ulps=0
   [2][2] derived=1.0476183343508862       shipped=1.0476184        ulps=0
 
+[ACESCG_TO_ADOBE_RGB]
+  acescg/aces-white -> adobe-rgb/d65, cone=bradford
+  compared as f32
+  [0][0] derived=1.1822189079538465       shipped=1.1822189        ulps=0
+  [0][1] derived=-0.11967341059473992     shipped=-0.11967341      ulps=0
+  [0][2] derived=-0.06254549735910653     shipped=-0.0625455       ulps=0
+  [1][0] derived=-0.13025641750704345     shipped=-0.13025641      ulps=0
+  [1][1] derived=1.1408047365754017       shipped=1.1408048        ulps=0
+  [1][2] derived=-0.010548319068358049    shipped=-0.010548319     ulps=0
+  [2][0] derived=-0.028376939811918574    shipped=-0.02837694      ulps=0
+  [2][1] derived=-0.07670261596195219     shipped=-0.07670262      ulps=0
+  [2][2] derived=1.105079555773872        shipped=1.1050795        ulps=0
+
 [ACESCG_TO_BT2020]
   acescg/aces-white -> bt2020/d65, cone=bradford
   compared as f32
@@ -123,6 +136,13 @@
   [0]    derived=0.2289745640697487       shipped=0.22897457       ulps=0
   [1]    derived=0.6917385218365062       shipped=0.69173855       ulps=0
   [2]    derived=0.079286914093745        shipped=0.07928691       ulps=0
+
+[ADOBE_RGB_LUMA]
+  luminance row of adobe-rgb/d65 normalized primary matrix (derived)
+  compared as f32
+  [0]    derived=0.29734497525053605      shipped=0.29734498       ulps=0
+  [1]    derived=0.6273635662554661       shipped=0.62736356       ulps=0
+  [2]    derived=0.07529145849399786      shipped=0.075291455      ulps=0
 
 [ACESCG_LUMA]
   luminance row of acescg (ap1/aces white) normalized primary matrix (derived)

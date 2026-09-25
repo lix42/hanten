@@ -18,6 +18,13 @@ entries — don't rewrite earlier ones.
 
 What other epics need to know about `output`:
 
+- **Adobe RGB (1998) is a destination gamut of the new chain (2026-09-24,
+  `output/adobe-rgb-gamut`), but nothing selects it yet.** `DestinationGamut::AdobeRgb`
+  maps and encodes it (`563/256` curve, v4 profile named
+  `Adobe RGB (1998) compatible (Hanten)` — an identifier once written, see CLAUDE.md);
+  choosing it is `nf-destinations/direct-preset`'s, the name `preset-set`'s.
+  `ADOBE_RGB` is now a Little-CMS-consumed definition, so editing it is a pixel
+  change even at audit `ulps = 0`.
 - **The preset surface is complete (2026-08-09, `output/presets`).** Twelve names
   are accepted, enumerated once in `OutputPreset::ALL`; `gain-map-hdr` is the
   default at `pipeline_version` 3. `custom` is the one named preset that is not
@@ -1391,11 +1398,85 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 ## adobe-rgb-gamut
 
-**Status:** not started
-**Updated:** 2026-09-13
+**Status:** done
+**Updated:** 2026-09-24
 
 - Goal: Adobe RGB (1998) as a first-class, gamut-mapped SDR output. Split out of
   `sdr-preset-followups`; `definitions::ADOBE_RGB` already exists for the analysis tool.
+- 2026-09-24: **Re-scoped to the new chain, and to the capability only.** The task
+  file asked for an `SdrGamut` arm and a preset, but `SdrGamut` is the legacy
+  renderer's and the migration rule is to write new stages fresh; the only
+  dependent task (`nf-destinations/direct-preset`) is a new-flow destination, and
+  `fit_gamut::DestinationGamut` was written expecting this arm. Picking a name or a
+  selector is `nf-destinations/preset-set`'s open question, so this task adds none:
+  `NEW_FLOW_GAMUT` stays Display P3, so no default render, fingerprint or user
+  guide moves.
+- 2026-09-24: **What landed.** `pinned::ACESCG_TO_ADOBE_RGB` and `ADOBE_RGB_LUMA`
+  (audited, 12/12 entries at `ulps = 0`; the colorimetry entry is in
+  `progress/color.md`); `DestinationGamut::AdobeRgb` (report name `adobe-rgb`,
+  applied `acescg-to-adobe-rgb-matrix+neutral-axis-radial-boundary-v2`);
+  `color::encode_display_linear`'s Adobe RGB arm, which applies
+  `transfer::adobe_rgb::GAMMA` (`563/256`, not 2.2) and embeds a v4 profile named
+  `Adobe RGB (1998) compatible (nc)`. The variant carries a `not(test)` dead-code
+  allow naming `direct-preset` as its consumer.
+- 2026-09-24: **The profile is named, unlike Display P3's `RGB built-in`.** This
+  destination exists for a workflow that continues in an editor, where the profile
+  name is what the user sees. Not plain `Adobe RGB (1998)`, which names Adobe's own
+  profile; `(nc)` follows the coded-HDR profiles, and like theirs it is in the bytes.
+- 2026-09-24: **Gamut-mapped, not tagged — the test.**
+  `fit_gamut::each_gamut_maps_what_it_cannot_hold_and_keeps_what_it_can` renders a
+  red P3 holds and Adobe RGB cannot, and a green the other way round: each passes
+  its own gamut untouched and lands on the other's boundary at its own luminance
+  with one common scale. Gotcha: a "P3 red" of `(0.85, 0.08, 0.06)` is *inside* Adobe
+  RGB — only a near-pure one (`(0.9, 0.01, 0.01)`) leaves it — so the test asserts
+  its own precondition. `chain_golden` gained `FIT_GAMUT_ADOBE_RGB`: P3's input and
+  cases except diffuse white, which lands just inside the Adobe RGB cube.
+- 2026-09-24: **The encode is exact.** Little CMS evaluates the parametric curve in
+  float, measured within 4e-9 of the oracle, so the test holds 1e-6 — tight enough to
+  tell `563/256` from 2.2 (they differ by 3e-5 to 1.3e-4 over the samples).
+- 2026-09-24: **`nctool metrics` agrees with the declared space**, checked by hand on
+  a throwaway build with `NEW_FLOW_GAMUT = AdobeRgb` (reverted, never committed):
+  `tests/fixtures/hdr-48bit.tif`, `--new-flow --film-base 0.9,0.7,0.5`, rendered
+  once per gamut. Measured each against its own space, the two files agree — mean
+  a* −6.000 / −5.996, mean b* −10.427 / −10.408, mean chroma 13.079 / 13.060,
+  median and p90 chroma identical, max chroma 41.81 / 41.81, `key_stops`,
+  `toe_span_stops` and `shoulder_span_stops` identical. The negative control, the
+  Adobe RGB file read as `display-p3`, moves mean a* by 1.0 and max chroma by 1.6.
+  The fixture is low-chroma (max C* 42), so this checks the transfer and primaries
+  rather than the map; the map's evidence is the test above. exiftool reads the
+  profile description as `Adobe RGB (1998) compatible (nc)`, version 4.4.
+- 2026-09-24: **Stale prose fixed along the way.** `colorimetry-maintenance.md`
+  step 4 said transfer constants have no path into Little CMS; `transfer::srgb` and
+  the PQ/HLG constants already built profile curves, and `adobe_rgb` now does too.
+  The "four lcms2-consumed spaces" lists (definitions module note, the maintenance
+  doc, CLAUDE.md, the `nc-reviewer` primer) are now five.
+- 2026-09-24: **Left downstream.** The `nctool` `PRESET_SPACES` row waits for a
+  destination name (`preset-set`); the `RunProfile` question and the CLI
+  reachability are `direct-preset`'s. `render_pair` accepts any gamut, but an HDR or
+  gain-map rendition in Adobe RGB is untested and nothing asks for one.
+- 2026-09-24: **Review fixes (`/code-review high`).** The profile is renamed
+  `Adobe RGB (1998) compatible (Hanten)` (user's call): the entries above record the
+  `(nc)` spelling that was measured then. `(nc)` stays only on the coded-HDR profiles
+  because their bytes already shipped; this one had shipped none, and a user-visible
+  name is Hanten — CLAUDE.md's naming table now lists it. Also: the `adobe_rgb`
+  transfer module had been inserted between `srgb`'s doc comment and its `mod`,
+  taking sRGB's docs; `nctool` now checks `ADOBE_RGB_LUMA` against the Rust audit to
+  1e-12 and reads `GAMMA` from `definitions.rs`; the published-luma anchor's bound
+  gained room for a one-ulp re-pin; and the colorant anchor was tightened from 2e-3
+  to 5e-5 against a measured 1.74e-5 (moving any primary coordinate by 1e-3 moves a
+  colorant by 1e-3 or more).
+- 2026-09-24: **Done.** Landed as the capability only: `DestinationGamut::AdobeRgb`
+  through fit gamut, `pinned::ACESCG_TO_ADOBE_RGB` / `ADOBE_RGB_LUMA`,
+  `transfer::adobe_rgb::GAMMA`, and `color::encode_display_linear`'s Adobe RGB arm.
+  Verified: every CI gate, the gamut-mapping test in both directions, the
+  `FIT_GAMUT_ADOBE_RGB` golden, and `nctool metrics --space adobe-rgb` on a
+  throwaway build (above). Reviewed by `/code-review high` (nine findings, all fixed
+  or decided), then `ship:diff-reviewer` and Codex (none). **For
+  `nf-destinations/direct-preset`:** pass `DestinationGamut::AdobeRgb` in the
+  destination's `DisplayTarget`; add the `adobe-rgb` row to `nctool`'s
+  `PRESET_SPACES` once the destination has a name; settle whether it shares
+  `RunProfile::NewFlowSdrTiff`; and remove the variant's `not(test)` dead-code allow
+  when it gains its first non-test constructor.
 
 ## sdr-report-block
 

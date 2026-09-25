@@ -157,7 +157,8 @@ class ColorimetrySource(unittest.TestCase):
         this module derives its matrices independently rather than importing them.
         """
         for space, section in (("srgb", "SRGB_LUMA"),
-                               ("display-p3", "DISPLAY_P3_LUMA")):
+                               ("display-p3", "DISPLAY_P3_LUMA"),
+                               ("adobe-rgb", "ADOBE_RGB_LUMA")):
             derived = self._audit_derived(section)
             ours = metrics.luminance_weights(metrics.SPACES[space])
             for got, want in zip(ours, derived):
@@ -181,6 +182,19 @@ class ColorimetrySource(unittest.TestCase):
         self.assertGreater(largest, 1e-7, "the two forms have become identical")
         self.assertLess(largest, 1e-5, "the derivation moved further than documented")
 
+    def test_adobe_rgb_gamma_matches_definitions_rs(self):
+        """The decode exponent is the one nc's Adobe RGB encoder uses.
+
+        Read as the quotient `definitions.rs` writes, not as a decimal, so a
+        rounded `2.2` or `2.19921875` on either side is a failure, not a match.
+        """
+        text = (COLORIMETRY / "definitions.rs").read_text(encoding="utf-8")
+        match = re.search(r"pub mod adobe_rgb \{.*?pub const GAMMA: f64 = "
+                          r"([\d.]+) / ([\d.]+);", text, re.DOTALL)
+        assert match, "definitions::transfer::adobe_rgb::GAMMA not found"
+        self.assertEqual(metrics.ADOBE_RGB_GAMMA,
+                         float(match.group(1)) / float(match.group(2)))
+
     def test_adobe_rgb_shares_rec709_red_and_blue(self):
         """Only green differs, which is also the easy thing to transcribe wrongly.
 
@@ -194,8 +208,8 @@ class ColorimetrySource(unittest.TestCase):
         self.assertNotEqual(adobe[1], rec709[1])
 
     def test_adobe_rgb_luma_moves_the_way_its_green_primary_implies(self):
-        """nc pins no Adobe RGB artifact, so `derived-artifacts.txt` cannot check
-        this one. What *is* checkable is the relationship to Rec.709.
+        """The relationship to Rec.709, beside the exact check against the Rust
+        audit in `test_luma_matches_rust_audit_derivation`.
 
         Adobe RGB's green primary is less yellow and more saturated than
         Rec.709's, so normalizing to the same white shifts luminance weight off

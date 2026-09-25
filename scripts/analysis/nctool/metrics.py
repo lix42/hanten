@@ -165,10 +165,11 @@ ROUND = 6
 # Transcribed from `src/pipeline/colorimetry/definitions.rs`, which is the
 # repository's single source of truth for standards-based colorimetry. Nothing
 # here may be edited independently: `test_metrics.py` re-reads that Rust file and
-# fails if these drift from it. That is also why `definitions::ADOBE_RGB` exists
-# at all — nc renders to no such space, but references arrive in it, and a set of
-# primaries living only in this file would be a second source of truth by
-# construction. Add the definition there, then transcribe it here.
+# fails if these drift from it. A space nc does not render to still gets its
+# definition there (`definitions::PROPHOTO` is one, and `ADOBE_RGB` was until the
+# new chain could render into it): references arrive in it, and a set of primaries living
+# only in this file would be a second source of truth by construction. Add the
+# definition there, then transcribe it here.
 
 PRIMARIES: dict[str, tuple[tuple[float, float], ...]] = {
     "rec709": ((0.640, 0.330), (0.300, 0.600), (0.150, 0.060)),
@@ -196,6 +197,11 @@ BRADFORD = (
     (-0.7502, 1.7135, 0.0367),
     (0.0389, -0.0685, 1.0296),
 )
+
+#: The Adobe RGB (1998) decode exponent, `definitions::transfer::adobe_rgb::GAMMA`:
+#: `563/256`, not the `2.2` often quoted. The encoder nc writes Adobe RGB with uses
+#: the same constant, so a decode that drifted from it would misread nc's own output.
+ADOBE_RGB_GAMMA = 563.0 / 256.0
 
 
 class Space:
@@ -362,7 +368,7 @@ def _decode_transfer(array, transfer: str):
         # has no linear segment near black, so there is no threshold to get wrong
         # — and no floor, which is why a near-zero sample stays near zero rather
         # than being lifted onto a linear ramp.
-        np.power(magnitude, np.float32(563.0 / 256.0), out=magnitude)
+        np.power(magnitude, np.float32(ADOBE_RGB_GAMMA), out=magnitude)
     elif transfer == "prophoto":
         # ISO 22028-2 (ROMM RGB): gamma 1.8 above 16 * (1/512).
         toe = magnitude < np.float32(16.0 / 512.0)

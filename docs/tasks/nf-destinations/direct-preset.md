@@ -24,8 +24,16 @@ What is known:
 - **It is not `film-master`**, which is linear, exceeds 1.0 and cannot be judged by
   eye; this one is viewable by construction.
 
+- **The gamut is ready** ([`output/adobe-rgb-gamut`](../output/adobe-rgb-gamut.md),
+  2026-09-24): pass `DestinationGamut::AdobeRgb` and the chain maps into it and the
+  encoder writes the Adobe RGB transfer and profile. What is left is the selection,
+  the `nctool` `PRESET_SPACES` row, and the memory question below.
+
 Open:
 
+- **`RunProfile`: does it share `NewFlowSdrTiff`?** Same buffers and shape as the
+  Display P3 destination (a matrix change inside an in-place map, and a transfer), so
+  it should — confirm by measurement, as `nf-destinations/memory-profiles` requires.
 - **Is it a named destination or a rendering profile** that other destinations can
   also resolve (design-update Part 2 open questions)? If the loop holds it fixed
   while destinations change, a profile is the better shape.

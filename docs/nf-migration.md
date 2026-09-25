@@ -105,7 +105,8 @@ The toe lives here, not in reconstruction. A content-aware toe was rejected as a
 different question and is open.
 
 ### `nf-destinations`
-Destination presets; Adobe RGB end to end (colorimetry artifact → gamut → preset);
+Destination presets; the Adobe RGB preset (its colorimetry, gamut and encode landed
+with `output/adobe-rgb-gamut`);
 the "direct" combination for external editing; encode and package wiring; memory
 profiles; file-suffix rules; the two `nctool` lookup tables.
 
@@ -154,6 +155,6 @@ HDR framing. Runs alongside the others rather than at the end.
 
 ## What carries over untouched
 
-Colorimetry (one new artifact for Adobe RGB), `io::decode`, input semantics,
+Colorimetry (Adobe RGB's two artifacts landed with `output/adobe-rgb-gamut`), `io::decode`, input semantics,
 telemetry (a schema bump only when an enum member is removed), the memory model's
 arithmetic, `tools/review-app`, and `nctool` (one row per new preset in two tables).

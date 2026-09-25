@@ -310,7 +310,9 @@ mod tests {
     use super::*;
     use crate::algo::{FilmRgbImage, reconstruct};
     use crate::pipeline::colorimetry::dot;
-    use crate::pipeline::colorimetry::pinned::{ACESCG_TO_DISPLAY_P3, DISPLAY_P3_LUMA};
+    use crate::pipeline::colorimetry::pinned::{
+        ACESCG_TO_ADOBE_RGB, ACESCG_TO_DISPLAY_P3, ADOBE_RGB_LUMA, DISPLAY_P3_LUMA,
+    };
     use crate::pipeline::fit_range::RangeFittedImage;
     use crate::pipeline::gain_ratio;
     use crate::pipeline::scene_correction::WhiteBalance;
@@ -378,7 +380,11 @@ mod tests {
     /// The expected output of fit gamut, written out independently of the stage:
     /// the pinned matrix, row by row, in the same order of operations.
     fn to_p3(rgb: &[f32]) -> Vec<f32> {
-        let m = ACESCG_TO_DISPLAY_P3;
+        to_destination(rgb, ACESCG_TO_DISPLAY_P3)
+    }
+
+    /// [`to_p3`] for any destination's pinned matrix.
+    fn to_destination(rgb: &[f32], m: [[f32; 3]; 3]) -> Vec<f32> {
         rgb.as_chunks::<3>()
             .0
             .iter()
@@ -453,27 +459,57 @@ mod tests {
     #[test]
     fn at_its_identities_the_chain_is_the_destination_matrix_then_the_gamut_map() {
         // Every stage above fit gamut at its identity: a colour the pinned ACEScg →
-        // Display P3 3×3 puts inside `[0, max(1, Y)]` comes out bit for bit, and only
-        // the others move — onto the boundary, nothing clamped past it.
+        // destination 3×3 puts inside `[0, max(1, Y)]` comes out bit for bit, and only
+        // the others move — onto the boundary, nothing clamped past it. For every
+        // destination gamut, each with its own matrix and luminance.
         let rgb = [0.0, 0.18, 1.0, 0.2, 0.4, 0.6, 0.9, 0.05, -0.3];
-        let aces = aces_from(3, 1, &rgb, None);
-        let p3 = to_p3(aces.rgb());
-        let (out, gamut) = render(aces, &params()).unwrap().image.into_parts();
-        assert_eq!(gamut, DestinationGamut::DisplayP3);
-        let (mut kept, mut mapped) = (0, 0);
-        for (px, want) in out.rgb.as_chunks::<3>().0.iter().zip(p3.as_chunks::<3>().0) {
-            let y = dot(*want, DISPLAY_P3_LUMA);
-            let ceiling = y.max(1.0);
-            if want.iter().all(|v| (0.0..=ceiling).contains(v)) {
-                assert_eq!(bits(px), bits(want));
-                kept += 1;
-            } else {
-                assert!(px.iter().all(|v| (0.0..=ceiling).contains(v)), "{px:?}");
-                assert!(px.contains(&0.0) || px.contains(&ceiling), "{px:?}");
-                mapped += 1;
+        for (gamut, matrix, luma) in [
+            (
+                DestinationGamut::DisplayP3,
+                ACESCG_TO_DISPLAY_P3,
+                DISPLAY_P3_LUMA,
+            ),
+            (
+                DestinationGamut::AdobeRgb,
+                ACESCG_TO_ADOBE_RGB,
+                ADOBE_RGB_LUMA,
+            ),
+        ] {
+            let aces = aces_from(3, 1, &rgb, None);
+            let expected = to_destination(aces.rgb(), matrix);
+            let mut p = params();
+            p.target.gamut = gamut;
+            let rendered = render(aces, &p).unwrap();
+            assert_eq!(
+                rendered.applied[3].1,
+                FitGamutParams { target: gamut }.applied()
+            );
+            let (out, stated) = rendered.image.into_parts();
+            assert_eq!(stated, gamut);
+            let (mut kept, mut mapped) = (0, 0);
+            for (px, want) in out
+                .rgb
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .zip(expected.as_chunks::<3>().0)
+            {
+                let y = dot(*want, luma);
+                let ceiling = y.max(1.0);
+                if want.iter().all(|v| (0.0..=ceiling).contains(v)) {
+                    assert_eq!(bits(px), bits(want), "{gamut:?}");
+                    kept += 1;
+                } else {
+                    assert!(px.iter().all(|v| (0.0..=ceiling).contains(v)), "{px:?}");
+                    assert!(px.contains(&0.0) || px.contains(&ceiling), "{px:?}");
+                    mapped += 1;
+                }
             }
+            assert!(
+                kept > 0 && mapped > 0,
+                "{gamut:?}: {kept} kept, {mapped} mapped"
+            );
         }
-        assert!(kept > 0 && mapped > 0, "{kept} kept, {mapped} mapped");
     }
 
     #[test]
