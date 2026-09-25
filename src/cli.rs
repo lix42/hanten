@@ -553,7 +553,10 @@ pub struct DensityOverrides {
     /// Per-channel density offset (orange-mask compensation).
     #[arg(long, value_name = "R,G,B", value_parser = parse_rgb)]
     pub density_offset: Option<[f32; 3]>,
-    /// Exponential-curve gamma (the straight line's slope).
+    /// Exponential-curve gamma (the straight line's slope). Under `--new-flow` this
+    /// is only the film's linearization (recipe key `reconstruction.linearization`,
+    /// default 1.8) — a calibration; how contrasty the picture is is `--contrast`.
+    /// Without it, the whole slope (default 2.0).
     #[arg(long)]
     pub density_gamma: Option<f32>,
     /// Film stock whose published characteristic curve to invert (with
@@ -671,7 +674,9 @@ impl From<AutoWb> for WbSource {
 pub struct SceneCorrectionOverrides {
     /// Exposure in stops (EV) — a scene-referred gain of `2^EV` on every channel,
     /// before the look and the display fit (recipe key `scene_correction.exposure`).
-    /// `--new-flow` only; the current chain's exposure is `--print-exposure`.
+    /// Stops of the reconstructed scene: the look's `--contrast` then expands them with
+    /// the rest of the picture. `--new-flow` only; the current chain's exposure is
+    /// `--print-exposure`.
     #[arg(long, allow_hyphen_values = true, conflicts_with = "print_exposure")]
     pub exposure: Option<f32>,
 }
@@ -680,6 +685,13 @@ pub struct SceneCorrectionOverrides {
 /// only; refused without it (`flow::reject_unavailable_flags`).
 #[derive(Args, Debug, Default)]
 pub struct LookOverrides {
+    /// Print contrast, pivoted at mid-grey: every ACEScg channel becomes
+    /// `0.18 · (v / 0.18)^CONTRAST` (recipe key `look.contrast`, default 2.0/1.8 ≈ 1.11,
+    /// which with the decode's linearization reproduces the pre-split contrast 2.0;
+    /// 1 is the identity). Runs after scene correction, so an `--exposure` is expanded
+    /// with the rest of the picture. `--new-flow` only.
+    #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
+    pub contrast: Option<f32>,
     /// Highlight desaturation's strength, in [0, 1]: how far a bright, near-neutral
     /// pixel is pulled toward neutral (recipe key
     /// `look.highlight_desaturation.strength`, default 0.8; 0 is off). It keys on
@@ -703,7 +715,7 @@ pub struct LookOverrides {
     pub highlight_desaturation_start: Option<f32>,
     /// Highlight desaturation's saturation band `S0,S1`: full pull at or below `S0`,
     /// none at or above `S1`, on `log10(max/min)` of the pixel's ACEScg channels over
-    /// the decode's contrast (recipe key `look.highlight_desaturation.band`, default
+    /// the whole contrast, `--density-gamma` times `--contrast` (recipe key `look.highlight_desaturation.band`, default
     /// `0.015,0.025`). `--new-flow` only.
     #[arg(
         long = "highlight-desaturation-band",
@@ -717,7 +729,8 @@ pub struct LookOverrides {
 impl LookOverrides {
     /// Whether any look flag was typed.
     pub(crate) fn any(&self) -> bool {
-        self.highlight_desaturation.is_some()
+        self.contrast.is_some()
+            || self.highlight_desaturation.is_some()
             || self.highlight_desaturation_start.is_some()
             || self.highlight_desaturation_band.is_some()
     }
@@ -1865,8 +1878,8 @@ pub struct NewFlowResult {
     pub stages: [NewFlowStageResult; 4],
     /// Scene correction's values: the white-balance gains and the exposure applied.
     pub scene_correction: scene_correction::SceneCorrection,
-    /// The look's controls as applied — highlight desaturation's strength, start and
-    /// band.
+    /// The look's controls as applied — the contrast, and highlight desaturation's
+    /// strength, start and band.
     pub look: look::LookSection,
     /// Fit range's operator by name, with the headroom, white point and display peak
     /// it ran at — what a non-default `fit_range.headroom_stops` changes.
@@ -4896,7 +4909,8 @@ fn removed_sigmoid_flag(flags: &RemovedSigmoidFlags) -> Option<(&'static str, &'
         (
             "--sigmoid-contrast",
             flags.sigmoid_contrast.is_some(),
-            "the exponential's slope is `--density-gamma`",
+            "the exponential's slope is `--density-gamma`; under `--new-flow` that is \
+             the film's linearization, and the picture's contrast is `--contrast`",
         ),
         ("--sigmoid-toe", flags.sigmoid_toe.is_some(), KNEE),
         ("--sigmoid-shoulder", flags.sigmoid_shoulder.is_some(), KNEE),
@@ -8511,7 +8525,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
                 aces.rgb(),
                 aces.width(),
                 aces.height(),
-                recipe.reconstruction.contrast,
+                recipe.reconstruction.linearization,
             )
             .map_err(|e| NcError::Other(format!("{}: {}", path.display(), e.message())))?;
             Some(MeasuredLeader {
@@ -9579,7 +9593,7 @@ mod tests {
             (
                 ["--sigmoid-contrast", "2"].as_slice(),
                 "--density-gamma",
-                "--density-gamma",
+                "--contrast",
             ),
             (
                 ["--sigmoid-toe", "0.2"].as_slice(),

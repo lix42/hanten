@@ -35,11 +35,12 @@ channels after the 3×3.
   2026-09-23): one key per control under `look`, not one CDL object — CDL's slope
   is white balance and its offset the flare subtraction, both scene correction's.
 - **Its overlap with contrast.** Equal exponents on all three channels, pivoted at
-  mid, *are* contrast — the same duplication that ruled out CDL. Decide who owns
-  neutral contrast (e.g. the grade is constrained to keep a neutral neutral, or
-  defined relative to one channel) in whichever of the two tasks runs first.
-- Is the pivot fixed at 0.18 or stated? Fixed is the honest default while the
-  decode pins mid.
+  mid, *are* contrast — the same duplication that ruled out CDL. Contrast landed first
+  (`look.contrast`, `nf-reconstruction/gamma-split`) and owns neutral contrast, so the
+  grade must not also move it — e.g. constrained to keep a neutral neutral, or defined
+  relative to one channel. Which?
+- The pivot: contrast fixes it at `look::MID_GREY`, the value the decode's anchor pins
+  mid at; the grade should share that pivot.
 
 ## How to Verify
 

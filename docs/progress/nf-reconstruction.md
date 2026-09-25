@@ -37,6 +37,14 @@ today's proposed anchor all three rolls measured land **0.55–1.73 stops short 
 so a per-channel highlight operator has nothing to act on. Anyone building on this epic,
 and `nf-calibration/anchor-comparison` in particular, needs that before they start.
 
+**`gamma` is split** (`gamma-split`, 2026-09-24). Under `--new-flow` the decode's slope
+is `reconstruction.linearization` (1.8, `--density-gamma`), a calibration tuned with
+`scale` and never alone; print contrast is the look's `look.contrast` (`--contrast`,
+default 2.0/1.8). The decode owns every per-channel exponent `linearization · scale_c`
+(convention `scale_r = 1`); the look owns one factor on all three. The current chain
+still runs the bundled 2.0. Exposure is expanded by the look's contrast, and
+`measure-roll` gains are measured at the linearization.
+
 **The anchor is settled as a rule, not as a white** (`anchor-rule`, 2026-09-22).
 `mid-at-base-offset(d)` is the decode's only placement, with `d = 0.62` hand-frozen as
 `generic-c41`'s mid aim rounded — never read from a datasheet at runtime, and pinned to
@@ -491,10 +499,78 @@ belongs to `nf-calibration/anchor-comparison`; keep `AnchorRule` an enum until i
 
 ## gamma-split
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: split `gamma` into calibration and look.
+- 2026-09-24: **planned — four decisions taken with the user before any code.**
+  **(1)** Ship the look half as a real knob — `look.contrast` / `--contrast` with its
+  merge arm, value rule and report field — not a placeholder: per-roll contrast
+  (white-placement candidate C) needed a home that is not the decode's calibration.
+  `nf-look/contrast` keeps the default and the overlap with the grade.
+  **(2)** Linearization 1.8, look default `2.0 / 1.8`, so the default new-flow render
+  keeps its neutrals. The task's check said "at the look's **identity**"; that cannot
+  hold once the decode carries only 1.8, and it contradicted `nf-look/contrast`'s
+  "unity is a bit-exact identity" — reworded to the default.
+  **(3)** `--density-gamma` stays, and the recipe key is renamed
+  `reconstruction.contrast` → `reconstruction.linearization` so a recipe reads as
+  calibration. The new-flow recipe is unreleased, but the old key is still refused by
+  name rather than left to `deny_unknown_fields`.
+  **(4)** A per-channel power on ACEScg pivoted at mid-grey, before highlight
+  desaturation. `nf-look/stage` had fixed only the container (one key per control); the
+  operator form was open, and `pipeline::roll_white` already assumed a channel-equal
+  power pivoted at mid.
+
+  **A correction to a premise raised in planning:** this task does not set a contrast
+  per roll. It splits one fixed number into two fixed numbers; a per-roll contrast is
+  `nf-calibration/anchor-comparison`'s candidate C, and under the split it would land
+  in `look.contrast`.
+- 2026-09-24: **landed.** What a later reader needs:
+
+  **The current chain did not move.** `types::ExponentialParams::default` read
+  `algo::fixed::CONTRAST`; it now reads `BUNDLED_CONTRAST = 2.0`, because that chain
+  has no look to carry the print half. No default pixel, fingerprint or
+  `pipeline_version` moved, and `--density-gamma` there still means the whole slope.
+  The new-flow render is unversioned (`nf-verification/fingerprints`).
+
+  **The equivalence, measured.** For a neutral the pivoted power is exactly a steeper
+  decode: `0.18 · (10^(L·(D′−A_L)) / 0.18)^k = 10^(Lk·(D′−A_Lk))`. Through decode,
+  3×3, identity scene correction and the look, the default split matches the 2.0 decode
+  to **3.6e-7 relative** at worst over base to 1.8 density (two `powf`s, and `1.8 ·
+  (2.0/1.8)` is not exactly 2.0 in f32). A pixel ±0.25 density off neutral differs by
+  up to **2.5%** on one channel: the power acts after the NC film RGB v1 3×3, which
+  mixes channels. Pinned in `pipeline::look`'s tests; stated in the docs, not tuned
+  away.
+
+  **Highlight desaturation divides by the whole contrast.** Its band measures
+  `log10(max/min) / (linearization · look.contrast)`. A power of `k` raises every
+  channel ratio to `k`, so this is invariant to which stage carries the contrast — and
+  `path-to-white`, built with the per-roll contrast passed as `--density-gamma`, keeps
+  its band. Contrast runs first, so desaturation's trigger (`DIFFUSE_WHITE = 1.0`) is
+  read where it was tuned.
+
+  **`DIFFUSE_WHITE` is a property of the graded image, not the decode's output.** At
+  1.8 the decode's anchor is 1.034 and the datasheets' white decodes to ≈0.80; the
+  look's default lifts it back to within ≈0.08 stop of 1.0, as before.
+
+  **Two side effects, both by design.** Exposure is expanded by the contrast
+  (`--exposure 1` at 1.11 is 1.11 stops of output): exposure is in stops of the
+  reconstructed scene. And `measure-roll`'s gains are measured at the decode's output,
+  now 1.8: on 2026-09-18-Gold200 blue went 1.2774 → 1.2442, i.e. the old gain to the
+  power 1.8/2.0 — a recipe carrying gains measured before this build renders slightly
+  differently until re-measured.
+
+  **Unity is an identity because the stage skips the operator.** `0.18 · (x/0.18)^1`
+  rounds twice and moved 5 of 27 samples by an ULP, so the skip is load-bearing and a
+  test pins both halves. The 1-ULP anchor falsifiability test had to change for a
+  similar reason: at 1.8 the anchor (≈1.03) is a binade above `d`, so one ULP of `d`
+  can round away in the sum; it now moves `d` until the anchor moves (≤2 ULP).
+
+  **Also:** `flow`'s new-flow-only refusal became a table (`NEW_FLOW_ONLY_FLAGS`) with
+  a completeness test — every kept flag either moves the current chain's resolved
+  config or has a row refusing it there — as `nf-core`'s summary asked once there were
+  two such flags. The decode goldens were recaptured and a windowed golden for the
+  contrast added (`chain_golden`).
 
 ## curve-endpoint-warning
 

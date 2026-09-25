@@ -47,7 +47,7 @@ pub struct LeaderGuard {
     /// The guard, in density: [`LEADER_GUARD_DENSITY`].
     pub guard_density: f32,
     /// A pixel reaching this on any channel is left out:
-    /// `median_c · 10^(−contrast · guard_density)`.
+    /// `median_c · 10^(−linearization · guard_density)`.
     pub ceiling: [f32; 3],
 }
 
@@ -63,14 +63,20 @@ fn leader_region(width: u32, height: u32) -> [u32; 4] {
 }
 
 /// Measure the guard from a decoded leader (`rgb`, `width` x `height`, at the
-/// decode's output), over its centre half, at a decode of the given `contrast`.
+/// decode's output), over its centre half, at a decode of the given `linearization`
+/// (`reconstruction.linearization` — the decode's slope, not the look's contrast).
 ///
 /// The guard is stated in density because that is what the leader's nearness means,
-/// but it is applied to linear ACEScg, where the decode's `10^(contrast·D′)` makes a
+/// but it is applied to linear ACEScg, where the decode's `10^(linearization·D′)` makes a
 /// density step a ratio. The working-space 3×3 mixes the channels a little, so on a
 /// saturated pixel the step is approximate — it only has to separate a fully exposed
 /// frame from picture content, which sit well apart.
-pub fn leader_guard(rgb: &[f32], width: u32, height: u32, contrast: f32) -> Result<LeaderGuard> {
+pub fn leader_guard(
+    rgb: &[f32],
+    width: u32,
+    height: u32,
+    linearization: f32,
+) -> Result<LeaderGuard> {
     let sample = sample_region(
         rgb,
         width,
@@ -86,7 +92,7 @@ pub fn leader_guard(rgb: &[f32], width: u32, height: u32, contrast: f32) -> Resu
             )));
         }
     }
-    let ratio = 10f32.powf(-contrast * LEADER_GUARD_DENSITY);
+    let ratio = 10f32.powf(-linearization * LEADER_GUARD_DENSITY);
     Ok(LeaderGuard {
         median,
         guard_density: LEADER_GUARD_DENSITY,

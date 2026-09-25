@@ -21,7 +21,7 @@ nothing in the plan owns them.
 - **The new chain's per-frame overrides get no roll-consistency warning.** The current
   chain warns (`--strict`-promotable) when an override sets `calibration.*`,
   `reconstruction.curve.anchor`, `curve.stock` or `output.preset`. Their new-chain
-  counterparts — `reconstruction.anchor` and `reconstruction.contrast`, a frame pinned
+  counterparts — `reconstruction.anchor` and `reconstruction.linearization`, a frame pinned
   on a different rule or slope than its roll — are probed by nothing, so such a frame
   would render differently from its siblings in silence once the seam opens. Decide
   which of the new sections are roll-fixed and warn on them.

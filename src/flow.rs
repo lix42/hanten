@@ -414,8 +414,9 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     },
     KeptEntry {
         covers: &["--density-gamma"],
-        why: "the fixed decode's contrast (recipe `reconstruction.contrast`). \
-              `nf-look/path-to-white` tunes against it directly, so it must stay reachable",
+        why: "the fixed decode's linearization (recipe `reconstruction.linearization`) — \
+              the calibrated half of `gamma`, which `nf-calibration/scale-gamma-loop` tunes \
+              with `scale`; print contrast is `--contrast`",
     },
     // Scene correction (`nf-scene-correction/stage`). `--exposure` is the new chain's
     // own spelling; white balance keeps the current chain's, since the knob means the
@@ -424,6 +425,11 @@ const KEPT_FLAGS: &[KeptEntry] = &[
         covers: &["--white-balance"],
         why: "scene correction's white balance (recipe `scene_correction.white_balance`) — \
               stated gains, which `hanten measure-roll` measures once per roll",
+    },
+    KeptEntry {
+        covers: &["--contrast"],
+        why: "the look's print contrast (recipe `look.contrast`) — the half of `gamma` \
+              `nf-reconstruction/gamma-split` moved out of the decode, new-flow only",
     },
     KeptEntry {
         covers: &[
@@ -472,27 +478,53 @@ pub fn reject_unavailable_flags(flow: Flow, args: &ConvertArgs) -> Result<()> {
     Ok(())
 }
 
-/// Refuse, on the **current** chain, a flag only the new chain reads — the other
-/// direction of the same accepted-and-ignored hole: the current chain's `merge` has no
-/// arm for it, so without this it would parse and do nothing.
+/// A flag only the new chain reads, refused on the current one.
+struct NewFlowOnlyEntry {
+    /// The flags the row covers, as `convert` spells them.
+    #[cfg_attr(not(test), allow(dead_code))]
+    // `every_kept_flag_is_read_by_one_chain_or_refused_on_the_other`
+    covers: &'static [&'static str],
+    present: fn(&ConvertArgs) -> bool,
+    message: &'static str,
+}
+
+/// Every flag only the new chain reads — the other direction of the
+/// accepted-and-ignored hole: the current chain's `merge` has no arm for these, so
+/// without a row here they would parse and do nothing.
+/// `every_kept_flag_is_read_by_one_chain_or_refused_on_the_other` holds the table
+/// complete: every kept flag either moves the current chain's resolved config or has a
+/// row here.
+const NEW_FLOW_ONLY_FLAGS: &[NewFlowOnlyEntry] = &[
+    NewFlowOnlyEntry {
+        covers: &["--exposure"],
+        present: |args| args.scene.exposure.is_some(),
+        message: "--exposure sets the new chain's scene-correction exposure (recipe \
+                  `scene_correction.exposure`) and has no meaning without `--new-flow`; \
+                  the current chain's exposure is `--print-exposure`",
+    },
+    NewFlowOnlyEntry {
+        covers: &[
+            "--contrast",
+            "--highlight-desaturation",
+            "--highlight-desaturation-start",
+            "--highlight-desaturation-band",
+        ],
+        present: |args| args.look.any(),
+        message: "the look's flags (--contrast, --highlight-desaturation, \
+                  --highlight-desaturation-start, --highlight-desaturation-band) set the \
+                  new chain's look (recipe `look`) and have no meaning without \
+                  `--new-flow`: the current chain has no look stage. Its contrast is the \
+                  whole `--density-gamma`",
+    },
+];
+
+/// Refuse, on the **current** chain, a flag only the new chain reads
+/// ([`NEW_FLOW_ONLY_FLAGS`]).
 fn reject_new_flow_only_flags(args: &ConvertArgs) -> Result<()> {
-    if args.scene.exposure.is_some() {
-        return Err(NcError::Usage(
-            "--exposure sets the new chain's scene-correction exposure (recipe \
-             `scene_correction.exposure`) and has no meaning without `--new-flow`; the \
-             current chain's exposure is `--print-exposure`"
-                .into(),
-        ));
+    match NEW_FLOW_ONLY_FLAGS.iter().find(|e| (e.present)(args)) {
+        Some(entry) => Err(NcError::Usage(entry.message.into())),
+        None => Ok(()),
     }
-    if args.look.any() {
-        return Err(NcError::Usage(
-            "--highlight-desaturation and its -start / -band flags set the new chain's \
-             look (recipe `look.highlight_desaturation`) and have no meaning without \
-             `--new-flow`: the current chain has no look stage"
-                .into(),
-        ));
-    }
-    Ok(())
 }
 
 /// The one generic rejection, built in one place so a new table row needs no
@@ -751,23 +783,16 @@ mod tests {
         }
     }
 
-    /// A kept flag is kept because the new flow *reads* it, so each one must reach the
-    /// new chain's recipe — a kept flag with no arm in `recipe::merge` would be the
-    /// accepted-and-ignored defect this inventory exists to prevent. Driven over
-    /// [`KEPT_FLAGS`] itself, so a row added later without a sample here reds.
-    #[test]
-    fn every_kept_flag_reaches_the_recipe() {
+    type Landed = fn(&crate::recipe::Recipe) -> bool;
+
+    /// One command line per kept flag, each setting a non-default value, and the one
+    /// field of the new chain's recipe it must land in — "the recipe changed" alone
+    /// would pass a flag wired to the wrong knob.
+    fn kept_flag_samples() -> &'static [(&'static str, &'static [&'static str], Landed)] {
         use crate::algo::fixed::AnchorRule;
-        use crate::cli::{Cli, Command};
         use crate::pipeline::scene_correction::WhiteBalance;
-        use crate::recipe::{self, Recipe};
         use crate::types::{FilmBaseSource, FilmType, MeaningAssertion, TransferAssertion};
-        use clap::Parser;
-        type Landed = fn(&Recipe) -> bool;
-        // One command line per kept flag, each setting a non-default value, and the
-        // one field it must land in — "the recipe changed" alone would pass a flag
-        // wired to the wrong knob.
-        let samples: &[(&str, &[&str], Landed)] = &[
+        &[
             ("--input-transfer", &["--input-transfer", "linear"], |r| {
                 r.input.transfer == TransferAssertion::Linear
             }),
@@ -800,8 +825,8 @@ mod tests {
             ("--density-offset", &["--density-offset", "0,0.1,0"], |r| {
                 r.reconstruction.offset == [0.0, 0.1, 0.0]
             }),
-            ("--density-gamma", &["--density-gamma", "1.8"], |r| {
-                r.reconstruction.contrast == 1.8
+            ("--density-gamma", &["--density-gamma", "1.9"], |r| {
+                r.reconstruction.linearization == 1.9
             }),
             (
                 "--anchor-mid-offset",
@@ -813,6 +838,9 @@ mod tests {
             }),
             ("--exposure", &["--exposure", "-0.5"], |r| {
                 r.scene_correction.exposure == -0.5
+            }),
+            ("--contrast", &["--contrast", "1.3"], |r| {
+                r.look.contrast == 1.3
             }),
             (
                 "--highlight-desaturation",
@@ -834,20 +862,39 @@ mod tests {
                 &["--display-tone-headroom", "4"],
                 |r| r.fit_range.headroom_stops == 4.0,
             ),
-        ];
+        ]
+    }
+
+    /// Parse `convert` with `extra` appended, with or without `--new-flow`.
+    fn parse_convert(new_flow: bool, extra: &[&str]) -> ConvertArgs {
+        use crate::cli::{Cli, Command};
+        use clap::Parser;
+        let flag: &[&str] = if new_flow { &["--new-flow"] } else { &[] };
+        let argv = ["hanten", "convert", "in.tif", "-o", "out"]
+            .iter()
+            .chain(flag)
+            .chain(extra)
+            .copied();
+        let Command::Convert(args) = Cli::try_parse_from(argv).unwrap().command else {
+            unreachable!()
+        };
+        args
+    }
+
+    /// A kept flag is kept because the new flow *reads* it, so each one must reach the
+    /// new chain's recipe — a kept flag with no arm in `recipe::merge` would be the
+    /// accepted-and-ignored defect this inventory exists to prevent. Driven over
+    /// [`KEPT_FLAGS`] itself, so a row added later without a sample reds.
+    #[test]
+    fn every_kept_flag_reaches_the_recipe() {
+        use crate::recipe::{self, Recipe};
         for entry in KEPT_FLAGS {
             for flag in entry.covers {
-                let (_, extra, landed) = samples
+                let (_, extra, landed) = kept_flag_samples()
                     .iter()
                     .find(|(f, _, _)| f == flag)
                     .unwrap_or_else(|| panic!("kept flag {flag} has no sample here"));
-                let argv = ["hanten", "convert", "in.tif", "-o", "out", "--new-flow"]
-                    .iter()
-                    .chain(extra.iter())
-                    .copied();
-                let Command::Convert(args) = Cli::try_parse_from(argv).unwrap().command else {
-                    unreachable!()
-                };
+                let args = parse_convert(true, extra);
                 let merged = recipe::merge(Recipe::default(), &args);
                 assert!(
                     landed(&merged),
@@ -856,6 +903,53 @@ mod tests {
                 // Falsifiability: the default does not already satisfy the check.
                 assert!(!landed(&Recipe::default()), "{flag}'s check is vacuous");
             }
+        }
+    }
+
+    /// The other direction: a kept flag the **current** chain has no arm for would be
+    /// accepted and ignored there. So each kept flag either moves the current chain's
+    /// resolved config, or has a [`NEW_FLOW_ONLY_FLAGS`] row refusing it without
+    /// `--new-flow` — never both, since a flag the current chain reads must not be
+    /// refused on it.
+    #[test]
+    fn every_kept_flag_is_read_by_one_chain_or_refused_on_the_other() {
+        use crate::cli::{ResolvedConfig, merge};
+        let only: BTreeSet<&str> = NEW_FLOW_ONLY_FLAGS
+            .iter()
+            .flat_map(|e| e.covers)
+            .copied()
+            .collect();
+        for flag in KEPT_FLAGS.iter().flat_map(|e| e.covers) {
+            let (_, extra, _) = kept_flag_samples()
+                .iter()
+                .find(|(f, _, _)| f == flag)
+                .unwrap_or_else(|| panic!("kept flag {flag} has no sample"));
+            let args = parse_convert(false, extra);
+            let refused = reject_unavailable_flags(Flow::Legacy, &args);
+            if only.contains(flag) {
+                let err = refused.expect_err(flag);
+                assert!(
+                    err.message().contains(flag),
+                    "{flag}'s refusal does not name it: {}",
+                    err.message()
+                );
+            } else {
+                refused.unwrap_or_else(|e| panic!("{flag} refused on the current chain: {e:?}"));
+                let merged = merge(ResolvedConfig::default(), &args)
+                    .unwrap_or_else(|e| panic!("{flag}: {}", e.message()));
+                assert_ne!(
+                    merged,
+                    ResolvedConfig::default(),
+                    "{flag} moves nothing on the current chain and has no \
+                     NEW_FLOW_ONLY_FLAGS row: it would be accepted and ignored there"
+                );
+            }
+        }
+        for flag in &only {
+            assert!(
+                KEPT_FLAGS.iter().any(|e| e.covers.contains(flag)),
+                "{flag} is refused on the current chain but is not a kept new-flow flag"
+            );
         }
     }
 

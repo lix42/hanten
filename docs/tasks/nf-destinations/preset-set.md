@@ -54,8 +54,8 @@ Open:
   on whether the destination runs a look, never one per look knob (`nf-look/stage`).
   Key it on `LookSection::asks_for_a_look` — neither the default nor empty. Not "any
   look at all": highlight desaturation is on by default, so that would refuse every
-  default recipe. Not "not the default" either: an empty look (`--highlight-desaturation 0`)
-  renders exactly what `film-master` does, and refusing that identity kills the
+  default recipe. Not "not the default" either: an empty look
+  (`--contrast 1 --highlight-desaturation 0`) renders exactly what `film-master` does, and refusing that identity kills the
   flags-win reset.
 - One recipe drives the same look through every destination that runs one, and the
   report names the look stage on each, empty or not.

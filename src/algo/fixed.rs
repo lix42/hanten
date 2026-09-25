@@ -4,7 +4,7 @@
 //! ```text
 //! D_c  = −log10(scan_c / base_c)          measurement
 //! D′_c = scale_c · D_c + offset_c          calibration
-//! out_c = 10^(contrast · (D′_c − A))       the curve
+//! out_c = 10^(linearization · (D′_c − A))  the curve
 //! ```
 //!
 //! One decode for every negative: a straight line in density against log exposure,
@@ -27,8 +27,8 @@
 //! contract to FMA — so: keep the f32 division *before* the `log10`; add `+ offset`
 //! unconditionally, never skipped because the constant is zero; never `mul_add` (an
 //! FMA would keep one product in extended precision and bit-differ); and apply the
-//! anchor **inside the exponent** rather than factoring it into a `10^(−contrast·A)`
-//! gain, which overflows f32 when `contrast · D′` alone leaves the pow10 range even
+//! anchor **inside the exponent** rather than factoring it into a `10^(−linearization·A)`
+//! gain, which overflows f32 when `linearization · D′` alone leaves the pow10 range even
 //! though the anchored exponent is small.
 //!
 //! **What each rule is worth, measured — one vector cannot hold four rules.** Each
@@ -77,7 +77,8 @@
 //! placements costed in `docs/spike/white-placement.md`, **C** — the only one that
 //! pins mid *and* white — needs nothing from this module: it solves its contrast
 //! from a **content** white and the spike puts that per-roll contrast in the look
-//! stage, leaving the decode fixed. **B** and **D** are the two that would hand
+//! stage — `look.contrast`, as `gamma / LINEARIZATION` — leaving the decode fixed.
+//! **B** and **D** are the two that would hand
 //! this module a measured density. That is why [`AnchorRule`] is an enum with one
 //! variant rather than a bare `f32` field: they add a variant, instead of silently
 //! changing what a number means. No white reference is measured, read or
@@ -90,8 +91,8 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 /// Mid-grey's density above the film base — the decode's one anchor constant.
 ///
 /// A **convention, not a per-stock value**: stocks measure 0.542–0.699, ≈1.06 stops
-/// at contrast 2.0, and choosing per stock would be per-stock exposure normalization
-/// inside a decode declared stock-agnostic. A fixed value lets film speed show
+/// at the default total contrast 2.0, and choosing per stock would be per-stock
+/// exposure normalization inside a decode declared stock-agnostic. A fixed value lets film speed show
 /// through, which is the faithful behaviour.
 ///
 /// **Where the number comes from:** `generic-c41`'s mid-grey aim, 0.624 above base on
@@ -107,13 +108,19 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 /// `nf-verification/fingerprints`'. It stays reachable as `--anchor-mid-offset`.
 pub const MID_ABOVE_BASE: f32 = 0.62;
 
-/// Where diffuse white sits in the decode's output: the value its anchor renders to.
+/// Where diffuse white sits in the **graded** image — the look's output, which every
+/// stage from the look on reads.
 ///
-/// `10^(contrast · (D′ − A))` is `1.0` at `D′ = A` by construction, and the anchor
-/// lands ≈0.08 stop from the datasheets' diffuse white (`tests::the_anchor_is_the_documented_number`)
-/// — so on this decode the value `1.0` **is** diffuse white, to that tolerance. A
-/// convention of the decode rather than a measurement of a frame: scene correction's
-/// exposure moves the picture, not this number.
+/// At the look's default contrast the chain renders a neutral exactly where the bundled
+/// decode did ([`BUNDLED_CONTRAST`]), whose anchor `10^(2.0 · (D′ − A))` is `1.0` at
+/// `D′ = A` and lands ≈0.08 stop from the datasheets' diffuse white
+/// (`tests::the_anchor_is_the_documented_number`) — so `1.0` **is** diffuse white there,
+/// to that tolerance. **Not at the decode's own output**: at the linearization alone the
+/// anchor sits higher (`A = d + 0.745/1.8`) and the datasheets' white decodes to ≈0.80,
+/// a third of a stop under; the look's contrast, pivoted at mid, is what lifts it. A
+/// stronger look contrast lifts it further, which is what print contrast does. A
+/// convention rather than a measurement of a frame: scene correction's exposure moves
+/// the picture, not this number.
 ///
 /// **The one definition every rendering stage keys on.** It is scene-referred and
 /// common to both display branches, which is why fit range's HDR lift starts here and
@@ -122,14 +129,35 @@ pub const MID_ABOVE_BASE: f32 = 0.62;
 /// disagree about where white is.
 pub const DIFFUSE_WHITE: f32 = 1.0;
 
-/// The decode's contrast — **still both halves of `gamma` in one number.**
+/// The decode's slope: **the calibrated half of `gamma`**, which linearizes the film.
 ///
-/// Linearizing the film (≈1/0.55 ≈ 1.8) is calibration and stays in the decode;
-/// print contrast is a look and moves to rendering. `2.0` is roughly the
-/// linearization plus ≈1.10× print contrast, and splitting it is
-/// `nf-reconstruction/gamma-split`'s. Held here so this task changes where the
-/// decode lives without also changing what it renders.
-pub const CONTRAST: f32 = 2.0;
+/// A C-41 negative's straight line rises ≈0.55 density per decade of exposure, so
+/// `1/0.55 ≈ 1.8` undoes it. That is a calibration and stays in the decode; how
+/// contrasty the *picture* is is a look, `look.contrast`
+/// (`nf-reconstruction/gamma-split`). Fixed, not per stock: the registry's red film
+/// gammas span 0.53–0.61, and choosing per stock would normalize tone character inside
+/// a decode declared stock-agnostic.
+///
+/// **Only the products `LINEARIZATION · scale_c` reach the curve**, so the two are one
+/// measurement split by the convention `scale_r = 1` ([`DENSITY_SCALE`];
+/// `tests::the_scale_convention_pins_red_to_one`). The decode owns every per-channel
+/// exponent; the look owns one factor shared by all three. Moving this value moves the
+/// calibration unless `scale` moves with it — `nf-calibration/scale-gamma-loop` tunes
+/// the two together, never one alone.
+///
+/// Reachable as `--density-gamma` (recipe `reconstruction.linearization`). A current
+/// pick, expected to move with `scale`.
+pub const LINEARIZATION: f32 = 1.8;
+
+/// The single `gamma` nc shipped before the split: linearization and print contrast
+/// bundled into one number.
+///
+/// Two readers. The current chain has no look stage, so its default curve still
+/// carries the whole bundle (`types::ExponentialParams::default`), and moves no pixel
+/// until `nf-core/default-flip` retires it. And the look's default contrast is defined
+/// from it — `BUNDLED_CONTRAST / LINEARIZATION` — so the new flow's default renders a
+/// neutral where the bundled decode did.
+pub const BUNDLED_CONTRAST: f32 = 2.0;
 
 /// The per-channel density calibration — **one global value**, never varied per
 /// stock, roll or frame. What one value cannot reach is a rendering correction, not
@@ -191,13 +219,13 @@ pub enum AnchorRule {
 impl AnchorRule {
     /// The corrected density that renders to `1.0`.
     ///
-    /// Solving `10^(contrast·(d − A)) = 0.18` gives `A = d + 0.745/contrast`. This is
-    /// the **only** definition of the anchor in the new flow: the report reads it
+    /// Solving `10^(linearization·(d − A)) = 0.18` gives `A = d + 0.745/linearization`.
+    /// This is the **only** definition of the anchor in the new flow: the report reads it
     /// from here rather than recomputing it, so a report cannot document a number the
     /// render did not use.
-    pub fn anchor(self, contrast: f32) -> f32 {
+    pub fn anchor(self, linearization: f32) -> f32 {
         match self {
-            AnchorRule::MidAboveBase(d) => d + MID_GREY_OUTPUT_DECADES / contrast,
+            AnchorRule::MidAboveBase(d) => d + MID_GREY_OUTPUT_DECADES / linearization,
         }
     }
 
@@ -233,8 +261,10 @@ pub struct DecodeParams {
     pub scale: [f32; 3],
     /// Per-channel density offset.
     pub offset: [f32; 3],
-    /// The straight line's slope in density against log exposure.
-    pub contrast: f32,
+    /// The straight line's slope in density against log exposure — the calibrated
+    /// half of `gamma` ([`LINEARIZATION`]). Print contrast is the look's
+    /// (`look.contrast`), never this.
+    pub linearization: f32,
     /// Which tone is pinned, and where.
     pub anchor: AnchorRule,
 }
@@ -244,7 +274,7 @@ impl Default for DecodeParams {
         Self {
             scale: DENSITY_SCALE,
             offset: DENSITY_OFFSET,
-            contrast: CONTRAST,
+            linearization: LINEARIZATION,
             anchor: AnchorRule::MidAboveBase(MID_ABOVE_BASE),
         }
     }
@@ -257,16 +287,16 @@ impl Default for DecodeParams {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DecodeReport {
     /// The corrected density that rendered to `1.0`, and therefore what sets the
-    /// black floor at `10^(−contrast·anchor)`.
+    /// black floor at `10^(−linearization·anchor)`.
     pub anchor: f32,
     /// The anchor rule's name.
     pub anchor_rule: &'static str,
     /// Whether a reference density was consumed. Always `false` — see
     /// [`AnchorRule::reads_reference`].
     pub reads_reference: bool,
-    /// The resolved contrast and calibration, so a render is reproducible from its
-    /// own report.
-    pub contrast: f32,
+    /// The resolved linearization and calibration, so a render is reproducible from
+    /// its own report.
+    pub linearization: f32,
     pub scale: [f32; 3],
     pub offset: [f32; 3],
 }
@@ -294,7 +324,7 @@ pub fn decode(
     let DecodeParams {
         scale,
         offset,
-        contrast,
+        linearization,
         ..
     } = *params;
 
@@ -313,7 +343,7 @@ pub fn decode(
             // Not `mul_add`, and `+ offset` is not skipped at zero. See the module
             // docs: both are bit-identity rules, not style.
             let corrected = scale[c] * d + offset[c];
-            out[c] = 10f32.powf(contrast * (corrected - anchor));
+            out[c] = 10f32.powf(linearization * (corrected - anchor));
         }
         Ok(out)
     })?;
@@ -328,7 +358,7 @@ pub fn decode(
             anchor,
             anchor_rule: params.anchor.name(),
             reads_reference: params.anchor.reads_reference(),
-            contrast,
+            linearization,
             scale,
             offset,
         },
@@ -351,13 +381,13 @@ pub enum DecodeFault {
     /// that channel flat (finite, in range, counted by nothing) and a negative one
     /// reverses its density ordering, breaking the strictly-increasing contract.
     Scale { channel: usize, value: f32 },
-    /// The contrast is not finite and positive.
-    Contrast(f32),
+    /// The linearization is not finite and positive.
+    Linearization(f32),
     /// The anchor rule's mid-grey density above the base is not finite and positive —
     /// the range `mid-at-base-offset` has always had on the current chain.
     MidAboveBase(f32),
     /// The resolved anchor, or the curve's exponent at it, overflows f32.
-    Anchor { anchor: f32, contrast: f32 },
+    Anchor { anchor: f32, linearization: f32 },
 }
 
 impl DecodeParams {
@@ -379,18 +409,18 @@ impl DecodeParams {
                 return Err(DecodeFault::Scale { channel, value });
             }
         }
-        if !self.contrast.is_finite() || self.contrast <= 0.0 {
-            return Err(DecodeFault::Contrast(self.contrast));
+        if !self.linearization.is_finite() || self.linearization <= 0.0 {
+            return Err(DecodeFault::Linearization(self.linearization));
         }
         let AnchorRule::MidAboveBase(d) = self.anchor;
         if !d.is_finite() || d <= 0.0 {
             return Err(DecodeFault::MidAboveBase(d));
         }
-        let anchor = self.anchor.anchor(self.contrast);
-        if !anchor.is_finite() || !(self.contrast * anchor).is_finite() {
+        let anchor = self.anchor.anchor(self.linearization);
+        if !anchor.is_finite() || !(self.linearization * anchor).is_finite() {
             return Err(DecodeFault::Anchor {
                 anchor,
-                contrast: self.contrast,
+                linearization: self.linearization,
             });
         }
         Ok(anchor)
@@ -408,15 +438,18 @@ fn check_params(params: &DecodeParams) -> Result<f32> {
             DecodeFault::Scale { channel, value } => {
                 format!("the fixed decode's scale[{channel}] must be finite and > 0 (got {value})")
             }
-            DecodeFault::Contrast(v) => {
-                format!("the fixed decode's contrast must be finite and > 0 (got {v})")
+            DecodeFault::Linearization(v) => {
+                format!("the fixed decode's linearization must be finite and > 0 (got {v})")
             }
             DecodeFault::MidAboveBase(d) => format!(
                 "the fixed decode's mid-above-base density must be finite and > 0 (got {d})"
             ),
-            DecodeFault::Anchor { anchor, contrast } => format!(
-                "the fixed decode derived a non-usable anchor ({anchor:e}) at contrast \
-                 {contrast}: the curve's exponent `contrast · (density − anchor)` is not \
+            DecodeFault::Anchor {
+                anchor,
+                linearization,
+            } => format!(
+                "the fixed decode derived a non-usable anchor ({anchor:e}) at linearization \
+                 {linearization}: the curve's exponent `linearization · (density − anchor)` is not \
                  finite, so every sample would render as exactly 0.0"
             ),
         })
@@ -481,9 +514,10 @@ mod tests {
     const PROBE_OFFSET: [f32; 3] = [-0.05, 0.02, 0.07];
 
     /// The current chain's configuration this decode reproduces: the exponential curve
-    /// at the same contrast, the same calibration, and the same reference-free
-    /// placement — its default since `pipeline_version` 6.
-    fn equivalent_legacy(offset: [f32; 3]) -> Reconstruction {
+    /// at the same slope, the same calibration, and the same reference-free placement.
+    /// At the slope [`BUNDLED_CONTRAST`] it is that chain's default since
+    /// `pipeline_version` 6; at [`LINEARIZATION`] it is this decode's default.
+    fn equivalent_legacy(offset: [f32; 3], gamma: f32) -> Reconstruction {
         Reconstruction {
             density: DensityParams {
                 scale: DENSITY_SCALE,
@@ -491,7 +525,7 @@ mod tests {
                 ..DensityParams::default()
             },
             curve: DensityCurve::Exponential(ExponentialParams {
-                gamma: CONTRAST,
+                gamma,
                 anchor: AnchorPlacement::MidAtBaseOffset(MID_ABOVE_BASE),
             }),
         }
@@ -511,20 +545,27 @@ mod tests {
         // offset add moves no sample, and at a non-zero offset the density's f32
         // rounding moves none. See the module docs for the measured split. The FMA
         // rule is witnessed by neither and has its own test below.
+        //
+        // Run at both slopes as well: this decode's default linearization, and the
+        // bundled contrast the current chain still ships — the configuration that makes
+        // that chain's default *this* decode.
         let (img, b) = (scan(), base());
-        for offset in [DENSITY_OFFSET, PROBE_OFFSET] {
-            let params = DecodeParams {
-                offset,
-                ..DecodeParams::default()
-            };
-            let (fresh, _) = decode(&img, &b, &params).unwrap();
-            let (legacy, _) = reconstruct(&img, &b, &equivalent_legacy(offset)).unwrap();
-            assert_eq!(
-                bits(fresh.rgb()),
-                bits(legacy.rgb()),
-                "the fresh decode is not bit-identical to the equivalent legacy \
-                 configuration at offset {offset:?}"
-            );
+        for gamma in [LINEARIZATION, BUNDLED_CONTRAST] {
+            for offset in [DENSITY_OFFSET, PROBE_OFFSET] {
+                let params = DecodeParams {
+                    offset,
+                    linearization: gamma,
+                    ..DecodeParams::default()
+                };
+                let (fresh, _) = decode(&img, &b, &params).unwrap();
+                let (legacy, _) = reconstruct(&img, &b, &equivalent_legacy(offset, gamma)).unwrap();
+                assert_eq!(
+                    bits(fresh.rgb()),
+                    bits(legacy.rgb()),
+                    "the fresh decode is not bit-identical to the equivalent legacy \
+                     configuration at offset {offset:?}, slope {gamma}"
+                );
+            }
         }
     }
 
@@ -563,7 +604,8 @@ mod tests {
         for (i, out) in film.rgb().iter().enumerate() {
             let c = i % 3;
             let d = -(samples[i] / BASE).log10();
-            let curve = |corrected: f32| 10f32.powf(report.contrast * (corrected - report.anchor));
+            let curve =
+                |corrected: f32| 10f32.powf(report.linearization * (corrected - report.anchor));
             let plain = curve(report.scale[c] * d + report.offset[c]);
             let fused = curve(report.scale[c].mul_add(d, report.offset[c]));
             assert_eq!(
@@ -584,21 +626,29 @@ mod tests {
     fn a_one_ulp_move_in_the_anchor_is_visible_to_that_comparison() {
         // Falsifiability for `the_fixed_decode_matches_the_equivalent_legacy_configuration`:
         // it is evidence only if the comparison can fail on the values this decode
-        // actually carries. A single
-        // ULP on `d` — the smallest change any of these parameters can take — must
-        // red it.
+        // actually carries. The smallest move of `d` that moves the resolved anchor
+        // must red it — and that is at most two ULP of `d`: at the linearization the
+        // anchor (≈1.03) sits a binade above `d` (0.62), so its ULP is twice as coarse
+        // and a single-ULP move of `d` can round away in the sum.
         let (img, b) = (scan(), base());
-        let shipped = decode(&img, &b, &DecodeParams::default()).unwrap().0;
-        let moved = decode(
-            &img,
-            &b,
-            &DecodeParams {
-                anchor: AnchorRule::MidAboveBase(MID_ABOVE_BASE.next_up()),
+        let shipped_params = DecodeParams::default();
+        let shipped_anchor = shipped_params.anchor.anchor(shipped_params.linearization);
+        let mut d = MID_ABOVE_BASE;
+        let mut steps = 0;
+        let moved_params = loop {
+            d = d.next_up();
+            steps += 1;
+            let p = DecodeParams {
+                anchor: AnchorRule::MidAboveBase(d),
                 ..DecodeParams::default()
-            },
-        )
-        .unwrap()
-        .0;
+            };
+            if p.anchor.anchor(p.linearization) != shipped_anchor {
+                break p;
+            }
+        };
+        assert!(steps <= 2, "{steps} ULP of `d` before the anchor moved");
+        let shipped = decode(&img, &b, &shipped_params).unwrap().0;
+        let moved = decode(&img, &b, &moved_params).unwrap().0;
         assert_ne!(bits(shipped.rgb()), bits(moved.rgb()));
     }
 
@@ -616,7 +666,7 @@ mod tests {
                 ..DensityParams::default()
             },
             curve: DensityCurve::Exponential(ExponentialParams {
-                gamma: CONTRAST,
+                gamma: LINEARIZATION,
                 anchor: AnchorPlacement::MidAtBaseOffset(0.5),
             }),
         };
@@ -625,32 +675,54 @@ mod tests {
     }
 
     #[test]
-    fn the_current_chains_default_is_this_decode() {
+    fn the_current_chains_default_is_this_decode_at_the_bundled_contrast() {
         // Since `pipeline_version` 6 the current chain's default reconstruction reads
         // its curve constants from here, so the equality tests above describe *the*
-        // default rather than one configuration of it. This pins the part those
-        // constants do not reach: the offset default and the whole shape.
-        assert_eq!(Reconstruction::default(), equivalent_legacy(DENSITY_OFFSET));
+        // default rather than one configuration of it. That chain has no look stage, so
+        // it still carries the whole bundled `gamma` rather than the linearization —
+        // which is what keeps the split from moving a pixel there. This pins the part
+        // those constants do not reach: the offset default and the whole shape.
+        assert_eq!(
+            Reconstruction::default(),
+            equivalent_legacy(DENSITY_OFFSET, BUNDLED_CONTRAST)
+        );
         assert_eq!(SCAN_FLOOR, density::SCAN_EPSILON);
     }
 
     #[test]
+    fn the_scale_convention_pins_red_to_one() {
+        // Only the products `linearization · scale_c` reach the curve, so the two
+        // factors are one measurement split by a convention. Red carries the
+        // linearization alone; move it off 1 and the same products are spelled a
+        // second way, which a later retune of either factor would then correct twice.
+        assert_eq!(DENSITY_SCALE[0], 1.0);
+        assert_eq!(DecodeParams::default().scale[0], 1.0);
+    }
+
+    #[test]
     fn the_anchor_is_the_documented_number() {
-        // 0.62 + 0.745/2.0. Confirmed against the binary during `anchor-spike`, which
-        // read `anchor_value: 0.99236375` — the number `docs/spike/white-placement.md`
-        // reasons from, so a change to either constant must land here first.
+        // 0.62 + 0.745/1.8 at the linearization. Before the split the decode ran at the
+        // bundled 2.0, where `anchor-spike` read `anchor_value: 0.99236375` off the
+        // binary — the number `docs/spike/white-placement.md` reasons from. Both are
+        // pinned, so a change to any of the three constants lands here first.
         let report = decode(&scan(), &base(), &DecodeParams::default())
             .unwrap()
             .1;
-        assert_eq!(report.anchor, 0.992_363_75);
+        assert_eq!(report.anchor, 1.033_737_5);
         assert_eq!(report.anchor_rule, "mid-at-base-offset");
+        let bundled = AnchorRule::MidAboveBase(MID_ABOVE_BASE).anchor(BUNDLED_CONTRAST);
+        assert_eq!(bundled, 0.992_363_75);
 
         // And where that sits against the *other* white in the glossary: the
-        // datasheets' diffuse white, `d + 0.36`. The gap is ~0.08 stops, which is the
-        // measured fact behind "nc already anchors at diffuse white, spelled as a mid
-        // anchor" — not an equality, and the two must not be conflated.
+        // datasheets' diffuse white, `d + 0.36`. At the bundled contrast — what the
+        // chain renders once the look's default contrast is applied — the gap is ~0.08
+        // stops, the measured fact behind "nc anchors at diffuse white, spelled as a mid
+        // anchor" — not an equality, and the two must not be conflated. At the
+        // linearization alone the decode's own anchor is further off, which is why
+        // `DIFFUSE_WHITE` is a property of the graded image, not of this output.
         let diffuse_white = MID_ABOVE_BASE + REFERENCE_MID_TO_WHITE_DELTA;
-        assert!((report.anchor - diffuse_white).abs() < 0.02);
+        assert!((bundled - diffuse_white).abs() < 0.02);
+        assert!((report.anchor - diffuse_white).abs() > 0.05);
     }
 
     #[test]
@@ -666,7 +738,7 @@ mod tests {
             ..DecodeParams::default()
         };
         let c = decode(&img, &b, &shifted).unwrap().0;
-        let gain = 10f32.powf(-CONTRAST * 0.1);
+        let gain = 10f32.powf(-LINEARIZATION * 0.1);
         for (x, y) in a.rgb().iter().zip(c.rgb()) {
             if x.is_finite() && *x > 0.0 {
                 assert!(
@@ -712,7 +784,7 @@ mod tests {
         for (params, what) in [
             (
                 DecodeParams {
-                    contrast: f32::from_bits(1),
+                    linearization: f32::from_bits(1),
                     ..DecodeParams::default()
                 },
                 "the anchor",
@@ -737,10 +809,10 @@ mod tests {
         for (params, needle) in [
             (
                 DecodeParams {
-                    contrast: 0.0,
+                    linearization: 0.0,
                     ..DecodeParams::default()
                 },
-                "contrast",
+                "linearization",
             ),
             (
                 DecodeParams {

@@ -225,7 +225,7 @@ mod tests {
     fn the_default_reports_its_base_derived_anchor() {
         let (_, report) = reconstruct(&image(), &base(), &Reconstruction::default()).unwrap();
         let expected =
-            fixed::MID_ABOVE_BASE + crate::types::MID_GREY_OUTPUT_DECADES / fixed::CONTRAST;
+            fixed::MID_ABOVE_BASE + crate::types::MID_GREY_OUTPUT_DECADES / fixed::BUNDLED_CONTRAST;
         assert_eq!(report.curve_anchor, Some(expected));
         assert_eq!(report.balance_range, None);
     }

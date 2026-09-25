@@ -1604,9 +1604,14 @@ the design in `docs/design-update.md`:
   `mid-at-base-offset` is the only rule; `d = 0.62` is hand-frozen as
   `generic-c41`'s mid aim, rounded, and never read from a datasheet at runtime.
   Which white the anchor references is `nf-calibration/anchor-comparison`'s
-- [ ] [Split `gamma` into calibration and
-  look](tasks/nf-reconstruction/gamma-split.md) — the film-linearization half
-  stays; print contrast becomes a look knob
+- [x] [Split `gamma` into calibration and
+  look](tasks/nf-reconstruction/gamma-split.md) — **done 2026-09-24.** Under
+  `--new-flow` the decode's slope is `reconstruction.linearization` (1.8,
+  `--density-gamma`) and print contrast is `look.contrast` (`--contrast`, default
+  2.0/1.8, pivoted at mid-grey, before highlight desaturation); a neutral renders where
+  the single 2.0 did, saturated colour moves slightly. The pre-split
+  `reconstruction.contrast` is refused by name. The current chain keeps the bundled 2.0,
+  so no pixel or fingerprint moved there
 - [ ] [Warn when the curve's endpoint is
   unreachable](tasks/nf-reconstruction/curve-endpoint-warning.md) — supersedes
   `algo/curve-endpoint-validation`: read the endpoint off the renderer's own
@@ -1660,8 +1665,9 @@ the design in `docs/design-update.md`:
   anchor then left the operator inert) and behind a roll-level white balance,
   without which its saturation band cannot tell a cast white from skin. **Done
   2026-09-24**: on by default at 0.8, band `0.015 → 0.025` on ACEScg
-- [ ] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
-  `gamma`; supersedes `algo/contrast-latitude-spike`
+- [~] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
+  `gamma`; supersedes `algo/contrast-latitude-spike`. The knob itself landed with
+  `gamma-split`; what remains is its default and its overlap with the grade
 - [ ] [Re-express the `--preset` bundles](tasks/nf-look/look-presets.md) —
   every current `--preset` names a retiring curve and an exposure calibrated
   to the old chain

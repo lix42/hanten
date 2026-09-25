@@ -40,14 +40,32 @@ Two things make this less mechanical than it sounds:
 
 ## How to Verify
 
-- With the look contrast at its identity value, a neutral patch renders where it does
-  today at `gamma = 2.0`; any residual difference is stated and explained rather than
-  tuned away.
+- With the look contrast at its **default** value (`2.0 / 1.8`), a neutral patch renders
+  where it did at `gamma = 2.0`; any residual difference is stated and explained rather
+  than tuned away. (Not at its identity: once the decode carries only the
+  linearization, unity renders flatter than today by design.)
 - A test pins the over-parameterization convention (`scale_r = 1`), so a later change
   to either factor cannot silently double-correct.
 - Changing the look contrast leaves the decode's output — `film-master` — untouched.
   That is the whole point of the split and is the falsifiable check.
 - The four CI gates pass.
+
+## Outcome (2026-09-24)
+
+- **Decode:** `reconstruction.linearization`, default 1.8 (`algo::fixed::LINEARIZATION`),
+  still `--density-gamma`. The pre-split `reconstruction.contrast` is refused by name at
+  every value, with the `look.contrast` that keeps it. The current chain keeps the
+  bundled 2.0 (`algo::fixed::BUNDLED_CONTRAST`) until `nf-core/default-flip`, so no
+  default pixel moved there and no `pipeline_version` bump.
+- **Look:** `look.contrast` / `--contrast`, `0.18 · (x / 0.18)^k` per ACEScg channel,
+  default `2.0 / 1.8`, `1` the identity; it runs before highlight desaturation, whose
+  band now divides by linearization × contrast.
+- **Ownership of the product:** the decode owns every per-channel exponent
+  `linearization · scale_c` (convention `scale_r = 1`, pinned by a test); the look owns
+  one factor shared by all three channels.
+- **Measured:** a neutral at the defaults matches the bundled decode to 3.6e-7 relative;
+  a pixel ±0.25 density off neutral differs by up to 2.5% on one channel, because the
+  power runs after the 3×3.
 
 ## Dependencies
 

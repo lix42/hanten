@@ -961,9 +961,14 @@ impl Default for ExponentialParams {
     /// two chains cannot drift apart. `algo::fixed`'s
     /// `the_fixed_decode_matches_the_equivalent_legacy_configuration` pins that this
     /// curve renders it bit-identically.
+    ///
+    /// The slope is the **bundled** `gamma` (`algo::fixed::BUNDLED_CONTRAST`), not the
+    /// new chain's linearization: this chain has no look stage to carry the print
+    /// contrast `nf-reconstruction/gamma-split` moved there, so it keeps both halves in
+    /// one number until `nf-core/default-flip` retires it.
     fn default() -> Self {
         Self {
-            gamma: crate::algo::fixed::CONTRAST,
+            gamma: crate::algo::fixed::BUNDLED_CONTRAST,
             anchor: AnchorPlacement::MidAtBaseOffset(crate::algo::fixed::MID_ABOVE_BASE),
         }
     }
