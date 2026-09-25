@@ -86,7 +86,9 @@ impl GainRatios {
 /// `≥ 0`. Fit gamut writes no meaningful negative, but where two channels tie on the
 /// cube's black face the one not assigned the boundary can land an ulp below zero
 /// (about `-1e-17`), so refusing negatives would fail legitimate pairs. A non-finite
-/// sample is refused, naming the lowest pixel: the chain never writes one.
+/// sample is refused, naming the lowest pixel: the chain never writes one. So is a gain
+/// too large for an `f32`: the alternate is not clamped to a peak here (the
+/// destination's job), so a finite but huge HDR sample over a dark base can overflow.
 #[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/preset-set`)
 pub fn between(sdr: &LinearImage, hdr: &LinearImage, offset: f32) -> Result<GainRatios> {
     if !(offset.is_finite() && offset > 0.0) {
@@ -107,9 +109,16 @@ pub fn between(sdr: &LinearImage, hdr: &LinearImage, offset: f32) -> Result<Gain
                 )));
             }
         }
-        Ok(std::array::from_fn(|c| {
+        let gain: [f32; 3] = std::array::from_fn(|c| {
             ((f64::from(alternate[c].max(0.0)) + o) / (stored(base[c]) + o)) as f32
-        }))
+        });
+        if !gain.iter().all(|g| g.is_finite()) {
+            return Err(NcError::Other(format!(
+                "a gain map's gain overflows at pixel {index}: HDR {alternate:?} over SDR \
+                 {base:?}"
+            )));
+        }
+        Ok(gain)
     })?;
     // `min` and `max` are exact, so their fold order cannot move the result.
     let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
@@ -225,6 +234,22 @@ mod tests {
             let msg = err.message();
             assert!(msg.contains(name) && msg.contains("pixel 1"), "{msg}");
         }
+    }
+
+    #[test]
+    fn a_gain_too_large_for_f32_is_refused_naming_the_pixel() {
+        // Both samples finite, the ratio not: the invariant is on the gain, not only on
+        // its inputs.
+        let (sdr, hdr) = (
+            [0.5, 0.5, 0.5, 0.0, 0.5, 0.5],
+            [0.5, 0.5, 0.5, f32::MAX, 0.5, 0.5],
+        );
+        let err = between(&image(&sdr), &image(&hdr), OFFSET).unwrap_err();
+        let msg = err.message();
+        assert!(
+            msg.contains("overflows") && msg.contains("pixel 1"),
+            "{msg}"
+        );
     }
 
     #[test]
