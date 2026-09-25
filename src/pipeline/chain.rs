@@ -24,30 +24,78 @@
 //! allocation" claim would be false at exactly the point it matters most. What each
 //! stage then *does* with the buffer it owns is `nf-core/buffer-strategy`'s to
 //! settle.
+//!
+//! # The SDR/HDR branch contract
+//!
+//! ```text
+//! scene correction → look ─┬─ fit range(peak 1) → fit gamut   SDR
+//!      (shared)            └─ fit range(peak P) → fit gamut   HDR
+//! ```
+//!
+//! **The chain splits after the look ([`GradedImage`]) and the branches differ in one
+//! argument: the display's peak.** A gain map needs the two renditions to agree below
+//! diffuse white ([`DIFFUSE_WHITE`]), so every stage that shapes contrast or colour
+//! sits above the split, and so does fit range's headroom ([`SharedParams`]). The
+//! types carry it: nothing above the split can read a [`DisplayTarget`], and
+//! [`render_pair`] cannot set the headroom per branch.
+//!
+//! What each branch may differ in, measured on the graded image's ACEScg luminance:
+//!
+//! - **Below diffuse white, only where the SDR cube binds.** Fit range agrees bit for
+//!   bit there (its lift is zero below white). Fit gamut's ceiling is the peak, so a
+//!   saturated colour with one channel above `1` is mapped onto the SDR cube's top and
+//!   left alone in HDR. Everywhere else the two renditions are bit-identical. The
+//!   difference is real colour the HDR display can show, and a per-channel gain map
+//!   carries it; forcing agreement would mean mapping HDR into the SDR cube.
+//! - **Above diffuse white, freely**: fit range lifts toward the peak there.
+//!
+//! **A single-rendition destination goes through the same split**: [`render`] is one
+//! branch of [`render_pair`], rendered by the same function, so skipping a branch
+//! skips a call, not a code path. The pair costs one full-frame copy of the graded
+//! image.
+//!
+//! [`DIFFUSE_WHITE`]: crate::algo::fixed::DIFFUSE_WHITE
 
-use crate::pipeline::fit_gamut::{self, DisplayReferredImage, FitGamutParams};
-use crate::pipeline::fit_range::{self, FitRange, FitRangeParams};
-use crate::pipeline::look::{self, LookParams, LookSection};
+use crate::pipeline::fit_gamut::{self, DestinationGamut, DisplayReferredImage, FitGamutParams};
+use crate::pipeline::fit_range::{self, DisplayPeak, FitRange, FitRangeParams};
+use crate::pipeline::look::{self, GradedImage, LookParams, LookSection};
 use crate::pipeline::scene_correction::{self, SceneCorrection, SceneCorrectionParams};
 use crate::pipeline::working_space::AcesCgImage;
 use crate::types::Result;
 
-/// Every stage's parameters, in chain order.
+/// Everything every rendition of a frame shares: the stages above the branch point,
+/// and fit range's headroom.
 ///
-/// Not a recipe type, though two of its four fields are: `scene_correction` and `look`
-/// are top-level sections of the new chain's recipe (`crate::recipe::Recipe`) as they
-/// stand, while fit range's peak and fit gamut's target are the destination's, so the
-/// recipe's `fit_range` and `fit_gamut` sections are their own types and
-/// [`crate::recipe::Recipe::chain_params`] adds the destination's half. These structs
-/// exist so a stage's signature is settled now and does not change when its knobs
-/// arrive. No `Default`, because neither [`FitRangeParams`] nor [`FitGamutParams`] has
-/// one: the destination states its peak and its gamut.
+/// **The headroom is here, not in [`DisplayTarget`], on purpose.** Reinhard's white
+/// point `W = 2^headroom_stops` shapes every luminance, the midtones included, so two
+/// renditions at different headrooms disagree below diffuse white and no gain map can
+/// pair them. Only the peak may differ, and it cannot act below white.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ChainParams {
+pub struct SharedParams {
     pub scene_correction: SceneCorrectionParams,
     pub look: LookParams,
-    pub fit_range: FitRangeParams,
-    pub fit_gamut: FitGamutParams,
+    /// Fit range's headroom in stops (the recipe's `fit_range.headroom_stops`).
+    pub headroom_stops: f32,
+}
+
+/// What a destination states about the display it renders for: the peak fit range
+/// compresses against, and the gamut fit gamut maps into. Never a recipe key.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayTarget {
+    pub peak: DisplayPeak,
+    pub gamut: DestinationGamut,
+}
+
+/// One rendition's parameters: the shared half and the destination's half.
+///
+/// Not a recipe type, though parts of it are: `scene_correction`, `look` and the
+/// headroom come from the new chain's recipe (`crate::recipe::Recipe`), while the
+/// [`DisplayTarget`] is the destination's, so [`crate::recipe::Recipe::chain_params`]
+/// adds it. No `Default`, because no destination is implied.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChainParams {
+    pub shared: SharedParams,
+    pub target: DisplayTarget,
 }
 
 /// What [`render`] produced: the display-referred image, and what the chain applied
@@ -55,8 +103,8 @@ pub struct ChainParams {
 pub struct Rendered {
     pub image: DisplayReferredImage,
     /// Each stage, in the order `render` ran it, with what it applied — the report's
-    /// account of the chain. Built inside `render` so a stage inserted, moved or
-    /// renamed there cannot leave the report listing the old chain, and read off the
+    /// account of the chain. Built inside this module so a stage inserted, moved or
+    /// renamed here cannot leave the report listing the old chain, and read off the
     /// values each stage applied, so an operation that moved no pixel is reported as
     /// `"identity"`.
     pub applied: [(&'static str, &'static str); 4],
@@ -68,7 +116,16 @@ pub struct Rendered {
     pub fit_range: FitRange,
 }
 
-/// Render an [`AcesCgImage`] through the new chain.
+/// An SDR and an HDR rendition of one frame, split from one graded image — what a
+/// gain map is built from. Each carries the full account of its own render; the
+/// shared stages' entries are identical by construction.
+#[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/preset-set`)
+pub struct RenderedPair {
+    pub sdr: Rendered,
+    pub hdr: Rendered,
+}
+
+/// Render an [`AcesCgImage`] through the new chain, for one destination.
 ///
 /// **Today this is scene correction's per-channel gains, the look's highlight
 /// desaturation, fit range's luminance operator, and the destination's 3×3 with the
@@ -87,31 +144,165 @@ pub struct Rendered {
 /// signature, this function's, every call site and every test here. The cost for a
 /// stage that cannot fail is an `Ok` wrapper.
 ///
-/// The single-branch shape is deliberate. The SDR/HDR split belongs below the
-/// look — a gain map requires the two renditions to agree below diffuse white —
-/// but where exactly, and whether a single-rendition destination goes through the
-/// branch point at all, is `nf-display-stages/branch-contract`'s open question.
-/// It splits *from* [`GradedImage`], whichever way it lands.
-///
-/// [`GradedImage`]: crate::pipeline::look::GradedImage
+/// A single-rendition destination goes through the same branch point as a pair: it
+/// is [`render_pair`] with one branch, not a second code path (see the module docs).
 pub fn render(image: AcesCgImage, params: &ChainParams) -> Result<Rendered> {
-    let (corrected, scene_correction) = scene_correction::apply(image, &params.scene_correction)?;
-    let graded = look::apply(corrected, &params.look)?;
-    let fitted = fit_range::apply(graded, &params.fit_range)?;
-    let image = fit_gamut::apply(fitted, &params.fit_gamut)?;
-    let fit_range = params.fit_range.resolved();
+    let (graded, scene_correction) = grade(image, &params.shared)?;
+    display(graded, scene_correction, &params.shared, params.target)
+}
+
+/// Render an SDR and an HDR rendition of one frame, for a gain map: one graded image,
+/// split once, and each branch rendered by the same function with its own peak.
+///
+/// **The contract** (see the module docs): below diffuse white the two are identical
+/// wherever the SDR cube leaves a pixel alone, and differ only where its ceiling
+/// binds. Both renditions share one gamut, because a gain map is a ratio between them.
+///
+/// Costs one full-frame copy of the graded image — the branch point's only
+/// allocation — on top of what [`render`] holds.
+#[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/preset-set`)
+pub fn render_pair(
+    image: AcesCgImage,
+    shared: &SharedParams,
+    gamut: DestinationGamut,
+    hdr_peak: DisplayPeak,
+) -> Result<RenderedPair> {
+    let (graded, scene_correction) = grade(image, shared)?;
+    let hdr_source = graded.split();
+    let branch = |peak| DisplayTarget { peak, gamut };
+    Ok(RenderedPair {
+        sdr: display(graded, scene_correction, shared, branch(DisplayPeak::SDR))?,
+        hdr: display(hdr_source, scene_correction, shared, branch(hdr_peak))?,
+    })
+}
+
+/// Above the branch point: scene correction, then the look. Nothing here may read the
+/// destination — it has no way to.
+fn grade(image: AcesCgImage, shared: &SharedParams) -> Result<(GradedImage, SceneCorrection)> {
+    let (corrected, scene_correction) = scene_correction::apply(image, &shared.scene_correction)?;
+    Ok((look::apply(corrected, &shared.look)?, scene_correction))
+}
+
+/// Below the branch point: fit range, then fit gamut, against one display.
+fn display(
+    graded: GradedImage,
+    scene_correction: SceneCorrection,
+    shared: &SharedParams,
+    target: DisplayTarget,
+) -> Result<Rendered> {
+    let fit_range_params = FitRangeParams {
+        headroom_stops: shared.headroom_stops,
+        peak: target.peak,
+    };
+    let fit_gamut_params = FitGamutParams {
+        target: target.gamut,
+    };
+    let fitted = fit_range::apply(graded, &fit_range_params)?;
+    let image = fit_gamut::apply(fitted, &fit_gamut_params)?;
+    let fit_range = fit_range_params.resolved();
     Ok(Rendered {
         image,
         applied: [
             ("scene_correction", scene_correction.applied()),
-            ("look", params.look.applied()),
+            ("look", shared.look.applied()),
             ("fit_range", fit_range.operator),
-            ("fit_gamut", params.fit_gamut.applied()),
+            ("fit_gamut", fit_gamut_params.applied()),
         ],
         scene_correction,
-        look: params.look.section,
+        look: shared.look.section,
         fit_range,
     })
+}
+
+/// The branch contract as a check over one rendered pair — shared by the unit tests
+/// and the real-frame probe (`pipeline::branch_probe`).
+#[cfg(test)]
+pub(in crate::pipeline) mod contract {
+    use super::{SharedParams, grade};
+    use crate::algo::fixed::DIFFUSE_WHITE;
+    use crate::pipeline::colorimetry::dot;
+    use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
+    use crate::pipeline::fit_gamut::{DestinationGamut, radial_to_boundary};
+    use crate::pipeline::fit_range::DisplayPeak;
+    use crate::pipeline::working_space::AcesCgImage;
+
+    /// The graded pixels `shared` produces from `image` — what both branches start
+    /// from, and what [`check`] reads "below white" off.
+    pub fn graded(image: AcesCgImage, shared: &SharedParams) -> Vec<f32> {
+        grade(image, shared)
+            .unwrap()
+            .0
+            .into_buffer()
+            .into_linear()
+            .rgb
+    }
+
+    /// How a pair's pixels below diffuse white sit against the contract.
+    #[derive(Debug, Default)]
+    pub struct Agreement {
+        /// Pixels whose graded luminance is at or below diffuse white.
+        pub below_white: usize,
+        /// …of which the two renditions are bit-identical.
+        pub identical: usize,
+        /// …of which they differ, and the SDR pixel is **exactly** the HDR pixel
+        /// mapped against the SDR ceiling: the one permitted difference.
+        pub sdr_bound: usize,
+        /// …of which they differ with the HDR pixel on its own cube's boundary too, so
+        /// the SDR pixel cannot be re-derived from it, and the SDR pixel reaches its
+        /// cube's top (a channel at or above `1`). Permitted, but checked only loosely,
+        /// so a test states how many it expects.
+        pub both_bound: usize,
+        /// …of which they differ for any other reason: the contract is broken. Pixel
+        /// indices.
+        pub violations: Vec<usize>,
+    }
+
+    /// Check `sdr` and `hdr` (display-referred, in `gamut`, the HDR one fitted to
+    /// `peak`) against the contract, with `graded` the ACEScg pixels both came from.
+    ///
+    /// "Below white" is read exactly as fit range reads it — the ACEScg luminance of
+    /// its input at or under [`DIFFUSE_WHITE`] — so the check cannot drift from the
+    /// operator by a rounding. Below white fit range's output is the same for both
+    /// peaks, so where the HDR cube leaves a pixel alone the HDR pixel **is** fit
+    /// gamut's pre-map value, and the SDR pixel must be exactly that value mapped
+    /// against the SDR ceiling. That ceiling is `max(1, Y)` in the *destination's*
+    /// luminance, which can exceed `1` where the ACEScg luminance does not: a saturated
+    /// blue at ACEScg `0.999` reads `1.012` in Display P3 and renders neutral in SDR.
+    pub fn check(
+        graded: &[f32],
+        sdr: &[f32],
+        hdr: &[f32],
+        gamut: DestinationGamut,
+        peak: DisplayPeak,
+    ) -> Agreement {
+        assert!(graded.len() == sdr.len() && sdr.len() == hdr.len());
+        let luma = gamut.luma();
+        let bits = |px: [f32; 3]| px.map(f32::to_bits);
+        let mut out = Agreement::default();
+        let pixels = graded
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(sdr.as_chunks::<3>().0)
+            .zip(hdr.as_chunks::<3>().0);
+        for (index, ((g, s), h)) in pixels.enumerate() {
+            if dot(*g, ACESCG_LUMA) > DIFFUSE_WHITE {
+                continue;
+            }
+            out.below_white += 1;
+            let hdr_bound = h.iter().any(|v| *v <= 0.0 || *v >= peak.value());
+            if bits(*s) == bits(*h) {
+                out.identical += 1;
+            } else if !hdr_bound && bits(*s) == bits(radial_to_boundary(*h, dot(luma, *h), 1.0)) {
+                out.sdr_bound += 1;
+            } else if hdr_bound && s.iter().any(|v| *v >= 1.0) {
+                out.both_bound += 1;
+            } else {
+                out.violations.push(index);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -120,8 +311,8 @@ mod tests {
     use crate::algo::{FilmRgbImage, reconstruct};
     use crate::pipeline::colorimetry::dot;
     use crate::pipeline::colorimetry::pinned::{ACESCG_TO_DISPLAY_P3, DISPLAY_P3_LUMA};
-    use crate::pipeline::fit_gamut::DestinationGamut;
-    use crate::pipeline::fit_range::{DisplayPeak, RangeFittedImage};
+    use crate::pipeline::fit_range::RangeFittedImage;
+    use crate::pipeline::gain_ratio;
     use crate::pipeline::scene_correction::WhiteBalance;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
     use crate::types::{
@@ -133,14 +324,14 @@ mod tests {
     /// wiring and the destination matrix rather than the operator.
     fn params() -> ChainParams {
         ChainParams {
-            scene_correction: SceneCorrectionParams::default(),
-            look: LookParams::off(),
-            fit_range: FitRangeParams {
+            shared: SharedParams {
+                scene_correction: SceneCorrectionParams::default(),
+                look: LookParams::off(),
                 headroom_stops: 0.0,
-                peak: DisplayPeak::SDR,
             },
-            fit_gamut: FitGamutParams {
-                target: DestinationGamut::DisplayP3,
+            target: DisplayTarget {
+                peak: DisplayPeak::SDR,
+                gamut: DestinationGamut::DisplayP3,
             },
         }
     }
@@ -148,8 +339,16 @@ mod tests {
     /// [`params`] with fit range at the recipe's default headroom — what a run gets.
     fn shipped_params() -> ChainParams {
         let mut p = params();
-        p.fit_range.headroom_stops = crate::types::DEFAULT_HEADROOM_STOPS;
+        p.shared.headroom_stops = crate::types::DEFAULT_HEADROOM_STOPS;
         p
+    }
+
+    /// Fit range's parameters as `display` builds them from `p`.
+    fn fit_range_params(p: &ChainParams) -> FitRangeParams {
+        FitRangeParams {
+            headroom_stops: p.shared.headroom_stops,
+            peak: p.target.peak,
+        }
     }
 
     /// An `AcesCgImage` whose *film RGB* input was exactly `rgb` — including a
@@ -169,11 +368,11 @@ mod tests {
     /// The chain up to fit range with every stage at its identity.
     fn through_fit_range(image: AcesCgImage) -> RangeFittedImage {
         let p = params();
-        let corrected = scene_correction::apply(image, &p.scene_correction)
+        let corrected = scene_correction::apply(image, &p.shared.scene_correction)
             .unwrap()
             .0;
-        let graded = look::apply(corrected, &p.look).unwrap();
-        fit_range::apply(graded, &p.fit_range).unwrap()
+        let graded = look::apply(corrected, &p.shared.look).unwrap();
+        fit_range::apply(graded, &fit_range_params(&p)).unwrap()
     }
 
     /// The expected output of fit gamut, written out independently of the stage:
@@ -302,11 +501,11 @@ mod tests {
         );
         let input = aces.rgb().to_vec();
         let p = shipped_params();
-        let corrected = scene_correction::apply(aces, &p.scene_correction)
+        let corrected = scene_correction::apply(aces, &p.shared.scene_correction)
             .unwrap()
             .0;
-        let graded = look::apply(corrected, &p.look).unwrap();
-        let out = fit_range::apply(graded, &p.fit_range)
+        let graded = look::apply(corrected, &p.shared.look).unwrap();
+        let out = fit_range::apply(graded, &fit_range_params(&p))
             .unwrap()
             .into_buffer()
             .into_linear()
@@ -452,12 +651,18 @@ mod tests {
         let aces = aces_from(1, 1, &[0.2, 0.4, 0.6], None);
         let p = params();
 
-        let corrected = scene_correction::apply(aces, &p.scene_correction)
+        let corrected = scene_correction::apply(aces, &p.shared.scene_correction)
             .unwrap()
             .0;
-        let graded = look::apply(corrected, &p.look).unwrap();
-        let fitted = fit_range::apply(graded, &p.fit_range).unwrap();
-        let out: DisplayReferredImage = fit_gamut::apply(fitted, &p.fit_gamut).unwrap();
+        let graded = look::apply(corrected, &p.shared.look).unwrap();
+        let fitted = fit_range::apply(graded, &fit_range_params(&p)).unwrap();
+        let out: DisplayReferredImage = fit_gamut::apply(
+            fitted,
+            &FitGamutParams {
+                target: p.target.gamut,
+            },
+        )
+        .unwrap();
 
         assert_eq!(out.into_parts().0.width, 1);
     }
@@ -482,7 +687,7 @@ mod tests {
             .map(|(i, v)| v * gains[i % 3])
             .collect();
         let mut p = params();
-        p.scene_correction.white_balance = WhiteBalance::Explicit(gains);
+        p.shared.scene_correction.white_balance = WhiteBalance::Explicit(gains);
 
         let rendered = render(aces, &p).unwrap();
         let (out, _) = rendered.image.into_parts();
@@ -511,7 +716,8 @@ mod tests {
         // the construction sites too: the tuple constructor may appear exactly twice —
         // the declaration and `apply` — and never spelled `Self(…)`. The `Self(` check
         // is textual over the whole module, so a helper newtype there must be built by
-        // name (`DisplayPeak(1.0)`), not `Self(..)`.
+        // name (`DisplayPeak(1.0)`), not `Self(..)`. `GradedImage::split` is the one
+        // counted exception: it copies an image `apply` minted.
         for (source, name, declaration) in [
             (
                 include_str!("scene_correction.rs"),
@@ -538,9 +744,12 @@ mod tests {
                 source.contains(declaration),
                 "the payload field must stay private to its stage: `{declaration}`"
             );
+            // `GradedImage` has one more: `split`, the branch point's copy of an image
+            // the stage already minted.
+            let expected = if name == "GradedImage" { 3 } else { 2 };
             assert_eq!(
                 source.matches(&format!("{name}(")).count(),
-                2,
+                expected,
                 "`{name}` must be minted in one place only: its declaration and `apply`"
             );
             assert!(
@@ -548,5 +757,267 @@ mod tests {
                 "`{name}`'s module must not mint one through `Self(…)` either"
             );
         }
+    }
+
+    // --- the branch contract ---------------------------------------------------
+
+    /// An HDR display's peak: 1000 nits over 203-nit reference white.
+    fn hdr_peak() -> DisplayPeak {
+        DisplayPeak::new(1000.0 / 203.0).unwrap()
+    }
+
+    /// Shipped-like shared parameters with every pre-branch stage acting: a white
+    /// balance, an exposure, the default look and the default headroom.
+    fn shared_acting() -> SharedParams {
+        SharedParams {
+            scene_correction: SceneCorrectionParams {
+                white_balance: WhiteBalance::Explicit([1.1, 1.0, 0.9]),
+                exposure: 0.25,
+            },
+            look: LookParams {
+                section: LookSection::default(),
+                linearization: crate::algo::fixed::LINEARIZATION,
+            },
+            headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
+        }
+    }
+
+    /// A film-RGB grid from deep shadow to far past white on every channel
+    /// independently: neutrals, near-neutrals the look reaches, saturated colours with
+    /// one channel over `1` at a luminance under white, and highlights.
+    fn grid() -> AcesCgImage {
+        const LEVELS: [f32; 10] = [0.0, 0.01, 0.05, 0.18, 0.45, 0.8, 0.95, 1.3, 2.0, 5.0];
+        let rgb: Vec<f32> = LEVELS
+            .iter()
+            .flat_map(|&r| {
+                LEVELS
+                    .iter()
+                    .flat_map(move |&g| LEVELS.iter().flat_map(move |&b| [r, g, b]))
+            })
+            .collect();
+        aces_from((rgb.len() / 3) as u32, 1, &rgb, None)
+    }
+
+    fn pixels_of(rendered: Rendered) -> LinearImage {
+        rendered.image.into_parts().0
+    }
+
+    #[test]
+    fn the_pair_agrees_below_white_except_where_the_sdr_cube_binds() {
+        // At the shipped headroom, and at zero, where fit range is the identity and
+        // pixels reach fit gamut at luminance near white.
+        for stops in [crate::types::DEFAULT_HEADROOM_STOPS, 0.0] {
+            let mut shared = shared_acting();
+            shared.headroom_stops = stops;
+            pair_agrees_below_white(&shared);
+        }
+    }
+
+    fn pair_agrees_below_white(shared: &SharedParams) {
+        let shared = shared.clone();
+        let graded = contract::graded(grid(), &shared);
+        let pair = render_pair(grid(), &shared, DestinationGamut::DisplayP3, hdr_peak()).unwrap();
+        let (sdr, hdr) = (pixels_of(pair.sdr), pixels_of(pair.hdr));
+
+        let agreement = contract::check(
+            &graded,
+            &sdr.rgb,
+            &hdr.rgb,
+            DestinationGamut::DisplayP3,
+            hdr_peak(),
+        );
+        assert!(
+            agreement.violations.is_empty(),
+            "{} of {} below-white pixels differ without the SDR cube binding, first {:?}",
+            agreement.violations.len(),
+            agreement.below_white,
+            &agreement.violations[..agreement.violations.len().min(5)]
+        );
+        // Not vacuous: both kinds of below-white pixel are in the grid, and so are
+        // pixels above white, where the branches are free to differ and do.
+        assert!(
+            agreement.identical > 100 && agreement.sdr_bound > 0,
+            "{agreement:?}"
+        );
+        // Every difference is re-derived exactly from the HDR pixel: none needs the
+        // loose rule for a pixel both cubes bind.
+        assert_eq!(agreement.both_bound, 0, "{agreement:?}");
+        let differing_samples = sdr
+            .rgb
+            .iter()
+            .zip(&hdr.rgb)
+            .filter(|(s, h)| s.to_bits() != h.to_bits())
+            .count();
+        assert!(
+            differing_samples > 3 * agreement.sdr_bound,
+            "only {differing_samples} samples differ in all, against {} SDR-bound \
+             below-white pixels",
+            agreement.sdr_bound
+        );
+    }
+
+    #[test]
+    fn the_contract_check_fails_when_the_headroom_is_set_per_branch() {
+        // Falsifiability: the headroom shapes the midtones, which is why it is shared.
+        // Two renders at different headrooms (which `render_pair` cannot express) break
+        // the contract far below white, and the check must say so.
+        let shared = shared_acting();
+        let graded = contract::graded(grid(), &shared);
+        let sdr = pixels_of(
+            render(
+                grid(),
+                &ChainParams {
+                    shared: shared.clone(),
+                    target: DisplayTarget {
+                        peak: DisplayPeak::SDR,
+                        gamut: DestinationGamut::DisplayP3,
+                    },
+                },
+            )
+            .unwrap(),
+        );
+        let mut other = shared.clone();
+        other.headroom_stops = 4.0;
+        let hdr = pixels_of(
+            render(
+                grid(),
+                &ChainParams {
+                    shared: other,
+                    target: DisplayTarget {
+                        peak: hdr_peak(),
+                        gamut: DestinationGamut::DisplayP3,
+                    },
+                },
+            )
+            .unwrap(),
+        );
+
+        let agreement = contract::check(
+            &graded,
+            &sdr.rgb,
+            &hdr.rgb,
+            DestinationGamut::DisplayP3,
+            hdr_peak(),
+        );
+        assert!(
+            agreement.violations.len() > agreement.below_white / 2,
+            "{agreement:?}"
+        );
+    }
+
+    #[test]
+    fn the_contract_check_fails_when_a_pre_branch_stage_runs_on_one_branch_only() {
+        // Falsifiability: the look moved below the split — applied to the SDR branch
+        // only. It starts a stop under white, so near-neutral pixels there disagree.
+        let shared = shared_acting();
+        let graded = contract::graded(grid(), &shared);
+        let target = |peak| DisplayTarget {
+            peak,
+            gamut: DestinationGamut::DisplayP3,
+        };
+        let sdr = pixels_of(
+            render(
+                grid(),
+                &ChainParams {
+                    shared: shared.clone(),
+                    target: target(DisplayPeak::SDR),
+                },
+            )
+            .unwrap(),
+        );
+        let mut without_look = shared.clone();
+        without_look.look = LookParams::off();
+        let hdr = pixels_of(
+            render(
+                grid(),
+                &ChainParams {
+                    shared: without_look,
+                    target: target(hdr_peak()),
+                },
+            )
+            .unwrap(),
+        );
+
+        let agreement = contract::check(
+            &graded,
+            &sdr.rgb,
+            &hdr.rgb,
+            DestinationGamut::DisplayP3,
+            hdr_peak(),
+        );
+        assert!(!agreement.violations.is_empty(), "{agreement:?}");
+    }
+
+    #[test]
+    fn a_single_destination_is_one_branch_of_the_pair() {
+        // No second code path: `render` for either peak is bit-identical to that
+        // branch of `render_pair`, report included.
+        let shared = shared_acting();
+        let pair = render_pair(grid(), &shared, DestinationGamut::DisplayP3, hdr_peak()).unwrap();
+        for (branch, peak) in [(pair.sdr, DisplayPeak::SDR), (pair.hdr, hdr_peak())] {
+            let single = render(
+                grid(),
+                &ChainParams {
+                    shared: shared.clone(),
+                    target: DisplayTarget {
+                        peak,
+                        gamut: DestinationGamut::DisplayP3,
+                    },
+                },
+            )
+            .unwrap();
+            assert_eq!(single.applied, branch.applied);
+            assert_eq!(single.fit_range, branch.fit_range);
+            assert_eq!(single.fit_range.display_peak, peak);
+            assert_eq!(single.scene_correction, branch.scene_correction);
+            assert_eq!(bits(&pixels_of(single).rgb), bits(&pixels_of(branch).rgb));
+        }
+    }
+
+    #[test]
+    fn a_gain_map_from_the_pair_rebuilds_the_hdr_rendition() {
+        let pair = render_pair(
+            grid(),
+            &shared_acting(),
+            DestinationGamut::DisplayP3,
+            hdr_peak(),
+        )
+        .unwrap();
+        let (sdr, hdr) = (pixels_of(pair.sdr), pixels_of(pair.hdr));
+        let gains = gain_ratio::between(&sdr, &hdr, 1.0 / 64.0).unwrap();
+        assert!(!gains.range().flat, "{:?}", gains.range());
+        // Below 1 too: the SDR cube lifted a channel the HDR rendition keeps lower.
+        assert!(
+            gains.range().min.iter().any(|g| *g < 1.0),
+            "{:?}",
+            gains.range()
+        );
+        let rebuilt = gains.apply_to(&sdr).unwrap();
+        for (index, (got, want)) in rebuilt.iter().zip(&hdr.rgb).enumerate() {
+            assert!(
+                (got - want).abs() <= 1e-6 * want.max(1.0),
+                "sample {index}: {got} vs {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pair_with_nothing_to_carry_gives_a_flat_map() {
+        // Neutrals and a mild colour, all below white: the renditions are identical and
+        // the map says so rather than passing silently.
+        let rgb = [
+            0.02, 0.02, 0.02, 0.18, 0.18, 0.18, 0.3, 0.25, 0.2, 0.6, 0.6, 0.6,
+        ];
+        let pair = render_pair(
+            aces_from(4, 1, &rgb, None),
+            &shared_acting(),
+            DestinationGamut::DisplayP3,
+            hdr_peak(),
+        )
+        .unwrap();
+        let (sdr, hdr) = (pixels_of(pair.sdr), pixels_of(pair.hdr));
+        assert_eq!(bits(&sdr.rgb), bits(&hdr.rgb));
+        let range = gain_ratio::between(&sdr, &hdr, 1.0 / 64.0).unwrap().range();
+        assert!(range.flat, "{range:?}");
     }
 }

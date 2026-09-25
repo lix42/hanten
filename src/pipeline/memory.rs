@@ -473,6 +473,11 @@ pub enum RunProfile {
     /// the **encode** phase, like `Convert`'s. Measured rather than inherited: see
     /// the module doc's calibration table. A separate variant so a chain stage that
     /// gains a full-frame buffer has an arm of its own to move.
+    ///
+    /// **One branch only** (`chain::render`). A gain-map pair (`chain::render_pair`)
+    /// copies the graded image and holds two working buffers through fit range and fit
+    /// gamut, so a destination that renders one needs an arm of its own
+    /// (`nf-destinations/memory-profiles`), not this one.
     NewFlowSdrTiff {
         /// Whether a u16 IR TIFF is staged before the primary TIFF.
         export_ir: bool,

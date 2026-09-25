@@ -32,7 +32,13 @@ Open:
   assuming the old numbers transfer.
 - **Whether a skipped branch changes the profile** — the branch-contract question
   about single-rendition destinations is the difference between two display buffers
-  and four.
+  and four. **Answered** (2026-09-24, `nf-display-stages/branch-contract`): a
+  single-rendition destination renders one branch (`chain::render`) and holds no second
+  buffer; a gain-map pair (`chain::render_pair`) copies the graded image once and
+  renders each branch in place, so it holds two full-frame working buffers where one
+  destination holds one. The copy includes the IR plane when the scan has one, so a
+  profile calibrated on an IR-free fixture under-counts an HDRi scan. The encoder's
+  own buffers come on top, per destination.
 - Whether the arms are per destination or per shape; fewer is better only if each
   sharing is measured.
 

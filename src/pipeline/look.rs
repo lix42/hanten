@@ -253,12 +253,19 @@ impl LookParams {
 
 /// Linear ACEScg after the look: scene-referred, graded.
 ///
-/// This is also **the one source both display branches share**. The branch point
-/// is below it (`nf-display-stages/branch-contract`), so whatever that task
-/// decides about the split, this is the boundary it splits *from*.
+/// This is also **the one source both display branches share**: the branch point is
+/// here (`pipeline::chain`'s module docs state the contract).
 pub struct GradedImage(WorkingBuffer);
 
 impl GradedImage {
+    /// A second copy for the other display branch — a full-frame allocation, made once
+    /// by `chain::render_pair`. Not `Clone`, so no caller outside `pipeline` can add a
+    /// buffer the memory model does not count.
+    #[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/preset-set`)
+    pub(in crate::pipeline) fn split(&self) -> GradedImage {
+        GradedImage(self.0.copy())
+    }
+
     /// Hand the buffer to the next stage. Consuming, so the pixels move rather
     /// than copy.
     pub(in crate::pipeline) fn into_buffer(self) -> WorkingBuffer {

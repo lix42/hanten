@@ -27,6 +27,9 @@ use crate::types::LinearImage;
 /// a value a caller outside the chain can hold. Values may leave `[0, 1]` — the
 /// working range is preserved all the way to the encoder, which is the only place
 /// clamping happens — and may be non-finite until fit range, which refuses them.
+///
+/// Deliberately not `Clone`: a full-frame copy is [`WorkingBuffer::copy`], named so
+/// every call site is visible to the memory model (`pipeline::memory`).
 pub(in crate::pipeline) struct WorkingBuffer {
     width: u32,
     height: u32,
@@ -37,6 +40,20 @@ pub(in crate::pipeline) struct WorkingBuffer {
 }
 
 impl WorkingBuffer {
+    /// A full-frame copy, the IR plane included when the scan has one. Its one caller
+    /// is the SDR/HDR branch point (`look::GradedImage::split`), where a gain map needs
+    /// both renditions; a new caller is a new full-frame buffer for
+    /// `pipeline::memory`'s model.
+    #[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/preset-set`), via `GradedImage::split`
+    pub(in crate::pipeline) fn copy(&self) -> Self {
+        Self {
+            width: self.width,
+            height: self.height,
+            rgb: self.rgb.clone(),
+            ir: self.ir.clone(),
+        }
+    }
+
     /// Take the buffers out of the chain's input [`AcesCgImage`].
     ///
     /// A **move**, not a copy: the `Vec`s are handed over, so entering the chain

@@ -31,6 +31,18 @@ What is known:
   so a moved `OutputPreset` fails to compile.
 - **`nctool` needs one row per destination in two lookup tables** — the only
   tooling change the migration owes.
+- **A new-flow gain-map destination consumes `chain::render_pair` and
+  `pipeline::gain_ratio`** (`nf-display-stages/branch-contract`, 2026-09-24): the
+  pair gives the SDR base and the HDR alternate from one look, and `gain_ratio`
+  gives the per-channel gains. Their rules: the gain is ratioed against the base
+  **as stored** (clamped to `[0, 1]`), never the unclamped rendition; and a flat map
+  (`GainRange::flat`) is reported rather than shipped silently.
+- **The gain-map destination must clamp HDR to its peak and count what it clamps**,
+  as the single-rendition encoders do. Fit range sets no hard ceiling (decided
+  2026-09-24) because the encoder clamps and counts above-peak samples, but
+  `gain_ratio::between` clamps the HDR rendition only to `>= 0`: a sample above the
+  peak (measured up to about `2 P` at headroom 2) would otherwise become a larger
+  gain, uncounted.
 
 Open:
 
