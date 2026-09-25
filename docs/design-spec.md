@@ -755,7 +755,9 @@ the placement rule, and one rule ships:
 | `{"mid-at-base-offset": d}` (default `d = 0.62`) | `d + 0.745/contrast` | mid-grey (18%) renders at density `d` *above the film base*; display white falls `0.745/contrast` above it |
 
 `0.745 = −log10(0.18)` is mid-grey's fixed distance below white on the *output* axis.
-At the defaults (contrast 2.0) `A ≈ 0.99`. The rule is **reference-free**: it reads only
+At the defaults (contrast 2.0) `A ≈ 0.99`; the new chain's decode runs at its
+linearization alone (1.8, `A ≈ 1.03`) and leaves the rest of the contrast to the look
+(§9, `reconstruction.linearization` and `look.contrast`). The rule is **reference-free**: it reads only
 the film base, which step 1 divides out, so the base *is* `D′ = 0` by construction
 (modulo `density.offset` and any regional balance). No leader or reference density
 enters the render, so a leader's roll-to-roll error cannot reach it, and nothing is
@@ -1078,14 +1080,17 @@ top-level **document version** rather than per-object ones:
   "reconstruction": {
     "scale": [1.0, 0.84, 0.73],
     "offset": [0.0, 0.0, 0.0],
-    "contrast": 2.0,
+    "linearization": 1.8,
     "anchor": {"mid-at-base-offset": 0.62}
   },
   "scene_correction": {
     "white_balance": {"explicit": [1.0, 1.0, 1.0]},
     "exposure": 0.0
   },
-  "look": {},
+  "look": {
+    "contrast": 1.1111112,
+    "highlight_desaturation": {"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]}
+  },
   "fit_range": {"headroom_stops": 6.0},
   "fit_gamut": {}
 }
@@ -1095,8 +1100,14 @@ top-level **document version** rather than per-object ones:
   the current chain; `calibration` holds the film base alone, since the fixed
   decode reads no reference density. `reconstruction` is the fixed decode's
   parameters (`--density-scale`, `--density-offset`, `--density-gamma`,
-  `--anchor-mid-offset`). `scene_correction` is white balance and exposure and
-  `fit_range` the operator's headroom, and `look` highlight desaturation (all below).
+  `--anchor-mid-offset`); its slope is `linearization`, the calibrated half of the
+  single `gamma` the current chain ships — print contrast is the look's
+  (`nf-reconstruction/gamma-split`). Only the products `linearization · scale_c` enter
+  the curve, pinned by the convention `scale_r = 1`. The pre-split
+  `reconstruction.contrast` is refused by name at every value, with the `look.contrast`
+  that would keep it as the whole contrast. `scene_correction` is white balance and
+  exposure and `fit_range` the operator's headroom, and `look` contrast and highlight
+  desaturation (all below).
   `fit_gamut` is empty and has no knob: it changes primaries into the destination's
   gamut and maps out-of-gamut colour radially toward neutral at constant luminance,
   against the cube `[0, max(peak, Y)]` — the peak is fit range's, and content above
@@ -1129,14 +1140,24 @@ top-level **document version** rather than per-object ones:
   correction and fit range. Each control is **its own key**, added by its own task — not
   one CDL-style object, whose slope and offset would restate white balance and the
   flare subtraction. At every control's identity the stage is a bit-exact identity and
-  the report's `new_flow.stages` lists it as `"applied": "identity"`.
+  the report's `new_flow.stages` lists it as `"applied": "identity"`. Controls run in
+  the order the section lists them.
+  `contrast` (`nf-reconstruction/gamma-split`, `--contrast`, new-flow only) — print
+  contrast pivoted at mid-grey, `out_c = 0.18 · (in_c / 0.18)^contrast` on each ACEScg
+  channel; non-positive and non-finite samples pass through. Finite and positive; `1`
+  is the identity. The default is `2.0 / 1.8`, so with the decode's linearization a
+  neutral renders where the single-slope decode rendered it (within a few f32 ULP);
+  saturated colour differs slightly, because the power acts after the NC film RGB v1
+  3×3 and the decode's slope before it. Scene correction runs first, so an exposure
+  of `e` stops leaves the look as `e · contrast` stops.
   `highlight_desaturation`
   (`nf-look/path-to-white`) = `{strength, start_stops, band: [s0, s1]}` —
   `--highlight-desaturation`, `--highlight-desaturation-start`,
   `--highlight-desaturation-band`, new-flow only. Per pixel on scene-referred ACEScg:
   `rgb ← rgb + strength · b · w · (Y − rgb)`, where `b` is a smoothstep in stops from
   `start_stops` (default −1) up to diffuse white, held above it, and `w` a linear band
-  over `s = log10(max/min) / reconstruction.contrast` — full pull at `s ≤ s0`, none at
+  over `s = log10(max/min) / (reconstruction.linearization · look.contrast)` — the
+  negative's density spread, whichever stage carries the contrast — full pull at `s ≤ s0`, none at
   `s ≥ s1` (default `0.015, 0.025`). Luminance is kept. `strength` is in `[0, 1]`,
   default `0.8`; `0` is off, a bit-exact identity. It assumes a roll-level white
   balance ahead of it. The report's `new_flow.look` echoes the section.

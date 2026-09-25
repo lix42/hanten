@@ -10402,7 +10402,7 @@ fn new_flow_renders_a_display_p3_tiff() {
             applied,
             [
                 "identity",
-                "highlight-desaturation",
+                "contrast+highlight-desaturation",
                 "reinhard-peak-lifted-v1",
                 "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
             ],
@@ -11118,10 +11118,10 @@ fn the_fixed_decodes_own_knobs_reach_the_decode_under_the_new_flow() {
     // The defaults: the decode's own constants.
     let (code, d, err) = decode_of(&[], "default.tiff");
     assert_eq!(code, 0, "{err}");
-    assert!(close(&d["contrast"], 2.0), "{d}");
+    assert!(close(&d["linearization"], 1.8), "{d}");
     assert_eq!(d["scale"], serde_json::json!([1.0, 0.84, 0.73]), "{d}");
-    // mid-grey 0.62 above base at contrast 2 ⇒ anchor 0.62 + 0.745/2.
-    assert!(close(&d["anchor"], 0.62 + 0.744_727_5 / 2.0), "{d}");
+    // mid-grey 0.62 above base at the linearization 1.8 ⇒ anchor 0.62 + 0.745/1.8.
+    assert!(close(&d["anchor"], 0.62 + 0.744_727_5 / 1.8), "{d}");
 
     let (code, d, err) = decode_of(&["--density-scale", "1,0.9,0.8"], "scale.tiff");
     assert_eq!(code, 0, "{err}");
@@ -11133,14 +11133,14 @@ fn the_fixed_decodes_own_knobs_reach_the_decode_under_the_new_flow() {
 
     let (code, d, err) = decode_of(&["--anchor-mid-offset", "0.7"], "anchor.tiff");
     assert_eq!(code, 0, "{err}");
-    assert!(close(&d["anchor"], 0.7 + 0.744_727_5 / 2.0), "{d}");
+    assert!(close(&d["anchor"], 0.7 + 0.744_727_5 / 1.8), "{d}");
 
     let (code, d, err) = decode_of(
-        &["--density-curve", "exponential", "--density-gamma", "1.8"],
+        &["--density-curve", "exponential", "--density-gamma", "1.7"],
         "gamma.tiff",
     );
     assert_eq!(code, 0, "{err}");
-    assert!(close(&d["contrast"], 1.8), "{d}");
+    assert!(close(&d["linearization"], 1.7), "{d}");
 
     for (i, extra) in [
         vec!["--density-curve", "exponential"],
@@ -11159,10 +11159,16 @@ fn the_fixed_decodes_own_knobs_reach_the_decode_under_the_new_flow() {
     // sigmoid, so `merge` refused the flag unless `--density-curve exponential` came
     // with it.
     // The new chain's recipe has no curve to disagree with: the flag sets
-    // `reconstruction.contrast` directly.
-    let (code, d, err) = decode_of(&["--density-gamma", "1.8"], "bare-gamma.tiff");
+    // `reconstruction.linearization` directly.
+    let (code, d, err) = decode_of(&["--density-gamma", "1.7"], "bare-gamma.tiff");
     assert_eq!(code, 0, "{err}");
-    assert!(close(&d["contrast"], 1.8), "{d}");
+    assert!(close(&d["linearization"], 1.7), "{d}");
+
+    // The look's contrast is not the decode's: it leaves the decode block untouched.
+    let (code, d, err) = decode_of(&["--contrast", "1.5"], "look-contrast.tiff");
+    assert_eq!(code, 0, "{err}");
+    assert!(close(&d["linearization"], 1.8), "{d}");
+    assert!(close(&d["anchor"], 0.62 + 0.744_727_5 / 1.8), "{d}");
 }
 
 /// `--new-flow` refuses a recipe-stated `calibration.dmax` — and still accepts
@@ -11314,7 +11320,7 @@ fn convert_under_the_new_flow_refuses_the_current_chains_recipe() {
     // (3) A new-chain recipe stating the decode renders, with its values.
     let (code, err) = run_with(
         r#"{"recipe_version": 2,
-            "reconstruction": {"scale": [1, 0.9, 0.8], "contrast": 1.8,
+            "reconstruction": {"scale": [1, 0.9, 0.8], "linearization": 1.7,
                                "anchor": {"mid-at-base-offset": 0.6}},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "measure": {"inset": 0.05},
@@ -11335,28 +11341,42 @@ fn convert_under_the_new_flow_refuses_the_current_chains_recipe() {
     assert_eq!(code, 0, "{err}");
     let decode = &json(&stdout)["new_flow"]["decode"];
     let close = |v: &serde_json::Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-5;
-    assert!(close(&decode["contrast"], 1.8), "{decode}");
+    assert!(close(&decode["linearization"], 1.7), "{decode}");
     assert!(close(&decode["scale"][1], 0.9), "{decode}");
 
     // (4) Its values are checked, whichever provenance set them.
     let (code, err) = run_with(
-        r#"{"recipe_version": 2, "reconstruction": {"contrast": 0},
+        r#"{"recipe_version": 2, "reconstruction": {"linearization": 0},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
         "bad.json",
         &["--new-flow"],
     );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("`reconstruction.contrast`"), "{err}");
+    assert!(err.contains("`reconstruction.linearization`"), "{err}");
 
-    // (5) An identity stage takes no keys yet.
+    // (5) A stage refuses a key it does not have.
     let (code, err) = run_with(
-        r#"{"recipe_version": 2, "look": {"contrast": 1.1},
+        r#"{"recipe_version": 2, "look": {"saturation": 1.1},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
         "look.json",
         &["--new-flow"],
     );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("contrast"), "{err}");
+    assert!(err.contains("saturation"), "{err}");
+
+    // (6) The decode's slope before the split is refused by name, with the split's
+    // remedy — never read as the linearization it no longer is.
+    let (code, err) = run_with(
+        r#"{"recipe_version": 2, "reconstruction": {"contrast": 2.0},
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+        "old-contrast.json",
+        &["--new-flow"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("`reconstruction.contrast` split in two") && err.contains("look.contrast"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -12239,7 +12259,10 @@ fn roll_refuses_the_current_chains_keys_from_either_recipe_site() {
 
     // The overlay lands on the new chain's document: a decode key it states is read
     // and checked there, not refused as unknown…
-    let bad = manifest_with("bad.json", r#"{ "reconstruction": { "contrast": -1 } }"#);
+    let bad = manifest_with(
+        "bad.json",
+        r#"{ "reconstruction": { "linearization": -1 } }"#,
+    );
     let (code, err) = roll(
         &["--frames", bad.to_str().unwrap()],
         &shared,
@@ -12247,13 +12270,16 @@ fn roll_refuses_the_current_chains_keys_from_either_recipe_site() {
         &["--new-flow"],
     );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("`reconstruction.contrast`"), "{err}");
+    assert!(err.contains("`reconstruction.linearization`"), "{err}");
     // It names the frame, and only the recipe key: `roll` accepts no `--density-gamma`.
     assert!(err.contains("per-frame `params` override"), "{err}");
     assert!(!err.contains("--density-gamma"), "{err}");
     // …and a valid one resolves and reaches the frame's render — the frame's own
     // recipe, not the shared one, which is what the decode reads.
-    let good = manifest_with("good.json", r#"{ "reconstruction": { "contrast": 1.8 } }"#);
+    let good = manifest_with(
+        "good.json",
+        r#"{ "reconstruction": { "linearization": 1.7 } }"#,
+    );
     let (code, err) = roll(
         &["--frames", good.to_str().unwrap()],
         &shared,
@@ -12273,8 +12299,10 @@ fn roll_refuses_the_current_chains_keys_from_either_recipe_site() {
     ]);
     assert_eq!(code, 0, "{err}");
     let frame = &json(&stdout)["frames"][0];
-    let contrast = frame["new_flow"]["decode"]["contrast"].as_f64().unwrap();
-    assert!((contrast - 1.8).abs() < 1e-5, "{frame}");
+    let linearization = frame["new_flow"]["decode"]["linearization"]
+        .as_f64()
+        .unwrap();
+    assert!((linearization - 1.7).abs() < 1e-5, "{frame}");
 
     // The reverse at the override site: without the flag, an override that states the
     // version is refused by name rather than as an unknown field. (An unversioned one
@@ -12283,7 +12311,7 @@ fn roll_refuses_the_current_chains_keys_from_either_recipe_site() {
     let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
     let versioned = manifest_with(
         "versioned.json",
-        r#"{ "recipe_version": 2, "reconstruction": { "contrast": 1.8 } }"#,
+        r#"{ "recipe_version": 2, "reconstruction": { "linearization": 1.8 } }"#,
     );
     let (code, err) = roll(
         &["--frames", versioned.to_str().unwrap()],
@@ -12376,7 +12404,11 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
             .any(|w| w.as_str().unwrap().contains("no --leader")),
         "an unguarded run says so: {report}"
     );
-    assert_eq!(report["decode"]["contrast"], 2.0, "{report}");
+    // Measured at the decode's output, which runs at the linearization alone.
+    assert!(
+        (report["decode"]["linearization"].as_f64().unwrap() - 1.8).abs() < 1e-6,
+        "{report}"
+    );
 
     let by_flag = tmp.path("flag.tiff");
     let flag = report["reuse"]["flag"].as_str().unwrap();
@@ -12667,21 +12699,22 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
     };
     let look = |r: &serde_json::Value| r["new_flow"]["stages"][1].clone();
 
-    // On by default at 0.8, and the report says so.
+    // On by default at 0.8, after the look's default contrast, and the report says so.
     let (plain, report) = convert("plain.tiff", &[]);
     assert_eq!(
         look(&report)["applied"],
-        "highlight-desaturation",
+        "contrast+highlight-desaturation",
         "{report}"
     );
     assert_eq!(
         report["new_flow"]["look"]["highlight_desaturation"],
         serde_json::json!({"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]})
     );
-    // Strength 0 is off: reported as the identity, different from the default, and with
-    // the other two knobs inert — a moved band or start changes nothing when off.
+    // Strength 0 is off: the look then runs its contrast alone, different from the
+    // default, and with the other two knobs inert — a moved band or start changes
+    // nothing when off.
     let (off, report) = convert("off.tiff", &["--highlight-desaturation", "0"]);
-    assert_eq!(look(&report)["applied"], "identity", "{report}");
+    assert_eq!(look(&report)["applied"], "contrast", "{report}");
     assert_ne!(plain, off, "the default must move the fixture's highlights");
     let (off_moved, _) = convert(
         "off-moved.tiff",
@@ -12754,6 +12787,124 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
         ],
     );
     assert_ne!(narrow, on, "the band must change which pixels are pulled");
+}
+
+/// The look's print contrast (`nf-reconstruction/gamma-split`): reachable by flag and
+/// by recipe, one knob, the flag winning; `1` is the identity, reported as such; and
+/// the decode it split from is untouched by it.
+#[test]
+fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
+    let tmp = TempDir::new("look-contrast");
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let convert = |name: &str, extra: &[&str]| {
+        let out = tmp.path(name);
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--new-flow",
+            // Off, so the look's `applied` reads the contrast alone.
+            "--highlight-desaturation",
+            "0",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, stdout, err) = run(&argv);
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        (std::fs::read(&out).unwrap(), json(&stdout))
+    };
+    let applied = |r: &serde_json::Value| r["new_flow"]["stages"][1]["applied"].clone();
+
+    let (default, report) = convert("default.tiff", &[]);
+    assert_eq!(applied(&report), "contrast", "{report}");
+    let reported = report["new_flow"]["look"]["contrast"].as_f64().unwrap();
+    let default_decode = report["new_flow"]["decode"].clone();
+    assert!((reported - 2.0 / 1.8).abs() < 1e-6, "{report}");
+
+    let (unity, report) = convert("unity.tiff", &["--contrast", "1"]);
+    assert_eq!(applied(&report), "identity", "{report}");
+    assert_ne!(unity, default, "the default contrast must move the pixels");
+
+    let (steep, report) = convert("steep.tiff", &["--contrast", "1.5"]);
+    assert_ne!(steep, default);
+    // The decode block is the same at every look contrast.
+    assert_eq!(
+        report["new_flow"]["decode"], default_decode,
+        "the look contrast reached the decode"
+    );
+
+    // The recipe key is the same knob, and a flag wins over it.
+    let recipe = write_file(
+        &tmp.path("look.json"),
+        r#"{ "recipe_version": 2, "look": { "contrast": 1.5 } }"#,
+    );
+    let (from_recipe, _) = convert("recipe.tiff", &["--params", recipe.to_str().unwrap()]);
+    assert_eq!(
+        steep, from_recipe,
+        "the recipe key and the flag are one knob"
+    );
+    let (reset, _) = convert(
+        "reset.tiff",
+        &["--params", recipe.to_str().unwrap(), "--contrast", "1"],
+    );
+    assert_eq!(reset, unity, "the flag's 1 must win over the recipe's 1.5");
+}
+
+#[test]
+fn the_look_contrast_is_refused_where_it_cannot_apply() {
+    let input = fixture("hdr-48bit.tif").display().to_string();
+    let tmp = TempDir::new("look-contrast-refused");
+    let out = tmp.path("x.tiff");
+    let base = [
+        "convert",
+        input.as_str(),
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+    ];
+    // The current chain has no look stage; its contrast is the whole --density-gamma.
+    let (code, _, err) = run(&[
+        &base[..],
+        &["--output-preset", "display-p3", "--contrast", "1.2"],
+    ]
+    .concat());
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--contrast")
+            && err.contains("no look stage")
+            && err.contains("--density-gamma"),
+        "{err}"
+    );
+    // A non-positive value is refused naming the flag and the key.
+    for value in ["0", "-1"] {
+        let (code, _, err) = run(&[&base[..], &["--new-flow", "--contrast", value]].concat());
+        assert_eq!(code, 2, "{value}: {err}");
+        assert!(err.contains("--contrast (recipe `look.contrast`)"), "{err}");
+    }
+    // So is a pair each usable alone whose product leaves f32 — a usage error naming
+    // both knobs, not an internal one from highlight desaturation.
+    for (gamma, contrast) in [("1e30", "1e10"), ("1e-30", "1e-20")] {
+        let (code, _, err) = run(&[
+            &base[..],
+            &[
+                "--new-flow",
+                "--density-gamma",
+                gamma,
+                "--contrast",
+                contrast,
+            ],
+        ]
+        .concat());
+        assert_eq!(code, 2, "{gamma} × {contrast}: {err}");
+        assert!(
+            err.contains("--density-gamma (recipe `reconstruction.linearization`)")
+                && err.contains("--contrast (recipe `look.contrast`)"),
+            "{err}"
+        );
+    }
 }
 
 #[test]

@@ -20,7 +20,8 @@
 //! **Which stages are bit-exact and which are windowed is decided by their libm
 //! calls.** The decode makes two (`log10`, `powf`), a fractional exposure one
 //! (`exp2`), fit range one (`log2`) — but only for an HDR peak and only above
-//! diffuse white — and highlight desaturation one per pixel at most: `log10` inside
+//! diffuse white — the look's contrast one `powf` per positive channel, and highlight
+//! desaturation one per pixel at most: `log10` inside
 //! its band's ramp, `log2` inside its brightness ramp (its constants' `powf` / `exp2`
 //! only classify, never enter the arithmetic); all are pinned within a window [`reachable_window`] *derives* by
 //! enumerating what a 1-ULP-accurate libm can return (CLAUDE.md, determinism). Every
@@ -195,20 +196,22 @@ fn decode_scan() -> LinearImage {
 /// constant.
 const PROBE_OFFSET: [f32; 3] = [-0.05, 0.02, 0.07];
 
-/// The captured decode at the shipped defaults, and at [`PROBE_OFFSET`].
+/// The captured decode at the shipped defaults, and at [`PROBE_OFFSET`]. Recaptured
+/// 2026-09-24 when the default slope became the linearization alone, 1.8
+/// (`nf-reconstruction/gamma-split`); before it the decode ran at the bundled 2.0.
 const DECODE_DEFAULT: [u32; 24] = [
-    0x3c3e41ab, 0x3c472c7f, 0x3c4467a7, 0x3dbeeaca, 0x3d8a8882, 0x3d841ca2, 0x41a7cc5e, 0x40ccbdff,
-    0x403537ec, 0x3c29b443, 0x3c29b443, 0x3c29b443, 0x3c184f87, 0x3c129ff8, 0x3c197151, 0x3d0975d7,
-    0x3ceae9de, 0x3cfaab8e, 0x4ffa09f8, 0x4c2dff42, 0x49cd08c6, NAN, NAN, NAN,
+    0x3c7a401a, 0x3c826425, 0x3c80c234, 0x3dcbe6ce, 0x3d98c6f9, 0x3d92638a, 0x41508878, 0x408f42e1,
+    0x40099236, 0x3c61c89a, 0x3c61c89a, 0x3c61c89a, 0x3c4cd871, 0x3c45f341, 0x3c4e371b, 0x3d2299d4,
+    0x3d0d241d, 0x3d15a226, 0x4e2b7e76, 0x4ac90670, 0x48a4c66f, NAN, NAN, NAN,
 ];
 const DECODE_PROBE_OFFSET: [u32; 24] = [
-    0x3c172049, 0x3c5a63c4, 0x3c878e9f, 0x3d97a69f, 0x3d97e60f, 0x3db65d7b, 0x41854976, 0x40e07ecd,
-    0x407a26b2, 0x3c06cd00, 0x3c3a13ae, 0x3c6a41c5, 0x3bf1f820, 0x3c20c55e, 0x3c53cf54, 0x3cda6095,
-    0x3d00c9ed, 0x3d2d02b3, 0x4fc69ce2, 0x4c3ec8b5, 0x4a0d835e, NAN, NAN, NAN,
+    0x3c4b6944, 0x3c8da90b, 0x3cac1927, 0x3da5bcca, 0x3da5fb2d, 0x3dc3a99d, 0x41298088, 0x409ba486,
+    0x4037e083, 0x3c37861a, 0x3c754c0e, 0x3c96e404, 0x3c268133, 0x3c570eed, 0x3c89d02e, 0x3d042abe,
+    0x3d1956da, 0x3d47ffd5, 0x4e0b653f, 0x4ada6624, 0x48dc3cd7, NAN, NAN, NAN,
 ];
 
-/// The anchor the defaults resolve (`MID_ABOVE_BASE + 0.745 / CONTRAST`).
-const DECODE_ANCHOR: u32 = 0x3f7e0b8d;
+/// The anchor the defaults resolve (`MID_ABOVE_BASE + 0.745 / LINEARIZATION`).
+const DECODE_ANCHOR: u32 = 0x3f845183;
 
 fn decode_params(offset: [f32; 3]) -> DecodeParams {
     DecodeParams {
@@ -237,9 +240,9 @@ fn correctly_rounded_densities() -> Vec<Option<f32>> {
 /// The decode after its `log10`, correctly rounded: the calibration and exponent in
 /// f32 as the decode writes them, the `10^` in f64.
 fn decode_from_density(d: f32, channel: usize, params: &DecodeParams) -> f32 {
-    let anchor = params.anchor.anchor(params.contrast);
+    let anchor = params.anchor.anchor(params.linearization);
     let corrected = params.scale[channel] * d + params.offset[channel];
-    10f64.powf(f64::from(params.contrast * (corrected - anchor))) as f32
+    10f64.powf(f64::from(params.linearization * (corrected - anchor))) as f32
 }
 
 #[test]
@@ -316,7 +319,8 @@ fn the_decode_capture_is_correctly_rounded_and_the_host_conforms() {
             );
             // The second libm call, `powf`, at the exponent the decode forms from `d`.
             let corrected = params.scale[i % 3] * d + params.offset[i % 3];
-            let exponent = params.contrast * (corrected - params.anchor.anchor(params.contrast));
+            let exponent =
+                params.linearization * (corrected - params.anchor.anchor(params.linearization));
             let off = ulps_between(10f32.powf(exponent), decode_from_density(d, i % 3, &params));
             assert!(
                 off <= LIBM_MAX_ERROR_ULPS,
@@ -628,15 +632,19 @@ const LOOK_FILM: [f32; 12] = [
     1.25, 1.2, 1.18, 1.3, 1.21, 1.14, 0.8, 0.78, 0.77, 1.6, 1.2, 0.9,
 ];
 
+/// Highlight desaturation alone, at a whole contrast of 2 carried by the linearization
+/// with the look's contrast at its identity — so these vectors pin the pull without the
+/// contrast's `powf` (which [`LOOK_CONTRAST_FILM`] pins).
 fn look_params() -> LookParams {
     LookParams {
         section: LookSection {
+            contrast: 1.0,
             highlight_desaturation: HighlightDesaturation {
                 strength: 0.8,
                 ..HighlightDesaturation::default()
             },
         },
-        decode_contrast: 2.0,
+        linearization: 2.0,
     }
 }
 
@@ -762,6 +770,67 @@ fn assert_clear_of_look_edges(label: &str, px: [f32; 3]) {
 const LOOK_FULL: [u32; 3] = [0x3f9b5286, 0x3f9aa512, 0x3f9a2494];
 const LOOK_BAND_RAMP: [u32; 3] = [0x3f9f996c, 0x3f9c0a9a, 0x3f971ca4];
 const LOOK_BRIGHTNESS_RAMP: [u32; 3] = [0x3f498013, 0x3f48597c, 0x3f474de1];
+
+/// Film RGB for the look's contrast: a near-neutral mid-grey, a deep shadow, a
+/// saturated midtone and a highlight above diffuse white. Each channel makes one libm
+/// call (`powf`), the final one before a multiply by [`look::MID_GREY`].
+const LOOK_CONTRAST_FILM: [f32; 12] = [
+    0.18, 0.18, 0.18, 0.01, 0.012, 0.015, 0.5, 0.3, 0.1, 2.0, 1.6, 1.2,
+];
+
+/// The contrast alone, at its default, over the default linearization.
+fn look_contrast_params() -> LookParams {
+    let mut params = LookParams::off();
+    params.section.contrast = look::DEFAULT_CONTRAST;
+    params
+}
+
+/// Captured 2026-09-24 when the contrast landed (`nf-reconstruction/gamma-split`).
+const LOOK_CONTRAST: [u32; 12] = [
+    0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3c02fd3c, 0x3c102c62, 0x3c34833c, 0x3ee7fc97, 0x3ea96adc,
+    0x3e009182, 0x401733ea, 0x4004981f, 0x3fc84399,
+];
+
+#[test]
+fn golden_look_contrast_is_correct_within_its_libm_window() {
+    let input = map_nc_film_rgb_v1(FilmRgbImage::fixture(
+        LinearImage::new(4, 1, LOOK_CONTRAST_FILM.to_vec(), None).unwrap(),
+    ));
+    let before = input.rgb().to_vec();
+    let (corrected, _) = scene_correction::apply(input, &SceneCorrectionParams::default()).unwrap();
+    let params = look_contrast_params();
+    assert_eq!(params.applied(), "contrast");
+    let out = look::apply(corrected, &params)
+        .unwrap()
+        .into_buffer()
+        .into_linear()
+        .rgb;
+    let k = params.section.contrast;
+    let mut widest = 0;
+    for (i, (&x, &want)) in before.iter().zip(&LOOK_CONTRAST).enumerate() {
+        let base = x / look::MID_GREY;
+        let rounded = f64::from(base).powf(f64::from(k)) as f32;
+        assert!(
+            ulps_between(base.powf(k), rounded) <= LIBM_MAX_ERROR_ULPS,
+            "this host's `powf` is not conforming on sample {i}"
+        );
+        let render = |p: f32| look::MID_GREY * p;
+        assert_eq!(
+            render(rounded).to_bits(),
+            want,
+            "sample {i}: capture integrity"
+        );
+        let window = reachable_window(render, rounded, 0);
+        widest = widest.max(window);
+        let drift = ulps_between(out[i], f32::from_bits(want));
+        assert!(
+            drift <= window,
+            "stage `look` (contrast) sample {i}: {drift} ULP from the capture, outside \
+             the {window} ULP a conforming libm can reach"
+        );
+    }
+    assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
+}
 
 // --- fit gamut -------------------------------------------------------------------
 

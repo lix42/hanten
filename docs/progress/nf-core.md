@@ -37,10 +37,10 @@ check before adding one back:
   `Availability::Renamed` once the new flag exists (`--print-exposure` → `--exposure`,
   `nf-scene-correction/stage`), or deletes it when the spelling is kept.
 - **A flag only the new chain reads must also be refused on the current one**, whose
-  `merge` has no arm for it — `flow::reject_new_flow_only_flags` does that by hand for
-  `--exposure`, and **nothing tests the direction**: a second such flag added only to
-  `KEPT_FLAGS` would be accepted-and-ignored without `--new-flow`. Add it there, and
-  when there are two, make it a table with a completeness test.
+  `merge` has no arm for it: give it a row in `flow::NEW_FLOW_ONLY_FLAGS`, which
+  `reject_new_flow_only_flags` reads. `every_kept_flag_is_read_by_one_chain_or_refused_on_the_other`
+  tests the direction — a kept flag the current chain does not read and that has no row
+  reds it, rather than being accepted and ignored without `--new-flow`.
 - **`every_convert_flag_is_classified`** reads the flag surface back out of `cli.rs`,
   so a knob added to `ConvertArgs` with no verdict reds the gate. Adding a flag now
   means adding a row (refused or kept) or an allowlist line.

@@ -35,9 +35,9 @@
 //!   (`nf-display-stages/branch-contract`).
 //!
 //! **Reinhard compresses upward only**: below mid-grey it is a gain, not a curve, so
-//! the approach to black is left to the decode's contrast. A toe belongs here, where the
-//! display's range is known; whether the operator earns one is
-//! `nf-display-stages/parametric-operator`'s question.
+//! the approach to black is left to the decode's linearization and the look's contrast.
+//! A toe belongs here, where the display's range is known; whether the operator earns
+//! one is `nf-display-stages/parametric-operator`'s question.
 //!
 //! Written fresh, per CLAUDE.md's migration rule — `pipeline::sdr` and `pipeline::hdr`
 //! each fuse tone, luminance rescale and gamut map into one loop body and retire with

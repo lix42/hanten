@@ -9,9 +9,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 7`, built at commit
-> `c9a9b9d` plus `nf-retire/dmax-machinery` (the roll reference density `Dmax` and the
-> three anchor placements that read it or pinned black retired, §6) and fit gamut's
-> radial map under `--new-flow` (`nf-display-stages/fit-gamut`, §11). The staleness
+> `7d5524b` plus `nf-reconstruction/gamma-split` (under `--new-flow` the decode's
+> slope is `reconstruction.linearization` and print contrast is `look.contrast` /
+> `--contrast`, §11). The staleness
 > signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
@@ -1401,10 +1401,11 @@ this flow promises yet.
   warning, since it still pairs by name with an image it no longer describes).
 - **The report is provisional.** The current chain's sections (`reconstruction_result`,
   `output_render`, `white_balance`, …) are absent; a `new_flow` block states
-  what ran instead — the decode's resolved `anchor`, `contrast`, `scale` and `offset`,
+  what ran instead — the decode's resolved `anchor`, `linearization`, `scale` and `offset`,
   each stage with what it `applied` (scene correction's from what it resolved —
   `"identity"`, `"white-balance"`, `"exposure"` or `"white-balance+exposure"`;
-  `"highlight-desaturation"` for the look, or `"identity"` at strength 0; fit range's
+  for the look `"contrast"`, `"highlight-desaturation"`, both
+  (`"contrast+highlight-desaturation"`, the default) or `"identity"`; fit range's
   operator; `"acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"` for fit
   gamut), scene correction's resolved values in `scene_correction`, fit range's in
   `fit_range` (below), the `destination` (`display-p3-u16-tiff`) and
@@ -1443,7 +1444,7 @@ refused:
 
 And these still work, because they *are* the fixed decode's own calibration and
 anchor: `--density-scale`, `--density-offset`, `--density-gamma` (the decode's
-contrast) and `--anchor-mid-offset`. So does `--density-curve exponential`, which
+linearization — see below) and `--anchor-mid-offset`. So does `--density-curve exponential`, which
 names what the new flow already decodes with, and a zero `--shadow-balance` /
 `--highlight-balance` — an identity value asks for nothing this flow cannot do. (It is *not* spared in order to let one recipe
 be re-used on either chain: the new chain's recipe has no key for any of them, so
@@ -1464,7 +1465,7 @@ $ hanten params --new-flow
   "reconstruction": {
     "scale": [1.0, 0.84, 0.73],
     "offset": [0.0, 0.0, 0.0],
-    "contrast": 2.0,
+    "linearization": 1.8,
     "anchor": { "mid-at-base-offset": 0.62 }
   },
   "scene_correction": {
@@ -1472,6 +1473,7 @@ $ hanten params --new-flow
     "exposure": 0.0
   },
   "look": {
+    "contrast": 1.1111112,
     "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] }
   },
   "fit_range": { "headroom_stops": 6.0 },
@@ -1482,9 +1484,9 @@ $ hanten params --new-flow
 (Abridged; the real output is one value per line.) `input` and `measure` are the
 current chain's sections unchanged. `calibration` holds the film base only — the
 fixed decode reads no reference density. `reconstruction` spells the four decode
-knobs above (`--density-gamma` is `contrast` here). `scene_correction` holds white
-balance and exposure, `look` highlight desaturation, `fit_range` its headroom (all
-below); `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
+knobs above (`--density-gamma` is `linearization` here). `scene_correction` holds white
+balance and exposure, `look` contrast and highlight desaturation, `fit_range` its
+headroom (all below); `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
 from the destination. There is no `output` section:
 the new chain writes one fixed destination. `--dump-params` under `--new-flow` writes this
 document with your values resolved, and it reloads under the flag unchanged.
@@ -1589,31 +1591,60 @@ Drop it, then state the gains `hanten measure-roll` reports for the roll, as
 `{"explicit": [r, g, b]}`
 ```
 
-**The look** is the stage between scene correction and fit range. Its one control so
-far is **highlight desaturation**: bright surfaces that are nearly neutral are pulled
-the rest of the way to neutral, so a white that still carries a trace of cast after the
-roll's white balance reads clean. It is **on by default** at strength 0.8.
+**The decode's slope and the picture's contrast are two knobs.** The current chain's
+single `gamma` (2.0) bundled the film's **linearization** — undoing the negative's
+≈0.55 density per decade, a calibration — with **print contrast**, a look. Under
+`--new-flow` they are split: `--density-gamma` sets `reconstruction.linearization`
+(default 1.8) and `--contrast` sets `look.contrast` (default 2.0/1.8 ≈ 1.11), so at
+the defaults a neutral renders where the single 2.0 did. To change how contrasty a
+picture is, change `--contrast`; `--density-gamma` is a calibration and moves with
+`--density-scale`, never alone. A recipe still stating `reconstruction.contrast` is
+refused, with the value that keeps it:
+
+```console
+$ hanten convert … --new-flow --params old.json   # "reconstruction": {"contrast": 2.0}
+usage: recipe old.json: `reconstruction.contrast` split in two: the decode's slope is
+now `reconstruction.linearization`, the film's linearization, and how contrasty the
+picture is is the look's `look.contrast`. Drop the key; to keep a stated 2 as the whole
+contrast, write `look.contrast`: 1.1111112 and leave `reconstruction.linearization` at
+its default 1.8
+```
+
+**The look** is the stage between scene correction and fit range. It runs two
+controls, in this order: **contrast**, then **highlight desaturation**, which pulls
+bright surfaces that are nearly neutral the rest of the way to neutral, so a white that
+still carries a trace of cast after the roll's white balance reads clean. Both are
+**on by default**.
 
 | Flag | Recipe key | |
 |---|---|---|
+| `--contrast CONTRAST` | `look.contrast` | print contrast, pivoted at mid-grey; default `2.0/1.8`, `1` is the identity, must be positive |
 | `--highlight-desaturation STRENGTH` | `look.highlight_desaturation.strength` | `0`–`1`; default `0.8`, `0` is off |
 | `--highlight-desaturation-start STOPS` | `look.highlight_desaturation.start_stops` | where the pull begins, in stops below diffuse white (default `-1`) |
 | `--highlight-desaturation-band S0,S1` | `look.highlight_desaturation.band` | the saturation band (default `0.015,0.025`) |
 
 - **It only touches near-neutral highlights.** Its strength rises from `start_stops`
   up to diffuse white, and falls to nothing across the band: a pixel whose channels
-  differ by more than `S1` (measured as `log10(max/min)` over the decode's contrast)
-  is left alone. So a sunset, sand or skin keeps its colour; a cast white does not.
+  differ by more than `S1` (measured as `log10(max/min)` over the whole contrast,
+  `--density-gamma` × `--contrast`, so the band means the same density spread
+  whichever knob carries a roll's contrast) is left alone. So a sunset, sand or skin keeps its colour; a cast white does not.
 - **It assumes the roll's white balance.** "Near-neutral" means near R = G = B, which
   is near white only after `measure-roll`'s gains have removed the roll's cast.
-- **Luminance is kept**; only chroma moves. `--highlight-desaturation 0` is the exact
+- **Contrast pivots at mid-grey**, on each ACEScg channel: mid-grey stays put and each
+  stop away from it becomes `CONTRAST` stops. A neutral stays neutral; saturated colour
+  shifts slightly against the pre-split single slope, which acted before the NC film
+  RGB 3×3 rather than after it. It runs after scene correction, so `--exposure 1` at
+  contrast 1.11 moves the picture 1.11 stops: exposure is in stops of the
+  reconstructed scene.
+- **Luminance is kept** by highlight desaturation; only chroma moves.
+  `--highlight-desaturation 0` turns it off — with `--contrast 1` the look is the exact
   identity, the way to see the roll's raw cast.
 - The report says what ran:
 
   ```console
   $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
       | jq -c '{look: .new_flow.look, stage: .new_flow.stages[1]}'
-  {"look":{"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"highlight-desaturation"}}
+  {"look":{"contrast":1.1111112,"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+highlight-desaturation"}}
   ```
 
 - The flags are new-flow only — the current chain has no look stage — and an
@@ -1667,21 +1698,21 @@ every frame. Give it the roll's picture frames, its leader, and its explicit fil
 $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.471,0.232,0.108
 {
   "command": "measure-roll",
-  "leader": { "median": [1.1094518, 0.8469106, 0.5191863], "guard_density": 0.1,
-              "ceiling": [0.70001674, 0.53436446, 0.32758445], … },
+  "leader": { "median": [0.92152184, 0.7227872, 0.46504393], "guard_density": 0.1,
+              "ceiling": [0.60884345, 0.4775408, 0.30725148], … },
   "frames": [ { "input": "frames/1774.tif", "region": [167, 167, 4579, 3009],
-                "sampled": 131072, "kept": 131066, "guarded": 6, "unusable": 0, … }, … ],
-  "white_balance": { "gains": [1.0021106, 1.0, 1.2774495], "percentile": 0.99,
-                     "pooled": 4542634 },
-  "reuse": { "flag": "--white-balance 1.0021106,1,1.2774495",
+                "sampled": 131072, "kept": 131065, "guarded": 7, "unusable": 0, … }, … ],
+  "white_balance": { "gains": [1.000904, 1.0, 1.2442316], "percentile": 0.99,
+                     "pooled": 4542296 },
+  "reuse": { "flag": "--white-balance 1.000904,1,1.2442316",
              "recipe": { "scene_correction": { "white_balance":
-                         { "explicit": [1.0021106, 1.0, 1.2774495] } } } },
+                         { "explicit": [1.000904, 1.0, 1.2442316] } } } },
   …
 }
 ```
 
 (Abridged; that is 35 frames of one roll.) Each frame is decoded under the new chain's
-decode and sampled over its **effective area** (§9); the gains equalize the pooled
+decode — at its linearization, before the look's contrast — and sampled over its **effective area** (§9); the gains equalize the pooled
 pixels' per-channel 99th percentile, green-anchored. Freeze them by pasting `reuse.flag`
 on `convert --new-flow`, or by merging `reuse.recipe` into the roll's recipe for
 `roll --new-flow`.
@@ -1715,7 +1746,7 @@ On `roll` the flag applies to every frame: each is written as
 takes no conversion flags, so its knobs come from the shared recipe and the
 per-frame overrides. The shared recipe must be the new chain's document, and each
 override is merged onto it and rendered with it, so an override uses the new
-sections too (`{"reconstruction": {"contrast": 1.8}}`,
+sections too (`{"reconstruction": {"linearization": 1.7}}`, `{"look": {"contrast": 1.3}}`,
 `{"scene_correction": {"exposure": -1}}`, `{"fit_range": {"headroom_stops": 4}}`)
 and one naming a
 current-chain key is refused the same way — naming its frame — at exit 2.

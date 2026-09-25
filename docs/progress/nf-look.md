@@ -21,11 +21,17 @@ control under `look`**, each named and added by its own task with a field on
 flag on the current chain), a `recipe::merge` arm with a merge test, and a value rule.
 `contrast` and the grade overlap (equal pivoted exponents are contrast), so whichever
 lands first decides who owns neutral contrast. The section is `look::LookSection`, and
-the stage's `LookParams` adds what the section cannot state (the decode's contrast, via
+the stage's `LookParams` adds what the section cannot state (the decode's linearization, via
 `Recipe::chain_params`). Two predicates, never a rule per knob: `is_empty` (moves no
 pixel — `applied()`) and `asks_for_a_look` (neither the default nor empty — what
 `film-master`'s refusal reads, in `nf-destinations/preset-set`); they differ because the
 default look is not the identity, and an empty look is spared because it is one.
+
+**Print contrast exists (`look.contrast`, 2026-09-24)**, landed by
+`nf-reconstruction/gamma-split` ahead of `contrast`: a power pivoted at mid-grey, default
+2.0/1.8, applied first in the stage. Highlight desaturation's band divides by the whole
+contrast (the decode's linearization × this), so it is unchanged whichever stage carries
+a roll's contrast.
 
 **`path-to-white` is done (2026-09-24): highlight desaturation, on by default at 0.8.**
 `look.highlight_desaturation` pulls near-neutral highlights to neutral, keyed on
@@ -416,10 +422,16 @@ visible by eye; the band's value is keeping the pull off colour.
 
 ## contrast
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** in progress
+**Updated:** 2026-09-24
 
 - 2026-09-19: created with the new-flow plan. Goal: the print-contrast knob.
+- 2026-09-24: **the knob landed early, with `nf-reconstruction/gamma-split`.**
+  `look.contrast` / `--contrast` exists: a per-channel power on ACEScg pivoted at
+  mid-grey, default `2.0 / 1.8`, running before highlight desaturation (whose band now
+  divides by linearization × contrast). The task file is rewritten to what remains —
+  the default and the overlap with the grade. Contrast landed first, so it owns neutral
+  contrast. Details in `docs/progress/nf-reconstruction.md`, `gamma-split`.
 
 ## look-presets
 

@@ -33,12 +33,14 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::algo::fixed::{AnchorRule, DecodeFault, DecodeParams};
+use crate::algo::fixed::{AnchorRule, DecodeFault, DecodeParams, LINEARIZATION};
 use crate::cli::ResolvedConfig;
 use crate::pipeline::chain::ChainParams;
 use crate::pipeline::fit_gamut::{DestinationGamut, FitGamutParams};
 use crate::pipeline::fit_range::{DisplayPeak, FitRangeParams};
-use crate::pipeline::look::{DesaturationFault, LookParams, LookSection, MAX_START_STOPS};
+use crate::pipeline::look::{
+    ContrastFault, DesaturationFault, LookParams, LookSection, MAX_START_STOPS,
+};
 use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
 use crate::types::{
     CalibrationParams, FilmBaseSource, InputParams, MeasureParams, NcError, Result,
@@ -186,7 +188,8 @@ const OLD_RECONSTRUCTION_KEYS: &[(&str, &str)] = &[
     ),
     (
         "curve",
-        "there is one curve: its slope is `reconstruction.contrast` and its placement \
+        "there is one curve: its slope is `reconstruction.linearization` (print contrast \
+         is `look.contrast`) and its placement \
          `reconstruction.anchor` (`{\"mid-at-base-offset\": <d>}`)",
     ),
     (
@@ -218,7 +221,8 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
     ),
     (
         &["sigmoid"],
-        "there is one curve: its slope is `reconstruction.contrast` and its placement \
+        "there is one curve: its slope is `reconstruction.linearization` (print contrast \
+         is `look.contrast`) and its placement \
          `reconstruction.anchor`",
     ),
     (
@@ -311,6 +315,33 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
              `{{\"explicit\": [r, g, b]}}`"
         ));
     }
+    // Retired by `nf-reconstruction/gamma-split`, which split the one slope in two.
+    // Refused at every value, the old default included: no single new key replays it.
+    if let Some(v) = body.get("reconstruction").and_then(|r| r.get("contrast")) {
+        let remedy = match v.as_f64() {
+            // In f32, as the recipe holds it, so the stated value prints as written.
+            // Only a look value validation accepts: a stated slope so small or so large
+            // that the quotient leaves the normal f32 range falls to the generic remedy.
+            Some(gamma) if (gamma as f32 / LINEARIZATION).is_normal() && gamma > 0.0 => {
+                format!(
+                    "to keep a stated {} as the whole contrast, write `look.contrast`: {} \
+                     and leave `reconstruction.linearization` at its default \
+                     {LINEARIZATION}",
+                    gamma as f32,
+                    gamma as f32 / LINEARIZATION,
+                )
+            }
+            _ => format!(
+                "state `look.contrast` for the print contrast, and leave \
+                 `reconstruction.linearization` at its default {LINEARIZATION}"
+            ),
+        };
+        return usage(format!(
+            "`reconstruction.contrast` split in two: the decode's slope is now \
+             `reconstruction.linearization`, the film's linearization, and how contrasty \
+             the picture is is the look's `look.contrast`. Drop the key; {remedy}"
+        ));
+    }
     if let Some((key, why)) = old_key("reconstruction", OLD_RECONSTRUCTION_KEYS) {
         return usage(format!(
             "`reconstruction.{key}` belongs to the current chain's recipe, not the new \
@@ -358,9 +389,10 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
         &mut r.measure,
         args,
     );
-    // The decode's own knobs. `--density-gamma` is the decode's contrast: the flag
-    // keeps its current spelling, and the split into a calibrated half and a look
-    // half is `nf-reconstruction/gamma-split`'s, which also owns renaming it.
+    // The decode's own knobs. `--density-gamma` is the decode's linearization — the
+    // calibrated half of `gamma`; print contrast is `--contrast`, the look's
+    // (`nf-reconstruction/gamma-split`). The flag keeps the current chain's spelling,
+    // where it is still the whole bundled slope.
     if let Some(v) = args.density.density_scale {
         r.reconstruction.scale = v;
     }
@@ -368,7 +400,7 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
         r.reconstruction.offset = v;
     }
     if let Some(v) = args.density.density_gamma {
-        r.reconstruction.contrast = v;
+        r.reconstruction.linearization = v;
     }
     if let Some(d) = args.anchor.anchor_mid_offset {
         r.reconstruction.anchor = AnchorRule::MidAboveBase(d);
@@ -380,6 +412,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     }
     if let Some(stops) = args.scene.exposure {
         r.scene_correction.exposure = stops;
+    }
+    if let Some(v) = args.look.contrast {
+        r.look.contrast = v;
     }
     let desat = &mut r.look.highlight_desaturation;
     if let Some(v) = args.look.highlight_desaturation {
@@ -425,6 +460,7 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
         Ok(_) => {
             validate_scene_correction(&r.scene_correction, names)?;
             validate_look(&r.look, names)?;
+            validate_whole_contrast(d.linearization, &r.look, names)?;
             return validate_fit_range(&r.fit_range, names);
         }
         Err(DecodeFault::Offset { channel, value }) => format!(
@@ -435,29 +471,32 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
             "{} must be finite and positive on every channel, got {value} on channel {channel}",
             name("--density-scale", "scale")
         ),
-        Err(DecodeFault::Contrast(v)) => format!(
+        Err(DecodeFault::Linearization(v)) => format!(
             "{} must be finite and positive, got {v}",
-            name("--density-gamma", "contrast")
+            name("--density-gamma", "linearization")
         ),
         Err(DecodeFault::MidAboveBase(v)) => format!(
             "{} must be finite and positive, got {v}",
             name("--anchor-mid-offset", "anchor")
         ),
-        Err(DecodeFault::Anchor { anchor, contrast }) => {
+        Err(DecodeFault::Anchor {
+            anchor,
+            linearization,
+        }) => {
             let AnchorRule::MidAboveBase(mid) = d.anchor;
-            // Two routes, and opposite remedies: a tiny contrast overflows the anchor
-            // itself (`0.745 / contrast`), while a huge offset overflows only the
-            // exponent `contrast · anchor`, where a larger contrast makes it worse.
+            // Two routes, and opposite remedies: a tiny linearization overflows the
+            // anchor itself (`0.745 / linearization`), while a huge offset overflows only
+            // the exponent `linearization · anchor`, where a larger one makes it worse.
             let remedy = if anchor.is_finite() {
                 format!("Use a smaller {}", name("--anchor-mid-offset", "anchor"))
             } else {
-                format!("Use a larger {}", name("--density-gamma", "contrast"))
+                format!("Use a larger {}", name("--density-gamma", "linearization"))
             };
             format!(
-                "the decode's anchor is not usable at {} {contrast:e} and {} {mid:e}: it \
-                 derives an anchor of {anchor:e}, whose exponent overflows f32 and would \
+                "the decode's anchor is not usable at {} {linearization:e} and {} {mid:e}: \
+                 it derives an anchor of {anchor:e}, whose exponent overflows f32 and would \
                  render every sample as exactly 0.0. {remedy}",
-                name("--density-gamma", "contrast"),
+                name("--density-gamma", "linearization"),
                 name("--anchor-mid-offset", "anchor"),
             )
         }
@@ -465,11 +504,18 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
     Err(NcError::Usage(message))
 }
 
-/// The look's value rules ([`HighlightDesaturation::check`]), rendered as a usage
-/// error naming the knob the way `names` says the command spells it.
+/// The look's value rules ([`LookSection::check_contrast`],
+/// [`HighlightDesaturation::check`]), rendered as a usage error naming the knob the
+/// way `names` says the command spells it.
 ///
 /// [`HighlightDesaturation::check`]: crate::pipeline::look::HighlightDesaturation::check
 fn validate_look(p: &LookSection, names: KnobNames) -> Result<()> {
+    if let Err(ContrastFault(v)) = p.check_contrast() {
+        return Err(NcError::Usage(format!(
+            "{} must be finite and positive (1 is the identity), got {v}",
+            knob_name(names, "look", "--contrast", "contrast")
+        )));
+    }
     let name = |flag: &str, key: &str| {
         knob_name(
             names,
@@ -495,6 +541,32 @@ fn validate_look(p: &LookSection, names: KnobNames) -> Result<()> {
         ),
     };
     Err(NcError::Usage(message))
+}
+
+/// The whole contrast, `linearization · look.contrast` — the divisor highlight
+/// desaturation normalises its saturation measure by — must be a normal positive f32.
+/// Each factor can pass its own rule while the product overflows to infinity or
+/// underflows to zero or a subnormal, which the stage cannot use. Keyed on the product
+/// whether or not desaturation is on: a whole contrast outside f32 describes no usable
+/// picture, and one rule is easier to state than a conditional one. Runs after both
+/// factors' own rules, so each is already finite and positive.
+fn validate_whole_contrast(linearization: f32, look: &LookSection, names: KnobNames) -> Result<()> {
+    let total = linearization * look.contrast;
+    if total.is_normal() {
+        return Ok(());
+    }
+    let gamma = knob_name(names, "reconstruction", "--density-gamma", "linearization");
+    let contrast = knob_name(names, "look", "--contrast", "contrast");
+    let (what, remedy) = if total.is_infinite() {
+        ("overflows", "smaller")
+    } else {
+        ("underflows", "larger")
+    };
+    Err(NcError::Usage(format!(
+        "the whole contrast, {gamma} {linearization:e} times {contrast} {:e}, {what} \
+         f32 (highlight desaturation divides by it). Use a {remedy} value for either",
+        look.contrast
+    )))
 }
 
 /// Scene correction's value rules ([`SceneCorrectionParams::check`]), rendered as a
@@ -550,7 +622,7 @@ impl Recipe {
             scene_correction: self.scene_correction.clone(),
             look: LookParams {
                 section: self.look,
-                decode_contrast: self.reconstruction.contrast,
+                linearization: self.reconstruction.linearization,
             },
             fit_range: FitRangeParams {
                 headroom_stops: self.fit_range.headroom_stops,
@@ -642,13 +714,14 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         // A stage with no knob is present as an empty object, not absent or `null`;
         // one with knobs writes each of them at its default — the identity for scene
-        // correction, highlight desaturation at 0.8 for the look, and reinhard at six
+        // correction, contrast 2.0/1.8 and highlight desaturation at 0.8 for the look
+        // (the contrast first, as the stage applies it), and reinhard at six
         // stops for fit range. (Fit gamut's map runs at every setting; it simply has
         // nothing for a recipe to set.)
         assert_eq!(json["fit_gamut"], serde_json::json!({}));
         assert_eq!(
             serde_json::to_string(&Recipe::default().look).unwrap(),
-            r#"{"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}}"#
+            r#"{"contrast":1.1111112,"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}}"#
         );
         assert_eq!(
             json["scene_correction"],
@@ -669,7 +742,7 @@ mod tests {
         // (`0.8399999737739563`), while the written document spells `0.84`.
         assert_eq!(
             serde_json::to_string(&Recipe::default().reconstruction).unwrap(),
-            r#"{"scale":[1.0,0.84,0.73],"offset":[0.0,0.0,0.0],"contrast":2.0,"anchor":{"mid-at-base-offset":0.62}}"#
+            r#"{"scale":[1.0,0.84,0.73],"offset":[0.0,0.0,0.0],"linearization":1.8,"anchor":{"mid-at-base-offset":0.62}}"#
         );
         // No reference density in the new calibration section.
         let json = serde_json::to_value(Recipe::default()).unwrap();
@@ -677,18 +750,20 @@ mod tests {
     }
 
     #[test]
-    fn the_look_is_handed_the_decodes_contrast() {
-        // Highlight desaturation's measure is normalised by the contrast that shaped
-        // its input; the look section cannot state it, so `chain_params` must.
+    fn the_look_is_handed_the_decodes_linearization() {
+        // Highlight desaturation's measure is normalised by the whole contrast that
+        // shaped its input — the decode's half of it the look section cannot state, so
+        // `chain_params` must.
         let r = parse(
-            r#"{"recipe_version": 2, "reconstruction": {"contrast": 3.1},
-                "look": {"highlight_desaturation": {"strength": 0.5}}}"#,
+            r#"{"recipe_version": 2, "reconstruction": {"linearization": 3.1},
+                "look": {"contrast": 1.2, "highlight_desaturation": {"strength": 0.5}}}"#,
         )
         .unwrap();
         let look = r
             .chain_params(DisplayPeak::SDR, DestinationGamut::DisplayP3)
             .look;
-        assert_eq!(look.decode_contrast, 3.1);
+        assert_eq!(look.linearization, 3.1);
+        assert_eq!(look.section.contrast, 1.2);
         assert_eq!(look.section.highlight_desaturation.strength, 0.5);
         assert_eq!(
             look.section.highlight_desaturation.band,
@@ -698,9 +773,36 @@ mod tests {
     }
 
     #[test]
+    fn the_look_contrast_leaves_the_decode_untouched() {
+        // The split's falsifiable point: how contrasty the picture is must not reach the
+        // decode. The decode reads `reconstruction` alone, so its output — what
+        // `film-master` will carry — is bit-identical across look contrasts, while the
+        // linearization, stated beside it, does move it.
+        use crate::algo::fixed;
+        use crate::types::{FilmBase, LinearImage};
+        let scan = LinearImage::new(2, 1, vec![0.5, 0.3, 0.2, 0.05, 0.04, 0.03], None).unwrap();
+        let base = FilmBase::from([0.9, 0.55, 0.42]);
+        let decoded = |json: &str| {
+            let r = parse(json).unwrap();
+            let (film, _) = fixed::decode(&scan, &base, &r.reconstruction).unwrap();
+            film.rgb().iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+        };
+        let plain = decoded(r#"{"recipe_version": 2}"#);
+        assert_eq!(
+            plain,
+            decoded(r#"{"recipe_version": 2, "look": {"contrast": 1.6}}"#)
+        );
+        assert_ne!(
+            plain,
+            decoded(r#"{"recipe_version": 2, "reconstruction": {"linearization": 2.0}}"#)
+        );
+    }
+
+    #[test]
     fn a_partial_recipe_takes_the_defaults_it_omits() {
-        let r = parse(r#"{"recipe_version": 2, "reconstruction": {"contrast": 1.8}}"#).unwrap();
-        assert_eq!(r.reconstruction.contrast, 1.8);
+        let r =
+            parse(r#"{"recipe_version": 2, "reconstruction": {"linearization": 1.7}}"#).unwrap();
+        assert_eq!(r.reconstruction.linearization, 1.7);
         assert_eq!(r.reconstruction.scale, DecodeParams::default().scale);
         assert_eq!(r.look, LookSection::default());
     }
@@ -799,7 +901,7 @@ mod tests {
             true,
         )
         .unwrap_err();
-        assert!(err.contains("reconstruction.contrast"), "{err}");
+        assert!(err.contains("reconstruction.linearization"), "{err}");
         let err = check(
             r#"{"recipe_version": 2, "calibration": {"dmax": "fixed"}}"#,
             true,
@@ -891,23 +993,23 @@ mod tests {
                 .contains("reconstruction.offset")
         );
         assert!(
-            with(|d| d.contrast = -1.0)
+            with(|d| d.linearization = -1.0)
                 .unwrap_err()
-                .contains("reconstruction.contrast")
+                .contains("reconstruction.linearization")
         );
         assert!(
             with(|d| d.anchor = AnchorRule::MidAboveBase(0.0))
                 .unwrap_err()
                 .contains("reconstruction.anchor")
         );
-        // A contrast small enough that `0.745 / contrast` overflows.
+        // A linearization small enough that `0.745 / linearization` overflows.
         // The remedy follows the route: here the anchor itself overflows, so a
-        // larger contrast is the fix…
-        let err = with(|d| d.contrast = 1e-39).unwrap_err();
+        // larger linearization is the fix…
+        let err = with(|d| d.linearization = 1e-39).unwrap_err();
         assert!(err.contains("anchor is not usable"), "{err}");
         assert!(err.contains("Use a larger --density-gamma"), "{err}");
         // A finite anchor whose exponent still overflows.
-        // …and here only the exponent does, where a larger contrast makes it worse.
+        // …and here only the exponent does, where a larger linearization makes it worse.
         let err = with(|d| d.anchor = AnchorRule::MidAboveBase(2e38)).unwrap_err();
         assert!(err.contains("anchor is not usable"), "{err}");
         assert!(err.contains("Use a smaller --anchor-mid-offset"), "{err}");
@@ -919,11 +1021,111 @@ mod tests {
         // `roll` accepts no conversion flags, so naming one there is a remedy the
         // user cannot type.
         let mut r = Recipe::default();
-        r.reconstruction.contrast = 0.0;
+        r.reconstruction.linearization = 0.0;
         let msg = validate(&r, KnobNames::KeyOnly).unwrap_err();
         let msg = msg.message();
-        assert!(msg.contains("`reconstruction.contrast`"), "{msg}");
+        assert!(msg.contains("`reconstruction.linearization`"), "{msg}");
         assert!(!msg.contains("--density-gamma"), "{msg}");
+        let mut r = Recipe::default();
+        r.look.contrast = 0.0;
+        let msg = validate(&r, KnobNames::KeyOnly).unwrap_err();
+        let msg = msg.message();
+        assert!(msg.contains("`look.contrast`"), "{msg}");
+        assert!(!msg.contains("--contrast"), "{msg}");
+    }
+
+    #[test]
+    fn validate_refuses_an_unusable_look_contrast() {
+        for bad in [0.0, -1.1, f32::NAN, f32::INFINITY] {
+            let mut r = Recipe::default();
+            r.look.contrast = bad;
+            let msg = validate(&r, KnobNames::FlagAndKey).unwrap_err();
+            assert!(
+                msg.message()
+                    .contains("--contrast (recipe `look.contrast`)"),
+                "{bad}: {}",
+                msg.message()
+            );
+        }
+        let mut r = Recipe::default();
+        r.look.contrast = 1.0;
+        validate(&r, KnobNames::FlagAndKey).unwrap();
+    }
+
+    #[test]
+    fn the_retired_contrast_key_is_refused_with_its_split() {
+        // Refused at every value, the old default included: the key was both halves at
+        // once, and no single new key replays it. The remedy states the look value
+        // that keeps the stated slope as the whole contrast.
+        for (json, look) in [
+            (
+                r#"{"recipe_version": 2, "reconstruction": {"contrast": 2.0}}"#,
+                "1.11",
+            ),
+            (
+                r#"{"recipe_version": 2, "reconstruction": {"contrast": 3.6}}"#,
+                "2",
+            ),
+        ] {
+            let err = check(json, true).unwrap_err();
+            assert!(
+                err.contains("reconstruction.linearization") && err.contains("look.contrast"),
+                "{err}"
+            );
+            assert!(err.contains(&format!("`look.contrast`: {look}")), "{err}");
+        }
+        // A value whose quotient validation would refuse (zero, subnormal or infinite
+        // in f32) gets the generic remedy, never a `look.contrast` it would then refuse.
+        for json in [
+            r#"{"recipe_version": 2, "reconstruction": {"contrast": "steep"}}"#,
+            r#"{"recipe_version": 2, "reconstruction": {"contrast": 1e-50}}"#,
+            r#"{"recipe_version": 2, "reconstruction": {"contrast": 1e-39}}"#,
+            r#"{"recipe_version": 2, "reconstruction": {"contrast": 1e39}}"#,
+            r#"{"recipe_version": 2, "reconstruction": {"contrast": -2.0}}"#,
+        ] {
+            let err = check(json, true).unwrap_err();
+            assert!(err.contains("state `look.contrast`"), "{json}: {err}");
+            assert!(!err.contains("write `look.contrast`"), "{json}: {err}");
+        }
+    }
+
+    #[test]
+    fn validate_refuses_a_whole_contrast_outside_f32() {
+        // Each factor passes its own rule; the product, which highlight desaturation
+        // divides by, does not. The remedy follows the direction.
+        let with = |linearization: f32, contrast: f32, names| {
+            let mut r = Recipe::default();
+            r.reconstruction.linearization = linearization;
+            r.look.contrast = contrast;
+            validate(&r, names).map_err(|e| (e.exit_code(), e.message().to_string()))
+        };
+        for (linearization, contrast, remedy) in [
+            (1e30, 1e10, "smaller"),
+            (1e-30, 1e-20, "larger"),
+            (1e-30, 1e-9, "larger"), // subnormal, not zero
+        ] {
+            let (code, msg) = with(linearization, contrast, KnobNames::FlagAndKey).unwrap_err();
+            assert_eq!(code, 2, "{msg}");
+            assert!(
+                msg.contains("--density-gamma (recipe `reconstruction.linearization`)")
+                    && msg.contains("--contrast (recipe `look.contrast`)"),
+                "{msg}"
+            );
+            assert!(msg.contains(&format!("Use a {remedy}")), "{msg}");
+            let (_, msg) = with(linearization, contrast, KnobNames::KeyOnly).unwrap_err();
+            assert!(
+                msg.contains("`reconstruction.linearization`") && msg.contains("`look.contrast`"),
+                "{msg}"
+            );
+            assert!(
+                !msg.contains("--density-gamma") && !msg.contains("--contrast"),
+                "{msg}"
+            );
+        }
+        // The remedy works: bringing either factor back makes the product usable.
+        with(1e30, 1.0, KnobNames::FlagAndKey).unwrap();
+        with(1.8, 1e10, KnobNames::FlagAndKey).unwrap();
+        with(1e-30, 1.0, KnobNames::FlagAndKey).unwrap();
     }
 
     #[test]

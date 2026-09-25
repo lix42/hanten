@@ -5,49 +5,44 @@
 Print contrast becomes a look knob: the half of `gamma` the decode no longer
 carries, pivoted at mid-grey and applied before the SDR/HDR branch.
 
-## Design
+## What already exists
 
-- **It is one half of a split, not a new idea.** Part 1 splits `gamma` into
-  linearizing the film (calibration, stays in the decode) and print contrast (a
-  look, moves here); today's single value bundles both. So this knob starts life
-  with a counterpart that must already have moved — hence the dependency.
-- **Pivoted at mid-grey**, for the same reason the decode's anchor pins mid:
-  contrast and exposure stay independent, and changing contrast pivots the image
-  instead of moving it.
-- **Scene-referred, before the branch.** Contrast is character below diffuse
-  white, which the two renditions must agree on for a gain map to work.
+**The knob landed with its counterpart** (`nf-reconstruction/gamma-split`, 2026-09-24),
+because the split could not ship half-done: `look.contrast` / `--contrast`, a power of
+each ACEScg channel pivoted at mid-grey, default `2.0 / 1.8` (so the default render's
+neutrals are unchanged), `1` the identity, running before highlight desaturation. Its
+value rule, merge arm, report field and both `LookSection` predicates are in place. So
+this task is what remains around the knob, not the knob.
+
+Design points that still hold and that the remaining work must keep:
+
 - **It, not the operator, decides shadow contrast.** Measured on the shipped
   reinhard at its default headroom (Part 2, "The shadow end"): local slope 1.00 at
   0.002, 0.99 at 0.01, 0.82 at mid — below mid the operator is a gain, not a
   curve. Everything a viewer reads as shadow contrast therefore arrives from this
   stage or from the decode's linearization.
-- **Its own key under `look`.** `nf-look/stage` settled the container on
-  2026-09-23: one key per control, not one CDL-style object shared with the grade.
+- **Exposure is in scene stops and contrast expands it**: scene correction runs first,
+  so `--exposure e` moves the graded image `e · contrast` stops.
+- **Per-roll contrast lands here.** `docs/spike/white-placement.md`'s candidate C
+  solves a per-roll `gamma`; under the split that is `look.contrast = gamma / 1.8`,
+  never a per-roll linearization.
 
 ## Open questions
 
-- The default. Today's 2.0 minus the ≈1.8 linearization is roughly a 1.10× print
-  contrast, which is a starting point rather than a decision — values belong to
-  `nf-calibration`.
-- Whether contrast and the per-channel grade compose in a stated order, or the
-  grade is defined as acting on the contrast's output.
-- **Its overlap with the grade.** A pivoted grade with equal exponents is this knob,
-  so the two can spell one operation twice. Decide who owns neutral contrast in
-  whichever of the two tasks runs first.
+- **The default.** `2.0 / 1.8` reproduces the pre-split render; it is a starting point
+  rather than a decision — values belong to `nf-calibration`, and a per-roll value is
+  `nf-calibration/anchor-comparison`'s candidate C.
+- **Its overlap with the grade.** A pivoted grade with equal exponents is this knob, so
+  the two can spell one operation twice. Contrast landed first, so it owns neutral
+  contrast; `nf-look/per-channel-grade` should be defined relative to it (e.g. exponents
+  normalised to the neutral one) and state its order against it.
 
 ## How to Verify
 
-- Unity is a bit-exact identity.
-- A mid-grey pixel is unmoved at any setting; a ramp steepens symmetrically about
-  it.
 - At matched lightness, a contrast change moves shadow separation where a fit
   range change does not — the measurement that motivates the knob's existence.
-- The first look control has landed (`path-to-white`, highlight desaturation on by
-  default): `LookSection` carries two predicates, `is_empty` (moves no pixel — what
-  `applied()` reads) and `asks_for_a_look` (neither default nor empty — what a no-look
-  destination such as `film-master` reads to refuse: the default is spared because
-  every default recipe carries it, an empty look because it is an identity). This
-  control extends both.
+- A default change carries its evidence (a review round) and restates the
+  neutral-equivalence test in `pipeline::look` against the new value.
 
 ## Dependencies
 
