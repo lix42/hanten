@@ -31,8 +31,10 @@
 //!   SDR above `1.0`, HDR above `P` — and the encoder clamps and counts it. The legacy
 //!   HDR renderer instead dropped `r`'s tail to stay strictly under its peak, and paid
 //!   for it with a below-white disagreement between the branches; this stage takes the
-//!   exact agreement. Revisit if an HDR destination's contract needs a hard ceiling
-//!   (`nf-display-stages/branch-contract`).
+//!   exact agreement. No destination adds a hard ceiling: at the default headroom no
+//!   real frame reaches past the HDR peak, and what a lower headroom pushes past is
+//!   clamped and counted (`nf-display-stages/branch-contract` has the measurement; for
+//!   a gain map the destination clamps and counts, since `gain_ratio` does not).
 //!
 //! **Reinhard compresses upward only**: below mid-grey it is a gain, not a curve, so
 //! the approach to black is left to the decode's linearization and the look's contrast.

@@ -17,6 +17,9 @@
 //! [`white_balance`] holds the white-balance statistics: the current chain's per-frame
 //! estimators and the roll measurement's levels ([`roll_white`]).
 
+/// The SDR/HDR branch contract on real frames (`nf-display-stages/branch-contract`).
+#[cfg(test)]
+mod branch_probe;
 pub mod chain;
 /// Goldens for the new flow's stages (`nf-verification/stage-goldens`).
 #[cfg(test)]
@@ -28,6 +31,7 @@ pub mod film_base;
 pub mod fit_gamut;
 pub mod fit_range;
 pub mod gain_map;
+pub mod gain_ratio;
 pub mod hdr;
 pub mod input_semantics;
 pub mod look;

@@ -56,7 +56,7 @@
 use crate::algo::FilmRgbImage;
 use crate::algo::fixed::DIFFUSE_WHITE;
 use crate::algo::fixed::{self, DENSITY_OFFSET, DecodeParams, SCAN_FLOOR};
-use crate::pipeline::chain::{self, ChainParams};
+use crate::pipeline::chain::{self, ChainParams, DisplayTarget, SharedParams};
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::{self, DestinationGamut, FitGamutParams};
 use crate::pipeline::fit_range::{self, DisplayPeak, FitRange, FitRangeParams};
@@ -859,21 +859,27 @@ fn golden_fit_gamut_is_bit_identical() {
 
 // --- threaded ----------------------------------------------------------------
 
+/// The new flow's one destination today: an SDR display in Display P3.
+const SDR_P3: DisplayTarget = DisplayTarget {
+    peak: DisplayPeak::SDR,
+    gamut: DestinationGamut::DisplayP3,
+};
+
 /// Every stage at its shipped setting except scene correction, which is not an
 /// identity on purpose — see the threaded goldens — and the look, which is off: no
 /// pixel here is near-neutral after these gains, so it would change nothing. The look
 /// has its own threaded vector below.
 fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
     ChainParams {
-        scene_correction: SceneCorrectionParams {
-            white_balance,
-            exposure: -1.0,
+        shared: SharedParams {
+            scene_correction: SceneCorrectionParams {
+                white_balance,
+                exposure: -1.0,
+            },
+            look: LookParams::off(),
+            headroom_stops: DEFAULT_HEADROOM_STOPS,
         },
-        look: LookParams::off(),
-        fit_range: fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR),
-        fit_gamut: FitGamutParams {
-            target: DestinationGamut::DisplayP3,
-        },
+        target: SDR_P3,
     }
 }
 
@@ -951,12 +957,12 @@ fn golden_the_look_threaded_runs_after_scene_correction() {
         exposure: 0.0,
     };
     let params = |look| ChainParams {
-        scene_correction: scene_correction.clone(),
-        look,
-        fit_range: fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR),
-        fit_gamut: FitGamutParams {
-            target: DestinationGamut::DisplayP3,
+        shared: SharedParams {
+            scene_correction: scene_correction.clone(),
+            look,
+            headroom_stops: DEFAULT_HEADROOM_STOPS,
         },
+        target: SDR_P3,
     };
     // Both pixels take a pure-IEEE path (full pull, or untouched), so pin them exactly.
     let (corrected, _) = scene_correction::apply(input(), &scene_correction).unwrap();

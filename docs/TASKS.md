@@ -1698,9 +1698,14 @@ the design in `docs/design-update.md`:
   toe](tasks/nf-display-stages/parametric-operator.md) — reinhard compresses
   upward only, so the shadow end is a subtraction; supersedes
   `algo/content-aware-sigmoid-toe`
-- [ ] [The SDR/HDR branch
-  contract](tasks/nf-display-stages/branch-contract.md) — where the branch
-  happens and what each side may differ in
+- [x] [The SDR/HDR branch
+  contract](tasks/nf-display-stages/branch-contract.md) — **done 2026-09-24.** The
+  chain splits after the look (`chain::render_pair`), the headroom shared above it,
+  so the branches differ only in the peak; below white they differ only where the SDR
+  cube binds, checked bit for bit by `chain::contract::check` (0 violations on 92
+  frames). `pipeline::gain_ratio` is the new chain's per-channel gain. No hard HDR
+  ceiling above `W`; the gain-map destination must clamp to its peak and count
+  (`nf-destinations/preset-set`)
 - [x] [Separate the gamut map's
   share](tasks/nf-display-stages/gamut-map-share.md) — **done 2026-09-23.** Near zero
   where it matters: across 92 frames on four rolls the map moves no marked white under

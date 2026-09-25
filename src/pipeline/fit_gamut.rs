@@ -14,6 +14,13 @@
 //! ceilings differ for real reasons — the gain map's must match the base as stored —
 //! so unifying the arithmetic must never unify them.
 //!
+//! **This is the one stage that may split an SDR/HDR pair below diffuse white.** A
+//! saturated colour with one channel above `1` at a luminance under white is mapped
+//! onto the SDR cube and left alone under an HDR peak. That is the branch contract's
+//! one permitted difference below white (`pipeline::chain`), carried by the gain map
+//! per channel; mapping HDR into the SDR cube to remove it would discard colour the HDR
+//! display can show.
+//!
 //! **What this stage discards is not counted.** It is the chain's last stage and clamps
 //! nothing, but the map is a gamut policy: a negative channel moves onto `0` with the
 //! rest of the colour, and a pixel with `Y ≤ 0` is written black. Neither reaches the
@@ -51,7 +58,7 @@ impl DestinationGamut {
 
     /// The destination's luminance weights: the cube being fitted into is the
     /// destination's, so luminance is measured in its primaries.
-    fn luma(self) -> [f32; 3] {
+    pub(in crate::pipeline) fn luma(self) -> [f32; 3] {
         match self {
             DestinationGamut::DisplayP3 => DISPLAY_P3_LUMA,
         }

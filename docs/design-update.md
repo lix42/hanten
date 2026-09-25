@@ -503,7 +503,12 @@ Constraints the order carries:
 - **Look comes before the SDR/HDR branch.** A gain map requires the two
   renditions to agree below diffuse white. If contrast or character lived in fit
   range, whose parameters depend on the display's peak, the midtones would
-  disagree. Only fit range and later stages may differ per branch.
+  disagree. Only fit range and later stages may differ per branch, and only in the
+  display's peak: fit range's headroom shapes the midtones too, so it is shared.
+  Below diffuse white the renditions are bit-identical except where the SDR cube
+  binds a saturated colour that HDR can show, which the gain map carries per
+  channel (`pipeline::chain`'s branch contract). A single-rendition destination
+  renders one branch through the same function.
 - **Fit range and fit gamut are separate but coupled.** The gamut ceiling
   follows the luminance fit range produced (`fit_gamut::apply`'s
   `max(peak, Y)`), so they stay adjacent.
@@ -605,8 +610,8 @@ stage needs it explicitly rather than inheriting it from a reconstruction curve:
   differs between SDR and HDR, so a single pre-branch operator cannot be defined
   against it. Diffuse white is scene-referred and common to both, and a gain map
   only requires the renditions to agree *below* it — which is the same crossover
-  the HDR highlight lift already uses. So the trigger point is shared even where
-  the pull above it is applied per branch.
+  the HDR highlight lift already uses. The whole look sits above the SDR/HDR split
+  (`nf-display-stages/branch-contract`), so the pull is shared as well as its trigger.
 
 ### The shadow end: reinhard compresses upward only
 

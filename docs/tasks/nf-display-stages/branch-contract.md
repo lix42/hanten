@@ -24,28 +24,28 @@ What is known:
   the gain-map defect `gain_map::build` records was an agreement failure every counter read
   as zero.
 
-Open:
+Answered (2026-09-24; the contract is `pipeline::chain`'s module doc):
 
-- **Does a destination that renders only one branch still go through the branch
-  point?** A single-rendition destination (an SDR TIFF, an HDR AVIF) has no partner
-  to agree with, and forcing both renditions costs memory for nothing — but a
-  branch that is sometimes skipped is a second code path.
-- **What the contract says about the gamut map**, whose ceiling differs per branch
-  by design (see [fit gamut](fit-gamut.md)): that is below-white-safe only if the
-  ceiling never bites below diffuse white. Confirm rather than assume. **It does**
-  (2026-09-24, `fit-gamut`): a saturated colour under diffuse white with one P3 channel
-  above `1` is mapped against the SDR ceiling and left alone under the HDR one
-  (`fit_gamut::tests::the_ceiling_is_the_peak_fit_range_used`).
-- Whether the contract is a doc statement, a type (one shared source handed to both
-  branches), or both.
+- **A single-rendition destination goes through the branch point**: it renders one
+  branch through the same function as a pair, so skipping a branch skips a call, not a
+  code path. A pair costs one full-frame copy of the graded image.
+- **The contract is a type and a test.** The headroom is shared with the stages above
+  the split (it shapes the midtones), and a branch states only its peak and gamut; a
+  pair shares its gamut. The test renders a pair and checks it pixel by pixel.
+- **The gamut map is the one permitted difference below white** (user decision
+  2026-09-24): where the SDR cube's top binds a saturated colour, the renditions differ,
+  and the gain map carries it per channel. The SDR ceiling is `max(1, Y)` in the
+  *destination's* luminance, which can exceed 1 while the ACEScg luminance does not.
+  Measured on 92 real frames: 0.01% of below-white pixels at the default headroom,
+  0.2% at zero; every other below-white pixel bit-identical.
 
-- **Fit range already gives exact agreement below diffuse white** (2026-09-23): its
-  lift is zero there and the base is shared, so the two peaks render the same bits.
-  What is open is **above**: the operator keeps reinhard's tail, so HDR content past
-  the headroom exceeds `P` (≈1.006·P at `W`, more beyond) and is clamped at the
-  encode, where legacy HDR stayed strictly under its 1000-nit peak by dropping the
-  tail — at the cost of the below-white agreement. Decide whether an HDR destination
-  needs the hard ceiling.
+- **An HDR destination gets no hard ceiling above `W`** (user decision 2026-09-24).
+  At a 1000/203 peak, 92 frames, no sample exceeds the peak at the default six stops;
+  57 samples on 4 frames at three stops; 0.0014% of samples on 21 frames (max 2.01·P)
+  at two; 381 on 9 frames (max 3.03·P) at zero (re-measured under the look's print
+  contrast, `nf-reconstruction/gamma-split`). The encoder clamps and counts them —
+  for a gain map that is the destination's job, since `gain_ratio::between` clamps HDR
+  only to `≥ 0` (recorded in `nf-destinations/preset-set`).
 
 ## How to Verify
 

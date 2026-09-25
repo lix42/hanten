@@ -35,9 +35,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::algo::fixed::{AnchorRule, DecodeFault, DecodeParams, LINEARIZATION};
 use crate::cli::ResolvedConfig;
-use crate::pipeline::chain::ChainParams;
-use crate::pipeline::fit_gamut::{DestinationGamut, FitGamutParams};
-use crate::pipeline::fit_range::{DisplayPeak, FitRangeParams};
+use crate::pipeline::chain::{ChainParams, DisplayTarget, SharedParams};
+use crate::pipeline::fit_gamut::DestinationGamut;
+use crate::pipeline::fit_range::DisplayPeak;
 use crate::pipeline::look::{
     ContrastFault, DesaturationFault, LookParams, LookSection, MAX_START_STOPS,
 };
@@ -111,7 +111,10 @@ impl<'de> Deserialize<'de> for RecipeVersion {
 ///
 /// Its own type rather than [`FitRangeParams`], for the reason [`FitGamut`] is: the
 /// stage's other parameter, the display's peak, is the **destination's** to state, and
-/// [`Recipe::chain_params`] adds it.
+/// [`Recipe::chain_params`] adds it. The headroom is shared by every rendition of a
+/// frame, the peak is not (`pipeline::chain`'s branch contract).
+///
+/// [`FitRangeParams`]: crate::pipeline::fit_range::FitRangeParams
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FitRange {
@@ -136,6 +139,8 @@ impl Default for FitRange {
 /// today — the target gamut — is the **destination's** to state, not the recipe's:
 /// [`Recipe::chain_params`] adds it. A recipe key for it would be a second way to
 /// choose primaries the destination already fixes.
+///
+/// [`FitGamutParams`]: crate::pipeline::fit_gamut::FitGamutParams
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FitGamut {}
@@ -614,21 +619,26 @@ fn validate_fit_range(p: &FitRange, names: KnobNames) -> Result<()> {
 }
 
 impl Recipe {
-    /// The stages' parameters, in chain order, for `pipeline::chain::render` — the
-    /// recipe's sections plus the destination's peak and gamut, which only the
-    /// destination states.
-    pub fn chain_params(&self, peak: DisplayPeak, target: DestinationGamut) -> ChainParams {
+    /// One rendition's parameters for `pipeline::chain::render` — the recipe's shared
+    /// half ([`Recipe::shared_params`]) plus the destination's peak and gamut, which
+    /// only the destination states.
+    pub fn chain_params(&self, peak: DisplayPeak, gamut: DestinationGamut) -> ChainParams {
         ChainParams {
+            shared: self.shared_params(),
+            target: DisplayTarget { peak, gamut },
+        }
+    }
+
+    /// Everything every rendition of a frame shares — the stages above the SDR/HDR
+    /// branch point and fit range's headroom (`pipeline::chain`'s branch contract).
+    pub fn shared_params(&self) -> SharedParams {
+        SharedParams {
             scene_correction: self.scene_correction.clone(),
             look: LookParams {
                 section: self.look,
                 linearization: self.reconstruction.linearization,
             },
-            fit_range: FitRangeParams {
-                headroom_stops: self.fit_range.headroom_stops,
-                peak,
-            },
-            fit_gamut: FitGamutParams { target },
+            headroom_stops: self.fit_range.headroom_stops,
         }
     }
 
@@ -761,6 +771,7 @@ mod tests {
         .unwrap();
         let look = r
             .chain_params(DisplayPeak::SDR, DestinationGamut::DisplayP3)
+            .shared
             .look;
         assert_eq!(look.linearization, 3.1);
         assert_eq!(look.section.contrast, 1.2);
@@ -1157,8 +1168,8 @@ mod tests {
         let mut r = Recipe::default();
         r.fit_range.headroom_stops = 4.0;
         let p = r.chain_params(DisplayPeak::SDR, DestinationGamut::DisplayP3);
-        assert_eq!(p.fit_range.headroom_stops, 4.0);
-        assert_eq!(p.fit_range.peak, DisplayPeak::SDR);
+        assert_eq!(p.shared.headroom_stops, 4.0);
+        assert_eq!(p.target.peak, DisplayPeak::SDR);
         let err = parse(r#"{"recipe_version": 2, "fit_range": {"peak": 4.9}}"#)
             .unwrap_err()
             .to_string();
