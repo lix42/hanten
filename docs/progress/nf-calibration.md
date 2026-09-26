@@ -13,13 +13,28 @@ ones.
 
 The numbers rather than the machinery: an early `scale` ladder (runs against today's binary, no colorchecker), the `scale`/`gamma` review loop, the offset question, the neutrality release gate, and what a user would run.
 
-Nothing has landed yet: the epic was created on 2026-09-19 as part of the new-flow
-migration plan (`docs/nf-migration.md`).
+The epic was created on 2026-09-19 with the new-flow migration plan
+(`docs/nf-migration.md`). **`scale-ladder` is done** (2026-09-20).
+
+**`anchor-comparison` is done (2026-09-25): the roll's white is content-referenced,
+placed through contrast, never through the decode's anchor.** `d` stays 0.62 and mid-grey
+stays pinned. Rule, provisional values from nine rolls: each frame's white is its red p97;
+the roll's white is its brightest frame's white at or under **+2.0** scene stops above
+mid-grey, raised to at least **+1.5**; a frame above +2.0 is clamped to it; the solved
+`look.contrast` spans whole contrast 2.23–2.97 (2.23 on a clamped frame). A warning fires near the **leader**
+(film saturation), never merely because the cap bound. It was chosen by review **with a
+black point in the chain**, and the new chain has none: every placement looked pale
+without one. Black is now `nf-display-stages/parametric-operator`'s (reference: where the
+film base renders). Implementation is `roll-white-rule`; the warning's margin is
+`saturation-margin`. Ranked rule > fixed anchor > content white with solved contrast
+(noise up to 5.4× the scan's floor) > level move (mid-grey up to L\* 82). Levels here
+are **scene stops**: red density through the fixed linearization, 1 stop ≈ 0.167
+density.
 
 ## anchor-comparison
 
-**Status:** not started
-**Updated:** 2026-09-24
+**Status:** done
+**Updated:** 2026-09-25
 
 - 2026-09-21: filed to carry the rendered half of `nf-reconstruction/anchor-spike`,
   which costed four white placements from the scans but could not rank them: under the
@@ -36,6 +51,202 @@ migration plan (`docs/nf-migration.md`).
   stays this task's to settle or hand on explicitly. **Where C/D's per-roll contrast
   lands is settled**: it is `look.contrast` itself, one knob, with the decode's anchor
   unchanged — only how it reaches the recipe (`measure-roll` or by hand) stays open.
+- 2026-09-25: **started; two review rounds, and the shortlist changed shape.** Sets and
+  scripts in `../temp/anchor-cap/` (`review.json` = cap round, `review-probe.json` = black
+  probe); rendered by hand on the new chain, since the generator cannot pass `--new-flow`.
+  Only `look.contrast` varies within a roll (total gamma `= 0.745 / (W − d)`, mid-grey
+  pinned at `d = 0.62`); white balance is each roll's `measure-roll` gains, held.
+
+  **Units.** The user reasons in stops, so every level here is in **scene stops above
+  mid-grey**: red density through the decode's fixed linearization (1 stop = 0.167
+  density). Not rendered stops — those depend on the contrast being solved.
+
+  **Two measurement traps, both hit.** (1) `decode-side.json`'s per-frame `q` is the
+  *channel mean*; the spike's `W` is *red*. Mixing them made frames appear to exceed their
+  leader. (2) `estimate`'s film base is a **transmission**: density is
+  `−log10(T / base)`, not `−log10 T − base`. Re-measured on red, all nine negative rolls
+  (`remeasure-fixed.json`): no frame's white exceeds its leader, and the spike's `W`
+  reproduces. The spike's roll `W` was the **p90 over frames** of per-frame red p97 — a
+  cross-frame percentile the user rejected, since it makes the roll's white depend on
+  roll size.
+
+  **Replaced D with a clamp on the roll's white** (user). The roll's white is its
+  brightest frame's white (per-frame red p97, which keeps the headroom), bounded by a cap
+  above and a floor below. Frames whose white sits above the cap are handled one of two
+  ways: **V1** clamps the roll's white to the cap; **V2** skips them and takes the
+  brightest frame left (the cap if none is). A cap binding must **warn** (user).
+
+  **Cap round** (6 rolls, 35 frames): uncapped, V1/V2 at +2.5/+3.0, V1 at leader −1.0.
+  The user preferred V2 +2.5 on most frames, V1 +2.5 on some; uncapped and +3.0 were
+  flat. Uncapped white lands at +2.2 to +4.7, which is gamma 0.94–2.05, pale on every roll.
+  1121 (07-23) judged overexposed; 1868 and 1902 (09-20) bright scenes; 1151 ambiguous.
+
+  **The pale look was mostly the missing black point.** The new chain places no black
+  (`--black-point` is refused under `--new-flow`; `flare-removal` and the operator's toe
+  are unbuilt), so the only thing darkening shadows was contrast: the darkest 1% of
+  pixels sat at L\* 12–26. Every roll's darkest frame bottoms out at the **film base**
+  (red p0.5 at −3.6 to −3.8 stops, against mid-grey's 3.7 above base), which the straight
+  line renders at **L\* 12–15** under V1. The **black probe** moved that level to L\* ≈ 2
+  (one value per roll and arm, applied to the JPEG, not a pipeline stage). Verdict (user):
+  **with black added, both white rules improved** (V1+black > V1, V2+black > V2), and on
+  09-14 and 09-18 the earlier wish for more contrast was met by the black alone. The
+  **two-point pin** (base → L\* 2, `W` → white, mid-grey floating; gamma 2.48–2.67 on every
+  roll) put mid-grey at L\* ≈ 36 and was **too dark** — **mid-grey stays pinned**.
+  **Leader − 0.5 with skip** found the overexposed frames (skipped 1121, 1151, 1816) but left
+  09-20 flat — it neither places the white nor fixes flatness.
+
+  **Where V1 beat V2 (both with black): almost exactly the frames V2 skipped** — 1121,
+  1151, 1632 (skin), 1868 (a toss-up); 1902, barely over the cap, went the other way. The
+  one other V1 win, 1137, is on 07-24 (3 frames), where skipping 1151 makes V2 jump to gamma
+  3.39: the jump to the next frame on a short roll. Hence **V3** (user-agreed): the roll's
+  contrast from V2, and each skipped frame clamped to the cap as in V1, with a warning.
+  Only warned frames render differently from their roll.
+
+  **What the leader is still good for.** Its distance from a frame's white says whether the
+  frame nears film saturation (1121 0.13 stop under, 1151 0.40) or is a bright scene
+  within latitude (1868 1.81 under). That separates the warning's two meanings, and
+  may justify a different highlight treatment for the saturated kind.
+
+  **Consequences.** (a) A black point is needed, and it is not this task's to build:
+  `nf-display-stages/parametric-operator` / `nf-scene-correction/flare-removal`. Its
+  natural reference is where the film base renders, which is already measured. Until it
+  exists, **every white rule must be judged with the probe's black added**, or the white
+  is tuned to compensate for the missing black. (b) The cap value is still an estimate (+2.5
+  was the only value tested with black); the floor is untested. Next round: V2 vs V3 at
+  +2.0/+2.5/+3.0 with black, and single dark frames under a floor ladder.
+- 2026-09-25: **round 3 (all with the probe's black) — cap, V3 and floor chosen** (user).
+  Sets `review-r3-cap.json`, `review-r3-floor.json`; `scripts/round3.py`.
+
+  **Cap +2.0, V3.** +3.0 lost wherever it differed; +2.0 and +2.5 were close, with a lean to
+  +2.0 (09-18, 09-14). V3 was safer on the frames near film saturation (1121: "v3 is much
+  safer at highlight"; 1151), V2 better on skipped frames that are ordinary bright scenes
+  (1632, 1902) — the split the leader distance predicts. **The warning keys on the leader,
+  not the cap** (user): +2.0 binds on every roll measured, so a cap warning would fire on
+  every roll. Warn when a frame's white is within a margin of its leader ("near film
+  saturation"); the cap itself is silent.
+
+  **Floor +1.5.** Single dark frames treated as a roll of one (09-13 1698/1696, 09-11
+  1658/1662, 09-09 1612, 09-14 1719, 09-18 1797, 09-20 1904): floor +1.0 (gamma 4.45) was
+  worst on every frame except control 1810; +1.5 (2.97) beat +2.0 (2.23) and the frame's
+  render within its own roll.
+
+  **The rule this gives, on all nine rolls** — roll white = brightest frame white at or
+  under +2.0, raised to at least +1.5; frames above +2.0 clamped to it:
+
+  | roll | `W` | gamma | leader − frame < 0.5 |
+  |---|---|---|---|
+  | 07-15 Ektar100 | +1.95 | 2.29 | — |
+  | 07-23 Portra160 | +1.91 | 2.33 | 1121 (0.14) |
+  | 07-24 Gold200 | +1.50 floor | 2.97 | 1151 (0.39) |
+  | 09-09 Ektar100 | +1.87 | 2.39 | — |
+  | 09-11 Portra400 | +1.52 | 2.93 | — |
+  | 09-13 Portra400 | +1.65 | 2.69 | — |
+  | 09-14 Ektar100 | +1.98 | 2.25 | — |
+  | 09-18 Gold200 | +1.50 floor | 2.97 | 1816 (0.27) |
+  | 09-20 Portra400 | +1.97 | 2.26 | — |
+
+  Two things this table raises, open: (1) **cap − floor is 0.5 stop**, so the rule can move a
+  roll's white by at most half a stop and its contrast only across 2.25–2.97. A fixed white
+  near +1.75 (gamma 2.54) is within ±0.25 stop of it on every roll, so the fixed option is the
+  null to beat before the per-roll measurement earns a place. (2) A 0.5-stop leader margin
+  also flags **1816**, which the user never judged overexposed; Gold200's leader sits only
+  ~1.5 stops above its content on both Gold rolls, so the margin may be stock-dependent.
+- 2026-09-25: **round 4, the null test — the per-roll rule beats a fixed white** (user).
+  `review-r4.json`, `scripts/round4.py`: 8 frames on five rolls chosen where the two differ
+  most (floor rolls 09-18/07-24/09-11 steeper under the rule, cap rolls 09-14/09-20 flatter),
+  the rule against one fixed white at +1.75 (gamma 2.54), both with the probe's black. "They
+  look different… maybe 1 or 2 frames the fixed one is better, but the rule is more
+  consistent." So the per-roll measurement earns its place, narrow band and all. **1816**:
+  the rule's highlight is better — the V3 clamp to the cap (gamma 2.23 against 2.54) helps
+  it, whether or not it is near saturation, so the leader margin (0.5 stop) stays
+  provisional rather than confirmed by this frame.
+- 2026-09-25: **the verification numbers, and the ranking.** `scripts/verify.py`, 160
+  16-bit renders measured in memory, on every frame with marked patches on 09-18/09-14/
+  09-20 plus three 09-11 frames. Noise is the three-way report's measure (q25 of
+  `|I(x+1) − I(x)|` over the median, red, 1200 px central crop) as a multiple of the scan's
+  own floor. C\* is the mean over the band fit's marked patches. Mid-grey is where a datasheet
+  mid lands, scene-referred (analytic). A = today's default; B = the spike's `W` to white by
+  exposure at gamma 2.0; C = the spike's candidate C; rule = the chosen rule; rule-bk = with
+  the probe's black.
+
+  | roll | option | gamma | noise × floor (max) | white C\* | colour C\* | mid L\* |
+  |---|---|---|---|---|---|---|
+  | 09-18 Gold200 | A | 2.00 | 0.88 (1.03) | 3.8 | 8.4 | 49.5 |
+  | | B | 2.00 | 0.77 (0.91) | 4.3 | 10.3 | **72.1** |
+  | | C | 4.15 | **1.98 (2.45)** | 7.8 | 17.3 | 49.5 |
+  | | rule | 2.23–2.97 | 1.32 (1.63) | 5.5 | 11.7 | 49.5 |
+  | | rule-bk | 2.23–2.97 | 1.36 (1.67) | 5.5 | 11.8 | 49.5 |
+  | 09-14 Ektar100 | A | 2.00 | 0.88 (1.34) | 4.0 | 11.0 | 49.5 |
+  | | B | 2.00 | 0.83 (1.27) | 4.2 | 11.6 | 58.4 |
+  | | C | 2.57 | 1.15 (1.76) | 5.3 | 14.9 | 49.5 |
+  | | rule | 2.23–2.25 | 1.00 (1.52) | 4.5 | 12.7 | 49.5 |
+  | | rule-bk | 2.23–2.25 | 1.14 (1.88) | 4.6 | 12.9 | 49.5 |
+  | 09-20 Portra400 | A | 2.00 | 0.87 (1.01) | 13.7 | 31.1 | 49.5 |
+  | | B | 2.00 | 0.84 (0.98) | 14.6 | 32.5 | 54.9 |
+  | | C | 2.32 | 1.00 (1.18) | 16.1 | 37.1 | 49.5 |
+  | | rule | 2.26 | 0.97 (1.15) | 15.6 | 36.0 | 49.5 |
+  | | rule-bk | 2.26 | 1.14 (1.32) | 15.9 | 36.5 | 49.5 |
+  | 09-11 Portra400 | A | 2.00 | 1.07 (1.28) | — | — | 49.5 |
+  | | B | 2.00 | 0.90 (1.08) | — | — | **81.6** |
+  | | C | 6.61 | **5.43 (6.31)** | — | — | 49.5 |
+  | | rule | 2.93 | 1.75 (2.14) | — | — | 49.5 |
+  | | rule-bk | 2.93 | 1.81 (2.22) | — | — | 49.5 |
+
+  Readings. **Noise tracks the slope**, as the three-way report found: C costs 2× the floor
+  on Gold200 and 5.4× on the underexposed 09-11. The rule's floor holds 09-11 to 1.75×. The
+  black probe adds ~0.05–0.15×, most of it the measure's own normalisation (the black
+  lowers the median it divides by). **B's mid-grey floats to L\* 55–82**: the washed-out
+  midtone the spike predicted, worst on the underexposed roll. **Marked whites' C\* rises
+  with contrast, in proportion to colour C\***. A → C on 09-18 doubles both (3.8 → 7.8,
+  8.4 → 17.3, gamma ×2.07). Contrast is a per-channel power, so it multiplies residual cast
+  with saturation, and highlight desaturation at its provisional band does not take it back.
+  The rule's whites carry 1.1–1.45× A's chroma. 09-20's two white patches sit at C\* ~14–16
+  under every option, so they are not neutral surfaces.
+
+  **Ranking: rule (with a black point) > A > C > B.** The rule won every review round it
+  was in. A is roll-consistent but pale and leaves the highlight operator nearly inert. C
+  pins both ends but pays in noise, unboundedly on an underexposed roll. B loses mid-grey.
+  "A, and move `d`" was not needed as the verdict: the rule's band (gamma 2.25–2.97) is what
+  moving away from A bought, and the fixed +1.75 white lost to it in review.
+
+  **The task's open questions, answered or handed on.** *Which percentile defines `W`*: each
+  frame's red p97 over a 12% inset, with the roll taking its brightest frame under the cap —
+  no cross-frame percentile. Moving onto `measure-roll`'s ACEScg pooling and re-checking
+  the cap and floor there goes to the follow-up that implements it. *Code constant or recipe
+  value, and how the contrast reaches the recipe*: handed to that follow-up, which has
+  `measure-roll` compute it and the recipe carry the value, as white balance does. *Whether
+  an underexposed roll is lifted*: only as far as the floor (+1.5, gamma ≤ 2.97); below it the
+  roll renders dark, which is the user's call ("if a whole roll is underexposed, we should
+  render them as underexposed").
+- 2026-09-25: **done.** Follow-ups filed (user-approved): `nf-calibration/roll-white-rule`
+  (implement the rule in `measure-roll`; depends on this task and on
+  `nf-display-stages/parametric-operator`, which now also places black) and
+  `nf-calibration/saturation-margin` (the leader margin, and frames near saturation).
+  Cross-references were appended to `path-to-white` (band re-fit), `scene-range-mapping`
+  (the floor as a noise budget), `parametric-operator` and `flare-removal`. The claims that this
+  task would decide the anchor were updated where they are current guidance: guide,
+  spec, open tasks, the `nf-look`, `nf-reconstruction`, `nf-retire` and `nf-calibration`
+  epic summaries, `types.rs`, `look.rs`, `fixed.rs`. The band re-fit is owned by
+  `nf-look/desaturation-band-refit`; a frame clamped to the cap is disclosed in the report,
+  not warned about (both from a code review of this close-out). What a dependent
+  needs: **`d` and the anchor rule do not move**; the per-roll value is `look.contrast`;
+  judge anything that places white with a black point in the chain.
+
+## roll-white-rule
+
+**Status:** not started
+**Updated:** 2026-09-25
+
+- 2026-09-25: filed from `anchor-comparison`. Goal: `measure-roll` places the roll's white
+  by the rule that task chose by review.
+
+## saturation-margin
+
+**Status:** not started
+**Updated:** 2026-09-25
+
+- 2026-09-25: filed from `anchor-comparison`. Goal: the leader margin the saturation
+  warning keys on, and whether frames near saturation need their own treatment.
 
 ## scale-ladder
 

@@ -562,16 +562,18 @@ pub enum FilmBaseSource {
 /// a rule that lives elsewhere — the rule stays a look knob, the measurement it
 /// reads lives here. The film base is its one member today; the roll reference
 /// density (`dmax`) retired with the placements that read it
-/// (`nf-retire/dmax-machinery`). The section is expected to grow: a roll **content white** (and possibly its
-/// per-frame spread) joins it if `nf-calibration/anchor-comparison` picks a
-/// content-referenced or hybrid placement — see `docs/spike/white-placement.md`.
+/// (`nf-retire/dmax-machinery`). The section is expected to grow:
+/// `nf-calibration/anchor-comparison` chose a content-referenced roll **white**, and
+/// `nf-calibration/roll-white-rule` decides whether it joins this section or only the
+/// contrast solved from it is carried.
 /// So nothing here may assume a closed pair, and every member carries its own
 /// optionality and its own default rather than the section carrying one for all
 /// of them.
 ///
 /// **Producing a calibration is not "one frame in, one calibration out".**
-/// `film_base` comes from a single reference frame, but a roll
-/// content white is a percentile taken across many frames. The acquisition
+/// `film_base` comes from a single reference frame, but a roll content white is read
+/// from every frame: the brightest frame's own white under a cap, never a percentile
+/// across frames (`nf-calibration/roll-white-rule`). The acquisition
 /// cascade that resolves a complete calibration is
 /// `core/base-acquisition-planner`; this struct is only its shape.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -1028,9 +1030,9 @@ pub const REFERENCE_CONTRAST: f32 = MID_GREY_OUTPUT_DECADES / REFERENCE_MID_TO_W
 /// the reference (`nf-retire/dmax-machinery`); a recipe naming one is refused by
 /// [`REMOVED_ANCHOR_PLACEMENTS`].
 ///
-/// Still an enum, and still serialized as a tagged object, so a later
-/// content-referenced placement (`nf-calibration/anchor-comparison`) can carry its own
-/// measured value rather than reuse this one's number for a different quantity.
+/// Still an enum, and still serialized as a tagged object — the form a content-referenced
+/// placement would need to carry its own measured value. `nf-calibration/anchor-comparison`
+/// placed the roll's white through the look's contrast instead, so none is planned.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AnchorPlacement {

@@ -78,11 +78,12 @@
 //! pins mid *and* white — needs nothing from this module: it solves its contrast
 //! from a **content** white and the spike puts that per-roll contrast in the look
 //! stage — `look.contrast`, as `gamma / LINEARIZATION` — leaving the decode fixed.
-//! **B** and **D** are the two that would hand
-//! this module a measured density. That is why [`AnchorRule`] is an enum with one
-//! variant rather than a bare `f32` field: they add a variant, instead of silently
-//! changing what a number means. No white reference is measured, read or
-//! representable today.
+//! **B** and **D** would have handed this module a measured density.
+//! `nf-calibration/anchor-comparison` chose neither: its rule, a bounded C, places the
+//! roll's white through `look.contrast`, so no content-referenced variant is planned.
+//! [`AnchorRule`] stays an enum with one variant rather than a bare `f32` field, so a
+//! future one would add a variant instead of silently changing what a number means.
+//! No white reference is measured, read or representable here.
 
 use crate::algo::{FilmRgbImage, density};
 use crate::pipeline::pixels;
@@ -102,8 +103,9 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 /// published `D-min` stays diagnostic-only (`algo/film-stock-profiles`, Constraint 1).
 /// `crate::film_stock`'s `the_fixed_decode_mid_is_the_generic_aim` ties the two together.
 ///
-/// The value is today's pick, not a closed question: `nf-calibration/anchor-comparison`
-/// may move it. That changes every `--new-flow` render, and nothing versions it yet —
+/// The value is today's pick. `nf-calibration/anchor-comparison` left it in place — the
+/// roll's white acts through the look's contrast — but a later calibration may move it.
+/// That changes every `--new-flow` render, and nothing versions it yet —
 /// `pipeline_version` tracks the default render only, and a new-flow fingerprint is
 /// `nf-verification/fingerprints`'. It stays reachable as `--anchor-mid-offset`.
 pub const MID_ABOVE_BASE: f32 = 0.62;
@@ -197,9 +199,9 @@ pub(crate) const SCAN_FLOOR: f32 = 1e-6;
 
 /// Which tone the decode pins, and at what density.
 ///
-/// One variant today, and that is the point: a bare `f32` field would let a later
-/// content-referenced placement (`docs/spike/white-placement.md` B and D) reuse the
-/// same number for a different quantity. See the module docs.
+/// One variant today, and that is the point: a bare `f32` field would let a
+/// content-referenced placement (`docs/spike/white-placement.md` B and D, neither of
+/// them planned) reuse the same number for a different quantity. See the module docs.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AnchorRule {
     /// Pin **mid-grey** (output 0.18) at `d` density above the film base, letting
@@ -239,8 +241,8 @@ impl AnchorRule {
 
     /// Whether resolving this rule consumes a reference density. Always `false`
     /// today, and stated rather than assumed: it is the property the whole anchor
-    /// design rests on, and a later content-referenced variant would have to return
-    /// `true` here instead of quietly changing what the decode reads.
+    /// design rests on, and a content-referenced variant, were one ever added, would
+    /// have to return `true` here instead of quietly changing what the decode reads.
     pub fn reads_reference(self) -> bool {
         match self {
             AnchorRule::MidAboveBase(_) => false,

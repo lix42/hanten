@@ -89,9 +89,13 @@ the empty-region refusal the stage no longer needs.
 ## flare-removal
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-09-25
 
 - 2026-09-19: created with the new-flow plan. Goal: the scene-referred half of the black point.
+- 2026-09-25: pointer from [`nf-calibration/anchor-comparison`](../tasks/nf-calibration/anchor-comparison.md): its black probe showed the new chain needs a black
+  point, which `nf-display-stages/parametric-operator` now owns (the film base as the
+  reference). Scanner veil and base fog stay this task's, as a scene term. The two meet
+  where the base renders, so measure fog against that level rather than a second one.
 
 ## levels-knob
 

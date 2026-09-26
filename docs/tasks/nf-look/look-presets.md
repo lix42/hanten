@@ -25,10 +25,10 @@ the old chain, so none of them survives unchanged; the likely answer is that
   reconstruction. [stock-data-home](stock-data-home.md) answered what returns: an
   optional per-stock normalization in the look, planned but unscheduled, with its own
   spelling — not the preset names.
-- **A preset does not set `look.contrast`** (`nf-look/contrast`, 2026-09-24). If
-  `nf-calibration/anchor-comparison` picks a per-roll contrast (candidate C or D), that
-  value is the roll's, carried in its recipe, and a preset setting the knob would
-  silently overwrite it.
+- **A preset does not set `look.contrast`** (`nf-look/contrast`, 2026-09-24).
+  `nf-calibration/anchor-comparison` chose a per-roll contrast (2026-09-25), which
+  `nf-calibration/roll-white-rule` has `measure-roll` compute: that value is the roll's,
+  carried in its recipe, and a preset setting the knob would silently overwrite it.
 - **It must work on a roll.** `docs/tasks/core/recipe-composition.md` adds
   `--preset` to `roll`'s override surface — the only way to apply a look to a roll
   without authoring a file. Whatever this becomes keeps that precedence position.
