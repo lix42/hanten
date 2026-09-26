@@ -15,9 +15,14 @@ verdicts are in `docs/progress/nf-calibration.md`, 2026-09-25). The values are
 
 - **The rule.** Each frame's white is its own high percentile, which keeps the specular
   headroom above white. The roll's white is the brightest frame white **at or under a
-  cap** (+2.0 scene stops above mid-grey), **raised to at least a floor** (+1.5). Mid-grey
-  stays pinned at the decode's `d`, so the white sets `look.contrast`; over the nine rolls
-  the whole contrast lands in 2.25–2.97 per roll, and 2.23 on a frame clamped to the cap.
+  cap** (+2.0 scene stops above mid-grey), **raised to at least a floor** (+1.5). **If every
+  frame is above the cap, the roll's white is the cap.** Mid-grey stays pinned at the
+  decode's `d`, so the white sets the contrast. Over the nine rolls the **whole** contrast
+  (linearization × `look.contrast`) lands in 2.25–2.97 per roll and 2.23 on a frame
+  clamped to the cap. **What the recipe stores is `look.contrast`, the whole contrast
+  over the linearization (1.8):** 1.25–1.65, and 1.24 when clamped. Storing the whole
+  value would apply the linearization twice (whole contrast 4.05–5.35) and reproduce none
+  of the reviewed renders.
 - **A frame above the cap is clamped to it**, not merely skipped: it renders at the
   contrast the cap gives, not the roll's. It was the review's choice on frames near
   saturation (V3 in the progress log). So the recipe needs a per-frame contrast for those
@@ -72,6 +77,7 @@ Open:
 - A frame near its leader warns, including one the leader guard would have excluded; a
   frame merely above the cap does not warn, and the report names it with both contrasts.
 - A roll of one dark frame lands on the floor, not on a contrast the floor excludes.
+- A roll whose every frame is above the cap lands on the cap.
 
 ## Dependencies
 

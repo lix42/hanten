@@ -38,8 +38,11 @@ Black, from `anchor-comparison` (2026-09-25, `docs/progress/nf-calibration.md`):
   rolls (≈ 2.95) but 7.2–9.2 on capped ones (≈ 2.25), measured in round 4. So the lift a
   black point must add varies by roll and is near zero at the floor: a fixed offset is the
   wrong shape.
-  Moving that level to near black needs no image statistic, and is the same for every
-  frame of a roll.
+  Moving that level to near black needs no image statistic, but it is **a function of
+  each frame's resolved contrast**, not one value per roll. A frame clamped to the cap
+  (`roll-white-rule`) renders at 2.23 while its roll may be at 2.97, so its base sits
+  higher. Either the mapping takes the frame's contrast, or a toe that handles both levels
+  is shown to.
 - **What the review showed.** A probe moved the base to L\* ≈ 2 with a linear-light offset
   on the finished JPEG (not a pipeline stage), one value per roll and contrast. With it,
   every white rule improved, and the user's wish for more contrast on two rolls was met

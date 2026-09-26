@@ -1010,7 +1010,8 @@ the design in `docs/design-update.md`:
   task — so the shape ships here and the values are re-fitted later
 - `nf-look/desaturation-band-refit` (new flow): `nf-calibration/roll-white-rule`, `nf-display-stages/parametric-operator`
   — filed 2026-09-25: `path-to-white`'s re-fit, owned by a task now that the white rule
-  is chosen; it needs the final white and black, which decide what reaches the band
+  is chosen; the white decides what reaches the band, and the black is what the re-fit
+  must be judged with
 - `nf-look/contrast` (new flow): `nf-look/stage`, `nf-reconstruction/gamma-split`
   — the look half of `gamma`; supersedes `algo/contrast-latitude-spike`
 - `nf-look/look-presets` (new flow): `nf-look/contrast`, `nf-look/per-channel-grade`
