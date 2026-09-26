@@ -172,6 +172,8 @@ graph TD
   nf-reconstruction --> nf-retire
   nf-look --> nf-retire
   nf-look --> nf-core
+  nf-destinations --> nf-core
+  nf-calibration --> nf-core
   nf-scene-correction --> nf-retire
   nf-core --> nf-docs
   nf-core --> analysis
@@ -568,6 +570,8 @@ graph TD
   nf-retire/sigmoid-and-simple --> nf-core/default-flip
   nf-retire/display-tones --> nf-core/default-flip
   nf-retire/dmax-machinery --> nf-core/default-flip
+  nf-destinations/gain-map-destination --> nf-core/default-flip
+  nf-calibration/roll-white-rule --> nf-core/default-flip
   nf-core/stage-skeleton --> nf-reconstruction/fixed-decode
   nf-reconstruction/fixed-decode --> nf-reconstruction/anchor-rule
   nf-reconstruction/anchor-spike --> nf-reconstruction/anchor-rule
@@ -654,6 +658,8 @@ graph TD
   nf-look/path-to-white --> nf-core/one-luma-dot
   nf-calibration/scale-ladder --> nf-look/path-to-white
   nf-calibration/scale-ladder --> nf-calibration/scale-gamma-loop
+  nf-destinations/direct-preset --> nf-calibration/scale-gamma-loop
+  nf-display-stages/parametric-operator --> nf-calibration/scale-gamma-loop
 ```
 
 Dependency list (a task is executable when all its deps are `[x]` done):
@@ -973,7 +979,7 @@ the design in `docs/design-update.md`:
 - `nf-core/knob-availability-audit` (new flow): `nf-core/new-flow-flag`
   — classify every knob value-rejected vs flag-rejected before the default
   moves
-- `nf-core/default-flip` (new flow): `nf-core/minimal-end-to-end`, `nf-core/knob-availability-audit`, `nf-retire/sigmoid-and-simple`, `nf-retire/display-tones`, `nf-retire/dmax-machinery`
+- `nf-core/default-flip` (new flow): `nf-core/minimal-end-to-end`, `nf-core/knob-availability-audit`, `nf-retire/sigmoid-and-simple`, `nf-retire/display-tones`, `nf-retire/dmax-machinery`, `nf-destinations/gain-map-destination`, `nf-calibration/roll-white-rule`
   — the default resolves the new chain; version bump, drift row, before/after
   report. Supersedes the flip half of `algo/split-default-migration`
 - `nf-reconstruction/fixed-decode` (new flow): `nf-core/stage-skeleton`
@@ -1054,7 +1060,7 @@ the design in `docs/design-update.md`:
   — supersedes `output/display-p3-default`; one bump rather than two
 - `nf-destinations/gain-map-destination` (new flow): `nf-destinations/preset-set`
   — the per-channel ISO 21496-1 gain-map JPEG, split out of the destination set
-- `nf-calibration/scale-gamma-loop` (new flow): `nf-destinations/preset-set`, `nf-verification/reference-snapshot`, `nf-calibration/scale-ladder`
+- `nf-calibration/scale-gamma-loop` (new flow): `nf-destinations/preset-set`, `nf-verification/reference-snapshot`, `nf-calibration/scale-ladder`, `nf-destinations/direct-preset`, `nf-display-stages/parametric-operator`
   — the two knobs the decode owns, tuned against a held-fixed rendering.
   Supersedes `algo/sigmoid-parameter-calibration` and
   `film-base/dmax-per-channel-reduction`

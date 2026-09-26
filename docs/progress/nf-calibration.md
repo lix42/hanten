@@ -385,9 +385,13 @@ density.
 ## scale-gamma-loop
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-09-26
 
 - 2026-09-19: created with the new-flow plan. Goal: tune `scale` and `gamma` by review.
+- 2026-09-26: two dependencies added (user). `nf-destinations/direct-preset`: the
+  rendering the loop holds fixed is the direct destination, which did not exist yet.
+  `nf-display-stages/parametric-operator`: it changes that rendering's operator and adds
+  its black point, so rounds judged before it would be re-judged.
 
 ## offset-question
 
