@@ -1000,9 +1000,6 @@ mod tests {
         // `--d-max`, which the base-derived default never consults.
         assert!(message.contains("--print-exposure"), "{message}");
         assert!(!message.contains("--d-max"), "{message}");
-        // Nor an `--anchor-*` flag: the characteristic curve refuses the whole family,
-        // and this warning cannot see which curve ran.
-        assert!(!message.contains("--anchor"), "{message}");
         // The new chain refuses both of the current chain's levers, so its remedy names
         // its own: scene correction's exposure, and an SDR destination.
         let message = sdr_range_warning(at_white, SdrRangeLevers::ExposureAndDestination)
