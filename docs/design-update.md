@@ -649,6 +649,16 @@ Two open questions below are the same question seen from each end: the parametri
 operator (does it earn its keep?) and the black point split (flare removal versus
 display black).
 
+**Settled 2026-09-26 for the black end** (`nf-display-stages/parametric-operator`,
+reviewed on real frames): display black is fit range's, but it is neither a subtraction
+nor a toe inside a new operator. It is a shift in stops on luminance — whole at the film
+base and below, fading to nothing at mid-grey — keyed on where the decoded film base
+renders after the frame's grade, with the depth a knob (`--display-black`, default 6
+stops below mid-grey). A rational toe `y²(1 + c)/(y + c)` lost to it on colour and
+shadow contrast, and could not hold both mid-grey and white. Whether a parametric
+operator earns its keep from mid-grey up is now `nf-display-stages/parametric-shoulder`;
+the flare half stays `nf-scene-correction/flare-removal`'s.
+
 ### A "direct" preset for external editing
 
 A render that does as little as possible, for a workflow that continues in

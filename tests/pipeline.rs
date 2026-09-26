@@ -9340,7 +9340,17 @@ fn new_flow_fits_the_scene_range_with_the_stated_headroom() {
     assert_eq!(fr["white_point"], 16.0);
     assert_ne!(read_u16_tiff(&four), read_u16_tiff(&default));
 
-    let (_, report) = convert("zero.tiff", &["--display-tone-headroom", "0"]);
+    // Zero headroom leaves reinhard out; display black still runs unless it is off.
+    let (_, report) = convert("zero-black.tiff", &["--display-tone-headroom", "0"]);
+    assert_eq!(report["new_flow"]["fit_range"]["operator"], "identity");
+    assert_eq!(
+        report["new_flow"]["stages"][2]["applied"],
+        "log-shift-to-mid-grey-v1"
+    );
+    let (_, report) = convert(
+        "zero.tiff",
+        &["--display-tone-headroom", "0", "--display-black", "off"],
+    );
     assert_eq!(report["new_flow"]["fit_range"]["operator"], "identity");
     assert_eq!(report["new_flow"]["stages"][2]["applied"], "identity");
     assert!(
@@ -9348,6 +9358,20 @@ fn new_flow_fits_the_scene_range_with_the_stated_headroom() {
         "the identity must clip more than reinhard: {} vs {default_clipped}",
         clipped(&report)
     );
+
+    // Display black: a deeper setting, and off, each render differently.
+    let (deeper, report) = convert("deeper.tiff", &["--display-black", "7"]);
+    assert_eq!(
+        report["new_flow"]["fit_range"]["display_black"]["setting"],
+        7.0
+    );
+    assert_ne!(read_u16_tiff(&deeper), read_u16_tiff(&default));
+    let (off, report) = convert("off.tiff", &["--display-black", "off"]);
+    let black = &report["new_flow"]["fit_range"]["display_black"];
+    assert_eq!(black["setting"], "off", "{black}");
+    assert_eq!(black["curve"], "identity");
+    assert_eq!(black["shift_stops"], 0.0);
+    assert_ne!(read_u16_tiff(&off), read_u16_tiff(&default));
 
     // A bad headroom is refused by its recipe key as well as its flag.
     let (code, _out, err) = run(&[
@@ -9363,6 +9387,34 @@ fn new_flow_fits_the_scene_range_with_the_stated_headroom() {
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("`fit_range.headroom_stops`"), "{err}");
+
+    // A bad display black is refused naming its flag and key; on the current chain the
+    // flag is refused outright.
+    let refused = |extra: &[&str]| {
+        let out = tmp.path("refused.tiff");
+        let mut argv = vec![
+            "convert",
+            input.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+        ];
+        argv.extend_from_slice(extra);
+        let (code, _out, err) = run(&argv);
+        assert_eq!(code, 2, "{extra:?}: {err}");
+        err
+    };
+    let err = refused(&["--new-flow", "--display-black", "0"]);
+    assert!(
+        err.contains("--display-black (recipe `fit_range.display_black`)"),
+        "{err}"
+    );
+    let err = refused(&["--output-preset", "display-p3", "--display-black", "6"]);
+    assert!(
+        err.contains("--display-black") && err.contains("--new-flow"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -9439,21 +9491,25 @@ fn new_flow_renders_a_display_p3_tiff() {
             [
                 "identity",
                 "contrast+highlight-desaturation",
-                "reinhard-peak-lifted-v1",
+                "reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1",
                 "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
             ],
             "the report states what each stage did, identities included"
         );
-        assert_eq!(
-            nf["fit_range"],
-            serde_json::json!({
-                "operator": "reinhard-peak-lifted-v1",
-                "headroom_stops": 6.0,
-                "white_point": 64.0,
-                "display_peak": 1.0,
-            }),
-            "{stdout}"
-        );
+        let fr = &nf["fit_range"];
+        assert_eq!(fr["operator"], "reinhard-peak-lifted-v1", "{stdout}");
+        assert_eq!(fr["headroom_stops"], 6.0);
+        assert_eq!(fr["white_point"], 64.0);
+        assert_eq!(fr["display_peak"], 1.0);
+        // At the default whole contrast 2.0 the base renders ≈ 3.8 stops under
+        // mid-grey, so display black shifts it to the default 6.
+        let black = &fr["display_black"];
+        assert_eq!(black["setting"], 6.0, "{stdout}");
+        assert_eq!(black["curve"], "log-shift-to-mid-grey-v1");
+        let base = black["film_base_stops"].as_f64().unwrap();
+        let shift = black["shift_stops"].as_f64().unwrap();
+        assert!((base - 3.84).abs() < 0.05, "{black}");
+        assert!((base - shift - 6.0).abs() < 1e-3, "{black}");
         // No legacy-chain section claims an operation this run did not perform, and no
         // sidecar or recipe echo describes a chain it did not select.
         for absent in [
@@ -12454,6 +12510,7 @@ fn the_new_flow_film_master_refuses_every_stage_it_does_not_run() {
         (&["--exposure", "2"][..], "scene correction"),
         (&["--white-balance", "1.2,1,1.1"][..], "scene correction"),
         (&["--display-tone-headroom", "3"][..], "fit range"),
+        (&["--display-black", "5"][..], "fit range"),
         (&["--contrast", "1.3"][..], "the look"),
     ]
     .into_iter()
@@ -12492,6 +12549,8 @@ fn the_new_flow_film_master_refuses_every_stage_it_does_not_run() {
         &["--exposure", "0", "--white-balance", "1,1,1"][..],
         &["--display-tone-headroom", "0"][..],
         &["--display-tone-headroom", "6"][..],
+        &["--display-black", "off"][..],
+        &["--display-black", "6"][..],
     ]
     .into_iter()
     .enumerate()
@@ -12503,7 +12562,7 @@ fn the_new_flow_film_master_refuses_every_stage_it_does_not_run() {
     let recipe = write_file(
         &tmp.path("stages.json"),
         r#"{"recipe_version": 2, "scene_correction": {"exposure": 1.5},
-            "fit_range": {"headroom_stops": 4}}"#,
+            "fit_range": {"headroom_stops": 4, "display_black": 5}}"#,
     );
     let r = recipe.to_str().unwrap();
     let (code, _, err) = new_flow_convert(&tmp.path("rec"), &["--film-master", "--params", r]);
@@ -12523,6 +12582,8 @@ fn the_new_flow_film_master_refuses_every_stage_it_does_not_run() {
             "0",
             "--display-tone-headroom",
             "0",
+            "--display-black",
+            "off",
         ],
     );
     assert_eq!(code, 0, "{err}");

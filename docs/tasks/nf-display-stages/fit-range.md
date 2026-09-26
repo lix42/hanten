@@ -32,7 +32,9 @@ Open:
   absorbing it here.
 - **The black point splits in two** (flare in scene correction, display black here).
   Whether the display-black half is a subtraction at all or a property of the
-  operator is [the parametric operator](parametric-operator.md)'s question.
+  operator was [`parametric-operator`](parametric-operator.md)'s question; settled
+  2026-09-26 as neither — a shift in stops on luminance inside this stage, below
+  mid-grey (`--display-black`).
 - Whether headroom keeps being spelled in stops, and whether the stage reports the
   resolved operator by name rather than by prose claim (CLAUDE.md's "fifth spot").
 

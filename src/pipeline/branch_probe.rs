@@ -174,9 +174,19 @@ fn measure(image: &LinearImage, base: &FilmBase, recipe: &Recipe, peak: DisplayP
                 .0,
         )
     };
+    let film_base = || -> AcesCgImage {
+        map_nc_film_rgb_v1(fixed::decode_film_base(base, &recipe.reconstruction).unwrap())
+    };
     let shared = recipe.shared_params();
     let graded = contract::graded(aces(), &shared);
-    let pair = chain::render_pair(aces(), &shared, DestinationGamut::DisplayP3, peak).unwrap();
+    let pair = chain::render_pair(
+        aces(),
+        film_base(),
+        &shared,
+        DestinationGamut::DisplayP3,
+        peak,
+    )
+    .unwrap();
     let (sdr, _) = pair.sdr.image.into_parts();
     let (hdr, _) = pair.hdr.image.into_parts();
     let agreement = contract::check(

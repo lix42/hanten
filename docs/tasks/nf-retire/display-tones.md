@@ -25,8 +25,8 @@ Leave fit range as the one display operator: remove `shoulder` and `none` from
   document the replacement — an unbounded value reaching the encode silently is
   the failure mode this guarded.
 - **Don't preserve the enum for its own sake.** If one operator remains,
-  `DisplayToneCurve` may stop being a selector; if the parametric operator
-  arrives it returns with different members.
+  `DisplayToneCurve` may stop being a selector; if a parametric shoulder
+  (`nf-display-stages/parametric-shoulder`) arrives it returns with different members.
 
 ## How to Verify
 

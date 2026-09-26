@@ -6,8 +6,9 @@
 //! into the destination `crate::destination` resolves (`cli::convert_frame`). Scene
 //! correction applies white balance and exposure; the look applies print contrast and
 //! the per-channel grade and desaturates near-neutral highlights (the rest of its epic
-//! fills it); fit range compresses the scene's range against the destination's peak,
-//! and fit gamut maps into the destination's gamut, keeping hue.
+//! fills it); fit range compresses the scene's range against the destination's peak
+//! and places black where the film base renders, and fit gamut maps into the
+//! destination's gamut, keeping hue.
 //!
 //! **The order is carried by the types, not by this function.** Each stage's
 //! input is the previous stage's output type, and each of those can be minted
@@ -35,9 +36,10 @@
 //! **The chain splits after the look ([`GradedImage`]) and the branches differ in one
 //! argument: the display's peak.** A gain map needs the two renditions to agree below
 //! diffuse white ([`DIFFUSE_WHITE`]), so every stage that shapes contrast or colour
-//! sits above the split, and so does fit range's headroom ([`SharedParams`]). The
-//! types carry it: nothing above the split can read a [`DisplayTarget`], and
-//! [`render_pair`] cannot set the headroom per branch.
+//! sits above the split, and so do fit range's headroom and display black
+//! ([`SharedParams`]), with the film base graded once for both. The types carry it:
+//! nothing above the split can read a [`DisplayTarget`], and [`render_pair`] cannot
+//! set either per branch.
 //!
 //! What each branch may differ in, measured on the graded image's ACEScg luminance:
 //!
@@ -56,15 +58,17 @@
 //!
 //! [`DIFFUSE_WHITE`]: crate::algo::fixed::DIFFUSE_WHITE
 
+use crate::pipeline::colorimetry::dot;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::{self, DestinationGamut, DisplayReferredImage, FitGamutParams};
-use crate::pipeline::fit_range::{self, DisplayPeak, FitRange, FitRangeParams};
+use crate::pipeline::fit_range::{self, DisplayBlack, DisplayPeak, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, GradedImage, LookParams, LookSection};
 use crate::pipeline::scene_correction::{self, SceneCorrection, SceneCorrectionParams};
 use crate::pipeline::working_space::AcesCgImage;
-use crate::types::Result;
+use crate::types::{NcError, Result};
 
 /// Everything every rendition of a frame shares: the stages above the branch point,
-/// and fit range's headroom.
+/// and fit range's headroom and display black.
 ///
 /// **The headroom is here, not in [`DisplayTarget`], on purpose.** Reinhard's white
 /// point `W = 2^headroom_stops` shapes every luminance, the midtones included, so two
@@ -76,6 +80,10 @@ pub struct SharedParams {
     pub look: LookParams,
     /// Fit range's headroom in stops (the recipe's `fit_range.headroom_stops`).
     pub headroom_stops: f32,
+    /// Where the film base renders on the display (the recipe's
+    /// `fit_range.display_black`). Shared for the reason the headroom is: it acts below
+    /// mid-grey, where the branches must agree.
+    pub display_black: DisplayBlack,
 }
 
 /// What a destination states about the display it renders for: the peak fit range
@@ -128,7 +136,8 @@ pub struct RenderedPair {
 /// Render an [`AcesCgImage`] through the new chain, for one destination.
 ///
 /// **Today this is scene correction's per-channel gains, the look's print contrast,
-/// per-channel grade and highlight desaturation, fit range's luminance operator, and
+/// per-channel grade and highlight desaturation, fit range's luminance operator and
+/// display black, and
 /// the destination's 3×3 with the radial gamut map.** Nothing is clamped: content fit
 /// range left above the peak rides through to the encoder, which is the only place
 /// clamping happens. The gamut map is
@@ -147,9 +156,26 @@ pub struct RenderedPair {
 ///
 /// A single-rendition destination goes through the same branch point as a pair: it
 /// is [`render_pair`] with one branch, not a second code path (see the module docs).
-pub fn render(image: AcesCgImage, params: &ChainParams) -> Result<Rendered> {
+///
+/// `film_base` is the **decoded film base**, one pixel (`algo::fixed::decode_film_base`
+/// through the same NC film RGB v1 mapping as the frame): it is graded beside the
+/// frame, so display black's reference follows every parameter that moves where the
+/// base renders — the look's contrast above all — and nothing is estimated from the
+/// image.
+pub fn render(
+    image: AcesCgImage,
+    film_base: AcesCgImage,
+    params: &ChainParams,
+) -> Result<Rendered> {
+    let base = graded_luminance(film_base, &params.shared)?;
     let (graded, scene_correction) = grade(image, &params.shared)?;
-    display(graded, scene_correction, &params.shared, params.target)
+    display(
+        graded,
+        scene_correction,
+        &params.shared,
+        params.target,
+        base,
+    )
 }
 
 /// Render an SDR and an HDR rendition of one frame, for a gain map: one graded image,
@@ -164,17 +190,38 @@ pub fn render(image: AcesCgImage, params: &ChainParams) -> Result<Rendered> {
 #[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/gain-map-destination`)
 pub fn render_pair(
     image: AcesCgImage,
+    film_base: AcesCgImage,
     shared: &SharedParams,
     gamut: DestinationGamut,
     hdr_peak: DisplayPeak,
 ) -> Result<RenderedPair> {
+    let base = graded_luminance(film_base, shared)?;
     let (graded, scene_correction) = grade(image, shared)?;
     let hdr_source = graded.split();
     let branch = |peak| DisplayTarget { peak, gamut };
     Ok(RenderedPair {
-        sdr: display(graded, scene_correction, shared, branch(DisplayPeak::SDR))?,
-        hdr: display(hdr_source, scene_correction, shared, branch(hdr_peak))?,
+        sdr: display(
+            graded,
+            scene_correction,
+            shared,
+            branch(DisplayPeak::SDR),
+            base,
+        )?,
+        hdr: display(hdr_source, scene_correction, shared, branch(hdr_peak), base)?,
     })
+}
+
+/// The film base's graded ACEScg luminance: the decoded base run through the frame's
+/// own grade — display black's reference.
+fn graded_luminance(film_base: AcesCgImage, shared: &SharedParams) -> Result<f32> {
+    let (graded, _) = grade(film_base, shared)?;
+    let mut buffer = graded.into_buffer();
+    let [r, g, b] = *buffer.rgb_mut() else {
+        return Err(NcError::Other(
+            "the chain's film base must be one pixel (`algo::fixed::decode_film_base`)".into(),
+        ));
+    };
+    Ok(dot([r, g, b], ACESCG_LUMA))
 }
 
 /// Above the branch point: scene correction, then the look. Nothing here may read the
@@ -190,10 +237,13 @@ fn display(
     scene_correction: SceneCorrection,
     shared: &SharedParams,
     target: DisplayTarget,
+    film_base: f32,
 ) -> Result<Rendered> {
     let fit_range_params = FitRangeParams {
         headroom_stops: shared.headroom_stops,
         peak: target.peak,
+        display_black: shared.display_black,
+        film_base,
     };
     let fit_gamut_params = FitGamutParams {
         target: target.gamut,
@@ -206,7 +256,7 @@ fn display(
         applied: [
             ("scene_correction", scene_correction.applied()),
             ("look", shared.look.applied()),
-            ("fit_range", fit_range.operator),
+            ("fit_range", fit_range.applied()),
             ("fit_gamut", fit_gamut_params.applied()),
         ],
         scene_correction,
@@ -328,6 +378,7 @@ mod tests {
                 scene_correction: SceneCorrectionParams::default(),
                 look: LookParams::off(),
                 headroom_stops: 0.0,
+                display_black: DisplayBlack::Off,
             },
             target: DisplayTarget {
                 peak: DisplayPeak::SDR,
@@ -343,12 +394,24 @@ mod tests {
         p
     }
 
-    /// Fit range's parameters as `display` builds them from `p`.
+    /// Fit range's parameters as `display` builds them from `p`, for a `p` with display
+    /// black off (the film base is then unread).
     fn fit_range_params(p: &ChainParams) -> FitRangeParams {
+        assert_eq!(p.shared.display_black, DisplayBlack::Off);
         FitRangeParams {
             headroom_stops: p.shared.headroom_stops,
             peak: p.target.peak,
+            display_black: p.shared.display_black,
+            film_base: FILM_BASE,
         }
+    }
+
+    /// Where the default decode puts the film base: `10^(−1.8 · (0.62 + 0.745 / 1.8))`.
+    const FILM_BASE: f32 = 0.013_77;
+
+    /// The decoded film base as the chain takes it: one neutral pixel at [`FILM_BASE`].
+    fn film_base() -> AcesCgImage {
+        aces_from(1, 1, &[FILM_BASE; 3], None)
     }
 
     /// An `AcesCgImage` whose *film RGB* input was exactly `rgb` — including a
@@ -477,7 +540,7 @@ mod tests {
             let expected = to_destination(aces.rgb(), matrix);
             let mut p = params();
             p.target.gamut = gamut;
-            let rendered = render(aces, &p).unwrap();
+            let rendered = render(aces, film_base(), &p).unwrap();
             assert_eq!(
                 rendered.applied[3].1,
                 FitGamutParams { target: gamut }.applied()
@@ -516,7 +579,9 @@ mod tests {
         // the setting.
         for p in [params(), shipped_params()] {
             let aces = aces_from(3, 1, &AWKWARD, None);
-            let err = render(aces, &p).err().expect("a non-finite sample");
+            let err = render(aces, film_base(), &p)
+                .err()
+                .expect("a non-finite sample");
             let msg = err.message();
             assert!(
                 msg.contains("fit range") && msg.contains("pixel 1"),
@@ -556,7 +621,7 @@ mod tests {
                 "hue moved: {out:?}"
             );
         }
-        let rendered = render(aces_from(1, 1, &[0.5, 0.5, 0.5], None), &p).unwrap();
+        let rendered = render(aces_from(1, 1, &[0.5, 0.5, 0.5], None), film_base(), &p).unwrap();
         assert_eq!(rendered.applied[2], ("fit_range", fit_range::OPERATOR));
         assert_eq!(rendered.fit_range.display_peak, DisplayPeak::SDR);
     }
@@ -571,7 +636,10 @@ mod tests {
         let aces = aces_from(2, 1, &rgb, None);
         let p3 = to_p3(aces.rgb());
         assert!(p3[3..].iter().any(|v| *v < 0.0), "{:?}", &p3[3..]);
-        let (out, _) = render(aces, &params()).unwrap().image.into_parts();
+        let (out, _) = render(aces, film_base(), &params())
+            .unwrap()
+            .image
+            .into_parts();
 
         assert!(out.rgb.iter().all(|v| v.is_finite()));
         assert!(out.rgb[..3].iter().all(|v| *v > 1.0), "{:?}", &out.rgb[..3]);
@@ -605,7 +673,10 @@ mod tests {
             "the film-RGB neutral must reach the chain as an ACEScg neutral: {neutral:?}"
         );
 
-        let (out, _) = render(aces, &params()).unwrap().image.into_parts();
+        let (out, _) = render(aces, film_base(), &params())
+            .unwrap()
+            .image
+            .into_parts();
         for c in 0..3 {
             assert!(
                 (out.rgb[c] - neutral[0]).abs() < 1e-5,
@@ -627,7 +698,10 @@ mod tests {
         let aces = aces_from(2, 2, &[0.25; 12], Some(ir.clone()));
         let expected = bits(&to_p3(aces.rgb()));
 
-        let (linear, _) = render(aces, &params()).unwrap().image.into_parts();
+        let (linear, _) = render(aces, film_base(), &params())
+            .unwrap()
+            .image
+            .into_parts();
 
         assert_eq!(linear.width, 2);
         assert_eq!(linear.height, 2);
@@ -638,7 +712,7 @@ mod tests {
     #[test]
     fn an_ir_free_input_stays_ir_free() {
         // Falsifiability for the test above: the plane must be carried, not minted.
-        let (out, _) = render(aces_from(2, 2, &[0.5; 12], None), &params())
+        let (out, _) = render(aces_from(2, 2, &[0.5; 12], None), film_base(), &params())
             .unwrap()
             .image
             .into_parts();
@@ -670,7 +744,10 @@ mod tests {
             let aces = map_nc_film_rgb_v1(produce(&img, &base));
             let expected = bits(&to_p3(aces.rgb()));
 
-            let (out, _) = render(aces, &params()).unwrap().image.into_parts();
+            let (out, _) = render(aces, film_base(), &params())
+                .unwrap()
+                .image
+                .into_parts();
 
             assert_eq!(bits(&out.rgb), expected, "{name}");
         }
@@ -725,7 +802,7 @@ mod tests {
         let mut p = params();
         p.shared.scene_correction.white_balance = WhiteBalance::Explicit(gains);
 
-        let rendered = render(aces, &p).unwrap();
+        let rendered = render(aces, film_base(), &p).unwrap();
         let (out, _) = rendered.image.into_parts();
 
         assert_eq!(bits(&out.rgb), bits(&to_p3(&balanced)));
@@ -802,6 +879,74 @@ mod tests {
         DisplayPeak::new(1000.0 / 203.0).unwrap()
     }
 
+    #[test]
+    fn display_black_places_the_film_base_itself_at_its_target() {
+        // A frame holding its own film base renders that pixel at the target, whatever
+        // the contrast: the reference is graded with the frame.
+        for contrast in [1.2_f32, 1.25, 1.4, 1.65] {
+            let mut shared = shared_acting();
+            shared.look.section.contrast = contrast;
+            let p = ChainParams {
+                shared,
+                target: DisplayTarget {
+                    peak: DisplayPeak::SDR,
+                    gamut: DestinationGamut::DisplayP3,
+                },
+            };
+            let rendered = render(aces_from(1, 1, &[FILM_BASE; 3], None), film_base(), &p).unwrap();
+            let black = rendered.fit_range.display_black;
+            let (out, _) = rendered.image.into_parts();
+            let y = dot([out.rgb[0], out.rgb[1], out.rgb[2]], DISPLAY_P3_LUMA);
+            let want = 0.18 * (-crate::pipeline::fit_range::DEFAULT_DISPLAY_BLACK_STOPS).exp2();
+            // The white balance tints the base, so its Display P3 luminance differs from
+            // the ACEScg luminance display black places by a fraction of a percent.
+            assert!(
+                (y / want - 1.0).abs() < 3e-3,
+                "contrast {contrast}: {y} vs {want}"
+            );
+            // Steeper contrast leaves less to do.
+            assert!(black.shift_stops < 0.0, "{contrast}: {black:?}");
+        }
+        let shift = |contrast: f32| {
+            let mut shared = shared_acting();
+            shared.look.section.contrast = contrast;
+            let p = ChainParams {
+                shared,
+                target: DisplayTarget {
+                    peak: DisplayPeak::SDR,
+                    gamut: DestinationGamut::DisplayP3,
+                },
+            };
+            render(grid(), film_base(), &p)
+                .unwrap()
+                .fit_range
+                .display_black
+                .shift_stops
+        };
+        assert!(
+            shift(1.25) < shift(1.4),
+            "a flatter frame needs a larger shift"
+        );
+    }
+
+    #[test]
+    fn a_film_base_that_grades_to_nothing_is_refused() {
+        let mut p = shipped_params();
+        p.shared.display_black = DisplayBlack::default();
+        let err = render(grid(), aces_from(1, 1, &[0.0; 3], None), &p)
+            .err()
+            .expect("refused");
+        assert!(err.message().contains("film base"), "{}", err.message());
+        // With display black off the base is never read, so it cannot fail the render.
+        p.shared.display_black = DisplayBlack::Off;
+        render(grid(), aces_from(1, 1, &[0.0; 3], None), &p).unwrap();
+        p.shared.display_black = DisplayBlack::default();
+        let err = render(grid(), aces_from(2, 1, &[FILM_BASE; 6], None), &p)
+            .err()
+            .expect("refused");
+        assert!(err.message().contains("one pixel"), "{}", err.message());
+    }
+
     /// Shipped-like shared parameters with every pre-branch stage acting: a white
     /// balance, an exposure, the default look and the default headroom.
     fn shared_acting() -> SharedParams {
@@ -815,6 +960,7 @@ mod tests {
                 linearization: crate::algo::fixed::LINEARIZATION,
             },
             headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
+            display_black: DisplayBlack::default(),
         }
     }
 
@@ -840,8 +986,9 @@ mod tests {
 
     #[test]
     fn the_pair_agrees_below_white_except_where_the_sdr_cube_binds() {
-        // At the shipped headroom, and at zero, where fit range is the identity and
-        // pixels reach fit gamut at luminance near white.
+        // At the shipped headroom, and at zero, where reinhard is the identity and
+        // pixels reach fit gamut at luminance near white. Display black stays on at its
+        // default in both, so the contrast is checked with it in the chain.
         for stops in [crate::types::DEFAULT_HEADROOM_STOPS, 0.0] {
             let mut shared = shared_acting();
             shared.headroom_stops = stops;
@@ -852,7 +999,14 @@ mod tests {
     fn pair_agrees_below_white(shared: &SharedParams) {
         let shared = shared.clone();
         let graded = contract::graded(grid(), &shared);
-        let pair = render_pair(grid(), &shared, DestinationGamut::DisplayP3, hdr_peak()).unwrap();
+        let pair = render_pair(
+            grid(),
+            film_base(),
+            &shared,
+            DestinationGamut::DisplayP3,
+            hdr_peak(),
+        )
+        .unwrap();
         let (sdr, hdr) = (pixels_of(pair.sdr), pixels_of(pair.hdr));
 
         let agreement = contract::check(
@@ -906,6 +1060,7 @@ mod tests {
         let sdr = pixels_of(
             render(
                 grid(),
+                film_base(),
                 &ChainParams {
                     shared: shared.clone(),
                     target: DisplayTarget {
@@ -921,6 +1076,7 @@ mod tests {
         let hdr = pixels_of(
             render(
                 grid(),
+                film_base(),
                 &ChainParams {
                     shared: other,
                     target: DisplayTarget {
@@ -958,6 +1114,7 @@ mod tests {
         let sdr = pixels_of(
             render(
                 grid(),
+                film_base(),
                 &ChainParams {
                     shared: shared.clone(),
                     target: target(DisplayPeak::SDR),
@@ -970,6 +1127,7 @@ mod tests {
         let hdr = pixels_of(
             render(
                 grid(),
+                film_base(),
                 &ChainParams {
                     shared: without_look,
                     target: target(hdr_peak()),
@@ -993,10 +1151,18 @@ mod tests {
         // No second code path: `render` for either peak is bit-identical to that
         // branch of `render_pair`, report included.
         let shared = shared_acting();
-        let pair = render_pair(grid(), &shared, DestinationGamut::DisplayP3, hdr_peak()).unwrap();
+        let pair = render_pair(
+            grid(),
+            film_base(),
+            &shared,
+            DestinationGamut::DisplayP3,
+            hdr_peak(),
+        )
+        .unwrap();
         for (branch, peak) in [(pair.sdr, DisplayPeak::SDR), (pair.hdr, hdr_peak())] {
             let single = render(
                 grid(),
+                film_base(),
                 &ChainParams {
                     shared: shared.clone(),
                     target: DisplayTarget {
@@ -1018,6 +1184,7 @@ mod tests {
     fn a_gain_map_from_the_pair_rebuilds_the_hdr_rendition() {
         let pair = render_pair(
             grid(),
+            film_base(),
             &shared_acting(),
             DestinationGamut::DisplayP3,
             hdr_peak(),
@@ -1050,6 +1217,7 @@ mod tests {
         ];
         let pair = render_pair(
             aces_from(4, 1, &rgb, None),
+            film_base(),
             &shared_acting(),
             DestinationGamut::DisplayP3,
             hdr_peak(),
@@ -1071,7 +1239,10 @@ mod tests {
     /// under 0.003): below mid reinhard is nearly a gain, costing 1–3% of slope over this
     /// ramp (`fit_range::tests::reinhard_compresses_upward_only`). The bound covers
     /// headroom ≥ 2 only; from 0 up, reinhard switching on costs up to ~0.023 (≈2%) at
-    /// contrast 1. A toe in fit range would fail this, which is the point — it would be a
+    /// contrast 1. It runs with display black **off** ([`params`]): black deliberately
+    /// steepens the stops between the film base and mid-grey (`fit_range`'s module
+    /// docs), which was decided by review. What this pins is that nothing *else* in fit
+    /// range shapes the shadows — a toe in reinhard's place would fail it, and would be a
     /// decision.
     #[test]
     fn contrast_not_fit_range_decides_shadow_separation() {
@@ -1081,7 +1252,7 @@ mod tests {
             let mut p = params();
             p.shared.look.section.contrast = contrast;
             p.shared.headroom_stops = headroom_stops;
-            let out = render(aces_from(3, 1, &rgb, None), &p).unwrap();
+            let out = render(aces_from(3, 1, &rgb, None), film_base(), &p).unwrap();
             let y: Vec<f32> = out
                 .image
                 .into_parts()

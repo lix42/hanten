@@ -23,9 +23,10 @@ the roll's white is its brightest frame's white at or under **+2.0** scene stops
 mid-grey, raised to at least **+1.5**; a frame above +2.0 is clamped to it; the solved
 `look.contrast` spans whole contrast 2.23–2.97 (2.23 on a clamped frame). A warning fires near the **leader**
 (film saturation), never merely because the cap bound. It was chosen by review **with a
-black point in the chain**, and the new chain has none: every placement looked pale
-without one. Black is now `nf-display-stages/parametric-operator`'s (reference: where the
-film base renders). Implementation is `roll-white-rule`; the warning's margin is
+black point in the chain**, which the new chain lacked: every placement looked pale
+without one. Black landed on 2026-09-26 as `--display-black` (`fit_range.display_black`,
+default 6 stops below mid-grey; `nf-display-stages/parametric-operator`), keyed on where
+the film base renders, so judge any white placement with it at its default. Implementation is `roll-white-rule`; the warning's margin is
 `saturation-margin`. Ranked rule > fixed anchor > content white with solved contrast
 (noise up to 5.4× the scan's floor) > level move (mid-grey up to L\* 82). Levels here
 are **scene stops**: red density through the fixed linearization, 1 stop ≈ 0.167

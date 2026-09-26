@@ -40,7 +40,9 @@ verdicts are in `docs/progress/nf-calibration.md`, 2026-09-25). The values are
 - **The rule needs a black point.** Every round was judged with the film base moved to
   near black; without it, every placement looked pale and the review would have tuned
   the white to make up for it. Black is
-  [`parametric-operator`](../nf-display-stages/parametric-operator.md)'s.
+  [`parametric-operator`](../nf-display-stages/parametric-operator.md)'s, landed as
+  `--display-black` (default 6 stops below mid-grey): verify the rule with it at its
+  default, never with the probe.
 - **Scene stops, not rendered stops**, for every level above: red density through the
   decode's fixed linearization (1 stop ≈ 0.167 density). Rendered stops depend on the
   contrast being solved.
@@ -82,5 +84,5 @@ Open:
 ## Dependencies
 
 - [Choose the white placement by rendering](anchor-comparison.md) — the rule and its values
-- [A parametric operator with a toe](../nf-display-stages/parametric-operator.md) — places
+- [Display black](../nf-display-stages/parametric-operator.md) — places
   black, which the rule was judged with

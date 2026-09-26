@@ -39,7 +39,9 @@ use crate::cli::ResolvedConfig;
 use crate::destination::{self, Change, DisplayAxes, Fault, OutputSection, Resolved};
 use crate::pipeline::chain::{ChainParams, DisplayTarget, SharedParams};
 use crate::pipeline::fit_gamut::DestinationGamut;
-use crate::pipeline::fit_range::DisplayPeak;
+use crate::pipeline::fit_range::{
+    DisplayBlack, DisplayBlackFault, DisplayPeak, MAX_DISPLAY_BLACK_STOPS,
+};
 use crate::pipeline::look::{
     ChannelGradeFault, ContrastFault, DesaturationFault, LookParams, LookSection, MAX_START_STOPS,
 };
@@ -79,7 +81,7 @@ pub struct Recipe {
     #[serde(default)]
     pub look: LookSection,
     #[serde(default)]
-    pub fit_range: FitRange,
+    pub fit_range: FitRangeSection,
     #[serde(default)]
     pub fit_gamut: FitGamut,
     #[serde(default)]
@@ -110,8 +112,52 @@ impl<'de> Deserialize<'de> for RecipeVersion {
     }
 }
 
-/// Fit range's recipe section: how much scene range above diffuse white it
-/// compresses.
+/// Fit range's section on the new chain: the headroom, and where the film base renders
+/// on the display.
+///
+/// Its own type rather than [`FitRange`], which the current chain's `ResolvedConfig`
+/// also carries: display black is new-chain only, and a key added to that shared type
+/// would be written into every current-chain sidecar. [`Recipe::to_config`] projects
+/// the headroom across. The peak is the destination's, as for [`FitRange`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FitRangeSection {
+    /// In stops above diffuse white: reinhard's white point is `2^headroom_stops`, and
+    /// `0` is the identity.
+    pub headroom_stops: f32,
+    /// Where the film base renders, in stops below mid-grey on the display, or
+    /// `"off"` (`pipeline::fit_range`'s display black).
+    pub display_black: DisplayBlack,
+}
+
+impl Default for FitRangeSection {
+    fn default() -> Self {
+        Self {
+            headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
+            display_black: DisplayBlack::default(),
+        }
+    }
+}
+
+impl FitRangeSection {
+    /// Whether the user asked for a fit — a headroom, or a display black, that is
+    /// neither its default nor its identity (`0`, `"off"`). The one predicate a
+    /// destination that runs no fit range (`film-master`) reads to refuse
+    /// ([`destination()`]), as the look's is [`LookSection::asks_for_a_look`]: the
+    /// defaults are spared because every recipe carries them, the identities because
+    /// they ask for nothing such a destination does not already do, and refusing them
+    /// would kill the flags-win reset.
+    pub fn asks_for_a_fit(&self) -> bool {
+        let headroom = self.headroom_stops != crate::types::DEFAULT_HEADROOM_STOPS
+            && self.headroom_stops != 0.0;
+        let black = self.display_black != DisplayBlack::default()
+            && self.display_black != DisplayBlack::Off;
+        headroom || black
+    }
+}
+
+/// The current chain's fit-range section (`cli::ResolvedConfig`): how much scene range
+/// above diffuse white it compresses. The new chain's is [`FitRangeSection`].
 ///
 /// Its own type rather than [`FitRangeParams`], for the reason [`FitGamut`] is: the
 /// stage's other parameter, the display's peak, is the **destination's** to state, and
@@ -132,18 +178,6 @@ impl Default for FitRange {
         Self {
             headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
         }
-    }
-}
-
-impl FitRange {
-    /// Whether the user asked for a fit — a headroom that is neither the default nor
-    /// the identity `0`. The one predicate a destination that runs no fit range
-    /// (`film-master`) reads to refuse ([`destination()`]), as the look's is
-    /// [`LookSection::asks_for_a_look`]: the default is spared because every recipe
-    /// carries it, the identity because it asks for nothing such a destination does
-    /// not already do, and refusing it would kill the flags-win reset.
-    pub fn asks_for_a_fit(&self) -> bool {
-        self.headroom_stops != crate::types::DEFAULT_HEADROOM_STOPS && self.headroom_stops != 0.0
     }
 }
 
@@ -184,9 +218,10 @@ const SECTIONS_WITH_NO_COUNTERPART: &[(&str, &str)] = &[(
     "white balance and exposure are `scene_correction.white_balance` and \
          `scene_correction.exposure`; the display tone is fit range, whose one \
          operator is reinhard and whose headroom is `fit_range.headroom_stops`; the \
-         black point splits between scene correction and fit range \
-         (`nf-scene-correction/flare-removal`), and `linear_range` has no home yet \
-         (`nf-scene-correction/levels-knob`) — neither of those two has a key yet",
+         black point splits in two — display black is `fit_range.display_black` (where \
+         the film base renders), and the flare/fog subtraction has no key yet \
+         (`nf-scene-correction/flare-removal`) — and `linear_range` has no home yet \
+         (`nf-scene-correction/levels-knob`)",
 )];
 
 /// The current chain's `output` keys, live and retired: a destination is its axes here.
@@ -480,6 +515,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
         axes.container = d.container.or(axes.container);
         r.output = OutputSection::Display(axes);
     }
+    if let Some(black) = args.display.display_black {
+        r.fit_range.display_black = black;
+    }
     r
 }
 
@@ -656,9 +694,17 @@ fn validate_scene_correction(p: &SceneCorrectionParams, names: KnobNames) -> Res
     Err(NcError::Usage(message))
 }
 
-/// Fit range's value rule — the headroom's, [`crate::types::headroom_fault`], shared
-/// with the current chain's knob — rendered as a usage error for this recipe's key.
-fn validate_fit_range(p: &FitRange, names: KnobNames) -> Result<()> {
+/// Fit range's value rules — the headroom's, [`crate::types::headroom_fault`], shared
+/// with the current chain's knob, and display black's, [`DisplayBlack::check`] —
+/// rendered as a usage error for this recipe's keys.
+fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
+    if let Err(DisplayBlackFault(v)) = p.display_black.check() {
+        return Err(NcError::Usage(format!(
+            "{} must be stops below mid-grey within (0, {MAX_DISPLAY_BLACK_STOPS}], or \
+             `off`, got {v}",
+            knob_name(names, "fit_range", "--display-black", "display_black")
+        )));
+    }
     let Some(fault) = crate::types::headroom_fault(p.headroom_stops) else {
         return Ok(());
     };
@@ -680,7 +726,7 @@ fn validate_fit_range(p: &FitRange, names: KnobNames) -> Result<()> {
 /// `film-master` runs no rendering stage, so a stage the user asked for is refused,
 /// naming the stage: **one** rule per stage, never one per knob — scene correction
 /// keyed on [`SceneCorrectionParams::asks_for_a_correction`], the look on
-/// [`LookSection::asks_for_a_look`], fit range on [`FitRange::asks_for_a_fit`]. Each
+/// [`LookSection::asks_for_a_look`], fit range on [`FitRangeSection::asks_for_a_fit`]. Each
 /// spares its default, which every recipe carries, and its identity, which renders
 /// exactly what the film master does (refusing that would kill the flags-win reset).
 /// Fit gamut has no knob to ask with. Every stage asked for is named in one refusal, in
@@ -760,10 +806,13 @@ fn stages_the_master_cannot_run(r: &Recipe, names: KnobNames) -> Vec<(&'static s
     if r.fit_range.asks_for_a_fit() {
         asked.push(pick(
             (
-                "fit range (--display-tone-headroom, recipe `fit_range`)",
-                "--display-tone-headroom 0",
+                "fit range (--display-tone-headroom, --display-black, recipe `fit_range`)",
+                "--display-tone-headroom 0 --display-black off",
             ),
-            ("fit range (`fit_range`)", "`fit_range.headroom_stops` 0"),
+            (
+                "fit range (`fit_range`)",
+                "`fit_range.headroom_stops` 0, `fit_range.display_black` \"off\"",
+            ),
         ));
     }
     asked
@@ -945,7 +994,8 @@ impl Recipe {
     }
 
     /// Everything every rendition of a frame shares — the stages above the SDR/HDR
-    /// branch point and fit range's headroom (`pipeline::chain`'s branch contract).
+    /// branch point, fit range's headroom and display black (`pipeline::chain`'s branch
+    /// contract).
     pub fn shared_params(&self) -> SharedParams {
         SharedParams {
             scene_correction: self.scene_correction.clone(),
@@ -954,12 +1004,13 @@ impl Recipe {
                 linearization: self.reconstruction.linearization,
             },
             headroom_stops: self.fit_range.headroom_stops,
+            display_black: self.fit_range.display_black,
         }
     }
 
     /// The current chain's config carrying this recipe's **shared** sections, for the
     /// stages both chains run: decode, the film base and the measurement region — plus
-    /// `fit_range`, the one section both recipes spell identically.
+    /// fit range's headroom, which both recipes spell identically.
     ///
     /// Scaffolding, deleted with `ResolvedConfig` by `nf-core/default-flip`. Every
     /// other section is left at its default, which is safe only because nothing past
@@ -975,7 +1026,9 @@ impl Recipe {
             measure: self.measure.clone(),
             // The same section on both chains, so the projection states the user's value
             // rather than a default the run does not use.
-            fit_range: self.fit_range.clone(),
+            fit_range: FitRange {
+                headroom_stops: self.fit_range.headroom_stops,
+            },
             ..ResolvedConfig::default()
         }
     }
@@ -1057,7 +1110,7 @@ mod tests {
         );
         assert_eq!(
             json["fit_range"],
-            serde_json::json!({"headroom_stops": 6.0})
+            serde_json::json!({"headroom_stops": 6.0, "display_black": 6.0})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
@@ -1622,13 +1675,52 @@ mod tests {
         r.scene_correction.exposure = -1.0;
         r.fit_range.headroom_stops = 0.0;
         destination(&r, KnobNames::FlagAndKey).unwrap();
-        assert!(!FitRange::default().asks_for_a_fit());
-        assert!(
-            FitRange {
-                headroom_stops: 5.0
-            }
-            .asks_for_a_fit()
-        );
+        let fit = |headroom_stops, display_black| FitRangeSection {
+            headroom_stops,
+            display_black,
+        };
+        assert!(!FitRangeSection::default().asks_for_a_fit());
+        assert!(!fit(0.0, DisplayBlack::Off).asks_for_a_fit());
+        assert!(fit(5.0, DisplayBlack::default()).asks_for_a_fit());
+        assert!(fit(0.0, DisplayBlack::StopsBelowMid(5.0)).asks_for_a_fit());
+    }
+
+    #[test]
+    fn validate_refuses_an_unusable_display_black() {
+        let with = |black: DisplayBlack, names| {
+            let mut r = Recipe::default();
+            r.fit_range.display_black = black;
+            validate(&r, names).map_err(|e| e.message().to_string())
+        };
+        with(DisplayBlack::Off, KnobNames::FlagAndKey).unwrap();
+        with(
+            DisplayBlack::StopsBelowMid(MAX_DISPLAY_BLACK_STOPS),
+            KnobNames::FlagAndKey,
+        )
+        .unwrap();
+        for bad in [0.0, -1.0, 16.5, f32::NAN, f32::INFINITY] {
+            let err = with(DisplayBlack::StopsBelowMid(bad), KnobNames::FlagAndKey).unwrap_err();
+            assert!(
+                err.contains("--display-black (recipe `fit_range.display_black`)")
+                    && err.contains("`off`"),
+                "{bad}: {err}"
+            );
+        }
+        let err = with(DisplayBlack::StopsBelowMid(-1.0), KnobNames::KeyOnly).unwrap_err();
+        assert!(err.contains("`fit_range.display_black`"), "{err}");
+        assert!(!err.contains("--display-black"), "{err}");
+    }
+
+    #[test]
+    fn display_black_reads_off_from_a_recipe_and_is_new_chain_only() {
+        let r = parse(r#"{"recipe_version": 2, "fit_range": {"display_black": "off"}}"#).unwrap();
+        assert_eq!(r.fit_range.display_black, DisplayBlack::Off);
+        let r = parse(r#"{"recipe_version": 2, "fit_range": {"display_black": 5}}"#).unwrap();
+        assert_eq!(r.fit_range.display_black, DisplayBlack::StopsBelowMid(5.0));
+        assert!(parse(r#"{"recipe_version": 2, "fit_range": {"display_black": "none"}}"#).is_err());
+        // The current chain's projection carries the headroom only.
+        let config = serde_json::to_value(r.to_config().fit_range).unwrap();
+        assert_eq!(config, serde_json::json!({"headroom_stops": 6.0}));
     }
 
     #[test]

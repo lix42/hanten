@@ -35,7 +35,7 @@ Open:
   four rolls, and every limit it hit was the cube's top. It does real work under a tone
   that plateaus near display white (the current `shoulder`, which the new flow retires),
   so the answer holds only if fit range's operator does not plateau there — re-check
-  once [the parametric operator](parametric-operator.md) is chosen, and for HDR, which
+  if [a parametric shoulder](parametric-shoulder.md) replaces reinhard, and for HDR, which
   was not measured.
 - **No diagnostic off switch** (decided 2026-09-23). Should one ever be wanted, "off"
   has to mean an unmapped **float** destination — a render that skips the map and then

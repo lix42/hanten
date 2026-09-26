@@ -108,4 +108,4 @@ across 135 patch-by-arm readings the largest C\* the map moved is 0.001.
   `fit-gamut`: under `reinhard` and `none` in SDR the share is already near zero. This
   does not transfer to a fit-range operator that plateaus near display white — the
   `shoulder` result shows the map then acts hard — nor to the HDR branch; both are for
-  `fit-range` / `parametric-operator` to re-check.
+  `fit-range` / `parametric-shoulder` to re-check.

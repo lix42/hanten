@@ -11,7 +11,7 @@ ones.
 
 ## Epic summary
 
-Fit range and fit gamut as real stages, shared by both display branches, plus the operator question the shadow end raises.
+Fit range and fit gamut as real stages, shared by both display branches, display black, and the operator question.
 
 The epic was created on 2026-09-19 as part of the new-flow migration plan
 (`docs/nf-migration.md`).
@@ -38,6 +38,15 @@ headroom measured. `pipeline::gain_ratio` is the pair's per-channel gain, ratioe
 against the base as stored. No hard HDR ceiling above `W`: the encoder clamps and
 counts what passes the peak — a gain-map destination must do that itself
 (`nf-destinations/gain-map-destination`), since `gain_ratio` does not.
+
+**Display black has landed** (`parametric-operator`, 2026-09-26): fit range shifts where
+the film base renders to `--display-black` stops below mid-grey (`fit_range.display_black`,
+default 6, ≈ L\* 2.5, `off` to disable) — a shift in stops on luminance, whole at the base
+and below, fading to nothing at mid-grey. The reference is the decoded film base graded
+with the frame (`chain::render` takes it), so it follows each frame's contrast and nothing
+is measured from the image; a base already deeper is left alone. Mid-grey, white and the
+branch contract are untouched. Whether a parametric operator beats reinhard from mid-grey
+up is `parametric-shoulder`'s.
 
 **The gamut map's share of highlight desaturation is near zero where it matters**
 (`gamut-map-share`, done 2026-09-23; `docs/reports/gamut-map-share.md`). It moves no
@@ -236,8 +245,8 @@ float destination, never a per-channel clip.
 
 ## parametric-operator
 
-**Status:** not started
-**Updated:** 2026-09-25
+**Status:** done
+**Updated:** 2026-09-26
 
 - 2026-09-19: created with the new-flow plan. Goal: a parametric operator with a toe.
 - 2026-09-25: **now also places black** (user, from [`nf-calibration/anchor-comparison`](../tasks/nf-calibration/anchor-comparison.md)). The new chain has no black
@@ -248,6 +257,151 @@ float destination, never a per-channel clip.
   subtraction, so it is the bar to match, not the mechanism. Folded here rather than filed
   apart, because where black lands and how the curve reaches it cannot be judged separately.
   `nf-calibration/roll-white-rule` now depends on this task.
+- 2026-09-26: **display black chosen by two review rounds** (user). Sets, scripts and
+  stats in `../temp/parametric-operator/` (`review-r1.json`, `review-r1-lift.json`,
+  `review-r2.json`, `scripts/round1.py`, `scripts/round2.py`); rendered on the new chain
+  at the rule's contrast (`anchor-comparison`), roll white balance held, with a
+  prototype knob that never merged.
+
+  **The base's level is predictable, so black needs no image statistic.** The film base
+  renders at `0.18 · 10^(−0.62·g) · 1.22` — `d` below mid-grey through the whole contrast
+  `g`, times reinhard's shadow gain at six stops. Against the probe's measured base
+  (each roll's darkest frame, p0.5 luminance) that is within ±0.25 stop on all 11 roll ×
+  contrast pairs, with the per-roll residual constant across contrast (scene content,
+  white-balance tint). So the reference is the **decoded film base run through the
+  frame's own grade**, which follows a clamped frame's contrast by construction.
+
+  **Scope (user):** black first; the parametric shoulder moves to its own task,
+  `parametric-shoulder`, with "reinhard stands" a valid outcome — the white rule was
+  chosen under reinhard, and two tasks wait on black only.
+
+  **Round 1** (8 frames, the probe vs toe A `y²(1 + c)/(y + c)`). A cannot hold both
+  mid-grey and white: holding mid, white rises up to +0.18 stop on a capped roll;
+  holding white (chosen, as the probe did), mid-grey falls up to 0.15 stop (L\* 49.5 →
+  47.3). Verdicts: on floored rolls (contrast ≈ 2.95, base already at L\* 2.7–3.0) no
+  arm differed. On capped ones **the toe beat the probe on colour** — the probe's equal
+  subtraction per channel amplifies the tint of dark near-neutrals (a blue cast on 1874
+  and 1714, worse skin on 1737), where a luminance scale keeps chromaticity — but **the
+  probe kept more shadow detail** than A at L\* 2.3. Target L\* 4 vs 2.3 split by
+  picture. Nothing reached code 0 in any arm, the probe included.
+  **Side set** (contrast 3.5, base at L\* ≈ 1.4, under the target): lifting it was a
+  small difference; **leave a darker base alone** (user).
+
+  **Round 2** (8 capped frames; A vs **B**, a shift in stops, whole at and below the
+  base, fading to nothing at mid-grey by a smoothstep in `log2`): **B > A** on 5, `<>`
+  on 2 (1737, 1111), A > B on 1 (1632, clamped, skin — B's steepest band sits 1–3
+  stops under mid). Level, B at L\* 2.3 vs 4: **2.3 on 5**, 4 on 2 (1737, 1111), even on
+  1605. The lighter target shows more shadow detail and the darker a deeper black, and
+  the preference follows the picture, not the roll (09-14's 1714 and 1737 split) — a
+  taste, so a knob.
+
+  **Decided (user, 2026-09-26):** shape B, knee fixed at mid-grey (mid-grey and white
+  untouched, slope 1 below the base); a base already darker than the target is left
+  alone; one knob, **`--display-black STOPS|off`**, recipe `fit_range.display_black`, in
+  **stops below mid-grey on the display**, default **6** (L\* ≈ 2.5, 0.17 stop over the
+  reviewed L\* 2.3). Stops rather than L\*: the user's unit, and B is itself a shift in
+  stops; the report also gives L\*. Named for where black lands, to stay apart from
+  `--black-point` (the legacy subtraction) and from `flare-removal`.
+
+  **Where display black lives vs `flare-removal`:** display black is fit range's, keyed
+  on where the base *renders*, computed from the decode and grade — never measured from
+  the image. Scanner veil and base fog stay a scene-side subtraction owned by
+  `flare-removal`; building it later changes scene values beneath the base without
+  moving the display target.
+- 2026-09-26: **implemented.** `pipeline::fit_range` places black on reinhard's output,
+  before the peak's lift: `y′ = y · 2^(shift · (1 − smoothstep(u)))`, `u` over `log2 y`
+  from the base's rendered level `b` to mid-grey, `shift = log2(0.18 · 2^−stops / b)`.
+  - **Reference plumbing.** `algo::fixed::decode_film_base` decodes the base as a
+    one-pixel image through `decode` itself; `chain::render` / `render_pair` take it
+    beside the frame and grade it with the frame's own scene correction and look, so
+    the reference follows every knob that moves the base (a test renders a frame holding
+    its own base at four contrasts and finds it at the target each time). A
+    non-positive graded base, or a base that is not one pixel, is refused.
+  - **Recipe.** The new chain's `fit_range` is its own type now, `FitRangeSection`
+    (headroom + `display_black`); the current chain keeps `FitRange`, so no current-chain
+    sidecar gains a key. `display_black` is a number or `"off"` (one enum,
+    `fit_range::DisplayBlack`), `(0, 16]`, default 6.
+  - **Report.** `new_flow.fit_range.display_black` = `{setting, curve, film_base_stops,
+    shift_stops}`; the stage list joins what ran,
+    `reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1` by default, and the HDR
+    destinations' `tone_curve` reads the same string.
+  - **`--black-point`** stays refused under `--new-flow` (`NotYet`: its flare half has
+    not landed), its message now naming `--display-black`; `--display-black` is refused
+    without `--new-flow`. `film-master` refuses a non-default, non-`off` display black as
+    it refuses a headroom.
+  - **Goldens.** Reinhard's vectors run with black off and stay bit-exact. Black calls
+    `log2`/`exp2` (three per frame, two per pixel below mid-grey), so its own golden
+    (`golden_display_black_is_correct_within_its_libm_window`) is windowed by enumerating
+    every combination of the five libm results at ±2 f64 ULP. Mutation-checked: a linear
+    ramp, the knee moved to 0.1, the base graded without the look, and the `Y ≤ 0` limit
+    without the shift each red at least one test. Moving the early return from 0.18 to
+    0.17 survives — the smoothstep is flat there, so it is equivalent to a few ULP.
+  - **Rebased onto `nf-destinations/preset-set` (#174).** Its `FitRange::asks_for_a_fit`
+    moved to `FitRangeSection` and now covers display black (remedy
+    `--display-tone-headroom 0 --display-black off`); `render_new_flow_destination`
+    takes the film base; `hdr::from_new_chain` names `FitRange::applied()`.
+  - **Verified.** CI gates green (815 + 222 tests, nctool 390). Current chain
+    byte-identical to `origin/main` on 20 of 20 renders (2 fixtures × 10 presets); new
+    chain with `--display-black off` byte-identical on 14 of 14 (7 destinations × 2
+    fixtures, film master included). Branch contract with black on, 92 frames
+    (`branch_probe`): 0 violations, 0 both-bound, SDR-bound 0.0103% — unchanged.
+    anchor-comparison's verification frames (32, four rolls, rule contrast;
+    `../temp/parametric-operator/scripts/verify.py`): **no sample at code 0** on any frame
+    (the probe: up to 0.007%); noise over the scan floor +0.04–0.23× against no black
+    (probe +0.04–0.17×; the measure divides by a median that darkening lowers); marked
+    white and colour C\* unchanged (the probe raised them slightly). Shift on the capped
+    rolls −1.6 to −1.8 stops, on floored ones −0.2.
+  - **For `flare-removal`:** the reference passes through scene correction, so a flare
+    subtraction there would move it — recorded in that task's open questions.
+- 2026-09-26: review round (`/code-review high`). Fixed:
+  - **An unusable film base failed the render with display black off**, a value the
+    render never reads. `apply` now refuses it only when black is on (tested).
+  - **The film master decoded the film base it never uses** — a failure path over an
+    unread value. The base is decoded in the rendered destinations' branch of
+    `cli::render_new_flow_destination` only.
+  - Stale prose: `fit_range`'s module doc still said SDR is transcendental-free and
+    bit-reproducible, and that zero headroom is the stage's identity — both false with
+    black on (reinhard alone keeps both). `resolved()`'s "same test `apply` skips on",
+    the pair test's "fit range is the identity at zero", and
+    `contrast_not_fit_range_decides_shadow_separation`'s "a toe in fit range would fail
+    this": that test runs with black off and now says so — black steepening the shadows
+    is the decided exception; it pins that nothing else in fit range does.
+  - `2^shift` for `Y ≤ 0` is resolved once per frame (`Shift::whole`) rather than per
+    pixel, so black makes four libm calls per frame, not three; the golden's accounting
+    says so. `Shift::apply`'s unreachable `v ≤ 0` branch is a debug assertion. The
+    default render is byte-identical to before the round.
+  - **Decided, no change: a new-flow recipe saved before display black replays with it
+    on**, so its shadows come out darker, unwarned. The new flow writes no sidecar, so
+    only hand-written or `--dump-params` recipes are affected, and new-flow output is
+    unversioned until `nf-verification/fingerprints` — the call `fit-range` made for the
+    same gap. Writing `"off"` into old documents or bumping `recipe_version` would be
+    versioning machinery for scaffolding.
+  - Declined: sharing `FILM_BASE` and a reinhard reference between `chain`'s tests and
+    `chain_golden` — the golden restates the arithmetic independently on purpose.
+- 2026-09-26: ship review (`ship:diff-reviewer` + Codex), both finding the same gap:
+  **a film base near mid-grey** — reachable only by a strong `--exposure` — packed the
+  whole shift into a narrow band (a 4-stop shift over 2 stops at 2 stops under), and at
+  or above mid-grey black was skipped silently, reported as `identity`. Now
+  `ResolvedBlack::warning` warns whenever black is on and the base renders less than
+  `MIN_FILM_BASE_STOPS` (2) under mid-grey, naming `--exposure` and `--display-black
+  off`; on `hdr-48bit.tif` at the defaults it starts at `--exposure 1.75`, and the skip
+  at 3.75. Documented in `ResolvedBlack::curve`, the guide and design-spec §9. The
+  golden's libm count was corrected to five per frame (the target's `exp2` is exact at
+  whole stops, which the golden runs). Declined: a report `film_base_stops` of `null`
+  for an unusable base with black off (the decoded base is positive by construction),
+  and film-master's refusal naming both identities when one knob asked (it works).
+- 2026-09-26: **done.** Display black ships on by default under `--new-flow`:
+  `--display-black STOPS|off` / `fit_range.display_black`, default 6 stops below
+  mid-grey, a shift in stops on luminance fading to nothing at mid-grey, keyed on the
+  decoded film base graded with the frame. Verified: CI gates green; current chain
+  byte-identical to `origin/main` (20 of 20), new chain with black off byte-identical
+  (14 of 14); branch contract 0 violations on 92 frames; no code-0 samples on 32 real
+  frames. For dependents: **`roll-white-rule`** and **`desaturation-band-refit`**
+  judge with display black at its default — never the probe; the white rule's cap
+  and floor were chosen with the probe's L\* 2.3, 0.17 stop darker than the default 6.
+  **`flare-removal`** must decide whether the base reference sees its subtraction
+  (open question on that task). **`parametric-shoulder`** replaces reinhard from
+  mid-grey up only; black owns the shadows.
 
 ## branch-contract
 
@@ -397,3 +551,14 @@ float destination, never a per-channel clip.
     under which the map removes 5.3-13.8 on average (worst 52). Corrected there to
     `--display-tone reinhard`.
   - Off switch: none, on either chain (user decision 2026-09-23).
+
+## parametric-shoulder
+
+**Status:** not started
+**Updated:** 2026-09-26
+
+- 2026-09-26: split from `parametric-operator` (user), which ships display black
+  alone. Goal: whether a parametric operator beats reinhard from mid-grey up, at
+  matched lightness, with display black in the chain; "reinhard stands" is a complete
+  outcome. Depends on `nf-calibration/roll-white-rule`, since a shoulder that holds
+  diffuse white moves the white the rule was chosen under.
