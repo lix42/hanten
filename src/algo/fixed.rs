@@ -524,7 +524,6 @@ mod tests {
             density: DensityParams {
                 scale: DENSITY_SCALE,
                 offset,
-                ..DensityParams::default()
             },
             curve: DensityCurve::Exponential(ExponentialParams {
                 gamma,
@@ -665,7 +664,6 @@ mod tests {
             density: DensityParams {
                 scale: DENSITY_SCALE,
                 offset: DENSITY_OFFSET,
-                ..DensityParams::default()
             },
             curve: DensityCurve::Exponential(ExponentialParams {
                 gamma: LINEARIZATION,

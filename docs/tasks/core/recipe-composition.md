@@ -46,9 +46,10 @@ target subsection in design-spec §8, which this task implements.
 3. **Should `--params -` be allowed more than once?** Reading stdin twice cannot
    work; refuse the second rather than silently reusing the buffer.
 4. **Which of `convert`'s overrides make sense roll-wide?** Most do. The
-   frame-local measurements (`--auto-d-max`, `--auto-balance-range`) are
-   accepted today but are exactly what breaks roll consistency — see
-   `core/unfrozen-auto-mode-warning`.
+   frame-local measurement left is the auto white balance (`--auto-wb`; `--auto-d-max`
+   and `--auto-balance-range` retired in `nf-retire/dmax-machinery` and
+   `nf-retire/regional-balance`), and it is exactly what breaks roll consistency —
+   see `core/unfrozen-auto-mode-warning`.
 
 ## How to Verify
 

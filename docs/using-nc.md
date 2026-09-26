@@ -9,14 +9,17 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 7`, built at commit
-> `7d5524b` plus `nf-reconstruction/gamma-split` (under `--new-flow` the decode's
-> slope is `reconstruction.linearization` and print contrast is `look.contrast` /
-> `--contrast`, §11) and `nf-look/per-channel-grade` (`--channel-grade`). The staleness
+> `b36ca64` (under `--new-flow` the decode's slope is `reconstruction.linearization`,
+> print contrast is `look.contrast` / `--contrast`, and the look's grade is
+> `--channel-grade`, §11) plus `nf-retire/regional-balance` (the balance flags and keys
+> retired, §5–§6). The staleness
 > signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
 >
-> **Retired flags and presets** — `--display-tone` and `--highlight-compress`,
+> **Retired flags and presets** — the regional balance (`--shadow-balance`,
+> `--highlight-balance`, `--balance-range`, `--auto-balance-range`),
+> `--display-tone` and `--highlight-compress`,
 > `--reconstruction`, `--density-curve sigmoid`, the `--sigmoid-*` flags, the
 > `sigmoid-knees` / `sigmoid-flat` presets, and before them `legacy` / `custom` — are
 > documented in the reference build's own guide
@@ -299,10 +302,7 @@ hanten params
     "schema_version": 1,
     "density": {
       "scale": [1.0, 0.84, 0.73],
-      "offset": [0.0, 0.0, 0.0],
-      "shadow_balance": [0.0, 0.0, 0.0],
-      "highlight_balance": [0.0, 0.0, 0.0],
-      "balance_range": "auto"
+      "offset": [0.0, 0.0, 0.0]
     },
     "curve": { "type": "exponential", "gamma": 2.0,
                "anchor": { "mid-at-base-offset": 0.62 } }
@@ -370,6 +370,34 @@ usage: recipe roll.json: `calibration.dmax` ({"explicit":1.5}) was removed: the 
 ```
 
 An older spelling, `reconstruction.curve.dmax`, is refused the same way.
+
+The regional balance is retired too (§6). Every earlier sidecar carries
+`reconstruction.density.shadow_balance` / `highlight_balance` at `[0, 0, 0]` and
+`balance_range` at `"auto"`; those are **dropped on load** and replay unchanged. Any
+other value is refused, naming the key. One case has an exact replacement: an equal
+shadow and highlight value was a tone-independent offset, and the message says to set
+`reconstruction.density.offset` to the offset the run resolves plus the pair:
+
+```
+usage: recipe eq.json: recipe key `reconstruction.density.shadow_balance`
+       ([0.05,0,-0.02]) was removed with the regional balance: … This recipe's equal
+       pair [0.05, 0.0, -0.02] was a tone-independent offset: remove the balance keys
+       and set `reconstruction.density.offset` to the offset this run resolves plus the
+       pair (the shared recipe's, for a roll per-frame override), which replays the
+       render (exactly over a zero offset, otherwise to float rounding). …
+```
+
+A differing pair has no counterpart on this chain; render it with the reference build.
+An explicit `balance_range` beside equal (or absent) balances is refused too, but the
+range was consulted only when the two balances differed, so its remedy is to remove the
+key — the render is unchanged:
+
+```
+usage: recipe range.json: recipe key `reconstruction.density.balance_range`
+       ({"explicit":[0.2,1.6]}) was removed with the regional balance: … Remove the
+       key; the render is unchanged — the range was consulted only when the two
+       balances differed. …
+```
 
 ### Strictness
 
@@ -721,9 +749,6 @@ section. If your recipe pinned a non-default placement, that is a loud,
 |---|---|
 | `--density-scale R,G,B` | Per-channel density gain — **default `1,0.84,0.73`**, see below |
 | `--density-offset R,G,B` | Per-channel density offset — **orange-mask compensation** |
-| `--shadow-balance R,G,B` | Per-channel offset applied to the positive's **shadows** |
-| `--highlight-balance R,G,B` | Per-channel offset applied to the positive's **highlights** |
-| `--balance-range LO,HI` | Fix the regional-balance tone anchors (default: measured per frame) |
 
 **`--density-scale` does not default to `1,1,1`.** It is `1,0.84,0.73` — a
 calibration, not an identity. Green and blue density rise faster than red in a scan,
@@ -755,28 +780,32 @@ Two things to know before relying on it:
   scanner. A roll that still shows a cast wants its own `--density-scale`;
   `io/scanner-density-calibration` is the task that should remove the need to guess.
 
-A positive balance value brightens that channel in that region. `0,0,0` (default)
-skips the regional pass entirely and is bit-exact with the unbalanced output.
+### The regional balance — retired
 
-Negative values are common for the balance flags and a leading `-` is accepted.
+`--shadow-balance`, `--highlight-balance`, `--balance-range` and `--auto-balance-range`
+exit 2 on both chains, at every value (`0,0,0` included), and the report no longer has
+a `balance_range` field:
 
-For **roll consistency**, measure the range once and freeze it. The range is only
-*measured* when the regional pass runs — that is, when the two balances **differ**
-— so set them first:
-
-```sh
-hanten convert scan.tif -o out.jpg --film-base … \
-  --shadow-balance=-0.05,0,0 --highlight-balance 0.05,0,0
+```
+usage: --shadow-balance was removed with the regional balance: per-channel density
+       offsets ramped between a shadow and a highlight density, whose `auto` range was
+       measured on every frame (…), and which nothing bounded, so a large enough
+       difference between its ends folded two densities onto one. Its successor is the
+       look's per-channel grade, `--channel-grade R,B` (recipe `look.channel_grade`)
+       under `--new-flow`: pivoted at a fixed mid-grey, so it measures nothing, and
+       bounded so it stays monotone. … the current chain has no counterpart. Drop the
+       flag. (…)
 ```
 
-Read the reported top-level `balance_range` (e.g. `[-0.368, 0.494]`), then pass it
-as `--balance-range LO,HI` on the rest. With the neutral default the pass
-short-circuits and no range is reported at all.
+The grade is not a rename: it acts on the working space's channels after the 3×3, not
+on film density before it, so old balance values do not translate — match it by eye.
+The current chain has no tone-dependent per-channel control until the new chain
+becomes the default. A recipe's balance keys are covered in §5.
 
 ### The `Dmax` reference density — retired
 
 `--d-max`, `--fixed-d-max`, `--auto-d-max`, `--no-d-max` and `estimate --d-max-region`
-exit 2 with the migration message above, on both chains. A recipe's `calibration.dmax`
+exit 2 with the anchor section's migration message, on both chains. A recipe's `calibration.dmax`
 is dropped at its old default `"fixed"` and refused otherwise (§5).
 
 ### Nothing is silently ignored
@@ -1023,9 +1052,8 @@ With `-v`, `hanten` says on stderr when it completed a path.
 
 ### Preset interaction rules
 
-- `film-master` rejects a measured `--auto-balance-range` (when a balance is applied)
-  and every non-default downstream control — it bypasses them, so accepting them would
-  be a lie.
+- `film-master` rejects every non-default downstream control — it bypasses them, so
+  accepting them would be a lie.
 - Every other preset consumes the print controls, `--linear-range` included.
 - The two f32 TIFFs are different images: `film-master` (unclamped linear ACEScg,
   no print controls) and `hdr-linear-tiff` (display-linear BT.2020, print controls
@@ -1419,12 +1447,6 @@ refused (exit 2) rather than accepted and ignored, and the message says whether 
 counterpart is missing **yet** or for good:
 
 ```console
-$ hanten convert … --new-flow --shadow-balance 0.1,0,0
-usage: --shadow-balance has no meaning under `--new-flow`: the new flow has no
-counterpart for it, and will not gain one: the regional balance (density offsets ramped
-over a measured tone range) is not ported. … Use --channel-grade R,B (recipe
-`look.channel_grade`), …
-
 $ hanten convert … --new-flow --output-preset display-p3
 usage: --output-preset has no meaning under `--new-flow`: the new flow has no
 counterpart for it yet — one arrives with the new flow's destination set: …
@@ -1446,18 +1468,16 @@ refused:
 |---|---|
 | `--density-curve characteristic` | the curve is no longer a choice the decode offers |
 | `--film-stock` | per-stock normalization becomes an optional **rendering** step — planned, not scheduled, and it will bring its own flag; `--film-stock` leaves with `--density-curve characteristic` |
-| `--shadow-balance`, `--highlight-balance` (non-zero) | a grade; the look's per-channel grade replaces it — `--channel-grade R,B` (recipe `look.channel_grade`) |
 | `--preset` | a preset sets knobs on both sides of the decode/rendering boundary |
-| `--balance-range`, `--auto-balance-range` | they shape the regional balance's tone ramp, which is itself refused |
 
 And these still work, because they *are* the fixed decode's own calibration and
 anchor: `--density-scale`, `--density-offset`, `--density-gamma` (the decode's
 linearization — see below) and `--anchor-mid-offset`. So does `--density-curve exponential`, which
-names what the new flow already decodes with, and a zero `--shadow-balance` /
-`--highlight-balance` — an identity value asks for nothing this flow cannot do. (It is *not* spared in order to let one recipe
-be re-used on either chain: the new chain's recipe has no key for any of them, so
-there is no pinned value for a flag to clear.) The retired sigmoid and `simple`
-flags are refused before any of this, on either chain.
+names what the new flow already decodes with — an identity value asks for nothing this
+flow cannot do. (It is *not* spared in order to let one recipe be re-used on either
+chain: the new chain's recipe has no curve key, so there is no pinned value for a flag
+to clear.) The retired sigmoid, `simple` and regional-balance flags are refused before
+any of this, on either chain.
 
 **A recipe for the new chain is its own document.** It states
 `"recipe_version": 2` and has one section per stage; `hanten params --new-flow`

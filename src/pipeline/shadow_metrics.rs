@@ -213,8 +213,7 @@ struct Tile {
     spread: f32,
 }
 
-/// Per-pixel scalar tone `D̄`: the mean of the *finite* channels, matching the domain
-/// `density::regional_balance` uses. A non-finite channel is excluded from the mean
+/// Per-pixel scalar tone `D̄`: the mean of the *finite* channels. A non-finite channel is excluded from the mean
 /// rather than poisoning it, but a wholly non-finite pixel yields `NaN` and is dropped
 /// by the callers' finite filter — so corrupt input cannot masquerade as a valid patch.
 fn tone(px: &[f32]) -> f32 {

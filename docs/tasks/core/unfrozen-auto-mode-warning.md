@@ -3,10 +3,9 @@
 ## Goal
 
 Say something when a recipe applied to a roll still re-measures per frame. A
-recipe carrying `dmax: "auto"`, an auto `white_balance`, or an `auto`
-`balance_range` with a non-neutral balance produces a *different* calibration on
-every frame — the exact inconsistency `roll` exists to prevent — and today nothing
-warns.
+recipe carrying an auto `white_balance` produces *different* gains on every frame —
+the exact inconsistency `roll` exists to prevent — and today nothing warns.
+(`dmax: "auto"` was the other such mode; it retired in `nf-retire/dmax-machinery`.)
 
 ## The gap, measured
 
@@ -22,7 +21,7 @@ roll re-derives all three per frame, and the only warning emitted was an
 incidental region-uniformity note.
 
 `roll` already warns when the film base is not `explicit`, so the precedent and
-the plumbing exist — `dmax` and white balance are the same hazard and are silent.
+the plumbing exist — white balance is the same hazard and is silent.
 
 ## Open questions
 
@@ -32,9 +31,10 @@ the plumbing exist — `dmax` and white balance are the same hazard and are sile
 2. **Is `convert` affected?** A single frame has no consistency to break, so
    probably not — which means this is a roll-scoped rule, unlike most of
    `validate`.
-3. **Which modes qualify?** `dmax: "auto"` and the auto white-balance modes
-   clearly. `balance_range: "auto"` only matters when a balance is non-zero
-   (`density::consults_balance_range`). A `{"region": …}` film base is subtler:
+3. **Which modes qualify?** The auto white-balance modes clearly. (`dmax: "auto"`
+   and the regional balance's `balance_range: "auto"` were too; they retired in
+   `nf-retire/dmax-machinery` and `nf-retire/regional-balance`.) A `{"region": …}`
+   film base is subtler:
    it re-samples the *same rectangle* on every frame, which is stable only if
    that rectangle is rebate on every frame.
 4. **Warning or `--strict`-only?** These are legitimate deliberate choices for
@@ -42,13 +42,11 @@ the plumbing exist — `dmax` and white balance are the same hazard and are sile
 
 ## How to Verify
 
-- A roll whose recipe carries `dmax: "auto"` warns, naming the field and what it
-  means for consistency.
+- A roll whose recipe carries an auto `white_balance` warns, naming the field and
+  what it means for consistency.
 - The same recipe under `convert` does whatever question 2 decides — asserted
   either way, not incidental.
 - A fully explicit recipe emits nothing (the falsifiable control).
-- `balance_range: "auto"` with neutral balances emits nothing; with a
-  non-neutral balance it warns.
 - `--strict` promotes it, and the existing not-explicit-base warning is not
   duplicated for the same frame.
 

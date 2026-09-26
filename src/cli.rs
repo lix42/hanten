@@ -40,10 +40,10 @@ use crate::pipeline::{
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::telemetry;
 use crate::types::{
-    AnchorPlacement, BalanceRange, CalibrationParams, CharacteristicParams, DEFAULT_MEASURE_INSET,
-    DensityCurve, DensityCurveType, DensityParams, EncodeOutcome, EncodeReport, FilmBase,
-    FilmBaseSource, FilmStock, FilmType, InputParams, LinearImage, MeaningAssertion, MeasureParams,
-    NcError, OutDepth, OutputParams, OutputPreset, OutputStats, PrintParams, REMOVED_SIGMOID_CURVE,
+    AnchorPlacement, CalibrationParams, CharacteristicParams, DEFAULT_MEASURE_INSET, DensityCurve,
+    DensityCurveType, DensityParams, EncodeOutcome, EncodeReport, FilmBase, FilmBaseSource,
+    FilmStock, FilmType, InputParams, LinearImage, MeaningAssertion, MeasureParams, NcError,
+    OutDepth, OutputParams, OutputPreset, OutputStats, PrintParams, REMOVED_SIGMOID_CURVE,
     REMOVED_SIMPLE_RECONSTRUCTION, Reconstruction, Result, TransferAssertion, WbSource,
     check_measure_inset,
 };
@@ -329,6 +329,8 @@ pub struct ConvertArgs {
     #[command(flatten)]
     pub dmax: RemovedDmaxFlags,
     #[command(flatten)]
+    pub balance: RemovedBalanceFlags,
+    #[command(flatten)]
     pub sigmoid: RemovedSigmoidFlags,
     #[command(flatten)]
     pub anchor: AnchorOverrides,
@@ -537,14 +539,9 @@ pub struct MeasureOverrides {
 /// Density-reconstruction overrides (design-spec §9,
 /// `reconstruction = density`). Every flag here maps into the tagged
 /// `reconstruction` object: `--density-scale`/`--density-offset` ⇒
-/// `reconstruction.density.scale`/`.offset`, the regional-balance flags ⇒ the
-/// same-named `reconstruction.density` fields, and `--density-gamma` ⇒
+/// `reconstruction.density.scale`/`.offset`, and `--density-gamma` ⇒
 /// `reconstruction.curve.gamma` (exponential curve only — a merge-time usage
 /// error under the characteristic curve, never ignored).
-///
-/// The two `balance_range` flags are mutually exclusive (clap rejects passing
-/// both), like the [`FilmBaseOverrides`] trio: whichever is given replaces the
-/// recipe's `reconstruction.density.balance_range` entirely.
 #[derive(Args, Debug, Default)]
 pub struct DensityOverrides {
     /// Per-channel density gain.
@@ -568,22 +565,23 @@ pub struct DensityOverrides {
     // clap and the deserializer each growing their own list to keep in step.
     #[arg(long, value_name = "NAME")]
     pub film_stock: Option<String>,
-    /// Regional balance: per-channel density offset for the positive's shadows.
-    /// Negative values are typical, so a leading `-` is accepted
-    /// (`allow_hyphen_values`); the comma-list parser still rejects non-numbers.
-    #[arg(long, value_name = "R,G,B", value_parser = parse_rgb, allow_hyphen_values = true)]
-    pub shadow_balance: Option<[f32; 3]>,
-    /// Regional balance: per-channel density offset for the positive's highlights.
-    #[arg(long, value_name = "R,G,B", value_parser = parse_rgb, allow_hyphen_values = true)]
-    pub highlight_balance: Option<[f32; 3]>,
-    /// Explicit tone-ramp anchors for the regional balance (corrected density;
-    /// reuse a frame's reported range across a roll). A negative `LO` is legal
-    /// (`density_offset` can shift densities below zero).
-    #[arg(long, value_name = "LO,HI", value_parser = parse_lo_hi, allow_hyphen_values = true,
-          conflicts_with = "auto_balance_range")]
-    pub balance_range: Option<[f32; 2]>,
-    /// Measure the regional-balance tone range per frame (the default behavior).
-    #[arg(long)]
+}
+
+/// The regional balance's flags, removed with it (`nf-retire/regional-balance`).
+/// Hidden, and kept only to emit a migration error — there is no alias. The valued
+/// ones take any value, or none, so the old spellings (a negative `--shadow-balance
+/// -0.05,0,0`, a bare `--balance-range`) reach that message instead of clap's generic
+/// one. (A bare one followed by another valued flag still swallows that flag and hits
+/// clap's error — loud, exit 2, and never a valid spelling.)
+#[derive(Args, Debug, Default)]
+pub struct RemovedBalanceFlags {
+    #[arg(long = "shadow-balance", hide = true, value_name = "R,G,B", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub shadow_balance: Option<String>,
+    #[arg(long = "highlight-balance", hide = true, value_name = "R,G,B", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub highlight_balance: Option<String>,
+    #[arg(long = "balance-range", hide = true, value_name = "LO,HI", num_args = 0..=1, default_missing_value = "", allow_hyphen_values = true)]
+    pub balance_range: Option<String>,
+    #[arg(long = "auto-balance-range", hide = true)]
     pub auto_balance_range: bool,
 }
 
@@ -872,8 +870,7 @@ pub struct OutputOverrides {
     /// Every TIFF preset requires `.tif`/`.tiff`. Recipe key `output.preset`.
     ///
     /// Every preset resolves its own depth, profile and container. `film-master`
-    /// additionally rejects a frame-local `--auto-balance-range` plus every
-    /// non-default downstream control; every display preset consumes those controls
+    /// additionally rejects every non-default downstream control; every display preset consumes those controls
     /// instead.
     #[arg(long = "output-preset", value_name = "PRESET")]
     pub output_preset: Option<String>,
@@ -982,8 +979,10 @@ fn removed_output_flag_message(s: &RemovedOutputSelector, new_flow: bool) -> Str
 }
 
 /// Drop the retired keys a recipe carries at the value every earlier build wrote by
-/// default — the output selectors, `print.highlight_compress`, and `calibration.dmax`
-/// at `"fixed"` — returning whether anything was removed. A non-default value is left
+/// default — the output selectors, `print.highlight_compress`, `calibration.dmax`
+/// at `"fixed"`, and the regional balance's `reconstruction.density.shadow_balance` /
+/// `highlight_balance` at `[0, 0, 0]` and `balance_range` at `"auto"` — returning
+/// whether anything was removed. A non-default value is left
 /// for [`reject_legacy_recipe_keys`] to refuse.
 ///
 /// The rule for retiring any recipe key: every sidecar and `--dump-params` document
@@ -992,7 +991,8 @@ fn removed_output_flag_message(s: &RemovedOutputSelector, new_flow: bool) -> Str
 /// whose replay would now render differently: refuse it, since stripping it would
 /// silently render the new default. `print.display_tone`'s `"shoulder"` is one, so it is
 /// **not** stripped here. `calibration.dmax`'s `"fixed"` is not one: the one placement
-/// left reads no reference, so it replays byte-identically.
+/// left reads no reference, so it replays byte-identically; nor is the regional
+/// balance's, whose neutral pair skipped the pass bit-exactly.
 fn strip_retired_keys_at_old_defaults(v: &mut serde_json::Value) -> bool {
     let mut stripped = false;
     if let Some(output) = v.get_mut("output").and_then(|o| o.as_object_mut()) {
@@ -1017,7 +1017,85 @@ fn strip_retired_keys_at_old_defaults(v: &mut serde_json::Value) -> bool {
         calibration.remove("dmax");
         stripped = true;
     }
+    if let Some(density) = v
+        .pointer_mut("/reconstruction/density")
+        .and_then(|d| d.as_object_mut())
+    {
+        // Neutral as the old deserializer read it (f32), so `-0.0`, `0` and a value
+        // underflowing to zero strip too — the old build skipped the pass for them all.
+        let neutral = |key: &str, value: &serde_json::Value| match key {
+            "balance_range" => value.as_str() == Some("auto"),
+            _ => balance_triple(value) == Some([0.0; 3]),
+        };
+        for key in REGIONAL_BALANCE_KEYS {
+            if density.get(key).is_some_and(|value| neutral(key, value)) {
+                density.remove(key);
+                stripped = true;
+            }
+        }
+    }
     stripped
+}
+
+/// The regional balance's recipe keys under `reconstruction.density`, retired with it
+/// (`nf-retire/regional-balance`).
+const REGIONAL_BALANCE_KEYS: [&str; 3] = ["shadow_balance", "highlight_balance", "balance_range"];
+
+/// A regional-balance triple as the old deserializer read it: a three-element numeric
+/// array, each value as `f32`. `None` for anything else. Shared by the neutral-default
+/// strip and the migration message, so the two agree on what equals what.
+fn balance_triple(value: &serde_json::Value) -> Option<[f32; 3]> {
+    let a = value.as_array()?;
+    if a.len() != 3 {
+        return None;
+    }
+    let mut t = [0.0f32; 3];
+    for (slot, c) in t.iter_mut().zip(a) {
+        *slot = c.as_f64()? as f32;
+    }
+    Some(t)
+}
+
+/// The migration error for a regional-balance key left after
+/// [`strip_retired_keys_at_old_defaults`] — a non-neutral value.
+///
+/// The old balance compared its two f32 triples first and, when they were equal (an
+/// absent key meaning `[0, 0, 0]`), applied a tone-independent offset without reading
+/// the range. So an equal pair is reproduced by `reconstruction.density.offset` —
+/// bit-for-bit over a zero offset, since `x + 0 + s` is `x + s`; otherwise to one f32
+/// rounding of the sum — and a `balance_range` beside equal (or absent) balances never
+/// affected the render. Both remedies say so; only a differing pair is a lost render.
+fn removed_balance_recipe_message(density: &serde_json::Value, context: &str) -> Option<String> {
+    let key = REGIONAL_BALANCE_KEYS
+        .into_iter()
+        .find(|k| density.get(k).is_some())?;
+    let value = &density[key];
+    // An absent key is its neutral default; a malformed value never counts as equal.
+    let triple = |k: &str| density.get(k).map_or(Some([0.0; 3]), balance_triple);
+    let equal_pair = match (triple("shadow_balance"), triple("highlight_balance")) {
+        (Some(s), Some(h)) if s == h => Some(s),
+        _ => None,
+    };
+    let remedy = match (key, equal_pair) {
+        ("balance_range", Some(_)) => "Remove the key; the render is unchanged — the range \
+                                       was consulted only when the two balances differed"
+            .to_string(),
+        (_, Some(offset)) => format!(
+            "This recipe's equal pair {offset:?} was a tone-independent offset: remove the \
+             balance keys and set `reconstruction.density.offset` to the offset this run \
+             resolves plus the pair (the shared recipe's, for a roll per-frame override), \
+             which replays the render (exactly over a zero offset, otherwise to float \
+             rounding)"
+        ),
+        (_, None) => "Remove the key; the old rendering is reproducible only from the \
+                      reference build"
+            .to_string(),
+    };
+    Some(format!(
+        "{context}: recipe key `reconstruction.density.{key}` ({value}) was removed with the \
+         regional balance: {REGIONAL_BALANCE_RETIRED}. {remedy}. Its neutral default is \
+         still accepted, so a sidecar written before the retirement replays."
+    ))
 }
 
 /// The migration message for a retired `print.display_tone` recipe value.
@@ -1139,7 +1217,7 @@ pub enum ConversionPreset {
 const REMOVED_CONVERSION_PRESETS: [&str; 2] = ["sigmoid-knees", "sigmoid-flat"];
 
 /// What a [`ConversionPreset`] resolves to. Only the three knobs a preset owns: the
-/// recipe's other fields (regional balance, film base, white balance, output preset)
+/// recipe's other fields (density offset, film base, white balance, output preset)
 /// are untouched, which is what lets a preset be layered onto a roll calibration.
 ///
 /// **`curve` is one path but several knobs — all of them looks.** While the roll's
@@ -2238,13 +2316,6 @@ pub struct Report {
     /// (design-spec §8/§9).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub white_balance: Option<[f32; 3]>,
-    /// Resolved regional-balance tone-ramp range `[lo, hi]` (corrected density)
-    /// the density conversion used (`convert`): the auto-measured or explicit
-    /// anchors, absent when both balances are neutral or for the `simple`
-    /// algorithm. Reported so a roll can reuse one frame's measured range via
-    /// `--balance-range` (design-spec §9).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub balance_range: Option<[f32; 2]>,
     /// How the film base was chosen, as the structured [`FilmBaseSource`]
     /// (`"auto"` / `{"region":[…]}` / `{"explicit":[…]}`) so an agent gets the
     /// sampled rectangle / explicit values without string-parsing a label.
@@ -2968,7 +3039,9 @@ fn canonical_params_json(cfg: &ResolvedConfig) -> Result<String> {
 ///   otherwise be raised;
 /// - a stated `calibration.dmax`, the roll reference density that retired with the
 ///   placements reading it (`nf-retire/dmax-machinery`). Its old default `"fixed"` is
-///   stripped before this runs.
+///   stripped before this runs;
+/// - a non-neutral regional balance (`nf-retire/regional-balance`), whose neutral
+///   defaults are likewise stripped first.
 ///
 /// nc is unreleased, so all of these are rejected, never aliased.
 fn reject_legacy_recipe_keys(v: &serde_json::Value, context: &str) -> Result<()> {
@@ -2994,6 +3067,12 @@ fn reject_legacy_recipe_keys(v: &serde_json::Value, context: &str) -> Result<()>
              `\"fixed\"` is still accepted, so a sidecar written before the retirement \
              replays."
         )));
+    }
+    if let Some(message) = v
+        .pointer("/reconstruction/density")
+        .and_then(|density| removed_balance_recipe_message(density, context))
+    {
+        return Err(NcError::Usage(message));
     }
     if v.get("input")
         .and_then(|input| input.get("color"))
@@ -3051,8 +3130,7 @@ fn reject_legacy_recipe_keys(v: &serde_json::Value, context: &str) -> Result<()>
             "{context}: top-level `{key}` is no longer supported — the reconstruction \
              is one `reconstruction` object (schema_version 1; the `simple` and \
              `sigmoid` algorithms were removed). Put density \
-             correction under `reconstruction.density` ({{scale, offset, \
-             shadow_balance, highlight_balance, balance_range}}) and exactly one \
+             correction under `reconstruction.density` ({{scale, offset}}) and exactly one \
              tagged curve under `reconstruction.curve` \
              ({{\"type\":\"exponential\", gamma, anchor}} or \
              {{\"type\":\"characteristic\", stock}}). See design-spec §8."
@@ -3335,8 +3413,7 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
     );
 
     // density block: `--density-scale`/`--density-offset` ⇒
-    // `reconstruction.density.scale`/`.offset`; regional-balance flags ⇒ the
-    // same-named density fields.
+    // `reconstruction.density.scale`/`.offset`.
     let Reconstruction { density, curve } = &mut cfg.reconstruction;
     if let Some(v) = args.density.density_scale {
         density.scale = v;
@@ -3344,21 +3421,6 @@ pub fn merge(mut cfg: ResolvedConfig, args: &ConvertArgs) -> Result<ResolvedConf
     if let Some(v) = args.density.density_offset {
         density.offset = v;
     }
-    if let Some(v) = args.density.shadow_balance {
-        density.shadow_balance = v;
-    }
-    if let Some(v) = args.density.highlight_balance {
-        density.highlight_balance = v;
-    }
-    // balance range: the two flags are mutually exclusive (clap-enforced);
-    // whichever is given replaces the recipe's
-    // `reconstruction.density.balance_range` entirely.
-    if let Some(v) = args.density.balance_range {
-        density.balance_range = BalanceRange::Explicit(v);
-    } else if args.density.auto_balance_range {
-        density.balance_range = BalanceRange::Auto;
-    }
-
     // `--density-gamma` and `--anchor-mid-offset` ⇒ the exponential's `gamma` and
     // `anchor`; refused, not ignored, under the characteristic curve, which carries
     // neither — a flag that sets one is asking it to be a different curve.
@@ -4189,32 +4251,6 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
     positive("--density-scale", &density.scale)?;
     finite("--density-offset", &density.offset)?;
 
-    // Regional balance: the offsets are density deltas — any finite value
-    // (including negative) is meaningful. An explicit ramp range must be finite
-    // and ordered `lo < hi`: equal anchors would make the ramp divide by zero,
-    // and a recipe can smuggle values the CLI parser never saw.
-    finite("--shadow-balance", &density.shadow_balance)?;
-    finite("--highlight-balance", &density.highlight_balance)?;
-    if let BalanceRange::Explicit([lo, hi]) = density.balance_range {
-        finite("--balance-range", &[lo, hi])?;
-        if lo >= hi {
-            return Err(usage(format!(
-                "--balance-range low ({lo}) must be < high ({hi})"
-            )));
-        }
-        // The span `hi - lo` divides the ramp; two individually-finite anchors
-        // can still overflow it to `+inf` (e.g. `-3e38,3e38`), which silently
-        // collapses `w_hi` to 0 for every pixel — the highlight balance would
-        // then never apply while the report claims the range was honored. A
-        // representable span is a hard requirement, not just `lo < hi`.
-        if !(hi - lo).is_finite() {
-            return Err(usage(format!(
-                "--balance-range span (high {hi} − low {lo}) overflows f32; \
-                 use anchors whose difference is representable"
-            )));
-        }
-    }
-
     match curve {
         // The characteristic curve has no parametric value to bound: its slope and
         // placement are the published curve's. The tables it will invert are checked
@@ -4293,9 +4329,9 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
     }
 
     // Range placement: the endpoints divide the affine, so they must be finite,
-    // ordered `lo < hi`, and have a representable span (the same three checks
-    // `--balance-range` needs — two individually-finite anchors can still overflow
-    // their difference to `+inf`, which would silently collapse every sample).
+    // ordered `lo < hi`, and have a representable span — two individually-finite
+    // anchors can still overflow their difference to `+inf`, which would silently
+    // collapse every sample.
     let [lo, hi] = cfg.print.linear_range;
     finite("--linear-range", &[lo, hi])?;
     if lo >= hi {
@@ -4351,9 +4387,7 @@ pub fn validate_with_remedy(cfg: &ResolvedConfig, remedy: FilmBaseRemedy) -> Res
 /// Every preset is atomic — container, depth and profile are resolved from it, and
 /// no knob states them any more — so the one rule left is `film-master`'s: it bypasses
 /// every downstream control, so it rejects a non-default one rather than silently
-/// ignoring it, and rejects the one *frame-local measurement* left — an
-/// actually-consulted `auto` `balance_range` — which normalizes per frame and breaks the
-/// cross-frame consistency a master exists to preserve. (A rule refusing the display tone
+/// ignoring it. (A rule refusing the display tone
 /// on presets that could not carry it retired with the other tones: every display preset
 /// applies the one that is left.)
 fn validate_output_preset(cfg: &ResolvedConfig) -> Result<()> {
@@ -4367,36 +4401,7 @@ fn validate_output_preset(cfg: &ResolvedConfig) -> Result<()> {
 fn validate_film_master(cfg: &ResolvedConfig) -> Result<()> {
     let usage = NcError::Usage;
 
-    // Rule 1a — a frame-local measurement: an `auto` regional-balance range measures
-    // this frame's 0.5/99.5 corrected-density percentiles
-    // (`algo::density::measure_balance_range`), so two frames of one roll get different
-    // tone-ramp anchors and their masters are not mutually consistent.
-    //
-    // Rejected only when the range is genuinely consulted: `regional_balance`
-    // short-circuits before measuring whenever the two balances are equal — including
-    // the neutral default — so the default `BalanceRange::Auto` is inert and must stay
-    // accepted. `density::consults_balance_range` is that predicate, kept beside the
-    // short-circuits it mirrors so the two cannot drift.
-    let density = &cfg.reconstruction.density;
-    if density.balance_range == BalanceRange::Auto
-        && crate::algo::density::consults_balance_range(density)
-    {
-        return Err(usage(format!(
-            "--output-preset film-master rejects a frame-local auto regional-balance \
-             range (--auto-balance-range / reconstruction.density.balance_range = \
-             \"auto\") when a balance is actually applied (shadow_balance {:?} vs \
-             highlight_balance {:?}): the ramp anchors are measured from this frame's \
-             density percentiles, so two frames of a roll would be corrected against \
-             different anchors and their masters would not be mutually consistent. \
-             Measure the range once with `hanten \
-             convert` on a representative frame and reuse it via --balance-range LO,HI, \
-             or leave the balances equal (an equal pair is a tone-independent offset and \
-             consults no range).",
-            density.shadow_balance, density.highlight_balance
-        )));
-    }
-
-    // Rule 1b — every non-default downstream control, named individually so the
+    // Every non-default downstream control, named individually so the
     // error says which one and where it came from. `film-master` encodes stage 4
     // directly, so each of these would otherwise be silently dropped.
     let d = PrintParams::default();
@@ -4808,6 +4813,15 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
     if let Some((flag, what)) = removed_dmax_flag(&args.dmax) {
         return Err(NcError::Usage(removed_dmax_message(flag, what)));
     }
+    if let Some(flag) = removed_balance_flag(&args.balance) {
+        return Err(NcError::Usage(format!(
+            "{flag} was removed with the regional balance: {REGIONAL_BALANCE_RETIRED}. \
+             Drop the flag. (An equal `--shadow-balance` and `--highlight-balance` was a \
+             tone-independent offset: `--density-offset` set to the resolved offset plus \
+             that value reproduces it — exactly over a zero offset, otherwise to float \
+             rounding.)"
+        )));
+    }
     // The removed depth switch, and `--out-depth`, which replaced it and has since
     // retired too. The older pair is pointed straight at the preset, not at a flag
     // that no longer exists.
@@ -4987,6 +5001,32 @@ fn removed_dmax_message(flag: &str, what: &str) -> String {
          mid-grey from the stock's published response and takes neither."
     )
 }
+
+/// The first removed regional-balance flag present, if any.
+fn removed_balance_flag(flags: &RemovedBalanceFlags) -> Option<&'static str> {
+    [
+        ("--shadow-balance", flags.shadow_balance.is_some()),
+        ("--highlight-balance", flags.highlight_balance.is_some()),
+        ("--balance-range", flags.balance_range.is_some()),
+        ("--auto-balance-range", flags.auto_balance_range),
+    ]
+    .into_iter()
+    .find_map(|(flag, present)| present.then_some(flag))
+}
+
+/// Why the regional balance retired and what replaces it — shared by the flag and
+/// recipe migration errors, which fire on both chains, so the replacement is named
+/// with the chain that has it. The substantive difference is the measurement, not
+/// the spelling: say so rather than presenting the grade as a rename.
+const REGIONAL_BALANCE_RETIRED: &str = "per-channel density offsets ramped between a \
+     shadow and a highlight density, whose `auto` range was measured on every frame (so \
+     a roll stayed consistent only by measuring once and replaying the range), and \
+     which nothing bounded, so a large enough difference between its ends folded two \
+     densities onto one. Its successor is the look's per-channel grade, `--channel-grade \
+     R,B` (recipe `look.channel_grade`) under `--new-flow`: pivoted at a fixed mid-grey, \
+     so it measures nothing, and bounded so it stays monotone. It acts on the working \
+     space's channels rather than on film density, so the old values do not carry over; \
+     the current chain has no counterpart";
 
 /// `--density-curve`'s parser: the curve names, plus a migration message for the
 /// retired `sigmoid` rather than clap's generic unknown-value error.
@@ -5774,7 +5814,6 @@ fn convert_frame(
     }
     let convert = rendered.convert();
     report.white_balance = convert.white_balance;
-    report.balance_range = convert.balance_range;
     report.reconstruction_result = Some(reconstruction_result(
         &cfg.reconstruction,
         convert.curve_anchor,
@@ -6785,8 +6824,6 @@ enum FrameStatus {
         film_base: Option<FilmBase>,
         #[serde(skip_serializing_if = "Option::is_none")]
         white_balance: Option<[f32; 3]>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        balance_range: Option<[f32; 2]>,
         /// The resolved effective measurement area — mirrors the single-frame
         /// `Report` field. Per-frame rather than roll-level: one shared
         /// `measure.inset` meets a holder depth that is genuinely this frame's
@@ -7439,7 +7476,6 @@ fn frame_report_ok(pf: &PlannedFrame, report: Report) -> FrameReport {
         status: FrameStatus::Ok {
             film_base: report.film_base,
             white_balance: report.white_balance,
-            balance_range: report.balance_range,
             effective_area: report.effective_area.map(Box::new),
             input_color: report.input_color.map(Box::new),
             loss: report.loss,
@@ -9314,11 +9350,6 @@ mod tests {
         density_cfg(DensityParams::default(), DensityCurve::Exponential(e))
     }
 
-    /// The density block of a resolved config.
-    fn density_of(cfg: &ResolvedConfig) -> &DensityParams {
-        &cfg.reconstruction.density
-    }
-
     /// The resolved curve of a config.
     fn curve_of(cfg: &ResolvedConfig) -> &DensityCurve {
         &cfg.reconstruction.curve
@@ -10469,144 +10500,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_regional_balance_flags() {
-        // Each knob maps through merge into `reconstruction.density`; a forgotten
-        // arm would silently make the flag a no-op (the four-spot-wiring trap).
-        let cfg = merge(
-            base_cfg(),
-            &parse_convert(&[
-                "--shadow-balance",
-                "0.1,0,-0.05",
-                "--highlight-balance",
-                "-0.1,0.02,0",
-                "--balance-range",
-                "0.25,1.75",
-            ]),
-        )
-        .unwrap();
-        let d = density_of(&cfg);
-        assert_eq!(d.shadow_balance, [0.1, 0.0, -0.05]);
-        assert_eq!(d.highlight_balance, [-0.1, 0.02, 0.0]);
-        assert_eq!(d.balance_range, BalanceRange::Explicit([0.25, 1.75]));
-
-        // No flag keeps the recipe's values; a flag replaces them (flags win),
-        // and `--auto-balance-range` overrides a recipe's explicit range.
-        let recipe: ResolvedConfig = serde_json::from_str(
-            r#"{"reconstruction":{"density":{"shadow_balance":[0.2,0.0,0.0],
-                                             "balance_range":{"explicit":[0.5,2.5]}}}}"#,
-        )
-        .unwrap();
-        let cfg = merge(recipe.clone(), &parse_convert(&[])).unwrap();
-        assert_eq!(density_of(&cfg).shadow_balance, [0.2, 0.0, 0.0]);
-        assert_eq!(
-            density_of(&cfg).balance_range,
-            BalanceRange::Explicit([0.5, 2.5])
-        );
-        let cfg = merge(
-            recipe,
-            &parse_convert(&["--shadow-balance", "0,0,0", "--auto-balance-range"]),
-        )
-        .unwrap();
-        assert_eq!(density_of(&cfg).shadow_balance, [0.0, 0.0, 0.0]);
-        assert_eq!(density_of(&cfg).balance_range, BalanceRange::Auto);
-    }
-
-    #[test]
-    fn mutually_exclusive_balance_range_flags_are_rejected() {
-        assert!(
-            Cli::try_parse_from([
-                "hanten",
-                "convert",
-                "i",
-                "-o",
-                "o",
-                "--balance-range",
-                "0.2,1.8",
-                "--auto-balance-range"
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn validate_rejects_bad_regional_balance() {
-        // Non-finite balance offsets (recipe-smuggleable) fail loudly.
-        let cfg = density_cfg(
-            DensityParams {
-                shadow_balance: [0.1, f32::NAN, 0.0],
-                ..DensityParams::default()
-            },
-            DensityCurve::default(),
-        );
-        assert!(matches!(validate(&cfg), Err(NcError::Usage(_))));
-        let cfg = density_cfg(
-            DensityParams {
-                highlight_balance: [f32::INFINITY, 0.0, 0.0],
-                ..DensityParams::default()
-            },
-            DensityCurve::default(),
-        );
-        assert!(matches!(validate(&cfg), Err(NcError::Usage(_))));
-
-        // An explicit range must be finite, ordered lo < hi (equal anchors would
-        // make the ramp divide by zero), and have a *representable* span — two
-        // individually-finite anchors can still overflow `hi - lo` to +inf,
-        // which would silently flatten the ramp.
-        for bad in [
-            [1.0, 1.0],
-            [2.0, 1.0],
-            [f32::NAN, 1.0],
-            [0.0, f32::INFINITY],
-            [-3.0e38, 3.0e38], // finite anchors, span overflows to +inf
-        ] {
-            let cfg = density_cfg(
-                DensityParams {
-                    balance_range: BalanceRange::Explicit(bad),
-                    ..DensityParams::default()
-                },
-                DensityCurve::default(),
-            );
-            assert!(
-                matches!(validate(&cfg), Err(NcError::Usage(_))),
-                "balance range {bad:?} should fail"
-            );
-        }
-
-        // Negative-density anchors are legal (`offset` can shift D' below zero),
-        // and Auto plus finite balances validate.
-        let cfg = density_cfg(
-            DensityParams {
-                shadow_balance: [0.1, -0.1, 0.0],
-                balance_range: BalanceRange::Explicit([-0.5, 1.5]),
-                ..DensityParams::default()
-            },
-            DensityCurve::default(),
-        );
-        validate(&cfg).unwrap();
-    }
-
-    #[test]
-    fn recipe_parses_regional_balance_keys() {
-        // The keys live under `reconstruction.density` (§9);
-        // `deny_unknown_fields` would silently reject a docs-shaped recipe if the
-        // structs drifted.
-        let cfg: ResolvedConfig = serde_json::from_str(
-            r#"{"reconstruction":{"density":{"shadow_balance":[0.1,0.0,-0.05],
-                                             "highlight_balance":[-0.1,0.0,0.05],
-                                             "balance_range":{"explicit":[0.25,1.75]}}}}"#,
-        )
-        .unwrap();
-        let d = density_of(&cfg);
-        assert_eq!(d.shadow_balance, [0.1, 0.0, -0.05]);
-        assert_eq!(d.highlight_balance, [-0.1, 0.0, 0.05]);
-        assert_eq!(d.balance_range, BalanceRange::Explicit([0.25, 1.75]));
-        let cfg: ResolvedConfig =
-            serde_json::from_str(r#"{"reconstruction":{"density":{"balance_range":"auto"}}}"#)
-                .unwrap();
-        assert_eq!(density_of(&cfg).balance_range, BalanceRange::Auto);
-    }
-
-    #[test]
     fn the_calibration_section_is_closed_and_names_its_members() {
         // The section is `deny_unknown_fields`, and the error names it. Falsifiable
         // control for the strictness the open-section design relies on: a member is
@@ -11732,77 +11625,6 @@ mod tests {
             };
             reject_roll_unsupported(&cfg).unwrap();
         }
-    }
-
-    #[test]
-    fn film_master_rejects_a_measured_balance_range_only_when_it_is_consulted() {
-        // A frame-local measurement: an `auto` regional-balance range is measured from *this* frame's density
-        // percentiles, so two frames of a roll get different ramp anchors.
-        //
-        // But `regional_balance` short-circuits before measuring whenever the two
-        // balances are equal — including the neutral default — so the default
-        // `BalanceRange::Auto` is genuinely inert and must stay accepted, or every
-        // default master would break.
-        let master_with = |density: DensityParams| ResolvedConfig {
-            reconstruction: Reconstruction {
-                density,
-                curve: DensityCurve::default(),
-            },
-            ..film_master_cfg()
-        };
-
-        // Accepted: the default (Auto range, neutral balances) — the case that must not
-        // regress — and an equal-but-non-neutral pair, which is a tone-independent
-        // offset that consults no range.
-        validate(&master_with(DensityParams::default())).unwrap();
-        validate(&master_with(DensityParams {
-            shadow_balance: [0.05, 0.0, -0.02],
-            highlight_balance: [0.05, 0.0, -0.02],
-            balance_range: BalanceRange::Auto,
-            ..DensityParams::default()
-        }))
-        .unwrap();
-        // Accepted: unequal balances with an *explicit* roll range — the recovery the
-        // error message points at.
-        validate(&master_with(DensityParams {
-            shadow_balance: [0.1, 0.0, 0.0],
-            highlight_balance: [0.0; 3],
-            balance_range: BalanceRange::Explicit([0.2, 1.6]),
-            ..DensityParams::default()
-        }))
-        .unwrap();
-
-        // Rejected: unequal balances with the measured `Auto` range, whichever side is
-        // set — this is the combination that was silently accepted before.
-        for (name, shadow, highlight) in [
-            ("shadow only", [0.1, 0.0, 0.0], [0.0; 3]),
-            ("highlight only", [0.0; 3], [-0.05, 0.01, 0.0]),
-            ("both unequal", [0.05, 0.0, -0.02], [-0.05, 0.01, 0.0]),
-        ] {
-            let msg = validate_err(&master_with(DensityParams {
-                shadow_balance: shadow,
-                highlight_balance: highlight,
-                balance_range: BalanceRange::Auto,
-                ..DensityParams::default()
-            }));
-            assert!(msg.contains("film-master"), "{name}: {msg}");
-            assert!(msg.contains("--balance-range"), "{name}: {msg}");
-            assert!(msg.contains("frame-local"), "{name}: {msg}");
-        }
-        // …and the same params without the preset are legal on a display preset.
-        validate(&ResolvedConfig {
-            reconstruction: Reconstruction {
-                density: DensityParams {
-                    shadow_balance: [0.1, 0.0, 0.0],
-                    highlight_balance: [0.0; 3],
-                    balance_range: BalanceRange::Auto,
-                    ..DensityParams::default()
-                },
-                curve: DensityCurve::default(),
-            },
-            ..base_cfg()
-        })
-        .unwrap();
     }
 
     #[test]
@@ -13001,7 +12823,6 @@ mod tests {
         for base in [
             serde_json::json!({"explicit": [0.9, 0.55, 0.42]}), // FilmBaseSource / WbSource
             serde_json::json!({"region": [1, 2, 3, 4]}),        // FilmBaseSource::Region
-            serde_json::json!({"explicit": [0.0, 1.0]}),        // BalanceRange::Explicit
         ] {
             let tag = base.as_object().unwrap().keys().next().unwrap().clone();
             let mut merged = base.clone();
@@ -13570,7 +13391,6 @@ mod tests {
                 status: FrameStatus::Ok {
                     film_base: Some(FilmBase::from([0.9, 0.55, 0.42])),
                     white_balance: None,
-                    balance_range: None,
                     effective_area: None,
                     input_color: None,
                     loss: None,

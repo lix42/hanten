@@ -81,12 +81,6 @@ pub struct ConvertReport {
     /// out-of-table sample is extrapolated, not measured, and a frame with many of them is
     /// being rendered off the published data.
     pub out_of_table: Option<crate::algo::characteristic::OutOfTable>,
-    /// The resolved regional-balance tone-ramp range `[lo, hi]` (corrected
-    /// density), when the density reconstruction applied a shadow/highlight
-    /// balance. `None` when both balances are the neutral
-    /// `[0, 0, 0]`. Reported so a roll can reuse one frame's measured range via
-    /// `--balance-range` (design-spec §9).
-    pub balance_range: Option<[f32; 2]>,
 }
 
 /// The `display-p3` / `compatibility` render: the shared display source, one SDR
@@ -136,7 +130,6 @@ pub fn render_display_source(
         convert: ConvertReport {
             curve_anchor: recon.curve_anchor,
             white_balance: Some(shared.controls.white_balance()),
-            balance_range: recon.balance_range,
             out_of_table: recon.out_of_table,
         },
         shared,
@@ -166,7 +159,7 @@ pub fn render_display_source(
 /// [`ConvertReport::white_balance`] stays `None` here by construction: no
 /// white-balance stage ran, and reporting resolved gains for a master that
 /// applied none would be a false provenance claim. The reconstruction's own
-/// resolved diagnostics (`curve_anchor`, `balance_range`) *are* reported — they are part
+/// resolved diagnostic (`curve_anchor`) *is* reported — it is part
 /// of what the master contains.
 pub fn render_film_master(
     image: &LinearImage,
@@ -189,7 +182,6 @@ pub fn render_film_master(
         convert: ConvertReport {
             curve_anchor: recon.curve_anchor,
             white_balance: None,
-            balance_range: recon.balance_range,
             out_of_table: recon.out_of_table,
         },
         timings: StageTimings {
@@ -815,8 +807,8 @@ pub(crate) mod golden {
     use crate::algo::characteristic::{OutOfTable, invert};
     use crate::film_stock::curves_for;
     use crate::types::{
-        AnchorPlacement, BalanceRange, CharacteristicParams, DensityCurve, DensityCurveType,
-        DensityParams, ExponentialParams,
+        AnchorPlacement, CharacteristicParams, DensityCurve, DensityCurveType, DensityParams,
+        ExponentialParams,
     };
 
     /// Five pixels spanning the tonal range plus out-of-range finite values,
@@ -855,21 +847,6 @@ pub(crate) mod golden {
         DensityParams {
             scale: [1.1, 1.0, 0.9],
             offset: [0.05, 0.0, -0.05],
-            shadow_balance: [0.05, 0.0, -0.02],
-            highlight_balance: [-0.05, 0.01, 0.0],
-            balance_range: BalanceRange::Explicit([0.2, 1.6]),
-        }
-    }
-
-    /// Non-neutral regional balances over otherwise-default density correction
-    /// — the block the auto-range golden was captured with (unlike
-    /// [`custom_density`], scale/offset stay at their defaults).
-    fn balanced_density() -> DensityParams {
-        DensityParams {
-            shadow_balance: [0.05, 0.0, -0.02],
-            highlight_balance: [-0.05, 0.01, 0.0],
-            balance_range: BalanceRange::Explicit([0.2, 1.6]),
-            ..frozen_density()
         }
     }
 
@@ -883,13 +860,12 @@ pub(crate) mod golden {
         (film.into_linear(), report)
     }
 
-    /// Assert the reconstructed pixels (and the resolved diagnostics) match the
+    /// Assert the reconstructed pixels (and the resolved anchor) match the
     /// captured bits exactly.
     fn assert_golden(
         reconstruction: Reconstruction,
         expected_rgb_bits: &[u32],
         expected_anchor_bits: Option<u32>,
-        expected_range_bits: Option<[u32; 2]>,
     ) {
         let (out, report) = reconstructed(&reconstruction);
         let got: Vec<u32> = out.rgb.iter().map(|v| v.to_bits()).collect();
@@ -898,11 +874,6 @@ pub(crate) mod golden {
             report.curve_anchor.map(f32::to_bits),
             expected_anchor_bits,
             "anchor"
-        );
-        assert_eq!(
-            report.balance_range.map(|r| r.map(f32::to_bits)),
-            expected_range_bits,
-            "balance range"
         );
         // IR rides through untouched on every path.
         assert_eq!(out.ir.as_deref(), Some(&[0.1f32, 0.2, 0.3, 0.4, 0.5][..]));
@@ -996,7 +967,6 @@ pub(crate) mod golden {
                 0x3c29b443,
             ],
             Some(0x3f7e0b8d), // 0.62 + 0.745/2
-            None,
         );
     }
 
@@ -1014,19 +984,22 @@ pub(crate) mod golden {
                 0x3c23d70a,
             ],
             Some(0x40000000), // the anchor these bits were captured at
-            None,
         );
     }
 
     #[test]
     fn golden_density_exponential_customized_is_bit_identical() {
-        // Every density knob non-default at once: scale/offset, regional balance
-        // with an explicit range, gamma 1.4, and an explicit anchor.
+        // Every density knob non-default at once: scale/offset, gamma 1.4, and an
+        // explicit anchor.
         //
         // RECAPTURED 2026-09-23 (`nf-retire/legacy-custom`) without the custom print
         // it used to carry: that stage retired, and the reconstruction half it sat on
         // is unchanged — re-applying the retired print arithmetic to these bits
         // reproduces the previous capture to f32 rounding.
+        //
+        // RECAPTURED 2026-09-25 (`nf-retire/regional-balance`) without the regional
+        // balance it also carried. These bits were captured from the build *before* the
+        // removal with the two balances zeroed, so the removal itself moved nothing.
         assert_golden(
             Reconstruction {
                 density: custom_density(),
@@ -1036,12 +1009,11 @@ pub(crate) mod golden {
                 }),
             },
             &[
-                0x3b952b3e, 0x3b622ad1, 0x3b332991, 0x3cb28033, 0x3c6d3ed9, 0x3c40dcef, 0x3f87e170,
-                0x3f2900bc, 0x3ea6cf04, 0x3ab43eb3, 0x48a5a519, 0x46f463df, 0x3b88998c, 0x3b45ea62,
-                0x3b1def80,
+                0x3b7ded3d, 0x3b622ad1, 0x3b3f180c, 0x3c9dd16d, 0x3c6c584b, 0x3c4c25f8, 0x3f9fa551,
+                0x3f23a448, 0x3ea6cf04, 0x3ad3c4f0, 0x48a063e0, 0x46f463df, 0x3b6887cd, 0x3b45ea62,
+                0x3b287418,
             ],
-            Some(0x3fe66666),               // 1.8
-            Some([0x3e4ccccd, 0x3fcccccd]), // [0.2, 1.6]
+            Some(0x3fe66666), // 1.8
         );
     }
 
@@ -1236,7 +1208,6 @@ pub(crate) mod golden {
         // property that makes it self-anchoring, asserted where a curve that quietly
         // acquired one would be caught.
         assert_eq!(report.curve_anchor, None);
-        assert_eq!(report.balance_range, None);
         // The extrapolation statistic is part of this render's output, and no other
         // golden carries one: the dense-highlight red and all three of the out-of-range
         // pixel's channels fall outside the published table.
@@ -1311,30 +1282,6 @@ pub(crate) mod golden {
         );
     }
 
-    #[test]
-    fn golden_auto_measured_balance_range_is_bit_identical() {
-        // The default `BalanceRange::Auto` with non-zero balances: the ramp
-        // anchors are MEASURED from this frame's tone distribution (the other
-        // regional-balance goldens use an explicit range), and both the measured
-        // `[lo, hi]` and the resulting pixels are pinned.
-        assert_golden(
-            Reconstruction {
-                density: DensityParams {
-                    balance_range: BalanceRange::Auto,
-                    ..balanced_density()
-                },
-                curve: frozen_reference_curve(),
-            },
-            &[
-                0x3c42a1d5, 0x3c3439a6, 0x3c2cf03a, 0x3d084c85, 0x3cfa994a, 0x3d093901, 0x3eea9e5a,
-                0x3eecf423, 0x3ee8a619, 0x3baf3a23, 0x45afe0e9, 0x45833ffb, 0x3c37d4dc, 0x3c23d70a,
-                0x3c1c774b,
-            ],
-            Some(0x40000000),
-            Some([0, 1080930529]), // the frame-measured [lo, hi], captured verbatim
-        );
-    }
-
     // --- why no whole-frame hash ---------------------------------------------
     //
     // No full-frame / whole-TIFF bit-exact hash is checked in: it can't be a
@@ -1346,7 +1293,7 @@ pub(crate) mod golden {
     // byte-identity per build/architecture (design-spec §8), not across hosts.
     //
     // The per-pixel goldens above (a curated tonal-range + out-of-range vector with
-    // anchor/balance-range/IR all pinned, captured from the pre-split code) are the
+    // anchor/IR pinned, captured from the pre-split code) are the
     // portable bit-identity / no-`pipeline_version`-bump gate. They stop at
     // `algo::reconstruct`: nothing committed guards display stages or post-lcms2
     // output across targets, so a change there is verified by same-machine

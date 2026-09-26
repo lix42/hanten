@@ -326,8 +326,11 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // Refreshed in place by `nf-retire/dmax-machinery`, which removed
         // `calibration.dmax` from the default document. The default placement never read
         // it, so `render` and `base` held — the gate asserts them first — and a recipe
-        // still stating the old default `"fixed"` is dropped on load and replays.
-        recipe: "b518f436e7f4317a",
+        // still stating the old default `"fixed"` is dropped on load and replays. Refreshed
+        // again by `nf-retire/regional-balance`, which removed the three regional-balance
+        // keys from `reconstruction.density`: their neutral default skipped the pass
+        // bit-exactly, so `render` and `base` held, and the neutral keys are dropped on load.
+        recipe: "8d1fc292f2e6c723",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -342,10 +345,10 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 /// - `render` — [`stable_hash`] over the default reconstruction of the curated
 ///   per-pixel vectors in `pipeline::stages::golden` (`Reconstruction::default()`
 ///   over `golden::pixels()` / `golden::base()`): every output pixel's `f32` bit
-///   pattern plus the resolved balance-range diagnostic, and two lines kept only for
-///   byte-identity with the recorded rows: `white_balance` (it echoes the default's
-///   explicit gains) and `dmax` (a frozen literal since the reference density
-///   retired). This is the *arithmetic* of stage 3 and
+///   pattern, and three lines kept only for byte-identity with the recorded rows:
+///   `white_balance` (it echoes the default's explicit gains), `dmax` (a frozen literal
+///   since the reference density retired) and `balance_range` (a frozen literal since
+///   the regional balance retired). This is the *arithmetic* of stage 3 and
 ///   nothing after it — no print control is covered. (Until `nf-retire/legacy-custom` it hashed
 ///   `reconstruct_and_print`, whose print half was a bit-exact identity under
 ///   default settings — so the text, and every recorded row, is unchanged.)
@@ -653,6 +656,10 @@ mod drift_gate {
     /// reference. See [`render_fingerprint_text`].
     const FROZEN_DMAX_LINE: &str = "3fa66666";
 
+    /// The `balance_range=` value every recorded row hashed: `-`, the neutral default's
+    /// "no range consulted". See [`render_fingerprint_text`].
+    const FROZEN_BALANCE_RANGE_LINE: &str = "-";
+
     /// A render's fingerprint input, as canonical text.
     ///
     /// **Parameterized on purpose.** The gate hashes it with the real defaults, and
@@ -665,7 +672,7 @@ mod drift_gate {
     /// print it and a developer can *see* which pixel or diagnostic moved instead of
     /// only that a hash differs.
     fn render_fingerprint_text(recon: &Reconstruction, white_balance: WbSource) -> String {
-        let (out, report) = golden::reconstructed(recon);
+        let (out, _) = golden::reconstructed(recon);
         // The `white_balance` line **covers no arithmetic**: the default is explicit
         // gains, so this only echoes a recipe value the `recipe` fingerprint already
         // hashes. It is kept for one reason — the text must stay byte-identical to what
@@ -684,22 +691,18 @@ mod drift_gate {
                 |a| a.iter().copied().map(hex).collect::<Vec<_>>().join(","),
             )
         };
-        let pair = |v: Option<[f32; 2]>| {
-            v.map_or_else(
-                || "-".to_string(),
-                |a| a.iter().copied().map(hex).collect::<Vec<_>>().join(","),
-            )
-        };
-        // The `dmax` line is a **frozen literal**: the reference density it echoed (the
-        // nominal 1.3, which the base-derived default never read) retired in
-        // `nf-retire/dmax-machinery`, and the text must stay byte-identical to what the
-        // recorded rows hashed. It covers no arithmetic, like `white_balance`.
+        // The `dmax` and `balance_range` lines are **frozen literals**: the reference
+        // density `dmax` echoed (the nominal 1.3, which the base-derived default never
+        // read) retired in `nf-retire/dmax-machinery`, and the regional balance whose
+        // range `balance_range` echoed (none, at the neutral default) in
+        // `nf-retire/regional-balance`. The text must stay byte-identical to what the
+        // recorded rows hashed. Neither covers arithmetic, like `white_balance`.
         format!(
             "rgb={}\ndmax={}\nwhite_balance={}\nbalance_range={}\n",
             rgb.join(","),
             FROZEN_DMAX_LINE,
             triple(white_balance),
-            pair(report.balance_range)
+            FROZEN_BALANCE_RANGE_LINE
         )
     }
 
