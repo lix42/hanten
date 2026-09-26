@@ -97,11 +97,6 @@ struct FlagEntry {
 const DESTINATION_ARRIVES_WITH: &str = "the new flow's destination set: it renders into exactly one destination today \
      (a Display P3 16-bit TIFF), so there is no output policy to choose or describe \
      (`nf-destinations/preset-set`)";
-const BALANCE_REPLACED_BECAUSE: &str = "the regional balance (density offsets ramped over a \
-     measured tone range) is not ported. Adjusting channels by tone region is the look's \
-     per-channel grade, pivoted at mid-grey so it needs no measured range, and unlike the \
-     regional balance it cannot fold the tone scale";
-const BALANCE_INSTEAD: &str = "--channel-grade R,B (recipe `look.channel_grade`)";
 
 /// Knobs with no new-flow meaning, keyed on the **flag the user typed**.
 ///
@@ -199,32 +194,8 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     // The retired anchor placements and reference-density flags have no row: they are
     // removed on both chains (`nf-retire/dmax-machinery`), and `reject_removed_flags`
     // refuses them before this table runs. `--anchor-mid-offset` is absent on purpose
-    // too: it *is* the rule's `d`.
-    // The regional balance. Zero is identity and stays accepted; the range flags are
-    // consulted only when a balance is non-zero, so alone they force nothing and are
-    // deliberately not listed.
-    FlagEntry {
-        knob: "--shadow-balance",
-        covers: &["--shadow-balance"],
-        present: |args| args.density.shadow_balance.is_some_and(|b| b != [0.0; 3]),
-        availability: Availability::Never {
-            reason: BALANCE_REPLACED_BECAUSE,
-            instead: Some(BALANCE_INSTEAD),
-        },
-    },
-    FlagEntry {
-        knob: "--highlight-balance",
-        covers: &["--highlight-balance"],
-        present: |args| {
-            args.density
-                .highlight_balance
-                .is_some_and(|b| b != [0.0; 3])
-        },
-        availability: Availability::Never {
-            reason: BALANCE_REPLACED_BECAUSE,
-            instead: Some(BALANCE_INSTEAD),
-        },
-    },
+    // too: it *is* the rule's `d`. The regional balance's flags have none either, for
+    // the same reason (`nf-retire/regional-balance`).
     // A preset sets knobs on **both** sides of the decode/rendering boundary — the
     // curve, `density.scale`, `print_exposure` — so it cannot be
     // resolved against a chain whose rendering knobs do not exist yet. It is also the
@@ -343,19 +314,6 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
             arriving_with: "the new chain's report and telemetry shape, which decides \
                             which stages a record times and what it says ran \
                             (`nf-core/report-contract`)",
-        },
-    },
-    // Anchors of the regional balance's tone ramp. The new chain's recipe has no
-    // field for them — the balance they shape is refused above, and its successor is a
-    // grade in the look — so they are refused at every value: with no recipe to hold
-    // the knob, there is no reset for an identity value to protect.
-    FlagEntry {
-        knob: "--balance-range / --auto-balance-range",
-        covers: &["--balance-range", "--auto-balance-range"],
-        present: |args| args.density.balance_range.is_some() || args.density.auto_balance_range,
-        availability: Availability::Never {
-            reason: BALANCE_REPLACED_BECAUSE,
-            instead: Some(BALANCE_INSTEAD),
         },
     },
 ];
@@ -615,6 +573,10 @@ mod tests {
         "--anchor-white-at-reference",
         "--anchor-mid-fraction",
         "--anchor-black-floor",
+        "--shadow-balance",
+        "--highlight-balance",
+        "--balance-range",
+        "--auto-balance-range",
         "--assume-linear",
         "--input-profile",
         "--invert-white-balance",

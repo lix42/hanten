@@ -187,7 +187,7 @@ pub struct LookSection {
     ///   than replacing the calibration.
     /// - **Pivoted at [`MID_GREY`]**, the contrast's pivot: a neutral mid stays neutral
     ///   and the cast grows away from mid in both directions, which white balance cannot
-    ///   do. It subsumes the retiring `shadow_balance` / `highlight_balance`.
+    ///   do. It subsumes the retired regional balance (`nf-retire/regional-balance`).
     /// - **Luminance is restored, so it never moves neutral contrast** — contrast owns
     ///   that. A pivoted power alone, even with exponents whose luminance-weighted mean is
     ///   1, holds a neutral's slope only at mid and bends it into an S-curve elsewhere

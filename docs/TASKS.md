@@ -1859,8 +1859,15 @@ the design in `docs/design-update.md`:
   recipe's `"dmax": "fixed"` is dropped on load, anything else refused. No pixel moved
   (`render`/`base` reproduced, `recipe` refreshed; telemetry schema 6); the effective
   area is still reported but nothing in `convert` measures over it
-- [ ] [Retire the regional balance](tasks/nf-retire/regional-balance.md) —
-  subsumed by the look's grade, and non-monotone at large values
+- [x] [Retire the regional balance](tasks/nf-retire/regional-balance.md) — **done
+  2026-09-25.** `--shadow-balance` / `--highlight-balance` / `--balance-range` /
+  `--auto-balance-range` are migration errors on both chains naming `--channel-grade`
+  under `--new-flow`; the current chain has no counterpart. A recipe's neutral balance
+  keys are dropped on load, anything else refused with a case-specific remedy (an equal
+  pair is an offset; a range beside equal balances was never read). The report's
+  `balance_range` is gone. No pixel moved (`render`/`base` reproduced, `recipe`
+  refreshed); on a synthetic crossover a hand-matched grade leaves C\* ≤ 0.71 where the
+  balance left 2.16
 - [ ] [Rename the `print.*` prefix](tasks/nf-retire/print-prefix-rename.md) —
   after the second implementation is gone, so nothing is renamed twice
 - [ ] [Retire the `characteristic` curve

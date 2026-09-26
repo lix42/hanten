@@ -161,7 +161,7 @@ plane is a separate single channel, carried but not consumed (§6.1).
 |---|---|---|---|---|
 | **transmission** (raw scan value) | fraction of light the film passes | more transparent film, thinner negative, brighter pixel *in the raw scan* — a **darker** scene | `[0, 1]` (= `u16`/65535) | `io::decode`, `LinearImage.rgb` |
 | **film base / `Dmin`** | the unexposed rebate's transmission — the per-channel *relative* maximum transmission | (the ceiling of transmission) | `(0, 1]` | `FilmBase`, `film_base::estimate` |
-| **density `D` / `B` / `D′`** | `D = −log10(scan / Dmin)`, log-scale opacity; `B = density_scale·D + density_offset` (per-channel corrected density); `D′ = B + shadow_balance·w_lo(D̄) + highlight_balance·w_hi(D̄)` (after regional balance, §7.2) | **denser** negative — a **brighter** scene | `D`: `0` at base, `≈ [0, 6]` (slightly `< 0` if a pixel out-transmits the base); `B`/`D′` shifted by the offset (and, for `D′`, the regional balance) | `density::to_density`, `density::regional_balance`, `DensityImage.density` |
+| **density `D` / `D′`** | `D = −log10(scan / Dmin)`, log-scale opacity; `D′ = density_scale·D + density_offset` (per-channel corrected density, §7.2) | **denser** negative — a **brighter** scene | `D`: `0` at base, `≈ [0, 6]` (slightly `< 0` if a pixel out-transmits the base); `D′` shifted by the offset | `density::to_density`, `DensityImage.density` |
 | **`D′` at the reconstruction→curve handoff** | the same corrected density `D′` (row above), named at the point it is passed to the selected density-to-positive curve | **denser** negative — a **brighter** scene | density units — `D′`'s range as defined in the row above (no re-clamping at the boundary) | reconstruction→curve handoff inside `density::reconstruct` |
 | **NC film RGB v1** (`FilmRgbImage`) | intentional positive film rendering from any density curve (exponential/characteristic) or the fixed decode; interpreted consistently as linear Rec.709/D65 | **brighter** positive — a **brighter** rendered scene | curve-defined and unclamped `f32` | `algo::FilmRgbImage`, `algo::reconstruct` (shipped typed reconstruction output) |
 | **ACEScg film rendering** (`AcesCgImage`) | NC film RGB v1 transformed/adapted into linear ACEScg/D60; preserves film/lens/development/scanner character and is not physical scene recovery | **brighter** rendered value | unclamped `f32`; nominal diffuse white is workflow-defined | `pipeline::working_space` mapper (implemented; every preset crosses it) |
@@ -334,12 +334,7 @@ detector proposes as possible rebate.
   (`cli::validate`), so a value is rejected identically whether it came from a
   recipe, a flag, or a removed simple-control migration — and a flag that resets a
   recipe value back to its documented default is legitimately accepted, which is how
-  a roll recipe carrying print controls can still be re-exported as a master. `film-master` additionally rejects a frame-local
-  measurement, to preserve cross-frame exposure: an `auto`
-  `reconstruction.density.balance_range` *when a balance is actually applied*, because
-  the tone-ramp anchors would then be measured from each frame's own density
-  percentiles. An `auto` range with equal shadow and highlight balances — including the
-  neutral default — consults no range and stays accepted.
+  a roll recipe carrying print controls can still be re-exported as a master.
   The resolved-branch record lands in the report as `output_render` (§8). The
   suffix table in `cli::required_extensions` is now **complete**: `.jpg`/`.jpeg`
   for `gain-map-hdr` and `ultra-hdr-v1`, `.avif` for `hdr-pq`/`hdr-hlg`, and `.tif`/`.tiff` for
@@ -722,9 +717,7 @@ The credible baseline for color negatives, following Kodak Cineon / darktable
 
 ```
 1. transmission → density:   D  = -log10(scan / Dmin_transmission)   (per channel)
-2. density correction:       B  = per-channel scale·D + offset (orange-mask comp)
-   regional balance:         D̄  = mean(B_r, B_g, B_b)   (scalar tone value)
-                             D' = B + shadow_balance·w_lo(D̄) + highlight_balance·w_hi(D̄)
+2. density correction:       D' = per-channel scale·D + offset (orange-mask comp)
 3. density curve:            exponential { gamma, anchor } or
                              characteristic { stock }
 4. typed film positive:      FilmRgbImage
@@ -759,7 +752,7 @@ At the defaults (contrast 2.0) `A ≈ 0.99`; the new chain's decode runs at its
 linearization alone (1.8, `A ≈ 1.03`) and leaves the rest of the contrast to the look
 (§9, `reconstruction.linearization` and `look.contrast`). The rule is **reference-free**: it reads only
 the film base, which step 1 divides out, so the base *is* `D′ = 0` by construction
-(modulo `density.offset` and any regional balance). No leader or reference density
+(modulo `density.offset`). No leader or reference density
 enters the render, so a leader's roll-to-roll error cannot reach it, and nothing is
 measured per frame — the rule is a roll-level placement, never derived from frame
 content. The other three placements — `white-at-dmax` and `mid-at-dmax-fraction`, which
@@ -777,30 +770,16 @@ keys, so their absence marks a file some other build wrote. Gamma and the anchor
 exist only in the exponential variant: `--density-gamma` or `--anchor-mid-offset` under
 a resolved `characteristic` curve is refused (exit 2), never ignored.
 
-**Regional (shadow/highlight) color balance.** A color *crossover* — a cast that
-differs between shadows and highlights (expired film, misprocessing, mixed
-lighting) — cannot be fixed by any single global per-channel gain/offset; in
-density space it is a per-channel offset that varies with tone. Step 2 therefore
-adds density-weighted offsets: `w_lo`/`w_hi` are complementary smoothstep ramps
-over the corrected-density range `[lo, hi]` (`w_lo = 1` at `lo` fading smoothly
-to `0` at `hi`, `w_hi = 1 − w_lo`, both saturating outside the range), so equal
-shadow and highlight balances degenerate to a uniform `density_offset`. The
-ramps take the **scalar** per-pixel tone `D̄` (the mean of the pre-regional
-corrected channels), never each channel's own density — per-channel weighting
-would let one channel of a crossover pixel receive the shadow correction while
-another receives the highlight one, misfiring on exactly the pixels this control
-exists to fix. Naming is from the **positive's** point of view: low density
-(near base) is a *shadow*, high density a *highlight*, and (by the polarity
-above) a positive balance value brightens that channel in its region. The range
-anchors come from `reconstruction.density.balance_range`: `auto` (default)
-measures robust
-percentiles (0.5 % / 99.5 %, nearest-rank over a deterministic sample) of the
-per-pixel tone in a two-pass within step 2, while an explicit
-`[lo, hi]` (e.g. a frame's reported range reused across a roll) short-circuits
-the measuring pass. Neutral `[0,0,0]` balances (the default) skip the regional
-pass entirely: the output is bit-exact with the unbalanced render. This runs
-*before* the print render's white balance: stage 2 fixes the tone-dependent
-crossover, print WB the remaining global cast. See §9.
+**Regional (shadow/highlight) balance — retired** in `nf-retire/regional-balance`. Step 2
+used to add per-channel density offsets ramped by tone between a shadow and a highlight
+density (`reconstruction.density.shadow_balance` / `highlight_balance`), with the ramp's
+range measured per frame (`balance_range`, default `auto`). It was per-channel adjustment
+by tone region acting on film density before the 3×3, unbounded (a large difference
+between its ends folded two densities onto one), and its `auto` range was a per-frame
+measurement a roll stayed consistent under only by measure-once-replay. A crossover is now
+the look's per-channel grade (§9, `look.channel_grade`), pivoted at a fixed mid-grey. The
+flags and non-neutral keys are migration errors; the neutral keys every earlier sidecar
+carries are dropped on load.
 
 **Auto neutral white balance (`print.white_balance`).** The print/display-stage white-balance
 gains are a single mutually-exclusive source: explicit `[r, g, b]` gains (the
@@ -957,10 +936,7 @@ reconstruction shapes (other stage objects are omitted here):
     "schema_version": 1,
     "density": {
       "scale": [1.0, 0.84, 0.73],
-      "offset": [0.0, 0.0, 0.0],
-      "shadow_balance": [0.0, 0.0, 0.0],
-      "highlight_balance": [0.0, 0.0, 0.0],
-      "balance_range": "auto"
+      "offset": [0.0, 0.0, 0.0]
     },
     "curve": {
       "type": "exponential",
@@ -973,8 +949,7 @@ reconstruction shapes (other stage objects are omitted here):
 
 That example is the **resolved default document** as of `pipeline_version` 6 —
 copying it reproduces the shipped render, the fixed decode's configuration. The
-exponential's fields can all be restated (here with an explicit balance range and a
-lower mid-grey placement):
+exponential's fields can all be restated (here with a lower mid-grey placement):
 
 ```json
 {
@@ -982,10 +957,7 @@ lower mid-grey placement):
     "schema_version": 1,
     "density": {
       "scale": [1.0, 0.84, 0.73],
-      "offset": [0.0, 0.0, 0.0],
-      "shadow_balance": [0.0, 0.0, 0.0],
-      "highlight_balance": [0.0, 0.0, 0.0],
-      "balance_range": {"explicit": [0.1, 1.9]}
+      "offset": [0.0, 0.0, 0.0]
     },
     "curve": {
       "type": "exponential",
@@ -1163,7 +1135,8 @@ top-level **document version** rather than per-object ones:
   finite and positive and the spread over `[r, 1, b]` under 1, which keeps it monotone
   in exposure; `[1, 1]` is the identity. A pixel is graded only when all three
   channels and both luminances are finite and positive and the result is finite; any
-  other pixel passes through whole, bit for bit. It replaces the current chain's regional balance.
+  other pixel passes through whole, bit for bit. It replaces the retired regional balance
+  (§7.2), which the current chain no longer has.
   `highlight_desaturation`
   (`nf-look/path-to-white`) = `{strength, start_stops, band: [s0, s1]}` —
   `--highlight-desaturation`, `--highlight-desaturation-start`,
@@ -1367,10 +1340,7 @@ task):
       "schema_version": 1,
       "density": {
         "scale": [1.0, 0.84, 0.73],
-        "offset": [0.0, 0.0, 0.0],
-        "shadow_balance": [0.0, 0.0, 0.0],
-        "highlight_balance": [0.0, 0.0, 0.0],
-        "balance_range": "auto"
+        "offset": [0.0, 0.0, 0.0]
       },
       "curve": {
         "type": "exponential",
@@ -1550,7 +1520,7 @@ hanten convert in.tiff -o out.tiff \
 # all. Reconstruction + the density curve + its anchor placement ARE in the master
 # (that is the intentional film rendering); WB/exposure/black/range and every
 # display operation are not. A non-default print control alongside it is a usage
-# error, as is a measured --auto-balance-range. Never silently dropped.
+# error. Never silently dropped.
 hanten convert frame12.tiff -o frame12_master.tiff \
   --output-preset film-master \
   --film-base 0.92,0.55,0.42
@@ -2025,14 +1995,6 @@ crossover.
   `DensityParams::default_scale_for` is the single definition of the split.
 - `--density-offset R,G,B` ⇒ `reconstruction.density.offset` — per-channel
   density offset (orange-mask compensation).
-- `--shadow-balance R,G,B` ⇒
-  `reconstruction.density.shadow_balance`.
-- `--highlight-balance R,G,B` ⇒
-  `reconstruction.density.highlight_balance`.
-- `--auto-balance-range` ⇒
-  `reconstruction.density.balance_range = "auto"`;
-  `--balance-range LO,HI` ⇒
-  `reconstruction.density.balance_range = {"explicit": [lo, hi]}`.
 - `--density-gamma <f>` ⇒ `reconstruction.curve.gamma` (default `2.0`), valid only
   when the resolved curve type is `exponential`.
 - `--anchor-mid-offset <d>` ⇒ `reconstruction.curve.anchor = {"mid-at-base-offset": d}`
@@ -2048,29 +2010,16 @@ crossover.
   reference density in `nf-retire/dmax-machinery`. They are hidden and exit 2 with a
   message naming `--anchor-mid-offset`, on both chains; the old behaviour lives only in
   the reference build.
-- Regional (shadow/highlight) color balance (see §7.2). "Shadow"/"highlight"
-  name the **positive's** tone regions (low/high corrected density); a positive
-  value brightens that channel in its region. Defaults `[0, 0, 0]` are identity
-  — the default output is bit-exact with the unbalanced render:
-  - `--shadow-balance R,G,B` — per-channel density offset applied in the
-    positive's shadows.
-  - `--highlight-balance R,G,B` — per-channel density offset applied in the
-    positive's highlights.
-  - Tone-ramp anchors — a single mutually-exclusive choice, recipe key
-    `reconstruction.density.balance_range` (default `"auto"`); the two flags conflict, and
-    whichever is given replaces a recipe's `balance_range`. Only consulted when
-    a balance is non-zero:
-    - `--auto-balance-range` (default) ⇒ `"auto"` — measure `[lo, hi]` per frame
-      from the corrected-density tone distribution (the 0.5th / 99.5th
-      percentiles, nearest-rank). The `auto` run echoes the measured `[lo, hi]`
-      in its JSON report, so a roll can capture one frame's range and replay it
-      on the rest via `--balance-range` for consistent toning. Fails loudly when
-      a balance is requested on a frame with no measurable range (uniform
-      densities) — pass an explicit range instead.
-    - `--balance-range LO,HI` ⇒ `{ "explicit": [lo, hi] }` — fix the ramp anchors
-      (`lo < hi`, both finite, and their difference representable in `f32`).
-- Both density curves share the `reconstruction.density` object, including
-  regional balance. The curve variants have disjoint fields. After recipe/CLI merge,
+- **Retired regional balance.** `--shadow-balance`, `--highlight-balance`,
+  `--balance-range` and `--auto-balance-range` went with the regional balance in
+  `nf-retire/regional-balance` (§7.2). They are hidden and exit 2 on both chains, naming
+  the look's per-channel grade (`--channel-grade`, under `--new-flow`). The recipe keys
+  `reconstruction.density.shadow_balance` / `highlight_balance` at `[0, 0, 0]` and
+  `balance_range` at `"auto"` are dropped on load; any other value is refused, and an
+  equal pair is pointed at `reconstruction.density.offset`, which it equalled; an
+  explicit range beside equal balances, which the balance never consulted, is told to
+  go, the render unchanged.
+- Both density curves share the `reconstruction.density` object. The curve variants have disjoint fields. After recipe/CLI merge,
   `--density-gamma`, `--anchor-mid-offset`, or a stock beside the curve that has no
   such field fails as a usage error — never ignored.
 
@@ -2222,9 +2171,7 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   `output.output_profile` / `output.bigtiff`), are removed-value usage errors (§5).
   - `film-master`: an unclamped 32-bit float linear ACEScg TIFF taken directly from
     the NC film RGB v1 mapping with the ACEScg profile embedded and no transform.
-    After recipe/CLI merge it rejects the frame-local measurement (when a balance is
-    actually applied) `auto` `reconstruction.density.balance_range`, plus every
-    non-default print control (`print_exposure`, `black_point`, `white_balance`,
+    After recipe/CLI merge it rejects every non-default print control (`print_exposure`, `black_point`, `white_balance`,
     `linear_range`) and a non-default display headroom (`fit_range.headroom_stops`)
     whatever their source. There is no ignore-conflicting-controls mode; the float export
     that applies those controls is `hdr-linear-tiff`.

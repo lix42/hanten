@@ -15,7 +15,8 @@ Remove the old paths once the reference build exists: `legacy`/`custom`, the bou
 
 Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration.md`).
 Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-09-23),
-**`display-tones`** (2026-09-24), **`dmax-machinery`** (2026-09-24).
+**`display-tones`** (2026-09-24), **`dmax-machinery`** (2026-09-24),
+**`regional-balance`** (2026-09-25).
 
 **What `legacy-custom` means for the rest of the epic.**
 
@@ -82,6 +83,20 @@ Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-
   must stay byte-identical to what the recorded rows hashed.
 - **The effective area has no `convert` consumer.** An empty region always warns, and
   `holder_applied` no longer suppresses the IR note; a future consumer must decide both.
+
+**What `regional-balance` means for the rest of the epic.**
+
+- **The current chain has no tone-dependent per-channel control** until `default-flip`;
+  the grade (`look.channel_grade`) exists only under `--new-flow`. Every migration
+  message says so rather than naming a flag the current chain refuses.
+- **`reconstruction.density` is `scale` and `offset` only.** The three keys join
+  `strip_retired_keys_at_old_defaults`, which now parses a triple as `f32`
+  (`balance_triple`), as the old deserializer did — a later retirement of a numeric key
+  should compare the same way, or a value the old build read as its default is refused.
+- **`film-master` has no frame-local rule left**, only the downstream-control sweep, and
+  no report or telemetry field carries a per-frame reconstruction measurement.
+- **The drift gate's `render` text has two frozen lines now** (`dmax=`,
+  `balance_range=`); both must stay byte-identical.
 
 ## legacy-custom
 
@@ -389,10 +404,119 @@ Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-
 
 ## regional-balance
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-25
 
 - 2026-09-19: created with the new-flow plan. Goal: retire the regional balance.
+- 2026-09-25: **plan.** Decisions taken with the user before starting: (1) the four
+  flags are hidden migration errors on both chains at every value, `0,0,0` and
+  `--auto-balance-range` included (the `dmax` precedent); since `--channel-grade` is
+  new-flow only, the current chain's remedy is "drop the flag; under `--new-flow` the
+  grade replaces it"; (2) a recipe's `shadow_balance`/`highlight_balance` at
+  `[0,0,0]` and `balance_range` at `"auto"` are stripped on load, anything else
+  refused — an equal non-zero pair is exactly a uniform offset, and its message says so
+  (`reconstruction.density.offset` replays it identically); (3) the report's
+  `balance_range` (convert and roll) goes, no constant stand-in; (4) no
+  `pipeline_version` bump — the neutral default short-circuited bit-exactly, so the
+  drift gate's `balance_range=` line becomes a frozen literal and only `recipe` moves;
+  (5) the customized golden is recaptured with neutral balances **from the pre-removal
+  build**, the auto-range golden is deleted; (6) the difference is documented on a
+  synthetic crossover wedge (reference balance vs `--new-flow --channel-grade`), not
+  on a real frame — none was ever rendered with a balance.
+- 2026-09-25: **implemented; all gates green, not yet reviewed.**
+  - **Removed:** `DensityParams::{shadow_balance, highlight_balance, balance_range}`,
+    `BalanceRange`, `algo::density::{regional_balance, measure_balance_range,
+    consults_balance_range, pixel_tone, smoothstep}` and the percentile constants;
+    `ReconstructionReport` / `ConvertReport` / `Report` / roll `FrameStatus::Ok`
+    `balance_range`; the balance `merge` arms and `validate` rules; `film-master`'s
+    frame-local-range rule (its one remaining rule is the downstream-control sweep);
+    `flow.rs`'s three balance rows and `BALANCE_REPLACED_BECAUSE`.
+  - **Migration:** `RemovedBalanceFlags` (hidden, `num_args = 0..=1`,
+    `allow_hyphen_values`) checked in `reject_removed_flags` on both chains, sharing
+    `REGIONAL_BALANCE_RETIRED` with the recipe message. Recipes: the three keys stripped
+    at their neutral defaults in `strip_retired_keys_at_old_defaults` (convert and roll
+    per-frame), anything else refused by `removed_balance_recipe_message`. **The
+    equal-pair remedy is exact only over a zero offset**: checked against the
+    pre-removal build, an equal pair re-expressed as `--density-offset` is byte-identical
+    at offset 0 and differs by f32 rounding otherwise (`(x + o) + s` against
+    `x + (o + s)`), so the message says so.
+  - **Drift gate / goldens:** `render` and `base` reproduced; the `balance_range=` line
+    is a frozen literal (`FROZEN_BALANCE_RANGE_LINE = "-"`); `recipe` refreshed in place
+    on the v7 row (`8d1fc292f2e6c723`). The customized golden's bits were captured from
+    `b36ca64` (pre-removal) with its balances zeroed, then pinned against the new code
+    unchanged. The auto-range golden went. Five `..DensityParams::default()` became
+    needless updates (clippy) and were dropped.
+  - **Tests:** 802 unit, 229 integration, 390 nctool. `tests/pipeline.rs` lost three
+    balance tests and the film-master range case, gained
+    `the_regional_balance_is_a_migration_error` (every flag and spelling on both chains,
+    both remedies accepted, neutral sidecar replays byte-identically to its absence,
+    non-neutral and explicit-range keys refused, equal-pair remedy, roll per-frame, no
+    key in report / sidecar / `hanten params`); mutation-checked by disabling the strip
+    and the flag check. Two new-flow tests that used `--shadow-balance` as their example
+    now use `--film-stock`.
+  - **The difference, measured (not asserted).** A synthetic wedge (generated in scratch, not
+    committed): 26 neutral bands at `D′` 0.05–1.30 with a pure crossover about
+    `D′` 0.62 — red density contrast ×1.08, blue ×0.94 — base `0.9,0.55,0.42`, read
+    per band with `nctool metrics image --space display-p3`. Uncorrected, both chains
+    render it alike (C\* within 0.03): 2.9 in the deepest band, 0.2 at mid, 13.9 at the
+    top. **The balance**, hand-matched to the crossover at its measured `auto` range
+    `[0.046, 1.304]` (`--shadow-balance=0.0456,0,-0.0342 --highlight-balance=-0.0544,0,0.0408`),
+    leaves up to **C\* 2.16** (around `D′` 1.05) and ~1.0 across the lower mids: it is
+    exact only at the range ends, because its smoothstep ramp cannot follow a linear
+    crossover. **The grade** at a hand-matched `0.95,1.05` leaves at most **C\* 0.71**.
+    Its "analytic" value `1/k` (`0.926,1.064`) over-corrects to C\* 7.2 at the top —
+    the grade acts on ACEScg channels after the 3×3 and inside the look's contrast, so
+    a density-exponent error does not translate one-to-one; match it by eye. **The
+    fold**, on `film-master` with red balances `±1` over `[0.05, 1.3]`: red runs
+    +1.86 → +2.43 → +0.27 → +3.15 stops across the wedge where the unbalanced red rises
+    monotonically −3.95 → +4.74 — two densities onto one, as the task file said. The
+    grade's exponent-spread bound rules that out.
+  - **Docs:** `using-nc.md` (re-verified against the binary: `hanten params`, the
+    new-flow refusals, film-master, the recipe migrations; header pin now `b36ca64`),
+    design-spec §4 table, §6 film-master, §7.2 (model and a retirement note), §9 CLI
+    list and examples, design-update's four mentions.
+- 2026-09-25: **review round** (`/review-fix-loop`: Codex clean; `nc-reviewer` four
+  findings, all taken, plus diff-caused doc staleness). The one that changes behaviour:
+  an explicit `balance_range` beside **equal** balances (neutral included, an absent key
+  counting as `[0,0,0]`) was never consulted — the old pass returned before reading it —
+  so it replays unchanged; its message said "reproducible only from the reference
+  build" and now says remove the key, the render is unchanged. Still refused, not
+  stripped (only the old default strips). The equal-pair test compares as f32, as the
+  old short-circuit did. **A regression of my own, caught here:** the §7.2 rewrite in
+  design-spec had cut through to `### 7.3`, deleting the auto-neutral-WB paragraph, the
+  fidelity-rule restatement and the `--highlight-compress` note; restored verbatim.
+  Also: `RemovedBalanceFlags`' doc now says a bare stub followed by a valued flag hits
+  clap's error (the `RemovedDmaxFlags` precedent); `render_split`'s "frame-local
+  measurement" claim went; three open task files stopped citing deleted code
+  (`consults_balance_range`, `pixel_tone`, `--auto-balance-range`). Pre-existing
+  staleness left for the user: `TASKS.md` and `unfrozen-auto-mode-warning.md` still
+  treat `dmax: "auto"` as live, `recipe-composition.md` lists `--auto-d-max`,
+  `density-safety-bounds.md` cites the retired `render_print`.
+- 2026-09-25: **second review round** (`/code-review`, seven findings, all taken). The
+  strip and the message parsed "neutral" differently — f64 against the old
+  deserializer's f32 — so `[1e-50, 0, 0]`, which the old build read as zero, was
+  refused with an advice to add `[0, 0, 0]` to the offset; both now share
+  `balance_triple` (f32), and a test pins the replay. The equal-pair remedies said
+  "add it to the offset", but a roll per-frame override's arrays **replace** the shared
+  recipe's and `--density-offset` **sets** rather than adds, so both now say to set the
+  offset to the resolved one plus the pair. Two open task files lost their remaining
+  claims that `--auto-d-max` / `dmax: "auto"` are live (lines this change had already
+  edited); a doc-comment agreement fix in `stages.rs`. Gates green: 802 unit, 229
+  integration, 390 nctool.
+- 2026-09-25: **ship review** (`ship:diff-reviewer` + Codex; Codex found nothing). Taken:
+  the flag message's offset remedy now carries the recipe message's qualifier (exact over
+  a zero offset, otherwise to float rounding) and no longer says "on both chains" — the
+  new chain never had the balance; `using-nc.md` §5 says "set", as the message does.
+- 2026-09-25: **done.** The regional balance is gone from the current chain: four flags
+  and three recipe keys are migration errors on both chains, their neutral defaults strip
+  on load, and the report carries no balance range. Verified: all CI gates green (802
+  unit, 229 integration, 390 nctool), `render`/`base` reproduced with `recipe` refreshed,
+  the customized golden recaptured from the pre-removal build, `docs/using-nc.md`
+  re-verified against the binary, and the difference documented on a synthetic crossover
+  rather than asserted. The task's three checks hold: removed names refuse naming the
+  grade (`the_regional_balance_is_a_migration_error`); no report, sidecar or
+  `hanten params` output carries a balance; the crossover renders through the grade with
+  the measured difference above.
 
 ## print-prefix-rename
 

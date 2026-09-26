@@ -150,10 +150,11 @@ are conventions and opinions rather than accuracy questions, and why they cannot
 be judged by "how much survived". Three exceptions, none of them about those
 four: a dead-pixel floor on the scan; non-finite samples passed through as NaN
 for the encoder to count; and the **regional balance** (`shadow_balance` /
-`highlight_balance`), which is omitted from the chain above and *can* be
-non-monotone — its weights vary with the scalar tone, nothing bounds their
-magnitude, and a large enough shadow-minus-highlight difference maps two scene
-densities onto one. One more reason it belongs in rendering as a grade.
+`highlight_balance`), which was omitted from the chain above and *could* be
+non-monotone — its weights varied with the scalar tone, nothing bounded their
+magnitude, and a large enough shadow-minus-highlight difference mapped two scene
+densities onto one. It retired for that reason and others
+(`nf-retire/regional-balance`); rendering's grade replaces it.
 
 Expanding the curve shows what each knob really is:
 
@@ -168,7 +169,7 @@ out_c = 10^(−gamma·A) × 10^(gamma·offset_c) × (10^(D_c))^(gamma · scale_c
 | **`offset [3]`** | a per-channel gain, constant at every brightness | **White balance** — but in film-layer space, *before* the 3×3, so it is not the same operator as rendering's white balance after it (≈2.6 % apart on a neutral, more on saturated colour). |
 | **`scale [3]`** | a per-channel *exponent*: the rate each channel grows with exposure | The pivoted per-channel grade (Part 2) — same symptom, different basis, not the same correction. |
 | **`gamma`** | overall contrast | The contrast knob (Part 2) — the same for neutrals, different for saturated colour. |
-| `shadow_balance` / `highlight_balance` | per-channel offsets by tone region | A grade. |
+| `shadow_balance` / `highlight_balance` (retired) | per-channel offsets by tone region | A grade — the look's `channel_grade`, which replaced them. |
 
 So `scale` and `gamma`'s calibration half are the decode's own. Rendering has a
 counterpart for every knob here — exposure, white balance, contrast, and the
@@ -332,7 +333,8 @@ not "datasheet vs content" but **fitted per frame vs measured per roll**.
   identifiable value yet.
 - **Rendering, move out:** sigmoid `toe` / `shoulder`; per-stock curves;
   `gamma`'s print- contrast half; `shadow_balance` / `highlight_balance` (a
-  grade — see Part 2's per-channel control, which subsumes them).
+  grade — see Part 2's per-channel control, which subsumes them; retired in
+  `nf-retire/regional-balance`).
 - **Tuned by review:** `scale` and `gamma` are the two knobs a visual review can
   settle. `#124` (the `scale` recalibration) was the first such round; `#120`
   moved the shared *brightness* target, which this design puts in rendering, so
@@ -577,8 +579,9 @@ neutral contrast; the task's decision records why.
 - **Scene-referred, before the SDR/HDR branch**, or the two renditions disagree
   in the midtones and the gain map breaks. It needs a guard for values at or
   below zero, which a wide-gamut linear space contains.
-- **It subsumes `shadow_balance` / `highlight_balance`.** Per-channel adjustment
-  by tone region is the same family; the standard forms are ASC-CDL (slope,
+- **It subsumes `shadow_balance` / `highlight_balance`** (retired in
+  `nf-retire/regional-balance`). Per-channel adjustment by tone region is the same
+  family, and the grade needs no per-frame measured range; the standard forms are ASC-CDL (slope,
   offset, power per channel) and per-channel tone curves. One control, not
   three.
 - **It does not replace the calibration.** It is a grade on top; without a

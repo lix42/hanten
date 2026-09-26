@@ -23,11 +23,9 @@ degenerate (e.g. finite all-black) image. Two complementary mechanisms:
 > `10^(γ·(d−anchor))` (the stage-3 tone map at `density.rs:408`): a hugely
 > *positive* density → `±inf` (caught by the encoder's non-finite counter), but a
 > hugely *negative* one underflows to a finite `+0.0` — a quietly black pixel
-> **no counter flags**. That tone map has no finiteness/collapse guard.
-> `pixel_tone`'s non-finite skip is a *different* defense: it covers both the
-> regional-balance measure **and** apply (`density.rs:350`) — see its doc at
-> `density.rs:221-226` — but it does nothing for the tone-map underflow, so don't
-> mistake it for the guard this task needs.
+> **no counter flags**. That tone map has no finiteness/collapse guard. (The
+> regional balance's `pixel_tone` non-finite skip, a different defense, retired with
+> the balance in `nf-retire/regional-balance`.)
 
 > **Context — a second confirmed underflow site, with a reproduction.** Found while
 > reviewing `color/film-master-render-pipeline` (2026-07-27) and deliberately **not**

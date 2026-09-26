@@ -538,16 +538,11 @@ mod tests {
     /// Synthesizing the *scan* rather than handing densities straight to the curve is what
     /// puts `to_density` inside the assertion, which is the whole point of this section.
     ///
-    /// It inverts stage 1 and stage 2's **per-channel** half only
-    /// (`D′ = scale·(−log10(s/base)) + offset`). Two preconditions follow, neither of
-    /// which any caller here violates and both of which a new one easily could:
-    ///
-    /// - `regional_balance` is stage 2's other half and is **not** inverted, so every
-    ///   caller must leave `shadow_balance` / `highlight_balance` neutral. A non-neutral
-    ///   pair is a per-tone per-channel offset the synthesis does not undo.
-    /// - `want` must stay under `−log10(SCAN_EPSILON/base_c)` — about 5.95 / 5.74 / 5.62
-    ///   for R/G/B at [`test_base`] — above which `to_density`'s dead-pixel floor clamps
-    ///   and the round trip stops being one.
+    /// It inverts stages 1 and 2 (`D′ = scale·(−log10(s/base)) + offset`). One
+    /// precondition follows, which no caller here violates and a new one easily could:
+    /// `want` must stay under `−log10(SCAN_EPSILON/base_c)` — about 5.95 / 5.74 / 5.62
+    /// for R/G/B at [`test_base`] — above which `to_density`'s dead-pixel floor clamps
+    /// and the round trip stops being one.
     fn scan_for(params: &DensityParams, want: &[[f32; 3]]) -> LinearImage {
         let base = test_base();
         let base = [base.r, base.g, base.b];
@@ -625,12 +620,6 @@ mod tests {
     /// alone; this asserts it of the chain. It fails if stage 1's base division is shared
     /// instead of per-channel, if one table is applied across all three channels, if the
     /// channels are permuted between stages, or if the dispatch reaches another curve.
-    ///
-    /// What it deliberately does **not** cover: where the regional balance sits. The
-    /// balances are neutral here (their default), so that pass is a no-op and reordering
-    /// it is invisible — a non-neutral balance is a per-tone per-channel offset and would
-    /// destroy the neutrality being asserted. It is shared with the parametric curves and
-    /// pinned by their goldens.
     #[test]
     fn a_neutral_ramp_reconstructs_neutral_through_the_whole_chain() {
         for stock in FilmStock::ALL {
@@ -727,7 +716,6 @@ mod tests {
         let density = DensityParams {
             scale: [1.15, 0.9, 0.85],
             offset: [0.08, -0.06, -0.05],
-            ..DensityParams::default()
         };
         // Falsifiability, machine-checked rather than asserted in prose: the transposed
         // spelling really does land far outside ROUND_TRIP_TOL at these values, so a green
