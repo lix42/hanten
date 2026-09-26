@@ -1063,3 +1063,10 @@ What other epics need to know about `analysis`:
 - 2026-09-24: filed from `probe-fixture-roll-names`. No `SEED_ROLES` entry matches a
   date-named roll, so a from-scratch generation would mark reference frames `real`.
 
+## review-test-local-binary
+
+**Status:** not started
+**Updated:** 2026-09-25
+
+- 2026-09-25: filed while shipping `nf-calibration/anchor-comparison`. Goal: the `nctool`
+  default-binary test stops depending on whether a release binary is built.

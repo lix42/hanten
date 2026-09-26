@@ -57,6 +57,13 @@ Open:
   binds (which one, by how much).
 - The user guide (`docs/using-nc.md`), since this changes what `measure-roll` reports and
   what a recipe carries.
+- **HDR was never reviewed.** Every round was judged on SDR renders. Where the white sits
+  also decides the HDR headroom (`nf-reconstruction/anchor-rule`'s handoff: a per-frame p97
+  left about a stop on a typical Gold200 frame). Measure the headroom under the rule and
+  look at the gain-map rendition before the values stop being provisional.
+- **Skipping a frame can drop the roll's white sharply on a short roll.** Skipping 07-24's one
+  bright frame takes its white from +3.19 to +1.31; the floor now catches it at +1.5, so the
+  floor is doing real work there. Keep it in mind if the floor moves.
 
 ## How to Verify
 
