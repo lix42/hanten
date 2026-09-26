@@ -45,5 +45,5 @@ The review set is judged with the black point in place.
 
 - [`measure-roll` places the roll's white](../nf-calibration/roll-white-rule.md) — the white
   the band is fitted under
-- [A parametric operator with a toe](../nf-display-stages/parametric-operator.md) — the
+- [Display black](../nf-display-stages/parametric-operator.md) — the
   black point the re-fit is judged with (not an input to the band)

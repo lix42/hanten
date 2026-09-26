@@ -14,7 +14,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `--channel-grade`, §11) plus `nf-retire/regional-balance` (the balance flags and keys
 > retired, §5–§6), `nf-destinations/preset-set` (the `--new-flow` destination
 > flags) and `nf-retire/characteristic` (the curve, `--density-curve`, `--film-stock`
-> and `--preset` retired, §5–§6). The staleness
+> and `--preset` retired, §5–§6), and `nf-display-stages/parametric-operator`
+> (`--display-black`, display black on by default under `--new-flow`, §11). The staleness
 > signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
@@ -631,7 +632,8 @@ dropped: a flag that quietly did nothing would be worse than a failure.
 | `--linear-range LOW,HIGH` | Affine black/white placement, applied last — **display presets only**, which includes the default (see §8) |
 
 (Under `--new-flow` exposure is spelled `--exposure` and white balance is scene
-correction's; `--display-tone-headroom` means the same on both chains — §11.)
+correction's, `--black-point` is refused and display black is `--display-black`;
+`--display-tone-headroom` means the same on both chains — §11.)
 
 `--white-balance` and `--auto-wb` are the two faces of one setting and are mutually
 exclusive. The report tells you what was actually used:
@@ -1183,8 +1185,8 @@ the recipe rather than merely out of the image.
 
 **It renders a minimal picture, not a finished one.** The fixed decode feeds the new
 chain. Scene correction applies white balance and exposure, the look desaturates
-near-white highlights, fit range compresses the scene's range into the display's (all
-below), and fit gamut maps colour outside the destination's gamut onto its boundary, keeping
+near-white highlights, fit range compresses the scene's range into the display's and
+places black where the film base renders (all below), and fit gamut maps colour outside the destination's gamut onto its boundary, keeping
 hue. With no destination flag the result is a Display P3 16-bit TIFF:
 
 ```console
@@ -1212,11 +1214,11 @@ instead of all four. Only these combinations are written today:
 
 `--film-master` writes the fixed decode's linear ACEScg as an unclamped 32-bit float TIFF
 with **no** rendering stage, so it refuses any stage you ask for — scene correction
-(`--exposure`, `--white-balance`), the look, or fit range (`--display-tone-headroom`) —
-naming the stage. Each stage's default and its identity are accepted, since neither
-asks for anything: `--exposure 0 --white-balance 1,1,1`, the empty look
-`--contrast 1 --highlight-desaturation 0`, and `--display-tone-headroom 0` (or its
-default 6).
+(`--exposure`, `--white-balance`), the look, or fit range (`--display-tone-headroom`,
+`--display-black`) — naming the stage. Each stage's default and its identity are
+accepted, since neither asks for anything: `--exposure 0 --white-balance 1,1,1`, the
+empty look `--contrast 1 --highlight-desaturation 0`, and `--display-tone-headroom 0
+--display-black off` (or their default 6).
 An HDR JPEG with a gain map (`--range hdr --container jpeg`) and an SDR JPEG are
 planned, and refused as not written yet.
 
@@ -1282,8 +1284,10 @@ roll's.
   `"identity"`, `"white-balance"`, `"exposure"` or `"white-balance+exposure"`;
   for the look the controls that ran joined by `+` in the order they run —
   `"contrast"`, `"channel-grade"`, `"highlight-desaturation"` — so the default is
-  `"contrast+highlight-desaturation"`, or `"identity"` when none ran; fit range's
-  operator; `"acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"` for fit
+  `"contrast+highlight-desaturation"`, or `"identity"` when none ran; for fit range
+  the operator and display black's curve joined the same way —
+  `"reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1"` by default — or whichever one
+  ran; `"acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"` for fit
   gamut, named for the destination's gamut), scene correction's resolved values in
   `scene_correction`, fit range's in `fit_range` (below), the `destination` (above)
   and `"sidecar_written": false`. The film master runs no stage, so its `stages` is
@@ -1343,7 +1347,7 @@ $ hanten params --new-flow
     "channel_grade": [1.0, 1.0],
     "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] }
   },
-  "fit_range": { "headroom_stops": 6.0 },
+  "fit_range": { "headroom_stops": 6.0, "display_black": 6.0 },
   "fit_gamut": {},
   "output": { "display": {} }
 }
@@ -1354,7 +1358,7 @@ current chain's sections unchanged. `calibration` holds the film base only — t
 fixed decode reads no reference density. `reconstruction` spells the four decode
 knobs above (`--density-gamma` is `linearization` here). `scene_correction` holds white
 balance and exposure, `look` contrast, the per-channel grade and highlight desaturation, `fit_range` its
-headroom (all below); `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
+headroom and display black (all below); `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
 from the destination. `output` is the destination (above), with nothing stated
 by default — every axis derived. The current chain's `output.preset` is refused in
 this document by name. `--dump-params` under `--new-flow` writes this
@@ -1395,11 +1399,11 @@ $ hanten convert … --new-flow --params print.json # "print": {…}
 usage: recipe print.json: `print` is a section of the current chain's recipe, not
 the new one's: white balance and exposure are `scene_correction.white_balance` and
 `scene_correction.exposure`; the display tone is fit range, whose one operator is
-reinhard and whose headroom is `fit_range.headroom_stops`; the black point splits
-between scene correction and fit range (`nf-scene-correction/flare-removal`), and
-`linear_range` has no home yet (`nf-scene-correction/levels-knob`) — neither of those
-two has a key yet. Drop it — the current chain reads it only in a recipe with no
-`recipe_version`
+reinhard and whose headroom is `fit_range.headroom_stops`; the black point splits in
+two — display black is `fit_range.display_black` (where the film base renders), and
+the flare/fog subtraction has no key yet (`nf-scene-correction/flare-removal`) — and
+`linear_range` has no home yet (`nf-scene-correction/levels-knob`). Drop it — the
+current chain reads it only in a recipe with no `recipe_version`
 ```
 
 The rest of the print and output **flags** are refused as well, each saying where
@@ -1408,7 +1412,7 @@ the knob went:
 | Refused | Where it goes |
 |---|---|
 | `--print-exposure` | renamed: `--exposure` (below) |
-| `--black-point` | split in two — flare/fog in scene correction, display black in fit range — which is why it is not a rename |
+| `--black-point` | split in two — display black in fit range, which is `--display-black` (below), and a flare/fog subtraction in scene correction, which has not landed — which is why it is not a rename |
 | `--linear-range` | an affine levels remap needing a stage and a name; retiring it outright is a listed outcome |
 | `--output-preset` | the destination flags `--range`, `--transfer`, `--gamut`, `--container` or `--film-master` (above); the refusal names the preset's counterpart |
 | `--telemetry`, `--telemetry-file` | the new chain's report and telemetry shape — the record would name the current chain's preset and timing buckets |
@@ -1538,14 +1542,14 @@ Contrast and highlight desaturation are **on by default**; the grade is off.
 
 **Fit range** fits the scene's range into the display's. It has one operator,
 reinhard, applied to luminance so all three channels scale together and hue is kept;
-mid-grey stays where the decode put it. Its one knob is how much range above diffuse
-white it compresses:
+mid-grey stays where the decode put it. It also places black (below). Its two knobs:
 
 | Flag | Recipe key | |
 |---|---|---|
 | `--display-tone-headroom STOPS` | `fit_range.headroom_stops` | `0`–`24`, default `6`; `0` is the identity |
+| `--display-black STOPS\|off` | `fit_range.display_black` | stops below mid-grey on the display, `(0, 16]` or `off`, default `6`; new-flow only |
 
-The flag and the key are the same on both chains (`--display-tone` and
+The headroom's flag and key are the same on both chains (`--display-tone` and
 `--highlight-compress` are removed on both — §7). The display's peak
 is the operator's other argument and belongs to the destination, not the recipe — `1`
 for SDR, `1000/203 ≈ 4.93` for HDR. The report names what ran:
@@ -1557,15 +1561,59 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
   "operator": "reinhard-peak-lifted-v1",
   "headroom_stops": 6.0,
   "white_point": 64.0,
-  "display_peak": 1.0
+  "display_peak": 1.0,
+  "display_black": {
+    "setting": 6.0,
+    "curve": "log-shift-to-mid-grey-v1",
+    "film_base_stops": 3.8510852,
+    "shift_stops": -2.1489148
+  }
 }
 ```
 
-At `0` the operator reads `"identity"`: fit range passes the scene through unchanged,
+At `0` the operator reads `"identity"`: reinhard passes the scene through unchanged,
 and everything above display white clips at the encode (32% of the samples on
-`tests/fixtures/hdr-48bit.tif`, against none at the default). A pixel with a
+`tests/fixtures/hdr-48bit.tif`, against none at the default). Display black still runs
+at `0` unless it is off, so the stage list names its curve then. A pixel with a
 non-finite channel is refused (exit 1, naming the pixel) rather than passed to the
 encoder.
+
+**Display black** is where the film base — the darkest thing on the film, since
+nothing below its threshold is recorded — lands on the display, in stops below
+mid-grey. Without it black lands wherever the look's contrast leaves it: at the
+default contrast the base renders 3.85 stops under mid-grey (above), which reads as a
+pale, lifted black. At the default `6` (about L\* 2.5) it is moved down by the 2.15
+stops `shift_stops` reports.
+
+- **Nothing is measured from the image.** Where the base renders is computed from the
+  film base you gave and the frame's own decode, white balance, exposure and contrast,
+  so a flatter frame gets a larger shift and a steeper one a smaller one, and two
+  frames of a roll at different contrasts both land their base at the same depth.
+- **Only the shadows move.** The shift is whole at the base and below, and fades to
+  nothing at mid-grey: mid-grey, the highlights and white are untouched. Below the base
+  the shadows are darkened by the same factor rather than squeezed toward 0, so
+  texture there survives. Colour is kept: all three channels scale together.
+- **Fewer stops, lighter shadows with more detail; more stops, a deeper black.** It is
+  a matter of taste per picture — `6` was chosen by review as the default.
+- **A base already that deep is left alone**, never lifted: at a steep contrast the
+  report shows `"curve": "identity"` and `"shift_stops": 0.0`. `off` leaves black
+  wherever the grade puts it.
+- **A base near mid-grey is warned about.** Only a strong `--exposure` gets it there:
+  at the default contrast the warning starts at about `--exposure 1.75`. Closer than 2
+  stops under mid-grey, the whole shift is squeezed into that narrow band and crushes
+  the shadows; at or above mid-grey (about `--exposure 3.75`) black cannot place it and
+  is skipped. Either way the report warns, naming
+  `--exposure` and `--display-black off` as the remedies.
+- **Not the current chain's `--black-point`**, a subtraction on every channel that
+  crushes and tints the shadows; that flag is refused here, and `--display-black` is
+  refused without `--new-flow`. Removing scanner veil or base fog is a separate,
+  scene-side correction that has not landed.
+
+```console
+$ hanten convert … --new-flow --display-black 0
+usage: --display-black (recipe `fit_range.display_black`) must be stops below mid-grey
+within (0, 16], or `off`, got 0
+```
 
 #### `measure-roll` — a roll's white balance, measured once
 

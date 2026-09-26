@@ -364,6 +364,16 @@ pub fn decode(
     ))
 }
 
+/// Decode the film base itself, as a one-pixel image: where the unexposed film lands
+/// in the positive, which is display black's reference (`pipeline::chain::render`).
+///
+/// Through [`decode`] rather than a formula beside it, so the base follows every
+/// parameter the decode reads — scale, offset, linearization, anchor — by construction.
+pub fn decode_film_base(base: &FilmBase, params: &DecodeParams) -> Result<FilmRgbImage> {
+    let pixel = LinearImage::new(1, 1, vec![base.r, base.g, base.b], None)?;
+    Ok(decode(&pixel, base, params)?.0)
+}
+
 /// What makes a [`DecodeParams`] unusable.
 ///
 /// **One checker, rendered two ways.** [`DecodeParams::check`] is the only place the

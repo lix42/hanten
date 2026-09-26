@@ -39,6 +39,14 @@ values.
   passes through whole (`nf-look/per-channel-grade`'s guard decision): continuous along
   exposure but not across colour, so noisy deep shadows straddling zero would render as
   salt and pepper. Revisit that guard when this lands.
+- **Display black's reference passes through this stage** (2026-09-26,
+  `nf-display-stages/parametric-operator`). Display black grades the decoded film base
+  through the frame's own scene correction and look (`chain::render`) to learn where it
+  renders, and places black from there. A subtraction here would move that reference
+  too — to zero or below for a term as large as the base itself, which fit range
+  refuses. Decide whether the reference sees the flare term (the base is unexposed
+  film, so arguably it carries the fog but not the scene's veil) and keep the two from
+  reading as one knob.
 
 ## How to Verify
 

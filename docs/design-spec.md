@@ -1052,7 +1052,7 @@ top-level **document version** rather than per-object ones:
     "channel_grade": [1.0, 1.0],
     "highlight_desaturation": {"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]}
   },
-  "fit_range": {"headroom_stops": 6.0},
+  "fit_range": {"headroom_stops": 6.0, "display_black": 6.0},
   "fit_gamut": {},
   "output": {"display": {"gamut": "adobe-rgb"}}
 }
@@ -1068,7 +1068,7 @@ top-level **document version** rather than per-object ones:
   the curve, pinned by the convention `scale_r = 1`. The pre-split
   `reconstruction.contrast` is refused by name at every value, with the `look.contrast`
   that would keep it as the whole contrast. `scene_correction` is white balance and
-  exposure and `fit_range` the operator's headroom, and `look` contrast, the
+  exposure and `fit_range` the operator's headroom and display black, and `look` contrast, the
   per-channel grade and highlight desaturation (all below).
   `fit_gamut` is empty and has no knob: it changes primaries into the destination's
   gamut and maps out-of-gamut colour radially toward neutral at constant luminance,
@@ -1169,6 +1169,22 @@ top-level **document version** rather than per-object ones:
   curve's limit at black (the mid-grey gain), so the scale is continuous there.
   The report's `new_flow.fit_range` names the operator (`reinhard-peak-lifted-v1`, or
   `identity` at zero headroom) with its headroom, white point and display peak.
+  **Display black** (`nf-display-stages/parametric-operator`): `display_black`
+  (`--display-black`) is where the film base renders, in stops below mid-grey on the
+  display, `(0, 16]` or `"off"`, default `6`. On reinhard's output `y`, before the
+  peak's lift: `y′ = y · 2^(shift · (1 − smoothstep(u)))`, `u` running over `log2 y`
+  from the base's rendered level `b` to mid-grey, `shift = log2(0.18 · 2^−stops / b)`.
+  `b` is the decoded film base (`algo::fixed::decode_film_base`) graded with the frame
+  (`chain::render`), so it follows each frame's contrast and nothing is measured from
+  the image. Mid-grey and above are untouched, the slope is 1 below the base, a base
+  already at or below the target is left alone, and the channels scale together. A
+  base rendering less than 2 stops under mid-grey (only a strong exposure reaches it)
+  is warned about: the shift crushes the narrow band there, and at or above mid-grey it
+  is skipped (`curve` `identity`). The
+  report's `fit_range.display_black` gives the setting, the curve
+  (`log-shift-to-mid-grey-v1` or `identity`), where the base rendered without it
+  (`film_base_stops`) and the shift applied (`shift_stops`); the stage list joins what
+  ran, `reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1` by default.
 
 This section states the shape. Each stage's keys are specified by the task that
 ships the knob, not written here ahead of the code.

@@ -210,16 +210,18 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
     FlagEntry {
         // Not simply renamed: today's single linear subtraction is **two** jobs, and
         // the new chain splits them — flare/fog removal on scene-referred values, and
-        // display black in fit range. So there is no one knob to point at yet, which
-        // is exactly what `NotYet` says and what an `instead` would get wrong.
+        // display black in fit range. Display black has landed (`--display-black`); the
+        // flare half has not, so pointing at either one alone as *the* replacement
+        // would be wrong, which is what `NotYet` keeps and an `instead` would lose.
         knob: "--black-point",
         covers: &["--black-point"],
         present: |args| args.print.black_point.is_some(),
         availability: Availability::NotYet {
-            arriving_with: "the two stages that split it — a flare/fog subtraction on \
-                            scene-referred values, and display black in fit range; today \
-                            it is one subtraction doing both, which is why it is not a \
-                            rename (`nf-scene-correction/flare-removal`)",
+            arriving_with: "the second of the two stages that split it: display black \
+                            has landed as `--display-black` (where the film base renders), \
+                            the flare/fog subtraction on scene-referred values has not \
+                            (`nf-scene-correction/flare-removal`). Today's flag is one \
+                            subtraction doing both, which is why it is not a rename",
         },
     },
     FlagEntry {
@@ -376,6 +378,11 @@ const KEPT_FLAGS: &[KeptEntry] = &[
               knobs and the film master, new-flow only",
     },
     KeptEntry {
+        covers: &["--display-black"],
+        why: "fit range's display black (recipe `fit_range.display_black`) — where the film \
+              base renders, new-flow only (`nf-display-stages/parametric-operator`)",
+    },
+    KeptEntry {
         covers: &["--anchor-mid-offset"],
         why: "the fixed decode's anchor (recipe `reconstruction.anchor`), `mid-at-base-offset`'s \
               `d`: every conversion knob is a flag and a recipe key, and \
@@ -529,6 +536,13 @@ const NEW_FLOW_ONLY_FLAGS: &[NewFlowOnlyEntry] = &[
                   `--new-flow`: the current chain has no look stage. Its contrast is the \
                   whole `--density-gamma`",
     },
+    NewFlowOnlyEntry {
+        covers: &["--display-black"],
+        present: |args| args.display.display_black.is_some(),
+        message: "--display-black places the new chain's display black (recipe \
+                  `fit_range.display_black`) and has no meaning without `--new-flow`; the \
+                  current chain's shadow floor is `--black-point`",
+    },
 ];
 
 /// Refuse, on the **current** chain, a flag only the new chain reads
@@ -581,6 +595,7 @@ fn refusal(knob: &str, availability: Availability) -> NcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::fit_range::DisplayBlack;
     use std::collections::BTreeSet;
 
     /// `convert` flags that are **not** conversion knobs, so the inventory owes them
@@ -899,6 +914,9 @@ mod tests {
                 &["--display-tone-headroom", "4"],
                 |r| r.fit_range.headroom_stops == 4.0,
             ),
+            ("--display-black", &["--display-black", "5"], |r| {
+                r.fit_range.display_black == DisplayBlack::StopsBelowMid(5.0)
+            }),
         ]
     }
 

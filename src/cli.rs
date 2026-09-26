@@ -306,6 +306,8 @@ pub struct ConvertArgs {
     #[command(flatten)]
     pub look: LookOverrides,
     #[command(flatten)]
+    pub display: DisplayOverrides,
+    #[command(flatten)]
     pub simple: SimpleOverrides,
     #[command(flatten)]
     pub output_opts: OutputOverrides,
@@ -770,6 +772,27 @@ impl LookOverrides {
             || self.highlight_desaturation_start.is_some()
             || self.highlight_desaturation_band.is_some()
     }
+}
+
+/// The new chain's fit-range overrides with no current-chain flag (recipe section
+/// `fit_range`). `--display-tone-headroom`, which both chains read, stays in
+/// [`PrintOverrides`]. `--new-flow` only; refused without it
+/// (`flow::reject_unavailable_flags`).
+#[derive(Args, Debug, Default)]
+pub struct DisplayOverrides {
+    /// Display black: where the film base — the darkest thing on the film — renders,
+    /// in stops below mid-grey on the display, or `off` (recipe key
+    /// `fit_range.display_black`, default 6, about L* 2.5). Fewer stops give lighter
+    /// shadows with more detail, more stops a deeper black. Display stops, not scene
+    /// stops: where the base lands before this is set by the look's contrast, and a
+    /// base already that deep is left alone. Mid-grey and everything above it do not
+    /// move. `--new-flow` only.
+    #[arg(
+        long = "display-black",
+        value_name = "STOPS|off",
+        allow_hyphen_values = true
+    )]
+    pub display_black: Option<crate::pipeline::fit_range::DisplayBlack>,
 }
 
 /// Print / tone-render overrides (design-spec §9).
@@ -5538,9 +5561,12 @@ impl NewFlowRender {
 }
 
 /// Render the fixed decode's ACEScg for `destination`: nothing for the film master; the
-/// chain, then the destination's transfer, for a rendered one.
+/// chain, then the destination's transfer, for a rendered one. A rendered destination
+/// also decodes the film base itself, one pixel through the same decode and 3×3 —
+/// display black's reference (`chain::render`); the film master never reads it.
 fn render_new_flow_destination(
     aces: AcesCgImage,
+    base: &FilmBase,
     recipe: &Recipe,
     destination: recipe::Destination,
 ) -> Result<NewFlowRender> {
@@ -5554,6 +5580,8 @@ fn render_new_flow_destination(
         }
         recipe::Destination::Display(d) => d,
     };
+    let film_base =
+        working_space::map_nc_film_rgb_v1(fixed::decode_film_base(base, &recipe.reconstruction)?);
     let params = recipe.chain_params(d.range.peak()?, d.gamut.destination());
     let chain::Rendered {
         image,
@@ -5561,7 +5589,7 @@ fn render_new_flow_destination(
         scene_correction,
         look,
         fit_range,
-    } = chain::render(aces, &params)?;
+    } = chain::render(aces, film_base, &params)?;
     let (linear, gamut) = image.into_parts();
     // Every HDR encoding here is a BT.2020 one; the destination table pairs them, and
     // this names the break rather than encoding other primaries under a BT.2020 tag.
@@ -5572,7 +5600,7 @@ fn render_new_flow_destination(
                 gamut.name()
             )));
         }
-        hdr::from_new_chain(linear, fit_range.operator, applied[3].1)
+        hdr::from_new_chain(linear, fit_range.applied(), applied[3].1)
     };
     let pixels = match d.encoding {
         Encoding::SdrTiff => {
@@ -5720,7 +5748,7 @@ fn render_new_flow_frame(
     // only a fault from *this* transform is counted.
     let _ = cms_error_occurred();
     let stage_started = Instant::now();
-    let render = render_new_flow_destination(aces, recipe, destination)?;
+    let render = render_new_flow_destination(aces, &base, recipe, destination)?;
     let color_ms = elapsed_ms(stage_started);
     if cms_error_occurred() {
         return Err(NcError::Other(
@@ -5738,6 +5766,9 @@ fn render_new_flow_frame(
         NewFlowRender::Rendered { rendered, .. } => Some(rendered),
         NewFlowRender::FilmMaster { .. } => None,
     };
+    if let Some(message) = rendered.and_then(|r| r.fit_range.display_black.warning()) {
+        push_warning_buf(warnings, log, message);
+    }
     report.new_flow = Some(NewFlowResult {
         decode: decoded,
         stages: rendered.map_or_else(Vec::new, |r| {

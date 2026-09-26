@@ -99,7 +99,8 @@ default: roll consistency is the product's central promise.
 
 ### `nf-display-stages`
 Fit range as one function both branches use, with reinhard as the baseline setting
-and a parametric operator with a toe; one gamut-mapping implementation rather than
+and display black (where the film base renders), with whether a parametric shoulder
+beats reinhard still open; one gamut-mapping implementation rather than
 three; the SDR/HDR branch point and what each branch may differ in.
 
 The toe lives here, not in reconstruction. A content-aware toe was rejected as a

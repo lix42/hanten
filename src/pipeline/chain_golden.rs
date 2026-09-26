@@ -19,8 +19,10 @@
 //!
 //! **Which stages are bit-exact and which are windowed is decided by their libm
 //! calls.** The decode makes two (`log10`, `powf`), a fractional exposure one
-//! (`exp2`), fit range one (`log2`) — but only for an HDR peak and only above
-//! diffuse white — the look's contrast one `powf` per positive channel, its per-channel
+//! (`exp2`), fit range one (`log2`) for an HDR peak above diffuse white and, with
+//! display black on, five per frame (the target's `exp2`, exact at a whole-stop
+//! setting, three `log2` and the whole shift's `exp2`) and two per pixel below mid-grey
+//! (`log2`, `exp2`); its golden runs the default whole-stop setting — so its reinhard vectors run with display black off — the look's contrast one `powf` per positive channel, its per-channel
 //! grade one on red and one on blue (both entering its luminance restore), and highlight
 //! desaturation one per pixel at most: `log10` inside
 //! its band's ramp, `log2` inside its brightness ramp (its constants' `powf` / `exp2`
@@ -60,7 +62,7 @@ use crate::algo::fixed::{self, DENSITY_OFFSET, DecodeParams, SCAN_FLOOR};
 use crate::pipeline::chain::{self, ChainParams, DisplayTarget, SharedParams};
 use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::fit_gamut::{self, DestinationGamut, FitGamutParams};
-use crate::pipeline::fit_range::{self, DisplayPeak, FitRange, FitRangeParams};
+use crate::pipeline::fit_range::{self, DisplayBlack, DisplayPeak, FitRange, FitRangeParams};
 use crate::pipeline::look::{self, HighlightDesaturation, LookParams, LookSection};
 use crate::pipeline::scene_correction::{
     self, SceneCorrection, SceneCorrectionParams, WhiteBalance,
@@ -500,11 +502,26 @@ fn golden_scene_correction_fractional_exposure_is_correct_within_its_libm_window
 // --- fit range -----------------------------------------------------------------
 
 /// Fit range at `headroom_stops` against `peak`.
+///
+/// Display black off: reinhard alone is IEEE arithmetic and pinned bit for bit here;
+/// display black calls `log2` and `exp2`, and has its own windowed golden.
 fn fit_range_params(headroom_stops: f32, peak: DisplayPeak) -> FitRangeParams {
     FitRangeParams {
         headroom_stops,
         peak,
+        display_black: DisplayBlack::Off,
+        film_base: FILM_BASE,
     }
+}
+
+/// Where the default decode puts the film base: `10^(−1.8 · (0.62 + 0.745 / 1.8))`.
+const FILM_BASE: f32 = 0.013_77;
+
+/// The decoded film base as the chain takes it: one neutral pixel at [`FILM_BASE`].
+fn film_base() -> AcesCgImage {
+    map_nc_film_rgb_v1(FilmRgbImage::fixture(
+        LinearImage::new(1, 1, vec![FILM_BASE; 3], None).unwrap(),
+    ))
 }
 
 /// [`finite_aces`] through scene correction and the look at their identities, then
@@ -622,6 +639,119 @@ fn golden_fit_range_hdr_agrees_below_white_and_is_correct_within_its_libm_window
 
 /// The one lifted pixel's three samples, correctly rounded.
 const FIT_RANGE_HDR_LIFTED: [u32; 3] = [0x3fc84f43, 0x3faaf58a, 0x3f904c23];
+
+/// Display black's golden film base: a capped roll's, graded — it renders ≈ 4.4 stops
+/// under mid-grey without black, so the default 6 stops shifts it by ≈ −1.6.
+const BLACK_FILM_BASE: f32 = 0.0075;
+
+/// One libm result a conforming target may return, `k` f64 ULPs from this host's.
+fn perturbed(host: f64, k: i32) -> f64 {
+    let mut v = host;
+    for _ in 0..k.unsigned_abs() {
+        v = if k > 0 { v.next_up() } else { v.next_down() };
+    }
+    v
+}
+
+/// Fit range at the default SDR headroom with display black at its default, one pixel
+/// written out independently of the stage. Each libm result is supplied through
+/// `libm(call_index, host_value)`, so the window can move each of them: the frame's
+/// `log2(T / b)`, `log2(b)` and `log2(0.18)` (0–2), then the pixel's `log2(y)` (3) and
+/// `exp2` (4) — at `y ≤ 0` the frame's `2^shift` in its place. `2^−6` is a whole-stop
+/// `exp2`, taken as exact (module docs).
+fn black_fit_range_pixel(px: [f32; 3], libm: &dyn Fn(usize, f64) -> f64) -> [f32; 3] {
+    let w = f64::from(DEFAULT_HEADROOM_STOPS.exp2());
+    let k = 1.0 - 0.18;
+    let gain = 2.0 / (k + (k * k + 4.0 * 0.18 / (w * w)).sqrt());
+    let reinhard = |v: f32| {
+        let u = f64::from(v) * gain;
+        (u * (1.0 + u / (w * w)) / (1.0 + u)) as f32
+    };
+    let b = f64::from(reinhard(BLACK_FILM_BASE));
+    let target = 0.18 * 2f64.powi(-(fit_range::DEFAULT_DISPLAY_BLACK_STOPS as i32));
+    let stops = libm(0, (target / b).log2());
+    let base = libm(1, b.log2());
+    let knee = libm(2, 0.18f64.log2());
+    let y = px[0] * ACESCG_LUMA[0] + px[1] * ACESCG_LUMA[1] + px[2] * ACESCG_LUMA[2];
+    let scale = if y <= 0.0 {
+        (gain * libm(4, stops.exp2())) as f32
+    } else {
+        let r = reinhard(y);
+        let v = f64::from(r);
+        let shifted = if v >= 0.18 {
+            r
+        } else {
+            let u = ((libm(3, v.log2()) - base) / (knee - base)).clamp(0.0, 1.0);
+            (v * libm(4, (stops * (1.0 - u * u * (3.0 - 2.0 * u))).exp2())) as f32
+        };
+        shifted / y
+    };
+    px.map(|c| c * scale)
+}
+
+/// [`finite_aces`] through fit range at the default SDR headroom with display black at
+/// its default and [`BLACK_FILM_BASE`], as this host rounds it. Pixel 0 sits at
+/// mid-grey and 2–4 above it (untouched), 1 in the shift's band, 6 below the base (the
+/// whole shift), 5 at luminance 0. Captured 2026-09-26 when display black
+/// landed (`nf-display-stages/parametric-operator`).
+const FIT_RANGE_BLACK: [u32; 21] = [
+    0x3e3851ec, 0x3e3851ed, 0x3e3851eb, 0x3d22aaea, 0x3c64f0e8, 0x3f30167f, 0x3f0b3c44, 0x3d864902,
+    0x3ace0b24, 0x3f0cb273, 0x3f0cb273, 0x3f0cb272, 0x3f65e127, 0x3f44323f, 0x3f259945, 0x00000000,
+    0x00000000, 0x00000000, 0x3aa29276, 0x3ac0bb85, 0x3a5d34dc,
+];
+
+#[test]
+fn golden_display_black_is_correct_within_its_libm_window() {
+    let mut params = fit_range_params(DEFAULT_HEADROOM_STOPS, DisplayPeak::SDR);
+    params.display_black = DisplayBlack::default();
+    params.film_base = BLACK_FILM_BASE;
+    let out = through_fit_range(&params).into_buffer().into_linear().rgb;
+    let input = finite_aces().rgb().to_vec();
+    let host = |_: usize, v: f64| v;
+    let mut widest = 0;
+    for (p, px) in input.as_chunks::<3>().0.iter().enumerate() {
+        let centre = black_fit_range_pixel(*px, &host);
+        // Every combination of the five libm results at this host's value and two f64
+        // ULPs either side — the host may itself be a ULP off the correctly rounded
+        // result, and a conforming target a ULP the other way.
+        let offsets = (0..5_u32.pow(5)).map(|n| {
+            let mut ks = [0_i32; 5];
+            for (call, k) in ks.iter_mut().enumerate() {
+                *k = (n / 5_u32.pow(call as u32) % 5) as i32 - 2;
+            }
+            ks
+        });
+        let reachable: Vec<[f32; 3]> = offsets
+            .map(|ks| black_fit_range_pixel(*px, &move |n: usize, v: f64| perturbed(v, ks[n])))
+            .collect();
+        for (c, &centre_c) in centre.iter().enumerate() {
+            let i = p * 3 + c;
+            let want = FIT_RANGE_BLACK[i];
+            assert_eq!(centre_c.to_bits(), want, "sample {i}: capture integrity");
+            let window = reachable
+                .iter()
+                .map(|r| ulps_between(r[c], centre_c))
+                .max()
+                .unwrap();
+            widest = widest.max(window);
+            let drift = ulps_between(out[i], f32::from_bits(want));
+            assert!(
+                drift <= window,
+                "stage `fit-range (display black)` sample {i}: {drift} ULP from the \
+                 capture, outside the {window} ULP a conforming libm can reach"
+            );
+        }
+    }
+    assert!(widest <= MAX_REASONABLE_WINDOW_ULPS, "{widest}");
+    // Mid-grey and everything above it are bit-identical to reinhard alone.
+    for p in [0, 2, 3, 4] {
+        assert_stage_bits(
+            "fit-range (display black, at or above mid-grey)",
+            &out[p * 3..p * 3 + 3],
+            &FIT_RANGE_SDR[p * 3..p * 3 + 3],
+        );
+    }
+}
 
 // --- the look --------------------------------------------------------------------
 
@@ -1002,9 +1132,10 @@ const SDR_P3: DisplayTarget = DisplayTarget {
 };
 
 /// Every stage at its shipped setting except scene correction, which is not an
-/// identity on purpose — see the threaded goldens — and the look, which is off: no
-/// pixel here is near-neutral after these gains, so it would change nothing. The look
-/// has its own threaded vector below.
+/// identity on purpose — see the threaded goldens — the look, which is off: no pixel
+/// here is near-neutral after these gains, so it would change nothing (it has its own
+/// threaded vector below) — and display black, off so the vector stays bit-exact (its
+/// golden is windowed; `chain`'s tests cover its wiring).
 fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
     ChainParams {
         shared: SharedParams {
@@ -1014,6 +1145,7 @@ fn threaded_params(white_balance: WhiteBalance) -> ChainParams {
             },
             look: LookParams::off(),
             headroom_stops: DEFAULT_HEADROOM_STOPS,
+            display_black: DisplayBlack::Off,
         },
         target: SDR_P3,
     }
@@ -1034,7 +1166,7 @@ fn golden_the_chain_threaded_is_bit_identical() {
     // them in another order, or handed a stage the wrong params, lands elsewhere even
     // though every per-stage golden passes.
     let params = threaded_params(WhiteBalance::Explicit([1.25, 1.0, 0.5]));
-    let rendered = chain::render(finite_aces(), &params).unwrap();
+    let rendered = chain::render(finite_aces(), film_base(), &params).unwrap();
     assert_eq!(
         rendered.applied,
         [
@@ -1063,8 +1195,18 @@ fn golden_the_chain_threaded_is_bit_identical() {
             headroom_stops: DEFAULT_HEADROOM_STOPS,
             white_point: 64.0,
             display_peak: DisplayPeak::SDR,
+            display_black: rendered.fit_range.display_black,
         },
         "chain (threaded): the fit range the render reports"
+    );
+    assert_eq!(
+        (
+            rendered.fit_range.display_black.setting,
+            rendered.fit_range.display_black.curve,
+            rendered.fit_range.display_black.shift_stops,
+        ),
+        (DisplayBlack::Off, fit_range::IDENTITY, 0.0),
+        "chain (threaded): display black, off"
     );
     let (out, gamut) = rendered.image.into_parts();
     assert_stage_bits("chain (threaded)", &out.rgb, &THREADED);
@@ -1097,6 +1239,7 @@ fn golden_the_look_threaded_runs_after_scene_correction() {
             scene_correction: scene_correction.clone(),
             look,
             headroom_stops: DEFAULT_HEADROOM_STOPS,
+            display_black: DisplayBlack::Off,
         },
         target: SDR_P3,
     };
@@ -1107,10 +1250,10 @@ fn golden_the_look_threaded_runs_after_scene_correction() {
         assert_clear_of_look_edges(&format!("threaded look pixel {p}"), [q[0], q[1], q[2]]);
     }
 
-    let on = chain::render(input(), &params(look_params())).unwrap();
+    let on = chain::render(input(), film_base(), &params(look_params())).unwrap();
     assert_eq!(on.applied[1], ("look", "highlight-desaturation"));
     let on = on.image.into_parts().0.rgb;
-    let off = chain::render(input(), &params(LookParams::off()))
+    let off = chain::render(input(), film_base(), &params(LookParams::off()))
         .unwrap()
         .image
         .into_parts()
@@ -1134,6 +1277,8 @@ fn the_chain_threaded_refuses_the_nan_pixel() {
     // Scene correction carries the NaN through; fit range is the stage that refuses
     // it, and names the pixel.
     let params = threaded_params(WhiteBalance::Explicit([1.25, 1.0, 0.5]));
-    let err = chain::render(aces(), &params).err().expect("a NaN pixel");
+    let err = chain::render(aces(), film_base(), &params)
+        .err()
+        .expect("a NaN pixel");
     assert!(err.message().contains("pixel 7"), "{}", err.message());
 }

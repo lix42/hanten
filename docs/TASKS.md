@@ -162,6 +162,7 @@ graph TD
   nf-look --> nf-calibration
   nf-reconstruction --> nf-calibration
   nf-calibration --> nf-look
+  nf-calibration --> nf-display-stages
   analysis --> nf-verification
   nf-core --> nf-verification
   nf-reconstruction --> nf-verification
@@ -345,6 +346,7 @@ graph TD
     nf-display-stages/fit-range
     nf-display-stages/fit-gamut
     nf-display-stages/parametric-operator
+    nf-display-stages/parametric-shoulder
     nf-display-stages/branch-contract
     nf-display-stages/gamut-map-share
   end
@@ -582,6 +584,8 @@ graph TD
   nf-calibration/roll-white-rule --> nf-calibration/saturation-margin
   nf-calibration/roll-white-rule --> nf-look/desaturation-band-refit
   nf-display-stages/parametric-operator --> nf-look/desaturation-band-refit
+  nf-display-stages/parametric-operator --> nf-display-stages/parametric-shoulder
+  nf-calibration/roll-white-rule --> nf-display-stages/parametric-shoulder
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
   nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
@@ -1031,8 +1035,12 @@ the design in `docs/design-update.md`:
   — one implementation both chains call, each with its own ceiling
 - `nf-display-stages/parametric-operator` (new flow): `nf-display-stages/fit-range`
   — reinhard compresses upward only, so the shadow end is a subtraction;
-  supersedes `algo/content-aware-sigmoid-toe`. Since 2026-09-25 it also places black:
-  the new chain has none, and `anchor-comparison`'s white rule needs one
+  supersedes `algo/content-aware-sigmoid-toe`. Since 2026-09-25 it places black: the
+  new chain had none, and `anchor-comparison`'s white rule needs one. The operator
+  question moved to `parametric-shoulder` (2026-09-26)
+- `nf-display-stages/parametric-shoulder` (new flow): `nf-display-stages/parametric-operator`, `nf-calibration/roll-white-rule`
+  — whether a parametric shoulder beats reinhard is judged with black in the chain,
+  and against the white rule it would move (the rule was chosen under reinhard)
 - `nf-display-stages/branch-contract` (new flow): `nf-display-stages/fit-range`, `nf-display-stages/fit-gamut`
   — where the branch happens and what each side may differ in
 - `nf-destinations/preset-set` (new flow): `nf-display-stages/branch-contract`, `output/output-path-suffix`
@@ -1735,11 +1743,18 @@ the design in `docs/design-update.md`:
   the new flow maps against `max(peak, Y)`, the peak riding on `RangeFittedImage`.
   On 92 real frames the new flow's clipped samples went 336,106 → 0; no marked white
   moved
-- [ ] [A parametric operator with a
-  toe](tasks/nf-display-stages/parametric-operator.md) — reinhard compresses
-  upward only, so the shadow end is a subtraction; supersedes
-  `algo/content-aware-sigmoid-toe`. Also places black, which the new chain lacks:
-  where the film base renders, moved to near black
+- [x] [Display black (was: a parametric operator with a
+  toe)](tasks/nf-display-stages/parametric-operator.md) — **done 2026-09-26.**
+  Reinhard compresses upward only, so the new chain had no black; supersedes
+  `algo/content-aware-sigmoid-toe`. Chosen by review: `--display-black`
+  (`fit_range.display_black`, stops below mid-grey, default 6) shifts where the film
+  base renders, fading to nothing at mid-grey; the reference is the decoded base
+  graded with the frame, so it follows each frame's contrast
+- [ ] [Does a parametric shoulder beat
+  reinhard?](tasks/nf-display-stages/parametric-shoulder.md) — split from
+  `parametric-operator`: an operator that could hold both mid-grey and diffuse white,
+  judged at matched lightness with display black in the chain; "reinhard stands" is a
+  valid outcome
 - [x] [The SDR/HDR branch
   contract](tasks/nf-display-stages/branch-contract.md) — **done 2026-09-24.** The
   chain splits after the look (`chain::render_pair`), the headroom shared above it,
