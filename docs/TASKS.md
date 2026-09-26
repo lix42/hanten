@@ -155,6 +155,7 @@ graph TD
   nf-display-stages --> nf-destinations
   output --> nf-destinations
   nf-destinations --> nf-calibration
+  nf-display-stages --> nf-calibration
   nf-verification --> nf-calibration
   analysis --> nf-calibration
   io --> nf-calibration
@@ -332,6 +333,7 @@ graph TD
     nf-look/stage
     nf-look/per-channel-grade
     nf-look/path-to-white
+    nf-look/desaturation-band-refit
     nf-look/contrast
     nf-look/look-presets
     nf-look/stock-data-home
@@ -353,6 +355,8 @@ graph TD
   end
   subgraph nf-calibration
     nf-calibration/anchor-comparison
+    nf-calibration/roll-white-rule
+    nf-calibration/saturation-margin
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -571,6 +575,11 @@ graph TD
   nf-display-stages/gamut-map-share --> nf-look/path-to-white
   nf-look/path-to-white --> nf-calibration/anchor-comparison
   nf-reconstruction/anchor-spike --> nf-calibration/anchor-comparison
+  nf-calibration/anchor-comparison --> nf-calibration/roll-white-rule
+  nf-display-stages/parametric-operator --> nf-calibration/roll-white-rule
+  nf-calibration/roll-white-rule --> nf-calibration/saturation-margin
+  nf-calibration/roll-white-rule --> nf-look/desaturation-band-refit
+  nf-display-stages/parametric-operator --> nf-look/desaturation-band-refit
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
   nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
@@ -995,6 +1004,9 @@ the design in `docs/design-update.md`:
   2026-09-22): under the base-referenced anchor the operator is inert, and the
   rule that lifts white is `nf-calibration/anchor-comparison`'s, which follows this
   task — so the shape ships here and the values are re-fitted later
+- `nf-look/desaturation-band-refit` (new flow): `nf-calibration/roll-white-rule`, `nf-display-stages/parametric-operator`
+  — filed 2026-09-25: `path-to-white`'s re-fit, owned by a task now that the white rule
+  is chosen; it needs the final white and black, which decide what reaches the band
 - `nf-look/contrast` (new flow): `nf-look/stage`, `nf-reconstruction/gamma-split`
   — the look half of `gamma`; supersedes `algo/contrast-latitude-spike`
 - `nf-look/look-presets` (new flow): `nf-look/contrast`, `nf-look/per-channel-grade`
@@ -1012,7 +1024,8 @@ the design in `docs/design-update.md`:
   — one implementation both chains call, each with its own ceiling
 - `nf-display-stages/parametric-operator` (new flow): `nf-display-stages/fit-range`
   — reinhard compresses upward only, so the shadow end is a subtraction;
-  supersedes `algo/content-aware-sigmoid-toe`
+  supersedes `algo/content-aware-sigmoid-toe`. Since 2026-09-25 it also places black:
+  the new chain has none, and `anchor-comparison`'s white rule needs one
 - `nf-display-stages/branch-contract` (new flow): `nf-display-stages/fit-range`, `nf-display-stages/fit-gamut`
   — where the branch happens and what each side may differ in
 - `nf-destinations/preset-set` (new flow): `nf-display-stages/branch-contract`, `output/output-path-suffix`
@@ -1119,7 +1132,13 @@ the design in `docs/design-update.md`:
 - `nf-calibration/anchor-comparison` (new flow): `nf-look/path-to-white`, `nf-reconstruction/anchor-spike`
   — the spike costs the four white placements from the scans; only a render with a real
   highlight operator in the chain can rank them, and under the fixed anchor that
-  operator has nothing to act on
+  operator has nothing to act on. Done 2026-09-25
+- `nf-calibration/roll-white-rule` (new flow): `nf-calibration/anchor-comparison`, `nf-display-stages/parametric-operator`
+  — filed 2026-09-25: implements the white rule `anchor-comparison` chose by review, which
+  was chosen with a black point in the chain and is not valid without one
+- `nf-calibration/saturation-margin` (new flow): `nf-calibration/roll-white-rule`
+  — filed 2026-09-25: the leader margin the warning keys on was set from one ambiguous
+  frame and may be stock-dependent
 
 ## Tasks
 
@@ -1667,6 +1686,10 @@ the design in `docs/design-update.md`:
   anchor then left the operator inert) and behind a roll-level white balance,
   without which its saturation band cannot tell a cast white from skin. **Done
   2026-09-24**: on by default at 0.8, band `0.015 → 0.025` on ACEScg
+- [ ] [Re-fit the highlight-desaturation band under the chosen white and
+  black](tasks/nf-look/desaturation-band-refit.md) — the band was fitted under a
+  hand-set contrast; whites' chroma rises with contrast and the operator does not take
+  it back
 - [x] [The print-contrast knob](tasks/nf-look/contrast.md) — the look half of
   `gamma`; supersedes `algo/contrast-latitude-spike`. The knob landed with
   `gamma-split`. **Done 2026-09-24**: one knob (a per-roll contrast under
@@ -1701,7 +1724,8 @@ the design in `docs/design-update.md`:
 - [ ] [A parametric operator with a
   toe](tasks/nf-display-stages/parametric-operator.md) — reinhard compresses
   upward only, so the shadow end is a subtraction; supersedes
-  `algo/content-aware-sigmoid-toe`
+  `algo/content-aware-sigmoid-toe`. Also places black, which the new chain lacks:
+  where the film base renders, moved to near black
 - [x] [The SDR/HDR branch
   contract](tasks/nf-display-stages/branch-contract.md) — **done 2026-09-24.** The
   chain splits after the look (`chain::render_pair`), the headroom shared above it,
@@ -1743,9 +1767,18 @@ the design in `docs/design-update.md`:
   exist](tasks/nf-calibration/scale-ladder.md) — runs against today's binary so
   it can run first; the decode would otherwise inherit a sigmoid-era value whose
   green half is documented as unresolved
-- [ ] [Choose the white placement by
-  rendering](tasks/nf-calibration/anchor-comparison.md) — rank the four options the
-  spike costed, once a highlight operator exists to make the differences visible
+- [x] [Choose the white placement by
+  rendering](tasks/nf-calibration/anchor-comparison.md) — **done 2026-09-25.** The
+  roll's white is its brightest frame's white under a +2.0 cap, floored at +1.5 (scene
+  stops above mid-grey), placed through `look.contrast` with mid-grey pinned; a warning
+  near the leader. Chosen with a black point, which the chain lacks
+  (`parametric-operator`); implemented by `roll-white-rule`
+- [ ] [`measure-roll` places the roll's
+  white](tasks/nf-calibration/roll-white-rule.md) — the rule the comparison chose:
+  brightest frame under a cap, a floor below, a warning near the leader
+- [ ] [The saturation warning's margin, and frames near
+  saturation](tasks/nf-calibration/saturation-margin.md) — set from one ambiguous
+  frame; may depend on the stock
 - [ ] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering. Supersedes

@@ -73,6 +73,25 @@ and where a datasheet mid-grey actually landed.
 A verdict of "A, and move `d` instead" is a complete outcome — the shortlist exists to
 be beaten, not adopted.
 
+## Outcome (2026-09-25)
+
+Done. Four review rounds on nine rolls and the verification numbers are in
+`docs/progress/nf-calibration.md`. None of the four shortlisted options won as written.
+
+- **The roll's white is content-referenced and placed through contrast.** The roll's white is
+  its brightest frame's white at or under a cap, raised to a floor, and a frame above the cap
+  is clamped to it. Mid-grey stays pinned, so the decode's anchor and `d` are unchanged.
+  This is D with the bounds on the white rather than on gamma.
+- **Ranked:** the rule > A (fixed anchor, pale, operator nearly inert) > C (noise up to
+  5.4× the scan's floor) > B (mid-grey up to L\* 82). A fixed white at the rule's midpoint
+  lost to the rule in review.
+- **It needs a black point**, which the new chain lacks — now
+  `nf-display-stages/parametric-operator`'s.
+- **Open questions:** `W` is each frame's red p97 with no cross-frame percentile; its move
+  onto `measure-roll`'s pooling, constant vs recipe value, and how the value reaches the
+  recipe went to `roll-white-rule`. An underexposed roll is lifted only as far as the floor,
+  and below it renders dark (user). The leader margin went to `saturation-margin`.
+
 ## Dependencies
 
 - [Highlight desaturation](../nf-look/path-to-white.md) — the operator has to exist, or

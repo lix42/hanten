@@ -71,9 +71,9 @@ Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-
 **What `dmax-machinery` means for the rest of the epic.**
 
 - **No reference density exists on either chain.** `AnchorPlacement` has one variant,
-  `mid-at-base-offset`, still a tagged enum so `nf-calibration/anchor-comparison` can add
-  a content-referenced one that carries its own measured value (its four candidates are
-  all reachable as `--anchor-mid-offset` + `--density-gamma`). `calibration` holds only
+  `mid-at-base-offset`, still a tagged enum. `nf-calibration/anchor-comparison` placed the roll's white
+  through `look.contrast` instead (2026-09-25), so no content-referenced variant is
+  planned. `calibration` holds only
   `film_base`; `CalibrationParams` and `recipe::Calibration` now have the same shape.
 - **Retired recipe keys follow one rule, `strip_retired_keys_at_old_defaults`:** the value every
   earlier build wrote by default is dropped on load, anything else is refused by

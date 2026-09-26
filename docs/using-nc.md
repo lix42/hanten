@@ -709,8 +709,9 @@ section. If your recipe pinned a non-default placement, that is a loud,
 `--strict`-promotable warning naming what was dropped.
 
 > **Provisional values.** `D = 0.62` is the generic C-41 profile's mid-grey aim above
-> the base, rounded and frozen; what the anchor should be *referenced to* is
-> `nf-calibration/anchor-comparison`'s to decide. The per-channel density gain beside it
+> the base, rounded and frozen. The anchor stays referenced to the base: a roll's own
+> white is planned to act through a per-roll contrast measured by `measure-roll`
+> (`nf-calibration/roll-white-rule`), not by moving `D`. The per-channel density gain beside it
 > (`--density-scale`) has moved twice (`pipeline_version` 4 and 5 — see below). Expect
 > further movement, with a `pipeline_version` bump when it happens.
 

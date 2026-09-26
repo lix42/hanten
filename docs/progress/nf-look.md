@@ -32,11 +32,13 @@ default look is not the identity, and an empty look is spared because it is one.
 stage. Highlight desaturation's band divides by the whole contrast (the decode's
 linearization × this), so it is unchanged whichever stage carries a roll's contrast. It
 stays **one knob** holding whatever makes the roll right: under
-`nf-calibration/anchor-comparison`'s C (or D below its cap) the solved per-roll value
+the rule `nf-calibration/anchor-comparison` chose (a bounded C) the solved per-roll value
 *is* `look.contrast`, with the decode's anchor unchanged; taste is editing that number.
 The default `2.0 / 1.8` is provisional; look presets must not set contrast; `--exposure`
 is a level, not a contrast control (it moves the shadow slope only through reinhard's
-mild curvature below mid). `W`'s percentile stays `anchor-comparison`'s. Measured
+mild curvature below mid). `anchor-comparison` has since chosen the per-roll rule
+(2026-09-25; whole contrast 2.23–2.97 on nine rolls), which
+`nf-calibration/roll-white-rule` implements. Measured
 through the chain: shadow slope is the contrast (0.98–0.99× under reinhard); across
 headrooms ≥ 2 stops it moves by under 0.003, and from 0 (fit range off) up by at most
 ~0.023 (≈2%, reinhard switching on). The grade runs after contrast and before
@@ -73,8 +75,8 @@ Under the base-referenced anchor at contrast 2.0 the operator is **inert** — a
 measured rolls land 0.55–1.73 stops below white (09-11 corrected 2026-09-23) — so the
 task is developed with a per-roll `--density-gamma` computed from that roll's base and
 red p97 (candidate C/D in `docs/spike/white-placement.md`), and its band values are
-provisional until
-`nf-calibration/anchor-comparison` chooses the rule. Two tasks were split out of it to
+provisional: `nf-calibration/anchor-comparison`
+chose the rule on 2026-09-25, and the band wants re-fitting under it and a black point. Two tasks were split out of it to
 run against today's binary, and both are done: `desaturation-band-fit` here (below) and
 `nf-display-stages/gamut-map-share` (2026-09-23), which removes the double-up concern: at
 the renders `path-to-white` is built under the gamut map moves no marked white. The
@@ -403,7 +405,7 @@ visible by eye; the band's value is keeping the pull off colour.
 ## path-to-white
 
 **Status:** done
-**Updated:** 2026-09-24
+**Updated:** 2026-09-25
 
 - 2026-09-19: created with the new-flow plan. Goal: highlight desaturation.
 - 2026-09-19: the gating spike moved to `nf-calibration/scale-ladder` and was
@@ -508,6 +510,13 @@ visible by eye; the band's value is keeping the pull off colour.
   and with it the flags-win reset. The acceptance set is the default plus every empty
   look, so `LookSection::is_default` became `asks_for_a_look` (`!is_empty() && != default`);
   the three task files above and `nf-look/stage`'s verify line now say so.
+- 2026-09-25: cross-reference from [`nf-calibration/anchor-comparison`](../tasks/nf-calibration/anchor-comparison.md), which chose the white rule this task's
+  band was provisional against (roll white = brightest frame under a +2.0 cap, floor
+  +1.5; whole contrast 2.23–2.97), and found the chain needs a black point. **The band
+  wants re-fitting under that rule and a black point.** Its verification measured marked
+  whites' C\* rising in proportion to the contrast (09-18: 3.8 at gamma 2.0, 5.5 under the
+  rule, 7.8 at 4.15), because contrast is a per-channel power that multiplies residual
+  cast, and the operator at `0.015 → 0.025` does not take it back.
 
 ## contrast
 
@@ -603,9 +612,24 @@ visible by eye; the band's value is keeping the pull off colour.
 ## scene-range-mapping
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-09-25
 
 - 2026-09-19: created with the new-flow plan. Goal: spike: opt-in bounded scene-range mapping.
+- 2026-09-25: from [`nf-calibration/anchor-comparison`](../tasks/nf-calibration/anchor-comparison.md): **a reviewed noise budget for a lone dark frame.** Treating
+  single underexposed frames as a roll of one, the user preferred the white floored at
+  +1.5 scene stops above mid-grey (whole contrast ≤ 2.97) over +1.0 (4.45, worst) and +2.0.
+  Delivered noise there was 1.75× the scan's floor on 09-11, against 5.4× at the contrast an
+  unbounded solve asks for. That is the number "bounded" needs, measured rather than
+  picked.
+
+## desaturation-band-refit
+
+**Status:** not started
+**Updated:** 2026-09-25
+
+- 2026-09-25: filed from `nf-calibration/anchor-comparison`'s review, where nothing owned
+  `path-to-white`'s re-fit. Goal: re-place the band under the chosen white rule and a black
+  point.
 
 ## desaturation-band-fit
 

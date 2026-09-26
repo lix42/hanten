@@ -49,8 +49,9 @@ still runs the bundled 2.0. Exposure is expanded by the look's contrast, and
 `mid-at-base-offset(d)` is the decode's only placement, with `d = 0.62` hand-frozen as
 `generic-c41`'s mid aim rounded — never read from a datasheet at runtime, and pinned to
 that origin by `algo::film_stock`'s `the_fixed_decode_mid_is_the_generic_aim`. `d` stays
-reachable as `--anchor-mid-offset`. What the anchor is *referenced to* (candidates A–D)
-belongs to `nf-calibration/anchor-comparison`; keep `AnchorRule` an enum until it rules.
+reachable as `--anchor-mid-offset`. What the anchor is *referenced to* was
+`nf-calibration/anchor-comparison`'s, and it ruled (2026-09-25): the anchor stays
+base-referenced, and the roll's white acts through `look.contrast`.
 
 ## fixed-decode
 

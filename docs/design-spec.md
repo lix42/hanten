@@ -765,8 +765,9 @@ measured per frame — the rule is a roll-level placement, never derived from fr
 content. The other three placements — `white-at-dmax` and `mid-at-dmax-fraction`, which
 read a roll reference density, and `black-at-base`, which pinned the base to an output
 floor — retired with that reference in `nf-retire/dmax-machinery`; a recipe naming one is refused naming `mid-at-base-offset`.
-`AnchorPlacement` stays a tagged enum so a later content-referenced placement
-(`nf-calibration/anchor-comparison`) can carry its own measured value.
+`AnchorPlacement` stays a tagged enum, the form a content-referenced placement would
+need. `nf-calibration/anchor-comparison` placed the roll's white through `look.contrast`
+instead, leaving the anchor base-referenced, so no such placement is planned.
 
 `characteristic` has no placement rule — the published curve carries it — so a switch
 to it resets `curve.anchor`; a switch that discards a **non-default** placement emits a
@@ -1046,14 +1047,16 @@ nothing else".
 **A key belongs here when it is (a) measured from the film, (b) fixed across the
 roll, and (c) consumed by a rule that lives elsewhere.** That is why `curve.anchor`
 stays in the curve: it is a rule, part of the look, and reads only the film base. The section is deliberately
-**open**, not a fixed pair: a roll content white (and possibly its per-frame
-spread) joins it if `nf-calibration/anchor-comparison` picks a content-referenced or
-hybrid placement (`docs/spike/white-placement.md`). Each member carries its own
+**open**, not a fixed pair: `nf-calibration/anchor-comparison` chose a content-referenced
+roll white, and `nf-calibration/roll-white-rule` decides whether it joins this section or
+only the contrast solved from it is carried. Each member carries its own
 optionality and its own default.
 
 Producing a calibration is not "one frame in, one calibration out": `film_base`
-comes from a single reference frame, but a roll content white is a percentile across
-many. The acquisition cascade is `core/base-acquisition-planner`.
+comes from a single reference frame, but a roll content white is read from every frame:
+the brightest frame's own white under a cap, never a percentile across frames
+(`nf-calibration/roll-white-rule`). The acquisition cascade is
+`core/base-acquisition-planner`.
 
 **`calibration.dmax` retired** with the roll reference density
 (`nf-retire/dmax-machinery`). Because every earlier sidecar and `--dump-params` document

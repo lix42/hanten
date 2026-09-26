@@ -29,8 +29,9 @@ leader or reference frame, now that the only anchor rule is reference-free.
   consistency is the product's central promise. The same holds for the "minimum gap
   below the leader's `Dmax`" guard proposed for a content-referenced white
   ([`anchor-rule`'s handoff](../nf-reconstruction/anchor-rule.md#evidence-handed-to-anchor-comparison)):
-  if `nf-calibration/anchor-comparison` adopts such a white, its guard reads a
-  measurement written fresh for it, and the `pre-new-flow` tag keeps the old one
+  `nf-calibration/anchor-comparison` adopted such a white (2026-09-25), with the leader
+  as a saturation warning rather than a guard (`nf-calibration/roll-white-rule`). It reads
+  a measurement written fresh for it, and the `pre-new-flow` tag keeps the old one
   comparable. One such measurement now exists — `pipeline::roll_white`'s leader guard,
   the leader's median at the decode's output — and is the one to share rather than a
   second.
