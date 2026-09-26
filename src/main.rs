@@ -7,6 +7,9 @@
 mod algo;
 mod cli;
 mod destination;
+// Test-only: the digitized stock tables are the evidence for the fixed decode's
+// constants, and nothing renders through them (`nf-retire/characteristic`).
+#[cfg(test)]
 mod film_stock;
 mod flow;
 mod io;
