@@ -3,9 +3,9 @@
 ## Goal
 
 Re-place highlight desaturation's band and strength under the white rule
-`nf-calibration/anchor-comparison` chose and a black point, which together decide which
-pixels reach the operator's range. The shipped values were fitted provisionally, under
-a hand-set per-roll contrast.
+`nf-calibration/anchor-comparison` chose, which decides which pixels reach the operator's
+range, and judge the result with a black point in the chain. The shipped values were
+fitted provisionally, under a hand-set per-roll contrast.
 
 ## Design
 
@@ -23,7 +23,10 @@ What is known:
   Contrast is a per-channel power, so it multiplies residual cast along with saturation. On
   09-18, marked whites' mean C\* was 3.8 at gamma 2.0, 5.5 under the rule and 7.8 at 4.15,
   with colour patches rising in step.
-- **The black point moves what reaches the band too**, which is why this waits for it.
+- **The black point does not change what reaches the band.** It lands in fit range, after
+  the look. It is a dependency because the re-fit is judged by eye, and
+  `anchor-comparison` found every render judged without black misleading: all of them
+  looked pale, and the review would have tuned around that.
 
 Open:
 
@@ -43,4 +46,4 @@ The review set is judged with the black point in place.
 - [`measure-roll` places the roll's white](../nf-calibration/roll-white-rule.md) — the white
   the band is fitted under
 - [A parametric operator with a toe](../nf-display-stages/parametric-operator.md) — the
-  black point
+  black point the re-fit is judged with (not an input to the band)
