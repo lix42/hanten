@@ -242,7 +242,8 @@ float destination, never a per-channel clip.
 - 2026-09-19: created with the new-flow plan. Goal: a parametric operator with a toe.
 - 2026-09-25: **now also places black** (user, from [`nf-calibration/anchor-comparison`](../tasks/nf-calibration/anchor-comparison.md)). The new chain has no black
   point; every white rule reviewed there looked pale without one and improved with a probe
-  that moved where the film base renders (L\* 12–15) to L\* ≈ 2. The base is the reference:
+  that moved where the film base renders (L\* 12–15 at the cap round's contrast ≈ 1.8; 2.6–9.2 under
+  the chosen rule, lower at higher contrast) to L\* ≈ 2. The base is the reference:
   every roll's darkest pixels bottom out there, and it is already measured. The probe was a
   subtraction, so it is the bar to match, not the mechanism. Folded here rather than filed
   apart, because where black lands and how the curve reaches it cannot be judged separately.

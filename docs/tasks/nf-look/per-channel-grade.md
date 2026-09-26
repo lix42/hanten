@@ -33,8 +33,8 @@ channels after the 3×3.
     with the contrast's, so the channel difference they make is multiplied by it too. A
     crossover the decode leaves is an exponent mismatch between layers, which the
     look's contrast multiplies too, so a grade that scales with it tracks the error;
-    dividing by contrast would under-correct a high-contrast roll. Under the per-roll contrast `anchor-comparison`
-    chose (whole contrast 2.23–2.97 on nine rolls, 1.24–1.65× the linearization) the same grade values therefore read stronger on a contrastier roll.
+    dividing by contrast would under-correct a high-contrast roll. Under a per-roll contrast (`anchor-comparison`'s C/D,
+    1.43–3.67×) the same grade values therefore read stronger on a contrastier roll.
 - **Needs a guard at and below zero.** Contrast passes non-positive and non-finite
   samples through untouched (`look::apply_contrast`); matching that keeps the look's two
   powers alike at the gamut edge. A wide-gamut linear working space contains

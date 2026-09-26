@@ -81,7 +81,8 @@ Done. Four review rounds on nine rolls and the verification numbers are in
 - **The roll's white is content-referenced and placed through contrast.** The roll's white is
   its brightest frame's white at or under a cap, raised to a floor, and a frame above the cap
   is clamped to it. Mid-grey stays pinned, so the decode's anchor and `d` are unchanged.
-  This is D with the bounds on the white rather than on gamma.
+  It is C with the white bounded by a cap and a floor. D instead bounded gamma and slid
+  toward B, re-anchoring. A frame over this cap is clamped, and the anchor never moves.
 - **Ranked:** the rule > A (fixed anchor, pale, operator nearly inert) > C (noise up to
   5.4× the scan's floor) > B (mid-grey up to L\* 82). A fixed white at the rule's midpoint
   lost to the rule in review.

@@ -13,7 +13,7 @@ What is known (`docs/progress/nf-calibration.md`, `anchor-comparison`, 2026-09-2
 - **The leader tells what the cap cannot.** A frame above the roll's cap is either a
   bright scene well inside the film's latitude or a frame running into the film's
   shoulder, and only its distance from the leader separates the two. Distances in
-  scene stops, with the user's verdicts: 1121 0.13 (overexposed), 1151 0.40
+  scene stops, with the user's verdicts: 1121 0.13 (overexposed), 1151 0.39
   (ambiguous), 1816 0.27 (not judged overexposed), 1868 1.81 (a bright scene).
 - **One margin may not fit every stock.** The leader sits ~1.5 stops above the content on
   both Gold200 rolls and ~3.3–3.8 on the Portra400 rolls, so a margin that catches

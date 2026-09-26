@@ -29,11 +29,15 @@ Black, from `anchor-comparison` (2026-09-25, `docs/progress/nf-calibration.md`):
 
 - **The new chain places no black.** `--black-point` is refused under `--new-flow`, and
   reinhard is nearly a gain below mid, so the only thing darkening shadows is the look's
-  contrast. At the chosen white rule the darkest 1% of pixels sat at L\* 12–26.
+  contrast. In the cap round (contrast ≈ 1.8) the darkest 1% of pixels sat at L\* 12–26.
 - **The reference is already measured: where the film base renders.** Every roll's
   darkest pixels bottom out at the base (red p0.5 at −3.6 to −3.8 scene stops below
   mid-grey, which is 3.7 stops above base), because below the film's threshold nothing is
-  recorded. The straight-line decode renders the base at L\* 12–15 at the rule's contrast.
+  recorded. Where the straight-line decode renders the base **depends on the contrast**:
+  L\* 12–15 at ≈ 1.8 (the cap round), and under the chosen rule L\* 2.6–3.2 on floored
+  rolls (≈ 2.95) but 7.2–9.2 on capped ones (≈ 2.25), measured in round 4. So the lift a
+  black point must add varies by roll and is near zero at the floor: a fixed offset is the
+  wrong shape.
   Moving that level to near black needs no image statistic, and is the same for every
   frame of a roll.
 - **What the review showed.** A probe moved the base to L\* ≈ 2 with a linear-light offset
