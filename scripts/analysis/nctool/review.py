@@ -463,6 +463,12 @@ def load_matrix(path: Path) -> dict:
     minutes of rendering is a matrix error found too late.
     """
     raw = _load_object(path, "matrix")
+    # Before the unknown-key check, which would name the key but not what to do.
+    if "rolls" in raw:
+        raise ReviewError(
+            f"{path}: `rolls` was removed with the `{{film_stock}}` placeholder it stated "
+            "(nf-retire/characteristic: `--film-stock` is gone); remove the block, and "
+            "any `--film-stock` argument")
     _known_keys(raw, {"schema_version", "title", "description", "output_dir",
                       "output_preset", "destination", "common_args", "frames",
                       "metrics", "builds", "configs"}, str(path))

@@ -130,7 +130,7 @@ class TestMatrix(unittest.TestCase):
     def test_refuses_the_retired_film_stock_placeholder_and_rolls_block(self):
         with self.assertRaisesRegex(review.ReviewError, "film_stock"):
             load(configs=[{"id": "a", "args": ["--film-stock", "{film_stock}"]}])
-        with self.assertRaisesRegex(review.ReviewError, "unknown key rolls;"):
+        with self.assertRaisesRegex(review.ReviewError, "`rolls` was removed"):
             load(rolls={"Ektar": {}})
 
 
