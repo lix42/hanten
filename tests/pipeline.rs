@@ -4003,160 +4003,6 @@ fn auto_wb_reports_gains_that_reproduce_the_output_when_reused() {
     assert_eq!(json(&stdout)["white_balance"], report["white_balance"]);
 }
 
-#[test]
-fn density_report_carries_resolved_balance_range() {
-    // The roll-reuse workflow reads `balance_range` from the report and feeds it
-    // back via --balance-range, so the measured [lo, hi] must ride into the
-    // stdout JSON when a balance is requested — and stay absent for the neutral
-    // default (guards the `run_convert` wiring, not just `ConvertReport`).
-    let dir = TempDir::new("balreport");
-    let fix = fixture("hdr-48bit.tif");
-    let out = dir.path("out.tiff");
-    let (code, stdout, err) = run(&[
-        "convert",
-        fix.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--shadow-balance",
-        "-0.05,0,0.02",
-    ]);
-    assert_eq!(code, 0, "{err}");
-    let report = json(&stdout);
-    let range = report["balance_range"]
-        .as_array()
-        .unwrap_or_else(|| panic!("measured range must be reported: {report}"));
-    let (lo, hi) = (range[0].as_f64().unwrap(), range[1].as_f64().unwrap());
-    assert!(lo.is_finite() && hi.is_finite() && lo < hi, "{report}");
-
-    // Neutral balances → the field is omitted (no regional pass ran).
-    let out2 = dir.path("out2.tiff");
-    let (code, stdout, err) = run(&[
-        "convert",
-        fix.to_str().unwrap(),
-        "-o",
-        out2.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-    ]);
-    assert_eq!(code, 0, "{err}");
-    let report = json(&stdout);
-    assert!(
-        report.get("balance_range").is_none_or(|v| v.is_null()),
-        "no range must be reported for neutral balances: {report}"
-    );
-}
-
-#[test]
-fn auto_measured_balance_range_reproduces_the_output_when_reused() {
-    // THE measure-once-reuse workflow, end-to-end: measure a frame's tone range
-    // under Auto, freeze it, and replay it on the next frame of the roll. This
-    // closes the loop the report/recipe tests only cover in halves and crosses
-    // the report-field ↔ recipe-key boundary, which is bug-prone —
-    // `Report.balance_range` must ride out as JSON text and feed straight back
-    // in via `--balance-range` with no precision drift.
-    let dir = TempDir::new("balreuse");
-    let fix = fixture("hdr-48bit.tif");
-
-    // A real crossover cast (shadows warm, highlights cool), so the regional
-    // pass runs and Auto has a non-degenerate range to measure.
-    let balances = [
-        "--shadow-balance",
-        "-0.15,0,0.08",
-        "--highlight-balance",
-        "0.15,0,-0.08",
-    ];
-
-    // Frame 1: Auto measures the range and reports it.
-    let auto_out = dir.path("auto.tiff");
-    let mut auto_args = vec![
-        "convert",
-        fix.to_str().unwrap(),
-        "-o",
-        auto_out.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--auto-balance-range",
-    ];
-    auto_args.extend_from_slice(&balances);
-    let (code, stdout, err) = run(&auto_args);
-    assert_eq!(code, 0, "{err}");
-    let report = json(&stdout);
-    let range = report["balance_range"]
-        .as_array()
-        .unwrap_or_else(|| panic!("measured range must be reported: {report}"));
-    // Take the numbers' verbatim JSON text — exactly what an agent reading the
-    // report would paste back — so no reformatting can mask (or introduce) drift.
-    let lo_hi = format!("{},{}", range[0], range[1]);
-
-    // Frame 2: freeze the reported range via Explicit `--balance-range`, same
-    // balances. Byte-identical output proves the range survived the JSON text
-    // round-trip and that `Report.balance_range` feeds back cleanly as input.
-    let reuse_out = dir.path("reuse.tiff");
-    let mut reuse_args = vec![
-        "convert",
-        fix.to_str().unwrap(),
-        "-o",
-        reuse_out.to_str().unwrap(),
-        "--output-preset",
-        "display-p3",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--balance-range",
-        &lo_hi,
-    ];
-    reuse_args.extend_from_slice(&balances);
-    let (code, _stdout, err) = run(&reuse_args);
-    assert_eq!(code, 0, "{err}");
-
-    assert_eq!(
-        std::fs::read(&auto_out).unwrap(),
-        std::fs::read(&reuse_out).unwrap(),
-        "reusing the reported range via --balance-range must reproduce the \
-         auto-measured output byte-for-byte"
-    );
-}
-
-#[test]
-fn auto_measured_balance_range_is_deterministic_in_the_report() {
-    // The convert-determinism test proves the RGB output is stable, but the
-    // reported anchors are the roll-reuse contract — an agent freezes them and
-    // replays them, so the measured [lo, hi] must itself be exactly repeatable.
-    let dir = TempDir::new("baldet");
-    let fix = fixture("hdr-48bit.tif");
-    let range = |tag: &str| {
-        let out = dir.path(tag);
-        let (code, stdout, err) = run(&[
-            "convert",
-            fix.to_str().unwrap(),
-            "-o",
-            out.to_str().unwrap(),
-            "--output-preset",
-            "display-p3",
-            "--film-base",
-            "0.9,0.55,0.42",
-            "--auto-balance-range",
-            "--shadow-balance",
-            "-0.05,0,0.02",
-        ]);
-        assert_eq!(code, 0, "{err}");
-        json(&stdout)["balance_range"].clone()
-    };
-    let (a, b) = (range("a.tiff"), range("b.tiff"));
-    assert!(
-        a.as_array().is_some_and(|r| r.len() == 2),
-        "range must be reported: {a}"
-    );
-    assert_eq!(a, b, "auto-measured balance_range must be deterministic");
-}
-
 // ---------------------------------------------------------------------------
 // roll (batch) — convert N frames from one shared, frozen recipe
 // ---------------------------------------------------------------------------
@@ -5244,23 +5090,16 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
 
 #[test]
 fn film_master_never_silently_ignores_a_requested_adjustment() {
-    // Every rejection the master owes the user, through the real binary: the
-    // frame-local measurement and each non-default downstream control. All are
-    // usage errors (exit 2) — never a quietly-adjusted or quietly-unadjusted image.
+    // Every rejection the master owes the user, through the real binary: each
+    // non-default downstream control. All are usage errors (exit 2) — never a
+    // quietly-adjusted or quietly-unadjusted image.
     //
-    // Each `expect` is a phrase distinctive to *this* rule: `contains("auto")` alone
-    // would also match a `balance_range: "auto"`, a film-base `"auto"`, or `--auto-wb`,
-    // so it would stay green if the rule it names disappeared.
+    // Each `expect` is a phrase distinctive to *this* rule, so it would not stay green
+    // if the rule it names disappeared.
     let tmp = TempDir::new("film-master-reject");
     let input = fixture("hdri-64bit.tif");
     let base = ["--film-base", "0.9,0.55,0.42"];
     for (extra, expect) in [
-        (
-            vec!["--shadow-balance", "0.1,0,0", "--auto-balance-range"],
-            "rejects a frame-local auto regional-balance range",
-        ),
-        // …and the same balance is accepted with an explicit roll range, so the
-        // rejection above is about the *measurement*, not the correction.
         (vec!["--print-exposure", "0.5"], "print_exposure"),
         (vec!["--black-point", "0.01"], "black_point"),
         (vec!["--white-balance", "1.05,1,0.93"], "white_balance"),
@@ -5291,31 +5130,6 @@ fn film_master_never_silently_ignores_a_requested_adjustment() {
         assert!(err.contains("film-master"), "{extra:?}: message was {err}");
         assert!(!out.exists(), "{extra:?}: no output may be written");
     }
-
-    // A measured balance range is rejected, but the *same* balance with an explicit
-    // roll range is accepted — the rejection is about the per-frame measurement.
-    let out = tmp.path("balanced.tiff");
-    let (code, _stdout, err) = run(&[
-        "convert",
-        input.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--output-preset",
-        "film-master",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--shadow-balance",
-        "0.1,0,0",
-        "--balance-range",
-        "0.2,1.6",
-        "--report",
-        "none",
-    ]);
-    assert_eq!(
-        code, 0,
-        "an explicit roll balance-range must be accepted:\n{err}"
-    );
-    assert_eq!(read_f32_tiff(&out).1, 32);
 }
 
 #[test]
@@ -10701,7 +10515,7 @@ fn the_availability_gate_outranks_the_rules_it_would_confuse() {
     let tmp = TempDir::new("new-flow-order");
     for knob in [
         ["--density-curve", "characteristic"],
-        ["--shadow-balance", "0.1,0,0"],
+        ["--film-stock", "ektar-100"],
     ] {
         let (code, _out, err) = run(&[
             "convert",
@@ -10788,9 +10602,11 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
     // The reconstruction half of the availability inventory, driven through the
     // binary. Each row is asserted to name the knob the user typed **and** to carry
     // the verdict its design earns: the per-stock curve as a curve is gone for good,
-    // the per-stock curve as a look and the regional balance are
-    // waiting for a rendering stage. Asserting the losing verdict's wording is absent
-    // is the only thing that tells two rules apart when both name the knob.
+    // the per-stock curve as a look is waiting for a rendering stage. (The regional
+    // balance is removed on both chains — see
+    // `the_regional_balance_is_a_migration_error`.) Asserting the losing verdict's
+    // wording is absent is the only thing that tells two rules apart when both name
+    // the knob.
     let tmp = TempDir::new("new-flow-stranded");
     let refuse = |extra: &[&str]| -> String {
         let out = tmp.path("out.tif");
@@ -10821,26 +10637,6 @@ fn new_flow_refuses_every_knob_the_fixed_decode_strands() {
         let err = refuse(&knob);
         assert!(err.contains(knob[0]), "names the knob typed: {err}");
         assert!(err.contains("will not gain one"), "{knob:?}: {err}");
-        assert!(
-            !err.contains("no counterpart for it yet"),
-            "the losing verdict's wording must be absent: {err}"
-        );
-    }
-
-    // Replaced by a look control that has landed (`nf-look/per-channel-grade`): not
-    // ported, and the remedy is the grade, a flag this flow accepts.
-    for knob in [
-        ["--shadow-balance", "0.1,0,0"],
-        ["--highlight-balance", "0,0,0.1"],
-        ["--balance-range", "0.2,1.2"],
-    ] {
-        let err = refuse(&knob);
-        assert!(err.contains(knob[0]), "names the knob typed: {err}");
-        assert!(err.contains("will not gain one"), "{knob:?}: {err}");
-        assert!(
-            err.contains("Use --channel-grade R,B (recipe `look.channel_grade`)"),
-            "{knob:?}: {err}"
-        );
         assert!(
             !err.contains("no counterpart for it yet"),
             "the losing verdict's wording must be absent: {err}"
@@ -11045,6 +10841,258 @@ fn the_reference_density_and_retired_placements_are_migration_errors() {
     }
 }
 
+/// `nf-retire/regional-balance`: the four flags and three recipe keys are migration
+/// errors on both chains, their neutral defaults replay, and the report no longer
+/// carries a balance range.
+#[test]
+fn the_regional_balance_is_a_migration_error() {
+    let tmp = TempDir::new("balance-retired");
+    let scan = fixture("hdr-48bit.tif");
+    let out = tmp.path("out.tif");
+    let convert = |extra: &[&str], new_flow: bool| {
+        let mut argv = vec![
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--report",
+            "none",
+        ];
+        argv.extend(if new_flow {
+            vec!["--new-flow"]
+        } else {
+            vec!["--output-preset", "display-p3"]
+        });
+        argv.extend_from_slice(extra);
+        let r = run(&argv);
+        std::fs::remove_file(&out).ok();
+        (r.0, r.2)
+    };
+
+    // (a) Each removed flag, on each chain, at every value — the identity `0,0,0`, a
+    // negative value in both spellings, a bare flag — reaches the migration message,
+    // not clap's.
+    for flags in [
+        vec!["--shadow-balance", "0.1,0,0"],
+        vec!["--shadow-balance", "-0.05,0,0"],
+        vec!["--shadow-balance=-0.05,0,0"],
+        vec!["--highlight-balance", "0,0,0"],
+        vec!["--balance-range", "0.2,1.2"],
+        vec!["--balance-range"],
+        vec!["--auto-balance-range"],
+    ] {
+        let flag = flags[0].split('=').next().unwrap();
+        for new_flow in [false, true] {
+            let (code, err) = convert(&flags, new_flow);
+            assert_eq!(code, 2, "{flags:?} (new flow {new_flow}): {err}");
+            assert!(
+                err.contains(&format!("{flag} was removed with the regional balance")),
+                "{flags:?}: {err}"
+            );
+            // The grade is named with the chain that has it, and the message says the
+            // current chain has none — never "use --channel-grade" bare, which the
+            // current chain refuses.
+            assert!(
+                err.contains(
+                    "`--channel-grade R,B` (recipe `look.channel_grade`) under `--new-flow`"
+                ) && err.contains("the current chain has no counterpart")
+                    && err.contains("Drop the flag"),
+                "{flags:?}: {err}"
+            );
+            // It says why the grade is not a rename: the measurement is gone.
+            assert!(err.contains("measures nothing"), "{flags:?}: {err}");
+        }
+    }
+    // Both named remedies are accepted where the message says they are.
+    let (code, err) = convert(&["--channel-grade", "0.95,1.05"], true);
+    assert_eq!(code, 0, "the grade under --new-flow: {err}");
+    for new_flow in [false, true] {
+        let (code, err) = convert(&["--density-offset", "0.05,0,-0.02"], new_flow);
+        assert_eq!(code, 0, "--density-offset (new flow {new_flow}): {err}");
+    }
+
+    // (b) A recipe: every earlier sidecar carries the three keys at their neutral
+    // defaults, which replay — byte-identically to a recipe without them.
+    let render_with = |name: &str, density: &str| {
+        let recipe = write_file(
+            &tmp.path(name),
+            &format!(
+                r#"{{"calibration":{{"film_base":{{"explicit":[0.9,0.55,0.42]}}}},
+                    "reconstruction":{{"density":{{"scale":[1.0,0.84,0.73],
+                    "offset":[0.0,0.0,0.0]{density}}}}}}}"#
+            ),
+        );
+        let o = tmp.path(&format!("{name}.tif"));
+        let (code, _, err) = run(&[
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            o.to_str().unwrap(),
+            "--output-preset",
+            "display-p3",
+            "--params",
+            recipe.to_str().unwrap(),
+            "--report",
+            "none",
+        ]);
+        (code, err, o)
+    };
+    let (code, err, plain) = render_with("plain.json", "");
+    assert_eq!(code, 0, "{err}");
+    let (code, err, old) = render_with(
+        "old-sidecar.json",
+        r#","shadow_balance":[0.0,0.0,0.0],"highlight_balance":[0.0,0.0,0.0],
+           "balance_range":"auto""#,
+    );
+    assert_eq!(
+        code, 0,
+        "an old sidecar's neutral balance must replay: {err}"
+    );
+    assert_eq!(
+        std::fs::read(&plain).unwrap(),
+        std::fs::read(&old).unwrap(),
+        "the stripped neutral balance renders exactly as its absence"
+    );
+    // Neutral as the old f32 fields read it: `-0.0`, integer `0` and a value underflowing
+    // f32 were all `[0, 0, 0]` there, so they strip too.
+    let (code, err, tiny) = render_with(
+        "f32-neutral.json",
+        r#","shadow_balance":[1e-50,0,-0.0],"highlight_balance":[0,0,0]"#,
+    );
+    assert_eq!(code, 0, "an f32-neutral balance must replay: {err}");
+    assert_eq!(
+        std::fs::read(&plain).unwrap(),
+        std::fs::read(&tiny).unwrap(),
+        "an f32-neutral balance renders exactly as its absence"
+    );
+
+    // Anything else is refused, naming the key and the grade. A differing pair is a
+    // lost render, with or without an explicit range beside it.
+    for (name, density, key) in [
+        (
+            "shadow.json",
+            r#","shadow_balance":[0.1,0.0,0.0]"#,
+            "reconstruction.density.shadow_balance",
+        ),
+        (
+            "crossover.json",
+            r#","shadow_balance":[0.1,0.0,0.0],"highlight_balance":[-0.1,0.0,0.0]"#,
+            "reconstruction.density.shadow_balance",
+        ),
+        (
+            "crossover-range.json",
+            r#","shadow_balance":[0.1,0.0,0.0],"highlight_balance":[-0.1,0.0,0.0],
+               "balance_range":{"explicit":[0.2,1.6]}"#,
+            "reconstruction.density.shadow_balance",
+        ),
+    ] {
+        let (code, err, _) = render_with(name, density);
+        assert_eq!(code, 2, "{name}: {err}");
+        assert!(err.contains(key), "{name}: {err}");
+        assert!(err.contains("look.channel_grade"), "{name}: {err}");
+        assert!(err.contains("reference build"), "{name}: {err}");
+        assert!(
+            !err.contains("reconstruction.density.offset"),
+            "{name}: {err}"
+        );
+    }
+    // An equal pair was a uniform offset: the message names the exact replacement.
+    let (code, err, _) = render_with(
+        "equal.json",
+        r#","shadow_balance":[0.05,0.0,-0.02],"highlight_balance":[0.05,0.0,-0.02]"#,
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            "set `reconstruction.density.offset` to the offset this run resolves plus the pair"
+        ) && err.contains("replays the render (exactly over a zero offset"),
+        "{err}"
+    );
+    assert!(!err.contains("reference build"), "{err}");
+    // Equal as the old f32 fields, though not as JSON numbers: still the offset remedy.
+    let (code, err, _) = render_with(
+        "equal-f32.json",
+        r#","shadow_balance":[0.1,0.0,0.0],"highlight_balance":[0.1000000001,0.0,0.0]"#,
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("reconstruction.density.offset"), "{err}");
+    assert!(!err.contains("reference build"), "{err}");
+
+    // An explicit range beside equal (here absent) balances was never consulted: it is
+    // refused (only the old default is stripped), but its remedy renders unchanged.
+    // This is also what an equal pair plus a range reads once the pair has moved.
+    let (code, err, _) = render_with("range.json", r#","balance_range":{"explicit":[0.2,1.6]}"#);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("reconstruction.density.balance_range"),
+        "{err}"
+    );
+    assert!(err.contains("the render is unchanged"), "{err}");
+    assert!(!err.contains("reference build"), "{err}");
+    assert!(!err.contains("reconstruction.density.offset"), "{err}");
+
+    // (c) A roll per-frame override takes the same path.
+    let shared = write_file(&tmp.path("shared.json"), ROLL_RECIPE);
+    for (balance, want) in [("[0.0,0.0,0.0]", 0), ("[0.1,0.0,0.0]", 2)] {
+        let manifest = write_file(
+            &tmp.path("frames.json"),
+            &format!(
+                r#"{{ "frames": [ {{ "input": {scan:?},
+                        "params": {{ "reconstruction": {{ "density":
+                            {{ "shadow_balance": {balance} }} }} }} }} ] }}"#,
+                scan = scan.to_str().unwrap()
+            ),
+        );
+        let (code, _, err) = run(&[
+            "roll",
+            "--frames",
+            manifest.to_str().unwrap(),
+            "--out-dir",
+            tmp.path(&format!("roll-{want}")).to_str().unwrap(),
+            "--params",
+            shared.to_str().unwrap(),
+            "--report",
+            "none",
+        ]);
+        assert_eq!(code, want, "per-frame {balance}: {err}");
+        if want == 2 {
+            assert!(
+                err.contains("reconstruction.density.shadow_balance"),
+                "{err}"
+            );
+        }
+    }
+
+    // (d) Neither the report nor the resolved parameters carry a balance any more.
+    let (code, stdout, err) = run(&[
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--output-preset",
+        "display-p3",
+        "--report",
+        "json",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let sidecar = std::fs::read_to_string(tmp.path("out.tif.json")).expect("the sidecar recipe");
+    let (code, params, err) = run(&["params"]);
+    assert_eq!(code, 0, "{err}");
+    for (what, text) in [
+        ("report", &stdout),
+        ("sidecar", &sidecar),
+        ("params", &params),
+    ] {
+        for key in ["balance_range", "shadow_balance", "highlight_balance"] {
+            assert!(!text.contains(key), "{what} still carries {key}: {text}");
+        }
+    }
+}
+
 #[test]
 fn the_new_flow_refusal_outranks_the_merge_rule_for_the_same_command_line() {
     // The ordering discipline, and the one case in this table where it bites: `merge`
@@ -11151,17 +11199,11 @@ fn the_fixed_decodes_own_knobs_reach_the_decode_under_the_new_flow() {
     assert_eq!(code, 0, "{err}");
     assert!(close(&d["linearization"], 1.7), "{d}");
 
-    for (i, extra) in [
-        vec!["--density-curve", "exponential"],
-        vec!["--shadow-balance", "0,0,0"],
-        vec!["--highlight-balance", "0,0,0"],
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let (code, _d, err) = decode_of(&extra, &format!("identity{i}.tiff"));
-        assert_eq!(code, 0, "{extra:?} must be accepted: {err}");
-    }
+    let (code, _d, err) = decode_of(&["--density-curve", "exponential"], "identity.tiff");
+    assert_eq!(
+        code, 0,
+        "an identity curve selection must be accepted: {err}"
+    );
 
     // Bare `--density-gamma` too. Before `nf-core/recipe-schema` the new flow merged
     // its flags into the current chain's config, whose default curve was then the

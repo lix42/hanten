@@ -597,29 +597,6 @@ pub struct CalibrationParams {
     pub film_base: Option<FilmBaseSource>,
 }
 
-/// Where the regional (shadow/highlight) balance's tone-ramp anchors come from
-/// (design-spec §7.2/§9, `density.balance_range`).
-///
-/// A single mutually-exclusive choice, like [`FilmBaseSource`] — not independent
-/// flags. The ramps span the corrected-density range `[lo, hi]`: `lo` is the
-/// positive's deepest shadow tone, `hi` its brightest highlight tone. `Auto`
-/// (default) measures the range per frame from the pre-regional corrected
-/// densities (robust percentiles of the per-pixel scalar tone) and reports the
-/// measured `[lo, hi]`; `Explicit` fixes it. Roll reuse is measure-once-replay:
-/// run one frame under `Auto`, read its reported range, then pass it as
-/// `Explicit` on the rest for deterministic, frame-independent toning.
-/// Serializes as `"auto"` / `{ "explicit": [lo, hi] }`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum BalanceRange {
-    /// Measure `[lo, hi]` per frame from the corrected-density distribution.
-    #[default]
-    Auto,
-    /// Explicit `[lo, hi]` corrected-density anchors (e.g. a reused measured
-    /// range for roll consistency). Requires `lo < hi`, both finite.
-    Explicit([f32; 2]),
-}
-
 /// Density-reconstruction knobs (design-spec §9, `reconstruction.density`) —
 /// everything that shapes the corrected density `D′` (stages 1–2). The
 /// density→positive curve (gamma and the anchor placement) is deliberately **not**
@@ -653,19 +630,6 @@ pub struct DensityParams {
     pub scale: [f32; 3],
     /// Per-channel density offset `[r, g, b]` (orange-mask compensation).
     pub offset: [f32; 3],
-    /// Per-channel density offset `[r, g, b]` applied to the **positive's
-    /// shadows** (low scalar tone density; the region near the film base).
-    /// A positive value brightens that channel there — pushes the region toward
-    /// that channel's color. `[0, 0, 0]` (default) is identity/off.
-    pub shadow_balance: [f32; 3],
-    /// Per-channel density offset `[r, g, b]` applied to the **positive's
-    /// highlights** (high scalar tone density; the dense negative areas).
-    /// Same sign convention as `shadow_balance`. `[0, 0, 0]` (default) is off.
-    pub highlight_balance: [f32; 3],
-    /// Tone-ramp anchor source for the regional balance (default `auto`).
-    /// Only consulted when a balance is non-zero — the neutral default skips
-    /// the regional pass entirely (bit-exact with the unbalanced output).
-    pub balance_range: BalanceRange,
 }
 
 impl DensityParams {
@@ -721,9 +685,6 @@ impl Default for DensityParams {
             // and a recipe that omits the key cannot drift apart.
             scale: Self::default_scale_for(DensityCurveType::Exponential),
             offset: [0.0, 0.0, 0.0],
-            shadow_balance: [0.0, 0.0, 0.0],
-            highlight_balance: [0.0, 0.0, 0.0],
-            balance_range: BalanceRange::Auto,
         }
     }
 }
@@ -1912,9 +1873,6 @@ mod tests {
         let params = DensityParams {
             scale: [1.2, 1.0, 0.8],
             offset: [0.1, 0.0, -0.05],
-            shadow_balance: [0.05, 0.0, -0.02],
-            highlight_balance: [-0.05, 0.01, 0.0],
-            balance_range: BalanceRange::Explicit([0.25, 1.75]),
         };
         let json = serde_json::to_string(&params).unwrap();
         let back: DensityParams = serde_json::from_str(&json).unwrap();
@@ -2283,33 +2241,6 @@ mod tests {
     }
 
     #[test]
-    fn density_params_default_regional_balance_is_neutral() {
-        // The identity defaults the bit-exact-default guarantee rests on.
-        let d = DensityParams::default();
-        assert_eq!(d.shadow_balance, [0.0, 0.0, 0.0]);
-        assert_eq!(d.highlight_balance, [0.0, 0.0, 0.0]);
-        assert_eq!(d.balance_range, BalanceRange::Auto);
-    }
-
-    #[test]
-    fn balance_range_serializes_like_film_base_source() {
-        // Unit variant is a bare lowercase string; the newtype variant is a
-        // tagged object — the same shape convention as `FilmBaseSource`.
-        assert_eq!(
-            serde_json::to_string(&BalanceRange::Auto).unwrap(),
-            "\"auto\""
-        );
-        assert_eq!(
-            serde_json::to_string(&BalanceRange::Explicit([0.25, 2.5])).unwrap(),
-            r#"{"explicit":[0.25,2.5]}"#
-        );
-        for src in [BalanceRange::Auto, BalanceRange::Explicit([0.1, 1.9])] {
-            let json = serde_json::to_string(&src).unwrap();
-            assert_eq!(serde_json::from_str::<BalanceRange>(&json).unwrap(), src);
-        }
-    }
-
-    #[test]
     fn partial_recipe_fills_defaults() {
         // A recipe that sets only one knob should leave the rest at defaults.
         let params: PrintParams = serde_json::from_str(r#"{"print_exposure": 2.0}"#).unwrap();
@@ -2320,8 +2251,7 @@ mod tests {
     #[test]
     fn wb_source_serializes_like_the_other_source_enums() {
         // Unit variants are bare kebab-case strings; the payload variant is a
-        // tagged object — the same shape convention as `FilmBaseSource` /
-        // `BalanceRange`.
+        // tagged object — the same shape convention as `FilmBaseSource`.
         assert_eq!(
             serde_json::to_string(&WbSource::GrayWorld).unwrap(),
             "\"gray-world\""

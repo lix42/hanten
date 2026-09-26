@@ -141,10 +141,6 @@ pub struct ReconstructionReport {
     /// `1.0`, and therefore what sets the black floor at `10^(−contrast·anchor)`.
     /// `None` for the characteristic curve, which places no anchor.
     pub curve_anchor: Option<f32>,
-    /// The resolved regional-balance tone-ramp range `[lo, hi]` (corrected
-    /// density), when a shadow/highlight balance was applied. `None` when both
-    /// balances are the neutral `[0, 0, 0]`.
-    pub balance_range: Option<[f32; 2]>,
     /// How far the frame's densities fell outside the stock's published curve, per channel
     /// — `Some` only for the characteristic curve, `None` for every other path.
     ///
@@ -227,6 +223,5 @@ mod tests {
         let expected =
             fixed::MID_ABOVE_BASE + crate::types::MID_GREY_OUTPUT_DECADES / fixed::BUNDLED_CONTRAST;
         assert_eq!(report.curve_anchor, Some(expected));
-        assert_eq!(report.balance_range, None);
     }
 }

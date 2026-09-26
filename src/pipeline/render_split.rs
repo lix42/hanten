@@ -40,9 +40,9 @@
 //! [`film_master`] therefore does exactly one thing: unwrap the mapped ACEScg
 //! buffer. Nothing is applied, nothing is clamped (range clamping stays at the
 //! u16 encode step, which `film-master` never uses), and non-finite samples ride
-//! through to `io::encode`'s counter. The strict rejection of a frame-local
-//! measurement and of every non-default downstream control happens at the CLI boundary
-//! (`cli::validate`), after recipe/flag merge — never silently here.
+//! through to `io::encode`'s counter. The strict rejection of every non-default
+//! downstream control happens at the CLI boundary (`cli::validate`), after
+//! recipe/flag merge — never silently here.
 //!
 //! ## The shared display controls
 //! [`display_source`] resolves the shared controls **once** and applies them in
