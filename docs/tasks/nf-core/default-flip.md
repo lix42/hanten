@@ -59,3 +59,8 @@ still accurate about what a default move owes.
 - [Retire the sigmoid and `simple`](../nf-retire/sigmoid-and-simple.md)
 - [Retire the `shoulder` and `none` tones](../nf-retire/display-tones.md)
 - [Retire the `Dmax` anchor machinery](../nf-retire/dmax-machinery.md)
+- [The gain-map destination](../nf-destinations/gain-map-destination.md) — the
+  product's default output must exist on the new chain before it becomes the only one
+- [`measure-roll` places the roll's white](../nf-calibration/roll-white-rule.md) — the
+  last planned move of the default render (after the black point, which it depends on);
+  flipping first would describe a default that is about to change

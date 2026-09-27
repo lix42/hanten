@@ -50,3 +50,7 @@ whether `scale` stays one global value once a second stock family is in the set.
 - [The frozen reference build](../nf-verification/reference-snapshot.md)
 - [A `density.scale` ladder, before the calibration frames exist](scale-ladder.md)
   — inherits its candidate value and its method caution
+- [The direct destination](../nf-destinations/direct-preset.md) — the rendering the
+  loop holds fixed must exist before rounds are judged against it
+- [A parametric operator with a toe](../nf-display-stages/parametric-operator.md) —
+  it changes the held rendering's operator and adds its black point

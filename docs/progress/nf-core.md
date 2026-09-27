@@ -933,9 +933,14 @@ boundary the SDR/HDR split will split *from*. Nothing about the no-flag path mov
 ## default-flip
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-09-26
 
 - 2026-09-19: created with the new-flow plan. Goal: flip the default to the new flow.
+- 2026-09-26: two dependencies added (user). `nf-destinations/gain-map-destination`:
+  the product default is a gain-map JPEG, and flipping before the new chain can write
+  one would remove it. `nf-calibration/roll-white-rule`: the last planned move of the
+  default render (it follows `parametric-operator`'s black point), so the flip records
+  the default that stays rather than one about to change.
 
 ## report-contract
 
