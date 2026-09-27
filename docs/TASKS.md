@@ -1817,9 +1817,12 @@ the design in `docs/design-update.md`:
   stops above mid-grey), placed through `look.contrast` with mid-grey pinned; a warning
   near the leader. Chosen with a black point, which the chain lacks
   (`parametric-operator`); implemented by `roll-white-rule`
-- [ ] [`measure-roll` places the roll's
+- [x] [`measure-roll` places the roll's
   white](tasks/nf-calibration/roll-white-rule.md) — the rule the comparison chose:
-  brightest frame under a cap, a floor below, a warning near the leader
+  brightest frame under a cap, a floor below, a warning near the leader. **Done
+  2026-09-27**: each frame's white is the p97 of its pixels' brightest channel (film RGB,
+  effective area, before the leader guard); `measure-roll` reports `look.contrast` and a
+  `roll --frames` manifest for clamped frames
 - [ ] [The saturation warning's margin, and frames near
   saturation](tasks/nf-calibration/saturation-margin.md) — set from one ambiguous
   frame; may depend on the stock

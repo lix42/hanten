@@ -121,8 +121,9 @@ pub const MID_GREY: f32 = 0.18;
 /// the single `gamma` nc shipped before the split that was never the film's
 /// linearization (`nf-reconstruction/gamma-split`). At it, a neutral renders where the
 /// bundled decode rendered it. Provisional rather than a tuned value:
-/// `nf-calibration/anchor-comparison` chose a per-roll value, which `measure-roll` is to
-/// compute (`nf-calibration/roll-white-rule`); this stays what a recipe without one gets.
+/// `nf-calibration/anchor-comparison` chose a per-roll value, which `measure-roll`
+/// computes (`pipeline::roll_white::contrast_for`); this stays what a recipe without one
+/// gets.
 pub const DEFAULT_CONTRAST: f32 =
     crate::algo::fixed::BUNDLED_CONTRAST / crate::algo::fixed::LINEARIZATION;
 

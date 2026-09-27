@@ -127,7 +127,7 @@ guaranteed byte-identical within one build and architecture.
 | `hanten params` | Print the full default recipe as JSON — the scaffolding starting point. | No |
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
 | `hanten roll` | Convert many frames from **one shared frozen recipe**. | Yes |
-| `hanten measure-roll` | **"What white balance does this roll need?"** — measured once over the roll's frames, for the new chain (§11). Prints reuse-ready flag and recipe forms. | No |
+| `hanten measure-roll` | **"What white balance and contrast does this roll need?"** — measured once over the roll's frames, for the new chain (§11). Prints reuse-ready flag, recipe and `roll --frames` forms. | No |
 
 Every command except `params` emits a **JSON report on stdout** on success
 (`--report none` to suppress, `--report-file PATH` to redirect); `params` takes no
@@ -554,8 +554,8 @@ The reference build keeps them, if you need to reproduce an old render.
 
 > **Provisional values.** `D = 0.62` is the generic C-41 profile's mid-grey aim above
 > the base, rounded and frozen. The anchor stays referenced to the base: a roll's own
-> white is planned to act through a per-roll contrast measured by `measure-roll`
-> (`nf-calibration/roll-white-rule`), not by moving `D`. The per-channel density gain beside it
+> white acts through a per-roll `look.contrast` that `measure-roll` measures (§11), not
+> by moving `D`. The per-channel density gain beside it
 > (`--density-scale`) has moved twice (`pipeline_version` 4 and 5 — see below). Expect
 > further movement, with a `pipeline_version` bump when it happens.
 
@@ -1615,40 +1615,85 @@ usage: --display-black (recipe `fit_range.display_black`) must be stops below mi
 within (0, 16], or `off`, got 0
 ```
 
-#### `measure-roll` — a roll's white balance, measured once
+#### `measure-roll` — a roll's white balance and contrast, measured once
 
-It removes the cast a whole roll shares — the film, the development, the scanner —
-and keeps the scene's light: one sunset frame barely moves a statistic taken over
-every frame. Give it the roll's picture frames, its leader, and its explicit film base
-(from `estimate`, §4):
+It measures two things a whole roll shares. The **white balance** removes the cast of
+the film, the development and the scanner, and keeps the scene's light: one sunset
+frame barely moves a statistic taken over every frame. The **roll's white** sets the
+look's contrast, so the roll's highlights reach white with mid-grey held where it is.
+Give it the roll's picture frames, its leader, and its explicit film base (from
+`estimate`, §4):
 
 ```console
-$ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.471,0.232,0.108
+$ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.23244068,0.10803387
 {
   "command": "measure-roll",
-  "leader": { "median": [0.92152184, 0.7227872, 0.46504393], "guard_density": 0.1,
-              "ceiling": [0.60884345, 0.4775408, 0.30725148], … },
+  "leader": { "median": [0.92210037, 0.72462136, 0.46541658], "guard_density": 0.1,
+              "ceiling": [0.6092257, 0.47875258, 0.30749768], "film_peak": 1.0815561, … },
   "frames": [ { "input": "frames/1774.tif", "region": [167, 167, 4579, 3009],
-                "sampled": 131072, "kept": 131065, "guarded": 7, "unusable": 0, … }, … ],
-  "white_balance": { "gains": [1.000904, 1.0, 1.2442316], "percentile": 0.99,
-                     "pooled": 4542296 },
-  "reuse": { "flag": "--white-balance 1.000904,1,1.2442316",
+                "holder_applied": false, "sampled": 131072, "kept": 131065, "guarded": 7,
+                "unusable": 0, "white_stops": 0.52260643,
+                "leader_distance_stops": 2.0644333, "white_role": "under", … }, … ],
+  "white_balance": { "gains": [1.0026785, 1.0, 1.2466215], "percentile": 0.99, … },
+  "white": { "stops": 1.5, "bound": "floor", "contrast": 1.6492873,
+             "whole_contrast": 2.968717,
+             "clamped": [ { "input": "frames/1816.tif", "white_stops": 2.297903,
+                            "contrast": 1.2369655 }, … ],
+             "rule": { "channel": "max", "percentile": 0.97, "cap_stops": 2.0,
+                       "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
+  "reuse": { "flag": "--white-balance 1.0026785,1,1.2466215 --contrast 1.6492873",
              "recipe": { "scene_correction": { "white_balance":
-                         { "explicit": [1.000904, 1.0, 1.2442316] } } } },
-  …
+                         { "explicit": [1.0026785, 1.0, 1.2466215] } },
+                         "look": { "contrast": 1.6492873 } },
+             "frames": { "frames": [ { "input": "frames/1774.tif" }, …,
+                         { "input": "frames/1816.tif",
+                           "params": { "look": { "contrast": 1.2369655 } } }, … ] } },
+  "warnings": [ "frames/1816.tif: near film saturation — its white sits 0.29 stop under the leader (margin 0.5 stop); …", … ]
 }
 ```
 
 (Abridged; that is 35 frames of one roll.) Each frame is decoded under the new chain's
-decode — at its linearization, before the look's contrast — and sampled over its **effective area** (§9); the gains equalize the pooled
-pixels' per-channel 99th percentile, green-anchored. Freeze them by pasting `reuse.flag`
-on `convert --new-flow`, or by merging `reuse.recipe` into the roll's recipe for
-`roll --new-flow`.
+decode — at its linearization, before the look's contrast — and sampled over its
+**effective area** (§9). Freeze the result by pasting `reuse.flag` on
+`convert --new-flow`, or by merging `reuse.recipe` into the roll's recipe for
+`roll --new-flow`; when `reuse.frames` is present, pass it as the `roll --frames`
+manifest (its input paths are as you gave them here).
 
-- **Pass the leader.** Any pixel within 0.1 density of it is left out (`guarded`), so a
-  fully exposed frame mixed into the inputs cannot become the roll's white — measured,
-  it would move the gains 0.4–1.3 stops. Without `--leader` the run warns, and
-  `--strict` refuses it before decoding anything (exit 2).
+**The white balance** equalizes the pooled pixels' per-channel 99th percentile,
+green-anchored.
+
+**The roll's white** is measured per frame, in **scene stops** above mid-grey: each
+frame's `white_stops` is the 97th percentile of its pixels' **brightest channel**, before
+the working-space matrix, which leaves speculars above white. The brightest channel
+rather than red, so a blue sky or a green-lit highlight reads as bright as it is. The roll's white is the brightest frame
+white at or under the **cap** (+2.0), raised to at least the **floor** (+1.5); `bound`
+says which limit set it (`none`, `floor`, or `cap` when every frame is above it).
+`contrast` is the `look.contrast` that renders that white at diffuse white with
+mid-grey pinned — the value the recipe stores. `whole_contrast` is it times the
+decode's linearization, for comparison only.
+
+- **A frame above the cap is clamped**, not counted: it renders at the cap's contrast
+  (`white.clamped`, beside the roll's `contrast`), which is gentler, and `reuse.frames`
+  gives it that contrast. An ordinary bright scene lands here too, so this is
+  reported, not warned about.
+- **A frame near its leader warns.** A white within 0.5 stop of the leader
+  (`leader_distance_stops`, the same brightest-channel measure) is near film saturation, where the film compresses
+  highlights and the decode renders them flat. Without `--leader` nothing is checked.
+- **An underexposed roll is lifted only as far as the floor**; below it the roll
+  renders dark.
+- **The contrast places the white at exposure 0.** `measure-roll` does not read the
+  recipe's `scene_correction.exposure`, and the look's contrast expands an exposure too:
+  with `--exposure 0.5` at contrast 1.65 the white lands about 0.8 stop past diffuse
+  white. That is an exposure doing its job, not a mismeasured white.
+- The cap, floor and margin are provisional: they were chosen by review on nine rolls
+  with no deliberately bad frames.
+
+- **Pass the leader.** Any pixel within 0.1 density of it is left out of the white
+  balance (`guarded`), so a fully exposed frame mixed into the inputs cannot set the
+  gains — measured, it would move them 0.4–1.3 stops. A frame's white is measured
+  before that guard, so a frame near saturation still shows it; the cap keeps it from
+  raising the roll's white. Without `--leader` the run warns, no frame is checked for
+  saturation, and `--strict` refuses it before decoding anything (exit 2).
 - **Only picture frames, each once.** Every input is pooled as picture; leave out the
   unexposed base, the leader and any calibration frame. A frame named twice is
   refused (exit 2) — it would weigh double — and so is the `--leader` file among the
@@ -1657,7 +1702,7 @@ on `convert --new-flow`, or by merging `reuse.recipe` into the roll's recipe for
   by name, so `--strict` catches both.
 - **The base must be explicit** — `--film-base`, or `calibration.film_base` in a
   `--params` recipe (the new chain's, `"recipe_version": 2`, whose `reconstruction`
-  it decodes under; its `scene_correction`, which this measures, and its `look` are
+  it decodes under; its `scene_correction` and its `look`, which this measures, are
   not read). A base estimated per frame would decode every frame differently, so
   anything else is refused (exit 2) pointing at `estimate --grid`.
 

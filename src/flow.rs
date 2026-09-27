@@ -338,7 +338,8 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     KeptEntry {
         covers: &["--contrast"],
         why: "the look's print contrast (recipe `look.contrast`) — the half of `gamma` \
-              `nf-reconstruction/gamma-split` moved out of the decode, new-flow only",
+              `nf-reconstruction/gamma-split` moved out of the decode, which `hanten \
+              measure-roll` measures once per roll; new-flow only",
     },
     KeptEntry {
         covers: &["--channel-grade"],

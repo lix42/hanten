@@ -21,6 +21,13 @@ What is known (`docs/progress/nf-calibration.md`, `anchor-comparison`, 2026-09-2
 - **Near the leader the film compresses highlights**, and the straight-line decode
   renders that compression flat and bright; clamping such a frame to the cap was the
   review's preference (1121: "much safer at highlight").
+- **What `measure-roll` does today** (`roll-white-rule`, 2026-09-27): a frame's white is
+  the p97 of its pixels' brightest film-RGB channel over its effective area, measured
+  before the leader guard, and its distance is taken to the leader's brightest-channel
+  median. At the placeholder 0.5 stop it warns on 1121 (0.22), 1151 (0.38), 1635 (0.20),
+  1815 (0.28) and 1816 (0.29). 1816 was not judged overexposed; 1635 (bright content at
+  the frame edge, a hand-cropped scan) and 1815 are unjudged. With no leader nothing is
+  checked.
 
 Open:
 
