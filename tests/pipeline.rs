@@ -11611,9 +11611,9 @@ fn roll_white_recipe(dir: &TempDir, base: &str) -> PathBuf {
 
 #[test]
 fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
-    // The contract the command exists for: measure once, state the gains, and every
-    // frame renders under exactly them — by the reported flag and by the reported
-    // recipe fragment alike.
+    // The contract the command exists for: measure once, state the gains and the
+    // contrast, and every frame renders under exactly them — by the reported flag and by
+    // the reported recipe fragment alike.
     let tmp = TempDir::new("measure-roll-reuse");
     let frame = fixture("hdr-48bit.tif").display().to_string();
     let second = tmp.path("second.tif");
@@ -11655,24 +11655,36 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     );
 
     let by_flag = tmp.path("flag.tiff");
-    let flag = report["reuse"]["flag"].as_str().unwrap();
-    let flag_gains = flag.strip_prefix("--white-balance ").unwrap();
+    let flag: Vec<&str> = report["reuse"]["flag"]
+        .as_str()
+        .unwrap()
+        .split_whitespace()
+        .collect();
+    assert_eq!(flag[0], "--white-balance", "{report}");
+    assert_eq!(flag[2], "--contrast", "{report}");
     let (code, stdout, err) = run(&[
-        "convert",
-        &frame,
-        "--new-flow",
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--white-balance",
-        flag_gains,
-        "-o",
-        by_flag.to_str().unwrap(),
-    ]);
+        &[
+            "convert",
+            &frame,
+            "--new-flow",
+            "--film-base",
+            "0.9,0.55,0.42",
+            "-o",
+            by_flag.to_str().unwrap(),
+        ][..],
+        &flag,
+    ]
+    .concat());
     assert_eq!(code, 0, "{err}");
+    let converted = json(&stdout);
     assert_eq!(
-        json(&stdout)["new_flow"]["scene_correction"]["white_balance"],
+        converted["new_flow"]["scene_correction"]["white_balance"],
         report["white_balance"]["gains"],
         "the flag's text round-trips the gains exactly"
+    );
+    assert_eq!(
+        converted["new_flow"]["look"]["contrast"], report["white"]["contrast"],
+        "and the contrast"
     );
 
     let mut recipe = report["reuse"]["recipe"].clone();
@@ -11768,6 +11780,207 @@ fn measure_roll_keeps_a_fully_exposed_frame_out_of_the_white() {
         err.contains("is both the --leader and an input frame"),
         "{err}"
     );
+}
+
+/// A uniform frame whose film density is `d` on every channel over `base`. Red carries
+/// the largest density scale, so above mid-grey it is the brightest channel, and the
+/// frame's white is red's `(d − 0.62) · 1.8 / log10 2` scene stops above mid-grey.
+fn write_uniform_density(path: &Path, base: [f32; 3], d: f32) {
+    let raw = base.map(|b| (b * 10f32.powf(-d) * 65535.0).round() as u16);
+    write_hdri_with_uniform_ir(path, 64, 64, raw, 40_000);
+}
+
+#[test]
+fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
+    // A dim frame (~+1.7 stops) and a bright one (~+3.0): the roll's white is the dim
+    // frame's, and the bright one is clamped to the cap — disclosed with both contrasts,
+    // and handed to `roll` as a per-frame contrast. It warns only when its leader is
+    // near: a frame merely above the cap is an ordinary bright scene.
+    let tmp = TempDir::new("measure-roll-white");
+    let base = [0.9f32, 0.55, 0.42];
+    let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let (dim, bright) = (tmp.path("dim.tif"), tmp.path("bright.tif"));
+    write_uniform_density(&dim, base, 0.904);
+    write_uniform_density(&bright, base, 1.122);
+    let (near, far) = (tmp.path("near.tif"), tmp.path("far.tif"));
+    // The near leader is 0.1 stop over the bright frame — inside the guard, which would
+    // leave the frame no pixel if its white were measured after it.
+    write_uniform_density(&near, base, 1.139);
+    write_uniform_density(&far, base, 1.5);
+    let measure = |leader: &Path| {
+        let (code, stdout, err) = run(&[
+            "measure-roll",
+            "--params",
+            recipe.to_str().unwrap(),
+            dim.to_str().unwrap(),
+            bright.to_str().unwrap(),
+            "--leader",
+            leader.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "{err}");
+        json(&stdout)
+    };
+    let saturation = |r: &serde_json::Value| {
+        r["warnings"]
+            .as_array()
+            .map(|w| {
+                w.iter()
+                    .filter(|w| w.as_str().unwrap().contains("near film saturation"))
+                    .map(|w| w.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    let report = measure(&far);
+    let white = &report["white"];
+    let stops = |i: usize| report["frames"][i]["white_stops"].as_f64().unwrap();
+    assert!((1.5..2.0).contains(&stops(0)), "{report}");
+    assert!(stops(1) > 2.0, "{report}");
+    assert_eq!(white["bound"], "none", "{report}");
+    assert_eq!(white["stops"], report["frames"][0]["white_stops"]);
+    assert_eq!(white["from"], dim.to_str().unwrap());
+    assert_eq!(report["frames"][0]["white_role"], "sets_roll");
+    assert_eq!(report["frames"][1]["white_role"], "clamped");
+    let roll_contrast = white["contrast"].as_f64().unwrap();
+    let clamped = &white["clamped"][0];
+    assert_eq!(clamped["input"], bright.to_str().unwrap());
+    let cap_contrast = clamped["contrast"].as_f64().unwrap();
+    assert!(
+        clamped["flag"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("--contrast {}", clamped["contrast"])),
+        "a clamped frame's own flag carries the cap's contrast: {report}"
+    );
+    assert!(
+        (cap_contrast * 1.8 - 2.23).abs() < 0.01 && roll_contrast > cap_contrast,
+        "{report}"
+    );
+    assert!(
+        saturation(&report).is_empty(),
+        "above the cap is not a warning: {report}"
+    );
+    assert!(
+        report["frames"][1]["leader_distance_stops"]
+            .as_f64()
+            .unwrap()
+            > 0.5,
+        "{report}"
+    );
+
+    let report_near = measure(&near);
+    let warned = saturation(&report_near);
+    assert_eq!(warned.len(), 1, "{report_near}");
+    assert!(
+        warned[0].starts_with(bright.to_str().unwrap()),
+        "{warned:?}"
+    );
+    assert_eq!(
+        report_near["frames"][1]["kept"], 0,
+        "the guard took every pixel, and the frame still warned: {report_near}"
+    );
+    assert_eq!(
+        report_near["frames"][1]["white_stops"],
+        report["frames"][1]["white_stops"]
+    );
+
+    // The reuse forms: the roll's contrast by flag and fragment, and the clamped
+    // frame's through a `roll --frames` manifest.
+    assert!(
+        report["reuse"]["flag"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("--contrast {}", white["contrast"])),
+        "{report}"
+    );
+    assert_eq!(
+        report["reuse"]["recipe"]["look"]["contrast"],
+        white["contrast"]
+    );
+    let manifest = &report["reuse"]["frames"];
+    assert!(manifest["frames"][0].get("params").is_none(), "{manifest}");
+    assert_eq!(
+        manifest["frames"][1]["params"]["look"]["contrast"],
+        clamped["contrast"]
+    );
+    let mut shared: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&recipe).unwrap()).unwrap();
+    for (k, v) in report["reuse"]["recipe"].as_object().unwrap() {
+        shared[k] = v.clone();
+    }
+    let shared = write_file(&tmp.path("shared.json"), &shared.to_string());
+    let manifest = write_file(&tmp.path("frames.json"), &manifest.to_string());
+    let out = tmp.path("out");
+    let (code, stdout, err) = run(&[
+        "roll",
+        "--new-flow",
+        "--params",
+        shared.to_str().unwrap(),
+        "--frames",
+        manifest.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let rolled = json(&stdout);
+    let rendered = |i: usize| &rolled["frames"][i]["new_flow"]["look"]["contrast"];
+    assert_eq!(rendered(0), &white["contrast"], "{rolled}");
+    assert_eq!(rendered(1), &clamped["contrast"], "{rolled}");
+
+    // A roll whose every frame is above the cap lands on the cap: its frames are still
+    // disclosed as clamped, but they render at the roll's own contrast, so there is no
+    // manifest to hand `roll`.
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        "--params",
+        recipe.to_str().unwrap(),
+        bright.to_str().unwrap(),
+        "--leader",
+        far.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let capped = json(&stdout);
+    assert_eq!(capped["white"]["bound"], "cap", "{capped}");
+    assert_eq!(capped["white"]["contrast"], clamped["contrast"], "{capped}");
+    assert_eq!(capped["frames"][0]["white_role"], "clamped", "{capped}");
+    assert!(capped["reuse"].get("frames").is_none(), "{capped}");
+}
+
+#[test]
+fn measure_roll_leader_errors_keep_their_exit_code() {
+    let tmp = TempDir::new("measure-roll-leader-errors");
+    let recipe = roll_white_recipe(&tmp, "0.9,0.55,0.42");
+    let frame = fixture("hdr-48bit.tif").display().to_string();
+    let params = recipe.to_str().unwrap();
+
+    // An unreadable leader is a decode error (exit 3), not a generic one.
+    let missing = tmp.path("missing-leader.tif");
+    let (code, _, err) = run(&[
+        "measure-roll",
+        "--params",
+        params,
+        &frame,
+        "--leader",
+        missing.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 3, "{err}");
+
+    // A leader over the memory budget is a resource refusal (exit 6, the one an agent
+    // retries with `--max-memory`).
+    let leader = tmp.path("leader.tif");
+    write_hdri_with_uniform_ir(&leader, 64, 64, [900, 700, 400], 40_000);
+    let (code, _, err) = run(&[
+        "measure-roll",
+        "--params",
+        params,
+        &frame,
+        "--leader",
+        leader.to_str().unwrap(),
+        "--max-memory",
+        "1024",
+    ]);
+    assert_eq!(code, 6, "{err}");
 }
 
 #[test]

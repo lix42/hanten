@@ -21,7 +21,7 @@ use std::time::Instant;
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
-use crate::algo::fixed;
+use crate::algo::{FilmRgbImage, fixed};
 use crate::destination::{
     Axis, Container, DisplayAxes, Encoding, Gamut, OutputSection, Range, Transfer,
 };
@@ -89,7 +89,7 @@ pub enum Command {
     Inspect(IoArgs),
     /// Run only film-base / Dmin estimation; emit JSON.
     Estimate(EstimateArgs),
-    /// Measure a roll's white balance once, for its recipe; emit JSON.
+    /// Measure a roll's white balance and contrast once, for its recipe; emit JSON.
     MeasureRoll(MeasureRollArgs),
     /// Print the full default parameter set as JSON (recipe scaffolding).
     Params(ParamsArgs),
@@ -229,15 +229,18 @@ pub struct MeasureRollArgs {
     #[arg(required = true)]
     pub inputs: Vec<PathBuf>,
     /// The roll's leader — a fully exposed frame, decoded with the same base. Pixels
-    /// within 0.1 density of it are left out, so a fully exposed frame mixed into the
-    /// roll cannot become its white (measured: it would move the gains 0.4–1.3 stops).
-    /// Without it the run warns, and `--strict` refuses before decoding anything.
+    /// within 0.1 density of it are left out of the white balance, so a fully exposed
+    /// frame mixed into the roll cannot set the gains (measured: it would move them
+    /// 0.4–1.3 stops), and a frame whose white comes within 0.5 stop of it warns as near
+    /// film saturation. Without it the run warns and nothing is checked for saturation,
+    /// and `--strict` refuses before decoding anything.
     #[arg(long, value_name = "PATH")]
     pub leader: Option<PathBuf>,
     /// The roll's recipe for the new chain (`"recipe_version": 2`): the film base and
-    /// the decode the gains are measured under. Its `scene_correction` values are not
-    /// read — that is what this command measures — though the recipe must still load
-    /// (a retired or unknown key there is refused).
+    /// the decode the gains and the white are measured under. Its `scene_correction` and
+    /// `look` values are not read — this command measures the white balance and the
+    /// contrast — though the recipe must still load (a retired or unknown key there is
+    /// refused).
     #[arg(long = "params", value_name = "JSON")]
     pub recipe_in: Option<PathBuf>,
     /// The roll's film base (Dmin) as `R,G,B`, over the recipe's. Required one way or
@@ -714,7 +717,8 @@ pub struct LookOverrides {
     /// `0.18 · (v / 0.18)^CONTRAST` (recipe key `look.contrast`, default 2.0/1.8 ≈ 1.11,
     /// which with the decode's linearization reproduces the pre-split contrast 2.0;
     /// 1 is the identity). Runs after scene correction, so an `--exposure` is expanded
-    /// with the rest of the picture. `--new-flow` only.
+    /// with the rest of the picture. `hanten measure-roll` measures a per-roll value.
+    /// `--new-flow` only.
     #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
     pub contrast: Option<f32>,
     /// The per-channel grade `R,B`: red and blue exponents pivoted at mid-grey, green
@@ -7701,8 +7705,10 @@ struct MeasureRollReport {
     leader: Option<MeasuredLeader>,
     frames: Vec<MeasuredFrame>,
     white_balance: RollWhiteBalance,
-    /// The gains in the two forms a user freezes them in.
-    reuse: WhiteBalanceReuse,
+    /// The roll's white and the look contrast that places it (`nf-calibration/roll-white-rule`).
+    white: MeasuredRollWhite,
+    /// The gains and the contrast in the forms a user freezes them in.
+    reuse: RollReuse,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
     elapsed_ms: f64,
@@ -7713,6 +7719,10 @@ struct MeasuredLeader {
     input: PathBuf,
     #[serde(flatten)]
     guard: roll_white::LeaderGuard,
+    /// The median of the leader's brightest channel in film RGB, before the working-space
+    /// 3×3 — the measure a frame's white takes, and what its saturation distance is
+    /// taken against.
+    film_peak: f32,
     memory: MemoryReport,
 }
 
@@ -7721,8 +7731,20 @@ struct MeasuredFrame {
     input: PathBuf,
     /// The effective area the frame was sampled over.
     region: [u32; 4],
+    /// Whether a measured holder moved `region` (`convert`'s `effective_area.holder_applied`);
+    /// otherwise the inset alone cut it.
+    holder_applied: bool,
     #[serde(flatten)]
     counts: roll_white::FrameCounts,
+    /// The frame's white — the percentile of its pixels' brightest channel, before the
+    /// leader guard — in scene stops above mid-grey; absent when no pixel was usable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    white_stops: Option<f32>,
+    /// How far the white sits under the leader, in scene stops; only with `--leader`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    leader_distance_stops: Option<f32>,
+    /// The frame's part in the roll's white.
+    white_role: roll_white::FrameRole,
     memory: MemoryReport,
 }
 
@@ -7736,20 +7758,106 @@ struct RollWhiteBalance {
     pooled: usize,
 }
 
+/// The roll's white, placed by the rule `roll_white` documents.
 #[derive(Debug, Serialize)]
-struct WhiteBalanceReuse {
-    /// For `convert --new-flow`.
-    flag: String,
-    /// A partial recipe, to merge into the roll's.
-    recipe: WhiteBalanceFragment,
+struct MeasuredRollWhite {
+    /// In scene stops above mid-grey.
+    stops: f32,
+    /// Which limit set it: `none` (a frame's own white), `floor` or `cap`.
+    bound: roll_white::WhiteBound,
+    /// The frame it was taken from, when no limit bound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<PathBuf>,
+    /// `look.contrast`: renders the white at diffuse white, mid-grey pinned — at
+    /// `scene_correction.exposure` 0. The look expands an exposure too, so with one set
+    /// the white lands `exposure · contrast` stops off diffuse white.
+    contrast: f32,
+    /// `contrast` times the decode's linearization — the whole slope, for comparison
+    /// only; the recipe stores `contrast`.
+    whole_contrast: f32,
+    /// Frames above the cap, rendered at the cap's contrast rather than the roll's.
+    /// Disclosed, not warned about: an ordinary bright scene lands here too.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    clamped: Vec<ClampedFrame>,
+    rule: WhiteRule,
 }
 
-/// `{"scene_correction": {"white_balance": {"explicit": [r, g, b]}}}`, typed rather than
-/// built as a `serde_json::Value` so the gains print in their `f32` form — a `Value`
-/// widens them to `f64` digits the flag form does not show.
 #[derive(Debug, Serialize)]
-struct WhiteBalanceFragment {
+struct ClampedFrame {
+    input: PathBuf,
+    white_stops: f32,
+    /// Its `look.contrast`, the cap's — against the roll's `contrast`.
+    contrast: f32,
+    /// This frame's own `convert --new-flow` flags: `reuse.flag` carries the roll's
+    /// contrast, which would undo the clamp on this frame.
+    flag: String,
+}
+
+/// The `convert --new-flow` flags that freeze `gains` and `contrast` — `reuse.flag`, and a
+/// clamped frame's own.
+fn reuse_flag(gains: [f32; 3], contrast: f32) -> String {
+    format!(
+        "--white-balance {},{},{} --contrast {contrast}",
+        gains[0], gains[1], gains[2]
+    )
+}
+
+/// The rule's values, provisional (`nf-calibration/roll-white-rule`).
+#[derive(Debug, Serialize)]
+struct WhiteRule {
+    /// What each pixel contributes: `max`, its brightest channel.
+    channel: &'static str,
+    percentile: f32,
+    cap_stops: f32,
+    floor_stops: f32,
+    /// Absent without `--leader`: there is then no saturation check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    saturation_margin_stops: Option<f32>,
+}
+
+#[derive(Debug, Serialize)]
+struct RollReuse {
+    /// For `convert --new-flow`, on every frame but a clamped one, which takes its own
+    /// `white.clamped[].flag`.
+    flag: String,
+    /// A partial recipe, to merge into the roll's.
+    recipe: RollFragment,
+    /// A `roll --frames` manifest giving each clamped frame its own contrast; only when a
+    /// frame renders at a contrast other than the roll's. Input paths are as given here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frames: Option<ClampManifest>,
+}
+
+/// `{"scene_correction": {"white_balance": {"explicit": [r, g, b]}}, "look": {"contrast":
+/// k}}`, typed rather than built as a `serde_json::Value` so the values print in their
+/// `f32` form — a `Value` widens them to `f64` digits the flag form does not show. The
+/// `look` section names only `contrast`, so merging it leaves the look's other keys alone.
+#[derive(Debug, Serialize)]
+struct RollFragment {
     scene_correction: WhiteBalanceSection,
+    look: ContrastSection,
+}
+
+#[derive(Debug, Serialize)]
+struct ContrastSection {
+    contrast: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct ClampManifest {
+    frames: Vec<ClampManifestFrame>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClampManifestFrame {
+    input: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<ClampParams>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClampParams {
+    look: ContrastSection,
 }
 
 #[derive(Debug, Serialize)]
@@ -7762,20 +7870,25 @@ struct WhiteBalanceSection {
 /// (memory preflight, input semantics, positive-mode refusal) and stopping before
 /// scene correction — the point the roll's gains will be applied at.
 ///
+/// `on_film` reads the decode's film RGB just before the working-space map, for what is
+/// measured there (the roll's white); it runs on the frame's effective area as found.
+///
 /// **A copy, and it must stay in step.** `convert_frame`'s front half is tangled with
 /// its report and IR notes, so this repeats its gates rather than sharing them: a
 /// refusal or measurement-region warning added there belongs here too, or gains get
 /// frozen from frames `convert` would refuse.
-fn decode_for_roll_white(
+fn decode_for_roll_white<T>(
     input: &Path,
     recipe: &Recipe,
     base: &FilmBase,
     budget: memory::Budget,
     log: &Log,
     warnings: &mut Vec<String>,
+    on_film: impl FnOnce(&FilmRgbImage, &Result<film_base::EffectiveArea>) -> Result<T>,
 ) -> Result<(
     AcesCgImage,
     Result<film_base::EffectiveArea>,
+    T,
     fixed::DecodeReport,
     MemoryReport,
 )> {
@@ -7817,16 +7930,86 @@ fn decode_for_roll_white(
     let area = film_base::effective_area(&image, recipe.measure.inset);
     let (film, decoded) = fixed::decode(&image, base, &recipe.reconstruction)?;
     drop(image);
+    let measured = on_film(&film, &area)?;
     Ok((
         working_space::map_nc_film_rgb_v1(film),
         area,
+        measured,
         decoded,
         memory,
     ))
 }
 
-/// `hanten measure-roll` — measure a roll's white balance once, over its picture
-/// frames, and report the gains to freeze into its recipe.
+/// Place the roll's white from the measured frames, recording each frame's role.
+fn measured_roll_white(
+    frames: &mut [MeasuredFrame],
+    guarded: bool,
+    linearization: f32,
+    gains: [f32; 3],
+) -> Result<MeasuredRollWhite> {
+    let stops: Vec<Option<f32>> = frames.iter().map(|f| f.white_stops).collect();
+    let placed = roll_white::place_roll_white(&stops)?;
+    for (f, role) in frames.iter_mut().zip(&placed.roles) {
+        f.white_role = *role;
+    }
+    let contrast = roll_white::contrast_for(placed.stops);
+    let cap_contrast = roll_white::contrast_for(roll_white::WHITE_CAP_STOPS);
+    Ok(MeasuredRollWhite {
+        stops: placed.stops,
+        bound: placed.bound,
+        from: frames
+            .iter()
+            .find(|f| f.white_role == roll_white::FrameRole::SetsRoll)
+            .map(|f| f.input.clone()),
+        contrast,
+        whole_contrast: contrast * linearization,
+        clamped: frames
+            .iter()
+            .filter(|f| f.white_role == roll_white::FrameRole::Clamped)
+            .map(|f| ClampedFrame {
+                input: f.input.clone(),
+                white_stops: f.white_stops.expect("a clamped frame has a white"),
+                contrast: cap_contrast,
+                flag: reuse_flag(gains, cap_contrast),
+            })
+            .collect(),
+        rule: WhiteRule {
+            channel: "max",
+            percentile: roll_white::WHITE_PERCENTILE,
+            cap_stops: roll_white::WHITE_CAP_STOPS,
+            floor_stops: roll_white::WHITE_FLOOR_STOPS,
+            saturation_margin_stops: guarded.then_some(roll_white::SATURATION_MARGIN_STOPS),
+        },
+    })
+}
+
+/// The `roll --frames` manifest that renders each clamped frame at its own contrast —
+/// `None` when every frame renders at the roll's (none clamped, or the roll's white is
+/// the cap itself, whose contrast a clamped frame already has).
+fn clamp_manifest(frames: &[MeasuredFrame], white: &MeasuredRollWhite) -> Option<ClampManifest> {
+    let own = |f: &MeasuredFrame| {
+        (f.white_role == roll_white::FrameRole::Clamped
+            && white.bound != roll_white::WhiteBound::Cap)
+            .then(|| roll_white::contrast_for(roll_white::WHITE_CAP_STOPS))
+    };
+    frames
+        .iter()
+        .any(|f| own(f).is_some())
+        .then(|| ClampManifest {
+            frames: frames
+                .iter()
+                .map(|f| ClampManifestFrame {
+                    input: f.input.clone(),
+                    params: own(f).map(|contrast| ClampParams {
+                        look: ContrastSection { contrast },
+                    }),
+                })
+                .collect(),
+        })
+}
+
+/// `hanten measure-roll` — measure a roll's white balance and white once, over its
+/// picture frames, and report the gains and the contrast to freeze into its recipe.
 fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
@@ -7853,8 +8036,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     if args.strict && args.leader.is_none() {
         return Err(NcError::Usage(
             "--strict refuses an unguarded measurement: without --leader a fully exposed \
-             frame among the inputs would become the roll's white. Pass the roll's leader \
-             scan"
+             frame among the inputs would set the roll's white balance, and no frame is \
+             checked for film saturation. Pass the roll's leader scan"
                 .into(),
         ));
     }
@@ -7926,18 +8109,38 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
 
     let leader = match &args.leader {
         Some(path) => {
-            let (aces, _, _, memory) =
-                decode_for_roll_white(path, &recipe, &base, budget, &log, &mut warnings)?;
+            // Each error keeps its kind, and so its exit code (a memory refusal stays 6).
+            let (aces, _, film_peak, _, memory) = decode_for_roll_white(
+                path,
+                &recipe,
+                &base,
+                budget,
+                &log,
+                &mut warnings,
+                |film, _| {
+                    roll_white::leader_peak(film.rgb(), film.width(), film.height())
+                        .map_err(|e| e.prefixed(path.display()))
+                },
+            )?;
+            // The guard first: it names the channel a bad leader lacks.
             let guard = roll_white::leader_guard(
                 aces.rgb(),
                 aces.width(),
                 aces.height(),
                 recipe.reconstruction.linearization,
             )
-            .map_err(|e| NcError::Other(format!("{}: {}", path.display(), e.message())))?;
+            .map_err(|e| e.prefixed(path.display()))?;
+            let film_peak = film_peak.ok_or_else(|| {
+                NcError::Other(format!(
+                    "{}: leader: no usable pixel — is the file a fully exposed leader, decoded \
+                     with the roll's film base?",
+                    path.display()
+                ))
+            })?;
             Some(MeasuredLeader {
                 input: path.clone(),
                 guard,
+                film_peak,
                 memory,
             })
         }
@@ -7946,8 +8149,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
                 &mut warnings,
                 &log,
                 "no --leader: the measurement is unguarded, so a fully exposed frame among \
-                 the inputs would become the roll's white (measured: it moves the gains \
-                 0.4–1.3 stops). Pass the roll's leader scan"
+                 the inputs would set the roll's white balance (measured: it moves the gains \
+                 0.4–1.3 stops), and no frame is checked for film saturation. Pass the \
+                 roll's leader scan"
                     .into(),
             );
             None
@@ -7957,8 +8161,20 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     let mut pool = Vec::new();
     let mut frames = Vec::with_capacity(args.inputs.len());
     for input in &args.inputs {
-        let (aces, area, decoded, memory) =
-            decode_for_roll_white(input, &recipe, &base, budget, &log, &mut warnings)?;
+        let (aces, area, white, decoded, memory) = decode_for_roll_white(
+            input,
+            &recipe,
+            &base,
+            budget,
+            &log,
+            &mut warnings,
+            |film, area| match area {
+                Ok(a) => roll_white::frame_white(film.rgb(), film.width(), a.region)
+                    .map_err(|e| e.prefixed(input.display())),
+                // Refused just below, with the input named.
+                Err(_) => Ok(None),
+            },
+        )?;
         let area = area.map_err(|e| {
             NcError::Usage(format!(
                 "{}: {} (every frame is measured over its effective area)",
@@ -7979,6 +8195,23 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             leader.as_ref().map(|l| &l.guard),
             &mut pool,
         )?;
+        let leader_distance_stops = leader
+            .as_ref()
+            .zip(white)
+            .map(|(l, w)| roll_white::leader_distance_stops(w, l.film_peak));
+        if let Some(d) = leader_distance_stops.filter(|d| roll_white::near_saturation(*d)) {
+            push_warning_buf(
+                &mut warnings,
+                &log,
+                format!(
+                    "{}: near film saturation — its white sits {d:.2} stop under the \
+                     leader (margin {} stop); the film compresses highlights there, which \
+                     the decode renders flat",
+                    input.display(),
+                    roll_white::SATURATION_MARGIN_STOPS
+                ),
+            );
+        }
         if counts.kept == 0 {
             push_warning_buf(
                 &mut warnings,
@@ -7995,13 +8228,29 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         frames.push(MeasuredFrame {
             input: input.clone(),
             region: area.region,
+            holder_applied: area.holder_applied,
             counts,
+            white_stops: white.map(roll_white::scene_stops),
+            leader_distance_stops,
+            // Placed once every frame is measured, below.
+            white_role: roll_white::FrameRole::Unmeasured,
             memory,
         });
         decode.get_or_insert(decoded);
     }
     let gains = roll_white::roll_gains(&pool)?;
     log.info(format_args!("roll white balance {gains:?}"));
+    let white = measured_roll_white(
+        &mut frames,
+        args.leader.is_some(),
+        recipe.reconstruction.linearization,
+        gains,
+    )?;
+    log.info(format_args!(
+        "roll white {:+.2} stops ({:?}), contrast {}",
+        white.stops, white.bound, white.contrast
+    ));
+    let clamps = clamp_manifest(&frames, &white);
 
     let report = MeasureRollReport {
         command: "measure-roll",
@@ -8015,14 +8264,19 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             percentile: roll_white::PERCENTILE,
             pooled: pool.len() / 3,
         },
-        reuse: WhiteBalanceReuse {
-            flag: format!("--white-balance {},{},{}", gains[0], gains[1], gains[2]),
-            recipe: WhiteBalanceFragment {
+        reuse: RollReuse {
+            flag: reuse_flag(gains, white.contrast),
+            recipe: RollFragment {
                 scene_correction: WhiteBalanceSection {
                     white_balance: scene_correction::WhiteBalance::Explicit(gains),
                 },
+                look: ContrastSection {
+                    contrast: white.contrast,
+                },
             },
+            frames: clamps,
         },
+        white,
         warnings,
         elapsed_ms: elapsed_ms(started),
     };

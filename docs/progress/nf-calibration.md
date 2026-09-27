@@ -18,7 +18,9 @@ The epic was created on 2026-09-19 with the new-flow migration plan
 
 **`anchor-comparison` is done (2026-09-25): the roll's white is content-referenced,
 placed through contrast, never through the decode's anchor.** `d` stays 0.62 and mid-grey
-stays pinned. Rule, provisional values from nine rolls: each frame's white is its red p97;
+stays pinned. Rule, provisional values from nine rolls: each frame's white is its red p97
+(**`measure-roll` reads each pixel's brightest channel instead**, `roll-white-rule`
+2026-09-26 — red under-reads blue- and green-lit highlights);
 the roll's white is its brightest frame's white at or under **+2.0** scene stops above
 mid-grey, raised to at least **+1.5**; a frame above +2.0 is clamped to it; the solved
 `look.contrast` spans whole contrast 2.23–2.97 (2.23 on a clamped frame). A warning fires near the **leader**
@@ -26,7 +28,10 @@ mid-grey, raised to at least **+1.5**; a frame above +2.0 is clamped to it; the 
 black point in the chain**, which the new chain lacked: every placement looked pale
 without one. Black landed on 2026-09-26 as `--display-black` (`fit_range.display_black`,
 default 6 stops below mid-grey; `nf-display-stages/parametric-operator`), keyed on where
-the film base renders, so judge any white placement with it at its default. Implementation is `roll-white-rule`; the warning's margin is
+the film base renders, so judge any white placement with it at its default. Implementation is
+`roll-white-rule`: `hanten measure-roll` reports the white and the `look.contrast` placing
+it, measured over the shared effective area in film RGB before the working-space matrix;
+a white target 0.15–0.31 stop above diffuse white was reviewed and not adopted. The warning's margin is
 `saturation-margin`. Ranked rule > fixed anchor > content white with solved contrast
 (noise up to 5.4× the scan's floor) > level move (mid-grey up to L\* 82). Levels here
 are **scene stops**: red density through the fixed linearization, 1 stop ≈ 0.167
@@ -235,11 +240,128 @@ density.
 
 ## roll-white-rule
 
-**Status:** not started
-**Updated:** 2026-09-25
+**Status:** done
+**Updated:** 2026-09-27
 
 - 2026-09-25: filed from `anchor-comparison`. Goal: `measure-roll` places the roll's white
   by the rule that task chose by review.
+- 2026-09-26: **implemented** (`pipeline::roll_white`, `run_measure_roll`). Decisions
+  (user):
+  - **A frame's white is measured before the leader guard.** The guard drops pixels
+    within 0.1 density (≈0.6 stop) of the leader — the highlights of a frame near
+    saturation — so a guarded white lands lower, can escape the clamp and set the roll's
+    contrast, and can **never** come within the 0.5-stop margin: the warning could not
+    fire. The cap already keeps a blown frame from raising the roll's white; the guard now
+    serves the white balance only.
+  - **Domain: film red, before the working-space 3×3** — the reviewed quantity (red's
+    density scale is 1, so it is red density through the linearization). ACEScg red
+    before white balance was tried first: it mixes in green, blue and the roll's
+    uncorrected cast, and moved frames −0.48 to +0.58 stop off the review **by stock**
+    (Gold200/Portra160 ~−0.2, Ektar ~+0.25) at the review's own inset. `decode_for_roll_white`
+    reads the film RGB just before mapping it; no extra full-frame buffer.
+  - **Area: the shared effective area** (holder cut + `measure.inset`), not the review's
+    12% inset. The scans are hand-cropped (user), so the 5–12% band is picture.
+  - **Constants in code** (`WHITE_PERCENTILE`, `WHITE_CAP_STOPS`, `WHITE_FLOOR_STOPS`,
+    `SATURATION_MARGIN_STOPS`), stated in the report: they parametrize a measurement, and
+    the render's knob, `look.contrast`, is what the recipe carries. `calibration` gains
+    no white.
+  - **Reuse**: the flag gains `--contrast`, the fragment `look.contrast`, and a
+    `roll --frames` manifest carries each clamped frame's contrast. **No leader, no
+    saturation check**; the no-leader warning says so.
+  - **The contrast needs no linearization**: at the decode's output a neutral `W` scene
+    stops up sits at `0.18·2^W`, so `look.contrast = log2(1/0.18) / W` (1.237 at the cap,
+    1.649 at the floor); the whole contrast is that × 1.8.
+
+  **Verification on the nine rolls** (`measure-roll --leader`, the review's bases;
+  area per the user's rule for these scans: holder + 5% where a holder is found, else a
+  1% inset — holders were found only on 07-15, 07-23, 07-24 and one 09-14 frame):
+
+  | roll | review `W` | `measure-roll` `W` | whole contrast | clamped | near leader (< 0.5) |
+  |---|---|---|---|---|---|
+  | 07-15 Ektar100 | +1.95 | **+1.50 floor** | 2.97 | 971, 991 | — |
+  | 07-23 Portra160 | +1.91 | +1.93 | 2.31 | 1121 | 1121 (0.22) |
+  | 07-24 Gold200 | +1.50 floor | +1.50 floor | 2.97 | 1151 | 1151 (0.38) |
+  | 09-09 Ektar100 | +1.87 | +1.85 | 2.41 | 1632, 1635 | 1635 (0.27) |
+  | 09-11 Portra400 | +1.52 | +1.61 | 2.77 | — | — |
+  | 09-13 Portra400 | +1.65 | +1.61 | 2.77 | — | — |
+  | 09-14 Ektar100 | +1.98 | +1.87 | 2.38 | 1737–1739 | — |
+  | 09-18 Gold200 | +1.50 floor | +1.50 floor | 2.97 | 1815, 1816 | 1815 (0.28), 1816 (0.30) |
+  | 09-20 Portra400 | +1.97 | +1.98 | 2.25 | 1868, 1894, 1902 | — |
+
+  Per-frame medians sit within ±0.12 stop of the review; the spread is the area. At the
+  review's 12% inset the same code reproduces it (roll `W` within 0.07 on eight rolls; 07-15
+  −0.23). What moved is **content the 12% inset excluded**: 07-15's 971 and 991 read
+  0.2–0.35 stop brighter and cross the cap, dropping the 3-frame roll to the floor; 1635's
+  white is +0.53 at 12% and +3.48 at the edge (bright picture content 5–9% in), and it
+  now warns. 1815 warns too; 1816 (warned) was not judged overexposed in review. Awaits the
+  user's call on whether these shifts stand.
+- 2026-09-26: **the white takes each pixel's brightest channel, not red** (user). Red
+  under-reads a blue- or green-lit highlight, and the solved contrast then pushes it past
+  white — the case per-frame work would expose. Only the measured `W` changes: the contrast
+  is `log2(1/0.18) / W` whatever the channel, so the cap and floor keep their units. Red vs
+  brightest channel, same area rule as above (leader distance in the same measure):
+
+  | roll | `W` red → max | whole contrast | clamped red → max | frame shift median / max |
+  |---|---|---|---|---|
+  | 07-15 Ektar100 | +1.50 → +1.56 | 2.97 → 2.85 | 2 → 2 | +0.01 / +0.08 |
+  | 07-23 Portra160 | +1.93 → +1.93 | 2.31 | 1 → 1 | +0.03 / +0.17 |
+  | 07-24 Gold200 | +1.50 → +1.50 | 2.97 | 1 → 1 | +0.00 / +0.01 |
+  | 09-09 Ektar100 | +1.85 → +2.00 | 2.41 → 2.23 | 2 → 5 | +0.61 / +2.15 |
+  | 09-11 Portra400 | +1.61 → +1.81 | 2.77 → 2.46 | 0 → 0 | +0.20 / +0.60 |
+  | 09-13 Portra400 | +1.61 → +1.62 | 2.77 → 2.75 | 0 → 0 | +0.29 / +0.99 |
+  | 09-14 Ektar100 | +1.87 → +1.97 | 2.38 → 2.26 | 3 → 5 | +0.75 / +1.57 |
+  | 09-18 Gold200 | +1.50 → +1.50 | 2.97 | 2 → 2 | +0.04 / +0.39 |
+  | 09-20 Portra400 | +1.98 → +1.98 | 2.25 | 3 → 3 | +0.07 / +0.40 |
+
+  The saturation warnings are the same set. **Ektar moves most**, expected (user): its
+  roll cast leaves neutrals ~0.25 stop lower in red than green (red gain ≈ 1.18), and the
+  rest is scene content — 0.5–2 stops on most 09-14 frames, the blue/green highlights this
+  change is for. The roll's white moves ≤ 0.2 stop, since the cap and floor bound it.
+  **Sunset colour is unaffected**: an orange highlight's brightest channel is red anyway,
+  white balance is a separate roll-level measurement, and highlight desaturation gives no
+  pull past its band's saturation limit however bright the pixel. Luminance was considered
+  and rejected: it weights blue at 5% (`ACESCG_LUMA`), so a blue sky still under-reads, and
+  it exists only after the 3×3. Near-neutral-only pixels were rejected: they fail exactly
+  on a blue- or green-dominated highlight. Next: a review round on 09-11, 09-09 and 09-14,
+  red vs brightest channel.
+- 2026-09-27: **two review rounds; the implementation stands** (user). Sets in
+  `../temp/white-channel/` (`review.json`, `review-r2.json`; `scripts/` holds the render
+  scripts, the rendering binary and its source patch). Both hold white balance, film base
+  and display black fixed and vary only `look.contrast`.
+  - **Round 1, red vs brightest channel** (16 frames on 09-09, 09-11, 09-14): "the diff is
+    very small", a little worse under the brightest channel on **09-11**, whose roll white
+    rose +1.61 → +1.81 (contrast 2.77 → 2.46).
+  - **Round 2, a global white-target offset** (18 frames, two per roll on all nine): the
+    roll's white rendered at diffuse white, 0.15 stop above it, or 0.31 stop above it
+    (every contrast ×1.06 / ×1.125; +0.31 restores 09-11's 2.77). No constant restores 09-11
+    alone: its white sits between the floor and the cap, so only a global lever reaches it.
+    Verdict: **+0.31 worse**; 0 and +0.15 hard to tell, +0.15 "a little better" in some
+    cases. **Kept at 0** — not worth changing the reviewed placement now. If a later round
+    wants more contrast, +0.15 is the value to retry.
+  - The shifts from measuring over the shared effective area (07-15, 09-14 and the new
+    1635/1815 warnings, above) stand with the implementation.
+- 2026-09-27: **done.** Landed: `pipeline::roll_white` (`frame_white`, `leader_peak`,
+  `place_roll_white`, `contrast_for`, the four constants) and `run_measure_roll`, which
+  reads each frame's film RGB before the working-space map (no extra full-frame buffer).
+  The report gains per-frame `white_stops`, `leader_distance_stops`, `white_role` and
+  `holder_applied`, a `white` section (`stops`, `bound`, `contrast`, `whole_contrast`,
+  `clamped`, `rule`), and reuse forms with `--contrast`, `look.contrast` and, when a frame
+  is clamped below the roll's contrast, a `roll --frames` manifest. Verified: unit tests on
+  the rule's four cases and a guarded highlight; binary tests from `measure-roll` through
+  `convert` and `roll --frames`, the all-above-the-cap roll, and the leader path's exit
+  codes; the nine rolls (tables above); two review rounds. Code review fixed the leader
+  path's exit codes, stale help text and the diagnosis order. **For dependents:**
+  - The white is placed at `scene_correction.exposure` 0; an exposure moves it by
+    `exposure · contrast` stops (documented in the guide).
+  - The roll's cast leaks into the white (measured before white balance; ~0.25 stop on
+    Ektar) — accepted.
+  - HDR headroom and the gain-map rendition under the rule were **never reviewed**; the
+    values stay provisional. `nf-display-stages/parametric-shoulder` re-opens where the
+    white renders and is the natural place to look at HDR.
+  - `saturation-margin` inherits 1816 warning (not judged overexposed) and the new 1635
+    and 1815 warnings.
+  - A white target 0.15 stop above diffuse white was "a little better" in some cases;
+    +0.31 was worse. Retry +0.15 if a later round wants more contrast.
 
 ## saturation-margin
 

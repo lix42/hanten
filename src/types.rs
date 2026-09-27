@@ -218,6 +218,20 @@ impl NcError {
         }
     }
 
+    /// The same error with `prefix: ` before its message — naming the file it came
+    /// from, say — keeping its kind, and so its exit code.
+    pub fn prefixed(self, prefix: impl std::fmt::Display) -> Self {
+        let with = |m: String| format!("{prefix}: {m}");
+        match self {
+            NcError::Usage(m) => NcError::Usage(with(m)),
+            NcError::Decode(m) => NcError::Decode(with(m)),
+            NcError::Unsupported(m) => NcError::Unsupported(with(m)),
+            NcError::Write(m) => NcError::Write(with(m)),
+            NcError::Resource(m) => NcError::Resource(with(m)),
+            NcError::Other(m) => NcError::Other(with(m)),
+        }
+    }
+
     /// The `kind:` label [`Display`](std::fmt::Display) prefixes, which is also the
     /// exit-code family (design-spec §11).
     fn kind(&self) -> &'static str {
@@ -247,6 +261,22 @@ mod error_tests {
     /// `Display` is `kind: message`, and `message()` is exactly the second half —
     /// so composing one error's text into another cannot pick up a stray `usage:`
     /// and the two spellings cannot drift apart.
+    #[test]
+    fn a_prefix_keeps_the_kind_and_so_the_exit_code() {
+        for e in [
+            NcError::Usage("u".into()),
+            NcError::Decode("d".into()),
+            NcError::Unsupported("x".into()),
+            NcError::Write("w".into()),
+            NcError::Resource("r".into()),
+            NcError::Other("o".into()),
+        ] {
+            let (code, message) = (e.exit_code(), format!("f.tif: {}", e.message()));
+            let p = e.prefixed("f.tif");
+            assert_eq!((p.exit_code(), p.message()), (code, message.as_str()));
+        }
+    }
+
     #[test]
     fn message_is_display_without_the_kind_prefix() {
         for e in [
@@ -534,9 +564,10 @@ pub enum FilmBaseSource {
 /// reads lives here. The film base is its one member today; the roll reference
 /// density (`dmax`) retired with the placements that read it
 /// (`nf-retire/dmax-machinery`). The section is expected to grow:
-/// `nf-calibration/anchor-comparison` chose a content-referenced roll **white**, and
-/// `nf-calibration/roll-white-rule` decides whether it joins this section or only the
-/// contrast solved from it is carried.
+/// `nf-calibration/anchor-comparison` chose a content-referenced roll **white**, but it
+/// does not join it: the white is consumed where it is measured (`measure-roll`), and the
+/// recipe carries only the contrast solved from it, `look.contrast` — a look knob, and
+/// per frame for a frame clamped to the cap (`pipeline::roll_white`).
 /// So nothing here may assume a closed pair, and every member carries its own
 /// optionality and its own default rather than the section carrying one for all
 /// of them.
@@ -544,7 +575,7 @@ pub enum FilmBaseSource {
 /// **Producing a calibration is not "one frame in, one calibration out".**
 /// `film_base` comes from a single reference frame, but a roll content white is read
 /// from every frame: the brightest frame's own white under a cap, never a percentile
-/// across frames (`nf-calibration/roll-white-rule`). The acquisition
+/// across frames (`pipeline::roll_white`). The acquisition
 /// cascade that resolves a complete calibration is
 /// `core/base-acquisition-planner`; this struct is only its shape.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]

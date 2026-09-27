@@ -75,23 +75,21 @@ impl FilmRgbImage {
         Self::from_linear(image)
     }
 
-    // The read accessors below are the boundary's inspection API, exercised only by
-    // tests: every production consumer takes the whole image across the boundary
-    // (`into_linear`, the working-space mapper) — a narrow documented allow per the
-    // house rule.
-    #[allow(dead_code)]
+    // The read accessors below are the boundary's inspection API. Rendering takes the
+    // whole image across the boundary (`into_linear`, the working-space mapper);
+    // `measure-roll` reads the dimensions and pixels; `ir` is exercised only by tests —
+    // a narrow documented allow per the house rule.
     pub fn width(&self) -> u32 {
         self.width
     }
 
-    #[allow(dead_code)]
     pub fn height(&self) -> u32 {
         self.height
     }
 
-    /// Read-only view of the interleaved film positive. Test-only: every production
-    /// consumer takes the whole image across the boundary instead.
-    #[cfg(test)]
+    /// Read-only view of the interleaved film positive. Rendering takes the whole image
+    /// across the boundary instead; `measure-roll` reads it to measure a frame's white in
+    /// film RGB, where it was reviewed (`pipeline::roll_white::frame_white`).
     pub fn rgb(&self) -> &[f32] {
         &self.rgb
     }

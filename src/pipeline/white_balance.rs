@@ -138,7 +138,13 @@ fn wb_channel_samples(rgb: &[f32]) -> [Vec<f32>; 3] {
 /// Nearest-rank percentile of a sorted, non-empty slice (`round((n−1)·p)`, the
 /// same convention as `density::auto_dmax`).
 fn nearest_rank(sorted: &[f32], p: f32) -> f32 {
-    sorted[(((sorted.len() - 1) as f32) * p).round() as usize]
+    sorted[nearest_rank_index(sorted.len(), p)]
+}
+
+/// The index [`nearest_rank`] reads in a sorted slice of `len > 0` — shared with
+/// `roll_white`'s white, so its p97 and the gains' p99 round alike.
+pub(crate) fn nearest_rank_index(len: usize, p: f32) -> usize {
+    (((len - 1) as f32) * p).round() as usize
 }
 
 /// Mean of the central `[trim, 1 − trim]` quantile span of a sorted, non-empty
