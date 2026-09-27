@@ -1638,7 +1638,8 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
   "white": { "stops": 1.5, "bound": "floor", "contrast": 1.6492873,
              "whole_contrast": 2.968717,
              "clamped": [ { "input": "frames/1816.tif", "white_stops": 2.297903,
-                            "contrast": 1.2369655 }, … ],
+                            "contrast": 1.2369655,
+                            "flag": "--white-balance 1.0026785,1,1.2466215 --contrast 1.2369655" }, … ],
              "rule": { "channel": "max", "percentile": 0.97, "cap_stops": 2.0,
                        "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
   "reuse": { "flag": "--white-balance 1.0026785,1,1.2466215 --contrast 1.6492873",
@@ -1657,7 +1658,9 @@ decode — at its linearization, before the look's contrast — and sampled over
 **effective area** (§9). Freeze the result by pasting `reuse.flag` on
 `convert --new-flow`, or by merging `reuse.recipe` into the roll's recipe for
 `roll --new-flow`; when `reuse.frames` is present, pass it as the `roll --frames`
-manifest (its input paths are as you gave them here).
+manifest (its input paths are as you gave them here). A clamped frame converted on its
+own takes its own `white.clamped[].flag` instead: `reuse.flag` carries the roll's
+contrast, which would undo the clamp.
 
 **The white balance** equalizes the pooled pixels' per-channel 99th percentile,
 green-anchored.
@@ -1673,8 +1676,8 @@ mid-grey pinned — the value the recipe stores. `whole_contrast` is it times th
 decode's linearization, for comparison only.
 
 - **A frame above the cap is clamped**, not counted: it renders at the cap's contrast
-  (`white.clamped`, beside the roll's `contrast`), which is gentler, and `reuse.frames`
-  gives it that contrast. An ordinary bright scene lands here too, so this is
+  (`white.clamped`, beside the roll's `contrast`), which is gentler; `reuse.frames` gives
+  it that contrast on `roll`, and its own `flag` on `convert`. An ordinary bright scene lands here too, so this is
   reported, not warned about.
 - **A frame near its leader warns.** A white within 0.5 stop of the leader
   (`leader_distance_stops`, the same brightest-channel measure) is near film saturation, where the film compresses

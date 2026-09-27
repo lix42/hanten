@@ -11847,6 +11847,13 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(clamped["input"], bright.to_str().unwrap());
     let cap_contrast = clamped["contrast"].as_f64().unwrap();
     assert!(
+        clamped["flag"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("--contrast {}", clamped["contrast"])),
+        "a clamped frame's own flag carries the cap's contrast: {report}"
+    );
+    assert!(
         (cap_contrast * 1.8 - 2.23).abs() < 0.01 && roll_contrast > cap_contrast,
         "{report}"
     );

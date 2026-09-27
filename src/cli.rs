@@ -7788,6 +7788,18 @@ struct ClampedFrame {
     white_stops: f32,
     /// Its `look.contrast`, the cap's — against the roll's `contrast`.
     contrast: f32,
+    /// This frame's own `convert --new-flow` flags: `reuse.flag` carries the roll's
+    /// contrast, which would undo the clamp on this frame.
+    flag: String,
+}
+
+/// The `convert --new-flow` flags that freeze `gains` and `contrast` — `reuse.flag`, and a
+/// clamped frame's own.
+fn reuse_flag(gains: [f32; 3], contrast: f32) -> String {
+    format!(
+        "--white-balance {},{},{} --contrast {contrast}",
+        gains[0], gains[1], gains[2]
+    )
 }
 
 /// The rule's values, provisional (`nf-calibration/roll-white-rule`).
@@ -7805,7 +7817,8 @@ struct WhiteRule {
 
 #[derive(Debug, Serialize)]
 struct RollReuse {
-    /// For `convert --new-flow`.
+    /// For `convert --new-flow`, on every frame but a clamped one, which takes its own
+    /// `white.clamped[].flag`.
     flag: String,
     /// A partial recipe, to merge into the roll's.
     recipe: RollFragment,
@@ -7932,6 +7945,7 @@ fn measured_roll_white(
     frames: &mut [MeasuredFrame],
     guarded: bool,
     linearization: f32,
+    gains: [f32; 3],
 ) -> Result<MeasuredRollWhite> {
     let stops: Vec<Option<f32>> = frames.iter().map(|f| f.white_stops).collect();
     let placed = roll_white::place_roll_white(&stops)?;
@@ -7956,6 +7970,7 @@ fn measured_roll_white(
                 input: f.input.clone(),
                 white_stops: f.white_stops.expect("a clamped frame has a white"),
                 contrast: cap_contrast,
+                flag: reuse_flag(gains, cap_contrast),
             })
             .collect(),
         rule: WhiteRule {
@@ -8229,6 +8244,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         &mut frames,
         args.leader.is_some(),
         recipe.reconstruction.linearization,
+        gains,
     )?;
     log.info(format_args!(
         "roll white {:+.2} stops ({:?}), contrast {}",
@@ -8249,10 +8265,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             pooled: pool.len() / 3,
         },
         reuse: RollReuse {
-            flag: format!(
-                "--white-balance {},{},{} --contrast {}",
-                gains[0], gains[1], gains[2], white.contrast
-            ),
+            flag: reuse_flag(gains, white.contrast),
             recipe: RollFragment {
                 scene_correction: WhiteBalanceSection {
                     white_balance: scene_correction::WhiteBalance::Explicit(gains),
