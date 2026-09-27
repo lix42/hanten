@@ -7,10 +7,10 @@ move each knob under the stage that now owns it.
 
 ## Design
 
-- **Its members belong to different stages now.** White balance, exposure and the
-  flare half of the black point are scene correction; `linear_range` is an affine
-  levels remap that needs a name and a home; the display-tone knobs are fit
-  range. One prefix cannot describe that, and `print` names a stage that no
+- **Its members belong to different stages now.** White balance and exposure
+  are scene correction; the black point is fit range's display black;
+  `linear_range` is an affine levels remap that needs a name and a home; the
+  display-tone knobs are fit range. One prefix cannot describe that, and `print` names a stage that no
   longer exists.
 - **Wait until there is no second implementation.** While legacy and the new
   chain both read `print.*`, a rename either renames twice or renames one

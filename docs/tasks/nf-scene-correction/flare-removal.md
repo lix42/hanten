@@ -1,60 +1,46 @@
 # The scene-referred half of the black point
 
+**Closed — not needed (2026-09-26).** There is no scene-referred additive term left
+for scene correction to remove, and the one job the legacy black point did is display
+black's (`nf-display-stages/parametric-operator`).
+
 ## Goal
 
 Give flare/fog removal a place of its own in scene correction, so that reaching
 black at the display end stops being done by subtracting from scene-referred
 values.
 
-## Design
+## Outcome
 
-- Today one linear subtraction (`print.black_point`) does two jobs at once. It is
-  the wrong instrument for the second: measured 2026-09-02
-  (`docs/progress/algo.md`), 0.019 crushed 0.69–8.66 % of every frame to code 0,
-  and ≈0.005 is the largest fixed value that crushes nothing — which is too small
-  to place black. Display black and the approach to it belong to fit range
-  (`nf-display-stages`); only the scene-referred term belongs here.
-- What this stage removes is **veiling glare and base fog**: an additive term the
-  lens and the scanner contribute, present before any display decision. Removing
-  it is a correction toward what the scene was, which is this stage's job
-  description.
-- **Do not re-create one knob spanning both jobs.** The split is the point; a
-  single number that a user nudges until blacks look right is exactly today's
-  behaviour under a new name.
+The premise was that `print.black_point` did two jobs: placing black on the display,
+and removing an additive veil the lens and scanner contribute. None of the three
+candidate terms belongs in this stage:
 
-## Open questions
+- **Base fog is already removed.** It is part of the unexposed film, so the measured
+  film base (from the rebate) includes it, and the decode references density to that
+  base.
+- **Camera lens glare is part of the photograph**, light that reached the film, not
+  a correction toward the scene. If it is ever wanted, it is an opt-in look control,
+  never a scene-correction default.
+- **Scanner veil acts in the transmission domain**, where it matters most in the
+  negative's dense areas (the scene's highlights). The clear base barely feels it.
+  If it is ever addressed, it is a scanner-calibration and highlight question, not
+  a black one.
 
-- Scalar or per-channel? Fog is per-layer on film, but the term acting here is
-  after the 3×3.
-- Stated, or measured from the frame? No flare estimate exists today — the
-  measurement in the repo is a *crush count*, which grades a candidate rather than
-  producing one.
-- Does it default to zero? Probably: a non-zero default subtraction is what
-  produced the crushing above. A non-zero default has to be argued from a
-  measurement, which is `nf-calibration`'s business.
-- Interaction with the decode's `offset`, which is also an additive density-domain
-  term — they are not the same quantity, and the report should not let them read
-  as one.
-- **It is the first producer of negative channels**, which the look's per-channel grade
-  passes through whole (`nf-look/per-channel-grade`'s guard decision): continuous along
-  exposure but not across colour, so noisy deep shadows straddling zero would render as
-  salt and pepper. Revisit that guard when this lands.
-- **Display black's reference passes through this stage** (2026-09-26,
-  `nf-display-stages/parametric-operator`). Display black grades the decoded film base
-  through the frame's own scene correction and look (`chain::render`) to learn where it
-  renders, and places black from there. A subtraction here would move that reference
-  too — to zero or below for a term as large as the base itself, which fit range
-  refuses. Decide whether the reference sees the flare term (the base is unexposed
-  film, so arguably it carries the fog but not the scene's veil) and keep the two from
-  reading as one knob.
+The evidence agrees: in `nf-calibration/anchor-comparison`, every roll's darkest
+pixels sat at the film base itself (red p0.5 at −3.6 to −3.8 scene stops, base at
+−3.7), so there is no pedestal in the shadows to remove. The legacy `--black-point`
+was therefore one job, placing black, and `--display-black`
+(`fit_range.display_black`) now does it.
 
-## How to Verify
+Consequences:
 
-- Default renders crush nothing on the frames the 2026-09-02 set measured;
-  `pipeline::shadow_metrics`' `crushed%` is the metric that can see it.
-- The resolved term is reported, separately from whatever fit range does at the
-  bottom end.
-- A stated value reproduces on a synthetic frame with a known additive pedestal.
+- Scene correction stays white balance and exposure.
+- Nothing upstream of the look produces negative channels, so the per-channel grade's
+  whole-pixel guard (`nf-look/per-channel-grade`) stays latent. Whatever stage first
+  produces negatives must revisit it.
+- Display black's reference (the film base graded with the frame) has no scene
+  subtraction to account for.
 
 ## Dependencies
 

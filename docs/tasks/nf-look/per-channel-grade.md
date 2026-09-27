@@ -84,7 +84,8 @@ channels after the 3×3.
   The trade-off, latent while nothing upstream produces negatives: it is continuous
   along exposure but not across colour — a channel at +ε is graded, its neighbour at −ε
   is not — so noisy deep shadows holding negatives would read as salt and pepper.
-  `nf-scene-correction/flare-removal`, the first producer of negatives, must revisit it.
+  Whichever stage first produces negatives must revisit it (`nf-scene-correction/flare-removal`,
+  which was expected to, closed without producing any).
 - **Value rule: exponents finite and positive, their spread (green included) under 1.**
   That bounds every channel's slope in exposure away from zero, so the grade is
   monotone — which the regional balance it replaces was not.

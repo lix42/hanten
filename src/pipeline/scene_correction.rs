@@ -1,10 +1,11 @@
 //! **Stage 1 of the new rendering chain — scene correction.**
 //!
 //! Photographic corrections toward what the scene was: **white balance** and
-//! **exposure**, and later the flare/fog half of the black point
-//! (`nf-scene-correction/flare-removal`). Scene-referred and linear: each is a
-//! per-channel gain on linear ACEScg, so the two fold into one multiply and nothing
-//! is clamped.
+//! **exposure**. There is no flare/fog subtraction here: base fog is already in the
+//! measured film base, lens glare is part of the photograph, and placing black is fit
+//! range's display black (`nf-scene-correction/flare-removal`, closed). Scene-referred
+//! and linear: each is a per-channel gain on linear ACEScg, so the two fold into one
+//! multiply and nothing is clamped.
 //!
 //! Written fresh, per CLAUDE.md's migration rule. `render_split::apply_shared_controls`
 //! runs the current chain's version of the same arithmetic, fused with the black

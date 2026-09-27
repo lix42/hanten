@@ -999,8 +999,7 @@ the design in `docs/design-update.md`:
 - `nf-scene-correction/stage` (new flow): `nf-core/stage-skeleton`, `nf-reconstruction/fixed-decode`
   — white balance and exposure resolved once and reported, instead of a fused
   expression
-- `nf-scene-correction/flare-removal` (new flow): `nf-scene-correction/stage`
-  — the black point does two jobs today; the scene-referred half lands here
+- `nf-scene-correction/flare-removal` (new flow, **closed—not needed**; the dep below is decision history): `nf-scene-correction/stage`
 - `nf-scene-correction/levels-knob` (new flow): `nf-scene-correction/stage`
   — `linear_range` is a levels remap, not fit range — decide whether it
   survives and where
@@ -1666,15 +1665,16 @@ the design in `docs/design-update.md`:
   written for three dye layers and says nothing about where mono pools
 
 ### nf-scene-correction — [progress](progress/nf-scene-correction.md)
-> Photographic corrections as a named stage: white balance, exposure, and the
-> scene-referred half of the black point.
+> Photographic corrections as a named stage: white balance and exposure.
 
 - [x] [Scene correction as a named stage](tasks/nf-scene-correction/stage.md)
   — white balance and exposure resolved once and reported, instead of a fused
   expression
-- [ ] [The scene-referred half of the black
-  point](tasks/nf-scene-correction/flare-removal.md) — the black point does
-  two jobs today; the scene-referred half lands here
+- [x] [The scene-referred half of the black
+  point](tasks/nf-scene-correction/flare-removal.md) — **closed—not needed
+  2026-09-26**: base fog is already in the measured film base, lens glare is part of
+  the photograph, and scanner veil is a highlight question; `--display-black` does
+  the black point's one job
 - [ ] [A home and a name for
   `linear_range`](tasks/nf-scene-correction/levels-knob.md) — `linear_range`
   is a levels remap, not fit range — decide whether it survives and where
