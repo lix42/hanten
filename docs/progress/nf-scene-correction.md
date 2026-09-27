@@ -11,7 +11,7 @@ ones.
 
 ## Epic summary
 
-Photographic corrections as a named stage: white balance, exposure, and the scene-referred half of the black point.
+Photographic corrections as a named stage: white balance and exposure.
 
 The epic was created on 2026-09-19 as part of the new-flow migration plan
 (`docs/nf-migration.md`). **`stage`** (2026-09-22) filled `pipeline::scene_correction`:
@@ -29,9 +29,13 @@ fixed decode's output, guards against a fully exposed frame with the leader, and
 reports gains that are then *stated* here — so the stage estimates nothing and the
 render stays per-frame pure. The per-frame `gray-world` / `percentile` modes and
 `--auto-wb` retired on this chain (refused by name). The measurement region therefore
-has no consumer inside a new-flow render; a flare estimate over it
-(`flare-removal`) would be the first, and would reintroduce the region argument and
-the empty-region refusal the stage no longer needs.
+has no consumer inside a new-flow render.
+
+**There is no scene-side black-point term (`flare-removal`, closed as not needed
+2026-09-26).** Base fog is already in the measured film base, lens glare is part of the
+photograph, and scanner veil is a highlight question. Placing black is fit range's
+`--display-black`. So this stage produces no negative channels, and display black's
+film-base reference has no scene subtraction to account for.
 
 ## stage
 
@@ -88,14 +92,38 @@ the empty-region refusal the stage no longer needs.
 
 ## flare-removal
 
-**Status:** not started
-**Updated:** 2026-09-25
+**Status:** closed — not needed
+**Updated:** 2026-09-26
 
 - 2026-09-19: created with the new-flow plan. Goal: the scene-referred half of the black point.
 - 2026-09-25: pointer from [`nf-calibration/anchor-comparison`](../tasks/nf-calibration/anchor-comparison.md): its black probe showed the new chain needs a black
   point, which `nf-display-stages/parametric-operator` now owns (the film base as the
   reference). Scanner veil and base fog stay this task's, as a scene term. The two meet
   where the base renders, so measure fog against that level rather than a second one.
+- 2026-09-26: **closed as not needed** (user, relayed from the
+  `nf-display-stages/parametric-operator` session after display black landed in #175).
+  The task's premise was a scene-referred additive term, "veiling glare and base fog",
+  for this stage to subtract. None of the candidates is one:
+  - **Base fog** is part of the unexposed film. The measured film base (from the
+    rebate) includes it, and the decode references density to that base, so it is
+    already removed.
+  - **Camera lens glare** is light that reached the film: part of the photograph, not a
+    correction toward the scene. If it is ever wanted, it is an opt-in look control,
+    never a scene-correction default.
+  - **Scanner veil** adds light in the transmission domain, where it matters most in
+    the negative's dense areas (the scene's highlights). The clear base barely feels it.
+    It is a scanner-calibration and highlight question, not a black one.
+
+  Evidence: in `nf-calibration/anchor-comparison` every roll's darkest pixels sat at
+  the film base itself (red p0.5 at −3.6 to −3.8 scene stops, base at −3.7), so there
+  is no pedestal in the shadows. The legacy `--black-point` was therefore one job,
+  placing black, which `--display-black` (`fit_range.display_black`) now does.
+  Consequences: the per-channel grade's whole-pixel guard stays latent, since no stage
+  upstream produces negatives; display black's reference needs no rule for a scene
+  subtraction. Refusing `--black-point` under `--new-flow` as `Never` (pointing at
+  `--display-black`), and removing the "flare half" wording from `fit_range`,
+  `recipe`, the design docs and the guide, goes in `parametric-operator`'s follow-up,
+  not here.
 
 ## levels-knob
 

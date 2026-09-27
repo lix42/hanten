@@ -4,7 +4,8 @@
 //! today, and later print emulation and per-stock normalization. Scene-referred and
 //! linear. Each control lands here with its own task under `nf-look`, as its own key in
 //! the recipe's `look` section — not one CDL-style object, whose slope and offset would
-//! duplicate white balance and the flare subtraction, which scene correction owns.
+//! duplicate white balance, which scene correction owns, and display black, which fit
+//! range owns.
 //!
 //! **Its position is a constraint, not a preference.** The look sits after scene
 //! correction and *above* the SDR/HDR branch, because a gain map requires the two
@@ -217,8 +218,8 @@ pub struct LookSection {
     ///   (within `f32` range). The cost is a discontinuity across colour, not exposure:
     ///   a pixel with a channel at `+ε` is fully graded while its neighbour at `−ε` is
     ///   untouched, which in noisy deep shadows holding negatives would read as salt and
-    ///   pepper (at −6 stops a red exponent of 1.1 moves red about 34%) — latent until a
-    ///   stage produces negatives (`nf-scene-correction/flare-removal`).
+    ///   pepper (at −6 stops a red exponent of 1.1 moves red about 34%) — latent while
+    ///   no stage upstream produces negatives.
     ///
     /// `[1, 1]` is the identity, bit-exact.
     pub channel_grade: [f32; 2],

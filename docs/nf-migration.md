@@ -58,7 +58,7 @@ authoritative for status and dependencies.
 |---|---|
 | `nf-core` | The new flow exists and can be selected |
 | `nf-reconstruction` | The fixed, stock-agnostic decode |
-| `nf-scene-correction` | White balance, exposure, flare — as a named stage |
+| `nf-scene-correction` | White balance and exposure, as a named stage |
 | `nf-look` | The creative stage, which does not exist today |
 | `nf-display-stages` | Fit range and fit gamut as real stages |
 | `nf-destinations` | Where a render can go |
@@ -80,9 +80,10 @@ half of `gamma`; `scale` as one global value; `Dmax` off the path. **Not** which
 values — that is `nf-calibration`.
 
 ### `nf-scene-correction`
-White balance, exposure and flare/fog removal on scene-referred values; the black
-point split in two (flare here, display black in fit range); a home and a name for
-what `linear_range` does today.
+White balance and exposure on scene-referred values, and a home and a name for what
+`linear_range` does today. The black point is not split: its one job, placing black,
+is fit range's display black, and there is no scene-side flare/fog term to remove
+(`flare-removal`, closed 2026-09-26).
 
 ### `nf-look`
 The stage itself — where it sits, its recipe section, its report fields — plus the
