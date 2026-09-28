@@ -15,7 +15,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > retired, §5–§6), `nf-destinations/preset-set` (the `--new-flow` destination
 > flags) and `nf-retire/characteristic` (the curve, `--density-curve`, `--film-stock`
 > and `--preset` retired, §5–§6), and `nf-display-stages/parametric-operator`
-> (`--display-black`, display black on by default under `--new-flow`, §11). The staleness
+> (`--display-black`, display black on by default under `--new-flow`, §11), and
+> `nf-destinations/gain-map-destination` (`--range hdr` writes the gain-map JPEG, §11). The staleness
 > signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
@@ -1211,6 +1212,7 @@ instead of all four. Only these combinations are written today:
 | `hdr` | `linear` | `bt2020` | `tiff` | 32-bit float display-linear TIFF (1.0 = 203 cd/m²) |
 | `hdr` | `pq` / `hlg` | `bt2020` | `tiff` | Rec.2100 signal as full-range 16-bit TIFF codes |
 | `hdr` | `pq` / `hlg` | `bt2020` | `avif` | 10-bit 4:4:4 AVIF |
+| `hdr` | `native` | `display-p3` | `jpeg` | gain-map JPEG: an 8-bit SDR base with a per-channel ISO 21496-1 gain map |
 
 `--film-master` writes the fixed decode's linear ACEScg as an unclamped 32-bit float TIFF
 with **no** rendering stage, so it refuses any stage you ask for — scene correction
@@ -1219,30 +1221,42 @@ with **no** rendering stage, so it refuses any stage you ask for — scene corre
 accepted, since neither asks for anything: `--exposure 0 --white-balance 1,1,1`, the
 empty look `--contrast 1 --highlight-desaturation 0`, and `--display-tone-headroom 0
 --display-black off` (or their default 6).
-An HDR JPEG with a gain map (`--range hdr --container jpeg`) and an SDR JPEG are
-planned, and refused as not written yet.
+An SDR JPEG (`--container jpeg` alone) is planned, and refused as not written yet.
+
+**The gain-map JPEG** renders one graded image twice — an SDR base and an HDR
+rendition clamped to the 1000 cd/m² peak — and stores the per-channel ratio between
+them as a half-resolution, three-channel gain map. It carries **ISO 21496-1 metadata
+only**, in a Multi-Picture Format container Hanten writes itself: no Ultra HDR v1 XMP,
+which cannot describe a per-channel map. Apple ImageIO reads it as HDR; a reader that
+knows only the Ultra HDR v1 XMP, or no gain maps at all, shows the SDR base. (The
+current chain's `gain-map-hdr` preset is a different file: a single-channel map in both
+dialects.)
 
 **Leave an axis unset and it is derived**, in the order range, transfer, gamut,
 container: its default when a destination fits, else the one value left, else a
-refusal listing the choices. So `--transfer pq` alone is an HDR BT.2020 TIFF and
-`--gamut adobe-rgb` alone the Adobe RGB TIFF, while `--gamut bt2020` asks which
-transfer. A value you **state** is never overridden — a combination the table lacks is
+refusal listing the choices. So `--range hdr` alone is the gain-map JPEG,
+`--transfer pq` alone an HDR BT.2020 TIFF and `--gamut adobe-rgb` alone the Adobe RGB
+TIFF, while `--gamut bt2020` asks which transfer. A value you **state** is never overridden — a combination the table lacks is
 refused, naming the conflicting pair and a flag that fixes it:
 
 ```console
 $ hanten convert … --new-flow --range hdr --gamut adobe-rgb
 usage: no destination combines --range hdr and --gamut adobe-rgb (recipe keys
-`output.display.range`, `.transfer`, `.gamut`, `.container`). Use --range sdr, or
---gamut bt2020 with --transfer linear|pq|hlg
+`output.display.range`, `.transfer`, `.gamut`, `.container`). Use --range sdr,
+--gamut display-p3, or --gamut bt2020 with --transfer linear|pq|hlg
 ```
 
 The report records every resolved axis in `new_flow.destination`
 (`{"display": {"range": "hdr", "transfer": "pq", "gamut": "bt2020", "container": "avif"}}`,
 or `"film-master"`), which is exactly the recipe `output` that replays it. An HDR
 destination clamps its rendition to the 1000 cd/m² peak and counts what that clamped
-in `new_flow.peak_clamp` and in `loss`, where `--strict` sees it; one whose brightest
-pixel stays at or below reference white is warned about, naming `--exposure` and
-`--range sdr` as the remedies. On `roll`, each frame's derived name takes its
+in `new_flow.peak_clamp` and in `loss`, where `--strict` sees it; a TIFF or AVIF whose
+brightest pixel stays at or below reference white is warned about, naming `--exposure`
+and `--range sdr` as the remedies. The gain-map JPEG is not warned about: an SDR-range
+frame makes a **flat** gain map, which `new_flow.gain_map.flat` states and which is a
+correct file (it displays as its base), so `--strict` passes it. Its `loss` counts
+both renditions — the SDR base's clip and the HDR rendition's clamp — over both
+renditions' samples. On `roll`, each frame's derived name takes its
 destination's container, and a per-frame `params.output` changes that frame's
 destination (a per-frame `output.display` joins the shared recipe's axes, axis by axis)
 and raises a roll warning (failed by `--strict`), even when it restates the
@@ -1250,18 +1264,19 @@ roll's.
 
 - **The suffix is judged against that destination**, on `convert` and on a `roll`
   manifest's explicit `output`: a suffix the container accepts is kept as typed, a
-  missing one is completed (`.tiff`, `.avif`), and anything else is refused:
+  missing one is completed (`.tiff`, `.avif`, `.jpg`), and anything else is refused:
 
   ```console
   $ hanten convert scan.tif -o out.jpg --film-base 0.9,0.55,0.42 --new-flow
   usage: the output path out.jpg does not end in .tif or .tiff: under --new-flow the
   destination is --range sdr --transfer native --gamut display-p3 --container tiff,
   which writes .tif or .tiff. Hanten never renames a suffix you state — drop .jpg and
-  the path is completed for you
+  the path is completed for you, or state a destination that writes it: --range hdr
+  --container jpeg
   ```
 
-  When a destination written today has that container, the refusal offers it too, as
-  the flags to add on top of what you stated — restating any axis you (or `--params`)
+  When a destination written today has that container, the refusal offers it too (as
+  above), as the flags to add on top of what you stated — restating any axis you (or `--params`)
   stated that it needs changed. So `-o out.avif` adds `…, or state a destination that
   writes it: --transfer pq --container avif; --transfer hlg --container avif`, and with a
   recipe stating `"gamut": "adobe-rgb"` each offer also carries `--gamut bt2020`. With
@@ -1293,8 +1308,20 @@ roll's.
   and `"sidecar_written": false`. The film master runs no stage, so its `stages` is
   empty and those three blocks are absent. The HDR destinations also fill the same
   `hdr_linear_tiff` / `hdr_coded_tiff` / `avif` block the current chain's HDR presets
-  do. Its final shape is
-  `nf-core/report-contract`'s to decide.
+  do. The gain-map JPEG instead adds `new_flow.gain_map`: the per-channel gain range
+  at full resolution (`min`, `max`, linear, exact), `flat` (every gain within 1/510 of a
+  stop of 1 — rounding, not HDR — in which case the map is written inert), the stored
+  map's `width` and
+  `height`, and `base_fit_range` — fit range as the SDR base ran it, since
+  `fit_range` is the HDR rendition's (they differ only in `display_peak`):
+
+  ```console
+  $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow --range hdr \
+      | jq -c '.new_flow.gain_map | {min, max, flat, width, height}'
+  {"min":[0.9999999,1.0,1.0],"max":[1.9145154,1.9127859,1.9116272],"flat":false,"width":251,"height":231}
+  ```
+
+  Its final shape is `nf-core/report-contract`'s to decide.
 
 What *is* live is the availability rule: a knob the new chain cannot honour is
 refused (exit 2) rather than accepted and ignored, and the message says whether the
@@ -1414,7 +1441,7 @@ the knob went:
 | `--print-exposure` | renamed: `--exposure` (below) |
 | `--black-point` | split in two — display black in fit range, which is `--display-black` (below), and a flare/fog subtraction in scene correction, which has not landed — which is why it is not a rename |
 | `--linear-range` | an affine levels remap needing a stage and a name; retiring it outright is a listed outcome |
-| `--output-preset` | the destination flags `--range`, `--transfer`, `--gamut`, `--container` or `--film-master` (above); the refusal names the preset's counterpart |
+| `--output-preset` | the destination flags `--range`, `--transfer`, `--gamut`, `--container` or `--film-master` (above); the refusal names the preset's counterpart — for `gain-map-hdr` and `ultra-hdr-v1` the nearest, `--range hdr`, and how its file differs |
 | `--telemetry`, `--telemetry-file` | the new chain's report and telemetry shape — the record would name the current chain's preset and timing buckets |
 
 Unlike the decode's knees, **no value is spared here** — `--linear-range 0,1`

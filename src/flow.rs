@@ -425,16 +425,14 @@ fn output_preset_counterpart(args: &ConvertArgs) -> Option<String> {
             "`{}` is the new flow's default destination, so drop the flag.",
             preset.name()
         ),
-        Counterpart::NotYet { flags, instead }
-        | Counterpart::Unnamed {
-            what: flags,
-            instead,
-        } => {
-            format!(
-                "`{}`'s counterpart, {flags}, is not written yet; {instead}.",
-                preset.name()
-            )
-        }
+        Counterpart::Nearest { flags, differs } => format!(
+            "For `{}`, the nearest is {flags}: {differs}.",
+            preset.name()
+        ),
+        Counterpart::Unnamed { what, instead } => format!(
+            "`{}`'s counterpart, {what}, is not written yet; {instead}.",
+            preset.name()
+        ),
     })
 }
 
@@ -445,14 +443,15 @@ enum Counterpart {
     Flags(&'static str),
     /// The default destination is the counterpart: no flag needed.
     Default,
-    /// Planned but not written yet; `instead` names what is.
-    NotYet {
+    /// No destination writes the same file, and none is planned; `flags` write the
+    /// closest one, and `differs` says how it differs.
+    Nearest {
         flags: &'static str,
-        instead: &'static str,
+        differs: &'static str,
     },
     /// Planned, but no axis value names it yet, so `what` is prose rather than flags;
     /// `instead` names what is written. `counterparts_resolve` holds that no axis spells
-    /// it, so the variant moves to [`Counterpart::NotYet`] when one does.
+    /// it, so the variant becomes flags when one does.
     Unnamed {
         what: &'static str,
         instead: &'static str,
@@ -460,8 +459,8 @@ enum Counterpart {
 }
 
 /// Scaffolding with the rest of this module: the output presets retire with the current
-/// chain. `counterparts_resolve` holds each named flag set to a destination that is
-/// written, or to one that is refused as not yet.
+/// chain. `counterparts_resolve` holds every named flag set — `Flags` and `Nearest`
+/// alike — to a destination that is written, and an `Unnamed` one to no axis spelling it.
 fn counterpart(preset: crate::types::OutputPreset) -> Counterpart {
     use crate::types::OutputPreset as P;
     match preset {
@@ -472,9 +471,17 @@ fn counterpart(preset: crate::types::OutputPreset) -> Counterpart {
         P::HdrHlgTiff => Counterpart::Flags("--transfer hlg"),
         P::HdrPq => Counterpart::Flags("--transfer pq --container avif"),
         P::HdrHlg => Counterpart::Flags("--transfer hlg --container avif"),
-        P::GainMapHdr | P::UltraHdrV1 => Counterpart::NotYet {
-            flags: "--range hdr --container jpeg",
-            instead: "the HDR destinations written today are --transfer linear, pq or hlg",
+        // Neither is the same file: the new flow's map is per-channel and ISO-only, so a
+        // reader that knows only the Ultra HDR v1 XMP shows its SDR base.
+        P::GainMapHdr => Counterpart::Nearest {
+            flags: "--range hdr",
+            differs: "its gain map is per-channel and carries ISO 21496-1 metadata only, \
+                      without the Ultra HDR v1 XMP this preset adds beside it",
+        },
+        P::UltraHdrV1 => Counterpart::Nearest {
+            flags: "--range hdr",
+            differs: "its gain map is per-channel and carries ISO 21496-1 metadata only, \
+                      not the Ultra HDR v1 XMP",
         },
         P::Compatibility => Counterpart::Unnamed {
             what: "an sRGB gamut",
@@ -1074,7 +1081,7 @@ mod tests {
 
     #[test]
     fn counterparts_resolve() {
-        use crate::destination::{Fault, Gamut, parse, resolve};
+        use crate::destination::{Gamut, parse, resolve};
         for preset in crate::types::OutputPreset::ALL {
             match counterpart(preset) {
                 Counterpart::Default => {
@@ -1086,13 +1093,10 @@ mod tests {
                         assert!(r.is_ok(), "{preset:?}: `{flags}` must be written: {r:?}");
                     }
                 }
-                Counterpart::NotYet { flags, .. } => {
+                Counterpart::Nearest { flags, .. } => {
                     let axes = stated(flags).expect("the film master is written");
                     let r = resolve(&axes);
-                    assert!(
-                        matches!(r, Err(Fault::NotYet { .. })),
-                        "{preset:?}: `{flags}` must name a planned row: {r:?}"
-                    );
+                    assert!(r.is_ok(), "{preset:?}: `{flags}` must be written: {r:?}");
                 }
                 // Prose because no axis spells it: when a gamut does, this fails and
                 // the counterpart becomes flags.

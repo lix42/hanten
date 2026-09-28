@@ -501,6 +501,18 @@ pub enum RunProfile {
         /// Whether a u16 IR TIFF is staged before the primary.
         export_ir: bool,
     },
+    /// `--new-flow` into the **gain-map JPEG**: the decoded image, then
+    /// `chain::render_pair` — the chain's buffer (image-shaped: the decode's cloned IR
+    /// plane is dropped only as the pair starts, and freed pages stay resident) and the
+    /// RGB-only graded copy it splits off — then the full-resolution f32 gains. The
+    /// HDR rendition and the gains are dropped as soon as the next buffer is built
+    /// from them, but freed pages stay resident, so they are summed, not competed.
+    /// Encode adds the u8 base, the half-resolution map, both JPEGs and the assembled
+    /// file. **Provisional**: counted, not measured (`nf-destinations/memory-profiles`).
+    NewFlowGainMapJpeg {
+        /// Whether a u16 IR TIFF is staged before the primary.
+        export_ir: bool,
+    },
     /// `inspect` / `estimate`: decode, then sample — no render, no encode.
     DecodeOnly,
     /// `measure-roll`, per frame: the fixed decode into linear ACEScg, then a strided
@@ -927,6 +939,25 @@ pub fn estimate_peak(
                 sum(sum(sum(render, avif_staging)?, ir_export)?, sampled)?,
             )
         }
+        RunProfile::NewFlowGainMapJpeg { export_ir } => {
+            // Render: decoded + the chain's image-shaped buffer + the RGB-only split
+            // copy + the f32 gains.
+            let rgb32 = mul(pixels, WORKING_CHANNELS * F32_BYTES)?;
+            let render = sum(mul(image, 2)?, mul(rgb32, 2)?)?;
+            // Encode: all of that retained, plus 3 B/px of u8 base, 0.75 B/px of u8
+            // map, both JPEGs and the assembled file (each smaller than the raw bytes
+            // it holds) — 12 B/px covers them loosely — and the optional u16 IR plane.
+            let byte_staging = mul(pixels, 12)?;
+            let ir_export = if export_ir && shape.ir_present {
+                mul(pixels, 2)?
+            } else {
+                0
+            };
+            (
+                sum(render, sampled)?,
+                sum(sum(sum(render, byte_staging)?, ir_export)?, sampled)?,
+            )
+        }
         // One arm for both dialects: see `RunProfile::GainMapHdr`'s note on why they
         // share it, and what in the staging term covers the ISO half.
         RunProfile::UltraHdrV1 { export_ir } | RunProfile::GainMapHdr { export_ir } => {
@@ -947,12 +978,9 @@ pub fn estimate_peak(
             // That dialect now *has* a CLI caller (`gain-map-hdr`), and this term
             // was re-checked when it got one: both JPEGs together are far smaller
             // than the raw frame, so 20 B/px stays loose over the extra copy, and
-            // both profiles are measured on two frame sizes below. Still true:
-            // `iso::encode_iso_gain_map` would add roughly 24 B/px of full-frame
-            // buffers (f32 per-channel normalization plus its deinterleaved planes)
-            // if it ever reaches a live path — the shipped presets both encode the
-            // *legacy* map and project ISO fields from it. Nothing tests this model
-            // against the code (module doc).
+            // both profiles are measured on two frame sizes below. Both presets
+            // encode the *legacy* map and project ISO fields from it. Nothing tests
+            // this model against the code (module doc).
             let byte_staging = mul(pixels, 20)?;
             let ir_export = if export_ir && shape.ir_present {
                 mul(pixels, 2)?
@@ -1654,6 +1682,11 @@ mod tests {
             // f32 is written verbatim, so encode adds nothing and render is the peak.
             (RunProfile::NewFlowF32Tiff { export_ir: false }, "render"),
             (RunProfile::NewFlowAvif { export_ir: false }, "encode"),
+            // Encode retains every render buffer and adds the byte staging.
+            (
+                RunProfile::NewFlowGainMapJpeg { export_ir: false },
+                "encode",
+            ),
             (RunProfile::MeasureRoll, "render"),
         ] {
             assert_eq!(peak_phase(profile), expected, "{profile:?}");

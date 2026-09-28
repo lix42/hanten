@@ -382,6 +382,32 @@ pub struct PeakClamp {
     pub below_zero: u64,
 }
 
+/// Clamp an HDR rendition's interleaved `rgb` to `[0, LINEAR_HEADROOM]` in place,
+/// counting what it clamps — the hand-off every new-chain HDR destination makes,
+/// whatever its primaries ([`from_new_chain`] for BT.2020, the gain map for Display
+/// P3). A non-finite sample is refused, naming the lowest pixel: the chain never
+/// writes one.
+pub fn clamp_to_peak(rgb: &mut [f32]) -> Result<PeakClamp> {
+    // Integer counts, so the order they are folded in does not matter; one sequential
+    // pass keeps the first non-finite pixel's index the lowest.
+    let mut clamp = PeakClamp::default();
+    for (index, px) in pixels::triples(rgb)?.iter().enumerate() {
+        for v in px {
+            if !v.is_finite() {
+                return Err(NcError::Other(format!(
+                    "the HDR rendition has a non-finite sample at pixel {index} ({px:?})"
+                )));
+            }
+            clamp.above_peak += u64::from(*v > LINEAR_HEADROOM);
+            clamp.below_zero += u64::from(*v < 0.0);
+        }
+    }
+    pixels::map_in_place(rgb, |px| {
+        *px = px.map(|v| v.clamp(0.0, LINEAR_HEADROOM));
+    });
+    Ok(clamp)
+}
+
 /// The new chain's HDR rendition, handed to the HDR encoders (`nf-destinations/preset-set`).
 ///
 /// `image` is fit gamut's output in linear BT.2020, relative to reference white. **Every
@@ -402,23 +428,7 @@ pub fn from_new_chain(
     gamut_mapping: &'static str,
 ) -> Result<(LinearBt2020Hdr, PeakClamp)> {
     image.ir = None;
-    // Integer counts, so the order they are folded in does not matter; one sequential
-    // pass keeps the first non-finite pixel's index the lowest.
-    let mut clamp = PeakClamp::default();
-    for (index, px) in pixels::triples(&image.rgb)?.iter().enumerate() {
-        for v in px {
-            if !v.is_finite() {
-                return Err(NcError::Other(format!(
-                    "the HDR rendition has a non-finite sample at pixel {index} ({px:?})"
-                )));
-            }
-            clamp.above_peak += u64::from(*v > LINEAR_HEADROOM);
-            clamp.below_zero += u64::from(*v < 0.0);
-        }
-    }
-    pixels::map_in_place(&mut image.rgb, |px| {
-        *px = px.map(|v| v.clamp(0.0, LINEAR_HEADROOM));
-    });
+    let clamp = clamp_to_peak(&mut image.rgb)?;
     let content_light = measure_content_light(&image.rgb);
     Ok((
         LinearBt2020Hdr {

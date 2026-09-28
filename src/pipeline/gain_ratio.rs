@@ -6,16 +6,19 @@
 //! against that. Ratioing against the unclamped rendition stores a gain short by
 //! whatever was clamped, and the highlight rebuilds dark with nothing counting it.
 //!
-//! This is the arithmetic only. Downsampling, quantization and the container (Ultra
-//! HDR / ISO 21496-1) are the destination's (`nf-destinations/gain-map-destination`), and so is
+//! This is the arithmetic only. Downsampling, quantization and the container (ISO
+//! 21496-1) are the destination's (`nf-destinations/gain-map-destination`), and so is
 //! the offset, which is format policy rather than a conversion knob.
 //! Clamping the HDR rendition to the destination's peak, and counting what that
 //! clamps, is also the caller's: [`between`] clamps the alternate only to `≥ 0`.
 //!
 //! **A flat map is a fact, not an error.** When the pair agrees everywhere (a frame
 //! with nothing above diffuse white and no colour the SDR cube binds), every gain is
-//! exactly `1` and the map carries nothing. [`GainRange::flat`] says so, so a report
-//! can state it rather than ship a gain map that silently does nothing.
+//! `1` and the map carries nothing. [`GainRange::flat`] says so, so a report can state
+//! it rather than ship a gain map that silently does nothing. "Is `1`" means within
+//! [`FLAT_TOLERANCE_LOG2`], not exactly: the two branches round differently where they
+//! agree by construction (a gain of `0.9999999` has been measured on a real frame), so
+//! an exact test would call a flat frame live and a map of rounding noise HDR.
 //!
 //! Written fresh, per the migration rule: `pipeline::gain_map` is the current chain's
 //! builder and retires with it.
@@ -27,7 +30,6 @@ use crate::types::{LinearImage, NcError, Result};
 
 /// Full-resolution per-channel gains from a base (SDR) to an alternate (HDR)
 /// rendition.
-#[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/gain-map-destination`)
 #[derive(Debug)]
 pub struct GainRatios {
     width: u32,
@@ -38,18 +40,22 @@ pub struct GainRatios {
     range: GainRange,
 }
 
+/// How far from `1` a gain may be, in stops (`log2`), for the map to still be flat:
+/// half an 8-bit code step of a one-stop window, `1/510` of a stop (about 0.14 %) —
+/// below anything the map could show, and far above rounding noise.
+pub const FLAT_TOLERANCE_LOG2: f32 = 1.0 / 510.0;
+
 /// The extent of a gain map, per channel — what its metadata states and what a report
 /// reads.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct GainRange {
     pub min: [f32; 3],
     pub max: [f32; 3],
-    /// Every gain is exactly `1`: the two renditions are identical as stored, and the
-    /// map carries nothing.
+    /// Every gain is `1` within [`FLAT_TOLERANCE_LOG2`]: the two renditions agree as
+    /// stored, and the map carries nothing. `min` and `max` stay exact.
     pub flat: bool,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/gain-map-destination`)
 impl GainRatios {
     /// The gains' extent.
     pub fn range(&self) -> GainRange {
@@ -61,9 +67,23 @@ impl GainRatios {
         &self.rgb
     }
 
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// The offset `o` added to both renditions, which a map's metadata states.
+    pub fn offset(&self) -> f32 {
+        self.offset
+    }
+
     /// What a decoder rebuilds from `base` (the SDR rendition, clamped here as the
     /// encoder stores it) with these gains, at full resolution and precision — the
     /// map's round trip before any quantization.
+    #[cfg(test)]
     pub fn apply_to(&self, base: &LinearImage) -> Result<Vec<f32>> {
         check_dimensions(base, self.width, self.height)?;
         let gains = pixels::triples(&self.rgb)?;
@@ -89,7 +109,6 @@ impl GainRatios {
 /// sample is refused, naming the lowest pixel: the chain never writes one. So is a gain
 /// too large for an `f32`: the alternate is not clamped to a peak here (the
 /// destination's job), so a finite but huge HDR sample over a dark base can overflow.
-#[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/gain-map-destination`)
 pub fn between(sdr: &LinearImage, hdr: &LinearImage, offset: f32) -> Result<GainRatios> {
     if !(offset.is_finite() && offset > 0.0) {
         return Err(NcError::Other(format!(
@@ -131,7 +150,10 @@ pub fn between(sdr: &LinearImage, hdr: &LinearImage, offset: f32) -> Result<Gain
     if rgb.is_empty() {
         (min, max) = ([1.0; 3], [1.0; 3]);
     }
-    let flat = min == [1.0; 3] && max == [1.0; 3];
+    let flat = min
+        .iter()
+        .chain(&max)
+        .all(|g| g.log2().abs() <= FLAT_TOLERANCE_LOG2);
     Ok(GainRatios {
         width: sdr.width,
         height: sdr.height,
@@ -179,6 +201,24 @@ mod tests {
                 flat: true
             }
         );
+    }
+
+    #[test]
+    fn rounding_noise_is_flat_and_the_first_visible_gain_is_not() {
+        // One float step either side of 1 — what the two branches produce where they
+        // agree by construction — is flat; a gain just past the tolerance is live.
+        let o = OFFSET;
+        let hdr_for = |gain: f32| gain * (0.5 + o) - o;
+        let flat = [0.9999999_f32, 1.0000001];
+        let sdr = [0.5; 6];
+        let hdr = [flat[0], flat[1], 1.0, 1.0, 1.0, 1.0].map(hdr_for);
+        let range = between(&image(&sdr), &image(&hdr), o).unwrap().range();
+        assert!(range.flat, "{range:?}");
+        assert!(range.min[0] < 1.0, "min stays exact: {range:?}");
+        let live = 2.0_f32.powf(FLAT_TOLERANCE_LOG2 * 1.5);
+        let hdr = [live, 1.0, 1.0, 1.0, 1.0, 1.0].map(hdr_for);
+        let range = between(&image(&sdr), &image(&hdr), o).unwrap().range();
+        assert!(!range.flat, "{range:?}");
     }
 
     #[test]

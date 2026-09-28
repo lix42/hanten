@@ -78,6 +78,32 @@ meaningful.
 Measure `_BASE` once per roll the usual way — `hanten estimate`, or the frozen
 `scripts/real-scan-verify/recipes/<roll>.json`.
 
+## The new flow's ISO-only file
+
+`--new-flow --range hdr` (`nf-destinations/gain-map-destination`) writes a different
+file from a different container path — ISO metadata only, a **three-channel** map, and
+MPF written by `io::iso_gain_map` rather than libultrahdr — so it is checked from the
+CLI's own output, not from `iso_oracle_samples`:
+
+```bash
+hanten convert <scan> -o /tmp/iso-oracle/new-flow --film-base <r,g,b> \
+  --new-flow --range hdr
+./scripts/iso-decoder-oracle/oracle /tmp/iso-oracle/new-flow.jpg
+```
+
+The pass condition is the same (`PRESENT` plus a `GainMapMax` above 0). What
+differs, and is expected:
+
+- **The three `ChannelMetadata` entries differ from each other** — the map is
+  per-channel, where the current chain's three are copies of one luminance window.
+  This is the evidence that the per-channel fields are read, not just parsed.
+- The description's `PixelFormat` is `875836518` (`420f`, biplanar YCbCr) rather than
+  `1278226488` (`L008`, one plane), and no `data:` line prints: ImageIO hands a colour
+  map back as a pixel buffer, not bytes.
+- The new chain's default render is not flat on a real frame, so no EV is needed; a
+  flat frame reports `GainMapMax = 0` on every channel and nc's report says
+  `new_flow.gain_map.flat: true`.
+
 ## Reading the output
 
 For the dual-dialect file, the gate wants:

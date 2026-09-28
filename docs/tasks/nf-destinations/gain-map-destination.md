@@ -31,13 +31,30 @@ What is known:
 - Needs its own `RunProfile` (the pair holds two working buffers; the copy includes the
   IR plane).
 
-Open:
+Decided (user, 2026-09-27):
 
-- Downsampling and quantization of a three-channel map, and which ISO fields a
-  multichannel map states (`output/iso-gain-map-metadata` records that
-  `is_multichannel` describes the metadata's channel count).
-- Whether the default (`--range hdr` with nothing else) should resolve here once it
-  lands — the table's derivation already takes it there.
+- **nc writes the container itself** — JFIF, ICC, the ISO segments and MPF, with no
+  XMP and no libultrahdr. `package()` always writes the legacy XMP, which cannot
+  describe an RGB map, so reusing it would ship a misleading dual-dialect file. The
+  writer types the gain map `050000` from the start, so `output/mp-container-conformance`'s
+  type-code and JFIF-order gaps never arise on this path (that task keeps the legacy
+  one).
+- **The map is half resolution**, three channels, centre-aligned like
+  `gain_map::resample_axis`.
+- **A flat map is a report field only** — a fact about the frame, not a warning, so
+  `--strict` still passes a frame with no highlights.
+- `--range hdr` alone resolves here once the row is ready, by the table's existing
+  derivation.
+- The ISO field set and serializers in `pipeline/gain_map/iso.rs` are the format's, not
+  the old chain's, and are reused; its dead RGB encoder (`encode_iso_gain_map`), which
+  takes the legacy `GainMapRender`, is replaced rather than adapted.
+
+Settled by the oracle (2026-09-27): Apple ImageIO reads the ISO gain map from nc's own
+container, with the `050000` type code, and parses all three channels' metadata
+distinctly — see the progress log.
+
+Not checked: Chrome, and the HDR rendition on an HDR display. Android is
+`output/gain-map-dialect-activation`'s, for the current chain's file.
 
 ## How to Verify
 

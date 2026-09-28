@@ -30,6 +30,7 @@ pub mod display_tone;
 pub mod film_base;
 pub mod fit_gamut;
 pub mod fit_range;
+pub mod gain_encode;
 pub mod gain_map;
 pub mod gain_ratio;
 pub mod hdr;

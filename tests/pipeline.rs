@@ -12580,6 +12580,7 @@ fn every_new_flow_destination_renders_end_to_end() {
             "avif",
             Some("avif"),
         ),
+        (vec!["--range", "hdr"], "jpeg", "jpg", None),
     ]
     .into_iter()
     .enumerate()
@@ -12602,8 +12603,12 @@ fn every_new_flow_destination_renders_end_to_end() {
         assert_eq!(nf["stages"][1]["stage"], "look", "{extra:?}");
         let hdr = axes["range"] == "hdr";
         assert_eq!(nf["peak_clamp"].is_object(), hdr, "{extra:?}: {nf}");
+        let gain_map = axes["container"] == "jpeg";
+        assert_eq!(nf["gain_map"].is_object(), gain_map, "{extra:?}: {nf}");
         if hdr {
-            assert_eq!(axes["gamut"], "bt2020", "{extra:?}");
+            // Coded and linear HDR are BT.2020; the gain map shares its SDR base's.
+            let gamut = if gain_map { "display-p3" } else { "bt2020" };
+            assert_eq!(axes["gamut"], gamut, "{extra:?}");
         }
         if let Some(block) = block {
             assert!(report[block].is_object(), "{extra:?}: no `{block}` block");
@@ -12612,6 +12617,74 @@ fn every_new_flow_destination_renders_end_to_end() {
             assert_eq!(read_tiff_bits(&out), 16, "{extra:?}");
         }
     }
+}
+
+#[test]
+fn the_gain_map_destination_writes_an_iso_only_jpeg_and_reports_its_map() {
+    // `hdr-48bit.tif` is 502×462 and IR-free, so a `--strict` exit is this run's own.
+    let tmp = TempDir::new("new-flow-gain-map");
+    let convert = |name: &str, extra: &[&str]| {
+        let (code, stdout, err) =
+            new_flow_convert(&tmp.path(name), &[&["--range", "hdr"][..], extra].concat());
+        assert_eq!(code, 0, "{extra:?}: {err}");
+        let bytes = std::fs::read(tmp.path(&format!("{name}.jpg"))).unwrap();
+        (json(&stdout), bytes)
+    };
+
+    // Three stops up puts highlights above diffuse white: the map is live.
+    let (report, bytes) = convert("live", &["--exposure", "3"]);
+    let gm = &report["new_flow"]["gain_map"];
+    assert_eq!(gm["flat"], false, "{gm}");
+    assert!(
+        gm["max"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m.as_f64().unwrap() > 1.0)
+    );
+    assert_eq!(
+        (gm["width"].as_u64(), gm["height"].as_u64()),
+        (Some(251), Some(231))
+    );
+    assert_eq!(gm["base_fit_range"]["display_peak"], 1.0, "{gm}");
+    let hdr_peak = report["new_flow"]["fit_range"]["display_peak"]
+        .as_f64()
+        .unwrap();
+    assert!((hdr_peak - 1000.0 / 203.0).abs() < 1e-5, "{report}");
+    // ISO 21496-1 is the only dialect: its segment label, and no Ultra HDR v1 XMP.
+    let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(contains(b"urn:iso:std:iso:ts:21496:-1\0"));
+    assert!(contains(b"MPF\0"));
+    assert!(!contains(b"hdrgm"));
+    // The file opens as the SDR base in an ordinary reader.
+    assert_eq!(
+        image::load_from_memory(&bytes)
+            .unwrap()
+            .to_rgb8()
+            .dimensions(),
+        (502, 462)
+    );
+
+    // Far overexposed, the SDR base clips and the HDR rendition clamps at its peak — two
+    // renditions, both counted, so the loss is taken over both and stays a fraction.
+    let (report, _) = convert("over", &["--exposure", "12"]);
+    let loss = &report["loss"];
+    let clipped = loss["clipped_high"].as_u64().unwrap() + loss["clipped_low"].as_u64().unwrap();
+    let total = loss["total_samples"].as_u64().unwrap();
+    assert!(clipped > 0 && clipped <= total, "{loss}");
+    assert_eq!(total, 2 * 502 * 462 * 3, "{loss}");
+
+    // Five stops down leaves nothing above white: the map is flat, and says so in the
+    // report — not as a warning, so `--strict` still passes.
+    let (report, _) = convert("flat", &["--exposure=-5", "--strict"]);
+    let gm = &report["new_flow"]["gain_map"];
+    assert_eq!(gm["flat"], true, "{gm}");
+    assert_eq!(gm["min"], serde_json::json!([1.0, 1.0, 1.0]), "{gm}");
+    assert_eq!(gm["max"], serde_json::json!([1.0, 1.0, 1.0]), "{gm}");
+    assert!(
+        report["warnings"].as_array().is_none_or(|w| w.is_empty()),
+        "{report}"
+    );
 }
 
 #[test]
@@ -12837,16 +12910,20 @@ fn a_destination_the_table_lacks_is_refused_with_a_remedy_that_works() {
     let (code, _, err) = new_flow_convert(&tmp.path("b"), &["--gamut", "bt2020"]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("--transfer linear|pq|hlg"), "{err}");
-    // A planned row names its task and what is ready now.
-    let (code, _, err) = new_flow_convert(&tmp.path("c"), &["--range", "hdr"]);
+    // A planned row names its task and what is ready now, as the fewest flags to add
+    // to what was stated — and following that remedy converts.
+    let (code, _, err) = new_flow_convert(&tmp.path("c"), &["--container", "jpeg"]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("gain-map-destination"), "{err}");
-    // Each offered as the fewest flags to add to what was stated.
+    assert!(err.contains("output/sdr-jpeg-preset"), "{err}");
     assert!(
-        err.contains("adding to what is stated: --transfer linear;"),
+        err.contains("adding to what is stated: --range hdr "),
         "{err}"
     );
-    assert!(err.contains("--transfer pq --container avif"), "{err}");
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("c2.jpg"),
+        &["--container", "jpeg", "--range", "hdr"],
+    );
+    assert_eq!(code, 0, "{err}");
     // The destination flags mean nothing without `--new-flow`.
     let input = fixture("hdr-48bit.tif");
     let out = tmp.path("d.tiff");
@@ -12915,11 +12992,18 @@ fn a_new_flow_suffix_refusal_offers_only_a_destination_that_writes_it() {
         );
         assert_eq!(code, 0, "following `{offer}` must convert: {err}");
     }
-    // No ready destination writes a JPEG yet, so none is offered — only dropping it.
+    // The one ready JPEG is the gain map, offered beside dropping the suffix, and the
+    // offer converts as written.
     let (code, _, err) = new_flow_convert(&tmp.path("b.jpg"), &[]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("drop .jpg"), "{err}");
-    assert!(!err.contains("state a destination"), "{err}");
+    let (_, offer) = err
+        .split_once("state a destination that writes it: ")
+        .unwrap_or_else(|| panic!("no offer: {err}"));
+    assert_eq!(offer.trim(), "--range hdr --container jpeg", "{err}");
+    let flags: Vec<&str> = offer.split_whitespace().collect();
+    let (code, _, err) = new_flow_convert(&tmp.path("b.jpg"), &flags);
+    assert_eq!(code, 0, "{err}");
 
     // A roll frame's explicit path is refused naming recipe keys: a roll takes no
     // conversion flags.

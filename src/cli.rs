@@ -23,11 +23,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::algo::{FilmRgbImage, fixed};
 use crate::destination::{
-    Axis, Container, DisplayAxes, Encoding, Gamut, OutputSection, Range, Transfer,
+    Axis, Container, DisplayAxes, Encoding, Gamut, OutputSection, Range, Resolved, Transfer,
 };
 use crate::flow::{self, Flow};
 use crate::io::decode::{DecodeInfo, decode_within, probe};
-use crate::io::{avif, encode, staged, ultra_hdr};
+use crate::io::{avif, encode, iso_gain_map, staged, ultra_hdr};
 use crate::pipeline::chain;
 use crate::pipeline::display_tone::Headroom;
 use crate::pipeline::fit_gamut::DestinationGamut;
@@ -38,7 +38,8 @@ use crate::pipeline::input_semantics::{
 use crate::pipeline::memory::{self, MemoryReport, RunProfile, SamplePlan};
 use crate::pipeline::working_space::AcesCgImage;
 use crate::pipeline::{
-    color, film_base, gain_map, hdr, look, roll_white, scene_correction, sdr, stages, working_space,
+    color, film_base, gain_encode, gain_map, gain_ratio, hdr, look, roll_white, scene_correction,
+    sdr, stages, working_space,
 };
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::telemetry;
@@ -441,11 +442,12 @@ pub struct DestinationOverrides {
     /// only.
     #[arg(long, value_enum, ignore_case = true, value_name = "GAMUT")]
     pub gamut: Option<Gamut>,
-    /// The file container: `tiff` (the default), `jpeg` or `avif` (PQ/HLG only).
-    /// Destinations: SDR `native` TIFF in Display P3 or Adobe RGB; HDR BT.2020 as a
-    /// `linear` float TIFF, or `pq`/`hlg` in a 16-bit TIFF or a 10-bit AVIF. JPEG
-    /// (SDR, and HDR with a gain map) is not written yet. Recipe key
-    /// `output.display.container`. `--new-flow` only.
+    /// The file container: `tiff` (the default), `jpeg` (HDR with a gain map) or
+    /// `avif` (PQ/HLG only). Destinations: SDR `native` TIFF in Display P3 or Adobe RGB;
+    /// HDR BT.2020 as a `linear` float TIFF, or `pq`/`hlg` in a 16-bit TIFF or a 10-bit
+    /// AVIF; HDR Display P3 as a JPEG with an ISO 21496-1 gain map (`--range hdr`
+    /// alone). An SDR JPEG is not written yet. Recipe key `output.display.container`.
+    /// `--new-flow` only.
     #[arg(long, value_enum, ignore_case = true, value_name = "CONTAINER")]
     pub container: Option<Container>,
     /// Write the fixed decode's linear ACEScg, unclamped 32-bit float TIFF, with no
@@ -1550,6 +1552,9 @@ pub struct NewFlowResult {
     /// `loss` too; absent for an SDR destination and the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_clamp: Option<hdr::PeakClamp>,
+    /// The gain map the gain-map destination wrote. Absent for every other destination.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gain_map: Option<GainMapResult>,
     /// Always `false`: no sidecar is written under `--new-flow` yet. The new chain's
     /// recipe exists (`crate::recipe`); writing it here is `nf-core/report-contract`'s.
     pub sidecar_written: bool,
@@ -1557,6 +1562,24 @@ pub struct NewFlowResult {
     /// described the image this run replaced. Absent when there was none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removed_sidecar: Option<PathBuf>,
+}
+
+/// The gain map a gain-map destination wrote (`nf-destinations/gain-map-destination`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct GainMapResult {
+    /// The per-channel gain extent, linear, at full resolution before quantization —
+    /// and `flat`: every gain within rounding of `1` (`gain_ratio::FLAT_TOLERANCE_LOG2`,
+    /// 1/510 stop), so the map is written inert and the file displays as its SDR base
+    /// everywhere. A flat map is a fact about the frame (nothing above diffuse white,
+    /// no colour the SDR cube binds), stated here rather than warned about.
+    #[serde(flatten)]
+    pub range: gain_ratio::GainRange,
+    /// The stored map's size: half the frame's, rounded up.
+    pub width: u32,
+    pub height: u32,
+    /// Fit range as the SDR base ran it. `fit_range` beside this block is the HDR
+    /// rendition's; the two differ only in the peak.
+    pub base_fit_range: fit_range::FitRange,
 }
 
 /// One stage of the new chain and what it applied under the run's parameters.
@@ -5478,6 +5501,7 @@ fn new_flow_profile(destination: recipe::Destination, export_ir: bool) -> RunPro
             }
             Encoding::HdrLinearTiff => RunProfile::NewFlowF32Tiff { export_ir },
             Encoding::HdrAvif(_) => RunProfile::NewFlowAvif { export_ir },
+            Encoding::GainMapJpeg => RunProfile::NewFlowGainMapJpeg { export_ir },
         },
     }
 }
@@ -5514,6 +5538,16 @@ enum NewFlowPixels {
     HdrCoded(hdr::RenderedHdr, hdr::PeakClamp),
     /// A Rec.2100 signal for the AVIF.
     HdrAvif(hdr::RenderedHdr, hdr::PeakClamp),
+    /// The SDR base with the display curve applied and its ICC profile, and the gain
+    /// map to the HDR rendition clamped to `headroom`.
+    GainMap {
+        base: LinearImage,
+        icc: Vec<u8>,
+        map: gain_encode::GainMapImage,
+        headroom: f32,
+        clamp: hdr::PeakClamp,
+        report: GainMapResult,
+    },
 }
 
 impl NewFlowRender {
@@ -5524,7 +5558,8 @@ impl NewFlowRender {
                 pixels:
                     NewFlowPixels::HdrLinear(_, clamp)
                     | NewFlowPixels::HdrCoded(_, clamp)
-                    | NewFlowPixels::HdrAvif(_, clamp),
+                    | NewFlowPixels::HdrAvif(_, clamp)
+                    | NewFlowPixels::GainMap { clamp, .. },
                 ..
             } => Some(*clamp),
             Self::Rendered {
@@ -5544,9 +5579,37 @@ impl NewFlowRender {
                 NewFlowPixels::HdrCoded(r, _) | NewFlowPixels::HdrAvif(r, _) => {
                     Some(r.metadata().content_light)
                 }
-                NewFlowPixels::Sdr { .. } => None,
+                // A gain map's deliverable is an SDR base plus a map, so an HDR
+                // rendition near reference white makes a flat map, not a mislabelled
+                // container: `gain_map.flat` states it (the legacy gain map's rule).
+                NewFlowPixels::Sdr { .. } | NewFlowPixels::GainMap { .. } => None,
             },
             Self::FilmMaster { .. } => None,
+        }
+    }
+
+    /// Samples of a second rendition whose clamps [`peak_clamp`](Self::peak_clamp)
+    /// counts: the gain map's HDR rendition, beside the SDR base the encoder counts.
+    /// Zero for a single-rendition destination, whose clamp and encode count the same
+    /// samples.
+    fn second_rendition_samples(&self) -> u64 {
+        match self {
+            Self::Rendered {
+                pixels: NewFlowPixels::GainMap { base, .. },
+                ..
+            } => base.rgb.len() as u64,
+            Self::Rendered { .. } | Self::FilmMaster { .. } => 0,
+        }
+    }
+
+    /// What the gain-map destination wrote, for the report.
+    fn gain_map(&self) -> Option<GainMapResult> {
+        match self {
+            Self::Rendered {
+                pixels: NewFlowPixels::GainMap { report, .. },
+                ..
+            } => Some(*report),
+            Self::Rendered { .. } | Self::FilmMaster { .. } => None,
         }
     }
 
@@ -5586,6 +5649,68 @@ fn render_new_flow_destination(
     };
     let film_base =
         working_space::map_nc_film_rgb_v1(fixed::decode_film_base(base, &recipe.reconstruction)?);
+    // One match on the encoding, so a new row cannot reach an encoder it was not written
+    // for: the gain map renders a pair, every other destination one rendition.
+    match d.encoding {
+        Encoding::GainMapJpeg => render_gain_map(aces, film_base, recipe, d),
+        Encoding::SdrTiff => render_one(aces, film_base, recipe, d, |r| {
+            let (image, icc) = color::encode_display_linear(r.linear, r.gamut)?;
+            Ok(NewFlowPixels::Sdr { image, icc })
+        }),
+        Encoding::HdrLinearTiff => render_one(aces, film_base, recipe, d, |r| {
+            let (hdr, clamp) = r.bt2020()?;
+            Ok(NewFlowPixels::HdrLinear(hdr, clamp))
+        }),
+        Encoding::HdrCodedTiff(transfer) => render_one(aces, film_base, recipe, d, |r| {
+            let (hdr, clamp) = r.bt2020()?;
+            Ok(NewFlowPixels::HdrCoded(
+                hdr::encode_transfer(hdr, transfer)?,
+                clamp,
+            ))
+        }),
+        Encoding::HdrAvif(transfer) => render_one(aces, film_base, recipe, d, |r| {
+            let (hdr, clamp) = r.bt2020()?;
+            Ok(NewFlowPixels::HdrAvif(
+                hdr::encode_transfer(hdr, transfer)?,
+                clamp,
+            ))
+        }),
+    }
+}
+
+/// One rendition out of the chain, as a single-rendition encoder receives it.
+struct OneRendition {
+    linear: LinearImage,
+    gamut: DestinationGamut,
+    /// Fit range's and fit gamut's `applied`, which an HDR report names.
+    tone_curve: &'static str,
+    gamut_mapping: &'static str,
+}
+
+impl OneRendition {
+    /// The HDR hand-off. Every single-rendition HDR encoding is a BT.2020 one; the
+    /// destination table pairs them, and this names the break rather than encoding
+    /// other primaries under a BT.2020 tag.
+    fn bt2020(self) -> Result<(hdr::LinearBt2020Hdr, hdr::PeakClamp)> {
+        if self.gamut != DestinationGamut::Bt2020 {
+            return Err(NcError::Other(format!(
+                "an HDR destination reached its encoder in {} rather than BT.2020",
+                self.gamut.name()
+            )));
+        }
+        hdr::from_new_chain(self.linear, self.tone_curve, self.gamut_mapping)
+    }
+}
+
+/// Render one rendition through the chain for `d`, then `encode` it into its encoder's
+/// input.
+fn render_one(
+    aces: AcesCgImage,
+    film_base: AcesCgImage,
+    recipe: &Recipe,
+    d: Resolved,
+    encode: impl FnOnce(OneRendition) -> Result<NewFlowPixels>,
+) -> Result<NewFlowRender> {
     let params = recipe.chain_params(d.range.peak()?, d.gamut.destination());
     let chain::Rendered {
         image,
@@ -5595,35 +5720,12 @@ fn render_new_flow_destination(
         fit_range,
     } = chain::render(aces, film_base, &params)?;
     let (linear, gamut) = image.into_parts();
-    // Every HDR encoding here is a BT.2020 one; the destination table pairs them, and
-    // this names the break rather than encoding other primaries under a BT.2020 tag.
-    let bt2020 = |linear: LinearImage| {
-        if gamut != DestinationGamut::Bt2020 {
-            return Err(NcError::Other(format!(
-                "an HDR destination reached its encoder in {} rather than BT.2020",
-                gamut.name()
-            )));
-        }
-        hdr::from_new_chain(linear, fit_range.applied(), applied[3].1)
-    };
-    let pixels = match d.encoding {
-        Encoding::SdrTiff => {
-            let (image, icc) = color::encode_display_linear(linear, gamut)?;
-            NewFlowPixels::Sdr { image, icc }
-        }
-        Encoding::HdrLinearTiff => {
-            let (hdr, clamp) = bt2020(linear)?;
-            NewFlowPixels::HdrLinear(hdr, clamp)
-        }
-        Encoding::HdrCodedTiff(transfer) => {
-            let (hdr, clamp) = bt2020(linear)?;
-            NewFlowPixels::HdrCoded(hdr::encode_transfer(hdr, transfer)?, clamp)
-        }
-        Encoding::HdrAvif(transfer) => {
-            let (hdr, clamp) = bt2020(linear)?;
-            NewFlowPixels::HdrAvif(hdr::encode_transfer(hdr, transfer)?, clamp)
-        }
-    };
+    let pixels = encode(OneRendition {
+        linear,
+        gamut,
+        tone_curve: fit_range.applied(),
+        gamut_mapping: applied[3].1,
+    })?;
     Ok(NewFlowRender::Rendered {
         rendered: Box::new(ChainAccount {
             applied,
@@ -5632,6 +5734,63 @@ fn render_new_flow_destination(
             fit_range,
         }),
         pixels,
+    })
+}
+
+/// Render the gain-map destination: one graded image split into an SDR and an HDR
+/// rendition (`chain::render_pair`), the HDR clamped to the destination's peak and
+/// counted, the per-channel gains ratioed against the SDR base as the JPEG stores it,
+/// and the map quantized at half resolution.
+///
+/// The report's chain account is the HDR rendition's — the destination's range — and
+/// the SDR base's fit range rides in `gain_map.base_fit_range`. Each full-frame
+/// buffer is dropped as soon as the next one is built from it (`RunProfile::NewFlowGainMapJpeg`).
+fn render_gain_map(
+    aces: AcesCgImage,
+    film_base: AcesCgImage,
+    recipe: &Recipe,
+    d: Resolved,
+) -> Result<NewFlowRender> {
+    let peak = d.range.peak()?;
+    // Neither JPEG stores the IR plane (`--export-ir` reads the decoded image), so it is
+    // dropped before the pair splits the graded image and copies it.
+    let chain::RenderedPair { sdr, hdr } = chain::render_pair(
+        aces.without_ir(),
+        film_base,
+        &recipe.shared_params(),
+        d.gamut.destination(),
+        peak,
+    )?;
+    let base_fit_range = sdr.fit_range;
+    let (sdr_linear, gamut) = sdr.image.into_parts();
+    let (mut hdr_linear, _) = hdr.image.into_parts();
+    let clamp = hdr::clamp_to_peak(&mut hdr_linear.rgb)?;
+    let ratios = gain_ratio::between(&sdr_linear, &hdr_linear, gain_encode::OFFSET)?;
+    drop(hdr_linear);
+    let map = gain_encode::encode(&ratios)?;
+    let report = GainMapResult {
+        range: ratios.range(),
+        width: map.width,
+        height: map.height,
+        base_fit_range,
+    };
+    drop(ratios);
+    let (base, icc) = color::encode_display_linear(sdr_linear, gamut)?;
+    Ok(NewFlowRender::Rendered {
+        rendered: Box::new(ChainAccount {
+            applied: hdr.applied,
+            scene_correction: hdr.scene_correction,
+            look: hdr.look,
+            fit_range: hdr.fit_range,
+        }),
+        pixels: NewFlowPixels::GainMap {
+            base,
+            icc,
+            map,
+            headroom: peak.value(),
+            clamp,
+            report,
+        },
     })
 }
 
@@ -5688,6 +5847,13 @@ fn encode_new_flow_render(
             report_avif(report, &summary, log, warnings);
             (staged, outcome)
         }
+        NewFlowPixels::GainMap {
+            base,
+            icc,
+            map,
+            headroom,
+            ..
+        } => iso_gain_map::encode(&base, &icc, &map, headroom, output)?,
     })
 }
 
@@ -5766,6 +5932,7 @@ fn render_new_flow_frame(
         push_warning_buf(warnings, log, message);
     }
     let peak_clamp = render.peak_clamp();
+    let second_rendition_samples = render.second_rendition_samples();
     let rendered = match &render {
         NewFlowRender::Rendered { rendered, .. } => Some(rendered),
         NewFlowRender::FilmMaster { .. } => None,
@@ -5788,6 +5955,7 @@ fn render_new_flow_frame(
             recipe::Destination::Display(d) => OutputSection::Display(d.axes()),
         },
         peak_clamp,
+        gain_map: render.gain_map(),
         sidecar_written: false,
         removed_sidecar: None,
     });
@@ -5815,9 +5983,13 @@ fn render_new_flow_frame(
     // What the HDR hand-off clamped to the peak is lost range like the encoder's own
     // clip, so it is counted there: the warning, the report's `loss` and `--strict` all
     // see it.
+    // The gain map's clamp counts its HDR rendition, a second set of samples beside the
+    // SDR base the encoder counted, so the total grows with it: a fraction over one
+    // rendition's samples could exceed 100 %.
     if let Some(clamp) = peak_clamp {
         outcome.loss.clipped_high += clamp.above_peak;
         outcome.loss.clipped_low += clamp.below_zero;
+        outcome.loss.total_samples += second_rendition_samples;
     }
     report_encode_outcome(&mut report, &outcome, log, warnings);
 
