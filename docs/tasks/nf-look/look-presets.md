@@ -58,7 +58,8 @@ the last three names left the flag with nothing to name. Both open questions res
   works on `roll`, with no calibration constants in code. That also removes the reason
   `recipe-composition` had for carrying `--preset` onto `roll`.
 - Per-stock normalization brings its own flag (`stock-data-home`); the "direct"
-  rendering is a destination's (`nf-destinations/direct-preset`).
+  rendering is a rendering selector, `--rendering direct`
+  (`nf-destinations/direct-preset`, re-planned 2026-09-27).
 
 `--preset` is a hidden migration error at every value, on both chains; the expansion
 layer, the report's `conversion_preset` block and the `defaults < params < preset <

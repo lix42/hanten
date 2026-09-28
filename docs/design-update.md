@@ -661,6 +661,9 @@ the flare half stays `nf-scene-correction/flare-removal`'s.
 
 ### A "direct" preset for external editing
 
+*Revised 2026-09-27: it became one of two renderings, below; its display black, contrast
+and gamut are settled there.*
+
 A render that does as little as possible, for a workflow that continues in
 Lightroom or Photoshop: identity scene correction, empty look, Adobe RGB, and
 only the fit range needed to land in the container. Two properties it must have,
@@ -676,6 +679,100 @@ and both come from reconstruction's conventions rather than from rendering:
 "Minimal" cannot mean "no tone": Adobe RGB ends at 1.0 and a real decode exceeds
 it, so a gentle compression is still a choice, just a fixed and documented one.
 This is the preset that makes Adobe RGB a must-have output (Part 2 decisions).
+
+### Two renderings: `direct` and `default` (2026-09-27)
+
+**What changed.** Part 1 set out to tune the decode to the best common ground at one
+acceptable configuration and leave taste to rendering, with "direct" as the plainest
+taste — the one the decode is judged through. Since then, what a common ground could not
+reach has become **measured per roll** and moved into rendering: `hanten measure-roll`
+measures the roll's white balance (`nf-scene-correction/roll-white-balance`) and its
+white, which sets the contrast (`nf-calibration/roll-white-rule`). So a render has three
+kinds of input:
+
+```text
+decode   fixed, plus calibration.film_base
+roll     measured once per roll by `hanten measure-roll`
+style    the user's taste
+```
+
+The pipeline may one day be rebuilt as those three steps — decode → roll optimize →
+style (`nf-core/three-step-pipeline`, after the default flip). For now the stages stay
+as they are; the split is carried by where the values live and by which rendering
+applies them.
+
+**The roll's values get their own recipe section**, `roll`
+(`nf-calibration/roll-section`): the white-balance gains and the roll's white in scene
+stops. The white is stored as the measurement, and the rendering turns it into a
+contrast (`pipeline::roll_white::contrast_for`). Written into `scene_correction` or
+`look`, as `measure-roll` first did, a measured value cannot be told from a chosen one.
+
+**`--rendering` chooses the base** (`nf-destinations/direct-preset`), and each has one
+principle:
+
+- **`direct` loses as little information as possible and applies only what the
+  container needs.** It does not apply the roll section. It is the handoff to an
+  external editor, and — stated SDR — the rendering the calibration loop holds fixed
+  (Part 3).
+- **`default` is what our code produces from measured values alone**: the roll section
+  applied, today's defaults for everything else, and no taste.
+
+| | `direct` | `default` |
+|---|---|---|
+| roll section | not applied, and reported as not applied | applied |
+| white balance | identity | the roll's gains |
+| `look.contrast` | `2.0 / 1.8` (whole 2.0), pinned | the roll's, else the fallback with a warning |
+| highlight desaturation | off | today's default (0.8) |
+| display black | on, 6 stops below mid-grey, pinned | today's default (6) |
+| fit range | reinhard at 6 stops of headroom, pinned | today's default |
+| unset destination axes | HDR, `linear`, 32-bit float TIFF (so BT.2020); with `--range sdr`, Adobe RGB | SDR, Display P3 |
+
+- **Display black is on in `direct`** because it does not compress: it is a monotone
+  shift that stretches the shadows down from the film base, fading to nothing at
+  mid-grey, so at 16 bits it loses almost nothing. Its reference is each frame's decoded
+  film base, so in the calibration loop it evens out part of a shadow difference between
+  two decode candidates — read a shadow tie with that in mind.
+- **`direct` defaults to HDR** (user, 2026-09-27: range matters more than gamut). The
+  row is the linear 32-bit float BT.2020 TIFF: no transfer and no quantization, so the
+  least lost, and the one HDR row an unset transfer can reach before
+  `nf-destinations/gain-map-destination` ships. It differs from `film-master` by what
+  rendering does — the contrast, fit range at the HDR peak, display black, the gamut
+  map — and it clamps at the peak (`1000/203`), counted. The destination set has no
+  HDR row in Adobe RGB, so Adobe RGB is `direct`'s gamut when SDR is stated
+  (`--rendering direct --range sdr`); **that SDR form is the one viewed by eye**, and so
+  the one the calibration loop holds.
+- **"Pinned" means `direct`'s own constants**, not today's defaults read through: moving
+  a default must not move the rendering the calibration loop holds.
+
+**Explicit knobs build on the base, under either rendering.** `--white-balance`
+multiplies the base gains, whose identity is 1. Every other knob replaces its base
+value — `--contrast` included, because `look.contrast` is an absolute rendering contrast
+with no identity to compose from. Contrast composes once `nf-look/contrast-definition`
+gives it one.
+
+**Three contrasts, not interchangeable:**
+
+| | example | where |
+|---|---|---|
+| whole contrast | 2.0 bundled · 2.23–2.97 roll-measured | not stored: `look.contrast × reconstruction.linearization` |
+| rendering contrast, `look.contrast` | `2.0 / 1.8 ≈ 1.11` · 1.24–1.65 | the look; what `measure-roll`'s `contrast_for` computes |
+| the decode's linearization | 1.8 | `reconstruction.linearization` — a calibration, not a look |
+
+The linearization stays out of the look because it is a calibration: at 1.8 the decode's
+output is scene-linear (double the exposure and the value doubles), which `film-master`,
+the roll's gains and `scale` all rely on. The look's `1.11` is the part that is not the
+film: it was kept so the new flow renders a neutral where the bundled decode did, and it
+is defined as `BUNDLED_CONTRAST / LINEARIZATION`, so the whole contrast holds when the
+linearization moves. Which whole contrast the fallback should be (the user's prior is
+about 2.5, i.e. `look.contrast ≈ 1.39`) is `nf-calibration/no-roll-defaults`'s.
+
+**Keeping `direct` current as stages change.** `direct`'s values are one struct built
+without `..`, so a new stage knob fails to compile until someone decides its `direct`
+value by the principle above. A pinned test holds the resolved values and names the
+module doc that says how to re-decide them. When `direct`'s output moves, the move is
+logged in `nf-calibration`'s progress, because review rounds judged before and after it
+no longer compare like for like. A task that changes a stage — e.g.
+`nf-display-stages/parametric-shoulder` — decides `direct`'s part as its own work.
 
 ## `film-master` is the reconstruction output
 
@@ -703,8 +800,9 @@ artifact on which a reconstruction is measured. Caveats:
   Add it only if it beats reinhard at matched lightness.
 - **How contrast and the per-channel grade are spelled** — *settled*: separate keys
   under `look` (`look.contrast`, `look.channel_grade`), not one CDL-style object.
-  Still open: whether the "direct" preset is a named output preset or a rendering
-  profile.
+  Whether "direct" is a named output preset or a rendering profile is *settled*
+  (2026-09-27): a rendering, `--rendering direct`, beside `default` — see "Two
+  renderings" above.
 - **The black point is two jobs:** a small flare/fog subtraction (scene
   correction) and display black / toe (fit range). Today it's one linear
   subtraction, and 0.019 crushed 0.69–8.66% of frames to code 0.
@@ -803,8 +901,10 @@ direction* is evidence where one disagreeing is not.
 ## Tuning order
 
 The loop tunes **decode** knobs — `scale` and `gamma` — while rendering is held
-fixed, and the "direct" preset (Part 2) is the rendering to hold: with scene
-correction identity and the look empty, what the eye judges is the decode. The
+fixed, and `--rendering direct --range sdr` (Part 2, "Two renderings") is the
+rendering to hold:
+with the roll section unapplied, white balance identity and the look reduced to the
+pinned contrast, what the eye judges is the decode. The
 2026-09-17 caution still applies in that setup: a defect seen there may belong
 to the fixed rendering rather than to the decode, so a candidate that loses
 should be re-checked under a second rendering before the decode is blamed.

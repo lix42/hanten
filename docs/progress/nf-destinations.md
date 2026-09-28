@@ -11,7 +11,7 @@ ones.
 
 ## Epic summary
 
-Where a render can go: the destination set, the direct Adobe RGB combination, memory profiles, and which destination the default resolves.
+Where a render can go: the destination set, the two renderings (`direct` and `default`), memory profiles, and which destination the default resolves.
 
 **The destination set has landed** (`preset-set`, 2026-09-26). Under `--new-flow` a
 destination is four separate knobs — `--range sdr|hdr`, `--transfer
@@ -102,9 +102,31 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
 ## direct-preset
 
 **Status:** not started
-**Updated:** 2026-09-19
+**Updated:** 2026-09-27
 
 - 2026-09-19: created with the new-flow plan. Goal: the direct destination for external editing.
+- 2026-09-27: **re-planned with the user** (`docs/design-update.md`, Part 2, "Two
+  renderings"). Since `roll-white-rule`, the roll's measurements live in rendering, so the
+  task is now `--rendering direct|default`: `direct` loses as little as possible and
+  applies only what the container needs (roll section unapplied, white balance identity,
+  `look.contrast` pinned at `2.0 / 1.8`, desaturation off, display black 6 stops and
+  reinhard at 6 stops pinned, SDR Adobe RGB when the axes are unset); `default` is our
+  code plus the roll's measurements, with today's defaults for the rest and a warned
+  fallback without a roll section. Explicit knobs build on either base: white balance
+  multiplies, everything else (contrast included, until `nf-look/contrast-definition`)
+  replaces. Decisions along the way: display black stays on in `direct`, because it
+  stretches the shadows rather than compressing them; `direct` stays SDR, because Adobe
+  RGB has no HDR row and `film-master` is already the lossless output; `direct`'s values
+  are pinned in a test that names the procedure for re-deciding them. Filed
+  `nf-calibration/roll-section` (now a dependency), `nf-calibration/no-roll-defaults`,
+  `nf-look/contrast-definition` and `nf-core/three-step-pipeline`. Shipped as a three-PR
+  stack: this re-plan, then `roll-section`, then this task.
+- 2026-09-27: **`direct` defaults to HDR** (user changed their mind: range matters more
+  than gamut). The unset axes resolve to the linear 32-bit float BT.2020 TIFF — the least
+  lost, and the one HDR row reachable before the gain-map row is ready — with Adobe RGB
+  as `direct`'s gamut when SDR is stated. The by-eye form, and the one the calibration
+  loop holds, is `--rendering direct --range sdr`. The memory profile to measure is now
+  `NewFlowF32Tiff` as well.
 
 ## memory-profiles
 

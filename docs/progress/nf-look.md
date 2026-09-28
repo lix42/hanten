@@ -831,3 +831,13 @@ preset row; do not reuse the name.
   1738 cloth white above `s1` stated in the placement, "upper bound" → "reference" for the
   W-patch white balance (a pooled variant scored better at its own threshold), `s` stated
   as computed on film RGB, and the 09-11 correction's two spread statistics told apart.
+
+## contrast-definition
+
+**Status:** not started
+**Updated:** 2026-09-27
+
+- 2026-09-27: filed while re-planning `nf-destinations/direct-preset`. Goal: restate what
+  `look.contrast` means — three contrasts are in play (whole, rendering, linearization),
+  and until it is restated an explicit `--contrast` replaces the rendering's base
+  instead of building on the roll's.

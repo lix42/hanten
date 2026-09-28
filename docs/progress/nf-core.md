@@ -1118,3 +1118,13 @@ boundary the SDR/HDR split will split *from*. Nothing about the no-flag path mov
     derivation math, independent by design).
   - The inline matrix products in `chain`, `fit_gamut` and `color` are the same kind
     of duplication, one level up; not in this task's scope.
+
+## three-step-pipeline
+
+**Status:** not started
+**Updated:** 2026-09-27
+
+- 2026-09-27: filed while re-planning `nf-destinations/direct-preset`, unscheduled. Goal:
+  decide whether the chain should be rebuilt as decode → roll → style, now that the
+  roll's measurements live in rendering (`docs/design-update.md`, Part 2, "Two
+  renderings").
