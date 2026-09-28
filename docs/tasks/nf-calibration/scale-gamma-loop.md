@@ -9,9 +9,12 @@ held-fixed rendering. Common ground, not per-frame neutrality.
 ## Design
 
 - **Rendering held fixed is what makes a review set evidence about the decode**
-  (design-update Part 3). The rendering to hold is the direct destination: scene
-  correction identity, look empty. Both knobs act before the 3×3, out of a grade's
-  reach.
+  (design-update Part 3). The rendering to hold is `--rendering direct --range sdr`
+  (design-update Part 2, "Two renderings", 2026-09-27; `direct` alone is HDR): the roll section unapplied, white balance
+  identity, the look reduced to a pinned contrast. Both knobs act before the 3×3, out of
+  a grade's reach. Its display black follows each frame's decoded film base, so it
+  evens out part of a shadow difference between candidates — read a shadow tie with
+  that in mind.
 - **Order: `scale` first, then `gamma`** — the cast is the open question, contrast
   is easier once it is settled, and two or three candidates per review set keeps a
   frame's toggle manageable.
@@ -50,7 +53,7 @@ whether `scale` stays one global value once a second stock family is in the set.
 - [The frozen reference build](../nf-verification/reference-snapshot.md)
 - [A `density.scale` ladder, before the calibration frames exist](scale-ladder.md)
   — inherits its candidate value and its method caution
-- [The direct destination](../nf-destinations/direct-preset.md) — the rendering the
-  loop holds fixed must exist before rounds are judged against it
+- [Two renderings: `direct` and `default`](../nf-destinations/direct-preset.md) — the
+  rendering the loop holds fixed must exist before rounds are judged against it
 - [A parametric operator with a toe](../nf-display-stages/parametric-operator.md) —
   it changes the held rendering's operator and adds its black point

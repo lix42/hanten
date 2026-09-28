@@ -40,6 +40,11 @@ Open:
   `tiff`, resolved through `preset-set`'s table), and moving it means moving one or
   more of those.
 
+- **2026-09-27 (`direct-preset` re-planned):** a bare `hanten convert` is `--rendering
+  default`, and the unset-axis defaults now depend on the rendering (`direct` defaults
+  to the HDR float TIFF, `default` keeps SDR Display P3). What this task moves is
+  `default`'s.
+
 ## How to Verify
 
 - A bare `hanten convert` resolves the intended destination with no output-selection
@@ -51,6 +56,6 @@ Open:
 ## Dependencies
 
 - [The destination set](preset-set.md)
-- [The direct destination for external editing](direct-preset.md) — the default is
+- [Two renderings: `direct` and `default`](direct-preset.md) — the default is
   chosen against it, since "minimal" and "what most users should get" are different
   answers and the contrast is what makes the choice legible

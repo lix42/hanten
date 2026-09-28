@@ -371,6 +371,25 @@ density.
 - 2026-09-25: filed from `anchor-comparison`. Goal: the leader margin the saturation
   warning keys on, and whether frames near saturation need their own treatment.
 
+## no-roll-defaults
+
+**Status:** not started
+**Updated:** 2026-09-27
+
+- 2026-09-27: filed while re-planning `nf-destinations/direct-preset`. Goal: the values a
+  render uses without a roll measurement, first the default whole contrast (2.0 today,
+  kept for continuity; the user suggests about 2.5; the rolls measure 2.23–2.97).
+
+## roll-section
+
+**Status:** not started
+**Updated:** 2026-09-27
+
+- 2026-09-27: filed while re-planning `nf-destinations/direct-preset`. Goal: a `roll` recipe
+  section for what `measure-roll` measures (the gains and the roll's white in stops), out
+  of `scene_correction` and `look`, so `--rendering default` can apply it and `direct`
+  can leave it out.
+
 ## scale-ladder
 
 **Status:** done

@@ -163,6 +163,8 @@ graph TD
   nf-reconstruction --> nf-calibration
   nf-calibration --> nf-look
   nf-calibration --> nf-display-stages
+  nf-calibration --> nf-destinations
+  nf-destinations --> nf-look
   analysis --> nf-verification
   nf-core --> nf-verification
   nf-reconstruction --> nf-verification
@@ -317,6 +319,7 @@ graph TD
     nf-core/knob-availability-audit
     nf-core/default-flip
     nf-core/one-luma-dot
+    nf-core/three-step-pipeline
   end
   subgraph nf-reconstruction
     nf-reconstruction/anchor-spike
@@ -343,6 +346,7 @@ graph TD
     nf-look/stock-data-home
     nf-look/scene-range-mapping
     nf-look/desaturation-band-fit
+    nf-look/contrast-definition
   end
   subgraph nf-display-stages
     nf-display-stages/fit-range
@@ -364,6 +368,8 @@ graph TD
     nf-calibration/anchor-comparison
     nf-calibration/roll-white-rule
     nf-calibration/saturation-margin
+    nf-calibration/no-roll-defaults
+    nf-calibration/roll-section
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -587,6 +593,13 @@ graph TD
   nf-calibration/anchor-comparison --> nf-calibration/roll-white-rule
   nf-display-stages/parametric-operator --> nf-calibration/roll-white-rule
   nf-calibration/roll-white-rule --> nf-calibration/saturation-margin
+  nf-calibration/roll-white-rule --> nf-calibration/no-roll-defaults
+  nf-calibration/roll-white-rule --> nf-calibration/roll-section
+  nf-calibration/roll-section --> nf-destinations/direct-preset
+  nf-destinations/direct-preset --> nf-look/contrast-definition
+  nf-core/default-flip --> nf-core/three-step-pipeline
+  nf-calibration/roll-section --> nf-core/three-step-pipeline
+  nf-destinations/direct-preset --> nf-core/three-step-pipeline
   nf-calibration/roll-white-rule --> nf-look/desaturation-band-refit
   nf-display-stages/parametric-operator --> nf-look/desaturation-band-refit
   nf-display-stages/parametric-operator --> nf-display-stages/parametric-shoulder
@@ -1037,6 +1050,8 @@ the design in `docs/design-update.md`:
 - `nf-look/scene-range-mapping` (new flow): `nf-look/stage`, `nf-scene-correction/stage`
   — a spike: opt-in and bounded, never the default — roll consistency is the
   promise
+- `nf-look/contrast-definition` (new flow): `nf-destinations/direct-preset`
+  — filed 2026-09-27: the renderings are the bases a contrast builds on
 - `nf-display-stages/fit-range` (new flow): `nf-look/stage`
   — one function both branches use, reinhard as the baseline setting
 - `nf-display-stages/fit-gamut` (new flow): `nf-display-stages/fit-range`
@@ -1053,9 +1068,9 @@ the design in `docs/design-update.md`:
   — where the branch happens and what each side may differ in
 - `nf-destinations/preset-set` (new flow): `nf-display-stages/branch-contract`, `output/output-path-suffix`
   — the destinations and their suffix rules
-- `nf-destinations/direct-preset` (new flow): `nf-destinations/preset-set`, `output/adobe-rgb-gamut`
-  — minimal rendering into Adobe RGB for a workflow that continues in an
-  editor
+- `nf-destinations/direct-preset` (new flow): `nf-destinations/preset-set`, `output/adobe-rgb-gamut`, `nf-calibration/roll-section`
+  — `--rendering direct|default`; re-planned 2026-09-27: `default` applies the roll
+  section and `direct` does not
 - `nf-destinations/memory-profiles` (new flow): `nf-destinations/preset-set`
   — a `RunProfile` per destination; sharing an arm is measured, not assumed
 - `nf-destinations/default-destination` (new flow): `nf-destinations/preset-set`, `nf-destinations/direct-preset`
@@ -1137,6 +1152,9 @@ the design in `docs/design-update.md`:
 - `nf-core/one-luma-dot` (new flow): `nf-look/path-to-white`
   — `dot` is copied in four stages, and the look imports fit range's. Done
   2026-09-24: one copy in `pipeline::colorimetry`
+- `nf-core/three-step-pipeline` (new flow): `nf-core/default-flip`, `nf-calibration/roll-section`, `nf-destinations/direct-preset`
+  — filed 2026-09-27, unscheduled: the interim design (the `roll` section and
+  `--rendering`) ships first, and the default flips
 - `nf-docs/reference-sweep` (new flow): none
   — about a dozen `src/` and doc pointers still assert an inactive task is
   live or owns a decision
@@ -1167,6 +1185,10 @@ the design in `docs/design-update.md`:
 - `nf-calibration/saturation-margin` (new flow): `nf-calibration/roll-white-rule`
   — filed 2026-09-25: the leader margin the warning keys on was set from one ambiguous
   frame and may be stock-dependent
+- `nf-calibration/no-roll-defaults` (new flow): `nf-calibration/roll-white-rule`
+  — filed 2026-09-27: the fallbacks are chosen against the per-roll contrasts it measures
+- `nf-calibration/roll-section` (new flow): `nf-calibration/roll-white-rule`
+  — filed 2026-09-27: moves the values it measures out of the style knobs
 
 ## Tasks
 
@@ -1636,6 +1658,9 @@ the design in `docs/design-update.md`:
 - [x] [One luminance dot product](tasks/nf-core/one-luma-dot.md) — **done
   2026-09-24.** `colorimetry::dot` is the one f32 copy; the four private ones are
   gone and the look no longer imports fit range's. No pixel moved, no golden edited
+- [ ] [Rethink the pipeline as decode → roll →
+  style](tasks/nf-core/three-step-pipeline.md) — unscheduled, after the default
+  flip; the interim is a `roll` section and `--rendering`
 
 ### nf-reconstruction — [progress](progress/nf-reconstruction.md)
 > The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`,
@@ -1739,6 +1764,9 @@ the design in `docs/design-update.md`:
 - [ ] [Spike: opt-in bounded scene-range
   mapping](tasks/nf-look/scene-range-mapping.md) — a spike: opt-in and
   bounded, never the default — roll consistency is the promise
+- [ ] [What `look.contrast` means](tasks/nf-look/contrast-definition.md) — three
+  contrasts are in play (whole, rendering, linearization); restate it as the whole
+  contrast or a multiplier, so an explicit contrast builds on the roll's
 
 ### nf-display-stages — [progress](progress/nf-display-stages.md)
 > Fit range and fit gamut as real stages shared by both display branches, plus the
@@ -1784,8 +1812,8 @@ the design in `docs/design-update.md`:
   Report: [`docs/reports/gamut-map-share.md`](reports/gamut-map-share.md)
 
 ### nf-destinations — [progress](progress/nf-destinations.md)
-> Where a render can go: the destination set, the direct Adobe RGB combination,
-> memory profiles, and which destination the default resolves.
+> Where a render can go: the destination set, the two renderings (`direct` and
+> `default`), memory profiles, and which destination the default resolves.
 
 - [x] [The destination set](tasks/nf-destinations/preset-set.md) — **done
   2026-09-26.** Under `--new-flow` a destination is four separate knobs — `--range`,
@@ -1795,9 +1823,11 @@ the design in `docs/design-update.md`:
   (default, unchanged) or Adobe RGB; HDR BT.2020 `linear` f32 TIFF, `pq`/`hlg` TIFF or
   AVIF, clamped to the peak and counted. The film master refuses every stage it does
   not run. The gain-map JPEG split to `gain-map-destination`
-- [ ] [The direct destination for external
-  editing](tasks/nf-destinations/direct-preset.md) — minimal rendering into
-  Adobe RGB for a workflow that continues in an editor
+- [ ] [Two renderings: `direct` and
+  `default`](tasks/nf-destinations/direct-preset.md) — `--rendering`: `direct` loses
+  as little as possible (HDR float TIFF by default, Adobe RGB when SDR; roll section
+  unapplied) for an editor and, stated SDR, the calibration loop; `default` is our code plus the roll's measurements. Re-planned
+  2026-09-27
 - [ ] [A memory profile per
   destination](tasks/nf-destinations/memory-profiles.md) — a `RunProfile` per
   destination; sharing an arm is measured, not assumed
@@ -1840,6 +1870,14 @@ the design in `docs/design-update.md`:
 - [ ] [The saturation warning's margin, and frames near
   saturation](tasks/nf-calibration/saturation-margin.md) — set from one ambiguous
   frame; may depend on the stock
+- [ ] [The default rendering without a roll
+  measurement](tasks/nf-calibration/no-roll-defaults.md) — the fallbacks a frame
+  gets without `measure-roll`, first the whole contrast (2.0 today; the rolls measure
+  2.23–2.97)
+- [ ] [The roll's measurements as their own recipe
+  section](tasks/nf-calibration/roll-section.md) — `roll.white_balance` and
+  `roll.white_stops`, out of `scene_correction` and `look`, so a rendering can apply
+  them or not
 - [ ] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering. Supersedes

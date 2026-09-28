@@ -139,7 +139,8 @@ white.
 - **Whether the "direct" preset should get it.** Part 2 wants that preset minimal and
   continuing in Lightroom, but an operator that hides residual cast is the wrong default
   where the cast is what a user is about to correct. A switch makes this a choice; had
-  it lived in fit range it would not have been one.
+  it lived in fit range it would not have been one. *Answered 2026-09-27: off under
+  `--rendering direct`, on under `default` (`nf-destinations/direct-preset`).*
 
 ## How to Verify
 
