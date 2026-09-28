@@ -16,8 +16,8 @@ the stage module tree, a minimal end-to-end render, the knob audit, the recipe â
 **`default-flip`** (2026-09-27, `pipeline_version` 8) made it the default and deleted
 the old chain, its presets, its print stage, its recipe, its sidecar and
 `ultrahdr-sys`. `--new-flow` is now a removed-flag error. Open: `report-contract`
-(the report, sidecar and telemetry shape), `subcommands` (`inspect`/`estimate`/`roll`
-leftovers), `buffer-strategy`, `three-step-pipeline`.
+(the report, sidecar and telemetry shape), `subcommands` (`roll`'s per-frame overrides;
+re-scoped 2026-09-28), `buffer-strategy`, `three-step-pipeline`.
 
 **Adding or changing a knob** (what used to be the availability tables in `src/flow.rs`,
 deleted by the flip):
@@ -1096,6 +1096,16 @@ SDR/HDR split splits *from*.
 **Updated:** 2026-09-19
 
 - 2026-09-19: filed after the plan review. Goal: `roll`, `inspect` and `estimate` under the new chain.
+- **2026-09-28 â€” re-scoped to `roll`'s per-frame overrides.** Checked against the code
+  after `default-flip`: `inspect` already reports no `dmax` and every command runs memory
+  preflight, so those points are done. `estimate` moved to `core/measure-base`, and
+  `nctool roll`'s calibrate step (still `estimate` only, never `measure-roll`) to
+  `core/roll-measure-mode`. What stays: the merge onto the serialized shared recipe, the
+  roll-fixed warnings for new-chain keys (today only `calibration.film_base` and
+  `output` warn; `roll.white_stops` per frame is legitimate, from `reuse.frames`), and
+  the error-code check. Now blocks `core/recipe-composition`, which layers on the same
+  resolution. The pinned test the old file named,
+  `roll_refuses_the_current_chains_keys_from_either_recipe_site`, no longer exists.
 
 ## buffer-strategy
 

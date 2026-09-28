@@ -176,6 +176,8 @@ graph TD
   nf-look --> nf-core
   nf-destinations --> nf-core
   nf-calibration --> nf-core
+  nf-calibration --> core
+  nf-core --> core
   nf-scene-correction --> nf-retire
   nf-core --> nf-docs
   nf-core --> analysis
@@ -196,7 +198,9 @@ graph TD
     core/dependency-hygiene
     core/release-readiness
     core/roll-conversion
-    core/base-acquisition-planner
+    core/auto-calibration
+    core/measure-base
+    core/roll-measure-mode
     core/recipe-composition
     core/profile-authoring
     core/unfrozen-auto-mode-warning
@@ -486,13 +490,13 @@ graph TD
   core/conversion-versioning --> core/calibration-recipe-section
   core/calibration-recipe-section --> core/recipe-composition
   core/calibration-recipe-section --> core/profile-authoring
-  core/calibration-recipe-section --> core/base-acquisition-planner
+  core/calibration-recipe-section --> core/auto-calibration
   core/cli-framework --> core/recipe-composition
   core/roll-conversion --> core/recipe-composition
   core/recipe-composition --> core/profile-authoring
   core/cli-framework --> core/profile-authoring
   core/roll-conversion --> core/unfrozen-auto-mode-warning
-  core/base-acquisition-planner --> film-base/half-frame-calibration
+  core/measure-base --> film-base/half-frame-calibration
   film-base/estimate-reuse-output --> film-base/tiling-uniformity-validator
   algo/reference-anchored-sigmoid --> analysis/comparison-review-tooling
   algo/film-stock-profiles --> io/scanner-density-calibration
@@ -567,10 +571,15 @@ graph TD
   analysis/asset-manifest --> analysis/probe-fixture-roll-names
   analysis/asset-manifest --> analysis/manifest-seed-roles
   analysis/asset-manifest --> analysis/calibration-frame-capture
-  core/roll-conversion --> core/base-acquisition-planner
-  film-base/auto-base-redesign --> core/base-acquisition-planner
-  film-base/ir-holder-detection --> core/base-acquisition-planner
-  film-base/dmax-reference --> core/base-acquisition-planner
+  core/roll-conversion --> core/auto-calibration
+  film-base/auto-base-redesign --> core/auto-calibration
+  film-base/ir-holder-detection --> core/auto-calibration
+  film-base/holder-masked-measurement --> core/auto-calibration
+  core/measure-base --> core/auto-calibration
+  core/calibration-recipe-section --> core/measure-base
+  nf-calibration/roll-section --> core/measure-base
+  core/measure-base --> core/roll-measure-mode
+  core/recipe-composition --> core/roll-measure-mode
   nf-core/new-flow-flag --> nf-core/stage-skeleton
   nf-core/stage-skeleton --> nf-core/minimal-end-to-end
   nf-reconstruction/fixed-decode --> nf-core/minimal-end-to-end
@@ -675,6 +684,7 @@ graph TD
   nf-core/stage-skeleton --> nf-core/report-contract
   nf-core/stage-skeleton --> nf-core/recipe-schema
   nf-core/minimal-end-to-end --> nf-core/subcommands
+  nf-core/subcommands --> core/recipe-composition
   nf-core/stage-skeleton --> nf-core/buffer-strategy
   nf-look/path-to-white --> nf-core/one-luma-dot
   nf-calibration/scale-ladder --> nf-look/path-to-white
@@ -696,7 +706,9 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `core/release-readiness` (post-MVP, productization): `core/pipeline-orchestration`
   — doc fixes now; packaging best sequenced after analysis/display-output-acceptance
 - `core/roll-conversion` (post-MVP): `core/pipeline-orchestration`, `algo/dmax-white-anchor`
-- `core/base-acquisition-planner` (post-MVP): `core/roll-conversion`, `core/calibration-recipe-section`, `film-base/auto-base-redesign`, `film-base/ir-holder-detection`, `film-base/dmax-reference`
+- `core/measure-base` (post-MVP): `core/calibration-recipe-section`, `nf-calibration/roll-section`
+- `core/roll-measure-mode` (post-MVP): `core/measure-base`, `core/recipe-composition`
+- `core/auto-calibration` (post-MVP; renamed from `core/base-acquisition-planner` 2026-09-28): `core/roll-conversion`, `core/calibration-recipe-section`, `film-base/auto-base-redesign`, `film-base/ir-holder-detection`, `film-base/holder-masked-measurement`, `core/measure-base`
 - `io/silverfast-decode`: `core/project-foundation`
 - `io/tiff-encode`: `core/project-foundation`
 - `io/input-data-semantics` (post-MVP): `core/pipeline-orchestration`
@@ -763,7 +775,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   one, measured by a whole-area percentile (leading) or the grid. **Retires the rebate-band
   search** (`rebate_candidates` / `select_auto_base`) — accepted as a breaking change, nc is not
   shipped — which parks `auto-base-real-scan-refusal`, `auto-base-neutral-stock` and
-  `white-holder-support` and changes `core/base-acquisition-planner`'s auto rung. Estimates the
+  `white-holder-support` and changes `core/auto-calibration`'s automatic rung. Estimates the
   **centre** instead of p97, which biases ~0.046 density (0.16 stops, the "pale" direction).
   **Pixel change**: one `pipeline_version` bump. Provenance is per-run
 - `film-base/tiling-uniformity-validator` (post-MVP): `film-base/holder-masked-measurement`, `film-base/estimate-reuse-output`
@@ -773,16 +785,17 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   `--grid`** (it no longer selects an estimator) and absorbs the removed
   `film-base/grid-verdict-enum`. Diagnostics only — no pixel change
 - `core/calibration-recipe-section` (post-MVP): `core/roll-conversion`, `core/conversion-versioning`
-- `core/recipe-composition` (post-MVP): `core/cli-framework`, `core/roll-conversion`, `core/calibration-recipe-section`
+- `core/recipe-composition` (post-MVP): `core/cli-framework`, `core/roll-conversion`, `core/calibration-recipe-section`, `nf-core/subcommands`
   — repeatable `--params` (file or `-`), `roll` gains convert's override flags, one precedence
-  chain `defaults < params A < params B < … < flags`. **No schema change**: both halves are
-  already valid partial recipes (verified 2026-08-11); only repeatability is missing.
-  Implements the design-spec §8 target
+  chain `defaults < params A < params B < … < flags`. Layering needs no schema change
+  (verified 2026-08-11; re-verify under `recipe_version` 2), but an in-recipe table of
+  per-frame clamps (roll-workflow open question 3) would be one.
+  Implements [the roll workflow](design/roll-workflow.md)
 - `core/profile-authoring` (post-MVP): `core/recipe-composition`, `core/cli-framework`, `core/calibration-recipe-section`
   — `hanten params` becomes `hanten profile`: takes the override flags, validates config-only, writes an
-  annotated JSONC look with `--out`, no image. **Deletes `--dump-params`**, which is
-  byte-identical to the sidecar and carries nothing the image produced — the same flags over two
-  different scans emit identical files
+  annotated JSONC look with `--out`, no image. Whether `--dump-params` goes is open
+  (roll-workflow open question 5): no sidecar is written since `nf-core/default-flip`, so it is
+  the only recipe a `convert` leaves
 - `core/unfrozen-auto-mode-warning` (post-MVP): `core/roll-conversion`
   — a recipe carrying `dmax: "auto"` or an auto white balance re-measures every frame, defeating
   the roll, and nothing warns today. Roll already warns on a non-explicit base; same hazard,
@@ -792,9 +805,9 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   every identifier. The boundary's home is CLAUDE.md. No dependencies, but it touches
   README/CLAUDE.md/design-spec and should run **alone between merges**, not beside the
   `nf-*` migration
-- `film-base/half-frame-calibration` (post-MVP, **deferred**, blocks nothing): `core/base-acquisition-planner`
+- `film-base/half-frame-calibration` (post-MVP, **deferred**, blocks nothing): `core/measure-base`
   — one frame that is part unexposed and part leader serving as both references (HP5 frame 1330).
-  Convenience over the planner's one-reference-per-frame path
+  Convenience over the one-reference-per-frame path (`measure-base`, `measure-roll --unexposed`)
 - `algo/interface`: `core/project-foundation`
 - `algo/simple`: `algo/interface`
 - `algo/density`: `algo/interface`
@@ -1149,8 +1162,8 @@ the design in `docs/design-update.md`:
   — `deny_unknown_fields` cannot see a *known but meaningless* key, so a stale
   `print.*` section is accepted-and-ignored
 - `nf-core/subcommands` (new flow): `nf-core/minimal-end-to-end`
-  — roll's planner resolves defaults by hand (the per-curve `density.scale` site went
-  with `nf-retire/characteristic`); `inspect` reports a resolved `dmax`; retirement adds a class of removed-flag errors
+  — roll's per-frame overrides: the merge onto the serialized shared recipe, roll-fixed
+  warnings for new-chain keys, and the error-code check
 - `nf-core/buffer-strategy` (new flow): `nf-core/stage-skeleton`
   — the GPU spike decided the seams are the existing typed boundaries, not one
   per stage; a buffer per stage is ≈0.9 GB each at 74.6 MP
@@ -1221,18 +1234,29 @@ the design in `docs/design-update.md`:
 - [x] [CLI framework](tasks/core/cli-framework.md)
 - [x] [Pipeline orchestration](tasks/core/pipeline-orchestration.md)
 - [x] [Roll conversion (batch + frozen recipe)](tasks/core/roll-conversion.md)
-- [ ] [Base-acquisition planner (the cascade)](tasks/core/base-acquisition-planner.md) — the roll-level `Dmin`/`Dmax` acquisition cascade: frozen recipe with provenance + confidence, and the roll→single fallback decision
+- [ ] [`measure-base`, and `measure-roll` as the one-stop measurement](tasks/core/measure-base.md) —
+  `measure-roll --unexposed` measures the base too and writes one recipe (`calibration` + `roll`);
+  `hanten estimate` becomes `measure-base`, kept for a single-frame `convert` and a roll with no
+  unexposed frame, and writes its
+  fragment as a file. No `jq` between measuring and converting
+- [ ] [`roll`'s measure mode](tasks/core/roll-measure-mode.md) — `roll --measure-roll
+  [--leader L]` measures the roll over the recipe's base, then converts; `--unexposed U`
+  measures the base too and implies it. `roll`'s requirements and defaults are unchanged. Opt-in `--save-recipe` writes the
+  resolved run for re-rendering the same roll
+- [ ] [Calibrate a roll without named reference frames](tasks/core/auto-calibration.md) — renamed
+  from `core/base-acquisition-planner`: detect the unexposed frame and leader in the roll,
+  cross-frame agreement, provenance + confidence, loud drop to single. An opt-in mode of
+  `measure-roll`
 - [x] [The `calibration` recipe section](tasks/core/calibration-recipe-section.md) — `film_base` and `dmax` move into their own top-level section; no pixel change
 - [ ] [Layered recipe composition](tasks/core/recipe-composition.md) — repeatable `--params`
   (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain
-  `defaults < params A < params B < … < flags`. Enables the pipeline-profile / roll-calibration
-  split with **no schema change** — both halves already parse as partial recipes
+  `defaults < params A < params B < … < flags`. Enables the look / roll-measurement split;
+  layering needs no schema change, an in-recipe clamp table would
 - [ ] [Author a reusable pipeline profile](tasks/core/profile-authoring.md) — `hanten params` becomes
   `hanten profile`: takes the override flags, validates config-only, writes annotated JSONC via
-  `--out`, needs no image. **Deletes `--dump-params`** — byte-identical to the sidecar, and it
-  captures nothing measured, so the "frozen" recipe it produced still re-measures per frame.
-  *Premise moved (`nf-core/default-flip`, 2026-09-27): no sidecar is written, so
-  `--dump-params` is the only recipe a run leaves — re-scope before starting*
+  `--out`, needs no image. Whether `--dump-params` goes is the roll-workflow design's open
+  question 5: no sidecar is written since `nf-core/default-flip`, so it is the only recipe a
+  run leaves
 - [ ] [Warn when auto modes defeat a roll](tasks/core/unfrozen-auto-mode-warning.md) — a recipe
   carrying `dmax: "auto"` or an auto white balance re-derives per frame and silently breaks roll
   consistency; roll already warns on a non-explicit film base, this is the same hazard
@@ -1340,7 +1364,7 @@ the design in `docs/design-update.md`:
   `film-base/grid-verdict-enum`; diagnostics only, no pixel change
 - [ ] [Calibrate from a single part-exposed frame](tasks/film-base/half-frame-calibration.md) —
   **deferred, blocks nothing**: one frame that is part unexposed and part leader serving as both
-  references (HP5 frame 1330 is one). Convenience over the planner's one-reference-per-frame path
+  references (HP5 frame 1330 is one). Convenience over `core/measure-base`'s one-reference-per-frame path
 
 ### algo — [progress](progress/algo.md)
 > `src/algo/`: the `reconstruct` surface, negative
@@ -1663,12 +1687,11 @@ the design in `docs/design-update.md`:
   boundary](tasks/nf-core/recipe-schema.md) — the new chain reads its own
   `"recipe_version": 2` document (`src/recipe.rs`, one section per stage), and
   each chain refuses the other's recipe by name
-- [ ] [`roll`, `inspect` and `estimate` under the new
-  chain](tasks/nf-core/subcommands.md) — roll's planner resolves defaults by
-  hand; `inspect` reports a resolved `dmax`; retirement
-  adds a class of removed-flag errors. *Premise moved (`nf-core/default-flip`,
-  2026-09-27): the old chain is gone, so these commands run only the new one —
-  re-scope before starting*
+- [ ] [`roll`'s per-frame overrides under the new
+  chain](tasks/nf-core/subcommands.md) — a frame's override resolves as `convert`
+  would, and the new chain's roll-fixed keys warn (`roll.white_stops` per frame is
+  legitimate). *Re-scoped 2026-09-28: `inspect` is done, `estimate` moved to
+  `core/measure-base`, `nctool roll`'s calibrate step to `core/roll-measure-mode`*
 - [ ] [Stage seams, buffers and the IR
   plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams
   are the existing typed boundaries, not one per stage; a buffer per stage is

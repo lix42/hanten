@@ -1,5 +1,7 @@
 # Author a reusable pipeline profile without an image
 
+**Design:** [the roll workflow](../../design/roll-workflow.md) — the single source for this task's CLI shape; where they disagree, the doc wins.
+
 ## Goal
 
 Rename `hanten params` to **`hanten profile`** and make it author a reusable look: accept
@@ -8,14 +10,15 @@ hand-editable file — with no scan involved. (`--preset` and `--film-stock` ret
 with the `characteristic` curve, `nf-retire/characteristic`: a named look is now a
 profile file, which is what this task authors.)
 
-Delete `--dump-params`, which this replaces.
+Whether `--dump-params` goes is the design doc's open question 5: no sidecar has been
+written since `nf-core/default-flip`, so it is the only recipe a `convert` leaves.
 
 ## Why `--dump-params` is not the answer
 
-Measured 2026-08-11:
+Measured 2026-08-11 (the sidecar point no longer holds — none is written since
+`nf-core/default-flip`):
 
-- Its output is **byte-identical to the sidecar** every conversion already writes,
-  so the flag duplicates something you get for free.
+- Its output was **byte-identical to the sidecar** every conversion then wrote.
 - It carries **nothing the image produced**: the same flags over two *different*
   scans emit identical files. It records the *modes* (`"auto"`, `"percentile"`,
   `{"region": …}`), never the resolved measurements the report holds alongside it.
@@ -23,7 +26,7 @@ Measured 2026-08-11:
   flags the user had just typed, and the result still re-measures per frame.
 
 Meanwhile `hanten params` prints only defaults and accepts **no flags at all**, so
-composing a real recipe means splicing `calibrate`'s fragments in by hand.
+composing a real recipe means splicing the measured fragments in by hand.
 
 ## What is known
 
@@ -37,7 +40,7 @@ composing a real recipe means splicing `calibrate`'s fragments in by hand.
 
 ## Open questions
 
-1. **Annotated output means JSONC** (design-spec §8). Comments are *generated
+1. **Annotated output means JSONC** (the design doc's "Authored files"). Comments are *generated
    from the schema*, never preserved — serde round-trips discard them. So what
    generates them, and how much do they say? Allowed values and units are clearly
    worth it; restating the whole parameter reference is not.
@@ -57,15 +60,14 @@ composing a real recipe means splicing `calibrate`'s fragments in by hand.
 - `hanten profile <overrides> --out look.jsonc` writes a file with no scan present,
   and that file is accepted by `--params` unchanged.
 - `hanten profile <look flags> --out look.jsonc` writes the same values
-  `convert --dump-params` writes today, so a roll can still take a named look after
-  `--dump-params` is gone.
+  `convert --dump-params` writes today.
 - The emitted comments survive a round trip *as comments in the file*, and the
   file still parses — the JSONC-is-a-superset claim, tested rather than assumed.
 - A contradictory override set (e.g. a sigmoid flag with an exponential curve) is
   reported here, not deferred to apply time.
 - `--out` refuses to clobber an existing file.
-- `--dump-params` is gone from `convert` and `roll`, and no path silently accepts
-  it.
+- If the design doc's open question 5 retires `--dump-params`, it is gone from
+  `convert` and no path silently accepts it.
 - `hanten params` is gone; nothing in docs, tests or scripts still invokes it.
 
 ## Dependencies
