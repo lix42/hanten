@@ -398,6 +398,29 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
     ),
 ];
 
+/// Read a value at its **old serialized default** as unset, in a whole v2 recipe. Returns
+/// whether anything changed.
+///
+/// Recipes written before `nf-calibration/roll-section` — `hanten params --new-flow`,
+/// `--dump-params` — serialized every default, so they state `look.contrast` at
+/// `2.0 / 1.8` although nobody chose it. Read as stated, it would win over a
+/// `roll.white_stops` merged in later, and the roll's white would never apply. So that
+/// exact value is read as unset, the retired-key rule in CLAUDE.md. Nothing renders
+/// differently without a roll section (unset is that same default); with one, the
+/// roll's white applies — state any other value, or `--contrast`, to override it.
+/// Whole recipes only: a per-frame override is the user's own, and no build wrote one.
+pub fn strip_old_serialized_defaults(body: &mut serde_json::Value) -> bool {
+    let Some(contrast) = body.get_mut("look").and_then(|l| l.get_mut("contrast")) else {
+        return false;
+    };
+    // Compared as the f32 the old build wrote, so `1.1111112` and its f64 widening match.
+    if contrast.as_f64().map(|v| v as f32) == Some(DEFAULT_CONTRAST) {
+        *contrast = serde_json::Value::Null;
+        return true;
+    }
+    false
+}
+
 /// Refuse a recipe body written for the other chain, before serde sees it.
 ///
 /// Run on the raw JSON, because the failure is about presence: a missing marker, or
@@ -1854,6 +1877,28 @@ mod tests {
             Recipe::default().shared_params().look.section,
             LookSection::default()
         );
+    }
+
+    #[test]
+    fn a_contrast_at_its_old_serialized_default_is_read_as_unset() {
+        let mut body =
+            serde_json::json!({"look": {"contrast": 1.1111112, "channel_grade": [1, 1]}});
+        assert!(strip_old_serialized_defaults(&mut body));
+        assert_eq!(
+            body,
+            serde_json::json!({"look": {"contrast": null, "channel_grade": [1, 1]}})
+        );
+        // Anything else is a choice, and stays.
+        for kept in [
+            serde_json::json!({"look": {"contrast": 1.3}}),
+            serde_json::json!({"look": {"contrast": null}}),
+            serde_json::json!({"look": {}}),
+            serde_json::json!({}),
+        ] {
+            let mut body = kept.clone();
+            assert!(!strip_old_serialized_defaults(&mut body));
+            assert_eq!(body, kept);
+        }
     }
 
     #[test]

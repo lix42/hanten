@@ -11745,6 +11745,57 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
 }
 
 #[test]
+fn a_recipe_from_an_earlier_build_lets_the_rolls_white_apply() {
+    // Earlier builds serialized `look.contrast` at its default (`hanten params
+    // --new-flow`), so a roll recipe built on one states 1.1111112 nobody chose. Merged
+    // with `measure-roll`'s `roll` section, the roll's white must still set the contrast.
+    let tmp = TempDir::new("old-default-contrast");
+    let frame = fixture("hdr-48bit.tif");
+    let contrast_of = |look: &str, extra: &[&str]| {
+        let recipe = write_file(
+            &tmp.path("r.json"),
+            &format!(
+                r#"{{"recipe_version": 2,
+                     "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
+                     "roll": {{"white_stops": 1.7}}, "look": {look}}}"#
+            ),
+        );
+        let out = tmp.path("out.tiff");
+        let (code, stdout, err) = run(&[
+            &[
+                "convert",
+                frame.to_str().unwrap(),
+                "--new-flow",
+                "--params",
+                recipe.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+            ][..],
+            extra,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        let report = json(&stdout);
+        (
+            report["new_flow"]["look"]["contrast"].as_f64().unwrap(),
+            report["new_flow"]["roll"]["contrast_applied"].clone(),
+        )
+    };
+    let roll = f64::from(1.7_f32).recip() * (1.0_f64 / 0.18).log2();
+    let (old, applied) = contrast_of(r#"{"contrast": 1.1111112}"#, &[]);
+    assert!((old - roll).abs() < 1e-5, "{old} vs {roll}");
+    assert_eq!(applied, true);
+    // Any other stated value is a choice, and wins.
+    let (stated, applied) = contrast_of(r#"{"contrast": 1.3}"#, &[]);
+    assert!((stated - 1.3).abs() < 1e-6, "{stated}");
+    assert_eq!(applied, false);
+    // So does the flag, even at the old default: a flag is always typed.
+    let (flag, applied) = contrast_of("{}", &["--contrast", "1.1111112"]);
+    assert!((flag - 1.111_111_2).abs() < 1e-6, "{flag}");
+    assert_eq!(applied, false);
+}
+
+#[test]
 fn measure_roll_keeps_a_fully_exposed_frame_out_of_the_white() {
     // A roll of the picture fixture plus one fully exposed frame — a copy of the
     // leader, mixed in (the leader itself as an input is refused below). Guarded by

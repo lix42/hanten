@@ -1714,7 +1714,10 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
 {"white_balance":[1.32,1.0,0.9],"exposure":0.0}
 ```
 
-With `--contrast` stated, `contrast_applied` is `false`: the stated contrast won. The
+With `--contrast` stated, `contrast_applied` is `false`: the stated contrast won. A
+recipe written by an earlier build states `look.contrast` at its old default,
+`1.1111112`, because it serialized every default; that exact value in a recipe is read
+as unset, so the roll's white applies (any other value, or the flag, still wins). The
 film master applies neither value, and reports both as not applied.
 
 **The white balance** equalizes the pooled pixels' per-channel 99th percentile,

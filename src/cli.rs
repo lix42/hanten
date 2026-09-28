@@ -2221,9 +2221,17 @@ fn load_recipe_for(path: Option<&Path>, flow: Flow) -> Result<LoadedRecipe> {
                 if let Some(v) = body {
                     recipe::check_body(v, true, &context)?;
                 }
-                let r: Recipe = match &envelope_body {
-                    Some(v) => serde_json::from_value(v.clone()).map_err(usage)?,
-                    None => serde_json::from_str(&txt).map_err(usage)?,
+                // A value an earlier build serialized at its default is read as unset.
+                let stripped = envelope_body
+                    .as_mut()
+                    .or(value.as_mut())
+                    .is_some_and(recipe::strip_old_serialized_defaults);
+                let r: Recipe = match (&envelope_body, &value) {
+                    (Some(v), _) => serde_json::from_value(v.clone()).map_err(usage)?,
+                    (None, Some(v)) if stripped => {
+                        serde_json::from_value(v.clone()).map_err(usage)?
+                    }
+                    (None, _) => serde_json::from_str(&txt).map_err(usage)?,
                 };
                 return Ok(LoadedRecipe {
                     doc: RecipeDoc::New(r),

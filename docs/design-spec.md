@@ -1124,7 +1124,9 @@ top-level **document version** rather than per-object ones:
   with mid-grey pinned. Both optional; unset they are written as `null`, never left
   out, so a roll's one-key per-frame override merges instead of replacing the section.
   The report's `new_flow.roll` states both, the contrast derived, and whether each was
-  applied (the film master applies neither).
+  applied (the film master applies neither). A whole recipe stating `look.contrast` at
+  exactly its old serialized default (`2.0 / 1.8`) reads it as unset, since earlier
+  builds wrote every default (`recipe::strip_old_serialized_defaults`).
 - **`scene_correction`** (`nf-scene-correction/stage`): per-channel gains on linear
   ACEScg, after the NC film RGB v1 3×3 and before the look. `white_balance` is
   `{"explicit": [r, g, b]}` (`--white-balance`; finite and positive) and nothing
