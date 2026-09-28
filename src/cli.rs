@@ -703,8 +703,9 @@ impl RollOverrides {
 #[derive(Args, Debug, Default)]
 pub struct SceneCorrectionOverrides {
     /// White-balance gains `R,G,B` — a per-channel gain on linear ACEScg, after the
-    /// NC film RGB v1 mapping (recipe key `scene_correction.white_balance`). Measured
-    /// once per roll with `hanten measure-roll`, which reports the gains to pass here.
+    /// NC film RGB v1 mapping (recipe key `scene_correction.white_balance`). Multiplied
+    /// into the roll's gains (`--roll-white-balance`, which `hanten measure-roll`
+    /// measures), so it adjusts the roll's balance rather than replacing it.
     #[arg(long, value_name = "R,G,B", value_parser = parse_rgb)]
     pub white_balance: Option<[f32; 3]>,
     /// Exposure in stops (EV) — a scene-referred gain of `2^EV` on every channel,
@@ -1937,7 +1938,7 @@ fn suffix_mismatch_error(
     // axes; its offer replaces it. Dropping the suffix is the one remedy that always
     // works — changing an axis may not.
     let offers = given_container(output)
-        .map(|c| crate::destination::writing(c, &stated_axes))
+        .map(|c| crate::destination::writing(c, &stated_axes, &defaults))
         .unwrap_or_default();
     // Only a typed `--film-master` needs dropping (it conflicts with the axis flags at
     // the parser); a recipe's is replaced by the axis flags themselves, which start
@@ -2003,6 +2004,7 @@ impl OutputTarget {
                 OutputSection::Display(axes) => axes,
                 OutputSection::FilmMaster => DisplayAxes::default(),
             },
+            defaults: r.base().axes,
             film_master_flag,
         })
     }
@@ -6699,7 +6701,10 @@ mod tests {
             }
             // The removed chain's vocabulary is not advice any more.
             assert!(!msg.contains("--new-flow"), "{argv:?}: {msg}");
-            assert!(!msg.contains("  "), "{argv:?}: a sentence is missing: {msg}");
+            assert!(
+                !msg.contains("  "),
+                "{argv:?}: a sentence is missing: {msg}"
+            );
         }
         let msg = reject_removed_flags(&parse_convert(&["--output-preset", "legacy"]))
             .unwrap_err()
@@ -7507,7 +7512,7 @@ mod tests {
         let got = load_recipe_body("ok", r#"{"recipe_version":2,"look":{"contrast":1.3}}"#)
             .unwrap()
             .recipe;
-        assert_eq!(got.look.contrast, 1.3);
+        assert_eq!(got.look.contrast, Some(1.3));
         assert_eq!(got.reconstruction, Recipe::default().reconstruction);
     }
 
@@ -7536,7 +7541,7 @@ mod tests {
             flat.recipe, wrapped.recipe,
             "both shapes resolve to one recipe"
         );
-        assert_eq!(wrapped.recipe.look.contrast, 1.3);
+        assert_eq!(wrapped.recipe.look.contrast, Some(1.3));
         // A bare recipe records no provenance; the envelope's is read but never
         // applied — only compared (see `pipeline_version_warning`).
         assert_eq!(flat.meta_pipeline_version, None);
@@ -8002,7 +8007,7 @@ mod tests {
         let args = roll_args(&manifest, &dir);
         let mut shared = base_recipe();
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
-        shared.look.contrast = 1.3;
+        shared.look.contrast = Some(1.3);
         let log = Log::new(&args.report);
         let planned = resolve_frames(&args, &shared, &mut Vec::new(), &log);
         std::fs::remove_dir_all(&dir).ok();

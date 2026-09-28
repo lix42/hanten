@@ -153,25 +153,11 @@ Read the module docs before changing these; they hold the traps.
 
 | Area | Read |
 |---|---|
-<<<<<<< HEAD
-| output paths, suffixes, preset → container | `cli::resolve_output_path`, `container_for`, `Unappendable` |
-| knob merge, validation order, removed keys | `cli::merge`, `validate`, `validate_convert`, `validate_output_preset`, `strip_retired_keys_at_old_defaults` |
-| new-flow flags and recipe | `src/flow.rs`, `src/recipe.rs` |
-| renderings (`direct` / `default`), `direct`'s pinned base | `src/rendering.rs` |
-| new-flow destination set (axes, table, derivation) | `src/destination.rs` |
-| reconstruction, density scale, anchors | `types.rs` (`DensityParams`, `ExponentialParams`, `AnchorPlacement`), `algo/fixed.rs` |
-||||||| parent of 7d70d16 (Flip the default to the new chain (nf-core/default-flip))
-| output paths, suffixes, preset → container | `cli::resolve_output_path`, `container_for`, `Unappendable` |
-| knob merge, validation order, removed keys | `cli::merge`, `validate`, `validate_convert`, `validate_output_preset`, `strip_retired_keys_at_old_defaults` |
-| new-flow flags and recipe | `src/flow.rs`, `src/recipe.rs` |
-| new-flow destination set (axes, table, derivation) | `src/destination.rs` |
-| reconstruction, density scale, anchors | `types.rs` (`DensityParams`, `ExponentialParams`, `AnchorPlacement`), `algo/fixed.rs` |
-=======
 | output paths, suffixes, destination → container | `cli::resolve_output_path`, `OutputTarget`, `Unappendable` |
 | knob merge, validation order, removed flags and keys | `recipe::check_body`, `recipe::merge`, `recipe::validate`, `recipe::destination`; `cli::reject_removed_flags`, `validate_convert`, `validate_shared` |
+| renderings (`direct` / `default`), `direct`'s pinned base | `src/rendering.rs` |
 | destination set (axes, table, derivation) | `src/destination.rs` |
 | decode, density scale, anchor | `algo/fixed.rs` |
->>>>>>> 7d70d16 (Flip the default to the new chain (nf-core/default-flip))
 | film base, IR holder mask, measurement region | `pipeline/film_base.rs` |
 | film-stock data | `film_stock/` (test-only: evidence for the decode's constants; `docs/datasheets/`) |
 | rendering stages, SDR/HDR bounds | `pipeline/scene_correction.rs`, `look.rs`, `fit_range.rs`, `fit_gamut.rs`, `hdr.rs`; the SDR/HDR branch contract in `pipeline/chain.rs` |

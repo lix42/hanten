@@ -312,14 +312,14 @@ impl TypedStyle {
     /// What `convert`'s flags typed.
     pub fn of(args: &crate::cli::ConvertArgs) -> Self {
         Self {
-            white_balance: args.print.white_balance.is_some(),
+            white_balance: args.scene.white_balance.is_some(),
             contrast: args.look.contrast.is_some(),
             highlight_desaturation_strength: args.look.highlight_desaturation.is_some(),
         }
     }
 }
 
-/// The current chain's sections this recipe does not have, and where each one's
+/// The removed chain's sections this recipe does not have, and where each one's
 /// knobs go. `reconstruction` is not here: the name survives with a different
 /// shape, and [`check_body`] diagnoses its old keys one by one.
 const SECTIONS_WITH_NO_COUNTERPART: &[(&str, &str)] = &[(
@@ -1471,31 +1471,6 @@ impl Recipe {
                 remedies,
             )
         })
-    }
-
-/ The current chain's config carrying this recipe's **shared** sections, for the
-    /// stages both chains run: decode, the film base and the measurement region — plus
-    /// fit range's headroom, which both recipes spell identically.
-    ///
-    /// Scaffolding, deleted with `ResolvedConfig` by `nf-core/default-flip`. Every
-    /// other section is left at its default, which is safe only because nothing past
-    /// the film base reads them on the new flow: the decode reads
-    /// [`Recipe::reconstruction`] and the chain [`Recipe::chain_params`], never this
-    /// projection, and the destination is fixed rather than resolved from `output`.
-    pub fn to_config(&self) -> ResolvedConfig {
-        ResolvedConfig {
-            input: self.input.clone(),
-            calibration: CalibrationParams {
-                film_base: self.calibration.film_base.clone(),
-            },
-            measure: self.measure.clone(),
-            // The same section on both chains, so the projection states the user's value
-            // rather than a default the run does not use.
-            fit_range: FitRange {
-                headroom_stops: self.resolved_fit_range().0,
-            },
-            ..ResolvedConfig::default()
-        }
     }
 }
 
@@ -2935,8 +2910,19 @@ mod tests {
             ("--exposure", &["--exposure", "-0.5"], |r| {
                 r.scene_correction.exposure == -0.5
             }),
+            ("--rendering", &["--rendering", "direct"], |r| {
+                r.rendering == Rendering::Direct
+            }),
+            (
+                "--roll-white-balance",
+                &["--roll-white-balance", "1.1,1,0.9"],
+                |r| r.roll.white_balance == Some([1.1, 1.0, 0.9]),
+            ),
+            ("--roll-white", &["--roll-white", "1.7"], |r| {
+                r.roll.white_stops == Some(1.7)
+            }),
             ("--contrast", &["--contrast", "1.3"], |r| {
-                r.look.contrast == 1.3
+                r.look.contrast == Some(1.3)
             }),
             ("--channel-grade", &["--channel-grade", "1.1,0.9"], |r| {
                 r.look.channel_grade == [1.1, 0.9]
@@ -2944,17 +2930,17 @@ mod tests {
             (
                 "--highlight-desaturation",
                 &["--highlight-desaturation", "0.5"],
-                |r| r.look.highlight_desaturation.strength == 0.5,
+                |r| r.look.highlight_desaturation.strength == Some(0.5),
             ),
             (
                 "--highlight-desaturation-start",
                 &["--highlight-desaturation-start", "-2"],
-                |r| r.look.highlight_desaturation.start_stops == -2.0,
+                |r| r.look.highlight_desaturation.start_stops == Some(-2.0),
             ),
             (
                 "--highlight-desaturation-band",
                 &["--highlight-desaturation-band", "0.01,0.03"],
-                |r| r.look.highlight_desaturation.band == [0.01, 0.03],
+                |r| r.look.highlight_desaturation.band == Some([0.01, 0.03]),
             ),
             ("--range", &["--range", "hdr"], |r| {
                 r.output == display(|a| a.range = Some(Range::Hdr))
@@ -2974,10 +2960,10 @@ mod tests {
             (
                 "--display-tone-headroom",
                 &["--display-tone-headroom", "4"],
-                |r| r.fit_range.headroom_stops == 4.0,
+                |r| r.fit_range.headroom_stops == Some(4.0),
             ),
             ("--display-black", &["--display-black", "5"], |r| {
-                r.fit_range.display_black == DisplayBlack::StopsBelowMid(5.0)
+                r.fit_range.display_black == Some(DisplayBlack::StopsBelowMid(5.0))
             }),
         ]
     }

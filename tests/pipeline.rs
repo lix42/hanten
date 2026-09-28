@@ -210,6 +210,11 @@ fn run(args: &[&str]) -> (i32, String, String) {
     spawn(args, &[])
 }
 
+/// A neutral roll measurement (the identity gains, the default contrast), for a
+/// `--strict` test whose subject is not the roll: without one the `default` rendering
+/// warns that it fell back, and `--strict` fails on that instead.
+const MEASURED: [&str; 4] = ["--roll-white-balance", "1,1,1", "--contrast", "1.1111112"];
+
 /// Like [`run`], but with extra environment variables set for the child (used to
 /// point `NC_TELEMETRY_LOG` at a temp file so telemetry tests never touch the
 /// real user data dir).
@@ -366,6 +371,7 @@ fn single_rendition_hdr_destinations_warn_when_the_signal_stays_below_reference_
             "--film-base",
             "1,1,1",
         ];
+        argv.extend_from_slice(&MEASURED);
         argv.extend_from_slice(destination);
         argv.extend_from_slice(extra);
         run(&argv)
@@ -453,16 +459,20 @@ fn hdr_linear_tiff_writes_a_bit_exact_display_linear_bt2020_master() {
         // fixture every run trips the "IR preserved but not used" warning and this
         // would prove nothing.
         let (code, stdout, err) = run(&[
-            "convert",
-            fixture("hdr-48bit.tif").to_str().unwrap(),
-            "-o",
-            output.to_str().unwrap(),
-            "--transfer",
-            "linear",
-            "--film-base",
-            "1,1,1",
-            "--strict",
-        ]);
+            &[
+                "convert",
+                fixture("hdr-48bit.tif").to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+                "--transfer",
+                "linear",
+                "--film-base",
+                "1,1,1",
+                "--strict",
+            ][..],
+            &MEASURED,
+        ]
+        .concat());
         assert_eq!(code, 0, "{err}");
         let report = json(&stdout);
         let axes = &report["new_flow"]["destination"]["display"];
@@ -545,20 +555,24 @@ fn coded_hdr_tiffs_store_exact_codes_and_signal_cicp_in_the_profile() {
     for (preset, transfer_code, expect_hlg) in [("pq", 16u64, false), ("hlg", 18, true)] {
         let output = tmp.path(&format!("{preset}.tif"));
         let (code, stdout, err) = run(&[
-            "convert",
-            fixture("hdr-48bit.tif").to_str().unwrap(),
-            "-o",
-            output.to_str().unwrap(),
-            "--transfer",
-            preset,
-            "--film-base",
-            "1,1,1",
-            // Exit 0 under `--strict` on the IR-free fixture means *no* promotable
-            // warning — including the SDR-range one
-            // (`single_rendition_hdr_destinations_warn_when_the_signal_stays_below_reference_white`),
-            // which has nothing to do with PQ/HLG code storage.
-            "--strict",
-        ]);
+            &[
+                "convert",
+                fixture("hdr-48bit.tif").to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+                "--transfer",
+                preset,
+                "--film-base",
+                "1,1,1",
+                // Exit 0 under `--strict` on the IR-free fixture means *no* promotable
+                // warning — including the SDR-range one
+                // (`single_rendition_hdr_destinations_warn_when_the_signal_stays_below_reference_white`),
+                // which has nothing to do with PQ/HLG code storage.
+                "--strict",
+            ][..],
+            &MEASURED,
+        ]
+        .concat());
         assert_eq!(code, 0, "{preset}: {err}");
         let report = json(&stdout);
         assert_eq!(
@@ -1561,18 +1575,23 @@ fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
     assert_eq!(code, 0, "a profile plus a base flag must convert: {err}");
 
     // **…and under `--strict`.** A profile has no `calibration` section by definition,
-    // and that absence must raise nothing a `--strict` run would promote.
+    // and that absence must raise nothing a `--strict` run would promote. (The roll
+    // measurement is the roll's, not the profile's, so it comes from flags here.)
     let (code, _, err) = run(&[
-        "convert",
-        scan.to_str().unwrap(),
-        "-o",
-        tmp.path("profile-strict.tif").to_str().unwrap(),
-        "--params",
-        profile.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--strict",
-    ]);
+        &[
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            tmp.path("profile-strict.tif").to_str().unwrap(),
+            "--params",
+            profile.to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--strict",
+        ][..],
+        &MEASURED,
+    ]
+    .concat());
     assert_eq!(code, 0, "a profile must be --strict clean: {err}");
 
     // …and without the base it is refused, not guessed.
@@ -4248,14 +4267,16 @@ fn recipe_dumped_by_this_build_replays_clean_under_strict() {
     // survive `--strict`: nothing else checks the one file the tool itself writes.
     //
     // The IR-free fixture is required: `hdri-64bit.tif` emits the "IR preserved but
-    // not used" warning on every frame, which would fail `--strict` here regardless.
+    // not used" warning on every frame, which would fail `--strict` here regardless. The
+    // roll measurement is stated so the dump carries one; without it the replay warns
+    // that it fell back, and `--strict` rightly fails on that.
     let tmp = TempDir::new("dumpreplay");
     let first = tmp.path("first.tiff");
     let dump = tmp.path("params.json");
     let (code, _, err) = convert_p3(
         &fixture("hdr-48bit.tif"),
         &first,
-        &["--dump-params", dump.to_str().unwrap()],
+        &[&["--dump-params", dump.to_str().unwrap()][..], &MEASURED].concat(),
     );
     assert_eq!(code, 0, "{err}");
 
@@ -6332,19 +6353,23 @@ fn a_usable_ir_plane_is_consumed_by_the_auto_film_base() {
     write_hdri_scan_with_rebate(&usable, 41_000, false);
     let out = dir.path("usable-out.tif");
     let (code, stdout, err) = run(&[
-        "convert",
-        "--auto-base",
-        "--strict",
-        // The synthetic fixture carries no SilverFast XMP, so state the input
-        // semantics the provenance gate would otherwise resolve from it.
-        "--input-transfer",
-        "linear",
-        "--input-meaning",
-        "scanner-device",
-        usable.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-    ]);
+        &[
+            "convert",
+            "--auto-base",
+            "--strict",
+            // The synthetic fixture carries no SilverFast XMP, so state the input
+            // semantics the provenance gate would otherwise resolve from it.
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            usable.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ][..],
+        &MEASURED,
+    ]
+    .concat());
     assert_eq!(
         code, 0,
         "a consumed IR plane must leave --strict clean:\n{err}"
@@ -6370,17 +6395,21 @@ fn a_usable_ir_plane_is_consumed_by_the_auto_film_base() {
     let all_holder = dir.path("all-holder.tif");
     write_hdri_scan_with_rebate(&all_holder, 41_000, true);
     let (code, stdout, err) = run(&[
-        "convert",
-        "--auto-base",
-        "--strict",
-        "--input-transfer",
-        "linear",
-        "--input-meaning",
-        "scanner-device",
-        all_holder.to_str().unwrap(),
-        "-o",
-        dir.path("all-holder-out.tif").to_str().unwrap(),
-    ]);
+        &[
+            "convert",
+            "--auto-base",
+            "--strict",
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            all_holder.to_str().unwrap(),
+            "-o",
+            dir.path("all-holder-out.tif").to_str().unwrap(),
+        ][..],
+        &MEASURED,
+    ]
+    .concat());
     assert_eq!(
         code, 1,
         "an unconsumed IR plane must still fail --strict:\n{err}"
@@ -6437,19 +6466,23 @@ fn export_ir_keeps_strict_clean_when_the_plane_cannot_serve_detection() {
     let opaque = dir.path("opaque.tif");
     write_hdri_scan_with_rebate(&opaque, 1_081, false); // film itself IR-opaque
     let (code, _stdout, err) = run(&[
-        "convert",
-        "--auto-base",
-        "--strict",
-        "--export-ir",
-        dir.path("ir.tif").to_str().unwrap(),
-        "--input-transfer",
-        "linear",
-        "--input-meaning",
-        "scanner-device",
-        opaque.to_str().unwrap(),
-        "-o",
-        dir.path("out.tif").to_str().unwrap(),
-    ]);
+        &[
+            "convert",
+            "--auto-base",
+            "--strict",
+            "--export-ir",
+            dir.path("ir.tif").to_str().unwrap(),
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            opaque.to_str().unwrap(),
+            "-o",
+            dir.path("out.tif").to_str().unwrap(),
+        ][..],
+        &MEASURED,
+    ]
+    .concat());
     assert_eq!(
         code, 0,
         "--strict --export-ir must stay usable on an HDRi scan:\n{err}"
@@ -6863,6 +6896,7 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
             "--export-ir",
             ir_out.to_str().unwrap(),
         ];
+        args.extend(MEASURED);
         args.extend(extra);
         args.extend(["-o", out.to_str().unwrap(), path.to_str().unwrap()]);
         run(&args)
@@ -6925,20 +6959,24 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
     }
     write_hdri(&shallow, W, H, &rgb, &ir);
     let (code, stdout, err) = run(&[
-        "convert",
-        "--film-base",
-        "0.9,0.6,0.5",
-        "--input-transfer",
-        "linear",
-        "--input-meaning",
-        "scanner-device",
-        "--export-ir",
-        dir.path("ir2.tif").to_str().unwrap(),
-        "--strict",
-        "-o",
-        dir.path("out2.tif").to_str().unwrap(),
-        shallow.to_str().unwrap(),
-    ]);
+        &[
+            "convert",
+            "--film-base",
+            "0.9,0.6,0.5",
+            "--input-transfer",
+            "linear",
+            "--input-meaning",
+            "scanner-device",
+            "--export-ir",
+            dir.path("ir2.tif").to_str().unwrap(),
+            "--strict",
+            "-o",
+            dir.path("out2.tif").to_str().unwrap(),
+            shallow.to_str().unwrap(),
+        ][..],
+        &MEASURED,
+    ]
+    .concat());
     assert_eq!(
         code, 0,
         "falsifiability: a sub-cap march must not warn at all: {err}"

@@ -340,14 +340,15 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
                    density gain, no auto white balance, extended-Reinhard display tone at 6 \
                    stops of headroom",
     },
-    // v8 — the chain flip: the default is the new chain end to end, into an SDR Display
-    // P3 TIFF (2026-09-27). `render` hashes the fixed decode rather than the removed
-    // chain's reconstruction, and `recipe` the new recipe document; `base` is unchanged.
+    // v8 — the chain flip: the default is `docs/design-update.md`'s chain end to end, into
+    // an SDR Display P3 TIFF (2026-09-27). `render` hashes the fixed decode rather than
+    // the removed chain's reconstruction, and `recipe` the new recipe document; `base` is
+    // unchanged.
     PipelineFingerprint {
         pipeline_version: 8,
         render: "3c6dd4aef40714e3",
         base: "01c5acccc36a3388",
-        recipe: "c78ddd20de0c0e8a",
+        recipe: "fe3d6808a270d45f",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];

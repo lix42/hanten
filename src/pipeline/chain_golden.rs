@@ -14,7 +14,7 @@
 //!   render reports, and the order the per-channel gains and the 3×3 run in (they do
 //!   not commute). They start at the mapped ACEScg, not at the decode: the hand-off
 //!   from the decode, and the recipe reaching `DecodeParams`, are the orchestrator's
-//!   (`cli::render_new_flow_frame`) and are not covered here.
+//!   (`cli::render_frame`) and are not covered here.
 //!
 //! **Which stages are bit-exact and which are windowed is decided by their libm
 //! calls.** The decode makes two (`log10`, `powf`), a fractional exposure one
