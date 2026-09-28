@@ -34,7 +34,10 @@ The design is `docs/design-update.md`, Part 2, "Two renderings: `direct` and `de
   alone now resolves to the gain-map JPEG. `default` keeps SDR Display P3.
   So the destination's unset-axis defaults depend on the rendering (`destination::resolve`
   takes them from it), and a stated axis still wins. The global default stays
-  `nf-destinations/default-destination`'s.
+  `nf-destinations/default-destination`'s. `direct` also derives its container first
+  (user, 2026-09-27: lossless first), so a stated axis that rules out the float TIFF
+  falls back to the 16-bit TIFF; the gain-map JPEG only when `--container jpeg` is
+  stated or the stated axes leave no lossless row.
 - **The gamut is ready** ([`output/adobe-rgb-gamut`](../output/adobe-rgb-gamut.md)), and
   `nctool metrics` already maps `("adobe-rgb", "native")` to `adobe-rgb`.
 - **Keeping `direct` current**: one struct built without `..`, so a new stage knob fails

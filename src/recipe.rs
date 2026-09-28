@@ -14,6 +14,7 @@
 //! input · calibration · measure      shared with the current chain (decode, film base)
 //! roll                               what `hanten measure-roll` measured for the roll
 //! reconstruction                     the fixed decode — algo::fixed::DecodeParams
+//! rendering                          which base the stages start from (crate::rendering)
 //! scene_correction · look ·          one per rendering stage with its knobs; fit
 //! fit_range · fit_gamut                gamut has none (its ceiling and target are not
 //!                                      the recipe's), so its section stays empty
@@ -49,6 +50,7 @@ use crate::pipeline::look::{
 };
 use crate::pipeline::roll_white;
 use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
+use crate::rendering::{Base, Rendering};
 use crate::types::{
     CalibrationParams, FilmBaseSource, InputParams, MeasureParams, NcError, Result,
 };
@@ -81,6 +83,9 @@ pub struct Recipe {
     pub measure: MeasureParams,
     #[serde(default)]
     pub reconstruction: DecodeParams,
+    /// `direct` or `default` (`--rendering`): the base every stage knob starts from.
+    #[serde(default)]
+    pub rendering: Rendering,
     #[serde(default)]
     pub scene_correction: SceneCorrectionParams,
     #[serde(default)]
@@ -118,30 +123,22 @@ impl<'de> Deserialize<'de> for RecipeVersion {
 }
 
 /// Fit range's section on the new chain: the headroom, and where the film base renders
-/// on the display.
+/// on the display. Each key is optional: unset, it takes the rendering's base
+/// (`crate::rendering`), so a value is written only when the user stated it.
 ///
 /// Its own type rather than [`FitRange`], which the current chain's `ResolvedConfig`
 /// also carries: display black is new-chain only, and a key added to that shared type
 /// would be written into every current-chain sidecar. [`Recipe::to_config`] projects
 /// the headroom across. The peak is the destination's, as for [`FitRange`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FitRangeSection {
     /// In stops above diffuse white: reinhard's white point is `2^headroom_stops`, and
     /// `0` is the identity.
-    pub headroom_stops: f32,
+    pub headroom_stops: Option<f32>,
     /// Where the film base renders, in stops below mid-grey on the display, or
     /// `"off"` (`pipeline::fit_range`'s display black).
-    pub display_black: DisplayBlack,
-}
-
-impl Default for FitRangeSection {
-    fn default() -> Self {
-        Self {
-            headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
-            display_black: DisplayBlack::default(),
-        }
-    }
+    pub display_black: Option<DisplayBlack>,
 }
 
 impl FitRangeSection {
@@ -153,10 +150,12 @@ impl FitRangeSection {
     /// they ask for nothing such a destination does not already do, and refusing them
     /// would kill the flags-win reset.
     pub fn asks_for_a_fit(&self) -> bool {
-        let headroom = self.headroom_stops != crate::types::DEFAULT_HEADROOM_STOPS
-            && self.headroom_stops != 0.0;
-        let black = self.display_black != DisplayBlack::default()
-            && self.display_black != DisplayBlack::Off;
+        let headroom = self
+            .headroom_stops
+            .is_some_and(|h| h != crate::types::DEFAULT_HEADROOM_STOPS && h != 0.0);
+        let black = self
+            .display_black
+            .is_some_and(|b| b != DisplayBlack::default() && b != DisplayBlack::Off);
         headroom || black
     }
 }
@@ -260,8 +259,9 @@ pub struct LookKeys {
     pub contrast: Option<f32>,
     /// `look.channel_grade`, `--channel-grade` ([`LookSection::channel_grade`]).
     pub channel_grade: [f32; 2],
-    /// `look.highlight_desaturation`, `--highlight-desaturation*`.
-    pub highlight_desaturation: HighlightDesaturation,
+    /// `look.highlight_desaturation`, `--highlight-desaturation*`: each key unset takes
+    /// the rendering's base (off under `direct`).
+    pub highlight_desaturation: DesaturationKeys,
 }
 
 impl Default for LookKeys {
@@ -269,32 +269,59 @@ impl Default for LookKeys {
         Self {
             contrast: None,
             channel_grade: IDENTITY_CHANNEL_GRADE,
-            highlight_desaturation: HighlightDesaturation::default(),
+            highlight_desaturation: DesaturationKeys::default(),
         }
     }
 }
 
 impl LookKeys {
-    /// The stage's section, with `base` as the contrast when none is stated.
-    pub fn resolve(&self, base: f32) -> LookSection {
+    /// The stage's section: `contrast` when none is stated, and `desaturation`'s value
+    /// for each unstated desaturation key. Destructured without `..`, so a new look knob
+    /// does not compile until it has a base (`crate::rendering`'s module docs).
+    pub fn resolve(&self, contrast: f32, desaturation: HighlightDesaturation) -> LookSection {
+        let LookKeys {
+            contrast: stated_contrast,
+            channel_grade,
+            highlight_desaturation:
+                DesaturationKeys {
+                    strength,
+                    start_stops,
+                    band,
+                },
+        } = *self;
         LookSection {
-            contrast: self.contrast.unwrap_or(base),
-            channel_grade: self.channel_grade,
-            highlight_desaturation: self.highlight_desaturation,
+            contrast: stated_contrast.unwrap_or(contrast),
+            channel_grade,
+            highlight_desaturation: HighlightDesaturation {
+                strength: strength.unwrap_or(desaturation.strength),
+                start_stops: start_stops.unwrap_or(desaturation.start_stops),
+                band: band.unwrap_or(desaturation.band),
+            },
         }
     }
 }
 
+/// The recipe's `look.highlight_desaturation` keys — the stage's
+/// [`HighlightDesaturation`], each optional so an unset one takes the rendering's base.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DesaturationKeys {
+    pub strength: Option<f32>,
+    pub start_stops: Option<f32>,
+    pub band: Option<[f32; 2]>,
+}
+
 /// Where the look's resolved contrast came from — the report's
-/// `new_flow.roll.contrast_applied`, and whose knob a contrast fault names.
+/// `new_flow.roll.contrast_applied`, whose knob a contrast fault names, and whether the
+/// `default` rendering fell back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContrastSource {
     /// `look.contrast` was stated, and wins over the roll's.
     Stated,
     /// The roll's white, through [`roll_white::contrast_for`].
     Roll,
-    /// Neither: [`DEFAULT_CONTRAST`].
-    Default,
+    /// Neither: the rendering's base ([`Base::contrast`]).
+    Base,
 }
 
 /// What the roll section held and what the run applied of it — the report's
@@ -308,22 +335,28 @@ pub struct RollReport {
     /// The look contrast `white_stops` renders at ([`roll_white::contrast_for`]).
     pub contrast: Option<f32>,
     /// Whether the gains were multiplied into scene correction's white balance: `false`
-    /// when there were none, or when no rendering stage ran (the film master).
+    /// when there were none, under `--rendering direct`, or when no rendering stage ran
+    /// (the film master).
     pub white_balance_applied: bool,
     /// Whether the look's contrast is the roll's: `false` when there was no white, when
-    /// `look.contrast` was stated (it wins), or when no rendering stage ran.
+    /// `look.contrast` was stated (it wins), under `--rendering direct`, or when no
+    /// rendering stage ran.
     pub contrast_applied: bool,
 }
 
-/// Which style knobs that can overlap a roll measurement were typed as flags on this
-/// invocation — [`Recipe::roll_overlap_warnings`] warns only for a value a recipe file
-/// stated. `roll` takes no flags, so it passes the default.
+/// Which style knobs were typed as flags on this invocation — [`Recipe::recipe_warnings`]
+/// warns only for a value a recipe file stated, since a typed flag is a choice made now.
+/// `roll` takes no flags, so it passes the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TypedStyle {
     /// `--white-balance` was typed.
     pub white_balance: bool,
     /// `--contrast` was typed.
     pub contrast: bool,
+    /// `--highlight-desaturation` (the strength) was typed. Its start and band have no
+    /// flag here: no warning reads them, since their old serialized defaults equal
+    /// `direct`'s base.
+    pub highlight_desaturation_strength: bool,
 }
 
 impl TypedStyle {
@@ -332,6 +365,7 @@ impl TypedStyle {
         Self {
             white_balance: args.print.white_balance.is_some(),
             contrast: args.look.contrast.is_some(),
+            highlight_desaturation_strength: args.look.highlight_desaturation.is_some(),
         }
     }
 }
@@ -596,7 +630,8 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     if let Some(d) = args.anchor.anchor_mid_offset {
         r.reconstruction.anchor = AnchorRule::MidAboveBase(d);
     }
-    // The roll's measurements (`hanten measure-roll`).
+    // The roll's measurements (`hanten measure-roll`); whether they apply is the
+    // rendering's.
     if let Some(gains) = args.roll.roll_white_balance {
         r.roll.white_balance = Some(gains);
     }
@@ -619,16 +654,16 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     }
     let desat = &mut r.look.highlight_desaturation;
     if let Some(v) = args.look.highlight_desaturation {
-        desat.strength = v;
+        desat.strength = Some(v);
     }
     if let Some(v) = args.look.highlight_desaturation_start {
-        desat.start_stops = v;
+        desat.start_stops = Some(v);
     }
     if let Some(v) = args.look.highlight_desaturation_band {
-        desat.band = v;
+        desat.band = Some(v);
     }
     if let Some(stops) = args.print.display_tone_headroom {
-        r.fit_range.headroom_stops = stops;
+        r.fit_range.headroom_stops = Some(stops);
     }
     // The destination. `--film-master` and the axis flags are exclusive at the parser,
     // so at most one arm fires. An axis flag over a recipe's `"film-master"` starts
@@ -649,7 +684,10 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
         r.output = OutputSection::Display(axes);
     }
     if let Some(black) = args.display.display_black {
-        r.fit_range.display_black = black;
+        r.fit_range.display_black = Some(black);
+    }
+    if let Some(rendering) = args.rendering.rendering {
+        r.rendering = rendering;
     }
     r
 }
@@ -687,11 +725,11 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
             let (contrast, source) = r.resolved_contrast();
             let contrast_name = match source {
                 ContrastSource::Roll => knob_name(names, "roll", "--roll-white", "white_stops"),
-                ContrastSource::Stated | ContrastSource::Default => {
+                ContrastSource::Stated | ContrastSource::Base => {
                     knob_name(names, "look", "--contrast", "contrast")
                 }
             };
-            validate_look(&r.look.resolve(contrast), &contrast_name, source, names)?;
+            validate_look(&r.resolved_look(), &contrast_name, source, names)?;
             validate_whole_contrast(d.linearization, contrast, &contrast_name, source, names)?;
             validate_fit_range(&r.fit_range, names)?;
             return destination(r, names).map(|_| ());
@@ -755,7 +793,7 @@ fn validate_look(
             ContrastSource::Roll => {
                 "the contrast is log2(1/0.18) over the white, so use a larger white"
             }
-            ContrastSource::Stated | ContrastSource::Default => "1 is the identity",
+            ContrastSource::Stated | ContrastSource::Base => "1 is the identity",
         };
         return Err(NcError::Usage(format!(
             "{contrast_name} must give a finite, positive contrast ({hint}), got {v}"
@@ -826,7 +864,7 @@ fn validate_whole_contrast(
     // the other way from the linearization.
     let remedy = match source {
         ContrastSource::Roll => format!("Use a {toward} {gamma} or a {away} {contrast_name}"),
-        ContrastSource::Stated | ContrastSource::Default => {
+        ContrastSource::Stated | ContrastSource::Base => {
             format!("Use a {toward} value for either")
         }
     };
@@ -927,14 +965,15 @@ fn scene_correction_fault(p: &SceneCorrectionParams, names: KnobNames) -> Result
 /// with the current chain's knob, and display black's, [`DisplayBlack::check`] —
 /// rendered as a usage error for this recipe's keys.
 fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
-    if let Err(DisplayBlackFault(v)) = p.display_black.check() {
+    // Only stated values: an unset one is the rendering's base, a constant.
+    if let Some(Err(DisplayBlackFault(v))) = p.display_black.map(|b| b.check()) {
         return Err(NcError::Usage(format!(
             "{} must be stops below mid-grey within (0, {MAX_DISPLAY_BLACK_STOPS}], or \
              `off`, got {v}",
             knob_name(names, "fit_range", "--display-black", "display_black")
         )));
     }
-    let Some(fault) = crate::types::headroom_fault(p.headroom_stops) else {
+    let Some(fault) = p.headroom_stops.and_then(crate::types::headroom_fault) else {
         return Ok(());
     };
     let name = knob_name(
@@ -962,6 +1001,28 @@ fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
 /// chain order, so removing one does not uncover the next.
 pub fn destination(r: &Recipe, names: KnobNames) -> Result<Destination> {
     match &r.output {
+        OutputSection::FilmMaster if r.rendering == Rendering::Direct => {
+            // The remedy works whichever of the recipe or a flag stated `direct`: a flag
+            // overrides the recipe's rendering, and `roll` takes no flags.
+            let (rendering, master, back) = match names {
+                KnobNames::FlagAndKey => (
+                    "--rendering direct (recipe `rendering`)",
+                    "--film-master (recipe `output`: `\"film-master\"`)",
+                    "pass --rendering default",
+                ),
+                KnobNames::KeyOnly => (
+                    "`rendering` \"direct\"",
+                    "`output` \"film-master\"",
+                    "set `rendering` to \"default\" (or remove it)",
+                ),
+            };
+            Err(NcError::Usage(format!(
+                "{rendering} chooses what the rendering stages start from, and {master} \
+                 runs none: it writes the fixed decode's linear ACEScg. Either {back}, or \
+                 choose a rendered destination — `direct` alone writes the HDR float TIFF, \
+                 the rendered output closest to the decode"
+            )))
+        }
         OutputSection::FilmMaster => {
             let asked = stages_the_master_cannot_run(r, names);
             if asked.is_empty() {
@@ -991,7 +1052,7 @@ pub fn destination(r: &Recipe, names: KnobNames) -> Result<Destination> {
                 identities.join("; "),
             )))
         }
-        OutputSection::Display(axes) => destination::resolve(axes)
+        OutputSection::Display(axes) => destination::resolve(axes, &r.base().axes)
             .map(Destination::Display)
             .map_err(|fault| NcError::Usage(fault_message(axes, &fault, names))),
     }
@@ -1018,9 +1079,12 @@ fn stages_the_master_cannot_run(r: &Recipe, names: KnobNames) -> Vec<(&'static s
             ),
         ));
     }
-    // The look as stated, with an unstated contrast at the default: the roll's contrast
-    // is a measurement the film master leaves unapplied, not a look the user asked for.
-    if r.look.resolve(DEFAULT_CONTRAST).asks_for_a_look() {
+    // The look as stated, every unstated key at its default: the roll's contrast is a
+    // measurement the film master leaves unapplied, not a look the user asked for.
+    if r.look
+        .resolve(DEFAULT_CONTRAST, HighlightDesaturation::DEFAULT)
+        .asks_for_a_look()
+    {
         asked.push(pick(
             (
                 "the look (--contrast, --channel-grade, --highlight-desaturation*, \
@@ -1227,73 +1291,169 @@ impl Recipe {
     /// Everything every rendition of a frame shares — the stages above the SDR/HDR
     /// branch point, fit range's headroom and display black (`pipeline::chain`'s branch
     /// contract).
+    ///
+    /// Every stage knob is resolved against the rendering's base (`crate::rendering`):
+    /// the roll section applied or not, and each unstated knob at the base's value.
     pub fn shared_params(&self) -> SharedParams {
+        let (headroom_stops, display_black) = self.resolved_fit_range();
         SharedParams {
             scene_correction: self.resolved_scene_correction(),
             look: LookParams {
-                section: self.look.resolve(self.resolved_contrast().0),
+                section: self.resolved_look(),
                 linearization: self.reconstruction.linearization,
             },
-            headroom_stops: self.fit_range.headroom_stops,
-            display_black: self.fit_range.display_black,
+            headroom_stops,
+            display_black,
         }
     }
 
-    /// Scene correction as the stage receives it: the roll's gains, when stated,
-    /// multiplied into the stated white balance — which is `1,1,1` unless the user set
-    /// it, so a roll's gains alone reach the stage exactly.
-    pub fn resolved_scene_correction(&self) -> SceneCorrectionParams {
-        let mut p = self.scene_correction.clone();
-        if let Some(roll) = self.roll.white_balance {
-            let WhiteBalance::Explicit(stated) = p.white_balance;
-            p.white_balance = WhiteBalance::Explicit(std::array::from_fn(|c| roll[c] * stated[c]));
+    /// The base this recipe's rendering starts every knob from.
+    pub fn base(&self) -> Base {
+        self.rendering.base()
+    }
+
+    /// The roll section as the rendering applies it: whole, or not at all.
+    fn applied_roll(&self) -> RollSection {
+        if self.base().applies_roll {
+            self.roll
+        } else {
+            RollSection::default()
         }
-        p
+    }
+
+    /// Scene correction as the stage receives it: the applied roll's gains multiplied
+    /// into the stated white balance — which is `1,1,1` unless the user set it, so a
+    /// roll's gains alone reach the stage exactly. Both renderings start the white
+    /// balance and the exposure at the identity.
+    pub fn resolved_scene_correction(&self) -> SceneCorrectionParams {
+        let SceneCorrectionParams {
+            white_balance: WhiteBalance::Explicit(stated),
+            exposure,
+        } = self.scene_correction;
+        let white_balance = match self.applied_roll().white_balance {
+            Some(roll) => std::array::from_fn(|c| roll[c] * stated[c]),
+            None => stated,
+        };
+        SceneCorrectionParams {
+            white_balance: WhiteBalance::Explicit(white_balance),
+            exposure,
+        }
     }
 
     /// The look's contrast as the stage receives it, and where it came from: a stated
-    /// `look.contrast` wins, else the roll's white, else [`DEFAULT_CONTRAST`].
+    /// `look.contrast` wins, else the applied roll's white, else the rendering's base.
     pub fn resolved_contrast(&self) -> (f32, ContrastSource) {
-        match (self.look.contrast, self.roll.contrast()) {
+        match (self.look.contrast, self.applied_roll().contrast()) {
             (Some(stated), _) => (stated, ContrastSource::Stated),
             (None, Some(roll)) => (roll, ContrastSource::Roll),
-            (None, None) => (DEFAULT_CONTRAST, ContrastSource::Default),
+            (None, None) => (self.base().contrast, ContrastSource::Base),
         }
     }
 
+    /// The look as the stage receives it.
+    pub fn resolved_look(&self) -> LookSection {
+        self.look.resolve(
+            self.resolved_contrast().0,
+            self.base().highlight_desaturation,
+        )
+    }
+
+    /// Fit range's headroom and display black as the stage receives them: stated, else
+    /// the rendering's base. Destructured without `..`, like [`LookKeys::resolve`].
+    pub fn resolved_fit_range(&self) -> (f32, DisplayBlack) {
+        let FitRangeSection {
+            headroom_stops,
+            display_black,
+        } = self.fit_range;
+        let base = self.base();
+        (
+            headroom_stops.unwrap_or(base.headroom_stops),
+            display_black.unwrap_or(base.display_black),
+        )
+    }
+
     /// The report's `new_flow.roll`: `None` when the section states nothing. `rendered`
-    /// is whether any rendering stage ran — the film master applies neither value.
+    /// is whether any rendering stage ran — the film master applies neither value, and
+    /// `--rendering direct` leaves the section out.
     pub fn roll_report(&self, rendered: bool) -> Option<RollReport> {
         let r = self.roll;
+        let applies = rendered && self.base().applies_roll;
         (r != RollSection::default()).then(|| RollReport {
             white_balance: r.white_balance,
             white_stops: r.white_stops,
             contrast: r.contrast(),
-            white_balance_applied: rendered && r.white_balance.is_some(),
-            contrast_applied: rendered && self.resolved_contrast().1 == ContrastSource::Roll,
+            white_balance_applied: applies && r.white_balance.is_some(),
+            contrast_applied: applies && self.resolved_contrast().1 == ContrastSource::Roll,
         })
     }
 
-    /// The report warnings for a style value **a recipe file stated** that meets a roll
-    /// measurement, once per run: `convert` passes which of the two it was given as
-    /// flags, `roll` nothing (it takes no flags). Empty for the film master, which
-    /// applies neither roll value.
+    /// The run's warnings about its **recipe** — facts of the run, not of a frame, so
+    /// `convert` emits them once and `roll` once for its shared recipe (a per-frame
+    /// override is that frame's explicit choice). `typed` is which style knobs were given
+    /// as flags: a typed flag is a choice made now and never warns. Empty for the film
+    /// master, which renders nothing. Recipe keys only, and remedies both commands take.
     ///
-    /// Neither combination is refused, and nothing is read as unset by its value: a
-    /// stated white balance on top of the roll's is a legitimate adjustment, and a
-    /// stated contrast legitimately wins, so a `--dump-params` recipe must replay as it
-    /// rendered. But a recipe an earlier build wrote states both without anyone having
-    /// chosen them — every one serialized `look.contrast` at its default, and
-    /// `measure-roll` wrote its gains into `scene_correction.white_balance` and its
-    /// contrast into `look.contrast` — so merging a `roll` section into one squares the
-    /// gains or silently loses the roll's white. The warnings name the migration. A
-    /// typed flag is a choice made now, never such a leftover, so it never warns.
-    /// Recipe keys only, since only a recipe value warns.
-    pub fn roll_overlap_warnings(&self, typed: TypedStyle) -> Vec<String> {
-        let mut warnings = Vec::new();
+    /// Nothing here refuses, and nothing is read as unset by its value, so a
+    /// `--dump-params` recipe replays as it rendered. What they catch is a value nobody
+    /// chose: a recipe an earlier build wrote states every default (`look.contrast`
+    /// 1.1111112, `highlight_desaturation.strength` 0.8, …), and an earlier `hanten
+    /// measure-roll` wrote its gains into `scene_correction.white_balance` and its
+    /// contrast into `look.contrast`.
+    ///
+    /// - **`default`, no roll measurement**: what fell back (the neutral white balance,
+    ///   the fallback contrast).
+    /// - **`default`, a recipe value beside a roll measurement**: a white balance that
+    ///   multiplies the roll's gains, a contrast that overrides the roll's white.
+    /// - **`direct`, a recipe value that moves its pinned base**: every such key, since
+    ///   `direct` is meant to be the rendering the calibration loop holds fixed.
+    pub fn recipe_warnings(&self, typed: TypedStyle) -> Vec<String> {
         if self.output == OutputSection::FilmMaster {
-            return warnings;
+            return Vec::new();
         }
+        match self.rendering {
+            Rendering::Default => {
+                let mut w = self.roll_overlap_warnings(typed);
+                w.extend(self.fallback_warning(typed));
+                w
+            }
+            Rendering::Direct => self.direct_override_warning(typed).into_iter().collect(),
+        }
+    }
+
+    /// `default` without a roll measurement: what fell back — the white balance (no roll
+    /// gains, none stated or typed) and the contrast (no roll white, none stated). A typed
+    /// flag, even `--white-balance 1,1,1`, is a choice, so it silences its half.
+    fn fallback_warning(&self, typed: TypedStyle) -> Option<String> {
+        let mut fell_back = Vec::new();
+        if !typed.white_balance
+            && self.roll.white_balance.is_none()
+            && self.scene_correction.white_balance == WhiteBalance::Explicit([1.0, 1.0, 1.0])
+        {
+            fell_back.push("neutral white balance (no `roll.white_balance`)".to_string());
+        }
+        if self.resolved_contrast().1 == ContrastSource::Base {
+            fell_back.push(format!(
+                "the fallback contrast {} (no `roll.white_stops`)",
+                self.base().contrast
+            ));
+        }
+        (!fell_back.is_empty()).then(|| {
+            format!(
+                "no roll measurement: rendered with {}. Run `hanten measure-roll` over the \
+                 roll and state what it reports (the `roll` section); or state the white \
+                 balance and contrast you want (`scene_correction.white_balance`, \
+                 `look.contrast`); or use the `direct` rendering (`rendering`: \"direct\"), \
+                 the decode without a roll correction, whose unset destination is the HDR \
+                 float TIFF",
+                fell_back.join(" and "),
+            )
+        })
+    }
+
+    /// `default`: a recipe's style value beside a roll measurement it multiplies or
+    /// overrides.
+    fn roll_overlap_warnings(&self, typed: TypedStyle) -> Vec<String> {
+        let mut warnings = Vec::new();
         let WhiteBalance::Explicit(stated) = self.scene_correction.white_balance;
         if !typed.white_balance
             && let Some(roll) = self.roll.white_balance
@@ -1325,6 +1485,92 @@ impl Recipe {
         warnings
     }
 
+    /// `direct`: a recipe value that moves its pinned base **and** that an earlier build
+    /// could have written without anyone choosing it, in one warning.
+    ///
+    /// Narrow on purpose: a `--dump-params` recipe of a deliberate adjustment (say
+    /// `--highlight-desaturation 0.5`) must replay under `--strict`, and a file cannot
+    /// say who chose a value. So only two cases warn — and the second is a carve-out
+    /// from that replay: a white balance or contrast typed beside a recipe's `roll`
+    /// section is dumped into the recipe, and warns when the dump is replayed (as
+    /// `default`'s overlap rule does); typing the flag on replay keeps it quietly.
+    ///
+    /// - `look.highlight_desaturation.strength` at exactly 0.8, the value every earlier
+    ///   recipe serialized. Every other old serialized default — contrast 1.1111112,
+    ///   headroom 6, display black 6, start −1, band `[0.015, 0.025]` — equals `direct`'s
+    ///   base, so it moves nothing.
+    /// - a stated `look.contrast`, or a white balance other than the identity, **beside a
+    ///   `roll` section**: what an earlier `hanten measure-roll` wrote there, which
+    ///   `direct` would otherwise apply although it leaves the roll out.
+    fn direct_override_warning(&self, typed: TypedStyle) -> Option<String> {
+        // The strength every recipe an earlier build wrote states — a historical value,
+        // pinned here rather than read from today's default.
+        const OLD_SERIALIZED_STRENGTH: f32 = 0.8;
+        let base = self.base();
+        let mut moved: Vec<String> = Vec::new();
+        let mut old_default = false;
+        let mut beside_roll = false;
+        if !typed.highlight_desaturation_strength
+            && self.look.highlight_desaturation.strength == Some(OLD_SERIALIZED_STRENGTH)
+        {
+            old_default = true;
+            moved.push(format!(
+                "`look.highlight_desaturation.strength` {OLD_SERIALIZED_STRENGTH} (direct: {}, \
+                 off; every recipe an earlier build wrote stated 0.8)",
+                base.highlight_desaturation.strength
+            ));
+        }
+        if self.roll != RollSection::default() {
+            let WhiteBalance::Explicit(wb) = self.scene_correction.white_balance;
+            if !typed.white_balance && wb != [1.0, 1.0, 1.0] {
+                beside_roll = true;
+                moved.push(format!(
+                    "`scene_correction.white_balance` {wb:?} beside a `roll` section (direct: \
+                     [1, 1, 1])"
+                ));
+            }
+            if !typed.contrast
+                && let Some(c) = self.look.contrast
+                && c != base.contrast
+            {
+                beside_roll = true;
+                moved.push(format!(
+                    "`look.contrast` {c} beside a `roll` section (direct: {})",
+                    base.contrast
+                ));
+            }
+        }
+        // Each case's remedy, never telling a deliberate adjuster to drop the value.
+        let mut remedies: Vec<&str> = Vec::new();
+        if old_default {
+            remedies.push(
+                "if the strength came from a recipe an earlier build wrote, set it to `null` \
+                 so `direct` renders as pinned",
+            );
+        }
+        if beside_roll {
+            remedies.push(
+                "if a value beside the `roll` section came from an earlier `hanten \
+                 measure-roll`, drop `scene_correction.white_balance` (and set \
+                 `look.contrast` to `null`)",
+            );
+        }
+        let remedies = remedies.join("; ");
+        let remedies = match remedies.split_at_checked(1) {
+            Some((first, rest)) => format!("{}{rest}", first.to_uppercase()),
+            None => remedies,
+        };
+        (!moved.is_empty()).then(|| {
+            format!(
+                "the recipe moves the `direct` rendering's pinned base: {}. {}; a \
+                 deliberate adjustment is fine — type it as a flag to keep it without this \
+                 warning",
+                moved.join(", "),
+                remedies,
+            )
+        })
+    }
+
     /// The current chain's config carrying this recipe's **shared** sections, for the
     /// stages both chains run: decode, the film base and the measurement region — plus
     /// fit range's headroom, which both recipes spell identically.
@@ -1344,7 +1590,7 @@ impl Recipe {
             // The same section on both chains, so the projection states the user's value
             // rather than a default the run does not use.
             fit_range: FitRange {
-                headroom_stops: self.fit_range.headroom_stops,
+                headroom_stops: self.resolved_fit_range().0,
             },
             ..ResolvedConfig::default()
         }
@@ -1401,6 +1647,7 @@ mod tests {
                 "roll",
                 "measure",
                 "reconstruction",
+                "rendering",
                 "scene_correction",
                 "look",
                 "fit_range",
@@ -1409,19 +1656,20 @@ mod tests {
             ]
         );
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        // A stage with no knob is present as an empty object, not absent or `null`;
-        // one with knobs writes each of them at its default — the identity for scene
-        // correction, an unstated contrast (the roll's, else 2.0/1.8), the identity grade
-        // and highlight desaturation at 0.8 for the look (in the order the stage applies
-        // them), and reinhard at six stops for fit range. The roll section states
-        // nothing, and says so with `null`s rather than by leaving keys out. (Fit gamut's map runs at every setting; it simply has
-        // nothing for a recipe to set.)
+        // A stage with no knob is present as an empty object, not absent or `null`. A
+        // knob whose base is the rendering's (`crate::rendering`) is written `null`,
+        // unstated — the look's contrast and highlight desaturation, fit range's headroom
+        // and display black — and so is the roll section; the rest are written at their
+        // identity (scene correction, the grade). Keys are written, never left out, so a
+        // per-frame override merges. (Fit gamut's map runs at every setting; it simply
+        // has nothing for a recipe to set.)
+        assert_eq!(json["rendering"], "default");
         assert_eq!(json["fit_gamut"], serde_json::json!({}));
         // Nothing stated: every axis is derived, so a written recipe states none.
         assert_eq!(json["output"], serde_json::json!({"display": {}}));
         assert_eq!(
             serde_json::to_string(&Recipe::default().look).unwrap(),
-            r#"{"contrast":null,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}}"#
+            r#"{"contrast":null,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":null,"start_stops":null,"band":null}}"#
         );
         assert_eq!(
             json["scene_correction"],
@@ -1429,7 +1677,7 @@ mod tests {
         );
         assert_eq!(
             json["fit_range"],
-            serde_json::json!({"headroom_stops": 6.0, "display_black": 6.0})
+            serde_json::json!({"headroom_stops": null, "display_black": null})
         );
         assert_eq!(
             json["roll"],
@@ -1883,7 +2131,7 @@ mod tests {
     fn validate_refuses_an_unusable_fit_range_headroom() {
         let with = |stops: f32, names| {
             let mut r = Recipe::default();
-            r.fit_range.headroom_stops = stops;
+            r.fit_range.headroom_stops = Some(stops);
             validate(&r, names).map_err(|e| e.message().to_string())
         };
         with(0.0, KnobNames::FlagAndKey).unwrap();
@@ -1944,12 +2192,356 @@ mod tests {
         // Neither: the default.
         assert_eq!(
             Recipe::default().resolved_contrast(),
-            (DEFAULT_CONTRAST, ContrastSource::Default)
+            (DEFAULT_CONTRAST, ContrastSource::Base)
         );
         assert_eq!(
             Recipe::default().shared_params().look.section,
             LookSection::default()
         );
+    }
+
+    #[test]
+    fn direct_starts_every_knob_from_its_pinned_base_and_leaves_the_roll_out() {
+        use crate::rendering::DIRECT;
+        let roll = r#""roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}"#;
+        let direct = merged(
+            &format!(r#"{{"recipe_version": 2, {roll}}}"#),
+            &["--rendering", "direct"],
+        );
+        let p = direct.shared_params();
+        assert_eq!(
+            p.scene_correction.white_balance,
+            WhiteBalance::Explicit([1.0, 1.0, 1.0]),
+            "the roll's gains are not applied"
+        );
+        assert_eq!(p.look.section.contrast, DIRECT.contrast, "nor its white");
+        assert!(p.look.section.highlight_desaturation.is_off());
+        assert_eq!(p.headroom_stops, DIRECT.headroom_stops);
+        assert_eq!(p.display_black, DIRECT.display_black);
+        let report = direct.roll_report(true).unwrap();
+        assert!(!report.white_balance_applied && !report.contrast_applied);
+        // `default` on the same recipe applies the roll, with every other default.
+        let default = merged(&format!(r#"{{"recipe_version": 2, {roll}}}"#), &[]);
+        let q = default.shared_params();
+        assert_eq!(
+            q.scene_correction.white_balance,
+            WhiteBalance::Explicit([0.8, 1.0, 1.25])
+        );
+        assert_eq!(q.look.section.contrast, roll_white::contrast_for(1.6));
+        assert_eq!(
+            q.look.section.highlight_desaturation,
+            HighlightDesaturation::DEFAULT
+        );
+        // A stated knob builds on either base: the white balance multiplies (the
+        // identity under `direct`), every other knob replaces.
+        let adjusted = merged(
+            &format!(r#"{{"recipe_version": 2, {roll}}}"#),
+            &[
+                "--rendering",
+                "direct",
+                "--white-balance",
+                "1.1,1,1",
+                "--contrast",
+                "1.3",
+                "--highlight-desaturation",
+                "0.5",
+                "--display-black",
+                "off",
+            ],
+        )
+        .shared_params();
+        assert_eq!(
+            adjusted.scene_correction.white_balance,
+            WhiteBalance::Explicit([1.1, 1.0, 1.0])
+        );
+        assert_eq!(adjusted.look.section.contrast, 1.3);
+        assert_eq!(adjusted.look.section.highlight_desaturation.strength, 0.5);
+        assert_eq!(adjusted.display_black, DisplayBlack::Off);
+        assert_eq!(adjusted.headroom_stops, DIRECT.headroom_stops);
+    }
+
+    #[test]
+    fn direct_defaults_the_destination_to_the_hdr_float_tiff() {
+        use destination::{Container, Gamut, Range, Transfer};
+        let resolved = |extra: &[&str]| {
+            let r = merged(
+                r#"{"recipe_version": 2}"#,
+                &[&["--rendering", "direct"][..], extra].concat(),
+            );
+            match destination(&r, KnobNames::FlagAndKey).unwrap() {
+                Destination::Display(d) => (d.range, d.transfer, d.gamut, d.container),
+                Destination::FilmMaster => unreachable!(),
+            }
+        };
+        assert_eq!(
+            resolved(&[]),
+            (Range::Hdr, Transfer::Linear, Gamut::Bt2020, Container::Tiff)
+        );
+        // Stated SDR: Adobe RGB, its gamut when a row has it.
+        assert_eq!(
+            resolved(&["--range", "sdr"]),
+            (
+                Range::Sdr,
+                Transfer::Native,
+                Gamut::AdobeRgb,
+                Container::Tiff
+            )
+        );
+        // The container is decided first, so a stated axis that rules the float TIFF
+        // out falls back to the lossless 16-bit TIFF, never the lossy gain-map JPEG — and
+        // a stated axis is never overridden by `direct`'s defaults.
+        assert_eq!(
+            resolved(&["--gamut", "display-p3"]),
+            (
+                Range::Sdr,
+                Transfer::Native,
+                Gamut::DisplayP3,
+                Container::Tiff
+            )
+        );
+        assert_eq!(
+            resolved(&["--transfer", "native"]),
+            (
+                Range::Sdr,
+                Transfer::Native,
+                Gamut::AdobeRgb,
+                Container::Tiff
+            )
+        );
+        assert_eq!(
+            resolved(&["--range", "hdr"]),
+            (Range::Hdr, Transfer::Linear, Gamut::Bt2020, Container::Tiff)
+        );
+        assert_eq!(
+            resolved(&["--transfer", "pq"]),
+            (Range::Hdr, Transfer::Pq, Gamut::Bt2020, Container::Tiff)
+        );
+        // Only a stated container reaches a lossy one.
+        assert_eq!(
+            resolved(&["--container", "jpeg"]),
+            (
+                Range::Hdr,
+                Transfer::Native,
+                Gamut::DisplayP3,
+                Container::Jpeg
+            )
+        );
+        // `default` keeps the standard defaults and order, where the same stated gamut
+        // is the gain map.
+        let standard = |extra: &[&str]| {
+            let r = merged(r#"{"recipe_version": 2}"#, extra);
+            match destination(&r, KnobNames::FlagAndKey).unwrap() {
+                Destination::Display(d) => (d.range, d.transfer, d.gamut, d.container),
+                Destination::FilmMaster => unreachable!(),
+            }
+        };
+        assert_eq!(
+            standard(&[]),
+            (
+                Range::Sdr,
+                Transfer::Native,
+                Gamut::DisplayP3,
+                Container::Tiff
+            )
+        );
+        assert_eq!(
+            standard(&["--range", "hdr", "--gamut", "display-p3"]),
+            (
+                Range::Hdr,
+                Transfer::Native,
+                Gamut::DisplayP3,
+                Container::Jpeg
+            )
+        );
+    }
+
+    #[test]
+    fn direct_is_refused_with_the_film_master_and_default_is_spared() {
+        let r = merged(
+            r#"{"recipe_version": 2}"#,
+            &["--rendering", "direct", "--film-master"],
+        );
+        let msg = destination(&r, KnobNames::FlagAndKey)
+            .unwrap_err()
+            .message()
+            .to_string();
+        assert!(
+            msg.contains("--rendering direct") && msg.contains("--film-master"),
+            "{msg}"
+        );
+        // The stage rule's wording is not what fired: this is the more specific one.
+        assert!(!msg.contains("cannot apply"), "{msg}");
+        let r: Recipe =
+            parse(r#"{"recipe_version": 2, "rendering": "direct", "output": "film-master"}"#)
+                .unwrap();
+        let msg = destination(&r, KnobNames::KeyOnly)
+            .unwrap_err()
+            .message()
+            .to_string();
+        assert!(
+            msg.contains("`rendering` \"direct\"") && !msg.contains("--"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("set `rendering` to \"default\" (or remove it)"),
+            "{msg}"
+        );
+        // The flag remedy works whether a flag or the recipe stated `direct`.
+        for (recipe, flags) in [
+            (r#"{"recipe_version": 2}"#, &["--rendering", "direct"][..]),
+            (r#"{"recipe_version": 2, "rendering": "direct"}"#, &[][..]),
+        ] {
+            let r = merged(recipe, &[flags, &["--film-master"]].concat());
+            let msg = destination(&r, KnobNames::FlagAndKey)
+                .unwrap_err()
+                .message()
+                .to_string();
+            assert!(msg.contains("pass --rendering default"), "{msg}");
+            // Passed instead of a typed `--rendering direct`, over the recipe's otherwise.
+            let r = merged(recipe, &["--film-master", "--rendering", "default"]);
+            assert_eq!(
+                destination(&r, KnobNames::FlagAndKey).unwrap(),
+                Destination::FilmMaster
+            );
+        }
+        let r = merged(
+            r#"{"recipe_version": 2}"#,
+            &["--rendering", "default", "--film-master"],
+        );
+        assert_eq!(
+            destination(&r, KnobNames::FlagAndKey).unwrap(),
+            Destination::FilmMaster
+        );
+    }
+
+    #[test]
+    fn direct_warns_when_a_recipe_moves_its_pinned_base() {
+        // An earlier build wrote every default into a recipe: under `direct`, its
+        // highlight desaturation 0.8 would turn the pull back on unnoticed.
+        let old = r#"{"recipe_version": 2, "rendering": "direct",
+            "look": {"contrast": 1.1111112,
+                     "highlight_desaturation": {"strength": 0.8, "start_stops": -1.0,
+                                                "band": [0.015, 0.025]}},
+            "fit_range": {"headroom_stops": 6.0, "display_black": 6.0}}"#;
+        let w = parse(old).unwrap().recipe_warnings(TypedStyle::default());
+        assert_eq!(w.len(), 1, "{w:?}");
+        // Only what moves the base is named: the contrast, headroom and black match it.
+        assert!(
+            w[0].contains("`look.highlight_desaturation.strength` 0.8")
+                && !w[0].contains("`look.contrast`")
+                && !w[0].contains("headroom")
+                && w[0].contains("`null`"),
+            "{}",
+            w[0]
+        );
+        assert!(!w[0].contains("--"), "recipe keys only: {}", w[0]);
+        // Typed, it is a choice made now.
+        let typed = TypedStyle {
+            highlight_desaturation_strength: true,
+            ..TypedStyle::default()
+        };
+        assert!(parse(old).unwrap().recipe_warnings(typed).is_empty());
+        // A deliberate value — anything but the old serialized default — is what a
+        // `--dump-params` recipe replays, so it must pass `--strict`: no warning.
+        for deliberate in [
+            r#"{"recipe_version": 2, "rendering": "direct",
+                "look": {"highlight_desaturation": {"strength": 0.5, "start_stops": -2.0,
+                                                    "band": [0.01, 0.03]}},
+                "fit_range": {"headroom_stops": 4.0, "display_black": "off"}}"#,
+            // A contrast or white balance with no roll section is the user's own.
+            r#"{"recipe_version": 2, "rendering": "direct", "look": {"contrast": 1.3},
+                "scene_correction": {"white_balance": {"explicit": [1.1, 1, 1]}}}"#,
+        ] {
+            let w = parse(deliberate)
+                .unwrap()
+                .recipe_warnings(TypedStyle::default());
+            assert!(w.is_empty(), "{deliberate}: {w:?}");
+        }
+        // Beside a roll section, a stated contrast or white balance is what an earlier
+        // `measure-roll` wrote, and `direct` would apply it although it leaves the roll
+        // out. A contrast at `direct`'s own base moves nothing.
+        let roll = r#"{"recipe_version": 2, "rendering": "direct",
+            "roll": {"white_balance": [1.2, 1, 0.9], "white_stops": 1.7},
+            "look": {"contrast": 1.3},
+            "scene_correction": {"white_balance": {"explicit": [1.2, 1, 0.9]}}}"#;
+        let w = parse(roll).unwrap().recipe_warnings(TypedStyle::default());
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("`scene_correction.white_balance` [1.2, 1.0, 0.9] beside a `roll`")
+                && w[0].contains("`look.contrast` 1.3 beside a `roll` section"),
+            "{}",
+            w[0]
+        );
+        let at_base = roll.replace("1.3", "1.1111112");
+        let w = parse(&at_base)
+            .unwrap()
+            .recipe_warnings(TypedStyle::default());
+        assert!(!w[0].contains("`look.contrast` 1.1111112"), "{}", w[0]);
+        // The remedy never tells a deliberate adjuster to drop the value.
+        assert!(
+            w[0].contains("If a value beside the `roll` section came from an earlier")
+                && w[0].contains("type it as a flag to keep it without this warning"),
+            "{}",
+            w[0]
+        );
+        let typed = TypedStyle {
+            white_balance: true,
+            contrast: true,
+            ..TypedStyle::default()
+        };
+        assert!(parse(roll).unwrap().recipe_warnings(typed).is_empty());
+        // `direct` never reads the roll, so it has no fallback to warn about.
+        let bare = r#"{"recipe_version": 2, "rendering": "direct"}"#;
+        assert!(
+            parse(bare)
+                .unwrap()
+                .recipe_warnings(TypedStyle::default())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn default_without_a_roll_measurement_says_what_fell_back() {
+        let w = Recipe::default().recipe_warnings(TypedStyle::default());
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("no roll measurement")
+                && w[0].contains("neutral white balance (no `roll.white_balance`)")
+                && w[0].contains(&format!(
+                    "the fallback contrast {} (no `roll.white_stops`)",
+                    DEFAULT_CONTRAST
+                )),
+            "{}",
+            w[0]
+        );
+        // All three remedies, as recipe keys.
+        assert!(
+            w[0].contains("`hanten measure-roll`")
+                && w[0].contains("`scene_correction.white_balance`, `look.contrast`")
+                && w[0].contains("`rendering`: \"direct\"")
+                && w[0].contains("HDR float TIFF")
+                && !w[0].contains("--"),
+            "{}",
+            w[0]
+        );
+        // A typed flag is a choice, even the identity: it silences its own half.
+        let typed = TypedStyle {
+            white_balance: true,
+            ..TypedStyle::default()
+        };
+        let w = Recipe::default().recipe_warnings(typed);
+        assert!(
+            w.len() == 1 && !w[0].contains("white balance (") && w[0].contains("contrast"),
+            "{w:?}"
+        );
+        let typed = TypedStyle {
+            white_balance: true,
+            contrast: true,
+            ..TypedStyle::default()
+        };
+        let mut r = Recipe::default();
+        r.look.contrast = Some(1.3);
+        assert!(r.recipe_warnings(typed).is_empty());
     }
 
     #[test]
@@ -2091,21 +2683,26 @@ mod tests {
         // A typed flag is a choice made now: it silences its own warning, not the other.
         let wb_typed = TypedStyle {
             white_balance: true,
-            contrast: false,
+            ..TypedStyle::default()
         };
         let only = warnings_typed(overlapping, wb_typed);
         assert_eq!(only, vec![both[1].clone()]);
         let contrast_typed = TypedStyle {
-            white_balance: false,
             contrast: true,
+            ..TypedStyle::default()
         };
         assert_eq!(
             warnings_typed(overlapping, contrast_typed),
             vec![both[0].clone()]
         );
-        // The film master applies neither roll value, so nothing overlaps.
+        // The film master renders nothing, so the run's recipe warnings are empty.
         let master = overlapping.replacen('{', r#"{"output": "film-master","#, 1);
-        assert_eq!(warnings(&master), Vec::<String>::new());
+        assert_eq!(
+            parse(&master)
+                .unwrap()
+                .recipe_warnings(TypedStyle::default()),
+            Vec::<String>::new()
+        );
         // No overlap, no warning.
         for quiet in [
             // No roll section.
@@ -2222,7 +2819,7 @@ mod tests {
         );
         let mut r = master();
         r.scene_correction.exposure = 1.0;
-        r.fit_range.headroom_stops = 3.0;
+        r.fit_range.headroom_stops = Some(3.0);
         let msg = destination(&r, KnobNames::KeyOnly).unwrap_err();
         let msg = msg.message();
         assert!(
@@ -2235,11 +2832,11 @@ mod tests {
         let mut r = master();
         r.scene_correction.white_balance = WhiteBalance::Explicit([2.0, 2.0, 2.0]);
         r.scene_correction.exposure = -1.0;
-        r.fit_range.headroom_stops = 0.0;
+        r.fit_range.headroom_stops = Some(0.0);
         destination(&r, KnobNames::FlagAndKey).unwrap();
-        let fit = |headroom_stops, display_black| FitRangeSection {
-            headroom_stops,
-            display_black,
+        let fit = |headroom: f32, black: DisplayBlack| FitRangeSection {
+            headroom_stops: Some(headroom),
+            display_black: Some(black),
         };
         assert!(!FitRangeSection::default().asks_for_a_fit());
         assert!(!fit(0.0, DisplayBlack::Off).asks_for_a_fit());
@@ -2251,7 +2848,7 @@ mod tests {
     fn validate_refuses_an_unusable_display_black() {
         let with = |black: DisplayBlack, names| {
             let mut r = Recipe::default();
-            r.fit_range.display_black = black;
+            r.fit_range.display_black = Some(black);
             validate(&r, names).map_err(|e| e.message().to_string())
         };
         with(DisplayBlack::Off, KnobNames::FlagAndKey).unwrap();
@@ -2276,9 +2873,12 @@ mod tests {
     #[test]
     fn display_black_reads_off_from_a_recipe_and_is_new_chain_only() {
         let r = parse(r#"{"recipe_version": 2, "fit_range": {"display_black": "off"}}"#).unwrap();
-        assert_eq!(r.fit_range.display_black, DisplayBlack::Off);
+        assert_eq!(r.fit_range.display_black, Some(DisplayBlack::Off));
         let r = parse(r#"{"recipe_version": 2, "fit_range": {"display_black": 5}}"#).unwrap();
-        assert_eq!(r.fit_range.display_black, DisplayBlack::StopsBelowMid(5.0));
+        assert_eq!(
+            r.fit_range.display_black,
+            Some(DisplayBlack::StopsBelowMid(5.0))
+        );
         assert!(parse(r#"{"recipe_version": 2, "fit_range": {"display_black": "none"}}"#).is_err());
         // The current chain's projection carries the headroom only.
         let config = serde_json::to_value(r.to_config().fit_range).unwrap();
@@ -2290,7 +2890,7 @@ mod tests {
         // The recipe carries the headroom; the peak comes from the destination, so a
         // recipe cannot name a peak its destination does not have.
         let mut r = Recipe::default();
-        r.fit_range.headroom_stops = 4.0;
+        r.fit_range.headroom_stops = Some(4.0);
         let p = r.chain_params(DisplayPeak::SDR, DestinationGamut::DisplayP3);
         assert_eq!(p.shared.headroom_stops, 4.0);
         assert_eq!(p.target.peak, DisplayPeak::SDR);

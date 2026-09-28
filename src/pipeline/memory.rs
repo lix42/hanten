@@ -177,6 +177,10 @@
 //! | `--new-flow --export-ir` 14.45 MP (explicit base) | 0.799 GB | 0.618 GB | +29.3% |
 //! | `--new-flow` 18.66 MP (explicit base, no IR export) | 0.950 GB | 0.795 GB | +19.5% |
 //! | `--new-flow --export-ir` 18.66 MP (explicit base) | 0.992 GB | 0.795 GB | +24.9% |
+//! | `--new-flow --rendering direct` (HDR float) 16.26 MP (explicit base) | 0.733 GB | 0.596 GB | +22.8% |
+//! | `--new-flow --rendering direct` (HDR float) 18.66 MP (explicit base) | 0.821 GB | 0.683 GB | +20.2% |
+//! | `--new-flow --rendering direct --range sdr` (Adobe RGB) 16.26 MP | 0.845 GB | 0.694 GB | +21.7% |
+//! | `--new-flow --rendering direct --range sdr` (Adobe RGB) 18.66 MP | 0.950 GB | 0.795 GB | +19.5% |
 //! | `measure-roll`, one 16.43 MP frame (explicit base) | 0.739 GB | 0.606 GB | +22.0% |
 //! | `measure-roll`, one 18.66 MP frame (explicit base) | 0.821 GB | 0.685 GB | +19.7% |
 //!
@@ -228,6 +232,13 @@
 //! ~42 B/px with ~10 MB fixed against the 38 B/px the enumerated buffers account —
 //! `accounted` 0.89–0.94x of measured, the allowance covering the rest. The largest
 //! scan was not on hand for this pair, so the rows are 14.45 and 18.66 MP.
+//!
+//! The four `--rendering direct` rows (2026-09-27, `nf-destinations/direct-preset`)
+//! calibrate [`RunProfile::NewFlowF32Tiff`] for the linear HDR destination — `direct`'s
+//! default — with `accounted` 0.87x of measured at both sizes, and confirm the Adobe RGB
+//! SDR TIFF shares [`RunProfile::NewFlowU16Tiff`]: it measured within 33 KB of a Display
+//! P3 run of the same frame at each size, as a matrix change inside an in-place map
+//! should.
 //!
 //! The two `hdr-pq` rows are the *pair* that solved
 //! [`AVIF_STAGING_BYTES_PER_PX`] — they are a fit, not two independent
@@ -472,7 +483,8 @@ pub enum RunProfile {
     /// chain that moves that buffer through every boundary and transforms it in
     /// place, and a 3x2 B quantize buffer with `tiff` streaming strips. Its peak is
     /// the **encode** phase, like `Convert`'s. Measured rather than inherited for the
-    /// SDR destination (see the module doc's calibration table); the coded HDR TIFF
+    /// SDR destination, in Display P3 and in Adobe RGB (see the module doc's
+    /// calibration table); the coded HDR TIFF
     /// shares it by the same buffer count and is **not yet measured**
     /// (`nf-destinations/memory-profiles`). A separate variant so a chain stage that
     /// gains a full-frame buffer has an arm of its own to move.
@@ -487,7 +499,9 @@ pub enum RunProfile {
     /// `--new-flow` into a **32-bit float TIFF**: the linear HDR destination, or the
     /// film master. [`NewFlowU16Tiff`](Self::NewFlowU16Tiff)'s buffers with no
     /// quantize buffer — f32 is written verbatim — so `Convert`'s f32 arithmetic.
-    /// **Provisional**: counted, not measured (`nf-destinations/memory-profiles`).
+    /// **Measured for the linear HDR destination** on two frame sizes (the module doc's
+    /// calibration table, `nf-destinations/direct-preset`); the film master shares it by
+    /// buffer count and is not yet measured (`nf-destinations/memory-profiles`).
     NewFlowF32Tiff {
         /// Carried for the uniform shape; an f32 IR plane is written verbatim from
         /// the decoded image, so it stages nothing (as for `Convert` at f32).

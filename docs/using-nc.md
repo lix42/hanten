@@ -18,7 +18,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > (`--display-black`, display black on by default under `--new-flow`, §11), and
 > `nf-destinations/gain-map-destination` (`--range hdr` writes the gain-map JPEG, §11), and
 > `nf-calibration/roll-section` (the `roll` recipe section, `--roll-white-balance` and
-> `--roll-white`, §11). The staleness
+> `--roll-white`, §11), and `nf-destinations/direct-preset` (`--rendering default|direct`,
+> §11). The staleness
 > signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
@@ -1225,6 +1226,86 @@ empty look `--contrast 1 --highlight-desaturation 0`, and `--display-tone-headro
 --display-black off` (or their default 6).
 An SDR JPEG (`--container jpeg` alone) is planned, and refused as not written yet.
 
+**The rendering — `--rendering default|direct`** (recipe `rendering`) — chooses what the
+rendering stages start from:
+
+| | `default` | `direct` |
+|---|---|---|
+| the roll's measurements (`roll`) | applied | left out, and reported so (`new_flow.roll.*_applied: false`) |
+| white balance / look contrast | the roll's; without them neutral / 2.0/1.8, and a warning | neutral / 2.0/1.8 |
+| highlight desaturation | 0.8 | off |
+| display black / headroom | 6 / 6 | 6 / 6, pinned |
+| destination, axes unset | SDR Display P3 TIFF | HDR 32-bit float BT.2020 TIFF; a stated axis that rules it out falls back to the lossless 16-bit TIFF (Adobe RGB unless a gamut is stated) |
+
+`default` is Hanten's picture from what was measured; `direct` loses as little as it
+can and applies only what the container needs — the handoff to an editor, and (as
+`--rendering direct --range sdr`, the form you can judge by eye) the rendering the
+calibration loop holds fixed. A knob you state builds on either: `--white-balance`
+multiplies the base gains, every other knob replaces its base value. A stated axis is
+never overridden, and `direct` decides its container before its range, so it never
+takes a lossy container by default — only when you state one, or when your stated axes
+leave no lossless row: `--rendering direct --gamut display-p3` is an SDR Display P3 TIFF
+(not the gain-map JPEG) and `--transfer native` the Adobe RGB TIFF, while `--container
+jpeg`, or `--range hdr --gamut display-p3` (the one row left), is the gain map. When
+`nf-destinations/easy-destination-rows` adds float rows in other gamuts, those take over
+from the 16-bit fallback. The report states it in `new_flow.rendering`.
+
+```console
+$ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --new-flow --rendering direct \
+    | jq -c '.output, .new_flow.destination'
+"d1.tiff"
+{"display":{"range":"hdr","transfer":"linear","gamut":"bt2020","container":"tiff"}}
+```
+
+- **`default` without a roll measurement warns**, since what it renders then is a
+  fallback, not a measurement:
+
+  ```text
+  hanten: warning: no roll measurement: rendered with neutral white balance (no `roll.white_balance`) and the fallback contrast 1.1111112 (no `roll.white_stops`). Run `hanten measure-roll` over the roll and state what it reports (the `roll` section); or state the white balance and contrast you want (`scene_correction.white_balance`, `look.contrast`); or use the `direct` rendering (`rendering`: "direct"), the decode without a roll correction, whose unset destination is the HDR float TIFF
+  ```
+
+  A typed `--white-balance` or `--contrast` is a choice — even `--white-balance 1,1,1` —
+  and silences its half. `--strict` fails the run on it: without a roll measurement,
+  state `--white-balance` and `--contrast`, or pass `--rendering direct`.
+- **A recipe value an earlier build could have written unchosen warns under
+  `direct`**: highlight desaturation at exactly 0.8, which every earlier recipe stated
+  and which would turn the pull back on, and a stated `look.contrast` or white balance
+  beside a `roll` section, which an earlier `measure-roll` wrote. Every other old
+  default equals `direct`'s base. A deliberate value — any other, or a typed flag —
+  never warns, so a `--dump-params` recipe replays under `--strict`, with one carve-out:
+  in a recipe that has a `roll` section, a white balance or contrast you typed is
+  dumped as a recipe value and warns on replay, since a file cannot say who chose it —
+  type the flag again on replay to keep it without the warning:
+
+  ```console
+  $ cat olddirect.json
+  {"recipe_version": 2, "rendering": "direct",
+   "look": {"contrast": 1.1111112,
+            "highlight_desaturation": {"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]}},
+   "fit_range": {"headroom_stops": 6.0, "display_black": 6.0}}
+  $ hanten convert scan.tif -o od --film-base 0.9,0.55,0.42 --new-flow --params olddirect.json --report none
+  hanten: warning: the recipe moves the `direct` rendering's pinned base: `look.highlight_desaturation.strength` 0.8 (direct: 0, off; every recipe an earlier build wrote stated 0.8). If the strength came from a recipe an earlier build wrote, set it to `null` so `direct` renders as pinned; a deliberate adjustment is fine — type it as a flag to keep it without this warning
+  ```
+
+  A recipe written entirely by an earlier `measure-roll` — its gains in
+  `scene_correction.white_balance`, its contrast in `look.contrast`, and no `roll`
+  section — does not warn: `direct` cannot tell those values from a deliberate
+  adjustment, and applies them. Migrate such a recipe first (move the values into
+  `roll`) before rendering it `direct`.
+
+- **`--rendering direct` with the film master is refused** — the film master runs no
+  rendering for it to choose — and so is `--rendering` without `--new-flow`:
+
+  ```console
+  $ hanten convert … --new-flow --rendering direct --film-master
+  usage: --rendering direct (recipe `rendering`) chooses what the rendering stages start from, and --film-master (recipe `output`: `"film-master"`) runs none: it writes the fixed decode's linear ACEScg. Either pass --rendering default, or choose a rendered destination — `direct` alone writes the HDR float TIFF, the rendered output closest to the decode
+  ```
+
+  On `roll` the remedy is the key: set `rendering` to `"default"` (or remove it).
+- **The roll flags are refused under `direct`**, which leaves the roll out: drop
+  `--roll-white-balance` / `--roll-white`, or pass `--rendering default`. A recipe's
+  `roll` section is not refused.
+
 **The gain-map JPEG** renders one graded image twice — an SDR base and an HDR
 rendition clamped to the 1000 cd/m² peak — and stores the per-channel ratio between
 them as a half-resolution, three-channel gain map. It carries **ISO 21496-1 metadata
@@ -1235,7 +1316,8 @@ current chain's `gain-map-hdr` preset is a different file: a single-channel map 
 dialects.)
 
 **Leave an axis unset and it is derived**, in the order range, transfer, gamut,
-container: its default when a destination fits, else the one value left, else a
+container (under `--rendering direct`, the container first): its default when a
+destination fits, else the one value left, else a
 refusal listing the choices. So `--range hdr` alone is the gain-map JPEG,
 `--transfer pq` alone an HDR BT.2020 TIFF and `--gamut adobe-rgb` alone the Adobe RGB
 TIFF, while `--gamut bt2020` asks which transfer. A value you **state** is never overridden — a combination the table lacks is
@@ -1368,6 +1450,7 @@ $ hanten params --new-flow
     "linearization": 1.8,
     "anchor": { "mid-at-base-offset": 0.62 }
   },
+  "rendering": "default",
   "scene_correction": {
     "white_balance": { "explicit": [1.0, 1.0, 1.0] },
     "exposure": 0.0
@@ -1375,9 +1458,9 @@ $ hanten params --new-flow
   "look": {
     "contrast": null,
     "channel_grade": [1.0, 1.0],
-    "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] }
+    "highlight_desaturation": { "strength": null, "start_stops": null, "band": null }
   },
-  "fit_range": { "headroom_stops": 6.0, "display_black": 6.0 },
+  "fit_range": { "headroom_stops": null, "display_black": null },
   "fit_gamut": {},
   "output": { "display": {} }
 }
@@ -1389,12 +1472,15 @@ fixed decode reads no reference density. `roll` holds what `hanten measure-roll`
 measured (below), nothing by default. `reconstruction` spells the four decode
 knobs above (`--density-gamma` is `linearization` here). `scene_correction` holds white
 balance and exposure, `look` contrast, the per-channel grade and highlight desaturation, `fit_range` its
-headroom and display black (all below) — the look's `contrast` is `null`, i.e. unstated:
-the roll's, else 2.0/1.8; `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
+headroom and display black (all below). `rendering` chooses what the stages start from
+(below); a `null` knob is unstated and takes the rendering's value — the look's
+contrast is the roll's, else 2.0/1.8, and highlight desaturation, headroom and display
+black are 0.8, 6 and 6 under `default`. `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
 from the destination. `output` is the destination (above), with nothing stated
 by default — every axis derived. The current chain's `output.preset` is refused in
 this document by name. `--dump-params` under `--new-flow` writes this
-document with your values resolved, and it reloads under the flag unchanged.
+document with what you stated — an unstated knob stays `null`, so the rendering
+still decides it on replay — and it reloads under the flag unchanged.
 
 The version is what tells the two chains' recipes apart, and each refuses the other's
 by name rather than parsing it and reading nothing:
@@ -1446,7 +1532,7 @@ the knob went:
 | `--print-exposure` | renamed: `--exposure` (below) |
 | `--black-point` | split in two — display black in fit range, which is `--display-black` (below), and a flare/fog subtraction in scene correction, which has not landed — which is why it is not a rename |
 | `--linear-range` | an affine levels remap needing a stage and a name; retiring it outright is a listed outcome |
-| `--output-preset` | the destination flags `--range`, `--transfer`, `--gamut`, `--container` or `--film-master` (above); the refusal names the preset's counterpart — for `gain-map-hdr` and `ultra-hdr-v1` the nearest, `--range hdr`, and how its file differs |
+| `--output-preset` | the destination flags `--range`, `--transfer`, `--gamut`, `--container` or `--film-master` (above); the refusal names the preset's counterpart — for `gain-map-hdr` and `ultra-hdr-v1` the nearest, `--range hdr --container jpeg`, and how its file differs; each named set resolves the same under either rendering |
 | `--telemetry`, `--telemetry-file` | the new chain's report and telemetry shape — the record would name the current chain's preset and timing buckets |
 
 Unlike the decode's knees, **no value is spared here** — `--linear-range 0,1`
@@ -1531,9 +1617,9 @@ Contrast and highlight desaturation are **on by default**; the grade is off.
 |---|---|---|
 | `--contrast CONTRAST` | `look.contrast` | print contrast, pivoted at mid-grey; unstated, the roll's (`roll.white_stops`), else `2.0/1.8`; stated, it wins over the roll's; `1` is the identity, must be positive |
 | `--channel-grade R,B` | `look.channel_grade` | red and blue exponents pivoted at mid-grey, green fixed at 1; default `1,1` (off); both positive, with the spread over `R,1,B` under 1 |
-| `--highlight-desaturation STRENGTH` | `look.highlight_desaturation.strength` | `0`–`1`; default `0.8`, `0` is off |
-| `--highlight-desaturation-start STOPS` | `look.highlight_desaturation.start_stops` | where the pull begins, in stops below diffuse white (default `-1`) |
-| `--highlight-desaturation-band S0,S1` | `look.highlight_desaturation.band` | the saturation band (default `0.015,0.025`) |
+| `--highlight-desaturation STRENGTH` | `look.highlight_desaturation.strength` | `0`–`1`; unstated, `0.8` (off under `--rendering direct`); `0` is off |
+| `--highlight-desaturation-start STOPS` | `look.highlight_desaturation.start_stops` | where the pull begins, in stops below diffuse white (unstated, `-1`) |
+| `--highlight-desaturation-band S0,S1` | `look.highlight_desaturation.band` | the saturation band (unstated, `0.015,0.025`) |
 
 - **It only touches near-neutral highlights.** Its strength rises from `start_stops`
   up to diffuse white, and falls to nothing across the band: a pixel whose channels
@@ -1584,7 +1670,7 @@ mid-grey stays where the decode put it. It also places black (below). Its two kn
 | Flag | Recipe key | |
 |---|---|---|
 | `--display-tone-headroom STOPS` | `fit_range.headroom_stops` | `0`–`24`, default `6`; `0` is the identity |
-| `--display-black STOPS\|off` | `fit_range.display_black` | stops below mid-grey on the display, `(0, 16]` or `off`, default `6`; new-flow only |
+| `--display-black STOPS\|off` | `fit_range.display_black` | stops below mid-grey on the display, `(0, 16]` or `off`; unstated, `6` (under either rendering); new-flow only |
 
 The headroom's flag and key are the same on both chains (`--display-tone` and
 `--highlight-compress` are removed on both — §7). The display's peak

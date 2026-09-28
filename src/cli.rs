@@ -306,6 +306,8 @@ pub struct ConvertArgs {
     #[command(flatten)]
     pub print: PrintOverrides,
     #[command(flatten)]
+    pub rendering: RenderingOverrides,
+    #[command(flatten)]
     pub roll: RollOverrides,
     #[command(flatten)]
     pub scene: SceneCorrectionOverrides,
@@ -701,6 +703,23 @@ impl From<AutoWb> for WbSource {
     }
 }
 
+/// Which base the rendering stages start from (recipe key `rendering`,
+/// `nf-destinations/direct-preset`). `--new-flow` only; refused without it
+/// (`flow::reject_unavailable_flags`).
+#[derive(Args, Debug, Default)]
+pub struct RenderingOverrides {
+    /// `default` renders with the roll's measurements (the recipe's `roll` section) and
+    /// every other knob at its default. `direct` loses as little as possible: the roll
+    /// section is left out, white balance is neutral, highlight desaturation is off, and
+    /// an unset destination is the HDR float BT.2020 TIFF — a stated axis that rules it
+    /// out falls back to the lossless 16-bit TIFF (Adobe RGB unless a gamut is stated),
+    /// and a lossy container only when one is stated or the stated axes leave no lossless
+    /// row — and the roll flags are refused.
+    /// A stated knob builds on either. `--new-flow` only.
+    #[arg(long, value_enum, value_name = "RENDERING")]
+    pub rendering: Option<crate::rendering::Rendering>,
+}
+
 /// The roll's measurements, as `hanten measure-roll` reports them (recipe section
 /// `roll`, `nf-calibration/roll-section`). `--new-flow` only; refused without it
 /// (`flow::reject_unavailable_flags`).
@@ -771,7 +790,8 @@ pub struct LookOverrides {
     pub channel_grade: Option<[f32; 2]>,
     /// Highlight desaturation's strength, in [0, 1]: how far a bright, near-neutral
     /// pixel is pulled toward neutral (recipe key
-    /// `look.highlight_desaturation.strength`, default 0.8; 0 is off). It keys on
+    /// `look.highlight_desaturation.strength`; unstated, 0.8, and off under `--rendering
+    /// direct`; 0 is off). It keys on
     /// brightness and on distance from the neutral axis, so coloured highlights keep
     /// their colour; it assumes the roll's white balance (`hanten measure-roll`).
     /// `--new-flow` only.
@@ -1566,8 +1586,11 @@ pub struct NewFlowResult {
     /// Each stage of the new chain in order, with what it applied. Empty for the film
     /// master, which runs none.
     pub stages: Vec<NewFlowStageResult>,
+    /// The rendering the stages started from (`--rendering`, `crate::rendering`).
+    pub rendering: crate::rendering::Rendering,
     /// The recipe's `roll` section and what the run applied of it; absent when the
-    /// section states nothing. The film master applies neither value.
+    /// section states nothing. The film master and `--rendering direct` apply neither
+    /// value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roll: Option<recipe::RollReport>,
     /// Scene correction's values: the white-balance gains and the exposure applied — the
@@ -2964,21 +2987,25 @@ pub fn validate_convert(
     Ok(())
 }
 
-/// Typed roll flags ask a rendering to apply the roll's measurements, which the film
-/// master never does. A typed `--film-master` conflicts with them at the parser; this
-/// is the same refusal when the film master is the recipe's (`output`: `"film-master"`).
+/// Typed roll flags ask a rendering to apply the roll's measurements, which neither the
+/// film master (no rendering stage) nor `--rendering direct` (it leaves the roll out)
+/// does. A typed `--film-master` conflicts with them at the parser; this is the same
+/// refusal when the film master is the recipe's (`output`: `"film-master"`), and when
+/// the merged rendering — typed or the recipe's — is `direct`. The film master is named
+/// first when both hold: it is the more specific, since no rendering at all runs.
 ///
 /// A presence rule, so [`run_convert`] runs it straight after `recipe::merge`, before
 /// `recipe::validate`: every value rule there is coarser for this run — a bad
 /// `--roll-white` would get a remedy no white can satisfy, and a typed `--contrast`
 /// would get the film master's look refusal, each fixed only to meet this one. It
-/// reads nothing but the merged `output` and the flags. The recipe's own `roll`
-/// section is spared: a measurement is not a stage asked for.
-fn reject_roll_flags_under_a_recipe_film_master(args: &ConvertArgs, r: &Recipe) -> Result<()> {
-    if r.output != OutputSection::FilmMaster || !args.roll.any() {
+/// reads nothing but the merged `output`, the merged rendering and the flags. The
+/// recipe's own `roll` section is spared: a measurement is not a stage asked for.
+fn reject_roll_flags_nothing_applies(args: &ConvertArgs, r: &Recipe) -> Result<()> {
+    let direct = r.rendering == crate::rendering::Rendering::Direct;
+    if !args.roll.any() || (r.output != OutputSection::FilmMaster && !direct) {
         return Ok(());
     }
-    let typed: Vec<&str> = [
+    let typed = [
         (
             "--roll-white-balance",
             args.roll.roll_white_balance.is_some(),
@@ -2987,20 +3014,44 @@ fn reject_roll_flags_under_a_recipe_film_master(args: &ConvertArgs, r: &Recipe) 
     ]
     .into_iter()
     .filter_map(|(flag, typed)| typed.then_some(flag))
-    .collect();
-    let (them, apply) = if typed.len() == 1 {
-        ("it", "applies")
-    } else {
+    .collect::<Vec<&str>>()
+    .join(" and ");
+    let (them, apply) = if args.roll.roll_white_balance.is_some() && args.roll.roll_white.is_some()
+    {
         ("them", "apply")
+    } else {
+        ("it", "applies")
     };
-    Err(NcError::Usage(format!(
-        "{} {apply} the roll's measurements through the rendering stages, but the recipe's \
-         `output` is \"film-master\", which writes the fixed decode's linear ACEScg with no \
-         rendering stage and would ignore {them}. Either drop {}, or choose a rendered \
-         destination (--range, --transfer, --gamut or --container)",
-        typed.join(" and "),
-        typed.join(" and "),
-    )))
+    let message = if r.output == OutputSection::FilmMaster {
+        // Under `direct` too, either remedy alone would meet the film master + `direct`
+        // refusal next, so each carries `--rendering default`.
+        let (drop, rendered) = if direct {
+            (
+                format!("drop {typed} and pass --rendering default"),
+                "choose a rendered destination (--range, --transfer, --gamut or --container) \
+                 with --rendering default",
+            )
+        } else {
+            (
+                format!("drop {typed}"),
+                "choose a rendered destination (--range, --transfer, --gamut or --container)",
+            )
+        };
+        format!(
+            "{typed} {apply} the roll's measurements through the rendering stages, but the \
+             recipe's `output` is \"film-master\", which writes the fixed decode's linear \
+             ACEScg with no rendering stage and would ignore {them}. Either {drop}, or \
+             {rendered}"
+        )
+    } else {
+        format!(
+            "{typed} {apply} the roll's measurements, but the rendering is `direct` \
+             (--rendering, recipe `rendering`), which leaves the roll out and would ignore \
+             {them}. Either drop {typed}, or pass --rendering default, which applies the \
+             roll"
+        )
+    };
+    Err(NcError::Usage(message))
 }
 
 /// Whether the loaded `--params` recipe stated `output.preset`, as
@@ -3277,6 +3328,7 @@ fn suffix_mismatch_error(
         OutputTarget::NewFlow {
             destination,
             stated: stated_axes,
+            defaults,
             film_master_flag,
         } => {
             // A roll takes no conversion flags, so its frame names the recipe keys.
@@ -3294,7 +3346,7 @@ fn suffix_mismatch_error(
             // the run stated, since a flag overrides a recipe's axis but never removes
             // it. The film master states no axes; its offer replaces it.
             let offers = given_container(output)
-                .map(|c| crate::destination::writing(c, &stated_axes))
+                .map(|c| crate::destination::writing(c, &stated_axes, &defaults))
                 .unwrap_or_default();
             // Only a typed `--film-master` needs dropping (it conflicts with the axis
             // flags at the parser); a recipe's is replaced by the axis flags themselves,
@@ -3414,6 +3466,8 @@ enum OutputTarget {
     NewFlow {
         destination: recipe::Destination,
         stated: DisplayAxes,
+        /// The rendering's axis defaults, which a suffix remedy is derived under.
+        defaults: crate::destination::Defaults,
         film_master_flag: bool,
     },
 }
@@ -3437,6 +3491,7 @@ impl OutputTarget {
                     OutputSection::Display(axes) => axes,
                     OutputSection::FilmMaster => DisplayAxes::default(),
                 },
+                defaults: r.base().axes,
                 film_master_flag,
             },
         })
@@ -6024,6 +6079,7 @@ fn render_new_flow_frame(
                 .map(|(stage, applied)| NewFlowStageResult { stage, applied })
                 .to_vec()
         }),
+        rendering: recipe.rendering,
         roll: recipe.roll_report(rendered.is_some()),
         scene_correction: rendered.map(|r| r.scene_correction),
         look: rendered.map(|r| r.look),
@@ -6180,7 +6236,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         RecipeDoc::New(r) => {
             let r = recipe::merge(r, &args);
             // A flag-presence rule, ahead of every value rule that could refuse first.
-            reject_roll_flags_under_a_recipe_film_master(&args, &r)?;
+            reject_roll_flags_nothing_applies(&args, &r)?;
             let cfg = r.to_config();
             recipe::validate(&r, KnobNames::FlagAndKey)?;
             (cfg, Some(r))
@@ -6295,10 +6351,10 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     if let Some(msg) = curve_default_warning(loaded.unpinned_curve, loaded.meta_pipeline_version) {
         push_warning_buf(&mut warnings, &log, msg);
     }
-    // A recipe's style value beside a roll measurement — possibly an earlier build's
-    // leftover. A fact about the run's recipe, not the frame; a typed flag never warns.
+    // What the run's recipe falls back on, or states that nobody may have chosen — a fact
+    // about the run's recipe, not the frame; a typed flag never warns.
     if let Some(r) = &new_recipe {
-        for msg in r.roll_overlap_warnings(recipe::TypedStyle::of(&args)) {
+        for msg in r.recipe_warnings(recipe::TypedStyle::of(&args)) {
             push_warning_buf(&mut warnings, &log, msg);
         }
     }
@@ -7205,11 +7261,11 @@ fn run_roll(args: RollArgs) -> Result<()> {
         log.warn(&msg);
         roll_warnings.push(msg);
     }
-    // A shared-recipe style value beside a roll measurement, once for the roll. A
+    // The shared recipe's fallbacks and possible leftovers, once for the roll. A
     // per-frame override is that frame's explicit choice, so it does not warn.
     for msg in shared_recipe
         .iter()
-        .flat_map(|r| r.roll_overlap_warnings(recipe::TypedStyle::default()))
+        .flat_map(|r| r.recipe_warnings(recipe::TypedStyle::default()))
     {
         log.warn(&msg);
         roll_warnings.push(msg);
@@ -8293,9 +8349,12 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     // effective area, blamed on that file.
     check_measure_inset(recipe.measure.inset)?;
     // What this command measures — the roll section, and the style knobs a roll recipe
-    // may carry beside it — is never read, and none of it may refuse the run. Keys
-    // only: this command takes none of the conversion flags.
+    // may carry beside it — is never read, and none of it may refuse the run. Nor may
+    // the rendering, since this command renders nothing: a roll recipe stating `direct`
+    // beside a film master would otherwise be refused as that pair. Keys only: this
+    // command takes none of the conversion flags.
     recipe.roll = recipe::RollSection::default();
+    recipe.rendering = crate::rendering::Rendering::default();
     recipe.scene_correction = scene_correction::SceneCorrectionParams::default();
     recipe.look = recipe::LookKeys::default();
     recipe::validate(&recipe, KnobNames::KeyOnly)?;

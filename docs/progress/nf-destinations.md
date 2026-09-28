@@ -33,9 +33,15 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   never a warning. Verified with the Apple oracle on the CLI's own output.
 - **The film master refuses every stage it does not run**, keyed on "asks for" (neither
   default nor identity) per stage.
-- Memory arms per buffer shape: `NewFlowU16Tiff` (measured for SDR), `NewFlowF32Tiff`,
+- Memory arms per buffer shape: `NewFlowU16Tiff` (measured for SDR, Display P3 and Adobe
+  RGB), `NewFlowF32Tiff` (measured for the linear HDR TIFF, not the film master),
   `NewFlowAvif` and `NewFlowGainMapJpeg` provisional.
 - nctool keys metrics on (gamut, transfer); a review matrix may state a `destination`.
+- **Unset-axis defaults and the derivation order come from the rendering**
+  (`destination::Defaults`, `direct-preset`): `Defaults::STANDARD` derives range,
+  transfer, gamut, container; `direct` sets `container_first`, so it derives TIFF before
+  its `hdr` range and never reaches a lossy container unless one is stated. Anything
+  resolving or offering a destination takes the run's `Defaults`.
 
 ## preset-set
 
@@ -101,7 +107,7 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
 
 ## direct-preset
 
-**Status:** not started
+**Status:** in progress
 **Updated:** 2026-09-27
 
 - 2026-09-19: created with the new-flow plan. Goal: the direct destination for external editing.
@@ -127,12 +133,63 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   as `direct`'s gamut when SDR is stated. The by-eye form, and the one the calibration
   loop holds, is `--rendering direct --range sdr`. The memory profile to measure is now
   `NewFlowF32Tiff` as well.
-- 2026-09-28: rebased onto `gain-map-destination`. `--range hdr` alone now resolves to
+- 2026-09-27: rebased onto `gain-map-destination`. `--range hdr` alone now resolves to
   the gain-map JPEG, so `direct`'s float TIFF rests on its own `linear` transfer default,
   and its reason is only "least lost". `easy-destination-rows` plans the float row in
   Adobe RGB; `direct`'s unset gamut is already Adobe RGB, so it will resolve there
   unaided — a move of `direct`'s output, to log in `nf-calibration`'s progress when it
   lands.
+- 2026-09-27: implemented (the top of the three-PR stack), awaiting review.
+  - **`src/rendering.rs`**: `Rendering` (`--rendering`, recipe `rendering`, new-flow
+    only) and each one's `Base`. `DIRECT` is written out value by value, pinned by
+    `direct_is_pinned`, whose failure message and the module doc give the procedure for
+    moving it (decide by the principle, update design-update's table, log a moved output
+    in `nf-calibration`). `default` reads the defaults through.
+  - **Unset means the rendering's**: `look.highlight_desaturation`'s three keys and
+    `fit_range`'s two became optional (`recipe::DesaturationKeys`, `FitRangeSection`),
+    joining `look.contrast`. `Recipe::shared_params` resolves every stage against the
+    base, destructuring each section without `..`, so a new knob does not compile
+    until it has one. The default document now writes them `null`; `--dump-params`
+    writes what was stated, so a replay lets the rendering decide again.
+  - **Destination defaults come from the rendering**: `destination::Defaults`, threaded
+    through `resolve`, the remedy search (`writing`, `closest`, `fewest`, the change
+    offers) and the suffix refusal, so every remedy is tested under both renderings'
+    defaults.
+  - **Refusals and warnings**: `direct` with the film master is refused (both names,
+    key-only on `roll`). One method, `Recipe::recipe_warnings`, emitted once per run and
+    once per roll, keyed on provenance (a typed flag never warns): `default`'s no-roll
+    fallback, `default`'s recipe values beside a roll measurement, and `direct`'s
+    recipe values that move its pinned base — which catches an earlier build's
+    serialized desaturation 0.8 turning the pull back on under `direct`.
+  - **Memory, measured** (release, explicit base, peak RSS): `direct`'s HDR float TIFF
+    0.596 GB at 16.26 MP and 0.683 GB at 18.66 MP against estimates 0.733 / 0.821 GB,
+    `accounted` 0.87x — `NewFlowF32Tiff` is no longer provisional for this row. The
+    Adobe RGB SDR TIFF measured within 33 KB of Display P3 at both sizes (0.694 /
+    0.795 GB), so it shares `NewFlowU16Tiff` by measurement.
+  - **nctool needs no field**: a review matrix states every destination axis, so
+    `direct`'s axis defaults never apply there; the calibration loop passes
+    `--rendering direct` in the matrix's `common_args`.
+  - Tests that ran `--strict` on the new flow now state a neutral roll measurement, so
+    they keep testing their own warning rather than the fallback's.
+- 2026-09-27: review round. **Lossless first under `direct`** (user): `Defaults` gained
+  `container_first`, set by `direct` only, so `--rendering direct --gamut display-p3` is
+  the SDR Display P3 TIFF, `--transfer native` the Adobe RGB TIFF, and only a stated
+  `--container jpeg` the gain map; `default`'s order is unchanged. Also: typed roll flags
+  under `direct` are refused like under a recipe's film master (one presence rule, film
+  master named first, run before `recipe::validate`); the `--output-preset`
+  counterparts state axes that resolve to the same row under either rendering, and the
+  film master's names `--rendering default` when `direct` may be in play; `direct`'s
+  override warning narrowed to what an earlier build wrote unchosen (desaturation 0.8,
+  a contrast or white balance beside a `roll` section), so a `--dump-params` recipe of
+  a deliberate value replays under `--strict`; the fallback warning keys on a typed
+  `--white-balance`, reads the base contrast, and names all three remedies; `TypedStyle`
+  keeps only the flags a warning reads; `measure-roll` resets the rendering; the film
+  master + `direct` refusal names `--rendering default` (key form on `roll`).
+- 2026-09-27: follow-up. `direct`'s override warning no longer tells a deliberate
+  adjuster to drop a value (type it as a flag instead), and its carve-out — a white balance
+  or contrast beside a `roll` section warns on replay — is documented; "never lossy" now
+  reads "never lossy by default" (stated axes can leave only the gain map); under a
+  recipe film master plus `direct`, both roll-flag remedies carry `--rendering default`.
 
 ## memory-profiles
 
