@@ -735,14 +735,16 @@ principle:
   film base, so in the calibration loop it evens out part of a shadow difference between
   two decode candidates — read a shadow tie with that in mind.
 - **`direct` defaults to HDR** (user, 2026-09-27: range matters more than gamut). The
-  row is the linear 32-bit float BT.2020 TIFF: no transfer and no quantization, so the
-  least lost, and the one HDR row an unset transfer can reach before
-  `nf-destinations/gain-map-destination` ships. It differs from `film-master` by what
-  rendering does — the contrast, fit range at the HDR peak, display black, the gamut
-  map — and it clamps at the peak (`1000/203`), counted. The destination set has no
-  HDR row in Adobe RGB, so Adobe RGB is `direct`'s gamut when SDR is stated
-  (`--rendering direct --range sdr`); **that SDR form is the one viewed by eye**, and so
-  the one the calibration loop holds.
+  row is the linear 32-bit float TIFF: no transfer and no quantization, so the least
+  lost — `direct` defaults the transfer to `linear`, where `--range hdr` alone resolves
+  to the gain-map JPEG. It differs from `film-master` by what rendering does — the
+  contrast, fit range at the HDR peak, display black, the gamut map — and it clamps at
+  the peak (`1000/203`), counted. Its unset gamut is Adobe RGB: the float row is BT.2020
+  only today, so it resolves there, and when `nf-destinations/easy-destination-rows`
+  adds the float row in Adobe RGB, `direct` resolves to that with no change here — a
+  move of `direct`'s output, to be logged as below. With SDR stated
+  (`--rendering direct --range sdr`) it is Adobe RGB; **that SDR form is the one viewed
+  by eye**, and so the one the calibration loop holds.
 - **"Pinned" means `direct`'s own constants**, not today's defaults read through: moving
   a default must not move the rendering the calibration loop holds.
 

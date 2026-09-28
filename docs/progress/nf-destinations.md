@@ -127,6 +127,12 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   as `direct`'s gamut when SDR is stated. The by-eye form, and the one the calibration
   loop holds, is `--rendering direct --range sdr`. The memory profile to measure is now
   `NewFlowF32Tiff` as well.
+- 2026-09-28: rebased onto `gain-map-destination`. `--range hdr` alone now resolves to
+  the gain-map JPEG, so `direct`'s float TIFF rests on its own `linear` transfer default,
+  and its reason is only "least lost". `easy-destination-rows` plans the float row in
+  Adobe RGB; `direct`'s unset gamut is already Adobe RGB, so it will resolve there
+  unaided — a move of `direct`'s output, to log in `nf-calibration`'s progress when it
+  lands.
 
 ## memory-profiles
 

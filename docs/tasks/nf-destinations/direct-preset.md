@@ -27,8 +27,11 @@ The design is `docs/design-update.md`, Part 2, "Two renderings: `direct` and `de
 - **`default` without a roll section** renders with the fallbacks and warns, naming
   `hanten measure-roll`. The fallback values are `nf-calibration/no-roll-defaults`'s.
 - **`direct` defaults the destination to HDR** (user, 2026-09-27): range `hdr`,
-  transfer `linear`, container `tiff` — the 32-bit float BT.2020 TIFF — and gamut Adobe
-  RGB, which the table reaches only when SDR is stated. `default` keeps SDR Display P3.
+  transfer `linear`, container `tiff` — the 32-bit float TIFF, BT.2020 today — and gamut
+  Adobe RGB, which the table reaches when SDR is stated, and for the float row once
+  `easy-destination-rows` adds it in Adobe RGB (a move of `direct`'s output: log it).
+  The transfer default matters since `gain-map-destination` landed: `--range hdr`
+  alone now resolves to the gain-map JPEG. `default` keeps SDR Display P3.
   So the destination's unset-axis defaults depend on the rendering (`destination::resolve`
   takes them from it), and a stated axis still wins. The global default stays
   `nf-destinations/default-destination`'s.
