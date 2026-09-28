@@ -6766,7 +6766,11 @@ mod tests {
             .unwrap_err()
             .to_string()
         };
-        assert!(text(&[]).contains("For `film-master`, pass --film-master."), "{}", text(&[]));
+        assert!(
+            text(&[]).contains("For `film-master`, pass --film-master."),
+            "{}",
+            text(&[])
+        );
         let direct = text(&["--rendering", "direct"]);
         assert!(
             direct.contains("--rendering default in place of --rendering direct"),
