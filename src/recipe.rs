@@ -315,6 +315,27 @@ pub struct RollReport {
     pub contrast_applied: bool,
 }
 
+/// Which style knobs that can overlap a roll measurement were typed as flags on this
+/// invocation — [`Recipe::roll_overlap_warnings`] warns only for a value a recipe file
+/// stated. `roll` takes no flags, so it passes the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TypedStyle {
+    /// `--white-balance` was typed.
+    pub white_balance: bool,
+    /// `--contrast` was typed.
+    pub contrast: bool,
+}
+
+impl TypedStyle {
+    /// What `convert`'s flags typed.
+    pub fn of(args: &crate::cli::ConvertArgs) -> Self {
+        Self {
+            white_balance: args.print.white_balance.is_some(),
+            contrast: args.look.contrast.is_some(),
+        }
+    }
+}
+
 /// The current chain's sections this recipe does not have, and where each one's
 /// knobs go. `reconstruction` is not here: the name survives with a different
 /// shape, and [`check_body`] diagnoses its old keys one by one.
@@ -397,29 +418,6 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
          (auto|scanner-device|colorimetric)",
     ),
 ];
-
-/// Read a value at its **old serialized default** as unset, in a whole v2 recipe. Returns
-/// whether anything changed.
-///
-/// Recipes written before `nf-calibration/roll-section` — `hanten params --new-flow`,
-/// `--dump-params` — serialized every default, so they state `look.contrast` at
-/// `2.0 / 1.8` although nobody chose it. Read as stated, it would win over a
-/// `roll.white_stops` merged in later, and the roll's white would never apply. So that
-/// exact value is read as unset, the retired-key rule in CLAUDE.md. Nothing renders
-/// differently without a roll section (unset is that same default); with one, the
-/// roll's white applies — state any other value, or `--contrast`, to override it.
-/// Whole recipes only: a per-frame override is the user's own, and no build wrote one.
-pub fn strip_old_serialized_defaults(body: &mut serde_json::Value) -> bool {
-    let Some(contrast) = body.get_mut("look").and_then(|l| l.get_mut("contrast")) else {
-        return false;
-    };
-    // Compared as the f32 the old build wrote, so `1.1111112` and its f64 widening match.
-    if contrast.as_f64().map(|v| v as f32) == Some(DEFAULT_CONTRAST) {
-        *contrast = serde_json::Value::Null;
-        return true;
-    }
-    false
-}
 
 /// Refuse a recipe body written for the other chain, before serde sees it.
 ///
@@ -693,8 +691,8 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
                     knob_name(names, "look", "--contrast", "contrast")
                 }
             };
-            validate_look(&r.look.resolve(contrast), &contrast_name, names)?;
-            validate_whole_contrast(d.linearization, contrast, &contrast_name, names)?;
+            validate_look(&r.look.resolve(contrast), &contrast_name, source, names)?;
+            validate_whole_contrast(d.linearization, contrast, &contrast_name, source, names)?;
             validate_fit_range(&r.fit_range, names)?;
             return destination(r, names).map(|_| ());
         }
@@ -744,10 +742,23 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
 /// a usage error naming the knob the way `names` says the command spells it.
 ///
 /// [`HighlightDesaturation::check`]: crate::pipeline::look::HighlightDesaturation::check
-fn validate_look(p: &LookSection, contrast_name: &str, names: KnobNames) -> Result<()> {
+fn validate_look(
+    p: &LookSection,
+    contrast_name: &str,
+    source: ContrastSource,
+    names: KnobNames,
+) -> Result<()> {
     if let Err(ContrastFault(v)) = p.check_contrast() {
+        // A white is finite and positive by its own rule, so only a tiny one reaches
+        // here, as an infinite contrast: the contrast is `log2(1/0.18)` over the white.
+        let hint = match source {
+            ContrastSource::Roll => {
+                "the contrast is log2(1/0.18) over the white, so use a larger white"
+            }
+            ContrastSource::Stated | ContrastSource::Default => "1 is the identity",
+        };
         return Err(NcError::Usage(format!(
-            "{contrast_name} must give a finite, positive contrast (1 is the identity), got {v}"
+            "{contrast_name} must give a finite, positive contrast ({hint}), got {v}"
         )));
     }
     if let Err(ChannelGradeFault([r, b])) = p.check_channel_grade() {
@@ -796,6 +807,7 @@ fn validate_whole_contrast(
     linearization: f32,
     contrast: f32,
     contrast_name: &str,
+    source: ContrastSource,
     names: KnobNames,
 ) -> Result<()> {
     let total = linearization * contrast;
@@ -803,15 +815,24 @@ fn validate_whole_contrast(
         return Ok(());
     }
     let gamma = knob_name(names, "reconstruction", "--density-gamma", "linearization");
-    let (what, remedy) = if total.is_infinite() {
-        ("overflows", "smaller")
+    let overflows = total.is_infinite();
+    let what = if overflows { "overflows" } else { "underflows" };
+    let (toward, away) = if overflows {
+        ("smaller", "larger")
     } else {
-        ("underflows", "larger")
+        ("larger", "smaller")
+    };
+    // The roll's contrast is inversely proportional to its white, so the white moves
+    // the other way from the linearization.
+    let remedy = match source {
+        ContrastSource::Roll => format!("Use a {toward} {gamma} or a {away} {contrast_name}"),
+        ContrastSource::Stated | ContrastSource::Default => {
+            format!("Use a {toward} value for either")
+        }
     };
     Err(NcError::Usage(format!(
         "the whole contrast, {gamma} {linearization:e} times the look contrast {contrast:e} \
-         from {contrast_name}, {what} f32 (highlight desaturation divides by it). Use a \
-         {remedy} value for either"
+         from {contrast_name}, {what} f32 (highlight desaturation divides by it). {remedy}"
     )))
 }
 
@@ -1253,6 +1274,57 @@ impl Recipe {
         })
     }
 
+    /// The report warnings for a style value **a recipe file stated** that meets a roll
+    /// measurement, once per run: `convert` passes which of the two it was given as
+    /// flags, `roll` nothing (it takes no flags). Empty for the film master, which
+    /// applies neither roll value.
+    ///
+    /// Neither combination is refused, and nothing is read as unset by its value: a
+    /// stated white balance on top of the roll's is a legitimate adjustment, and a
+    /// stated contrast legitimately wins, so a `--dump-params` recipe must replay as it
+    /// rendered. But a recipe an earlier build wrote states both without anyone having
+    /// chosen them — every one serialized `look.contrast` at its default, and
+    /// `measure-roll` wrote its gains into `scene_correction.white_balance` and its
+    /// contrast into `look.contrast` — so merging a `roll` section into one squares the
+    /// gains or silently loses the roll's white. The warnings name the migration. A
+    /// typed flag is a choice made now, never such a leftover, so it never warns.
+    /// Recipe keys only, since only a recipe value warns.
+    pub fn roll_overlap_warnings(&self, typed: TypedStyle) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if self.output == OutputSection::FilmMaster {
+            return warnings;
+        }
+        let WhiteBalance::Explicit(stated) = self.scene_correction.white_balance;
+        if !typed.white_balance
+            && let Some(roll) = self.roll.white_balance
+            && stated != [1.0, 1.0, 1.0]
+        {
+            let product: [f32; 3] = std::array::from_fn(|c| roll[c] * stated[c]);
+            warnings.push(format!(
+                "the recipe's `scene_correction.white_balance` {stated:?} multiplies the \
+                 roll's gains, `roll.white_balance` {roll:?}: the white balance applied is \
+                 {product:?}. A stated white balance is an adjustment on top of the roll's \
+                 measurement; if it holds gains an earlier `hanten measure-roll` wrote there, \
+                 drop it — they now live in `roll.white_balance`"
+            ));
+        }
+        if !typed.contrast
+            && let (Some(stated), Some(white), Some(roll)) = (
+                self.look.contrast,
+                self.roll.white_stops,
+                self.roll.contrast(),
+            )
+        {
+            warnings.push(format!(
+                "the recipe's `look.contrast` {stated} overrides the roll's contrast {roll} \
+                 (from `roll.white_stops` {white}). If it came from a recipe an earlier build \
+                 wrote (every one stated `look.contrast` 1.1111112) or from an earlier `hanten \
+                 measure-roll`, set it to `null` to use the roll's"
+            ));
+        }
+        warnings
+    }
+
     /// The current chain's config carrying this recipe's **shared** sections, for the
     /// stages both chains run: decode, the film base and the measurement region — plus
     /// fit range's headroom, which both recipes spell identically.
@@ -1457,6 +1529,7 @@ mod tests {
         for section in [
             "input",
             "calibration",
+            "roll",
             "measure",
             "reconstruction",
             "scene_correction",
@@ -1880,28 +1953,6 @@ mod tests {
     }
 
     #[test]
-    fn a_contrast_at_its_old_serialized_default_is_read_as_unset() {
-        let mut body =
-            serde_json::json!({"look": {"contrast": 1.1111112, "channel_grade": [1, 1]}});
-        assert!(strip_old_serialized_defaults(&mut body));
-        assert_eq!(
-            body,
-            serde_json::json!({"look": {"contrast": null, "channel_grade": [1, 1]}})
-        );
-        // Anything else is a choice, and stays.
-        for kept in [
-            serde_json::json!({"look": {"contrast": 1.3}}),
-            serde_json::json!({"look": {"contrast": null}}),
-            serde_json::json!({"look": {}}),
-            serde_json::json!({}),
-        ] {
-            let mut body = kept.clone();
-            assert!(!strip_old_serialized_defaults(&mut body));
-            assert_eq!(body, kept);
-        }
-    }
-
-    #[test]
     fn the_roll_flags_land_in_the_roll_section() {
         let r = merged(
             r#"{"recipe_version": 2, "roll": {"white_balance": [0.9, 1.0, 1.1], "white_stops": 1.5}}"#,
@@ -1956,6 +2007,44 @@ mod tests {
         );
         assert!(msg.contains("from --roll-white"), "{msg}");
         assert!(!msg.contains("--contrast"), "{msg}");
+        // The remedy moves the white the other way: the contrast is inverse to it.
+        assert!(
+            msg.contains(
+                "Use a larger --density-gamma (recipe `reconstruction.linearization`) or a \
+                 smaller --roll-white (recipe `roll.white_stops`)"
+            ),
+            "{msg}"
+        );
+        assert!(!msg.contains("value for either"), "{msg}");
+        // Overflow, in `roll`'s key-only spelling: the reverse remedy.
+        let msg = refusal(
+            r#"{"recipe_version": 2, "roll": {"white_stops": 1e-30},
+                "reconstruction": {"linearization": 1e10}}"#,
+            KnobNames::KeyOnly,
+        );
+        assert!(msg.contains("overflows"), "{msg}");
+        assert!(
+            msg.contains(
+                "Use a smaller `reconstruction.linearization` or a larger `roll.white_stops`"
+            ),
+            "{msg}"
+        );
+        assert!(
+            !msg.contains("value for either") && !msg.contains("--"),
+            "{msg}"
+        );
+        // A white so small its contrast is not finite: no identity hint, which is about
+        // a stated contrast.
+        let msg = refusal(
+            r#"{"recipe_version": 2, "roll": {"white_stops": 1e-45}}"#,
+            KnobNames::FlagAndKey,
+        );
+        assert!(
+            msg.contains("--roll-white (recipe `roll.white_stops`) must give a finite")
+                && msg.contains("use a larger white"),
+            "{msg}"
+        );
+        assert!(!msg.contains("identity"), "{msg}");
         // A product only the roll's gains make is named with both factors.
         let msg = refusal(
             r#"{"recipe_version": 2, "roll": {"white_balance": [1e30, 1, 1]},
@@ -1966,6 +2055,76 @@ mod tests {
             msg.contains("--roll-white-balance") && msg.contains("--white-balance"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn a_recipe_stated_style_value_that_meets_a_roll_measurement_warns() {
+        let warnings_typed = |json: &str, typed| parse(json).unwrap().roll_overlap_warnings(typed);
+        let warnings = |json: &str| warnings_typed(json, TypedStyle::default());
+        // Both overlaps: the stated gains multiply the roll's, and the stated contrast
+        // wins over the roll's white.
+        let overlapping = r#"{"recipe_version": 2,
+                "roll": {"white_balance": [1.25, 1, 0.5], "white_stops": 1.7},
+                "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}},
+                "look": {"contrast": 1.1111112}}"#;
+        let both = warnings(overlapping);
+        assert_eq!(both.len(), 2, "{both:?}");
+        assert!(
+            both[0].contains("the recipe's `scene_correction.white_balance` [2.0, 1.0, 2.0]")
+                && both[0].contains("`roll.white_balance` [1.25, 1.0, 0.5]")
+                && both[0].contains("the white balance applied is [2.5, 1.0, 1.0]")
+                && both[0].contains("drop it"),
+            "{}",
+            both[0]
+        );
+        let roll = roll_white::contrast_for(1.7);
+        assert!(
+            both[1].contains("the recipe's `look.contrast` 1.1111112 overrides the roll's")
+                && both[1].contains(&roll.to_string())
+                && both[1].contains("`roll.white_stops` 1.7")
+                && both[1].contains("`null`"),
+            "{}",
+            both[1]
+        );
+        // Recipe keys only: only a recipe value warns.
+        assert!(both.iter().all(|w| !w.contains("--")), "{both:?}");
+        // A typed flag is a choice made now: it silences its own warning, not the other.
+        let wb_typed = TypedStyle {
+            white_balance: true,
+            contrast: false,
+        };
+        let only = warnings_typed(overlapping, wb_typed);
+        assert_eq!(only, vec![both[1].clone()]);
+        let contrast_typed = TypedStyle {
+            white_balance: false,
+            contrast: true,
+        };
+        assert_eq!(
+            warnings_typed(overlapping, contrast_typed),
+            vec![both[0].clone()]
+        );
+        // The film master applies neither roll value, so nothing overlaps.
+        let master = overlapping.replacen('{', r#"{"output": "film-master","#, 1);
+        assert_eq!(warnings(&master), Vec::<String>::new());
+        // No overlap, no warning.
+        for quiet in [
+            // No roll section.
+            r#"{"recipe_version": 2,
+                "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}},
+                "look": {"contrast": 1.3}}"#,
+            // The roll's gains over the identity; the roll's white, contrast unstated.
+            r#"{"recipe_version": 2,
+                "roll": {"white_balance": [1.25, 1, 0.5], "white_stops": 1.7},
+                "scene_correction": {"white_balance": {"explicit": [1, 1, 1]}},
+                "look": {"contrast": null}}"#,
+            // A stated value beside the *other* roll measurement.
+            r#"{"recipe_version": 2, "roll": {"white_stops": 1.7},
+                "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}}}"#,
+            r#"{"recipe_version": 2, "roll": {"white_balance": [1.25, 1, 0.5]},
+                "look": {"contrast": 1.3}}"#,
+        ] {
+            assert_eq!(warnings(quiet), Vec::<String>::new(), "{quiet}");
+        }
     }
 
     #[test]

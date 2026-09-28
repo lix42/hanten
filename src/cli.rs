@@ -90,7 +90,7 @@ pub enum Command {
     Inspect(IoArgs),
     /// Run only film-base / Dmin estimation; emit JSON.
     Estimate(EstimateArgs),
-    /// Measure a roll's white balance and contrast once, for its recipe; emit JSON.
+    /// Measure a roll's white balance and white once, for its recipe; emit JSON.
     MeasureRoll(MeasureRollArgs),
     /// Print the full default parameter set as JSON (recipe scaffolding).
     Params(ParamsArgs),
@@ -454,9 +454,16 @@ pub struct DestinationOverrides {
     pub container: Option<Container>,
     /// Write the fixed decode's linear ACEScg, unclamped 32-bit float TIFF, with no
     /// rendering stage (recipe `output`: `"film-master"`). Refuses a rendering stage
-    /// the recipe or flags ask for (scene correction, the look, fit range).
-    /// `--new-flow` only.
-    #[arg(long = "film-master", conflicts_with_all = ["range", "transfer", "gamut", "container"])]
+    /// the recipe or flags ask for (scene correction, the look, fit range), and the
+    /// roll flags (`--roll-white-balance`, `--roll-white`), which only a rendering
+    /// applies — refused under a recipe's film master too. A recipe's `roll` section is
+    /// spared, since a measurement is not a stage asked for. `--new-flow` only.
+    #[arg(
+        long = "film-master",
+        conflicts_with_all = [
+            "range", "transfer", "gamut", "container", "roll_white_balance", "roll_white",
+        ]
+    )]
     pub film_master: bool,
 }
 
@@ -743,11 +750,11 @@ pub struct SceneCorrectionOverrides {
 #[derive(Args, Debug, Default)]
 pub struct LookOverrides {
     /// Print contrast, pivoted at mid-grey: every ACEScg channel becomes
-    /// `0.18 · (v / 0.18)^CONTRAST` (recipe key `look.contrast`, default 2.0/1.8 ≈ 1.11,
-    /// which with the decode's linearization reproduces the pre-split contrast 2.0;
-    /// 1 is the identity). Runs after scene correction, so an `--exposure` is expanded
-    /// with the rest of the picture. Stated, it wins over the roll's (`--roll-white`).
-    /// `--new-flow` only.
+    /// `0.18 · (v / 0.18)^CONTRAST` (recipe key `look.contrast`; 1 is the identity).
+    /// Unstated, it is the roll's (`--roll-white`), else 2.0/1.8 ≈ 1.11, which with the
+    /// decode's linearization reproduces the pre-split contrast 2.0. Stated, it wins
+    /// over the roll's. Runs after scene correction, so an `--exposure` is expanded
+    /// with the rest of the picture. `--new-flow` only.
     #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
     pub contrast: Option<f32>,
     /// The per-channel grade `R,B`: red and blue exponents pivoted at mid-grey, green
@@ -2221,17 +2228,9 @@ fn load_recipe_for(path: Option<&Path>, flow: Flow) -> Result<LoadedRecipe> {
                 if let Some(v) = body {
                     recipe::check_body(v, true, &context)?;
                 }
-                // A value an earlier build serialized at its default is read as unset.
-                let stripped = envelope_body
-                    .as_mut()
-                    .or(value.as_mut())
-                    .is_some_and(recipe::strip_old_serialized_defaults);
-                let r: Recipe = match (&envelope_body, &value) {
-                    (Some(v), _) => serde_json::from_value(v.clone()).map_err(usage)?,
-                    (None, Some(v)) if stripped => {
-                        serde_json::from_value(v.clone()).map_err(usage)?
-                    }
-                    (None, _) => serde_json::from_str(&txt).map_err(usage)?,
+                let r: Recipe = match &envelope_body {
+                    Some(v) => serde_json::from_value(v.clone()).map_err(usage)?,
+                    None => serde_json::from_str(&txt).map_err(usage)?,
                 };
                 return Ok(LoadedRecipe {
                     doc: RecipeDoc::New(r),
@@ -2963,6 +2962,45 @@ pub fn validate_convert(
     reject_output_suffix_mismatch(cfg, args, recipe_preset, new)?;
     validate(cfg)?;
     Ok(())
+}
+
+/// Typed roll flags ask a rendering to apply the roll's measurements, which the film
+/// master never does. A typed `--film-master` conflicts with them at the parser; this
+/// is the same refusal when the film master is the recipe's (`output`: `"film-master"`).
+///
+/// A presence rule, so [`run_convert`] runs it straight after `recipe::merge`, before
+/// `recipe::validate`: every value rule there is coarser for this run — a bad
+/// `--roll-white` would get a remedy no white can satisfy, and a typed `--contrast`
+/// would get the film master's look refusal, each fixed only to meet this one. It
+/// reads nothing but the merged `output` and the flags. The recipe's own `roll`
+/// section is spared: a measurement is not a stage asked for.
+fn reject_roll_flags_under_a_recipe_film_master(args: &ConvertArgs, r: &Recipe) -> Result<()> {
+    if r.output != OutputSection::FilmMaster || !args.roll.any() {
+        return Ok(());
+    }
+    let typed: Vec<&str> = [
+        (
+            "--roll-white-balance",
+            args.roll.roll_white_balance.is_some(),
+        ),
+        ("--roll-white", args.roll.roll_white.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(flag, typed)| typed.then_some(flag))
+    .collect();
+    let (them, apply) = if typed.len() == 1 {
+        ("it", "applies")
+    } else {
+        ("them", "apply")
+    };
+    Err(NcError::Usage(format!(
+        "{} {apply} the roll's measurements through the rendering stages, but the recipe's \
+         `output` is \"film-master\", which writes the fixed decode's linear ACEScg with no \
+         rendering stage and would ignore {them}. Either drop {}, or choose a rendered \
+         destination (--range, --transfer, --gamut or --container)",
+        typed.join(" and "),
+        typed.join(" and "),
+    )))
 }
 
 /// Whether the loaded `--params` recipe stated `output.preset`, as
@@ -6141,6 +6179,8 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         RecipeDoc::Current(doc) => (merge(doc, &args)?, None),
         RecipeDoc::New(r) => {
             let r = recipe::merge(r, &args);
+            // A flag-presence rule, ahead of every value rule that could refuse first.
+            reject_roll_flags_under_a_recipe_film_master(&args, &r)?;
             let cfg = r.to_config();
             recipe::validate(&r, KnobNames::FlagAndKey)?;
             (cfg, Some(r))
@@ -6254,6 +6294,13 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     }
     if let Some(msg) = curve_default_warning(loaded.unpinned_curve, loaded.meta_pipeline_version) {
         push_warning_buf(&mut warnings, &log, msg);
+    }
+    // A recipe's style value beside a roll measurement — possibly an earlier build's
+    // leftover. A fact about the run's recipe, not the frame; a typed flag never warns.
+    if let Some(r) = &new_recipe {
+        for msg in r.roll_overlap_warnings(recipe::TypedStyle::of(&args)) {
+            push_warning_buf(&mut warnings, &log, msg);
+        }
     }
     let frame = convert_frame(
         "convert",
@@ -7158,6 +7205,15 @@ fn run_roll(args: RollArgs) -> Result<()> {
         log.warn(&msg);
         roll_warnings.push(msg);
     }
+    // A shared-recipe style value beside a roll measurement, once for the roll. A
+    // per-frame override is that frame's explicit choice, so it does not warn.
+    for msg in shared_recipe
+        .iter()
+        .flat_map(|r| r.roll_overlap_warnings(recipe::TypedStyle::default()))
+    {
+        log.warn(&msg);
+        roll_warnings.push(msg);
+    }
     if !matches!(
         shared.calibration.film_base,
         Some(FilmBaseSource::Explicit(_))
@@ -7919,7 +7975,7 @@ struct MeasureRollReport {
     white_balance: RollWhiteBalance,
     /// The roll's white and the look contrast that places it (`nf-calibration/roll-white-rule`).
     white: MeasuredRollWhite,
-    /// The gains and the contrast in the forms a user freezes them in.
+    /// The gains and the white in the forms a user freezes them in.
     reuse: RollReuse,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
@@ -7962,7 +8018,7 @@ struct MeasuredFrame {
 
 #[derive(Debug, Serialize)]
 struct RollWhiteBalance {
-    /// Green-anchored gains for `scene_correction.white_balance`.
+    /// Green-anchored gains for `roll.white_balance`.
     gains: [f32; 3],
     /// The per-channel percentile of the pooled pixels they equalize.
     percentile: f32,

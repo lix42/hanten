@@ -333,7 +333,8 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     KeptEntry {
         covers: &["--white-balance"],
         why: "scene correction's white balance (recipe `scene_correction.white_balance`) — \
-              stated gains, which `hanten measure-roll` measures once per roll",
+              stated gains, multiplied into the roll's (`--roll-white-balance`, recipe \
+              `roll.white_balance`, which `hanten measure-roll` measures once per roll)",
     },
     KeptEntry {
         covers: &["--roll-white-balance", "--roll-white"],
@@ -343,8 +344,8 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     KeptEntry {
         covers: &["--contrast"],
         why: "the look's print contrast (recipe `look.contrast`) — the half of `gamma` \
-              `nf-reconstruction/gamma-split` moved out of the decode, which `hanten \
-              measure-roll` measures once per roll; new-flow only",
+              `nf-reconstruction/gamma-split` moved out of the decode; unstated, the roll's \
+              white (`--roll-white`) gives it; new-flow only",
     },
     KeptEntry {
         covers: &["--channel-grade"],

@@ -1480,6 +1480,8 @@ read a sunset as the cast and remove it, so the gains are measured once per roll
 with `hanten measure-roll` (below) and stated in the recipe's `roll` section.
 `--white-balance` then multiplies the roll's gains: it adjusts the roll's balance
 rather than replacing it, and at its default `1,1,1` the roll's gains apply exactly.
+Typed, it never warns; the same gains stated in a recipe beside the roll's do (§11),
+since they may be an earlier `measure-roll`'s leftover.
 `--auto-wb` is refused, and so is a recipe naming a per-frame mode:
 
 ```console
@@ -1714,11 +1716,36 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
 {"white_balance":[1.32,1.0,0.9],"exposure":0.0}
 ```
 
-With `--contrast` stated, `contrast_applied` is `false`: the stated contrast won. A
-recipe written by an earlier build states `look.contrast` at its old default,
-`1.1111112`, because it serialized every default; that exact value in a recipe is read
-as unset, so the roll's white applies (any other value, or the flag, still wins). The
-film master applies neither value, and reports both as not applied.
+With `--contrast` stated, `contrast_applied` is `false`: the stated contrast won. The
+film master applies neither value, and reports both as not applied. The roll flags are
+refused under it — a typed `--film-master` conflicts with them, and under a recipe's
+`"film-master"` the refusal says to drop them or choose a rendered destination — but a
+recipe's `roll` section is not.
+
+A style value **a recipe states** beside a roll measurement is kept, and the run warns
+(so `--strict` refuses it): it may be a leftover from an earlier build, not a choice.
+A typed `--white-balance` or `--contrast` is a choice made now, and never warns. A
+`--dump-params` recipe that states a contrast (or white balance) beside the roll's
+measurement does warn on replay, since a file cannot say who chose a value; type the
+flag on replay to keep it without the warning. `roll` warns once, for the shared recipe,
+not per frame:
+
+```console
+$ cat old.json
+{"recipe_version": 2,
+ "roll": {"white_balance": [1.1, 1.0, 0.9], "white_stops": 1.7},
+ "scene_correction": {"white_balance": {"explicit": [1.2, 1.0, 1.0]}},
+ "look": {"contrast": 1.1111112}}
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow --params old.json --report none
+hanten: warning: the recipe's `scene_correction.white_balance` [1.2, 1.0, 1.0] multiplies the roll's gains, `roll.white_balance` [1.1, 1.0, 0.9]: the white balance applied is [1.32, 1.0, 0.9]. A stated white balance is an adjustment on top of the roll's measurement; if it holds gains an earlier `hanten measure-roll` wrote there, drop it — they now live in `roll.white_balance`
+hanten: warning: the recipe's `look.contrast` 1.1111112 overrides the roll's contrast 1.4552535 (from `roll.white_stops` 1.7). If it came from a recipe an earlier build wrote (every one stated `look.contrast` 1.1111112) or from an earlier `hanten measure-roll`, set it to `null` to use the roll's
+```
+
+**Adopting the `roll` section in a recipe an earlier build wrote:** drop
+`scene_correction.white_balance` and set `look.contrast` to `null` if they hold
+`measure-roll`'s old output (or, for the contrast, the `1.1111112` every earlier recipe
+stated). No value is read as unset for you: a `--dump-params` recipe replays exactly
+what it rendered.
 
 **The white balance** equalizes the pooled pixels' per-channel 99th percentile,
 green-anchored.
