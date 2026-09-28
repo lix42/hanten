@@ -213,6 +213,15 @@ committed.
 - **Write for the future reader.** Docs and comments earn their place by long-term
   value: the constraint, the reason, the trap — not how the decision was reached,
   and not a count of how often something broke.
+- **Keep comments short.** Add a comment only if it helps future development. If
+  it is still long after that cut, move the detail to a doc (a new or existing
+  one under `docs/design/`, or wherever it fits) and leave a one-line pointer.
+  This applies to existing comments too: no sweeps, but when you edit a file or
+  function, check whether its comments should shrink or move.
+- **A review finding about a comment is fixed by simplifying, not appending.**
+  Even when the finding is right (from an agent, Codex or a PR reviewer), don't
+  patch the comment with more text: tighten it, rewrite it, or move the complex
+  part to a doc.
 - **No gate reads prose.** After changing behaviour, grep for the *negation* of the
   claim you just falsified, worded several ways and across every path including
   `docs/TASKS.md` — the stale sentence is never in your diff.
