@@ -45,8 +45,15 @@ default 6, ≈ L\* 2.5, `off` to disable) — a shift in stops on luminance, who
 and below, fading to nothing at mid-grey. The reference is the decoded film base graded
 with the frame (`chain::render` takes it), so it follows each frame's contrast and nothing
 is measured from the image; a base already deeper is left alone. Mid-grey, white and the
-branch contract are untouched. Whether a parametric operator beats reinhard from mid-grey
-up is `parametric-shoulder`'s.
+branch contract are untouched.
+
+**Reinhard stands** (`parametric-shoulder`, 2026-09-27). With mid-grey, the rendered
+white and the peak pinned, any smooth shoulder stays within about 0.15 stop of reinhard.
+A brighter white with mid-grey pinned (+0.15, +0.30 stop, shadows untouched) lost to
+reinhard in review. Where white renders is `look.contrast` (the white rule). The
+headroom barely moves white (0.09 stop from 6 stops to 2); it sets how hard the stops
+above white are compressed. HDR under the white rule is still unreviewed
+(`nf-calibration/white-rule-hdr`).
 
 **The gamut map's share of highlight desaturation is near zero where it matters**
 (`gamut-map-share`, done 2026-09-23; `docs/reports/gamut-map-share.md`). It moves no
@@ -554,11 +561,52 @@ float destination, never a per-channel clip.
 
 ## parametric-shoulder
 
-**Status:** not started
-**Updated:** 2026-09-26
+**Status:** done
+**Updated:** 2026-09-27
 
 - 2026-09-26: split from `parametric-operator` (user), which ships display black
   alone. Goal: whether a parametric operator beats reinhard from mid-grey up, at
   matched lightness, with display black in the chain; "reinhard stands" is a complete
   outcome. Depends on `nf-calibration/roll-white-rule`, since a shoulder that holds
   diffuse white moves the white the rule was chosen under.
+- 2026-09-27: **measured first, then one review round; reinhard stands** (user).
+  Scripts, curves, the throwaway patches and the set are in `../temp/parametric-shoulder/`
+  (`scripts/probe.patch`, `scripts/render.patch` on `c49960e`). The frames are
+  `white-channel`'s round 2 (two per roll, nine rolls) at the white rule's contrast, with
+  each roll's white balance and base, display black at its default, SDR Display P3.
+  - **"Holds mid-grey and diffuse white" cannot mean white at 1.0 in SDR**: that leaves
+    nothing for speculars. Reinhard renders diffuse white at 0.550 (−0.86 stop). The
+    headroom barely moves that (−0.86 at 6 stops, −0.77 at 2), so the existing knob is
+    not a candidate shape.
+  - **Where the pixels are** (graded luminance, holder excluded): 20–40% of a typical
+    frame sits between mid-grey and white (3–75%), and under 3% above white, except on
+    the clamped or bright frames (1121, 1151, 1737, 1868: 15–23%).
+  - **Pin mid-grey (value and log-log slope, so the join is smooth), white's rendered
+    level and the peak at the same headroom**, and the shape has almost no freedom. A
+    slope family `s(x) = s0 / (1 + (x/k)^p)^(q/p)` in stops, with the knee sharpness
+    `p` free, stays within +0.05 stop of reinhard below white and −0.14 above. The
+    reason: a compressive curve through those points cannot fall below the straight
+    line in stops from mid-grey to white (slope 0.65), and reinhard sits at most 0.12
+    stop above that line (at +1.3 stops; its slope bends 0.82 → 0.45). Joining
+    reinhard's slope at mid-grey keeps a smooth curve from getting close to the line.
+    So matched lightness in the strict sense leaves nothing to review.
+  - **Pin white only**: moving mid-grey with white held is exposure plus
+    `look.contrast`, and it moves the pivot display black and the white rule key on.
+    Dropped.
+  - **Pin mid-grey only**: white can render up to about +0.2 stop brighter on a smooth
+    curve, +0.42 at the concave limit. Unlike the white rule's contrast offsets (+0.15
+    ≈, +0.31 worse), this brightens the top without deepening the shadows, so that
+    verdict did not cover it. The price is specular room: at +0.30 the curve is flat
+    about 3 stops above white.
+  - **Round 1** (10 frames: 7 clamped or bright, 3 ordinary). Arms: reinhard; white
+    +0.15; white +0.30, curves tabulated and read by a throwaway `NC_SHOULDER_LUT` hook
+    in `fit_range` from mid-grey up. Plumbing check: the tabulated reinhard reproduced
+    the unpatched render within 1 code in 65535. Rendered L\* p10–p50 were identical
+    across arms (p50 +1 on 1714); p99 rose 2–4 L\* at +0.15 and 4–9 at +0.30, and +0.30
+    clipped 1–4% of pixels on 1151, 1737, 1868 and 971. **Verdict: reinhard best.**
+  - **Not done here:** HDR under the white rule was never reviewed (`roll-white-rule`
+    handed it here as the natural place). Filed as `nf-calibration/white-rule-hdr`
+    (user).
+- 2026-09-27: **done.** Reinhard stays fit range's operator; no code, knob or report
+  change. For dependents: `fit-gamut`'s "re-check if a shoulder replaces reinhard" and
+  the white rule's cap and floor need no re-check, since nothing moved.

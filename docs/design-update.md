@@ -641,15 +641,10 @@ That leaves the dark end to whatever else is in the chain:
 - **So the black point is doing the job today, by subtraction**, which is the
   wrong instrument: 0.019 crushed 0.69–8.66 % of frames to code 0. Reaching black
   by subtracting is exactly what a toe exists to avoid.
-- **The principled fix is a toe in the operator**, which is one of the reasons to
-  prefer a parametric member of the sigmoid family over Reinhard. Note the
-  measured caution points the other way only for *reconstruction*: a toe there
-  bought nothing and cost 1–2 code values of black depth. A toe belongs where the
-  display range is known, which is here.
-
-Two open questions below are the same question seen from each end: the parametric
-operator (does it earn its keep?) and the black point split (flare removal versus
-display black).
+- **Black belongs at the display stage**, where the display range is known. A toe
+  in *reconstruction* bought nothing and cost 1–2 code values of black depth.
+  (This once argued for a parametric sigmoid with a toe in place of reinhard; both
+  halves were settled apart, below.)
 
 **Settled 2026-09-26 for the black end** (`nf-display-stages/parametric-operator`,
 reviewed on real frames): display black is fit range's, but it is neither a subtraction
@@ -657,9 +652,10 @@ nor a toe inside a new operator. It is a shift in stops on luminance — whole a
 base and below, fading to nothing at mid-grey — keyed on where the decoded film base
 renders after the frame's grade, with the depth a knob (`--display-black`, default 6
 stops below mid-grey). A rational toe `y²(1 + c)/(y + c)` lost to it on colour and
-shadow contrast, and could not hold both mid-grey and white. Whether a parametric
-operator earns its keep from mid-grey up is now `nf-display-stages/parametric-shoulder`;
-the flare half stays `nf-scene-correction/flare-removal`'s.
+shadow contrast, and could not hold both mid-grey and white. There is no scene-side
+flare/fog half (`nf-scene-correction/flare-removal`, closed as not needed
+2026-09-26). From mid-grey up reinhard stays (`nf-display-stages/parametric-shoulder`,
+under Open questions below).
 
 ### A "direct" preset for external editing
 
@@ -797,19 +793,22 @@ artifact on which a reconstruction is measured. Caveats:
 
 ## Open questions
 
-- **A parametric fit-range operator.** Classic Reinhard is one member of the
-  sigmoid family. An operator with a toe, contrast, shoulder and display-peak
-  parameters could hold both mid-grey and diffuse white, which reinhard can't,
-  and could shape the approach to black instead of leaving it to a subtraction.
-  Add it only if it beats reinhard at matched lightness.
+- **A parametric fit-range operator** — *settled: reinhard stays*
+  (`nf-display-stages/parametric-shoulder`, 2026-09-27). The toe went to display
+  black (above). From mid-grey up, "hold both mid-grey and diffuse white" cannot put
+  white at 1.0 in SDR, which would leave nothing for speculars. With mid-grey, the
+  rendered white and the peak pinned, any smooth shoulder stays within about 0.15 stop
+  of reinhard. The one real alternative, white rendered brighter with mid-grey pinned
+  (+0.15 and +0.30 stop), lost to reinhard in review.
 - **How contrast and the per-channel grade are spelled** — *settled*: separate keys
   under `look` (`look.contrast`, `look.channel_grade`), not one CDL-style object.
   Whether "direct" is a named output preset or a rendering profile is *settled*
   (2026-09-27): a rendering, `--rendering direct`, beside `default` — see "Two
   renderings" above.
-- **The black point is two jobs:** a small flare/fog subtraction (scene
-  correction) and display black / toe (fit range). Today it's one linear
-  subtraction, and 0.019 crushed 0.69–8.66% of frames to code 0.
+- **The black point is two jobs** — *settled*: only one survives. Display black is
+  fit range's (`--display-black`), and there is no scene-side flare/fog subtraction
+  (`nf-scene-correction/flare-removal`, closed as not needed 2026-09-26). The legacy
+  subtraction, 0.019, crushed 0.69–8.66% of frames to code 0.
 - **Other legacy-only outputs** (ProPhoto, arbitrary ICC paths): keep or drop,
   undecided.
 - **Where per-stock normalization lives** (scene correction or look). Part 1

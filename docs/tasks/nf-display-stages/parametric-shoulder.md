@@ -28,13 +28,24 @@ What is known:
   diffuse white moves where that white renders, so the rule is re-checked with any
   candidate.
 
-Open:
+**Decided 2026-09-27 (user): reinhard stands.** No operator, knob or report change.
+The numbers and the round are in `docs/progress/nf-display-stages.md`.
 
-- **What "beats reinhard" means as a test.** Matched lightness is the floor, the
-  judgement is a visual review, and a candidate that wins on numbers can lose on the
-  picture (the 2026-09-17 offset round).
-- How many parameters are exposed versus fixed per destination: an operator with four
-  knobs is a look surface, and the look stage already owns contrast.
+- **With mid-grey, white and the peak all pinned there is almost nothing to choose.**
+  A curve that joins reinhard smoothly at mid-grey, renders diffuse white where
+  reinhard does and reaches the SDR peak at the same headroom stays within 0.05 stop of
+  it below white and 0.15 stop above. That is under what the white rule's review could
+  tell apart.
+- **Pinning white alone duplicates existing knobs.** Moving mid-grey with white held is
+  exposure plus contrast, and it would move the pivots display black and the white rule
+  key on.
+- **Pinning mid-grey alone was the one real option**: white rendered brighter with the
+  shadows untouched, paid for by the speculars. It was reviewed at +0.15 and +0.30 stop
+  and reinhard was preferred.
+- So the open questions (what "beats reinhard" means, how many parameters) are moot.
+  Where white renders is already a knob, `look.contrast` (via the white rule).
+  `--display-tone-headroom` barely moves white; it sets how hard the stops above white
+  are compressed.
 
 ## How to Verify
 
@@ -42,6 +53,13 @@ Open:
   held fixed, and a recorded verdict.
 - If it ships: the operator named in the report, the branch contract re-checked, and
   the white rule's cap and floor re-checked under it.
+
+**How it was met:** at matched lightness in the strict sense (mid-grey, white and the
+peak all pinned), the candidates were shown numerically to stay within 0.15 stop of
+reinhard, below what the white rule's review could tell apart, so that set was not
+rendered. The round rendered instead the one alternative with room: mid-grey and the
+shadows pinned (identical rendered L\* p10–p50 across arms), white +0.15 and +0.30
+stop. Verdict recorded; nothing shipped, so the second bullet does not apply.
 
 ## Dependencies
 

@@ -100,13 +100,14 @@ default: roll consistency is the product's central promise.
 
 ### `nf-display-stages`
 Fit range as one function both branches use, with reinhard as the baseline setting
-and display black (where the film base renders), with whether a parametric shoulder
-beats reinhard still open; one gamut-mapping implementation rather than
+and display black (where the film base renders); reinhard stays, since a parametric
+shoulder did not beat it (`parametric-shoulder`); one gamut-mapping implementation rather than
 three; the SDR/HDR branch point and what each branch may differ in.
 
 The toe lives here, not in reconstruction. A content-aware toe was rejected as a
-*reconstruction* curve mode; shaping the approach to black at the display stage is a
-different question and is open.
+*reconstruction* curve mode. At the display stage it is settled: display black in fit
+range (`parametric-operator`, `--display-black`), not a toe inside the operator
+(`parametric-shoulder`).
 
 ### `nf-destinations`
 Destination presets; the Adobe RGB preset (its colorimetry, gamut and encode landed
