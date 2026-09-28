@@ -1,6 +1,7 @@
 //! **The roll white balance** (`nf-scene-correction/roll-white-balance`): one set of
 //! white-balance gains per roll, measured over the roll's own picture frames and
-//! frozen into the recipe as `scene_correction.white_balance`.
+//! frozen into the recipe as `roll.white_balance` (`nf-calibration/roll-section`), which
+//! scene correction's own white balance then multiplies.
 //!
 //! It removes what a whole roll shares — the film, development and scanner cast —
 //! and keeps the scene's light: one sunset frame barely moves a roll statistic,
@@ -16,7 +17,9 @@
 //!
 //! **The roll's white** (`nf-calibration/roll-white-rule`) is measured from the same
 //! per-frame samples and placed through the look's contrast, with mid-grey pinned, so the
-//! roll's white renders at diffuse white. The rule was chosen by review on nine rolls
+//! roll's white renders at diffuse white. The recipe stores the white
+//! (`roll.white_stops`), not the contrast: [`contrast_for`] is applied at render time,
+//! and a stated `look.contrast` wins over it. The rule was chosen by review on nine rolls
 //! (`nf-calibration/anchor-comparison`), with a black point in the chain; its values are
 //! provisional, since that sample held no deliberately bad frames:
 //!
