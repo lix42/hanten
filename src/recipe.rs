@@ -268,7 +268,7 @@ pub struct DesaturationKeys {
 }
 
 /// Where the look's resolved contrast came from — the report's
-/// `new_flow.roll.contrast_applied`, whose knob a contrast fault names, and whether the
+/// `chain.roll.contrast_applied`, whose knob a contrast fault names, and whether the
 /// `default` rendering fell back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContrastSource {
@@ -281,7 +281,7 @@ pub enum ContrastSource {
 }
 
 /// What the roll section held and what the run applied of it — the report's
-/// `new_flow.roll`, present whenever the section states a value.
+/// `chain.roll`, present whenever the section states a value.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct RollReport {
     /// The section's gains, as stated.
@@ -1216,6 +1216,15 @@ fn fault_message(axes: &DisplayAxes, fault: &Fault, names: KnobNames) -> String 
 }
 
 impl Recipe {
+    /// The recipe's `params_hash` (`version::stable_hash`) over the bytes
+    /// `--dump-params` writes, so a dumped recipe hashes to the run it came from. The
+    /// report's `identity` and the telemetry record carry the same value.
+    pub fn params_hash(&self) -> String {
+        // Plain data cannot fail to serialize; the empty fallback keeps telemetry,
+        // which must never fail a run, total.
+        crate::version::stable_hash(&serde_json::to_string_pretty(self).unwrap_or_default())
+    }
+
     /// One rendition's parameters for `pipeline::chain::render` — the recipe's shared
     /// half ([`Recipe::shared_params`]) plus the destination's peak and gamut, which
     /// only the destination states.
@@ -1306,7 +1315,7 @@ impl Recipe {
         )
     }
 
-    /// The report's `new_flow.roll`: `None` when the section states nothing. `rendered`
+    /// The report's `chain.roll`: `None` when the section states nothing. `rendered`
     /// is whether any rendering stage ran — the film master applies neither value, and
     /// `--rendering direct` leaves the section out.
     pub fn roll_report(&self, rendered: bool) -> Option<RollReport> {

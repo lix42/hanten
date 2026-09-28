@@ -587,7 +587,7 @@ def output_cell_space(matrix: dict, interface: str,
     """`cell_space` or `destination_cell_space`, for one rendered cell.
 
     A preset build reports the recipe it resolved (`recipe`); a destination build
-    reports the destination instead (`new_flow.destination`) and no recipe at all.
+    reports the destination it resolved (`chain.destination`).
     """
     if interface == "preset":
         recipe = report.get("recipe") if isinstance(report.get("recipe"), dict) else {}
@@ -622,10 +622,9 @@ def destination_metrics_space(destination: object) -> tuple[str | None, str]:
 
 def destination_cell_space(report: dict, expected: object) -> tuple[str | None, str]:
     """`cell_space` for a destination build's cell: from the destination nc
-    **reports** it resolved (`new_flow.destination`), which must be the one the
+    **reports** it resolved (`chain.destination`), which must be the one the
     matrix asked for."""
-    new_flow = report.get("new_flow") if isinstance(report.get("new_flow"), dict) else {}
-    resolved = new_flow.get("destination")
+    resolved = _manifest.chain_block(report).get("destination")
     if resolved != expected:
         return None, (
             f"the render reports destination {resolved!r}, not the matrix's "

@@ -2,69 +2,57 @@
 
 ## Goal
 
-Decide what nc's JSON report and telemetry record say about a new-flow run, so the
-machine-readable contract moves with the chain deliberately instead of being
+Decide what nc's JSON report and telemetry record say about a run of the one chain, so
+the machine-readable contract moves with the chain deliberately instead of being
 inherited one optional section at a time.
 
-*Premise moved (`nf-core/default-flip`, 2026-09-27): the old chain is gone, so there is
-no "while `--new-flow` lives" and no second report shape — the old chain's report
-sections were deleted with it. Telemetry is schema 8 with `conversion.destination`, and
-`nctool` reads which interface a run used (preset or destination) from its
-`pipeline_version`. Re-scope before starting.*
+*Re-scoped after `nf-core/default-flip` (2026-09-27), which deleted the old chain and
+its report sections and left a provisional `new_flow` block, no `params_hash`, no recipe
+echo, no sidecar, and telemetry schema 8 timed in the old chain's buckets.*
+
+## Decisions (user, 2026-09-28)
+
+- **No sidecar.** The report echoes the resolved `recipe` (what `--dump-params`
+  writes, reloadable through `--params`) and `identity.params_hash` hashes those bytes;
+  the telemetry record carries the same hash. The pre-flip stale-sidecar cleanup stays.
+- **The block is `chain`** (was `new_flow`), same nesting. `nctool` reads either name,
+  since builds on both sides of the rename are `pipeline_version` 8.
+- **Telemetry times every stage in a fixed field** (`crate::stage::StageKind`), schema 9.
+  The chain stages are absent for the film master. `StageKind` is also the report's
+  `chain.stages[].stage` and what `telemetry/schema-v2`'s failure events name.
+- **`params_hash` moved at the flip and is not comparable across it.** Allowed, not
+  announced: `pipeline_version` 8 already marks the boundary, and `nctool compare`
+  never pairs frames across pipeline versions.
 
 ## Design
 
-- **Nothing owns this today.** `cli::Report` carries around twenty optional sections
-  keyed to the old chain — `reconstruction_result`, `output_render`, `dmax`, the HDR
-  blocks. Every one is `Option`, so a new flow that simply omits them parses cleanly
-  for any consumer tolerating a missing key. Silence is the failure mode, not a type
-  error.
-- **Prose that names an operation is a claim about the run.** The known
-  defect is `output_render.content`, which asserted the reference-white-preserving
-  shoulder "have all run" for a whole preset, so `--display-tone none` made one
-  report contradict itself. A chain whose look stage may be an identity pass
-  reproduces that trap at every stage: derive the prose from the resolved chain, or
-  state the fact in a field.
-- **The telemetry bump is driven by the timing shape, not only by a removed enum
-  member.** `TimingInfo`'s buckets are `decode / film_base / algorithm / color /
-  encode`, and `algorithm` already lumps reconstruction with the print controls —
-  that is the bucket the GPU spike's timing table reads. More named stages means a
-  different shape, so decide once whether stages are fixed fields or a map. The
-  migration doc's "a schema bump only when an enum member is removed" understates it.
-- **Two consumers live outside the crate.** `nctool compare` derives the primary
-  artifact's depth from `output_render.encoding` and diffs `timing_ms` bucket by
-  bucket; `nctool roll` reads `film_base`, `dmax` and friends to build a calibration.
-  A renamed field is their break, not nc's, and their fixtures are part of the change.
-- Telemetry stays **operational**: arg-struct only, never a recipe key.
-- **`telemetry/schema-v2` waits on this task** for the stage enum and timing
-  fields of its failure events and upload projection.
+- **Prose that names an operation is a claim about the run.** Every per-stage fact is
+  a field read off the resolved chain; a stage that moved no pixel reports
+  `"identity"` rather than disappearing.
+- **The stages stay clock-free.** The orchestrator hands the chain a `StageClock`;
+  a stage that runs twice (the gain map's two renditions) sums.
+- **Roll frames carry a convert report's hash and HDR encoder blocks**: the per-frame
+  `params_hash` of the recipe the frame ran, and the HDR encoder blocks. The roll-level identity carries no
+  hash, since frames may differ.
+- **Two consumers live outside the crate** (`nctool compare`, `roll`, `review`,
+  `metrics`); their fixtures move with the report.
 
-- **The new chain's recipe now exists** (`crate::recipe::Recipe`, `nf-core/recipe-schema`),
-  but a `--new-flow` run still writes no sidecar, echoes no `recipe` and reports no
-  `params_hash`, because those three were built around the current chain's config.
-  The recipe reloads under `--new-flow` (`--dump-params` round-trips byte-for-byte),
-  so all three can now carry it; which fields, and how the stale-sidecar cleanup
-  changes once a sidecar is written again, are this task's to decide.
+## Known and open
 
-## Open questions
-
-- **Does the new flow emit the old report shape while `--new-flow` lives?**
-  [The minimal render](minimal-end-to-end.md) leaves this open on purpose — cheap now,
-  a migration later — and this task is where it gets decided.
-- **Is `identity.params_hash` comparable across the flip?** It hashes the effective
-  recipe, whose shape changes, so the hash moves for reasons that are not a pixel
-  change — announced, or just allowed to happen?
+- `roll` emits no telemetry record; `telemetry/schema-v2` is scoped to `convert`.
+- `fit_gamut` returns no counts (pixels the radial map moved, or wrote black at
+  `Y ≤ 0`), so the report cannot state them.
 
 ## How to Verify
 
-- Under each flow the report's sections correspond to the stages that actually ran,
-  and no prose names an operation the resolved chain did not perform — proven by
-  flipping one knob and asserting the sentence changes.
+- The report's sections correspond to the stages that ran, and no prose names an
+  operation the resolved chain did not perform — proven by flipping one knob and
+  asserting `chain.stages[].applied` changes.
+- The report's `recipe` replays the run to identical bytes and hash.
 - `nctool`'s fixtures move in the same change and its suite passes under
   `NCTOOL_REQUIRE_DEPS=1`.
-- The telemetry `schema_version` is bumped in the change that moves the timing shape,
-  with a serialization test pinning the wire bytes.
-- Telemetry on and off produce identical pixels; the four CI gates pass.
+- The telemetry `schema_version` is bumped with a serialization test pinning the wire
+  bytes; telemetry on and off produce identical pixels; the CI gates pass.
 
 ## Dependencies
 

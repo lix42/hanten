@@ -11,10 +11,10 @@
   legacy records", `source_schema_version: 1`, legacy-fixture and local-v1
   import passages below as withdrawn. What the uploader does with legacy lines in
   a selected file is `telemetry/upload`'s decision.
-- **The upload manifest below is stale** against the code (local schema is v7;
-  retired reconstructions in `conversion.algorithm`; `u8`/`u10` outputs; exit 6).
-  `telemetry/schema-v2` revises it once `nf-core/report-contract` fixes the new
-  chain's stage/timing shape — see that task file's open questions.
+- **The upload manifest below is stale** against the code (local schema is v9, whose
+  `timing_ms` has one field per `crate::stage::StageKind` rather than `algorithm` /
+  `color`; retired reconstructions in `conversion.algorithm`; `u8`/`u10` outputs;
+  exit 6). `telemetry/schema-v2` revises it — see that task file's open questions.
 
 This note decides how `nc` grows the shipped local-only performance record into
 anonymous, explicitly consented remote telemetry. It is the output of the

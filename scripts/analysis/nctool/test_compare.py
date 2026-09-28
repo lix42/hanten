@@ -65,15 +65,24 @@ DISPLAY_P3_TIFF = {"display": {"range": "sdr", "transfer": "native",
 
 
 def destination_report(destination=None, mean=(0.25, 0.5, 0.75),
-                       total=400, low=10, high=30):
-    """A destination build's `convert` report: no `params_hash` in `identity` (it is
-    in telemetry) and no `output_render` — the resolved destination instead."""
-    return dict(identity=dict(nc_version="0.1.0", git_commit="abc", git_dirty=False,
-                              pipeline_version=8, target="t"),
-                output_stats=dict(mean=list(mean)),
-                new_flow=dict(destination=destination or DISPLAY_P3_TIFF),
-                loss=dict(total_samples=total, clipped_low=low, clipped_high=high,
-                          non_finite=0))
+                       total=400, low=10, high=30, params_hash="cafe", block="chain"):
+    """A destination build's `convert` report: the resolved destination in `chain`
+    instead of `output_render`. `params_hash=None, block="new_flow"` is a build from
+    before `nf-core/report-contract`, whose hash is only in telemetry."""
+    identity = dict(nc_version="0.1.0", git_commit="abc", git_dirty=False,
+                    pipeline_version=8, target="t")
+    if params_hash is not None:
+        identity["params_hash"] = params_hash
+    return {"identity": identity,
+            "output_stats": dict(mean=list(mean)),
+            block: dict(destination=destination or DISPLAY_P3_TIFF),
+            "loss": dict(total_samples=total, clipped_low=low, clipped_high=high,
+                         non_finite=0)}
+
+
+def early_destination_report(destination=None):
+    """A destination build from before `nf-core/report-contract`."""
+    return destination_report(destination, params_hash=None, block="new_flow")
 
 
 def banner(pipeline_version):
@@ -102,6 +111,15 @@ class TestDiff(unittest.TestCase):
         self.assertTrue(identical, "a timing difference must not break `identical`")
         self.assertEqual(rows[0]["timing_ms_delta"]["total"], 21.5,
                          "but it must still be reported")
+
+    def test_a_stage_on_one_side_only_has_no_delta(self):
+        # Schema 8 timed `algorithm`/`color`; schema 9 times each stage. A key only
+        # one side has is not a regression of its full duration.
+        v8 = {"total": 100.0, "decode": 40.0, "algorithm": 20.0, "color": 12.0}
+        v9 = {"total": 104.0, "decode": 41.0, "reconstruction": 19.0, "look": 4.0}
+        self.assertEqual(compare._timing_delta(v8, v9), {
+            "algorithm": None, "color": None, "decode": 1.0, "look": None,
+            "reconstruction": None, "total": 4.0})
 
     def test_a_changed_mean_is_detected_with_a_signed_delta(self):
         a = record([frame("a", [0.10, 0.20, 0.30])])
@@ -619,7 +637,7 @@ class TestConvertCase(unittest.TestCase):
             ("identity only", {"identity": {"nc_version": "0.1.0"}}),
             ("no depth", {k: v for k, v in nc_report().items() if k != "output_render"}),
             ("unknown destination", {**destination_report(),
-                                     "new_flow": {"destination": {"display": {}}}}),
+                                     "chain": {"destination": {"display": {}}}}),
             ("unknown encoding", {**nc_report(), "output_render": {"encoding": "who-knows"}}),
         ]
         for label, report in hollow:
@@ -629,11 +647,17 @@ class TestConvertCase(unittest.TestCase):
                 self.assertIsNone(entry, label)
                 self.assertIn("missing", err or "", label)
 
-    # A destination build reports no `params_hash` and no `output_render`: the hash
-    # is in the telemetry record and the depth follows the resolved destination.
+    # A destination build reports no `output_render`: the depth follows the resolved
+    # destination. Its hash is in `identity`, or — before `nf-core/report-contract` —
+    # only in the telemetry record, and both shapes must read the same.
     def test_a_destination_build_is_read_from_its_destination_and_telemetry(self):
         telemetry = {"timing_ms": {"total": 3.0},
                      "conversion": {"params_hash": "cafe", "destination": "film-master"}}
+        for make in (destination_report, early_destination_report):
+            with self.subTest(report=make.__name__):
+                self._reads_destination(make, telemetry)
+
+    def _reads_destination(self, make, telemetry):
         for destination, want in (("film-master", "f32"),
                                   (DISPLAY_P3_TIFF, "u16"),
                                   ({"display": {**DISPLAY_P3_TIFF["display"],
@@ -646,7 +670,7 @@ class TestConvertCase(unittest.TestCase):
                                                 "transfer": "pq", "container": "avif"}},
                                    "u10")):
             with self.subTest(destination=destination), tempfile.TemporaryDirectory() as d:
-                report = destination_report(destination)
+                report = make(destination)
                 with mock.patch("subprocess.run", self.fake_run(report, telemetry)):
                     entry, identity, err = compare.convert_case("nc", self.case(d), d)
                 self.assertIsNone(err)
@@ -654,14 +678,14 @@ class TestConvertCase(unittest.TestCase):
                 self.assertEqual(entry["params_hash"], "cafe")
                 self.assertEqual(identity["pipeline_version"], 8)
 
-    # There the telemetry record is the only source of the hash, so losing it is
-    # not the informational loss it is on a preset build.
+    # On an early destination build the telemetry record is the only source of the
+    # hash, so losing it is not the informational loss it is elsewhere.
     def test_a_destination_build_without_telemetry_is_refused(self):
         for label, report in (("preset build, no hash", {
                                   **nc_report(),
                                   "identity": {"nc_version": "0.1.0",
                                                "pipeline_version": 1, "target": "t"}}),
-                              ("destination build", destination_report())):
+                              ("early destination build", early_destination_report())):
             with self.subTest(label=label), tempfile.TemporaryDirectory() as d:
                 with mock.patch("subprocess.run", self.fake_run(report)):
                     entry, _, err = compare.convert_case("nc", self.case(d), d)
@@ -965,7 +989,8 @@ class TestShippedBenchmark(unittest.TestCase):
         gaps = compare._report_gaps({"output_render": [1]})
         self.assertTrue(any("output_render.encoding" in g for g in gaps), gaps)
         for hollow in ({"output_render": "x"}, {"output_render": {"preset": "legacy"}},
-                       {"new_flow": "x"}, {"new_flow": {"destination": [1]}}):
+                       {"chain": "x"}, {"chain": {"destination": [1]}},
+                       {"new_flow": {"destination": [1]}}):
             self.assertTrue(
                 any("output_render.encoding" in g for g in compare._report_gaps(hollow)),
                 hollow)
@@ -973,7 +998,7 @@ class TestShippedBenchmark(unittest.TestCase):
         # A non-dict `timing_ms` is informational data, so it degrades to "no
         # timings" rather than sinking the comparison — but never raises.
         self.assertEqual(compare._timing_delta(compare._dict(["a"]), {"a": 1.0}),
-                         {"a": 1.0})
+                         {"a": None})
 
         for label, args in (
             ("sets is a list", ({"sets": []}, "x", "/tmp")),

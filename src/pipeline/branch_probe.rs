@@ -27,6 +27,7 @@ use crate::pipeline::fit_range::DisplayPeak;
 use crate::pipeline::gain_ratio;
 use crate::pipeline::working_space::{AcesCgImage, map_nc_film_rgb_v1};
 use crate::recipe::Recipe;
+use crate::stage::Untimed;
 use crate::types::{FilmBase, LinearImage};
 
 /// The rolls measured and each one's film base: `2026-09-09-Ektar100` from its frozen
@@ -185,6 +186,7 @@ fn measure(image: &LinearImage, base: &FilmBase, recipe: &Recipe, peak: DisplayP
         &shared,
         DestinationGamut::DisplayP3,
         peak,
+        &mut Untimed,
     )
     .unwrap();
     let (sdr, _) = pair.sdr.image.into_parts();

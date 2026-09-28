@@ -66,10 +66,10 @@ class TestMatrix(unittest.TestCase):
                           "--gamut", "bt2020", "--container", "tiff"])
         self.assertEqual(review.destination_metrics_space(destination)[0], "linear-bt2020")
         # The cell is measured only when nc reports the destination the matrix asked for.
-        report = {"new_flow": {"destination": destination}}
+        report = {"chain": {"destination": destination}}
         self.assertEqual(review.destination_cell_space(report, destination)[0],
                          "linear-bt2020")
-        other = {"new_flow": {"destination": "film-master"}}
+        other = {"chain": {"destination": "film-master"}}
         self.assertIsNone(review.destination_cell_space(other, destination)[0])
         master = review.load_matrix(write({
             **{k: v for k, v in MATRIX.items() if k != "output_preset"},

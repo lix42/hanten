@@ -115,6 +115,18 @@ DESTINATION_PIPELINE = 8
 PIPELINE_LINE = re.compile(r"^pipeline_version: (\d+)", re.M)
 
 
+def chain_block(report: object) -> dict:
+    """A destination build's per-run rendering facts: the report's (or roll frame's)
+    `chain` block, or `new_flow` from a build before `nf-core/report-contract` renamed
+    it (both are `pipeline_version` 8). Empty when neither is a dict."""
+    if not isinstance(report, dict):
+        return {}
+    for key in ("chain", "new_flow"):
+        if isinstance(report.get(key), dict):
+            return report[key]
+    return {}
+
+
 def banner_pipeline_version(banner: str) -> int | None:
     """The `pipeline_version` a `--version` banner states, or `None`.
 

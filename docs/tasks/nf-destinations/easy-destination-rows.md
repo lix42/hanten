@@ -55,7 +55,7 @@ Open:
 ## How to Verify
 
 - Each new row resolves from its flags, writes its container, and states every
-  resolved axis in `new_flow.destination`; the destination table's exhaustive remedy
+  resolved axis in `chain.destination`; the destination table's exhaustive remedy
   tests still pass.
 - The BT.2020 linear TIFF's bytes and report are unchanged.
 - Each float file's embedded profile names its gamut and linear transfer; values above

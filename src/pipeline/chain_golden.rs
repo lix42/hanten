@@ -68,6 +68,7 @@ use crate::pipeline::scene_correction::{
     self, SceneCorrection, SceneCorrectionParams, WhiteBalance,
 };
 use crate::pipeline::working_space::{AcesCgImage, map_nc_film_rgb_v1};
+use crate::stage::{StageKind, Untimed};
 use crate::types::{DEFAULT_HEADROOM_STOPS, FilmBase, LinearImage};
 use crate::version::drift_gate;
 
@@ -1196,15 +1197,15 @@ fn golden_the_chain_threaded_is_bit_identical() {
     // them in another order, or handed a stage the wrong params, lands elsewhere even
     // though every per-stage golden passes.
     let params = threaded_params(WhiteBalance::Explicit([1.25, 1.0, 0.5]));
-    let rendered = chain::render(finite_aces(), film_base(), &params).unwrap();
+    let rendered = chain::render(finite_aces(), film_base(), &params, &mut Untimed).unwrap();
     assert_eq!(
         rendered.applied,
         [
-            ("scene_correction", "white-balance+exposure"),
-            ("look", "identity"),
-            ("fit_range", fit_range::OPERATOR),
+            (StageKind::SceneCorrection, "white-balance+exposure"),
+            (StageKind::Look, "identity"),
+            (StageKind::FitRange, fit_range::OPERATOR),
             (
-                "fit_gamut",
+                StageKind::FitGamut,
                 "acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"
             ),
         ],
@@ -1280,15 +1281,20 @@ fn golden_the_look_threaded_runs_after_scene_correction() {
         assert_clear_of_look_edges(&format!("threaded look pixel {p}"), [q[0], q[1], q[2]]);
     }
 
-    let on = chain::render(input(), film_base(), &params(look_params())).unwrap();
-    assert_eq!(on.applied[1], ("look", "highlight-desaturation"));
+    let on = chain::render(input(), film_base(), &params(look_params()), &mut Untimed).unwrap();
+    assert_eq!(on.applied[1], (StageKind::Look, "highlight-desaturation"));
     let on = on.image.into_parts().0.rgb;
-    let off = chain::render(input(), film_base(), &params(LookParams::off()))
-        .unwrap()
-        .image
-        .into_parts()
-        .0
-        .rgb;
+    let off = chain::render(
+        input(),
+        film_base(),
+        &params(LookParams::off()),
+        &mut Untimed,
+    )
+    .unwrap()
+    .image
+    .into_parts()
+    .0
+    .rgb;
     assert_ne!(
         bits(&on[0..3]),
         bits(&off[0..3]),
@@ -1307,7 +1313,7 @@ fn the_chain_threaded_refuses_the_nan_pixel() {
     // Scene correction carries the NaN through; fit range is the stage that refuses
     // it, and names the pixel.
     let params = threaded_params(WhiteBalance::Explicit([1.25, 1.0, 0.5]));
-    let err = chain::render(aces(), film_base(), &params)
+    let err = chain::render(aces(), film_base(), &params, &mut Untimed)
         .err()
         .expect("a NaN pixel");
     assert!(err.message().contains("pixel 7"), "{}", err.message());

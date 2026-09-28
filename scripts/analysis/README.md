@@ -125,9 +125,10 @@ documented unused-IR warning.
 `tags.json` is a small index for the run. It records the configuration ID, source
 roll, source-frame checksums, frozen recipe, calibration frames/regions/values, build identity, report
 path, and roll summary. `calibration.json` retains the complete `hanten estimate`
-reports. The roll report carries each frame's identity and, on a destination
-build, its resolved destination (`new_flow`); a destination build writes no
-per-image sidecar, so `recipe.json` plus that report is the whole record.
+reports. The roll report carries each frame's identity (with the hash of the recipe
+the frame ran) and, on a destination build, its resolved destination (`chain`, named
+`new_flow` by earlier builds); a destination build writes no per-image sidecar, so
+`recipe.json` plus that report is the whole record.
 
 After a successful TIFF-producing conversion, regenerate the asset manifest so
 its converted bucket includes the new TIFFs:
@@ -160,7 +161,8 @@ choose another destination. The artifact contains:
 - the output depth, from the destination each frame resolved (or, for a preset
   build, from the recipe's preset);
 - stable per-frame film-base, input-semantics, output-statistics, clipping,
-  identity, rendering-facts (`new_flow`), status, and warning fields;
+  identity, rendering-facts (`chain`, or an earlier build's `new_flow`), status, and
+  warning fields;
 - deterministic key and frame ordering.
 
 It deliberately omits timestamps, elapsed time, memory/machine facts, and
@@ -372,7 +374,7 @@ re-renders it later without re-reading pixels.
 The colour space is **resolved from the run's recorded provenance** here rather
 than declared — not a guess at the pixels — and an under-determined one is refused
 rather than defaulted. On a build that takes destinations it is the destination the
-roll report says every frame resolved (`new_flow.destination`), since the frozen
+roll report says every frame resolved (`chain.destination`), since the frozen
 recipe may leave its axes to nc; the frames must agree:
 
 | destination (gamut, transfer) | space | notes |
@@ -452,7 +454,7 @@ Four rules it holds to, each of which has a reason rather than a preference:
   matrix, keyed on the container and on (gamut, transfer).
 - **Each cell is measured in the space its own render reports**, not in whatever
   the output's name usually implies — a destination cell by the
-  `new_flow.destination` it resolved, a preset cell by its resolved recipe (the
+  `chain.destination` it resolved, a preset cell by its resolved recipe (the
   reference build's `legacy` and `custom` accept `--output-profile`, and measuring
   ProPhoto pixels as sRGB yields a table where every number is wrong and every
   number looks reasonable).
@@ -484,12 +486,14 @@ the `rolls` set resolves real scans and checksums through the asset manifest.
 A case's `args` go to every build, and its `destination_args` or `preset_args`
 only to a build that takes that interface — read off the binary's `--version`
 banner, as `review generate` does — so a reference-build record and a current one
-share case names and `diff` pairs them. A destination build reports its
-`params_hash` only in telemetry, so there a missing telemetry record fails the
-case instead of merely losing its timings.
+share case names and `diff` pairs them. The `params_hash` is read from the report's
+`identity`; a destination build from before `nf-core/report-contract` reports it only in
+telemetry, so there a missing telemetry record fails the case instead of merely losing
+its timings.
 Run records include build identity, pipeline version, input digest, parameter
 hash, output depth, means, clipping counts, and telemetry timings. Timing changes
-are informational and never decide the deterministic-statistics verdict.
+are informational and never decide the deterministic-statistics verdict; a stage
+only one record times (a schema-8 `algorithm` beside schema-9 stages) diffs as `null`.
 
 ## Datasheet digitization — `digitize_datasheets.py`
 

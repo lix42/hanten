@@ -10,8 +10,7 @@
 //!    behavior changes. Answers "would this build render my frame differently".
 //! 3. **Params hash** — [`stable_hash`] over the canonical recipe JSON, the exact
 //!    bytes `--dump-params` writes. Answers "was this the same configuration". The
-//!    telemetry record carries it; the report's [`Identity::params_hash`] is absent
-//!    until `nf-core/report-contract` decides what a run's identity hashes.
+//!    report's [`Identity::params_hash`] and the telemetry record carry it.
 //!
 //! All of it is **operational metadata**, in the same class as `--report` and the
 //! telemetry flags (CLAUDE.md): it is not a conversion knob, has no CLI flag or
@@ -547,11 +546,9 @@ pub struct Identity {
     pub pipeline_version: u32,
     /// Compile target triple ([`TARGET`]).
     pub target: &'static str,
-    /// Hash of the canonical resolved-recipe JSON. **Always absent today**: every
-    /// build that wrote it hashed the removed chain's recipe, and what a run's
-    /// identity hashes now — the recipe exists (`crate::recipe`) — is
-    /// `nf-core/report-contract`'s to decide. The key stays in the wire shape
-    /// meanwhile, so a reader of old reports and new ones parses one type.
+    /// Hash of the recipe the run resolved (`Recipe::params_hash`), on `convert` and
+    /// each `roll` frame only; absent elsewhere (`measure-roll` included). Not
+    /// comparable across `pipeline_version` 8, which changed the recipe it hashes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params_hash: Option<String>,
 }
@@ -566,6 +563,14 @@ impl Identity {
             pipeline_version: PIPELINE_VERSION,
             target: TARGET,
             params_hash: None,
+        }
+    }
+
+    /// This identity, stamped with the run's recipe hash.
+    pub fn with_params_hash(self, params_hash: String) -> Self {
+        Self {
+            params_hash: Some(params_hash),
+            ..self
         }
     }
 }
@@ -604,16 +609,11 @@ pub fn version_string() -> &'static str {
 /// consumer depends on that stability *and* on it being platform-independent, which
 /// this is: pure integer arithmetic over bytes, identical on every target.
 ///
-/// **This is the crate's only params-hash implementation.** It originated in
-/// `telemetry` and was moved here — a neutral home both consumers can reach —
-/// rather than copied: the report is core output and must not depend on the
-/// opt-in telemetry module, and two hashes of the same recipe that could disagree
-/// would defeat the point of publishing one. [`crate::telemetry::params_hash`] is
-/// now a delegation to this function, so a telemetry record's `params_hash` and a
-/// report's `identity.params_hash` are the same function over the same bytes.
-/// The consumers are:
+/// **The crate's only params-hash implementation**, so no two hashes of one recipe
+/// can disagree. The consumers are:
 ///
-/// - the telemetry record's `conversion.params_hash` (`telemetry::params_hash`);
+/// - `Recipe::params_hash`, which the report's `identity` and the telemetry record's
+///   `conversion.params_hash` both carry;
 /// - the `pipeline_version` drift-gate fingerprints (`PIPELINE_FINGERPRINTS`).
 pub fn stable_hash(text: &str) -> String {
     const OFFSET: u64 = 0xcbf29ce484222325;

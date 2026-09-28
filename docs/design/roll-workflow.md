@@ -208,7 +208,8 @@ Each is owned by the task named; its answer is recorded here.
    `core/profile-authoring`
 5. **Does `--dump-params` go?** It was to be deleted as a duplicate of the output
    sidecar, but no sidecar has been written since `nf-core/default-flip`, so it is the
-   only recipe a `convert` leaves. — `core/profile-authoring`
+   only recipe *file* a `convert` leaves (the report echoes the recipe). —
+   `core/profile-authoring`
 6. **Is a profile complete or partial?** Complete survives a default change; partial
    composes and reads better. — `core/profile-authoring`
 7. **`--strict` across measure mode's phases**: does a measurement warning refuse

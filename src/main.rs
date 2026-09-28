@@ -15,6 +15,7 @@ mod io;
 mod pipeline;
 mod recipe;
 mod rendering;
+mod stage;
 mod telemetry;
 mod types;
 mod version;

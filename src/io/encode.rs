@@ -409,8 +409,8 @@ pub fn export_ir(image: &LinearImage, depth: OutDepth, path: &Path) -> Result<St
 
 /// The sidecar path for an output: `<output>.json` (extension appended, not
 /// replaced, so `a.tiff` → `a.tiff.json` and output/sidecar stay paired by name).
-/// No sidecar is written yet (`nf-core/report-contract`); the CLI reads this path to
-/// find, and remove, one an earlier build wrote beside an output it replaces.
+/// No run writes a sidecar now; the CLI reads this path to find, and remove, one an
+/// earlier build wrote beside an output it replaces.
 pub fn sidecar_path(output_path: &Path) -> PathBuf {
     let mut name = OsString::from(output_path.as_os_str());
     name.push(".json");

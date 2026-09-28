@@ -1137,7 +1137,7 @@ class SpaceFromRecipe(unittest.TestCase):
         asked for instead."""
         with self.assertRaises(metrics.MetricsError) as caught:
             metrics.space_for_recipe({"recipe_version": 2})
-        self.assertIn("new_flow.destination", str(caught.exception))
+        self.assertIn("chain.destination", str(caught.exception))
 
     def test_the_default_preset_resolves(self):
         """A preset recipe with no output section is a preset build's default,
@@ -1153,17 +1153,17 @@ class SpaceFromRecipe(unittest.TestCase):
         recipe = {"recipe_version": 2, "output": {"display": {}}}
         resolved = {"display": {"range": "sdr", "transfer": "native",
                                 "gamut": "adobe-rgb", "container": "tiff"}}
-        report = {"frames": [{"new_flow": {"destination": resolved}},
-                             {"new_flow": {"destination": resolved}},
+        report = {"frames": [{"chain": {"destination": resolved}},
+                             {"chain": {"destination": resolved}},
                              {"status": "error"}]}
         space, _ = metrics.space_for_run(recipe, report)
         self.assertEqual(space, "adobe-rgb")
         # Frames that disagree cannot share one space.
-        report["frames"].append({"new_flow": {"destination": "film-master"}})
+        report["frames"].append({"chain": {"destination": "film-master"}})
         with self.assertRaisesRegex(metrics.MetricsError, "different destinations"):
             metrics.space_for_run(recipe, report)
         # No frame states one: the recipe alone decides, and refuses what it leaves open.
-        with self.assertRaisesRegex(metrics.MetricsError, "new_flow.destination"):
+        with self.assertRaisesRegex(metrics.MetricsError, "chain.destination"):
             metrics.space_for_run(recipe, {"frames": []})
         # A preset build's run is resolved from its recipe, as before.
         space, _ = metrics.space_for_run({"output": {"preset": "compatibility"}},
@@ -1304,7 +1304,7 @@ class Rollup(unittest.TestCase):
         (base / "tags.json").write_text(json.dumps(tags))
         report = json.loads((base / "roll-report.json").read_text())
         for frame in report["frames"]:
-            frame["new_flow"] = {"destination": {"display": {
+            frame["chain"] = {"destination": {"display": {
                 "range": "sdr", "transfer": "native", "gamut": "adobe-rgb",
                 "container": "tiff"}}}
         (base / "roll-report.json").write_text(json.dumps(report))

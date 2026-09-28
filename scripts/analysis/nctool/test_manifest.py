@@ -614,5 +614,18 @@ class TestWriteManifest(Base):
         self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o666 & ~umask)
 
 
+class TestChainBlock(unittest.TestCase):
+    """`chain_block` reads a report's rendering facts under either name."""
+
+    def test_chain_wins_and_new_flow_is_the_fallback(self):
+        self.assertEqual(manifest.chain_block({"chain": {"a": 1}, "new_flow": {"a": 2}}),
+                         {"a": 1})
+        self.assertEqual(manifest.chain_block({"new_flow": {"a": 2}}), {"a": 2})
+        self.assertEqual(manifest.chain_block({"chain": "x", "new_flow": {"a": 2}}),
+                         {"a": 2})
+        for junk in ({}, {"chain": [1]}, [1], None):
+            self.assertEqual(manifest.chain_block(junk), {})
+
+
 if __name__ == "__main__":
     unittest.main()

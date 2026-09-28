@@ -64,6 +64,7 @@ use crate::pipeline::fit_range::{self, DisplayBlack, DisplayPeak, FitRange, FitR
 use crate::pipeline::look::{self, GradedImage, LookParams, LookSection};
 use crate::pipeline::scene_correction::{self, SceneCorrection, SceneCorrectionParams};
 use crate::pipeline::working_space::AcesCgImage;
+use crate::stage::{StageClock, StageKind};
 use crate::types::{NcError, Result};
 
 /// Everything every rendition of a frame shares: the stages above the branch point,
@@ -115,7 +116,7 @@ pub struct Rendered {
     /// off the
     /// values each stage applied, so an operation that moved no pixel is reported as
     /// `"identity"`.
-    pub applied: [(&'static str, &'static str); 4],
+    pub applied: [(StageKind, &'static str); 4],
     /// Scene correction's values as applied to this frame.
     pub scene_correction: SceneCorrection,
     /// The look's controls as applied.
@@ -152,6 +153,7 @@ pub struct RenderedPair {
 ///
 /// A single-rendition destination goes through the same branch point as a pair: it
 /// is [`render_pair`] with one branch, not a second code path (see the module docs).
+/// `clock` times each stage; the stages never read it.
 ///
 /// `film_base` is the **decoded film base**, one pixel (`algo::fixed::decode_film_base`
 /// through the same NC film RGB v1 mapping as the frame): it is graded beside the
@@ -162,15 +164,17 @@ pub fn render(
     image: AcesCgImage,
     film_base: AcesCgImage,
     params: &ChainParams,
+    clock: &mut impl StageClock,
 ) -> Result<Rendered> {
-    let base = graded_luminance(film_base, &params.shared)?;
-    let (graded, scene_correction) = grade(image, &params.shared)?;
+    let base = graded_luminance(film_base, &params.shared, clock)?;
+    let (graded, scene_correction) = grade(image, &params.shared, clock)?;
     display(
         graded,
         scene_correction,
         &params.shared,
         params.target,
         base,
+        clock,
     )
 }
 
@@ -189,9 +193,10 @@ pub fn render_pair(
     shared: &SharedParams,
     gamut: DestinationGamut,
     hdr_peak: DisplayPeak,
+    clock: &mut impl StageClock,
 ) -> Result<RenderedPair> {
-    let base = graded_luminance(film_base, shared)?;
-    let (graded, scene_correction) = grade(image, shared)?;
+    let base = graded_luminance(film_base, shared, clock)?;
+    let (graded, scene_correction) = grade(image, shared, clock)?;
     let hdr_source = graded.split();
     let branch = |peak| DisplayTarget { peak, gamut };
     Ok(RenderedPair {
@@ -201,15 +206,27 @@ pub fn render_pair(
             shared,
             branch(DisplayPeak::SDR),
             base,
+            clock,
         )?,
-        hdr: display(hdr_source, scene_correction, shared, branch(hdr_peak), base)?,
+        hdr: display(
+            hdr_source,
+            scene_correction,
+            shared,
+            branch(hdr_peak),
+            base,
+            clock,
+        )?,
     })
 }
 
 /// The film base's graded ACEScg luminance: the decoded base run through the frame's
 /// own grade — display black's reference.
-fn graded_luminance(film_base: AcesCgImage, shared: &SharedParams) -> Result<f32> {
-    let (graded, _) = grade(film_base, shared)?;
+fn graded_luminance(
+    film_base: AcesCgImage,
+    shared: &SharedParams,
+    clock: &mut impl StageClock,
+) -> Result<f32> {
+    let (graded, _) = grade(film_base, shared, clock)?;
     let mut buffer = graded.into_buffer();
     let [r, g, b] = *buffer.rgb_mut() else {
         return Err(NcError::Other(
@@ -221,9 +238,16 @@ fn graded_luminance(film_base: AcesCgImage, shared: &SharedParams) -> Result<f32
 
 /// Above the branch point: scene correction, then the look. Nothing here may read the
 /// destination — it has no way to.
-fn grade(image: AcesCgImage, shared: &SharedParams) -> Result<(GradedImage, SceneCorrection)> {
-    let (corrected, scene_correction) = scene_correction::apply(image, &shared.scene_correction)?;
-    Ok((look::apply(corrected, &shared.look)?, scene_correction))
+fn grade(
+    image: AcesCgImage,
+    shared: &SharedParams,
+    clock: &mut impl StageClock,
+) -> Result<(GradedImage, SceneCorrection)> {
+    let (corrected, scene_correction) = clock.time(StageKind::SceneCorrection, || {
+        scene_correction::apply(image, &shared.scene_correction)
+    })?;
+    let graded = clock.time(StageKind::Look, || look::apply(corrected, &shared.look))?;
+    Ok((graded, scene_correction))
 }
 
 /// Below the branch point: fit range, then fit gamut, against one display.
@@ -233,6 +257,7 @@ fn display(
     shared: &SharedParams,
     target: DisplayTarget,
     film_base: f32,
+    clock: &mut impl StageClock,
 ) -> Result<Rendered> {
     let fit_range_params = FitRangeParams {
         headroom_stops: shared.headroom_stops,
@@ -243,16 +268,20 @@ fn display(
     let fit_gamut_params = FitGamutParams {
         target: target.gamut,
     };
-    let fitted = fit_range::apply(graded, &fit_range_params)?;
-    let image = fit_gamut::apply(fitted, &fit_gamut_params)?;
+    let fitted = clock.time(StageKind::FitRange, || {
+        fit_range::apply(graded, &fit_range_params)
+    })?;
+    let image = clock.time(StageKind::FitGamut, || {
+        fit_gamut::apply(fitted, &fit_gamut_params)
+    })?;
     let fit_range = fit_range_params.resolved();
     Ok(Rendered {
         image,
         applied: [
-            ("scene_correction", scene_correction.applied()),
-            ("look", shared.look.applied()),
-            ("fit_range", fit_range.applied()),
-            ("fit_gamut", fit_gamut_params.applied()),
+            (StageKind::SceneCorrection, scene_correction.applied()),
+            (StageKind::Look, shared.look.applied()),
+            (StageKind::FitRange, fit_range.applied()),
+            (StageKind::FitGamut, fit_gamut_params.applied()),
         ],
         scene_correction,
         look: shared.look.section,
@@ -271,11 +300,12 @@ pub(in crate::pipeline) mod contract {
     use crate::pipeline::fit_gamut::{DestinationGamut, radial_to_boundary};
     use crate::pipeline::fit_range::DisplayPeak;
     use crate::pipeline::working_space::AcesCgImage;
+    use crate::stage::Untimed;
 
     /// The graded pixels `shared` produces from `image` — what both branches start
     /// from, and what [`check`] reads "below white" off.
     pub fn graded(image: AcesCgImage, shared: &SharedParams) -> Vec<f32> {
-        grade(image, shared)
+        grade(image, shared, &mut Untimed)
             .unwrap()
             .0
             .into_buffer()
@@ -363,6 +393,7 @@ mod tests {
     use crate::pipeline::gain_ratio;
     use crate::pipeline::scene_correction::WhiteBalance;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
+    use crate::stage::Untimed;
     use crate::types::{FilmBase, LinearImage};
 
     /// Every stage at its identity — fit range at zero headroom — so a test sees the
@@ -535,7 +566,7 @@ mod tests {
             let expected = to_destination(aces.rgb(), matrix);
             let mut p = params();
             p.target.gamut = gamut;
-            let rendered = render(aces, film_base(), &p).unwrap();
+            let rendered = render(aces, film_base(), &p, &mut Untimed).unwrap();
             assert_eq!(
                 rendered.applied[3].1,
                 FitGamutParams { target: gamut }.applied()
@@ -574,7 +605,7 @@ mod tests {
         // the setting.
         for p in [params(), shipped_params()] {
             let aces = aces_from(3, 1, &AWKWARD, None);
-            let err = render(aces, film_base(), &p)
+            let err = render(aces, film_base(), &p, &mut Untimed)
                 .err()
                 .expect("a non-finite sample");
             let msg = err.message();
@@ -616,8 +647,17 @@ mod tests {
                 "hue moved: {out:?}"
             );
         }
-        let rendered = render(aces_from(1, 1, &[0.5, 0.5, 0.5], None), film_base(), &p).unwrap();
-        assert_eq!(rendered.applied[2], ("fit_range", fit_range::OPERATOR));
+        let rendered = render(
+            aces_from(1, 1, &[0.5, 0.5, 0.5], None),
+            film_base(),
+            &p,
+            &mut Untimed,
+        )
+        .unwrap();
+        assert_eq!(
+            rendered.applied[2],
+            (StageKind::FitRange, fit_range::OPERATOR)
+        );
         assert_eq!(rendered.fit_range.display_peak, DisplayPeak::SDR);
     }
 
@@ -631,7 +671,7 @@ mod tests {
         let aces = aces_from(2, 1, &rgb, None);
         let p3 = to_p3(aces.rgb());
         assert!(p3[3..].iter().any(|v| *v < 0.0), "{:?}", &p3[3..]);
-        let (out, _) = render(aces, film_base(), &params())
+        let (out, _) = render(aces, film_base(), &params(), &mut Untimed)
             .unwrap()
             .image
             .into_parts();
@@ -668,7 +708,7 @@ mod tests {
             "the film-RGB neutral must reach the chain as an ACEScg neutral: {neutral:?}"
         );
 
-        let (out, _) = render(aces, film_base(), &params())
+        let (out, _) = render(aces, film_base(), &params(), &mut Untimed)
             .unwrap()
             .image
             .into_parts();
@@ -693,7 +733,7 @@ mod tests {
         let aces = aces_from(2, 2, &[0.25; 12], Some(ir.clone()));
         let expected = bits(&to_p3(aces.rgb()));
 
-        let (linear, _) = render(aces, film_base(), &params())
+        let (linear, _) = render(aces, film_base(), &params(), &mut Untimed)
             .unwrap()
             .image
             .into_parts();
@@ -707,10 +747,15 @@ mod tests {
     #[test]
     fn an_ir_free_input_stays_ir_free() {
         // Falsifiability for the test above: the plane must be carried, not minted.
-        let (out, _) = render(aces_from(2, 2, &[0.5; 12], None), film_base(), &params())
-            .unwrap()
-            .image
-            .into_parts();
+        let (out, _) = render(
+            aces_from(2, 2, &[0.5; 12], None),
+            film_base(),
+            &params(),
+            &mut Untimed,
+        )
+        .unwrap()
+        .image
+        .into_parts();
         assert_eq!(out.ir, None);
     }
 
@@ -736,7 +781,7 @@ mod tests {
             let aces = map_nc_film_rgb_v1(produce(&img, &base));
             let expected = bits(&to_p3(aces.rgb()));
 
-            let (out, _) = render(aces, film_base(), &params())
+            let (out, _) = render(aces, film_base(), &params(), &mut Untimed)
                 .unwrap()
                 .image
                 .into_parts();
@@ -794,7 +839,7 @@ mod tests {
         let mut p = params();
         p.shared.scene_correction.white_balance = WhiteBalance::Explicit(gains);
 
-        let rendered = render(aces, film_base(), &p).unwrap();
+        let rendered = render(aces, film_base(), &p, &mut Untimed).unwrap();
         let (out, _) = rendered.image.into_parts();
 
         assert_eq!(bits(&out.rgb), bits(&to_p3(&balanced)));
@@ -803,7 +848,10 @@ mod tests {
             bits(&after),
             "the other order must differ here"
         );
-        assert_eq!(rendered.applied[0], ("scene_correction", "white-balance"));
+        assert_eq!(
+            rendered.applied[0],
+            (StageKind::SceneCorrection, "white-balance")
+        );
     }
 
     #[test]
@@ -885,7 +933,13 @@ mod tests {
                     gamut: DestinationGamut::DisplayP3,
                 },
             };
-            let rendered = render(aces_from(1, 1, &[FILM_BASE; 3], None), film_base(), &p).unwrap();
+            let rendered = render(
+                aces_from(1, 1, &[FILM_BASE; 3], None),
+                film_base(),
+                &p,
+                &mut Untimed,
+            )
+            .unwrap();
             let black = rendered.fit_range.display_black;
             let (out, _) = rendered.image.into_parts();
             let y = dot([out.rgb[0], out.rgb[1], out.rgb[2]], DISPLAY_P3_LUMA);
@@ -909,7 +963,7 @@ mod tests {
                     gamut: DestinationGamut::DisplayP3,
                 },
             };
-            render(grid(), film_base(), &p)
+            render(grid(), film_base(), &p, &mut Untimed)
                 .unwrap()
                 .fit_range
                 .display_black
@@ -925,17 +979,22 @@ mod tests {
     fn a_film_base_that_grades_to_nothing_is_refused() {
         let mut p = shipped_params();
         p.shared.display_black = DisplayBlack::default();
-        let err = render(grid(), aces_from(1, 1, &[0.0; 3], None), &p)
+        let err = render(grid(), aces_from(1, 1, &[0.0; 3], None), &p, &mut Untimed)
             .err()
             .expect("refused");
         assert!(err.message().contains("film base"), "{}", err.message());
         // With display black off the base is never read, so it cannot fail the render.
         p.shared.display_black = DisplayBlack::Off;
-        render(grid(), aces_from(1, 1, &[0.0; 3], None), &p).unwrap();
+        render(grid(), aces_from(1, 1, &[0.0; 3], None), &p, &mut Untimed).unwrap();
         p.shared.display_black = DisplayBlack::default();
-        let err = render(grid(), aces_from(2, 1, &[FILM_BASE; 6], None), &p)
-            .err()
-            .expect("refused");
+        let err = render(
+            grid(),
+            aces_from(2, 1, &[FILM_BASE; 6], None),
+            &p,
+            &mut Untimed,
+        )
+        .err()
+        .expect("refused");
         assert!(err.message().contains("one pixel"), "{}", err.message());
     }
 
@@ -997,6 +1056,7 @@ mod tests {
             &shared,
             DestinationGamut::DisplayP3,
             hdr_peak(),
+            &mut Untimed,
         )
         .unwrap();
         let (sdr, hdr) = (pixels_of(pair.sdr), pixels_of(pair.hdr));
@@ -1060,6 +1120,7 @@ mod tests {
                         gamut: DestinationGamut::DisplayP3,
                     },
                 },
+                &mut Untimed,
             )
             .unwrap(),
         );
@@ -1076,6 +1137,7 @@ mod tests {
                         gamut: DestinationGamut::DisplayP3,
                     },
                 },
+                &mut Untimed,
             )
             .unwrap(),
         );
@@ -1111,6 +1173,7 @@ mod tests {
                     shared: shared.clone(),
                     target: target(DisplayPeak::SDR),
                 },
+                &mut Untimed,
             )
             .unwrap(),
         );
@@ -1124,6 +1187,7 @@ mod tests {
                     shared: without_look,
                     target: target(hdr_peak()),
                 },
+                &mut Untimed,
             )
             .unwrap(),
         );
@@ -1149,6 +1213,7 @@ mod tests {
             &shared,
             DestinationGamut::DisplayP3,
             hdr_peak(),
+            &mut Untimed,
         )
         .unwrap();
         for (branch, peak) in [(pair.sdr, DisplayPeak::SDR), (pair.hdr, hdr_peak())] {
@@ -1162,6 +1227,7 @@ mod tests {
                         gamut: DestinationGamut::DisplayP3,
                     },
                 },
+                &mut Untimed,
             )
             .unwrap();
             assert_eq!(single.applied, branch.applied);
@@ -1180,6 +1246,7 @@ mod tests {
             &shared_acting(),
             DestinationGamut::DisplayP3,
             hdr_peak(),
+            &mut Untimed,
         )
         .unwrap();
         let (sdr, hdr) = (pixels_of(pair.sdr), pixels_of(pair.hdr));
@@ -1213,6 +1280,7 @@ mod tests {
             &shared_acting(),
             DestinationGamut::DisplayP3,
             hdr_peak(),
+            &mut Untimed,
         )
         .unwrap();
         let (sdr, hdr) = (pixels_of(pair.sdr), pixels_of(pair.hdr));
@@ -1244,7 +1312,7 @@ mod tests {
             let mut p = params();
             p.shared.look.section.contrast = contrast;
             p.shared.headroom_stops = headroom_stops;
-            let out = render(aces_from(3, 1, &rgb, None), film_base(), &p).unwrap();
+            let out = render(aces_from(3, 1, &rgb, None), film_base(), &p, &mut Untimed).unwrap();
             let y: Vec<f32> = out
                 .image
                 .into_parts()
