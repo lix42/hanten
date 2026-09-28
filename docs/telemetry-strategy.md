@@ -1,6 +1,20 @@
 # Telemetry strategy
 
-**Status:** approved 2026-07-23
+**Status:** approved 2026-07-23; amended 2026-09-27 (see Amendments)
+
+## Amendments
+
+**2026-09-27** (at `telemetry/schema-v2`'s start; they override the text below):
+
+- **Legacy local records are never uploaded.** Only events in the new local schema
+  are projected; every record written before it stays local. Read the "upgraded
+  legacy records", `source_schema_version: 1`, legacy-fixture and local-v1
+  import passages below as withdrawn. What the uploader does with legacy lines in
+  a selected file is `telemetry/upload`'s decision.
+- **The upload manifest below is stale** against the code (local schema is v7;
+  retired reconstructions in `conversion.algorithm`; `u8`/`u10` outputs; exit 6).
+  `telemetry/schema-v2` revises it once `nf-core/report-contract` fixes the new
+  chain's stage/timing shape — see that task file's open questions.
 
 This note decides how `nc` grows the shipped local-only performance record into
 anonymous, explicitly consented remote telemetry. It is the output of the

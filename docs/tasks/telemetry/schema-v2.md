@@ -10,6 +10,40 @@ service, and panic hook.
 The approved field manifest and decisions live in
 [`docs/telemetry-strategy.md`](../../telemetry-strategy.md).
 
+## Decisions (2026-09-27)
+
+Taken at task start, before any code; they override the Design below where the
+two disagree.
+
+- **Blocked on [`nf-core/report-contract`](../nf-core/report-contract.md).** The
+  stage enum and timing fields below are the legacy chain's buckets, which
+  `nf-core/default-flip` deletes. The new chain's stage/timing shape is that task's
+  decision, so this contract waits for it instead of being built twice.
+- **Legacy local records are never uploaded.** Neither the projection nor the
+  uploader reads any record older than the new local event schema. This removes
+  the legacy-projection, `source_schema_version: 1` and known-16-bit legacy-fixture
+  requirements below, and amends the strategy note (see its Amendments).
+
+## Open questions (for the follow-up)
+
+The strategy note predates later changes, so the upload manifest needs revising
+(and the user's approval) before implementation:
+
+- **Local schema numbering.** The local record is `SCHEMA_VERSION` 7, not 1, so
+  "local v2" means the next bump, and `source_schema_version` takes that value.
+- **`conversion.algorithm`** (`simple|density|sigmoid`) names retired
+  reconstructions and curves. What replaces it, if anything, follows the new
+  chain's knobs.
+- **`conversion.output_depth` / `output_mode`** assume `u16|f32` and a binary
+  SDR/HDR split; outputs now also have `u8` and `u10`, and the new chain
+  describes a destination as separate knobs.
+- **Exit 6** (`NcError::Resource`, the memory preflight) has no `error_kind` and
+  falls outside the manifest's `exit_code 0..=5`.
+- **Dependencies:** `getrandom` is not yet a direct dependency, and Rust-side
+  validation against the JSON Schema needs a validator.
+- **Size:** consider splitting typed local events (+ orchestrator) from the upload
+  projection + schema/corpus.
+
 ## Design
 
 Keep local and remote privacy contracts distinct:
@@ -105,3 +139,5 @@ and accepts integer `16` or string `unknown`, never total 48/64-bit layout.
 
 - [Telemetry strategy spike](strategy.md) — fixes the event manifest,
   privacy boundary, and success/failure semantics.
+- [The report and telemetry shape for the new chain](../nf-core/report-contract.md)
+  — fixes which stages a record times and what it says ran.

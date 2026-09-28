@@ -9,6 +9,11 @@ new failure modes to foreground commands.
 The authoritative protocol, consent, queue, privacy, and retention decisions are
 in [`docs/telemetry-strategy.md`](../../telemetry-strategy.md).
 
+**Amended 2026-09-27:** legacy local records are never uploaded (the strategy's
+Amendments). The local-v1 import and legacy-projection requirements below are
+withdrawn; decide here whether legacy lines in a selected file are skipped,
+quarantined or left alone.
+
 ## Design
 
 Add a `hanten telemetry` maintenance surface:

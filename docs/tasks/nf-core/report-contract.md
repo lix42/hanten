@@ -30,6 +30,8 @@ inherited one optional section at a time.
   bucket; `nctool roll` reads `film_base`, `dmax` and friends to build a calibration.
   A renamed field is their break, not nc's, and their fixtures are part of the change.
 - Telemetry stays **operational**: arg-struct only, never a recipe key.
+- **`telemetry/schema-v2` waits on this task** for the stage enum and timing
+  fields of its failure events and upload projection.
 
 - **The new chain's recipe now exists** (`crate::recipe::Recipe`, `nf-core/recipe-schema`),
   but a `--new-flow` run still writes no sidecar, echoes no `recipe` and reports no
