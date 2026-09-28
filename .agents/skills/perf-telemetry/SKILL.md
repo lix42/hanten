@@ -19,9 +19,9 @@ local append-only JSONL log and/or a one-off file. It is **opt-in**,
 the success signal (there is no `outcome.success` field), so a run that exits
 non-zero — including a `--strict` warning promotion — writes **no** record. Full design: design-spec §9 (record shape) and §12
 (roadmap). Code: `src/telemetry.rs` (record + builder + sinks), wired from
-`cli::run_convert` / `cli::emit_telemetry`; per-stage timings come from the
-`pipeline::stages` renders (`render_film_master`, `render_display_source`,
-`render_sdr_preset`) via `StageTimings`.
+`cli::run_convert` / `cli::emit_telemetry`; per-stage timings come from
+`cli::render_frame` (the fixed decode, then the chain and its destination render,
+`cli::render_destination`) via `StageTimings`.
 
 ## 1. Adding telemetry when you build a feature
 
@@ -49,18 +49,17 @@ TelemetryRecord` (`src/telemetry.rs`). To add a field:
 ### Two invariants every addition MUST preserve
 
 - **Determinism — never touch the deterministic path.** The record must not enter
-  the recipe sidecar or change the output image bytes. Telemetry on vs off ⇒
-  byte-identical TIFF *and* sidecar (guarded by the `telemetry_does_not_perturb_
-  output_or_sidecar` test). Telemetry is gathered/written *last*, after the image +
-  sidecar are on disk, and only *reads* their finished facts. Never route a
-  telemetry value back into a stage, the recipe, or the sidecar.
+  the recipe or change the output image bytes. Telemetry on vs off ⇒ byte-identical
+  output (guarded by the `telemetry_does_not_perturb_the_output` test). Telemetry is
+  gathered/written *last*, after the image is on disk, and only *reads* its finished
+  facts. Never route a telemetry value back into a stage or the recipe.
 - **Fail-soft — telemetry must never fail a conversion.** A telemetry write/serialize
   failure warns on stderr and is swallowed (exit stays 0). It must NOT enter
   `report.warnings` (that would let `--strict` promote it), and it is surfaced even
   under `--quiet` (via `Log::warn_always`, used by the `warn` closure in
   `emit_telemetry`, mirroring the `non_finite` precedent). The one loud exception
   is a `--telemetry-file`/log path
-  that *collides* with a real artifact (input/output/sidecar/report-file) — that's a
+  that *collides* with a real artifact (input/output/IR export/report-file) — that's a
   config error caught up front (exit 2), so telemetry can't clobber real data.
 
 Do NOT add these flags to `ResolvedConfig`/`*Params`/`merge`/`validate`: telemetry
@@ -118,22 +117,20 @@ written before it carry `reconstruction` and may name `simple` or `sigmoid`. **v
 dropped `conversion.dmax` when the roll reference density retired; older records may
 carry it. **v7** dropped `conversion.curve` when the `characteristic` curve retired and
 left it one-valued; older records carry it.)
-`conversion.preset` is the resolved `output.preset` (any name in
-`OutputPreset::ALL`) — **v3** added it, because without it a `film-master` run was
-indistinguishable from the since-retired `legacy` one except by file size. Records
-written before `nf-retire/legacy-custom` may still carry `legacy` or `custom`. **v4** (2026-08-09) renamed `conversion.output_hdr` to
-`conversion.output_depth` (`u8`|`u10`|`u16`|`f32`); it reports the **primary image's** depth
-(`OutputParams::primary_depth_label`), which for the JPEG and AVIF presets is the
-container's fixed 8/10-bit.
-`params_hash` is a stable FNV-1a of the canonical effective-recipe JSON — the exact
-bytes `--dump-params` writes — so identical conversions share a hash. It is **not**
-the sidecar's bytes: the sidecar is the
-`{ "meta": {…identity…}, "params": {…recipe…} }` envelope, whose `params` body is
-the same recipe document re-indented two spaces. The implementation is
-`version::stable_hash`, the same function behind a report's
-`identity.params_hash`, so a telemetry record and report for one run agree. The
-sample value above is **illustrative**: it covers the whole recipe and changes when
-any key is added, removed, or re-defaulted. Do not assert it as a constant.
+`conversion.destination` is the resolved recipe `output` — `"film-master"` or
+`{"display": {range, transfer, gamut, container}}` with every axis resolved. **v8**
+(`nf-core/default-flip`) replaced **v3**'s `conversion.preset` with it; older records
+carry a preset name (`gain-map-hdr`, `display-p3`, …, and before
+`nf-retire/legacy-custom` `legacy` or `custom`). **v4** (2026-08-09) renamed
+`conversion.output_hdr` to `conversion.output_depth` (`u8`|`u10`|`u16`|`f32`); it reports
+the **primary image's** depth (`cli::primary_depth`), which for the JPEG and AVIF
+destinations is the container's fixed 8/10-bit.
+`params_hash` is a stable FNV-1a (`version::stable_hash`) of the canonical
+effective-recipe JSON — the `"recipe_version": 2` document, the exact bytes
+`--dump-params` writes — so identical conversions share a hash. Records before v8
+hashed the removed chain's recipe, so the two never compare. The sample value above is
+**illustrative**: it covers the whole recipe and changes when any key is added, removed,
+or re-defaulted. Do not assert it as a constant.
 
 `jq` recipes over the JSONL log (`jq -c` reads it line by line):
 
@@ -145,7 +142,7 @@ jq -c '{ts:.timestamp_ms, total:.timing_ms.total, decode:.timing_ms.decode, \
          algo:.timing_ms.algorithm, color:.timing_ms.color, encode:.timing_ms.encode}' "$LOG"
 
 # Only film-master runs.
-jq -c 'select(.conversion.preset == "film-master")' "$LOG"
+jq -c 'select(.conversion.destination == "film-master")' "$LOG"
 
 # Megapixels vs total ms (TSV — feed a scatter / spot the slow ones).
 jq -r '[.image.megapixels, .timing_ms.total] | @tsv' "$LOG"
@@ -155,7 +152,7 @@ jq -r '[.image.megapixels, (.image.megapixels / (.timing_ms.total/1000))] | @tsv
 
 # Runs that clipped or hit a non-finite sample.
 jq -c 'select(.outcome.clipped > 0 or .outcome.non_finite > 0) \
-       | {ts:.timestamp_ms, preset:.conversion.preset, clipped:.outcome.clipped}' "$LOG"
+       | {ts:.timestamp_ms, destination:.conversion.destination, clipped:.outcome.clipped}' "$LOG"
 
 # Group timing stats by nc_version (across runs).
 jq -s 'group_by(.nc_version)[] | {version: .[0].nc_version, runs: length, \
