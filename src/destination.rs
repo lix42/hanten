@@ -9,10 +9,8 @@
 //! anywhere would drift from the first — the `OutputPreset::ALL` lesson.
 //!
 //! **An axis the user leaves unset is derived from the table** ([`resolve`]), axis by
-//! axis in a fixed order — range, transfer, gamut, container, except that the `direct`
-//! rendering decides its container first ([`Defaults::container_first`]), so it never
-//! takes a lossy container by default — only when one is stated, or when the stated axes
-//! leave no lossless row: its default when a row consistent with
+//! axis in a fixed order — range, transfer, gamut, container (the container first under
+//! `direct`, [`Defaults::container_first`]): its default when a row consistent with
 //! everything decided so far has it, else the one value left, else a refusal naming the
 //! choices. So
 //! `--transfer pq` alone is an HDR BT.2020 TIFF, and `--gamut bt2020` alone asks which
@@ -66,23 +64,16 @@ pub trait Axis: Copy + Eq + fmt::Debug + 'static {
     fn default_in(d: &Defaults) -> Self;
 }
 
-/// The value each axis takes when it is unset and a consistent row has it, and the
-/// order the unset axes are derived in — the **rendering's** (`crate::rendering`):
-/// `direct` defaults to the HDR float TIFF and decides its container first, where every
-/// other run takes [`Defaults::STANDARD`]. Only the unset axes read it, so a stated axis
-/// is never overridden, under any rendering.
+/// The rendering's defaults for unset axes, and their derivation order
+/// (`crate::rendering`). A stated axis is never overridden.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Defaults {
     pub range: Range,
     pub transfer: Transfer,
     pub gamut: Gamut,
     pub container: Container,
-    /// Derive the container before the other axes, rather than last. `direct` sets it
-    /// so its lossless container default (TIFF) is never lost to its `hdr` range
-    /// default: range first, a stated `--gamut display-p3` would leave the 8-bit gain-map
-    /// JPEG as the only HDR row, while container first it lands on the SDR TIFF. A lossy
-    /// container is reached only when it is stated, or when the stated axes leave no
-    /// lossless row (`--range hdr --gamut display-p3` is the gain map, the one row left).
+    /// Derive the container first, so `direct`'s lossless TIFF default is not lost to its
+    /// `hdr` default (range first, `--gamut display-p3` would land on the gain-map JPEG).
     pub container_first: bool,
 }
 
