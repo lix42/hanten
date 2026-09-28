@@ -51,7 +51,8 @@
       "Bash(tail*)",
       "Bash(grep*)",
       "Bash(sed*)",
-      "Bash(wc*)"
+      "Bash(wc*)",
+      "EnterWorktree"
     ]
   },
   "enabledPlugins": {
