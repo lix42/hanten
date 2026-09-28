@@ -17,7 +17,7 @@ entries — don't rewrite earlier ones.
 
 ## Epic summary
 
-What other epics need to know about `telemetry` (refreshed 2026-09-13):
+What other epics need to know about `telemetry` (refreshed 2026-09-27):
 
 - **Telemetry is operational, never a conversion knob.** `--telemetry`,
   `--telemetry-file`, and `NC_TELEMETRY_LOG` live on the CLI arg struct only —
@@ -54,8 +54,11 @@ What other epics need to know about `telemetry` (refreshed 2026-09-13):
   the four remaining tasks — it went through six review passes on race and
   ownership edge cases, and the four task files restate its runtime rules in
   full.
-- **Explicitly rejected by the user:** persistent install identity, and uploading
-  `params_hash`. Backend spend is capped at $10/month.
+- **Explicitly rejected by the user:** persistent install identity, uploading
+  `params_hash`, and (2026-09-27) uploading any legacy local record. Backend spend
+  is capped at $10/month.
+- **`schema-v2` waits on `nf-core/report-contract`** (2026-09-27): the strategy's
+  upload manifest is stale against the code; see the strategy's Amendments.
 - **`telemetry/perf-instrumentation` is parked, not pending** — the criterion
   lab-benchmark approach was superseded by real-world telemetry and survives only
   on the remote branch `origin/prototype/perf-bench-instrumentation` (no local
@@ -190,11 +193,23 @@ What shipped, and the parts the open tasks build on:
 
 
 ## schema-v2
-**Status:** not started
-**Updated:** 2026-07-23
+**Status:** blocked on `nf-core/report-contract`
+**Updated:** 2026-09-27
 
 - Goal: add typed local success/failure events and a separately versioned,
   allowlisted upload projection with random per-event deduplication IDs.
+
+### 2026-09-27 — start review: blocked, no code
+- The strategy (2026-07-23) predates six local schema bumps (now v7), the
+  retirement of `simple`/`sigmoid`/`characteristic`, `u8`/`u10` outputs and exit 6
+  (`Resource`); its stage list is the legacy chain's, which `nf-core/default-flip`
+  deletes, and `--new-flow` still refuses `--telemetry` pending
+  `nf-core/report-contract`.
+- **User decisions:** block this task on `nf-core/report-contract` rather than
+  build the stage/timing contract on the old chain; **never upload legacy local
+  records** (only the new local schema projects). Recorded in the task file's
+  Decisions, the strategy's Amendments and `upload.md`; the stale manifest items
+  are the task file's open questions.
 
 
 ## ingestion-service

@@ -179,6 +179,7 @@ graph TD
   nf-scene-correction --> nf-retire
   nf-core --> nf-docs
   nf-core --> analysis
+  nf-core --> telemetry
 ```
 
 ```mermaid
@@ -430,6 +431,7 @@ graph TD
   core/pipeline-orchestration --> telemetry/perf-telemetry
   telemetry/perf-telemetry --> telemetry/strategy
   telemetry/strategy --> telemetry/schema-v2
+  nf-core/report-contract --> telemetry/schema-v2
   telemetry/schema-v2 --> telemetry/ingestion-service
   telemetry/schema-v2 --> telemetry/upload
   telemetry/ingestion-service --> telemetry/upload
@@ -931,7 +933,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   the real (real-world, not lab) direction
 - `telemetry/perf-telemetry` (post-MVP): `core/pipeline-orchestration`
 - `telemetry/strategy` (post-MVP, spike): `telemetry/perf-telemetry`
-- `telemetry/schema-v2` (post-MVP): `telemetry/strategy`
+- `telemetry/schema-v2` (post-MVP): `telemetry/strategy`, `nf-core/report-contract`
 - `telemetry/ingestion-service` (post-MVP): `telemetry/schema-v2`
 - `telemetry/upload` (post-MVP): `telemetry/schema-v2`, `telemetry/ingestion-service`
 - `telemetry/panic-hook` (post-MVP): `telemetry/upload`
@@ -1532,7 +1534,8 @@ the design in `docs/design-update.md`:
   detached draining, success/failure events, and sanitized panic reporting.
 - [ ] [Telemetry event schema v2](tasks/telemetry/schema-v2.md) — add typed
   success/failure local events and a separately versioned, privacy-minimized
-  upload projection with random per-event deduplication IDs.
+  upload projection with random per-event deduplication IDs. Blocked on
+  `nf-core/report-contract` (the new chain's stage/timing shape).
 - [ ] [Telemetry ingestion service](tasks/telemetry/ingestion-service.md) — build
   the validating Cloudflare Worker + D1 endpoint, exact deduplication, 180-day
   retention, hard FREE-plan quotas, abuse quarantine/kill switch, and initial
