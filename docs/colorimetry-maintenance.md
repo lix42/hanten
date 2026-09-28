@@ -103,7 +103,7 @@ negative value means it sits below. This is a review step, not a formality:
 >
 > **So: if you touched `REC709`, `DISPLAY_P3`, `ACESCG`, `ADOBE_RGB`, or
 > `BT2020`, treat it as a pixel change and go to step 6 regardless of the ulp
-> column.** Run the before/after output comparison in step 5 through every preset
+> column.** Run the before/after output comparison in step 5 through every destination
 > that embeds an affected space. The same holds for the **transfer constants**:
 > `transfer::srgb`, `transfer::adobe_rgb` and the PQ/HLG constants build profile
 > curves, and none of them is in the audit. The luma vectors and cone-response
@@ -130,11 +130,20 @@ Do a same-machine before/after comparison on real pixels for any change that
 reaches `pinned.rs` **or that touches one of the five colour spaces Little CMS
 consumes** (see the warning in step 4). Build the binary before and after — a
 `git worktree add --detach <tmp> <base>` gives you a clean "before" without
-disturbing your tree — convert the same fixture through `film-master` (ACEScg),
-`display-p3` and `compatibility` (Display P3, sRGB), `hdr-linear-tiff` (BT.2020) and
-`ultra-hdr-v1`, and compare output checksums. Adobe RGB has no preset: compare
-`hanten convert --new-flow --gamut adobe-rgb` outputs, and the new chain's BT.2020
-with `--new-flow --transfer linear`.
+disturbing your tree — convert the same fixture through every destination that
+embeds an affected space, and compare output checksums:
+
+```sh
+hanten convert <scan> -o before/film-master --film-base <r,g,b> --film-master        # ACEScg
+hanten convert <scan> -o before/p3          --film-base <r,g,b>                      # Display P3 SDR TIFF (the default)
+hanten convert <scan> -o before/adobe       --film-base <r,g,b> --gamut adobe-rgb    # Adobe RGB
+hanten convert <scan> -o before/linear      --film-base <r,g,b> --transfer linear    # BT.2020 float TIFF
+hanten convert <scan> -o before/pq          --film-base <r,g,b> --transfer pq        # BT.2020 PQ TIFF
+hanten convert <scan> -o before/gain-map    --film-base <r,g,b> --range hdr          # Display P3 gain-map JPEG
+```
+
+sRGB has no destination in this build; only the reference build
+(`scripts/reference-snapshot/`) writes one.
 
 ### 6. Decide: representation-only, or a pixel change?
 
@@ -179,9 +188,9 @@ and a test pins the gap so nobody "corrects" the tabulated one.
 
 ## Known deviation
 
-Three of the 45 shipped matrix entries sit exactly **+1 `f32` ulp** from the
-canonical derivation: `ACESCG_TO_SRGB[2][1]`, `ACESCG_TO_DISPLAY_P3[2][0]`, and
-`BT2020_TO_DISPLAY_P3[0][2]`. All three are negative values, so the derivation
+Two of the 36 entries of the four `ACESCG_TO_*` matrices sit exactly **+1 `f32` ulp** from the
+canonical derivation: `ACESCG_TO_SRGB[2][1]` and `ACESCG_TO_DISPLAY_P3[2][0]`.
+Both are negative values, so the derivation
 being one ulp *above* the shipped literal means it has the smaller magnitude. Reaching those values needs a ~3e-9 relative shift
 — far too large for `f64` accumulation noise (a sweep over inverse algorithms,
 association orders, and summation orders moves the result ~1e-17) and far too

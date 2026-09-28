@@ -75,8 +75,7 @@ This command automates the calibrate-once/apply-many workflow from
 ```sh
 PYTHONPATH=scripts/analysis python3 -m nctool roll convert Ektar \
   --nc target/release/hanten \
-  --config sigmoid-p3 \
-  --output-preset display-p3 \
+  --config default-p3 \
   --strict-estimate
 ```
 
@@ -110,19 +109,25 @@ non-empty destination is refused so a new run cannot silently mix with or
 overwrite an old configuration.
 
 Use `--recipe FILE` for the full configuration surface. It accepts a partial nc
-recipe or an image sidecar envelope; the measured Dmin deliberately replaces
-any film base in it. `--output-preset`, `--print-exposure`, and
-`--film-type` are convenience overrides. `--strict-estimate` is recommended for
-calibration; `--strict-roll` is separate because a frozen explicit base on an IR
-scan can legitimately emit the documented unused-IR warning.
+recipe (or a preset build's image sidecar envelope); the measured Dmin
+deliberately replaces any film base in it. `--film-type` is a convenience
+override, and so are the destination flags `--film-master` or `--range`,
+`--transfer`, `--gamut`, `--container` (the recipe `output`) and `--exposure`
+(`scene_correction.exposure`). Those write `recipe_version` 2 keys, so they need a
+build that takes destinations; against a preset build (the reference build) they
+are refused before anything is measured, and its output goes in `--recipe`
+instead. `--strict-estimate` is recommended for calibration; `--strict-roll` is
+separate because a frozen explicit base on an IR scan can legitimately emit the
+documented unused-IR warning.
 
 ### Tags
 
 `tags.json` is a small index for the run. It records the configuration ID, source
 roll, source-frame checksums, frozen recipe, calibration frames/regions/values, build identity, report
 path, and roll summary. `calibration.json` retains the complete `hanten estimate`
-reports. Individual image sidecars remain the authoritative per-output recipe
-and identity record.
+reports. The roll report carries each frame's identity and, on a destination
+build, its resolved destination (`new_flow`); a destination build writes no
+per-image sidecar, so `recipe.json` plus that report is the whole record.
 
 After a successful TIFF-producing conversion, regenerate the asset manifest so
 its converted bucket includes the new TIFFs:
@@ -132,19 +137,19 @@ PYTHONPATH=scripts/analysis python3 -m nctool manifest generate \
   --asset-root ../nc-assets --nc target/release/hanten
 ```
 
-The current manifest schema inventories TIFF artifacts only. A default
-gain-map JPEG or HDR AVIF run is still fully described by its `tags.json`, roll
-report, and optional `analysis.json`, but `manifest generate` will not add those
-container files to `manifest.json` yet.
+The current manifest schema inventories TIFF artifacts only. A gain-map JPEG or
+HDR AVIF run is still fully described by its `tags.json`, roll report, and
+optional `analysis.json`, but `manifest generate` will not add those container
+files to `manifest.json` yet.
 
 ## Analyze a converted roll, then compare with `diff`
 
 ```sh
-PYTHONPATH=scripts/analysis python3 -m nctool roll analyze Ektar sigmoid-p3
-PYTHONPATH=scripts/analysis python3 -m nctool roll analyze Ektar exponential-p3
+PYTHONPATH=scripts/analysis python3 -m nctool roll analyze Ektar default-p3
+PYTHONPATH=scripts/analysis python3 -m nctool roll analyze Ektar adobe
 diff -u \
-  ../nc-assets/converted/nc/sigmoid-p3/Ektar/analysis.json \
-  ../nc-assets/converted/nc/exponential-p3/Ektar/analysis.json
+  ../nc-assets/converted/nc/default-p3/Ektar/analysis.json \
+  ../nc-assets/converted/nc/adobe/Ektar/analysis.json
 ```
 
 The run operand is a configuration ID or an explicit path to `tags.json`.
@@ -152,8 +157,10 @@ The run operand is a configuration ID or an explicit path to `tags.json`.
 choose another destination. The artifact contains:
 
 - the frozen recipe, calibration, build identity, and source checksums;
+- the output depth, from the destination each frame resolved (or, for a preset
+  build, from the recipe's preset);
 - stable per-frame film-base, input-semantics, output-statistics, clipping,
-  identity, status, and warning fields;
+  identity, rendering-facts (`new_flow`), status, and warning fields;
 - deterministic key and frame ordering.
 
 It deliberately omits timestamps, elapsed time, memory/machine facts, and
@@ -210,8 +217,8 @@ has. The record marks `gain_map_present` so the base of a dual-image file is nev
 mistaken for the rendition an HDR-aware viewer shows. `hdr` is **not implemented**
 and says so: reconstructing it means applying the gain map with its ISO 21496-1 /
 Ultra HDR metadata, and a reconstruction that is subtly wrong yields plausible
-wrong numbers rather than an error. Measure nc's own `hdr-linear-tiff` render of
-the same source instead.
+wrong numbers rather than an error. Measure nc's own `--range hdr --transfer
+linear` render (a linear BT.2020 float TIFF) of the same source instead.
 
 `--inset F` trims that fraction off each edge and `--region x,y,w,h` takes an
 explicit rectangle; both are **fractions**, because the images being compared do
@@ -352,8 +359,8 @@ is how `definitions::ADOBE_RGB` came to exist before nc rendered to it, and why
 ### A whole roll at once
 
 ```sh
-PYTHONPATH=scripts/analysis .venv/bin/python -m nctool metrics roll Ektar sigmoid-p3 \
-  --inset 0.08 --markdown docs/reports/ektar-sigmoid-p3.md
+PYTHONPATH=scripts/analysis .venv/bin/python -m nctool metrics roll Ektar default-p3 \
+  --inset 0.08 --markdown docs/reports/ektar-default-p3.md
 ```
 
 The run operand is a configuration ID or a path to `tags.json`, as for `roll
@@ -362,13 +369,25 @@ analyze`. It measures every successfully converted frame and writes
 table; `--markdown` also renders the table, and `metrics table <metrics.json>`
 re-renders it later without re-reading pixels.
 
-The colour space is **resolved from the run's frozen recipe** here rather than
-declared — that is recorded provenance, not a guess at the pixels — and an
-under-determined one is refused rather than defaulted:
+The colour space is **resolved from the run's recorded provenance** here rather
+than declared — not a guess at the pixels — and an under-determined one is refused
+rather than defaulted. On a build that takes destinations it is the destination the
+roll report says every frame resolved (`new_flow.destination`), since the frozen
+recipe may leave its axes to nc; the frames must agree:
+
+| destination (gamut, transfer) | space | notes |
+|---|---|---|
+| `display-p3`, `native` | `display-p3` | a gain-map JPEG is read as its **SDR base**, per `--jpeg-image` |
+| `adobe-rgb`, `native` | `adobe-rgb` | |
+| `bt2020`, `linear` | `linear-bt2020` | |
+| `"film-master"` | `linear-acescg` | |
+
+`pq`/`hlg` transfers and the AVIF container are refused with the reason. On a
+build that takes presets (the reference build) it is the frozen recipe's preset:
 
 | preset | space | notes |
 |---|---|---|
-| `legacy`, `custom` (default profile) | `srgb` | retired presets, still read from reference-build renders |
+| `legacy`, `custom` (default profile) | `srgb` | retired before the reference build's successors |
 | `legacy`, `custom` + `--output-profile` | that profile's space | `prophoto` resolves to `prophoto-gamma1.8` |
 | `compatibility` | `srgb` | |
 | `display-p3` | `display-p3` | |
@@ -381,10 +400,10 @@ coded HDR TIFFs are PQ/HLG encoded, an `--output-profile` path has no primaries
 here, and an f32 `legacy` TIFF's transfer was never established. `--space`
 overrides all of it.
 
-nc's default preset writes a gain-map JPEG, and a default roll therefore measures
-as its **SDR base**. That is a real rendition, not a fallback — it is what a
-non-HDR viewer shows — but it is not what an HDR-aware viewer shows, and the
-per-frame records mark `gain_map_present` accordingly.
+A gain-map JPEG (an HDR Display P3 destination, or a preset build's default
+`gain-map-hdr`) measures as its **SDR base**. That is a real rendition, not a
+fallback — it is what a non-HDR viewer shows — but it is not what an HDR-aware
+viewer shows, and the per-frame records mark `gain_map_present` accordingly.
 
 A frame that fails to measure is recorded in `skipped` and the command exits 1 —
 the rest of the roll is still measured and written, but a partial roll never
@@ -417,19 +436,26 @@ so the two cannot drift.
 
 Four rules it holds to, each of which has a reason rather than a preference:
 
-- **The matrix states the preset once**, as `output_preset` — or, for the new
-  chain, the `destination` it renders (the recipe `output` value with all four axes
-  stated, `{"display": {"range", "transfer", "gamut", "container"}}`, or
-  `"film-master"`; the generator then passes `--new-flow` and the destination flags).
-  A config may not restate it or any other flag the generator supplies (`-o`,
-  `--report`, `--new-flow`, the destination flags), because `nc` takes the last
-  occurrence of such a flag and the override would be silent. Every axis is stated
-  rather than left to `nc`'s derivation, so the suffix and the metrics' colour space
-  are read off the matrix, keyed on the container and on (gamut, transfer).
-- **Each cell is measured in the space its own resolved recipe reports**, not in
-  whatever the preset's name usually implies — the reference build's `legacy` and
-  `custom` accept `--output-profile`, and measuring ProPhoto pixels as sRGB yields a
-  table where every number is wrong and every number looks reasonable.
+- **The matrix states the output once per interface its builds speak.** A build
+  at `pipeline_version` 8 or later takes a **destination**: the matrix's
+  `destination` is the recipe `output` value with all four axes stated,
+  `{"display": {"range", "transfer", "gamut", "container"}}`, or `"film-master"`,
+  and the generator passes the destination flags. An earlier build — the reference
+  build — takes a **preset**, stated as `output_preset`, passed as
+  `--output-preset`. Which a build gets is read off its own `--version` banner,
+  never from its name; a build axis mixing the two states both, and a build whose
+  interface the matrix does not state is refused before anything renders. A config
+  may not restate these or any other flag the generator supplies (`-o`,
+  `--report`), because `nc` takes the last occurrence of such a flag and the
+  override would be silent. Every destination axis is stated rather than left to
+  `nc`'s derivation, so the suffix and the metrics' colour space are read off the
+  matrix, keyed on the container and on (gamut, transfer).
+- **Each cell is measured in the space its own render reports**, not in whatever
+  the output's name usually implies — a destination cell by the
+  `new_flow.destination` it resolved, a preset cell by its resolved recipe (the
+  reference build's `legacy` and `custom` accept `--output-profile`, and measuring
+  ProPhoto pixels as sRGB yields a table where every number is wrong and every
+  number looks reasonable).
 - **A cell that fails costs only itself.** A roll that states no film stock loses
   the one column that needs it; a failed render leaves its config without a
   rendition, which the app draws as a visible gap.
@@ -455,6 +481,12 @@ PYTHONPATH=scripts/analysis python3 -m nctool compare diff before.json after.jso
 
 Cases come from `benchmark.json`. The default `fixtures` set is self-contained;
 the `rolls` set resolves real scans and checksums through the asset manifest.
+A case's `args` go to every build, and its `destination_args` or `preset_args`
+only to a build that takes that interface — read off the binary's `--version`
+banner, as `review generate` does — so a reference-build record and a current one
+share case names and `diff` pairs them. A destination build reports its
+`params_hash` only in telemetry, so there a missing telemetry record fails the
+case instead of merely losing its timings.
 Run records include build identity, pipeline version, input digest, parameter
 hash, output depth, means, clipping counts, and telemetry timings. Timing changes
 are informational and never decide the deterministic-statistics verdict.

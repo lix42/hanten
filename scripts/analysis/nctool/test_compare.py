@@ -46,7 +46,7 @@ def record(frames, pipeline_version=1, commit="abc123", dirty=False,
 def nc_report(params_hash="feed", mean=(0.25, 0.5, 0.75), depth="u16",
               encoding="rendered-u16-tiff",
               total=400, low=10, high=30, non_finite=0):
-    """A complete `hanten convert` report, i.e. every block+field `run` reads.
+    """A complete preset build's `convert` report, i.e. every block+field `run` reads.
 
     `depth` is the `output.depth` **knob** and `encoding` the container the preset
     actually resolved. They are separate arguments because the whole point of the
@@ -58,6 +58,26 @@ def nc_report(params_hash="feed", mean=(0.25, 0.5, 0.75), depth="u16",
                 output_render=dict(preset="legacy", encoding=encoding),
                 loss=dict(total_samples=total, clipped_low=low, clipped_high=high,
                           non_finite=non_finite))
+
+
+DISPLAY_P3_TIFF = {"display": {"range": "sdr", "transfer": "native",
+                               "gamut": "display-p3", "container": "tiff"}}
+
+
+def destination_report(destination=None, mean=(0.25, 0.5, 0.75),
+                       total=400, low=10, high=30):
+    """A destination build's `convert` report: no `params_hash` in `identity` (it is
+    in telemetry) and no `output_render` — the resolved destination instead."""
+    return dict(identity=dict(nc_version="0.1.0", git_commit="abc", git_dirty=False,
+                              pipeline_version=8, target="t"),
+                output_stats=dict(mean=list(mean)),
+                new_flow=dict(destination=destination or DISPLAY_P3_TIFF),
+                loss=dict(total_samples=total, clipped_low=low, clipped_high=high,
+                          non_finite=0))
+
+
+def banner(pipeline_version):
+    return f"hanten 0.1.0\npipeline_version: {pipeline_version} (x)\ncommit: abc\n"
 
 
 class TestDiff(unittest.TestCase):
@@ -597,10 +617,9 @@ class TestConvertCase(unittest.TestCase):
             ("no loss", {k: v for k, v in nc_report().items() if k != "loss"}),
             ("partial loss", {**nc_report(), "loss": {"total_samples": 3}}),
             ("identity only", {"identity": {"nc_version": "0.1.0"}}),
-            ("no params_hash", {**nc_report(),
-                                "identity": {"nc_version": "0.1.0", "pipeline_version": 1,
-                                             "target": "t"}}),
             ("no depth", {k: v for k, v in nc_report().items() if k != "output_render"}),
+            ("unknown destination", {**destination_report(),
+                                     "new_flow": {"destination": {"display": {}}}}),
             ("unknown encoding", {**nc_report(), "output_render": {"encoding": "who-knows"}}),
         ]
         for label, report in hollow:
@@ -609,6 +628,45 @@ class TestConvertCase(unittest.TestCase):
                     entry, _, err = compare.convert_case("nc", self.case(d), d)
                 self.assertIsNone(entry, label)
                 self.assertIn("missing", err or "", label)
+
+    # A destination build reports no `params_hash` and no `output_render`: the hash
+    # is in the telemetry record and the depth follows the resolved destination.
+    def test_a_destination_build_is_read_from_its_destination_and_telemetry(self):
+        telemetry = {"timing_ms": {"total": 3.0},
+                     "conversion": {"params_hash": "cafe", "destination": "film-master"}}
+        for destination, want in (("film-master", "f32"),
+                                  (DISPLAY_P3_TIFF, "u16"),
+                                  ({"display": {**DISPLAY_P3_TIFF["display"],
+                                                "range": "hdr", "gamut": "bt2020",
+                                                "transfer": "linear"}}, "f32"),
+                                  ({"display": {**DISPLAY_P3_TIFF["display"],
+                                                "range": "hdr", "container": "jpeg"}}, "u8"),
+                                  ({"display": {**DISPLAY_P3_TIFF["display"],
+                                                "range": "hdr", "gamut": "bt2020",
+                                                "transfer": "pq", "container": "avif"}},
+                                   "u10")):
+            with self.subTest(destination=destination), tempfile.TemporaryDirectory() as d:
+                report = destination_report(destination)
+                with mock.patch("subprocess.run", self.fake_run(report, telemetry)):
+                    entry, identity, err = compare.convert_case("nc", self.case(d), d)
+                self.assertIsNone(err)
+                self.assertEqual(entry["output_depth"], want)
+                self.assertEqual(entry["params_hash"], "cafe")
+                self.assertEqual(identity["pipeline_version"], 8)
+
+    # There the telemetry record is the only source of the hash, so losing it is
+    # not the informational loss it is on a preset build.
+    def test_a_destination_build_without_telemetry_is_refused(self):
+        for label, report in (("preset build, no hash", {
+                                  **nc_report(),
+                                  "identity": {"nc_version": "0.1.0",
+                                               "pipeline_version": 1, "target": "t"}}),
+                              ("destination build", destination_report())):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as d:
+                with mock.patch("subprocess.run", self.fake_run(report)):
+                    entry, _, err = compare.convert_case("nc", self.case(d), d)
+                self.assertIsNone(entry)
+                self.assertIn("no params_hash", err or "")
 
     def test_missing_telemetry_warns_but_still_records(self):
         # Timings are informational, so losing them must not sink the comparison.
@@ -633,11 +691,25 @@ class TestRunCommand(unittest.TestCase):
         base.update(kw)
         return mock.Mock(**base)
 
-    def call(self, args, report=None, per_call=None):
-        """Run `cmd_run` with `subprocess.run` faked, returning `(code, stdout, stderr)`."""
+    def call(self, args, report=None, per_call=None, version=5, telemetry=None,
+             argvs=None):
+        """Run `cmd_run` with `subprocess.run` faked, returning `(code, stdout, stderr)`.
+
+        `version` is the `pipeline_version` the fake's `--version` banner states
+        (`None` for a banner that states none), which picks the case's
+        interface-specific args; every convert's argv is appended to `argvs`."""
         calls = {"n": 0}
 
-        def _run(argv, capture_output=True, text=True):
+        def _run(argv, capture_output=True, text=True, **_kwargs):
+            if argv[1:] == ["--version"]:
+                text_ = banner(version) if version is not None else "hanten 0.1.0\n"
+                return mock.Mock(returncode=0, stdout=text_, stderr="")
+            if argvs is not None:
+                argvs.append(argv)
+            if telemetry is not None:
+                with open(argv[argv.index("--telemetry-file") + 1], "w",
+                          encoding="utf-8") as fh:
+                    json.dump(telemetry, fh)
             i = calls["n"]
             calls["n"] += 1
             doc = per_call[i] if per_call else report
@@ -670,6 +742,35 @@ class TestRunCommand(unittest.TestCase):
             self.assertEqual(len(fr["input_sha256"]), 64)
         # And the record it wrote is one `diff` accepts.
         self.assertIsNone(compare.validate_record(rec, "rec"))
+
+    # One benchmark set serves both interfaces, so a reference-build record and a
+    # current one keep the same case names and `diff` can pair them.
+    def test_each_build_gets_the_args_for_the_interface_it_speaks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            presets: list = []
+            code, _, err = self.call(self.args(tmp), report=nc_report(), version=5,
+                                     argvs=presets)
+            self.assertEqual(code, 0, err)
+            destinations: list = []
+            code, _, err = self.call(
+                self.args(tmp), report=destination_report("film-master"), version=8,
+                telemetry={"conversion": {"params_hash": "cafe"}}, argvs=destinations)
+            self.assertEqual(code, 0, err)
+        self.assertTrue(all("--output-preset" in argv for argv in presets), presets)
+        self.assertFalse(any("--film-master" in argv for argv in presets))
+        self.assertFalse(any("--output-preset" in argv for argv in destinations))
+        self.assertEqual(sum("--film-master" in argv for argv in destinations), 1)
+        # The shared `args` reach both.
+        self.assertTrue(all("--film-base" in argv for argv in presets + destinations))
+
+    def test_a_binary_that_states_no_pipeline_version_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            argvs: list = []
+            code, _, err = self.call(self.args(tmp), report=nc_report(), version=None,
+                                     argvs=argvs)
+        self.assertEqual(code, 2)
+        self.assertIn("states no pipeline_version", err)
+        self.assertEqual(argvs, [])
 
     def test_skip_checksums_is_recorded_and_warned_about(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -863,7 +964,8 @@ class TestShippedBenchmark(unittest.TestCase):
         # or asset manifest — so any parent can be the wrong type.
         gaps = compare._report_gaps({"output_render": [1]})
         self.assertTrue(any("output_render.encoding" in g for g in gaps), gaps)
-        for hollow in ({"output_render": "x"}, {"output_render": {"preset": "legacy"}}):
+        for hollow in ({"output_render": "x"}, {"output_render": {"preset": "legacy"}},
+                       {"new_flow": "x"}, {"new_flow": {"destination": [1]}}):
             self.assertTrue(
                 any("output_render.encoding" in g for g in compare._report_gaps(hollow)),
                 hollow)

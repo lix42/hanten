@@ -5,7 +5,12 @@ file is the **high-level** record: the strategy, the epic list, and the ordering
 constraints. Tasks, dependencies and status live in `docs/TASKS.md` as usual; each
 epic below is a `docs/tasks/nf-*/` directory with a `docs/progress/nf-*.md` log.
 
-**Status:** filed 2026-09-19 — ten epics, 53 tasks, and the triage of the existing
+**Status (2026-09-27):** `nf-core/default-flip` made the new chain the only one:
+`--new-flow` is a removed-flag error, the old chain's code is deleted, and
+`pipeline_version` 8 is the new default. The strategy below is the record of how it
+got there; what remains is the open `nf-*` tasks in `docs/TASKS.md`.
+
+**Filed** 2026-09-19 — ten epics, 53 tasks, and the triage of the existing
 plan (44 tasks carry over unchanged, 9 superseded, 7 retired; the superseded and
 retired files keep a header and leave the active checklist). `docs/TASKS.md` is
 authoritative for status and dependencies.

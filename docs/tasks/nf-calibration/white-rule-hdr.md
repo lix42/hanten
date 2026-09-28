@@ -27,10 +27,9 @@ What is known:
 
 Open:
 
-- **Which HDR rendition to review.** Under `--new-flow`, `--range hdr` alone writes
-  the per-channel gain-map JPEG (`nf-destinations/gain-map-destination`), and
-  `--range hdr --transfer pq|hlg` writes a Rec.2100 signal (`--output-preset` is
-  refused under `--new-flow`). Viewing HDR needs an HDR display and a viewer that keeps the HDR signal
+- **Which HDR rendition to review.** `--range hdr` alone writes the per-channel
+  gain-map JPEG (`nf-destinations/gain-map-destination`), and
+  `--range hdr --transfer pq|hlg` writes a Rec.2100 signal. Viewing HDR needs an HDR display and a viewer that keeps the HDR signal
   (`analysis/comparison-review-tooling` records that `sips` destroys gain maps).
 - What to measure alongside the review: headroom above the roll's white per frame, the
   share of pixels the lift reaches, and HDR samples past the peak.

@@ -62,10 +62,10 @@ use super::pinned;
 /// Largest permitted disagreement between a shipped `f32` literal and the
 /// canonical derivation.
 ///
-/// **One ulp, and the justification is measured, not assumed.** Three of the 45
-/// shipped matrix entries sit exactly one ulp from the canonical derivation (see
+/// **One ulp, and the justification is measured, not assumed.** Two of the 36
+/// `ACESCG_TO_*` matrix entries sit exactly one ulp from the canonical derivation (see
 /// [`pinned`] for which, and why the historical route is unrecoverable). Tightening
-/// this to zero would mean re-pinning those three — a pixel change. Loosening it
+/// this to zero would mean re-pinning those two — a pixel change. Loosening it
 /// would stop catching real transcription errors, which are ≥ 2 ulps in practice.
 ///
 /// For scale: the chromaticities involved are specified to three decimals, and
@@ -117,11 +117,6 @@ fn pinned_display_matrices_reproduce_the_canonical_derivation() {
         "ACESCG_TO_BT2020",
         rgb_to_rgb(ACESCG, BT2020, BRADFORD),
         pinned::ACESCG_TO_BT2020,
-    );
-    assert_matrix_within_tolerance(
-        "BT2020_TO_DISPLAY_P3",
-        rgb_to_rgb(BT2020, DISPLAY_P3, BRADFORD),
-        pinned::BT2020_TO_DISPLAY_P3,
     );
 }
 
@@ -211,48 +206,6 @@ fn nc_film_rgb_v1_matches_the_same_published_matrix_in_its_own_direction() {
     }
 }
 
-#[test]
-fn transformed_primaries_recover_the_standards_chromaticities() {
-    // The strongest independent anchor available without quoting an external
-    // matrix: push each source primary through the shipped matrix, convert the
-    // result to XYZ with the destination's normalized primary matrix, and recover
-    // the chromaticity. It must come back as the *source standard's* published
-    // primary chromaticity.
-    //
-    // Restricted to the shared-white pair: with a chromatic adaptation in the
-    // chain the recovered chromaticity is the adapted one, which is not a
-    // published number.
-    //
-    // **The expected values below are re-typed from ITU-R BT.2020-2 on purpose
-    // and must stay that way.** Writing `BT2020.primaries` here instead would be
-    // shorter and would look equivalent — and it would destroy the only thing
-    // this test contributes. The documented way to change a colour space is "edit
-    // the definition, then re-pin the matrix" (`docs/colorimetry-maintenance.md`),
-    // so in the flow that matters the definition and the pinned matrix move
-    // *together*: a typo in `definitions::BT2020` would be faithfully carried into
-    // the re-pinned matrix, recovered back out here, and compared against itself.
-    // Independently transcribed literals are what make that self-validation fail
-    // instead of pass — which is the property the task requires of at least one
-    // reference per transform. Do not "tidy this up" by pointing it at the const.
-    const BT2020_PRIMARIES_FROM_THE_STANDARD: [(f64, f64); 3] =
-        [(0.708, 0.292), (0.170, 0.797), (0.131, 0.046)];
-
-    let matrix = pinned::BT2020_TO_DISPLAY_P3.map(|row| row.map(|v| v as f64));
-    let destination_npm = derive::normalized_primary_matrix(DISPLAY_P3);
-
-    for (channel, &(want_x, want_y)) in BT2020_PRIMARIES_FROM_THE_STANDARD.iter().enumerate() {
-        let mut rgb = [0.0; 3];
-        rgb[channel] = 1.0;
-        let xyz = transform(destination_npm, transform(matrix, rgb));
-        let sum = xyz[0] + xyz[1] + xyz[2];
-        let (x, y) = (xyz[0] / sum, xyz[1] / sum);
-        assert!(
-            (x - want_x).abs() < 1e-6 && (y - want_y).abs() < 1e-6,
-            "channel {channel}: recovered ({x:.6}, {y:.6}), standard says ({want_x}, {want_y})",
-        );
-    }
-}
-
 // -- structural invariants ----------------------------------------------------
 
 #[test]
@@ -260,7 +213,7 @@ fn every_white_adapted_matrix_maps_neutral_to_neutral() {
     // Rows summing to 1 is exactly "source white maps to destination white". A
     // missing or wrong chromatic adaptation tints white, and this catches it
     // without reference to any derivation.
-    let matrices: [(&str, [[f64; 3]; 3]); 6] = [
+    let matrices: [(&str, [[f64; 3]; 3]); 5] = [
         ("NC_FILM_RGB_V1_TO_ACESCG", pinned::NC_FILM_RGB_V1_TO_ACESCG),
         (
             "ACESCG_TO_SRGB",
@@ -277,10 +230,6 @@ fn every_white_adapted_matrix_maps_neutral_to_neutral() {
         (
             "ACESCG_TO_BT2020",
             pinned::ACESCG_TO_BT2020.map(|r| r.map(|v| v as f64)),
-        ),
-        (
-            "BT2020_TO_DISPLAY_P3",
-            pinned::BT2020_TO_DISPLAY_P3.map(|r| r.map(|v| v as f64)),
         ),
     ];
     for (name, m) in matrices {
@@ -307,10 +256,6 @@ fn matrices_round_trip_through_their_inverses() {
             rgb_to_rgb(ACESCG, ADOBE_RGB, BRADFORD),
         ),
         ("ACESCG_TO_BT2020", rgb_to_rgb(ACESCG, BT2020, BRADFORD)),
-        (
-            "BT2020_TO_DISPLAY_P3",
-            rgb_to_rgb(BT2020, DISPLAY_P3, BRADFORD),
-        ),
     ] {
         let identity = multiply(m, inverse(m));
         for (i, j) in cells() {
@@ -379,7 +324,7 @@ fn white_point_adaptation_actually_happens() {
 fn shared_white_pairs_use_no_adaptation() {
     // BT.2020 and Display P3 are both D65, so `rgb_to_rgb` must skip the CAT
     // entirely. Applying a D65→D65 Bradford would be a near-identity but not an
-    // identity, and would shift the matrix off the shipped literal.
+    // identity, and would shift a shared-white matrix off its exact derivation.
     assert_eq!(BT2020.white, D65);
     assert_eq!(DISPLAY_P3.white, D65);
     let skipped = rgb_to_rgb(BT2020, DISPLAY_P3, BRADFORD);
@@ -389,19 +334,12 @@ fn shared_white_pairs_use_no_adaptation() {
         let dst = inverse(derive::normalized_primary_matrix(DISPLAY_P3));
         multiply(dst, multiply(cat, src))
     };
-    // They agree colorimetrically, but the shipped literal was derived the
-    // skipped way; assert the code takes that path.
     for (i, j) in cells() {
         assert!(
             (skipped[i][j] - forced[i][j]).abs() < 1e-12,
             "a D65→D65 adaptation should be a no-op at [{i}][{j}]"
         );
     }
-    assert_matrix_within_tolerance(
-        "BT2020_TO_DISPLAY_P3",
-        skipped,
-        pinned::BT2020_TO_DISPLAY_P3,
-    );
 }
 
 // -- luma vectors -------------------------------------------------------------
@@ -543,57 +481,6 @@ fn luma_vectors_sum_to_one() {
         assert!(
             (sum - 1.0).abs() < 1e-6,
             "{name} sums to {sum}: neutral would not preserve luminance"
-        );
-    }
-}
-
-#[test]
-fn pinned_luma_agrees_with_the_pinned_matrix_it_is_applied_after() {
-    // The two pinned artifacts the gain-map path uses back to back: pixels are
-    // brought into Display P3 with `BT2020_TO_DISPLAY_P3`, then their luminance is
-    // taken with `DISPLAY_P3_LUMA`. Neither artifact's own test can catch a drift
-    // *between* them — each is only compared against its own derivation — yet a
-    // drift is exactly what would make gain-map luminance stop describing the
-    // pixels it is computed from.
-    //
-    // The oracle is that CIE Y is absolute and gamut-independent: a colour has one
-    // luminance, whichever RGB space expresses it. So take Y for the *source*
-    // BT.2020 colour straight off the BT.2020 normalized primary matrix — a
-    // quantity that touches neither pinned literal — and require the pinned pair
-    // to reproduce it.
-    let matrix = pinned::BT2020_TO_DISPLAY_P3.map(|row| row.map(|v| v as f64));
-    let luma = pinned::DISPLAY_P3_LUMA.map(|v| v as f64);
-    let bt2020_npm = derive::normalized_primary_matrix(BT2020);
-
-    // Non-neutral on purpose. A neutral passes on the row sums alone (both
-    // vectors sum to 1) and says nothing about the individual weights; each
-    // primary isolates one weight, and the mixtures would catch a compensating
-    // pair of errors that the primaries happened to hide.
-    //
-    // Tolerance, measured rather than guessed: both literals are `f32` stores of
-    // an `f64` derivation and a few entries are pinned a further ulp off it, so
-    // each contributes ~1e-7 *relative*. Over these colours the disagreement
-    // actually reaches 1.3e-8 absolute (worst case: pure BT.2020 green). 1e-7
-    // sits ~8x above that — enough that an `f32` re-pin within the existing
-    // MAX_ULPS budget cannot trip it — and five orders of magnitude below the
-    // 1.4e-3 that a genuinely wrong luma weight produces (verified by perturbing
-    // DISPLAY_P3_LUMA by 1e-3, which fails this test on the first colour).
-    for rgb in [
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [0.8, 0.3, 0.1],
-        [0.15, 0.62, 0.94],
-    ] {
-        let in_p3 = transform(matrix, rgb);
-        let via_pinned: f64 = luma.iter().zip(&in_p3).map(|(w, c)| w * c).sum();
-        let reference_y = transform(bt2020_npm, rgb)[1];
-        assert!(
-            (via_pinned - reference_y).abs() < 1e-7,
-            "BT.2020 {rgb:?}: DISPLAY_P3_LUMA over BT2020_TO_DISPLAY_P3 gives Y \
-             {via_pinned}, but the colour's own luminance is {reference_y} \
-             (err {:.2e}) — the two pinned artifacts disagree",
-            (via_pinned - reference_y).abs(),
         );
     }
 }

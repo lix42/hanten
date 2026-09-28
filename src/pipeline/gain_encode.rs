@@ -1,17 +1,17 @@
-//! The gain-map image for the new chain: per-channel gains quantized into a
+//! The gain-map image: per-channel gains quantized into a
 //! half-resolution, 8-bit, three-channel map, and the window its metadata states.
 //!
 //! Each channel is normalized over **its own** `log2` window — the gains' exact
 //! per-channel extent, read from [`GainRange`] — so a channel with little gain keeps
 //! its full code range. The ISO 21496-1 dialect states one window per channel
-//! (`is_multichannel`); the legacy Ultra HDR v1 XMP cannot, which is why this
+//! (`is_multichannel`); the Ultra HDR v1 XMP cannot, which is why this
 //! destination is ISO-only. Encoding gamma is `1`: a code is linear in `log2` gain.
 //!
 //! **Half resolution, centre-aligned** (user decision, 2026-09-27). Each output
 //! sample is the bilinear blend of the four nearest *normalized* gains, i.e. the
 //! blend is taken in the `log2` domain, as a decoder's upsampling interpolates the
 //! stored codes. ISO 21496-1 6.2.2 NOTE 1 prefers a co-sited phase; the NOTE is
-//! informative, and the current chain's map is centre-aligned too.
+//! informative, and the removed chain's Ultra HDR map was centre-aligned too.
 //!
 //! **A spatially constant channel states `min == max`** (5.2.5.3 allows equality) and
 //! writes code `0`, which decodes to that gain exactly. **A flat map** ([`GainRange::flat`],
@@ -20,8 +20,8 @@
 //! rounding noise over the full code range. The caller reports it; it is never widened
 //! to look live.
 //!
-//! Written fresh, per the migration rule: `pipeline::gain_map` is the current
-//! chain's builder and retires with it.
+//! Written fresh, per the migration rule, rather than from the removed chain's
+//! `pipeline::gain_map`.
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -31,8 +31,8 @@ use crate::pipeline::pixels;
 use crate::types::Result;
 
 /// The offset `o` added to both renditions before the gain is taken — format policy,
-/// not a conversion knob. `1/64` is the Ultra HDR v1 value the current chain's maps
-/// state; it keeps a black base's gain finite without lifting its shadows visibly.
+/// not a conversion knob. `1/64` is the Ultra HDR v1 value the removed chain's maps
+/// stated; it keeps a black base's gain finite without lifting its shadows visibly.
 pub const OFFSET: f32 = 1.0 / 64.0;
 
 /// The encoding gamma every channel states: a code is linear in `log2` gain.

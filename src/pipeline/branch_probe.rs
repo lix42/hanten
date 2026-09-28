@@ -1,5 +1,5 @@
 //! Test-only probe for `nf-display-stages/branch-contract`: renders real frames as an
-//! SDR/HDR pair through the new chain and prints derived numbers only — how the pair
+//! SDR/HDR pair through the chain and prints derived numbers only — how the pair
 //! sits against the branch contract below diffuse white, how far the HDR rendition
 //! overshoots its peak (the open question of whether an HDR destination needs a hard
 //! ceiling), and the gain map the pair makes.
@@ -64,8 +64,8 @@ fn env_or(name: &str, default: f64) -> f64 {
 /// Decode budget, matching the shipped default (see `shadow_metrics`).
 const DECODE_BUDGET_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 
-/// The format policy the current chain's gain map uses (`gain_map`'s Ultra HDR v1
-/// offset), restated rather than imported so the probe does not follow it.
+/// The Ultra HDR v1 gain-map offset the removed chain's maps used, restated rather
+/// than imported so the probe does not follow `gain_encode`'s.
 const OFFSET: f32 = 1.0 / 64.0;
 
 fn repo_root() -> PathBuf {

@@ -1,4 +1,4 @@
-//! Where a new-chain render goes — the destination set (`nf-destinations/preset-set`).
+//! Where a render goes — the destination set (`nf-destinations/preset-set`).
 //!
 //! **A destination is four separate knobs, not a name per combination** (user,
 //! 2026-09-25): the dynamic [`Range`], the [`Transfer`] the samples are stored with,
@@ -6,7 +6,7 @@
 //! are not something the code can write, so the set is **one table**, [`ROWS`], and
 //! everything that has to agree with it reads it: resolution, the refusals and their
 //! remedies, and the container `cli` judges an output path against. A second list
-//! anywhere would drift from the first — the `OutputPreset::ALL` lesson.
+//! anywhere would drift from the first — the lesson of the retired presets' `ALL` list.
 //!
 //! **An axis the user leaves unset is derived from the table** ([`resolve`]), axis by
 //! axis in a fixed order — range, transfer, gamut, container (the container first under
@@ -28,7 +28,8 @@
 //! transfer do not describe it. It is the other arm of the recipe's `output` section
 //! ([`OutputSection`]).
 //!
-//! Outlives `--new-flow`: after `nf-core/default-flip` this is *the* destination set.
+//! This is the one destination set: the output presets retired with the chain that
+//! rendered them (`nf-core/default-flip`).
 
 use std::fmt;
 
@@ -288,8 +289,7 @@ impl Axis for Gamut {
 axis_serde!(Gamut);
 
 /// The file containers Hanten writes. Which spellings a path may state, and which one
-/// Hanten supplies when it completes or derives a name, both hang off this — for the
-/// current chain's presets (`cli::container_for`) and for this set alike.
+/// Hanten supplies when it completes or derives a name, both hang off this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Container {
     Tiff,

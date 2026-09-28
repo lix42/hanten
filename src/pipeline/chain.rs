@@ -1,7 +1,6 @@
-//! The new rendering chain, composed: scene correction → look → fit range → fit
-//! gamut.
+//! The rendering chain, composed: scene correction → look → fit range → fit gamut.
 //!
-//! The chain `--new-flow` selects (`docs/design-update.md` Part 2,
+//! The chain every conversion runs (`docs/design-update.md` Part 2,
 //! `docs/nf-migration.md`), fed by the fixed decode (`algo::fixed`) and rendering
 //! into the destination `crate::destination` resolves (`cli::convert_frame`). Scene
 //! correction applies white balance and exposure; the look applies print contrast and
@@ -97,7 +96,7 @@ pub struct DisplayTarget {
 /// One rendition's parameters: the shared half and the destination's half.
 ///
 /// Not a recipe type, though parts of it are: `scene_correction`, `look` and the
-/// headroom come from the new chain's recipe (`crate::recipe::Recipe`), while the
+/// headroom come from the recipe (`crate::recipe::Recipe`), while the
 /// [`DisplayTarget`] is the destination's, so [`crate::recipe::Recipe::chain_params`]
 /// adds it. No `Default`, because no destination is implied.
 #[derive(Clone, Debug, PartialEq)]
@@ -112,7 +111,8 @@ pub struct Rendered {
     pub image: DisplayReferredImage,
     /// Each stage, in the order `render` ran it, with what it applied — the report's
     /// account of the chain. Built inside this module so a stage inserted, moved or
-    /// renamed here cannot leave the report listing the old chain, and read off the
+    /// renamed here cannot leave the report listing stages it no longer runs, and read
+    /// off the
     /// values each stage applied, so an operation that moved no pixel is reported as
     /// `"identity"`.
     pub applied: [(&'static str, &'static str); 4],
@@ -132,7 +132,7 @@ pub struct RenderedPair {
     pub hdr: Rendered,
 }
 
-/// Render an [`AcesCgImage`] through the new chain, for one destination.
+/// Render an [`AcesCgImage`] through the chain, for one destination.
 ///
 /// **Today this is scene correction's per-channel gains, the look's print contrast,
 /// per-channel grade and highlight desaturation, fit range's luminance operator and
@@ -146,12 +146,9 @@ pub struct RenderedPair {
 ///
 /// **Fallible by construction.** Every stage's signature returns a `Result` and so
 /// does this, and today every stage can fail. That is the
-/// point of settling the boundaries once: every stage this chain will host has a
-/// *fallible* counterpart in the shipped code — `render_split::display_source`,
-/// `sdr::render` (which errors on a non-finite sample) and `hdr::render_linear` all
-/// return `Result` — so a stage that gains its arithmetic would otherwise change its
-/// signature, this function's, every call site and every test here. The cost for a
-/// stage that cannot fail is an `Ok` wrapper.
+/// point of settling the boundaries once: a stage that gains fallible arithmetic would
+/// otherwise change its signature, this function's, every call site and every test
+/// here. The cost for a stage that cannot fail is an `Ok` wrapper.
 ///
 /// A single-rendition destination goes through the same branch point as a pair: it
 /// is [`render_pair`] with one branch, not a second code path (see the module docs).
@@ -357,7 +354,7 @@ pub(in crate::pipeline) mod contract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::{FilmRgbImage, reconstruct};
+    use crate::algo::FilmRgbImage;
     use crate::pipeline::colorimetry::dot;
     use crate::pipeline::colorimetry::pinned::{
         ACESCG_TO_ADOBE_RGB, ACESCG_TO_DISPLAY_P3, ADOBE_RGB_LUMA, DISPLAY_P3_LUMA,
@@ -366,7 +363,7 @@ mod tests {
     use crate::pipeline::gain_ratio;
     use crate::pipeline::scene_correction::WhiteBalance;
     use crate::pipeline::working_space::map_nc_film_rgb_v1;
-    use crate::types::{FilmBase, LinearImage, Reconstruction};
+    use crate::types::{FilmBase, LinearImage};
 
     /// Every stage at its identity — fit range at zero headroom — so a test sees the
     /// wiring and the destination matrix rather than the operator.
@@ -719,16 +716,13 @@ mod tests {
 
     #[test]
     fn the_chain_is_producer_agnostic() {
-        // The chain's input is an `AcesCgImage` regardless of which reconstruction
-        // produced it — and deliberately *not* only the one a real `--new-flow` run
-        // takes (`algo::fixed`): the boundary is the type, so what produces it stays
-        // free to change.
+        // The chain's input is an `AcesCgImage` regardless of what produced it — and
+        // deliberately *not* only the one a real run takes (`algo::fixed`): the boundary
+        // is the type, so what produces it stays free to change.
         type Producer = fn(&LinearImage, &FilmBase) -> crate::algo::FilmRgbImage;
         let producers: [(&str, Producer); 2] = [
-            ("reconstruct", |img, base| {
-                reconstruct(img, base, &Reconstruction::default())
-                    .unwrap()
-                    .0
+            ("fixture", |img, _| {
+                crate::algo::FilmRgbImage::fixture(img.clone())
             }),
             ("fixed::decode", |img, base| {
                 crate::algo::fixed::decode(img, base, &Default::default())

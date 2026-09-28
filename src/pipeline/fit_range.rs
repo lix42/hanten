@@ -80,11 +80,6 @@
 //! lost to it in review. Where white renders is the look's contrast (the roll's white
 //! rule). The headroom barely moves white (0.09 stop from 6 stops to 2); it sets how
 //! hard the stops above white are compressed.
-//!
-//! Written fresh, per CLAUDE.md's migration rule — `pipeline::sdr` and `pipeline::hdr`
-//! each fuse tone, luminance rescale and gamut map into one loop body and retire with
-//! the legacy chain; `pipeline::display_tone`'s reinhard is the same curve at `P = 1`,
-//! which `tests::the_sdr_operator_is_the_legacy_reinhard` pins while both exist.
 
 use std::fmt;
 
@@ -104,7 +99,7 @@ pub const OPERATOR: &str = "reinhard-peak-lifted-v1";
 
 /// What the report names in place of an operator when the headroom leaves nothing to
 /// compress (`headroom_stops = 0`), so a report never names an operator that moved no
-/// pixel. Shared with the current chain's `display_tone`.
+/// pixel.
 pub const IDENTITY: &str = "identity";
 
 /// Scene mid-grey, which the operator leaves where the decode put it.
@@ -645,7 +640,6 @@ fn mid_grey_preserving_gain(white_point: f32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::display_tone;
     use crate::types::{DEFAULT_HEADROOM_STOPS, MAX_HEADROOM_STOPS};
 
     /// An HDR display's peak for these tests: 1000 nits over 203-nit reference white.
@@ -684,22 +678,6 @@ mod tests {
             let o = op(0.0, peak);
             for v in sweep() {
                 assert_eq!(o.apply(v).to_bits(), v.to_bits(), "peak {peak}, v {v}");
-            }
-        }
-    }
-
-    #[test]
-    fn the_sdr_operator_is_the_legacy_reinhard() {
-        // The same curve written fresh; bit-identical while both exist, so the two
-        // chains' SDR tones cannot drift apart before `nf-retire/display-tones`.
-        for stops in [0.0, 2.0, DEFAULT_HEADROOM_STOPS, 10.0] {
-            let w = headroom_white_point(stops);
-            for v in sweep() {
-                assert_eq!(
-                    op(stops, 1.0).apply(v).to_bits(),
-                    display_tone::extended_reinhard(v, w).to_bits(),
-                    "stops {stops}, v {v}"
-                );
             }
         }
     }

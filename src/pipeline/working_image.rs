@@ -1,4 +1,4 @@
-//! The pixel buffer every new-flow stage boundary carries.
+//! The pixel buffer every chain stage boundary carries.
 //!
 //! Each boundary in `pipeline::chain` is its own type — [`SceneReferredImage`],
 //! [`GradedImage`], [`RangeFittedImage`], [`DisplayReferredImage`] — because each

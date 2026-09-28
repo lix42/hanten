@@ -7,13 +7,11 @@
 //! probe that quietly changes what it measures keeps printing plausible numbers. Tag
 //! `pre-new-flow` keeps them runnable.
 //!
-//! **Why this is test-only and in-crate.** The SDR and HDR renderers are not
-//! CLI-reachable in isolation — the presets run them only inside a whole conversion,
-//! and [`crate::pipeline::sdr`] / [`crate::pipeline::hdr`] are pure stages. `nc` also
-//! has no `[lib]` target, so an integration test in
-//! `tests/` could only drive the binary. A `#[cfg(test)]` module is therefore the only
-//! way to measure the real render chain, and it keeps this diagnostic out of the
-//! shipped binary and adds no product surface that `output/presets` would have to undo.
+//! **Why this is test-only and in-crate.** The decode is not CLI-reachable in
+//! isolation — it runs only inside a whole conversion — and `nc` has no `[lib]` target,
+//! so an integration test in `tests/` could only drive the binary. A `#[cfg(test)]`
+//! module is therefore the only way to measure it directly, and it keeps this
+//! diagnostic out of the shipped binary and adds no product surface.
 //!
 //! **Discipline.** Every **asset-dependent** entry point is `#[ignore]`d and skips with
 //! a clear message when the assets are absent, so `cargo test` stays green on a machine
@@ -37,8 +35,42 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::algo::density::to_density;
-use crate::types::{DensityParams, FilmBase};
+use crate::algo::fixed::{DecodeParams, SCAN_FLOOR};
+use crate::types::{FilmBase, LinearImage};
+
+/// Corrected density `D′ = scale · −log10(max(scan, floor) / base) + offset`, per
+/// channel — the fixed decode's first two steps, before its curve. A non-finite scan
+/// sample becomes NaN.
+struct Density {
+    width: u32,
+    height: u32,
+    density: Vec<f32>,
+}
+
+fn to_density(image: &LinearImage, base: &FilmBase, params: &DecodeParams) -> Density {
+    let base = <[f32; 3]>::from(*base);
+    let density = image
+        .rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|px| {
+            (0..3).map(move |c| {
+                let d = if px[c].is_finite() {
+                    -(px[c].max(SCAN_FLOOR) / base[c]).log10()
+                } else {
+                    f32::NAN
+                };
+                params.scale[c] * d + params.offset[c]
+            })
+        })
+        .collect();
+    Density {
+        width: image.width,
+        height: image.height,
+        density,
+    }
+}
 
 /// Decode budget for the harness. It bypasses the CLI's `memory::preflight`, so it
 /// states its own ceiling rather than inheriting one — matching the shipped 6 GiB
@@ -333,7 +365,7 @@ fn propose_patches() {
         return;
     };
     let recipes = repo_root().join("scripts/real-scan-verify/recipes");
-    let params = DensityParams::default();
+    let params = DecodeParams::default();
 
     for (roll, stem) in FIXTURES {
         let base = frozen_reference(&recipes.join(format!("{stem}.json")));
@@ -435,7 +467,7 @@ fn characterise_reference_frames() {
         return;
     };
     let recipes = repo_root().join("scripts/real-scan-verify/recipes");
-    let params = DensityParams::default();
+    let params = DecodeParams::default();
 
     for (roll, stem) in FIXTURES {
         let base = frozen_reference(&recipes.join(format!("{stem}.json")));

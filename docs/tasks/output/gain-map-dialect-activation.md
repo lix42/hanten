@@ -14,6 +14,11 @@ home platform.
 default, in `output/presets` (2026-08-09), and the dialect's `#[allow(dead_code)]` is
 gone. Only the Android half remains.
 
+*Premise moved (`nf-core/default-flip`, 2026-09-27): the Ultra HDR v1 dialect is gone,
+so this build writes no dual-dialect, legacy-only or conflicting file and the sample
+procedure below no longer exists in `scripts/iso-decoder-oracle/`. Those files come
+only from the reference build (`scripts/reference-snapshot/`). Re-scope before starting.*
+
 ## Design
 
 Generate the sample set exactly as `scripts/iso-decoder-oracle/README.md` describes

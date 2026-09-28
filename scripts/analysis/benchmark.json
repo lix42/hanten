@@ -4,43 +4,52 @@
   "sets": {
     "fixtures": {
       "root": "repo",
-      "note": "The committed decoder fixtures -- tiny (502x462), no Drive assets needed, so `compare` is runnable and testable on any checkout. Covers both input formats (HDR 48-bit, HDRi 64-bit) and, across cases, the default curve and f32 output. The `sigmoid` and `simple` cases went with those paths (nf-retire/sigmoid-and-simple), and the case naming the exponential explicitly went with `--density-curve` (nf-retire/characteristic); the reference build renders them. This is the set to use for a determinism / zero-diff check. Every case states `--output-preset display-p3` explicitly (`film-master` for the f32 one): they write TIFFs, and the product default is `gain-map-hdr` (a JPEG). They stated `legacy` until nf-retire/legacy-custom retired it (2026-09-23); records made before that are comparable only against the reference build (scripts/reference-snapshot/), not against these cases. This is a holding set -- nf-verification/benchmark-set rebuilds it on the new chain.",
+      "note": "The committed decoder fixtures -- tiny (502x462), no Drive assets needed, so `compare` is runnable and testable on any checkout. Covers both input formats (HDR 48-bit, HDRi 64-bit) and, across cases, a 16-bit TIFF and f32 output. This is the set to use for a determinism / zero-diff check. Each case's `args` go to every build; `destination_args` go only to a build that takes destinations (pipeline_version >= 8) and `preset_args` only to one that takes presets (the reference build, scripts/reference-snapshot/), chosen by `compare run` from the binary's --version banner. The two name the same TIFF output: the default destination (SDR Display P3 16-bit TIFF, no flag) against the `display-p3` preset, and `--film-master` against the `film-master` preset -- the same container, so a diff across the two differs in the pipeline, not the units. This is a holding set -- nf-verification/benchmark-set rebuilds it.",
       "cases": [
         {
           "name": "hdri-default",
           "input": "tests/fixtures/hdri-64bit.tif",
           "args": [
-            "--output-preset",
-            "display-p3",
             "--film-base",
             "0.9,0.55,0.42"
+          ],
+          "preset_args": [
+            "--output-preset",
+            "display-p3"
           ]
         },
         {
           "name": "hdr-default",
           "input": "tests/fixtures/hdr-48bit.tif",
           "args": [
-            "--output-preset",
-            "display-p3",
             "--film-base",
             "0.9,0.55,0.42"
+          ],
+          "preset_args": [
+            "--output-preset",
+            "display-p3"
           ]
         },
         {
           "name": "hdri-f32",
           "input": "tests/fixtures/hdri-64bit.tif",
           "args": [
-            "--output-preset",
-            "film-master",
             "--film-base",
             "0.9,0.55,0.42"
+          ],
+          "destination_args": [
+            "--film-master"
+          ],
+          "preset_args": [
+            "--output-preset",
+            "film-master"
           ]
         }
       ]
     },
     "rolls": {
       "root": "assets",
-      "note": "The real-scan benchmark: exposed frames from the Ektar and Phoenix rolls (the two rolls docs/reports/v0-baseline.md was measured on), each with its roll's frozen recipe from scripts/real-scan-verify/recipes/ -- so the roll-fixed Dmin comes from that roll's own calibration rather than a per-frame estimate. Requires the nc-assets Drive folder via ../nc-assets plus a generated manifest.json.",
+      "note": "The real-scan benchmark: exposed frames from the Ektar and Phoenix rolls (the two rolls docs/reports/v0-baseline.md was measured on), each with its roll's frozen recipe from scripts/real-scan-verify/recipes/ -- so the roll-fixed Dmin comes from that roll's own calibration rather than a per-frame estimate. Requires the nc-assets Drive folder via ../nc-assets plus a generated manifest.json. The frozen recipes are recipe_version 2 documents, so this set runs only on a build that takes destinations (pipeline_version >= 8); benchmark an older build with the nctool and recipes of its own checkout.",
       "cases": [
         {
           "name": "Ektar-971",

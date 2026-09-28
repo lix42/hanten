@@ -20,6 +20,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from . import compare as _compare
 from . import manifest as _manifest
 
 TAG_SCHEMA = 1
@@ -132,6 +133,8 @@ def _recipe_input(path: str | None) -> tuple[dict | None, str | None]:
     if error:
         return None, error
     assert value is not None
+    # A preset build's `<out>.json` sidecar wraps its recipe; a destination build
+    # writes none, and its recipes are read as they are.
     if set(value) == {"meta", "params"}:
         value = value.get("params")
         if not isinstance(value, dict):
@@ -177,10 +180,35 @@ def _drop_retired_curve_tag(defaults: dict, partial: dict) -> None:
         curve.pop("type")
 
 
+#: The destination axes the convenience flags may set, as the recipe
+#: `output.display` names them.
+DISPLAY_AXES = ("range", "transfer", "gamut", "container")
+
+
+def _output_override(args) -> tuple[object, str | None]:
+    """What the destination flags ask of the recipe's `output`: `"film-master"`, a
+    dict of the display axes stated, or `None` when no flag was passed — with an
+    error when they contradict each other."""
+    axes = {axis: getattr(args, axis, None) for axis in DISPLAY_AXES}
+    axes = {axis: value for axis, value in axes.items() if value}
+    if getattr(args, "film_master", False):
+        if axes:
+            return None, ("--film-master writes no display destination; drop "
+                          + ", ".join(f"--{axis}" for axis in axes))
+        return "film-master", None
+    return axes or None, None
+
+
 def _freeze_recipe(base: dict, dmin: list[float],
-                   film_type: str | None, preset: str | None,
-                   exposure: float | None) -> tuple[dict | None, str | None]:
-    """Overlay measured calibration and the convenience flags on a partial recipe."""
+                   film_type: str | None, output: object = None,
+                   exposure: float | None = None) -> tuple[dict | None, str | None]:
+    """Overlay measured calibration and the convenience flags on a partial recipe.
+
+    `output` and `exposure` write `recipe_version` 2 keys (`output`,
+    `scene_correction.exposure`), so they need a base from a build that takes
+    destinations; on a preset build's recipe (the reference build) they are refused
+    and the partial `--recipe` states that build's own keys instead.
+    """
     recipe = json.loads(json.dumps(base))
     # The measurement lives in the `calibration` section (design-spec §8): a roll
     # calibration is a recipe with nothing else, a pipeline profile is a recipe with
@@ -210,16 +238,25 @@ def _freeze_recipe(base: dict, dmin: list[float],
         if not isinstance(input_cfg, dict):
             return None, "recipe `input` must be an object"
         input_cfg["film_type"] = film_type
-    if preset:
-        output = recipe.setdefault("output", {})
-        if not isinstance(output, dict):
-            return None, "recipe `output` must be an object"
-        output["preset"] = preset
+    if (output is not None or exposure is not None) and recipe.get("recipe_version") != 2:
+        return None, ("--film-master, --range, --transfer, --gamut, --container and "
+                      "--exposure set recipe_version 2 keys, and this build's recipe "
+                      "is not one (it takes output presets); state its output in "
+                      "--recipe instead")
+    if output == "film-master":
+        recipe["output"] = "film-master"
+    elif output is not None:
+        current = recipe.get("output")
+        display = current.get("display") if isinstance(current, dict) else None
+        # Axes stated over a film master start a display destination afresh.
+        display = dict(display) if isinstance(display, dict) else {}
+        display.update(output)
+        recipe["output"] = {"display": display}
     if exposure is not None:
-        print_cfg = recipe.setdefault("print", {})
-        if not isinstance(print_cfg, dict):
-            return None, "recipe `print` must be an object"
-        print_cfg["print_exposure"] = exposure
+        scene = recipe.setdefault("scene_correction", {})
+        if not isinstance(scene, dict):
+            return None, "recipe `scene_correction` must be an object"
+        scene["exposure"] = exposure
     return recipe, None
 
 
@@ -254,6 +291,11 @@ def _sha256(path: Path) -> str:
 
 
 def cmd_convert(args) -> int:
+    output, error = _output_override(args)
+    if error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    exposure = getattr(args, "exposure", None)
     root = Path(args.asset_root).resolve()
     data, error = _asset_manifest(root)
     if error:
@@ -282,6 +324,12 @@ def cmd_convert(args) -> int:
         reconstruction.pop("type")
     _drop_retired_curve_tag(defaults, partial)
     base = _deep_merge(defaults, partial)
+    # Everything but the measurement is known now, so a recipe the flags cannot be
+    # frozen into is refused before the Dmin estimate spends its time.
+    _, error = _freeze_recipe(base, [0.0, 0.0, 0.0], args.film_type, output, exposure)
+    if error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
 
     unexposed = roles["unexposed"][0]
     dmin_region, error = _region(args.dmin_region, unexposed, "Dmin")
@@ -333,8 +381,7 @@ def cmd_convert(args) -> int:
         print("error: Dmin report has no finite three-channel `film_base`", file=sys.stderr)
         return 1
 
-    recipe, error = _freeze_recipe(base, dmin, args.film_type,
-                                   args.output_preset, args.print_exposure)
+    recipe, error = _freeze_recipe(base, dmin, args.film_type, output, exposure)
     if error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -418,7 +465,26 @@ def _tag_path(root: Path, roll: str, ref: str) -> Path:
     return root / "converted" / "nc" / ref / roll / "tags.json"
 
 
-def _depth(recipe: dict) -> str:
+class DepthError(ValueError):
+    """The roll's output depth cannot be stated: the report names no build, no frame
+    resolved a destination, or one resolved a depth this reader does not know."""
+
+
+def _frame_depth(frame: dict) -> str | None:
+    """The depth a destination build's frame resolved (`new_flow.destination`), or
+    `None` when it resolved none (a frame that failed first)."""
+    new_flow = frame.get("new_flow")
+    if not isinstance(new_flow, dict) or "destination" not in new_flow:
+        return None
+    depth = _compare.depth_for_destination(new_flow["destination"])
+    if depth is None:
+        raise DepthError("a frame resolved a destination of unknown depth ("
+                         + json.dumps(new_flow["destination"], sort_keys=True) + ")")
+    return depth
+
+
+def _preset_depth(recipe: dict) -> str:
+    """A preset build's depth, fixed for the whole roll by the recipe's preset."""
     output = recipe.get("output") if isinstance(recipe.get("output"), dict) else {}
     preset = output.get("preset", "gain-map-hdr")
     if preset in ("gain-map-hdr", "ultra-hdr-v1"):
@@ -427,10 +493,40 @@ def _depth(recipe: dict) -> str:
         return "u10"
     if preset in ("film-master", "hdr-linear-tiff"):
         return "f32"
-    # Retired presets, still read from reference-build sidecars.
+    # Retired before the reference build's successors; still read from its runs.
     if preset in ("legacy", "custom") and output.get("depth") == "f32":
         return "f32"
     return "u16"
+
+
+def _depths(recipe: dict, report: dict) -> tuple[str, list[str | None]]:
+    """The roll's output depth and each report frame's.
+
+    Which source states it follows the build's `pipeline_version`
+    (`manifest.output_interface`): a destination build's frames each state the
+    destination they resolved, since its recipe may leave the axes to nc; a preset
+    build's depth is the recipe's preset. The roll's depth is `mixed` when its frames
+    differ; each frame's is then the one to read.
+
+    Raises `DepthError` rather than recording no depth, like
+    `metrics.space_for_run`: `output_depth` says which units the frames' means are
+    in, and a missing one would let two artifacts' means be compared across units.
+    """
+    frames = [frame for frame in report.get("frames", []) if isinstance(frame, dict)]
+    identity = report.get("identity") if isinstance(report.get("identity"), dict) else {}
+    pipeline_version = identity.get("pipeline_version")
+    if not isinstance(pipeline_version, int) or isinstance(pipeline_version, bool):
+        raise DepthError("the report states no identity.pipeline_version, so whether "
+                         "its frames' depth follows a destination or a preset is unknown")
+    if _manifest.output_interface(pipeline_version) == "preset":
+        depth = _preset_depth(recipe)
+        return depth, [depth if frame.get("status") == "ok" else None for frame in frames]
+    per_frame = [_frame_depth(frame) for frame in frames]
+    resolved = sorted({depth for depth in per_frame if depth is not None})
+    if not resolved:
+        raise DepthError("no frame resolved a destination (did every frame fail?), so "
+                         "the roll's depth cannot be stated")
+    return (resolved[0] if len(resolved) == 1 else "mixed"), per_frame
 
 
 def _clip(frame: dict) -> float | None:
@@ -444,19 +540,25 @@ def _clip(frame: dict) -> float | None:
     return (low + high) / total if total else 0.0
 
 
-def _analysis_frame(frame: dict, source_by_name: dict[str, str]) -> dict:
-    """Select stable, conversion-relevant fields from one roll report row."""
+def _analysis_frame(frame: dict, source_by_name: dict[str, str],
+                    depth: str | None) -> dict:
+    """Select stable, conversion-relevant fields from one roll report row, plus the
+    depth its output was written at (absent when it wrote none)."""
     input_ref = frame.get("input")
     name = Path(input_ref).name if isinstance(input_ref, str) else "(unknown)"
     result = {
         "source": source_by_name.get(name, name),
         "status": frame.get("status"),
     }
-    # `dmax` is still read: reports from the reference build carry it.
+    # `dmax` is still read: reports from the reference build carry it. `new_flow`
+    # is a destination build's per-frame rendering facts (the resolved destination
+    # among them).
     for key in ("film_base", "dmax", "white_balance", "input_color", "loss",
-                "output_stats", "identity", "warnings", "error"):
+                "output_stats", "identity", "new_flow", "warnings", "error"):
         if key in frame:
             result[key] = frame[key]
+    if depth is not None:
+        result["output_depth"] = depth
     clip_fraction = _clip(frame)
     if clip_fraction is not None:
         result["clip_fraction"] = clip_fraction
@@ -505,9 +607,17 @@ def cmd_analyze(args) -> int:
         Path(source["file"]).name: source["file"]
         for source in stable_sources if isinstance(source.get("file"), str)
     }
+    try:
+        depth, frame_depths = _depths(
+            tag.get("recipe") if isinstance(tag.get("recipe"), dict) else {}, report)
+    except DepthError as depth_error:
+        print(f"error: {report_path}: {depth_error}", file=sys.stderr)
+        return 2
     frames = [
-        _analysis_frame(frame, source_by_name)
-        for frame in report.get("frames", []) if isinstance(frame, dict)
+        _analysis_frame(frame, source_by_name, frame_depth)
+        for frame, frame_depth in zip(
+            (frame for frame in report.get("frames", []) if isinstance(frame, dict)),
+            frame_depths)
     ]
     frames.sort(key=lambda frame: str(frame.get("source")))
     output = {
@@ -517,7 +627,7 @@ def cmd_analyze(args) -> int:
         "config": tag.get("config"),
         "source_frames": stable_sources,
         "identity": tag.get("identity"),
-        "output_depth": _depth(tag.get("recipe", {})),
+        "output_depth": depth,
         "recipe": tag.get("recipe"),
         "calibration": tag.get("calibration"),
         "summary": report.get("summary", tag.get("summary")),

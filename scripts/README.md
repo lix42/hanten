@@ -12,30 +12,6 @@ otherwise.
 | [`iso-decoder-oracle/`](iso-decoder-oracle/) | A macOS ImageIO interoperability oracle for ISO and legacy gain-map JPEGs. |
 | [`render-defaults-v2/`](render-defaults-v2/) | Reproduce the historical v1-to-v2 default-render measurements. |
 | [`render-defaults-v3/`](render-defaults-v3/) | Render and measure the legacy-TIFF-to-gain-map-JPEG default transition. |
-| `check-vendored-native.py` | Verify the checked-in libultrahdr and libjpeg-turbo source snapshots. |
-
-## Vendored native-source check
-
-`check-vendored-native.py` hashes every path and file payload in the two native
-source snapshots. It also checks that the files present on disk are represented
-in Git's index, catching upstream `.gitignore` rules that would otherwise make a
-local snapshot pass while files were absent from a fresh checkout.
-
-```sh
-python3 scripts/check-vendored-native.py
-```
-
-The command exits non-zero if either snapshot differs from
-`vendor/ultrahdr-sys/VENDORED_SNAPSHOT.json`. After intentionally changing and
-reviewing the native sources, update the recorded snapshot with:
-
-```sh
-python3 scripts/check-vendored-native.py --write
-```
-
-`--write` accepts the current source tree as the new baseline; it is not a repair
-operation and should only follow review of the native-source diff and pinned
-revision.
 
 ## `../nc-assets` roll/file rename (2026-09-13)
 

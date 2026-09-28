@@ -1,12 +1,11 @@
-//! [`LinearImage`] → 16-bit / 32-bit-float TIFF, embedded ICC, sidecar JSON,
-//! optional IR export — plus the domain-typed HDR TIFF entry points.
+//! [`LinearImage`] → 16-bit / 32-bit-float TIFF with an embedded ICC, and the optional
+//! IR export — plus the domain-typed HDR TIFF entry points.
 //!
-//! [`encode`] is the general path driven by [`OutputParams`]. The two HDR entry
-//! points are separate on purpose, because each takes one of `pipeline::hdr`'s
-//! opaque types rather than a bare [`LinearImage`], so an HDR domain cannot be
-//! confused with the Rec.709 working space `encode`'s images live in:
-//! [`encode_hdr_linear`] takes [`LinearBt2020Hdr`] (display-linear, written
-//! verbatim as f32) and [`encode_hdr_coded`] takes
+//! [`encode_u16`] writes an SDR display rendition and [`encode_f32`] the film master. The two HDR entry points are separate on purpose,
+//! because each takes one of `pipeline::hdr`'s opaque types rather than a bare
+//! [`LinearImage`], so an HDR domain cannot be confused with an SDR display's:
+//! [`encode_hdr_linear`] takes [`LinearBt2020Hdr`] (display-linear, written verbatim
+//! as f32) and [`encode_hdr_coded`] takes
 //! [`RenderedHdr`](crate::pipeline::hdr::RenderedHdr) (nonlinear Rec.2100 PQ/HLG,
 //! quantized once to 16-bit codes). All three share this module's low-level writer,
 //! BigTIFF sizing, and loss accounting — the split is in the *type*, not the
@@ -31,8 +30,7 @@ use crate::io::QUANTIZE_BAND_SAMPLES;
 use crate::io::staged::{self, Staged};
 use crate::pipeline::hdr::{ContentLightLevel, LinearBt2020Hdr, LinearHdrMetadata};
 use crate::types::{
-    BigTiff, EncodeOutcome, EncodeReport, LinearImage, NcError, OutDepth, OutputParams,
-    OutputStats, Result,
+    BigTiff, EncodeOutcome, EncodeReport, LinearImage, NcError, OutDepth, OutputStats, Result,
 };
 
 /// Slack added to the raw sample-data size when deciding BigTIFF auto-promotion:
@@ -47,38 +45,14 @@ const BIGTIFF_MARGIN_BYTES: u64 = 1 << 20; // 1 MiB
 /// whole file must stay within `u32::MAX` bytes (~4 GiB).
 const CLASSIC_TIFF_LIMIT: u64 = u32::MAX as u64;
 
-/// Encode `image` to a TIFF at `path` at the depth `params`' preset resolves, with
-/// BigTIFF decided automatically. `icc` is the output-profile blob to embed —
-/// produced by the render, so the encoder embeds exactly the profile the pixels are
-/// in rather than re-resolving it. `None` embeds no profile.
+/// Encode `image` as a 16-bit integer TIFF — the SDR destination encode, embedding
+/// `icc`, the profile the render produced, so the file names the space its pixels are
+/// in. BigTIFF is decided automatically, and the decision is **returned** rather than
+/// predicted by a second sizing call, so the caller reports exactly what was written.
 ///
-/// Returns an [`EncodeOutcome`]: the [`EncodeReport`] recording any quantization
-/// clipping so the caller can fold it into the JSON report (and `--strict` can
-/// promote it to an error), plus the report-only [`OutputStats`] of the samples as
-/// written (the cross-version comparison basis).
-pub fn encode(
-    image: &LinearImage,
-    params: &OutputParams,
-    icc: Option<&[u8]>,
-    path: &Path,
-) -> Result<(Staged, EncodeOutcome)> {
-    // Staged: the bytes land on a same-directory temp and are fsynced, and `path`
-    // does not exist (or still holds the previous output) until the caller commits.
-    // Flushing is `stage`'s job now — a `BufWriter` dropped unflushed silently
-    // truncates, which is why neither layer may leave it implicit.
-    staged::stage(path, |writer| {
-        encode_to_writer(writer, image, params.depth(), BigTiff::Auto, icc)
-    })
-}
-
-/// Encode `image` as a 16-bit integer TIFF — the new flow's SDR destination encode.
-///
-/// The same writer [`encode`] drives, reached without an [`OutputParams`]: that type
-/// resolves depth from the current chain's output preset, a section the new flow
-/// does not read, so borrowing it would pick the depth through a preset name that
-/// says nothing about this destination. BigTIFF is decided automatically, and the
-/// decision is **returned** rather than predicted by a second sizing call, so the
-/// caller reports exactly what was written.
+/// Returns the [`EncodeReport`] recording any quantization clipping, which the caller
+/// folds into the JSON report (and `--strict` can promote), and the report-only
+/// [`OutputStats`] of the samples as written (the cross-version comparison basis).
 pub fn encode_u16(
     image: &LinearImage,
     icc: &[u8],
@@ -87,7 +61,7 @@ pub fn encode_u16(
     encode_at(image, OutDepth::U16, icc, path)
 }
 
-/// Encode `image` as an unclamped 32-bit float TIFF — the new flow's film master. As
+/// Encode `image` as an unclamped 32-bit float TIFF — the film master. As
 /// [`encode_u16`], at the depth that writes the working buffer verbatim.
 pub fn encode_f32(
     image: &LinearImage,
@@ -117,22 +91,6 @@ fn encode_at(
         encode_to_writer(writer, image, depth, policy, Some(icc))
     })?;
     Ok((staged, outcome, big))
-}
-
-/// Whether encoding `image` under `params` (with an `icc_len`-byte embedded
-/// profile) will produce a BigTIFF. Reuses the same sizing logic `encode` runs
-/// internally, so the orchestrator can report an automatic promotion in the JSON
-/// report without duplicating the threshold — and without re-deciding it
-/// differently than the encoder does.
-pub fn plans_bigtiff(params: &OutputParams, image: &LinearImage, icc_len: usize) -> bool {
-    resolve_bigtiff(
-        BigTiff::Auto,
-        image.width,
-        image.height,
-        3,
-        depth_bytes(params.depth()),
-        icc_len as u64,
-    )
 }
 
 /// TIFF `SampleFormat` for IEEE floating-point samples (TIFF 6.0 §19, tag 339,
@@ -182,7 +140,7 @@ pub struct HdrLinearTiffSummary {
 ///
 /// `icc` is the linear-BT.2020 blob from `color::hdr_linear_bt2020_icc`. It is
 /// passed in rather than built here so the encoder embeds exactly the profile the
-/// orchestrator resolved — the same rule [`encode`] follows.
+/// orchestrator resolved — the same rule [`encode_u16`] follows.
 ///
 /// The destination is written through [`staged`], so a failure in sizing, in the
 /// TIFF writer, or in the flush leaves no partial file at `path`.
@@ -449,23 +407,10 @@ pub fn export_ir(image: &LinearImage, depth: OutDepth, path: &Path) -> Result<St
     Ok(staged)
 }
 
-/// Write the sidecar JSON next to the output. The sidecar path is `<output>.json`
-/// (e.g. `out.tiff` → `out.tiff.json`), so an output and its recipe stay paired by
-/// name.
-///
-/// The caller composes the document: `cli` writes the
-/// `{ "meta": {…identity…}, "params": {…recipe…} }` envelope
-/// (`core/conversion-versioning`), keeping run identity out of the recipe body so
-/// the sidecar stays reloadable through `--params`. This function only owns the
-/// path and the write error.
-pub fn write_sidecar(output_path: &Path, sidecar_json: &str) -> Result<Staged> {
-    let sidecar = sidecar_path(output_path);
-    staged::stage_bytes(&sidecar, sidecar_json.as_bytes())
-}
-
 /// The sidecar path for an output: `<output>.json` (extension appended, not
 /// replaced, so `a.tiff` → `a.tiff.json` and output/sidecar stay paired by name).
-/// Exposed so the CLI can include the sidecar in write-target collision checks.
+/// No sidecar is written yet (`nf-core/report-contract`); the CLI reads this path to
+/// find, and remove, one an earlier build wrote beside an output it replaces.
 pub fn sidecar_path(output_path: &Path) -> PathBuf {
     let mut name = OsString::from(output_path.as_os_str());
     name.push(".json");
@@ -821,7 +766,6 @@ impl From<tiff::TiffError> for NcError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::display_tone::Headroom;
     use std::io::Cursor;
     use tiff::decoder::{Decoder, DecodingResult};
 
@@ -830,7 +774,7 @@ mod tests {
     }
 
     /// The two writer inputs these tests vary, stated directly: the depth is no
-    /// longer a knob (a preset resolves it), and neither is the BigTIFF policy.
+    /// longer a knob (the destination resolves it), and neither is the BigTIFF policy.
     struct Out {
         depth: OutDepth,
         bigtiff: BigTiff,
@@ -952,13 +896,12 @@ mod tests {
     #[test]
     fn the_film_master_branch_writes_a_negative_sample_unclamped() {
         use crate::algo::FilmRgbImage;
-        use crate::pipeline::render_split::film_master;
         use crate::pipeline::working_space::map_nc_film_rgb_v1;
 
         // The NC film RGB v1 matrix is all-positive with rows summing to 1, so a neutral
         // negative stays negative across it.
         let film = FilmRgbImage::fixture(img(2, 1, vec![-0.25, -0.25, -0.25, 0.5, 0.5, 0.5], None));
-        let master = film_master(map_nc_film_rgb_v1(film));
+        let master = map_nc_film_rgb_v1(film).into_linear();
         let bytes = encode_bytes(&master, &out(OutDepth::F32, BigTiff::Off), None);
         let mut dec = Decoder::new(Cursor::new(bytes)).unwrap();
         let DecodingResult::F32(pixels) = dec.read_image().unwrap() else {
@@ -1164,51 +1107,34 @@ mod tests {
 
     #[test]
     fn sidecar_path_appends_json() {
-        let dir = std::env::temp_dir();
-        let output = dir.join(format!("nc_sidecar_test_{}.tiff", std::process::id()));
-        let json = r#"{"algorithm":"density"}"#;
-        let staged = write_sidecar(&output, json).unwrap();
-        let sidecar = PathBuf::from(format!("{}.json", output.display()));
-        // Staged, so nothing is at the sidecar path yet — the commit is what puts it
-        // there. This test now covers the path derivation *and* that ordering.
-        assert!(!sidecar.exists(), "the sidecar appears only on commit");
-        staged.commit().unwrap();
-
-        let read = std::fs::read_to_string(&sidecar).unwrap();
-        assert_eq!(read, json);
-        // Valid JSON.
-        let _: serde_json::Value = serde_json::from_str(&read).unwrap();
-        let _ = std::fs::remove_file(&sidecar);
+        // Appended, not replaced: an output and its sidecar pair by name.
+        assert_eq!(
+            sidecar_path(Path::new("dir/a.tiff")),
+            PathBuf::from("dir/a.tiff.json")
+        );
+        assert_eq!(sidecar_path(Path::new("a")), PathBuf::from("a.json"));
     }
 
     // -----------------------------------------------------------------------
     // hdr-linear-tiff
     // -----------------------------------------------------------------------
 
-    /// Render a tiny real image through the production stages, so these tests
-    /// exercise genuine renderer output and metadata rather than a hand-built
-    /// struct that could drift from the renderer's contract (the `io::avif` tests'
-    /// `render_tiny` precedent).
+    /// A tiny display-linear BT.2020 rendition through the production hand-off
+    /// (`hdr::from_new_chain`), so these tests exercise the real metadata rather than a
+    /// hand-built struct that could drift from its contract.
     ///
-    /// `print_exposure` is the lever that reaches the HDR headroom: the film
-    /// positives these tests pass sit in `[0, 1]`, so without
-    /// exposure nothing would ever exceed reference white and a
-    /// "highlights survive" assertion would pass vacuously. Rendered at zero headroom
-    /// (the identity), so a sample above `LINEAR_HEADROOM` is refused rather than rolled
-    /// off — at 2.4 stops a `0.9` positive lands at ≈4.75, just under it.
-    fn render_linear_tiny(rgb: &[f32], w: u32, h: u32, print_exposure: f32) -> LinearBt2020Hdr {
-        use crate::algo::FilmRgbImage;
-        use crate::pipeline::render_split::display_source;
-        use crate::pipeline::working_space::map_nc_film_rgb_v1;
-        use crate::types::PrintParams;
-
-        let film = FilmRgbImage::fixture(LinearImage::new(w, h, rgb.to_vec(), None).unwrap());
-        let print = PrintParams {
-            print_exposure,
-            ..PrintParams::default()
-        };
-        let shared = display_source(map_nc_film_rgb_v1(film), &print).unwrap();
-        crate::pipeline::hdr::render_linear(&shared, Headroom::new(0.0).unwrap()).unwrap()
+    /// `exposure` (stops) is the lever that reaches the HDR headroom: the values these
+    /// tests pass sit in `[0, 1]`, so without it nothing would ever exceed reference
+    /// white and a "highlights survive" assertion would pass vacuously. At 2.4 stops a
+    /// `0.9` lands at ≈4.75, just under `LINEAR_HEADROOM`, so nothing is clamped.
+    fn render_linear_tiny(rgb: &[f32], w: u32, h: u32, exposure: f32) -> LinearBt2020Hdr {
+        let gain = exposure.exp2();
+        let scaled = rgb.iter().map(|v| v * gain).collect();
+        let image = LinearImage::new(w, h, scaled, None).unwrap();
+        let (hdr, clamp) =
+            crate::pipeline::hdr::from_new_chain(image, "reinhard", "radial").unwrap();
+        assert_eq!(clamp, crate::pipeline::hdr::PeakClamp::default());
+        hdr
     }
 
     fn temp_path(tag: &str) -> PathBuf {
@@ -1379,14 +1305,7 @@ mod tests {
         w: u32,
         h: u32,
     ) -> crate::pipeline::hdr::RenderedHdr {
-        use crate::algo::FilmRgbImage;
-        use crate::pipeline::render_split::display_source;
-        use crate::pipeline::working_space::map_nc_film_rgb_v1;
-        use crate::types::PrintParams;
-
-        let film = FilmRgbImage::fixture(LinearImage::new(w, h, rgb.to_vec(), None).unwrap());
-        let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
-        crate::pipeline::hdr::render(&shared, transfer, Headroom::new(0.0).unwrap()).unwrap()
+        crate::pipeline::hdr::encode_transfer(render_linear_tiny(rgb, w, h, 0.0), transfer).unwrap()
     }
 
     fn decode_u16(bytes: &[u8]) -> (u32, u32, Vec<u16>) {

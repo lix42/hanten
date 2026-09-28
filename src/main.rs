@@ -11,7 +11,6 @@ mod destination;
 // constants, and nothing renders through them (`nf-retire/characteristic`).
 #[cfg(test)]
 mod film_stock;
-mod flow;
 mod io;
 mod pipeline;
 mod recipe;

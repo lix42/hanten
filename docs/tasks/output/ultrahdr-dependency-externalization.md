@@ -1,5 +1,11 @@
 # Remove the Ultra HDR Native Dependency
 
+> **Closed — moot (2026-09-27).** `nf-core/default-flip` retired the Ultra HDR v1
+> dialect with the chain that wrote it, and deleted `vendor/ultrahdr-sys`, the
+> `ultrahdr-sys` dependency, `scripts/check-vendored-native.py` and its CI step. The
+> gain-map JPEG is ISO 21496-1 only, written by `io::iso_gain_map`, so no container
+> was left to rewrite. What follows is the plan as it stood, kept as decision history.
+
 > **Task id unchanged** (`output/ultrahdr-dependency-externalization`) so its
 > links, dependency entries, and append-only progress sections keep resolving.
 > The *scope* changed on 2026-08-05: from "externalize the snapshot to a

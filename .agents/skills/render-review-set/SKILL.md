@@ -4,7 +4,7 @@ description: >-
   Build a visual review set — an image set converted through two or more
   configurations, optionally beside another tool's output (Negative Lab Pro,
   SmartConvert, a hand-edited target) — write its review.json, and offer to serve it
-  in tools/review-app. Use when asked to compare presets, parameters or builds by
+  in tools/review-app. Use when asked to compare destinations, parameters or builds by
   eye, to "render a review set", "build a comparison", "see how X looks across the
   roll", to judge a default before changing it, or to put an outside reference beside
   Hanten's renders.
@@ -86,10 +86,10 @@ every cell whose `common_args` reference `{dmin}`.
   `<assets>/rolls/<roll>/<file>`, so copying the manifest's own `rolls/<roll>/<serial>.tif`
   produces a doubled path and every frame is reported missing and skipped.
 - **matrix copy** — `schema_version` (must be `1`; the loader refuses the document
-  otherwise), `output_dir`, `output_preset` (or, for `--new-flow`, `destination` — see
-  below), `common_args` (usually `["--film-base",
-  "{dmin}"]`), `metrics.inset`, and one entry per configuration under `configs`. `{dmin}`
-  is the one placeholder.
+  otherwise), `output_dir`, the output — `destination` for a current build, `output_preset`
+  for the reference build, both when a build axis mixes them (see below) — `common_args`
+  (usually `["--film-base", "{dmin}"]`), `metrics.inset`, and one entry per configuration
+  under `configs`. `{dmin}` is the one placeholder.
 - **a build axis, when comparing two binaries** — an optional top-level `builds`, one
   `{"id", "label", "nc"}` per binary (`note` optional). Every config is then rendered by
   every build, as cells with the composed id `<config>@<build>` and the label
@@ -105,16 +105,24 @@ every cell whose `common_args` reference `{dmin}`.
 
 Rules, each with a reason:
 
-- A config may not restate any flag the generator owns — `--output-preset`, `-o` /
-  `--output`, `--report`, `--report-file`. `hanten` takes the **last** occurrence, so an output
-  override would be silent, and redirecting the report to a file stops the generator reading
-  the resolved recipe back from stdout. State the preset once as `output_preset`. The loader
-  rejects all five by name, so a config that restates one fails before anything renders.
-- A new-chain set states `destination` instead of `output_preset`: the recipe `output` value
+- **The output is stated once per interface, and each build gets the one it speaks.** A
+  build at `pipeline_version` 8 or later takes a `destination`: the recipe `output` value
   with **every** axis stated (`{"display": {"range": "sdr", "transfer": "native", "gamut":
-  "display-p3", "container": "tiff"}}`) or `"film-master"`. The generator passes `--new-flow`
-  and the destination flags itself, so a config may not state them either. A reference-build
-  arm (the pre-migration binary) cannot render a `destination` set — it has no `--new-flow`.
+  "display-p3", "container": "tiff"}}`) or `"film-master"`, rendered with the destination
+  flags. An earlier build — the reference build — takes an `output_preset`, rendered with
+  `--output-preset`. The generator reads each build's `pipeline_version` off its own
+  `--version` banner, never off its id or label, so a matrix comparing the reference arm
+  with a current one states **both** (`"output_preset": "display-p3"` beside the SDR
+  Display P3 TIFF destination writes the same container on both arms). A build whose
+  interface the matrix does not state is refused before anything renders (exit 2).
+- A config may not restate any flag the generator owns — `--output-preset`, the destination
+  flags (`--range`, `--transfer`, `--gamut`, `--container`, `--film-master`), `-o` /
+  `--output`, `--report`, `--report-file`. `hanten` takes the **last** occurrence, so an
+  output override would be silent, and redirecting the report to a file stops the generator
+  reading the resolved output back from stdout. The loader rejects them by name, so a config
+  that restates one fails before anything renders. A flag only one arm has (`--exposure` on
+  a current build, `--preset` on the reference) goes in a config that opts out of the other
+  arm with `"builds"`.
 - A cell that fails costs only itself; the app draws the gap.
 - Re-measuring is keyed to the image's **checksum**, not mtime, because a rerun re-renders
   everything.
@@ -138,11 +146,13 @@ Three things the generator checks for you, none of which needs a flag. **The fir
 not build-axis features** — a matrix with no `builds` is one unnamed build, the `--nc`
 binary, and both rules apply to it verbatim:
 
-- Every binary is verified **before anything renders** — it exists, and its `--version`
-  really is this project's CLI. That includes a plain `--nc` binary, which used to fail at
+- Every binary is verified **before anything renders** — it exists, its `--version`
+  really is this project's CLI, and it states a `pipeline_version`, which picks the output
+  interface it renders through. That includes a plain `--nc` binary, which used to fail at
   the first render instead. The **pre-rename `nc` banner is accepted**, which matters because
   the reference arm of a before/after is usually the pre-rename reference build, which
-  prints it.
+  prints it. A render reporting another `pipeline_version` than the banner stated aborts the
+  run like any other identity change.
 - A binary that reports **one identity and then another** aborts the run — a build by name,
   or the `--nc` binary by path. It writes no `review.json`, and it *deletes* an earlier run's
   `review.json` from the output directory **when this run overwrote a cell that file names**
@@ -174,19 +184,21 @@ would make this first-class; until then it is manual. Three things to get right:
    **Verify one file per encoding** against an independent decode (`sips -m` with the
    embedded profile) before converting a batch — a wrong matrix still looks plausible.
 
-   **Converting only the reference is not enough, and no preset fixes it.** With the usual
-   `gain-map-hdr` matrix, Hanten's cells are gain-map JPEGs: on an HDR display the browser shows
-   the *HDR* rendition while the reference stays plain SDR, so the two cells differ in
-   rendering intent before any conversion is compared — and `nctool metrics` meanwhile reads
-   Hanten's **SDR base**, so the charts and the picture describe different renditions. Hanten cannot
-   be asked for a plain SDR JPEG instead: the only JPEG writers are `gain-map-hdr` and
-   `ultra-hdr-v1`, both gain-map carriers, and every SDR preset writes TIFF, which browsers
-   will not display. So either strip the gain map from Hanten's JPEGs, or review on an SDR display
-   and **say** that is what was done. Making this first-class belongs to
-   `analysis/review-reference-cells`.
+   **Converting only the reference is not enough, and no destination fixes it.** The
+   browser-displayable Hanten cell is the HDR Display P3 destination (`--range hdr`), a
+   gain-map JPEG: on an HDR display the browser shows the *HDR* rendition while the
+   reference stays plain SDR, so the two cells differ in rendering intent before any
+   conversion is compared — and `nctool metrics` meanwhile reads Hanten's **SDR base**, so
+   the charts and the picture describe different renditions. Hanten cannot be asked for a
+   plain SDR JPEG instead: the JPEG container is HDR-only, and every SDR destination writes
+   TIFF, which browsers will not display (the reference build's presets are no better:
+   `gain-map-hdr` and `ultra-hdr-v1` are both gain-map carriers). So either strip the gain map
+   from Hanten's JPEGs, or review on an SDR display and **say** that is what was done. Making
+   this first-class belongs to `analysis/review-reference-cells`.
 
    **Stripping the gain map fixes the rendering intent, not the gamut.** Hanten's SDR base is
-   **Display P3** for both gain-map presets (`metrics.py`'s `PRESET_SPACES`), so a strip that
+   **Display P3** for every gain-map JPEG (`metrics.py`'s `DESTINATION_SPACES`, and
+   `PRESET_SPACES` for the reference build's presets), so a strip that
    drops the ICC profile leaves P3 numbers that a viewer then shows as sRGB — saturation
    errors that look like a conversion difference. Either convert the stripped base to sRGB as
    well, so "a common sRGB pair" is true, or keep its P3 profile and stop calling the pair
@@ -287,7 +299,7 @@ One folder per kind of output, so configurations never mix:
   README.md          # index of every folder — keep it current
   <set>/             # one rendering configuration set
     review.json  review-<roll>.json
-    <frame>-<config>.jpg[.json][.metrics.json]
+    <frame>-<config>.<jpg|tiff|avif>[.metrics.json]
     scripts/         # the matrix, the fixtures copy, and the scripts that built them
   <producer>-srgb/   # converted outside references, shared by every set
   notes/             # what was observed, frame by frame
@@ -299,8 +311,8 @@ weeks later.
 ## Traps
 
 - **Never publish or commit a review set.** The images are personal photographs.
-- **A new-flow SDR set has no browser-displayable cell yet**: the SDR destinations are TIFF
-  only (SDR JPEG is `output/sdr-jpeg-preset`), and a gain-map JPEG shows its HDR rendition.
+- **An SDR set has no browser-displayable cell yet**: the SDR destinations are TIFF only
+  (SDR JPEG is `output/sdr-jpeg-preset`), and a gain-map JPEG shows its HDR rendition.
   Render by hand and convert the TIFF to a JPEG keeping its ICC profile.
 - **Nothing checks that a metric record describes the pixels beside it.** Re-render by hand
   and the charts go on describing the previous render; `nctool review generate` re-measures on
@@ -310,9 +322,9 @@ weeks later.
   re-run after a pipeline change can produce different pixels. **A set records which binary made it only when it declares `builds`**: each config
   then carries a `producer` block, derived from what that binary reported rather than typed
   into the matrix, and the app shows it under the picture and in the button's tooltip. A
-  matrix with no build axis still carries none — every cell writes its own `<image>.json`
-  sidecar beside it, which is where the commit is in that case, but `review.json` does not
-  name it. So for a set meant to be trusted months later, either give it a `builds` block or
-  write the commit and `hanten --version` into the set's own `scripts/` folder yourself.
+  matrix with no build axis still carries none, and a current build writes no `<image>.json`
+  sidecar either (only the reference build does), so nothing in the set names the commit. So
+  for a set meant to be trusted months later, either give it a `builds` block or write the
+  commit and `hanten --version` into the set's own `scripts/` folder yourself.
 - **Deleting source frames breaks later reruns, not the existing set.** Rendered JPEGs and
   their records survive; the generator simply skips the missing sources.

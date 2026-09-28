@@ -863,10 +863,10 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `output/sdr-display-rendering` (post-MVP): `color/film-master-render-pipeline`, `output/display-p3-output`, `output/hdr-output-spike`
 - `output/hdr-display-rendering` (post-MVP): `color/film-master-render-pipeline`, `output/hdr-output-spike`
 - `output/gain-map-hdr-output` (post-MVP): `output/sdr-display-rendering`, `output/hdr-display-rendering`
-- `output/ultrahdr-dependency-externalization` (post-MVP, **deferred maintenance**; no downstream blockers): `output/gain-map-hdr-output`, `output/iso-gain-map-metadata`
+- `output/ultrahdr-dependency-externalization` (post-MVP, **closed—moot** by `nf-core/default-flip`; the deps below are decision history): `output/gain-map-hdr-output`, `output/iso-gain-map-metadata`
   — **re-scoped 2026-08-05** from "externalize to a published crate" to "remove the
-  native dependency entirely"; the id is deliberately unchanged so its links,
-  progress sections, and the `check-vendored-native.py` reference keep resolving.
+  native dependency entirely"; the id is deliberately unchanged so its links and
+  progress sections keep resolving.
   The published `ultrahdr-sys` crate cannot qualify: it obtains libjpeg-turbo
   either by build-time clone at a mutable tag or from a machine-installed library,
   and that `GIT_TAG` lives inside the crate's own bundled CMake with no
@@ -1230,7 +1230,9 @@ the design in `docs/design-update.md`:
 - [ ] [Author a reusable pipeline profile](tasks/core/profile-authoring.md) — `hanten params` becomes
   `hanten profile`: takes the override flags, validates config-only, writes annotated JSONC via
   `--out`, needs no image. **Deletes `--dump-params`** — byte-identical to the sidecar, and it
-  captures nothing measured, so the "frozen" recipe it produced still re-measures per frame
+  captures nothing measured, so the "frozen" recipe it produced still re-measures per frame.
+  *Premise moved (`nf-core/default-flip`, 2026-09-27): no sidecar is written, so
+  `--dump-params` is the only recipe a run leaves — re-scope before starting*
 - [ ] [Warn when auto modes defeat a roll](tasks/core/unfrozen-auto-mode-warning.md) — a recipe
   carrying `dmax: "auto"` or an auto white balance re-derives per frame and silently breaks roll
   consistency; roll already warns on a non-explicit film base, this is the same hazard
@@ -1447,10 +1449,10 @@ the design in `docs/design-update.md`:
 - [x] [SDR display rendering](tasks/output/sdr-display-rendering.md) — render intentional linear ACEScg film values into a valid Display P3 or sRGB SDR rendition with explicit reference-white, tone, and gamut policy
 - [x] [Display-HDR rendering](tasks/output/hdr-display-rendering.md) — render intentional linear ACEScg film values into BT.2020 PQ/HLG with explicit headroom, tone, and gamut mapping
 - [x] [Ultra HDR v1 gain-map JPEG output](tasks/output/gain-map-hdr-output.md) — write an explicit backward-compatible Display P3 JPEG plus public Ultra HDR v1 gain-map metadata
-- [ ] [Remove the Ultra HDR native dependency](tasks/output/ultrahdr-dependency-externalization.md) — **deferred maintenance**, **re-scoped 2026-08-05** (id kept): delete `vendor/ultrahdr-sys` and end the C/C++ dependency by writing the Ultra HDR v1 XMP and MPF container in Rust, so neither `cargo build` nor `cargo test` needs CMake/clang/nasm/libjpeg or a network fetch. Only 6 native calls are on the shipping path and they merely assemble XMP+MPF around two JPEGs nc already encodes itself. The decode oracle is **replaced by captured goldens**, not kept as a dev-dependency (that would leave the native toolchain in CI). The published-crate route is recorded but not pursued — it fetches libjpeg-turbo at a mutable tag or links a system library, and no version bump changes that. Blocks no output work
+- [x] [Remove the Ultra HDR native dependency](tasks/output/ultrahdr-dependency-externalization.md) — **closed—moot** (2026-09-27, `nf-core/default-flip`): the Ultra HDR v1 dialect retired with the removed chain, so there was no container left to rewrite in Rust. The flip deleted `vendor/ultrahdr-sys`, the `ultrahdr-sys` dependency, `scripts/check-vendored-native.py` and its CI step; the gain-map JPEG is ISO 21496-1 only, written by nc's own `io::iso_gain_map`. The build still needs CMake and NASM for libaom and a C compiler for lcms2. Retained as decision history
 - [x] [Final ISO gain-map metadata](tasks/output/iso-gain-map-metadata.md) — add verified ISO 21496-1:2025 metadata to the same JPEG and prove dual-dialect agreement. **Metadata and container halves implemented against the licensed text** (2026-08-04: `pipeline/gain_map/iso.rs` C.2.2 payload + normative validation; `io/ultra_hdr.rs` `Dialects::LegacyPlusIso` writing C.4.3/C.4.6 segments into both images, MPF-safe). **Code complete**; verified with exiftool (MPF index resolves, second image extracts, 2350+1186=3536 bytes) and `sips`. **Both blockers cleared 2026-08-06**: the CIPA DC-007 text was fetched and read (its two conformance gaps split into `output/mp-container-conformance`), and the external decoder oracle ran — Apple ImageIO, harness committed at `scripts/iso-decoder-oracle/`. The oracle found a real defect: the baseline segment sat *after* `SOF0`, where no reader scans, so ImageIO saw no gain map at all; fixed, and the metadata now reads back field-for-field as written (the decoder's 4.926 headroom is nc's own declared constant echoed back, not evidence — `GainMapMax` is). **Done 2026-08-07** on the strength of the Apple oracle plus libultrahdr; the Android 15+ half and CLI activation moved to `output/gain-map-dialect-activation` so they stop gating `output/presets`. **Note the `ts:` URN is the published first edition's, not a draft** — and libultrahdr's compact-denominator ISO layout is *non-conformant*, so nc owns its serializer.
-- [ ] [MP container conformance (CIPA DC-007)](tasks/output/mp-container-conformance.md) — **deferred conformance**, split out of `iso-gain-map-metadata` on 2026-08-06 after reading the free CIPA text. Three gaps, none functional: the gain map carries MP Type `000000` (Undefined) where DC-007 Table 4 assigns `050000` and marks `000000` "shall not be used" in a Baseline MP File — inherited from libultrahdr, whose own output does the same — the baseline is JFIF with no Exif APP1 where §4.2.1/§5.1 specify an Exif file (§7's *tag* requirements are only "should"), and in the gain-map image libultrahdr's prepended XMP puts `APP1` before `APP0 JFIF`, so JFIF is not first in the dependent image (found by review, not in the CIPA read). The type code is a masked 4-byte MPEntry patch but **changes shipped `ultra-hdr-v1` bytes**; the Exif half must be probed against `package()` and re-run through the ImageIO oracle, since a marker-layout change is exactly what silently disabled the ISO metadata once. Blocks nothing
-- [ ] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **Android 15+** decoder verification, the half `iso-gain-map-metadata` shipped without; the CLI path landed as the `gain-map-hdr` default (`output/presets`, 2026-08-09)
+- [ ] [MP container conformance (CIPA DC-007)](tasks/output/mp-container-conformance.md) — *Premise moved (`nf-core/default-flip`, 2026-09-27): libultrahdr and `ultra-hdr-v1` are gone, and the ISO-only writer `io::iso_gain_map` already writes MP Type `050000`; re-scope before starting.* **Deferred conformance**, split out of `iso-gain-map-metadata` on 2026-08-06 after reading the free CIPA text. Three gaps, none functional: the gain map carries MP Type `000000` (Undefined) where DC-007 Table 4 assigns `050000` and marks `000000` "shall not be used" in a Baseline MP File — inherited from libultrahdr, whose own output does the same — the baseline is JFIF with no Exif APP1 where §4.2.1/§5.1 specify an Exif file (§7's *tag* requirements are only "should"), and in the gain-map image libultrahdr's prepended XMP puts `APP1` before `APP0 JFIF`, so JFIF is not first in the dependent image (found by review, not in the CIPA read). The type code is a masked 4-byte MPEntry patch but **changes shipped `ultra-hdr-v1` bytes**; the Exif half must be probed against `package()` and re-run through the ImageIO oracle, since a marker-layout change is exactly what silently disabled the ISO metadata once. Blocks nothing
+- [ ] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **Android 15+** decoder verification, the half `iso-gain-map-metadata` shipped without; the CLI path landed as the `gain-map-hdr` default (`output/presets`, 2026-08-09). *Premise moved (`nf-core/default-flip`, 2026-09-27): the gain map is now `--range hdr`'s ISO-only per-channel JPEG and not the default; re-scope before starting*
 - [ ] [SDR preset follow-ups (carried-over findings)](tasks/output/sdr-preset-followups.md) — the bounded review findings the SDR preset PRs left out; its three design questions are now the tasks below
 - [x] [Adobe RGB (1998) as an output gamut](tasks/output/adobe-rgb-gamut.md) — **done 2026-09-24.** The gamut-mapped render into Adobe RGB, on the new chain: `DestinationGamut::AdobeRgb`, its pinned matrix and luma, and a `563/256` encode with a `(Hanten)`-named profile. No selector — `NEW_FLOW_GAMUT` stays Display P3, so no default render or fingerprint moved; selecting it is `nf-destinations/direct-preset`'s
 - [ ] [Machine-readable SDR contract in the report](tasks/output/sdr-report-block.md) — the `hdr_coded_tiff` shape for the SDR presets
@@ -1645,13 +1647,18 @@ the design in `docs/design-update.md`:
   test — its resolved-value table and section refusal were since replaced by the
   new chain's own recipe (`nf-core/recipe-schema`);
   three remedies that named a knob this flow refuses are fixed
-- [ ] [Flip the default to the new flow](tasks/nf-core/default-flip.md) — the
-  default resolves the new chain; version bump, drift row, before/after
-  report. Supersedes the flip half of `algo/split-default-migration`
+- [x] [Flip the default to the new flow](tasks/nf-core/default-flip.md) — **done
+  2026-09-27.** The new chain is the only one: `--new-flow` is a removed-flag error,
+  the old chain, its presets, print stage, recipe, sidecar and `ultrahdr-sys` are
+  deleted, and `pipeline_version` 8 defaults to an SDR Display P3 16-bit TIFF — v7's
+  `--new-flow` render byte for byte (`docs/reports/default-flip.md`). Supersedes the flip
+  half of `algo/split-default-migration`
 - [ ] [The report and telemetry shape for the new
   chain](tasks/nf-core/report-contract.md) — ~20 report sections and the
   per-stage timing buckets are keyed to the old chain, and `nctool` parses
-  both
+  both. *Premise moved (`nf-core/default-flip`, 2026-09-27): the old chain and its
+  report sections are gone; telemetry is schema 8 with `conversion.destination`, and
+  `nctool` reads the interface from `pipeline_version` — re-scope before starting*
 - [x] [The recipe schema across the flow
   boundary](tasks/nf-core/recipe-schema.md) — the new chain reads its own
   `"recipe_version": 2` document (`src/recipe.rs`, one section per stage), and
@@ -1659,7 +1666,9 @@ the design in `docs/design-update.md`:
 - [ ] [`roll`, `inspect` and `estimate` under the new
   chain](tasks/nf-core/subcommands.md) — roll's planner resolves defaults by
   hand; `inspect` reports a resolved `dmax`; retirement
-  adds a class of removed-flag errors
+  adds a class of removed-flag errors. *Premise moved (`nf-core/default-flip`,
+  2026-09-27): the old chain is gone, so these commands run only the new one —
+  re-scope before starting*
 - [ ] [Stage seams, buffers and the IR
   plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams
   are the existing typed boundaries, not one per stage; a buffer per stage is

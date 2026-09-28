@@ -46,7 +46,7 @@ Open:
   the table's gamut default (Display P3) would now match a linear row, so it
   resolves to P3 rather than BT.2020 — a silent change of meaning — or, with Adobe
   RGB only, refuses. Options: refuse and ask for `--gamut` (explicit, uniform,
-  recommended — `--new-flow` is transitional), or keep BT.2020 through a
+  recommended), or keep BT.2020 through a
   range-dependent gamut default (the asymmetry `preset-set` flagged as a risk).
 - Whether Display P3 linear is worth a row beside BT.2020 linear, which contains it.
 - Whether the sRGB gain map is read as HDR by Apple ImageIO, and what the legacy

@@ -29,18 +29,14 @@
 //! ## Typed boundary
 //! [`AcesCgImage`] has private fields and a module-private constructor, so
 //! [`map_nc_film_rgb_v1`] — the only function in this module that builds one — is
-//! the sole producer, and that half is **compiler-enforced**. The named-output split
-//! (`pipeline::render_split`: the `film-master` branch and the shared display
-//! controls) accepts an `AcesCgImage` and nothing else, so a raw
-//! [`FilmRgbImage`] cannot *enter* a named output branch
-//! without first crossing this mapper. This is the working-space analogue of
+//! the sole producer, and that half is **compiler-enforced**. The film master's encode
+//! and the chain's entry point accept an `AcesCgImage` and nothing else, so a raw
+//! [`FilmRgbImage`] cannot reach either without first crossing this mapper. This is the working-space analogue of
 //! `FilmRgbImage`'s own construction restriction.
 //!
-//! It does **not** follow that profile tagging is type-checked:
-//! `io::encode(image: &LinearImage, params: &OutputParams, …)` will happily write any
-//! buffer with any profile, so keeping the ACEScg tag matched to ACEScg pixels remains
-//! the orchestrator's responsibility (`pipeline::stages` fetches the tag on the same
-//! branch that maps the pixels).
+//! It does **not** follow that profile tagging is type-checked: the `io::encode`
+//! writers take any buffer with any profile, so keeping the ACEScg tag matched to
+//! ACEScg pixels is the orchestrator's (`cli`) responsibility.
 //!
 //! ## Precision, clamping, non-finite
 //! The matrix multiply runs in **binary64** and stores `f32` — so the only
@@ -106,14 +102,11 @@ impl AcesCgImage {
         }
     }
 
-    // Read accessors — the boundary's inspection API, consumed by the
-    // named-output split (`pipeline::render_split`).
-    #[allow(dead_code)] // read by `output/{sdr,hdr}-display-rendering`.
+    // Read accessors — the boundary's inspection API.
     pub fn width(&self) -> u32 {
         self.width
     }
 
-    #[allow(dead_code)] // read by `output/{sdr,hdr}-display-rendering`.
     pub fn height(&self) -> u32 {
         self.height
     }
@@ -123,8 +116,9 @@ impl AcesCgImage {
         &self.rgb
     }
 
-    /// Read-only view of the carried IR plane, when the input had one.
-    #[allow(dead_code)] // read by `output/{sdr,hdr}-display-rendering`.
+    /// Read-only view of the carried IR plane, when the input had one. Tests only: the
+    /// chain takes the plane with the buffer (`into_linear`).
+    #[cfg(test)]
     pub fn ir(&self) -> Option<&[f32]> {
         self.ir.as_deref()
     }
@@ -139,10 +133,8 @@ impl AcesCgImage {
     }
 
     /// Unwrap into the plain working-space image — the **read** direction of the
-    /// boundary, for whichever chain consumes this image. Today that is the
-    /// named-output split (`pipeline::render_split`), where the `film-master`
-    /// encode and the shared display stage both take an `AcesCgImage` this way, and
-    /// the new flow's entry point (`pipeline::working_image::WorkingBuffer::from_aces`),
+    /// boundary: the film master's encode takes an `AcesCgImage` this way, and so does
+    /// the chain's entry point (`pipeline::working_image::WorkingBuffer::from_aces`),
     /// which moves the buffers into the chain. Constructing one stays restricted to
     /// the mapper; reading one out is not the invariant the type protects.
     pub(crate) fn into_linear(self) -> LinearImage {
@@ -194,8 +186,7 @@ pub fn map_nc_film_rgb_v1(film: FilmRgbImage) -> AcesCgImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::reconstruct;
-    use crate::types::{FilmBase, Reconstruction};
+    use crate::types::FilmBase;
 
     // -- derivation helpers ----------------------------------------------------
     //
@@ -235,14 +226,11 @@ mod tests {
 
     /// Every film-RGB producer — both must reach the same mapper.
     ///
-    /// The current chain's reconstruction and the new chain's fixed decode, each at
-    /// its defaults.
+    /// A test fixture and the fixed decode at its defaults.
     fn producers() -> [(&'static str, Producer); 2] {
         [
-            ("reconstruct", |img, base| {
-                reconstruct(img, base, &Reconstruction::default())
-                    .unwrap()
-                    .0
+            ("fixture", |img, _| {
+                crate::algo::FilmRgbImage::fixture(img.clone())
             }),
             ("fixed::decode", |img, base| {
                 crate::algo::fixed::decode(img, base, &Default::default())

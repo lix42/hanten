@@ -1,33 +1,11 @@
-//! Working-space → output color transforms via lcms2, and the ICC blobs to embed.
+//! Output transfer transforms via lcms2, and the ICC blobs to embed.
 //!
-//! ## Working space
-//! Step-1 decode produces "linear scanner RGB" with no input ICC, so the source
-//! colorimetry must be pinned to build any transform. We treat the working space
-//! as **Rec.709/sRGB primaries, D65 white, linear TRC**. sRGB output is then a
-//! pure tone-curve application (identical primaries); wide-gamut output is a
-//! clean primaries remap. The input semantic resolver
-//! (`pipeline::input_semantics`) runs upstream of this stage and only admits
-//! inputs whose measurement meaning is scanner-device with a supported linear
-//! transfer — it never applies a source→working transform before density (an
-//! embedded scanner ICC is reported, not applied), so this fixed working space
-//! still holds. A characterized scanner/film → working transform is the separate,
-//! deferred `post-reconstruction-color-characterization` task.
-//!
-//! ## Output spaces
-//! The tone curve is a property of the space, so every embedded profile
-//! self-describes its data:
-//! - `SRgb`      — Rec.709 / D65, sRGB curve   (display-referred)
-//! - `AcesCg`    — AP1     / ~D60, linear       (scene-referred; the `film-master` tag)
-//! - `DisplayP3` — P3      / D65, sRGB curve    (display-referred SDR)
-//!
-//! The new chain's destinations are not `OutputSpace`s: `fit_gamut` has already moved
-//! the pixels into the destination's primaries, so [`encode_display_linear`] applies
-//! only the transfer, and the profile is chosen by `DestinationGamut` — Display P3 as
-//! above, or Adobe RGB (1998): its primaries, D65, the pure `563/256` power law.
-//!
-//! ProPhoto and user-supplied ICC paths retired with the `legacy` preset, the only
-//! path that selected an output space by name; an arbitrary destination returns,
-//! if at all, as a gamut-mapped destination of its own.
+//! No transform here changes primaries: `fit_gamut` has already moved the pixels into
+//! the destination's, so [`encode_display_linear`] applies only the transfer, and the
+//! profile is chosen by `DestinationGamut` — Display P3 (P3 primaries, D65, the sRGB
+//! curve) or Adobe RGB (1998): its primaries, D65, the pure `563/256` power law. The
+//! film master's pixels are already linear ACEScg, so [`icc_profile`] only tags them
+//! (AP1, ~D60, linear). The HDR profiles are built for their encoders below.
 //!
 //! Values may leave `[0, 1]` after a gamut remap; range clamping and clipping
 //! warnings are the encoder's job ("fail loudly" at encode), not this stage's.
@@ -43,13 +21,11 @@ use crate::pipeline::colorimetry::pinned;
 use crate::pipeline::fit_gamut::DestinationGamut;
 use crate::pipeline::hdr;
 use crate::pipeline::pixels;
-use crate::pipeline::sdr::{RenderedSdr, SdrGamut, SdrRenderMetadata};
 use crate::types::{LinearImage, NcError, Result};
 
 /// The output color space to transform into and tag the file with.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OutputSpace {
-    SRgb,
     AcesCg,
     /// Display P3 SDR: P3 primaries, D65 encoding white, piecewise sRGB TRC.
     /// The standardized wide-gamut SDR destination (and the planned gain-map
@@ -62,9 +38,8 @@ pub enum OutputSpace {
 
 /// The ICC bytes to embed for a given space, **without** building a transform.
 ///
-/// The `film-master` branch has no transform to build — its pixels are already
-/// linear ACEScg — so `pipeline::stages`' film-master render calls this to fetch the
-/// tag that matches them.
+/// The film master has no transform to build — its pixels are already linear ACEScg —
+/// so its render calls this to fetch the tag that matches them.
 pub fn icc_profile(space: &OutputSpace) -> Result<Vec<u8>> {
     profile_icc(&build_profile(space)?)
 }
@@ -90,27 +65,10 @@ fn profile_icc(profile: &Profile) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Apply only the destination's sRGB transfer curve to an SDR-rendered linear
-/// image and return the matching ICC profile. The renderer already performed
-/// ACEScg → destination gamut conversion, so the transform must not remap the
-/// primaries a second time.
-pub fn encode_rendered_sdr(
-    rendered: RenderedSdr,
-) -> Result<(LinearImage, Vec<u8>, SdrRenderMetadata)> {
-    let (mut image, metadata) = rendered.into_parts();
-    let (linear, output) = match metadata.gamut {
-        SdrGamut::DisplayP3 => display_p3_transfer_profiles()?,
-        SdrGamut::SRgb => (working_profile()?, build_profile(&OutputSpace::SRgb)?),
-    };
-    transform_in_place(&mut image, &linear, &output)?;
-    Ok((image, profile_icc(&output)?, metadata))
-}
-
-/// Apply only the destination's transfer curve to the new chain's output, which
-/// `fit_gamut` has already moved into the destination's primaries, and return the
-/// matching ICC profile — the new flow's counterpart of [`encode_rendered_sdr`], for
-/// the same reason: a second gamut transform would remap values that are already in
-/// the destination's primaries.
+/// Apply only the destination's transfer curve to the chain's output, which `fit_gamut`
+/// has already moved into the destination's primaries, and return the matching ICC
+/// profile: a second gamut transform would remap values that are already in the
+/// destination's primaries.
 ///
 /// The gamut is read off the chain's exit rather than chosen here, so the embedded
 /// profile names the primaries the pixels are actually in. Consumes and returns the
@@ -168,13 +126,13 @@ fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
     Ok((synth(white, primaries, 1.0)?, output))
 }
 
-/// The ICC blob for the `hdr-linear-tiff` output: linear BT.2020 / D65.
+/// The ICC blob for the linear HDR TIFF destination: linear BT.2020 / D65.
 ///
 /// **No transform runs here, and that is the whole point.** `pipeline::hdr` already
 /// rendered into BT.2020 primaries, so this only *describes* the samples the
-/// encoder writes verbatim. A transform from the Rec.709 working profile would treat
-/// display-linear BT.2020 as Rec.709 working RGB and remap it a second time — the
-/// same trap [`encode_rendered_sdr`] documents for the SDR rendition.
+/// encoder writes verbatim. A transform from another profile would treat
+/// display-linear BT.2020 as that space and remap it a second time — the same trap
+/// [`encode_display_linear`] avoids for the SDR rendition.
 ///
 /// Two deliberate omissions, both recorded so they are not "fixed" later:
 ///
@@ -187,7 +145,7 @@ fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
 ///   (H.273 value 8) is not a substitute for that.
 /// * **No attempt to encode luminance semantics in the profile.** The ICC PCS
 ///   stops at the media white, so no v4 profile can say "1.0 means 203 cd/m² and
-///   4.926108 means 1000 cd/m²". The report and sidecar own those facts; the task
+///   4.926108 means 1000 cd/m²". The report owns those facts; the task
 ///   requires that this profile never be claimed to carry them.
 ///
 /// ⚠ This is a runtime consumer of a `colorimetry::definitions` colour space
@@ -862,8 +820,7 @@ fn synth(white: CIExyY, primaries: [(f64, f64); 3], gamma: f64) -> Result<Profil
 
 /// The piecewise sRGB transfer curve (IEC 61966-2.1) — the same curve Little
 /// CMS's built-in `new_srgb()` carries, built explicitly here for the Display P3
-/// profile (`new_srgb()` covers the sRGB output, so `srgb_trc` is Display P3's
-/// only caller). A Little CMS **parametric** type-4 curve —
+/// profile. A Little CMS **parametric** type-4 curve —
 /// `Y = ((a·X + b))^g` for `X ≥ d`, else `Y = c·X`, with the standard sRGB
 /// parameters — so the near-black linear toe is exact rather than the visibly
 /// wrong result of approximating the whole curve by a single gamma-2.2 power. The
@@ -878,17 +835,9 @@ fn srgb_trc() -> Result<ToneCurve> {
         .map_err(|e| NcError::Other(format!("failed to build sRGB tone curve: {e}")))
 }
 
-/// The linear Rec.709 / D65 working-space profile (see module docs).
-fn working_profile() -> Result<Profile> {
-    let (white, primaries) = lcms_inputs(definitions::REC709);
-    synth(white, primaries, 1.0)
-}
-
 /// Build the lcms2 profile for an output space.
 fn build_profile(space: &OutputSpace) -> Result<Profile> {
     match space {
-        // Built-in sRGB: Rec.709 primaries, D65, sRGB TRC.
-        OutputSpace::SRgb => Ok(Profile::new_srgb()),
         // ACEScg: AP1 primaries, ACES white (~D60), linear.
         OutputSpace::AcesCg => {
             let (white, primaries) = lcms_inputs(definitions::ACESCG);
@@ -910,36 +859,29 @@ fn build_profile(space: &OutputSpace) -> Result<Profile> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::FilmRgbImage;
-    use crate::pipeline::display_tone::Headroom;
-    use crate::pipeline::render_split::display_source;
-    use crate::pipeline::sdr;
-    use crate::pipeline::working_space::map_nc_film_rgb_v1;
-    use crate::types::PrintParams;
 
     fn gray_image(v: f32) -> LinearImage {
         LinearImage::new(1, 1, vec![v, v, v], None).unwrap()
     }
 
-    /// The linear working → `space` transform, built and run the way the encoders
-    /// build and run theirs.
-    fn transform_to(mut image: LinearImage, space: &OutputSpace) -> Result<LinearImage> {
-        transform_in_place(&mut image, &working_profile()?, &build_profile(space)?)?;
-        Ok(image)
+    /// Linear Rec.709 / D65 — a source with a known relation to Little CMS's built-in
+    /// sRGB and to the shipped profiles, for exercising [`transform_in_place`].
+    fn linear_rec709() -> Profile {
+        let (white, primaries) = lcms_inputs(definitions::REC709);
+        synth(white, primaries, 1.0).unwrap()
     }
 
-    fn render_sdr(rgb: &[f32], gamut: SdrGamut) -> RenderedSdr {
-        let film = FilmRgbImage::fixture(
-            LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap(),
-        );
-        let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
-        sdr::render(&shared, gamut, Headroom::default()).unwrap()
+    /// Linear Rec.709 → `output`, built and run the way the encoders build and run
+    /// theirs.
+    fn transform_to(mut image: LinearImage, output: &Profile) -> Result<LinearImage> {
+        transform_in_place(&mut image, &linear_rec709(), output)?;
+        Ok(image)
     }
 
     #[test]
     fn neutral_gray_maps_to_srgb_encoded_value() {
         // Linear 0.5 in the working space → sRGB-encoded ~0.7353.
-        let out = transform_to(gray_image(0.5), &OutputSpace::SRgb).unwrap();
+        let out = transform_to(gray_image(0.5), &Profile::new_srgb()).unwrap();
         for &c in &out.rgb {
             assert!((c - 0.7353).abs() < 0.005, "got {c}, expected ~0.7353");
         }
@@ -948,8 +890,8 @@ mod tests {
     #[test]
     fn srgb_round_trip_within_tolerance() {
         // working → sRGB, then sRGB → working should recover the input.
-        let encoded = transform_to(gray_image(0.5), &OutputSpace::SRgb).unwrap();
-        let working = working_profile().unwrap();
+        let encoded = transform_to(gray_image(0.5), &Profile::new_srgb()).unwrap();
+        let working = linear_rec709();
         let srgb = Profile::new_srgb();
         let back: Transform<[f32; 3], [f32; 3]> = Transform::new(
             &srgb,
@@ -983,11 +925,7 @@ mod tests {
 
     #[test]
     fn icc_profile_bytes_are_valid_for_builtins() {
-        for space in [
-            OutputSpace::SRgb,
-            OutputSpace::AcesCg,
-            OutputSpace::DisplayP3,
-        ] {
+        for space in [OutputSpace::AcesCg, OutputSpace::DisplayP3] {
             let bytes = icc_profile(&space).unwrap();
             assert!(!bytes.is_empty(), "{space:?} produced empty ICC");
             // Re-openable as a valid profile.
@@ -1000,7 +938,7 @@ mod tests {
         // The IR plane must survive the color transform byte-for-byte (it is
         // preserved, not consumed, in Step 1).
         let img = LinearImage::new(1, 1, vec![0.5, 0.5, 0.5], Some(vec![0.42])).unwrap();
-        let out = transform_to(img, &OutputSpace::SRgb).unwrap();
+        let out = transform_to(img, &Profile::new_srgb()).unwrap();
         assert_eq!(out.width, 1);
         assert_eq!(out.height, 1);
         assert_eq!(out.ir, Some(vec![0.42]));
@@ -1014,7 +952,7 @@ mod tests {
         //
         let mut img = LinearImage::new(1, 1, vec![0.5, 0.5, 0.5], None).unwrap();
         img.rgb.push(0.25); // len 4 — not a multiple of 3
-        let err = transform_to(img, &OutputSpace::SRgb).unwrap_err();
+        let err = transform_to(img, &Profile::new_srgb()).unwrap_err();
         assert_eq!(err.exit_code(), 1);
         assert!(err.to_string().contains("not a multiple of 3"), "{err}");
     }
@@ -1026,12 +964,16 @@ mod tests {
         // Rec.709 red encoded into the wider AP1 gamut must pull R below 1.0 and
         // lift G/B off 0 — this pins down the primaries/white-point, not just the
         // (linear) TRC.
-        let gray = transform_to(gray_image(0.5), &OutputSpace::AcesCg).unwrap();
+        let gray = transform_to(
+            gray_image(0.5),
+            &build_profile(&OutputSpace::AcesCg).unwrap(),
+        )
+        .unwrap();
         for &c in &gray.rgb {
             assert!((0.3..0.7).contains(&c), "AcesCg gray {c} far from 0.5");
         }
         let img = LinearImage::new(1, 1, vec![1.0, 0.0, 0.0], None).unwrap();
-        let out = transform_to(img, &OutputSpace::AcesCg).unwrap();
+        let out = transform_to(img, &build_profile(&OutputSpace::AcesCg).unwrap()).unwrap();
         let [r, g, b] = [out.rgb[0], out.rgb[1], out.rgb[2]];
         assert!(r < 1.0, "expected R pulled below 1.0, got {r}");
         assert!(g > 0.0 && b > 0.0, "expected G/B lifted off 0, got {g}/{b}");
@@ -1167,7 +1109,7 @@ mod tests {
         // Same machine, same lcms2 build: the banded parallel transform must be
         // bit-identical to one sequential `cmsDoTransform` over the whole buffer.
         // 37 rows is not a multiple of the band, so the short tail band runs too.
-        let working = working_profile().unwrap();
+        let working = linear_rec709();
         let output = build_profile(&OutputSpace::DisplayP3).unwrap();
         let (w, h) = (64_u32, 37_u32);
         let rgb: Vec<f32> = (0..(w * h * 3) as usize)
@@ -1312,10 +1254,10 @@ mod tests {
         let second = hdr_linear_bt2020_icc().unwrap();
         assert_eq!(first, second);
         assert!(!first.is_empty());
-        // And it is *not* the ACEScg or Rec.709 profile — a copy-paste of the wrong
+        // And it is *not* the ACEScg or Display P3 profile — a copy-paste of the wrong
         // `definitions` constant would otherwise pass every assertion above.
         assert_ne!(first, icc_profile(&OutputSpace::AcesCg).unwrap());
-        assert_ne!(first, icc_profile(&OutputSpace::SRgb).unwrap());
+        assert_ne!(first, icc_profile(&OutputSpace::DisplayP3).unwrap());
         // Carries a real description, not Little CMS's default "RGB built-in".
         let profile = Profile::new_icc(&first).unwrap();
         let description = profile
@@ -1324,15 +1266,6 @@ mod tests {
         assert!(
             description.contains("BT.2020") && description.contains("Linear"),
             "unexpected profile description {description:?}"
-        );
-        // The older shipped profiles are deliberately left alone, so their bytes
-        // do not move: this asserts the scope of the naming change.
-        let srgb = Profile::new_icc(&icc_profile(&OutputSpace::SRgb).unwrap()).unwrap();
-        assert_eq!(
-            srgb.info(lcms2::InfoType::Description, lcms2::Locale::none())
-                .unwrap_or_default(),
-            "sRGB built-in",
-            "the sRGB profile description must not change here"
         );
     }
 
@@ -1575,35 +1508,8 @@ mod tests {
     }
 
     #[test]
-    fn rendered_p3_samples_encode_with_srgb_trc_and_matching_profile() {
-        // Exercise the public renderer → opaque value → encoder seam. The encoder
-        // receives no independently selectable gamut, so a mismatched profile is
-        // unrepresentable; each rendered-linear channel receives only the sRGB TRC.
-        let rendered = render_sdr(
-            &[0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4],
-            SdrGamut::DisplayP3,
-        );
-        let input: Vec<[f32; 3]> = rendered.image().rgb.as_chunks::<3>().0.to_vec();
-        let (encoded, icc, metadata) = encode_rendered_sdr(rendered).unwrap();
-        assert_eq!(icc, icc_profile(&OutputSpace::DisplayP3).unwrap());
-        assert_eq!(metadata.gamut, SdrGamut::DisplayP3);
-        let encoded: Vec<[f32; 3]> = encoded.rgb.as_chunks::<3>().0.to_vec();
-        for (got, inp) in encoded.iter().copied().zip(input.iter().copied()) {
-            for ch in 0..3 {
-                let want = srgb_encode(inp[ch]);
-                assert!(
-                    (got[ch] - want).abs() < 2e-3,
-                    "channel {ch}: {} != sRGB-encoded {want} (input {})",
-                    got[ch],
-                    inp[ch]
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_new_flows_display_linear_encode_applies_only_the_srgb_curve() {
-        // The new flow's destination half of "the declared profile matches the pixels":
+    fn the_display_linear_encode_applies_only_the_srgb_curve() {
+        // The destination half of "the declared profile matches the pixels":
         // `fit_gamut` already moved the pixels into Display P3, so the encode must apply
         // the sRGB curve and nothing else — no second gamut transform — and embed the
         // Display P3 profile. The IR plane rides through untouched.
@@ -1621,32 +1527,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn rendered_srgb_samples_encode_with_srgb_trc_and_matching_profile() {
-        let rendered = render_sdr(
-            &[0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4],
-            SdrGamut::SRgb,
-        );
-        let input: Vec<[f32; 3]> = rendered.image().rgb.as_chunks::<3>().0.to_vec();
-        let (encoded, icc, metadata) = encode_rendered_sdr(rendered).unwrap();
-        assert_eq!(icc, icc_profile(&OutputSpace::SRgb).unwrap());
-        assert_eq!(metadata.gamut, SdrGamut::SRgb);
-        let encoded: Vec<[f32; 3]> = encoded.rgb.as_chunks::<3>().0.to_vec();
-        for (got, inp) in encoded.iter().copied().zip(input) {
-            for ch in 0..3 {
-                let want = srgb_encode(inp[ch]);
-                assert!(
-                    (got[ch] - want).abs() < 2e-3,
-                    "channel {ch}: {} != sRGB-encoded {want} (input {})",
-                    got[ch],
-                    inp[ch]
-                );
-            }
-        }
-    }
-
     // -----------------------------------------------------------------------
-    // Adobe RGB (1998), the new chain's second destination gamut
+    // Adobe RGB (1998), the second SDR destination gamut
     // -----------------------------------------------------------------------
 
     /// The Adobe RGB profile's bytes, as [`encode_display_linear`] embeds them.

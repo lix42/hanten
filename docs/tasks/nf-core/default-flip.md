@@ -43,14 +43,48 @@ still accurate about what a default move owes.
   path is a list of abilities the new code may need — but the list has to be produced
   before the flip, not after.
 
+## Scope and the gap list (2026-09-27, with the user)
+
+**Scope.** Removing the flag leaves the current chain's render unreachable, and no other
+task deletes it, so this task does: `merge`, the print/output halves of
+`ResolvedConfig`, `OutputPreset`, the current chain's render and encode paths and their
+report, sidecar and telemetry code, keeping what the new chain reuses. One PR,
+separate commits. The default destination is the new chain's axis defaults (SDR
+Display P3 16-bit TIFF, where the current default is `gain-map-hdr`);
+`nf-destinations/default-destination` may still move it. The new fingerprint row's
+`render` hashes the fixed decode only; where it should stop is
+`nf-verification/fingerprints`'.
+
+**What the current chain does that the new one does not, and each verdict.** Produced
+before the flip, as the migration rule asks.
+
+| Ability | Verdict |
+|---|---|
+| `gain-map-hdr`'s Ultra HDR v1 XMP beside ISO 21496-1 | Dropped. `--range hdr` writes the ISO-only per-channel map; a reader that knows only the legacy XMP shows the SDR base |
+| `ultra-hdr-v1` (legacy dialect only) | Dropped, as above; it was never HDR on Apple |
+| `compatibility` (sRGB SDR TIFF) | Gap until `nf-destinations/easy-destination-rows` adds an sRGB gamut |
+| `--black-point` (one subtraction on film RGB) | Its surviving half is `--display-black`; the flare half was closed as not needed (`nf-scene-correction/flare-removal`) |
+| `--linear-range` | Gap; `nf-scene-correction/levels-knob` decides a home or retirement |
+| `--auto-wb` | Dropped for `hanten measure-roll` (already a `Never` row) |
+| Sidecar, `params_hash`, the report's `recipe` echo and its ~20 current-chain sections | Gap; `nf-core/report-contract`. `--dump-params` is the round trip meanwhile |
+| `--telemetry` / `--telemetry-file` | Kept, adapted minimally (user, 2026-09-27): `schema_version` 8, `conversion.destination` for the preset, `params_hash` over the v2 recipe; the final shape is `nf-core/report-contract`'s |
+| `libultrahdr` (`ultrahdr-sys`, its vendored snapshot and check) | Deleted with the Ultra HDR dialect (user, 2026-09-27); `output/ultrahdr-dependency-externalization` closed as moot |
+| `inspect` / `estimate` fields that read the current chain's config; roll's per-frame consistency warnings | `nf-core/subcommands` |
+| Loading a current-chain recipe or sidecar | Refused with a migration message; no converter (nc is unreleased) |
+| `nctool` driving a build with `--output-preset` | A reference build still takes it; the new build takes the destination axes with no `--new-flow` — this task |
+
 ## How to Verify
 
 - A bare `hanten convert` resolves the new chain; `--new-flow` exits 2 with a migration
-  message naming what replaced it, and a recipe carrying it fails to load.
+  message naming what replaced it, and a recipe without `recipe_version` 2 (every
+  current-chain sidecar) fails to load with a migration message.
+- The current chain's render code is gone, not unreachable: no `allow(dead_code)` stands
+  in for a deletion.
 - The new fingerprint row exists and the gate is green; no historical row changed.
-- The release gate's recorded decision exists — the measured residual *and* the
-  judgement made against it, either way.
-- `docs/using-nc.md` verified against the binary, and the four CI gates pass.
+- `docs/using-nc.md` verified against the binary, and the CI gates pass.
+
+The neutrality gate is **not** a check here: it holds the decode's values, not the
+chain flip, and records no dependent (`nf-calibration/neutrality-gate`).
 
 ## Dependencies
 

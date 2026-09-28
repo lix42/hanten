@@ -11,6 +11,8 @@ ones.
 
 ## Epic summary
 
+> **Since `nf-core/default-flip` (2026-09-27, `pipeline_version` 8)** the chain this summary calls the new flow is the only one: read "under `--new-flow`" as the default, and "the current chain" as the removed one (the reference build).
+
 The fixed, stock-agnostic decode: exponential, one anchor rule with a frozen `d`, `gamma` split into a calibration half and a look half.
 
 The fixed decode has landed (`src/algo/fixed.rs`, 2026-09-22): fresh arithmetic,

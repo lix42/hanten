@@ -6,6 +6,11 @@ Carry the three non-`convert` surfaces across the flow boundary. The migration i
 sequenced around `convert`; these three reach the same stages by other paths, and
 nothing in the plan owns them.
 
+*Premise moved (`nf-core/default-flip`, 2026-09-27): the old chain is gone and
+`--new-flow` is a removed-flag error, so the "current chain" / "new chain" contrasts
+below describe history — `roll`, `inspect` and `estimate` run only the new chain.
+Re-scope before starting.*
+
 ## Design
 
 - **`roll` resolves defaults by hand, and a new decode reopens that trap.** Its

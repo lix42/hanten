@@ -11,6 +11,8 @@ ones.
 
 ## Epic summary
 
+> **Since `nf-core/default-flip` (2026-09-27, `pipeline_version` 8)** the chain this summary calls the new flow is the only one: read "under `--new-flow`" as the default, and "the current chain" as the removed one (the reference build).
+
 Remove the old paths once the reference build exists: `legacy`/`custom`, the bounded display tones, the sigmoid and `simple`, the `Dmax` anchor machinery, the regional balance, and the `print.*` prefix.
 
 Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration.md`).

@@ -1,5 +1,5 @@
 //! The fixed, stock-agnostic decode (`nf-reconstruction/fixed-decode`,
-//! `docs/design-update.md` Part 1) — the reconstruction the new flow runs.
+//! `docs/design-update.md` Part 1) — the reconstruction every conversion runs.
 //!
 //! ```text
 //! D_c  = −log10(scan_c / base_c)          measurement
@@ -14,11 +14,8 @@
 //! they cannot be judged by "how much survived". Everything about how the picture
 //! should look belongs to rendering.
 //!
-//! **Written fresh, not extracted.** Per CLAUDE.md's migration rule this does not
-//! reuse [`density::reconstruct`]'s seams or its `DensityImage` intermediate: the
-//! two passes are fused into one, so the decode allocates one buffer where the
-//! legacy path allocates one and transforms it again. It lives in `algo` rather
-//! than `pipeline` because [`FilmRgbImage`] is the typed boundary every
+//! **One pass, one buffer**: transmission → density → the line, fused per sample. It
+//! lives in `algo` rather than `pipeline` because [`FilmRgbImage`] is the typed boundary every
 //! reconstruction path produces and only this module tree may mint one; the 3×3
 //! into ACEScg stays `pipeline::working_space::map_nc_film_rgb_v1`.
 //!
@@ -85,7 +82,7 @@
 //! future one would add a variant instead of silently changing what a number means.
 //! No white reference is measured, read or representable here.
 
-use crate::algo::{FilmRgbImage, density};
+use crate::algo::FilmRgbImage;
 use crate::pipeline::pixels;
 use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Result};
 
@@ -105,9 +102,8 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 ///
 /// The value is today's pick. `nf-calibration/anchor-comparison` left it in place — the
 /// roll's white acts through the look's contrast — but a later calibration may move it.
-/// That changes every `--new-flow` render, and nothing versions it yet —
-/// `pipeline_version` tracks the default render only, and a new-flow fingerprint is
-/// `nf-verification/fingerprints`'. It stays reachable as `--anchor-mid-offset`.
+/// That changes every default render, so it adds a `version::PIPELINE_FINGERPRINTS`
+/// row. It stays reachable as `--anchor-mid-offset`.
 pub const MID_ABOVE_BASE: f32 = 0.62;
 
 /// Where diffuse white sits in the **graded** image — the look's output, which every
@@ -154,11 +150,8 @@ pub const LINEARIZATION: f32 = 1.8;
 /// The single `gamma` nc shipped before the split: linearization and print contrast
 /// bundled into one number.
 ///
-/// Two readers. The current chain has no look stage, so its default curve still
-/// carries the whole bundle (`types::ExponentialParams::default`), and moves no pixel
-/// until `nf-core/default-flip` retires it. And the look's default contrast is defined
-/// from it — `BUNDLED_CONTRAST / LINEARIZATION` — so the new flow's default renders a
-/// neutral where the bundled decode did.
+/// The look's default contrast is defined from it — `BUNDLED_CONTRAST / LINEARIZATION`
+/// — so the default renders a neutral where the bundled decode did.
 pub const BUNDLED_CONTRAST: f32 = 2.0;
 
 /// The per-channel density calibration — **one global value**, never varied per
@@ -169,10 +162,6 @@ pub const BUNDLED_CONTRAST: f32 = 2.0;
 /// averaged with equal weight per roll. It is a fit of *our* chain — one scanner,
 /// two developers — shipped as a **default prior**, not as anyone's calibration;
 /// the residual belongs to `io/scanner-density-calibration`.
-///
-/// The current chain's `DensityParams::default` reads this constant (since
-/// `pipeline_version` 6), so both chains default to one gain;
-/// `tests::the_current_chains_default_is_this_decode_at_the_bundled_contrast` pins it.
 pub const DENSITY_SCALE: [f32; 3] = [1.0, 0.84, 0.73];
 
 /// The per-channel density offset. `[0, 0, 0]` is **a pick, not a closed question**:
@@ -209,8 +198,9 @@ pub enum AnchorRule {
     /// about mid instead of moving the whole image. Pinning black instead would
     /// leave midtone brightness depending on contrast, and the base is fog rather
     /// than scene black anyway.
-    // Spelled as the current chain spells the placement it reproduces, so a
-    // recipe reads one name across both flows (see [`AnchorRule::name`]).
+    // Spelled as the removed chain spelled the placement this reproduces, so the
+    // key a recipe carried before `pipeline_version` 8 names the same placement (see
+    // [`AnchorRule::name`]).
     #[serde(rename = "mid-at-base-offset")]
     MidAboveBase(f32),
 }
@@ -219,7 +209,7 @@ impl AnchorRule {
     /// The corrected density that renders to `1.0`.
     ///
     /// Solving `10^(linearization·(d − A)) = 0.18` gives `A = d + 0.745/linearization`.
-    /// This is the **only** definition of the anchor in the new flow: the report reads it
+    /// This is the **only** definition of the anchor: the report reads it
     /// from here rather than recomputing it, so a report cannot document a number the
     /// render did not use.
     pub fn anchor(self, linearization: f32) -> f32 {
@@ -228,8 +218,9 @@ impl AnchorRule {
         }
     }
 
-    /// The rule's name for the report. Matches the legacy placement it reproduces
-    /// (`mid-at-base-offset`), so a reader comparing the two flows sees one name.
+    /// The rule's name for the report. Matches the removed chain's placement it
+    /// reproduces (`mid-at-base-offset`), so a reader comparing the reference build's
+    /// reports with these sees one name.
     pub fn name(self) -> &'static str {
         match self {
             AnchorRule::MidAboveBase(_) => "mid-at-base-offset",
@@ -249,7 +240,7 @@ impl AnchorRule {
 
 /// The decode's parameters — measurement, calibration, curve.
 ///
-/// Also the new chain's recipe section `reconstruction` (`crate::recipe`), field for
+/// Also the recipe section `reconstruction` (`crate::recipe`), field for
 /// field: the recipe spells exactly what the decode reads, so there is no mapping to
 /// drift. Omitted keys take [`Default`], which is these module constants.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -316,7 +307,7 @@ pub fn decode(
     // auto/region-estimated one is only guarded at its consumption point, which is
     // here. Shared with the legacy path deliberately: the film base is the one input
     // both flows measure the same way, so one message serves both.
-    density::check_base(base)?;
+    check_base(base)?;
     let anchor = check_params(params)?;
 
     let base = [base.r, base.g, base.b];
@@ -364,6 +355,21 @@ pub fn decode(
     ))
 }
 
+/// Refuse a film base that is not a per-channel transmission in `(0, 1]`: it is the
+/// divisor of the density conversion, so zero, negative or non-finite would decode to
+/// infinities, and a value above 1 renders every real sample denser than the base.
+fn check_base(base: &FilmBase) -> Result<()> {
+    for (name, v) in [("r", base.r), ("g", base.g), ("b", base.b)] {
+        if !v.is_finite() || v <= 0.0 || v > 1.0 {
+            return Err(NcError::Other(format!(
+                "film base {name} channel must be a transmission in (0, 1] (got {v}); \
+                 measure a valid Dmin or pass an explicit --film-base"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Decode the film base itself, as a one-pixel image: where the unexposed film lands
 /// in the positive, which is display black's reference (`pipeline::chain::render`).
 ///
@@ -393,7 +399,7 @@ pub enum DecodeFault {
     /// The linearization is not finite and positive.
     Linearization(f32),
     /// The anchor rule's mid-grey density above the base is not finite and positive —
-    /// the range `mid-at-base-offset` has always had on the current chain.
+    /// the range `mid-at-base-offset` has always had.
     MidAboveBase(f32),
     /// The resolved anchor, or the curve's exponent at it, overflows f32.
     Anchor { anchor: f32, linearization: f32 },
@@ -468,17 +474,7 @@ fn check_params(params: &DecodeParams) -> Result<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::reconstruct;
-    use crate::types::{
-        AnchorPlacement, DensityParams, ExponentialParams, REFERENCE_MID_TO_WHITE_DELTA,
-        Reconstruction,
-    };
-
-    /// Bit patterns, not values: `NaN != NaN`, so an `==` comparison would pass over
-    /// exactly the samples these assertions exist to cover.
-    fn bits(pixels: &[f32]) -> Vec<u32> {
-        pixels.iter().map(|v| v.to_bits()).collect()
-    }
+    use crate::types::REFERENCE_MID_TO_WHITE_DELTA;
 
     fn base() -> FilmBase {
         FilmBase::from([0.9, 0.55, 0.42])
@@ -515,67 +511,10 @@ mod tests {
         .unwrap()
     }
 
-    /// A non-zero offset for the equality test's second pass. `DENSITY_OFFSET` is
-    /// `[0, 0, 0]` today, which makes `+ offset` a no-op on every sample — so the
-    /// shipped-value pass cannot witness the rule that it is never dropped, and
-    /// `nf-calibration/offset-question` may move that constant out from under it.
-    /// Distinct per channel, so a transposed channel reds it too.
+    /// A non-zero offset, distinct per channel. `DENSITY_OFFSET` is `[0, 0, 0]` today,
+    /// which makes `+ offset` a no-op on every sample, so a test of the offset's
+    /// arithmetic needs one of its own.
     const PROBE_OFFSET: [f32; 3] = [-0.05, 0.02, 0.07];
-
-    /// The current chain's configuration this decode reproduces: the exponential curve
-    /// at the same slope, the same calibration, and the same reference-free placement.
-    /// At the slope [`BUNDLED_CONTRAST`] it is that chain's default since
-    /// `pipeline_version` 6; at [`LINEARIZATION`] it is this decode's default.
-    fn equivalent_legacy(offset: [f32; 3], gamma: f32) -> Reconstruction {
-        Reconstruction {
-            density: DensityParams {
-                scale: DENSITY_SCALE,
-                offset,
-            },
-            curve: ExponentialParams {
-                gamma,
-                anchor: AnchorPlacement::MidAtBaseOffset(MID_ABOVE_BASE),
-            },
-        }
-    }
-
-    #[test]
-    fn the_fixed_decode_matches_the_equivalent_legacy_configuration() {
-        // The task's acceptance test, and it is a real one rather than a tautology:
-        // the arithmetic here is written fresh and fused, so equality is a claim
-        // about two implementations rather than about one call site. It is also
-        // cross-target safe by construction — two implementations compared on one
-        // host, never against a checked-in constant — which is what lets it be
-        // bit-exact over `log10` and `powf` at all (CLAUDE.md, determinism).
-        //
-        // Run at **both** the shipped offset and a non-zero one, because neither alone
-        // holds the rules the module docs claim for it: at `[0, 0, 0]` dropping the
-        // offset add moves no sample, and at a non-zero offset the density's f32
-        // rounding moves none. See the module docs for the measured split. The FMA
-        // rule is witnessed by neither and has its own test below.
-        //
-        // Run at both slopes as well: this decode's default linearization, and the
-        // bundled contrast the current chain still ships — the configuration that makes
-        // that chain's default *this* decode.
-        let (img, b) = (scan(), base());
-        for gamma in [LINEARIZATION, BUNDLED_CONTRAST] {
-            for offset in [DENSITY_OFFSET, PROBE_OFFSET] {
-                let params = DecodeParams {
-                    offset,
-                    linearization: gamma,
-                    ..DecodeParams::default()
-                };
-                let (fresh, _) = decode(&img, &b, &params).unwrap();
-                let (legacy, _) = reconstruct(&img, &b, &equivalent_legacy(offset, gamma)).unwrap();
-                assert_eq!(
-                    bits(fresh.rgb()),
-                    bits(legacy.rgb()),
-                    "the fresh decode is not bit-identical to the equivalent legacy \
-                     configuration at offset {offset:?}, slope {gamma}"
-                );
-            }
-        }
-    }
 
     #[test]
     fn the_decode_never_contracts_the_calibration_into_an_fma() {
@@ -628,72 +567,6 @@ mod tests {
             "no sample in the swept band tells an FMA from the plain form, so this \
              test proves nothing"
         );
-    }
-
-    #[test]
-    fn a_one_ulp_move_in_the_anchor_is_visible_to_that_comparison() {
-        // Falsifiability for `the_fixed_decode_matches_the_equivalent_legacy_configuration`:
-        // it is evidence only if the comparison can fail on the values this decode
-        // actually carries. The smallest move of `d` that moves the resolved anchor
-        // must red it — and that is at most two ULP of `d`: at the linearization the
-        // anchor (≈1.03) sits a binade above `d` (0.62), so its ULP is twice as coarse
-        // and a single-ULP move of `d` can round away in the sum.
-        let (img, b) = (scan(), base());
-        let shipped_params = DecodeParams::default();
-        let shipped_anchor = shipped_params.anchor.anchor(shipped_params.linearization);
-        let mut d = MID_ABOVE_BASE;
-        let mut steps = 0;
-        let moved_params = loop {
-            d = d.next_up();
-            steps += 1;
-            let p = DecodeParams {
-                anchor: AnchorRule::MidAboveBase(d),
-                ..DecodeParams::default()
-            };
-            if p.anchor.anchor(p.linearization) != shipped_anchor {
-                break p;
-            }
-        };
-        assert!(steps <= 2, "{steps} ULP of `d` before the anchor moved");
-        let shipped = decode(&img, &b, &shipped_params).unwrap().0;
-        let moved = decode(&img, &b, &moved_params).unwrap().0;
-        assert_ne!(bits(shipped.rgb()), bits(moved.rgb()));
-    }
-
-    #[test]
-    fn the_comparison_distinguishes_a_different_placement() {
-        // The other half of falsifiability: the equality must be pinning *this*
-        // configuration, not passing because every configuration agrees on this
-        // vector. A different placement on the same curve must differ.
-        let (img, b) = (scan(), base());
-        let (fresh, _) = decode(&img, &b, &DecodeParams::default()).unwrap();
-        let other = Reconstruction {
-            density: DensityParams {
-                scale: DENSITY_SCALE,
-                offset: DENSITY_OFFSET,
-            },
-            curve: ExponentialParams {
-                gamma: LINEARIZATION,
-                anchor: AnchorPlacement::MidAtBaseOffset(0.5),
-            },
-        };
-        let (legacy, _) = reconstruct(&img, &b, &other).unwrap();
-        assert_ne!(bits(fresh.rgb()), bits(legacy.rgb()));
-    }
-
-    #[test]
-    fn the_current_chains_default_is_this_decode_at_the_bundled_contrast() {
-        // Since `pipeline_version` 6 the current chain's default reconstruction reads
-        // its curve constants from here, so the equality tests above describe *the*
-        // default rather than one configuration of it. That chain has no look stage, so
-        // it still carries the whole bundled `gamma` rather than the linearization —
-        // which is what keeps the split from moving a pixel there. This pins the part
-        // those constants do not reach: the offset default and the whole shape.
-        assert_eq!(
-            Reconstruction::default(),
-            equivalent_legacy(DENSITY_OFFSET, BUNDLED_CONTRAST)
-        );
-        assert_eq!(SCAN_FLOOR, density::SCAN_EPSILON);
     }
 
     #[test]
@@ -842,8 +715,8 @@ mod tests {
 
         // The scale is a gain, so finite is not enough — and both failures are quiet:
         // a zero renders that channel flat (finite, in range, tripping no counter) and
-        // a negative one reverses its density ordering. `cli::validate` refuses both at
-        // the flag; a programmatic caller reaches this guard.
+        // a negative one reverses its density ordering. `recipe::validate` refuses both
+        // at load; a programmatic caller reaches this guard.
         for scale in [[1.0, 0.0, 1.0], [1.0, -0.84, 1.0]] {
             let err = decode(
                 &scan(),
@@ -861,8 +734,7 @@ mod tests {
             );
         }
 
-        // The mid-grey offset is a density *above* the base, so it is positive — the
-        // range `mid-at-base-offset` has on the current chain too.
+        // The mid-grey offset is a density *above* the base, so it is positive.
         for d in [0.0, -0.1, f32::NAN] {
             let err = decode(
                 &scan(),

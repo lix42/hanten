@@ -15,8 +15,8 @@ changing any encoding behaviour.
 
 Add a `windows-latest` job to `.github/workflows/ci.yml` and make the native build
 work under MSVC: libaom is built from the published `libaom-sys` crate's vendored
-source via CMake, so the job needs a C/C++ toolchain, CMake, NASM for x86_64 SIMD,
-and `libclang` for bindgen. Confirm the static link produces a self-contained
+source via CMake, so the job needs a C/C++ toolchain, CMake and NASM for x86_64
+SIMD. Confirm the static link produces a self-contained
 `nc.exe` with no libaom DLL dependency.
 
 Nothing about the container, the codestream, or the pinned encoder settings should
@@ -26,14 +26,13 @@ hold is the weaker documented cross-build contract — identical semantic metada
 and decoded pixels within the codec bounds `io::avif` already pins.
 
 If MSVC cannot build libaom without patching vendored source, prefer documenting
-Windows as unsupported over carrying a local patch: the repo already has one
-regretted native snapshot (`output/ultrahdr-dependency-externalization`).
+Windows as unsupported over carrying a local patch: the repo carried one regretted
+native snapshot (`vendor/ultrahdr-sys`, removed by `nf-core/default-flip`).
 
 ## How to Verify
 
-- A `windows-latest` CI job runs the same four gates as the other targets, plus
-  `scripts/check-vendored-native.py`, and is green.
-- `hdr-pq` and `hdr-hlg` produce files on Windows that an independent decoder reads
+- A `windows-latest` CI job runs the same gates as the other targets, and is green.
+- The PQ and HLG AVIF destinations produce files on Windows that an independent decoder reads
   with the same dimensions, depth, 4:4:4 sampling, full range, CICP, brands and
   content-light metadata as the macOS/Linux outputs.
 - Decoded pixels agree with the other targets within the codec bounds pinned by

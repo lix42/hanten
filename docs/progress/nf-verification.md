@@ -11,6 +11,8 @@ ones.
 
 ## Epic summary
 
+> **Since `nf-core/default-flip` (2026-09-27, `pipeline_version` 8)** the chain this summary calls the new flow is the only one: read "under `--new-flow`" as the default, and "the current chain" as the removed one (the reference build).
+
 Gates that describe the new chain, and the frozen reference build that lets the old paths retire early.
 
 Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration.md`).
@@ -25,9 +27,10 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
   recaptures that stage's vector, and the threaded ones, in the same change.
   `FilmRgbImage::fixture` is the test-only way to enter the chain with chosen values.
   No decode pixel is provably bit-portable, which constrains `fingerprints`.
-- **A `--new-flow` cell cannot yet go in a review matrix**: the generator always passes
-  `--output-preset`, which `--new-flow` refuses. Render that side by hand until
-  `nf-destinations/preset-set`.
+- **A review matrix states `destination` for builds at `pipeline_version` 8 and later,
+  and `output_preset` for older ones** (the reference build); a matrix mixing both
+  states both, and each build takes the flags its banner's `pipeline_version` says it
+  speaks (`scripts/analysis/CLAUDE.md`).
 
 ## reference-snapshot
 

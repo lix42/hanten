@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -101,6 +102,51 @@ def is_nc(cand: str) -> bool:
     v = out.stdout.strip()
     return (out.returncode == 0 and v.startswith(BANNERS)
             and any(c.isdigit() for c in v))
+
+
+#: The first `pipeline_version` whose CLI states its output as a **destination**
+#: (`--range`/`--transfer`/`--gamut`/`--container`, or `--film-master`) rather than
+#: an output preset (`--output-preset`). Every build before it speaks presets — the
+#: reference build (scripts/reference-snapshot/) among them. The intermediate builds
+#: that offered destinations only behind `--new-flow` are not supported: they are
+#: read as preset builds, which is what their default chain was.
+DESTINATION_PIPELINE = 8
+
+PIPELINE_LINE = re.compile(r"^pipeline_version: (\d+)", re.M)
+
+
+def banner_pipeline_version(banner: str) -> int | None:
+    """The `pipeline_version` a `--version` banner states, or `None`.
+
+    Both sides of the rename print it on its own line, so this is how a tool
+    decides which output interface a binary speaks before it renders anything.
+    """
+    match = PIPELINE_LINE.search(banner)
+    return int(match.group(1)) if match else None
+
+
+def output_interface(pipeline_version: int) -> str:
+    """`"destination"` or `"preset"`: the output flags a build of this version takes."""
+    return "destination" if pipeline_version >= DESTINATION_PIPELINE else "preset"
+
+
+def probe_interface(binary: str) -> tuple[str | None, str]:
+    """The output interface `binary` speaks, read off its own `--version` banner.
+
+    Returns `(interface, "")`, or `(None, why)` when the banner states no
+    `pipeline_version` — refused by callers rather than guessed, because the wrong
+    guess renders every cell with a flag the binary does not have.
+    """
+    try:
+        out = subprocess.run([binary, "--version"], capture_output=True, text=True,
+                             timeout=15)
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, f"{binary} --version failed: {error}"
+    version = banner_pipeline_version(out.stdout)
+    if version is None:
+        return None, (f"{binary} --version states no pipeline_version, so whether it "
+                      "takes output presets or destinations is unknown")
+    return output_interface(version), ""
 
 
 def find_nc() -> str | None:

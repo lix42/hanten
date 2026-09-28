@@ -3,8 +3,8 @@
 The external decoder oracle for
 [`iso-gain-map-metadata`](../../docs/tasks/output/iso-gain-map-metadata.md) and
 [`mp-container-conformance`](../../docs/tasks/output/mp-container-conformance.md):
-a small Swift program that reads nc's gain-map JPEGs with **Apple ImageIO**, an
-independent implementation of both ISO 21496-1 and the legacy Ultra HDR dialect.
+a small Swift program that reads nc's gain-map JPEG with **Apple ImageIO**, an
+independent implementation of ISO 21496-1.
 What it reports about nc's bytes is evidence nc's own reader can never supply —
 it found the placement defect fixed on 2026-08-06, which the entire Rust suite
 had passed over.
@@ -27,7 +27,7 @@ Results write-up:
 
 - macOS 15.0 or newer (`kCGImageAuxiliaryDataTypeISOGainMap` was added there;
   the recorded results are from macOS 26.5) and Xcode command-line tools.
-- Nothing else — no assets, no `nc` binary at run time.
+- A `hanten` build and a real scan, for the file step 2 writes.
 
 ## Usage
 
@@ -37,119 +37,69 @@ Every command below runs from the **repo root**.
 # 1. build the reader
 (cd scripts/iso-decoder-oracle && swiftc -O oracle.swift -o oracle)
 
-# 2. generate the three-file set
+# 2. write the one gain-map file the build produces
 mkdir -p /tmp/iso-oracle
-NC_ISO_SAMPLE_DIR=/tmp/iso-oracle \
-NC_ISO_SAMPLE_INPUT=../nc-assets/rolls/<roll>/<frame>.tif \
-NC_ISO_SAMPLE_BASE=<r,g,b> NC_ISO_SAMPLE_EV=3.0 \
-  cargo test --bin hanten iso_oracle_samples -- --ignored --nocapture
+hanten convert <scan> -o /tmp/iso-oracle/gain-map --film-base <r,g,b> --range hdr
 
-# 3. read them back
-./scripts/iso-decoder-oracle/oracle /tmp/iso-oracle/oracle-*.jpg
+# 3. read it back
+./scripts/iso-decoder-oracle/oracle /tmp/iso-oracle/gain-map.jpg
 ```
 
-`iso_oracle_samples` (`src/io/ultra_hdr.rs`, `#[ignore]`) writes
-`oracle-legacy-only.jpg`, `oracle-dual-dialect.jpg` and `oracle-conflicting.jpg`
-from **one** render through **one** container path, so any difference the oracle
-reports is attributable to the metadata alone. There is no CLI path to a
-dual-dialect file — `ultra-hdr-v1` is contractually ISO-free — so this test is
-the only way to produce one.
+`--range hdr` writes the gain-map JPEG (`nf-destinations/gain-map-destination`): ISO
+21496-1 metadata only, a **three-channel** map, and MPF written by `io::iso_gain_map`.
+Measure `<r,g,b>` once per roll the usual way — `hanten estimate`, or the frozen
+`scripts/real-scan-verify/recipes/<roll>.json`. The default render is not flat on a
+real frame, so no exposure push is needed; a flat frame reports `GainMapMax = 0` on
+every channel and nc's report says `new_flow.gain_map.flat: true`.
 
-## Inputs (env vars on the sample writer)
-
-| Var | Default | Meaning |
-|---|---|---|
-| `NC_ISO_SAMPLE_DIR` | the system temp dir | where the three files are written (must exist) |
-| `NC_ISO_SAMPLE_INPUT` | unset → the toy in-test fixture | a real scan to render instead |
-| `NC_ISO_SAMPLE_BASE` | — | film base `r,g,b`; **required** with `_INPUT` |
-| `NC_ISO_SAMPLE_EV` | `0.0` | print exposure |
-
-**The EV was not optional when this gate was written.** At that build's defaults
-the gain map was flat — measured `GainMapMax` 0.0039 log2 = 1.003x on both the toy
-fixture and a real Ektar frame — because the exponential curve then anchored display
-white at the reference density and ordinary content landed at or below reference
-white. The default gain map has been live since `pipeline_version` 6, so
-re-measure before relying on the figures below. A flat gain map cannot
-discriminate an HDR reconstruction from an SDR one, so the oracle would report
-"present and correct" no matter what the reconstruction did. `+3 EV` pushes
-content over reference white (`GainMapMax` 1.095 log2 = 2.14x) and makes the check
-meaningful.
-
-Measure `_BASE` once per roll the usual way — `hanten estimate`, or the frozen
-`scripts/real-scan-verify/recipes/<roll>.json`.
-
-## The new flow's ISO-only file
-
-`--new-flow --range hdr` (`nf-destinations/gain-map-destination`) writes a different
-file from a different container path — ISO metadata only, a **three-channel** map, and
-MPF written by `io::iso_gain_map` rather than libultrahdr — so it is checked from the
-CLI's own output, not from `iso_oracle_samples`:
-
-```bash
-hanten convert <scan> -o /tmp/iso-oracle/new-flow --film-base <r,g,b> \
-  --new-flow --range hdr
-./scripts/iso-decoder-oracle/oracle /tmp/iso-oracle/new-flow.jpg
-```
-
-The pass condition is the same (`PRESENT` plus a `GainMapMax` above 0). What
-differs, and is expected:
-
-- **The three `ChannelMetadata` entries differ from each other** — the map is
-  per-channel, where the current chain's three are copies of one luminance window.
-  This is the evidence that the per-channel fields are read, not just parsed.
-- The description's `PixelFormat` is `875836518` (`420f`, biplanar YCbCr) rather than
-  `1278226488` (`L008`, one plane), and no `data:` line prints: ImageIO hands a colour
-  map back as a pixel buffer, not bytes.
-- The new chain's default render is not flat on a real frame, so no EV is needed; a
-  flat frame reports `GainMapMax = 0` on every channel and nc's report says
-  `new_flow.gain_map.flat: true`.
+The legacy Ultra HDR v1 and dual-dialect files the earlier results cover can no longer
+be written by this build; they are reproducible only from the reference build
+(`scripts/reference-snapshot/`).
 
 ## Reading the output
 
-For the dual-dialect file, the gate wants:
+The gate wants:
 
 ```
   ISO 21496-1 gain map (kCGImageAuxiliaryDataTypeISOGainMap): PRESENT
+      description: {…, PixelFormat: 875836518, …}
       meta: HDRToneMap:AlternateHeadroom = 2.300448
-      meta: HDRToneMap:ChannelMetadata = [ … GainMapMax = 1.095282 … ]
+      meta: HDRToneMap:ChannelMetadata = [ … GainMapMax = 0.936979 … ]
+  Apple/legacy HDR gain map (kCGImageAuxiliaryDataTypeHDRGainMap): ABSENT
   ...
-  HDR decode: WxH, headroom 4.9261084
+  HDR decode: WxH, headroom 4.926107
 ```
 
-- **The pass condition is `PRESENT` *plus* a `GainMapMax` materially above 0**
-  — about `1.095` (log2, = 2.14x) on a real frame at `_EV=3.0`. `ABSENT` is a
-  failure, and has meant a *placement* problem before rather than a
-  serialization one. `PRESENT` with `GainMapMax ≈ 0.0039` means the metadata
-  parsed but the gain map is inert: the file is structurally fine and
-  photographically a no-op, which is the defaults case §Inputs warns about.
+- **The pass condition is `PRESENT` *plus* a `GainMapMax` materially above 0.**
+  `ABSENT` is a failure, and has meant a *placement* problem before rather than a
+  serialization one. `PRESENT` with every `GainMapMax ≈ 0` means the metadata parsed
+  but the gain map is inert: structurally fine and photographically a no-op, which
+  cannot discriminate an HDR rendition from an SDR one — check nc's report
+  (`new_flow.gain_map.flat`) before reading it as a defect.
+- **The three `ChannelMetadata` entries differ from each other** — the map is
+  per-channel. This is the evidence that the per-channel fields are read, not just
+  parsed. Three entries is `is_multichannel = true` read back; that is deliberate and
+  must not be "fixed" (C.2.3 lets the metadata channel count differ from the map's).
+- The description's `PixelFormat` is `875836518` (`420f`, biplanar YCbCr), and no
+  `data:` line prints: ImageIO hands a colour map back as a pixel buffer, not bytes.
+- The legacy dialect (`kCGImageAuxiliaryDataTypeHDRGainMap`) is expected **ABSENT**:
+  the file carries no Ultra HDR v1 XMP.
 - **Do not read the headroom figure as a measurement — it is the trap here.**
-  `HDR decode: headroom 4.9261084` is just `2^AlternateHeadroom`, i.e. nc's own
+  `HDR decode: headroom 4.926107` is just `2^AlternateHeadroom`, i.e. nc's own
   declared `1000/203` policy constant parsed out of the metadata and echoed
-  back. It reads **4.9261084 even on a completely flat gain map**, so it can
+  back. It reads the same **even on a completely flat gain map**, so it can
   confirm that ImageIO parsed the headroom field, and nothing more. "Headroom
   1.0 with `PRESENT`" is a state nc's files cannot produce; treating it as the
   failure mode makes the gate unfalsifiable.
 - The `meta:` lines are ImageIO's own parse of each ISO field, and *this* is the
-  substantive evidence: compare each against what nc wrote (the test prints the
-  legacy metadata, and `exiftool -a -G1` shows the segments).
+  substantive evidence: compare each against what nc wrote (the report's
+  `new_flow.gain_map`, and `exiftool -a -G1` shows the segments).
 
   | ImageIO prints | nc's `IsoGainMapFields` |
   |---|---|
   | `HDRToneMap:ChannelMetadata[i]` `GainMapMin` / `GainMapMax` | `gain_map_min_log2[i]` / `gain_map_max_log2[i]` |
   | `…[i]` `Gamma` / `BaseOffset` / `AlternateOffset` | `gain_map_gamma[i]` / `base_offset[i]` / `alternate_offset[i]` |
   | `BaseHeadroom` / `AlternateHeadroom` / `BaseColorIsWorkingColor` | `base_hdr_headroom_log2` / `alternate_hdr_headroom_log2` / `use_base_colour_space` |
-
-  Three `ChannelMetadata` entries rather than one is `is_multichannel = true`
-  read back; that is deliberate and must not be "fixed" (C.2.3 lets the metadata
-  channel count differ from the map's).
-- `oracle-legacy-only.jpg` is expected to be **ABSENT for both dialects** with
-  headroom 1.0: Apple ignores Google's Ultra HDR v1 XMP entirely. This is the
-  one place the headroom figure is informative — with no ISO metadata to read,
-  there is no declared constant to echo.
-- `oracle-conflicting.jpg` carries legacy and ISO metadata that disagree by
-  exactly one stop, which is how the observed dual-aware precedence was
-  established. It is *observed Apple behaviour* only — ISO 21496-1 says nothing
-  about coexistence, so it must never be stated as a conformance property.
 
 ## Notes
 
@@ -173,5 +123,5 @@ For the dual-dialect file, the gate wants:
   **silently** — a `git add` of a sample or control image here looks like it
   worked and stages nothing, which is the intended outcome. Don't `-f` past it:
   no sample, control, or PDF belongs in the repo.
-- The complementary in-repo check is libultrahdr, which reads the **legacy**
-  dialect only — it was never an ISO oracle, which is exactly why this exists.
+- exiftool accepts files no decoder parses, so it is not a substitute: it shows the
+  segments, not whether a decoder finds the gain map.
