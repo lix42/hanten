@@ -1046,6 +1046,7 @@ top-level **document version** rather than per-object ones:
     "linearization": 1.8,
     "anchor": {"mid-at-base-offset": 0.62}
   },
+  "rendering": "default",
   "scene_correction": {
     "white_balance": {"explicit": [1.0, 1.0, 1.0]},
     "exposure": 0.0
@@ -1053,9 +1054,9 @@ top-level **document version** rather than per-object ones:
   "look": {
     "contrast": null,
     "channel_grade": [1.0, 1.0],
-    "highlight_desaturation": {"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]}
+    "highlight_desaturation": {"strength": null, "start_stops": null, "band": null}
   },
-  "fit_range": {"headroom_stops": 6.0, "display_black": 6.0},
+  "fit_range": {"headroom_stops": null, "display_black": null},
   "fit_gamut": {},
   "output": {"display": {"gamut": "adobe-rgb"}}
 }
@@ -1092,7 +1093,10 @@ top-level **document version** rather than per-object ones:
   its identity — naming the stage. Not a name
   per combination: **one table** of destinations drives resolution, refusals and the
   container. Each axis is optional — an unset one is derived from the table in the
-  order range, transfer, gamut, container (its default when a consistent destination
+  order range, transfer, gamut, container, or with the container first under
+  `--rendering direct` (so a lossy container comes only from a stated one, or from
+  stated axes that leave no lossless row), with the rendering's
+  defaults (its default when a consistent destination
   has it, else the one value left, else a refusal listing the choices), so a stated
   value is never overridden by another axis. The report records every resolved axis
   (`new_flow.destination`), which replays exactly. Written today: SDR `native` TIFF in
@@ -1110,10 +1114,24 @@ top-level **document version** rather than per-object ones:
   `algorithm`/`density`/`film_base`, `input.color`, …) are refused in a v2 document by
   name, each with where its knobs went — a migration error, no aliases.
 - `hanten params --new-flow` writes the default document, and `--dump-params` under
-  `--new-flow` writes the resolved one; either reloads under the flag unchanged.
+  `--new-flow` writes the merged one (an unstated knob stays `null`, so the rendering
+  decides it on replay too); either reloads under the flag unchanged.
   `recipe_version`, like `params`, is reserved and never a key of the current
   chain's recipe.
 
+- **`rendering`** (`nf-destinations/direct-preset`, `--rendering`, `crate::rendering`):
+  `"default"` or `"direct"`, the base every stage knob starts from. A knob written
+  `null` is unstated and takes its rendering's value; a stated one builds on it (the
+  white balance multiplies the base gains, every other knob replaces its base value).
+  `default` applies the `roll` section and leaves every other knob at its default,
+  warning when it has no roll measurement to apply. `direct` leaves the `roll` section
+  out and starts from pinned values — white balance identity, `look.contrast`
+  `2.0 / 1.8`, highlight desaturation off, reinhard at 6 stops, display black at 6 — and
+  its unset destination axes default to HDR, `linear`, Adobe RGB, TIFF (so the float
+  BT.2020 TIFF today, the Adobe RGB TIFF with `range` `sdr`); a stated axis is never
+  overridden. `direct` with the film master is refused. A recipe value that moves
+  `direct`'s pinned base warns, since an earlier build wrote every default. The report
+  states it in `new_flow.rendering`. Design: design-update Part 2, "Two renderings".
 - **`roll`** (`nf-calibration/roll-section`): what `hanten measure-roll` measured,
   kept apart from the style knobs so a measured value is never mistaken for a chosen
   one. `white_balance` (`--roll-white-balance R,G,B`; finite and positive) is the
@@ -1175,8 +1193,8 @@ top-level **document version** rather than per-object ones:
   `start_stops` (default −1) up to diffuse white, held above it, and `w` a linear band
   over `s = log10(max/min) / (reconstruction.linearization · look.contrast)` — the
   negative's density spread, whichever stage carries the contrast — full pull at `s ≤ s0`, none at
-  `s ≥ s1` (default `0.015, 0.025`). Luminance is kept. `strength` is in `[0, 1]`,
-  default `0.8`; `0` is off, a bit-exact identity. It assumes a roll-level white
+  `s ≥ s1` (unset: `0.015, 0.025`). Luminance is kept. `strength` is in `[0, 1]`,
+  unset `0.8` under `default` and `0` under `direct`; `0` is off, a bit-exact identity. It assumes a roll-level white
   balance ahead of it. The report's `new_flow.look` echoes the section.
 - **`fit_range`** (`nf-display-stages/fit-range`): fits the scene's range into the
   display's, with the display's **peak** as the operator's one per-destination
@@ -1186,7 +1204,7 @@ top-level **document version** rather than per-object ones:
   reinhard at `W = 2^headroom_stops` and `s` a smoothstep in stops from diffuse white
   (`1.0` on the fixed decode) to `W`. So `P = 1` is exactly reinhard, and every peak
   agrees bit for bit below diffuse white. `headroom_stops` (`--display-tone-headroom`)
-  is finite, `0`–`24`, default `6`; `0` is the identity. Content above `W` exceeds
+  is finite, `0`–`24`, unset `6` (the rendering's); `0` is the identity. Content above `W` exceeds
   the peak on every branch and is clamped and counted at the encode. A non-finite
   sample is refused, naming the pixel; a pixel with luminance ≤ 0 is scaled by the
   curve's limit at black (the mid-grey gain), so the scale is continuous there.
@@ -1194,7 +1212,7 @@ top-level **document version** rather than per-object ones:
   `identity` at zero headroom) with its headroom, white point and display peak.
   **Display black** (`nf-display-stages/parametric-operator`): `display_black`
   (`--display-black`) is where the film base renders, in stops below mid-grey on the
-  display, `(0, 16]` or `"off"`, default `6`. On reinhard's output `y`, before the
+  display, `(0, 16]` or `"off"`, unset `6` (the rendering's). On reinhard's output `y`, before the
   peak's lift: `y′ = y · 2^(shift · (1 − smoothstep(u)))`, `u` running over `log2 y`
   from the base's rendered level `b` to mid-grey, `shift = log2(0.18 · 2^−stops / b)`.
   `b` is the decoded film base (`algo::fixed::decode_film_base`) graded with the frame

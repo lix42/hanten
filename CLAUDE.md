@@ -158,6 +158,7 @@ Read the module docs before changing these; they hold the traps.
 | output paths, suffixes, preset → container | `cli::resolve_output_path`, `container_for`, `Unappendable` |
 | knob merge, validation order, removed keys | `cli::merge`, `validate`, `validate_convert`, `validate_output_preset`, `strip_retired_keys_at_old_defaults` |
 | new-flow flags and recipe | `src/flow.rs`, `src/recipe.rs` |
+| renderings (`direct` / `default`), `direct`'s pinned base | `src/rendering.rs` |
 | new-flow destination set (axes, table, derivation) | `src/destination.rs` |
 | reconstruction, density scale, anchors | `types.rs` (`DensityParams`, `ExponentialParams`, `AnchorPlacement`), `algo/fixed.rs` |
 | film base, IR holder mask, measurement region | `pipeline/film_base.rs` |

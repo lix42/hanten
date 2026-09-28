@@ -337,6 +337,11 @@ const KEPT_FLAGS: &[KeptEntry] = &[
               `roll.white_balance`, which `hanten measure-roll` measures once per roll)",
     },
     KeptEntry {
+        covers: &["--rendering"],
+        why: "which base the rendering stages start from (recipe `rendering`, \
+              `nf-destinations/direct-preset`) — `direct` or `default`; new-flow only",
+    },
+    KeptEntry {
         covers: &["--roll-white-balance", "--roll-white"],
         why: "the roll's measurements (recipe `roll`, `nf-calibration/roll-section`) — what \
               `hanten measure-roll` measured, kept apart from the style knobs; new-flow only",
@@ -426,11 +431,21 @@ fn output_preset_counterpart(args: &ConvertArgs) -> Option<String> {
     let name = args.output_opts.output_preset.as_deref()?;
     let preset = crate::types::OutputPreset::parse(name).ok()?;
     Some(match counterpart(preset) {
+        // The film master runs no rendering, so `direct` is refused beside it: name the
+        // way back when `direct` may be in play — typed, or from a recipe this refusal
+        // runs too early to read.
+        Counterpart::Flags(flags) if preset == crate::types::OutputPreset::FilmMaster => {
+            let direct = args.rendering.rendering == Some(crate::rendering::Rendering::Direct);
+            let rendering = if direct {
+                ", with --rendering default in place of --rendering direct"
+            } else if args.recipe_in.is_some() {
+                " (with --rendering default if the recipe states `rendering`: \"direct\")"
+            } else {
+                ""
+            };
+            format!("For `{}`, pass {flags}{rendering}.", preset.name())
+        }
         Counterpart::Flags(flags) => format!("For `{}`, pass {flags}.", preset.name()),
-        Counterpart::Default => format!(
-            "`{}` is the new flow's default destination, so drop the flag.",
-            preset.name()
-        ),
         Counterpart::Nearest { flags, differs } => format!(
             "For `{}`, the nearest is {flags}: {differs}.",
             preset.name()
@@ -445,10 +460,10 @@ fn output_preset_counterpart(args: &ConvertArgs) -> Option<String> {
 /// The new chain's counterpart of a current-chain output preset.
 #[derive(Debug)]
 enum Counterpart {
-    /// These flags write the same kind of file.
+    /// These flags write the same kind of file — under either rendering: each set states
+    /// enough axes to resolve to the same destination whatever the rendering's defaults
+    /// (`counterparts_resolve`), since this refusal runs before the recipe is read.
     Flags(&'static str),
-    /// The default destination is the counterpart: no flag needed.
-    Default,
     /// No destination writes the same file, and none is planned; `flags` write the
     /// closest one, and `differs` says how it differs.
     Nearest {
@@ -470,7 +485,9 @@ enum Counterpart {
 fn counterpart(preset: crate::types::OutputPreset) -> Counterpart {
     use crate::types::OutputPreset as P;
     match preset {
-        P::DisplayP3 => Counterpart::Default,
+        // Stated rather than "drop the flag": unset, `--rendering direct` writes the HDR
+        // float TIFF.
+        P::DisplayP3 => Counterpart::Flags("--gamut display-p3"),
         P::FilmMaster => Counterpart::Flags("--film-master"),
         P::HdrLinearTiff => Counterpart::Flags("--transfer linear"),
         P::HdrPqTiff => Counterpart::Flags("--transfer pq"),
@@ -479,13 +496,14 @@ fn counterpart(preset: crate::types::OutputPreset) -> Counterpart {
         P::HdrHlg => Counterpart::Flags("--transfer hlg --container avif"),
         // Neither is the same file: the new flow's map is per-channel and ISO-only, so a
         // reader that knows only the Ultra HDR v1 XMP shows its SDR base.
+        // The container stated: under `direct`, `--range hdr` alone is the float TIFF.
         P::GainMapHdr => Counterpart::Nearest {
-            flags: "--range hdr",
+            flags: "--range hdr --container jpeg",
             differs: "its gain map is per-channel and carries ISO 21496-1 metadata only, \
                       without the Ultra HDR v1 XMP this preset adds beside it",
         },
         P::UltraHdrV1 => Counterpart::Nearest {
-            flags: "--range hdr",
+            flags: "--range hdr --container jpeg",
             differs: "its gain map is per-channel and carries ISO 21496-1 metadata only, \
                       not the Ultra HDR v1 XMP",
         },
@@ -527,6 +545,12 @@ const NEW_FLOW_ONLY_FLAGS: &[NewFlowOnlyEntry] = &[
                   --film-master) choose the new chain's destination (recipe `output`) and \
                   have no meaning without `--new-flow`; the current chain's is \
                   --output-preset",
+    },
+    NewFlowOnlyEntry {
+        covers: &["--rendering"],
+        present: |args| args.rendering.rendering.is_some(),
+        message: "--rendering chooses what the new chain's rendering stages start from \
+                  (recipe `rendering`) and has no meaning without `--new-flow`",
     },
     NewFlowOnlyEntry {
         covers: &["--roll-white-balance", "--roll-white"],
@@ -894,6 +918,9 @@ mod tests {
             ("--exposure", &["--exposure", "-0.5"], |r| {
                 r.scene_correction.exposure == -0.5
             }),
+            ("--rendering", &["--rendering", "direct"], |r| {
+                r.rendering == crate::rendering::Rendering::Direct
+            }),
             (
                 "--roll-white-balance",
                 &["--roll-white-balance", "1.1,1,0.9"],
@@ -911,17 +938,17 @@ mod tests {
             (
                 "--highlight-desaturation",
                 &["--highlight-desaturation", "0.5"],
-                |r| r.look.highlight_desaturation.strength == 0.5,
+                |r| r.look.highlight_desaturation.strength == Some(0.5),
             ),
             (
                 "--highlight-desaturation-start",
                 &["--highlight-desaturation-start", "-2"],
-                |r| r.look.highlight_desaturation.start_stops == -2.0,
+                |r| r.look.highlight_desaturation.start_stops == Some(-2.0),
             ),
             (
                 "--highlight-desaturation-band",
                 &["--highlight-desaturation-band", "0.01,0.03"],
-                |r| r.look.highlight_desaturation.band == [0.01, 0.03],
+                |r| r.look.highlight_desaturation.band == Some([0.01, 0.03]),
             ),
             ("--range", &["--range", "hdr"], |r| {
                 r.output == display(|a| a.range = Some(crate::destination::Range::Hdr))
@@ -941,10 +968,10 @@ mod tests {
             (
                 "--display-tone-headroom",
                 &["--display-tone-headroom", "4"],
-                |r| r.fit_range.headroom_stops == 4.0,
+                |r| r.fit_range.headroom_stops == Some(4.0),
             ),
             ("--display-black", &["--display-black", "5"], |r| {
-                r.fit_range.display_black == DisplayBlack::StopsBelowMid(5.0)
+                r.fit_range.display_black == Some(DisplayBlack::StopsBelowMid(5.0))
             }),
         ]
     }
@@ -1102,23 +1129,34 @@ mod tests {
 
     #[test]
     fn counterparts_resolve() {
-        use crate::destination::{Gamut, parse, resolve};
+        use crate::destination::{Defaults, Gamut, parse, resolve};
+        // Under every rendering's defaults, and to the same destination under each: the
+        // refusal runs before the recipe, so it cannot know which rendering applies.
+        let renderings = [Defaults::STANDARD, crate::rendering::DIRECT.axes];
+        let same_under_each = |preset, flags: &str| {
+            let axes = stated(flags).expect("an axis set");
+            let rows: Vec<_> = renderings
+                .iter()
+                .map(|d| {
+                    let r = resolve(&axes, d);
+                    assert!(r.is_ok(), "{preset:?}: `{flags}` must be written: {r:?}");
+                    r.unwrap()
+                })
+                .collect();
+            assert!(
+                rows.windows(2).all(|w| w[0] == w[1]),
+                "{preset:?}: `{flags}` must name one destination under every rendering: \
+                 {rows:?}"
+            );
+        };
         for preset in crate::types::OutputPreset::ALL {
             match counterpart(preset) {
-                Counterpart::Default => {
-                    resolve(&Default::default()).unwrap();
-                }
                 Counterpart::Flags(flags) => {
-                    if let Some(axes) = stated(flags) {
-                        let r = resolve(&axes);
-                        assert!(r.is_ok(), "{preset:?}: `{flags}` must be written: {r:?}");
+                    if stated(flags).is_some() {
+                        same_under_each(preset, flags);
                     }
                 }
-                Counterpart::Nearest { flags, .. } => {
-                    let axes = stated(flags).expect("the film master is written");
-                    let r = resolve(&axes);
-                    assert!(r.is_ok(), "{preset:?}: `{flags}` must be written: {r:?}");
-                }
+                Counterpart::Nearest { flags, .. } => same_under_each(preset, flags),
                 // Prose because no axis spells it: when a gamut does, this fails and
                 // the counterpart becomes flags.
                 Counterpart::Unnamed { what, .. } => {
@@ -1127,5 +1165,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_film_master_counterpart_names_the_way_out_of_direct() {
+        let text = |extra: &[&str]| {
+            output_preset_counterpart(&parse_convert(
+                true,
+                &[&["--output-preset", "film-master"][..], extra].concat(),
+            ))
+            .unwrap()
+        };
+        assert_eq!(text(&[]), "For `film-master`, pass --film-master.");
+        assert!(
+            text(&["--rendering", "direct"])
+                .contains("--rendering default in place of --rendering direct"),
+            "{}",
+            text(&["--rendering", "direct"])
+        );
+        assert!(
+            text(&["--params", "r.json"]).contains("if the recipe states `rendering`: \"direct\""),
+            "{}",
+            text(&["--params", "r.json"])
+        );
+        // No longer "drop the flag": unset is the float TIFF under `direct`.
+        let p3 =
+            output_preset_counterpart(&parse_convert(true, &["--output-preset", "display-p3"]))
+                .unwrap();
+        assert_eq!(p3, "For `display-p3`, pass --gamut display-p3.");
     }
 }

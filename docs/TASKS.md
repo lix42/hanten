@@ -1830,7 +1830,7 @@ the design in `docs/design-update.md`:
   (default, unchanged) or Adobe RGB; HDR BT.2020 `linear` f32 TIFF, `pq`/`hlg` TIFF or
   AVIF, clamped to the peak and counted. The film master refuses every stage it does
   not run. The gain-map JPEG split to `gain-map-destination`
-- [ ] [Two renderings: `direct` and
+- [~] [Two renderings: `direct` and
   `default`](tasks/nf-destinations/direct-preset.md) — `--rendering`: `direct` loses
   as little as possible (HDR float TIFF by default, Adobe RGB when SDR; roll section
   unapplied) for an editor and, stated SDR, the calibration loop; `default` is our code plus the roll's measurements. Re-planned
@@ -1881,7 +1881,7 @@ the design in `docs/design-update.md`:
   measurement](tasks/nf-calibration/no-roll-defaults.md) — the fallbacks a frame
   gets without `measure-roll`, first the whole contrast (2.0 today; the rolls measure
   2.23–2.97)
-- [~] [The roll's measurements as their own recipe
+- [x] [The roll's measurements as their own recipe
   section](tasks/nf-calibration/roll-section.md) — `roll.white_balance` and
   `roll.white_stops`, out of `scene_correction` and `look`, so a rendering can apply
   them or not

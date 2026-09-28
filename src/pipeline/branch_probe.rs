@@ -238,14 +238,14 @@ fn branch_probe() {
     let stride = stride as u32;
     let peak = DisplayPeak::new(env_or("NC_PROBE_HDR_PEAK", 1000.0 / 203.0) as f32).unwrap();
     let mut recipe = Recipe::default();
-    recipe.fit_range.headroom_stops = env_or(
+    let headroom = env_or(
         "NC_PROBE_HEADROOM",
-        f64::from(recipe.fit_range.headroom_stops),
+        f64::from(recipe.resolved_fit_range().0),
     ) as f32;
+    recipe.fit_range.headroom_stops = Some(headroom);
     println!(
-        "stride {stride}, HDR peak {:.4}, headroom {} stops, default recipe",
+        "stride {stride}, HDR peak {:.4}, headroom {headroom} stops, default recipe",
         peak.value(),
-        recipe.fit_range.headroom_stops
     );
 
     let mut total = Tally::default();

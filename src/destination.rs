@@ -9,8 +9,12 @@
 //! anywhere would drift from the first — the `OutputPreset::ALL` lesson.
 //!
 //! **An axis the user leaves unset is derived from the table** ([`resolve`]), axis by
-//! axis in a fixed order: its default when a row consistent with everything decided so
-//! far has it, else the one value left, else a refusal naming the choices. So
+//! axis in a fixed order — range, transfer, gamut, container, except that the `direct`
+//! rendering decides its container first ([`Defaults::container_first`]), so it never
+//! takes a lossy container by default — only when one is stated, or when the stated axes
+//! leave no lossless row: its default when a row consistent with
+//! everything decided so far has it, else the one value left, else a refusal naming the
+//! choices. So
 //! `--transfer pq` alone is an HDR BT.2020 TIFF, and `--gamut bt2020` alone asks which
 //! transfer. Derivation ignores whether a row is ready yet, so a command names the same
 //! row on every build; a row that is not ready is refused *after* resolution, naming
@@ -43,7 +47,8 @@ use crate::types::Result;
 pub trait Axis: Copy + Eq + fmt::Debug + 'static {
     /// Every value, in help order.
     const ALL: &'static [Self];
-    /// The value an unset axis takes when a consistent row has it.
+    /// The value an unset axis takes when a consistent row has it, unless the rendering
+    /// defaults it otherwise ([`Defaults`]).
     const DEFAULT: Self;
     /// The command-line flag.
     const FLAG: &'static str;
@@ -57,6 +62,39 @@ pub trait Axis: Copy + Eq + fmt::Debug + 'static {
     fn stated(axes: &DisplayAxes) -> Option<Self>;
     /// State this axis's value.
     fn set(axes: &mut DisplayAxes, value: Self);
+    /// This axis's value in a set of defaults.
+    fn default_in(d: &Defaults) -> Self;
+}
+
+/// The value each axis takes when it is unset and a consistent row has it, and the
+/// order the unset axes are derived in — the **rendering's** (`crate::rendering`):
+/// `direct` defaults to the HDR float TIFF and decides its container first, where every
+/// other run takes [`Defaults::STANDARD`]. Only the unset axes read it, so a stated axis
+/// is never overridden, under any rendering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Defaults {
+    pub range: Range,
+    pub transfer: Transfer,
+    pub gamut: Gamut,
+    pub container: Container,
+    /// Derive the container before the other axes, rather than last. `direct` sets it
+    /// so its lossless container default (TIFF) is never lost to its `hdr` range
+    /// default: range first, a stated `--gamut display-p3` would leave the 8-bit gain-map
+    /// JPEG as the only HDR row, while container first it lands on the SDR TIFF. A lossy
+    /// container is reached only when it is stated, or when the stated axes leave no
+    /// lossless row (`--range hdr --gamut display-p3` is the gain map, the one row left).
+    pub container_first: bool,
+}
+
+impl Defaults {
+    /// Each axis's own [`Axis::DEFAULT`].
+    pub const STANDARD: Self = Self {
+        range: Range::DEFAULT,
+        transfer: Transfer::DEFAULT,
+        gamut: Gamut::DEFAULT,
+        container: Container::DEFAULT,
+        container_first: false,
+    };
 }
 
 /// The recipe keys of `output.display`, in resolution order — one per axis, taken from
@@ -159,6 +197,9 @@ impl Axis for Range {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.range = Some(value);
     }
+    fn default_in(d: &Defaults) -> Self {
+        d.range
+    }
 }
 axis_serde!(Range);
 
@@ -203,6 +244,9 @@ impl Axis for Transfer {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.transfer = Some(value);
     }
+    fn default_in(d: &Defaults) -> Self {
+        d.transfer
+    }
 }
 axis_serde!(Transfer);
 
@@ -245,6 +289,9 @@ impl Axis for Gamut {
     }
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.gamut = Some(value);
+    }
+    fn default_in(d: &Defaults) -> Self {
+        d.gamut
     }
 }
 axis_serde!(Gamut);
@@ -303,6 +350,9 @@ impl Axis for Container {
     }
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.container = Some(value);
+    }
+    fn default_in(d: &Defaults) -> Self {
+        d.container
     }
 }
 axis_serde!(Container);
@@ -586,12 +636,13 @@ fn complete(row: &Row) -> DisplayAxes {
 
 /// Resolve stated axes to a destination.
 ///
-/// Unset axes are derived in the order range, transfer, gamut, container — each from the
+/// Unset axes are derived in the order range, transfer, gamut, container — the container
+/// first under a rendering that says so ([`Defaults::container_first`]) — each from the
 /// rows consistent with everything decided before it (see the module docs). A row that
 /// is not ready is refused only after resolution, so what a command names does not
 /// depend on which rows this build can write.
-pub fn resolve(axes: &DisplayAxes) -> std::result::Result<Resolved, Fault> {
-    match derive(axes) {
+pub fn resolve(axes: &DisplayAxes, d: &Defaults) -> std::result::Result<Resolved, Fault> {
+    match derive(axes, d) {
         Derivation::Row(row) => match row.status {
             Status::Ready(encoding) => Ok(Resolved {
                 range: row.range,
@@ -604,10 +655,10 @@ pub fn resolve(axes: &DisplayAxes) -> std::result::Result<Resolved, Fault> {
                 let adding: Vec<DisplayAxes> = ROWS
                     .iter()
                     .filter(|r| is_ready(r) && axes.admits(r))
-                    .map(|r| fewest(axes, r))
+                    .map(|r| fewest(axes, r, d))
                     .collect();
                 let instead = if adding.is_empty() {
-                    closest(axes)
+                    closest(axes, d)
                 } else {
                     Vec::new()
                 };
@@ -619,7 +670,7 @@ pub fn resolve(axes: &DisplayAxes) -> std::result::Result<Resolved, Fault> {
                 })
             }
         },
-        Derivation::NoRow => Err(conflict(axes)),
+        Derivation::NoRow => Err(conflict(axes, d)),
         Derivation::Open {
             flag,
             key,
@@ -627,7 +678,7 @@ pub fn resolve(axes: &DisplayAxes) -> std::result::Result<Resolved, Fault> {
         } => Err(Fault::Ambiguous {
             flag,
             key,
-            choices: resolving(&candidates),
+            choices: resolving(&candidates, d),
         }),
     }
 }
@@ -651,15 +702,23 @@ fn is_ready(row: &Row) -> bool {
     matches!(row.status, Status::Ready(_))
 }
 
-fn derive(axes: &DisplayAxes) -> Derivation {
+fn derive(axes: &DisplayAxes, d: &Defaults) -> Derivation {
     let mut rows: Vec<Row> = ROWS.iter().copied().filter(|r| axes.admits(r)).collect();
     if rows.is_empty() {
         return Derivation::NoRow;
     }
-    let decided = narrow::<Range>(axes, &mut rows)
-        .and_then(|()| narrow::<Transfer>(axes, &mut rows))
-        .and_then(|()| narrow::<Gamut>(axes, &mut rows))
-        .and_then(|()| narrow::<Container>(axes, &mut rows));
+    // The container first when the rendering says so ([`Defaults::container_first`]);
+    // narrowing a stated or already decided axis again is a no-op.
+    let first = if d.container_first {
+        narrow::<Container>(axes, &mut rows, d)
+    } else {
+        Ok(())
+    };
+    let decided = first
+        .and_then(|()| narrow::<Range>(axes, &mut rows, d))
+        .and_then(|()| narrow::<Transfer>(axes, &mut rows, d))
+        .and_then(|()| narrow::<Gamut>(axes, &mut rows, d))
+        .and_then(|()| narrow::<Container>(axes, &mut rows, d));
     if let Err(open) = decided {
         return open;
     }
@@ -672,7 +731,11 @@ fn derive(axes: &DisplayAxes) -> Derivation {
 }
 
 /// Decide one unset axis over the rows consistent so far, and keep only those rows.
-fn narrow<A: Axis>(axes: &DisplayAxes, rows: &mut Vec<Row>) -> std::result::Result<(), Derivation> {
+fn narrow<A: Axis>(
+    axes: &DisplayAxes,
+    rows: &mut Vec<Row>,
+    d: &Defaults,
+) -> std::result::Result<(), Derivation> {
     if A::stated(axes).is_some() {
         return Ok(());
     }
@@ -681,8 +744,8 @@ fn narrow<A: Axis>(axes: &DisplayAxes, rows: &mut Vec<Row>) -> std::result::Resu
         .copied()
         .filter(|v| rows.iter().any(|r| A::of(r) == *v))
         .collect();
-    let chosen = if values.contains(&A::DEFAULT) {
-        A::DEFAULT
+    let chosen = if values.contains(&A::default_in(d)) {
+        A::default_in(d)
     } else if let [only] = values.as_slice() {
         *only
     } else {
@@ -705,20 +768,20 @@ fn narrow<A: Axis>(axes: &DisplayAxes, rows: &mut Vec<Row>) -> std::result::Resu
 
 /// Whether stated axes reach a ready destination — directly, or after the user settles
 /// each axis the table leaves open. Terminates: every level states one more axis.
-fn resolves(axes: &DisplayAxes) -> bool {
-    match derive(axes) {
+fn resolves(axes: &DisplayAxes, d: &Defaults) -> bool {
+    match derive(axes, d) {
         Derivation::Row(row) => is_ready(&row),
         Derivation::NoRow => false,
-        Derivation::Open { candidates, .. } => candidates.iter().any(|(_, a)| resolves(a)),
+        Derivation::Open { candidates, .. } => candidates.iter().any(|(_, a)| resolves(a, d)),
     }
 }
 
 /// The candidates of an open axis that reach a ready destination — the only choices a
 /// refusal offers, so every remedy works.
-fn resolving(candidates: &[(&'static str, DisplayAxes)]) -> Vec<&'static str> {
+fn resolving(candidates: &[(&'static str, DisplayAxes)], d: &Defaults) -> Vec<&'static str> {
     candidates
         .iter()
-        .filter(|(_, a)| resolves(a))
+        .filter(|(_, a)| resolves(a, d))
         .map(|(name, _)| *name)
         .collect()
 }
@@ -730,7 +793,7 @@ fn resolving(candidates: &[(&'static str, DisplayAxes)]) -> Vec<&'static str> {
 /// is not blamed. Only when every pair has a row and the whole set does not is the set
 /// named. The changes offered are single-axis edits of a conflicting axis that resolve
 /// with every *other* stated axis kept — so each remedy works as written.
-fn conflict(axes: &DisplayAxes) -> Fault {
+fn conflict(axes: &DisplayAxes, d: &Defaults) -> Fault {
     let stated = axes.stated_axes();
     let has_row = |subset: &DisplayAxes| ROWS.iter().any(|r| subset.admits(r));
     let mut conflicting = stated.clone();
@@ -744,13 +807,13 @@ fn conflict(axes: &DisplayAxes) -> Fault {
     }
     let mut changes = Vec::new();
     for axis in &conflicting {
-        push_changes::<Range>(axes, axis.flag, &mut changes);
-        push_changes::<Transfer>(axes, axis.flag, &mut changes);
-        push_changes::<Gamut>(axes, axis.flag, &mut changes);
-        push_changes::<Container>(axes, axis.flag, &mut changes);
+        push_changes::<Range>(axes, axis.flag, d, &mut changes);
+        push_changes::<Transfer>(axes, axis.flag, d, &mut changes);
+        push_changes::<Gamut>(axes, axis.flag, d, &mut changes);
+        push_changes::<Container>(axes, axis.flag, d, &mut changes);
     }
     let instead = if changes.is_empty() {
-        closest(axes)
+        closest(axes, d)
     } else {
         Vec::new()
     };
@@ -771,7 +834,7 @@ fn conflict(axes: &DisplayAxes) -> Fault {
 /// row (`every_container_offer_resolves_over_what_was_stated`). Only the rows needing the
 /// fewest stated axes changed are offered. Empty when no ready row writes `container`,
 /// so a message offers nothing it cannot deliver.
-pub fn writing(container: Container, stated: &DisplayAxes) -> Vec<DisplayAxes> {
+pub fn writing(container: Container, stated: &DisplayAxes, d: &Defaults) -> Vec<DisplayAxes> {
     // The stated axes (other than the container) each row would change.
     let changed = |r: &Row| {
         [
@@ -802,7 +865,7 @@ pub fn writing(container: Container, stated: &DisplayAxes) -> Vec<DisplayAxes> {
                 container: Some(container),
             };
             let base = over(stated, &change);
-            let added = fewest(&base, r);
+            let added = fewest(&base, r, d);
             DisplayAxes {
                 range: change.range.or(added.range),
                 transfer: change.transfer.or(added.transfer),
@@ -826,7 +889,7 @@ pub fn over(stated: &DisplayAxes, flags: &DisplayAxes) -> DisplayAxes {
 /// The ready destinations sharing the most stated values with `axes`, each as the fewest
 /// axes that name it alone — the fallback remedy when nothing closer works. Never empty
 /// while a row is ready.
-fn closest(axes: &DisplayAxes) -> Vec<DisplayAxes> {
+fn closest(axes: &DisplayAxes, d: &Defaults) -> Vec<DisplayAxes> {
     let shared = |r: &Row| {
         [
             axes.range.is_some_and(|v| v == r.range),
@@ -842,7 +905,7 @@ fn closest(axes: &DisplayAxes) -> Vec<DisplayAxes> {
     let most = ready.clone().map(shared).max().unwrap_or(0);
     ready
         .filter(|r| shared(r) == most)
-        .map(|r| fewest(&DisplayAxes::default(), r))
+        .map(|r| fewest(&DisplayAxes::default(), r, d))
         .collect()
 }
 
@@ -850,7 +913,7 @@ fn closest(axes: &DisplayAxes) -> Vec<DisplayAxes> {
 /// offers a destination. Smallest sets first, then in axis order (range, transfer,
 /// gamut, container): of two sets the same size, the one with the earlier first axis
 /// wins. `base` must not contradict the row.
-fn fewest(base: &DisplayAxes, row: &Row) -> DisplayAxes {
+fn fewest(base: &DisplayAxes, row: &Row, d: &Defaults) -> DisplayAxes {
     let full = complete(row);
     // Bit `i` is axis `i`. Reversed, the earliest axis is the most significant bit, so
     // a larger reversed mask is earlier in axis order — hence the `Reverse`.
@@ -870,7 +933,7 @@ fn fewest(base: &DisplayAxes, row: &Row) -> DisplayAxes {
             gamut: base.gamut.or(added.gamut),
             container: base.container.or(added.container),
         };
-        if matches!(derive(&with), Derivation::Row(r) if r == *row) {
+        if matches!(derive(&with, d), Derivation::Row(r) if r == *row) {
             return added;
         }
     }
@@ -890,7 +953,7 @@ fn only(axes: &DisplayAxes, flags: &[&str]) -> DisplayAxes {
 
 /// The values of axis `A` (when it is the one named `flag`) that, replacing the stated
 /// one, make the axes resolve.
-fn push_changes<A: Axis>(axes: &DisplayAxes, flag: &str, out: &mut Vec<Change>) {
+fn push_changes<A: Axis>(axes: &DisplayAxes, flag: &str, d: &Defaults, out: &mut Vec<Change>) {
     if A::FLAG != flag {
         return;
     }
@@ -900,13 +963,13 @@ fn push_changes<A: Axis>(axes: &DisplayAxes, flag: &str, out: &mut Vec<Change>) 
         }
         let mut changed = *axes;
         A::set(&mut changed, v);
-        let then = match derive(&changed) {
+        let then = match derive(&changed, d) {
             Derivation::Row(row) if is_ready(&row) => None,
             Derivation::Open {
                 flag,
                 key,
                 candidates,
-            } => match resolving(&candidates) {
+            } => match resolving(&candidates, d) {
                 choices if !choices.is_empty() => Some((flag, key, choices)),
                 _ => continue,
             },
@@ -924,6 +987,13 @@ fn push_changes<A: Axis>(axes: &DisplayAxes, flag: &str, out: &mut Vec<Change>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const STD: Defaults = Defaults::STANDARD;
+
+    /// Every rendering's axis defaults: a remedy must work under each.
+    fn every_defaults() -> [Defaults; 2] {
+        [Defaults::STANDARD, crate::rendering::DIRECT.axes]
+    }
     use std::collections::BTreeSet;
 
     fn axes(
@@ -997,7 +1067,7 @@ mod tests {
     #[test]
     fn nothing_stated_is_the_display_p3_sdr_tiff() {
         // The default destination, so the default render does not move.
-        let r = resolve(&DisplayAxes::default()).unwrap();
+        let r = resolve(&DisplayAxes::default(), &STD).unwrap();
         assert_eq!(
             (r.range, r.transfer, r.gamut, r.container, r.encoding),
             (
@@ -1012,20 +1082,20 @@ mod tests {
 
     #[test]
     fn an_unset_axis_takes_the_one_value_left() {
-        let r = resolve(&axes(None, Some(Transfer::Pq), None, None)).unwrap();
+        let r = resolve(&axes(None, Some(Transfer::Pq), None, None), &STD).unwrap();
         assert_eq!(
             (r.range, r.gamut, r.container),
             (Range::Hdr, Gamut::Bt2020, Container::Tiff)
         );
-        let r = resolve(&axes(None, None, Some(Gamut::AdobeRgb), None)).unwrap();
+        let r = resolve(&axes(None, None, Some(Gamut::AdobeRgb), None), &STD).unwrap();
         assert_eq!(r.encoding, Encoding::SdrTiff);
-        let r = resolve(&axes(None, Some(Transfer::Linear), None, None)).unwrap();
+        let r = resolve(&axes(None, Some(Transfer::Linear), None, None), &STD).unwrap();
         assert_eq!(r.encoding, Encoding::HdrLinearTiff);
     }
 
     #[test]
     fn an_open_axis_is_refused_with_only_choices_that_resolve() {
-        let err = resolve(&axes(None, None, Some(Gamut::Bt2020), None)).unwrap_err();
+        let err = resolve(&axes(None, None, Some(Gamut::Bt2020), None), &STD).unwrap_err();
         assert_eq!(
             err,
             Fault::Ambiguous {
@@ -1034,7 +1104,7 @@ mod tests {
                 choices: vec!["linear", "pq", "hlg"],
             }
         );
-        let err = resolve(&axes(None, None, None, Some(Container::Avif))).unwrap_err();
+        let err = resolve(&axes(None, None, None, Some(Container::Avif)), &STD).unwrap_err();
         assert!(
             matches!(err, Fault::Ambiguous { flag: "--transfer", ref choices, .. }
             if choices == &vec!["pq", "hlg"])
@@ -1045,7 +1115,7 @@ mod tests {
     fn hdr_alone_resolves_to_the_gain_map_jpeg() {
         // Transfer's default (`native`) is on the gain map's row, so it wins over the
         // HDR TIFFs and AVIFs, which need a transfer stated.
-        let r = resolve(&axes(Some(Range::Hdr), None, None, None)).unwrap();
+        let r = resolve(&axes(Some(Range::Hdr), None, None, None), &STD).unwrap();
         assert_eq!(
             (r.transfer, r.gamut, r.container, r.encoding),
             (
@@ -1063,7 +1133,7 @@ mod tests {
         // derivation does not depend on which rows this build can write, so it is not
         // quietly promoted to the gain map.
         let Err(Fault::NotYet { row, adding, .. }) =
-            resolve(&axes(None, None, None, Some(Container::Jpeg)))
+            resolve(&axes(None, None, None, Some(Container::Jpeg)), &STD)
         else {
             panic!("expected NotYet");
         };
@@ -1080,12 +1150,15 @@ mod tests {
     #[test]
     fn a_conflict_names_the_pair_not_a_bystander() {
         // `--container tiff` is stated and innocent; the pair is range × gamut.
-        let err = resolve(&axes(
-            Some(Range::Hdr),
-            None,
-            Some(Gamut::AdobeRgb),
-            Some(Container::Tiff),
-        ))
+        let err = resolve(
+            &axes(
+                Some(Range::Hdr),
+                None,
+                Some(Gamut::AdobeRgb),
+                Some(Container::Tiff),
+            ),
+            &STD,
+        )
         .unwrap_err();
         let Fault::Conflict { conflicting, .. } = err else {
             panic!("expected Conflict: {err:?}")
@@ -1098,53 +1171,55 @@ mod tests {
     fn every_offered_remedy_resolves() {
         // Walk every stated combination: whatever a refusal suggests must work when
         // applied, with the axis it leaves open settled by one of its choices.
-        for stated in every_stated_combination() {
-            match resolve(&stated) {
-                Ok(_) => {}
-                Err(Fault::Ambiguous { choices, flag, .. }) => {
-                    assert!(!choices.is_empty(), "{stated:?}: no choice offered");
-                    for c in choices {
-                        let mut s = stated;
-                        set_by_flag(&mut s, flag, c);
-                        assert!(resolves(&s), "{stated:?}: {flag} {c} does not resolve");
+        for d in &every_defaults() {
+            for stated in every_stated_combination() {
+                match resolve(&stated, d) {
+                    Ok(_) => {}
+                    Err(Fault::Ambiguous { choices, flag, .. }) => {
+                        assert!(!choices.is_empty(), "{stated:?}: no choice offered");
+                        for c in choices {
+                            let mut s = stated;
+                            set_by_flag(&mut s, flag, c);
+                            assert!(resolves(&s, d), "{stated:?}: {flag} {c} does not resolve");
+                        }
                     }
-                }
-                Err(Fault::NotYet {
-                    adding, instead, ..
-                }) => {
-                    assert!(adding.is_empty() != instead.is_empty(), "{stated:?}");
-                    for add in adding {
+                    Err(Fault::NotYet {
+                        adding, instead, ..
+                    }) => {
+                        assert!(adding.is_empty() != instead.is_empty(), "{stated:?}");
+                        for add in adding {
+                            assert!(
+                                resolve(&union(&stated, &add), d).is_ok(),
+                                "{stated:?}: {add:?}"
+                            );
+                        }
+                        for alone in instead {
+                            assert!(resolve(&alone, d).is_ok(), "{stated:?}: {alone:?}");
+                        }
+                    }
+                    Err(Fault::Conflict {
+                        changes,
+                        conflicting,
+                        instead,
+                    }) => {
                         assert!(
-                            resolve(&union(&stated, &add)).is_ok(),
-                            "{stated:?}: {add:?}"
+                            changes.is_empty() != instead.is_empty(),
+                            "{stated:?} {conflicting:?}: exactly one kind of way out"
                         );
-                    }
-                    for alone in instead {
-                        assert!(resolve(&alone).is_ok(), "{stated:?}: {alone:?}");
-                    }
-                }
-                Err(Fault::Conflict {
-                    changes,
-                    conflicting,
-                    instead,
-                }) => {
-                    assert!(
-                        changes.is_empty() != instead.is_empty(),
-                        "{stated:?} {conflicting:?}: exactly one kind of way out"
-                    );
-                    for axes in instead {
-                        assert!(resolve(&axes).is_ok(), "{stated:?}: {axes:?}");
-                    }
-                    for ch in changes {
-                        let mut s = stated;
-                        set_by_flag(&mut s, ch.flag, ch.value);
-                        match &ch.then {
-                            None => assert!(resolve(&s).is_ok(), "{stated:?}: {ch:?}"),
-                            Some((flag, _, choices)) => {
-                                for c in choices {
-                                    let mut s2 = s;
-                                    set_by_flag(&mut s2, flag, c);
-                                    assert!(resolves(&s2), "{stated:?}: {ch:?} then {c}");
+                        for axes in instead {
+                            assert!(resolve(&axes, d).is_ok(), "{stated:?}: {axes:?}");
+                        }
+                        for ch in changes {
+                            let mut s = stated;
+                            set_by_flag(&mut s, ch.flag, ch.value);
+                            match &ch.then {
+                                None => assert!(resolve(&s, d).is_ok(), "{stated:?}: {ch:?}"),
+                                Some((flag, _, choices)) => {
+                                    for c in choices {
+                                        let mut s2 = s;
+                                        set_by_flag(&mut s2, flag, c);
+                                        assert!(resolves(&s2, d), "{stated:?}: {ch:?} then {c}");
+                                    }
                                 }
                             }
                         }
@@ -1177,33 +1252,35 @@ mod tests {
     fn every_container_offer_resolves_over_what_was_stated() {
         // What a suffix refusal offers must work when stated on top of what the run
         // already stated — a flag overrides a recipe's axis but cannot remove it.
-        for stated in every_stated_combination() {
-            for c in Container::ALL.iter().copied() {
-                let offers = writing(c, &stated);
-                let any_ready = ROWS.iter().any(|r| is_ready(r) && r.container == c);
-                assert_eq!(!offers.is_empty(), any_ready, "{c:?} over {stated:?}");
-                for offer in offers {
-                    let applied = over(&stated, &offer);
-                    let got = resolve(&applied)
-                        .unwrap_or_else(|f| panic!("{offer:?} over {stated:?}: {f:?}"));
-                    assert_eq!(got.container, c, "{offer:?} over {stated:?}");
+        for d in &every_defaults() {
+            for stated in every_stated_combination() {
+                for c in Container::ALL.iter().copied() {
+                    let offers = writing(c, &stated, d);
+                    let any_ready = ROWS.iter().any(|r| is_ready(r) && r.container == c);
+                    assert_eq!(!offers.is_empty(), any_ready, "{c:?} over {stated:?}");
+                    for offer in offers {
+                        let applied = over(&stated, &offer);
+                        let got = resolve(&applied, d)
+                            .unwrap_or_else(|f| panic!("{offer:?} over {stated:?}: {f:?}"));
+                        assert_eq!(got.container, c, "{offer:?} over {stated:?}");
+                    }
                 }
             }
         }
         // A PQ AVIF asked for as a TIFF: only the container changes.
         let pq_avif = axes(None, Some(Transfer::Pq), None, Some(Container::Avif));
         assert_eq!(
-            writing(Container::Tiff, &pq_avif),
+            writing(Container::Tiff, &pq_avif, &STD),
             [axes(None, None, None, Some(Container::Tiff))]
         );
         // A stated Adobe RGB gamut cannot reach an AVIF unless the offer restates it.
         let adobe = axes(None, None, Some(Gamut::AdobeRgb), None);
-        for offer in writing(Container::Avif, &adobe) {
+        for offer in writing(Container::Avif, &adobe, &STD) {
             assert_eq!(offer.gamut, Some(Gamut::Bt2020), "{offer:?}");
         }
         // The one ready JPEG is the gain map: the offer restates the transfer it
         // needs (`native`), since the stated `pq` cannot reach it.
-        let offers = writing(Container::Jpeg, &pq_avif);
+        let offers = writing(Container::Jpeg, &pq_avif, &STD);
         assert!(
             !offers.is_empty() && offers.iter().all(|o| o.transfer == Some(Transfer::Native)),
             "{offers:?}"
@@ -1213,9 +1290,11 @@ mod tests {
     #[test]
     fn a_resolved_destination_replays_exactly() {
         // The report records every resolved axis; stating them all must name the same row.
-        for stated in every_stated_combination() {
-            if let Ok(r) = resolve(&stated) {
-                assert_eq!(resolve(&r.axes()), Ok(r));
+        for d in &every_defaults() {
+            for stated in every_stated_combination() {
+                if let Ok(r) = resolve(&stated, d) {
+                    assert_eq!(resolve(&r.axes(), d), Ok(r));
+                }
             }
         }
     }

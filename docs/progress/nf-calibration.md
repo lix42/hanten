@@ -39,6 +39,13 @@ a white target 0.15–0.31 stop above diffuse white was reviewed and not adopted
 are **scene stops**: red density through the fixed linearization, 1 stop ≈ 0.167
 density.
 
+**`roll-section` is done (2026-09-27): the roll's measurements are their own recipe
+section**, `roll.white_balance` and `roll.white_stops` (the white, not a contrast;
+`look.contrast` unset means the roll's, else the default). `measure-roll` writes it; the
+gains multiply a stated white balance, and a stated contrast wins. A rendering decides
+whether it applies (`--rendering default` does, `direct` does not). The fallback when a
+roll has no measurement is `no-roll-defaults`'.
+
 ## anchor-comparison
 
 **Status:** done
@@ -384,7 +391,7 @@ density.
 
 ## roll-section
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-09-27
 
 - 2026-09-27: filed while re-planning `nf-destinations/direct-preset`. Goal: a `roll` recipe
@@ -452,6 +459,15 @@ density.
   through the binary, with the losing wording asserted absent. `using-nc.md` §11 notes
   that a `--dump-params` recipe stating a contrast or white balance beside the roll's
   warns on replay (a file cannot say who chose it); typing the flag keeps it quietly.
+- 2026-09-27: **done**, merged as #180. What dependents need: the roll's measurements
+  live in the recipe's `roll` section (`roll.white_balance`, `roll.white_stops`; flags
+  `--roll-white-balance`, `--roll-white`), stored as measurements — the contrast is
+  derived at render time (`roll_white::contrast_for`) unless `look.contrast` is stated,
+  and the gains multiply `scene_correction.white_balance`. `measure-roll`'s reuse output
+  writes the section. Nothing is read as unset by its value, so `--dump-params` replays;
+  a recipe value beside a roll measurement warns instead (typed flags never do). Whether
+  the section applies is the rendering's (`nf-destinations/direct-preset`: `default`
+  applies it, `direct` leaves it out).
 
 ## white-rule-hdr
 

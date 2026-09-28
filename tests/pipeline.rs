@@ -11913,6 +11913,189 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
 }
 
 #[test]
+fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
+    // A file cannot say who chose a value, so `direct` warns only for what an earlier
+    // build wrote unchosen (desaturation 0.8, a contrast or white balance beside a roll
+    // section): a dump of a deliberate adjustment must replay under `--strict`, to the
+    // same bytes. `hdr-48bit.tif` is the IR-free fixture, so an exit 1 is a warning.
+    let tmp = TempDir::new("direct-dump-replay");
+    let dumped = tmp.path("d.json");
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("a.tiff"),
+        &[
+            "--rendering",
+            "direct",
+            "--highlight-desaturation",
+            "0.5",
+            "--strict",
+            "--dump-params",
+            dumped.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("b.tiff"),
+        &["--params", dumped.to_str().unwrap(), "--strict"],
+    );
+    assert_eq!(code, 0, "the dump must replay under --strict: {err}");
+    assert_eq!(
+        std::fs::read(tmp.path("a.tiff")).unwrap(),
+        std::fs::read(tmp.path("b.tiff")).unwrap()
+    );
+    // The old serialized default still warns, and `--strict` refuses it.
+    let old = write_file(
+        &tmp.path("old.json"),
+        r#"{"recipe_version": 2, "rendering": "direct",
+            "look": {"highlight_desaturation": {"strength": 0.8}}}"#,
+    );
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("c.tiff"),
+        &["--params", old.to_str().unwrap(), "--strict"],
+    );
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("`look.highlight_desaturation.strength` 0.8"),
+        "{err}"
+    );
+
+    // The carve-out: beside a recipe's `roll` section, a white balance or contrast typed
+    // now is dumped into the recipe, and a file cannot say who chose it — so the replay
+    // warns (as `default`'s overlap rule does). Typed again on replay, it is quiet.
+    let roll = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 2, "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
+    );
+    for flag in [
+        &["--white-balance", "1.05,1,1"][..],
+        &["--contrast", "1.3"][..],
+    ] {
+        let dump = tmp.path("roll-dump.json");
+        let (code, _, err) = new_flow_convert(
+            &tmp.path("r1.tiff"),
+            &[
+                &[
+                    "--params",
+                    roll.to_str().unwrap(),
+                    "--rendering",
+                    "direct",
+                    "--strict",
+                    "--dump-params",
+                    dump.to_str().unwrap(),
+                ][..],
+                flag,
+            ]
+            .concat(),
+        );
+        assert_eq!(code, 0, "{flag:?}: typed, it never warns: {err}");
+        let (code, _, err) = new_flow_convert(
+            &tmp.path("r2.tiff"),
+            &["--params", dump.to_str().unwrap(), "--strict"],
+        );
+        assert_eq!(code, 1, "{flag:?}: the replay warns: {err}");
+        assert!(
+            err.contains("beside a `roll` section")
+                && err.contains("type it as a flag to keep it without this warning"),
+            "{flag:?}: {err}"
+        );
+        let (code, _, err) = new_flow_convert(
+            &tmp.path("r3.tiff"),
+            &[&["--params", dump.to_str().unwrap(), "--strict"][..], flag].concat(),
+        );
+        assert_eq!(code, 0, "{flag:?}: typed on replay, it is quiet: {err}");
+    }
+}
+
+#[test]
+fn the_roll_flags_are_refused_under_the_direct_rendering() {
+    // `direct` leaves the roll out, so a typed roll flag would be silently ignored —
+    // refused whether a flag or the recipe chose `direct`, before any value rule, and
+    // with a remedy that works. A recipe's `roll` section is spared.
+    let tmp = TempDir::new("roll-flag-direct");
+    let direct = write_file(
+        &tmp.path("direct.json"),
+        r#"{"recipe_version": 2, "rendering": "direct",
+            "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
+    );
+    let params = ["--params", direct.to_str().unwrap()];
+    for (source, extra) in [
+        (
+            &["--rendering", "direct"][..],
+            &["--roll-white", "1.7", "--strict"][..],
+        ),
+        (&params[..], &["--roll-white-balance", "1.3,1,0.8"][..]),
+        // A bad value still gets the presence refusal, not the value rule's remedy.
+        (&params[..], &["--roll-white", "1e-45"][..]),
+    ] {
+        let (code, _, err) = new_flow_convert(&tmp.path("d.tiff"), &[source, extra].concat());
+        assert_eq!(code, 2, "{extra:?}: {err}");
+        assert!(
+            err.contains(&format!("{} applies the roll's measurements", extra[0]))
+                && err.contains("the rendering is `direct`")
+                && err.contains(&format!("drop {}", extra[0]))
+                && err.contains("pass --rendering default"),
+            "{extra:?}: {err}"
+        );
+        assert!(
+            !err.contains("larger white") && !err.contains("must give a finite"),
+            "{extra:?}: {err}"
+        );
+    }
+    // The remedy works over the recipe's `direct`, and applies the roll.
+    let (code, stdout, err) = new_flow_convert(
+        &tmp.path("default.tiff"),
+        &[
+            &params[..],
+            &["--roll-white", "1.7", "--rendering", "default"],
+        ]
+        .concat(),
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(json(&stdout)["new_flow"]["roll"]["contrast_applied"], true);
+    // The recipe's own section alone is spared.
+    let (code, _, err) = new_flow_convert(&tmp.path("spared.tiff"), &params);
+    assert_eq!(code, 0, "{err}");
+    // Film master and `direct` both: the film master is named, with a remedy that
+    // clears `direct` too.
+    let both = write_file(
+        &tmp.path("both.json"),
+        r#"{"recipe_version": 2, "rendering": "direct", "output": "film-master"}"#,
+    );
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("both.tiff"),
+        &["--params", both.to_str().unwrap(), "--roll-white", "1.7"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("the recipe's `output` is \"film-master\"")
+            && err.contains("Either drop --roll-white and pass --rendering default, or")
+            && err.contains("with --rendering default"),
+        "{err}"
+    );
+    assert!(!err.contains("the rendering is `direct`"), "{err}");
+    // Each offered remedy, followed as written, converts: the first writes the film
+    // master under `default`, the second a rendered destination applying the roll.
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("both-dropped.tiff"),
+        &["--params", both.to_str().unwrap(), "--rendering", "default"],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("both-fixed.tiff"),
+        &[
+            "--params",
+            both.to_str().unwrap(),
+            "--roll-white",
+            "1.7",
+            "--range",
+            "sdr",
+            "--rendering",
+            "default",
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+}
+
+#[test]
 fn the_roll_flags_are_refused_under_the_film_master() {
     // A roll flag asks a rendering to apply a measurement, which the film master never
     // does. A typed `--film-master` conflicts at the parser, like the destination axes;
@@ -12283,6 +12466,27 @@ fn measure_roll_leader_errors_keep_their_exit_code() {
         "1024",
     ]);
     assert_eq!(code, 6, "{err}");
+}
+
+#[test]
+fn measure_roll_reads_a_roll_recipe_whatever_rendering_it_states() {
+    // `measure-roll` renders nothing, so a recipe's rendering is never read — not even
+    // `direct` beside a film master, a pair `convert` refuses.
+    let tmp = TempDir::new("measure-roll-direct-master");
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 2, "rendering": "direct", "output": "film-master",
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+    );
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!err.contains("--rendering"), "{err}");
+    assert_eq!(json(&stdout)["command"], "measure-roll");
 }
 
 #[test]
@@ -12922,12 +13126,105 @@ fn every_new_flow_destination_renders_end_to_end() {
 }
 
 #[test]
-fn the_gain_map_destination_writes_an_iso_only_jpeg_and_reports_its_map() {
-    // `hdr-48bit.tif` is 502×462 and IR-free, so a `--strict` exit is this run's own.
-    let tmp = TempDir::new("new-flow-gain-map");
+fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
+    // `hdr-48bit.tif` is IR-free, so `--strict` sees only this run's warnings.
+    let tmp = TempDir::new("new-flow-direct");
+    let recipe = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 2,
+            "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#,
+    );
     let convert = |name: &str, extra: &[&str]| {
-        let (code, stdout, err) =
-            new_flow_convert(&tmp.path(name), &[&["--range", "hdr"][..], extra].concat());
+        let out = tmp.path(name);
+        let (code, stdout, err) = run(&[
+            &[
+                "convert",
+                fixture("hdr-48bit.tif").to_str().unwrap(),
+                "--new-flow",
+                "--params",
+                recipe.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+            ][..],
+            extra,
+        ]
+        .concat());
+        (code, stdout, err, out)
+    };
+
+    // Bare: the HDR float TIFF, the roll left out and saying so, nothing to warn about.
+    let (code, stdout, err, out) = convert("bare", &["--rendering", "direct", "--strict"]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let nf = &report["new_flow"];
+    assert_eq!(nf["rendering"], "direct", "{nf}");
+    assert_eq!(
+        nf["destination"]["display"],
+        serde_json::json!({"range": "hdr", "transfer": "linear", "gamut": "bt2020",
+                           "container": "tiff"}),
+        "{nf}"
+    );
+    assert_eq!(
+        read_tiff_bits(&PathBuf::from(format!("{}.tiff", out.display()))),
+        32
+    );
+    assert_eq!(nf["roll"]["white_balance_applied"], false, "{nf}");
+    assert_eq!(nf["roll"]["contrast_applied"], false, "{nf}");
+    assert_eq!(
+        nf["scene_correction"]["white_balance"],
+        serde_json::json!([1.0, 1.0, 1.0]),
+        "{nf}"
+    );
+    assert_eq!(
+        nf["look"]["highlight_desaturation"]["strength"], 0.0,
+        "{nf}"
+    );
+    assert!(
+        report
+            .get("warnings")
+            .is_none_or(|w| w.as_array().unwrap().is_empty()),
+        "{report}"
+    );
+
+    // Stated SDR: Adobe RGB, 16 bits — the form viewed by eye.
+    let (code, stdout, err, out) = convert("sdr", &["--rendering", "direct", "--range", "sdr"]);
+    assert_eq!(code, 0, "{err}");
+    let nf = &json(&stdout)["new_flow"];
+    assert_eq!(nf["destination"]["display"]["gamut"], "adobe-rgb", "{nf}");
+    assert_eq!(
+        read_tiff_bits(&PathBuf::from(format!("{}.tiff", out.display()))),
+        16
+    );
+
+    // `default` on the same recipe applies the roll.
+    let (code, stdout, err, _) = convert("default", &[]);
+    assert_eq!(code, 0, "{err}");
+    let nf = &json(&stdout)["new_flow"];
+    assert_eq!(nf["rendering"], "default", "{nf}");
+    assert_eq!(nf["roll"]["white_balance_applied"], true, "{nf}");
+
+    // The film master renders nothing for `direct` to start from.
+    let (code, _, err, _) = convert("fm", &["--rendering", "direct", "--film-master"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--rendering direct") && err.contains("--film-master"),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_gain_map_destination_writes_an_iso_only_jpeg_and_reports_its_map() {
+    // `hdr-48bit.tif` is 502×462 and IR-free, and every run states a roll measurement
+    // (neutral gains, the default contrast), so a `--strict` exit is this run's own — not
+    // the `default` rendering's no-roll fallback warning.
+    let tmp = TempDir::new("new-flow-gain-map");
+    let measured = ["--roll-white-balance", "1,1,1", "--contrast", "1.1111112"];
+    let convert = |name: &str, extra: &[&str]| {
+        let (code, stdout, err) = new_flow_convert(
+            &tmp.path(name),
+            &[&["--range", "hdr"][..], &measured[..], extra].concat(),
+        );
         assert_eq!(code, 0, "{extra:?}: {err}");
         let bytes = std::fs::read(tmp.path(&format!("{name}.jpg"))).unwrap();
         (json(&stdout), bytes)
@@ -13030,10 +13327,16 @@ fn the_new_flow_film_master_runs_no_rendering_and_refuses_a_look() {
 
 #[test]
 fn the_new_flow_hdr_hand_off_counts_what_it_clamps_and_strict_sees_it() {
-    // `hdr-48bit.tif` is the IR-free fixture, so a `--strict` exit 1 is this warning's.
+    // `hdr-48bit.tif` is the IR-free fixture, and every run states a roll measurement
+    // (neutral gains, the default contrast), so a `--strict` exit 1 is this warning's —
+    // not the `default` rendering's fallback warning.
     let tmp = TempDir::new("new-flow-peak-clamp");
+    let measured = ["--roll-white-balance", "1,1,1", "--contrast", "1.1111112"];
     // The control: at the defaults nothing sits above the peak, and `--strict` passes.
-    let (code, stdout, err) = new_flow_convert(&tmp.path("a"), &["--transfer", "pq", "--strict"]);
+    let (code, stdout, err) = new_flow_convert(
+        &tmp.path("a"),
+        &[&measured[..], &["--transfer", "pq", "--strict"]].concat(),
+    );
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
     assert_eq!(
@@ -13043,13 +13346,17 @@ fn the_new_flow_hdr_hand_off_counts_what_it_clamps_and_strict_sees_it() {
     // Three stops up with fit range at its identity puts content past the 1000-nit peak:
     // clamped at the hand-off, counted there, folded into the report's clip count.
     let over = [
-        "--transfer",
-        "pq",
-        "--exposure",
-        "3",
-        "--display-tone-headroom",
-        "0",
-    ];
+        &measured[..],
+        &[
+            "--transfer",
+            "pq",
+            "--exposure",
+            "3",
+            "--display-tone-headroom",
+            "0",
+        ],
+    ]
+    .concat();
     let (code, stdout, err) = new_flow_convert(&tmp.path("b"), &over);
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
@@ -13064,6 +13371,7 @@ fn the_new_flow_hdr_hand_off_counts_what_it_clamps_and_strict_sees_it() {
     );
     assert!(err.contains("clipped"), "{err}");
     let (code, _, err) = new_flow_convert(&tmp.path("c"), &[&over[..], &["--strict"]].concat());
+    assert!(!err.contains("no roll measurement"), "{err}");
     assert_eq!(code, 1, "--strict must promote the clamp: {err}");
 
     // An HDR signal that never passes reference white is warned about with this chain's
@@ -13431,11 +13739,16 @@ fn a_roll_names_each_frame_from_its_destination() {
     // The shared recipe's `output` picks the container, so derived names follow it; a
     // per-frame override that changes the destination changes that frame's name.
     let tmp = TempDir::new("new-flow-roll-destination");
+    // A roll measurement is stated (neutral gains, the default contrast), so the
+    // `--strict` runs below see only the destination warning, not the `default`
+    // rendering's fallback.
     let recipe = write_file(
         &tmp.path("roll.json"),
         r#"{
   "recipe_version": 2,
   "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
+  "roll": { "white_balance": [1.0, 1.0, 1.0] },
+  "look": { "contrast": 1.1111112 },
   "output": { "display": { "transfer": "pq", "container": "avif" } }
 }"#,
     );

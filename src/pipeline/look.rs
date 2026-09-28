@@ -64,16 +64,20 @@ pub struct HighlightDesaturation {
     pub band: [f32; 2],
 }
 
-impl Default for HighlightDesaturation {
+impl HighlightDesaturation {
     /// Strength `0.8`, one stop below white, band `0.015 → 0.025` on the ACEScg measure —
     /// where marked colours keep 92–100% of their chroma (`nf-look` progress,
-    /// `path-to-white`).
+    /// `path-to-white`). A `const` so a rendering's base (`crate::rendering`) can name it.
+    pub const DEFAULT: Self = Self {
+        strength: 0.8,
+        start_stops: -1.0,
+        band: [0.015, 0.025],
+    };
+}
+
+impl Default for HighlightDesaturation {
     fn default() -> Self {
-        Self {
-            strength: 0.8,
-            start_stops: -1.0,
-            band: [0.015, 0.025],
-        }
+        Self::DEFAULT
     }
 }
 
