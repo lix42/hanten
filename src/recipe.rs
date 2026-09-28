@@ -122,9 +122,8 @@ impl<'de> Deserialize<'de> for RecipeVersion {
     }
 }
 
-/// Fit range's section on the new chain: the headroom, and where the film base renders
-/// on the display. Each key is optional: unset, it takes the rendering's base
-/// (`crate::rendering`), so a value is written only when the user stated it.
+/// Fit range's section on the new chain: the headroom and display black, each unset
+/// meaning the rendering's base (`crate::rendering`).
 ///
 /// Its own type rather than [`FitRange`], which the current chain's `ResolvedConfig`
 /// also carries: display black is new-chain only, and a key added to that shared type
@@ -214,18 +213,11 @@ pub struct Calibration {
     pub film_base: Option<FilmBaseSource>,
 }
 
-/// What `hanten measure-roll` measured for the roll (`nf-calibration/roll-section`):
-/// kept apart from the style knobs so a measured value is never mistaken for a chosen
-/// one, and so a rendering can apply it or leave it out (`nf-destinations/direct-preset`).
+/// What `hanten measure-roll` measured, kept apart from the style knobs so a rendering
+/// can apply it or leave it out. Applied in [`Recipe::shared_params`].
 ///
-/// Both values are optional and independent — a roll may state one, both or neither.
-/// Unset, each is written as `null` rather than left out: `cli::merge_json` reads a
-/// one-key object as an enum switch, so a sparse section would let a roll's per-frame
-/// `{"roll": {"white_stops": …}}` replace the shared recipe's gains.
-///
-/// How the values reach the chain is [`Recipe::shared_params`]'s: the gains multiply
-/// `scene_correction.white_balance`, and the white becomes the look's contrast
-/// ([`roll_white::contrast_for`]) unless `look.contrast` is stated.
+/// Unset values are written as `null`, never left out: `cli::merge_json` reads a one-key
+/// object as an enum switch, and a per-frame `{"roll": {"white_stops": …}}` must merge.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RollSection {
@@ -245,13 +237,9 @@ impl RollSection {
     }
 }
 
-/// The recipe's `look` keys: the stage's [`LookSection`], with the contrast optional.
-///
-/// Its own type because "unset" and "stated at the default" must stay apart: an unset
-/// contrast takes the roll's ([`RollSection::white_stops`]) or else
-/// [`DEFAULT_CONTRAST`], while a stated one — any value — wins over both. The stage
-/// always receives a resolved number ([`LookKeys::resolve`]); it never picks a fallback
-/// of its own. Serializes with the stage's keys, the contrast as `null` when unset.
+/// The recipe's `look` keys: the stage's [`LookSection`] with the rendering-dependent
+/// keys optional, since "unset" and "stated at the default" resolve differently. The
+/// stage only ever receives a resolved section ([`LookKeys::resolve`]).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LookKeys {
@@ -334,28 +322,21 @@ pub struct RollReport {
     pub white_stops: Option<f32>,
     /// The look contrast `white_stops` renders at ([`roll_white::contrast_for`]).
     pub contrast: Option<f32>,
-    /// Whether the gains were multiplied into scene correction's white balance: `false`
-    /// when there were none, under `--rendering direct`, or when no rendering stage ran
-    /// (the film master).
+    /// Whether the gains reached scene correction (not under `direct` or the film master).
     pub white_balance_applied: bool,
-    /// Whether the look's contrast is the roll's: `false` when there was no white, when
-    /// `look.contrast` was stated (it wins), under `--rendering direct`, or when no
-    /// rendering stage ran.
+    /// Whether the look's contrast is the roll's (a stated `look.contrast` wins).
     pub contrast_applied: bool,
 }
 
-/// Which style knobs were typed as flags on this invocation — [`Recipe::recipe_warnings`]
-/// warns only for a value a recipe file stated, since a typed flag is a choice made now.
-/// `roll` takes no flags, so it passes the default.
+/// Which style knobs this invocation typed as flags: [`Recipe::recipe_warnings`] never
+/// warns about those. `roll` takes no flags and passes the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TypedStyle {
     /// `--white-balance` was typed.
     pub white_balance: bool,
     /// `--contrast` was typed.
     pub contrast: bool,
-    /// `--highlight-desaturation` (the strength) was typed. Its start and band have no
-    /// flag here: no warning reads them, since their old serialized defaults equal
-    /// `direct`'s base.
+    /// `--highlight-desaturation` (the strength; no warning reads the start or band).
     pub highlight_desaturation_strength: bool,
 }
 
@@ -1288,12 +1269,8 @@ impl Recipe {
         }
     }
 
-    /// Everything every rendition of a frame shares — the stages above the SDR/HDR
-    /// branch point, fit range's headroom and display black (`pipeline::chain`'s branch
-    /// contract).
-    ///
-    /// Every stage knob is resolved against the rendering's base (`crate::rendering`):
-    /// the roll section applied or not, and each unstated knob at the base's value.
+    /// Everything every rendition of a frame shares (`pipeline::chain`'s branch contract),
+    /// each stage resolved against the rendering's base.
     pub fn shared_params(&self) -> SharedParams {
         let (headroom_stops, display_black) = self.resolved_fit_range();
         SharedParams {
@@ -1387,25 +1364,9 @@ impl Recipe {
         })
     }
 
-    /// The run's warnings about its **recipe** — facts of the run, not of a frame, so
-    /// `convert` emits them once and `roll` once for its shared recipe (a per-frame
-    /// override is that frame's explicit choice). `typed` is which style knobs were given
-    /// as flags: a typed flag is a choice made now and never warns. Empty for the film
-    /// master, which renders nothing. Recipe keys only, and remedies both commands take.
-    ///
-    /// Nothing here refuses, and nothing is read as unset by its value, so a
-    /// `--dump-params` recipe replays as it rendered. What they catch is a value nobody
-    /// chose: a recipe an earlier build wrote states every default (`look.contrast`
-    /// 1.1111112, `highlight_desaturation.strength` 0.8, …), and an earlier `hanten
-    /// measure-roll` wrote its gains into `scene_correction.white_balance` and its
-    /// contrast into `look.contrast`.
-    ///
-    /// - **`default`, no roll measurement**: what fell back (the neutral white balance,
-    ///   the fallback contrast).
-    /// - **`default`, a recipe value beside a roll measurement**: a white balance that
-    ///   multiplies the roll's gains, a contrast that overrides the roll's white.
-    /// - **`direct`, a recipe value that moves its pinned base**: every such key, since
-    ///   `direct` is meant to be the rendering the calibration loop holds fixed.
+    /// The run's warnings about its recipe, emitted once per run (once per roll, from the
+    /// shared recipe). `typed` spares what was given as a flag; empty for the film master.
+    /// Why these and not refusals: design-update Part 2, "Recipe warnings, not refusals".
     pub fn recipe_warnings(&self, typed: TypedStyle) -> Vec<String> {
         if self.output == OutputSection::FilmMaster {
             return Vec::new();
@@ -1420,9 +1381,8 @@ impl Recipe {
         }
     }
 
-    /// `default` without a roll measurement: what fell back — the white balance (no roll
-    /// gains, none stated or typed) and the contrast (no roll white, none stated). A typed
-    /// flag, even `--white-balance 1,1,1`, is a choice, so it silences its half.
+    /// `default` without a roll measurement: what fell back. A typed flag, even
+    /// `--white-balance 1,1,1`, is a choice and silences its half.
     fn fallback_warning(&self, typed: TypedStyle) -> Option<String> {
         let mut fell_back = Vec::new();
         if !typed.white_balance
@@ -1485,23 +1445,8 @@ impl Recipe {
         warnings
     }
 
-    /// `direct`: a recipe value that moves its pinned base **and** that an earlier build
-    /// could have written without anyone choosing it, in one warning.
-    ///
-    /// Narrow on purpose: a `--dump-params` recipe of a deliberate adjustment (say
-    /// `--highlight-desaturation 0.5`) must replay under `--strict`, and a file cannot
-    /// say who chose a value. So only two cases warn — and the second is a carve-out
-    /// from that replay: a white balance or contrast typed beside a recipe's `roll`
-    /// section is dumped into the recipe, and warns when the dump is replayed (as
-    /// `default`'s overlap rule does); typing the flag on replay keeps it quietly.
-    ///
-    /// - `look.highlight_desaturation.strength` at exactly 0.8, the value every earlier
-    ///   recipe serialized. Every other old serialized default — contrast 1.1111112,
-    ///   headroom 6, display black 6, start −1, band `[0.015, 0.025]` — equals `direct`'s
-    ///   base, so it moves nothing.
-    /// - a stated `look.contrast`, or a white balance other than the identity, **beside a
-    ///   `roll` section**: what an earlier `hanten measure-roll` wrote there, which
-    ///   `direct` would otherwise apply although it leaves the roll out.
+    /// `direct`: a recipe value that moves its pinned base and that an earlier build could
+    /// have written unchosen — narrow on purpose (design-update, "Recipe warnings").
     fn direct_override_warning(&self, typed: TypedStyle) -> Option<String> {
         // The strength every recipe an earlier build wrote states — a historical value,
         // pinned here rather than read from today's default.

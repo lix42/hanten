@@ -771,13 +771,38 @@ is defined as `BUNDLED_CONTRAST / LINEARIZATION`, so the whole contrast holds wh
 linearization moves. Which whole contrast the fallback should be (the user's prior is
 about 2.5, i.e. `look.contrast ≈ 1.39`) is `nf-calibration/no-roll-defaults`'s.
 
-**Keeping `direct` current as stages change.** `direct`'s values are one struct built
-without `..`, so a new stage knob fails to compile until someone decides its `direct`
-value by the principle above. A pinned test holds the resolved values and names the
-module doc that says how to re-decide them. When `direct`'s output moves, the move is
-logged in `nf-calibration`'s progress, because review rounds judged before and after it
-no longer compare like for like. A task that changes a stage (say, a new fit-range
-operator) decides `direct`'s part as its own work.
+**Recipe warnings, not refusals** (`Recipe::recipe_warnings`). A file cannot say who
+chose a value, and a `--dump-params` recipe must replay as it rendered, so nothing is read
+as unset by its value and nothing is refused; the run warns once instead, and a typed flag
+(a choice made now) never does. What the warnings catch is a value nobody chose: earlier
+builds wrote every default into a recipe, and an earlier `measure-roll` wrote its gains
+into `scene_correction.white_balance` and its contrast into `look.contrast`.
+
+- `default` without a roll measurement: what fell back.
+- `default`, a recipe value beside a roll measurement: a white balance that multiplies the
+  roll's gains, a contrast that overrides the roll's white.
+- `direct`, narrowly: only highlight desaturation at 0.8 (every other old default equals
+  `direct`'s base) and a white balance or contrast beside a `roll` section (old
+  `measure-roll` output). Narrow so a dump of a deliberate adjustment replays under
+  `--strict`; the one carve-out is a value typed beside a `roll` section, which warns on
+  replay unless the flag is typed again.
+
+**Keeping `direct` current as stages change.** `direct`'s values are its own constants
+(`rendering::DIRECT`), never today's defaults read through, so moving a default does not
+move the rendering the calibration loop holds. The resolver destructures every stage
+section without `..`, so a new stage knob fails to compile until it has a base, and
+`direct_is_pinned` fails on any change to `DIRECT`. When either happens:
+
+1. **Decide the knob's `direct` value by the principle.** Needed to land in the
+   container: the gentlest fixed value. A choice of taste: its identity.
+   Information-preserving, like display black's monotone stretch: it may stay.
+2. **Update `DIRECT`, the pinned test and the table above together.**
+3. **If `direct`'s output moved, log it** as a dated entry in `nf-calibration`'s
+   progress: review rounds judged before and after the move no longer compare like for
+   like.
+
+A task that changes a stage (say, a new fit-range operator) decides `direct`'s part as
+its own work.
 
 ## `film-master` is the reconstruction output
 

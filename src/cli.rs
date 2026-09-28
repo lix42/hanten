@@ -708,14 +708,11 @@ impl From<AutoWb> for WbSource {
 /// (`flow::reject_unavailable_flags`).
 #[derive(Args, Debug, Default)]
 pub struct RenderingOverrides {
-    /// `default` renders with the roll's measurements (the recipe's `roll` section) and
-    /// every other knob at its default. `direct` loses as little as possible: the roll
-    /// section is left out, white balance is neutral, highlight desaturation is off, and
-    /// an unset destination is the HDR float BT.2020 TIFF — a stated axis that rules it
-    /// out falls back to the lossless 16-bit TIFF (Adobe RGB unless a gamut is stated),
-    /// and a lossy container only when one is stated or the stated axes leave no lossless
-    /// row — and the roll flags are refused.
-    /// A stated knob builds on either. `--new-flow` only.
+    /// `default` applies the roll's measurements (recipe `roll`) and every other default.
+    /// `direct` loses as little as possible: no roll, neutral white balance, highlight
+    /// desaturation off, and an unset destination the HDR float TIFF (else the lossless
+    /// 16-bit TIFF; never a lossy one by default). A stated knob builds on either.
+    /// `--new-flow` only.
     #[arg(long, value_enum, value_name = "RENDERING")]
     pub rendering: Option<crate::rendering::Rendering>,
 }
@@ -2987,19 +2984,11 @@ pub fn validate_convert(
     Ok(())
 }
 
-/// Typed roll flags ask a rendering to apply the roll's measurements, which neither the
-/// film master (no rendering stage) nor `--rendering direct` (it leaves the roll out)
-/// does. A typed `--film-master` conflicts with them at the parser; this is the same
-/// refusal when the film master is the recipe's (`output`: `"film-master"`), and when
-/// the merged rendering — typed or the recipe's — is `direct`. The film master is named
-/// first when both hold: it is the more specific, since no rendering at all runs.
-///
-/// A presence rule, so [`run_convert`] runs it straight after `recipe::merge`, before
-/// `recipe::validate`: every value rule there is coarser for this run — a bad
-/// `--roll-white` would get a remedy no white can satisfy, and a typed `--contrast`
-/// would get the film master's look refusal, each fixed only to meet this one. It
-/// reads nothing but the merged `output`, the merged rendering and the flags. The
-/// recipe's own `roll` section is spared: a measurement is not a stage asked for.
+/// Refuse typed roll flags when nothing will apply them: a recipe's film master (a typed
+/// `--film-master` conflicts at the parser) or a `direct` rendering. The film master is
+/// named first. A presence rule, so it runs before `recipe::validate`, whose value rules
+/// would otherwise refuse first with remedies that cannot work. A recipe's `roll` section
+/// is spared.
 fn reject_roll_flags_nothing_applies(args: &ConvertArgs, r: &Recipe) -> Result<()> {
     let direct = r.rendering == crate::rendering::Rendering::Direct;
     if !args.roll.any() || (r.output != OutputSection::FilmMaster && !direct) {
