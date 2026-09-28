@@ -1560,7 +1560,7 @@ So you don't go looking:
 
 | Missing | Owning task |
 |---|---|
-| **Auto-cascade recipe generation** — a planner that produces a roll recipe for you, instead of you measuring and freezing it by hand | [`core/base-acquisition-planner`](tasks/core/base-acquisition-planner.md) |
+| **Auto-cascade recipe generation** — a planner that produces a roll recipe for you, instead of you measuring and freezing it by hand | [`core/auto-calibration`](tasks/core/auto-calibration.md) |
 | **Content-based film-base fallback** (`--base-content`) for cropped scans with no visible rebate | [`film-base/content-fallback`](tasks/film-base/content-fallback.md) |
 | **IR dust removal** | roadmap follow-up, no task file yet |
 

@@ -88,7 +88,7 @@ Two things this does **not** settle, and which this task still owns:
   freeze it as an explicit `Dmax` for every frame. It keeps the roll-fixed, cross-frame
   consistency that makes `Explicit` the right shape while replacing the part that is
   uncontrolled — the leader. Finding 2 above is direct evidence for it: real content
-  already measures *above* the leader anchor. `core/base-acquisition-planner` owns the
+  already measures *above* the leader anchor. `core/auto-calibration` owns the
   cascade this would slot into.
   **It inherits the holder defect.** A high percentile over whole frames is exactly what
   `algo/auto-anchor-interior-measurement` found resolving to 2.23–2.37 against a roll Dmax

@@ -69,6 +69,9 @@ What other epics need to know about `core`:
   that lives elsewhere*, which is why `curve.anchor` stayed in the curve. A stated value a
   resolved look will not read (`characteristic`, `simple`) is **carried and warned about**,
   never refused — that is what lets one calibration compose with any profile.
+- **The roll CLI workflow's design is `docs/design/roll-workflow.md`** (2026-09-28),
+  built by `core/measure-base`, `core/recipe-composition`, `core/roll-measure-mode`,
+  `core/auto-calibration` and `nf-core/subcommands`; it wins over their task files.
 - **Exit codes (design-spec §11):** Usage=2, Decode=3, Unsupported=4, Write=5,
   Resource=6, Other=1. `NcError::exit_code()` is the single mapping.
 - **stdout is report-only**; logs and warnings go to stderr. Reports emit
@@ -364,13 +367,60 @@ of plan → recipe → apply. The **plan** half is `core/base-acquisition-planne
   subsection, decided 2026-08-11 (#94).
 
 
-## base-acquisition-planner
+## auto-calibration
 
 **Status:** not started
-**Updated:** —
+**Updated:** 2026-09-28
 
 - Goal: Implement the automatic **acquisition cascade** that resolves a roll's `Dmin` and `Dmax` from whatever the user provides, emits a **frozen recipe with provenance + confidence**, and decides when to fall back from roll to single conversion.
+- **2026-09-28 — renamed from `base-acquisition-planner` and re-scoped.** The explicit
+  half (measure the base from a named frame, write it as a recipe) moved to
+  `measure-base`; the one-command roll to `roll-measure-mode`. This task keeps the automatic
+  half — detecting the unexposed frame and leader, cross-frame agreement, provenance,
+  the drop to single — as an opt-in mode of `measure-roll`. `Dmax` left the goal
+  (`nf-retire/dmax-machinery`), and so did `hanten calibrate`. Now depends on
+  `film-base/holder-masked-measurement`, which replaces the automatic rung.
+- **2026-09-28:** an opt-in mode of `measure-roll` rather than of `roll` — finding the
+  frames is measurement. Its cascade may still use region and automatic base measurement;
+  a named `--unexposed` always measures its whole frame.
 
+## measure-base
+
+**Status:** not started
+**Updated:** 2026-09-28
+
+- Goal: `hanten estimate` → `hanten measure-base`, writing its `calibration` fragment as
+  a recipe file; `measure-roll` writes its `roll` section the same way.
+- Decided 2026-09-28: not a split. Everything else in `estimate`'s report is evidence
+  for the one measurement, and `inspect` is already the general command; `--params`
+  never reads a report (recipes are `deny_unknown_fields`).
+- **2026-09-28 — `measure-roll` becomes the one-stop measurement.** `--unexposed` makes
+  it measure the base too (the whole frame, through `measure-base`'s code), writing one
+  recipe with `calibration` and `roll`. `measure-base` stays, for a single-frame `convert`
+  and a roll with no unexposed frame. Design: `docs/design/roll-workflow.md`.
+
+## roll-measure-mode
+
+**Status:** not started
+**Updated:** 2026-09-28
+
+- Goal: `roll --measure-roll [--leader L]` measures the roll's white balance, white and
+  clamps over its frames (`measure-roll`'s code) with the recipe's base, then converts;
+  `--unexposed U` measures the base too and implies the mode. Design:
+  `docs/design/roll-workflow.md`.
+- Decided 2026-09-28:
+  - **A mode of `roll`, not a new command**, and `roll`'s requirements and defaults are
+    unchanged: it needs only a base, the `roll` section stays optional, and it refuses
+    only when a required value has no source.
+  - **An explicit `--measure-roll` trigger**, so a roll whose base came from
+    `measure-base --base-region` can measure in the same command; `--unexposed` alone
+    would have left that case with two commands. In measure mode a stated (non-null)
+    `roll` value or `--roll-*` flag is refused, as is `--unexposed` beside a stated base;
+    `--leader` outside measure mode guards nothing and is refused.
+  - **The recipe is opt-in** (`--save-recipe`). A roll's measurements do not transfer to
+    another roll; the file is for re-rendering this one (a changed look, or a subset of
+    frames with the whole roll's numbers — measuring a subset gives different ones). It
+    holds the whole run, so `roll --params` replays it byte for byte.
 
 ## conversion-versioning
 
@@ -636,6 +686,11 @@ heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`
   defaulted. The single missing mechanic is that `--params` rejects repetition.
 - Precedence extends the existing rule rather than replacing it: flags already beat
   the recipe **by source, not value**, and layering adds ordering among recipes.
+- **2026-09-28:** premise moved — the recipe is `recipe_version` 2, so the `dmax`,
+  `print` and `curve` keys above are gone; re-verify "no schema change". This task is
+  now also what removes the hand merge between measuring and `roll` (two layers: the
+  measured file from `measure-roll --out` with `calibration` and `roll`, and the look), and
+  `roll-measure-mode` depends on it for `roll`'s override flags.
 
 ## profile-authoring
 

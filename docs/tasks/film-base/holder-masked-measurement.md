@@ -28,7 +28,7 @@ search: `Auto` becomes "the effective area, measured by the configured method".
 Removing it reaches four other tasks, all of which exist to serve the detector:
 `auto-base-real-scan-refusal` (why it never fires), `auto-base-neutral-stock`
 (hardening it for a neutral base), `white-holder-support` (its holder polarity), and
-`core/base-acquisition-planner`'s auto rung. Their disposition is part of this task,
+`core/auto-calibration`'s automatic rung. Their disposition is part of this task,
 not a silent consequence of it — each is parked with a pointer here.
 
 **`content-fallback` is not retired.** Tier 3 estimates the base from picture content

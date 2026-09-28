@@ -1022,8 +1022,8 @@ optionality and its own default.
 Producing a calibration is not "one frame in, one calibration out": `film_base`
 comes from a single reference frame, but a roll content white is read from every frame:
 the brightest frame's own white under a cap, never a percentile across frames
-(`pipeline::roll_white`). The acquisition cascade is
-`core/base-acquisition-planner`.
+(`pipeline::roll_white`). The automatic acquisition cascade is
+`core/auto-calibration`.
 
 **`calibration.dmax` retired** with the roll reference density
 (`nf-retire/dmax-machinery`). Because every earlier sidecar and `--dump-params` document
@@ -1238,67 +1238,12 @@ top-level **document version** rather than per-object ones:
 This section states the shape. Each stage's keys are specified by the task that
 ships the knob, not written here ahead of the code.
 
-### Target: recipe composition and the calibrate/profile split
+### Target: the roll workflow
 
-> **This subsection describes the target, not the shipped surface** — like the
-> "Target replacement architecture" block in `TASKS.md`. Owned by
-> `core/recipe-composition`, `core/profile-authoring`,
-> `core/base-acquisition-planner` and `core/value-domain-terminology`. Everything
-> above this heading is what ships today.
-
-**Two kinds of configuration, distinguished by lifetime:**
-
-| | Scope | Origin | Reused |
-|---|---|---|---|
-| **pipeline profile** — reconstruction, curve shape, print controls, output policy | a look | chosen | across many rolls |
-| **roll calibration** — `calibration.film_base` (and any later roll measurement) | one roll | measured from film | never |
-
-**The structural half of this has shipped** (`core/calibration-recipe-section`):
-the measurements live in their own `calibration` section, described above. What
-remains below is the *workflow* built on that split.
-
-**Composition is layered, over one schema.** `--params` is repeatable and accepts
-`-` for stdin. Later layers win, and individual flags still win over all of them:
-
-```text
-defaults  <  --params A  <  --params B  <  …  <  individual flags
-```
-
-`roll` gains the same per-knob override flags `convert` has, so a one-off roll
-needs no file at all. Per-frame overrides stay in the `--frames` manifest.
-
-**The workflow.** Freezing no longer runs a conversion:
-
-```sh
-hanten inspect scan.tif                                       # optional: what is this file
-hanten calibrate --unexposed blank.tif --leader exposed.tif              --out roll-cal.jsonc                          # measure the roll, once
-hanten profile --density-gamma 2.4            --output-preset display-p3 --out my-look.jsonc  # author a look, no image
-hanten roll frames/*.tif --out-dir positives/         --params my-look.jsonc --params roll-cal.jsonc     # apply
-```
-
-Both `--unexposed` and `--leader` are optional: `--unexposed` resolves the film base,
-and `--leader` — which measured the retired reference density — would now only guard
-a roll-white measurement, as `measure-roll`'s does. Agents can skip the
-files entirely — the report stays on stdout, so
-`hanten calibrate … | jq '{recipe_version: 2, calibration}' | hanten roll … --params -` composes
-(the report's `calibration` key is the section *body*, so the object form is what
-`--params` takes).
-
-**Authored files are JSONC** (JSON plus comments). It is a superset, so every
-existing recipe, sidecar and `--params` file stays valid, the tagged enums the
-schema leans on keep working, and the machine contracts — report on stdout, the
-output sidecar — remain plain JSON. Comments are **generated from the schema, not
-preserved**: serde round-trips discard them, so Hanten writes an annotated file once
-and never rewrites a user's file in place.
-
-**Renames and removals.** `hanten estimate` becomes **`hanten calibrate`** (it resolves a
-roll, not one value — `hanten measure-roll`, the first command that measures across a
-roll's frames, is the other half it would absorb) and `hanten params` becomes **`hanten profile`** (it authors a
-reusable look, not a parameter dump). `--dump-params` is **deleted** rather than
-aliased: it is byte-identical to the sidecar every conversion already writes, and
-it captures none of the measured values, so a "frozen" recipe produced by it still
-re-measures per frame. `--grid` retires separately with
-`film-base/tiling-uniformity-validator`.
+**The target CLI workflow — measuring, layered recipes, `roll`'s measure mode — is
+[`docs/design/roll-workflow.md`](design/roll-workflow.md)**, the single source for the
+tasks that build it. The structural half has shipped: the measurements live in their
+own `calibration` and `roll` sections, described above.
 
 ### Reports & determinism
 
@@ -1585,7 +1530,7 @@ hanten roll scans/ --out-dir out/ --params roll-A.json   # a directory expands t
 # Per-frame overrides via a manifest: each frame may carry its own output path
 # and a partial-recipe `params` deep-merged onto the shared recipe for that frame
 # only (the "frame-local" knobs, e.g. print exposure). The manifest is the shape
-# the base-acquisition-planner will emit.
+# `measure-roll`'s `reuse.frames` emits.
 #   frames.json: { "frames": [
 #     { "input": "frame01.tiff" },
 #     { "input": "frame02.tiff", "params": { "print": { "print_exposure": 0.15 } } } ] }
@@ -2622,7 +2567,7 @@ the NLP feature comparison, Phase 6).
    roll-level JSON report (per-frame status + the shared recipe once). See §8.
    What remains: the auto-cascade that *generates* the shared recipe (detect the
    film base once for the roll and emit the frozen recipe roll applies) —
-   the dependent `base-acquisition-planner` task — plus first-class named presets
+   the dependent `core/measure-base`, `core/roll-measure-mode` and `core/auto-calibration` tasks — plus first-class named presets
    (film stock, neutral spots).
 7. **Optional color-correction QA harness.** Target-based fitting and ΔE2000 /
    SSIM regression testing against controlled negatives may support explicitly
@@ -2695,16 +2640,17 @@ the NLP feature comparison, Phase 6).
     LAB-benchmark `perf-instrumentation` task is **parked** (prototype on
     `prototype/perf-bench-instrumentation`); `perf-telemetry` is the real-world
     successor.
-13. **Roll workflow & base-acquisition planner** (extends item 6). The
+13. **Roll workflow & automatic calibration** (extends item 6). The
     deterministic **apply** half has shipped as `hanten roll`: it converts a batch
     from one shared recipe, supports per-frame manifest overrides, and emits one
     roll report while preserving the single-frame conversion core. Roll-fixed
     parameters (`Dmin`) versus frame-local print controls remain the
-    model. The open `base-acquisition-planner` owns the automatic **plan** half:
+    model. The open `core/auto-calibration` owns the automatic **plan** half:
     an acquisition cascade (unexposed reference → rebate region → `--auto-base`
     → cross-frame agreement → drop-to-single; content estimation only on explicit
     opt-in) emits the frozen recipe and provenance that `hanten roll` replays.
-    Tracked: shipped `roll-conversion`; open `base-acquisition-planner` and
+    Tracked: shipped `roll-conversion`; open `core/measure-base`, `core/roll-measure-mode`,
+    `core/auto-calibration` and
     `film-base/content-fallback`.
 14. **Roll-fixed `Dmax` from a fully-exposed reference frame.** *(Shipped as
     `dmax-reference`, then retired by `nf-retire/dmax-machinery`.)* It made the display

@@ -49,7 +49,7 @@ source should say so up front instead of failing after a full decode.
   and brighter than the interior median by 5% on every channel. Any one of these can
   be the gate that kills a real, thin, slightly noisy rebate.
 - Three later tasks build on this detector (`auto-base-neutral-stock`,
-  `white-holder-support`, the auto rung of `core/base-acquisition-planner`), and the
+  `white-holder-support`, the auto rung of `core/auto-calibration`), and the
   supported workflow today is measure-once-and-reuse with an explicit base.
 
 ## Open questions
@@ -92,5 +92,5 @@ source should say so up front instead of failing after a full decode.
 Not dependencies, but should not start before this has an answer:
 [auto-base-neutral-stock](auto-base-neutral-stock.md) and
 [white-holder-support](white-holder-support.md) harden edge cases of this detector, and
-[base-acquisition-planner](../core/base-acquisition-planner.md)'s auto rung assumes it
+[`core/auto-calibration`](../core/auto-calibration.md)'s auto rung assumes it
 can succeed.
