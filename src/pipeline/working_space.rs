@@ -34,11 +34,9 @@
 //! [`FilmRgbImage`] cannot reach either without first crossing this mapper. This is the working-space analogue of
 //! `FilmRgbImage`'s own construction restriction.
 //!
-//! It does **not** follow that profile tagging is type-checked:
-//! `io::encode(image: &LinearImage, params: &OutputParams, …)` will happily write any
-//! buffer with any profile, so keeping the ACEScg tag matched to ACEScg pixels remains
-//! the orchestrator's responsibility (`pipeline::stages` fetches the tag on the same
-//! branch that maps the pixels).
+//! It does **not** follow that profile tagging is type-checked: the `io::encode`
+//! writers take any buffer with any profile, so keeping the ACEScg tag matched to
+//! ACEScg pixels is the orchestrator's (`cli`) responsibility.
 //!
 //! ## Precision, clamping, non-finite
 //! The matrix multiply runs in **binary64** and stores `f32` — so the only

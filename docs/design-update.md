@@ -495,11 +495,11 @@ reconstruction (the fixed decode)
 
 | Stage | Job | Today |
 |---|---|---|
-| **scene correction** | Photographic corrections toward what the scene was: white balance, exposure, flare/fog removal. Scene-referred, linear. | `render_split::display_source` (`apply_shared_controls`): WB → exposure → black point → `linear_range` |
-| **look** | Creative and optional: contrast, per-channel colour grading, saturation, print or paper emulation, per-stock normalization. Scene-referred. | Doesn't exist as a stage |
-| **fit range** | Fit the scene's dynamic range into the display's range, with parameters from the display's peak (SDR vs HDR). The industry term is *tone mapping*: "tone" means brightness levels, not colour. | `fit_range.headroom_stops` (`display_tone::Headroom`) in `pipeline::sdr` / `pipeline::hdr`; `pipeline::fit_range` under `--new-flow` |
-| **fit gamut** | Move out-of-gamut colour to the display's boundary, keeping hue. | `fit_gamut::radial_to_boundary`, shared by both chains (the legacy metadata names it `neutral-axis-radial-boundary-v1`, with a `bt2020-` / `display-p3-` prefix on the HDR and gain-map renditions) |
-| **encode** | Transfer function (sRGB, PQ or HLG), quantization, counting clipped samples | `color`, `io::encode`, `io::avif` |
+| **scene correction** | Photographic corrections toward what the scene was: white balance, exposure, flare/fog removal. Scene-referred, linear. | `pipeline::scene_correction` |
+| **look** | Creative and optional: contrast, per-channel colour grading, saturation, print or paper emulation, per-stock normalization. Scene-referred. | `pipeline::look` |
+| **fit range** | Fit the scene's dynamic range into the display's range, with parameters from the display's peak (SDR vs HDR). The industry term is *tone mapping*: "tone" means brightness levels, not colour. | `pipeline::fit_range` |
+| **fit gamut** | Move out-of-gamut colour to the display's boundary, keeping hue. | `pipeline::fit_gamut` (`radial_to_boundary`) |
+| **encode** | Transfer function (sRGB, PQ or HLG), quantization, counting clipped samples | `color`, `io::encode`, `io::avif`, `io::jpeg` |
 | **package** | Container (TIFF / AVIF / gain-map JPEG), ICC profile or CICP, metadata | `io::*` |
 
 Constraints the order carries:
