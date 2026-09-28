@@ -11612,8 +11612,9 @@ fn roll_white_recipe(dir: &TempDir, base: &str) -> PathBuf {
 #[test]
 fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     // The contract the command exists for: measure once, state the gains and the
-    // contrast, and every frame renders under exactly them — by the reported flag and by
-    // the reported recipe fragment alike.
+    // white, and every frame renders under exactly them — by the reported flag and by
+    // the reported recipe fragment alike, and as the same values stated as style knobs
+    // would (`nf-calibration/roll-section` moved them, and moved no pixel).
     let tmp = TempDir::new("measure-roll-reuse");
     let frame = fixture("hdr-48bit.tif").display().to_string();
     let second = tmp.path("second.tif");
@@ -11660,8 +11661,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         .unwrap()
         .split_whitespace()
         .collect();
-    assert_eq!(flag[0], "--white-balance", "{report}");
-    assert_eq!(flag[2], "--contrast", "{report}");
+    assert_eq!(flag[0], "--roll-white-balance", "{report}");
+    assert_eq!(flag[2], "--roll-white", "{report}");
     let (code, stdout, err) = run(&[
         &[
             "convert",
@@ -11685,6 +11686,39 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(
         converted["new_flow"]["look"]["contrast"], report["white"]["contrast"],
         "and the contrast"
+    );
+    let roll = &converted["new_flow"]["roll"];
+    assert_eq!(roll["white_stops"], report["white"]["stops"], "{converted}");
+    assert_eq!(roll["contrast"], report["white"]["contrast"], "{converted}");
+    assert_eq!(roll["white_balance_applied"], true, "{converted}");
+    assert_eq!(roll["contrast_applied"], true, "{converted}");
+
+    // The same values as style knobs: the section is where they live, not what they do.
+    let as_style = tmp.path("style.tiff");
+    let gains_text = gains
+        .iter()
+        .map(|g| g.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let contrast_text = report["white"]["contrast"].to_string();
+    let (code, _, err) = run(&[
+        "convert",
+        &frame,
+        "--new-flow",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--white-balance",
+        &gains_text,
+        "--contrast",
+        &contrast_text,
+        "-o",
+        as_style.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&by_flag).unwrap(),
+        std::fs::read(&as_style).unwrap(),
+        "the roll section renders what the same values as style knobs render"
     );
 
     let mut recipe = report["reuse"]["recipe"].clone();
@@ -11847,11 +11881,11 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(clamped["input"], bright.to_str().unwrap());
     let cap_contrast = clamped["contrast"].as_f64().unwrap();
     assert!(
-        clamped["flag"]
-            .as_str()
-            .unwrap()
-            .ends_with(&format!("--contrast {}", clamped["contrast"])),
-        "a clamped frame's own flag carries the cap's contrast: {report}"
+        clamped["flag"].as_str().unwrap().ends_with(&format!(
+            "--roll-white {}",
+            white["rule"]["cap_stops"].as_f64().unwrap() as f32
+        )),
+        "a clamped frame's own flag carries the cap as its white: {report}"
     );
     assert!(
         (cap_contrast * 1.8 - 2.23).abs() < 0.01 && roll_contrast > cap_contrast,
@@ -11885,24 +11919,27 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         report["frames"][1]["white_stops"]
     );
 
-    // The reuse forms: the roll's contrast by flag and fragment, and the clamped
-    // frame's through a `roll --frames` manifest.
+    // The reuse forms: the roll's white by flag and fragment, and the clamped frame's
+    // (the cap) through a `roll --frames` manifest.
     assert!(
         report["reuse"]["flag"]
             .as_str()
             .unwrap()
-            .ends_with(&format!("--contrast {}", white["contrast"])),
+            .ends_with(&format!(
+                "--roll-white {}",
+                white["stops"].as_f64().unwrap() as f32
+            )),
         "{report}"
     );
     assert_eq!(
-        report["reuse"]["recipe"]["look"]["contrast"],
-        white["contrast"]
+        report["reuse"]["recipe"]["roll"]["white_stops"],
+        white["stops"]
     );
     let manifest = &report["reuse"]["frames"];
     assert!(manifest["frames"][0].get("params").is_none(), "{manifest}");
     assert_eq!(
-        manifest["frames"][1]["params"]["look"]["contrast"],
-        clamped["contrast"]
+        manifest["frames"][1]["params"]["roll"]["white_stops"],
+        white["rule"]["cap_stops"]
     );
     let mut shared: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&recipe).unwrap()).unwrap();

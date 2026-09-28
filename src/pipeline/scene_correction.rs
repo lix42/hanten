@@ -33,8 +33,9 @@ use crate::pipeline::working_space::AcesCgImage;
 use crate::types::{NcError, Result};
 
 /// The white-balance gains, always **stated**: a roll's are measured once by
-/// `hanten measure-roll` (`pipeline::roll_white`) and frozen here, so every frame of
-/// the roll — and a lone `convert` of one — applies the same gains.
+/// `hanten measure-roll` (`pipeline::roll_white`) and frozen into the recipe's `roll`
+/// section, which these multiply (`crate::recipe::Recipe::resolved_scene_correction`),
+/// so every frame of the roll — and a lone `convert` of one — applies the same gains.
 ///
 /// There is no per-frame estimate. `gray-world` and `percentile` retired with
 /// `nf-scene-correction/roll-white-balance`: a frame's own statistics read a sunset

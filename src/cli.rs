@@ -306,6 +306,8 @@ pub struct ConvertArgs {
     #[command(flatten)]
     pub print: PrintOverrides,
     #[command(flatten)]
+    pub roll: RollOverrides,
+    #[command(flatten)]
     pub scene: SceneCorrectionOverrides,
     #[command(flatten)]
     pub look: LookOverrides,
@@ -692,6 +694,31 @@ impl From<AutoWb> for WbSource {
     }
 }
 
+/// The roll's measurements, as `hanten measure-roll` reports them (recipe section
+/// `roll`, `nf-calibration/roll-section`). `--new-flow` only; refused without it
+/// (`flow::reject_unavailable_flags`).
+#[derive(Args, Debug, Default)]
+pub struct RollOverrides {
+    /// The roll's white-balance gains `R,G,B`, as `hanten measure-roll` measured them
+    /// (recipe key `roll.white_balance`). Multiplied into `--white-balance`, which then
+    /// adjusts the roll's balance rather than replacing it. `--new-flow` only.
+    #[arg(long, value_name = "R,G,B", value_parser = parse_rgb)]
+    pub roll_white_balance: Option<[f32; 3]>,
+    /// The roll's white, in scene stops above mid-grey, as `hanten measure-roll`
+    /// measured it (recipe key `roll.white_stops`). The look renders it at diffuse white
+    /// with mid-grey pinned — a contrast of `log2(1/0.18) / STOPS` — unless `--contrast`
+    /// is stated, which wins. `--new-flow` only.
+    #[arg(long, value_name = "STOPS")]
+    pub roll_white: Option<f32>,
+}
+
+impl RollOverrides {
+    /// Whether any roll flag was typed.
+    pub(crate) fn any(&self) -> bool {
+        self.roll_white_balance.is_some() || self.roll_white.is_some()
+    }
+}
+
 /// The new chain's scene-correction overrides that have no current-chain flag
 /// (recipe section `scene_correction`, `nf-scene-correction/stage`).
 ///
@@ -719,7 +746,7 @@ pub struct LookOverrides {
     /// `0.18 · (v / 0.18)^CONTRAST` (recipe key `look.contrast`, default 2.0/1.8 ≈ 1.11,
     /// which with the decode's linearization reproduces the pre-split contrast 2.0;
     /// 1 is the identity). Runs after scene correction, so an `--exposure` is expanded
-    /// with the rest of the picture. `hanten measure-roll` measures a per-roll value.
+    /// with the rest of the picture. Stated, it wins over the roll's (`--roll-white`).
     /// `--new-flow` only.
     #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
     pub contrast: Option<f32>,
@@ -1532,8 +1559,12 @@ pub struct NewFlowResult {
     /// Each stage of the new chain in order, with what it applied. Empty for the film
     /// master, which runs none.
     pub stages: Vec<NewFlowStageResult>,
-    /// Scene correction's values: the white-balance gains and the exposure applied.
-    /// Absent for the film master.
+    /// The recipe's `roll` section and what the run applied of it; absent when the
+    /// section states nothing. The film master applies neither value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roll: Option<recipe::RollReport>,
+    /// Scene correction's values: the white-balance gains and the exposure applied — the
+    /// roll's gains included. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_correction: Option<scene_correction::SceneCorrection>,
     /// The look's controls as applied — the contrast, and highlight desaturation's
@@ -5947,6 +5978,7 @@ fn render_new_flow_frame(
                 .map(|(stage, applied)| NewFlowStageResult { stage, applied })
                 .to_vec()
         }),
+        roll: recipe.roll_report(rendered.is_some()),
         scene_correction: rendered.map(|r| r.scene_correction),
         look: rendered.map(|r| r.look),
         fit_range: rendered.map(|r| r.fit_range),
@@ -7940,12 +7972,12 @@ struct MeasuredRollWhite {
     /// The frame it was taken from, when no limit bound.
     #[serde(skip_serializing_if = "Option::is_none")]
     from: Option<PathBuf>,
-    /// `look.contrast`: renders the white at diffuse white, mid-grey pinned — at
-    /// `scene_correction.exposure` 0. The look expands an exposure too, so with one set
+    /// The look contrast `roll.white_stops` renders at: the white at diffuse white,
+    /// mid-grey pinned — at `scene_correction.exposure` 0. The look expands an exposure too, so with one set
     /// the white lands `exposure · contrast` stops off diffuse white.
     contrast: f32,
     /// `contrast` times the decode's linearization — the whole slope, for comparison
-    /// only; the recipe stores `contrast`.
+    /// only; the recipe stores `stops` (`roll.white_stops`).
     whole_contrast: f32,
     /// Frames above the cap, rendered at the cap's contrast rather than the roll's.
     /// Disclosed, not warned about: an ordinary bright scene lands here too.
@@ -7958,18 +7990,18 @@ struct MeasuredRollWhite {
 struct ClampedFrame {
     input: PathBuf,
     white_stops: f32,
-    /// Its `look.contrast`, the cap's — against the roll's `contrast`.
+    /// Its look contrast, the cap's — against the roll's `contrast`.
     contrast: f32,
     /// This frame's own `convert --new-flow` flags: `reuse.flag` carries the roll's
-    /// contrast, which would undo the clamp on this frame.
+    /// white, which would undo the clamp on this frame.
     flag: String,
 }
 
-/// The `convert --new-flow` flags that freeze `gains` and `contrast` — `reuse.flag`, and a
-/// clamped frame's own.
-fn reuse_flag(gains: [f32; 3], contrast: f32) -> String {
+/// The `convert --new-flow` flags that freeze `gains` and the white `white_stops` —
+/// `reuse.flag`, and a clamped frame's own.
+fn reuse_flag(gains: [f32; 3], white_stops: f32) -> String {
     format!(
-        "--white-balance {},{},{} --contrast {contrast}",
+        "--roll-white-balance {},{},{} --roll-white {white_stops}",
         gains[0], gains[1], gains[2]
     )
 }
@@ -7994,25 +8026,20 @@ struct RollReuse {
     flag: String,
     /// A partial recipe, to merge into the roll's.
     recipe: RollFragment,
-    /// A `roll --frames` manifest giving each clamped frame its own contrast; only when a
-    /// frame renders at a contrast other than the roll's. Input paths are as given here.
+    /// A `roll --frames` manifest giving each clamped frame its own white (the cap); only
+    /// when a frame renders at a contrast other than the roll's. Input paths are as given
+    /// here.
     #[serde(skip_serializing_if = "Option::is_none")]
     frames: Option<ClampManifest>,
 }
 
-/// `{"scene_correction": {"white_balance": {"explicit": [r, g, b]}}, "look": {"contrast":
-/// k}}`, typed rather than built as a `serde_json::Value` so the values print in their
-/// `f32` form — a `Value` widens them to `f64` digits the flag form does not show. The
-/// `look` section names only `contrast`, so merging it leaves the look's other keys alone.
+/// `{"roll": {"white_balance": [r, g, b], "white_stops": w}}` — the recipe's `roll`
+/// section (`nf-calibration/roll-section`), typed rather than built as a
+/// `serde_json::Value` so the values print in their `f32` form — a `Value` widens them to
+/// `f64` digits the flag form does not show.
 #[derive(Debug, Serialize)]
 struct RollFragment {
-    scene_correction: WhiteBalanceSection,
-    look: ContrastSection,
-}
-
-#[derive(Debug, Serialize)]
-struct ContrastSection {
-    contrast: f32,
+    roll: recipe::RollSection,
 }
 
 #[derive(Debug, Serialize)]
@@ -8027,14 +8054,16 @@ struct ClampManifestFrame {
     params: Option<ClampParams>,
 }
 
+/// A clamped frame's own white. Only `white_stops`, so merging it over the roll's
+/// recipe keeps the roll's gains.
 #[derive(Debug, Serialize)]
 struct ClampParams {
-    look: ContrastSection,
+    roll: ClampedWhite,
 }
 
 #[derive(Debug, Serialize)]
-struct WhiteBalanceSection {
-    white_balance: scene_correction::WhiteBalance,
+struct ClampedWhite {
+    white_stops: f32,
 }
 
 /// One input decoded into linear ACEScg at the new chain's decode, plus its effective
@@ -8142,7 +8171,7 @@ fn measured_roll_white(
                 input: f.input.clone(),
                 white_stops: f.white_stops.expect("a clamped frame has a white"),
                 contrast: cap_contrast,
-                flag: reuse_flag(gains, cap_contrast),
+                flag: reuse_flag(gains, roll_white::WHITE_CAP_STOPS),
             })
             .collect(),
         rule: WhiteRule {
@@ -8155,14 +8184,14 @@ fn measured_roll_white(
     })
 }
 
-/// The `roll --frames` manifest that renders each clamped frame at its own contrast —
-/// `None` when every frame renders at the roll's (none clamped, or the roll's white is
-/// the cap itself, whose contrast a clamped frame already has).
+/// The `roll --frames` manifest that renders each clamped frame at its own white, the
+/// cap — `None` when every frame renders at the roll's (none clamped, or the roll's white
+/// is the cap itself, which a clamped frame already has).
 fn clamp_manifest(frames: &[MeasuredFrame], white: &MeasuredRollWhite) -> Option<ClampManifest> {
     let own = |f: &MeasuredFrame| {
         (f.white_role == roll_white::FrameRole::Clamped
             && white.bound != roll_white::WhiteBound::Cap)
-            .then(|| roll_white::contrast_for(roll_white::WHITE_CAP_STOPS))
+            .then_some(roll_white::WHITE_CAP_STOPS)
     };
     frames
         .iter()
@@ -8172,8 +8201,8 @@ fn clamp_manifest(frames: &[MeasuredFrame], white: &MeasuredRollWhite) -> Option
                 .iter()
                 .map(|f| ClampManifestFrame {
                     input: f.input.clone(),
-                    params: own(f).map(|contrast| ClampParams {
-                        look: ContrastSection { contrast },
+                    params: own(f).map(|white_stops| ClampParams {
+                        roll: ClampedWhite { white_stops },
                     }),
                 })
                 .collect(),
@@ -8199,11 +8228,12 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     // Before any decode: a bad inset would otherwise surface from the first frame's
     // effective area, blamed on that file.
     check_measure_inset(recipe.measure.inset)?;
-    // What this command measures, and the look it never applies, so neither is read —
-    // and neither may refuse the run. Keys only: this command takes none of the
-    // conversion flags.
+    // What this command measures — the roll section, and the style knobs a roll recipe
+    // may carry beside it — is never read, and none of it may refuse the run. Keys
+    // only: this command takes none of the conversion flags.
+    recipe.roll = recipe::RollSection::default();
     recipe.scene_correction = scene_correction::SceneCorrectionParams::default();
-    recipe.look = look::LookSection::default();
+    recipe.look = recipe::LookKeys::default();
     recipe::validate(&recipe, KnobNames::KeyOnly)?;
     if args.strict && args.leader.is_none() {
         return Err(NcError::Usage(
@@ -8437,13 +8467,11 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             pooled: pool.len() / 3,
         },
         reuse: RollReuse {
-            flag: reuse_flag(gains, white.contrast),
+            flag: reuse_flag(gains, white.stops),
             recipe: RollFragment {
-                scene_correction: WhiteBalanceSection {
-                    white_balance: scene_correction::WhiteBalance::Explicit(gains),
-                },
-                look: ContrastSection {
-                    contrast: white.contrast,
+                roll: recipe::RollSection {
+                    white_balance: Some(gains),
+                    white_stops: Some(white.stops),
                 },
             },
             frames: clamps,
@@ -11772,6 +11800,19 @@ mod tests {
             base,
             serde_json::json!({"film_base": {"explicit": [0.9, 0.5, 0.4]}})
         );
+    }
+
+    #[test]
+    fn a_frames_own_roll_white_keeps_the_rolls_gains() {
+        // `roll --frames` merges over the *serialized* shared recipe, where an unset roll
+        // value is a `null` key, so a one-key overlay is never read as an enum switch.
+        let mut shared = crate::recipe::Recipe::default();
+        shared.roll.white_balance = Some([0.8, 1.0, 1.25]);
+        let mut v = serde_json::to_value(&shared).unwrap();
+        merge_json(&mut v, &serde_json::json!({"roll": {"white_stops": 2.0}}));
+        let frame: crate::recipe::Recipe = serde_json::from_value(v).unwrap();
+        assert_eq!(frame.roll.white_balance, Some([0.8, 1.0, 1.25]));
+        assert_eq!(frame.roll.white_stops, Some(2.0));
     }
 
     #[test]

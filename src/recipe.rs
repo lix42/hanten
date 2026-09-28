@@ -12,6 +12,7 @@
 //!
 //! ```text
 //! input · calibration · measure      shared with the current chain (decode, film base)
+//! roll                               what `hanten measure-roll` measured for the roll
 //! reconstruction                     the fixed decode — algo::fixed::DecodeParams
 //! scene_correction · look ·          one per rendering stage with its knobs; fit
 //! fit_range · fit_gamut                gamut has none (its ceiling and target are not
@@ -43,8 +44,10 @@ use crate::pipeline::fit_range::{
     DisplayBlack, DisplayBlackFault, DisplayPeak, MAX_DISPLAY_BLACK_STOPS,
 };
 use crate::pipeline::look::{
-    ChannelGradeFault, ContrastFault, DesaturationFault, LookParams, LookSection, MAX_START_STOPS,
+    ChannelGradeFault, ContrastFault, DEFAULT_CONTRAST, DesaturationFault, HighlightDesaturation,
+    IDENTITY_CHANNEL_GRADE, LookParams, LookSection, MAX_START_STOPS,
 };
+use crate::pipeline::roll_white;
 use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
 use crate::types::{
     CalibrationParams, FilmBaseSource, InputParams, MeasureParams, NcError, Result,
@@ -73,13 +76,15 @@ pub struct Recipe {
     #[serde(default)]
     pub calibration: Calibration,
     #[serde(default)]
+    pub roll: RollSection,
+    #[serde(default)]
     pub measure: MeasureParams,
     #[serde(default)]
     pub reconstruction: DecodeParams,
     #[serde(default)]
     pub scene_correction: SceneCorrectionParams,
     #[serde(default)]
-    pub look: LookSection,
+    pub look: LookKeys,
     #[serde(default)]
     pub fit_range: FitRangeSection,
     #[serde(default)]
@@ -208,6 +213,106 @@ pub struct Calibration {
     /// Required at `convert`/`roll` time with no default, exactly as on the current
     /// chain — `cli::validate` refuses an unstated one on the projection.
     pub film_base: Option<FilmBaseSource>,
+}
+
+/// What `hanten measure-roll` measured for the roll (`nf-calibration/roll-section`):
+/// kept apart from the style knobs so a measured value is never mistaken for a chosen
+/// one, and so a rendering can apply it or leave it out (`nf-destinations/direct-preset`).
+///
+/// Both values are optional and independent — a roll may state one, both or neither.
+/// Unset, each is written as `null` rather than left out: `cli::merge_json` reads a
+/// one-key object as an enum switch, so a sparse section would let a roll's per-frame
+/// `{"roll": {"white_stops": …}}` replace the shared recipe's gains.
+///
+/// How the values reach the chain is [`Recipe::shared_params`]'s: the gains multiply
+/// `scene_correction.white_balance`, and the white becomes the look's contrast
+/// ([`roll_white::contrast_for`]) unless `look.contrast` is stated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RollSection {
+    /// The roll's white-balance gains, green-anchored, as `measure-roll` reports them.
+    pub white_balance: Option<[f32; 3]>,
+    /// The roll's white, in scene stops above mid-grey — the measurement, not the
+    /// contrast derived from it, so this section holds no contrast value
+    /// (`nf-look/contrast-definition`). A frame clamped to the cap states the cap here
+    /// in a `roll --frames` manifest.
+    pub white_stops: Option<f32>,
+}
+
+impl RollSection {
+    /// The look contrast the roll's white renders at, if it has one.
+    pub fn contrast(&self) -> Option<f32> {
+        self.white_stops.map(roll_white::contrast_for)
+    }
+}
+
+/// The recipe's `look` keys: the stage's [`LookSection`], with the contrast optional.
+///
+/// Its own type because "unset" and "stated at the default" must stay apart: an unset
+/// contrast takes the roll's ([`RollSection::white_stops`]) or else
+/// [`DEFAULT_CONTRAST`], while a stated one — any value — wins over both. The stage
+/// always receives a resolved number ([`LookKeys::resolve`]); it never picks a fallback
+/// of its own. Serializes with the stage's keys, the contrast as `null` when unset.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LookKeys {
+    /// `look.contrast`, `--contrast`: the rendering contrast ([`LookSection::contrast`]).
+    pub contrast: Option<f32>,
+    /// `look.channel_grade`, `--channel-grade` ([`LookSection::channel_grade`]).
+    pub channel_grade: [f32; 2],
+    /// `look.highlight_desaturation`, `--highlight-desaturation*`.
+    pub highlight_desaturation: HighlightDesaturation,
+}
+
+impl Default for LookKeys {
+    fn default() -> Self {
+        Self {
+            contrast: None,
+            channel_grade: IDENTITY_CHANNEL_GRADE,
+            highlight_desaturation: HighlightDesaturation::default(),
+        }
+    }
+}
+
+impl LookKeys {
+    /// The stage's section, with `base` as the contrast when none is stated.
+    pub fn resolve(&self, base: f32) -> LookSection {
+        LookSection {
+            contrast: self.contrast.unwrap_or(base),
+            channel_grade: self.channel_grade,
+            highlight_desaturation: self.highlight_desaturation,
+        }
+    }
+}
+
+/// Where the look's resolved contrast came from — the report's
+/// `new_flow.roll.contrast_applied`, and whose knob a contrast fault names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContrastSource {
+    /// `look.contrast` was stated, and wins over the roll's.
+    Stated,
+    /// The roll's white, through [`roll_white::contrast_for`].
+    Roll,
+    /// Neither: [`DEFAULT_CONTRAST`].
+    Default,
+}
+
+/// What the roll section held and what the run applied of it — the report's
+/// `new_flow.roll`, present whenever the section states a value.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct RollReport {
+    /// The section's gains, as stated.
+    pub white_balance: Option<[f32; 3]>,
+    /// The section's white, as stated.
+    pub white_stops: Option<f32>,
+    /// The look contrast `white_stops` renders at ([`roll_white::contrast_for`]).
+    pub contrast: Option<f32>,
+    /// Whether the gains were multiplied into scene correction's white balance: `false`
+    /// when there were none, or when no rendering stage ran (the film master).
+    pub white_balance_applied: bool,
+    /// Whether the look's contrast is the roll's: `false` when there was no white, when
+    /// `look.contrast` was stated (it wins), or when no rendering stage ran.
+    pub contrast_applied: bool,
 }
 
 /// The current chain's sections this recipe does not have, and where each one's
@@ -377,8 +482,8 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
         return usage(format!(
             "`scene_correction.white_balance` \"{mode}\" was a per-frame estimate, and the \
              new chain has none: it read a sunset as the cast and removed it. Drop it, \
-             then state the gains `hanten measure-roll` reports for the roll, as \
-             `{{\"explicit\": [r, g, b]}}`"
+             then state the gains `hanten measure-roll` reports for the roll as \
+             `roll.white_balance`: `[r, g, b]`"
         ));
     }
     // Retired by `nf-reconstruction/gamma-split`, which split the one slope in two.
@@ -470,6 +575,13 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     if let Some(d) = args.anchor.anchor_mid_offset {
         r.reconstruction.anchor = AnchorRule::MidAboveBase(d);
     }
+    // The roll's measurements (`hanten measure-roll`).
+    if let Some(gains) = args.roll.roll_white_balance {
+        r.roll.white_balance = Some(gains);
+    }
+    if let Some(stops) = args.roll.roll_white {
+        r.roll.white_stops = Some(stops);
+    }
     // Scene correction. `--auto-wb` never reaches here: `flow` refuses it by
     // presence, since this chain has no per-frame estimate.
     if let Some(gains) = args.print.white_balance {
@@ -479,7 +591,7 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
         r.scene_correction.exposure = stops;
     }
     if let Some(v) = args.look.contrast {
-        r.look.contrast = v;
+        r.look.contrast = Some(v);
     }
     if let Some(v) = args.look.channel_grade {
         r.look.channel_grade = v;
@@ -547,9 +659,19 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
     let d = &r.reconstruction;
     let message = match d.check() {
         Ok(_) => {
-            validate_scene_correction(&r.scene_correction, names)?;
-            validate_look(&r.look, names)?;
-            validate_whole_contrast(d.linearization, &r.look, names)?;
+            // The roll's own values first: each is also a factor in what the stages
+            // below receive, so a bad one must be named as itself.
+            validate_roll(&r.roll, names)?;
+            validate_scene_correction(r, names)?;
+            let (contrast, source) = r.resolved_contrast();
+            let contrast_name = match source {
+                ContrastSource::Roll => knob_name(names, "roll", "--roll-white", "white_stops"),
+                ContrastSource::Stated | ContrastSource::Default => {
+                    knob_name(names, "look", "--contrast", "contrast")
+                }
+            };
+            validate_look(&r.look.resolve(contrast), &contrast_name, names)?;
+            validate_whole_contrast(d.linearization, contrast, &contrast_name, names)?;
             validate_fit_range(&r.fit_range, names)?;
             return destination(r, names).map(|_| ());
         }
@@ -599,11 +721,10 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
 /// a usage error naming the knob the way `names` says the command spells it.
 ///
 /// [`HighlightDesaturation::check`]: crate::pipeline::look::HighlightDesaturation::check
-fn validate_look(p: &LookSection, names: KnobNames) -> Result<()> {
+fn validate_look(p: &LookSection, contrast_name: &str, names: KnobNames) -> Result<()> {
     if let Err(ContrastFault(v)) = p.check_contrast() {
         return Err(NcError::Usage(format!(
-            "{} must be finite and positive (1 is the identity), got {v}",
-            knob_name(names, "look", "--contrast", "contrast")
+            "{contrast_name} must give a finite, positive contrast (1 is the identity), got {v}"
         )));
     }
     if let Err(ChannelGradeFault([r, b])) = p.check_channel_grade() {
@@ -648,28 +769,92 @@ fn validate_look(p: &LookSection, names: KnobNames) -> Result<()> {
 /// whether or not desaturation is on: a whole contrast outside f32 describes no usable
 /// picture, and one rule is easier to state than a conditional one. Runs after both
 /// factors' own rules, so each is already finite and positive.
-fn validate_whole_contrast(linearization: f32, look: &LookSection, names: KnobNames) -> Result<()> {
-    let total = linearization * look.contrast;
+fn validate_whole_contrast(
+    linearization: f32,
+    contrast: f32,
+    contrast_name: &str,
+    names: KnobNames,
+) -> Result<()> {
+    let total = linearization * contrast;
     if total.is_normal() {
         return Ok(());
     }
     let gamma = knob_name(names, "reconstruction", "--density-gamma", "linearization");
-    let contrast = knob_name(names, "look", "--contrast", "contrast");
     let (what, remedy) = if total.is_infinite() {
         ("overflows", "smaller")
     } else {
         ("underflows", "larger")
     };
     Err(NcError::Usage(format!(
-        "the whole contrast, {gamma} {linearization:e} times {contrast} {:e}, {what} \
-         f32 (highlight desaturation divides by it). Use a {remedy} value for either",
-        look.contrast
+        "the whole contrast, {gamma} {linearization:e} times the look contrast {contrast:e} \
+         from {contrast_name}, {what} f32 (highlight desaturation divides by it). Use a \
+         {remedy} value for either"
     )))
+}
+
+/// The roll section's value rules: gains finite and positive, as scene correction's
+/// are; a white finite and positive, since the contrast is `log2(1/0.18)` over it.
+fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
+    if let Some(gains) = p.white_balance
+        && let Some((channel, value)) = gains
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|&(_, g)| !g.is_finite() || g <= 0.0)
+    {
+        return Err(NcError::Usage(format!(
+            "{} must be finite and positive on every channel, got {value} on channel {channel}",
+            knob_name(names, "roll", "--roll-white-balance", "white_balance")
+        )));
+    }
+    if let Some(stops) = p.white_stops
+        && !(stops.is_finite() && stops > 0.0)
+    {
+        return Err(NcError::Usage(format!(
+            "{} must be finite and positive — stops above mid-grey, as `hanten \
+             measure-roll` reports them — got {stops}",
+            knob_name(names, "roll", "--roll-white", "white_stops")
+        )));
+    }
+    Ok(())
 }
 
 /// Scene correction's value rules ([`SceneCorrectionParams::check`]), rendered as a
 /// usage error naming the knob the way `names` says the command spells it.
-fn validate_scene_correction(p: &SceneCorrectionParams, names: KnobNames) -> Result<()> {
+///
+/// The stated section is checked first, so a bad stated value is named as itself; then
+/// the section the stage receives, with the roll's gains multiplied in
+/// ([`Recipe::resolved_scene_correction`]) — only a product can fail there, and the
+/// message names both factors.
+fn validate_scene_correction(r: &Recipe, names: KnobNames) -> Result<()> {
+    let name = |flag: &str, key: &str| knob_name(names, "scene_correction", flag, key);
+    scene_correction_fault(&r.scene_correction, names)?;
+    // A product can fail either way: as a gain no longer finite, or as a gain whose
+    // product with the exposure's is not a normal f32.
+    let product = match r
+        .roll
+        .white_balance
+        .map(|_| r.resolved_scene_correction().check())
+    {
+        Some(Err(SceneFault::WhiteBalance { channel, value })) => Some((channel, value)),
+        Some(Err(SceneFault::Combined { channel, gain })) => Some((channel, gain)),
+        _ => None,
+    };
+    if let Some((channel, gain)) = product {
+        return Err(NcError::Usage(format!(
+            "{} times {} times the exposure gain from {} is {gain:e} on channel {channel}, \
+             which is not a normal f32 — every sample of that channel would render as 0 or \
+             inf. Move the white balance or the exposure toward neutral",
+            knob_name(names, "roll", "--roll-white-balance", "white_balance"),
+            name("--white-balance", "white_balance"),
+            name("--exposure", "exposure"),
+        )));
+    }
+    Ok(())
+}
+
+/// [`SceneCorrectionParams::check`] on the stated section, as a usage error.
+fn scene_correction_fault(p: &SceneCorrectionParams, names: KnobNames) -> Result<()> {
     let name = |flag: &str, key: &str| knob_name(names, "scene_correction", flag, key);
     let message = match p.check() {
         Ok(()) => return Ok(()),
@@ -789,7 +974,9 @@ fn stages_the_master_cannot_run(r: &Recipe, names: KnobNames) -> Vec<(&'static s
             ),
         ));
     }
-    if r.look.asks_for_a_look() {
+    // The look as stated, with an unstated contrast at the default: the roll's contrast
+    // is a measurement the film master leaves unapplied, not a look the user asked for.
+    if r.look.resolve(DEFAULT_CONTRAST).asks_for_a_look() {
         asked.push(pick(
             (
                 "the look (--contrast, --channel-grade, --highlight-desaturation*, \
@@ -998,14 +1185,49 @@ impl Recipe {
     /// contract).
     pub fn shared_params(&self) -> SharedParams {
         SharedParams {
-            scene_correction: self.scene_correction.clone(),
+            scene_correction: self.resolved_scene_correction(),
             look: LookParams {
-                section: self.look,
+                section: self.look.resolve(self.resolved_contrast().0),
                 linearization: self.reconstruction.linearization,
             },
             headroom_stops: self.fit_range.headroom_stops,
             display_black: self.fit_range.display_black,
         }
+    }
+
+    /// Scene correction as the stage receives it: the roll's gains, when stated,
+    /// multiplied into the stated white balance — which is `1,1,1` unless the user set
+    /// it, so a roll's gains alone reach the stage exactly.
+    pub fn resolved_scene_correction(&self) -> SceneCorrectionParams {
+        let mut p = self.scene_correction.clone();
+        if let Some(roll) = self.roll.white_balance {
+            let WhiteBalance::Explicit(stated) = p.white_balance;
+            p.white_balance = WhiteBalance::Explicit(std::array::from_fn(|c| roll[c] * stated[c]));
+        }
+        p
+    }
+
+    /// The look's contrast as the stage receives it, and where it came from: a stated
+    /// `look.contrast` wins, else the roll's white, else [`DEFAULT_CONTRAST`].
+    pub fn resolved_contrast(&self) -> (f32, ContrastSource) {
+        match (self.look.contrast, self.roll.contrast()) {
+            (Some(stated), _) => (stated, ContrastSource::Stated),
+            (None, Some(roll)) => (roll, ContrastSource::Roll),
+            (None, None) => (DEFAULT_CONTRAST, ContrastSource::Default),
+        }
+    }
+
+    /// The report's `new_flow.roll`: `None` when the section states nothing. `rendered`
+    /// is whether any rendering stage ran — the film master applies neither value.
+    pub fn roll_report(&self, rendered: bool) -> Option<RollReport> {
+        let r = self.roll;
+        (r != RollSection::default()).then(|| RollReport {
+            white_balance: r.white_balance,
+            white_stops: r.white_stops,
+            contrast: r.contrast(),
+            white_balance_applied: rendered && r.white_balance.is_some(),
+            contrast_applied: rendered && self.resolved_contrast().1 == ContrastSource::Roll,
+        })
     }
 
     /// The current chain's config carrying this recipe's **shared** sections, for the
@@ -1081,6 +1303,7 @@ mod tests {
                 VERSION_KEY,
                 "input",
                 "calibration",
+                "roll",
                 "measure",
                 "reconstruction",
                 "scene_correction",
@@ -1093,16 +1316,17 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         // A stage with no knob is present as an empty object, not absent or `null`;
         // one with knobs writes each of them at its default — the identity for scene
-        // correction, contrast 2.0/1.8, the identity grade and highlight desaturation at
-        // 0.8 for the look (in the order the stage applies them), and reinhard at six
-        // stops for fit range. (Fit gamut's map runs at every setting; it simply has
+        // correction, an unstated contrast (the roll's, else 2.0/1.8), the identity grade
+        // and highlight desaturation at 0.8 for the look (in the order the stage applies
+        // them), and reinhard at six stops for fit range. The roll section states
+        // nothing, and says so with `null`s rather than by leaving keys out. (Fit gamut's map runs at every setting; it simply has
         // nothing for a recipe to set.)
         assert_eq!(json["fit_gamut"], serde_json::json!({}));
         // Nothing stated: every axis is derived, so a written recipe states none.
         assert_eq!(json["output"], serde_json::json!({"display": {}}));
         assert_eq!(
             serde_json::to_string(&Recipe::default().look).unwrap(),
-            r#"{"contrast":1.1111112,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}}"#
+            r#"{"contrast":null,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}}"#
         );
         assert_eq!(
             json["scene_correction"],
@@ -1111,6 +1335,10 @@ mod tests {
         assert_eq!(
             json["fit_range"],
             serde_json::json!({"headroom_stops": 6.0, "display_black": 6.0})
+        );
+        assert_eq!(
+            json["roll"],
+            serde_json::json!({"white_balance": null, "white_stops": null})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
@@ -1186,7 +1414,7 @@ mod tests {
             parse(r#"{"recipe_version": 2, "reconstruction": {"linearization": 1.7}}"#).unwrap();
         assert_eq!(r.reconstruction.linearization, 1.7);
         assert_eq!(r.reconstruction.scale, DecodeParams::default().scale);
-        assert_eq!(r.look, LookSection::default());
+        assert_eq!(r.look, LookKeys::default());
     }
 
     #[test]
@@ -1229,7 +1457,9 @@ mod tests {
             let body = format!(r#"{{"scene_correction": {{"white_balance": "{mode}"}}}}"#);
             let err = check(&body, false).unwrap_err();
             assert!(
-                err.contains(mode) && err.contains("measure-roll") && err.contains("explicit"),
+                err.contains(mode)
+                    && err.contains("measure-roll")
+                    && err.contains("`roll.white_balance`"),
                 "{err}"
             );
         }
@@ -1420,7 +1650,7 @@ mod tests {
         assert!(msg.contains("`reconstruction.linearization`"), "{msg}");
         assert!(!msg.contains("--density-gamma"), "{msg}");
         let mut r = Recipe::default();
-        r.look.contrast = 0.0;
+        r.look.contrast = Some(0.0);
         let msg = validate(&r, KnobNames::KeyOnly).unwrap_err();
         let msg = msg.message();
         assert!(msg.contains("`look.contrast`"), "{msg}");
@@ -1431,7 +1661,7 @@ mod tests {
     fn validate_refuses_an_unusable_look_contrast() {
         for bad in [0.0, -1.1, f32::NAN, f32::INFINITY] {
             let mut r = Recipe::default();
-            r.look.contrast = bad;
+            r.look.contrast = Some(bad);
             let msg = validate(&r, KnobNames::FlagAndKey).unwrap_err();
             assert!(
                 msg.message()
@@ -1441,7 +1671,7 @@ mod tests {
             );
         }
         let mut r = Recipe::default();
-        r.look.contrast = 1.0;
+        r.look.contrast = Some(1.0);
         validate(&r, KnobNames::FlagAndKey).unwrap();
     }
 
@@ -1521,7 +1751,7 @@ mod tests {
         let with = |linearization: f32, contrast: f32, names| {
             let mut r = Recipe::default();
             r.reconstruction.linearization = linearization;
-            r.look.contrast = contrast;
+            r.look.contrast = Some(contrast);
             validate(&r, names).map_err(|e| (e.exit_code(), e.message().to_string()))
         };
         for (linearization, contrast, remedy) in [
@@ -1587,6 +1817,134 @@ mod tests {
             unreachable!()
         };
         merge(parse(json).unwrap(), &args)
+    }
+
+    #[test]
+    fn the_roll_section_reaches_the_stages_and_a_stated_contrast_wins() {
+        let roll = r#"{"recipe_version": 2,
+                       "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#;
+        // The gains multiply the stated white balance; the white sets the contrast.
+        let r = merged(roll, &["--white-balance", "1.25,1,1"]);
+        let shared = r.shared_params();
+        assert_eq!(
+            shared.scene_correction.white_balance,
+            WhiteBalance::Explicit([0.8 * 1.25, 1.0, 1.25])
+        );
+        let from_white = roll_white::contrast_for(1.6);
+        assert_eq!(shared.look.section.contrast, from_white);
+        assert_eq!(r.resolved_contrast(), (from_white, ContrastSource::Roll));
+        // Alone, the gains reach the stage exactly: the identity multiplies nothing in.
+        let alone = merged(roll, &[]).shared_params();
+        assert_eq!(
+            alone.scene_correction.white_balance,
+            WhiteBalance::Explicit([0.8, 1.0, 1.25])
+        );
+        // A stated contrast wins — at any value, the default's included.
+        let stated = merged(roll, &["--contrast", &DEFAULT_CONTRAST.to_string()]);
+        assert_eq!(
+            stated.resolved_contrast(),
+            (DEFAULT_CONTRAST, ContrastSource::Stated)
+        );
+        // Neither: the default.
+        assert_eq!(
+            Recipe::default().resolved_contrast(),
+            (DEFAULT_CONTRAST, ContrastSource::Default)
+        );
+        assert_eq!(
+            Recipe::default().shared_params().look.section,
+            LookSection::default()
+        );
+    }
+
+    #[test]
+    fn the_roll_flags_land_in_the_roll_section() {
+        let r = merged(
+            r#"{"recipe_version": 2, "roll": {"white_balance": [0.9, 1.0, 1.1], "white_stops": 1.5}}"#,
+            &["--roll-white", "1.8"],
+        );
+        // One flag replaces its own key and leaves the other.
+        assert_eq!(
+            r.roll,
+            RollSection {
+                white_balance: Some([0.9, 1.0, 1.1]),
+                white_stops: Some(1.8),
+            }
+        );
+        let r = merged(
+            r#"{"recipe_version": 2}"#,
+            &["--roll-white-balance", "1.2,1,0.8"],
+        );
+        assert_eq!(r.roll.white_balance, Some([1.2, 1.0, 0.8]));
+        assert_eq!(r.roll.white_stops, None);
+    }
+
+    #[test]
+    fn the_roll_values_are_refused_by_their_own_names() {
+        let refusal = |json: &str, names| {
+            let r: Recipe = parse(json).unwrap();
+            validate(&r, names).unwrap_err().message().to_string()
+        };
+        for stops in ["0", "-1.5"] {
+            let msg = refusal(
+                &format!(r#"{{"recipe_version": 2, "roll": {{"white_stops": {stops}}}}}"#),
+                KnobNames::FlagAndKey,
+            );
+            assert!(
+                msg.contains("--roll-white (recipe `roll.white_stops`)"),
+                "{msg}"
+            );
+        }
+        let msg = refusal(
+            r#"{"recipe_version": 2, "roll": {"white_balance": [1, 0, 1]}}"#,
+            KnobNames::KeyOnly,
+        );
+        assert!(
+            msg.contains("`roll.white_balance`") && !msg.contains("--"),
+            "{msg}"
+        );
+        // A contrast the roll's white gives, too small to survive the whole contrast:
+        // named as the white, not as `--contrast`, which the user never typed.
+        let msg = refusal(
+            r#"{"recipe_version": 2, "roll": {"white_stops": 1e38},
+                "reconstruction": {"linearization": 1e-8}}"#,
+            KnobNames::FlagAndKey,
+        );
+        assert!(msg.contains("from --roll-white"), "{msg}");
+        assert!(!msg.contains("--contrast"), "{msg}");
+        // A product only the roll's gains make is named with both factors.
+        let msg = refusal(
+            r#"{"recipe_version": 2, "roll": {"white_balance": [1e30, 1, 1]},
+                "scene_correction": {"white_balance": {"explicit": [1e10, 1, 1]}}}"#,
+            KnobNames::FlagAndKey,
+        );
+        assert!(
+            msg.contains("--roll-white-balance") && msg.contains("--white-balance"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn the_film_master_leaves_the_roll_section_unapplied_and_says_so() {
+        let r: Recipe = parse(
+            r#"{"recipe_version": 2, "output": "film-master",
+                "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#,
+        )
+        .unwrap();
+        // A measurement is not a stage the user asked for, so it is not refused.
+        assert_eq!(
+            destination(&r, KnobNames::FlagAndKey).unwrap(),
+            Destination::FilmMaster
+        );
+        let report = r.roll_report(false).unwrap();
+        assert!(!report.white_balance_applied && !report.contrast_applied);
+        assert_eq!(report.contrast, Some(roll_white::contrast_for(1.6)));
+        let rendered = r.roll_report(true).unwrap();
+        assert!(rendered.white_balance_applied && rendered.contrast_applied);
+        // A stated contrast wins, and the report says the roll's did not apply.
+        let mut stated = r.clone();
+        stated.look.contrast = Some(1.3);
+        assert!(!stated.roll_report(true).unwrap().contrast_applied);
+        assert_eq!(Recipe::default().roll_report(true), None);
     }
 
     #[test]

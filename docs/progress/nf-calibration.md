@@ -382,13 +382,41 @@ density.
 
 ## roll-section
 
-**Status:** not started
+**Status:** in progress
 **Updated:** 2026-09-27
 
 - 2026-09-27: filed while re-planning `nf-destinations/direct-preset`. Goal: a `roll` recipe
   section for what `measure-roll` measures (the gains and the roll's white in stops), out
   of `scene_correction` and `look`, so `--rendering default` can apply it and `direct`
   can leave it out.
+- 2026-09-27: implemented (the middle PR of a three-PR stack), awaiting review.
+  - **`recipe::RollSection`** — `roll.white_balance`, `roll.white_stops`, flags
+    `--roll-white-balance` / `--roll-white` (new-flow only). Unset values are written as
+    `null`, never left out: `cli::merge_json` reads a one-key object as an enum switch, and
+    a roll's per-frame `{"roll": {"white_stops": …}}` must merge, not replace (pinned by
+    `a_frames_own_roll_white_keeps_the_rolls_gains`).
+  - **Presence, not value.** "The roll's contrast unless `look.contrast` is stated" needs an
+    unset contrast, so the recipe's look keys are their own type, `recipe::LookKeys`, with
+    `contrast: Option<f32>`; the stage still receives a resolved `LookSection`
+    (`Recipe::shared_params`), and never picks a fallback itself — which is what lets
+    `direct` pin its own base later. The default document now writes `"contrast": null`.
+  - **Resolution** (`Recipe::resolved_scene_correction`, `resolved_contrast`): the roll's
+    gains multiply the stated white balance (identity by default, so they reach the stage
+    exactly); the contrast is stated, else `contrast_for(white_stops)`, else the default.
+    Validation checks each stated value by its own name, then the product, naming both
+    factors; a contrast from the white that fails the whole-contrast rule names
+    `--roll-white`, not `--contrast`.
+  - **`measure-roll`** writes `--roll-white-balance … --roll-white W`, a `{"roll": …}`
+    fragment, and a `--frames` manifest giving each clamped frame the cap as its white.
+    Verified: the fragment renders byte-identically to the same values stated as
+    `--white-balance` / `--contrast` (`measure_roll_gains_reach_convert_…`).
+  - Report: `new_flow.roll` states both values, the derived contrast, and
+    `white_balance_applied` / `contrast_applied` (false for the film master, and for the
+    contrast when `look.contrast` is stated). The film master does not refuse the section:
+    a measurement is not a stage asked for.
+  - The `--auto-wb` and per-frame-mode remedies point at `roll.white_balance`.
+  - Docs: `using-nc.md` §5/§11 (the `measure-roll` example's reuse values are derived from
+    the example's own numbers, not re-run on the 35-frame roll), design-spec §8–§9.
 
 ## scale-ladder
 
