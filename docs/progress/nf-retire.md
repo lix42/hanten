@@ -31,8 +31,8 @@ Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-
   always `auto`. A future destination that wants an f32 or ICC choice adds its own knob.
 - **The drift gate now hashes `algo::reconstruct`** (`stages::golden::reconstructed`)
   plus the default white balance's resolved gains, which reproduced the v5 `render`
-  hash exactly — the default print was a bit-exact identity. `nf-verification/fingerprints`
-  still owns deciding where the new `render` hash stops.
+  hash exactly — the default print was a bit-exact identity. Where `render` stops now is
+  in the `nf-verification` Epic summary.
 - **Tests state their preset.** `tests/pipeline.rs` no longer injects one; a TIFF
   test names `display-p3` (u16) or `film-master` (f32), and a test that needs
   clipping uses `--display-tone reinhard`, the one tone that overshoots white.

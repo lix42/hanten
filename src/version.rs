@@ -57,7 +57,7 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// | 5 | the same gain again, `[1, 0.90, 0.86]` → **`[1, 0.84, 0.73]`** (2026-09-16, `io/scanner-density-calibration`). Calibrated from **31 hand-marked neutral patches** over five rolls instead of from the tone-scale slope: each roll's median nulling scale, averaged with equal weight per roll, gives green 0.837 and blue 0.733. Blue is the half that holds — every roll wants 0.68–0.78, so v4's `0.860`, taken from the manufacturers' published per-channel structure, overcorrects on this scanner. Green **splits by scan date** (July rolls 0.86–0.90, September ~0.77, consistent with a change of developer), so `0.84` is a deliberate compromise fitting neither group exactly. Shipped on a visual verdict over five rolls with an NLP reference beside them, where it beat v4 on every frame but one — `2026-07-15-Ektar100/991` reads green-yellow, which is the overshoot the July patches predict. Every default pixel moves, and colour more than tone. Evidence: `docs/progress/algo.md` (2026-09-16). |
 /// | 6 | the default density curve sigmoid → **exponential at the fixed decode's configuration** (2026-09-23, `nf-retire/sigmoid-and-simple`): contrast 2.0, mid-grey pinned 0.62 density above the film base (`mid-at-base-offset`), the same `[1, 0.84, 0.73]` gain. It is `algo::fixed`'s decode on the current chain, bit-identically (`the_fixed_decode_matches_the_equivalent_legacy_configuration`), so the two chains now render the same default reconstruction. The sigmoid's toe and shoulder were a rendering fused into the decode; the default anchor no longer reads the roll's reference density. Every default pixel moves, highlights most (nothing is compressed at white any more). `simple` retired in the same change, which moves no default pixel. |
 /// | 7 | the default display tone `shoulder` → **extended Reinhard at 6 stops of headroom** (2026-09-24, `nf-retire/display-tones`), fit range's operator. `shoulder` and `none` retired with `highlight_compress`; the headroom moved to `fit_range.headroom_stops`. Every default display pixel moves — the whole curve is compressed rather than only the top, with mid-grey held at 0.18 — while `render` and `base` are unmoved, since the gate stops before the display stages. Evidence: `docs/progress/nf-retire.md`. |
-/// | 8 | **current** — the chain flip (2026-09-27, `nf-core/default-flip`): the rendering chain of `docs/design-update.md` is the only one. The default render is the fixed decode at the linearization **1.8** (not the bundled 2.0) → scene correction (neutral) → the look (contrast 2.0/1.8, highlight desaturation 0.8) → fit range (extended Reinhard at 6 stops, display black 6 stops below mid-grey) → fit gamut into Display P3, written as an **SDR Display P3 16-bit TIFF** where v7 wrote a gain-map JPEG — a container change as well as a render one. `render` now hashes the fixed decode over the same frozen vectors, and `recipe` the recipe document that replaced the old one (`crate::recipe`), so both moved; `base` did not. Evidence: `docs/reports/default-flip.md`. |
+/// | 8 | **current** — the chain flip (2026-09-27, `nf-core/default-flip`): the rendering chain of `docs/design-update.md` is the only one. The default render is the fixed decode at the linearization **1.8** (not the bundled 2.0) → scene correction (neutral) → the look (contrast 2.0/1.8, highlight desaturation 0.8) → fit range (extended Reinhard at 6 stops, display black 6 stops below mid-grey) → fit gamut into Display P3, written as an **SDR Display P3 16-bit TIFF** where v7 wrote a gain-map JPEG — a container change as well as a render one. `render` now hashes the fixed decode (refreshed by `nf-verification/fingerprints` to reach the ACEScg mapping, over a new vector, with no pixel moved), and `recipe` the recipe document that replaced the old one (`crate::recipe`), so both moved; `base` did not. Evidence: `docs/reports/default-flip.md`. |
 /// **Contested, and deliberately left at 3 — read this before assuming it settled.**
 /// `film-base/ir-usability-detection` (2026-09-04) turned the IR holder-mask
 /// detector from opt-in behind `--film-type chromogenic` into the default for every
@@ -113,8 +113,8 @@ const GIT_DIRTY_RAW: &str = env!("NC_GIT_DIRTY");
 /// contract change, not a render change. Bumping for it would have been actively
 /// harmful: `pipeline_version_warning` fires on any mismatch, telling a user
 /// re-running an archived v1 sidecar that "the output will not match the original"
-/// when it matches exactly. The row's `recipe` hash was refreshed in place (the one
-/// field this table sanctions editing) and `PIPELINE_BEHAVIOR` was amended to drop
+/// when it matches exactly. The row's `recipe` hash was refreshed in place (see
+/// `PIPELINE_FINGERPRINTS` for when that is allowed) and `PIPELINE_BEHAVIOR` was amended to drop
 /// its film-base clause — see both for why that amendment is permitted here.
 ///
 /// Version 0 predates this constant, so no fingerprint of it can be computed from
@@ -141,11 +141,14 @@ pub const PIPELINE_VERSION: u32 = 8;
 ///   copy-paste). A bump without a recorded fingerprint would leave the *new*
 ///   version undefended, which is why the bump is not free.
 ///
-/// **A recorded row is history, not a scratchpad.** The only edit-in-place this
-/// table sanctions is refreshing `recipe` for a new opt-in knob with a neutral
-/// default (see [`PipelineFingerprint`]). Editing an existing row's `render` or
-/// `base` would make one version label two different behaviors — silently
-/// destroying the very attribution the table exists to provide. Add a row instead.
+/// **A recorded row is history, not a scratchpad.** Editing an existing row's `render`
+/// or `base` because a default moved would make one version label two different
+/// behaviors — silently destroying the very attribution the table exists to provide.
+/// Add a row instead. Two edits in place are sanctioned, both for a **current** row
+/// whose default pixels did not move: refreshing `recipe` for a new opt-in knob with a
+/// neutral default (see [`PipelineFingerprint`]), and refreshing a hash whose own
+/// definition changed (v8's `render`). A bump for either would falsely tell a user
+/// replaying an old recipe that the output will not match.
 ///
 /// Test-only: nothing at runtime reads it, and gating it on `cfg(test)` keeps it
 /// out of the shipped binary without needing a `dead_code` allow.
@@ -346,7 +349,11 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
     // unchanged.
     PipelineFingerprint {
         pipeline_version: 8,
-        render: "d44927104451d581",
+        // Refreshed in place by `nf-verification/fingerprints` (was `d44927104451d581`):
+        // the fingerprint was redefined — carried through the mapping, over a vector of
+        // minimum-window samples — while no default pixel moved. The label still names
+        // one render; only its witness changed (see `PIPELINE_FINGERPRINTS`).
+        render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
         recipe: "fe3d6808a270d45f",
         behavior: PIPELINE_BEHAVIOR,
@@ -361,13 +368,17 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 /// different reasons:
 ///
 /// - `render` — [`stable_hash`] over the default fixed decode (`algo::fixed`,
-///   `DecodeParams::default()`) of five curated pixels frozen in `mod drift_gate`: every
-///   output pixel's `f32` bit pattern, and the anchor it resolved. This is the
-///   *arithmetic* of the decode and nothing after it — no rendering stage is covered;
-///   whether the hash should reach further is `nf-verification/fingerprints`'. (Rows
-///   v1–v7 hashed the removed chain's reconstruction over the same pixels bar one, in a text
-///   shape that also echoed its white balance, reference density and regional-balance
-///   range. They are history: the gate checks only the current version's row.)
+///   `DecodeParams::default()`) of five near-base pixels frozen in `mod drift_gate`,
+///   then the NC film RGB v1 → ACEScg mapping: every film-RGB and ACEScg `f32` bit
+///   pattern, and the anchor. It **stops at scene correction's input, on purpose.**
+///   Every rendering stage after it makes libm calls at its defaults (the look's
+///   `powf`, highlight desaturation, display black), each able to round either way on
+///   another target, and a hash has no window; it would also trip on every tuning
+///   round. The rendering stages' default *values* are `recipe`'s, their arithmetic
+///   the stage goldens' (`pipeline::chain_golden`) — which can be recaptured without a
+///   bump, and that gap is this gate's. (Rows v1–v7 hashed the removed chain's
+///   reconstruction over another vector. They are history: the gate checks only the
+///   current version's row.)
 /// - `base` — [`stable_hash`] over `film_base::estimate`'s result (the resolved
 ///   base's `f32` bit patterns plus its warnings) for [`FilmBaseSource::Auto`]
 ///   over the frozen synthetic scan in `pipeline::film_base::golden`. This is
@@ -392,6 +403,10 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///
 /// - stage 1 `io::decode` (container parsing, sample scaling, IR-plane handling);
 /// - stage 1b `pipeline::input_semantics::resolve` (transfer/meaning resolution);
+/// - the decode away from the base: `render`'s samples sit within a third of a stop of it, so the
+///   scan floor (`SCAN_FLOOR`) and non-finite handling are the decode golden's alone;
+/// - every rendering stage's arithmetic, from scene correction to fit gamut (see
+///   `render` above), and the orchestrator's wiring of the chain;
 /// - the lcms2 **output color transform** and the embedded ICC bytes — excluded
 ///   *deliberately*, since both differ by target and no cross-platform hash of them
 ///   is possible (design-spec §8);
@@ -421,23 +436,16 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 /// **Why hashing these particular values is safe on both macOS/aarch64 and x86_64
 /// Linux** (CLAUDE.md's cross-platform determinism rule, design-spec §8):
 ///
-/// - `render` hashes **exactly** the per-pixel values `golden_default_decode_is_bit_identical`
-///   pins as literal bit patterns, so hashing adds a version label without widening the
-///   numeric surface by one value. **Their portability is observed, not proved**: the
-///   decode makes one `log10` and one `powf` per sample, which a conforming libm may
-///   round either way (`pipeline::chain_golden` windows them for that reason). The v8
-///   vector agrees on macOS and on glibc 2.39 and 2.41 (x86_64 and aarch64); glibc
-///   2.39's `log10f` is not correctly rounded, so a libm upgrade can move a sample.
-///   If a runner ever reds on the golden, the failure is the vector's — pick sample
-///   values that do agree, per CLAUDE.md's rule — not the gate's, and not a real
-///   behavior change. **And that is not a remote possibility:**
-///   `algo/characteristic-curve-coverage` established that x86_64 and macOS return
-///   different `f32` results from `log10f` on two samples of this very vector under
-///   the (since retired) characteristic curve. A fingerprint has no tolerance window
-///   to absorb the answer the way a golden does.
-/// - It stops at the decode, i.e. **before** every rendering stage and the lcms2
-///   output transform. No post-lcms2 pixel and no embedded ICC byte — both of which differ
-///   by target — enters any of the hashes.
+/// - `render` hashes **exactly** the values `golden_default_render_is_bit_identical`
+///   pins as literal bit patterns. **Their portability is observed, not proved**: each
+///   sample's final `powf` may round either way on a conforming libm, and a fingerprint
+///   has no window. So the vector holds only samples where that one call is the whole
+///   risk — nothing upstream amplified into it — which `pipeline::chain_golden` asserts.
+///   The mapping after it is IEEE f64. If a runner ever reds on the golden, the vector
+///   is at fault, not the gate: pick samples that agree, per CLAUDE.md.
+/// - It stops at scene correction's input, **before** every rendering stage's libm
+///   call and the lcms2 output transform. No post-lcms2 pixel and no embedded ICC
+///   byte — both of which differ by target — enters any of the hashes.
 /// - `base` hashes the output of a code path with **no transcendental at all** (no
 ///   `powf` / `10^` / `log10` / `exp` / `sqrt` anywhere in `film_base`): integer
 ///   indexing, IEEE `+ - * /`, comparisons, and a nearest-rank order statistic
@@ -626,10 +634,10 @@ pub fn stable_hash(text: &str) -> String {
 /// macOS/aarch64 and x86_64 Linux while a whole-file or whole-frame checksum would
 /// not be.
 #[cfg(test)]
-mod drift_gate {
+pub(crate) mod drift_gate {
     use super::*;
     use crate::algo::fixed::{self, DecodeParams};
-    use crate::pipeline::film_base;
+    use crate::pipeline::{film_base, working_space};
     use crate::recipe::Recipe;
     use crate::types::{FilmBase, FilmBaseSource, LinearImage};
 
@@ -639,44 +647,44 @@ mod drift_gate {
         format!("{:08x}", v.to_bits())
     }
 
-    /// The `render` fingerprint's frozen input: five pixels spanning the tonal range
-    /// plus out-of-range finite values, with an IR plane — near-base shadow, midtone,
-    /// dense highlight, out-of-range (above the base / negative / zero, which reaches
-    /// the scan floor), and exactly the base.
+    /// The `render` fingerprint's frozen input: the film base itself, a pixel above it
+    /// and three up to about a third of a stop below it (in scan transmission).
     ///
-    /// **Frozen.** Every recorded row hashed these pixels (v1–v7 through the removed
-    /// chain's reconstruction, with `1.5` for the out-of-range red: glibc 2.39 decodes
-    /// that one 7 ulps off macOS under the fixed decode), and
-    /// [`golden_default_decode_is_bit_identical`]
-    /// pins the decode over them bit for bit on every CI target — the observed
-    /// agreement the row rests on (see [`PipelineFingerprint`]).
-    fn pixels() -> LinearImage {
+    /// **Every sample sits at the minimum decode window**, one ULP: only the decode's
+    /// final `powf` can round differently on another target, and nothing amplifies it
+    /// (`pipeline::chain_golden` asserts this). Samples further from the base —
+    /// midtones, dense highlights, the scan floor, out-of-range values — reach 4–37 ULP,
+    /// and a fingerprint has no window to absorb that, so they are the goldens' alone.
+    /// **Frozen** since v8's refresh (rows v1–v7 hashed an earlier vector).
+    pub(crate) fn pixels() -> LinearImage {
         LinearImage::new(
             5,
             1,
             vec![
-                0.85, 0.5, 0.38, // near-base shadow
-                0.3, 0.18, 0.12, // midtone
-                0.02, 0.012, 0.009, // dense highlight
-                1.8, -0.2, 0.0, // out-of-range finite
                 0.9, 0.55, 0.42, // exactly the base
+                0.95, 0.6, 0.45, // above the base
+                0.85, 0.5, 0.38, // just below the base
+                0.8, 0.47, 0.4, // a tenth to a quarter of a stop below
+                0.7, 0.45, 0.35, // about a third of a stop below
             ],
-            Some(vec![0.1, 0.2, 0.3, 0.4, 0.5]),
+            None,
         )
         .unwrap()
     }
 
     /// The film base [`pixels`] are decoded against.
-    fn base() -> FilmBase {
+    pub(crate) fn base() -> FilmBase {
         FilmBase::from([0.9, 0.55, 0.42])
     }
 
-    /// The fixed decode over [`pixels`] / [`base`]: the film RGB, and the anchor it
-    /// resolved.
-    fn decoded(params: &DecodeParams) -> (Vec<f32>, f32) {
+    /// The fixed decode over [`pixels`] / [`base`], then the NC film RGB v1 mapping: the
+    /// film RGB, the ACEScg RGB, and the anchor the decode resolved.
+    fn rendered(params: &DecodeParams) -> (Vec<f32>, Vec<f32>, f32) {
         let (film, report) = fixed::decode(&pixels(), &base(), params)
             .expect("the decode must succeed on the frozen vectors");
-        (film.rgb().to_vec(), report.anchor)
+        let film_rgb = film.rgb().to_vec();
+        let aces = working_space::map_nc_film_rgb_v1(film);
+        (film_rgb, aces.rgb().to_vec(), report.anchor)
     }
 
     /// A render's fingerprint input, as canonical text.
@@ -689,11 +697,16 @@ mod drift_gate {
     ///
     /// Kept human-readable (rather than hashing raw bytes) so a gate failure can print
     /// it and a developer can *see* which pixel moved instead of only that a hash
-    /// differs.
+    /// differs. The film RGB says which side of the mapping moved.
     fn render_fingerprint_text(params: &DecodeParams) -> String {
-        let (rgb, anchor) = decoded(params);
-        let rgb: Vec<String> = rgb.into_iter().map(hex).collect();
-        format!("rgb={}\nanchor={}\n", rgb.join(","), hex(anchor))
+        let (film, aces, anchor) = rendered(params);
+        let join = |v: Vec<f32>| v.into_iter().map(hex).collect::<Vec<_>>().join(",");
+        format!(
+            "film={}\naces={}\nanchor={}\n",
+            join(film),
+            join(aces),
+            hex(anchor)
+        )
     }
 
     /// The **stage 2** fingerprint input: what `film_base::estimate` resolves for
@@ -753,31 +766,56 @@ mod drift_gate {
     }
 
     #[test]
-    fn golden_default_decode_is_bit_identical() {
-        // THE default decode as of `pipeline_version` 8 (2026-09-27): linearization 1.8,
-        // mid-grey pinned 0.62 above the film base, gain `[1, 0.84, 0.73]`, no offset.
+    fn golden_default_render_is_bit_identical() {
+        // THE default decode and mapping as of `pipeline_version` 8 (2026-09-27):
+        // linearization 1.8, mid-grey pinned 0.62 above the film base, gain
+        // `[1, 0.84, 0.73]`, no offset, then NC film RGB v1 → ACEScg.
         //
-        // Captured from this build — so it pins "the default has not drifted since it
-        // was set" — and checked to agree on macOS and glibc 2.39 / 2.41. That agreement
-        // is what the `render` fingerprint rests on: the decode makes one `log10` and one
-        // `powf` per sample, which a conforming libm may round either way
-        // (`pipeline::chain_golden` windows them for that reason).
-        // If a runner ever disagrees, the vector is at fault — pick samples that agree,
-        // per CLAUDE.md — not the decode.
-        let (rgb, anchor) = decoded(&DecodeParams::default());
-        let got: Vec<u32> = rgb.iter().map(|v| v.to_bits()).collect();
-        assert_eq!(got, DEFAULT_DECODE_BITS, "pixel bits drifted");
+        // Captured from this build. The `render` fingerprint rests on this agreeing on
+        // every CI target, which is observed, not proved: each sample's final `powf` may
+        // round either way (see `pixels`). If a runner ever disagrees, the vector is at
+        // fault — pick samples that agree, per CLAUDE.md — not the decode.
+        let (film, aces, anchor) = rendered(&DecodeParams::default());
+        let bits = |v: Vec<f32>| v.iter().map(|x| x.to_bits()).collect::<Vec<u32>>();
+        assert_eq!(bits(film), DEFAULT_FILM_BITS, "film RGB bits drifted");
+        assert_eq!(bits(aces), DEFAULT_ACES_BITS, "ACEScg bits drifted");
         assert_eq!(anchor.to_bits(), DEFAULT_DECODE_ANCHOR_BITS, "anchor");
     }
 
-    /// [`golden_default_decode_is_bit_identical`]'s capture.
-    const DEFAULT_DECODE_BITS: [u32; 15] = [
-        0x3c7a401a, 0x3c826425, 0x3c80c234, 0x3dcbe6ce, 0x3d98c6f9, 0x3d92638a, 0x41508878,
-        0x408f42e1, 0x40099236, 0x3b81adb7, 0x4ac90670, 0x48a4c66f, 0x3c61c89a, 0x3c61c89a,
-        0x3c61c89a,
+    /// [`golden_default_render_is_bit_identical`]'s capture: the decode.
+    const DEFAULT_FILM_BITS: [u32; 15] = [
+        0x3c61c89a, 0x3c61c89a, 0x3c61c89a, 0x3c4cd871, 0x3c45f341, 0x3c4e371b, 0x3c7a401a,
+        0x3c826425, 0x3c80c234, 0x3c8b8d62, 0x3c8f2dc8, 0x3c70bb90, 0x3cb1780e, 0x3c98e8c1,
+        0x3c8f73b6,
+    ];
+    /// [`golden_default_render_is_bit_identical`]'s capture: the mapping.
+    const DEFAULT_ACES_BITS: [u32; 15] = [
+        0x3c61c89a, 0x3c61c89b, 0x3c61c899, 0x3c4a91bc, 0x3c468ba0, 0x3c4d480a, 0x3c7e2ba9,
+        0x3c81ffe5, 0x3c80dcd2, 0x3c8bdfe3, 0x3c8e9e0e, 0x3c7685d8, 0x3ca784c6, 0x3c9a8184,
+        0x3c913082,
     ];
     /// The anchor `0.62 + 0.745 / 1.8`.
     const DEFAULT_DECODE_ANCHOR_BITS: u32 = 0x3f845183;
+
+    /// The hash covers every pinned value — both sides of the mapping and the anchor —
+    /// so a formatter that drops one cannot quietly stop defending it.
+    #[test]
+    fn the_render_fingerprint_hashes_every_pinned_value() {
+        let join = |bits: &[u32]| {
+            bits.iter()
+                .map(|b| format!("{b:08x}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        assert_eq!(
+            render_fingerprint_text(&DecodeParams::default()),
+            format!(
+                "film={}\naces={}\nanchor={DEFAULT_DECODE_ANCHOR_BITS:08x}\n",
+                join(&DEFAULT_FILM_BITS),
+                join(&DEFAULT_ACES_BITS)
+            )
+        );
+    }
 
     #[test]
     fn default_conversion_behavior_matches_the_recorded_pipeline_version() {
@@ -787,16 +825,17 @@ mod drift_gate {
         assert_eq!(
             render,
             row.render,
-            "the DEFAULT DECODE changed but PIPELINE_VERSION is still {PIPELINE_VERSION}.\n\n\
+            "the DEFAULT DECODE or WORKING-SPACE MAPPING changed but PIPELINE_VERSION is still {PIPELINE_VERSION}.\n\n\
              Default pixels are the behavioral contract, so this is a `pipeline_version` bump: \
              raise PIPELINE_VERSION, update PIPELINE_BEHAVIOR, add a history-table row, and \
              ADD a new PIPELINE_FINGERPRINTS row with render: \"{render}\".\n\n\
-             NEVER edit an existing row's `render` in place. That row is the recorded history of \
-             a shipped version; overwriting it makes one `pipeline_version` label two different \
-             behaviors, and every output already stamped with it becomes unattributable.\n\n\
-             If instead you believe the default decode is unchanged, the bit patterns say \
-             otherwise — the sibling test `golden_default_decode_is_bit_identical` names the \
-             pixel that moved.\n\nfingerprint input was:\n{}",
+             NEVER edit an existing row's `render` in place for a moved default. That row is the \
+             recorded history of a shipped version; overwriting it makes one `pipeline_version` \
+             label two different behaviors.\n\n\
+             Only if you changed what the fingerprint hashes (its vector or its coverage) and \
+             no default, refresh THIS row's `render` in place (see `PIPELINE_FINGERPRINTS`). \
+             `golden_default_render_is_bit_identical` names the pixel that moved.\n\n\
+             fingerprint input was:\n{}",
             render_fingerprint_text(&DecodeParams::default())
         );
 
@@ -828,8 +867,8 @@ mod drift_gate {
              If you only ADDED an opt-in knob whose default is neutral, no default pixel \
              moved: update this row's `recipe` to \"{recipe}\" WITHOUT bumping \
              PIPELINE_VERSION, and note in the task's progress log why the default render is \
-             unaffected. `recipe` is the ONE field this table sanctions editing in place; \
-             `render` and `base` are history.\n\nfingerprint input was:\n{}",
+             unaffected (see `PIPELINE_FINGERPRINTS` for the in-place edits it \
+             sanctions).\n\nfingerprint input was:\n{}",
             recipe_fingerprint_text()
         );
 

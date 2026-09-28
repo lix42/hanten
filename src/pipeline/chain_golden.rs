@@ -1,5 +1,6 @@
 //! **Goldens for the chain's stages** (`nf-verification/stage-goldens`): the fixed
-//! decode, the NC film RGB v1 mapping, and each stage of [`chain`].
+//! decode, the NC film RGB v1 mapping, and each stage of [`chain`]. It also checks the
+//! drift gate's `render` vector against the decode's windows, since the harness is here.
 //!
 //! Written fresh rather than re-pointing the removed chain's `stages::golden` vectors
 //! (in git history), whose inputs every historical `PIPELINE_FINGERPRINTS` row hashed.
@@ -68,6 +69,7 @@ use crate::pipeline::scene_correction::{
 };
 use crate::pipeline::working_space::{AcesCgImage, map_nc_film_rgb_v1};
 use crate::types::{DEFAULT_HEADROOM_STOPS, FilmBase, LinearImage};
+use crate::version::drift_gate;
 
 // --- shared harness ----------------------------------------------------------
 
@@ -344,6 +346,35 @@ fn the_decode_capture_is_correctly_rounded_and_the_host_conforms() {
         widest <= MAX_REASONABLE_WINDOW_ULPS,
         "the widest derived decode window is {widest} ULP — understand it before accepting it"
     );
+}
+
+/// The drift gate's `render` fingerprint has no window, so its vector must hold only
+/// samples at the minimum one — the final `powf` alone, nothing amplified — and this
+/// host must decode each to the correctly-rounded value.
+#[test]
+fn the_fingerprint_vector_sits_at_the_minimum_decode_window() {
+    let scan = drift_gate::pixels();
+    let base = <[f32; 3]>::from(drift_gate::base());
+    let params = DecodeParams::default();
+    let (film, _) = fixed::decode(&scan, &drift_gate::base(), &params).unwrap();
+    for (i, (&s, &got)) in scan.rgb.iter().zip(film.rgb()).enumerate() {
+        let d = -(f64::from(s.max(SCAN_FLOOR) / base[i % 3]).log10()) as f32;
+        let window = reachable_window(
+            |d| decode_from_density(d, i % 3, &params),
+            d,
+            LIBM_MAX_ERROR_ULPS,
+        );
+        assert_eq!(
+            window, LIBM_MAX_ERROR_ULPS,
+            "fingerprint sample {i} ({s}): a {window} ULP window — a fingerprint cannot \
+             absorb it; pick a sample nearer the base"
+        );
+        assert_eq!(
+            got.to_bits(),
+            decode_from_density(d, i % 3, &params).to_bits(),
+            "fingerprint sample {i} ({s}): not the correctly-rounded decode"
+        );
+    }
 }
 
 // --- the working-space mapping and the chain ---------------------------------

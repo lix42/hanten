@@ -1101,7 +1101,7 @@ the design in `docs/design-update.md`:
   — the `reserve` branch (from tag `pre-new-flow`), named by commit, keeps the old
   binary — this is what lets `nf-retire` run early
 - `nf-verification/fingerprints` (new flow): `nf-core/minimal-end-to-end`
-  — retire the print half of the `render` row, not the row; supersedes
+  — `render` stops at scene correction's input, over minimum-window samples; supersedes
   `algo/characteristic-fingerprint-vector`
 - `nf-verification/stage-goldens` (new flow): `nf-core/minimal-end-to-end`
   — curated per-pixel vectors for the new stages; never a full-frame or
@@ -1924,9 +1924,9 @@ the design in `docs/design-update.md`:
   build](tasks/nf-verification/reference-snapshot.md) — done: `reserve` (from tag
   `pre-new-flow`), built by `scripts/reference-snapshot/` — this is what lets
   `nf-retire` run early
-- [ ] [Rebase the drift gate on the new
-  chain](tasks/nf-verification/fingerprints.md) — retire the print half of the
-  `render` row, not the row; supersedes
+- [x] [Rebase the drift gate on the new
+  chain](tasks/nf-verification/fingerprints.md) — `render` stops at scene
+  correction's input, over minimum-window samples; supersedes
   `algo/characteristic-fingerprint-vector`
 - [x] [Goldens for the new stages](tasks/nf-verification/stage-goldens.md) —
   curated per-pixel vectors for the new stages; never a full-frame or

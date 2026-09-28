@@ -98,14 +98,12 @@ What other epics need to know about `core`:
   `Dmax` 1.3 + sigmoid default; 3: `gain-map-hdr` default preset; 4:
   `density.scale` `[1, 0.90, 0.86]`). The golden drift gate
   (`version::PIPELINE_FINGERPRINTS`) hashes three small, deliberately
-  target-independent things — the curated per-pixel vectors in
-  `pipeline::stages::golden` (stages 3–4), `film_base::estimate` over the frozen
-  scan in `pipeline::film_base::golden` (stage 2), and the default recipe
-  *values*. Read `version::PipelineFingerprint` for what it does NOT cover
-  (decode, stage-1b semantics, the lcms2 transform, encode, non-default film-base
-  sources, the IR path, real-scan geometry, and every non-default curve). **Never
-  edit a historical row's `render`/`base` in place**; `recipe` is the one field
-  sanctioned for an in-place refresh, and only when no default pixel moved.
+  target-independent things — the fixed decode and the ACEScg mapping over
+  near-base pixels (`nf-verification/fingerprints`), `film_base::estimate` over the
+  frozen scan in `pipeline::film_base::golden` (stage 2), and the default recipe
+  *values*. Read `version::PipelineFingerprint` for what it does NOT cover. **Never
+  edit a row's `render`/`base` in place for a moved default**; the in-place edits
+  it does sanction are listed on `PIPELINE_FINGERPRINTS`.
 - **The sidecar is `{ "meta": {…identity…}, "params": {…recipe…} }`.**
   `--params` accepts the envelope *and* a bare legacy recipe. Identity must never
   become a recipe key (`deny_unknown_fields` would reject every new sidecar), and
