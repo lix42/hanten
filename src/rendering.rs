@@ -36,8 +36,8 @@
 //!    `docs/progress/nf-calibration.md`: review rounds judged before and after the move no
 //!    longer compare like for like.
 //!
-//! A task that changes a stage (e.g. `nf-display-stages/parametric-shoulder` replacing
-//! reinhard) decides `direct`'s part as its own work.
+//! A task that changes a stage (say, a new fit-range operator) decides `direct`'s part as
+//! its own work.
 
 use serde::{Deserialize, Serialize};
 
