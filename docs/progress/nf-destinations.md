@@ -11,6 +11,8 @@ ones.
 
 ## Epic summary
 
+> **Since `nf-core/default-flip` (2026-09-27, `pipeline_version` 8)** the chain this summary calls the new flow is the only one: read "under `--new-flow`" as the default, and "the current chain" as the removed one (the reference build).
+
 Where a render can go: the destination set, the two renderings (`direct` and `default`), memory profiles, and which destination the default resolves.
 
 **The destination set has landed** (`preset-set`, 2026-09-26). Under `--new-flow` a

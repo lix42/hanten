@@ -11,101 +11,58 @@ ones.
 
 ## Epic summary
 
-The new flow exists and can be selected: the `--new-flow` selector, the stage module tree, a minimal end-to-end render, the knob audit, and the default flip that ends the migration's first half.
+The new chain is the only one. The epic built it behind `--new-flow` — the selector,
+the stage module tree, a minimal end-to-end render, the knob audit, the recipe — and
+**`default-flip`** (2026-09-27, `pipeline_version` 8) made it the default and deleted
+the old chain, its presets, its print stage, its recipe, its sidecar and
+`ultrahdr-sys`. `--new-flow` is now a removed-flag error. Open: `report-contract`
+(the report, sidecar and telemetry shape), `subcommands` (`inspect`/`estimate`/`roll`
+leftovers), `buffer-strategy`, `three-step-pipeline`.
 
-The epic was created on 2026-09-19 as part of the new-flow migration plan
-(`docs/nf-migration.md`). Landed so far: **`new-flow-flag`** (2026-09-20) — the
-`--new-flow` selector on `convert` and `roll`, the availability refusal
-(`src/flow.rs`), and the render seam — **`stage-skeleton`** (2026-09-21) — the
-chain that seam guards: `pipeline::chain` composing `scene_correction` -> `look` ->
-`fit_range` -> `fit_gamut` over `working_image::WorkingBuffer` — and
-**`knob-availability-audit`** (2026-09-22), which closed the availability surface
-— and **`recipe-schema`** (2026-09-22), the new chain's own recipe.
+**Adding or changing a knob** (what used to be the availability tables in `src/flow.rs`,
+deleted by the flip):
 
-**What the audit means for every other epic.** Under `--new-flow` the old knobs are
-now *refused*, not accepted-and-ignored, so the epic that builds a stage also owns
-un-refusing its knobs. Three mechanisms, and which one a knob uses is the thing to
-check before adding one back:
-
-- **The new chain's recipe schema** (`crate::recipe`) refuses the current chain's
-  `print`/`output` sections and old `reconstruction`/`calibration` keys by name. It
-  replaced `flow::UNREAD_RECIPE_SECTIONS` (`nf-core/recipe-schema`); a stage that
-  gains a knob gives its own section a field.
-- **A flag row per knob** in `FLAG_ENTRIES`, keyed on presence, naming the task that
-  will carry it — never a replacement flag spelling written ahead of the stage, since
-  that belongs to the task that builds it. That task turns the row into
-  `Availability::Renamed` once the new flag exists (`--print-exposure` → `--exposure`,
-  `nf-scene-correction/stage`), or deletes it when the spelling is kept.
-- **A flag only the new chain reads must also be refused on the current one**, whose
-  `merge` has no arm for it: give it a row in `flow::NEW_FLOW_ONLY_FLAGS`, which
-  `reject_new_flow_only_flags` reads. `every_kept_flag_is_read_by_one_chain_or_refused_on_the_other`
-  tests the direction — a kept flag the current chain does not read and that has no row
-  reds it, rather than being accepted and ignored without `--new-flow`.
-- **`every_convert_flag_is_classified`** reads the flag surface back out of `cli.rs`,
-  so a knob added to `ConvertArgs` with no verdict reds the gate. Adding a flag now
-  means adding a row (refused or kept) or an allowlist line.
-
-**One corollary that will bite whoever adds a knob back:** once a section is refused
-whole, an identity value earns **no** exemption from the presence-vs-value tiebreaker
-— the exemption exists so a flag can clear what a recipe pinned, and there is nothing
-left to clear. `--highlight-compress 0` is refused. (`--white-balance 1,1,1` was too,
-until `nf-scene-correction/stage` gave white balance a `scene_correction` key.)
-
-**`nf-core/minimal-end-to-end` made the flag render** (2026-09-22): the fixed decode
-(`algo::fixed`) → NC film RGB v1 → `pipeline::chain` → one destination, a **Display
-P3 16-bit TIFF** (`cli::render_new_flow_frame`), on `convert` and `roll`. What a
-dependent epic builds on:
-
-- **`fit_gamut` owns the change of primaries** into a `DestinationGamut` carried by
-  `FitGamutParams` (no `Default`: the destination states it), and the gamut rides out
-  of the chain on `DisplayReferredImage::into_parts`. The encode
-  (`color::encode_display_linear`) applies only the transfer, so the embedded profile
-  is the shipped `display-p3` preset's, byte for byte. `nf-display-stages/fit-gamut`
-  adds the radial map on top of the matrix; with fit range still an identity, bright
-  frames clip at the u16 encode (counted, `--strict`-promotable).
-- **The suffix rule judges against the new flow's destination** (`cli::OutputTarget`),
-  so `-o out` completes to `out.tiff` and `.jpg` is refused naming the flag.
-- **No sidecar, no `params_hash`, no `recipe` echo** under the flag, on `convert` or
-  `roll`: those were built around the legacy chain's config. The report carries a
-  provisional `new_flow` block (decode facts, each stage's `applied`, destination) and
-  omits the legacy-chain sections; `nf-core/report-contract` owns the real shape, and
-  now has the new chain's recipe to put in all three.
-- **`--export-ir` renders** (u16, from the decoded image); **`--telemetry*` is
-  refused** — its record would name the legacy preset and timing buckets.
-- **`RunProfile::NewFlowSdrTiff`** shares `Convert`'s u16 arithmetic, measured on two
-  frame sizes. A new-flow buffer added later must move that arm.
-
-**The new chain's recipe exists** (`nf-core/recipe-schema`, 2026-09-22):
-`src/recipe.rs`, a `"recipe_version": 2` document with one section per stage, which
-the decode (`Recipe::reconstruction`) and the chain (`Recipe::chain_params`) read —
-`convert_frame` takes it as `FrameChain::New`, and each `roll` frame carries its own.
-A stage epic adds its knobs as fields on its own `*Params` struct — which *is* the
-recipe section (fit gamut's excepted: its target is the destination's) — plus a
-`recipe::merge` arm for the flag, and un-refuses the flag's row in `flow`. Under
-`--new-flow` the current chain's `merge` does not run, so a new flag has no effect
-until that arm exists; `every_kept_flag_reaches_the_recipe` catches a kept flag
-without one. There is no resolved-value refusal table any more: the schema refuses at
-load what it would have.
+- **A knob is a `*Overrides` field (`cli.rs`), a field on its recipe section**
+  (`src/recipe.rs`, or the stage's own params where the section *is* that struct), a
+  `recipe::merge` arm, and usually a `recipe::validate` rule.
+  `every_flag_reaches_the_recipe` reads the flag surface back out of clap, so a flag
+  that reaches no recipe field reds the gate; `NON_KNOB_FLAGS` lists the operational
+  and input-only ones.
+- **A retired flag stays parsable, hidden, and is refused** by
+  `cli::reject_removed_flags` with a message naming what replaced it, before `merge`;
+  `every_hidden_convert_flag_is_refused` pins that a hidden flag cannot parse and do
+  nothing.
+- **A retired recipe key** is refused by `recipe::check_body` by name, with where its
+  knob went. A recipe without `"recipe_version": 2` — every sidecar and `--dump-params`
+  file written before `pipeline_version` 8 — is refused whole; there is no converter.
+- **The film master refuses a stage by stage, never by knob**
+  (`recipe::destination`): each stage's default and identity are spared, so a flag can
+  clear what a recipe asked for.
 
 **What a dependent epic needs to know.** Every stage is
-`apply(input, &Params) -> Result<Output>`, pure, and an **identity pass** until its
-epic fills it — except fit gamut, which already applies the change of primaries (above). The `Result` is there so that filling one needs no re-plumbing: every
-stage this chain will host has a fallible counterpart in the shipped code, so the
-alternative was changing four signatures, `chain::render` and every test the first
-time a stage could refuse a pixel. The stage **order is carried by
-the types**, not by the composition function: each stage's input is the previous
-one's output, and each boundary type can be minted only inside the module that
-produces it, so an out-of-order chain does not compile. Crossing a boundary
-**moves** the buffers, so a type per stage costs no allocation. Each stage's
-`Params` is a struct — not an `Option`, because "this stage is off" is
-deliberately not expressible — empty until its epic gives it a knob, and it *is*
-that stage's recipe section (`nf-core/recipe-schema`). Fit gamut is the exception on
-both counts: `FitGamutParams` carries the destination's target, and its recipe
-section is the separate, empty `recipe::FitGamut`; `nf-core/report-contract` owns the report. The IR plane
-rides the whole chain and leaves it with the image — the exit is
-`DisplayReferredImage::into_parts`, a
-consuming unwrap, and it is the boundary's whole surface. `GradedImage` is the
-boundary the SDR/HDR split will split *from*. Nothing about the no-flag path moved.
+`apply(input, &Params) -> Result<Output>`, pure. The stage **order is carried by the
+types**, not by the composition function: each stage's input is the previous one's
+output, and each boundary type can be minted only inside the module that produces it,
+so an out-of-order chain does not compile. Crossing a boundary **moves** the buffers,
+so a type per stage costs no allocation. Each stage's `Params` is a struct — not an
+`Option`, because "this stage is off" is deliberately not expressible. Fit gamut owns
+the change of primaries into the destination's gamut (`DestinationGamut`, carried by
+`FitGamutParams`, which has no `Default`), and its recipe section is the separate,
+empty `recipe::FitGamut`. The IR plane rides the whole chain and leaves it with the
+image through `DisplayReferredImage::into_parts`. `GradedImage` is the boundary the
+SDR/HDR split splits *from*.
+
+- **The destination decides the output path** (`cli::OutputTarget`): `-o out`
+  completes to the container's suffix, and a stated suffix the destination does not
+  write is refused, offering the axes that would write it.
+- **No sidecar, no `params_hash` in the report, no `recipe` echo**: the report carries
+  a provisional `new_flow` block (decode facts, each stage's `applied`, the
+  destination); `nf-core/report-contract` owns the real shape. A sidecar a pre-flip
+  run left beside a replaced image is removed, and reported.
+- **Telemetry is `schema_version` 8**: `conversion.destination` for the old preset,
+  `params_hash` over the v2 recipe.
+- **Memory profiles are per buffer shape** (`RunProfile::{U16Tiff, F32Tiff, Avif,
+  GainMapJpeg}`); a buffer added to a stage must move its arm.
 
 ## new-flow-flag
 
@@ -932,7 +889,7 @@ boundary the SDR/HDR split will split *from*. Nothing about the no-flag path mov
 
 ## default-flip
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-09-27
 
 - 2026-09-19: created with the new-flow plan. Goal: flip the default to the new flow.
@@ -953,6 +910,45 @@ boundary the SDR/HDR split will split *from*. Nothing about the no-flag path mov
   flip — dropped. And "a recipe carrying `--new-flow` fails to load" could not happen:
   the flag was never a recipe key. The real contract is that a recipe without
   `recipe_version` 2 is refused with a migration message.
+
+- 2026-09-27: done. **The flip.** `--new-flow` is a removed-flag error on `convert`,
+  `roll` and `params`; the chain it selected is the only one, and `pipeline_version` 8
+  records the new default (an SDR Display P3 16-bit TIFF). The old chain is **deleted,
+  not unreachable**: `flow.rs`, `ResolvedConfig`/`merge`/`validate`, `OutputPreset`, the
+  print stage, the display-tone/SDR/HDR/gain-map renderers, `stages`, `algo::density`,
+  the sidecar writer and `io::ultra_hdr` with `ultrahdr-sys` and its vendored snapshot.
+  The removed flags stay hidden and refused (`cli::reject_removed_flags`), and a
+  recipe without `"recipe_version": 2` is refused whole.
+
+  **v8's default is v7's `--new-flow` render byte for byte** on nine real frames, one
+  per roll (`docs/reports/default-flip.md`); against v7's default every frame renders
+  darker, and the estimated peak roughly halves. The v8 fingerprint row's `render`
+  hashes the fixed decode over the frozen vectors (the old reconstruction is gone), so
+  it moved with the code it covers; `base` did not.
+
+  **Rebased onto `nf-destinations/direct-preset` and `nf-calibration/roll-section`**,
+  which landed while this ran: `--rendering` and the roll flags are ordinary flags now,
+  the v8 row's `recipe` hash covers their sections, and `--output-preset`'s counterparts
+  name one destination under either rendering (`display-p3` is `--gamut display-p3`, the
+  gain map `--range hdr --container jpeg`). One consequence worth knowing: the `default`
+  rendering's **no-roll warning now fires on every plain `convert`**, so `--strict` at
+  defaults needs a measured roll, a stated white balance and contrast, or `--rendering
+  direct`. Tests whose subject is not the roll state a neutral one (`MEASURED` in
+  `tests/pipeline.rs`).
+
+  **Tooling.** `nctool` reads which flags a build speaks off its banner's
+  `pipeline_version` (8+ destinations, older presets), so a review matrix or `compare`
+  can mix the reference build with this one; `real-scan-verify` freezes v2 recipes
+  stating every axis and expects no sidecar. `docs/using-nc.md` was restructured around
+  the one chain (§5 recipes, §6 decode, §7 stages and `measure-roll`, §8 destinations)
+  and re-verified against the binary — most of `nf-docs/using-nc`'s rewrite.
+
+  **Gotchas.** A bulk strip of `"--new-flow",` from the tests left every test that
+  compared the two chains comparing the new one with itself; each was rewritten or
+  deleted by hand, and the stale-sidecar tests now write a pre-flip sidecar themselves
+  (`write_stale_sidecar`). `design-spec.md` still describes the preset chain; it carries
+  a banner until `nf-docs/design-spec` folds the new design in.
+
 
 ## report-contract
 

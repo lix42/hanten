@@ -11,14 +11,16 @@ ones.
 
 ## Epic summary
 
+> **Since `nf-core/default-flip` (2026-09-27, `pipeline_version` 8)** the chain this summary calls the new flow is the only one: read "under `--new-flow`" as the default, and "the current chain" as the removed one (the reference build).
+
 The creative stage the old chain never had: per-channel grade, path to white, contrast, look presets, and the stock data that survives `characteristic` leaving the decode.
 
 The epic was created on 2026-09-19 with the new-flow plan (`docs/nf-migration.md`).
 **`stage` closed 2026-09-23**: the stage, its empty `look` recipe section and its report
 entry already existed from `nf-core`; what it settled is the spelling — **one key per
 control under `look`**, each named and added by its own task with a field on
-`LookParams`, a CLI flag (classified in `flow`, which must also refuse a new-flow-only
-flag on the current chain), a `recipe::merge` arm with a merge test, and a value rule.
+`LookParams`, a CLI flag (read back by `recipe`'s `every_flag_reaches_the_recipe`), a
+`recipe::merge` arm with a merge test, and a value rule.
 `contrast` and the grade overlap (equal pivoted exponents are contrast): contrast owns
 neutral contrast, and the grade must not be able to move it. The section is `look::LookSection`, and
 the stage's `LookParams` adds what the section cannot state (the decode's linearization, via

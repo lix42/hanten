@@ -16,6 +16,8 @@ entries — don't rewrite earlier ones.
 
 ## Epic summary
 
+> **Since `nf-core/default-flip` (2026-09-27, `pipeline_version` 8)** the output presets, the print stage and the Ultra HDR v1 dialect below are removed; they live in the reference build. What replaced them: `docs/using-nc.md` §7–§8.
+
 What other epics need to know about `color`:
 
 - **The working space is linear Rec.709/sRGB primaries, D65, linear TRC.** That

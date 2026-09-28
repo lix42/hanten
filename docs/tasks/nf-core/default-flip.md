@@ -67,7 +67,8 @@ before the flip, as the migration rule asks.
 | `--linear-range` | Gap; `nf-scene-correction/levels-knob` decides a home or retirement |
 | `--auto-wb` | Dropped for `hanten measure-roll` (already a `Never` row) |
 | Sidecar, `params_hash`, the report's `recipe` echo and its ~20 current-chain sections | Gap; `nf-core/report-contract`. `--dump-params` is the round trip meanwhile |
-| `--telemetry` / `--telemetry-file` | Refused until `nf-core/report-contract` |
+| `--telemetry` / `--telemetry-file` | Kept, adapted minimally (user, 2026-09-27): `schema_version` 8, `conversion.destination` for the preset, `params_hash` over the v2 recipe; the final shape is `nf-core/report-contract`'s |
+| `libultrahdr` (`ultrahdr-sys`, its vendored snapshot and check) | Deleted with the Ultra HDR dialect (user, 2026-09-27); `output/ultrahdr-dependency-externalization` closed as moot |
 | `inspect` / `estimate` fields that read the current chain's config; roll's per-frame consistency warnings | `nf-core/subcommands` |
 | Loading a current-chain recipe or sidecar | Refused with a migration message; no converter (nc is unreleased) |
 | `nctool` driving a build with `--output-preset` | A reference build still takes it; the new build takes the destination axes with no `--new-flow` — this task |
