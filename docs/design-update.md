@@ -771,8 +771,8 @@ without `..`, so a new stage knob fails to compile until someone decides its `di
 value by the principle above. A pinned test holds the resolved values and names the
 module doc that says how to re-decide them. When `direct`'s output moves, the move is
 logged in `nf-calibration`'s progress, because review rounds judged before and after it
-no longer compare like for like. A task that changes a stage — e.g.
-`nf-display-stages/parametric-shoulder` — decides `direct`'s part as its own work.
+no longer compare like for like. A task that changes a stage (say, a new fit-range
+operator) decides `direct`'s part as its own work.
 
 ## `film-master` is the reconstruction output
 
