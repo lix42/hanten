@@ -45,8 +45,10 @@ Open:
   not state must not be written into a recipe as if they had, or a `default` recipe
   replayed under `direct` carries desaturation 0.8 as a stated value. The knobs a
   rendering sets become "unset means the rendering's base", and the report records the
-  resolved values. Recipes written before this serialized every default, so a value at
-  exactly its old default is read as unset (the retired-key rule in CLAUDE.md).
+  resolved values. Recipes written before this serialized every default, but a value is
+  never read as unset by its value — that breaks `--dump-params` replay; where an earlier
+  build's serialized default meets a rendering or roll base, the run warns and the
+  migration is explicit (as `nf-calibration/roll-section`'s `roll_overlap_warnings` does).
 - **`--rendering direct` with the film master is refused.** The film master runs no
   rendering, so the selector would be silently ignored; its refusals of stages asked for
   spare defaults and identities (`preset-set`), which is every value `direct` pins, so
