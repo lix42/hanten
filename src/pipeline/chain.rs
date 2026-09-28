@@ -127,7 +127,6 @@ pub struct Rendered {
 /// An SDR and an HDR rendition of one frame, split from one graded image — what a
 /// gain map is built from. Each carries the full account of its own render; the
 /// shared stages' entries are identical by construction.
-#[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/gain-map-destination`)
 pub struct RenderedPair {
     pub sdr: Rendered,
     pub hdr: Rendered,
@@ -187,7 +186,6 @@ pub fn render(
 ///
 /// Costs one full-frame copy of the graded image — the branch point's only
 /// allocation — on top of what [`render`] holds.
-#[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/gain-map-destination`)
 pub fn render_pair(
     image: AcesCgImage,
     film_base: AcesCgImage,

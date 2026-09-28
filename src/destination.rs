@@ -319,6 +319,9 @@ pub enum Encoding {
     HdrCodedTiff(HdrTransfer),
     /// One HDR rendition, a Rec.2100 signal as 10-bit 4:4:4 AVIF.
     HdrAvif(HdrTransfer),
+    /// An SDR and an HDR rendition in the gamut's own curve: the SDR as an 8-bit
+    /// JPEG base, the HDR as a per-channel ISO 21496-1 gain map against it.
+    GainMapJpeg,
 }
 
 /// Whether the code can write a row yet.
@@ -417,10 +420,7 @@ pub const ROWS: &[Row] = &[
         Transfer::Native,
         Gamut::DisplayP3,
         Container::Jpeg,
-        Status::NotYet {
-            arriving_with: "the gain-map destination, an SDR base with a per-channel \
-                            ISO 21496-1 gain map (`nf-destinations/gain-map-destination`)",
-        },
+        Status::Ready(Encoding::GainMapJpeg),
     ),
     row(
         Range::Sdr,
@@ -1042,25 +1042,37 @@ mod tests {
     }
 
     #[test]
+    fn hdr_alone_resolves_to_the_gain_map_jpeg() {
+        // Transfer's default (`native`) is on the gain map's row, so it wins over the
+        // HDR TIFFs and AVIFs, which need a transfer stated.
+        let r = resolve(&axes(Some(Range::Hdr), None, None, None)).unwrap();
+        assert_eq!(
+            (r.transfer, r.gamut, r.container, r.encoding),
+            (
+                Transfer::Native,
+                Gamut::DisplayP3,
+                Container::Jpeg,
+                Encoding::GainMapJpeg
+            )
+        );
+    }
+
+    #[test]
     fn a_row_not_ready_is_refused_after_resolution_with_what_is_ready() {
-        // `--range hdr` alone names the gain map (transfer's default is on its row):
-        // derivation does not depend on which rows this build can write.
-        let Err(Fault::NotYet {
-            row, adding: ready, ..
-        }) = resolve(&axes(Some(Range::Hdr), None, None, None))
+        // `--container jpeg` alone names the SDR JPEG (range's default is on its row):
+        // derivation does not depend on which rows this build can write, so it is not
+        // quietly promoted to the gain map.
+        let Err(Fault::NotYet { row, adding, .. }) =
+            resolve(&axes(None, None, None, Some(Container::Jpeg)))
         else {
             panic!("expected NotYet");
         };
-        assert_eq!(row.container, Container::Jpeg);
-        assert_eq!(
-            ready.len(),
-            5,
-            "every ready HDR destination is offered: {ready:?}"
-        );
-        let offered: Vec<_> = ready.iter().map(|a| a.stated_axes()).collect();
-        // Each as the fewest flags to add: `--transfer pq` alone, not four axes.
+        assert_eq!((row.range, row.container), (Range::Sdr, Container::Jpeg));
+        // The one ready JPEG, as the fewest flags to add: `--range hdr`.
+        let offered: Vec<_> = adding.iter().map(|a| a.stated_axes()).collect();
+        assert_eq!(offered.len(), 1, "{offered:?}");
         assert!(
-            offered.iter().any(|a| a.len() == 1 && a[0].value == "pq"),
+            offered[0].len() == 1 && offered[0][0].value == "hdr",
             "{offered:?}"
         );
     }
@@ -1189,8 +1201,13 @@ mod tests {
         for offer in writing(Container::Avif, &adobe) {
             assert_eq!(offer.gamut, Some(Gamut::Bt2020), "{offer:?}");
         }
-        // No ready row writes a JPEG yet, so nothing is offered.
-        assert!(writing(Container::Jpeg, &pq_avif).is_empty());
+        // The one ready JPEG is the gain map: the offer restates the transfer it
+        // needs (`native`), since the stated `pq` cannot reach it.
+        let offers = writing(Container::Jpeg, &pq_avif);
+        assert!(
+            !offers.is_empty() && offers.iter().all(|o| o.transfer == Some(Transfer::Native)),
+            "{offers:?}"
+        );
     }
 
     #[test]

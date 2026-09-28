@@ -909,6 +909,19 @@ enough to blow highlights when borrowed.
   and names the echo explicitly, as do the task file, `TASKS.md`, and
   `insert_baseline_iso_segment`'s rustdoc.
 
+- 2026-09-27: **Cross-reference from `nf-destinations/gain-map-destination`.** The new
+  chain's gain-map JPEG is written by a container nc owns, `io::iso_gain_map` — no
+  libultrahdr, ISO metadata only — and it already types the gain map `050000` and keeps
+  `APP0 JFIF` first in both images, so items 1 and 3 of this task never arise on that
+  path. Apple ImageIO reads it as `PRESENT` with the `050000` code (measured on the
+  CLI's own output, 2026-09-27), which is also the first evidence that ImageIO accepts
+  that code. This task still owns the **legacy** container (`io::ultra_hdr`), whose MPF
+  libultrahdr writes, and the Exif question for both. `io::iso_gain_map`'s MPF layout
+  (big-endian, three tags, no attribute IFD) is a template for the MPF half of
+  `ultrahdr-dependency-externalization`. The dead RGB encoder in
+  `pipeline::gain_map::iso` (`encode_iso_gain_map`) was removed with it; the ISO field
+  set is now built from plain values (`iso::fields`), which `project` feeds.
+
 ## gain-map-dialect-activation
 
 **Status:** not started

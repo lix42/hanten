@@ -347,7 +347,6 @@ impl GradedImage {
     /// A second copy for the other display branch — a full-frame allocation, made once
     /// by `chain::render_pair`. Not `Clone`, so no caller outside `pipeline` can add a
     /// buffer the memory model does not count.
-    #[cfg_attr(not(test), allow(dead_code))] // the gain-map destination (`nf-destinations/gain-map-destination`)
     pub(in crate::pipeline) fn split(&self) -> GradedImage {
         GradedImage(self.0.copy())
     }

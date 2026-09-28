@@ -129,6 +129,15 @@ impl AcesCgImage {
         self.ir.as_deref()
     }
 
+    /// The same image without its IR plane, for a render that never reads it and would
+    /// otherwise copy it — the gain map, whose `chain::render_pair` splits the graded
+    /// image in two. Dropping data cannot mint an unmapped image, so this keeps the
+    /// constructor's invariant.
+    pub(crate) fn without_ir(mut self) -> Self {
+        self.ir = None;
+        self
+    }
+
     /// Unwrap into the plain working-space image — the **read** direction of the
     /// boundary, for whichever chain consumes this image. Today that is the
     /// named-output split (`pipeline::render_split`), where the `film-master`

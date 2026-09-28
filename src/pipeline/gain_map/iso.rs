@@ -1,15 +1,17 @@
 //! ISO 21496-1 gain-map metadata: the projection, and the bytes it serializes to.
 //!
-//! This module owns the projection from the one canonical [`GainMapMetadata`]
-//! model into the ISO dialect's numeric field set ([`project`]), the Annex C.2.2
-//! byte serializers built on that field set ([`serialize_version`],
-//! [`serialize_metadata`]), and the C.4.6 APP2 framing those payloads travel in
-//! ([`segment_content`], [`app2_segment`]). It does **not** place the segments in
-//! a file: `io::ultra_hdr::encode_with` owns placement, because where a segment
-//! goes depends on the container and on libultrahdr's packaging behavior. Also
-//! here is the multichannel RGB gain-map encoding the ISO dialect can carry (the
-//! legacy Ultra HDR v1 XMP dialect cannot, which is the only reason
-//! `encode_legacy_gain_map` collapses to luminance).
+//! This module owns the ISO dialect's numeric field set, built from what a map
+//! states ([`fields`], from a [`Stated`]) or projected from the current chain's
+//! canonical [`GainMapMetadata`] ([`project`]); the Annex C.2.2 byte serializers
+//! built on that field set ([`serialize_version`], [`serialize_metadata`]); and the
+//! C.4.6 APP2 framing those payloads travel in ([`segment_content`],
+//! [`app2_segment`]). It does **not** place the segments in a file: placement
+//! depends on the container, so `io::ultra_hdr::encode_with` owns it for the
+//! current chain's libultrahdr package and `io::iso_gain_map` for the new chain's
+//! ISO-only one.
+//!
+//! **It serves both chains**, and outlives its parent: `pipeline::gain_map` retires
+//! with the current chain, and this module then moves rather than goes.
 //!
 //! **Field layout and semantics are pinned against the licensed
 //! ISO 21496-1:2025 text** (Annex C.2, normative), not inferred from an
@@ -46,7 +48,7 @@
 //! spike note's "Determinism and acceptance" scope — never as a cross-platform
 //! contract.
 
-use super::{GainMapMetadata, GainMapRender, bilinear_sample, normalize_log_gain};
+use super::GainMapMetadata;
 use crate::types::{NcError, Result};
 
 /// The SDR base sits at reference white by construction, so its headroom is
@@ -165,28 +167,18 @@ pub(crate) struct IsoGainMapFields {
     pub alternate_hdr_headroom_log2: UnsignedRational,
 }
 
-/// A multichannel RGB gain map plus the ISO fields that describe it.
-///
-/// Unlike [`super::EncodedGainMap`], the samples stay three-channel: the ISO
-/// dialect can signal a per-channel map, so collapsing to luminance here would
-/// discard chromatic highlight detail the canonical model already carries.
-// The container writer exists and deliberately does *not* take this: a
-// dual-dialect file has to share the achromatic luminance map, because legacy XMP
-// cannot signal a multichannel one. The RGB form is retained because 4.3 states
-// the gain map's component count *should* match the baseline's for maximum
-// accuracy — so this is the standard-preferred form for a future ISO-only output,
-// and the grayscale map is the legacy compromise. Remove the allowance with that
-// output, not separately.
-#[allow(dead_code)]
-pub(crate) struct IsoEncodedGainMap {
-    pub width: u32,
-    pub height: u32,
-    /// Interleaved RGB, one byte per channel.
-    pub samples: Vec<u8>,
-    /// The canonical metadata as encoded, with extrema reflecting the
-    /// normalization actually applied.
-    pub metadata: GainMapMetadata,
-    pub fields: IsoGainMapFields,
+/// The values an ISO gain map states, in the units its fields store them: the gain
+/// extrema as `log2`, gamma and the offsets linear. The headroom is the one linear
+/// value converted here, because every caller holds it as a display ratio.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Stated {
+    pub gain_min_log2: [f32; 3],
+    pub gain_max_log2: [f32; 3],
+    pub gamma: [f32; 3],
+    pub base_offset: [f32; 3],
+    pub alternate_offset: [f32; 3],
+    /// The alternate rendition's peak over the base's reference white, linear.
+    pub alternate_headroom_linear: f32,
 }
 
 /// Project the canonical metadata into the ISO dialect's field set.
@@ -196,6 +188,28 @@ pub(crate) struct IsoEncodedGainMap {
 /// `docs/spike/hdr-output-spike.md` warns about under "Do not confuse linear API
 /// values with serialized logarithmic values".
 pub(crate) fn project(metadata: &GainMapMetadata) -> Result<IsoGainMapFields> {
+    let mut gain_min_log2 = [0.0_f32; 3];
+    let mut gain_max_log2 = [0.0_f32; 3];
+    for channel in 0..3 {
+        gain_min_log2[channel] = log2_positive(metadata.gain_min[channel], "gain minimum")?;
+        gain_max_log2[channel] = log2_positive(metadata.gain_max[channel], "gain maximum")?;
+    }
+    fields(&Stated {
+        gain_min_log2,
+        gain_max_log2,
+        gamma: metadata.gain_gamma,
+        base_offset: metadata.offset_sdr,
+        alternate_offset: metadata.offset_hdr,
+        alternate_headroom_linear: metadata.display_headroom_linear,
+    })
+}
+
+/// The ISO field set for what a gain map states, validated.
+///
+/// Always three metadata channels over the baseline's primaries: both callers
+/// derive their map in the base rendition's own gamut, and C.2.3 lets the metadata
+/// channel count differ from the map's.
+pub(crate) fn fields(stated: &Stated) -> Result<IsoGainMapFields> {
     let mut gain_map_min_log2 = [Rational {
         numerator: 0,
         denominator: 1,
@@ -209,23 +223,18 @@ pub(crate) fn project(metadata: &GainMapMetadata) -> Result<IsoGainMapFields> {
     }; 3];
 
     for channel in 0..3 {
-        gain_map_min_log2[channel] =
-            Rational::from_f32(log2_positive(metadata.gain_min[channel], "gain minimum")?)?;
-        gain_map_max_log2[channel] =
-            Rational::from_f32(log2_positive(metadata.gain_max[channel], "gain maximum")?)?;
-        gain_map_gamma[channel] = UnsignedRational::from_f32(metadata.gain_gamma[channel])?;
-        base_offset[channel] = Rational::from_f32(metadata.offset_sdr[channel])?;
-        alternate_offset[channel] = Rational::from_f32(metadata.offset_hdr[channel])?;
+        gain_map_min_log2[channel] = Rational::from_f32(stated.gain_min_log2[channel])?;
+        gain_map_max_log2[channel] = Rational::from_f32(stated.gain_max_log2[channel])?;
+        gain_map_gamma[channel] = UnsignedRational::from_f32(stated.gamma[channel])?;
+        base_offset[channel] = Rational::from_f32(stated.base_offset[channel])?;
+        alternate_offset[channel] = Rational::from_f32(stated.alternate_offset[channel])?;
     }
 
     let fields = IsoGainMapFields {
         // 5.2.8: zero for this edition; C.2.3: writer >= minimum.
         minimum_version: 0,
         writer_version: 0,
-        // nc always writes three metadata channels.
         is_multichannel: true,
-        // The map is derived in the base rendition's common linear Display P3,
-        // so the application space takes the baseline's primaries.
         use_base_colour_space: true,
         gain_map_min_log2,
         gain_map_max_log2,
@@ -237,7 +246,7 @@ pub(crate) fn project(metadata: &GainMapMetadata) -> Result<IsoGainMapFields> {
             "base headroom",
         )?)?,
         alternate_hdr_headroom_log2: UnsignedRational::from_f32(log2_positive(
-            metadata.display_headroom_linear,
+            stated.alternate_headroom_linear,
             "alternate headroom",
         )?)?,
     };
@@ -305,96 +314,6 @@ fn validate_fields(fields: &IsoGainMapFields) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Encode the canonical per-channel gain ratios into a half-resolution RGB map.
-///
-/// Consumes the canonical ratios directly instead of re-deriving them from the
-/// two renditions, so the two dialects cannot disagree about the gain field.
-// Unused for the same reason as [`IsoEncodedGainMap`]: `io::ultra_hdr::encode_with`
-// shares the legacy achromatic map, and this RGB map waits on an ISO-only output.
-#[allow(dead_code)]
-pub(crate) fn encode_iso_gain_map(render: &GainMapRender) -> Result<IsoEncodedGainMap> {
-    let width = render.gain.width();
-    let height = render.gain.height();
-    let out_width = width.div_ceil(2);
-    let out_height = height.div_ceil(2);
-    let policy = render.metadata;
-
-    // Per-channel normalization: the ISO dialect signals per-channel extrema, so
-    // each channel uses its own log2 window rather than a shared one.
-    let mut log_min = [0.0_f32; 3];
-    let mut log_span = [0.0_f32; 3];
-    for channel in 0..3 {
-        let minimum = log2_positive(policy.gain_min[channel], "gain minimum")?;
-        let maximum = log2_positive(policy.gain_max[channel], "gain maximum")?;
-        log_min[channel] = minimum;
-        // A spatially constant channel still needs a finite denominator.
-        log_span[channel] = (maximum - minimum).max(1.0 / 255.0);
-    }
-
-    let ratios = render.gain.image.rgb.as_chunks::<3>().0;
-    let mut normalized = vec![0.0_f32; ratios.len() * 3];
-    for (pixel, gains) in ratios.iter().enumerate() {
-        for channel in 0..3 {
-            let gain = gains[channel];
-            if !gain.is_finite() || gain <= 0.0 {
-                return Err(NcError::Other(format!(
-                    "ISO gain-map ratio is non-finite or non-positive at pixel {pixel}, channel \
-                     {channel}"
-                )));
-            }
-            normalized[pixel * 3 + channel] = normalize_log_gain(
-                gain,
-                log_min[channel],
-                log_span[channel],
-                policy.gain_gamma[channel],
-            );
-        }
-    }
-
-    // Deinterleave once: `bilinear_sample` reads a single plane, and rebuilding
-    // one per output pixel would make downsampling quadratic in frame size.
-    let planes: [Vec<f32>; 3] = std::array::from_fn(|channel| {
-        normalized
-            .iter()
-            .skip(channel)
-            .step_by(3)
-            .copied()
-            .collect()
-    });
-    let mut samples = Vec::with_capacity((out_width * out_height) as usize * 3);
-    for y in 0..out_height {
-        for x in 0..out_width {
-            for plane in &planes {
-                // Reuses the legacy path's center-aligned bilinear taps, so the
-                // two dialects downsample the same way.
-                let value = bilinear_sample(plane, width, height, out_width, out_height, x, y);
-                samples.push((value * 255.0).round() as u8);
-            }
-        }
-    }
-
-    let mut gain_min = [0.0_f32; 3];
-    let mut gain_max = [0.0_f32; 3];
-    for channel in 0..3 {
-        gain_min[channel] = 2.0_f32.powf(log_min[channel]);
-        gain_max[channel] = 2.0_f32.powf(log_min[channel] + log_span[channel]);
-    }
-    let metadata = GainMapMetadata {
-        gain_min,
-        gain_max,
-        ..policy
-    };
-    let fields = project(&metadata)?;
-
-    Ok(IsoEncodedGainMap {
-        width: out_width,
-        height: out_height,
-        samples,
-        metadata,
-        fields,
-    })
 }
 
 /// The segment label of C.3 and the C.4.6 layout table. The published first
@@ -690,66 +609,6 @@ mod tests {
         assert!(error.to_string().contains("finite and positive"));
         assert!(log2_positive(-1.0, "gain maximum").is_err());
         assert!(log2_positive(f32::NAN, "gain maximum").is_err());
-    }
-
-    #[test]
-    fn iso_map_keeps_three_channels_where_the_legacy_map_keeps_one() {
-        let shared = shared_from_film_rgb(&[0.0, 0.0, 0.0, 0.18, 0.3, 0.5, 2.0, 0.6, 0.1]);
-        let output = render(&shared, config()).unwrap();
-        let iso = encode_iso_gain_map(&output).unwrap();
-        let legacy = encode_legacy_gain_map(&output).unwrap();
-
-        assert_eq!((iso.width, iso.height), (legacy.width, legacy.height));
-        assert_eq!(iso.samples.len(), legacy.samples.len() * 3);
-    }
-
-    #[test]
-    fn iso_map_preserves_chromatic_gain_differences_through_reconstruction() {
-        // A frame whose channels need different boosts. Note what carries that
-        // difference: because each channel is normalized against *its own*
-        // log2 window, equal sample bytes can still mean different gains — the
-        // chroma lives in the per-channel extrema. So asserting on raw bytes
-        // would be both fragile and wrong; reconstruct instead, the way a
-        // decoder does.
-        let shared =
-            shared_from_film_rgb(&[0.05, 0.4, 2.5, 2.5, 0.4, 0.05, 0.1, 1.0, 1.5, 1.5, 1.0, 0.1]);
-        let output = render(&shared, config()).unwrap();
-        let iso = encode_iso_gain_map(&output).unwrap();
-
-        // Per-channel windows, not one shared window.
-        assert_ne!(iso.metadata.gain_max[0], iso.metadata.gain_max[2]);
-
-        let reconstruct = |sample: u8, channel: usize| {
-            let normalized = f64::from(sample) / 255.0;
-            let minimum = f64::from(iso.metadata.gain_min[channel]).log2();
-            let maximum = f64::from(iso.metadata.gain_max[channel]).log2();
-            // gamma is 1 for this policy, so the inverse is the plain window.
-            2.0_f64.powf(minimum + normalized * (maximum - minimum))
-        };
-        let differs = iso
-            .samples
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .any(|pixel| (reconstruct(pixel[0], 0) - reconstruct(pixel[2], 2)).abs() > 1e-3);
-        assert!(
-            differs,
-            "expected per-channel gains to survive encoding and reconstruction"
-        );
-    }
-
-    #[test]
-    fn iso_encoding_is_deterministic_and_reports_its_own_extrema() {
-        let shared = shared_from_film_rgb(&[0.0, 0.0, 0.0, 0.18, 0.3, 0.5, 2.0, 0.6, 0.1]);
-        let first = encode_iso_gain_map(&render(&shared, config()).unwrap()).unwrap();
-        let second = encode_iso_gain_map(&render(&shared, config()).unwrap()).unwrap();
-        assert_eq!(first.samples, second.samples);
-        assert_eq!(first.fields, second.fields);
-
-        for channel in 0..3 {
-            assert!(first.metadata.gain_min[channel] > 0.0);
-            assert!(first.metadata.gain_max[channel] >= first.metadata.gain_min[channel]);
-        }
     }
 
     #[test]

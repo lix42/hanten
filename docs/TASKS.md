@@ -358,6 +358,7 @@ graph TD
     nf-destinations/memory-profiles
     nf-destinations/default-destination
     nf-destinations/gain-map-destination
+    nf-destinations/easy-destination-rows
   end
   subgraph nf-calibration
     nf-calibration/anchor-comparison
@@ -622,6 +623,8 @@ graph TD
   nf-destinations/preset-set --> nf-destinations/default-destination
   nf-destinations/direct-preset --> nf-destinations/default-destination
   nf-destinations/preset-set --> nf-destinations/gain-map-destination
+  nf-destinations/preset-set --> nf-destinations/easy-destination-rows
+  nf-destinations/gain-map-destination --> nf-destinations/easy-destination-rows
   nf-destinations/preset-set --> nf-calibration/scale-gamma-loop
   nf-verification/reference-snapshot --> nf-calibration/scale-gamma-loop
   nf-calibration/scale-gamma-loop --> nf-calibration/offset-question
@@ -1059,6 +1062,9 @@ the design in `docs/design-update.md`:
   — supersedes `output/display-p3-default`; one bump rather than two
 - `nf-destinations/gain-map-destination` (new flow): `nf-destinations/preset-set`
   — the per-channel ISO 21496-1 gain-map JPEG, split out of the destination set
+- `nf-destinations/easy-destination-rows` (new flow; no downstream blockers): `nf-destinations/preset-set`, `nf-destinations/gain-map-destination`
+  — linear float HDR in Adobe RGB / Display P3, sRGB as a gamut, then sRGB's float
+  and gain-map rows
 - `nf-calibration/scale-gamma-loop` (new flow): `nf-destinations/preset-set`, `nf-verification/reference-snapshot`, `nf-calibration/scale-ladder`, `nf-destinations/direct-preset`, `nf-display-stages/parametric-operator`
   — the two knobs the decode owns, tuned against a held-fixed rendering.
   Supersedes `algo/sigmoid-parameter-calibration` and
@@ -1798,9 +1804,17 @@ the design in `docs/design-update.md`:
 - [ ] [Which destination the default
   resolves](tasks/nf-destinations/default-destination.md) — supersedes
   `output/display-p3-default`; one bump rather than two
-- [ ] [The gain-map
-  destination](tasks/nf-destinations/gain-map-destination.md) — the new chain's HDR
-  JPEG: a per-channel ISO 21496-1 gain map, which needs a multichannel container
+- [x] [The gain-map
+  destination](tasks/nf-destinations/gain-map-destination.md) — **done 2026-09-27.**
+  `--range hdr` alone writes the new chain's HDR JPEG: a Display P3 SDR base and a
+  half-resolution, per-channel gain map, ISO 21496-1 metadata only, in an MPF container
+  nc writes (`io::iso_gain_map`, no libultrahdr; gain map typed `050000`). A flat map is
+  `new_flow.gain_map.flat`, never a warning. Apple ImageIO reads it `PRESENT` with three
+  distinct channel entries; `NewFlowGainMapJpeg` is provisional
+- [ ] [Easy destination
+  rows](tasks/nf-destinations/easy-destination-rows.md) — the rows a 2026-09-27 survey
+  classed as easy: linear float HDR TIFF in Adobe RGB and Display P3, sRGB as a gamut,
+  then sRGB's float and gain-map rows. Open: what `--transfer linear` alone resolves to
 
 ### nf-calibration — [progress](progress/nf-calibration.md)
 > The numbers rather than the machinery: an early `scale` ladder, the `scale`/`gamma`

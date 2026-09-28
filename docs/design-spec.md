@@ -1095,9 +1095,11 @@ top-level **document version** rather than per-object ones:
   value is never overridden by another axis. The report records every resolved axis
   (`new_flow.destination`), which replays exactly. Written today: SDR `native` TIFF in
   Display P3 (the default) or Adobe RGB; HDR BT.2020 as a `linear` 32-bit float TIFF, or
-  `pq`/`hlg` as a 16-bit TIFF or a 10-bit AVIF. The HDR JPEG with a gain map
-  (`nf-destinations/gain-map-destination`) and the SDR JPEG are planned rows, refused
-  as not yet. The current chain's `output.preset` (and the retired selectors) are
+  `pq`/`hlg` as a 16-bit TIFF or a 10-bit AVIF; and the HDR JPEG with a gain map
+  (`nf-destinations/gain-map-destination`), which `--range hdr` alone resolves to — a
+  Display P3 SDR base and a half-resolution, per-channel gain map to the HDR rendition,
+  described by ISO 21496-1 metadata only in an MPF container nc writes. The SDR JPEG
+  is a planned row, refused as not yet. The current chain's `output.preset` (and the retired selectors) are
   refused by name under this document.
 - **The version is the chain declaration.** `recipe_version` is required and is
   exactly `2`. Under `--new-flow` a recipe without it is refused; without the flag,
