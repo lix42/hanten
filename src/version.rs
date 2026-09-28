@@ -346,7 +346,7 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
     // unchanged.
     PipelineFingerprint {
         pipeline_version: 8,
-        render: "3c6dd4aef40714e3",
+        render: "d44927104451d581",
         base: "01c5acccc36a3388",
         recipe: "fe3d6808a270d45f",
         behavior: PIPELINE_BEHAVIOR,
@@ -365,7 +365,7 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   output pixel's `f32` bit pattern, and the anchor it resolved. This is the
 ///   *arithmetic* of the decode and nothing after it — no rendering stage is covered;
 ///   whether the hash should reach further is `nf-verification/fingerprints`'. (Rows
-///   v1–v7 hashed the removed chain's reconstruction over the same pixels, in a text
+///   v1–v7 hashed the removed chain's reconstruction over the same pixels bar one, in a text
 ///   shape that also echoed its white balance, reference density and regional-balance
 ///   range. They are history: the gate checks only the current version's row.)
 /// - `base` — [`stable_hash`] over `film_base::estimate`'s result (the resolved
@@ -426,9 +426,8 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   numeric surface by one value. **Their portability is observed, not proved**: the
 ///   decode makes one `log10` and one `powf` per sample, which a conforming libm may
 ///   round either way (`pipeline::chain_golden` windows them for that reason). The v8
-///   capture was taken on aarch64-apple-darwin; CI's x86_64 Linux run is what confirms
-///   it is portable (the removed chain's same two calls agreed across both targets for
-///   rows v1–v7, which is why agreement is expected, not why it is known).
+///   vector agrees on macOS and on glibc 2.39 and 2.41 (x86_64 and aarch64); glibc
+///   2.39's `log10f` is not correctly rounded, so a libm upgrade can move a sample.
 ///   If a runner ever reds on the golden, the failure is the vector's — pick sample
 ///   values that do agree, per CLAUDE.md's rule — not the gate's, and not a real
 ///   behavior change. **And that is not a remote possibility:**
@@ -645,8 +644,10 @@ mod drift_gate {
     /// dense highlight, out-of-range (above the base / negative / zero, which reaches
     /// the scan floor), and exactly the base.
     ///
-    /// **Frozen.** Every recorded row hashed these same pixels (v1–v7 through the
-    /// removed chain's reconstruction), and [`golden_default_decode_is_bit_identical`]
+    /// **Frozen.** Every recorded row hashed these pixels (v1–v7 through the removed
+    /// chain's reconstruction, with `1.5` for the out-of-range red: glibc 2.39 decodes
+    /// that one 7 ulps off macOS under the fixed decode), and
+    /// [`golden_default_decode_is_bit_identical`]
     /// pins the decode over them bit for bit on every CI target — the observed
     /// agreement the row rests on (see [`PipelineFingerprint`]).
     fn pixels() -> LinearImage {
@@ -657,7 +658,7 @@ mod drift_gate {
                 0.85, 0.5, 0.38, // near-base shadow
                 0.3, 0.18, 0.12, // midtone
                 0.02, 0.012, 0.009, // dense highlight
-                1.5, -0.2, 0.0, // out-of-range finite
+                1.8, -0.2, 0.0, // out-of-range finite
                 0.9, 0.55, 0.42, // exactly the base
             ],
             Some(vec![0.1, 0.2, 0.3, 0.4, 0.5]),
@@ -757,11 +758,10 @@ mod drift_gate {
         // mid-grey pinned 0.62 above the film base, gain `[1, 0.84, 0.73]`, no offset.
         //
         // Captured from this build — so it pins "the default has not drifted since it
-        // was set" — on aarch64-apple-darwin. CI's x86_64 Linux run is what confirms the
-        // capture is portable, and that agreement is what the `render` fingerprint rests
-        // on: the decode makes one `log10` and one `powf` per sample, which a conforming
-        // libm may round either way (`pipeline::chain_golden` windows them for that
-        // reason).
+        // was set" — and checked to agree on macOS and glibc 2.39 / 2.41. That agreement
+        // is what the `render` fingerprint rests on: the decode makes one `log10` and one
+        // `powf` per sample, which a conforming libm may round either way
+        // (`pipeline::chain_golden` windows them for that reason).
         // If a runner ever disagrees, the vector is at fault — pick samples that agree,
         // per CLAUDE.md — not the decode.
         let (rgb, anchor) = decoded(&DecodeParams::default());
@@ -773,7 +773,7 @@ mod drift_gate {
     /// [`golden_default_decode_is_bit_identical`]'s capture.
     const DEFAULT_DECODE_BITS: [u32; 15] = [
         0x3c7a401a, 0x3c826425, 0x3c80c234, 0x3dcbe6ce, 0x3d98c6f9, 0x3d92638a, 0x41508878,
-        0x408f42e1, 0x40099236, 0x3bb40cf6, 0x4ac90670, 0x48a4c66f, 0x3c61c89a, 0x3c61c89a,
+        0x408f42e1, 0x40099236, 0x3b81adb7, 0x4ac90670, 0x48a4c66f, 0x3c61c89a, 0x3c61c89a,
         0x3c61c89a,
     ];
     /// The anchor `0.62 + 0.745 / 1.8`.
