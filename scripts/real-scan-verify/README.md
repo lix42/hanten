@@ -12,7 +12,8 @@ Results write-up: [`docs/reports/real-scan-verification.md`](../../docs/reports/
 
 - `harness.sh` — the staged verification runner.
 - `recipes/` — frozen per-roll calibration produced by the `freeze` stage:
-  `<roll>.json` (16-bit), `<roll>.hdr.json` (float), `<roll>.provenance.json`
+  `<roll>.json` (16-bit SDR), `<roll>.hdr.json` (float linear HDR), each a
+  `"recipe_version": 2` recipe stating every destination axis, and `<roll>.provenance.json`
   (source frame/region + estimator warnings). Committed; reused by
   `display-output-acceptance`.
 
@@ -71,8 +72,8 @@ PYTHONPATH=scripts/analysis python3 -m unittest discover -s scripts/analysis -p 
 
 `nctool.test_harness` creates a temporary one-roll asset tree from the committed
 TIFF fixtures and drives the real `nc` binary through `freeze` and `convert`. It
-checks the generated recipe shape, explicit `display-p3`/`hdr-linear-tiff` selections, TIFF magic,
-sidecar `{meta, params}` envelopes, normalized report paths, and the success message. Fake binaries
+checks the generated recipe shape, the explicit SDR and linear HDR destinations, TIFF
+magic, normalized report paths, and the success message. Fake binaries
 also cover wrong suffixes, TIFF-named non-TIFF content, directory-shaped final
 targets, and invalid strict-probe failures; the harness must reject those runs
 before reporting success.
@@ -95,7 +96,7 @@ acceptance.
   missing, the harness fails loudly (exit 2) with the generate command to run.
 - Converted images are large and **not committed**; regenerate with `convert`.
 - `convert` renders into a fresh hidden staging directory under each roll output,
-  verifies every expected TIFF container and `{meta, params}` sidecar envelope, and rejects extras or
+  verifies every expected TIFF container, and rejects extras or
   directory-shaped final targets before publishing the complete set. It then
   revalidates the published files and rewrites the saved roll reports to their
   durable final paths. A failed run can leave the hidden staging directory as

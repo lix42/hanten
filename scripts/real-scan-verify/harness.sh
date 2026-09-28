@@ -96,18 +96,6 @@ require_json_object() { # path description
   fi
 }
 
-require_sidecar() { # path description
-  require_file "$1" "$2"
-  if ! jq -e '
-      type == "object" and
-      (.meta | type == "object") and
-      (.params | type == "object")
-    ' "$1" >/dev/null; then
-    echo "error: $2 is not a valid sidecar envelope with object-valued meta and params: $1" >&2
-    return 1
-  fi
-}
-
 reject_directory_target() { # path description
   # `-d` follows symlinks, so this rejects both directories and directory
   # symlinks before `mv` can silently publish the source *inside* one.
@@ -178,14 +166,13 @@ stage_freeze() {
     ureg=$(center_region "$U")
     jmin=$($NC estimate --base-region "$ureg" "$U" 2>"$ART/$roll.dmin.warn")
     dmin=$(echo "$jmin" | jq -c '.film_base')
-    # `output.preset` is stated, not defaulted: the product default is `gain-map-hdr`
-    # (a JPEG), and this harness converts to TIFFs throughout — a 16-bit SDR one
-    # (`display-p3`) and a float one (`hdr-linear-tiff`, the float TIFF that applies
-    # the print controls). Both were `legacy` until that preset retired.
+    # The destination is stated, every axis, not defaulted: this harness converts to
+    # TIFFs throughout — the 16-bit SDR Display P3 one and the float linear HDR one —
+    # and a moved default must not change what it verifies.
     jq -n --argjson b "$dmin" \
-      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]}},reconstruction:{curve:{type:"exponential"}},output:{preset:"display-p3"}}' > "$REC/$roll.json"
+      '{recipe_version:2,calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]}},output:{display:{range:"sdr",transfer:"native",gamut:"display-p3",container:"tiff"}}}' > "$REC/$roll.json"
     jq -n --argjson b "$dmin" \
-      '{calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]}},reconstruction:{curve:{type:"exponential"}},output:{preset:"hdr-linear-tiff"}}' > "$REC/$roll.hdr.json"
+      '{recipe_version:2,calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]}},output:{display:{range:"hdr",transfer:"linear",gamut:"bt2020",container:"tiff"}}}' > "$REC/$roll.hdr.json"
     jq -n --arg roll "$roll" --arg uf "$uf" --arg ureg "$ureg" \
       --argjson b "$dmin" \
       --arg mw "$(tr '\n' ' ' <"$ART/$roll.dmin.warn")" '{
@@ -219,11 +206,9 @@ stage_convert() {
     for fr in $reals; do
       name=$(basename "$fr"); stem=${name%.*}; frame_count=$((frame_count + 1))
       require_tiff "$u16tmp/${stem}_positive.tiff" "16-bit TIFF for $roll/$fr"
-      require_sidecar "$u16tmp/${stem}_positive.tiff.json" "16-bit sidecar for $roll/$fr"
       require_tiff "$htmp/${stem}_positive.tiff" "float TIFF for $roll/$fr"
-      require_sidecar "$htmp/${stem}_positive.tiff.json" "float sidecar for $roll/$fr"
     done
-    expected_entries=$((frame_count * 2))
+    expected_entries=$frame_count
     require_entry_count "$u16tmp" "$expected_entries" "$roll 16-bit conversion"
     require_entry_count "$htmp" "$expected_entries" "$roll float conversion"
 
@@ -242,17 +227,13 @@ stage_convert() {
     for fr in $reals; do
       name=$(basename "$fr"); stem=${name%.*}
       reject_directory_target "$od/${stem}_positive.tiff" "16-bit TIFF for $roll/$fr"
-      reject_directory_target "$od/${stem}_positive.tiff.json" "16-bit sidecar for $roll/$fr"
       reject_directory_target "$od/${stem}_positive_hdr.tiff" "float TIFF for $roll/$fr"
-      reject_directory_target "$od/${stem}_positive_hdr.tiff.json" "float sidecar for $roll/$fr"
     done
 
     for fr in $reals; do
       name=$(basename "$fr"); stem=${name%.*}
       mv "$u16tmp/${stem}_positive.tiff" "$od/${stem}_positive.tiff"
-      mv "$u16tmp/${stem}_positive.tiff.json" "$od/${stem}_positive.tiff.json"
       mv "$htmp/${stem}_positive.tiff" "$od/${stem}_positive_hdr.tiff"
-      mv "$htmp/${stem}_positive.tiff.json" "$od/${stem}_positive_hdr.tiff.json"
     done
 
     # Reports are durable artifacts too: replace their now-deleted staging paths
@@ -262,9 +243,7 @@ stage_convert() {
     for fr in $reals; do
       name=$(basename "$fr"); stem=${name%.*}
       require_tiff "$od/${stem}_positive.tiff" "published 16-bit TIFF for $roll/$fr"
-      require_sidecar "$od/${stem}_positive.tiff.json" "published 16-bit sidecar for $roll/$fr"
       require_tiff "$od/${stem}_positive_hdr.tiff" "published float TIFF for $roll/$fr"
-      require_sidecar "$od/${stem}_positive_hdr.tiff.json" "published float sidecar for $roll/$fr"
       require_report_output "$ART/$roll.roll16.json" "$od/${stem}_positive.tiff" \
         "published 16-bit TIFF for $roll/$fr"
       require_report_output "$ART/$roll.rollhdr.json" "$od/${stem}_positive_hdr.tiff" \

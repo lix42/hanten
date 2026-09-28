@@ -103,19 +103,23 @@ class HarnessTest(unittest.TestCase):
         )
         self.assertEqual(scalar_shape(generated), scalar_shape(committed))
         self.assertEqual(scalar_shape(generated_hdr), scalar_shape(committed_hdr))
-        self.assertEqual(generated["output"], {"preset": "display-p3"})
-        self.assertEqual(generated_hdr["output"], {"preset": "hdr-linear-tiff"})
+        self.assertEqual(generated["recipe_version"], 2)
+        self.assertEqual(
+            generated["output"],
+            {"display": {"range": "sdr", "transfer": "native", "gamut": "display-p3",
+                         "container": "tiff"}},
+        )
+        self.assertEqual(
+            generated_hdr["output"],
+            {"display": {"range": "hdr", "transfer": "linear", "gamut": "bt2020",
+                         "container": "tiff"}},
+        )
 
         convert = self.run_harness("convert", nc)
         self.assertEqual(convert.returncode, 0, convert.stdout + convert.stderr)
         self.assertIn("converted FixtureRoll: 1 frames x2 modes", convert.stdout)
         roll_out = self.out / "FixtureRoll"
-        expected = {
-            "real_positive.tiff",
-            "real_positive.tiff.json",
-            "real_positive_hdr.tiff",
-            "real_positive_hdr.tiff.json",
-        }
+        expected = {"real_positive.tiff", "real_positive_hdr.tiff"}
         self.assertEqual({p.name for p in roll_out.iterdir()}, expected)
         for report_name, expected_output in (
             ("FixtureRoll.roll16.json", roll_out / "real_positive.tiff"),
@@ -148,11 +152,9 @@ mkdir -p "$out_dir"
 case "$params" in
   *.hdr.json)
     cp "$FAKE_TIFF_SOURCE" "$out_dir/real_positive.jpg"
-    printf '{"meta":{},"params":{}}\n' > "$out_dir/real_positive.jpg.json"
     ;;
   *)
     cp "$FAKE_TIFF_SOURCE" "$out_dir/real_positive.tiff"
-    printf '{"meta":{},"params":{}}\n' > "$out_dir/real_positive.tiff.json"
     ;;
 esac
 printf '{"command":"roll","frames":[]}\n'
@@ -184,11 +186,6 @@ for arg in "$@"; do
 done
 mkdir -p "$out_dir"
 cp "$FAKE_TIFF_SOURCE" "$out_dir/real_positive.tiff"
-if [ "${FAKE_INVALID_SIDECAR:-false}" = true ]; then
-  printf '{}\n' > "$out_dir/real_positive.tiff.json"
-else
-  printf '{"meta":{},"params":{}}\n' > "$out_dir/real_positive.tiff.json"
-fi
 if [ "${FAKE_EMPTY_REPORT:-false}" = true ]; then
   printf '{"command":"roll","frames":[]}\n'
 else
@@ -219,7 +216,6 @@ for arg in "$@"; do
 done
 mkdir -p "$out_dir"
 printf 'this is not a tiff\n' > "$out_dir/real_positive.tiff"
-printf '{"meta":{},"params":{}}\n' > "$out_dir/real_positive.tiff.json"
 printf '{"command":"roll","frames":[{"input":"real.tif","output":"%s/real_positive.tiff","status":"ok"}]}\n' "$out_dir"
 """,
             encoding="utf-8",
@@ -256,20 +252,6 @@ printf '{"command":"roll","frames":[{"input":"real.tif","output":"%s/real_positi
         self.assertIn("publication target is a directory", result.stderr)
         self.assertEqual(list(backing.iterdir()), [])
         self.assertFalse((roll_out / "real_positive_hdr.tiff").exists())
-
-    def test_wrong_sidecar_envelope_is_rejected_before_publication(self):
-        self.seed_recipes()
-        fake_nc = self.write_successful_fake_roll_nc()
-        env = {
-            "FAKE_TIFF_SOURCE": str(FIXTURES / "hdr-48bit.tif"),
-            "FAKE_INVALID_SIDECAR": "true",
-        }
-
-        result = self.run_harness("convert", fake_nc, env)
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("is not a valid sidecar envelope", result.stderr)
-        self.assertNotIn("converted FixtureRoll", result.stdout)
-        self.assertFalse((self.out / "FixtureRoll" / "real_positive.tiff").exists())
 
     def test_missing_successful_report_frame_is_rejected_before_publication(self):
         self.seed_recipes()
