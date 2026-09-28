@@ -52,7 +52,8 @@
       "Bash(grep*)",
       "Bash(sed*)",
       "Bash(wc*)",
-      "EnterWorktree"
+      "EnterWorktree",
+      "ExitWorktree"
     ]
   },
   "enabledPlugins": {
