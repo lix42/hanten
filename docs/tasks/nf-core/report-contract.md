@@ -6,6 +6,12 @@ Decide what nc's JSON report and telemetry record say about a new-flow run, so t
 machine-readable contract moves with the chain deliberately instead of being
 inherited one optional section at a time.
 
+*Premise moved (`nf-core/default-flip`, 2026-09-27): the old chain is gone, so there is
+no "while `--new-flow` lives" and no second report shape — the old chain's report
+sections were deleted with it. Telemetry is schema 8 with `conversion.destination`, and
+`nctool` reads which interface a run used (preset or destination) from its
+`pipeline_version`. Re-scope before starting.*
+
 ## Design
 
 - **Nothing owns this today.** `cli::Report` carries around twenty optional sections

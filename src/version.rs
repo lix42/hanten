@@ -425,9 +425,10 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   pins as literal bit patterns, so hashing adds a version label without widening the
 ///   numeric surface by one value. **Their portability is observed, not proved**: the
 ///   decode makes one `log10` and one `powf` per sample, which a conforming libm may
-///   round either way (`pipeline::chain_golden` windows them for that reason), so the
-///   capture rests on CI's x86_64 Linux runner agreeing with macOS/aarch64 — as the
-///   same pixels did through the removed chain's identical two calls for rows v1–v7.
+///   round either way (`pipeline::chain_golden` windows them for that reason). The v8
+///   capture was taken on aarch64-apple-darwin; CI's x86_64 Linux run is what confirms
+///   it is portable (the removed chain's same two calls agreed across both targets for
+///   rows v1–v7, which is why agreement is expected, not why it is known).
 ///   If a runner ever reds on the golden, the failure is the vector's — pick sample
 ///   values that do agree, per CLAUDE.md's rule — not the gate's, and not a real
 ///   behavior change. **And that is not a remote possibility:**
@@ -756,10 +757,11 @@ mod drift_gate {
         // mid-grey pinned 0.62 above the film base, gain `[1, 0.84, 0.73]`, no offset.
         //
         // Captured from this build — so it pins "the default has not drifted since it
-        // was set" — on macOS/aarch64, and held bit-exact on CI's x86_64 Linux runner
-        // too, which is the observed agreement the `render` fingerprint rests on: the
-        // decode makes one `log10` and one `powf` per sample, which a conforming libm
-        // may round either way (`pipeline::chain_golden` windows them for that reason).
+        // was set" — on aarch64-apple-darwin. CI's x86_64 Linux run is what confirms the
+        // capture is portable, and that agreement is what the `render` fingerprint rests
+        // on: the decode makes one `log10` and one `powf` per sample, which a conforming
+        // libm may round either way (`pipeline::chain_golden` windows them for that
+        // reason).
         // If a runner ever disagrees, the vector is at fault — pick samples that agree,
         // per CLAUDE.md — not the decode.
         let (rgb, anchor) = decoded(&DecodeParams::default());

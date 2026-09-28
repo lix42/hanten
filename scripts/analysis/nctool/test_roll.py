@@ -342,7 +342,8 @@ class TestAnalyze(unittest.TestCase):
         else:
             frame["new_flow"] = {"destination": destination}
             recipe = {"recipe_version": 2, "output": {"display": {}}}
-        report = {"summary": {"total": 1, "succeeded": 1, "failed": 0},
+        report = {"identity": {"pipeline_version": 7 if destination is None else 8},
+                  "summary": {"total": 1, "succeeded": 1, "failed": 0},
                   "frames": [frame]}
         (base / "roll-report.json").write_text(json.dumps(report))
         (base / "tags.json").write_text(json.dumps({
@@ -391,6 +392,78 @@ class TestAnalyze(unittest.TestCase):
                 (self.root / f"converted/nc/{config}/R/analysis.json").read_text())
             self.assertEqual(result["output_depth"], depth)
             self.assertEqual(result["frames"][0]["new_flow"], {"destination": destination})
+
+    def edit_report(self, config: str, edit) -> None:
+        path = self.root / f"converted/nc/{config}/R/roll-report.json"
+        report = json.loads(path.read_text())
+        edit(report)
+        path.write_text(json.dumps(report))
+
+    def analyze(self, config: str) -> tuple[int, str]:
+        args = argparse.Namespace(asset_root=str(self.root), roll="R", run=config,
+                                  out=None)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = roll.cmd_analyze(args)
+        return code, err.getvalue()
+
+    def test_a_mixed_depth_roll_records_each_frames_depth(self):
+        tiff = {"display": {"range": "sdr", "transfer": "native",
+                            "gamut": "display-p3", "container": "tiff"}}
+        self.write_run("mixed", [.1, .2, .3], destination="film-master")
+
+        def add_frames(report):
+            first = report["frames"][0]
+            report["frames"] += [
+                dict(first, input="/assets/rolls/R/b.tif", new_flow={"destination": tiff}),
+                {"input": "/assets/rolls/R/c.tif", "status": "failed", "error": "x"}]
+        self.edit_report("mixed", add_frames)
+        self.assertEqual(self.analyze("mixed")[0], 0)
+        result = json.loads(
+            (self.root / "converted/nc/mixed/R/analysis.json").read_text())
+        self.assertEqual(result["output_depth"], "mixed")
+        self.assertEqual(
+            {frame["source"]: frame.get("output_depth") for frame in result["frames"]},
+            {"rolls/R/a.tif": "f32", "b.tif": "u16", "c.tif": None})
+
+    def test_a_depth_that_cannot_be_stated_is_refused_not_left_empty(self):
+        # Like `metrics.space_for_run`, analysis refuses rather than write no depth.
+        # A destination build with no resolved destination must not fall back to the
+        # reference build's preset default (`gain-map-hdr`, u8).
+        def all_failed(report):
+            report["frames"] = [{"input": "/assets/rolls/R/a.tif", "status": "failed",
+                                 "error": "x"}]
+
+        def unknown(report):
+            report["frames"][0]["new_flow"] = {
+                "destination": {"display": {"container": "webp"}}}
+
+        def no_build(report):
+            del report["identity"]
+
+        for config, edit, wording in (
+                ("failed", all_failed, "no frame resolved a destination"),
+                ("unknown", unknown, "unknown depth"),
+                ("nobuild", no_build, "identity.pipeline_version")):
+            self.write_run(config, [.1, .2, .3], destination="film-master")
+            self.edit_report(config, edit)
+            code, err = self.analyze(config)
+            self.assertEqual(code, 2)
+            self.assertIn(wording, err)
+            self.assertFalse(
+                (self.root / f"converted/nc/{config}/R/analysis.json").exists())
+
+    def test_a_preset_build_with_every_frame_failed_takes_its_presets_depth(self):
+        self.write_run("p", [.1, .2, .3])
+
+        def all_failed(report):
+            report["frames"] = [{"input": "/assets/rolls/R/a.tif", "status": "failed",
+                                 "error": "x"}]
+        self.edit_report("p", all_failed)
+        self.assertEqual(self.analyze("p")[0], 0)
+        result = json.loads((self.root / "converted/nc/p/R/analysis.json").read_text())
+        self.assertEqual(result["output_depth"], "u16")
+        self.assertNotIn("output_depth", result["frames"][0])
 
     def test_explicit_output_path_and_clipping_fraction(self):
         self.write_run("b", [.2, .2, .1], clipped=5)

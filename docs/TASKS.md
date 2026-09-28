@@ -1656,7 +1656,9 @@ the design in `docs/design-update.md`:
 - [ ] [The report and telemetry shape for the new
   chain](tasks/nf-core/report-contract.md) — ~20 report sections and the
   per-stage timing buckets are keyed to the old chain, and `nctool` parses
-  both
+  both. *Premise moved (`nf-core/default-flip`, 2026-09-27): the old chain and its
+  report sections are gone; telemetry is schema 8 with `conversion.destination`, and
+  `nctool` reads the interface from `pipeline_version` — re-scope before starting*
 - [x] [The recipe schema across the flow
   boundary](tasks/nf-core/recipe-schema.md) — the new chain reads its own
   `"recipe_version": 2` document (`src/recipe.rs`, one section per stage), and
@@ -1664,7 +1666,9 @@ the design in `docs/design-update.md`:
 - [ ] [`roll`, `inspect` and `estimate` under the new
   chain](tasks/nf-core/subcommands.md) — roll's planner resolves defaults by
   hand; `inspect` reports a resolved `dmax`; retirement
-  adds a class of removed-flag errors
+  adds a class of removed-flag errors. *Premise moved (`nf-core/default-flip`,
+  2026-09-27): the old chain is gone, so these commands run only the new one —
+  re-scope before starting*
 - [ ] [Stage seams, buffers and the IR
   plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams
   are the existing typed boundaries, not one per stage; a buffer per stage is

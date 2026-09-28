@@ -210,9 +210,9 @@ fn run(args: &[&str]) -> (i32, String, String) {
     spawn(args, &[])
 }
 
-/// A neutral roll measurement (the identity gains, the default contrast), for a
-/// `--strict` test whose subject is not the roll: without one the `default` rendering
-/// warns that it fell back, and `--strict` fails on that instead.
+/// Identity roll gains and a stated contrast, for a `--strict` test whose subject is
+/// not the roll: without them the `default` rendering warns that it fell back, and
+/// `--strict` fails on that instead.
 const MEASURED: [&str; 4] = ["--roll-white-balance", "1,1,1", "--contrast", "1.1111112"];
 
 /// Like [`run`], but with extra environment variables set for the child (used to
@@ -4259,6 +4259,76 @@ fn inspect_and_estimate_carry_build_identity_without_a_params_hash() {
             "{args:?} resolves no recipe, so params_hash must be OMITTED: {id}"
         );
     }
+}
+
+#[test]
+fn convert_report_echoes_a_declared_film_type_only() {
+    // `--film-type` gates nothing; it is a provenance declaration, so the report must
+    // carry it or the flag is accepted and dropped. The default (`unknown`) is omitted.
+    let tmp = TempDir::new("filmtype");
+    let out = tmp.path("out.tiff");
+    let (code, stdout, err) =
+        convert_p3(&fixture("hdr-48bit.tif"), &out, &["--film-type", "silver"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(json(&stdout)["film_type"], "silver", "{stdout}");
+
+    let (code, stdout, err) = convert_p3(&fixture("hdr-48bit.tif"), &out, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(json(&stdout).get("film_type").is_none(), "{stdout}");
+
+    // A stated `unknown` is omitted by every command alike.
+    let (code, stdout, err) =
+        convert_p3(&fixture("hdr-48bit.tif"), &out, &["--film-type", "unknown"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(json(&stdout).get("film_type").is_none(), "{stdout}");
+    let scan = fixture("hdr-48bit.tif");
+    let scan = scan.to_str().unwrap();
+    for argv in [
+        &["inspect", scan][..],
+        &["estimate", scan, "--base-region", "0,0,60,60"],
+    ] {
+        let command = argv[0];
+        let (code, stdout, err) = run(&[argv, &["--film-type", "unknown"]].concat());
+        assert_eq!(code, 0, "{command}: {err}");
+        assert!(
+            json(&stdout).get("film_type").is_none(),
+            "{command}: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn telemetry_params_hash_is_the_hash_of_the_dumped_recipe_bytes() {
+    // The documented contract (`version::stable_hash`, `telemetry::params_hash`): the
+    // record's `conversion.params_hash` is FNV-1a-64 over exactly the bytes
+    // `--dump-params` writes, so a record can be matched to a kept recipe file.
+    let tmp = TempDir::new("paramshash");
+    let out = tmp.path("out.tiff");
+    let dump = tmp.path("params.json");
+    let rec = tmp.path("run.json");
+    let (code, _, err) = convert_p3(
+        &fixture("hdr-48bit.tif"),
+        &out,
+        &[
+            "--dump-params",
+            dump.to_str().unwrap(),
+            "--telemetry-file",
+            rec.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in &std::fs::read(&dump).unwrap() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
+    assert_eq!(
+        record["conversion"]["params_hash"],
+        format!("{h:016x}"),
+        "{record}"
+    );
 }
 
 #[test]

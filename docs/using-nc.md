@@ -1237,8 +1237,9 @@ exception that needs nothing from you:
   `--film-type silver|chromogenic|unknown` still exists on `convert`, `estimate`
   and `inspect` (recipe key `input.film_type`), as a **provenance declaration**:
   it records what stock a run was made from, and nothing reads it. Set it if you
-  want the film chemistry captured in the recipe or report you keep beside the
-  output; leave it out otherwise. Planned IR dust removal will need the same
+  want the film chemistry captured beside the output: the report echoes it as
+  `film_type` (on `roll`, per frame; never `unknown`), and `--dump-params` writes it as
+  `input.film_type`. Leave it out otherwise. Planned IR dust removal will need the same
   declaration, which is why it stays.
 
   `hanten inspect` and `hanten estimate` report the verdict, and `inspect` adds the

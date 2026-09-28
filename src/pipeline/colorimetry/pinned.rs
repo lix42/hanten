@@ -16,11 +16,11 @@
 //!
 //! ## Why the deviations are stated in `f32` ulps
 //!
-//! 42 of the 45 matrix entries below reproduce the canonical derivation
-//! **bit-exactly**. Three are exactly **+1 `f32` ulp** away, and they are named
+//! 34 of the 36 entries of the four `ACESCG_TO_*` matrices reproduce the
+//! canonical derivation **bit-exactly**. Two are exactly **+1 `f32` ulp** away, and they are named
 //! individually in the docs below. (The audit reports `ulps` as
 //! `derived − shipped` on a monotonic ordering, so `+1` means the derivation
-//! sits one ulp *above* the shipped literal. All three are negative values,
+//! sits one ulp *above* the shipped literal. Both are negative values,
 //! where "above" is the smaller magnitude.) Reaching those neighbouring values needs a
 //! ~3e-9 relative shift in the derivation — far too large to be `f64`
 //! accumulation noise (a sweep over inverse algorithms, association orders, and
@@ -325,7 +325,7 @@ pub const ACESCG_LUMA: [f32; 3] = [0.272_228_72, 0.674_081_74, 0.053_689_517];
 /// exact derivation would be a **pixel change** once an sRGB destination multiplies
 /// by it, not a correction. No script recording the 6-decimal rounding was
 /// committed, so its exact origin is unrecoverable — the same situation as the
-/// three 1-ulp matrix entries, with a larger number.
+/// two 1-ulp matrix entries, with a larger number.
 // Consumer: fit gamut's sRGB destination (`nf-destinations/easy-destination-rows`),
 // whose gamut map holds this luminance.
 #[allow(dead_code)]

@@ -62,10 +62,10 @@ use super::pinned;
 /// Largest permitted disagreement between a shipped `f32` literal and the
 /// canonical derivation.
 ///
-/// **One ulp, and the justification is measured, not assumed.** Three of the 45
-/// shipped matrix entries sit exactly one ulp from the canonical derivation (see
+/// **One ulp, and the justification is measured, not assumed.** Two of the 36
+/// `ACESCG_TO_*` matrix entries sit exactly one ulp from the canonical derivation (see
 /// [`pinned`] for which, and why the historical route is unrecoverable). Tightening
-/// this to zero would mean re-pinning those three — a pixel change. Loosening it
+/// this to zero would mean re-pinning those two — a pixel change. Loosening it
 /// would stop catching real transcription errors, which are ≥ 2 ulps in practice.
 ///
 /// For scale: the chromaticities involved are specified to three decimals, and

@@ -4,9 +4,10 @@
 //! every subcommand and flag (design-spec §8–9), JSON recipe load/merge (flags
 //! override a loaded recipe), `--dump-params` / `params` for discovery, a JSON
 //! report, and stable exit codes via [`NcError`]. The conversion runs here:
-//! `convert` drives the full decode → film-base → algorithm → output color
-//! transform → encode pipeline (delegating the pure stages to `pipeline`/`algo`/
-//! `io`); `inspect` and `estimate` decode and report without writing an image.
+//! `convert` drives the full read → film-base → fixed decode → scene correction →
+//! look → fit range → fit gamut → encode chain (delegating the pure stages to
+//! `pipeline`/`algo`/`io`); `inspect` and `estimate` decode and report without
+//! writing an image.
 //!
 //! Determinism rule: stdout carries *only* the JSON report / params; all logs and
 //! warnings go to stderr, so an agent can pipe stdout straight into a parser.
@@ -378,8 +379,9 @@ pub struct ConvertArgs {
 /// `--frames` manifest.
 ///
 /// Unlike `convert`'s single `-o <file>`, roll writes per-frame outputs into an
-/// `--out-dir` (named `<stem>_positive.tiff`) plus a roll-level JSON report on
-/// stdout, so single-frame `convert` stays byte-for-byte unchanged.
+/// `--out-dir` (named `<stem>_positive.<ext>`, the suffix of the frame's resolved
+/// destination) plus a roll-level JSON report on stdout, so single-frame `convert`
+/// stays byte-for-byte unchanged.
 #[derive(Args, Debug)]
 pub struct RollArgs {
     /// Input scans: files, directories (expanded to their `.tif`/`.tiff` files),
@@ -395,8 +397,8 @@ pub struct RollArgs {
     #[arg(long, value_name = "JSON")]
     pub frames: Option<PathBuf>,
     /// Output directory (created if missing). Per-frame outputs are written here
-    /// as `<input-stem>_positive.tiff` unless the manifest gives an explicit
-    /// output path.
+    /// as `<input-stem>_positive.<ext>` — the suffix of the frame's resolved
+    /// destination — unless the manifest gives an explicit output path.
     #[arg(short = 'o', long = "out-dir", value_name = "DIR")]
     pub out_dir: PathBuf,
     /// Shared frozen recipe applied to every frame (the roll-fixed film base,
@@ -886,8 +888,8 @@ pub struct ReuseReady {
 
 /// The report's `calibration` object: the calibration values this invocation
 /// resolved, in exactly the recipe shape, so
-/// `hanten estimate … | jq '{calibration}' > roll-cal.json` writes a reusable roll
-/// calibration with nothing to hand-edit.
+/// `hanten estimate … | jq '{recipe_version: 2, calibration}' > roll-cal.json` writes
+/// a reusable roll calibration with nothing to hand-edit.
 ///
 /// The pipe straight into `--params -` that design-spec §8 shows is the **target**:
 /// `--params` takes a path today, is not repeatable, and has no `-` case. Both arrive
@@ -1276,12 +1278,13 @@ pub struct Report {
     /// and a future UI draws its highlight rectangles from the same data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_candidates: Option<Vec<film_base::RebateCandidate>>,
-    /// The declared film chemistry, echoed back (`inspect` / `estimate`). Those two
-    /// commands resolve no recipe, so without this the flag would be parsed and
-    /// dropped — accepted-and-ignored, which this project treats as a bug. It gates
-    /// nothing (`ir-usability-detection`); it is recorded so a declaration a user
-    /// made is visible in the artifact that run produced. `convert`/`roll` carry it
-    /// in the resolved recipe instead.
+    /// The declared film chemistry, echoed back. It gates nothing
+    /// (`ir-usability-detection`); it is recorded so a declaration a user made is
+    /// visible in the artifact the run produced — without it the flag would be parsed
+    /// and dropped, accepted-and-ignored, which this project treats as a bug.
+    /// `inspect` / `estimate` echo the `--film-type` flag; `convert` (and each `roll`
+    /// frame, as `FrameStatus::Ok::film_type`) echo the resolved recipe's
+    /// `input.film_type`. Omitted for `unknown` (the default), even when stated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub film_type: Option<FilmType>,
     /// The measured IR usability verdict (`inspect` / `estimate`, only on a scan
@@ -1705,10 +1708,14 @@ fn reject_roll_flags_nothing_applies(args: &ConvertArgs, r: &Recipe) -> Result<(
     Err(NcError::Usage(message))
 }
 
-/// The **complete** `convert` parameter gate, after the flags merged: the recipe's own
-/// stage and decode rules ([`recipe::validate`]), the output path's suffix, then the
-/// shared sections ([`validate_shared`]) — whose last rule, no film base chosen, is the
-/// least specific diagnosis there is.
+/// The `convert` **value** gate, after the flags merged: the recipe's own stage and
+/// decode rules ([`recipe::validate`]), the output path's suffix, then the shared
+/// sections ([`validate_shared`]) — whose last rule, no film base chosen, is the least
+/// specific diagnosis there is.
+///
+/// It is not the whole gate: the flag-presence rule [`reject_roll_flags_nothing_applies`]
+/// runs before it, in `run_convert`, since it must diagnose a typed roll flag before any
+/// value rule here can refuse with a remedy that cannot work.
 ///
 /// The suffix is a property of *this invocation*, so it outranks the shared value
 /// rules, and specifically the missing-base rule: without that ordering, `-o out.jpg`
@@ -3883,6 +3890,10 @@ fn render_frame(
     // The NC film RGB v1 3×3 into ACEScg runs on this flow too, so the pinned
     // interpretation is a fact about the run.
     report.working_mapping = Some(working_space::WORKING_MAPPING_ID);
+    // The resolved chemistry declaration, echoed so it survives into the report: the
+    // report is the only artifact a convert run keeps beside its output.
+    report.film_type =
+        (recipe.input.film_type != FilmType::Unknown).then_some(recipe.input.film_type);
 
     // The chain, then the destination's transfer. Clear any stale lcms2 flag first so
     // only a fault from *this* transform is counted.
@@ -4381,6 +4392,10 @@ enum FrameStatus {
         /// have nothing to diff frame-to-frame.
         #[serde(skip_serializing_if = "Option::is_none")]
         output_stats: Option<OutputStats>,
+        /// The frame's declared film chemistry — mirrors the single-frame `Report`
+        /// field (omitted when `unknown`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        film_type: Option<FilmType>,
         /// This frame's own identity, beside the roll's. (The per-frame recipe hash it
         /// carried before `pipeline_version` 8 is `nf-core/report-contract`'s to
         /// restore.) Boxed with `new_flow` below: adding that block tipped `Ok` over
@@ -4786,6 +4801,7 @@ fn frame_report_ok(pf: &PlannedFrame, report: Report) -> FrameReport {
             input_color: report.input_color.map(Box::new),
             loss: report.loss,
             output_stats: report.output_stats,
+            film_type: report.film_type,
             identity: report.identity.map(Box::new),
             new_flow: report.new_flow.map(Box::new),
         },
@@ -5096,7 +5112,7 @@ fn run_inspect(args: IoArgs) -> Result<()> {
     let ir_separability = film_base::ir_separability(&image);
     let ir_usable = ir_separability.is_some_and(|s| s.usable);
     report.ir_separability = ir_separability;
-    report.film_type = args.film_type;
+    report.film_type = args.film_type.filter(|&t| t != FilmType::Unknown);
     // Build the mask *before* the notes, so each one describes what actually
     // happened rather than predicting it: a usable plane can still produce no mask
     // (a too-small image errors on `scan_depth`; an all-holder mask falls back).
@@ -5352,7 +5368,7 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     // IR holder mask, so it degrades to RGB-only when the IR plane is shape-only
     // (unverified provenance) or measures unable to separate holder from film. The
     // `--grid` and explicit/region paths never touch IR, so they need no note.
-    report.film_type = args.film_type;
+    report.film_type = args.film_type.filter(|&t| t != FilmType::Unknown);
     // The calibration command reports the measurement itself, not just a warning
     // about it: `estimate` is where a user decides how to acquire a base, so the
     // number that drove the decision belongs in its artifact too.
@@ -8316,6 +8332,7 @@ mod tests {
                     output_stats: Some(OutputStats {
                         mean: [0.25, 0.5, 0.75],
                     }),
+                    film_type: Some(FilmType::Silver),
                     identity: Some(Box::new(Identity::new())),
                     new_flow: None,
                 },
@@ -8345,6 +8362,7 @@ mod tests {
             .map(|x| x.as_f64().unwrap())
             .collect();
         assert_eq!(ffb.len(), 3);
+        assert_eq!(v["frames"][0]["film_type"], "silver");
     }
 
     #[test]

@@ -64,9 +64,10 @@ use crate::types::{EncodeReport, FilmBaseSource};
 /// those presets is only the optional IR TIFF's. A **renamed field is a wire-shape change** under any reading of
 /// the rule above, unlike *adding* an enum member — which `conversion.preset` has
 /// now done eight times without a bump, and which
-/// `output/sdr-preset-followups` still owns settling. `conversion.preset` accepts
-/// every name in `OutputPreset::ALL`; do not restate the list here, since that is
-/// exactly the rustdoc that went stale at v3.
+/// `output/sdr-preset-followups` still owns settling. `conversion.preset` carried
+/// whichever output preset names the build of the time had (`OutputPreset::ALL`, gone
+/// since v8); the list was never restated here, since that is exactly the rustdoc that
+/// went stale at v3.
 ///
 /// **Removing** members is not a bump either: `legacy` and `custom` left
 /// `conversion.preset` with `nf-retire/legacy-custom` (2026-09-23). Records written

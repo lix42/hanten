@@ -1735,3 +1735,16 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
   multithreading work; the measurements and the candidate causes are in the task file
   and under `parallel-display-stages` above. A clean re-measurement was blocked by a
   loaded machine (load average ~40 from other sessions).
+
+## ultrahdr-dependency-externalization (closed)
+
+**Status:** closed—moot
+**Updated:** 2026-09-27
+
+- 2026-09-27: **Closed as moot by `nf-core/default-flip`.** The Ultra HDR v1 dialect
+  retired with the removed chain, so there was no container left to assemble in Rust:
+  the flip deleted `vendor/ultrahdr-sys`, the `ultrahdr-sys` dependency and
+  `scripts/check-vendored-native.py` with its CI step. The gain-map JPEG is ISO 21496-1
+  only, written by nc's own `io::iso_gain_map`; the manual Apple ImageIO gate
+  (`scripts/iso-decoder-oracle/`) remains its external check. The build still needs
+  CMake and NASM for libaom and a C compiler for lcms2.

@@ -261,7 +261,10 @@ stage_ir() {
      -o "$ART/ir-pos-$roll.tiff" "$A/rolls/$roll/$fr" --report json > "$ART/ir.json" 2>"$ART/ir.err"
   echo "IR export ($roll/$fr):"; exiftool -s -s -s -ImageWidth -ImageHeight -BitsPerSample "$ART/ir-$roll.tiff" 2>/dev/null
   echo "--strict on same frame (expect IR-ignored warning -> hard error):"
+  # A stated white balance and contrast silence the `default` rendering's "no roll
+  # measurement" warning, so the exit 1 is attributable to the IR note alone.
   if $NC convert --params "$REC/$roll.json" -o "$ART/strict.tiff" \
+      --white-balance 1,1,1 --contrast 1.1111112 \
       "$A/rolls/$roll/$fr" --strict >/dev/null 2>"$ART/strict.err"; then
     echo "error: --strict unexpectedly succeeded; expected the IR-ignored warning to fail" >&2
     return 1

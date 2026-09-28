@@ -172,7 +172,7 @@ Read the module docs before changing these; they hold the traps.
 | build identity (`NC_GIT_*`) | `build.rs` |
 
 Gain-map container changes need the manual `scripts/iso-decoder-oracle/` check
-(macOS only): exiftool and libultrahdr both accept files no decoder parses.
+(macOS only): exiftool accepts files no decoder parses.
 
 ## Commands and gates
 

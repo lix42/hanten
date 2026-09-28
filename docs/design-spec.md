@@ -1280,7 +1280,7 @@ Both `--unexposed` and `--leader` are optional: `--unexposed` resolves the film 
 and `--leader` — which measured the retired reference density — would now only guard
 a roll-white measurement, as `measure-roll`'s does. Agents can skip the
 files entirely — the report stays on stdout, so
-`hanten calibrate … | jq '{calibration}' | hanten roll … --params -` composes
+`hanten calibrate … | jq '{recipe_version: 2, calibration}' | hanten roll … --params -` composes
 (the report's `calibration` key is the section *body*, so the object form is what
 `--params` takes).
 
@@ -1620,7 +1620,7 @@ hanten estimate reference.tiff --base-region 200,0,300,3600 --report json
 #     "calibration": { "film_base": { "explicit": [0.553, 0.271, 0.159] } }, … }
 hanten convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159
 # …or write the calibration straight out and batch with it:
-hanten estimate reference.tiff --base-region 200,0,300,3600 | jq '{calibration}' > roll-cal.json
+hanten estimate reference.tiff --base-region 200,0,300,3600 | jq '{recipe_version: 2, calibration}' > roll-cal.json
 
 # On a dedicated blank frame, `estimate --grid` samples a fixed 5-cell grid
 # (corners + center) over the frame (or over --base-region) instead of a single
@@ -1701,9 +1701,9 @@ not specified here.
   IR-assisted film-holder detection (§6.1) is enabled by *measuring* the IR plane,
   not by this declaration. Kept as a shared input-medium axis for the deferred IR
   dust-removal stage (§12 item 1) and `bw-support`; accepted on `convert`,
-  `estimate`, and `inspect`, which echo it back as the report's `film_type` — those
-  two resolve no recipe, so echoing is what keeps a declaration from being parsed
-  and dropped. `hanten inspect` and `hanten estimate` report `ir_separability` (the measured
+  `estimate`, and `inspect`, and echoed back as the report's `film_type` (per frame
+  on `roll`; omitted for `unknown`) so a declaration is never parsed and dropped.
+  `hanten inspect` and `hanten estimate` report `ir_separability` (the measured
   interior IR transmission and the verdict) on any scan carrying an IR plane, and
   on a usable one additionally reports a `holder_mask`: the per-edge along-edge
   segments, each with its span `[start, end)`, holder/film class, and
