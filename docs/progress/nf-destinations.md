@@ -204,6 +204,12 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   `--rendering direct --range sdr` (put it in a review matrix's `common_args`); when
   `easy-destination-rows` adds the Adobe RGB float row, `direct` resolves to it unaided
   — a move of its output, to log in `nf-calibration`'s progress.
+- 2026-09-27: first use as the held rendering (`nf-calibration/scale-gamma-loop`, round
+  S1, 18 frames on nine rolls): it worked as intended (user) — a scale candidate's cast
+  shows with nothing masking it. Correction to the entry above: `--rendering direct` goes
+  in `common_args`, but `range: sdr` goes in the matrix's `destination` (the generator
+  owns `--range`). The set was still rendered by hand: the new-flow SDR destinations are
+  TIFF only, which the review app cannot show.
 
 ## memory-profiles
 

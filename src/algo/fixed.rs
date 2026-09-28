@@ -144,8 +144,8 @@ pub const DIFFUSE_WHITE: f32 = 1.0;
 /// measurement split by the convention `scale_r = 1` ([`DENSITY_SCALE`];
 /// `tests::the_scale_convention_pins_red_to_one`). The decode owns every per-channel
 /// exponent; the look owns one factor shared by all three. Moving this value moves the
-/// calibration unless `scale` moves with it — `nf-calibration/scale-gamma-loop` tunes
-/// the two together, never one alone.
+/// calibration unless `scale` moves with it — `nf-calibration/neutrality-gate` measures
+/// the two together from bracketed neutrals, never one alone.
 ///
 /// Reachable as `--density-gamma` (recipe `reconstruction.linearization`). A current
 /// pick, expected to move with `scale`.

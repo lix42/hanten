@@ -318,14 +318,14 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     // `reconstruction` section; `crate::recipe::merge` sets each one there.
     KeptEntry {
         covers: &["--density-scale", "--density-offset"],
-        why: "the decode's own calibration — `nf-calibration/scale-gamma-loop` owns the \
+        why: "the decode's own calibration — `nf-calibration/neutrality-gate` owns the \
               values, this gate only keeps them reachable",
     },
     KeptEntry {
         covers: &["--density-gamma"],
         why: "the fixed decode's linearization (recipe `reconstruction.linearization`) — \
-              the calibrated half of `gamma`, which `nf-calibration/scale-gamma-loop` tunes \
-              with `scale`; print contrast is `--contrast`",
+              the calibrated half of `gamma`, which `nf-calibration/neutrality-gate` \
+              measures with `scale`; print contrast is `--contrast`",
     },
     // Scene correction (`nf-scene-correction/stage`). `--exposure` is the new chain's
     // own spelling; white balance keeps the current chain's, since the knob means the

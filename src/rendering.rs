@@ -62,7 +62,7 @@ const DEFAULT: Base = Base {
 /// `direct`: every value written out, so a moved default leaves it alone.
 pub const DIRECT: Base = Base {
     applies_roll: false,
-    // A rendering contrast, so a moved linearization still shows (the loop tunes it).
+    // A rendering contrast, so a moved linearization still shows.
     contrast: 2.0 / 1.8,
     // Off: it hides the residual cast an editor or the loop must see.
     highlight_desaturation: HighlightDesaturation {
