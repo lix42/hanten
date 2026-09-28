@@ -1,5 +1,7 @@
 # Calibrate from a single part-exposed frame
 
+**Design:** the roll workflow's open question 8 — whether `measure-roll --unexposed` takes a region of a part-exposed frame — is this task's ([doc](../../design/roll-workflow.md)).
+
 > **Dmax half is parametric-curves only (noted 2026-09-13).** The `characteristic` curve resolves
 > no `Dmax`; only the unexposed half of such a frame serves every path.
 
@@ -9,7 +11,7 @@
 Let one frame that is *partly* unexposed and *partly* fully exposed serve as both
 calibration references, instead of requiring two separate frames.
 
-**Deferred — blocks nothing.** `core/base-acquisition-planner` handles the normal
+**Deferred — blocks nothing.** `core/measure-base` handles the normal
 case of one frame per reference; this is a convenience for the roll where the
 photographer produced a single transitional frame instead.
 
@@ -22,7 +24,8 @@ the interior p05 is 0.0202, i.e. an opaque population coexisting with a
 transparent one in the same frame.
 
 Today that frame is usable for neither measurement without hand-picked regions,
-because `calibrate` resolves one reference per input file.
+because the base is measured from one whole reference file (`measure-base`, or
+`measure-roll --unexposed`).
 
 ## Open questions
 
@@ -53,8 +56,8 @@ because `calibrate` resolves one reference per input file.
 
 ## Dependencies
 
-- [Base-acquisition planner](../core/base-acquisition-planner.md) — owns the
-  one-reference-per-frame path this extends
+- [`measure-base`](../core/measure-base.md) — owns the one-reference-per-frame path
+  this extends (`measure-base`, `measure-roll --unexposed`)
 
 Coordinate with [Dmax anchor reliability](dmax-anchor-reliability.md), which owns
 how far any leader-derived anchor can be trusted.

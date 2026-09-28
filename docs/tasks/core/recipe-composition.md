@@ -1,5 +1,7 @@
 # Layered recipe composition
 
+**Design:** [the roll workflow](../../design/roll-workflow.md) — the single source for this task's CLI shape; where they disagree, the doc wins.
+
 ## Goal
 
 Let configuration be assembled from parts instead of authored as one document:
@@ -7,8 +9,15 @@ make `--params` repeatable (file or `-` for stdin), give `roll` the same per-kno
 override flags `convert` has, and define one precedence chain that every command
 follows.
 
-This is what makes the pipeline-profile / roll-calibration split usable — see the
-target subsection in design-spec §8, which this task implements.
+This is what makes the look / roll-measurement split usable.
+
+*Premise moved (2026-09-28): the recipe is `"recipe_version": 2` since
+`nf-core/default-flip` — `dmax`, `print` and `reconstruction.curve` below are gone, and a
+roll now has two layers (the measured file from `measure-roll --out`, holding
+`calibration` and `roll` — [`measure-base`](measure-base.md) — and the look).
+Repeatable `--params` is what removes the hand merge between measuring and `roll`, and
+`roll`'s override flags are what [`roll`'s measure mode](roll-measure-mode.md) builds on. Re-verify
+the "no schema change" claim before starting.*
 
 ## What is known
 
@@ -41,7 +50,8 @@ target subsection in design-spec §8, which this task implements.
    explicitly either way.
 2. **Does an empty or all-defaults layer differ from an absent one?** It should
    not, but `calibration.film_base` has no default, so "absent" and "explicitly null"
-   are distinguishable and probably must stay so.
+   are distinguishable and probably must stay so. Related: the design doc's open
+   question 10 (does a later layer's `null` override an earlier value?).
 3. **Should `--params -` be allowed more than once?** Reading stdin twice cannot
    work; refuse the second rather than silently reusing the buffer.
 4. **Which of `convert`'s overrides make sense roll-wide?** Most do. The
@@ -49,6 +59,8 @@ target subsection in design-spec §8, which this task implements.
    and `--auto-balance-range` retired in `nf-retire/dmax-machinery` and
    `nf-retire/regional-balance`), and it is exactly what breaks roll consistency —
    see `core/unfrozen-auto-mode-warning`.
+5. **Does a `roll` flag beat a frame's manifest `params`?** Tracked in the design
+   doc's open questions; record the answer there.
 
 ## How to Verify
 
@@ -57,7 +69,7 @@ target subsection in design-spec §8, which this task implements.
 - Order matters and later wins, including when both layers set the same key.
 - A flag still beats every layer, and still beats by *source* — the existing
   white-balance precedence test extends to the layered case.
-- `--params -` reads stdin, and the piped form in design-spec §8 works end to end.
+- `--params -` reads stdin.
 - `roll` runs with no recipe file at all, configured entirely by flags.
 - The resolved config is unchanged for every existing single-`--params`
   invocation — this task adds composition, it must not move any pixel.
@@ -68,3 +80,5 @@ target subsection in design-spec §8, which this task implements.
 - [Roll conversion](roll-conversion.md)
 - [The `calibration` recipe section](calibration-recipe-section.md) — the shape of
   the calibration layer this task composes
+- [`roll`'s per-frame overrides](../nf-core/subcommands.md) — settles how a frame's
+  override resolves before this task layers on top of it

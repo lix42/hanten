@@ -77,4 +77,4 @@ lives here, and the terminology task keeps only its documentation and help-text 
 
 Depended on by [recipe composition](recipe-composition.md),
 [profile authoring](profile-authoring.md) and the
-[base-acquisition planner](base-acquisition-planner.md).
+[base-acquisition planner](auto-calibration.md) (renamed `core/auto-calibration`).

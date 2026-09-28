@@ -373,7 +373,7 @@ pub struct ConvertArgs {
 /// This is the batch-**apply** half of plan→recipe→apply: it replays a *provided*
 /// frozen recipe (hand-authored or `hanten params`/`--dump-params`-produced) over N
 /// frames. It deliberately owns no auto-cascade that *generates* the recipe —
-/// that is the separate `base-acquisition-planner` task. Roll-fixed params (the
+/// that is `core/auto-calibration`. Roll-fixed params (the
 /// film base) live in the shared `--params` recipe and appear
 /// once in the roll report; frame-local params can be overridden per frame via a
 /// `--frames` manifest.
@@ -891,9 +891,8 @@ pub struct ReuseReady {
 /// `hanten estimate … | jq '{recipe_version: 2, calibration}' > roll-cal.json` writes
 /// a reusable roll calibration with nothing to hand-edit.
 ///
-/// The pipe straight into `--params -` that design-spec §8 shows is the **target**:
-/// `--params` takes a path today, is not repeatable, and has no `-` case. Both arrive
-/// with `core/recipe-composition`; the shape emitted here is already what they take.
+/// `core/measure-base` replaces this `jq` step with a recipe file the command writes
+/// (`docs/design/roll-workflow.md`).
 ///
 /// **Partial by construction, and that is load-bearing.** It is not the recipe's
 /// [`recipe::Calibration`]: every member is skipped when absent, so a run that measured
@@ -903,7 +902,7 @@ pub struct ReuseReady {
 ///
 /// It reports *what was measured here*, never "the roll's calibration": a complete
 /// one may need several invocations, and a future member is measured across many
-/// frames rather than from one. Assembling it is `core/base-acquisition-planner`.
+/// frames rather than from one. Assembling it is `core/measure-base`.
 #[derive(Clone, Debug, PartialEq, Default, Serialize)]
 pub struct CalibrationFragment {
     /// The measured base as `calibration.film_base` — present exactly when
