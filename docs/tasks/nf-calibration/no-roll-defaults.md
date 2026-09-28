@@ -20,8 +20,8 @@ What is known:
   strong prior to raise it, to about `2.5` (`look.contrast ≈ 1.39` at the 1.8
   linearization; 2026-09-27).
 - **Whole contrast, not `look.contrast`, is the number to choose.** The look's default is
-  derived as `whole / LINEARIZATION`, so the whole contrast holds when
-  `scale-gamma-loop` moves the linearization.
+  derived as `whole / LINEARIZATION`, so the whole contrast holds if
+  `neutrality-gate` moves the linearization (`scale-gamma-loop` kept it at 1.8).
 - **`direct` does not follow this default by itself.** Its contrast is a separate
   pinned value (`2.0 / 1.8`, `direct-preset`), so moving the fallback does not move the
   rendering the calibration loop holds fixed.
@@ -37,7 +37,6 @@ Open:
   (`nf-look/desaturation-band-refit`; display black's default was chosen in
   `nf-display-stages/parametric-operator`), never a value that changes with the
   presence of a `roll` section.
-- Whether to choose the contrast before `scale-gamma-loop` settles the decode, or after.
 - How to judge a fallback: a single value against every roll's measured contrast, or a
   review of frames rendered without a measurement.
 

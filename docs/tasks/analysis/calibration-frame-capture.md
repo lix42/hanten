@@ -17,8 +17,9 @@ them owns producing them:
 
 - `io/scanner-density-calibration` — needs them for the 3×3 + offset fit. Its tier 1
   is deliberately non-calibrating, so its checkbox can go green without them.
-- `nf-calibration/scale-gamma-loop` — needs a bracketed roll and a grey card in
-  frame, which is the same shoot.
+- `nf-calibration/scale-gamma-loop` — needed a bracketed roll and a grey card in
+  frame, which is the same shoot. It closed on review (2026-09-27) and handed that
+  pass to `nf-calibration/neutrality-gate`.
 - `film-base/dmax-per-channel-reduction` — **parked 2026-09-13** for want of exactly
   this (its route 3). Added here after #115 merged; it is the one consumer that was
   not visible when this task was filed on 2026-09-12.
@@ -77,8 +78,8 @@ short note on why each requirement exists for the fit it performs.
 In: the shoot, development, scanning, registering the frames in `manifest.json` with
 their roles and conditions, and a first neutrality measurement against them.
 
-Out: the 3×3 + offset fit itself (`io/scanner-density-calibration`), the sigmoid
-parameter values (`nf-calibration/scale-gamma-loop`), the parametric per-channel gain
+Out: the 3×3 + offset fit itself (`io/scanner-density-calibration`), the decode's
+`scale` and linearization (`nf-calibration/neutrality-gate`), the parametric per-channel gain
 (`film-base/dmax-per-channel-reduction`), and any default move
 (`nf-calibration/neutrality-gate`). This task produces evidence; those consume it.
 

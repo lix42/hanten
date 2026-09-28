@@ -1888,9 +1888,10 @@ the design in `docs/design-update.md`:
 - [ ] [The white rule in
   HDR](tasks/nf-calibration/white-rule-hdr.md) — the rule's values stay provisional
   until its HDR rendition and headroom are looked at; every round so far was SDR
-- [ ] [Tune `scale` and `gamma` by
+- [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
-  owns, tuned against a held-fixed rendering. Supersedes
+  owns, tuned against a held-fixed rendering; one round, nothing moved, the
+  calibrated re-run is `neutrality-gate`'s. Supersedes
   `algo/sigmoid-parameter-calibration` and
   `film-base/dmax-per-channel-reduction`
 - [ ] [Does `density.offset` earn a

@@ -37,8 +37,13 @@ This supersedes two tasks:
   leader is disqualified as a source. See `docs/progress/film-base.md` (2026-09-10,
   2026-09-13); do not re-plan that investigation.
 
-Open: how many rounds this is worth before the calibration frames exist, and
-whether `scale` stays one global value once a second stock family is in the set.
+## Outcome (2026-09-27)
+
+One `scale` round (blue), no value moved; `gamma`'s linearization kept at 1.8, the
+datasheets' slope, since review cannot separate it from `look.contrast`. The re-run
+against the calibration frames is [the neutrality gate](neutrality-gate.md)'s; the
+look's default contrast is [`no-roll-defaults`](no-roll-defaults.md)'. Evidence:
+`docs/progress/nf-calibration.md`.
 
 ## How to Verify
 

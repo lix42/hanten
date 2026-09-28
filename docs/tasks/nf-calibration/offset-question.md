@@ -23,7 +23,9 @@ What is known:
   identifiable in principle, which is why it was worth a render not an argument.
 - **`scale` is settled first.** Whatever `scale` cannot remove is the evidence for
   what an offset would have to do, so read the residual the loop leaves rather than
-  fitting both at once.
+  fitting both at once. The loop moved nothing; `neutrality-gate` may still move
+  `scale` from the calibration frames, so an offset settled before it may need
+  re-reading.
 
 Open:
 
