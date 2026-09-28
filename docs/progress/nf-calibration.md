@@ -32,7 +32,9 @@ the film base renders, so judge any white placement with it at its default. Impl
 `roll-white-rule`: `hanten measure-roll` reports the white and the `look.contrast` placing
 it, measured over the shared effective area in film RGB before the working-space matrix;
 a white target 0.15–0.31 stop above diffuse white was reviewed and not adopted. The warning's margin is
-`saturation-margin`. Ranked rule > fixed anchor > content white with solved contrast
+`saturation-margin`. Every round was judged on SDR; the values stay provisional until
+`white-rule-hdr` reviews the HDR rendition. Fit range stays reinhard
+(`nf-display-stages/parametric-shoulder`), so the rule's cap and floor stand as chosen. Ranked rule > fixed anchor > content white with solved contrast
 (noise up to 5.4× the scan's floor) > level move (mid-grey up to L\* 82). Levels here
 are **scene stops**: red density through the fixed linearization, 1 stop ≈ 0.167
 density.
@@ -450,6 +452,16 @@ density.
   through the binary, with the losing wording asserted absent. `using-nc.md` §11 notes
   that a `--dump-params` recipe stating a contrast or white balance beside the roll's
   warns on replay (a file cannot say who chose it); typing the flag keeps it quietly.
+
+## white-rule-hdr
+
+**Status:** not started
+**Updated:** 2026-09-27
+
+- 2026-09-27: filed (user) from `nf-display-stages/parametric-shoulder`, which kept
+  reinhard and so did not look at HDR, the hand-off `roll-white-rule` gave it. Goal:
+  review the white rule on an HDR rendition so its cap, floor and target stop being
+  provisional.
 
 ## scale-ladder
 

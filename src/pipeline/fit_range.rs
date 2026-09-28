@@ -70,9 +70,16 @@
 //! - **Below diffuse white every peak still agrees exactly**: black acts below
 //!   mid-grey, where the lift is zero.
 //!
-//! Scanner veil and base fog are a scene term, `nf-scene-correction/flare-removal`'s;
-//! this is where the base lands on the display. Whether the operator itself should
-//! give way to a parametric one is `nf-display-stages/parametric-shoulder`'s.
+//! This is where the base lands on the display, and the only black placement: there is
+//! no scene-side flare/fog subtraction (`nf-scene-correction/flare-removal`, closed as
+//! not needed).
+//!
+//! **Reinhard is kept on purpose** (`nf-display-stages/parametric-shoulder`,
+//! 2026-09-27). With mid-grey, the rendered white and the peak all pinned, any smooth
+//! shoulder stays within about 0.15 stop of it. A brighter white with mid-grey pinned
+//! lost to it in review. Where white renders is the look's contrast (the roll's white
+//! rule). The headroom barely moves white (0.09 stop from 6 stops to 2); it sets how
+//! hard the stops above white are compressed.
 //!
 //! Written fresh, per CLAUDE.md's migration rule — `pipeline::sdr` and `pipeline::hdr`
 //! each fuse tone, luminance rescale and gamut map into one loop body and retire with

@@ -370,6 +370,7 @@ graph TD
     nf-calibration/saturation-margin
     nf-calibration/no-roll-defaults
     nf-calibration/roll-section
+    nf-calibration/white-rule-hdr
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -604,6 +605,8 @@ graph TD
   nf-display-stages/parametric-operator --> nf-look/desaturation-band-refit
   nf-display-stages/parametric-operator --> nf-display-stages/parametric-shoulder
   nf-calibration/roll-white-rule --> nf-display-stages/parametric-shoulder
+  nf-calibration/roll-white-rule --> nf-calibration/white-rule-hdr
+  nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
   nf-reconstruction/fixed-decode --> nf-reconstruction/mono-decode
@@ -1189,6 +1192,9 @@ the design in `docs/design-update.md`:
   — filed 2026-09-27: the fallbacks are chosen against the per-roll contrasts it measures
 - `nf-calibration/roll-section` (new flow): `nf-calibration/roll-white-rule`
   — filed 2026-09-27: moves the values it measures out of the style knobs
+- `nf-calibration/white-rule-hdr` (new flow): `nf-calibration/roll-white-rule`, `nf-display-stages/parametric-shoulder`
+  — filed 2026-09-27: the rule was reviewed on SDR only; `roll-white-rule` handed HDR to
+  `parametric-shoulder`, which kept reinhard and left it unreviewed
 
 ## Tasks
 
@@ -1790,11 +1796,12 @@ the design in `docs/design-update.md`:
   (`fit_range.display_black`, stops below mid-grey, default 6) shifts where the film
   base renders, fading to nothing at mid-grey; the reference is the decoded base
   graded with the frame, so it follows each frame's contrast
-- [ ] [Does a parametric shoulder beat
-  reinhard?](tasks/nf-display-stages/parametric-shoulder.md) — split from
-  `parametric-operator`: an operator that could hold both mid-grey and diffuse white,
-  judged at matched lightness with display black in the chain; "reinhard stands" is a
-  valid outcome
+- [x] [Does a parametric shoulder beat
+  reinhard?](tasks/nf-display-stages/parametric-shoulder.md) — **done 2026-09-27:
+  reinhard stands.** With mid-grey, the rendered white and the peak pinned, any smooth
+  shoulder stays within ~0.15 stop of reinhard; a brighter white with mid-grey pinned
+  (+0.15, +0.30 stop) lost in review. No code change; HDR under the white rule moved to
+  `nf-calibration/white-rule-hdr`
 - [x] [The SDR/HDR branch
   contract](tasks/nf-display-stages/branch-contract.md) — **done 2026-09-24.** The
   chain splits after the look (`chain::render_pair`), the headroom shared above it,
@@ -1878,6 +1885,9 @@ the design in `docs/design-update.md`:
   section](tasks/nf-calibration/roll-section.md) — `roll.white_balance` and
   `roll.white_stops`, out of `scene_correction` and `look`, so a rendering can apply
   them or not
+- [ ] [The white rule in
+  HDR](tasks/nf-calibration/white-rule-hdr.md) — the rule's values stay provisional
+  until its HDR rendition and headroom are looked at; every round so far was SDR
 - [ ] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering. Supersedes

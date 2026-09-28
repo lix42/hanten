@@ -34,8 +34,9 @@ Open:
   the white balance and the contrast have a roll measurement to fall back from.
   Highlight desaturation and display black are the `default` rendering's defaults
   whether or not a roll is measured, so tuning them is their own tasks'
-  (`nf-look/desaturation-band-refit`, `nf-display-stages/parametric-shoulder`), never
-  a value that changes with the presence of a `roll` section.
+  (`nf-look/desaturation-band-refit`; display black's default was chosen in
+  `nf-display-stages/parametric-operator`), never a value that changes with the
+  presence of a `roll` section.
 - Whether to choose the contrast before `scale-gamma-loop` settles the decode, or after.
 - How to judge a fallback: a single value against every roll's measured contrast, or a
   review of frames rendered without a measurement.
