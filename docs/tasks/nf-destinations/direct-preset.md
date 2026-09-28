@@ -42,10 +42,15 @@ The design is `docs/design-update.md`, Part 2, "Two renderings: `direct` and `de
 Open:
 
 - **Set versus default.** Once the base depends on the rendering, a knob the user did
-  not state must not be written into the sidecar as if they had, or a `default` sidecar
+  not state must not be written into a recipe as if they had, or a `default` recipe
   replayed under `direct` carries desaturation 0.8 as a stated value. The knobs a
   rendering sets become "unset means the rendering's base", and the report records the
-  resolved values.
+  resolved values. Recipes written before this serialized every default, so a value at
+  exactly its old default is read as unset (the retired-key rule in CLAUDE.md).
+- **`--rendering direct` with the film master is refused.** The film master runs no
+  rendering, so the selector would be silently ignored; its refusals of stages asked for
+  spare defaults and identities (`preset-set`), which is every value `direct` pins, so
+  this needs its own rule. `default` is spared, since every recipe carries it.
 - **`RunProfile`**: `direct`'s default rides `NewFlowF32Tiff`, which `preset-set` left
   provisional (counted, not measured), so it is measured here on two frame sizes, as
   `nf-destinations/memory-profiles` requires; and whether the Adobe RGB SDR form shares
@@ -62,8 +67,9 @@ Open:
 - On a correctly exposed frame, mid-grey lands mid under `direct` across stocks, with no
   per-frame correction.
 - Two decode candidates rendered through `direct` differ only in the decode.
-- A sidecar replays exactly under either rendering, and a stated knob wins over either
-  base.
+- A `--dump-params` recipe replays exactly under either rendering (the new flow writes
+  no sidecar until `nf-core/report-contract`), and a stated knob wins over either base.
+- `--rendering direct --film-master` is refused, naming both.
 - The pinned test of `direct`'s resolved values, and the memory measurement recorded.
 - `docs/using-nc.md` updated by running the binary; design-spec §9 states the key.
 

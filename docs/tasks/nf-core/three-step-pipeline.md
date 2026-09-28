@@ -28,4 +28,7 @@ it costs to migrate recipes and reports again.
 
 ## Dependencies
 
-- [Flip the default to the new flow](default-flip.md) — the interim design ships first
+- [Flip the default to the new flow](default-flip.md) — the rethink follows the migration
+- [The roll's measurements as their own recipe section](../nf-calibration/roll-section.md)
+  — the interim this would replace ships first
+- [Two renderings: `direct` and `default`](../nf-destinations/direct-preset.md) — likewise

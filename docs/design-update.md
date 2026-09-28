@@ -1,10 +1,12 @@
 # Design update
 
-**Status:** agreed direction from a design discussion, 2026-09-16/17. **Not yet
-applied** to `design-spec.md`, `TASKS.md`, any task file or CLAUDE.md. Where
-this document contradicts them, it describes the intended design and they
-describe the current one. Folding it in (spec revision, task changes) is
-follow-up work and has not been planned. Git history keeps earlier versions of
+**Status:** agreed direction from a design discussion, 2026-09-16/17, extended by
+dated sections since (e.g. Part 2's "Two renderings", 2026-09-27). **The migration
+carries it out**: `docs/nf-migration.md` and the `nf-*` epics in `docs/TASKS.md` and
+their task files are the plan for it, and are kept in step with each dated section as it
+lands. `design-spec.md` and CLAUDE.md describe the current chain and are brought in line
+task by task as the new one ships; where they contradict this document, this is the
+intended design. Git history keeps earlier versions of
 this document. Part 1's first version set a different goal ("estimate scene
 exposure, per stock"); it was replaced on 2026-09-17 for the reasons recorded
 below. The 2026-09-17 revision also folds in two independent reviews (a repo

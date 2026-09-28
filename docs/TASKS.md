@@ -598,6 +598,8 @@ graph TD
   nf-calibration/roll-section --> nf-destinations/direct-preset
   nf-destinations/direct-preset --> nf-look/contrast-definition
   nf-core/default-flip --> nf-core/three-step-pipeline
+  nf-calibration/roll-section --> nf-core/three-step-pipeline
+  nf-destinations/direct-preset --> nf-core/three-step-pipeline
   nf-calibration/roll-white-rule --> nf-look/desaturation-band-refit
   nf-display-stages/parametric-operator --> nf-look/desaturation-band-refit
   nf-display-stages/parametric-operator --> nf-display-stages/parametric-shoulder
@@ -1150,8 +1152,9 @@ the design in `docs/design-update.md`:
 - `nf-core/one-luma-dot` (new flow): `nf-look/path-to-white`
   — `dot` is copied in four stages, and the look imports fit range's. Done
   2026-09-24: one copy in `pipeline::colorimetry`
-- `nf-core/three-step-pipeline` (new flow): `nf-core/default-flip`
-  — filed 2026-09-27, unscheduled: the interim design ships first
+- `nf-core/three-step-pipeline` (new flow): `nf-core/default-flip`, `nf-calibration/roll-section`, `nf-destinations/direct-preset`
+  — filed 2026-09-27, unscheduled: the interim design (the `roll` section and
+  `--rendering`) ships first, and the default flips
 - `nf-docs/reference-sweep` (new flow): none
   — about a dozen `src/` and doc pointers still assert an inactive task is
   live or owns a decision
