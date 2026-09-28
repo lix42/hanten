@@ -2,7 +2,6 @@
 
 # Rust
 /target
-/vendor/ultrahdr-sys/target/
 
 # Python (nctool toolkit — scripts/analysis)
 __pycache__/

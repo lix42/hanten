@@ -1217,7 +1217,7 @@ pub struct HolderDepths {
 /// distinction must be able to extend the arguments instead of rewriting every
 /// call site.
 pub fn effective_area(image: &LinearImage, inset_frac: f32) -> Result<EffectiveArea> {
-    // The same check `cli::validate` runs, so a programmatic caller cannot bypass
+    // The same check `cli::validate_shared` runs, so a programmatic caller cannot bypass
     // the bound and the two gates cannot disagree about it.
     check_measure_inset(inset_frac)?;
     let holder = holder_depths(image);

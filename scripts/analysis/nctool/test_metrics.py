@@ -1107,8 +1107,8 @@ class SpaceFromRecipe(unittest.TestCase):
             self.assertEqual(space, "display-p3", preset)
             self.assertIn(preset, why)
 
-    def test_new_chain_destinations_resolve_on_gamut_and_transfer(self):
-        """A new-chain recipe (`recipe_version` 2) names a destination, not a preset:
+    def test_destination_recipes_resolve_on_gamut_and_transfer(self):
+        """A `recipe_version` 2 recipe names a destination, not a preset:
         its space comes from the gamut and the transfer, the row key of
         `DESTINATION_SPACES`."""
         def display(**axes):
@@ -1131,7 +1131,7 @@ class SpaceFromRecipe(unittest.TestCase):
                 metrics.space_for_recipe(display(**axes))
             self.assertIn(expected, str(caught.exception), axes)
 
-    def test_a_new_chain_destination_left_to_derivation_is_refused(self):
+    def test_a_destination_left_to_derivation_is_refused(self):
         """nc derives an unset axis from its destination table; a second copy of
         that table here is the drift it exists to prevent, so the resolved one is
         asked for instead."""
@@ -1140,10 +1140,35 @@ class SpaceFromRecipe(unittest.TestCase):
         self.assertIn("new_flow.destination", str(caught.exception))
 
     def test_the_default_preset_resolves(self):
-        """A recipe with no output section is nc's default, `gain-map-hdr`."""
+        """A preset recipe with no output section is a preset build's default,
+        `gain-map-hdr`."""
         space, why = metrics.space_for_recipe({})
         self.assertEqual(space, "display-p3")
         self.assertIn("gain-map-hdr", why)
+
+    def test_a_run_reads_a_derived_destination_off_its_report(self):
+        """`hanten params` writes `{"display": {}}`, so a frozen v2 recipe routinely
+        leaves every axis to nc. The roll report states the resolved destination per
+        frame, and that is what the run is measured by."""
+        recipe = {"recipe_version": 2, "output": {"display": {}}}
+        resolved = {"display": {"range": "sdr", "transfer": "native",
+                                "gamut": "adobe-rgb", "container": "tiff"}}
+        report = {"frames": [{"new_flow": {"destination": resolved}},
+                             {"new_flow": {"destination": resolved}},
+                             {"status": "error"}]}
+        space, _ = metrics.space_for_run(recipe, report)
+        self.assertEqual(space, "adobe-rgb")
+        # Frames that disagree cannot share one space.
+        report["frames"].append({"new_flow": {"destination": "film-master"}})
+        with self.assertRaisesRegex(metrics.MetricsError, "different destinations"):
+            metrics.space_for_run(recipe, report)
+        # No frame states one: the recipe alone decides, and refuses what it leaves open.
+        with self.assertRaisesRegex(metrics.MetricsError, "new_flow.destination"):
+            metrics.space_for_run(recipe, {"frames": []})
+        # A preset build's run is resolved from its recipe, as before.
+        space, _ = metrics.space_for_run({"output": {"preset": "compatibility"}},
+                                         {"frames": []})
+        self.assertEqual(space, "srgb")
 
     def test_output_profile_overrides_the_non_atomic_presets(self):
         # `prophoto` resolves to the **pure 1.8** space, not the piecewise ROMM
@@ -1269,6 +1294,24 @@ class Rollup(unittest.TestCase):
             (self.root / "converted/nc/cfg/R/metrics.json").read_text())
         self.assertEqual(record["space"]["declared"], "linear-srgb")
         self.assertIn("command line", record["space"]["source"])
+
+    def test_a_destination_builds_space_comes_from_its_report(self):
+        """Its frozen recipe leaves the axes to nc (`{"display": {}}`), which
+        `space_for_recipe` refuses; the roll report states them resolved."""
+        base = self.write_run([("a", 1.0, "ok")])
+        tags = json.loads((base / "tags.json").read_text())
+        tags["recipe"] = {"recipe_version": 2, "output": {"display": {}}}
+        (base / "tags.json").write_text(json.dumps(tags))
+        report = json.loads((base / "roll-report.json").read_text())
+        for frame in report["frames"]:
+            frame["new_flow"] = {"destination": {"display": {
+                "range": "sdr", "transfer": "native", "gamut": "adobe-rgb",
+                "container": "tiff"}}}
+        (base / "roll-report.json").write_text(json.dumps(report))
+        code, err = self._run()
+        self.assertEqual(code, 0, err)
+        record = json.loads((base / "metrics.json").read_text())
+        self.assertEqual(record["space"]["declared"], "adobe-rgb")
 
     def test_an_avif_preset_is_refused_before_any_measurement(self):
         """A container with no reader must fail before a single frame is read."""

@@ -1,4 +1,4 @@
-//! The new chain's gain-map JPEG: an SDR base and a three-channel gain map, described
+//! The gain-map JPEG destination: an SDR base and a three-channel gain map, described
 //! by ISO 21496-1 metadata **only**, in a Multi-Picture Format container nc writes
 //! itself (`nf-destinations/gain-map-destination`).
 //!
@@ -11,9 +11,8 @@
 //! ```
 //!
 //! **Every APP segment sits before `SOF0`.** A reader stops scanning for `APPn` at the
-//! frame header; the current chain's container once shipped an ISO segment past it and
-//! ImageIO saw no gain map at all (`io::ultra_hdr::insert_baseline_iso_segment`). The
-//! JPEG encoder writes every segment it is given in the header block, in order, so
+//! frame header; the removed Ultra HDR container once shipped an ISO segment past it
+//! and ImageIO saw no gain map at all. The JPEG encoder writes every segment it is given in the header block, in order, so
 //! nothing here is spliced after encoding.
 //!
 //! **MPF** follows libultrahdr's layout — big-endian, an MP Index IFD of three tags
@@ -33,6 +32,8 @@
 //! Verify any change here with `scripts/iso-decoder-oracle/` (manual, macOS-only):
 //! a well-formed file can still be one no decoder parses.
 
+pub(crate) mod metadata;
+
 use std::path::Path;
 
 use jpeg_encoder::ColorType;
@@ -40,7 +41,6 @@ use jpeg_encoder::ColorType;
 use crate::io::jpeg::{encode_jpeg, quantize_u8};
 use crate::io::staged::{self, Staged};
 use crate::pipeline::gain_encode::{self, GainMapImage};
-use crate::pipeline::gain_map::iso;
 use crate::types::{EncodeOutcome, LinearImage, NcError, Result};
 
 /// The label an MPF APP2 segment's content starts with.
@@ -78,8 +78,8 @@ pub fn encode(
 
 /// The ISO field set `map` states: its per-channel window, gamma and offset, over a
 /// base at reference white.
-fn fields(map: &GainMapImage, alternate_headroom: f32) -> Result<iso::IsoGainMapFields> {
-    iso::fields(&iso::Stated {
+fn fields(map: &GainMapImage, alternate_headroom: f32) -> Result<metadata::IsoGainMapFields> {
+    metadata::fields(&metadata::Stated {
         gain_min_log2: map.window.log2_min,
         gain_max_log2: map.window.log2_max,
         gamma: [gain_encode::GAMMA; 3],
@@ -96,7 +96,7 @@ fn assemble(
     height: u32,
     icc: &[u8],
     map: &GainMapImage,
-    fields: &iso::IsoGainMapFields,
+    fields: &metadata::IsoGainMapFields,
 ) -> Result<Vec<u8>> {
     let gain_jpeg = encode_jpeg(
         &map.rgb,
@@ -105,7 +105,9 @@ fn assemble(
         None,
         "gain map",
         ColorType::Rgb,
-        vec![iso::segment_content(&iso::serialize_metadata(fields)?)],
+        vec![metadata::segment_content(&metadata::serialize_metadata(
+            fields,
+        )?)],
     )?;
     let mut base_jpeg = encode_jpeg(
         base_rgb,
@@ -115,7 +117,7 @@ fn assemble(
         "SDR base",
         ColorType::Rgb,
         vec![
-            iso::segment_content(&iso::serialize_version(fields)),
+            metadata::segment_content(&metadata::serialize_version(fields)),
             mpf_content(0, 0, 0),
         ],
     )?;
@@ -239,7 +241,7 @@ mod tests {
 
     /// A small frame whose red channel carries highlight gain in one quadrant, so the
     /// map is live and chromatic.
-    fn sample() -> (Vec<u8>, GainMapImage, iso::IsoGainMapFields, Vec<f32>) {
+    fn sample() -> (Vec<u8>, GainMapImage, metadata::IsoGainMapFields, Vec<f32>) {
         let (width, height) = (16_u32, 16_u32);
         let mut sdr = Vec::new();
         let mut hdr = Vec::new();
@@ -338,8 +340,11 @@ mod tests {
             let length = usize::from(u16::from_be_bytes([jpeg[content - 2], jpeg[content - 1]]));
             jpeg[content + 28..content - 2 + length].to_vec()
         };
-        assert_eq!(payload(base), iso::serialize_version(&fields));
-        assert_eq!(payload(gain), iso::serialize_metadata(&fields).unwrap());
+        assert_eq!(payload(base), metadata::serialize_version(&fields));
+        assert_eq!(
+            payload(gain),
+            metadata::serialize_metadata(&fields).unwrap()
+        );
         // No legacy XMP, no Exif: the only dialect is ISO's.
         let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
         assert!(!contains(b"hdrgm"));

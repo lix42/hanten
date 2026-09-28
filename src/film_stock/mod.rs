@@ -453,4 +453,22 @@ mod tests {
             );
         }
     }
+
+    /// Every measured sheet's `D-min` carries the orange mask: blue densest, red
+    /// thinnest. A table read off the wrong plot, or with two channels swapped, breaks
+    /// the order — which is all these diagnostic values are checked for, since no render
+    /// path reads them (the measured roll base is authoritative).
+    #[test]
+    fn every_measured_d_min_carries_the_orange_mask() {
+        for sc in curves::STOCKS {
+            let Some([r, g, b]) = sc.d_min else { continue };
+            assert!(
+                0.0 < r && r < g && g < b,
+                "{} ({}): D-min {:?} is not ordered red < green < blue",
+                sc.publication,
+                sc.revision,
+                [r, g, b]
+            );
+        }
+    }
 }

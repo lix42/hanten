@@ -1,9 +1,8 @@
-//! **Goldens for the new flow's stages** (`nf-verification/stage-goldens`): the fixed
+//! **Goldens for the chain's stages** (`nf-verification/stage-goldens`): the fixed
 //! decode, the NC film RGB v1 mapping, and each stage of [`chain`].
 //!
-//! The new chain's counterpart of `stages::golden`, written fresh rather than
-//! re-pointing that module's vectors: `golden::pixels()` is shared with every
-//! historical `PIPELINE_FINGERPRINTS` row, and it retires with the legacy path.
+//! Written fresh rather than re-pointing the removed chain's `stages::golden` vectors
+//! (in git history), whose inputs every historical `PIPELINE_FINGERPRINTS` row hashed.
 //!
 //! **Small, curated, decode-independent**: a handful of values fed straight into each
 //! stage, no file and no assets, captured as raw `f32` bits. A failure names its stage
@@ -76,7 +75,7 @@ use crate::types::{DEFAULT_HEADROOM_STOPS, FilmBase, LinearImage};
 const NAN: u32 = 0x7fc0_0000;
 
 /// The accuracy premise every window rests on: a conforming libm is within 1 ULP on
-/// `log10`, `powf` and `exp2`. Deliberately the weak bound — `stages::golden`'s
+/// `log10`, `powf` and `exp2`. Deliberately the weak bound — the removed `stages::golden`'s
 /// `LIBM_MAX_ERROR_ULPS` records why a margin-based argument failed on real targets.
 const LIBM_MAX_ERROR_ULPS: i64 = 1;
 
@@ -568,7 +567,7 @@ fn golden_fit_range_sdr_is_bit_identical() {
 }
 
 /// An HDR display's peak: 1000 nits over 203-nit reference white. Stated here rather
-/// than borrowed from `pipeline::hdr`, which retires with the legacy chain.
+/// than borrowed from `pipeline::hdr`, so the golden does not follow the code it checks.
 const HDR_PEAK: f32 = 1000.0 / 203.0;
 
 /// The HDR peak's operator for one pixel, written out independently of the stage,
@@ -1125,7 +1124,7 @@ fn golden_fit_gamut_bt2020_is_bit_identical() {
 
 // --- threaded ----------------------------------------------------------------
 
-/// The new flow's default destination: an SDR display in Display P3.
+/// The default destination: an SDR display in Display P3.
 const SDR_P3: DisplayTarget = DisplayTarget {
     peak: DisplayPeak::SDR,
     gamut: DestinationGamut::DisplayP3,

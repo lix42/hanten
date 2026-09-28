@@ -25,7 +25,7 @@ MATRIX = {
     "schema_version": 1,
     "title": "Two presets",
     "output_preset": "gain-map-hdr",
-    "common_args": ["--print-exposure", "0.5"],
+    "common_args": ["--exposure", "0.5"],
     "metrics": {"inset": 0.1},
     "configs": [
         {"id": "generic", "label": "generic", "args": ["--density-gamma", "2.2"]},
@@ -49,17 +49,20 @@ class TestMatrix(unittest.TestCase):
     def test_reads_the_configs_in_order(self):
         matrix = load()
         self.assertEqual([c["id"] for c in matrix["configs"]], ["generic", "stock"])
-        self.assertEqual(matrix["suffix"], "jpg")
+        self.assertEqual(matrix["outputs"], {"preset": {
+            "suffix": "jpg", "render_args": ["--output-preset", "gain-map-hdr"],
+            "label": "gain-map-hdr"}})
 
-    def test_a_destination_matrix_renders_the_new_chain(self):
+    def test_a_destination_renders_through_the_destination_flags(self):
         destination = {"display": {"range": "hdr", "transfer": "linear",
                                    "gamut": "bt2020", "container": "tiff"}}
         matrix = review.load_matrix(write({
             **{k: v for k, v in MATRIX.items() if k != "output_preset"},
             "destination": destination}))
-        self.assertEqual(matrix["suffix"], "tiff")
-        self.assertEqual(matrix["render_args"],
-                         ["--new-flow", "--range", "hdr", "--transfer", "linear",
+        self.assertEqual(list(matrix["outputs"]), ["destination"])
+        self.assertEqual(matrix["outputs"]["destination"]["suffix"], "tiff")
+        self.assertEqual(matrix["outputs"]["destination"]["render_args"],
+                         ["--range", "hdr", "--transfer", "linear",
                           "--gamut", "bt2020", "--container", "tiff"])
         self.assertEqual(review.destination_metrics_space(destination)[0], "linear-bt2020")
         # The cell is measured only when nc reports the destination the matrix asked for.
@@ -71,18 +74,26 @@ class TestMatrix(unittest.TestCase):
         master = review.load_matrix(write({
             **{k: v for k, v in MATRIX.items() if k != "output_preset"},
             "destination": "film-master"}))
-        self.assertEqual(master["render_args"], ["--new-flow", "--film-master"])
+        self.assertEqual(master["outputs"]["destination"]["render_args"],
+                         ["--film-master"])
 
-    def test_a_matrix_states_one_output_target(self):
-        with self.assertRaisesRegex(review.ReviewError, "exactly one of"):
-            load(destination="film-master")
+    # A build axis mixing the reference build (presets) with a current one
+    # (destinations) needs both stated; which one a build gets is its own business.
+    def test_a_matrix_states_one_output_per_interface(self):
+        both = load(destination="film-master")
+        self.assertEqual(sorted(both["outputs"]), ["destination", "preset"])
+        self.assertEqual(both["outputs"]["preset"]["suffix"], "jpg")
+        self.assertEqual(both["outputs"]["destination"]["suffix"], "tiff")
+        with self.assertRaisesRegex(review.ReviewError, "state the output"):
+            review.load_matrix(write(
+                {k: v for k, v in MATRIX.items() if k != "output_preset"}))
         with self.assertRaisesRegex(review.ReviewError, "destination.display.container"):
             review.load_matrix(write({
                 **{k: v for k, v in MATRIX.items() if k != "output_preset"},
                 "destination": {"display": {"range": "sdr", "transfer": "native",
                                             "gamut": "display-p3"}}}))
         with self.assertRaisesRegex(review.ReviewError, "state it once as destination"):
-            load(common_args=["--new-flow"])
+            load(common_args=["--film-master"])
 
     def test_refuses_an_unknown_output_preset(self):
         with self.assertRaisesRegex(review.ReviewError, "unknown output_preset"):
@@ -589,7 +600,8 @@ class TestBuildOverrides(unittest.TestCase):
 class TestResolveBinaries(unittest.TestCase):
     """The pre-flight: every binary is checked before a single cell renders."""
 
-    def fake(self, banner: str = "hanten 0.1.0", name: str = "fake") -> str:
+    def fake(self, banner: str = "hanten 0.1.0\npipeline_version: 8 (x)",
+             name: str = "fake") -> str:
         directory = Path(tempfile.mkdtemp(prefix="nc-review-bin-"))
         path = directory / name
         path.write_text(f"#!/bin/sh\necho '{banner}'\n", encoding="utf-8")
@@ -609,7 +621,8 @@ class TestResolveBinaries(unittest.TestCase):
         cwd = Path(tempfile.mkdtemp(prefix="nc-review-cwd-"))
         default = cwd / review.DEFAULT_NC
         default.parent.mkdir(parents=True)
-        default.write_text("#!/bin/sh\necho 'hanten 0.1.0'\n", encoding="utf-8")
+        default.write_text("#!/bin/sh\necho 'hanten 0.1.0\npipeline_version: 8'\n",
+                           encoding="utf-8")
         default.chmod(0o755)
         with contextlib.chdir(cwd):
             resolved = review.resolve_binaries([], {}, None)
@@ -625,9 +638,24 @@ class TestResolveBinaries(unittest.TestCase):
     # and prints `nc`. A pre-flight
     # that demanded `hanten` would reject exactly that binary.
     def test_accepts_the_pre_rename_banner(self):
-        binary = self.fake(banner="nc 0.1.0")
+        binary = self.fake(banner="nc 0.1.0\npipeline_version: 5 (x)")
         self.assertEqual(len(review.resolve_binaries(
             [{"id": "old", "label": "old", "note": None, "nc": binary}], {}, None)), 1)
+
+    # The interface is read off the binary, never off a name the matrix gave it.
+    def test_reads_each_builds_interface_off_its_banner(self):
+        old = self.fake(banner="nc 0.1.0\npipeline_version: 5 (x)", name="old")
+        new = self.fake(name="new")
+        resolved = review.resolve_binaries(
+            [{"id": "new", "label": "n", "note": None, "nc": old},
+             {"id": "old", "label": "o", "note": None, "nc": new}], {}, None)
+        self.assertEqual([(b["pipeline_version"], b["interface"]) for b in resolved],
+                         [(5, "preset"), (8, "destination")])
+
+    def test_refuses_a_banner_that_states_no_pipeline_version(self):
+        binary = self.fake(banner="hanten 0.1.0")
+        with self.assertRaisesRegex(review.ReviewError, "states no pipeline_version"):
+            review.resolve_binaries([], {}, binary)
 
     def test_refuses_something_that_is_not_this_projects_cli(self):
         binary = self.fake(banner="netcat")
@@ -1018,8 +1046,10 @@ FAKE_NC = '''#!{python}
 import json, pathlib, sys
 here = pathlib.Path(__file__).resolve().parent
 if "--version" in sys.argv:
-    print("hanten 0.1.0\\ncommit: {banner}")
+    print("hanten 0.1.0\\npipeline_version: {version} (x)\\ncommit: {banner}")
     raise SystemExit(0)
+with open(here / "{name}.argv", "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
 if "--strict" in sys.argv:
     # The shape measured off the release binary: `--strict` gates *after*
     # encoding, so the image and its sidecar are on disk and the exit is still 1.
@@ -1036,7 +1066,7 @@ index = int(counter.read_text()) if counter.exists() else 0
 counter.write_text(str(index + 1))
 dest = pathlib.Path(sys.argv[sys.argv.index("-o") + 1])
 dest.write_bytes(b"II*\\x00")
-identity = {{"nc_version": "0.1.0", "git_dirty": False, "pipeline_version": 5,
+identity = {{"nc_version": "0.1.0", "git_dirty": False, "pipeline_version": {reports},
             "target": "t", "git_commit": commits[min(index, len(commits) - 1)],
             "params_hash": "h%d" % index}}
 dest.with_name(dest.name + ".json").write_text(
@@ -1058,12 +1088,18 @@ class TestBuildAxisEndToEnd(unittest.TestCase):
              "frames": {"F1": {"roll": "R", "file": "f1.tif"},
                         "F2": {"roll": "R", "file": "f1.tif"}}}), encoding="utf-8")
 
-    def binary(self, name: str, *commits: str, banner: str | None = None) -> str:
+    def binary(self, name: str, *commits: str, banner: str | None = None,
+               version: int = 5, reports: int | None = None) -> str:
         """A fake nc whose renders report `commits` in turn and whose `--version`
-        states `banner` — the first commit unless a test needs the two to disagree."""
+        states `banner` — the first commit unless a test needs the two to disagree.
+
+        `version` is the `pipeline_version` its banner states (5 takes presets, 8
+        destinations) and `reports` the one its renders report, the same unless a
+        test needs them to disagree."""
         path = self.root / name
         path.write_text(FAKE_NC.format(python=sys.executable, commits=list(commits),
-                                       banner=banner or commits[0],
+                                       banner=banner or commits[0], version=version,
+                                       reports=version if reports is None else reports,
                                        name=name), encoding="utf-8")
         path.chmod(0o755)
         return str(path)
@@ -1087,6 +1123,73 @@ class TestBuildAxisEndToEnd(unittest.TestCase):
 
     def review_json(self) -> dict:
         return json.loads((self.root / "out" / "review.json").read_text(encoding="utf-8"))
+
+    def argvs(self, name: str) -> list[list[str]]:
+        """Every render argv the fake binary `name` was called with."""
+        log = self.root / f"{name}.argv"
+        if not log.exists():
+            return []
+        return [json.loads(line) for line in log.read_text().splitlines()]
+
+    # The reference build takes presets and a current one destinations; one matrix
+    # states both, and each build renders through the one its banner says it speaks.
+    def test_a_mixed_build_axis_renders_each_build_through_its_own_interface(self):
+        code, err = self.run_generate(
+            [{"id": "ref", "label": "reference", "nc": self.binary("a", "aaa", version=5)},
+             {"id": "new", "label": "candidate",
+              "nc": self.binary("b", "bbb", version=8)}],
+            output_preset="display-p3", destination="film-master", frames="F1")
+        self.assertEqual(code, 0, err)
+        [ref], [new] = self.argvs("a"), self.argvs("b")
+        self.assertEqual(ref[-2:], ["--output-preset", "display-p3"])
+        self.assertNotIn("--film-master", ref)
+        self.assertEqual(new[-1:], ["--film-master"])
+        self.assertNotIn("--output-preset", new)
+        self.assertEqual(sorted(self.review_json()["images"][0]["renditions"]),
+                         ["dflt@new", "dflt@ref"])
+        out = self.root / "out"
+        self.assertTrue((out / "F1-dflt@ref.tiff").is_file())
+        self.assertTrue((out / "F1-dflt@new.tiff").is_file())
+
+    # Refused in the pre-flight, before anything renders: otherwise every cell of
+    # that build fails on a flag it does not have.
+    def test_a_build_whose_interface_the_matrix_does_not_state_is_refused(self):
+        for version, stated, missing in ((8, {"output_preset": "display-p3"},
+                                          "states no destination"),
+                                         (5, {"destination": "film-master"},
+                                          "states no output_preset")):
+            with self.subTest(version=version):
+                name = f"x{version}"
+                matrix = {**{k: v for k, v in MATRIX.items() if k != "output_preset"},
+                          **stated}
+                path = write({**matrix, "common_args": [],
+                              "configs": [{"id": "dflt", "args": []}],
+                              "builds": [{"id": "only", "label": "only",
+                                          "nc": self.binary(name, "aaa",
+                                                            version=version)}]})
+                args = argparse.Namespace(
+                    matrix=str(path), fixtures=str(self.root / "fixtures.json"),
+                    frames=None, nc=None, build=None,
+                    asset_root=str(self.root / "assets"), out=str(self.root / "out"),
+                    no_metrics=True, force=False)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = review.cmd_generate(args)
+                self.assertEqual(code, 2)
+                self.assertIn(missing, err.getvalue())
+                self.assertIn(f"pipeline_version {version}", err.getvalue())
+                self.assertEqual(self.argvs(name), [])
+
+    # The interface was chosen from the banner, so a render reporting another
+    # version ran on flags chosen for a different binary.
+    def test_a_render_disagreeing_with_its_banners_version_aborts(self):
+        code, err = self.run_generate(
+            [{"id": "new", "label": "n",
+              "nc": self.binary("a", "aaa", version=8, reports=5)}],
+            destination="film-master")
+        self.assertEqual(code, 1)
+        self.assertIn("stated pipeline_version 8 before the run", err)
+        self.assertIn("No review.json was written", err)
 
     def test_two_builds_yield_two_cells_labelled_from_their_own_identity(self):
         code, _err = self.run_generate([

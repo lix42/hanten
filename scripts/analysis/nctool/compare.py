@@ -34,9 +34,18 @@ difference in the recorded statistics", not "the same image".
 functions depending on the depth of the artifact actually produced — quantized to
 `[0, 1]` for integer output, verbatim and unclamped for f32 — so a u16-vs-f32
 comparison would report a *unit* change as a rendering regression. That depth comes
-from the report's `output_render.encoding`, not from the `output.depth` knob: an
-atomic preset resolves its own container, so the knob says `u16` on a `film-master`
-run that writes f32 and on the 8-bit JPEG and 10-bit AVIF presets alike.
+from what the report says was written: `new_flow.destination` on a build that takes
+destinations, `output_render.encoding` on one that takes presets (the reference
+build) — never from a preset build's `output.depth` knob, which its atomic presets
+ignore.
+
+**Two output interfaces.** A build at or after `manifest.DESTINATION_PIPELINE`
+states its output as a destination, an earlier one (the reference build) as a preset.
+`run` reads which from the binary's `--version` banner, and a case adds
+`destination_args` or `preset_args` to its shared `args` accordingly — so one set,
+and one case name per frame, serves both builds of a comparison. A destination build
+reports no `params_hash`; it is read from the run's telemetry record instead, which
+is therefore required there.
 `identity.target` is likewise a real axis: transcendental
 libm results and the lcms2 transform differ by target (design-spec §8), so a
 cross-target diff must be read as such. `diff` surfaces `output_depth_changed`,
@@ -84,6 +93,8 @@ import os
 import subprocess
 import sys
 import tempfile
+
+from . import manifest as _manifest
 
 # The benchmark manifest lives beside the tool (repo-relative), not at the asset
 # root: it names *cases* (frame + recipe + flags), which are code-versioned
@@ -136,7 +147,8 @@ OUTPUT_EXTENSIONS = ("tiff", "tif", "jpg", "jpeg", "avif")
 # values `output.depth` can hold.
 OUTPUT_DEPTHS = ("u8", "u10", "u16", "f32")
 
-# The primary artifact's depth per `output_render.encoding` identifier.
+# A preset build's primary artifact depth, per `output_render.encoding` identifier
+# (a destination build's comes from `depth_for_destination`).
 #
 # **Not `recipe.output.depth`.** That is the *knob*, and an atomic preset ignores it:
 # a `film-master` run reports `depth: "u16"` while writing unclamped f32 and a mean in
@@ -183,8 +195,8 @@ NUMERIC_FRAME_FIELDS = ("clipped", "non_finite", "total_samples", "clip_fraction
 
 # Identity fields a *run record* must carry to be attributable at all. Deliberately
 # **not** `REQUIRED_REPORT["identity"]`: that describes an `nc` report, whereas a
-# record's identity is `_build_identity`'s output, which drops `params_hash` on
-# purpose (it is per-frame — a benchmark set spans several recipes). `git_commit` /
+# record's identity is `_build_identity`'s output, which never carries `params_hash`
+# (it is per-frame — a benchmark set spans several recipes). `git_commit` /
 # `git_dirty` stay optional because a no-git build legitimately omits them, and
 # `pins_source` already refuses to draw determinism conclusions without them.
 REQUIRED_RECORD_IDENTITY = ("nc_version", "pipeline_version", "target")
@@ -192,8 +204,11 @@ REQUIRED_RECORD_IDENTITY = ("nc_version", "pipeline_version", "target")
 # Report blocks `run` needs, with the sub-fields the verdict actually reads. A build
 # predating `core/conversion-versioning` has none of them; a *malformed* report may
 # have the block and not the field, which is just as unusable and must be as loud.
+#
+# `params_hash` is not among them: a preset build reports it in `identity`, a
+# destination build only in telemetry, so `params_hash_for` checks it separately.
 REQUIRED_REPORT = {
-    "identity": ("params_hash", "pipeline_version", "nc_version", "target"),
+    "identity": ("pipeline_version", "nc_version", "target"),
     "output_stats": ("mean",),
     "loss": ("total_samples", "clipped_low", "clipped_high", "non_finite"),
 }
@@ -346,8 +361,16 @@ def resolve_cases(bench: dict, set_name: str, asset_root: str,
         if output_ext not in OUTPUT_EXTENSIONS:
             return [], (f"case {name!r}: output_ext {output_ext!r} is not one of "
                         f"{', '.join(sorted(OUTPUT_EXTENSIONS))}")
+        # `args` go to every build; `destination_args` / `preset_args` only to a
+        # build that takes that output interface (`manifest.output_interface`).
+        extra = {}
+        for key in ("args", "destination_args", "preset_args"):
+            value = case.get(key, [])
+            if not (isinstance(value, list) and all(isinstance(v, str) for v in value)):
+                return [], f"case {name!r}: `{key}` must be a list of strings"
+            extra[key] = list(value)
         out.append(dict(name=name, input=path, recipe=recipe, output_ext=output_ext,
-                        args=list(case.get("args", [])), expect_sha256=expect))
+                        expect_sha256=expect, **extra))
     if not out:
         return [], f"benchmark set {set_name!r} has no cases"
     # A duplicate case name would produce two frames `diff` then matches by one name,
@@ -387,6 +410,40 @@ def clip_fraction(loss: dict) -> float:
     return (_number(loss.get("clipped_low")) + _number(loss.get("clipped_high"))) / total
 
 
+def depth_for_destination(destination) -> str | None:
+    """The primary artifact's depth for a resolved destination (`new_flow.destination`),
+    or `None` for one this does not know — refused by the caller, never guessed.
+
+    The film master and a `linear` transfer write unclamped f32; otherwise the
+    container decides — the gain-map JPEG is 8-bit, the AVIF 10-bit, the TIFF u16.
+    """
+    if destination == "film-master":
+        return "f32"
+    display = _dict(_dict(destination).get("display"))
+    if display.get("transfer") == "linear":
+        return "f32"
+    return {"tiff": "u16", "jpeg": "u8", "avif": "u10"}.get(display.get("container"))
+
+
+def primary_depth(report: dict) -> str | None:
+    """The depth of the artifact a run wrote, from what its report says it resolved:
+    `new_flow.destination` on a destination build, `output_render.encoding` on a
+    preset build. `None` when neither is present and known."""
+    new_flow = _dict(report.get("new_flow"))
+    if "destination" in new_flow:
+        return depth_for_destination(new_flow["destination"])
+    return PRIMARY_DEPTH_BY_ENCODING.get(_dict(report.get("output_render")).get("encoding"))
+
+
+def params_hash_for(report: dict, telemetry: dict | None) -> str | None:
+    """The run's `params_hash`: in the report's `identity` on a preset build, in the
+    telemetry record's `conversion` on a destination build."""
+    value = _dict(report.get("identity")).get("params_hash")
+    if value is None:
+        value = _dict(_dict(telemetry).get("conversion")).get("params_hash")
+    return value if isinstance(value, str) and value else None
+
+
 def _report_gaps(report: dict) -> list[str]:
     """Which of the blocks/fields the comparison basis needs are missing from an `nc`
     report. Checks the *fields the verdict reads*, not just the blocks: a present
@@ -405,8 +462,9 @@ def _report_gaps(report: dict) -> list[str]:
         if mean is not None and not (isinstance(mean, list) and len(mean) == 3
                                      and all(isinstance(v, (int, float)) for v in mean)):
             gaps.append("output_stats.mean (must be three numbers)")
-    if _dict(report.get("output_render")).get("encoding") not in PRIMARY_DEPTH_BY_ENCODING:
-        gaps.append("output_render.encoding (a known primary encoding)")
+    if primary_depth(report) is None:
+        gaps.append("the output's depth (a known new_flow.destination, or a known "
+                    "output_render.encoding)")
     return gaps
 
 
@@ -423,7 +481,7 @@ def convert_case(nc: str, case: dict, workdir: str,
     scraped from `--version` text, so the record and the report can't disagree.
     """
     # The suffix follows the case, because nc validates it against the resolved
-    # preset and never renames the path. A case selecting a JPEG or AVIF preset would
+    # output and never renames the path. A case selecting a JPEG or AVIF preset would
     # otherwise fail the CLI suffix check before producing a report, making the
     # `u8`/`u10` entries in PRIMARY_DEPTH_BY_ENCODING unreachable.
     # `.get` with the same default `resolve_cases` applies: a hand-built case (the
@@ -435,6 +493,9 @@ def convert_case(nc: str, case: dict, workdir: str,
     if case["recipe"]:
         argv += ["--params", case["recipe"]]
     argv += case["args"]
+    # The interface-specific half of the case (`destination_args` / `preset_args`),
+    # chosen by `cmd_run` from the binary's banner. A hand-built case has none.
+    argv += case.get("interface_args", [])
     proc = subprocess.run(argv, capture_output=True, text=True)
     if proc.returncode != 0:
         return None, {}, (f"case {case['name']!r}: nc exited {proc.returncode}\n"
@@ -460,10 +521,17 @@ def convert_case(nc: str, case: dict, workdir: str,
     stats = report["output_stats"]
     loss = report["loss"]
     timing: dict = {}
-    record, err = load_json(tel)
-    if err:
+    record, tel_err = load_json(tel)
+    phash = params_hash_for(report, record)
+    if phash is None:
+        # A destination build states `params_hash` only in telemetry, so there the
+        # record is not optional: a frame with no hash cannot say which recipe ran.
+        return None, {}, (
+            f"case {case['name']!r}: no params_hash in the report's identity or the "
+            f"telemetry record's conversion ({tel_err or 'the record has none'})")
+    if tel_err:
         # Timings are informational; losing them must not sink the comparison.
-        print(f"warning: case {case['name']!r}: no telemetry record ({err})",
+        print(f"warning: case {case['name']!r}: no telemetry record ({tel_err})",
               file=sys.stderr)
     else:
         timing = _dict(_dict(record).get("timing_ms"))
@@ -472,14 +540,12 @@ def convert_case(nc: str, case: dict, workdir: str,
         input=os.path.basename(case["input"]),
         input_sha256=case.get("input_sha256"),
         checksums=case.get("checksums", "skipped"),
-        params_hash=identity["params_hash"],
+        params_hash=phash,
         # `mean`'s units follow the depth of the artifact actually written (see the
         # module docstring), so that depth rides with it — a mean is not comparable
-        # without it. Taken from the resolved *encoding*, never from the
-        # `output.depth` knob an atomic preset ignores. Reachable only because
-        # `_report_gaps` already proved the chain is well-formed dicts ending in a
-        # known encoding identifier.
-        output_depth=PRIMARY_DEPTH_BY_ENCODING[report["output_render"]["encoding"]],
+        # without it. Taken from the resolved output, never from the `output.depth`
+        # knob an atomic preset ignores; `_report_gaps` already proved it is known.
+        output_depth=primary_depth(report),
         mean=stats["mean"],
         clipped=_number(loss.get("clipped_low")) + _number(loss.get("clipped_high")),
         non_finite=_number(loss.get("non_finite")),
@@ -565,6 +631,12 @@ def cmd_run(args) -> int:
     if not os.path.isfile(args.nc) or not os.access(args.nc, os.X_OK):
         print(f"error: not an executable binary: {args.nc}", file=sys.stderr)
         return 2
+    interface, why = _manifest.probe_interface(args.nc)
+    if interface is None:
+        print(f"error: {why}", file=sys.stderr)
+        return 2
+    for case in cases:
+        case["interface_args"] = case[f"{interface}_args"]
 
     if err := _verify_inputs(cases, args.skip_checksums):
         print(f"error: {err}", file=sys.stderr)

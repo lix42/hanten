@@ -2,6 +2,14 @@
 
 > Target: Step 1 (MVP) · Language: Rust
 
+> **Partly superseded (`pipeline_version` 8, `nf-core/default-flip`).** The rendering
+> chain of [`design-update.md`](design-update.md) is now the only one. The sections
+> below that describe output presets (`--output-preset`, `output.preset`), the print
+> stage (`--print-exposure`, `--black-point`, `--auto-wb`, `--linear-range`), the
+> unversioned recipe, sidecars and `--new-flow` describe the removed chain; folding the
+> new design in is `nf-docs/design-spec`'s. Until it lands, `design-update.md` is the
+> design and [`using-nc.md`](using-nc.md) is what the binary accepts.
+
 ## 1. Purpose
 
 **Hanten** (the binary is `hanten`) is a command-line tool that reads a **film

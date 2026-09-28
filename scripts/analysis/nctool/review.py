@@ -18,11 +18,15 @@ grid cell per (frame, config) — a genuine second axis would mean a second togg
 
 Five properties worth keeping:
 
-* **Every config renders through the path being measured.** The matrix states one
-  `output_preset` for the whole set — or, for the new chain (`--new-flow`), one
-  `destination`: the recipe `output` value with every axis stated, or
-  `"film-master"` — and both the file suffix and the colour space the metrics are
-  read in come from *that* rather than from a guess about the bytes.
+* **Every config renders through the path being measured.** The matrix states the
+  output for the whole set, once per interface a build may speak: an
+  `output_preset` for builds that take presets (`pipeline_version` below
+  `manifest.DESTINATION_PIPELINE` — the reference build), a `destination` for
+  builds that take destinations (the recipe `output` value with every axis stated,
+  or `"film-master"`). Which one a build gets is read off its own `--version`
+  banner, never from a label, and a build needing one the matrix did not state is
+  refused before anything renders. Both the file suffix and the colour space the
+  metrics are read in come from *that* rather than from a guess about the bytes.
 * **A build's provenance is derived, never declared.** The matrix supplies a short
   name; the identity under it is read back off each render. A name a human typed is
   a claim, and a wrong claim about which binary made a cell is the one failure a
@@ -59,17 +63,19 @@ SCHEMA = 1
 #: The `review.json` schema the app parses (`tools/review-app/SCHEMA.md`).
 REVIEW_SCHEMA = 1
 
-#: Suffix per output preset, mirroring `cli::derived_extension`.
+#: Suffix per output preset, mirroring a preset build's `cli::derived_extension`.
 #:
-#: Not load-bearing in the dangerous direction: nc refuses an `-o` whose suffix
-#: its resolved preset does not accept, so a stale entry here fails loudly at the
-#: first render rather than writing a mislabelled file.
+#: Presets exist only on builds before `manifest.DESTINATION_PIPELINE` (the
+#: reference build), so this is the union of what those builds name. Not
+#: load-bearing in the dangerous direction: such a build refuses an `-o` whose
+#: suffix its resolved preset does not accept, so a stale entry here fails loudly
+#: at the first render rather than writing a mislabelled file.
 PRESET_SUFFIX: dict[str, str] = {
     "gain-map-hdr": "jpg",
     "ultra-hdr-v1": "jpg",
     "hdr-pq": "avif",
     "hdr-hlg": "avif",
-    # Retired from nc; kept for a reference-build arm that still names them.
+    # Retired before the last preset build; kept for the builds that still name them.
     "legacy": "tiff",
     "custom": "tiff",
     "film-master": "tiff",
@@ -113,18 +119,21 @@ def check_id(value: str, what: str, at: str) -> str:
 #: Flags the generator supplies itself, refused in a matrix.
 #:
 #: `nc` takes the **last** occurrence of a `Set` argument, so a config restating one
-#: would be silently overridden — and `--output-preset` decides the file suffix and
+#: would be silently overridden — and the output flags decide the file suffix and
 #: the colour space besides, so the override would not even be consistently ignored.
 #: `--report-file` belongs here too: it sends the report to a file *instead of*
 #: stdout, which is where the generator reads each cell's resolved recipe from —
 #: so a matrix passing it would lose the measurement on every cell that rendered
 #: perfectly well, and every cell would overwrite the same report path.
 OWNED_FLAGS = ("--output-preset", "-o", "--output", "--report", "--report-file",
-               # A `destination` matrix supplies these; a preset matrix cannot use them.
-               "--new-flow", "--range", "--transfer", "--gamut", "--container",
-               "--film-master")
+               # The matrix's `destination` supplies these.
+               "--range", "--transfer", "--gamut", "--container", "--film-master")
 
-#: Suffix per new-chain container, mirroring `destination::Container::canonical`.
+#: The matrix key that states the output for each interface a build may speak
+#: (`manifest.output_interface`).
+OUTPUT_KEYS = {"preset": "output_preset", "destination": "destination"}
+
+#: Suffix per destination container, mirroring `destination::Container::canonical`.
 CONTAINER_SUFFIX: dict[str, str] = {"tiff": "tiff", "jpeg": "jpg", "avif": "avif"}
 
 #: Placeholders a config's `args` may use, resolved per frame.
@@ -409,7 +418,7 @@ def reject_owned_flags(args: list[str], at: str) -> None:
                 f"{at}: {name} is set by the generator, not by the matrix"
                 + (" — state it once as output_preset" if name == "--output-preset" else "")
                 + (" — state it once as destination"
-                   if name in ("--new-flow", "--range", "--transfer", "--gamut",
+                   if name in ("--range", "--transfer", "--gamut",
                                "--container", "--film-master") else ""))
 
 
@@ -420,14 +429,14 @@ def destination_render(destination: object) -> tuple[str, list[str]]:
     matrix rather than off a copy of nc's derivation.
     """
     if destination == "film-master":
-        return "tiff", ["--new-flow", "--film-master"]
+        return "tiff", ["--film-master"]
     display = destination.get("display") if isinstance(destination, dict) else None
     if not isinstance(display, dict) or set(destination) != {"display"}:
         raise ReviewError(
             'destination must be "film-master" or {"display": {range, transfer, gamut, '
             f"container}}}}, got {destination!r}")
     _known_keys(display, set(_metrics.DESTINATION_AXES), "destination.display")
-    args = ["--new-flow"]
+    args = []
     for axis in _metrics.DESTINATION_AXES:
         value = _string(display.get(axis), f"destination.display.{axis}")
         args += [f"--{axis}", value]
@@ -477,24 +486,30 @@ def load_matrix(path: Path) -> dict:
         raise ReviewError(
             f"{path}: schema_version must be {SCHEMA}, got {version!r}")
 
-    if ("output_preset" in raw) == ("destination" in raw):
+    # One entry per interface the matrix can serve, keyed as `manifest.
+    # output_interface` names it. Both may be stated: a build axis mixing the
+    # reference build (presets) with a current one (destinations) needs both, and
+    # which one a build gets is decided from the build, in `check_interfaces`.
+    if "output_preset" not in raw and "destination" not in raw:
         raise ReviewError(
-            "state exactly one of output_preset (the current chain) or destination "
-            "(the new chain, --new-flow)")
+            "state the output: output_preset (for builds that take presets, "
+            f"pipeline_version < {_manifest.DESTINATION_PIPELINE}), destination (for "
+            "builds that take destinations), or both when the builds mix the two")
+    outputs: dict[str, dict] = {}
+    preset = destination = None
     if "destination" in raw:
-        preset = None
         destination = raw["destination"]
         suffix, render_args = destination_render(destination)
-        target = destination_label(destination)
-    else:
+        outputs["destination"] = {"suffix": suffix, "render_args": render_args,
+                                  "label": destination_label(destination)}
+    if "output_preset" in raw:
         preset = _string(raw.get("output_preset"), "output_preset")
         if preset not in PRESET_SUFFIX:
             known = ", ".join(sorted(PRESET_SUFFIX))
             raise ReviewError(f"unknown output_preset {preset!r}; known: {known}")
-        destination = None
-        suffix = PRESET_SUFFIX[preset]
-        render_args = ["--output-preset", preset]
-        target = preset
+        outputs["preset"] = {"suffix": PRESET_SUFFIX[preset],
+                             "render_args": ["--output-preset", preset],
+                             "label": preset}
 
     common = _string_list(raw.get("common_args", []), "common_args")
     placeholders_in(common, "common_args")
@@ -544,10 +559,9 @@ def load_matrix(path: Path) -> dict:
         "description": _optional_string(raw.get("description"), "description"),
         "output_preset": preset,
         "destination": destination,
-        "suffix": suffix,
-        # What the generator appends to every render, and how messages name it.
-        "render_args": render_args,
-        "target": target,
+        # Per interface: the suffix, what the generator appends to every render
+        # through a build of that interface, and how messages name it.
+        "outputs": outputs,
         "common_args": common,
         "builds": builds,
         # **Expanded, not declared.** Everything downstream — the collision check,
@@ -559,6 +573,26 @@ def load_matrix(path: Path) -> dict:
         "inset": float(inset),
         "output_dir": _optional_string(raw.get("output_dir"), "output_dir"),
     }
+
+
+def output_metrics_space(matrix: dict, interface: str) -> tuple[str | None, str]:
+    """`metrics_space` or `destination_metrics_space`, for one interface's output."""
+    if interface == "preset":
+        return metrics_space(matrix["output_preset"])
+    return destination_metrics_space(matrix["destination"])
+
+
+def output_cell_space(matrix: dict, interface: str,
+                      report: dict) -> tuple[str | None, str]:
+    """`cell_space` or `destination_cell_space`, for one rendered cell.
+
+    A preset build reports the recipe it resolved (`recipe`); a destination build
+    reports the destination instead (`new_flow.destination`) and no recipe at all.
+    """
+    if interface == "preset":
+        recipe = report.get("recipe") if isinstance(report.get("recipe"), dict) else {}
+        return cell_space(recipe, matrix["output_preset"])
+    return destination_cell_space(report, matrix["destination"])
 
 
 def metrics_space(preset: str) -> tuple[str | None, str]:
@@ -578,7 +612,7 @@ def metrics_space(preset: str) -> tuple[str | None, str]:
 
 
 def destination_metrics_space(destination: object) -> tuple[str | None, str]:
-    """`metrics_space` for a new-chain destination matrix."""
+    """`metrics_space` for a matrix's `destination`."""
     try:
         space, _why = _metrics.space_for_destination(destination)
     except _metrics.MetricsError as error:
@@ -587,8 +621,9 @@ def destination_metrics_space(destination: object) -> tuple[str | None, str]:
 
 
 def destination_cell_space(report: dict, expected: object) -> tuple[str | None, str]:
-    """`cell_space` for a new-chain cell: from the destination nc **reports** it
-    resolved (`new_flow.destination`), which must be the one the matrix asked for."""
+    """`cell_space` for a destination build's cell: from the destination nc
+    **reports** it resolved (`new_flow.destination`), which must be the one the
+    matrix asked for."""
     new_flow = report.get("new_flow") if isinstance(report.get("new_flow"), dict) else {}
     resolved = new_flow.get("destination")
     if resolved != expected:
@@ -599,7 +634,7 @@ def destination_cell_space(report: dict, expected: object) -> tuple[str | None, 
 
 
 def cell_space(recipe: dict, expected_preset: str) -> tuple[str | None, str]:
-    """The colour space one rendered cell is measured in, from its **own** recipe.
+    """The colour space a preset build's cell is measured in, from its **own** recipe.
 
     Resolved per cell from what `nc` reports it resolved, not from the matrix's
     preset name, because the preset name does not determine the space: `legacy`
@@ -732,9 +767,10 @@ def cell_identity(report: dict, dest: Path) -> dict | None:
     The two are the same value by construction (nc's `SidecarMeta` serializes the
     very `&Identity` the report carries, flattened into `meta`), and the report is
     already parsed here — so it is read first. The sidecar is a cheap second look
-    rather than a known need: no binary has been shown to write one without the
-    other, so the fallback is kept because it costs a line, not because a version
-    requiring it has been established.
+    rather than a known need, and only preset builds write one (a destination build
+    writes none): no binary has been shown to write one without the other, so the
+    fallback is kept because it costs a line, not because a version requiring it
+    has been established.
 
     `None` is an ordinary answer, not a failure: a build that identifies itself
     nowhere still renders pictures, and the run says once that it cannot label
@@ -764,6 +800,15 @@ def record_identity(identities: dict, build: dict, cell: str,
     is a run fault for the same reason: the binary at that path is the wrong one.
     """
     identity = build_identity(cell_identity(report, dest))
+    banner_version = build.get("pipeline_version")
+    reported_version = (identity or {}).get("pipeline_version")
+    if banner_version is not None and reported_version not in (None, banner_version):
+        # The interface this build renders through was chosen from its banner's
+        # version, so a render reporting another one ran on flags chosen for a
+        # different binary.
+        return (f"the binary {build['nc']} stated pipeline_version {banner_version} "
+                f"before the run, but {cell} reports {reported_version}; the binary "
+                "changed under the run, so every cell rendered under it is suspect")
     expected = build.get("expect_commit")
     if expected and (mismatch := commit_mismatch(expected, identity)):
         return (f"build {build['id']!r} ({build['nc']}) expects a clean build of "
@@ -901,6 +946,11 @@ def resolve_binaries(builds: list[dict], overrides: dict[str, str],
     `nc` banner** as well as `hanten`. That is load-bearing rather than tidy: the
     reference build this axis exists to compare against (`reserve`, from tag
     `pre-new-flow`) predates the rename and prints `nc`.
+
+    The same banner states the build's `pipeline_version`, which decides the output
+    interface it renders through (`manifest.output_interface`). A banner that states
+    none is refused: either guess would render every cell with a flag the binary may
+    not have.
     """
     # A matrix with no build axis is one unnamed build — the `--nc` binary — so the
     # render loop has a single shape rather than two.
@@ -919,18 +969,45 @@ def resolve_binaries(builds: list[dict], overrides: dict[str, str],
             raise ReviewError(
                 f"{named}{path} is not this project's CLI (its `--version` reported "
                 "neither `hanten <ver>` nor the pre-rename `nc <ver>`)")
+        banner = subprocess.run([str(path), "--version"], capture_output=True,
+                                text=True).stdout
         # Checked here as well as per cell: refusing now writes nothing, where the
         # render-time check has already rendered over the cell it refuses.
         if build.get("expect_commit"):
-            banner = subprocess.run([str(path), "--version"], capture_output=True,
-                                    text=True).stdout
             mismatch = commit_mismatch(build["expect_commit"], banner_identity(banner))
             if mismatch:
                 raise ReviewError(f"{named}{path} is not a clean build of "
                                   f"{build['expect_commit']} (`--version` reports "
                                   f"{mismatch})")
-        resolved.append({**build, "nc": str(path), "digest": _manifest.sha256(str(path))})
+        version = _manifest.banner_pipeline_version(banner)
+        if version is None:
+            raise ReviewError(
+                f"{named}{path} states no pipeline_version in `--version`, so whether "
+                "it takes output presets or destinations is unknown")
+        resolved.append({**build, "nc": str(path), "digest": _manifest.sha256(str(path)),
+                         "pipeline_version": version,
+                         "interface": _manifest.output_interface(version)})
     return resolved
+
+
+def check_interfaces(matrix: dict, resolved: list[dict]) -> None:
+    """Refuse a matrix that states no output for an interface one of its builds speaks.
+
+    Runs after `resolve_binaries`, because the interface is read off each binary,
+    and before any render: otherwise every cell of that build fails on a flag the
+    binary does not have, after the rest of the set has spent its time rendering.
+    """
+    for build in resolved:
+        interface = build["interface"]
+        if interface in matrix["outputs"]:
+            continue
+        named = (f"build {build['id']!r} ({build['nc']})" if build["id"]
+                 else f"the binary {build['nc']}")
+        speaks = ("output presets" if interface == "preset"
+                  else "destinations (--range/--transfer/--gamut/--container)")
+        raise ReviewError(
+            f"{named} is pipeline_version {build['pipeline_version']}, which takes "
+            f"{speaks}, but the matrix states no {OUTPUT_KEYS[interface]}; add one")
 
 
 def producer_block(build: dict | None, identity: dict | None) -> dict | None:
@@ -1101,7 +1178,7 @@ def _cast_note(report: dict) -> str | None:
     """The one-line G/R B/R summary the page shows beside the heading.
 
     Only for a **positive** red mean, which is not the same as a non-zero one:
-    the unclamped-float presets (`film-master`, `hdr-linear-tiff`) can report a
+    the unclamped-float outputs (`film-master`, a `linear` destination) can report a
     negative mean, and dividing by it prints sign-flipped ratios rather than no
     ratio at all.
     """
@@ -1150,6 +1227,7 @@ def cmd_generate(args) -> int:
 
         # From here on the faults are environmental.
         builds = resolve_binaries(matrix["builds"], overrides, args.nc)
+        check_interfaces(matrix, builds)
         assets = Path(args.asset_root).resolve()
         if not (assets / "manifest.json").is_file():
             raise ReviewError(f"no assets at {assets}")
@@ -1169,12 +1247,17 @@ def cmd_generate(args) -> int:
     for warning in duplicate_binary_warnings(builds):
         print(f"note: {warning}", file=sys.stderr)
 
-    readable, why_not = (metrics_space(matrix["output_preset"])
-                         if matrix["destination"] is None
-                         else destination_metrics_space(matrix["destination"]))
-    measuring = readable is not None and not args.no_metrics
-    if readable is None and not args.no_metrics:
-        print(f"note: no metrics — {why_not}", file=sys.stderr)
+    # Only the interfaces some build renders through: an output stated for a build
+    # this run does not have is not worth a note.
+    used = sorted({build["interface"] for build in builds})
+    readable: dict[str, bool] = {}
+    for interface in used:
+        space, why_not = output_metrics_space(matrix, interface)
+        readable[interface] = space is not None
+        if space is None and not args.no_metrics:
+            print(f"note: no metrics for {matrix['outputs'][interface]['label']} — "
+                  f"{why_not}", file=sys.stderr)
+    measuring = any(readable.values()) and not args.no_metrics
     if measuring:
         # Asked **once**, before anything renders. Measuring is the only part of
         # this toolkit that is not stdlib-only, and a fresh checkout has no venv
@@ -1187,10 +1270,12 @@ def cmd_generate(args) -> int:
             print(f"note: no metrics — {error}", file=sys.stderr)
             measuring = False
 
-    if matrix["suffix"] not in ("jpg", "avif"):
-        print(f"note: {matrix['target']} writes {matrix['suffix'].upper()}, which most "
-              "browsers do not display in an <img> (Safari does); the set will render but "
-              "most of it will show as broken images", file=sys.stderr)
+    for interface in used:
+        output = matrix["outputs"][interface]
+        if output["suffix"] not in ("jpg", "avif"):
+            print(f"note: {output['label']} writes {output['suffix'].upper()}, which "
+                  "most browsers do not display in an <img> (Safari does); the set will "
+                  "render but those cells will show as broken images", file=sys.stderr)
 
     fraction = _metrics.inset_fraction(matrix["inset"]) if matrix["inset"] else (
         0.0, 0.0, 1.0, 1.0)
@@ -1232,13 +1317,14 @@ def cmd_generate(args) -> int:
                 continue
 
             build = by_build[(config.get("build") or {}).get("id")]
-            dest = out / f"{rendition_stem(key, config['id'])}.{matrix['suffix']}"
+            output = matrix["outputs"][build["interface"]]
+            dest = out / f"{rendition_stem(key, config['id'])}.{output['suffix']}"
             # Recorded **before** the render, not after it succeeds: a `hanten`
             # that exits nonzero may already have written this file. `--strict`
             # gates *after* encoding, so a frame carrying the IR warning writes
-            # the image and its sidecar and then exits 1 — measured against the
-            # release binary, and `--strict` is not an owned flag, so an ordinary
-            # config may pass it. Booking it here makes a render that failed
+            # the image (and, on a preset build, its sidecar) and then exits 1 —
+            # measured against the binary — and `--strict` is not an owned flag, so
+            # an ordinary config may pass it. Booking it here makes a render that failed
             # before writing anything over-match, which is the same trade
             # `dest_key` makes for case: over-matching only deletes a stale index
             # that was arguably still true, while a miss leaves a lie in place and
@@ -1247,7 +1333,7 @@ def cmd_generate(args) -> int:
             try:
                 report = _render(Path(build["nc"]), source, dest,
                                  expand_args(matrix["common_args"] + config["args"], values)
-                                 + matrix["render_args"])
+                                 + output["render_args"])
             except ReviewError as error:
                 print(f"{cell}: {error}", file=sys.stderr)
                 failures.append(cell)
@@ -1258,13 +1344,10 @@ def cmd_generate(args) -> int:
                 break
 
             rendition: dict[str, object] = {"src": dest.name}
-            if measuring:
-                # The space this cell is measured in comes from the recipe `nc`
-                # reports it resolved — provenance, not the matrix's preset name.
-                space, why = (
-                    cell_space(report.get("recipe", {}), matrix["output_preset"])
-                    if matrix["destination"] is None
-                    else destination_cell_space(report, matrix["destination"]))
+            if measuring and readable[build["interface"]]:
+                # The space this cell is measured in comes from what `nc` reports
+                # it resolved — provenance, not the matrix's output name.
+                space, why = output_cell_space(matrix, build["interface"], report)
                 record_path = dest.with_name(dest.name + ".metrics.json")
                 if space is None:
                     print(f"{cell}: metrics skipped — {why}", file=sys.stderr)

@@ -188,7 +188,7 @@ pub const DISPLAY_P3: ColorSpace = ColorSpace {
 /// gamuts, and it is also the easiest pair to transcribe wrongly, so the tests
 /// assert both halves of the relationship rather than just the values.
 ///
-/// Two consumers. The new chain renders into it (`fit_gamut::DestinationGamut`'s
+/// Two consumers. The chain renders into it (`fit_gamut::DestinationGamut`'s
 /// Adobe RGB arm, through the pinned `ACESCG_TO_ADOBE_RGB`), and
 /// `scripts/analysis/nctool/metrics.py` measures Adobe RGB output against it. That
 /// analysis tool's tests re-read this file, because a set of primaries transcribed

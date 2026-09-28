@@ -124,9 +124,7 @@ pub fn adaptation(
 /// Composed linear RGB → linear RGB transform, adapting between adopted whites.
 ///
 /// When the two spaces share a white point the adaptation term is skipped
-/// entirely rather than multiplied by a near-identity matrix — that is both the
-/// correct thing to do and what `gain_map::BT2020_TO_DISPLAY_P3` (D65 → D65) was
-/// originally derived with.
+/// entirely rather than multiplied by a near-identity matrix.
 pub fn rgb_to_rgb(source: ColorSpace, destination: ColorSpace, cone: ConeResponse) -> Matrix3 {
     let src = normalized_primary_matrix(source);
     let dst_inverse = inverse(normalized_primary_matrix(destination));

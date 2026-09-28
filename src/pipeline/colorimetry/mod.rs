@@ -17,7 +17,8 @@
 //!    matrices and luma weights the runtime actually uses.
 //! 3. **Product policy** — reference white, peak luminance, display tone, gamut
 //!    policy, gain-map limits. These deliberately **stay with the stage that owns
-//!    them** (`pipeline::hdr`, `pipeline::gain_map`); they merely refer to the
+//!    them** (`pipeline::hdr`, `pipeline::fit_range`, `pipeline::gain_encode`); they
+//!    merely refer to the
 //!    named colour space here instead of repeating its colorimetry.
 //! 4. **Verification values** — tolerances and independent reference vectors,
 //!    which live in the test modules. Independent references are deliberately

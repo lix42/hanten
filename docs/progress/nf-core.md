@@ -932,8 +932,8 @@ boundary the SDR/HDR split will split *from*. Nothing about the no-flag path mov
 
 ## default-flip
 
-**Status:** not started
-**Updated:** 2026-09-26
+**Status:** in progress
+**Updated:** 2026-09-27
 
 - 2026-09-19: created with the new-flow plan. Goal: flip the default to the new flow.
 - 2026-09-26: two dependencies added (user). `nf-destinations/gain-map-destination`:
@@ -941,6 +941,18 @@ boundary the SDR/HDR split will split *from*. Nothing about the no-flag path mov
   one would remove it. `nf-calibration/roll-white-rule`: the last planned move of the
   default render (it follows `parametric-operator`'s black point), so the flip records
   the default that stays rather than one about to change.
+- 2026-09-27: started. Scope settled with the user: this task also **deletes the
+  current chain** (nothing else owns it, and an unreachable chain fails `clippy -D
+  warnings`), in one PR; it flips before `report-contract` and `subcommands`, recording
+  what the default run loses meanwhile; the default destination is the new chain's axis
+  defaults (SDR Display P3 TIFF, not `gain-map-hdr`); the new drift row hashes the fixed
+  decode only. The gap list, with a verdict per ability, is in the task file.
+
+  **Two corrections to the task file.** Its verification asked for the neutrality
+  gate's recorded decision, which that gate's own file says does not block the chain
+  flip — dropped. And "a recipe carrying `--new-flow` fails to load" could not happen:
+  the flag was never a recipe key. The real contract is that a recipe without
+  `recipe_version` 2 is refused with a migration message.
 
 ## report-contract
 

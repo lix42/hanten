@@ -1,21 +1,19 @@
-//! Deterministic Rec.2100 display-HDR rendering from the shared adjusted ACEScg
-//! source.
+//! The HDR hand-off: the chain's display-linear BT.2020 rendition, fitted to the
+//! 1000-nit peak and measured ([`from_new_chain`]), then the Rec.2100 PQ or HLG
+//! transfer ([`encode_transfer`]).
 //!
-//! This stage owns ACEScg/D60 → BT.2020/D65 rendering, the 203-nit
-//! reference-white / 1000-nit peak placement, the highlight-lifted Reinhard display
-//! tone, neutral-axis gamut mapping, and the Rec.2100 PQ or HLG transfer.
-//! AVIF quantization, coding, and container metadata remain downstream.
+//! This module owns the 203-nit reference-white / 1000-nit peak contract every HDR
+//! destination states. The tone and the gamut map are the chain's (fit range, fit
+//! gamut); AVIF quantization, coding, and container metadata remain downstream.
 
 use serde::Serialize;
 
 use crate::pipeline::colorimetry::definitions::transfer;
 use crate::pipeline::colorimetry::dot;
-use crate::pipeline::colorimetry::pinned::{ACESCG_TO_BT2020, BT2020_LUMA};
-use crate::pipeline::display_tone::Headroom;
+use crate::pipeline::colorimetry::pinned::BT2020_LUMA;
 use crate::pipeline::fit_gamut::radial_to_boundary;
 use crate::pipeline::pixels;
-use crate::pipeline::render_split::SharedDisplaySource;
-use crate::types::{LinearImage, NcError, OutputPreset, Result};
+use crate::types::{LinearImage, NcError, Result};
 
 /// Binding display reference white for every named HDR rendition.
 pub const REFERENCE_WHITE_NITS: f32 = 203.0;
@@ -41,34 +39,6 @@ pub enum HdrTransfer {
     Hlg,
 }
 
-/// The Rec.2100 transfer a single-rendition display-HDR preset renders.
-///
-/// `None` for every preset that renders no Rec.2100 signal. This lives here rather
-/// than on [`OutputPreset`] deliberately: `types` is the shared-types leaf and must
-/// not depend on a pipeline module, while this module already depends on `types`.
-///
-/// **It answers "which transfer", never "which container".** Two presets share each
-/// answer — `hdr-pq` writes AVIF and `hdr-pq-tiff` writes TIFF from the identical
-/// rendition — so an orchestrator must not use a `Some(_)` here to pick an encoder.
-/// `convert_frame` matches on the preset itself for that, exhaustively, so a new
-/// preset cannot silently inherit another's container.
-pub fn transfer_for(preset: OutputPreset) -> Option<HdrTransfer> {
-    match preset {
-        OutputPreset::HdrPq | OutputPreset::HdrPqTiff => Some(HdrTransfer::Pq),
-        OutputPreset::HdrHlg | OutputPreset::HdrHlgTiff => Some(HdrTransfer::Hlg),
-        // `hdr-linear-tiff` is `None` because it applies **no** transfer at all —
-        // it stops at [`render_linear`]. That is a different thing from the presets
-        // below, which are not HDR renditions in the first place; both answers are
-        // "no transfer", for opposite reasons.
-        OutputPreset::HdrLinearTiff
-        | OutputPreset::DisplayP3
-        | OutputPreset::Compatibility
-        | OutputPreset::FilmMaster
-        | OutputPreset::UltraHdrV1
-        | OutputPreset::GainMapHdr => None,
-    }
-}
-
 /// Measured content-light levels for one rendered frame, in cd/m².
 ///
 /// **Measured, not policy.** CTA-861.3 — and therefore AVIF's `clli` box —
@@ -84,21 +54,10 @@ pub struct ContentLightLevel {
     pub max_fall_nits: u16,
 }
 
-/// Which command-line levers [`sdr_range_warning`]'s remedy names — the caller's to say,
-/// since a stage does not know which chain ran it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SdrRangeLevers {
-    /// The current chain's: `--print-exposure`, and an SDR output preset.
-    PrintExposureAndPreset,
-    /// The new chain's (`--new-flow`): scene correction's `--exposure`, and an SDR
-    /// destination (`--range sdr`).
-    ExposureAndDestination,
-}
-
 /// Warn when a single-rendition HDR container would carry a signal that never rises
 /// above SDR reference white.
 ///
-/// Every HDR preset advertises `target_peak_nits: 1000` in its report, and the
+/// Every HDR destination advertises `target_peak_nits: 1000` in its report, and the
 /// container's own signalling (CICP transfer 16/18, the PQ `clli` box) says "HDR".
 /// If the rendered frame's brightest pixel measures at or below the 203-nit
 /// reference white, all of that is true of the *file* and none of it is true of the
@@ -114,25 +73,12 @@ pub enum SdrRangeLevers {
 /// frame peaking at 203.4 nits is not meaningfully HDR either.
 ///
 /// `None` for a frame with real highlights — that is the falsifiable half, and the
-/// reason this takes the measurement rather than the preset.
-///
-/// The remedies follow `levers`, since each chain refuses the other's ([`SdrRangeLevers`]).
-pub fn sdr_range_warning(
-    content_light: ContentLightLevel,
-    levers: SdrRangeLevers,
-) -> Option<String> {
+/// reason this takes the measurement rather than the destination.
+pub fn sdr_range_warning(content_light: ContentLightLevel) -> Option<String> {
     let reference_white = REFERENCE_WHITE_NITS.round() as u16;
-    let (exposure, sdr) = match levers {
-        SdrRangeLevers::PrintExposureAndPreset => (
-            "`--print-exposure`, which every display preset and curve accepts",
-            "an SDR preset",
-        ),
-        SdrRangeLevers::ExposureAndDestination => (
-            "`--exposure` (recipe `scene_correction.exposure`)",
-            "an SDR destination (`--range sdr` in place of the HDR axes, recipe \
-             `output.display.range`)",
-        ),
-    };
+    let exposure = "`--exposure` (recipe `scene_correction.exposure`)";
+    let sdr = "an SDR destination (`--range sdr` in place of the HDR axes, recipe \
+               `output.display.range`)";
     (content_light.max_cll_nits <= reference_white).then(|| {
         format!(
             "HDR output carries an SDR-range signal: the brightest pixel measures {} nits, \
@@ -193,11 +139,13 @@ pub struct LinearBt2020Hdr {
 
 impl LinearBt2020Hdr {
     /// Borrow the finite, non-negative, reference-white-relative BT.2020 pixels.
+    #[cfg(test)]
     pub fn image(&self) -> &LinearImage {
         &self.image
     }
 
     /// Borrow the fully resolved linear rendering policy.
+    #[cfg(test)]
     pub fn metadata(&self) -> &LinearHdrMetadata {
         &self.metadata
     }
@@ -293,7 +241,7 @@ impl RenderedHdr {
     /// **A production call site exists:** `cli::convert_frame` reads
     /// `metadata().transfer` to pick the coded-TIFF ICC profile, deliberately keying
     /// the profile off the transfer that produced the code values rather than off the
-    /// preset. Hence no `dead_code` allow here.
+    /// destination. Hence no `dead_code` allow here.
     pub fn metadata(&self) -> &HdrRenderMetadata {
         &self.metadata
     }
@@ -302,48 +250,6 @@ impl RenderedHdr {
     pub(crate) fn into_parts(self) -> (EncodedHdrImage, HdrRenderMetadata) {
         (self.image, self.metadata)
     }
-}
-
-/// Render and transfer-encode the shared adjusted source as Rec.2100 HDR.
-pub fn render(
-    shared: &SharedDisplaySource,
-    transfer: HdrTransfer,
-    tone: Headroom,
-) -> Result<RenderedHdr> {
-    encode_transfer(render_linear(shared, tone)?, transfer)
-}
-
-/// Render the shared adjusted source into display-linear BT.2020.
-///
-/// Adjusted `1.0` remains 203-nit reference white. The tone is
-/// the lifted extended Reinhard (`Headroom::hdr`), whose composite stays strictly under the
-/// 1000-nit peak, so a sample above it is a renderer bug and fails loudly. At zero
-/// headroom the operator is the identity, and input above the peak is refused instead —
-/// with the way out named. Out-of-gamut colour moves radially toward the same-luminance
-/// neutral axis, preserving chroma direction instead of clipping channels
-/// independently.
-///
-/// This is also where [`ContentLightLevel`] is measured: the rendered values are
-/// BT.2020 luminance relative to reference white, so `dot(rgb, BT2020_LUMA) *
-/// REFERENCE_WHITE_NITS` is this pixel's luminance in cd/m².
-pub fn render_linear(shared: &SharedDisplaySource, tone: Headroom) -> Result<LinearBt2020Hdr> {
-    let rgb = pixels::try_map(shared.source.rgb(), |index, px| {
-        render_pixel_checked(px, index, tone)
-    })?;
-    let content_light = measure_content_light(&rgb);
-    let image = LinearImage::new(shared.source.width(), shared.source.height(), rgb, None)?;
-    Ok(LinearBt2020Hdr {
-        image,
-        content_light,
-        metadata: LinearHdrMetadata {
-            reference_white_nits: REFERENCE_WHITE_NITS,
-            target_peak_nits: TARGET_PEAK_NITS,
-            linear_headroom: LINEAR_HEADROOM,
-            tone_curve: tone.operator(REFERENCE_WHITE_CROSSOVER),
-            gamut_mapping: "bt2020-neutral-axis-radial-boundary-v1",
-            linear_domain: LINEAR_DOMAIN,
-        },
-    })
 }
 
 /// The linear domain every HDR rendition here is stated in.
@@ -372,7 +278,7 @@ fn measure_content_light(rgb: &[f32]) -> ContentLightLevel {
     }
 }
 
-/// What fitting the new chain's HDR rendition into `[0, peak]` clamped, per sample.
+/// What fitting the chain's HDR rendition into `[0, peak]` clamped, per sample.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct PeakClamp {
     /// Samples above the 1000-nit peak, clamped down to it.
@@ -408,7 +314,7 @@ pub fn clamp_to_peak(rgb: &mut [f32]) -> Result<PeakClamp> {
     Ok(clamp)
 }
 
-/// The new chain's HDR rendition, handed to the HDR encoders (`nf-destinations/preset-set`).
+/// The chain's HDR rendition, handed to the HDR encoders (`nf-destinations/preset-set`).
 ///
 /// `image` is fit gamut's output in linear BT.2020, relative to reference white. **Every
 /// channel is clamped to `[0, LINEAR_HEADROOM]` here, and what that clamps is counted and
@@ -418,10 +324,9 @@ pub fn clamp_to_peak(rgb: &mut [f32]) -> Result<PeakClamp> {
 /// the report's clip count, where `--strict` sees them. The content light is measured on
 /// the clamped pixels, which are what is stored.
 ///
-/// `tone_curve` and `gamut_mapping` name the new chain's fit range and fit gamut for the
-/// report; the luminance contract (reference white, peak, linear domain) is this module's,
-/// shared with the legacy renderer. A non-finite sample is refused: the chain never writes
-/// one.
+/// `tone_curve` and `gamut_mapping` name the chain's fit range and fit gamut for the
+/// report; the luminance contract (reference white, peak, linear domain) is this module's.
+/// A non-finite sample is refused: the chain never writes one.
 pub fn from_new_chain(
     mut image: LinearImage,
     tone_curve: &'static str,
@@ -513,90 +418,6 @@ fn whole_nits(relative_luminance: f64) -> u16 {
         return 0;
     }
     nits.round().clamp(0.0, f64::from(u16::MAX)) as u16
-}
-
-/// Where the SDR and HDR renditions diverge: **reference white**, which is principled
-/// rather than tuned — below it both fit inside SDR, above it only HDR can go. Named once
-/// because two rules read it (the lift's span and `Headroom::is_identity`) and a
-/// literal in each would let them disagree. Not to be confused with *diffuse* white, whose
-/// position depends on the reconstruction's uncalibrated anchor offset.
-const REFERENCE_WHITE_CROSSOVER: f32 = 1.0;
-
-/// The loud half of "an identity render is self-policing" on the HDR side: at zero
-/// headroom nothing bounds a reconstruction that overshoots the declared peak.
-fn above_range_error(index: usize, luminance: f32) -> NcError {
-    NcError::Other(format!(
-        "HDR display rendering ran at zero display-tone headroom (the identity), but \
-         pixel {index} sits above the {TARGET_PEAK_NITS}-nit peak (luminance \
-         {luminance} of a permitted {LINEAR_HEADROOM}), which the identity has no curve \
-         to roll off. Note this \
-         ceiling is the peak, not reference white: content between the two is exactly \
-         the headroom an HDR rendition carries, and only what exceeds the peak fails. \
-         Two things reach here: the reconstruction may exceed the peak (no shipped \
-         curve is bounded), or a print control applied before this render may have \
-         lifted it there (exposure, white balance, linear range). So: lower the print \
-         exposure (--print-exposure / print.print_exposure) until the frame fits, or \
-         raise the headroom above 0 (--display-tone-headroom / fit_range.headroom_stops) \
-         to roll the highlights off."
-    ))
-}
-
-fn render_pixel_checked(aces: [f32; 3], index: usize, tone: Headroom) -> Result<[f32; 3]> {
-    if !aces.iter().all(|value| value.is_finite()) {
-        return Err(NcError::Other(format!(
-            "HDR display rendering received a non-finite ACEScg sample at pixel {index}"
-        )));
-    }
-    let bt2020 = mul(ACESCG_TO_BT2020, aces);
-    let luminance = dot(bt2020, BT2020_LUMA);
-    if !bt2020.iter().all(|value| value.is_finite()) || !luminance.is_finite() {
-        return Err(NcError::Other(format!(
-            "HDR display rendering produced a non-finite sample at pixel {index}"
-        )));
-    }
-    // Diagnosed before the gamut map, for the same reason as the SDR side: at zero
-    // headroom nothing pulls luminance down and the gamut map holds it constant, so the
-    // range violation below would report a consequence rather than the cause.
-    // `REFERENCE_WHITE_CROSSOVER` is the single source for both this diagnosis and the
-    // lift's own span, so they cannot disagree about what "the identity" means.
-    if tone.is_identity(REFERENCE_WHITE_CROSSOVER) && luminance > LINEAR_HEADROOM {
-        return Err(above_range_error(index, luminance));
-    }
-    let rendered = if luminance <= 0.0 {
-        [0.0; 3]
-    } else {
-        // The crossover is **reference white**, and that is principled rather than a
-        // tuning choice: below it both branches fit inside SDR, above it only this one
-        // can go, so the divergence starts exactly there. Not to be confused with
-        // *diffuse* white, whose position does depend on the reconstruction's
-        // uncalibrated anchor offset — that is what decides how much of the headroom a
-        // given frame can fill, measured strong on two of seven frames and marginal on
-        // the rest, and it is not something this operator can fix.
-        let rendered_luminance = tone.hdr(luminance, REFERENCE_WHITE_CROSSOVER, LINEAR_HEADROOM);
-        let scale = rendered_luminance / luminance;
-        radial_to_boundary(
-            bt2020.map(|channel| channel * scale),
-            rendered_luminance,
-            LINEAR_HEADROOM,
-        )
-    };
-    if !rendered.iter().all(|value| value.is_finite()) {
-        return Err(NcError::Other(format!(
-            "HDR display rendering produced a non-finite sample at pixel {index}"
-        )));
-    }
-    // Never relaxed, unlike the SDR side's: the lifted Reinhard's asymptotic base holds
-    // the composite strictly under the ceiling at every headroom, and the identity was
-    // bounded by the check above — so a sample past the peak is a renderer bug.
-    if !rendered
-        .iter()
-        .all(|value| (0.0..=LINEAR_HEADROOM).contains(value))
-    {
-        return Err(NcError::Other(format!(
-            "HDR display rendering produced an out-of-range sample at pixel {index}"
-        )));
-    }
-    Ok(rendered)
 }
 
 /// ST 2084 inverse EOTF for absolute luminance in cd/m².
@@ -700,46 +521,27 @@ fn hlg_oetf(scene_linear: f32) -> f32 {
     }
 }
 
-fn mul(matrix: [[f32; 3]; 3], value: [f32; 3]) -> [f32; 3] {
-    [
-        dot(matrix[0], value),
-        dot(matrix[1], value),
-        dot(matrix[2], value),
-    ]
-}
-
-// AP1/D60 → XYZ, Bradford D60→D65, then XYZ → BT.2020, plus the BT.2020 luma
-// weights. Both are defined once in `colorimetry::pinned` (imported above) with
-// their standards provenance; reviewed checked-in constants keep rendering
-// independent of an installed ICC profile or CMM.
-//
-// Note the two have different provenance *kinds*: the matrix is derived from
-// primaries, while the luma vector is transcribed from BT.2020's table and
-// deliberately does not match a derivation.
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::FilmRgbImage;
-    use crate::pipeline::display_tone;
-    use crate::pipeline::render_split::{SharedDisplaySource, display_source};
-    use crate::pipeline::working_space::map_nc_film_rgb_v1;
-    use crate::types::{LinearImage, PrintParams};
+    use crate::pipeline::colorimetry::pinned::ACESCG_TO_BT2020;
+    use crate::types::LinearImage;
+
+    /// A row of display-linear BT.2020 pixels as the chain hands them over — within
+    /// the peak, so nothing is clamped and the values reach the encoder as given.
+    fn linear(rgb: &[f32]) -> LinearBt2020Hdr {
+        let image = LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap();
+        let (hdr, clamp) = from_new_chain(image, "tone", "gamut").unwrap();
+        assert_eq!(clamp, PeakClamp::default(), "a fixture must not clamp");
+        hdr
+    }
+
+    fn mul(matrix: [[f32; 3]; 3], value: [f32; 3]) -> [f32; 3] {
+        matrix.map(|row| dot(row, value))
+    }
 
     fn close(actual: f32, expected: f32) {
         assert!((actual - expected).abs() < 2e-5, "{actual} != {expected}");
-    }
-
-    /// Zero headroom: the identity tone, for tests about the transfer and gamut halves.
-    fn identity() -> Headroom {
-        Headroom::new(0.0).unwrap()
-    }
-
-    fn shared_from_film_rgb(rgb: &[f32]) -> SharedDisplaySource {
-        let film = FilmRgbImage::fixture(
-            LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap(),
-        );
-        display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap()
     }
 
     #[test]
@@ -817,8 +619,11 @@ mod tests {
     #[test]
     fn neutral_ramp_is_neutral_monotonic_and_pins_black_white_and_peak() {
         for transfer in [HdrTransfer::Pq, HdrTransfer::Hlg] {
-            let shared = shared_from_film_rgb(&[0.0, 0.0, 0.0, 0.18, 0.18, 0.18, 1.0, 1.0, 1.0]);
-            let rendered = render(&shared, transfer, identity()).unwrap();
+            let rendered = encode_transfer(
+                linear(&[0.0, 0.0, 0.0, 0.18, 0.18, 0.18, 1.0, 1.0, 1.0]),
+                transfer,
+            )
+            .unwrap();
             let pixels = rendered.image().rgb().as_chunks::<3>().0;
             for px in pixels {
                 close(px[0], px[1]);
@@ -838,9 +643,8 @@ mod tests {
 
     #[test]
     fn rendered_peak_lands_at_1000_nits_in_both_transfer_systems() {
-        let shared = shared_from_film_rgb(&[LINEAR_HEADROOM; 3]);
-        let pq = render(&shared, HdrTransfer::Pq, identity()).unwrap();
-        let hlg = render(&shared, HdrTransfer::Hlg, identity()).unwrap();
+        let pq = encode_transfer(linear(&[LINEAR_HEADROOM; 3]), HdrTransfer::Pq).unwrap();
+        let hlg = encode_transfer(linear(&[LINEAR_HEADROOM; 3]), HdrTransfer::Hlg).unwrap();
         close(pq.image().rgb()[0], 0.751_827_1);
         close(hlg.image().rgb()[0], 1.0);
     }
@@ -868,67 +672,24 @@ mod tests {
     }
 
     #[test]
-    fn each_call_site_maps_against_its_own_ceiling() {
-        // Both call sites share `radial_to_boundary` with other renderers, so what
-        // pins each one is the ceiling it passes. The display render's is the linear
-        // headroom: a colour under reference white with a BT.2020 channel above 1 is
-        // inside the HDR cube and stays put (zero headroom, so no luminance scale).
-        let aces = [2.0, 0.2, 0.2];
-        let bt2020 = mul(ACESCG_TO_BT2020, aces);
-        assert!(
-            bt2020[0] > 1.0 && dot(bt2020, BT2020_LUMA) < 1.0,
-            "{bt2020:?}"
-        );
-        let rendered = render_pixel_checked(aces, 0, Headroom::new(0.0).unwrap()).unwrap();
-        assert_eq!(rendered, bt2020);
-
-        // HLG's is `1.0` in scene-linear light: a display colour whose inverse OOTF
-        // lands above 1 is mapped onto the cube, so its signal tops out at exactly 1.
+    fn hlg_maps_against_the_scene_linear_ceiling() {
+        // HLG's boundary is `1.0` in scene-linear light: a display colour whose inverse
+        // OOTF lands above 1 is mapped onto the cube, so its signal tops out at exactly 1.
         let display = [4.5, 0.05, 0.05];
         let scene = hlg_inverse_ootf(display.map(|channel| channel / LINEAR_HEADROOM));
         assert!(scene[0] > 1.0, "{scene:?}");
-        let mut linear =
-            render_linear(&shared_from_film_rgb(&[0.18; 3]), Headroom::default()).unwrap();
-        linear.image = LinearImage::new(1, 1, display.to_vec(), None).unwrap();
-        let hlg = encode_transfer(linear, HdrTransfer::Hlg).unwrap();
+        let hlg = encode_transfer(linear(&display), HdrTransfer::Hlg).unwrap();
         let signal = hlg.image().rgb();
         assert!(signal.iter().all(|&v| v <= 1.0), "{signal:?}");
         assert!(signal.contains(&1.0), "{signal:?}");
     }
 
     #[test]
-    fn golden_vectors_pin_pq_and_hlg_renditions() {
-        // At the identity tone, so the vectors pin the gamut and transfer alone (captured
-        // under the retired shoulder, which was the identity below its knee).
-        let shared = shared_from_film_rgb(&[0.42, 0.18, 0.07]);
-        let pq = render(&shared, HdrTransfer::Pq, identity()).unwrap();
-        let hlg = render(&shared, HdrTransfer::Hlg, identity()).unwrap();
-        for (actual, expected) in
-            pq.image()
-                .rgb()
-                .iter()
-                .copied()
-                .zip([0.467_198_4, 0.418_472_56, 0.344_785_96])
-        {
-            close(actual, expected);
-        }
-        for (actual, expected) in
-            hlg.image()
-                .rgb()
-                .iter()
-                .copied()
-                .zip([0.567_732_45, 0.446_373_76, 0.295_179_46])
-        {
-            close(actual, expected);
-        }
-    }
-
-    #[test]
     fn public_renderer_is_deterministic_and_reports_transfer_contract() {
-        let shared = shared_from_film_rgb(&[0.18, 0.18, 0.18, 3.0, 0.5, 0.1]);
+        let rgb = [0.18, 0.18, 0.18, 3.0, 0.5, 0.1];
         for (transfer, cicp_transfer) in [(HdrTransfer::Pq, 16), (HdrTransfer::Hlg, 18)] {
-            let first = render(&shared, transfer, Headroom::default()).unwrap();
-            let second = render(&shared, transfer, Headroom::default()).unwrap();
+            let first = encode_transfer(linear(&rgb), transfer).unwrap();
+            let second = encode_transfer(linear(&rgb), transfer).unwrap();
             assert_eq!(
                 first
                     .image()
@@ -957,8 +718,8 @@ mod tests {
         // Black, reference white, and the mastering peak in one row: rendered
         // luminance is 0, 1 and LINEAR_HEADROOM relative to reference white, so the
         // measurement must read 0, 203 and 1000 cd/m² — and the frame average is the
-        // mean of those three, 401. At the identity tone, so the numbers are the input's.
-        let shared = shared_from_film_rgb(&[
+        // mean of those three, 401.
+        let measured = linear(&[
             0.0,
             0.0,
             0.0,
@@ -968,110 +729,71 @@ mod tests {
             LINEAR_HEADROOM,
             LINEAR_HEADROOM,
             LINEAR_HEADROOM,
-        ]);
-        let measured = render_linear(&shared, identity()).unwrap().content_light;
+        ])
+        .content_light;
         assert_eq!(measured.max_cll_nits, TARGET_PEAK_NITS as u16);
         assert_eq!(measured.max_fall_nits, 401);
         assert!(measured.max_fall_nits <= measured.max_cll_nits);
 
         // A dark frame reports a dark frame's numbers. This is the whole point:
         // nothing may be inherited from the 1000-nit ceiling.
-        let dark = render_linear(&shared_from_film_rgb(&[0.05; 3]), identity())
-            .unwrap()
-            .content_light;
-        let bright = render_linear(&shared_from_film_rgb(&[1.0; 3]), identity())
-            .unwrap()
-            .content_light;
+        let dark = linear(&[0.05; 3]).content_light;
+        let bright = linear(&[1.0; 3]).content_light;
         assert_eq!(bright.max_cll_nits, REFERENCE_WHITE_NITS as u16);
         assert_eq!(dark.max_cll_nits, 10, "0.05 x 203 nits rounds to 10");
         assert!(dark.max_cll_nits < bright.max_cll_nits);
         // A uniform frame's peak is its average, in both transfer systems, and the
         // measurement survives the transfer encode unchanged.
         for transfer in [HdrTransfer::Pq, HdrTransfer::Hlg] {
-            let rendered = render(&shared_from_film_rgb(&[0.05; 3]), transfer, identity()).unwrap();
+            let rendered = encode_transfer(linear(&[0.05; 3]), transfer).unwrap();
             assert_eq!(rendered.metadata().content_light, dark);
             assert_eq!(dark.max_fall_nits, dark.max_cll_nits);
         }
     }
 
     #[test]
-    fn sdr_range_warning_fires_on_the_measurement_not_on_the_preset() {
+    fn sdr_range_warning_fires_on_the_measurement_not_on_the_destination() {
         // A frame rendered exactly at reference white uses none of the headroom: the
         // container says 1000 nits, the picture says 203. `<=` is deliberate — a
         // signal that only *reaches* reference white has no HDR content either.
-        let at_white = render_linear(&shared_from_film_rgb(&[1.0; 3]), identity())
-            .unwrap()
-            .content_light();
+        let at_white = linear(&[1.0; 3]).content_light();
         assert_eq!(at_white.max_cll_nits, REFERENCE_WHITE_NITS as u16);
-        let message = sdr_range_warning(at_white, SdrRangeLevers::PrintExposureAndPreset)
-            .expect("a 203-nit peak must warn");
+        let message = sdr_range_warning(at_white).expect("a 203-nit peak must warn");
         assert!(message.contains("203"), "{message}");
-        // The remedy names a lever every curve accepts; it used to advise measuring
-        // `--d-max`, which the base-derived default never consults.
-        assert!(message.contains("--print-exposure"), "{message}");
-        assert!(!message.contains("--d-max"), "{message}");
-        // The new chain refuses both of the current chain's levers, so its remedy names
-        // its own: scene correction's exposure, and an SDR destination.
-        let message = sdr_range_warning(at_white, SdrRangeLevers::ExposureAndDestination)
-            .expect("a 203-nit peak must warn");
+        // The remedies are scene correction's exposure and an SDR destination.
         assert!(
             message.contains("`--exposure`") && message.contains("--range sdr"),
             "{message}"
         );
-        assert!(
-            !message.contains("--print-exposure") && !message.contains("SDR preset"),
-            "{message}"
-        );
 
         // Darker still, obviously.
-        let dark = render_linear(&shared_from_film_rgb(&[0.05; 3]), identity())
-            .unwrap()
-            .content_light();
-        assert!(sdr_range_warning(dark, SdrRangeLevers::PrintExposureAndPreset).is_some());
+        assert!(sdr_range_warning(linear(&[0.05; 3]).content_light()).is_some());
 
         // The falsifiable half: one pixel above reference white silences it, so the
-        // warning tracks the frame rather than the preset.
-        let bright = render_linear(
-            &shared_from_film_rgb(&[
-                0.0,
-                0.0,
-                0.0,
-                LINEAR_HEADROOM,
-                LINEAR_HEADROOM,
-                LINEAR_HEADROOM,
-            ]),
-            identity(),
-        )
-        .unwrap()
+        // warning tracks the frame rather than the destination.
+        let bright = linear(&[
+            0.0,
+            0.0,
+            0.0,
+            LINEAR_HEADROOM,
+            LINEAR_HEADROOM,
+            LINEAR_HEADROOM,
+        ])
         .content_light();
         assert!(bright.max_cll_nits > REFERENCE_WHITE_NITS as u16);
-        assert_eq!(
-            sdr_range_warning(bright, SdrRangeLevers::PrintExposureAndPreset),
-            None
-        );
-        assert_eq!(
-            sdr_range_warning(bright, SdrRangeLevers::ExposureAndDestination),
-            None
-        );
+        assert_eq!(sdr_range_warning(bright), None);
 
         // The transfer encode carries the same measurement, so PQ and HLG renditions
         // reach the identical verdict from the identical number.
         for transfer in [HdrTransfer::Pq, HdrTransfer::Hlg] {
-            let rendered = render(&shared_from_film_rgb(&[0.05; 3]), transfer, identity()).unwrap();
-            assert!(
-                sdr_range_warning(
-                    rendered.metadata().content_light,
-                    SdrRangeLevers::PrintExposureAndPreset
-                )
-                .is_some()
-            );
+            let rendered = encode_transfer(linear(&[0.05; 3]), transfer).unwrap();
+            assert!(sdr_range_warning(rendered.metadata().content_light).is_some());
         }
     }
 
     #[test]
     fn hlg_metadata_pins_reference_display_assumptions() {
-        let shared = shared_from_film_rgb(&[1.0; 3]);
-        let rendered = render(&shared, HdrTransfer::Hlg, Headroom::default()).unwrap();
+        let rendered = encode_transfer(linear(&[1.0; 3]), HdrTransfer::Hlg).unwrap();
         assert_eq!(rendered.metadata().hlg_system_gamma, Some(1.2));
         assert_eq!(
             rendered.metadata().hlg_reference_display_peak_nits,
@@ -1085,7 +807,7 @@ mod tests {
 
     #[test]
     fn linear_seam_pins_domain_dimensions_reference_white_headroom_and_policy() {
-        let shared = shared_from_film_rgb(&[
+        let rendered = linear(&[
             0.0,
             0.0,
             0.0,
@@ -1096,7 +818,6 @@ mod tests {
             LINEAR_HEADROOM,
             LINEAR_HEADROOM,
         ]);
-        let rendered = render_linear(&shared, identity()).unwrap();
         assert_eq!(rendered.image().width, 3);
         assert_eq!(rendered.image().height, 1);
         assert_eq!(rendered.image().rgb.len(), 9);
@@ -1121,15 +842,10 @@ mod tests {
             rendered.metadata().linear_domain,
             "bt2020-linear-relative-to-203-nit-reference-white"
         );
-        assert_eq!(
-            rendered.metadata().tone_curve,
-            crate::pipeline::fit_range::IDENTITY,
-            "zero headroom moved no pixel, so the report must not name an operator"
-        );
-        assert_eq!(
-            rendered.metadata().gamut_mapping,
-            "bt2020-neutral-axis-radial-boundary-v1"
-        );
+        // The chain's own stages name the tone and the gamut map; the hand-off records
+        // them as given.
+        assert_eq!(rendered.metadata().tone_curve, "tone");
+        assert_eq!(rendered.metadata().gamut_mapping, "gamut");
     }
 
     #[test]
@@ -1144,60 +860,6 @@ mod tests {
         {
             close(actual, expected);
         }
-    }
-
-    /// The HDR branch applies the lifted Reinhard, and keeps the ceiling it declares.
-    #[test]
-    fn the_hdr_branch_applies_the_lifted_tone_and_holds_its_ceiling() {
-        for source in [
-            vec![0.0, 0.18, 0.5],
-            // A sample over the 1000-nit peak: the case the ceiling has to hold on its own.
-            vec![1.0, 1.0, 1.0, 6.0, 6.0, 6.0],
-        ] {
-            let shared = shared_from_film_rgb(&source);
-            let render = render_linear(&shared, Headroom::default()).unwrap();
-            assert_eq!(
-                render.metadata().tone_curve,
-                display_tone::EXTENDED_REINHARD
-            );
-            // The asymptotic base is what makes this hold, so it is the property to pin:
-            // strictly inside the declared headroom, with no plateau at it.
-            for v in &render.image().rgb {
-                assert!(
-                    v.is_finite() && (0.0..LINEAR_HEADROOM).contains(v),
-                    "sample {v} left the declared headroom"
-                );
-            }
-        }
-        // Far over the peak, the lifted tone still lands inside the ceiling, where the
-        // identity refuses the same sample.
-        let over_peak = [10.0f32; 3];
-        let lifted = render_pixel_checked(over_peak, 7, Headroom::default()).unwrap();
-        assert!(
-            lifted.iter().all(|v| (0.0..LINEAR_HEADROOM).contains(v)),
-            "{lifted:?}"
-        );
-        assert!(
-            render_pixel_checked(over_peak, 7, identity()).is_err(),
-            "the identity must still refuse what the lifted tone renders"
-        );
-    }
-
-    #[test]
-    fn zero_headroom_refuses_input_above_the_declared_peak_naming_the_pixel() {
-        let shared = shared_from_film_rgb(&[1.0, 1.0, 1.0, 6.0, 6.0, 6.0]);
-        // The default headroom renders it; the identity has nothing to roll it off.
-        assert!(render_linear(&shared, Headroom::default()).is_ok());
-
-        let err = render_linear(&shared, identity()).unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("pixel 1"), "{message}");
-        assert!(message.contains("zero display-tone headroom"), "{message}");
-        // Both provenances of the remedy: `roll` takes no conversion flags.
-        assert!(message.contains("fit_range.headroom_stops"), "{message}");
-        // Content between reference white and the peak is headroom, not an overshoot.
-        let within = shared_from_film_rgb(&[3.0; 3]);
-        assert!(render_linear(&within, identity()).is_ok());
     }
 
     #[test]
@@ -1268,13 +930,5 @@ mod tests {
             assert!(err.to_string().contains("pixel 1"), "{bad}: {err}");
             assert!(err.to_string().contains("non-finite"), "{bad}: {err}");
         }
-    }
-
-    #[test]
-    fn non_finite_input_fails_with_pixel_index() {
-        let shared = shared_from_film_rgb(&[f32::NAN, 0.2, 0.3]);
-        let err = render(&shared, HdrTransfer::Pq, Headroom::default()).unwrap_err();
-        assert!(err.to_string().contains("pixel 0"), "{err}");
-        assert!(err.to_string().contains("non-finite"), "{err}");
     }
 }

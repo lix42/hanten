@@ -1,4 +1,4 @@
-//! **Stage 4 of the new rendering chain — fit gamut.**
+//! **Stage 4 of the rendering chain — fit gamut.**
 //!
 //! Move out-of-gamut colour to the destination's boundary, keeping hue: the change of
 //! primaries out of ACEScg, then [`radial_to_boundary`] against the cube
@@ -9,10 +9,8 @@
 //! [`radial_to_boundary`]), so content fit range left above the peak renders neutral at
 //! its own luminance, and the encoder clamps and counts its level.
 //!
-//! [`radial_to_boundary`] is the **one** gamut-mapping implementation: the legacy
-//! renderers (`sdr`, `hdr`, `gain_map`) call it too, each passing its own ceiling. The
-//! ceilings differ for real reasons — the gain map's must match the base as stored —
-//! so unifying the arithmetic must never unify them.
+//! [`radial_to_boundary`] is the **one** gamut-mapping implementation; each rendition
+//! passes its own peak as the ceiling.
 //!
 //! **This is the one stage that may split an SDR/HDR pair below diffuse white.** A
 //! saturated colour with one channel above `1` at a luminance under white is mapped
@@ -47,7 +45,7 @@ use crate::types::{LinearImage, NcError, Result};
 /// `film-master` is the output for those. **Which destination renders into which gamut
 /// is the destination table's** (`crate::destination::ROWS`), not this type's. An enum rather than a matrix
 /// field so the value can travel with the image to the encoder, which reads it off
-/// [`DisplayReferredImage`] instead of re-deriving it from a preset.
+/// [`DisplayReferredImage`] instead of re-deriving it from the destination.
 ///
 /// **Adding a variant** means a pinned ACEScg → destination matrix and luma row
 /// (`docs/colorimetry-maintenance.md`), an arm in each method here, and one in
@@ -130,9 +128,8 @@ impl FitGamutParams {
 ///
 /// **The carried IR plane rides out with it.** The design says carry the plane
 /// through rather than consume it (CLAUDE.md), and this chain must not be the thing
-/// that loses it — today's `pipeline::sdr` render does drop it
-/// (`LinearImage::new(w, h, rgb, None)`), and the new chain deliberately does not
-/// copy that. Nothing downstream depends on the plane arriving here: `--export-ir`
+/// that loses it — the removed chain's SDR render dropped it
+/// (`LinearImage::new(w, h, rgb, None)`), and this chain deliberately does not. Nothing downstream depends on the plane arriving here: `--export-ir`
 /// writes from the *decoded* image, and both IR warnings are derived before the
 /// render. How the plane *travels* is `nf-core/buffer-strategy`'s to settle; that it
 /// is not lost is decided here.
@@ -630,11 +627,10 @@ mod tests {
 
     #[test]
     fn golden_the_shared_map_is_bit_identical_at_every_callers_ceiling() {
-        // The current chain's `sdr`, `hdr` and `gain_map` render through this
-        // function, and no fingerprint reaches past reconstruction — so a change made
-        // here for the new flow would move shipped pixels with every other gate green.
-        // Pinned at each ceiling a caller passes (HLG's scene-linear `1` is SDR's); a deliberate change recaptures these
-        // and re-checks the current chain's output byte for byte.
+        // Every display rendition runs through this function, and no fingerprint
+        // reaches past the decode — so a change here would move shipped pixels with
+        // every other gate green. Pinned at the SDR and HDR ceilings; a deliberate
+        // change recaptures these and adds a `PIPELINE_FINGERPRINTS` row.
         let run = |ceiling: f32| -> Vec<u32> {
             GOLDEN_IN
                 .iter()

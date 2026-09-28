@@ -1,6 +1,4 @@
-//! Baseline JPEG encoding shared by both gain-map containers: the current chain's
-//! Ultra HDR package (`io::ultra_hdr`) and the new chain's ISO-only one
-//! (`io::iso_gain_map`).
+//! Baseline JPEG encoding for the gain-map container (`io::iso_gain_map`).
 
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use rayon::prelude::*;

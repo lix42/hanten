@@ -1,4 +1,4 @@
-//! **Stage 1 of the new rendering chain — scene correction.**
+//! **Stage 1 of the rendering chain — scene correction.**
 //!
 //! Photographic corrections toward what the scene was: **white balance** and
 //! **exposure**. There is no flare/fog subtraction here: base fog is already in the
@@ -7,9 +7,9 @@
 //! and linear: each is a per-channel gain on linear ACEScg, so the two fold into one
 //! multiply and nothing is clamped.
 //!
-//! Written fresh, per CLAUDE.md's migration rule. `render_split::apply_shared_controls`
-//! runs the current chain's version of the same arithmetic, fused with the black
-//! point and `linear_range`; it is context for what the controls do, not a template.
+//! Written fresh, per CLAUDE.md's migration rule, rather than from the removed chain's
+//! `render_split::apply_shared_controls`, which fused the same arithmetic with the
+//! black point and `linear_range`.
 //!
 //! The corrections act on working-space channels, **after** the NC film RGB v1 3×3 —
 //! so this white balance is not reconstruction's `offset`, and this exposure is not
@@ -41,13 +41,13 @@ use crate::types::{NcError, Result};
 /// `nf-scene-correction/roll-white-balance`: a frame's own statistics read a sunset
 /// as the cast and remove it before highlight desaturation can protect it
 /// (`docs/spike/desaturation-band.md`). `crate::recipe::check_body` refuses them by
-/// name, and `crate::flow` refuses `--auto-wb`.
+/// name, and `cli::reject_removed_flags` refuses `--auto-wb`.
 ///
 /// Serialized as `{ "explicit": [r, g, b] }` — the tagged form is kept, one member or
-/// not, because it is the recipe contract every new-chain recipe already spells.
-/// Unlike the current chain's `print.white_balance` it accepts no bare `[r, g, b]`
-/// array: that form is a compatibility alias for recipes older than the tagged one,
-/// and this recipe has none.
+/// not, because it is the recipe contract every recipe already spells. Unlike the
+/// removed chain's `print.white_balance` it accepts no bare `[r, g, b]` array: that
+/// form was a compatibility alias for recipes older than the tagged one, and this
+/// recipe has none.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WhiteBalance {
@@ -61,7 +61,7 @@ impl Default for WhiteBalance {
     }
 }
 
-/// Scene correction's knobs — and the new chain's `scene_correction` recipe section
+/// Scene correction's knobs — and the recipe's `scene_correction` section
 /// (`crate::recipe`), field for field.
 ///
 /// A struct rather than an `Option`: a stage is always in the chain, and "this stage

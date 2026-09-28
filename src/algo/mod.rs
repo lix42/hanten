@@ -1,27 +1,18 @@
-//! Negative reconstruction and density curves (design-spec §7).
-//!
-//! The [`Reconstruction`] config drives the current chain's one path —
-//! Dmin-normalized corrected density `D′` mapped through the exponential curve — and
-//! the new chain's fixed decode ([`fixed`]) is a second producer. **Both return the typed [`FilmRgbImage`] boundary**:
+//! Negative reconstruction (design-spec §7): the fixed decode ([`fixed`]), which returns
+//! the typed [`FilmRgbImage`] boundary:
 //!
 //! ```text
-//! scan → Dmin normalization → corrected density D′   (density reconstruction)
-//!      → exponential density curve                    (the curve stage)
-//!      → FilmRgbImage                                  (typed boundary)
+//! scan → Dmin normalization → corrected density D′ → the straight line → FilmRgbImage
 //! ```
 //!
 //! [`FilmRgbImage`]'s fields are private and its only constructor is
-//! `pub(in crate::algo)`, so [`reconstruct`]'s paths inside this module tree
-//! are the only producers — downstream stages that accept a `FilmRgbImage`
-//! (the NC-film-RGB → ACEScg working-space mapper) can never be handed a raw
-//! scan or density buffer. The pixel arithmetic of [`reconstruct`] is
-//! bit-identical to the pre-split monolithic converters' reconstruction half
-//! (pinned by the golden fixtures in `pipeline::stages`, `mod golden`).
+//! `pub(in crate::algo)`, so the decode inside this module tree is its only producer —
+//! downstream stages that accept a `FilmRgbImage` (the NC-film-RGB → ACEScg
+//! working-space mapper) can never be handed a raw scan or density buffer.
 
-pub mod density;
 pub mod fixed;
 
-use crate::types::{FilmBase, LinearImage, Reconstruction, Result};
+use crate::types::LinearImage;
 
 /// The typed film-rendering RGB boundary every reconstruction path produces:
 /// the unclamped linear positive in NC's film-rendering interpretation, plus
@@ -51,7 +42,7 @@ impl FilmRgbImage {
     /// The shipped constructor — restricted to the `algo` module tree (note:
     /// `pub(super)` would NOT do this: `algo` is a top-level module, so its
     /// `super` is the crate root and `pub(super)` would be crate-wide), so
-    /// [`reconstruct`]'s paths are the only producers outside tests (see
+    /// the fixed decode ([`fixed::decode`]) is the only producer outside tests (see
     /// `FilmRgbImage::fixture` (test-only)). Takes an
     /// already-validated [`LinearImage`] so the buffer length invariants hold
     /// by construction.
@@ -123,31 +114,10 @@ impl std::fmt::Debug for FilmRgbImage {
     }
 }
 
-/// Diagnostics the reconstruction stage surfaces for the JSON report — the
-/// resolved values, not new knobs (controls live in [`Reconstruction`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct ReconstructionReport {
-    /// The **derived** anchor the curve used — the corrected density that rendered to
-    /// `1.0`, and therefore what sets the black floor at `10^(−contrast·anchor)`.
-    pub curve_anchor: f32,
-}
-
-/// Stage 3 — reconstruct the negative into the typed film positive
-/// (design-spec §7): pure `(input, config) -> output`. The IR plane is carried
-/// through untouched (Step-1 rule: preserve, don't consume). Total in its inputs: a
-/// degenerate film base or an unusable curve anchor surfaces as an
-/// [`NcError`](crate::types::NcError), never a silently-wrong image.
-pub fn reconstruct(
-    image: &LinearImage,
-    base: &FilmBase,
-    config: &Reconstruction,
-) -> Result<(FilmRgbImage, ReconstructionReport)> {
-    density::reconstruct(image, base, &config.density, &config.curve)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::FilmBase;
 
     fn image() -> LinearImage {
         LinearImage::new(
@@ -165,9 +135,9 @@ mod tests {
 
     #[test]
     fn reconstruction_returns_a_film_rgb_image_and_preserves_ir() {
-        // The type-level boundary: the config produces a `FilmRgbImage` (enforced by
-        // `reconstruct`'s signature) with the dimensions and IR plane intact.
-        let (film, _) = reconstruct(&image(), &base(), &Reconstruction::default()).unwrap();
+        // The type-level boundary: the decode produces a `FilmRgbImage` (enforced by
+        // its signature) with the dimensions and IR plane intact.
+        let (film, _) = fixed::decode(&image(), &base(), &fixed::DecodeParams::default()).unwrap();
         assert_eq!((film.width(), film.height()), (2, 1));
         assert_eq!(film.rgb().len(), 6);
         assert_eq!(film.ir(), Some(&[0.25_f32, 0.75][..]));
@@ -180,14 +150,6 @@ mod tests {
     // `FilmRgbImage`'s construction privacy is enforced by the compiler:
     // `from_linear` is `pub(in crate::algo)`, so no code outside the `algo`
     // module tree can mint one — the working-space mapper can only receive
-    // what `reconstruct` produced. (A compile-fail test would need a
+    // what the decode produced. (A compile-fail test would need a
     // `trybuild` dev-dependency; the privacy annotation is the guarantee.)
-
-    #[test]
-    fn the_default_reports_its_base_derived_anchor() {
-        let (_, report) = reconstruct(&image(), &base(), &Reconstruction::default()).unwrap();
-        let expected =
-            fixed::MID_ABOVE_BASE + crate::types::MID_GREY_OUTPUT_DECADES / fixed::BUNDLED_CONTRAST;
-        assert_eq!(report.curve_anchor, expected);
-    }
 }

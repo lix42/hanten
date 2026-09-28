@@ -20,4 +20,3 @@ pub mod encode;
 pub mod iso_gain_map;
 pub mod jpeg;
 pub mod staged;
-pub mod ultra_hdr;

@@ -40,16 +40,17 @@ in-progress changes, fix them, and prove the tree green — nothing more.
 - **Pure-function pipeline, thin CLI**: stages stay pure; `main`/`cli` are the
   only orchestrators. Range-clamp only at the u16 encode step, counted into
   `EncodeReport` — never silently.
-- **Four coupled spots per knob**: CLI `*Overrides` field (`cli.rs`), recipe
-  `*Params` field (`types.rs`), a `merge` arm, and usually a `validate` check —
-  plus a merge test. A fix that touches a knob touches all four.
+- **Coupled spots per knob**: CLI `*Overrides` field (`cli.rs`), its recipe
+  section's field (`recipe.rs` or the stage's params), a `recipe::merge` arm, and
+  usually a `recipe::validate` check — plus a merge test. A fix that touches a knob
+  touches all of them.
 - **Recipe shape mirrors design-spec §9** (`deny_unknown_fields`); `params` is
   a reserved top-level key; mutually-exclusive knobs are one enum field.
 - **Standards coefficients live only in `pipeline/colorimetry/`** — never add a
   matrix or luma literal inline in a stage; import it.
 - **Determinism is per build/architecture** — never fix a test by checksumming
   a full frame, an encoded file, or post-lcms2 pixels; cross-platform pins use
-  the curated `pipeline::stages::golden` vectors.
+  the curated `pipeline::chain_golden` vectors.
 - **Default-render changes trip `version::PIPELINE_FINGERPRINTS`** — a new
   default behavior needs a new version row; never edit a historical row's
   `render` in place. A neutral-default opt-in knob refreshes only the `recipe`
@@ -68,7 +69,6 @@ Finish with **every CI gate green, in order** — CI's flags, not shorter ones
 (CLAUDE.md "Commands and gates" is the list; this is a copy):
 
 ```
-python3 scripts/check-vendored-native.py
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo build --all-targets --all-features

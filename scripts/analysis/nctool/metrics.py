@@ -166,8 +166,8 @@ ROUND = 6
 # repository's single source of truth for standards-based colorimetry. Nothing
 # here may be edited independently: `test_metrics.py` re-reads that Rust file and
 # fails if these drift from it. A space nc does not render to still gets its
-# definition there (`definitions::PROPHOTO` is one, and `ADOBE_RGB` was until the
-# new chain could render into it): references arrive in it, and a set of primaries living
+# definition there (`definitions::PROPHOTO` is one, and `ADOBE_RGB` was until a
+# destination could render into it): references arrive in it, and a set of primaries living
 # only in this file would be a second source of truth by construction. Add the
 # definition there, then transcribe it here.
 
@@ -1236,11 +1236,13 @@ def measure(path: Path, space_name: str,
 
 # -- resolving a converted roll's colour space --------------------------------
 #
-# Derived from the run's **frozen recipe**, which is recorded provenance, not from
-# the pixels — a different thing entirely from the guessing this module refuses to
-# do. Only the presets whose output space is documented and verified appear here;
-# everything else must be declared with --space, because being wrong produces a
-# plausible wrong table rather than an error.
+# Derived from the run's **frozen recipe** (or, for a destination build, the
+# destination its report says it resolved), which is recorded provenance, not the
+# pixels — a different thing entirely from the guessing this module refuses to
+# do. Presets exist only on builds before `manifest.DESTINATION_PIPELINE` (the
+# reference build). Only the presets and destinations whose output space is
+# documented and verified appear here; everything else must be declared with
+# --space, because being wrong produces a plausible wrong table rather than an error.
 #
 # Verified by conversion + exiftool on 2026-09-02:
 #   legacy / compatibility -> "sRGB built-in"
@@ -1257,8 +1259,9 @@ PRESET_SPACES: dict[str, str] = {
     # rendition an HDR-aware viewer shows.
     "gain-map-hdr": "display-p3",
     "ultra-hdr-v1": "display-p3",
-    # Retired from nc (`nf-retire/legacy-custom`), kept because the reference build
-    # still writes them and a review set measures its renders.
+    # Retired before the reference build's successors (`nf-retire/legacy-custom`),
+    # kept because a preset build may still write them and a review set measures
+    # its renders.
     "legacy": "srgb",
     "custom": "srgb",
     "compatibility": "srgb",
@@ -1288,7 +1291,7 @@ PROFILE_SPACES: dict[str, str] = {
 }
 
 
-#: The new chain's destinations (`crate::destination` in nc), keyed on what fixes the
+#: The destinations (`crate::destination` in nc), keyed on what fixes the
 #: pixels' space — the gamut and the transfer. The range and the container do not
 #: change it. Verified against the profiles nc embeds (`pipeline::color`).
 DESTINATION_SPACES: dict[tuple[str, str], str] = {
@@ -1297,18 +1300,18 @@ DESTINATION_SPACES: dict[tuple[str, str], str] = {
     ("bt2020", "linear"): "linear-bt2020",
 }
 
-#: New-chain transfers this command cannot read, with the reason.
+#: Destination transfers this command cannot read, with the reason.
 DESTINATION_UNREADABLE: dict[str, str] = {
     "pq": PRESET_UNREADABLE["hdr-pq-tiff"],
     "hlg": PRESET_UNREADABLE["hdr-hlg-tiff"],
 }
 
-#: The four axes of a new-chain destination, as its recipe `output.display` names them.
+#: The four axes of a destination, as its recipe `output.display` names them.
 DESTINATION_AXES = ("range", "transfer", "gamut", "container")
 
 
 def space_for_destination(output: object) -> tuple[str, str]:
-    """The colour space a new-chain destination writes, and why.
+    """The colour space a destination writes, and why.
 
     `output` is the recipe's `output` value — `"film-master"`, or `{"display": {...}}`
     with **every** axis stated, as nc's report records the resolved destination
@@ -1321,7 +1324,7 @@ def space_for_destination(output: object) -> tuple[str, str]:
     display = output.get("display") if isinstance(output, dict) else None
     if not isinstance(display, dict):
         raise MetricsError(
-            f"unrecognised new-chain destination {output!r}; declare the space with --space")
+            f"unrecognised destination {output!r}; declare the space with --space")
     missing = [axis for axis in DESTINATION_AXES if not isinstance(display.get(axis), str)]
     if missing:
         raise MetricsError(
@@ -1340,6 +1343,34 @@ def space_for_destination(output: object) -> tuple[str, str]:
     return DESTINATION_SPACES[key], f"{key[0]} {key[1]} destination"
 
 
+def space_for_run(recipe: dict, report: dict) -> tuple[str, str]:
+    """The colour space a converted roll is in: from its frozen recipe, or — for a
+    destination build — from the destination its roll report says every frame
+    resolved.
+
+    A `recipe_version` 2 recipe routinely leaves destination axes to nc (`hanten
+    params` writes `{"display": {}}`), and `space_for_destination` refuses to derive
+    them. The report states them resolved (`new_flow.destination`), so they are read
+    from there — and must agree across frames, since one space measures them all.
+    """
+    if recipe.get("recipe_version") != 2:
+        return space_for_recipe(recipe)
+    resolved = []
+    for frame in report.get("frames", []):
+        new_flow = frame.get("new_flow") if isinstance(frame, dict) else None
+        if isinstance(new_flow, dict) and "destination" in new_flow:
+            if new_flow["destination"] not in resolved:
+                resolved.append(new_flow["destination"])
+    if len(resolved) == 1:
+        return space_for_destination(resolved[0])
+    if not resolved:
+        return space_for_recipe(recipe)
+    raise MetricsError(
+        "the roll's frames resolved different destinations ("
+        + ", ".join(json.dumps(d, sort_keys=True) for d in resolved)
+        + "); measure them separately, or declare --space")
+
+
 def space_for_recipe(recipe: dict) -> tuple[str, str]:
     """The colour space a frozen recipe's output is in, and why.
 
@@ -1348,7 +1379,7 @@ def space_for_recipe(recipe: dict) -> tuple[str, str]:
     the artifact wrong while every number still looks reasonable.
     """
     if recipe.get("recipe_version") == 2:
-        # The new chain's recipe: its `output` is a destination, not a preset.
+        # A destination build's recipe: its `output` is a destination, not a preset.
         return space_for_destination(recipe.get("output", {"display": {}}))
     output = recipe.get("output") if isinstance(recipe.get("output"), dict) else {}
     preset = output.get("preset", "gain-map-hdr")
@@ -1733,8 +1764,6 @@ def cmd_roll(args) -> int:
                 raise MetricsError(
                     f"unknown colour space {space_name!r}. Declare one of: "
                     + ", ".join(sorted(SPACES)))
-        else:
-            space_name, space_source = space_for_recipe(recipe)
 
         report_ref = tag.get("report_file")
         if not isinstance(report_ref, str):
@@ -1746,6 +1775,8 @@ def cmd_roll(args) -> int:
         if error:
             raise MetricsError(error)
         assert report is not None
+        if not args.space:
+            space_name, space_source = space_for_run(recipe, report)
     except MetricsError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

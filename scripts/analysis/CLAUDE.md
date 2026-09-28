@@ -17,3 +17,9 @@ only the traps it does not.
   Drop the old prefix and every command pointed at the reference build (`--nc`,
   `$NC`, a review matrix's `builds`) refuses it. Auto-discovery (`find_nc`) is
   deliberately `hanten`-only, so a stale `target/*/nc` is never picked up.
+- **Which output flags a binary takes is read off its banner's `pipeline_version`**
+  (`manifest.DESTINATION_PIPELINE`): from 8 on, destinations (`--range`…,
+  `--film-master`); before it — the reference build — `--output-preset`. `review
+  generate` and `compare run` both refuse a banner with no `pipeline_version` line, so
+  a fake binary in a test must print one. Never key the choice on a build's id or
+  label.

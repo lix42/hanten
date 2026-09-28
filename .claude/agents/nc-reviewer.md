@@ -71,13 +71,13 @@ The load-bearing rules you review against:
   stages stay pure `(input, params) -> output`. Processing is 32-bit float
   linear; range-clamping happens **only** at the u16 encode step and is counted
   into `EncodeReport` — silent clamping anywhere else is a finding.
-- **Every conversion knob spans four coupled spots**: a CLI `*Overrides` field
-  (`cli.rs`), a recipe `*Params` field (`types.rs`), a `merge` arm, and usually a
-  `validate` check — plus a merge test. A missing `merge` arm makes the flag a
-  silent no-op; check all four for any new or changed knob. Note `validate` is
-  **not** the whole `convert` gate: `validate_convert` composes it with the
-  flag-presence checks, so a rule that must see flag *presence* (not just the
-  resolved value) belongs there. Reject by presence only when a flag *forces*
+- **Every conversion knob spans coupled spots**: a CLI `*Overrides` field
+  (`cli.rs`), its recipe section's field (`recipe.rs` or the stage's params), a
+  `recipe::merge` arm, and usually a `recipe::validate` check — plus a merge test.
+  A missing `merge` arm makes the flag a silent no-op; check them all for any new
+  or changed knob. Note `recipe::validate` is **not** the whole `convert` gate:
+  `cli::validate_convert` composes it with the flag-presence checks, so a rule that
+  must see flag *presence* (not just the resolved value) belongs there. Reject by presence only when a flag *forces*
   something the branch cannot produce; an identity value that asks for nothing
   stays accepted where a recipe could have set the knob.
 - **Recipe shape mirrors design-spec §9** and structs use `deny_unknown_fields`,
@@ -94,7 +94,7 @@ The load-bearing rules you review against:
 - **Determinism is per build/architecture.** A checked-in bit-exact hash of a
   full frame, an encoded file, or post-lcms2 pixels breaks on the other CI
   target — flag it. Cross-platform pins belong in the curated
-  `pipeline::stages::golden` vectors.
+  `pipeline::chain_golden` vectors.
 - **Default-render changes trip `version::PIPELINE_FINGERPRINTS`.** New default
   behavior needs a new version row; editing a historical row's `render` in place
   silently makes one version label two behaviors — a finding.

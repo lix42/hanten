@@ -1,17 +1,18 @@
-//! The new chain's recipe (`nf-core/recipe-schema`).
+//! The recipe (`nf-core/recipe-schema`).
 //!
-//! One document, versioned **as a document**: a recipe for the new chain states
-//! `"recipe_version": 2` at top level, and that marker is what makes the recipe
-//! self-describing. `--new-flow` still selects the chain, but a recipe can no longer
-//! mean one thing under the flag and another without it — each side refuses the
-//! other's recipe by name ([`check_body`]). That closes the gap `deny_unknown_fields`
-//! cannot: it rejects an *unknown* key, and is blind to a **known but meaningless**
-//! one, such as a whole `print` section loaded under a chain that has no print stage.
+//! One document, versioned **as a document**: a recipe states `"recipe_version": 2` at
+//! top level, and that marker is what makes it self-describing. A document without it
+//! was written for the chain `nf-core/default-flip` removed (every sidecar and
+//! `--dump-params` file before `pipeline_version` 8), and is refused whole; one with it
+//! that still carries the removed chain's keys is refused by name ([`check_body`]).
+//! That closes the gap `deny_unknown_fields` cannot: it rejects an *unknown* key, and is
+//! blind to a **known but meaningless** one, such as a whole `print` section loaded
+//! into a chain that has no print stage.
 //!
 //! The sections follow the chain, one per stage, and an identity stage still has one:
 //!
 //! ```text
-//! input · calibration · measure      shared with the current chain (decode, film base)
+//! input · calibration · measure      the decode's input and the film base
 //! roll                               what `hanten measure-roll` measured for the roll
 //! reconstruction                     the fixed decode — algo::fixed::DecodeParams
 //! rendering                          which base the stages start from (crate::rendering)
@@ -20,8 +21,8 @@
 //!                                      the recipe's), so its section stays empty
 //! ```
 //!
-//! **No per-section `schema_version`.** The current chain's tagged `reconstruction`
-//! carries one because it once had to tell several shapes apart inside a single
+//! **No per-section `schema_version`.** The removed chain's tagged `reconstruction`
+//! carried one because it once had to tell several shapes apart inside a single
 //! object; here the document version does that for every section at once.
 //!
 //! **`output` is the destination, not a stage**: the four axes of the destination set
@@ -29,15 +30,10 @@
 //! the stages, and each axis is optional — an unset one is derived from the destination
 //! table, so the section says only what the user chose. Each key lands with the task that
 //! ships its knob — design-spec §9 states the shape, not keys written ahead of the code.
-//!
-//! Named for what it will be rather than for the migration: after
-//! `nf-core/default-flip` this is *the* recipe, and the current chain's
-//! `cli::ResolvedConfig` is what gets deleted.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::algo::fixed::{AnchorRule, DecodeFault, DecodeParams, LINEARIZATION};
-use crate::cli::ResolvedConfig;
 use crate::destination::{self, Change, DisplayAxes, Fault, OutputSection, Resolved};
 use crate::pipeline::chain::{ChainParams, DisplayTarget, SharedParams};
 use crate::pipeline::fit_gamut::DestinationGamut;
@@ -51,21 +47,18 @@ use crate::pipeline::look::{
 use crate::pipeline::roll_white;
 use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
 use crate::rendering::{Base, Rendering};
-use crate::types::{
-    CalibrationParams, FilmBaseSource, InputParams, MeasureParams, NcError, Result,
-};
+use crate::types::{FilmBaseSource, InputParams, MeasureParams, NcError, Result};
 
 /// The only document version this build reads.
 pub const RECIPE_VERSION: u32 = 2;
 
 /// The top-level key carrying [`RECIPE_VERSION`].
 ///
-/// Reserved beside `params` (the sidecar envelope's key): the current chain's recipe
-/// must never gain a field of this name, or a v2 document would stop being
-/// distinguishable from a v1 one. A test pins it absent from `ResolvedConfig`.
+/// Reserved beside `params` (the sidecar envelope's key). The removed chain's recipe
+/// never had a field of this name, which is what tells the two apart.
 pub const VERSION_KEY: &str = "recipe_version";
 
-/// A recipe for the new chain.
+/// A recipe: every conversion knob, one section per stage.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Recipe {
@@ -122,13 +115,15 @@ impl<'de> Deserialize<'de> for RecipeVersion {
     }
 }
 
-/// Fit range's section on the new chain: the headroom and display black, each unset
-/// meaning the rendering's base (`crate::rendering`).
+/// Fit range's section: the headroom and display black, each unset meaning the
+/// rendering's base (`crate::rendering`).
 ///
-/// Its own type rather than [`FitRange`], which the current chain's `ResolvedConfig`
-/// also carries: display black is new-chain only, and a key added to that shared type
-/// would be written into every current-chain sidecar. [`Recipe::to_config`] projects
-/// the headroom across. The peak is the destination's, as for [`FitRange`].
+/// Its own type rather than [`FitRangeParams`], for the reason [`FitGamut`] is: the
+/// stage's other parameter, the display's peak, is the **destination's** to state, and
+/// [`Recipe::chain_params`] adds it. The headroom is shared by every rendition of a
+/// frame, the peak is not (`pipeline::chain`'s branch contract).
+///
+/// [`FitRangeParams`]: crate::pipeline::fit_range::FitRangeParams
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FitRangeSection {
@@ -159,31 +154,6 @@ impl FitRangeSection {
     }
 }
 
-/// The current chain's fit-range section (`cli::ResolvedConfig`): how much scene range
-/// above diffuse white it compresses. The new chain's is [`FitRangeSection`].
-///
-/// Its own type rather than [`FitRangeParams`], for the reason [`FitGamut`] is: the
-/// stage's other parameter, the display's peak, is the **destination's** to state, and
-/// [`Recipe::chain_params`] adds it. The headroom is shared by every rendition of a
-/// frame, the peak is not (`pipeline::chain`'s branch contract).
-///
-/// [`FitRangeParams`]: crate::pipeline::fit_range::FitRangeParams
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct FitRange {
-    /// In stops above diffuse white: reinhard's white point is `2^headroom_stops`, and
-    /// `0` is the identity.
-    pub headroom_stops: f32,
-}
-
-impl Default for FitRange {
-    fn default() -> Self {
-        Self {
-            headroom_stops: crate::types::DEFAULT_HEADROOM_STOPS,
-        }
-    }
-}
-
 /// Fit gamut's recipe section: empty, and refuses any key. The map has no knob — its
 /// ceiling is fit range's output and its target the destination's — and no off switch
 /// (decided 2026-09-23, `nf-display-stages/gamut-map-share`).
@@ -198,18 +168,16 @@ impl Default for FitRange {
 #[serde(deny_unknown_fields)]
 pub struct FitGamut {}
 
-/// The new chain's roll calibration: the film base alone.
+/// The roll calibration: the film base alone.
 ///
-/// Its own type rather than the current chain's [`CalibrationParams`], which retires
-/// with that chain (`nf-core/default-flip`). The two had different shapes until the
-/// reference density `dmax` retired (`nf-retire/dmax-machinery`). The section stays
-/// open, as design-spec §8 describes it; a later measurement joins it with its own
-/// task.
+/// The section stays open, as design-spec §8 describes it; a later measurement joins it
+/// with its own task. (The reference density `dmax` left it with
+/// `nf-retire/dmax-machinery`.)
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Calibration {
-    /// Required at `convert`/`roll` time with no default, exactly as on the current
-    /// chain — `cli::validate` refuses an unstated one on the projection.
+    /// Required at `convert`/`roll` time with no default — `cli::validate_shared`
+    /// refuses an unstated one.
     pub film_base: Option<FilmBaseSource>,
 }
 
@@ -359,16 +327,15 @@ const SECTIONS_WITH_NO_COUNTERPART: &[(&str, &str)] = &[(
     "white balance and exposure are `scene_correction.white_balance` and \
          `scene_correction.exposure`; the display tone is fit range, whose one \
          operator is reinhard and whose headroom is `fit_range.headroom_stops`; the \
-         black point splits in two — display black is `fit_range.display_black` (where \
-         the film base renders), and the flare/fog subtraction has no key yet \
-         (`nf-scene-correction/flare-removal`) — and `linear_range` has no home yet \
+         black point's surviving half is display black, `fit_range.display_black` \
+         (where the film base renders); and `linear_range` has no home yet \
          (`nf-scene-correction/levels-knob`)",
 )];
 
-/// The current chain's `output` keys, live and retired: a destination is its axes here.
+/// The removed chain's `output` keys: a destination is its axes here.
 const OLD_OUTPUT_KEYS: &[&str] = &["preset", "depth", "hdr", "output_profile", "bigtiff"];
 
-/// The current chain's `reconstruction` keys, and each one's fate here.
+/// The removed chain's `reconstruction` keys, and each one's fate here.
 const OLD_RECONSTRUCTION_KEYS: &[(&str, &str)] = &[
     (
         "schema_version",
@@ -392,9 +359,7 @@ const OLD_RECONSTRUCTION_KEYS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Keys neither chain reads any more — each already a migration error on the
-/// current chain (`cli::reject_legacy_recipe_keys`), whose remedies point at that
-/// chain's homes. These point at the new chain's, so the diagnosis survives the flag.
+/// Keys retired before the removed chain was: each names where its knob lives now.
 /// A path is top-level (`["density"]`) or one level down (`["input", "color"]`).
 const RETIRED_KEYS: &[(&[&str], &str)] = &[
     (
@@ -434,10 +399,10 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
     ),
 ];
 
-/// Refuse a recipe body written for the other chain, before serde sees it.
+/// Refuse a recipe body written for the removed chain, before serde sees it.
 ///
 /// Run on the raw JSON, because the failure is about presence: a missing marker, or
-/// a key that parses on one chain and means nothing on the other. `whole` is `true`
+/// a key the removed chain read that means nothing here. `whole` is `true`
 /// for a whole recipe and `false` for a `roll` per-frame overlay, which is a partial
 /// document merged onto an already-versioned one and so need not restate the
 /// version (it may, and must then state the right one).
@@ -450,10 +415,13 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
     match body.get(VERSION_KEY) {
         None if whole => {
             return usage(format!(
-                "under `--new-flow` a recipe must state `\"{VERSION_KEY}\": {RECIPE_VERSION}` — \
-                 without it the document describes the current chain, whose sections this \
-                 chain does not read. `hanten params --new-flow` writes the new layout; or run \
-                 without `--new-flow`, where a recipe with no `{VERSION_KEY}` is read"
+                "a recipe must state `\"{VERSION_KEY}\": {RECIPE_VERSION}`. A document without \
+                 it — every sidecar and `--dump-params` file written before `pipeline_version` \
+                 8 — describes the rendering chain that version removed, and there is no \
+                 converter. `hanten params` writes the current layout: `input`, `measure` and \
+                 `calibration.film_base` carry over unchanged, and the rest is a stage \
+                 section each (`reconstruction`, `scene_correction`, `look`, `fit_range`) \
+                 plus `output`, the destination"
             ));
         }
         Some(v) if v.as_u64() != Some(u64::from(RECIPE_VERSION)) => {
@@ -471,7 +439,7 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
         };
         if found.is_some() {
             return usage(format!(
-                "`{}` is not a key of either chain's recipe any more: {why}",
+                "`{}` is not a recipe key any more: {why}",
                 path.join(".")
             ));
         }
@@ -479,13 +447,11 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
     for (section, why) in SECTIONS_WITH_NO_COUNTERPART {
         if body.get(section).is_some() {
             return usage(format!(
-                "`{section}` is a section of the current chain's recipe, not the new one's: \
-                 {why}. Drop it — the current chain reads it only in a recipe with no \
-                 `{VERSION_KEY}`"
+                "`{section}` is a section of the removed chain's recipe: {why}. Drop it"
             ));
         }
     }
-    // The current chain's `output` keys. The section name is shared, so it is diagnosed
+    // The removed chain's `output` keys. The section name is shared, so it is diagnosed
     // key by key rather than refused whole.
     if let Some(key) = body
         .get("output")
@@ -493,11 +459,9 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
         .and_then(|o| OLD_OUTPUT_KEYS.iter().find(|k| o.contains_key(**k)))
     {
         return usage(format!(
-            "`output.{key}` belongs to the current chain's recipe, not the new one's: a \
-             destination here is its axes, `output.display` with `range`, `transfer`, \
-             `gamut` and `container` (each optional — an unset one is derived), or \
-             `\"film-master\"`. Drop it — the current chain reads it only in a recipe with \
-             no `{VERSION_KEY}`"
+            "`output.{key}` belongs to the removed chain's recipe: a destination is its \
+             axes, `output.display` with `range`, `transfer`, `gamut` and `container` (each \
+             optional — an unset one is derived), or `\"film-master\"`. Drop it"
         ));
     }
     let old_key = |section: &str, table: &[(&'static str, &'static str)]| {
@@ -517,7 +481,7 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
     {
         return usage(format!(
             "`scene_correction.white_balance` \"{mode}\" was a per-frame estimate, and the \
-             new chain has none: it read a sunset as the cast and removed it. Drop it, \
+             chain has none: it read a sunset as the cast and removed it. Drop it, \
              then state the gains `hanten measure-roll` reports for the roll as \
              `roll.white_balance`: `[r, g, b]`"
         ));
@@ -551,54 +515,48 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
     }
     if let Some((key, why)) = old_key("reconstruction", OLD_RECONSTRUCTION_KEYS) {
         return usage(format!(
-            "`reconstruction.{key}` belongs to the current chain's recipe, not the new \
-             one's: {why}. Drop it — the current chain reads it only in a recipe with no \
-             `{VERSION_KEY}`"
+            "`reconstruction.{key}` belongs to the removed chain's recipe: {why}. Drop it"
         ));
     }
     Ok(())
 }
 
-/// Refuse a new-chain recipe loaded **without** `--new-flow`.
+/// Apply the command-line flags, flags winning over the recipe.
 ///
-/// The other half of the marker's contract. Without it the current chain's
-/// `deny_unknown_fields` would still refuse the document, but with an opaque
-/// "unknown field" message that never says the recipe was fine for the other chain.
-pub fn check_body_without_flag(body: &serde_json::Value, context: &str) -> Result<()> {
-    // The remedy says only what the value supports: "pass `--new-flow`" is advice
-    // only for the version the new chain reads, or the user is sent to a second
-    // refusal (`recipe_version` 1 is the likely case: meant as "the current schema").
-    match body.get(VERSION_KEY) {
-        None => Ok(()),
-        Some(v) if v.as_u64() == Some(u64::from(RECIPE_VERSION)) => Err(NcError::Usage(format!(
-            "{context}: states `{VERSION_KEY}`, so it describes the new rendering chain, \
-                 which only `--new-flow` reads. The current chain's recipe carries no version"
-        ))),
-        Some(v) => Err(NcError::Usage(format!(
-            "{context}: states `{VERSION_KEY}` {v}, which no chain reads — the current \
-             chain's recipe carries no `{VERSION_KEY}` at all (remove it), and the new \
-             chain (`--new-flow`) reads only {RECIPE_VERSION}"
-        ))),
-    }
-}
-
-/// Apply the command-line flags the new chain reads, flags winning over the recipe.
-///
-/// Every other conversion flag is refused by presence before this runs — by
-/// `flow::reject_unavailable_flags`, or on both chains by `cli`'s removed-flag check
-/// (`--reconstruction`, `--density-curve`, `--preset`, …) — so it has nothing to set. `flow`'s `every_kept_flag_reaches_the_recipe` holds that each kept flag
+/// Every removed flag is refused before this runs (`cli`'s removed-flag check), so it
+/// has nothing to set. `every_flag_reaches_the_recipe` holds that each conversion flag
 /// has an arm here.
 pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
-    crate::cli::merge_shared_sections(
-        &mut r.input,
-        &mut r.calibration.film_base,
-        &mut r.measure,
-        args,
-    );
+    // Input color: transfer and meaning are independent axes — each flag replaces the
+    // recipe's value on its own axis. The deprecated `--assume-linear` /
+    // `--input-profile` flags are refused before this runs
+    // (`cli::reject_deprecated_input_flags`).
+    let input = &args.input_opts;
+    if let Some(t) = input.input_transfer {
+        r.input.transfer = t;
+    }
+    if let Some(m) = input.input_meaning {
+        r.input.meaning = m;
+    }
+    if let Some(t) = input.film_type {
+        r.input.film_type = t;
+    }
+    if let Some(p) = &input.export_ir {
+        r.input.export_ir = Some(p.clone());
+    }
+    // The film base: the three source flags are mutually exclusive (clap-enforced), and
+    // whichever is given replaces the recipe's source entirely.
+    if let Some(src) = crate::cli::film_base_source_override(&args.film_base) {
+        r.calibration.film_base = Some(src);
+    }
+    // The measurement region's static inset. The holder half of the effective area is
+    // measured, never configured.
+    if let Some(f) = args.measure.measure_inset {
+        r.measure.inset = f;
+    }
     // The decode's own knobs. `--density-gamma` is the decode's linearization — the
     // calibrated half of `gamma`; print contrast is `--contrast`, the look's
-    // (`nf-reconstruction/gamma-split`). The flag keeps the current chain's spelling,
-    // where it is still the whole bundled slope.
+    // (`nf-reconstruction/gamma-split`).
     if let Some(v) = args.density.density_scale {
         r.reconstruction.scale = v;
     }
@@ -619,9 +577,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     if let Some(stops) = args.roll.roll_white {
         r.roll.white_stops = Some(stops);
     }
-    // Scene correction. `--auto-wb` never reaches here: `flow` refuses it by
-    // presence, since this chain has no per-frame estimate.
-    if let Some(gains) = args.print.white_balance {
+    // Scene correction. `--auto-wb` never reaches here: it is a removed flag, since the
+    // chain has no per-frame estimate.
+    if let Some(gains) = args.scene.white_balance {
         r.scene_correction.white_balance = WhiteBalance::Explicit(gains);
     }
     if let Some(stops) = args.scene.exposure {
@@ -643,7 +601,7 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     if let Some(v) = args.look.highlight_desaturation_band {
         desat.band = Some(v);
     }
-    if let Some(stops) = args.print.display_tone_headroom {
+    if let Some(stops) = args.display.display_tone_headroom {
         r.fit_range.headroom_stops = Some(stops);
     }
     // The destination. `--film-master` and the axis flags are exclusive at the parser,
@@ -691,9 +649,8 @@ fn knob_name(names: KnobNames, section: &str, flag: &str, key: &str) -> String {
 }
 
 /// The value rules this recipe's own sections carry: the decode's, which live in
-/// [`DecodeParams::check`] and are rendered here as a usage error. The shared
-/// sections are checked on the projection, by the same `cli::validate` the current
-/// chain uses.
+/// [`DecodeParams::check`] and are rendered here as a usage error. The input, film-base
+/// and measurement sections are checked by `cli::validate_shared`.
 pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
     let name = |flag: &str, key: &str| knob_name(names, "reconstruction", flag, key);
     let d = &r.reconstruction;
@@ -942,8 +899,8 @@ fn scene_correction_fault(p: &SceneCorrectionParams, names: KnobNames) -> Result
     Err(NcError::Usage(message))
 }
 
-/// Fit range's value rules — the headroom's, [`crate::types::headroom_fault`], shared
-/// with the current chain's knob, and display black's, [`DisplayBlack::check`] —
+/// Fit range's value rules — the headroom's, [`crate::types::headroom_fault`], and
+/// display black's, [`DisplayBlack::check`] —
 /// rendered as a usage error for this recipe's keys.
 fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
     // Only stated values: an unset one is the rendering's base, a constant.
@@ -1516,7 +1473,7 @@ impl Recipe {
         })
     }
 
-    /// The current chain's config carrying this recipe's **shared** sections, for the
+/ The current chain's config carrying this recipe's **shared** sections, for the
     /// stages both chains run: decode, the film base and the measurement region — plus
     /// fit range's headroom, which both recipes spell identically.
     ///
@@ -1768,10 +1725,12 @@ mod tests {
     }
 
     #[test]
-    fn a_body_without_the_marker_is_refused_as_the_current_chains() {
+    fn a_body_without_the_marker_is_refused_as_the_removed_chains() {
         let err = check(r#"{"calibration": {"film_base": "auto"}}"#, true).unwrap_err();
         assert!(err.contains("\"recipe_version\": 2"), "{err}");
-        assert!(err.contains("hanten params --new-flow"), "{err}");
+        assert!(err.contains("`hanten params`"), "{err}");
+        assert!(err.contains("pipeline_version` 8"), "{err}");
+        assert!(!err.contains("--new-flow"), "{err}");
         // A per-frame overlay is partial and may omit it…
         check(r#"{"calibration": {"film_base": "auto"}}"#, false).unwrap();
         // …but may not state a wrong one.
@@ -1786,7 +1745,7 @@ mod tests {
             err.contains("`print`") && err.contains("scene_correction"),
             "{err}"
         );
-        // `output` is shared by name, so the current chain's keys under it are named
+        // `output` is shared by name, so the removed chain's keys under it are named
         // one by one, pointing at the destination's axes.
         for key in OLD_OUTPUT_KEYS {
             let body = format!(r#"{{"recipe_version": 2, "output": {{"{key}": "x"}}}}"#);
@@ -1822,43 +1781,50 @@ mod tests {
         // Overlays get the same diagnosis.
         let err = check(r#"{"print": {"print_exposure": 1}}"#, false).unwrap_err();
         assert!(err.contains("`print`"), "{err}");
-        // The remedy must not send the user to the current chain as-is: this document
-        // states `recipe_version`, which that chain refuses outright.
-        assert!(!err.contains("run without `--new-flow`"), "{err}");
+        // The chain that read it is gone, so the remedy is to drop it, never to run
+        // something else.
+        assert!(!err.contains("--new-flow"), "{err}");
     }
 
+    /// No section may be named `params`: it is the envelope's key, and a recipe
+    /// carrying one would be read as a sidecar.
     #[test]
-    fn a_new_chain_recipe_is_refused_without_the_flag() {
-        let v = serde_json::json!({"recipe_version": 2});
-        let err = check_body_without_flag(&v, "recipe r.json").unwrap_err();
-        assert!(err.message().contains("only `--new-flow` reads"), "{err}");
-        check_body_without_flag(&serde_json::json!({}), "recipe r.json").unwrap();
-        // Any other value reads on neither chain, so the flag is not the remedy: under
-        // it, `1` would be refused again for the version.
-        let v = serde_json::json!({"recipe_version": 1});
-        let err = check_body_without_flag(&v, "recipe r.json").unwrap_err();
-        assert!(!err.message().contains("pass `--new-flow`"), "{err}");
-        assert!(err.message().contains("remove it"), "{err}");
-    }
-
-    /// The marker distinguishes the two documents only while the current chain's
-    /// recipe cannot carry it — the same reserved-key rule as the envelope's `params`.
-    #[test]
-    fn the_version_key_is_reserved_and_no_section_is_named_params() {
-        let old = serde_json::to_value(ResolvedConfig::default()).unwrap();
-        assert!(old.get(VERSION_KEY).is_none());
+    fn no_section_is_named_params() {
         let new = serde_json::to_value(Recipe::default()).unwrap();
         assert!(new.get("params").is_none());
     }
 
-    /// The recipe half of the availability inventory: every section and key the
-    /// current chain's recipe can carry is either shared with this one or refused by
-    /// name. A key added to the current chain's schema and classified nowhere would
-    /// reach the new flow as an opaque "unknown field" — or, in a shared section, as
-    /// a key the new flow parses and never reads.
+    /// The last default document the removed chain wrote (`pipeline_version` 7,
+    /// `hanten params` at 5207460), keys only — the shape every archived sidecar and
+    /// `--dump-params` file carries. Frozen: it describes files on disk, not code.
+    fn removed_chains_document() -> serde_json::Value {
+        serde_json::json!({
+            "reconstruction": {
+                "schema_version": 1,
+                "density": {"scale": [1, 0.84, 0.73], "offset": [0, 0, 0]},
+                "curve": {"gamma": 2.0, "anchor": {"mid-at-base-offset": 0.62}}
+            },
+            "input": {"transfer": "auto", "meaning": "auto", "film_type": "unknown", "export_ir": null},
+            "calibration": {"film_base": null},
+            "measure": {"inset": 0.05},
+            "print": {
+                "print_exposure": 0.0,
+                "black_point": 0.0,
+                "white_balance": {"explicit": [1, 1, 1]},
+                "linear_range": [0, 1]
+            },
+            "fit_range": {"headroom_stops": 6.0},
+            "output": {"preset": "gain-map-hdr"}
+        })
+    }
+
+    /// The migration inventory: every section and key of the removed chain's recipe is
+    /// either shared with this one or refused by name, so an archived recipe fails with
+    /// where its knob went rather than an opaque "unknown field" — or, in a shared
+    /// section, parses a key nothing reads.
     #[test]
-    fn every_key_of_the_current_chains_recipe_is_shared_or_diagnosed() {
-        let old = serde_json::to_value(ResolvedConfig::default()).unwrap();
+    fn every_key_of_the_removed_chains_recipe_is_shared_or_diagnosed() {
+        let old = removed_chains_document();
         let new = serde_json::to_value(Recipe::default()).unwrap();
         for (section, fields) in old.as_object().unwrap() {
             if SECTIONS_WITH_NO_COUNTERPART
@@ -2094,11 +2060,11 @@ mod tests {
         assert!(!err.contains("--display-tone-headroom"), "{err}");
     }
 
-    /// `convert --new-flow` with `extra`, merged over the recipe `json`.
+    /// `convert` with `extra`, merged over the recipe `json`.
     fn merged(json: &str, extra: &[&str]) -> Recipe {
         use crate::cli::{Cli, Command};
         use clap::Parser;
-        let argv = ["hanten", "convert", "in.tif", "-o", "out", "--new-flow"]
+        let argv = ["hanten", "convert", "in.tif", "-o", "out"]
             .iter()
             .chain(extra)
             .copied();
@@ -2816,7 +2782,7 @@ mod tests {
     }
 
     #[test]
-    fn display_black_reads_off_from_a_recipe_and_is_new_chain_only() {
+    fn display_black_reads_off_from_a_recipe() {
         let r = parse(r#"{"recipe_version": 2, "fit_range": {"display_black": "off"}}"#).unwrap();
         assert_eq!(r.fit_range.display_black, Some(DisplayBlack::Off));
         let r = parse(r#"{"recipe_version": 2, "fit_range": {"display_black": 5}}"#).unwrap();
@@ -2825,9 +2791,6 @@ mod tests {
             Some(DisplayBlack::StopsBelowMid(5.0))
         );
         assert!(parse(r#"{"recipe_version": 2, "fit_range": {"display_black": "none"}}"#).is_err());
-        // The current chain's projection carries the headroom only.
-        let config = serde_json::to_value(r.to_config().fit_range).unwrap();
-        assert_eq!(config, serde_json::json!({"headroom_stops": 6.0}));
     }
 
     #[test]
@@ -2846,10 +2809,9 @@ mod tests {
     }
 
     #[test]
-    fn a_key_both_chains_retired_points_at_the_new_home() {
-        // The current chain's migration errors point at its own homes
-        // (`reconstruction.density.scale`), so the new chain needs its own wording
-        // rather than an opaque "unknown field".
+    fn a_key_retired_earlier_points_at_its_home() {
+        // Keys retired before the removed chain was still name their homes here, rather
+        // than falling to an opaque "unknown field".
         for (json, needles) in [
             (
                 r#"{"recipe_version": 2, "density": {"scale": [1, 1, 1]}}"#,
@@ -2880,18 +2842,185 @@ mod tests {
         }
     }
 
+    /// `convert` flags that are not conversion knobs, so they owe the recipe nothing:
+    /// operational flags (never a recipe key), and plumbing (paths and the recipe
+    /// itself, not settings inside it).
+    const NON_KNOB_FLAGS: &[&str] = &[
+        // Refused by `cli::reject_deprecated_input_flags` before this merge runs.
+        "--input-profile",
+        "--output",
+        "--params",
+        "--dump-params",
+        "--strict",
+        "--seed",
+        "--telemetry",
+        "--telemetry-file",
+        "--max-memory",
+        "--report",
+        "--report-file",
+        "--verbose",
+        "--quiet",
+        "--help",
+    ];
+
+    /// Every visible `convert` flag that is a conversion knob, read off clap itself —
+    /// the alternative is a hand-kept list sitting beside the flags. Hidden flags are
+    /// removed ones, which `cli`'s removed-flag check refuses before this merge runs.
+    fn convert_knob_flags() -> std::collections::BTreeSet<String> {
+        use clap::CommandFactory;
+        let cli = crate::cli::Cli::command();
+        let convert = cli
+            .find_subcommand("convert")
+            .expect("`convert` is a subcommand");
+        convert
+            .get_arguments()
+            .filter(|arg| !arg.is_hide_set())
+            .filter_map(|arg| arg.get_long().map(|long| format!("--{long}")))
+            .filter(|flag| !NON_KNOB_FLAGS.contains(&flag.as_str()))
+            .collect()
+    }
+
+    type Landed = fn(&Recipe) -> bool;
+
+    /// One command line per knob flag, each setting a non-default value, and the one
+    /// field of the recipe it must land in — "the recipe changed" alone would pass a
+    /// flag wired to the wrong knob.
+    fn knob_samples() -> &'static [(&'static str, &'static [&'static str], Landed)] {
+        use crate::destination::{Container, Gamut, Range, Transfer};
+        use crate::types::{FilmType, MeaningAssertion, TransferAssertion};
+        &[
+            ("--input-transfer", &["--input-transfer", "linear"], |r| {
+                r.input.transfer == TransferAssertion::Linear
+            }),
+            (
+                "--input-meaning",
+                &["--input-meaning", "scanner-device"],
+                |r| r.input.meaning == MeaningAssertion::ScannerDevice,
+            ),
+            ("--film-type", &["--film-type", "silver"], |r| {
+                r.input.film_type == FilmType::Silver
+            }),
+            ("--film-base", &["--film-base", "0.5,0.4,0.3"], |r| {
+                matches!(r.calibration.film_base, Some(FilmBaseSource::Explicit(_)))
+            }),
+            ("--base-region", &["--base-region", "0,0,10,10"], |r| {
+                matches!(r.calibration.film_base, Some(FilmBaseSource::Region(_)))
+            }),
+            ("--auto-base", &["--auto-base"], |r| {
+                r.calibration.film_base == Some(FilmBaseSource::Auto)
+            }),
+            ("--export-ir", &["--export-ir", "ir.tiff"], |r| {
+                r.input.export_ir.as_deref() == Some("ir.tiff")
+            }),
+            ("--measure-inset", &["--measure-inset", "0.1"], |r| {
+                r.measure.inset == 0.1
+            }),
+            ("--density-scale", &["--density-scale", "1,0.9,0.8"], |r| {
+                r.reconstruction.scale == [1.0, 0.9, 0.8]
+            }),
+            ("--density-offset", &["--density-offset", "0,0.1,0"], |r| {
+                r.reconstruction.offset == [0.0, 0.1, 0.0]
+            }),
+            ("--density-gamma", &["--density-gamma", "1.9"], |r| {
+                r.reconstruction.linearization == 1.9
+            }),
+            (
+                "--anchor-mid-offset",
+                &["--anchor-mid-offset", "0.5"],
+                |r| r.reconstruction.anchor == AnchorRule::MidAboveBase(0.5),
+            ),
+            ("--white-balance", &["--white-balance", "1.1,1,0.9"], |r| {
+                r.scene_correction.white_balance == WhiteBalance::Explicit([1.1, 1.0, 0.9])
+            }),
+            ("--exposure", &["--exposure", "-0.5"], |r| {
+                r.scene_correction.exposure == -0.5
+            }),
+            ("--contrast", &["--contrast", "1.3"], |r| {
+                r.look.contrast == 1.3
+            }),
+            ("--channel-grade", &["--channel-grade", "1.1,0.9"], |r| {
+                r.look.channel_grade == [1.1, 0.9]
+            }),
+            (
+                "--highlight-desaturation",
+                &["--highlight-desaturation", "0.5"],
+                |r| r.look.highlight_desaturation.strength == 0.5,
+            ),
+            (
+                "--highlight-desaturation-start",
+                &["--highlight-desaturation-start", "-2"],
+                |r| r.look.highlight_desaturation.start_stops == -2.0,
+            ),
+            (
+                "--highlight-desaturation-band",
+                &["--highlight-desaturation-band", "0.01,0.03"],
+                |r| r.look.highlight_desaturation.band == [0.01, 0.03],
+            ),
+            ("--range", &["--range", "hdr"], |r| {
+                r.output == display(|a| a.range = Some(Range::Hdr))
+            }),
+            ("--transfer", &["--transfer", "pq"], |r| {
+                r.output == display(|a| a.transfer = Some(Transfer::Pq))
+            }),
+            ("--gamut", &["--gamut", "adobe-rgb"], |r| {
+                r.output == display(|a| a.gamut = Some(Gamut::AdobeRgb))
+            }),
+            ("--container", &["--container", "avif"], |r| {
+                r.output == display(|a| a.container = Some(Container::Avif))
+            }),
+            ("--film-master", &["--film-master"], |r| {
+                r.output == OutputSection::FilmMaster
+            }),
+            (
+                "--display-tone-headroom",
+                &["--display-tone-headroom", "4"],
+                |r| r.fit_range.headroom_stops == 4.0,
+            ),
+            ("--display-black", &["--display-black", "5"], |r| {
+                r.fit_range.display_black == DisplayBlack::StopsBelowMid(5.0)
+            }),
+        ]
+    }
+
+    /// A rendered destination with the axes `set` states.
+    fn display(set: fn(&mut DisplayAxes)) -> OutputSection {
+        let mut axes = DisplayAxes::default();
+        set(&mut axes);
+        OutputSection::Display(axes)
+    }
+
+    /// Every conversion flag reaches its own recipe field — a flag with no arm in
+    /// [`merge`] would parse and do nothing, the accepted-and-ignored defect. Driven
+    /// over the flag surface clap reports, so a flag added without a sample reds, and
+    /// a sample for a flag that no longer exists reds too.
     #[test]
-    fn the_projection_carries_the_shared_sections_and_nothing_else() {
-        let mut r = Recipe::default();
-        r.calibration.film_base = Some(FilmBaseSource::Auto);
-        r.measure.inset = 0.1;
-        let cfg = r.to_config();
-        assert_eq!(cfg.calibration.film_base, Some(FilmBaseSource::Auto));
-        assert_eq!(cfg.measure.inset, 0.1);
-        assert_eq!(cfg.input, r.input);
-        let defaults = ResolvedConfig::default();
-        assert_eq!(cfg.reconstruction, defaults.reconstruction);
-        assert_eq!(cfg.print, defaults.print);
-        assert_eq!(cfg.output, defaults.output);
+    fn every_flag_reaches_the_recipe() {
+        use crate::cli::{Cli, Command};
+        use clap::Parser;
+        let surface = convert_knob_flags();
+        let sampled: std::collections::BTreeSet<String> = knob_samples()
+            .iter()
+            .map(|(flag, _, _)| flag.to_string())
+            .collect();
+        assert_eq!(
+            surface, sampled,
+            "every visible conversion flag needs a sample here, and every sample a flag"
+        );
+        for (flag, extra, landed) in knob_samples() {
+            let argv = ["hanten", "convert", "in.tif", "-o", "out"]
+                .iter()
+                .chain(extra.iter())
+                .copied();
+            let Command::Convert(args) = Cli::try_parse_from(argv).unwrap().command else {
+                unreachable!()
+            };
+            let merged = merge(Recipe::default(), &args);
+            assert!(
+                landed(&merged),
+                "{flag} did not land in its field: {merged:?}"
+            );
+            // Falsifiability: the default does not already satisfy the check.
+            assert!(!landed(&Recipe::default()), "{flag}'s check is vacuous");
+        }
     }
 }

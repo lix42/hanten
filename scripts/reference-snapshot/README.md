@@ -1,8 +1,8 @@
 # The frozen reference build
 
 The pre-migration pipeline is preserved by **git, not by code** (CLAUDE.md's
-migration rule): once the new chain replaces a path, the old behaviour lives only in
-a build of the reference commit. This directory is how that build is made and run.
+migration rule): the new chain has replaced the old paths, so the old behaviour lives
+only in a build of the reference commit. This directory is how that build is made and run.
 
 | | |
 |---|---|
@@ -55,9 +55,9 @@ commit with the same toolchain were byte-identical — even the binaries were. A
 
 - **`sigmoid-knees`** is the best result reviewed before the migration
   (`docs/design-update.md`, "Reference for the migration").
-- **`display-p3`** is the same destination `--new-flow` writes: 16-bit TIFF, Display P3
-  ICC. That means a reference cell and a new-flow cell differ in the pipeline and not in
-  the container. To view one in a browser, convert it to sRGB JPEG the same way as another
+- **`display-p3`** writes the same container as the current binary's default destination
+  (SDR, native, Display P3, TIFF): 16-bit TIFF, Display P3 ICC. That means a reference cell
+  and a current cell differ in the pipeline and not in the container. To view one in a browser, convert it to sRGB JPEG the same way as another
   tool's output (`render-review-set`, §5 step 1). The source is a 16-bit **Display P3**
   TIFF with its profile embedded.
 - **Frames are not pinned.** A consuming task brings its own, with the film base measured
@@ -117,11 +117,12 @@ frame from step 3.
   reference build's own guide documents that step and its caveat
   (`git show origin/reserve:docs/using-nc.md`, §4 step 3 and §6) — the live guide
   dropped them when the reference density retired.
-- **A reference recipe only means something to the reference binary.** The new chain
-  refuses it because it has no `"recipe_version": 2`. Keep it beside the roll's output,
+- **A reference recipe only means something to the reference binary.** The current
+  binary refuses it because it has no `"recipe_version": 2`. Keep it beside the roll's output,
   not in the tree.
-- Every output's `<out>.json` sidecar carries the build identity and the full recipe,
-  and `--params <sidecar>` reproduces the output.
+- Every reference output's `<out>.json` sidecar carries the build identity and the full
+  recipe, and `--params <sidecar>` reproduces the output. (The current binary writes no
+  sidecar.)
 
 ## 4. Put it in a review set
 
@@ -135,8 +136,18 @@ Add it to a matrix as one arm of a build axis (`render-review-set`, §3):
 ]
 ```
 
-The rest of the matrix (`schema_version`, `output_preset`, `common_args`, `configs`) is
-as `render-review-set` §3 describes. Paths resolve against the working directory (run
+The two arms speak different output interfaces: the reference build takes a preset, the
+candidate a destination. The matrix states both, and each build gets the one its own
+`--version` banner (`pipeline_version`) says it speaks — the same container on both arms:
+
+```json
+"output_preset": "display-p3",
+"destination": {"display": {"range": "sdr", "transfer": "native",
+                            "gamut": "display-p3", "container": "tiff"}}
+```
+
+A matrix missing the one an arm needs is refused before anything renders. The rest
+(`schema_version`, `common_args`, `configs`) is as `render-review-set` §3 describes. Paths resolve against the working directory (run
 from the repo root), and the candidate arm must already be built. The `ref` arm's `nc`
 is only a placeholder: point it at the cache at render time rather than committing a
 machine path:
@@ -157,11 +168,4 @@ new commit and says so; update `expect_commit` on purpose.
 A config only one build accepts opts out of the other arm — `"builds": ["new"]` for a
 flag added after the tag, `"builds": ["ref"]` for one retired since. `--preset
 sigmoid-knees` is the latter: the candidate refuses it since `nf-retire/sigmoid-and-simple`,
-so it renders only on the reference arm.
-
-**Known gap: one matrix cannot hold a reference cell and a `--new-flow` cell.** A
-matrix states one output target for every cell: an `output_preset` (the current chain,
-which the reference arm needs) or a `destination` (the new chain, which passes
-`--new-flow` and the destination flags — a flag the reference build does not have).
-Render the new-flow side as its own `destination` matrix, or with `hanten convert
---new-flow` directly, and add its cell to the reference set's `review.json` by hand.
+so it renders only on the reference arm; `--exposure` is the former.

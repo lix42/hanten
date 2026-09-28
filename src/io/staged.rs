@@ -519,7 +519,7 @@ pub fn stage<T>(
 /// this pass the commits run in order and a later failure leaves earlier artifacts
 /// already promoted — reintroducing exactly the orphaned-primary case this module
 /// exists to prevent. (Found by the failure-injection test, not by reasoning: the
-/// obvious way to make a sidecar write fail — occupy its path with a directory —
+/// obvious way to make an artifact's write fail — occupy its path with a directory —
 /// fails at the rename, not at the write.)
 ///
 /// **What it still does not promise.** The pre-check narrows the window; it cannot
@@ -527,7 +527,7 @@ pub fn stage<T>(
 /// revoked mid-run, the filesystem going read-only, a crash between two renames), and
 /// an already-renamed artifact cannot be un-renamed — its previous content is gone.
 /// So callers should order the set with the artifact whose *presence implies success*
-/// last; `cli` commits the primary output after the sidecar for that reason.
+/// last; `cli` commits the primary output after the IR export for that reason.
 pub fn commit_all(artifacts: Vec<Staged>) -> Result<Vec<String>> {
     // Two artifacts resolving to the SAME file is not caught upstream: `cli`'s
     // `ensure_write_targets_distinct` compares the paths the user gave, and symlink
@@ -574,7 +574,7 @@ fn flush_surfacing_errors<W: Write>(writer: &mut W, target: &Path) -> Result<()>
         .map_err(|e| NcError::Write(format!("flushing {}: {e}", target.display())))
 }
 
-/// Stage a complete byte buffer — the JSON artifacts (sidecar, `--dump-params`,
+/// Stage a complete byte buffer — the JSON artifacts (`--dump-params`,
 /// `--report-file`), which are built in memory and have no incremental writer.
 pub fn stage_bytes(target: &Path, bytes: &[u8]) -> Result<Staged> {
     let (staged, ()) = stage(target, |w| {
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn staging_two_artifacts_at_once_uses_distinct_temps() {
-        // `convert` stages IR + primary + sidecar before committing any, and `roll`
+        // `convert` stages IR + primary before committing either, and `roll`
         // stages per frame — so temps must never collide, including for the same
         // target path.
         let dir = TempDir::new("distinct");

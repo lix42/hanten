@@ -96,18 +96,19 @@ N runs append N lines. `--telemetry-file <path>` overwrites (a single record).
 Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
 
 ```json
-{ "schema_version":7, "timestamp_ms":1752566400000,
-  "nc_version":"0.1.0", "target":"aarch64-apple-darwin", "cpu_count":14,
+{ "schema_version":8, "timestamp_ms":1790569820202,
+  "nc_version":"0.1.0", "target":"aarch64-apple-darwin", "cpu_count":11,
   "image":{"format":"hdri","width":502,"height":462,"megapixels":0.231924,
            "bit_depth":16,"channels":3,"ir_present":true,
-           "input_bytes":2017230,"output_bytes":1392370},
-  "timing_ms":{"total":30.0,"decode":5.0,"film_base":0.0,"algorithm":4.4,
-               "color":18.4,"encode":1.0,"ir_export":0.6},
-  "conversion":{"preset":"display-p3",
-                "params_hash":"92a827ffd2d0aebd",
+           "input_bytes":2017230,"output_bytes":1392366},
+  "timing_ms":{"total":73.4,"decode":18.3,"film_base":0.0,"algorithm":6.1,
+               "color":22.8,"encode":8.0,"ir_export":11.6},
+  "conversion":{"destination":{"display":{"range":"sdr","transfer":"native",
+                                          "gamut":"display-p3","container":"tiff"}},
+                "params_hash":"3edbc0135f3469fd",
                 "film_base_source":{"explicit":[0.9,0.55,0.42]},
                 "output_depth":"u16"},
-  "outcome":{"warnings":1,"clipped":3419,"non_finite":0} }
+  "outcome":{"warnings":0,"clipped":0,"non_finite":0} }
 ```
 
 `timing_ms.ir_export` appears only when `--export-ir` ran. (Schema v2 replaced v1's

@@ -1,4 +1,4 @@
-//! The per-channel gain between a gain map's two renditions, for the new chain.
+//! The per-channel gain between a gain map's two renditions.
 //!
 //! A gain map stores `G = (hdr + o) / (base + o)` per channel, and a decoder rebuilds
 //! the HDR rendition as `G · (base + o) − o` from the base **as stored**. The base is
@@ -20,8 +20,8 @@
 //! agree by construction (a gain of `0.9999999` has been measured on a real frame), so
 //! an exact test would call a flat frame live and a map of rounding noise HDR.
 //!
-//! Written fresh, per the migration rule: `pipeline::gain_map` is the current chain's
-//! builder and retires with it.
+//! Written fresh, per the migration rule, rather than from the removed chain's
+//! `pipeline::gain_map`.
 
 use serde::Serialize;
 

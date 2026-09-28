@@ -98,8 +98,8 @@ const CPU_USED: c_int = 6;
 
 /// Pinned constant-quality level, chosen by measurement.
 ///
-/// A **fixed part of the preset's definition**, not a conversion knob — the same
-/// shape as `io::ultra_hdr`'s `JPEG_QUALITY`. A user-facing quality control would
+/// A **fixed part of the destination's definition**, not a conversion knob — the same
+/// shape as `io::jpeg`'s quality. A user-facing quality control would
 /// need a recipe key, a merge arm and a `pipeline_version` story; the task pins
 /// settings for the initial determinism contract instead.
 ///
@@ -117,7 +117,7 @@ const CPU_USED: c_int = 6;
 /// AVIF is nc's *delivery* HDR container, so some loss is appropriate — the
 /// archival paths are `film-master` and the planned lossless HDR TIFFs. Note the
 /// first row: `cq_level = 0` is **mathematically lossless**, so AV1 could carry a
-/// bit-exact HDR still if a preset ever wants one, at ~20x the size.
+/// bit-exact HDR still if a destination ever wants one, at ~20x the size.
 const CQ_LEVEL: c_uint = 8;
 
 /// libaom worker threads, with row multithreading on. **Pinned, not derived from
@@ -1181,7 +1181,6 @@ fn content_light_level(metadata: &hdr::HdrRenderMetadata) -> Option<(u16, u16)> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::display_tone::Headroom;
 
     /// Parse a minimal box tree into `(type, size, body offset)` triples.
     fn boxes(buf: &[u8]) -> Vec<(String, usize, usize)> {
@@ -1218,17 +1217,34 @@ mod tests {
             .unwrap_or_else(|| panic!("no `{kind}` box in {tree:?}"))
     }
 
-    /// Render a tiny real image so tests use genuine renderer metadata rather
-    /// than a hand-built struct that could drift from the renderer's contract.
+    /// A tiny display-linear BT.2020 rendition through the production hand-off and
+    /// transfer, so tests use genuine metadata rather than a hand-built struct that
+    /// could drift from its contract.
     fn render_tiny(transfer: hdr::HdrTransfer, rgb: &[f32], w: u32, h: u32) -> RenderedHdr {
-        use crate::algo::FilmRgbImage;
-        use crate::pipeline::render_split::display_source;
-        use crate::pipeline::working_space::map_nc_film_rgb_v1;
-        use crate::types::{LinearImage, PrintParams};
+        let image = crate::types::LinearImage::new(w, h, rgb.to_vec(), None).unwrap();
+        let (linear, _) = hdr::from_new_chain(image, "reinhard", "radial").unwrap();
+        hdr::encode_transfer(linear, transfer).unwrap()
+    }
 
-        let film = FilmRgbImage::fixture(LinearImage::new(w, h, rgb.to_vec(), None).unwrap());
-        let shared = display_source(map_nc_film_rgb_v1(film), &PrintParams::default()).unwrap();
-        hdr::render(&shared, transfer, Headroom::new(0.0).unwrap()).unwrap()
+    /// `rgb` read as film RGB and carried through the NC film RGB v1 mapping into
+    /// BT.2020 at the identity tone — the signal the codec bounds below were measured
+    /// on, so the pinned figures keep describing the same input.
+    fn render_film_tiny(transfer: hdr::HdrTransfer, rgb: &[f32], w: u32, h: u32) -> RenderedHdr {
+        use crate::algo::FilmRgbImage;
+        use crate::pipeline::colorimetry::dot;
+        use crate::pipeline::colorimetry::pinned::ACESCG_TO_BT2020;
+        use crate::pipeline::working_space::map_nc_film_rgb_v1;
+
+        let film = crate::types::LinearImage::new(w, h, rgb.to_vec(), None).unwrap();
+        let aces = map_nc_film_rgb_v1(FilmRgbImage::fixture(film)).into_linear();
+        let bt2020: Vec<f32> = aces
+            .rgb
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|px| ACESCG_TO_BT2020.map(|row| dot(row, *px)))
+            .collect();
+        render_tiny(transfer, &bt2020, w, h)
     }
 
     fn pq_metadata() -> hdr::HdrRenderMetadata {
@@ -1706,7 +1722,7 @@ mod tests {
             (hdr::HdrTransfer::Pq, [(9, 0.702), (10, 0.849), (9, 0.591)]),
             (hdr::HdrTransfer::Hlg, [(8, 0.645), (8, 0.782), (7, 0.615)]),
         ] {
-            let render = render_tiny(transfer, &rgb, w, h);
+            let render = render_film_tiny(transfer, &rgb, w, h);
             let want = quantize_to_ycbcr(render.image().rgb(), w, h).unwrap().0;
             let dir = tempdir();
             let path = dir.join(format!("bounds-{transfer:?}.avif"));

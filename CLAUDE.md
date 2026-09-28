@@ -28,7 +28,7 @@ assistance is opt-in and sits *around* a deterministic core.
 | `nc_version`, telemetry `schema_version` | snapshot tests assert the exact JSON |
 | `NC_*` environment variables | diagnostic and test surface |
 | the telemetry log directory (`<data-dir>/nc/telemetry.jsonl`) | moving it orphans existing logs |
-| the `(nc)` suffix in the coded-HDR ICC descriptions (`pipeline::color`) | it is **written into the profile bytes** of every `hdr-pq-tiff` / `hdr-hlg-tiff` |
+| the `(nc)` suffix in the coded-HDR ICC descriptions (`pipeline::color`) | it is **written into the profile bytes** of every PQ / HLG TIFF |
 | recipe keys, report fields, exit codes | the scripting contract |
 | the crate and Cargo package | `NC_VERSION` is `CARGO_PKG_VERSION`; a `[[bin]]` section renames the binary |
 | `nctool`, its `--nc`/`$NC`, `../nc-assets` | internal tooling and the machine-local asset symlink |
@@ -48,9 +48,10 @@ assistance is opt-in and sits *around* a deterministic core.
 
 ## The migration rule (read before writing any `nf` code)
 
-nc is migrating to the design in `docs/design-update.md` (the fixed decode plus a
-staged rendering chain). While that runs, **structure for the long term beats
-reusing what is there**:
+nc migrated to the design in `docs/design-update.md` (the fixed decode plus a
+staged rendering chain); `nf-core/default-flip` made it the only chain and deleted
+the old one. The remaining `nf-*` tasks keep this rule — **structure for the long
+term beats reusing what is there**:
 
 - **Write the new stages fresh.** Do not shape a new stage around the old code's
   seams, types or fusions, and do not "extract" a stage out of a per-pixel body
@@ -67,7 +68,8 @@ reusing what is there**:
 
 - `docs/design-spec.md` — the authoritative design: architecture, CLI surface,
   §4 value terms, §8 determinism, §9 recipe schema, §11 exit codes.
-- `docs/design-update.md` — the new-flow design the migration is heading to.
+- `docs/design-update.md` — the design the migration built: the fixed decode and
+  the staged rendering chain.
 - `docs/TASKS.md` — the plan: canonical dependency graph and task checklist by epic.
 - `docs/tasks/<epic>/<name>.md` — per-task file. Task ids are `<epic>/<name>`.
 - `docs/progress/<epic>.md` — **append-only** execution log per epic, opening with
@@ -106,28 +108,24 @@ A pure-function pipeline orchestrated by a thin CLI. Stages are pure
 stage decides (e.g. `BaseEstimate::ir_mask_applied`) is **returned**, never
 re-derived by the caller.
 
-**Current chain** — `cli::convert_frame` dispatches on the resolved `output.preset`:
+**The chain** — `cli::convert_frame` renders the recipe's resolved destination
+(`crate::destination`):
 
 ```text
-decode → film-base → tagged reconstruction → FilmRgbImage
-  ├ film-master → NC film RGB v1 → linear ACEScg → encode (unclamped f32, no transform)
-  └ display presets → NC film RGB v1 → linear ACEScg → shared print controls
-      ├ gain-map-hdr (default) / ultra-hdr-v1 → SDR + HDR + gain map → JPEG
-      ├ display-p3 / compatibility → SDR → P3/sRGB → 16-bit TIFF
-      ├ hdr-pq / hdr-hlg        → HDR → Rec.2100 PQ/HLG → 10-bit 4:4:4 AVIF
-      ├ hdr-pq-tiff / hdr-hlg-tiff → the same signal → full-range 16-bit TIFF
-      └ hdr-linear-tiff         → HDR, no transfer → 32-bit float BT.2020 TIFF
+decode → film-base → algo::fixed decode → NC film RGB v1 → linear ACEScg
+  ├ --film-master → encode (unclamped f32 ACEScg TIFF, no rendering stage)
+  └ scene_correction → look → fit_range → fit_gamut → destination encode
+      ├ SDR (default)  → Display P3 or Adobe RGB → 16-bit TIFF
+      ├ HDR linear     → BT.2020, no transfer → 32-bit float TIFF
+      ├ HDR PQ / HLG   → Rec.2100 → full-range 16-bit TIFF, or 10-bit 4:4:4 AVIF
+      └ HDR gain map   → SDR base + HDR rendition → ISO 21496-1 gain-map JPEG
 ```
 
-Every preset is atomic; `OutputPreset` (`types.rs`) is the list and says what
-must stay in step with it. `gain-map-hdr` and `ultra-hdr-v1` are one render
-packaged in two metadata dialects.
-
-**New chain** (`--new-flow`, the migration target): `algo::fixed` decode →
-`scene_correction` → `look` → `fit_range` → `fit_gamut` → encode, with the stage
-order pinned by boundary types (`pipeline/chain.rs`). `--new-flow` is migration
-scaffolding (`src/flow.rs`, deleted by `nf-core/default-flip`): it selects the
-chain and its knobs, so unlike the operational flags it **does** change output.
+A destination is four axes (`--range`, `--transfer`, `--gamut`, `--container`) or
+`--film-master`; `destination::ROWS` is the one table of what exists, and the stage
+order is pinned by boundary types (`pipeline/chain.rs`). A recipe is a
+`"recipe_version": 2` document (`crate::recipe`); one written before
+`pipeline_version` 8 is refused whole. The removed chain is the reference build.
 
 Rules every stage keeps:
 
@@ -146,8 +144,8 @@ Rules every stage keeps:
 - **Per-pixel maps go through `pipeline/pixels`**; floating-point reductions run
   in a fixed order, or output stops being byte-identical.
 - **Adding a full-frame buffer to any stage means updating `pipeline/memory.rs`'s
-  model.** Nothing tests the model against the code, and a new preset calibrates
-  its own `RunProfile`.
+  model.** Nothing tests the model against the code, and a new buffer shape
+  calibrates its own `RunProfile`.
 
 ### Where the detail lives
 
@@ -155,21 +153,34 @@ Read the module docs before changing these; they hold the traps.
 
 | Area | Read |
 |---|---|
+<<<<<<< HEAD
 | output paths, suffixes, preset → container | `cli::resolve_output_path`, `container_for`, `Unappendable` |
 | knob merge, validation order, removed keys | `cli::merge`, `validate`, `validate_convert`, `validate_output_preset`, `strip_retired_keys_at_old_defaults` |
 | new-flow flags and recipe | `src/flow.rs`, `src/recipe.rs` |
 | renderings (`direct` / `default`), `direct`'s pinned base | `src/rendering.rs` |
 | new-flow destination set (axes, table, derivation) | `src/destination.rs` |
 | reconstruction, density scale, anchors | `types.rs` (`DensityParams`, `ExponentialParams`, `AnchorPlacement`), `algo/fixed.rs` |
+||||||| parent of 7d70d16 (Flip the default to the new chain (nf-core/default-flip))
+| output paths, suffixes, preset → container | `cli::resolve_output_path`, `container_for`, `Unappendable` |
+| knob merge, validation order, removed keys | `cli::merge`, `validate`, `validate_convert`, `validate_output_preset`, `strip_retired_keys_at_old_defaults` |
+| new-flow flags and recipe | `src/flow.rs`, `src/recipe.rs` |
+| new-flow destination set (axes, table, derivation) | `src/destination.rs` |
+| reconstruction, density scale, anchors | `types.rs` (`DensityParams`, `ExponentialParams`, `AnchorPlacement`), `algo/fixed.rs` |
+=======
+| output paths, suffixes, destination → container | `cli::resolve_output_path`, `OutputTarget`, `Unappendable` |
+| knob merge, validation order, removed flags and keys | `recipe::check_body`, `recipe::merge`, `recipe::validate`, `recipe::destination`; `cli::reject_removed_flags`, `validate_convert`, `validate_shared` |
+| destination set (axes, table, derivation) | `src/destination.rs` |
+| decode, density scale, anchor | `algo/fixed.rs` |
+>>>>>>> 7d70d16 (Flip the default to the new chain (nf-core/default-flip))
 | film base, IR holder mask, measurement region | `pipeline/film_base.rs` |
 | film-stock data | `film_stock/` (test-only: evidence for the decode's constants; `docs/datasheets/`) |
-| display tone, SDR/HDR bounds | `pipeline/display_tone.rs`, `sdr.rs`, `hdr.rs`, `render_split.rs`; the new chain's SDR/HDR branch contract in `pipeline/chain.rs` |
-| gain map, Ultra HDR / ISO 21496-1 container | `pipeline/gain_map.rs` (legacy), `pipeline/gain_ratio.rs` (the new chain's per-channel gain), `gain_map/iso.rs`, `io/ultra_hdr.rs`, `scripts/iso-decoder-oracle/`, `Cargo.toml` (`ultrahdr-sys`'s `jpeg-max-dimension`) |
+| rendering stages, SDR/HDR bounds | `pipeline/scene_correction.rs`, `look.rs`, `fit_range.rs`, `fit_gamut.rs`, `hdr.rs`; the SDR/HDR branch contract in `pipeline/chain.rs` |
+| gain map, ISO 21496-1 container | `pipeline/gain_ratio.rs`, `gain_encode.rs`, `io/iso_gain_map.rs` (+ `metadata.rs`), `scripts/iso-decoder-oracle/` |
 | AVIF / libaom | `io/avif.rs`, `Cargo.toml` comments |
 | colorimetry | `pipeline/colorimetry/`, `docs/colorimetry-maintenance.md` |
 | memory preflight | `pipeline/memory.rs` |
 | lcms2 transforms and fault handler | `pipeline/color.rs`; `cli.rs`'s `CMS_ERROR` handler, cleared before and checked after each render |
-| goldens, cross-platform bounds, drift gate | `stages::golden`, `pipeline/chain_golden.rs`, `version.rs` (`PipelineFingerprint`) |
+| goldens, cross-platform bounds, drift gate | `pipeline/chain_golden.rs`, `version.rs` (`PipelineFingerprint`) |
 | diagnostic probes | `pipeline/shadow_metrics.rs` |
 | telemetry | `telemetry.rs`, the `perf-telemetry` skill |
 | build identity (`NC_GIT_*`) | `build.rs` |
@@ -183,7 +194,7 @@ Rust (edition 2024), one binary crate `nc` with binary `hanten`; `Cargo.lock` is
 committed.
 
 - **Before pushing, match CI** (`.github/workflows/ci.yml`):
-  `python3 scripts/check-vendored-native.py` → `cargo fmt --all --check` →
+  `cargo fmt --all --check` →
   `cargo clippy --all-targets --all-features -- -D warnings` →
   `cargo build --all-targets --all-features` →
   `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` → the `nctool` suite
@@ -235,7 +246,7 @@ committed.
 - **A plan doc is not code.** In review, edit it only for findings that would
   mislead the design or waste work, not for gaps implementation will surface.
 - **A user-visible change updates `docs/using-nc.md` in the same PR** (a flag,
-  subcommand, default, recipe key, preset, exit code, or a report field or message
+  subcommand, default, recipe key, destination, exit code, or a report field or message
   a user acts on). Verify by running the binary — the `update-usingnc-doc` skill.
 - **Value terms (high/low/bright/dark):** read design-spec §4 first. As scene
   luminance rises, transmission falls while density, positive and output rise;
@@ -245,16 +256,18 @@ committed.
 ### Knobs and recipes
 
 - **Every conversion knob is a CLI flag and a recipe key** — nothing reachable
-  only from code. A knob spans the `*Overrides` field (`cli.rs`), the `*Params`
-  field (`types.rs`), a `merge` arm with a merge test (a missing arm is a silent
-  no-op), and usually a `validate` rule. Flags win over the recipe. Exceptions:
-  operational flags (`--report`, `--telemetry*`, `--max-memory`) never change the
-  image and are not recipe keys; `--new-flow` selects the chain.
+  only from code. A knob spans the `*Overrides` field (`cli.rs`), its recipe
+  section's field (`recipe.rs` or the stage's params), a `recipe::merge` arm (a
+  missing arm is a silent no-op; `every_flag_reaches_the_recipe` enumerates the
+  flags), and usually a `recipe::validate` rule. Flags win over the recipe.
+  Exception: operational flags (`--report`, `--telemetry*`, `--max-memory`) never
+  change the image and are not recipe keys.
 - **Recipe shape follows design-spec §9** (every struct is `deny_unknown_fields`).
   Mutually exclusive knobs are one enum field, never parallel `Option`s or bools.
-- **Retiring a recipe key:** strip its old default (every sidecar serializes it),
-  refuse any other value with a migration message, and never alias. Refuse even the
-  old default if replaying it would now render differently.
+- **Retiring a recipe key:** strip its old default (every `--dump-params` and
+  `hanten params` document serializes it), refuse any other value with a migration
+  message (`recipe::check_body`), and never alias. Refuse even the old default if
+  replaying it would now render differently.
 - **Report prose that names an operation is a claim about the run** — derive it
   from the resolved config, or state the fact in a field.
 
@@ -268,9 +281,10 @@ committed.
   losing rule's wording is **absent** and go through the real path (`merge` or the
   binary), not the rule directly.
 - **Validate the resolved value, never a proxy for it.** Value rules go in
-  `validate` (shared with `roll` and per-frame overrides). Flag-presence rules must
-  run before anything coarser can refuse: `--new-flow` availability in
-  `flow::reject_unavailable_flags` (before `merge`), the rest in `validate_convert`.
+  `recipe::validate` and `cli::validate_shared` (shared with `roll` and per-frame
+  overrides). Flag-presence rules must run before anything coarser can refuse:
+  removed flags in `cli::reject_removed_flags` (before `merge`), the rest in
+  `validate_convert`.
   A presence rule refuses a flag only when it forces something the branch cannot
   produce; an identity value is spared only where a recipe could have set the
   knob.
@@ -279,7 +293,7 @@ committed.
 
 - **Same inputs + params ⇒ identical output, per build and architecture** — libm
   and lcms2 differ by target (design-spec §8). Pin bit-identity with curated
-  per-pixel goldens (`stages::golden`, `chain_golden`); never checksum a full
+  per-pixel goldens (`chain_golden`); never checksum a full
   frame, an encoded file or post-lcms2 pixels in a cross-platform gate. When a
   value cannot be pinned exactly, bound it by enumerating what a conforming libm can
   return (the retired characteristic golden's `reachable_window`, in git), never by
@@ -291,8 +305,8 @@ committed.
   add a row, never edit a historical one.
 - **`cargo test` never runs the `#[ignore]`d asset probes.** After moving a
   default, re-run them by hand (`cargo test --release -- --ignored`).
-- **`tests/pipeline.rs`'s `run()` passes arguments verbatim**: a test that writes
-  a TIFF states its preset.
+- **`tests/pipeline.rs`'s `run()` passes arguments verbatim**: a test states any
+  destination flag it depends on.
 
 ### Real scans and renders
 

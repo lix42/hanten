@@ -11,8 +11,8 @@
 //! Two deliberate design boundaries:
 //!
 //! - **Determinism (critical):** the record (timings, timestamp, system info)
-//!   never enters the recipe sidecar and never changes the image bytes. Telemetry
-//!   on or off, the output TIFF and sidecar JSON are byte-identical. This module
+//!   never enters the recipe and never changes the image bytes. Telemetry on or
+//!   off, the output is byte-identical. This module
 //!   only *reads* the finished conversion's facts.
 //! - **Fail-soft (a documented deviation from the house fail-loudly rule):** a
 //!   telemetry *write* failure must not fail a successful conversion. The image
@@ -35,12 +35,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+use crate::destination::OutputSection;
 use crate::io::decode::{DecodeInfo, SilverFastFormat};
-use crate::types::{EncodeReport, FilmBaseSource, OutputPreset};
+use crate::types::{EncodeReport, FilmBaseSource};
 
 /// Telemetry record schema version. Bump on any change to [`TelemetryRecord`]'s
 /// shape so a server can ingest old and new records side by side. Note the record
-/// embeds domain enums (`OutputPreset`, `FilmBaseSource`, `SilverFastFormat`) whose serde representation lives
+/// embeds domain types (`OutputSection`, `FilmBaseSource`, `SilverFastFormat`) whose serde representation lives
 /// elsewhere — a change to *their* wire form is also a schema change and must
 /// bump this too.
 ///
@@ -81,7 +82,15 @@ use crate::types::{EncodeReport, FilmBaseSource, OutputPreset};
 /// v7: `conversion.curve` is gone — with the `characteristic` curve retired
 /// (`nf-retire/characteristic`) the exponential is the only curve, so the field could
 /// hold one value.
-pub const SCHEMA_VERSION: u32 = 7;
+///
+/// v8: `conversion.preset` is `conversion.destination` — the output presets retired
+/// with the chain that rendered them (`nf-core/default-flip`), and a destination is the
+/// recipe's `output` section (`"film-master"`, or `{"display": {range, transfer, gamut,
+/// container}}` with every axis resolved). `params_hash` hashes the recipe that
+/// replaced the old one (`crate::recipe`), and `timing_ms.algorithm` / `color` time the
+/// fixed decode and the chain with its destination transfer. The record's final shape
+/// is `nf-core/report-contract`'s.
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// Default local JSONL log path, honoring `NC_TELEMETRY_LOG` then the platform
 /// data dir; `None` when no home/data dir can be located (the caller then warns
@@ -196,9 +205,9 @@ pub struct ImageInfo {
 }
 
 /// Per-stage wall-clock timings in milliseconds. `total` is the whole
-/// orchestrated run up to the sidecar write (the clock stops before the report is
+/// orchestrated run up to the commit (the clock stops before the report is
 /// emitted); the per-stage values sum to less than it (the remainder is recipe
-/// merge, validation, and the sidecar write).
+/// merge, validation, and the commit).
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct TimingInfo {
     pub total: f64,
@@ -217,21 +226,18 @@ pub struct TimingInfo {
 /// carrying the whole recipe; a few high-signal knobs ride alongside it.
 #[derive(Clone, Debug, Serialize)]
 pub struct ConversionInfo {
-    /// Resolved output preset (`"gain-map-hdr"` / `"film-master"` / …) — which branch
-    /// out of the NC film RGB v1 ACEScg boundary ran. Recorded because it is the
-    /// single biggest determinant of what the written pixels *are*: two f32 TIFFs
-    /// (`film-master`, `hdr-linear-tiff`) are otherwise indistinguishable.
-    pub preset: OutputPreset,
-    /// Stable 64-bit hash (hex) of the effective recipe JSON — the same bytes
-    /// written to the sidecar, so identical conversions share a hash.
+    /// The destination written, every axis resolved (the recipe's `output` shape).
+    /// Recorded because it is the single biggest determinant of what the written pixels
+    /// *are*: two f32 TIFFs (the film master, a linear HDR TIFF) are otherwise
+    /// indistinguishable.
+    pub destination: OutputSection,
+    /// Stable 64-bit hash (hex) of the effective recipe JSON (`crate::recipe`), so
+    /// identical conversions share a hash.
     pub params_hash: String,
     /// Film-base provenance (`"auto"` / `{"region":…}` / `{"explicit":…}`).
     pub film_base_source: FilmBaseSource,
-    /// Whether HDR (32-bit float) output was written. Derived from
-    /// [`OutputParams::depth`](crate::types::OutputParams::depth) — the single place
-    /// a recipe becomes a depth — not from the `output.hdr` switch: under
-    /// `film-master` that switch is pinned at its default while the branch still
-    /// resolves f32, so reading it directly would report `false` for an f32 master.
+    /// The primary image's sample depth as written (`u8` / `u10` / `u16` / `f32`),
+    /// fixed by the destination's encoding.
     pub output_depth: &'static str,
 }
 
@@ -257,8 +263,8 @@ pub struct OutcomeInfo {
 /// names each field.
 pub struct RecordInputs<'a> {
     pub info: &'a DecodeInfo,
-    /// Resolved output preset (`cfg.output.preset`).
-    pub preset: OutputPreset,
+    /// The destination written, every axis resolved.
+    pub destination: OutputSection,
     /// Wall-clock time the record is built, UNIX epoch milliseconds. Injected by
     /// the orchestrator (see [`now_unix_millis`]) so the builder stays pure.
     pub timestamp_ms: u64,
@@ -278,7 +284,7 @@ pub struct RecordInputs<'a> {
 /// Build a full [`TelemetryRecord`] from the finished conversion's facts. A pure
 /// function of `inputs`: the timestamp and CPU count are injected by the caller,
 /// and the crate version + target are compile-time constants — nothing here reads
-/// ambient state or touches the image/sidecar.
+/// ambient state or touches the image.
 pub fn build_record(inputs: RecordInputs<'_>) -> TelemetryRecord {
     let info = inputs.info;
     let megapixels = (info.width as f64 * info.height as f64) / 1_000_000.0;
@@ -301,7 +307,7 @@ pub fn build_record(inputs: RecordInputs<'_>) -> TelemetryRecord {
         },
         timing_ms: inputs.timings,
         conversion: ConversionInfo {
-            preset: inputs.preset,
+            destination: inputs.destination,
             params_hash: inputs.params_hash,
             film_base_source: inputs.film_base_source,
             output_depth: inputs.output_depth,
@@ -457,12 +463,12 @@ mod tests {
             output_bytes: Some(67_890),
             params_hash: "deadbeef".into(),
             film_base_source: FilmBaseSource::Auto,
-            preset: OutputPreset::DisplayP3,
+            destination: sdr_p3_tiff(),
             output_depth: "u16",
             warnings: 4,
         });
 
-        assert_eq!(rec.schema_version, 7);
+        assert_eq!(rec.schema_version, 8);
         assert_eq!(rec.image.width, 2000);
         assert_eq!(rec.image.height, 3000);
         // 2000 * 3000 = 6e6 pixels → 6.0 MP.
@@ -500,7 +506,7 @@ mod tests {
             output_bytes: None,
             params_hash: "0".into(),
             film_base_source: FilmBaseSource::Explicit([0.9, 0.5, 0.4]),
-            preset: OutputPreset::FilmMaster,
+            destination: OutputSection::FilmMaster,
             output_depth: "f32",
             warnings: 0,
         });
@@ -617,6 +623,17 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The default destination, every axis stated as a report resolves it.
+    fn sdr_p3_tiff() -> OutputSection {
+        use crate::destination::{Container, DisplayAxes, Gamut, Range, Transfer};
+        OutputSection::Display(DisplayAxes {
+            range: Some(Range::Sdr),
+            transfer: Some(Transfer::Native),
+            gamut: Some(Gamut::DisplayP3),
+            container: Some(Container::Tiff),
+        })
+    }
+
     #[test]
     fn record_wire_shape_is_pinned() {
         // Snapshot the exact serialized JSON for a fully-populated record and a
@@ -654,7 +671,7 @@ mod tests {
                 ir_export: Some(2.0),
             },
             conversion: ConversionInfo {
-                preset: OutputPreset::DisplayP3,
+                destination: sdr_p3_tiff(),
                 params_hash: "0123456789abcdef".into(),
                 film_base_source: FilmBaseSource::Explicit([0.5, 0.25, 0.125]),
                 output_depth: "u16",
@@ -666,14 +683,15 @@ mod tests {
             },
         };
         let expected_full = concat!(
-            r#"{"schema_version":7,"timestamp_ms":1700000000000,"nc_version":"9.9.9","#,
+            r#"{"schema_version":8,"timestamp_ms":1700000000000,"nc_version":"9.9.9","#,
             r#""target":"test-triple","cpu_count":8,"#,
             r#""image":{"format":"hdri","width":100,"height":200,"megapixels":0.25,"#,
             r#""bit_depth":16,"channels":3,"ir_present":true,"input_bytes":1000,"#,
             r#""output_bytes":2000},"#,
             r#""timing_ms":{"total":30.0,"decode":5.0,"film_base":1.0,"algorithm":10.0,"#,
             r#""color":8.0,"encode":4.0,"ir_export":2.0},"#,
-            r#""conversion":{"preset":"display-p3","params_hash":"0123456789abcdef","#,
+            r#""conversion":{"destination":{"display":{"range":"sdr","transfer":"native","#,
+            r#""gamut":"display-p3","container":"tiff"}},"params_hash":"0123456789abcdef","#,
             r#""film_base_source":{"explicit":[0.5,0.25,0.125]},"output_depth":"u16"},"#,
             r#""outcome":{"warnings":1,"clipped":2,"non_finite":0}}"#,
         );
@@ -707,10 +725,10 @@ mod tests {
                 encode: 0.0,
                 ir_export: None,
             },
-            // A `film-master` run: `output_depth = f32` because the preset resolves it. Snapshotted here so
-            // the `"film-master"` wire name and that depth pairing are both pinned.
+            // A film-master run: `output_depth = f32`, fixed by the destination. Snapshotted
+            // here so the `"film-master"` wire name and that depth pairing are both pinned.
             conversion: ConversionInfo {
-                preset: OutputPreset::FilmMaster,
+                destination: OutputSection::FilmMaster,
                 params_hash: "0".into(),
                 film_base_source: FilmBaseSource::Auto,
                 output_depth: "f32",
@@ -722,14 +740,14 @@ mod tests {
             },
         };
         let expected_minimal = concat!(
-            r#"{"schema_version":7,"timestamp_ms":0,"nc_version":"9.9.9","#,
+            r#"{"schema_version":8,"timestamp_ms":0,"nc_version":"9.9.9","#,
             r#""target":"test-triple","cpu_count":null,"#,
             r#""image":{"format":"hdr","width":1,"height":1,"megapixels":0.0,"#,
             r#""bit_depth":16,"channels":3,"ir_present":false,"input_bytes":null,"#,
             r#""output_bytes":null},"#,
             r#""timing_ms":{"total":0.0,"decode":0.0,"film_base":0.0,"algorithm":0.0,"#,
             r#""color":0.0,"encode":0.0},"#,
-            r#""conversion":{"preset":"film-master","params_hash":"0","#,
+            r#""conversion":{"destination":"film-master","params_hash":"0","#,
             r#""film_base_source":"auto","output_depth":"f32"},"#,
             r#""outcome":{"warnings":0,"clipped":0,"non_finite":0}}"#,
         );

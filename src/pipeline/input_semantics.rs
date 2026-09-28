@@ -937,9 +937,10 @@ mod tests {
     #[test]
     fn embedded_and_non_embedded_same_raw_pick_same_path() {
         let without = resolve(&facts(true, None, None), &InputAssertions::auto()).unwrap();
-        // A minimal valid sRGB profile as the "embedded" ICC.
-        let icc = crate::pipeline::color::icc_profile(&crate::pipeline::color::OutputSpace::SRgb)
-            .unwrap();
+        // A valid Display P3 profile as the "embedded" ICC.
+        let icc =
+            crate::pipeline::color::icc_profile(&crate::pipeline::color::OutputSpace::DisplayP3)
+                .unwrap();
         let with = resolve(
             &facts(true, None, Some(icc.clone())),
             &InputAssertions::auto(),
@@ -961,8 +962,9 @@ mod tests {
     #[test]
     fn embedded_icc_alone_does_not_establish_meaning() {
         // An embedded ICC with NO raw-mode structure: meaning stays Unknown.
-        let icc = crate::pipeline::color::icc_profile(&crate::pipeline::color::OutputSpace::SRgb)
-            .unwrap();
+        let icc =
+            crate::pipeline::color::icc_profile(&crate::pipeline::color::OutputSpace::DisplayP3)
+                .unwrap();
         let m = resolve(&facts(false, None, Some(icc)), &InputAssertions::auto()).unwrap();
         assert_eq!(m.meaning, MeasurementMeaning::Unknown);
         assert!(require_convertible(&m).is_err());
@@ -970,8 +972,9 @@ mod tests {
 
     #[test]
     fn icc_summary_has_safe_fields_and_no_bytes() {
-        let icc = crate::pipeline::color::icc_profile(&crate::pipeline::color::OutputSpace::SRgb)
-            .unwrap();
+        let icc =
+            crate::pipeline::color::icc_profile(&crate::pipeline::color::OutputSpace::DisplayP3)
+                .unwrap();
         let summary = summarize_icc(&icc).expect("sRGB ICC summarizes");
         assert_eq!(summary.size_bytes, icc.len());
         assert_eq!(summary.color_space, "RgbData");

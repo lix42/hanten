@@ -114,7 +114,8 @@ def build_parser() -> argparse.ArgumentParser:
     rconvert.add_argument("--nc", required=True, help="path to the hanten binary to run")
     rconvert.add_argument("--config", help="configuration ID (default: hash of frozen recipe)")
     rconvert.add_argument("--out-dir", help="output directory (default: converted/nc/CONFIG/ROLL)")
-    rconvert.add_argument("--recipe", help="partial recipe or conversion sidecar to extend")
+    rconvert.add_argument("--recipe", help="partial recipe (or a preset build's "
+                                           "conversion sidecar) to extend")
     rconvert.add_argument("--dmin-region", help="unexposed-frame X,Y,W,H (default: center 80%%)")
     rconvert.add_argument("--dmin-mode", choices=("grid", "region"), default="grid",
                           help="measure Dmin with a five-cell grid or one region "
@@ -122,9 +123,21 @@ def build_parser() -> argparse.ArgumentParser:
     rconvert.add_argument("--film-type", choices=("unknown", "silver", "chromogenic"),
                           help="record film chemistry in the estimate reports and "
                                "the frozen recipe (provenance; it gates nothing)")
-    rconvert.add_argument("--output-preset", help="override output.preset in the recipe")
-    rconvert.add_argument("--print-exposure", type=float,
-                          help="override print.print_exposure in the recipe")
+    # The destination flags and --exposure write recipe_version 2 keys; against a
+    # build that takes output presets (the reference build) they are refused, and
+    # the partial --recipe states that build's own keys instead.
+    rconvert.add_argument("--film-master", action="store_true",
+                          help="set the recipe output to \"film-master\"")
+    rconvert.add_argument("--range", choices=("sdr", "hdr"),
+                          help="set output.display.range in the recipe")
+    rconvert.add_argument("--transfer", choices=("native", "linear", "pq", "hlg"),
+                          help="set output.display.transfer in the recipe")
+    rconvert.add_argument("--gamut", choices=("display-p3", "adobe-rgb", "bt2020"),
+                          help="set output.display.gamut in the recipe")
+    rconvert.add_argument("--container", choices=("tiff", "jpeg", "avif"),
+                          help="set output.display.container in the recipe")
+    rconvert.add_argument("--exposure", type=float,
+                          help="set scene_correction.exposure (stops) in the recipe")
     rconvert.add_argument("--max-memory", default="6GiB",
                           help="memory budget passed to estimate and roll (default: 6GiB)")
     rconvert.add_argument("--strict-estimate", action="store_true",

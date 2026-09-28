@@ -215,16 +215,6 @@ fn catalog() -> Vec<Artifact> {
             shipped: Shipped::matrix_f32(pinned::ACESCG_TO_BT2020),
         },
         Artifact {
-            name: "BT2020_TO_DISPLAY_P3",
-            description: "bt2020/d65 -> display-p3/d65, no adaptation (shared white)",
-            source: Source::RgbToRgb {
-                source: BT2020,
-                destination: DISPLAY_P3,
-                cone: BRADFORD,
-            },
-            shipped: Shipped::matrix_f32(pinned::BT2020_TO_DISPLAY_P3),
-        },
-        Artifact {
             name: "DISPLAY_P3_LUMA",
             description: "luminance row of display-p3/d65 normalized primary matrix (derived)",
             source: Source::LumaRow(DISPLAY_P3),
@@ -341,8 +331,7 @@ fn flatten(m: [[f64; 3]; 3]) -> Vec<(String, f64)> {
 /// one.
 ///
 /// That is reachable, not theoretical. Several shipped entries sit near zero
-/// (`BT2020_TO_DISPLAY_P3[2][0]`, `ACESCG_TO_DISPLAY_P3[2][0]`,
-/// `ACESCG_TO_BT2020[1][0]`), so a standards revision that flips one across zero
+/// (`ACESCG_TO_DISPLAY_P3[2][0]`, `ACESCG_TO_BT2020[1][0]`), so a standards revision that flips one across zero
 /// would make the audit *panic* instead of reporting the difference it exists to
 /// report. The ordered key removes the discontinuity and `i64` gives the result
 /// room: keys span ±2^31, so their difference always fits.
@@ -499,8 +488,8 @@ mod tests {
             white: BT2020.white,
         };
 
-        let honest = derive::rgb_to_rgb(tampered, DISPLAY_P3, BRADFORD);
-        let shipped = pinned::BT2020_TO_DISPLAY_P3;
+        let honest = derive::rgb_to_rgb(ACESCG, tampered, BRADFORD);
+        let shipped = pinned::ACESCG_TO_BT2020;
         let moved = (0..3)
             .flat_map(|i| (0..3).map(move |j| (i, j)))
             .any(|(i, j)| ulps_f32(honest[i][j] as f32, shipped[i][j]).abs() > 1);
