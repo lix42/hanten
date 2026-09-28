@@ -27,6 +27,10 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
   recaptures that stage's vector, and the threaded ones, in the same change.
   `FilmRgbImage::fixture` is the test-only way to enter the chain with chosen values.
   No decode pixel is provably bit-portable, which constrains `fingerprints`.
+- **The drift gate's `render` stops at scene correction's input** (`fingerprints`,
+  2026-09-28): the decode plus the ACEScg mapping, over samples at the minimum decode
+  window. A decode or mapping default change bumps the version; a rendering stage's
+  default *value* moves `recipe`, and its arithmetic is only the goldens'.
 - **A review matrix states `destination` for builds at `pipeline_version` 8 and later,
   and `output_preset` for older ones** (the reference build); a matrix mixing both
   states both, and each build takes the flags its banner's `pipeline_version` says it
@@ -125,10 +129,67 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
 
 ## fingerprints
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done (2026-09-28)
+**Updated:** 2026-09-28
 
 - 2026-09-19: created with the new-flow plan. Goal: rebase the drift gate on the new chain.
+
+### 2026-09-28 — implemented
+
+- **Already half done by `nf-core/default-flip`:** v8's `render` hashed the fixed decode
+  over the old five pixels. That left two things: where the hash stops, and the vector.
+- **The stage-goldens premise no longer holds.** "Everything downstream of the decode is
+  IEEE-only" (2026-09-23) predates the look and display black. At defaults the chain now
+  calls `powf` (look contrast), `log10`/`log2`/`powf` (highlight desaturation) and
+  `log2`/`exp2` (display black), each windowed in `chain_golden`. Hashing through fit
+  range would stack them with no window.
+- **User decision: `render` stops at scene correction's input** — the decode plus the NC
+  film RGB v1 → ACEScg mapping (IEEE f64, so the matrices are covered at no portability
+  cost). The rendering stages' default values are `recipe`'s, their arithmetic
+  `chain_golden`'s. Stated gap: a golden can be recaptured without a bump.
+- **The vector: only minimum-window samples.** Measured with `reachable_window` at the
+  shipped defaults. Up to about a third of a stop below the base every channel sits at 1 ULP (the
+  final `powf` alone); midtones reach 4–6, dense highlights 5–9, the old out-of-range
+  and floored pixel `[1.8, -0.2, 0.0]` reaches `[1, 30, 25]`. The new vector is the base,
+  above it, `[0.85, 0.5, 0.38]`, `[0.8, 0.47, 0.4]`, `[0.7, 0.45, 0.35]`, and
+  `the_fingerprint_vector_sits_at_the_minimum_decode_window` asserts it stays so, and
+  that this host decodes each to the correctly-rounded value. The price: the scan floor
+  is now the decode golden's alone.
+- **User decision: v8's `render` refreshed in place** (`d44927104451d581` →
+  `f51d3397c7364160`), not a v9. No default pixel moved; a v9 would need a contrived
+  distinct `behavior` string and would make `pipeline_version_warning` claim the output
+  will not match. The table's docs now name this as the second sanctioned in-place edit.
+- **Falsifiability, by hand, reverted:** a mapping-matrix entry +1e-7, `MID_ABOVE_BASE`
+  +1 ULP, and blue `DENSITY_SCALE` 0.73 → 0.731 each red the gate, its golden and its
+  "actually detects" test. Linearization 1.8 → 1.85 is the standing perturbation test.
+
+### 2026-09-28 — review fixes
+
+- The gate's own failure messages and the v1 note had said `recipe` was the only
+  in-place edit; they now defer to `PIPELINE_FINGERPRINTS`' rule.
+- `the_render_fingerprint_hashes_every_pinned_value` pins the hashed text to the golden
+  bits, so the mapping half cannot silently drop out of the hash.
+- The third-of-a-stop sample's green moved 0.5 → 0.47, which had duplicated the
+  near-base sample's green. It is still at the 1-ULP window.
+- `docs/design-spec.md` and `docs/design-update.md` had still described the gate's old
+  scope.
+- **Not done:** re-adding dense samples (the coverage the old vector had away from the
+  base). They cannot be made portable, which is this task's premise.
+
+### 2026-09-28 — done
+
+- **Landed:** v8's `render` = `f51d3397c7364160`, over the decode and the ACEScg
+  mapping; `base` and `recipe` unmoved. Local gates green (aarch64 macOS); **x86_64
+  agreement is this PR's CI to show** — if it reds on `golden_default_render_is_bit_identical`,
+  change the offending sample, not the decode.
+- A second review (`ship:diff-reviewer`) fixed: the gate's failure message now ties an
+  in-place refresh to *what the fingerprint hashes* changing, never to the golden passing
+  (a recaptured golden passes too); the samples' stop distances were overstated; the
+  `core` and `nf-retire` Epic summaries still stated the old rule. Codex was skipped (out
+  of credits).
+- **For dependents:** a task that moves a decode default (`nf-calibration/offset-question`)
+  bumps the version and recaptures `DEFAULT_FILM_BITS`/`DEFAULT_ACES_BITS` with the
+  new row. A rendering-stage default moves only `recipe`.
 
 ## stage-goldens
 

@@ -550,11 +550,10 @@ Constraints the order carries:
     golden vectors, the ~87 legacy-injected integration tests and the
     benchmark's legacy cases. A regression gate measuring legacy would only pin
     the design being replaced; build new gates on the new stages once the work
-    is done. **Scope the drift gate carefully, though:** its `render` row hashes
-    `reconstruct_and_print`, whose `reconstruct` half *is* the decode being
-    kept, and its `base` and `recipe` rows (film-base estimation, the default
-    recipe document) have nothing to do with the print path. Retire the print
-    half, not the row.
+    is done. The drift gate kept its rows: `render` now hashes the fixed decode
+    and the ACEScg mapping, stopping at scene correction's input
+    (`version::PipelineFingerprint` says why), and `base` and `recipe` never
+    involved the print path.
 
 ## Three controls the look stage owes
 

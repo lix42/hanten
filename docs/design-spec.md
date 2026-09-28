@@ -1292,14 +1292,16 @@ changed output pixel.
   carries the full table. This is the axis a version comparison is keyed on.
 - **What the drift gate does and does not cover.** A golden drift test
   (`version::PIPELINE_FINGERPRINTS`) pairs each version with three fingerprints —
-  the default **render** (the curated per-pixel vectors in
-  `pipeline::stages::golden`), the default **film-base estimate** (stage 2, `auto`
+  the default **render** (the fixed decode and the ACEScg mapping over five near-base
+  pixels; it stops at scene correction's input, since every rendering stage after it
+  makes libm calls a windowless hash cannot absorb), the default **film-base estimate** (stage 2, `auto`
   over the frozen scan in `pipeline::film_base::golden`, because the render
   fingerprint is handed a hardcoded base and the recipe fingerprint sees only
   `null` — `calibration.film_base` has no default, so the base fingerprint names `auto`
   explicitly), and the default **recipe values**. Change a default in those
   stages and the test fails until the version and the fingerprints are updated
-  together. It does **not** cover decode, stage-1b input semantics, the lcms2 output
+  together. It does **not** cover container decode (`io::decode`), stage-1b input
+  semantics, the rendering stages' arithmetic (the stage goldens'), the lcms2 output
   transform or embedded ICC bytes (excluded deliberately — both differ by target, so
   no cross-platform hash of them exists), encode/quantization, the non-default
   film-base sources, or the auto detector's behavior on *real* scan geometry. A
