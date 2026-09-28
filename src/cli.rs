@@ -2478,7 +2478,7 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
     if let Some(message) = removed_print_message(&args.removed_print) {
         return Err(NcError::Usage(message));
     }
-    if let Some(message) = removed_output_message(&args.removed_output) {
+    if let Some(message) = removed_output_message(args) {
         return Err(NcError::Usage(message));
     }
     // The removed simple-reconstruction controls, and the controls that replaced them,
@@ -2537,8 +2537,8 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
         return Some(
             "--auto-wb was removed: a per-frame estimate reads a sunset as the cast and \
              removes it, so white balance is measured once per roll. Run `hanten \
-             measure-roll`, then pass the gains it reports as `--white-balance R,G,B` \
-             (recipe `scene_correction.white_balance`)."
+             measure-roll`, then pass the gains it reports as `--roll-white-balance R,G,B` \
+             (recipe `roll.white_balance`)."
                 .into(),
         );
     }
@@ -2583,14 +2583,15 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
 }
 
 /// The migration error for a removed output selector, or `None` when none was passed.
-fn removed_output_message(flags: &RemovedOutputFlags) -> Option<String> {
+fn removed_output_message(args: &ConvertArgs) -> Option<String> {
+    let flags = &args.removed_output;
     const AXES: &str = "a destination is four separate knobs — --range, --transfer, \
                         --gamut, --container (recipe `output.display`) — or --film-master";
     if let Some(name) = &flags.output_preset {
         return Some(format!(
             "--output-preset was removed with the chain its presets named: {AXES}. {} \
              There is no alias.",
-            preset_counterpart(name)
+            preset_counterpart(name, args)
         ));
     }
     for (flag, present) in [
@@ -2618,39 +2619,56 @@ fn removed_output_message(flags: &RemovedOutputFlags) -> Option<String> {
     None
 }
 
+/// The removed presets a destination replaces, and the flags that write it. Each set
+/// names **one** destination under either rendering, since this refusal runs before the
+/// recipe says which (`the_preset_counterparts_resolve_the_same_under_every_rendering`).
+const PRESET_COUNTERPARTS: &[(&str, &str)] = &[
+    ("display-p3", "--gamut display-p3"),
+    ("film-master", "--film-master"),
+    ("hdr-linear-tiff", "--transfer linear"),
+    ("hdr-pq-tiff", "--transfer pq"),
+    ("hdr-hlg-tiff", "--transfer hlg"),
+    ("hdr-pq", "--transfer pq --container avif"),
+    ("hdr-hlg", "--transfer hlg --container avif"),
+    // Neither is the same file: the map is per-channel and ISO-only, so a reader that
+    // knows only the Ultra HDR v1 XMP shows the SDR base.
+    ("gain-map-hdr", "--range hdr --container jpeg"),
+    ("ultra-hdr-v1", "--range hdr --container jpeg"),
+];
+
 /// What replaces a removed output preset, as a sentence — for a name with no counterpart
-/// (`legacy`, `custom`, which retired before the chain did, or a typo), the default and
-/// how to choose another.
-fn preset_counterpart(name: &str) -> String {
-    let flags = match name {
-        "display-p3" => return "`display-p3` is the default destination: drop the flag.".into(),
-        "film-master" => "--film-master",
-        "hdr-linear-tiff" => "--transfer linear",
-        "hdr-pq-tiff" => "--transfer pq",
-        "hdr-hlg-tiff" => "--transfer hlg",
-        "hdr-pq" => "--transfer pq --container avif",
-        "hdr-hlg" => "--transfer hlg --container avif",
-        // Neither is the same file: the map is per-channel and ISO-only, so a reader that
-        // knows only the Ultra HDR v1 XMP shows the SDR base.
-        "gain-map-hdr" | "ultra-hdr-v1" => {
-            return format!(
-                "For `{name}`, the nearest is --range hdr: its gain map is per-channel and \
-                 carries ISO 21496-1 metadata only, without the Ultra HDR v1 XMP."
-            );
-        }
-        "compatibility" => {
-            return "`compatibility`'s sRGB has no destination yet \
-                    (`nf-destinations/easy-destination-rows`); the SDR gamuts written are \
-                    --gamut display-p3 (the default) and --gamut adobe-rgb."
-                .into();
-        }
-        _ => {
-            return "Drop the flag for the default, an SDR Display P3 16-bit TIFF, or state \
-                    the axes you want."
-                .into();
-        }
+/// (`legacy`, `custom`, which retired before the chain did, or a typo), how to choose.
+fn preset_counterpart(name: &str, args: &ConvertArgs) -> String {
+    let Some(&(_, flags)) = PRESET_COUNTERPARTS.iter().find(|(n, _)| *n == name) else {
+        return if name == "compatibility" {
+            "`compatibility`'s sRGB has no destination yet \
+             (`nf-destinations/easy-destination-rows`); the SDR gamuts written are \
+             --gamut display-p3 and --gamut adobe-rgb."
+                .into()
+        } else {
+            "Drop the flag, or state the axes you want.".into()
+        };
     };
-    format!("For `{name}`, pass {flags}.")
+    match name {
+        "gain-map-hdr" | "ultra-hdr-v1" => format!(
+            "For `{name}`, the nearest is {flags}: its gain map is per-channel and carries \
+             ISO 21496-1 metadata only, without the Ultra HDR v1 XMP."
+        ),
+        // `direct` is refused beside the film master: name the way back when it may be in
+        // play (typed, or from a recipe this refusal runs too early to read).
+        "film-master" => {
+            let direct = args.rendering.rendering == Some(crate::rendering::Rendering::Direct);
+            let rendering = if direct {
+                ", with --rendering default in place of --rendering direct"
+            } else if args.recipe_in.is_some() {
+                " (with --rendering default if the recipe states `rendering`: \"direct\")"
+            } else {
+                ""
+            };
+            format!("For `{name}`, pass {flags}{rendering}.")
+        }
+        _ => format!("For `{name}`, pass {flags}."),
+    }
 }
 
 /// The first retired sigmoid flag the user passed, with its remedy.
@@ -6625,12 +6643,12 @@ mod tests {
             (
                 vec!["--auto-wb", "percentile"],
                 "--auto-wb was removed",
-                Some("--white-balance"),
+                Some("--roll-white-balance"),
             ),
             (
                 vec!["--auto-wb"],
                 "--auto-wb was removed",
-                Some("--white-balance"),
+                Some("--roll-white-balance"),
             ),
             (
                 vec!["--linear-range", "0,1"],
@@ -6709,13 +6727,56 @@ mod tests {
         let msg = reject_removed_flags(&parse_convert(&["--output-preset", "legacy"]))
             .unwrap_err()
             .to_string();
-        assert!(msg.contains("Drop the flag for the default"), "{msg}");
-        // `display-p3` is the default destination, so its remedy is to drop the flag.
+        assert!(msg.contains("Drop the flag, or state the axes"), "{msg}");
+        // `display-p3` names its gamut rather than "the default": under `--rendering
+        // direct` the default is the HDR float TIFF.
         let msg = reject_removed_flags(&parse_convert(&["--output-preset", "display-p3"]))
             .unwrap_err()
             .to_string();
-        assert!(msg.contains("drop the flag"), "{msg}");
+        assert!(msg.contains("pass --gamut display-p3"), "{msg}");
         assert!(reject_removed_flags(&parse_convert(&[])).is_ok());
+    }
+
+    #[test]
+    fn the_preset_counterparts_resolve_the_same_under_every_rendering() {
+        // The refusal runs before the recipe says which rendering applies, so each named
+        // set must write one destination under either — and be written today.
+        use crate::destination::{Defaults, resolve};
+        for &(name, flags) in PRESET_COUNTERPARTS {
+            let argv: Vec<&str> = flags.split_whitespace().collect();
+            let r = crate::recipe::merge(Recipe::default(), &parse_convert(&argv));
+            let OutputSection::Display(axes) = r.output else {
+                assert_eq!(flags, "--film-master", "{name}");
+                continue;
+            };
+            let rows: Vec<_> = [Defaults::STANDARD, crate::rendering::DIRECT.axes]
+                .iter()
+                .map(|d| resolve(&axes, d).unwrap_or_else(|f| panic!("{name}: {f:?}")))
+                .collect();
+            assert_eq!(rows[0], rows[1], "{name}: `{flags}` differs by rendering");
+        }
+    }
+
+    #[test]
+    fn the_film_master_counterpart_names_the_way_out_of_direct() {
+        let text = |extra: &[&str]| {
+            reject_removed_flags(&parse_convert(
+                &[&["--output-preset", "film-master"][..], extra].concat(),
+            ))
+            .unwrap_err()
+            .to_string()
+        };
+        assert!(text(&[]).contains("For `film-master`, pass --film-master."), "{}", text(&[]));
+        let direct = text(&["--rendering", "direct"]);
+        assert!(
+            direct.contains("--rendering default in place of --rendering direct"),
+            "{direct}"
+        );
+        let recipe = text(&["--params", "r.json"]);
+        assert!(
+            recipe.contains("if the recipe states `rendering`: \"direct\""),
+            "{recipe}"
+        );
     }
 
     /// Every hidden `convert` flag is a removed one, and each reaches a migration error
