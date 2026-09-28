@@ -565,9 +565,10 @@ pub enum FilmBaseSource {
 /// density (`dmax`) retired with the placements that read it
 /// (`nf-retire/dmax-machinery`). The section is expected to grow:
 /// `nf-calibration/anchor-comparison` chose a content-referenced roll **white**, but it
-/// does not join it: the white is consumed where it is measured (`measure-roll`), and the
-/// recipe carries only the contrast solved from it, `look.contrast` — a look knob, and
-/// per frame for a frame clamped to the cap (`pipeline::roll_white`).
+/// does not join it: the new chain's recipe carries the white in its own `roll` section,
+/// `roll.white_stops` (`nf-calibration/roll-section`), beside the roll's gains, and the
+/// look contrast is derived from it unless `look.contrast` is stated — per frame for a
+/// frame clamped to the cap (`pipeline::roll_white`).
 /// So nothing here may assume a closed pair, and every member carries its own
 /// optionality and its own default rather than the section carrying one for all
 /// of them.

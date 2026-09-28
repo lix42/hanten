@@ -384,13 +384,74 @@ density.
 
 ## roll-section
 
-**Status:** not started
+**Status:** in progress
 **Updated:** 2026-09-27
 
 - 2026-09-27: filed while re-planning `nf-destinations/direct-preset`. Goal: a `roll` recipe
   section for what `measure-roll` measures (the gains and the roll's white in stops), out
   of `scene_correction` and `look`, so `--rendering default` can apply it and `direct`
   can leave it out.
+- 2026-09-27: implemented (the middle PR of a three-PR stack), awaiting review.
+  - **`recipe::RollSection`** — `roll.white_balance`, `roll.white_stops`, flags
+    `--roll-white-balance` / `--roll-white` (new-flow only). Unset values are written as
+    `null`, never left out: `cli::merge_json` reads a one-key object as an enum switch, and
+    a roll's per-frame `{"roll": {"white_stops": …}}` must merge, not replace (pinned by
+    `a_frames_own_roll_white_keeps_the_rolls_gains`).
+  - **Presence, not value.** "The roll's contrast unless `look.contrast` is stated" needs an
+    unset contrast, so the recipe's look keys are their own type, `recipe::LookKeys`, with
+    `contrast: Option<f32>`; the stage still receives a resolved `LookSection`
+    (`Recipe::shared_params`), and never picks a fallback itself — which is what lets
+    `direct` pin its own base later. The default document now writes `"contrast": null`.
+  - **Resolution** (`Recipe::resolved_scene_correction`, `resolved_contrast`): the roll's
+    gains multiply the stated white balance (identity by default, so they reach the stage
+    exactly); the contrast is stated, else `contrast_for(white_stops)`, else the default.
+    Validation checks each stated value by its own name, then the product, naming both
+    factors; a contrast from the white that fails the whole-contrast rule names
+    `--roll-white`, not `--contrast`.
+  - **`measure-roll`** writes `--roll-white-balance … --roll-white W`, a `{"roll": …}`
+    fragment, and a `--frames` manifest giving each clamped frame the cap as its white.
+    Verified: the fragment renders byte-identically to the same values stated as
+    `--white-balance` / `--contrast` (`measure_roll_gains_reach_convert_…`).
+  - Report: `new_flow.roll` states both values, the derived contrast, and
+    `white_balance_applied` / `contrast_applied` (false for the film master, and for the
+    contrast when `look.contrast` is stated). The film master does not refuse the section:
+    a measurement is not a stage asked for.
+  - The `--auto-wb` and per-frame-mode remedies point at `roll.white_balance`.
+  - Docs: `using-nc.md` §5/§11 (the `measure-roll` example's reuse values are derived from
+    the example's own numbers, not re-run on the 35-frame roll), design-spec §8–§9.
+- 2026-09-27: review round (#180). **No value is read as unset by its value.** An
+  earlier fix read `look.contrast` at exactly its old serialized default (1.1111112) as
+  unset, so a roll's white would apply to recipes older builds wrote; it broke replay —
+  `--roll-white 1.7 --contrast 1.1111112 --dump-params d.json` rendered at 1.1111112 and
+  `--params d.json` at 1.455 — since a value cannot tell an old default from a choice.
+  Removed. Instead `Recipe::roll_overlap_warnings` warns, on a rendered run, where a
+  stated `scene_correction.white_balance` (not the identity) multiplies
+  `roll.white_balance`, or a stated `look.contrast` overrides `roll.white_stops`, and
+  names the migration for a recipe an earlier build or `measure-roll` wrote (drop the
+  gains; set the contrast to `null`). Recipe keys only, so one message serves `convert`
+  and `roll`. Also: a whole-contrast fault from the roll's white names the remedy in the
+  white's direction (the contrast is inverse to it), and its contrast fault drops the
+  "1 is the identity" hint; `--roll-white-balance` / `--roll-white` conflict with
+  `--film-master` at the parser, as the destination axes do (the recipe section is still
+  spared). Deferred: a roll-level warning when a per-frame override sets
+  `roll.white_balance`.
+- 2026-09-27: review round 2. **The overlap warnings key on provenance.** A typed
+  `--white-balance` or `--contrast` beside a roll value is a documented adjustment, and
+  warning on it made `--strict` refuse a legitimate workflow; only a value a recipe file
+  stated can be a leftover. `roll_overlap_warnings` takes `TypedStyle` (which of the two
+  were typed) and skips the film master; `convert` pushes it once per run, `roll` once
+  for the shared recipe (no per-frame push, and a per-frame override does not warn). The
+  white-balance warning now says "the white balance applied", since the stage also
+  applies `2^exposure`. Typed roll flags under a **recipe's** film master are refused
+  first in `validate_convert` (`reject_roll_flags_under_a_recipe_film_master`), ahead of
+  the suffix rule; a typed `--film-master` still conflicts at the parser.
+- 2026-09-27: review round 3. `reject_roll_flags_under_a_recipe_film_master` moved out of
+  `validate_convert` to straight after `recipe::merge` in `run_convert`, before
+  `recipe::validate`: a bad `--roll-white` got a remedy no white satisfies, and
+  `--roll-white 1.7 --contrast 1.3` got the film master's look refusal first. Pinned
+  through the binary, with the losing wording asserted absent. `using-nc.md` §11 notes
+  that a `--dump-params` recipe stating a contrast or white balance beside the roll's
+  warns on replay (a file cannot say who chose it); typing the flag keeps it quietly.
 
 ## white-rule-hdr
 

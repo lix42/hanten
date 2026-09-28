@@ -16,7 +16,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > flags) and `nf-retire/characteristic` (the curve, `--density-curve`, `--film-stock`
 > and `--preset` retired, §5–§6), and `nf-display-stages/parametric-operator`
 > (`--display-black`, display black on by default under `--new-flow`, §11), and
-> `nf-destinations/gain-map-destination` (`--range hdr` writes the gain-map JPEG, §11). The staleness
+> `nf-destinations/gain-map-destination` (`--range hdr` writes the gain-map JPEG, §11), and
+> `nf-calibration/roll-section` (the `roll` recipe section, `--roll-white-balance` and
+> `--roll-white`, §11). The staleness
 > signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
@@ -128,7 +130,7 @@ guaranteed byte-identical within one build and architecture.
 | `hanten params` | Print the full default recipe as JSON — the scaffolding starting point. | No |
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
 | `hanten roll` | Convert many frames from **one shared frozen recipe**. | Yes |
-| `hanten measure-roll` | **"What white balance and contrast does this roll need?"** — measured once over the roll's frames, for the new chain (§11). Prints reuse-ready flag, recipe and `roll --frames` forms. | No |
+| `hanten measure-roll` | **"What white balance and white does this roll have?"** — measured once over the roll's frames, for the new chain (§11). Prints reuse-ready flag, recipe and `roll --frames` forms for the recipe's `roll` section. | No |
 
 Every command except `params` emits a **JSON report on stdout** on success
 (`--report none` to suppress, `--report-file PATH` to redirect); `params` takes no
@@ -555,8 +557,8 @@ The reference build keeps them, if you need to reproduce an old render.
 
 > **Provisional values.** `D = 0.62` is the generic C-41 profile's mid-grey aim above
 > the base, rounded and frozen. The anchor stays referenced to the base: a roll's own
-> white acts through a per-roll `look.contrast` that `measure-roll` measures (§11), not
-> by moving `D`. The per-channel density gain beside it
+> white acts through the look's contrast, from the `roll.white_stops` that `measure-roll`
+> measures (§11), not by moving `D`. The per-channel density gain beside it
 > (`--density-scale`) has moved twice (`pipeline_version` 4 and 5 — see below). Expect
 > further movement, with a `pipeline_version` bump when it happens.
 
@@ -1358,6 +1360,7 @@ $ hanten params --new-flow
   "recipe_version": 2,
   "input": { … },
   "calibration": { "film_base": null },
+  "roll": { "white_balance": null, "white_stops": null },
   "measure": { "inset": 0.05 },
   "reconstruction": {
     "scale": [1.0, 0.84, 0.73],
@@ -1370,7 +1373,7 @@ $ hanten params --new-flow
     "exposure": 0.0
   },
   "look": {
-    "contrast": 1.1111112,
+    "contrast": null,
     "channel_grade": [1.0, 1.0],
     "highlight_desaturation": { "strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025] }
   },
@@ -1382,10 +1385,12 @@ $ hanten params --new-flow
 
 (Abridged; the real output is one value per line.) `input` and `measure` are the
 current chain's sections unchanged. `calibration` holds the film base only — the
-fixed decode reads no reference density. `reconstruction` spells the four decode
+fixed decode reads no reference density. `roll` holds what `hanten measure-roll`
+measured (below), nothing by default. `reconstruction` spells the four decode
 knobs above (`--density-gamma` is `linearization` here). `scene_correction` holds white
 balance and exposure, `look` contrast, the per-channel grade and highlight desaturation, `fit_range` its
-headroom and display black (all below); `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
+headroom and display black (all below) — the look's `contrast` is `null`, i.e. unstated:
+the roll's, else 2.0/1.8; `fit_gamut` is empty for good — its ceiling comes from fit range and its gamut
 from the destination. `output` is the destination (above), with nothing stated
 by default — every axis derived. The current chain's `output.preset` is refused in
 this document by name. `--dump-params` under `--new-flow` writes this
@@ -1472,8 +1477,12 @@ $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
 
 **There is no per-frame auto white balance on this chain.** A frame's own statistics
 read a sunset as the cast and remove it, so the gains are measured once per roll
-with `hanten measure-roll` (below) and stated. `--auto-wb` is refused, and so is a
-recipe naming a per-frame mode:
+with `hanten measure-roll` (below) and stated in the recipe's `roll` section.
+`--white-balance` then multiplies the roll's gains: it adjusts the roll's balance
+rather than replacing it, and at its default `1,1,1` the roll's gains apply exactly.
+Typed, it never warns; the same gains stated in a recipe beside the roll's do (§11),
+since they may be an earlier `measure-roll`'s leftover.
+`--auto-wb` is refused, and so is a recipe naming a per-frame mode:
 
 ```console
 $ hanten convert … --new-flow --auto-wb percentile
@@ -1481,22 +1490,23 @@ usage: --auto-wb has no meaning under `--new-flow`: the new flow has no counterp
 for it, and will not gain one: a per-frame estimate reads a sunset as the cast and
 removes it before highlight desaturation can protect it, so white balance is
 measured once per roll (…). Use `hanten measure-roll`, then its gains as
-`--white-balance` (recipe `scene_correction.white_balance`), or run without
-`--new-flow`, where this knob has a meaning. …
+`--roll-white-balance` (recipe `roll.white_balance`), or run without `--new-flow`,
+where this knob has a meaning. …
 
 $ hanten convert … --new-flow --params wb.json   # "white_balance": "percentile"
 usage: recipe wb.json: `scene_correction.white_balance` "percentile" was a per-frame
 estimate, and the new chain has none: it read a sunset as the cast and removed it.
-Drop it, then state the gains `hanten measure-roll` reports for the roll, as
-`{"explicit": [r, g, b]}`
+Drop it, then state the gains `hanten measure-roll` reports for the roll as
+`roll.white_balance`: `[r, g, b]`
 ```
 
 **The decode's slope and the picture's contrast are two knobs.** The current chain's
 single `gamma` (2.0) bundled the film's **linearization** — undoing the negative's
 ≈0.55 density per decade, a calibration — with **print contrast**, a look. Under
 `--new-flow` they are split: `--density-gamma` sets `reconstruction.linearization`
-(default 1.8) and `--contrast` sets `look.contrast` (default 2.0/1.8 ≈ 1.11), so at
-the defaults a neutral renders where the single 2.0 did. To change how contrasty a
+(default 1.8) and `--contrast` sets `look.contrast`. Unstated, the contrast is the
+roll's (from `roll.white_stops`, below), else 2.0/1.8 ≈ 1.11, at which a neutral
+renders where the single 2.0 did. To change how contrasty a
 picture is, change `--contrast`; `--density-gamma` is a calibration and moves with
 `--density-scale`, never alone. A recipe still stating `reconstruction.contrast` is
 refused, with the value that keeps it:
@@ -1519,7 +1529,7 @@ Contrast and highlight desaturation are **on by default**; the grade is off.
 
 | Flag | Recipe key | |
 |---|---|---|
-| `--contrast CONTRAST` | `look.contrast` | print contrast, pivoted at mid-grey; default `2.0/1.8`, `1` is the identity, must be positive |
+| `--contrast CONTRAST` | `look.contrast` | print contrast, pivoted at mid-grey; unstated, the roll's (`roll.white_stops`), else `2.0/1.8`; stated, it wins over the roll's; `1` is the identity, must be positive |
 | `--channel-grade R,B` | `look.channel_grade` | red and blue exponents pivoted at mid-grey, green fixed at 1; default `1,1` (off); both positive, with the spread over `R,1,B` under 1 |
 | `--highlight-desaturation STRENGTH` | `look.highlight_desaturation.strength` | `0`–`1`; default `0.8`, `0` is off |
 | `--highlight-desaturation-start STOPS` | `look.highlight_desaturation.start_stops` | where the pull begins, in stops below diffuse white (default `-1`) |
@@ -1642,7 +1652,7 @@ usage: --display-black (recipe `fit_range.display_black`) must be stops below mi
 within (0, 16], or `off`, got 0
 ```
 
-#### `measure-roll` — a roll's white balance and contrast, measured once
+#### `measure-roll` — a roll's white balance and white, measured once
 
 It measures two things a whole roll shares. The **white balance** removes the cast of
 the film, the development and the scanner, and keeps the scene's light: one sunset
@@ -1666,16 +1676,15 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
              "whole_contrast": 2.968717,
              "clamped": [ { "input": "frames/1816.tif", "white_stops": 2.297903,
                             "contrast": 1.2369655,
-                            "flag": "--white-balance 1.0026785,1,1.2466215 --contrast 1.2369655" }, … ],
+                            "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 2" }, … ],
              "rule": { "channel": "max", "percentile": 0.97, "cap_stops": 2.0,
                        "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
-  "reuse": { "flag": "--white-balance 1.0026785,1,1.2466215 --contrast 1.6492873",
-             "recipe": { "scene_correction": { "white_balance":
-                         { "explicit": [1.0026785, 1.0, 1.2466215] } },
-                         "look": { "contrast": 1.6492873 } },
+  "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5",
+             "recipe": { "roll": { "white_balance": [1.0026785, 1.0, 1.2466215],
+                                   "white_stops": 1.5 } },
              "frames": { "frames": [ { "input": "frames/1774.tif" }, …,
                          { "input": "frames/1816.tif",
-                           "params": { "look": { "contrast": 1.2369655 } } }, … ] } },
+                           "params": { "roll": { "white_stops": 2.0 } } }, … ] } },
   "warnings": [ "frames/1816.tif: near film saturation — its white sits 0.29 stop under the leader (margin 0.5 stop); …", … ]
 }
 ```
@@ -1687,7 +1696,56 @@ decode — at its linearization, before the look's contrast — and sampled over
 `roll --new-flow`; when `reuse.frames` is present, pass it as the `roll --frames`
 manifest (its input paths are as you gave them here). A clamped frame converted on its
 own takes its own `white.clamped[].flag` instead: `reuse.flag` carries the roll's
-contrast, which would undo the clamp.
+white, which would undo the clamp.
+
+The recipe keeps these in its **`roll` section**, apart from the style knobs, so a
+measured value is never mistaken for a chosen one:
+
+| Flag | Recipe key | |
+|---|---|---|
+| `--roll-white-balance R,G,B` | `roll.white_balance` | the roll's gains; `--white-balance` multiplies them |
+| `--roll-white STOPS` | `roll.white_stops` | the roll's white; the look's contrast renders it at diffuse white unless `--contrast` is stated |
+
+Both are `--new-flow` only, and each is optional. The report says what applied:
+
+```console
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow \
+    --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --white-balance 1.2,1,1 \
+    | jq -c '.new_flow.roll, .new_flow.scene_correction'
+{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"contrast":1.4552535,"white_balance_applied":true,"contrast_applied":true}
+{"white_balance":[1.32,1.0,0.9],"exposure":0.0}
+```
+
+With `--contrast` stated, `contrast_applied` is `false`: the stated contrast won. The
+film master applies neither value, and reports both as not applied. The roll flags are
+refused under it — a typed `--film-master` conflicts with them, and under a recipe's
+`"film-master"` the refusal says to drop them or choose a rendered destination — but a
+recipe's `roll` section is not.
+
+A style value **a recipe states** beside a roll measurement is kept, and the run warns
+(so `--strict` refuses it): it may be a leftover from an earlier build, not a choice.
+A typed `--white-balance` or `--contrast` is a choice made now, and never warns. A
+`--dump-params` recipe that states a contrast (or white balance) beside the roll's
+measurement does warn on replay, since a file cannot say who chose a value; type the
+flag on replay to keep it without the warning. `roll` warns once, for the shared recipe,
+not per frame:
+
+```console
+$ cat old.json
+{"recipe_version": 2,
+ "roll": {"white_balance": [1.1, 1.0, 0.9], "white_stops": 1.7},
+ "scene_correction": {"white_balance": {"explicit": [1.2, 1.0, 1.0]}},
+ "look": {"contrast": 1.1111112}}
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --new-flow --params old.json --report none
+hanten: warning: the recipe's `scene_correction.white_balance` [1.2, 1.0, 1.0] multiplies the roll's gains, `roll.white_balance` [1.1, 1.0, 0.9]: the white balance applied is [1.32, 1.0, 0.9]. A stated white balance is an adjustment on top of the roll's measurement; if it holds gains an earlier `hanten measure-roll` wrote there, drop it — they now live in `roll.white_balance`
+hanten: warning: the recipe's `look.contrast` 1.1111112 overrides the roll's contrast 1.4552535 (from `roll.white_stops` 1.7). If it came from a recipe an earlier build wrote (every one stated `look.contrast` 1.1111112) or from an earlier `hanten measure-roll`, set it to `null` to use the roll's
+```
+
+**Adopting the `roll` section in a recipe an earlier build wrote:** drop
+`scene_correction.white_balance` and set `look.contrast` to `null` if they hold
+`measure-roll`'s old output (or, for the contrast, the `1.1111112` every earlier recipe
+stated). No value is read as unset for you: a `--dump-params` recipe replays exactly
+what it rendered.
 
 **The white balance** equalizes the pooled pixels' per-channel 99th percentile,
 green-anchored.
@@ -1698,9 +1756,10 @@ the working-space matrix, which leaves speculars above white. The brightest chan
 rather than red, so a blue sky or a green-lit highlight reads as bright as it is. The roll's white is the brightest frame
 white at or under the **cap** (+2.0), raised to at least the **floor** (+1.5); `bound`
 says which limit set it (`none`, `floor`, or `cap` when every frame is above it).
-`contrast` is the `look.contrast` that renders that white at diffuse white with
-mid-grey pinned — the value the recipe stores. `whole_contrast` is it times the
-decode's linearization, for comparison only.
+`contrast` is the look contrast that renders that white at diffuse white with
+mid-grey pinned; the recipe stores the white (`roll.white_stops`) and the contrast is
+derived from it at render time. `whole_contrast` is it times the decode's
+linearization, for comparison only.
 
 - **A frame above the cap is clamped**, not counted: it renders at the cap's contrast
   (`white.clamped`, beside the roll's `contrast`), which is gentler; `reuse.frames` gives
@@ -1732,8 +1791,8 @@ decode's linearization, for comparison only.
   by name, so `--strict` catches both.
 - **The base must be explicit** — `--film-base`, or `calibration.film_base` in a
   `--params` recipe (the new chain's, `"recipe_version": 2`, whose `reconstruction`
-  it decodes under; its `scene_correction` and its `look`, which this measures, are
-  not read). A base estimated per frame would decode every frame differently, so
+  it decodes under; its `roll` section, which this measures, and its
+  `scene_correction` and `look` are not read). A base estimated per frame would decode every frame differently, so
   anything else is refused (exit 2) pointing at `estimate --grid`.
 
 What survives untouched is everything before the seam: `--film-base`,
@@ -1750,7 +1809,8 @@ default), with no sidecars and no `recipe` in the roll report. `roll`
 takes no conversion flags, so its knobs come from the shared recipe and the
 per-frame overrides. The shared recipe must be the new chain's document, and each
 override is merged onto it and rendered with it, so an override uses the new
-sections too (`{"reconstruction": {"linearization": 1.7}}`, `{"look": {"contrast": 1.3}}`,
+sections too (`{"reconstruction": {"linearization": 1.7}}`, `{"roll": {"white_stops": 2}}`,
+`{"look": {"contrast": 1.3}}`,
 `{"scene_correction": {"exposure": -1}}`, `{"fit_range": {"headroom_stops": 4}}`)
 and one naming a
 current-chain key is refused the same way — naming its frame — at exit 2.

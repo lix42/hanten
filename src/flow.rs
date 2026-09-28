@@ -191,8 +191,8 @@ const FLAG_ENTRIES: &[FlagEntry] = &[
                      highlight desaturation can protect it, so white balance is measured \
                      once per roll (`nf-scene-correction/roll-white-balance`)",
             instead: Some(
-                "`hanten measure-roll`, then its gains as `--white-balance` (recipe \
-                 `scene_correction.white_balance`)",
+                "`hanten measure-roll`, then its gains as `--roll-white-balance` (recipe \
+                 `roll.white_balance`)",
             ),
         },
     },
@@ -333,13 +333,19 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     KeptEntry {
         covers: &["--white-balance"],
         why: "scene correction's white balance (recipe `scene_correction.white_balance`) — \
-              stated gains, which `hanten measure-roll` measures once per roll",
+              stated gains, multiplied into the roll's (`--roll-white-balance`, recipe \
+              `roll.white_balance`, which `hanten measure-roll` measures once per roll)",
+    },
+    KeptEntry {
+        covers: &["--roll-white-balance", "--roll-white"],
+        why: "the roll's measurements (recipe `roll`, `nf-calibration/roll-section`) — what \
+              `hanten measure-roll` measured, kept apart from the style knobs; new-flow only",
     },
     KeptEntry {
         covers: &["--contrast"],
         why: "the look's print contrast (recipe `look.contrast`) — the half of `gamma` \
-              `nf-reconstruction/gamma-split` moved out of the decode, which `hanten \
-              measure-roll` measures once per roll; new-flow only",
+              `nf-reconstruction/gamma-split` moved out of the decode; unstated, the roll's \
+              white (`--roll-white`) gives it; new-flow only",
     },
     KeptEntry {
         covers: &["--channel-grade"],
@@ -521,6 +527,13 @@ const NEW_FLOW_ONLY_FLAGS: &[NewFlowOnlyEntry] = &[
                   --film-master) choose the new chain's destination (recipe `output`) and \
                   have no meaning without `--new-flow`; the current chain's is \
                   --output-preset",
+    },
+    NewFlowOnlyEntry {
+        covers: &["--roll-white-balance", "--roll-white"],
+        present: |args| args.roll.any(),
+        message: "--roll-white-balance and --roll-white carry a roll's measurements into the \
+                  new chain (recipe `roll`) and have no meaning without `--new-flow`; the \
+                  current chain's white balance is `--white-balance`",
     },
     NewFlowOnlyEntry {
         covers: &["--exposure"],
@@ -881,8 +894,16 @@ mod tests {
             ("--exposure", &["--exposure", "-0.5"], |r| {
                 r.scene_correction.exposure == -0.5
             }),
+            (
+                "--roll-white-balance",
+                &["--roll-white-balance", "1.1,1,0.9"],
+                |r| r.roll.white_balance == Some([1.1, 1.0, 0.9]),
+            ),
+            ("--roll-white", &["--roll-white", "1.7"], |r| {
+                r.roll.white_stops == Some(1.7)
+            }),
             ("--contrast", &["--contrast", "1.3"], |r| {
-                r.look.contrast == 1.3
+                r.look.contrast == Some(1.3)
             }),
             ("--channel-grade", &["--channel-grade", "1.1,0.9"], |r| {
                 r.look.channel_grade == [1.1, 0.9]

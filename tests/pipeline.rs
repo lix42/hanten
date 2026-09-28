@@ -11612,8 +11612,9 @@ fn roll_white_recipe(dir: &TempDir, base: &str) -> PathBuf {
 #[test]
 fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     // The contract the command exists for: measure once, state the gains and the
-    // contrast, and every frame renders under exactly them — by the reported flag and by
-    // the reported recipe fragment alike.
+    // white, and every frame renders under exactly them — by the reported flag and by
+    // the reported recipe fragment alike, and as the same values stated as style knobs
+    // would (`nf-calibration/roll-section` moved them, and moved no pixel).
     let tmp = TempDir::new("measure-roll-reuse");
     let frame = fixture("hdr-48bit.tif").display().to_string();
     let second = tmp.path("second.tif");
@@ -11660,8 +11661,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         .unwrap()
         .split_whitespace()
         .collect();
-    assert_eq!(flag[0], "--white-balance", "{report}");
-    assert_eq!(flag[2], "--contrast", "{report}");
+    assert_eq!(flag[0], "--roll-white-balance", "{report}");
+    assert_eq!(flag[2], "--roll-white", "{report}");
     let (code, stdout, err) = run(&[
         &[
             "convert",
@@ -11686,6 +11687,39 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         converted["new_flow"]["look"]["contrast"], report["white"]["contrast"],
         "and the contrast"
     );
+    let roll = &converted["new_flow"]["roll"];
+    assert_eq!(roll["white_stops"], report["white"]["stops"], "{converted}");
+    assert_eq!(roll["contrast"], report["white"]["contrast"], "{converted}");
+    assert_eq!(roll["white_balance_applied"], true, "{converted}");
+    assert_eq!(roll["contrast_applied"], true, "{converted}");
+
+    // The same values as style knobs: the section is where they live, not what they do.
+    let as_style = tmp.path("style.tiff");
+    let gains_text = gains
+        .iter()
+        .map(|g| g.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let contrast_text = report["white"]["contrast"].to_string();
+    let (code, _, err) = run(&[
+        "convert",
+        &frame,
+        "--new-flow",
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--white-balance",
+        &gains_text,
+        "--contrast",
+        &contrast_text,
+        "-o",
+        as_style.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&by_flag).unwrap(),
+        std::fs::read(&as_style).unwrap(),
+        "the roll section renders what the same values as style knobs render"
+    );
 
     let mut recipe = report["reuse"]["recipe"].clone();
     recipe["recipe_version"] = 2.into();
@@ -11708,6 +11742,271 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         std::fs::read(&by_recipe).unwrap(),
         "the reported flag and recipe fragment are one knob"
     );
+}
+
+#[test]
+fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
+    // Nothing is read as unset by its value: a `--dump-params` recipe replays exactly
+    // what it rendered, and a recipe an earlier build wrote (every one stated
+    // `look.contrast` 1.1111112) keeps its stated contrast over the roll's white. A
+    // *recipe* value beside a roll measurement may be such a leftover, so the run warns;
+    // a typed flag is a choice made now, and never does. `hdr-48bit.tif` is the IR-free
+    // fixture, so a `--strict` exit 1 is this warning's; the typed-flag and migrated
+    // runs are the controls.
+    let tmp = TempDir::new("roll-overlap");
+    let overlap = |warnings: &serde_json::Value, key: &str| {
+        let prefix = format!("the recipe's `{key}`");
+        warnings.as_array().map_or(0, |w| {
+            w.iter()
+                .filter(|w| w.as_str().unwrap().starts_with(&prefix))
+                .count()
+        })
+    };
+    let contrast =
+        |report: &serde_json::Value| report["new_flow"]["look"]["contrast"].as_f64().unwrap();
+
+    // Typed flags beside the roll's: no warning, and `--strict` passes.
+    let dumped = tmp.path("dumped.json");
+    let (code, stdout, err) = new_flow_convert(
+        &tmp.path("a.tiff"),
+        &[
+            "--roll-white-balance",
+            "1.25,1,0.8",
+            "--white-balance",
+            "1.05,1,1",
+            "--roll-white",
+            "1.7",
+            "--contrast",
+            "1.1111112",
+            "--dump-params",
+            dumped.to_str().unwrap(),
+            "--strict",
+        ],
+    );
+    assert_eq!(code, 0, "a typed flag never warns: {err}");
+    let first = json(&stdout);
+    assert!((contrast(&first) - 1.111_111_2).abs() < 1e-6, "{first}");
+    assert!(
+        first
+            .get("warnings")
+            .is_none_or(|w| w.as_array().unwrap().is_empty()),
+        "{first}"
+    );
+
+    // The dump, read back: the same render, and now both values are the recipe's.
+    let (code, stdout, err) =
+        new_flow_convert(&tmp.path("b.tiff"), &["--params", dumped.to_str().unwrap()]);
+    assert_eq!(code, 0, "{err}");
+    let replay = json(&stdout);
+    assert_eq!(contrast(&replay), contrast(&first), "{replay}");
+    assert_eq!(replay["new_flow"]["roll"]["contrast_applied"], false);
+    assert_eq!(overlap(&replay["warnings"], "look.contrast"), 1, "{replay}");
+    assert_eq!(
+        overlap(&replay["warnings"], "scene_correction.white_balance"),
+        1,
+        "{replay}"
+    );
+    assert_eq!(
+        std::fs::read(tmp.path("a.tiff")).unwrap(),
+        std::fs::read(tmp.path("b.tiff")).unwrap(),
+        "the dump replays what it rendered"
+    );
+    // The same recipe with both values typed over it: the flags are the choice.
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("b2.tiff"),
+        &[
+            "--params",
+            dumped.to_str().unwrap(),
+            "--white-balance",
+            "1.05,1,1",
+            "--contrast",
+            "1.1111112",
+            "--strict",
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+
+    // An earlier build's recipe, with a `roll` section merged in: the stated contrast
+    // renders, and `--strict` promotes the warning.
+    let recipe = |look: &str, scene: &str| {
+        let path = tmp.path(&format!("r{}.json", look.len() + scene.len()));
+        write_file(
+            &path,
+            &format!(
+                r#"{{"recipe_version": 2,
+                     "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
+                     "roll": {{"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}},
+                     "scene_correction": {{"white_balance": {{"explicit": {scene}}}}},
+                     "look": {{"contrast": {look}}}}}"#
+            ),
+        )
+    };
+    let old = recipe("1.1111112", "[1, 1, 1]");
+    let (code, stdout, err) =
+        new_flow_convert(&tmp.path("c.tiff"), &["--params", old.to_str().unwrap()]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert!((contrast(&report) - 1.111_111_2).abs() < 1e-6, "{report}");
+    assert_eq!(overlap(&report["warnings"], "look.contrast"), 1, "{report}");
+    assert_eq!(
+        overlap(&report["warnings"], "scene_correction.white_balance"),
+        0,
+        "{report}"
+    );
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("d.tiff"),
+        &["--params", old.to_str().unwrap(), "--strict"],
+    );
+    assert_eq!(code, 1, "--strict must promote the warning: {err}");
+    assert!(
+        err.contains("the recipe's `look.contrast` 1.1111112 overrides"),
+        "{err}"
+    );
+
+    // Old gains still in `scene_correction.white_balance`: they multiply the roll's.
+    let squared = recipe("null", "[1.25, 1.0, 0.8]");
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("e.tiff"),
+        &["--params", squared.to_str().unwrap(), "--strict"],
+    );
+    assert_eq!(code, 1, "--strict must promote the warning: {err}");
+    assert!(
+        err.contains("the recipe's `scene_correction.white_balance` [1.25, 1.0, 0.8] multiplies"),
+        "{err}"
+    );
+
+    // The control: the migrated recipe — contrast `null`, gains dropped — is quiet.
+    let migrated = recipe("null", "[1, 1, 1]");
+    let (code, stdout, err) = new_flow_convert(
+        &tmp.path("f.tiff"),
+        &["--params", migrated.to_str().unwrap(), "--strict"],
+    );
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert_eq!(
+        report["new_flow"]["roll"]["contrast_applied"], true,
+        "{report}"
+    );
+
+    // `roll`: a shared-recipe fact, so it warns once for the roll, never per frame.
+    let second = tmp.path("second.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &second).unwrap();
+    let (code, stdout, err) = run(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        second.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("roll").to_str().unwrap(),
+        "--params",
+        old.to_str().unwrap(),
+        "--new-flow",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    assert_eq!(overlap(&report["warnings"], "look.contrast"), 1, "{report}");
+    let frames = report["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 2, "{report}");
+    for frame in frames {
+        assert_eq!(frame["status"], "ok", "{frame}");
+        assert_eq!(overlap(&frame["warnings"], "look.contrast"), 0, "{frame}");
+    }
+}
+
+#[test]
+fn the_roll_flags_are_refused_under_the_film_master() {
+    // A roll flag asks a rendering to apply a measurement, which the film master never
+    // does. A typed `--film-master` conflicts at the parser, like the destination axes;
+    // a recipe's film master is refused by the presence rule, with a remedy the command
+    // accepts. A recipe's `roll` section is spared
+    // (`the_film_master_leaves_the_roll_section_unapplied_and_says_so`).
+    let tmp = TempDir::new("roll-flag-film-master");
+    let master = write_file(
+        &tmp.path("master.json"),
+        r#"{"recipe_version": 2, "output": "film-master",
+            "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
+    );
+    for flag in [
+        &["--roll-white-balance", "1.3,1,0.8"][..],
+        &["--roll-white", "1.7"][..],
+    ] {
+        let (code, _, err) = new_flow_convert(
+            &tmp.path("m.tiff"),
+            &[&["--film-master"][..], flag].concat(),
+        );
+        assert_eq!(code, 2, "{flag:?}: {err}");
+        assert!(
+            err.contains("--film-master")
+                && err.contains(flag[0])
+                && err.contains("cannot be used"),
+            "{flag:?}: {err}"
+        );
+
+        // `.jpg` also breaks the film master's suffix rule, a coarser diagnosis.
+        let (code, _, err) = new_flow_convert(
+            &tmp.path("m.jpg"),
+            &[&["--params", master.to_str().unwrap()][..], flag].concat(),
+        );
+        assert_eq!(code, 2, "{flag:?}: {err}");
+        assert!(
+            err.contains(&format!("{} applies the roll's measurements", flag[0]))
+                && err.contains("the recipe's `output` is \"film-master\"")
+                && err.contains(&format!("drop {}", flag[0]))
+                && err.contains("choose a rendered destination"),
+            "{flag:?}: {err}"
+        );
+        // The more specific diagnosis wins over the suffix rule.
+        assert!(!err.contains("does not end in"), "{flag:?}: {err}");
+        // The remedy works: a rendered destination applies the flag.
+        let (code, stdout, err) = new_flow_convert(
+            &tmp.path("rendered.tiff"),
+            &[
+                &["--params", master.to_str().unwrap(), "--range", "sdr"][..],
+                flag,
+            ]
+            .concat(),
+        );
+        assert_eq!(code, 0, "{flag:?}: {err}");
+        assert!(json(&stdout)["new_flow"]["roll"].is_object());
+    }
+    // The presence rule runs before every value rule that could refuse first: a bad
+    // roll value, or a typed look knob the film master refuses, would each be fixed
+    // only to meet this refusal.
+    for (extra, losing) in [
+        (
+            &["--roll-white", "1e-45"][..],
+            &["larger white", "must give a finite"][..],
+        ),
+        (
+            &["--roll-white-balance", "0,1,1"][..],
+            &["must be finite and positive"][..],
+        ),
+        (
+            &["--roll-white", "1.7", "--contrast", "1.3"][..],
+            &["cannot apply", "--contrast"][..],
+        ),
+    ] {
+        let (code, _, err) = new_flow_convert(
+            &tmp.path("m.tiff"),
+            &[&["--params", master.to_str().unwrap()][..], extra].concat(),
+        );
+        assert_eq!(code, 2, "{extra:?}: {err}");
+        assert!(
+            err.contains("the recipe's `output` is \"film-master\"") && err.contains(extra[0]),
+            "{extra:?}: {err}"
+        );
+        for wording in losing {
+            assert!(
+                !err.contains(wording),
+                "{extra:?} lost to {wording:?}: {err}"
+            );
+        }
+    }
+    // The recipe's own section alone is spared.
+    let (code, _, err) = new_flow_convert(
+        &tmp.path("spared.tiff"),
+        &["--params", master.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{err}");
 }
 
 #[test]
@@ -11847,11 +12146,11 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(clamped["input"], bright.to_str().unwrap());
     let cap_contrast = clamped["contrast"].as_f64().unwrap();
     assert!(
-        clamped["flag"]
-            .as_str()
-            .unwrap()
-            .ends_with(&format!("--contrast {}", clamped["contrast"])),
-        "a clamped frame's own flag carries the cap's contrast: {report}"
+        clamped["flag"].as_str().unwrap().ends_with(&format!(
+            "--roll-white {}",
+            white["rule"]["cap_stops"].as_f64().unwrap() as f32
+        )),
+        "a clamped frame's own flag carries the cap as its white: {report}"
     );
     assert!(
         (cap_contrast * 1.8 - 2.23).abs() < 0.01 && roll_contrast > cap_contrast,
@@ -11885,24 +12184,27 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         report["frames"][1]["white_stops"]
     );
 
-    // The reuse forms: the roll's contrast by flag and fragment, and the clamped
-    // frame's through a `roll --frames` manifest.
+    // The reuse forms: the roll's white by flag and fragment, and the clamped frame's
+    // (the cap) through a `roll --frames` manifest.
     assert!(
         report["reuse"]["flag"]
             .as_str()
             .unwrap()
-            .ends_with(&format!("--contrast {}", white["contrast"])),
+            .ends_with(&format!(
+                "--roll-white {}",
+                white["stops"].as_f64().unwrap() as f32
+            )),
         "{report}"
     );
     assert_eq!(
-        report["reuse"]["recipe"]["look"]["contrast"],
-        white["contrast"]
+        report["reuse"]["recipe"]["roll"]["white_stops"],
+        white["stops"]
     );
     let manifest = &report["reuse"]["frames"];
     assert!(manifest["frames"][0].get("params").is_none(), "{manifest}");
     assert_eq!(
-        manifest["frames"][1]["params"]["look"]["contrast"],
-        clamped["contrast"]
+        manifest["frames"][1]["params"]["roll"]["white_stops"],
+        white["rule"]["cap_stops"]
     );
     let mut shared: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&recipe).unwrap()).unwrap();
