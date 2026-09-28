@@ -6,9 +6,12 @@
 > chain of [`design-update.md`](design-update.md) is now the only one. The sections
 > below that describe output presets (`--output-preset`, `output.preset`), the print
 > stage (`--print-exposure`, `--black-point`, `--auto-wb`, `--linear-range`), the
-> unversioned recipe, sidecars and `--new-flow` describe the removed chain; folding the
-> new design in is `nf-docs/design-spec`'s. Until it lands, `design-update.md` is the
-> design and [`using-nc.md`](using-nc.md) is what the binary accepts.
+> unversioned recipe, sidecars, the report's per-stage sections (§8 "Reports &
+> determinism") and `--new-flow` describe the removed chain; folding the new design in
+> is `nf-docs/design-spec`'s. Until it lands, `design-update.md` is the design and
+> [`using-nc.md`](using-nc.md) is what the binary accepts. The report's current shape
+> is `cli::Report` (its `chain` block and `recipe` echo; no sidecar is written), and the
+> telemetry record below is current.
 
 ## 1. Purpose
 
@@ -1086,7 +1089,7 @@ top-level **document version** rather than per-object ones:
   gamut and maps out-of-gamut colour radially toward neutral at constant luminance,
   against the cube `[0, max(peak, Y)]` — the peak is fit range's, and content above
   it renders neutral at its own luminance and is clamped, counted: on an HDR
-  destination at the hand-off to the HDR encoder (`new_flow.peak_clamp`, folded into
+  destination at the hand-off to the HDR encoder (`chain.peak_clamp`, folded into
   the report's clip count), otherwise at the encode. A pixel whose destination
   luminance is `≤ 0` renders black. The report names it after the destination's gamut,
   `acescg-to-<gamut>-matrix+neutral-axis-radial-boundary-v2` (`display-p3`,
@@ -1107,7 +1110,7 @@ top-level **document version** rather than per-object ones:
   defaults (its default when a consistent destination
   has it, else the one value left, else a refusal listing the choices), so a stated
   value is never overridden by another axis. The report records every resolved axis
-  (`new_flow.destination`), which replays exactly. Written today: SDR `native` TIFF in
+  (`chain.destination`), which replays exactly. Written today: SDR `native` TIFF in
   Display P3 (the default) or Adobe RGB; HDR BT.2020 as a `linear` 32-bit float TIFF, or
   `pq`/`hlg` as a 16-bit TIFF or a 10-bit AVIF; and the HDR JPEG with a gain map
   (`nf-destinations/gain-map-destination`), which `--range hdr` alone resolves to — a
@@ -1139,7 +1142,7 @@ top-level **document version** rather than per-object ones:
   BT.2020 TIFF today, the Adobe RGB TIFF with `range` `sdr`); a stated axis is never
   overridden. `direct` with the film master is refused. A recipe value that moves
   `direct`'s pinned base warns, since an earlier build wrote every default. The report
-  states it in `new_flow.rendering`. Design: design-update Part 2, "Two renderings".
+  states it in `chain.rendering`. Design: design-update Part 2, "Two renderings".
 - **`roll`** (`nf-calibration/roll-section`): what `hanten measure-roll` measured,
   kept apart from the style knobs so a measured value is never mistaken for a chosen
   one. `white_balance` (`--roll-white-balance R,G,B`; finite and positive) is the
@@ -1149,7 +1152,7 @@ top-level **document version** rather than per-object ones:
   look's contrast is `log2(1/0.18) / white_stops`, which renders it at diffuse white
   with mid-grey pinned. Both optional; unset they are written as `null`, never left
   out, so a roll's one-key per-frame override merges instead of replacing the section.
-  The report's `new_flow.roll` states both, the contrast derived, and whether each was
+  The report's `chain.roll` states both, the contrast derived, and whether each was
   applied (the film master applies neither). No value is read as unset by its value, or
   a `--dump-params` recipe would not replay; instead a rendered run warns, once, where a
   value a recipe file stated — `scene_correction.white_balance` (not the identity)
@@ -1166,12 +1169,12 @@ top-level **document version** rather than per-object ones:
   own statistics read a sunset as the cast — and are refused by name. `exposure`
   is in stops (`--exposure`, the new chain's spelling of `--print-exposure`), applied
   as `2^EV`; each gain times it must be a normal `f32`. The report's
-  `new_flow.scene_correction` states the gains and the exposure applied.
+  `chain.scene_correction` states the gains and the exposure applied.
 - **`look`** (`nf-look`): the creative stage, scene-referred and linear, between scene
   correction and fit range. Each control is **its own key**, added by its own task — not
   one CDL-style object, whose slope and offset would restate white balance and the
   flare subtraction. At every control's identity the stage is a bit-exact identity and
-  the report's `new_flow.stages` lists it as `"applied": "identity"`. Controls run in
+  the report's `chain.stages` lists it as `"applied": "identity"`. Controls run in
   the order the section lists them.
   `contrast` (`nf-reconstruction/gamma-split`, `--contrast`, new-flow only) — print
   contrast pivoted at mid-grey, `out_c = 0.18 · (in_c / 0.18)^contrast` on each ACEScg
@@ -1203,7 +1206,7 @@ top-level **document version** rather than per-object ones:
   negative's density spread, whichever stage carries the contrast — full pull at `s ≤ s0`, none at
   `s ≥ s1` (unset: `0.015, 0.025`). Luminance is kept. `strength` is in `[0, 1]`,
   unset `0.8` under `default` and `0` under `direct`; `0` is off, a bit-exact identity. It assumes a roll-level white
-  balance ahead of it. The report's `new_flow.look` echoes the section.
+  balance ahead of it. The report's `chain.look` echoes the section.
 - **`fit_range`** (`nf-display-stages/fit-range`): fits the scene's range into the
   display's, with the display's **peak** as the operator's one per-destination
   argument — the destination states it, never the recipe (`1.0` for the SDR TIFF).
@@ -1216,7 +1219,7 @@ top-level **document version** rather than per-object ones:
   the peak on every branch and is clamped and counted at the encode. A non-finite
   sample is refused, naming the pixel; a pixel with luminance ≤ 0 is scaled by the
   curve's limit at black (the mid-grey gain), so the scale is continuous there.
-  The report's `new_flow.fit_range` names the operator (`reinhard-peak-lifted-v1`, or
+  The report's `chain.fit_range` names the operator (`reinhard-peak-lifted-v1`, or
   `identity` at zero headroom) with its headroom, white point and display peak.
   **Display black** (`nf-display-stages/parametric-operator`): `display_black`
   (`--display-black`) is where the film base renders, in stops below mid-grey on the
@@ -2326,8 +2329,8 @@ frame.
 
 **Telemetry (operational, `convert` only — NOT recipe keys).** Opt-in
 performance + context telemetry. These are operational flags like `--report`, so
-they are **not** conversion knobs: they never enter the recipe/sidecar and never
-affect the output bytes (telemetry on or off ⇒ byte-identical TIFF + sidecar).
+they are **not** conversion knobs: they never enter the recipe and never affect
+the output bytes (telemetry on or off ⇒ byte-identical output).
 - `--telemetry` — append one JSON record for this run to the local JSONL log
   (default `$XDG_DATA_HOME/nc/telemetry.jsonl`, else `$HOME/.local/share/nc/…` on
   Unix / `%APPDATA%\nc\…` on Windows; override with the `NC_TELEMETRY_LOG` env
@@ -2340,60 +2343,52 @@ affect the output bytes (telemetry on or off ⇒ byte-identical TIFF + sidecar).
   deviation from the fail-loudly rule, since telemetry is non-critical
   observability and the image already succeeded. A `--telemetry-file` **or**
   `--telemetry` log path (`NC_TELEMETRY_LOG` or the default path) that would *collide* with the
-  input/output/sidecar/report-file is still a loud usage error (a config mistake,
+  input/output/IR export/report-file is still a loud usage error (a config mistake,
   caught up front — an odd log path must never silently append into the scan).
 
-**Telemetry record shape (`schema_version` 7, serialize-only JSON).** Designed for
+**Telemetry record shape (`schema_version` 9, serialize-only JSON).** Designed for
 a future background uploader (§12, `telemetry/upload`) to drain and ship:
 ```json
 {
-  "schema_version": 7,
-  "timestamp_ms": 1752566400000,
+  "schema_version": 9,
+  "timestamp_ms": 1790633724299,
   "nc_version": "0.1.0",
   "target": "aarch64-apple-darwin",
-  "cpu_count": 14,
+  "cpu_count": 11,
   "image": {
     "format": "hdri", "width": 502, "height": 462, "megapixels": 0.231924,
     "bit_depth": 16, "channels": 3, "ir_present": true,
-    "input_bytes": 2017230, "output_bytes": 1392370
+    "input_bytes": 2017230, "output_bytes": 1392366
   },
   "timing_ms": {
-    "total": 30.0, "decode": 5.0, "film_base": 0.0, "algorithm": 4.4,
-    "color": 18.4, "encode": 1.0, "ir_export": 0.6
+    "total": 59.9, "decode": 15.3, "film_base": 0.0, "reconstruction": 5.6,
+    "scene_correction": 0.0, "look": 1.7, "fit_range": 4.0, "fit_gamut": 7.8,
+    "destination": 5.8, "encode": 6.0, "ir_export": 6.2
   },
   "conversion": {
-    "preset": "display-p3",
-    "params_hash": "92a827ffd2d0aebd",
+    "destination": { "display": { "range": "sdr", "transfer": "native",
+                                  "gamut": "display-p3", "container": "tiff" } },
+    "params_hash": "a6bcbaf9b33f4480",
     "film_base_source": { "explicit": [0.9, 0.55, 0.42] },
     "output_depth": "u16"
   },
-  "outcome": { "warnings": 1, "clipped": 3419, "non_finite": 0 }
+  "outcome": { "warnings": 1, "clipped": 0, "non_finite": 0 }
 }
 ```
-`timing_ms.ir_export` is present only when `--export-ir` ran (schema v2 replaced v1's
-`conversion.algorithm` with the `reconstruction` + `curve` pair; v5 dropped
-`reconstruction` with `simple` and made `curve` always present; v6 dropped
-`conversion.dmax` with the roll reference density; v7 dropped `curve`, left one-valued
-by the `characteristic` curve's retirement).
-`conversion.preset` is the resolved `output.preset` — v3 added it, because without it
-two f32 TIFFs (`film-master`, `hdr-linear-tiff`) are indistinguishable. Records made
-before `nf-retire/legacy-custom` may carry the retired `legacy` / `custom`.
-`conversion.output_depth` names the **primary** artifact's depth
-(`OutputParams::primary_depth_label()`), not `OutputParams::depth()`, which for the
-JPEG and AVIF presets is only the optional IR TIFF's depth — `u8`/`u10` are depths it
-cannot spell at all.
-`params_hash` is a stable hash of the
-effective recipe JSON (the same bytes as the sidecar), so identical conversions
-share a hash without the record carrying the whole recipe. The value shown above is
-**illustrative**: because it covers the *whole* recipe it changes whenever any key is
-added, removed, or re-defaulted (adding `print.linear_range` and `output.preset` changed
-it, and the next schema change will again). Nothing asserts it — treat it as a shape
-example, not a reproducible constant.`params_hash` is a stable hash of the canonical effective-recipe JSON — the same
-bytes `--dump-params` writes — so identical conversions share a hash without the
-record carrying the whole recipe. The sidecar is an envelope, so its `params` body
-is the same recipe document re-indented rather than the same bytes. The hash is
-computed by the same function as the report's `identity.params_hash`, so a
-telemetry record and report for one run agree. The value shown above is
+`timing_ms` has one field per stage (`crate::stage::StageKind`); `total` also covers
+recipe load, validation, the memory preflight and the commit. The four chain stages are
+absent for the film master, which runs none, and `ir_export` without `--export-ir`; a
+gain map's `fit_range` and `fit_gamut` sum its two renditions (the copy that splits
+them counts only toward `total`), and `scene_correction` and `look` include the film
+base's one-pixel grade. The history of the shape is `telemetry::SCHEMA_VERSION`'s
+rustdoc.
+`conversion.destination` is the resolved recipe `output`, every axis stated — without
+it two f32 TIFFs (the film master, a linear HDR TIFF) are indistinguishable.
+`conversion.output_depth` names the **primary** artifact's depth (`u8` for the gain-map
+JPEG, `u10` for the AVIF), not the optional IR TIFF's.
+`params_hash` is a stable hash (`Recipe::params_hash`) of the bytes `--dump-params`
+writes, the same value as the report's `identity.params_hash`, so identical
+conversions share a hash without the record carrying the recipe. The value shown is
 **illustrative**: it covers the whole recipe and changes whenever any key is added,
 removed, or re-defaulted. Nothing asserts it as a constant.
 

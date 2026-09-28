@@ -475,11 +475,11 @@ fn hdr_linear_tiff_writes_a_bit_exact_display_linear_bt2020_master() {
         .concat());
         assert_eq!(code, 0, "{err}");
         let report = json(&stdout);
-        let axes = &report["new_flow"]["destination"]["display"];
+        let axes = &report["chain"]["destination"]["display"];
         assert_eq!(axes["transfer"], "linear");
         assert_eq!(axes["gamut"], "bt2020");
         // The chain ran, which is what distinguishes this from the film master.
-        assert_eq!(report["new_flow"]["stages"][1]["stage"], "look");
+        assert_eq!(report["chain"]["stages"][1]["stage"], "look");
 
         let block = &report["hdr_linear_tiff"];
         assert_eq!(
@@ -576,7 +576,7 @@ fn coded_hdr_tiffs_store_exact_codes_and_signal_cicp_in_the_profile() {
         assert_eq!(code, 0, "{preset}: {err}");
         let report = json(&stdout);
         assert_eq!(
-            report["new_flow"]["destination"]["display"]["transfer"],
+            report["chain"]["destination"]["display"]["transfer"],
             preset
         );
 
@@ -724,7 +724,7 @@ fn hdr_pq_writes_a_deterministic_advanced_profile_avif() {
         ]);
         assert_eq!(code, 0, "{err}");
         let report = json(&stdout);
-        let axes = &report["new_flow"]["destination"]["display"];
+        let axes = &report["chain"]["destination"]["display"];
         assert_eq!(axes["transfer"], "pq");
         assert_eq!(axes["container"], "avif");
         // The `avif` report block is evidence read back out of the file.
@@ -757,10 +757,10 @@ fn hdr_pq_writes_a_deterministic_advanced_profile_avif() {
         let timing: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(telemetry).unwrap()).unwrap();
         assert!(
-            timing["timing_ms"]["color"]
+            timing["timing_ms"]["destination"]
                 .as_f64()
                 .is_some_and(|value| value > 0.0),
-            "HDR display rendering must be included in timing_ms.color: {timing}"
+            "the Rec.2100 transfer must be timed in timing_ms.destination: {timing}"
         );
     }
 
@@ -880,10 +880,7 @@ fn hdr_hlg_signals_its_own_transfer_and_omits_content_light_level() {
     ]);
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
-    assert_eq!(
-        report["new_flow"]["destination"]["display"]["transfer"],
-        "hlg"
-    );
+    assert_eq!(report["chain"]["destination"]["display"]["transfer"], "hlg");
     assert_eq!(report["avif"]["cicp"][1], 18);
     let bytes = std::fs::read(&output).unwrap();
     let tree = avif_boxes(&bytes);
@@ -1069,15 +1066,15 @@ fn convert_writes_tiff_and_report() {
     ]);
     assert_eq!(code, 0, "convert should succeed");
     assert!(is_tiff(&out), "output must be a valid TIFF");
-    // No sidecar yet: writing the recipe beside the output is
-    // `nf-core/report-contract`'s, and the report says so.
+    // No sidecar: the report's `recipe` is the record of the run.
     assert!(!sidecar_of(&out).exists());
 
     let report = json(&stdout);
     assert_eq!(report["command"], "convert");
-    assert_eq!(report["new_flow"]["sidecar_written"], false);
+    assert_eq!(report["recipe"]["recipe_version"], 2, "{stdout}");
+    assert!(report["chain"].get("sidecar_written").is_none(), "{stdout}");
     assert_eq!(
-        report["new_flow"]["destination"]["display"]["container"],
+        report["chain"]["destination"]["display"]["container"],
         "tiff"
     );
     // The pinned working-space mapping is stamped on every convert report
@@ -2458,7 +2455,7 @@ fn telemetry_file_writes_full_record() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
 
-    assert_eq!(record["schema_version"], 8);
+    assert_eq!(record["schema_version"], 9);
     assert!(record["timestamp_ms"].as_u64().unwrap() > 0);
     assert!(record["nc_version"].is_string());
     assert!(record["target"].is_string());
@@ -2480,20 +2477,27 @@ fn telemetry_file_writes_full_record() {
     assert!(image["input_bytes"].as_u64().unwrap() > 0);
     assert!(image["output_bytes"].as_u64().unwrap() > 0);
 
-    // Per-stage timings are all present and finite.
+    // Every stage a rendered destination runs is timed, by name (schema 9).
     let timing = &record["timing_ms"];
     for key in [
         "total",
         "decode",
         "film_base",
-        "algorithm",
-        "color",
+        "reconstruction",
+        "scene_correction",
+        "look",
+        "fit_range",
+        "fit_gamut",
+        "destination",
         "encode",
     ] {
         assert!(
             timing[key].as_f64().is_some_and(f64::is_finite),
             "timing_ms.{key} must be finite: {timing}"
         );
+    }
+    for gone in ["algorithm", "color"] {
+        assert!(timing.get(gone).is_none(), "{timing}");
     }
     // No IR plane in this fixture → no ir_export timing.
     assert!(timing.get("ir_export").is_none() || timing["ir_export"].is_null());
@@ -2624,7 +2628,7 @@ fn telemetry_log_appends_one_line_per_run() {
     // Each line is an independent, valid JSON object.
     for line in lines {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(v["schema_version"], 8);
+        assert_eq!(v["schema_version"], 9);
     }
 }
 
@@ -2819,7 +2823,7 @@ fn telemetry_file_dash_writes_json_to_stdout() {
     ]);
     assert_eq!(code, 0, "telemetry to stdout should succeed:\n{err}");
     let record = json(&stdout);
-    assert_eq!(record["schema_version"], 8);
+    assert_eq!(record["schema_version"], 9);
     assert_eq!(record["image"]["format"], "hdr");
 }
 
@@ -3810,7 +3814,7 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
     assert_eq!(report["loss"]["clipped_high"], 0);
     assert_eq!(report["loss"]["non_finite"], 0);
     // What ran: the fixed decode and nothing after it.
-    let nf = &report["new_flow"];
+    let nf = &report["chain"];
     assert_eq!(nf["destination"], "film-master");
     assert_eq!(nf["stages"], serde_json::json!([]));
     for stage in ["scene_correction", "look", "fit_range"] {
@@ -3982,8 +3986,12 @@ fn film_master_telemetry_names_the_destination_and_the_written_depth() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
     let conv = &record["conversion"];
-    assert_eq!(record["schema_version"], 8);
+    assert_eq!(record["schema_version"], 9);
     assert_eq!(conv["destination"], "film-master");
+    // The film master runs no chain stage, so none is timed.
+    for stage in ["scene_correction", "look", "fit_range", "fit_gamut"] {
+        assert!(record["timing_ms"].get(stage).is_none(), "{record}");
+    }
     assert_eq!(
         conv["output_depth"], "f32",
         "the master writes f32, so the record's depth must say so: {conv}"
@@ -4182,8 +4190,7 @@ fn convert_p3(input: &Path, out: &Path, extra: &[&str]) -> (i32, String, String)
 #[test]
 fn report_carries_every_identity_layer() {
     // Every report carries nc_version, the git commit and the behavioral
-    // pipeline_version. The params_hash is absent until `nf-core/report-contract`
-    // decides what it hashes.
+    // pipeline_version, and a convert report the hash of the recipe it ran.
     let tmp = TempDir::new("identity");
     let out = tmp.path("out.tiff");
     let (code, stdout, err) = convert_p3(&fixture("hdri-64bit.tif"), &out, &[]);
@@ -4211,7 +4218,11 @@ fn report_carries_every_identity_layer() {
         Some(pipeline_version_from_version_flag()),
         "the report's pipeline_version must match `nc --version`: {id}"
     );
-    assert!(id.get("params_hash").is_none(), "{id}");
+    let hash = id["params_hash"].as_str().unwrap_or_else(|| panic!("{id}"));
+    assert!(
+        hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()),
+        "{id}"
+    );
     assert!(!id["target"].as_str().unwrap().is_empty());
 }
 
@@ -4298,15 +4309,16 @@ fn convert_report_echoes_a_declared_film_type_only() {
 }
 
 #[test]
-fn telemetry_params_hash_is_the_hash_of_the_dumped_recipe_bytes() {
-    // The documented contract (`version::stable_hash`, `telemetry::params_hash`): the
-    // record's `conversion.params_hash` is FNV-1a-64 over exactly the bytes
-    // `--dump-params` writes, so a record can be matched to a kept recipe file.
+fn params_hash_is_the_hash_of_the_dumped_recipe_bytes() {
+    // The documented contract (`Recipe::params_hash`): the report's
+    // `identity.params_hash` and the record's `conversion.params_hash` are FNV-1a-64
+    // over exactly the bytes `--dump-params` writes, so either can be matched to a kept
+    // recipe file.
     let tmp = TempDir::new("paramshash");
     let out = tmp.path("out.tiff");
     let dump = tmp.path("params.json");
     let rec = tmp.path("run.json");
-    let (code, _, err) = convert_p3(
+    let (code, stdout, err) = convert_p3(
         &fixture("hdr-48bit.tif"),
         &out,
         &[
@@ -4329,6 +4341,46 @@ fn telemetry_params_hash_is_the_hash_of_the_dumped_recipe_bytes() {
         format!("{h:016x}"),
         "{record}"
     );
+    assert_eq!(
+        json(&stdout)["identity"]["params_hash"],
+        format!("{h:016x}"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn the_reports_recipe_replays_the_run() {
+    // The report is the only record a run keeps of its recipe (no sidecar), so its
+    // `recipe` must reload through `--params` to the same image and the same hash. A
+    // non-default knob makes the echo carry something a default replay would miss.
+    let tmp = TempDir::new("recipe-echo");
+    let first = tmp.path("first.tiff");
+    let (code, stdout, err) = convert_p3(&fixture("hdr-48bit.tif"), &first, &["--exposure", "0.5"]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let recipe = tmp.path("echo.json");
+    std::fs::write(&recipe, report["recipe"].to_string()).unwrap();
+
+    let second = tmp.path("second.tiff");
+    let (code, replay, err) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        second.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&first).unwrap(),
+        std::fs::read(&second).unwrap()
+    );
+    let replay = json(&replay);
+    assert_eq!(
+        replay["identity"]["params_hash"], report["identity"]["params_hash"],
+        "{replay}"
+    );
+    assert_eq!(replay["recipe"], report["recipe"]);
 }
 
 #[test]
@@ -4749,7 +4801,7 @@ fn roll_frames_carry_their_own_identity_and_comparison_basis() {
     // The un-overridden frame ran the shared recipe's exposure; the overridden one
     // reports its own.
     let exposure = |frame: &serde_json::Value| {
-        frame["new_flow"]["scene_correction"]["exposure"]
+        frame["chain"]["scene_correction"]["exposure"]
             .as_f64()
             .unwrap_or_else(|| panic!("no resolved exposure in {frame}"))
     };
@@ -6144,7 +6196,7 @@ fn the_default_output_is_an_sdr_display_p3_tiff() {
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
     assert_eq!(
-        report["new_flow"]["destination"],
+        report["chain"]["destination"],
         serde_json::json!({ "display": {
             "range": "sdr", "transfer": "native", "gamut": "display-p3", "container": "tiff"
         } })
@@ -6239,7 +6291,7 @@ fn the_headroom_changes_the_sdr_render_and_the_report_records_it() {
         assert_eq!(code, 0, "{stops}: {err}");
         let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(
-            report["new_flow"]["fit_range"]["headroom_stops"],
+            report["chain"]["fit_range"]["headroom_stops"],
             stops.parse::<f64>().unwrap(),
             "{stops}"
         );
@@ -7108,10 +7160,10 @@ fn scene_correction_applies_the_stated_gains_and_exposure() {
         assert_eq!(code, 0, "{extra:?}: {err}");
         (out, json(&stdout))
     };
-    let applied = |report: &serde_json::Value| report["new_flow"]["stages"][0]["applied"].clone();
+    let applied = |report: &serde_json::Value| report["chain"]["stages"][0]["applied"].clone();
 
     let (plain, report) = convert("plain.tiff", &[]);
-    let sc = &report["new_flow"]["scene_correction"];
+    let sc = &report["chain"]["scene_correction"];
     assert_eq!(
         *sc,
         serde_json::json!({"white_balance": [1.0, 1.0, 1.0], "exposure": 0.0}),
@@ -7123,7 +7175,7 @@ fn scene_correction_applies_the_stated_gains_and_exposure() {
     // Exposure: one stop down darkens every channel.
     let (darker, report) = convert("darker.tiff", &["--exposure", "-1"]);
     assert_eq!(applied(&report), "exposure");
-    assert_eq!(report["new_flow"]["scene_correction"]["exposure"], -1.0);
+    assert_eq!(report["chain"]["scene_correction"]["exposure"], -1.0);
     let darker_means = channel_means(&read_u16_tiff(&darker));
     for c in 0..3 {
         assert!(
@@ -7135,7 +7187,7 @@ fn scene_correction_applies_the_stated_gains_and_exposure() {
     // Stated white balance: warms red against blue, and is reported as applied.
     let (warm, report) = convert("warm.tiff", &["--white-balance", "1.3,1,0.7"]);
     assert_eq!(applied(&report), "white-balance");
-    let sc = &report["new_flow"]["scene_correction"];
+    let sc = &report["chain"]["scene_correction"];
     assert_eq!(
         sc["white_balance"],
         serde_json::json!([1.3, 1.0, 0.7]),
@@ -7212,11 +7264,11 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     };
 
     let (default, report) = convert("default.tiff", &[]);
-    assert_eq!(report["new_flow"]["fit_range"]["headroom_stops"], 6.0);
+    assert_eq!(report["chain"]["fit_range"]["headroom_stops"], 6.0);
     let default_clipped = clipped(&report);
 
     let (four, report) = convert("four.tiff", &["--display-tone-headroom", "4"]);
-    let fr = &report["new_flow"]["fit_range"];
+    let fr = &report["chain"]["fit_range"];
     assert_eq!(fr["operator"], "reinhard-peak-lifted-v1", "{fr}");
     assert_eq!(fr["headroom_stops"], 4.0);
     assert_eq!(fr["white_point"], 16.0);
@@ -7224,17 +7276,17 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
 
     // Zero headroom leaves reinhard out; display black still runs unless it is off.
     let (_, report) = convert("zero-black.tiff", &["--display-tone-headroom", "0"]);
-    assert_eq!(report["new_flow"]["fit_range"]["operator"], "identity");
+    assert_eq!(report["chain"]["fit_range"]["operator"], "identity");
     assert_eq!(
-        report["new_flow"]["stages"][2]["applied"],
+        report["chain"]["stages"][2]["applied"],
         "log-shift-to-mid-grey-v1"
     );
     let (_, report) = convert(
         "zero.tiff",
         &["--display-tone-headroom", "0", "--display-black", "off"],
     );
-    assert_eq!(report["new_flow"]["fit_range"]["operator"], "identity");
-    assert_eq!(report["new_flow"]["stages"][2]["applied"], "identity");
+    assert_eq!(report["chain"]["fit_range"]["operator"], "identity");
+    assert_eq!(report["chain"]["stages"][2]["applied"], "identity");
     assert!(
         clipped(&report) > default_clipped,
         "the identity must clip more than reinhard: {} vs {default_clipped}",
@@ -7244,12 +7296,12 @@ fn fit_range_fits_the_scene_range_with_the_stated_headroom() {
     // Display black: a deeper setting, and off, each render differently.
     let (deeper, report) = convert("deeper.tiff", &["--display-black", "7"]);
     assert_eq!(
-        report["new_flow"]["fit_range"]["display_black"]["setting"],
+        report["chain"]["fit_range"]["display_black"]["setting"],
         7.0
     );
     assert_ne!(read_u16_tiff(&deeper), read_u16_tiff(&default));
     let (off, report) = convert("off.tiff", &["--display-black", "off"]);
-    let black = &report["new_flow"]["fit_range"]["display_black"];
+    let black = &report["chain"]["fit_range"]["display_black"];
     assert_eq!(black["setting"], "off", "{black}");
     assert_eq!(black["curve"], "identity");
     assert_eq!(black["shift_stops"], 0.0);
@@ -7317,7 +7369,7 @@ fn the_default_destination_renders_a_display_p3_tiff() {
 
         let report = json(&stdout);
         assert_eq!(report["output"], out.to_str().unwrap());
-        let nf = &report["new_flow"];
+        let nf = &report["chain"];
         // Every axis resolved, as the recipe `output` that replays it.
         assert_eq!(
             nf["destination"],
@@ -7365,15 +7417,14 @@ fn the_default_destination_renders_a_display_p3_tiff() {
             "output_render",
             "dmax",
             "white_balance",
-            "recipe",
         ] {
             assert!(
                 report.get(absent).is_none(),
                 "{absent} must be absent: {stdout}"
             );
         }
-        assert!(report["identity"].get("params_hash").is_none(), "{stdout}");
-        assert_eq!(nf["sidecar_written"], false);
+        assert!(report["identity"]["params_hash"].is_string(), "{stdout}");
+        assert!(nf.get("sidecar_written").is_none(), "{stdout}");
         assert!(!sidecar_of(&out).exists(), "no sidecar is written");
     }
 }
@@ -7596,7 +7647,7 @@ fn the_regional_balance_is_a_migration_error() {
 fn the_fixed_decodes_own_knobs_reach_the_decode() {
     // Everything the fixed decode reads must be accepted **and must arrive** — an
     // accepted flag the decode never saw is the accepted-and-ignored defect, so the
-    // report's resolved `new_flow.decode` block is the witness, not the exit code.
+    // report's resolved `chain.decode` block is the witness, not the exit code.
     let tmp = TempDir::new("decode-knobs");
     let decode_of = |extra: &[&str], name: &str| -> (i32, serde_json::Value, String) {
         let out = tmp.path(name);
@@ -7611,7 +7662,7 @@ fn the_fixed_decodes_own_knobs_reach_the_decode() {
         argv.extend(extra.iter().map(|s| (*s).to_string()));
         let (code, stdout, err) = run(&argv.iter().map(String::as_str).collect::<Vec<_>>());
         let decode = if code == 0 {
-            json(&stdout)["new_flow"]["decode"].clone()
+            json(&stdout)["chain"]["decode"].clone()
         } else {
             serde_json::Value::Null
         };
@@ -7790,7 +7841,7 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
         tmp.path("new.json").to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{err}");
-    let decode = &json(&stdout)["new_flow"]["decode"];
+    let decode = &json(&stdout)["chain"]["decode"];
     let close = |v: &serde_json::Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-5;
     assert!(close(&decode["linearization"], 1.7), "{decode}");
     assert!(close(&decode["scale"][1], 0.9), "{decode}");
@@ -8017,7 +8068,7 @@ fn the_anchor_guard_recommends_only_a_slope() {
 
 #[test]
 fn convert_writes_no_sidecar_and_guards_no_phantom_one() {
-    // No sidecar is written (that is `nf-core/report-contract`'s), so none is a write
+    // No sidecar is written (the report's `recipe` is the record), so none is a write
     // target either: `-o out --report-file out.tiff.json` must not be refused for
     // colliding with a file that is never written.
     let tmp = TempDir::new("no-sidecar");
@@ -8035,7 +8086,7 @@ fn convert_writes_no_sidecar_and_guards_no_phantom_one() {
     ]);
     assert_eq!(code, 0, "{err}");
     assert!(!err.contains("collides with the sidecar"), "{err}");
-    assert!(json(&std::fs::read_to_string(&report).unwrap())["new_flow"].is_object());
+    assert!(json(&std::fs::read_to_string(&report).unwrap())["chain"].is_object());
 
     // The guard's *real* checks still run, so a report file aimed at the input scan
     // is still refused.
@@ -8093,7 +8144,7 @@ fn convert_removes_a_stale_sidecar_and_nothing_else() {
         "the stale sidecar must be removed"
     );
     assert_eq!(
-        report["new_flow"]["removed_sidecar"],
+        report["chain"]["removed_sidecar"],
         sidecar_of(&out).to_str().unwrap(),
         "and the removal is reported"
     );
@@ -8107,7 +8158,7 @@ fn convert_removes_a_stale_sidecar_and_nothing_else() {
             sidecar_of(&out).exists(),
             "a user's own file must survive: {body}"
         );
-        assert!(report["new_flow"].get("removed_sidecar").is_none());
+        assert!(report["chain"].get("removed_sidecar").is_none());
     }
 }
 
@@ -8140,7 +8191,7 @@ fn convert_never_removes_the_recipe_it_read() {
     assert_eq!(code, 0, "{err}");
     assert!(sidecar.exists(), "the run's own recipe must survive");
     let report = json(&stdout);
-    assert!(report["new_flow"].get("removed_sidecar").is_none());
+    assert!(report["chain"].get("removed_sidecar").is_none());
     assert!(
         report["warnings"]
             .as_array()
@@ -8229,7 +8280,7 @@ fn roll_renders_every_frame() {
     for frame in report["frames"].as_array().unwrap() {
         assert_eq!(frame["status"], "ok", "{frame}");
         assert_eq!(
-            frame["new_flow"]["destination"]["display"]["gamut"],
+            frame["chain"]["destination"]["display"]["gamut"],
             "display-p3"
         );
     }
@@ -8270,13 +8321,31 @@ fn a_roll_frame_override_reaches_scene_correction() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|f| {
-            f["new_flow"]["scene_correction"]["exposure"]
-                .as_f64()
-                .unwrap()
-        })
+        .map(|f| f["chain"]["scene_correction"]["exposure"].as_f64().unwrap())
         .collect();
     assert_eq!(exposures, [-1.5, 0.0], "{stdout}");
+    // Each frame's identity hashes the recipe that frame ran, override included.
+    let hashes: Vec<&str> = report["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["identity"]["params_hash"].as_str().unwrap())
+        .collect();
+    assert_ne!(hashes[0], hashes[1], "{stdout}");
+    // A frame without an override runs the shared recipe, as `convert` would.
+    let (code, stdout, err) = run(&[
+        "convert",
+        b.to_str().unwrap(),
+        "-o",
+        tmp.path("single").to_str().unwrap(),
+        "--params",
+        shared.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        json(&stdout)["identity"]["params_hash"].as_str().unwrap(),
+        hashes[1]
+    );
 
     // A value the stage refuses is refused per frame, naming the key — roll takes no
     // conversion flags, so a flag spelling would be a remedy the user cannot type.
@@ -8468,9 +8537,7 @@ fn roll_refuses_the_removed_chains_keys_from_either_recipe_site() {
     ]);
     assert_eq!(code, 0, "{err}");
     let frame = &json(&stdout)["frames"][0];
-    let linearization = frame["new_flow"]["decode"]["linearization"]
-        .as_f64()
-        .unwrap();
+    let linearization = frame["chain"]["decode"]["linearization"].as_f64().unwrap();
     assert!((linearization - 1.7).abs() < 1e-5, "{frame}");
 }
 
@@ -8560,15 +8627,14 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(code, 0, "{err}");
     let converted = json(&stdout);
     assert_eq!(
-        converted["new_flow"]["scene_correction"]["white_balance"],
-        report["white_balance"]["gains"],
+        converted["chain"]["scene_correction"]["white_balance"], report["white_balance"]["gains"],
         "the flag's text round-trips the gains exactly"
     );
     assert_eq!(
-        converted["new_flow"]["look"]["contrast"], report["white"]["contrast"],
+        converted["chain"]["look"]["contrast"], report["white"]["contrast"],
         "and the contrast"
     );
-    let roll = &converted["new_flow"]["roll"];
+    let roll = &converted["chain"]["roll"];
     assert_eq!(roll["white_stops"], report["white"]["stops"], "{converted}");
     assert_eq!(roll["contrast"], report["white"]["contrast"], "{converted}");
     assert_eq!(roll["white_balance_applied"], true, "{converted}");
@@ -8642,7 +8708,7 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
         })
     };
     let contrast =
-        |report: &serde_json::Value| report["new_flow"]["look"]["contrast"].as_f64().unwrap();
+        |report: &serde_json::Value| report["chain"]["look"]["contrast"].as_f64().unwrap();
 
     // Typed flags beside the roll's: no warning, and `--strict` passes.
     let dumped = tmp.path("dumped.json");
@@ -8678,7 +8744,7 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
     assert_eq!(code, 0, "{err}");
     let replay = json(&stdout);
     assert_eq!(contrast(&replay), contrast(&first), "{replay}");
-    assert_eq!(replay["new_flow"]["roll"]["contrast_applied"], false);
+    assert_eq!(replay["chain"]["roll"]["contrast_applied"], false);
     assert_eq!(overlap(&replay["warnings"], "look.contrast"), 1, "{replay}");
     assert_eq!(
         overlap(&replay["warnings"], "scene_correction.white_balance"),
@@ -8763,7 +8829,7 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
     assert_eq!(
-        report["new_flow"]["roll"]["contrast_applied"], true,
+        report["chain"]["roll"]["contrast_applied"], true,
         "{report}"
     );
 
@@ -8928,7 +8994,7 @@ fn the_roll_flags_are_refused_under_the_direct_rendering() {
         .concat(),
     );
     assert_eq!(code, 0, "{err}");
-    assert_eq!(json(&stdout)["new_flow"]["roll"]["contrast_applied"], true);
+    assert_eq!(json(&stdout)["chain"]["roll"]["contrast_applied"], true);
     // The recipe's own section alone is spared.
     let (code, _, err) = convert_48bit(&tmp.path("spared.tiff"), &params);
     assert_eq!(code, 0, "{err}");
@@ -9027,7 +9093,7 @@ fn the_roll_flags_are_refused_under_the_film_master() {
             .concat(),
         );
         assert_eq!(code, 0, "{flag:?}: {err}");
-        assert!(json(&stdout)["new_flow"]["roll"].is_object());
+        assert!(json(&stdout)["chain"]["roll"].is_object());
     }
     // The presence rule runs before every value rule that could refuse first: a bad
     // roll value, or a typed look knob the film master refuses, would each be fixed
@@ -9286,7 +9352,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     ]);
     assert_eq!(code, 0, "{err}");
     let rolled = json(&stdout);
-    let rendered = |i: usize| &rolled["frames"][i]["new_flow"]["look"]["contrast"];
+    let rendered = |i: usize| &rolled["frames"][i]["chain"]["look"]["contrast"];
     assert_eq!(rendered(0), &white["contrast"], "{rolled}");
     assert_eq!(rendered(1), &clamped["contrast"], "{rolled}");
 
@@ -9536,7 +9602,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
         assert_eq!(code, 0, "{extra:?}: {err}");
         (std::fs::read(&out).unwrap(), json(&stdout))
     };
-    let look = |r: &serde_json::Value| r["new_flow"]["stages"][1].clone();
+    let look = |r: &serde_json::Value| r["chain"]["stages"][1].clone();
 
     // On by default at 0.8, after the look's default contrast, and the report says so.
     let (plain, report) = convert("plain.tiff", &[]);
@@ -9546,7 +9612,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
         "{report}"
     );
     assert_eq!(
-        report["new_flow"]["look"]["highlight_desaturation"],
+        report["chain"]["look"]["highlight_desaturation"],
         serde_json::json!({"strength": 0.8, "start_stops": -1.0, "band": [0.015, 0.025]})
     );
     // Strength 0 is off: the look then runs its contrast alone, different from the
@@ -9610,7 +9676,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
         ],
     );
     assert_eq!(
-        report["new_flow"]["look"]["highlight_desaturation"]["strength"], 0.0,
+        report["chain"]["look"]["highlight_desaturation"]["strength"], 0.0,
         "{report}"
     );
     assert_eq!(reset, off, "the flag's 0 must win over the recipe's 1");
@@ -9653,12 +9719,12 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
         assert_eq!(code, 0, "{extra:?}: {err}");
         (std::fs::read(&out).unwrap(), json(&stdout))
     };
-    let applied = |r: &serde_json::Value| r["new_flow"]["stages"][1]["applied"].clone();
+    let applied = |r: &serde_json::Value| r["chain"]["stages"][1]["applied"].clone();
 
     let (default, report) = convert("default.tiff", &[]);
     assert_eq!(applied(&report), "contrast", "{report}");
-    let reported = report["new_flow"]["look"]["contrast"].as_f64().unwrap();
-    let default_decode = report["new_flow"]["decode"].clone();
+    let reported = report["chain"]["look"]["contrast"].as_f64().unwrap();
+    let default_decode = report["chain"]["decode"].clone();
     assert!((reported - 2.0 / 1.8).abs() < 1e-6, "{report}");
 
     let (unity, report) = convert("unity.tiff", &["--contrast", "1"]);
@@ -9669,7 +9735,7 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
     assert_ne!(steep, default);
     // The decode block is the same at every look contrast.
     assert_eq!(
-        report["new_flow"]["decode"], default_decode,
+        report["chain"]["decode"], default_decode,
         "the look contrast reached the decode"
     );
 
@@ -9752,12 +9818,12 @@ fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
         assert_eq!(code, 0, "{extra:?}: {err}");
         (std::fs::read(&out).unwrap(), json(&stdout))
     };
-    let applied = |r: &serde_json::Value| r["new_flow"]["stages"][1]["applied"].clone();
+    let applied = |r: &serde_json::Value| r["chain"]["stages"][1]["applied"].clone();
 
     let (identity, report) = convert("identity.tiff", &[]);
     assert_eq!(applied(&report), "identity", "{report}");
     assert_eq!(
-        report["new_flow"]["look"]["channel_grade"],
+        report["chain"]["look"]["channel_grade"],
         serde_json::json!([1.0, 1.0]),
         "{report}"
     );
@@ -9922,7 +9988,7 @@ fn every_destination_renders_end_to_end() {
         assert_eq!(sniff_container(&out), container, "{extra:?}");
         let report = json(&stdout);
         assert_eq!(report["output"], out.to_str().unwrap(), "{extra:?}");
-        let nf = &report["new_flow"];
+        let nf = &report["chain"];
         let axes = &nf["destination"]["display"];
         for key in ["range", "transfer", "gamut", "container"] {
             assert!(axes[key].is_string(), "{extra:?}: {key} unresolved: {nf}");
@@ -9980,7 +10046,7 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
     let (code, stdout, err, out) = convert("bare", &["--rendering", "direct", "--strict"]);
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
-    let nf = &report["new_flow"];
+    let nf = &report["chain"];
     assert_eq!(nf["rendering"], "direct", "{nf}");
     assert_eq!(
         nf["destination"]["display"],
@@ -10013,7 +10079,7 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
     // Stated SDR: Adobe RGB, 16 bits — the form viewed by eye.
     let (code, stdout, err, out) = convert("sdr", &["--rendering", "direct", "--range", "sdr"]);
     assert_eq!(code, 0, "{err}");
-    let nf = &json(&stdout)["new_flow"];
+    let nf = &json(&stdout)["chain"];
     assert_eq!(nf["destination"]["display"]["gamut"], "adobe-rgb", "{nf}");
     assert_eq!(
         read_tiff_bits(&PathBuf::from(format!("{}.tiff", out.display()))),
@@ -10023,7 +10089,7 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
     // `default` on the same recipe applies the roll.
     let (code, stdout, err, _) = convert("default", &[]);
     assert_eq!(code, 0, "{err}");
-    let nf = &json(&stdout)["new_flow"];
+    let nf = &json(&stdout)["chain"];
     assert_eq!(nf["rendering"], "default", "{nf}");
     assert_eq!(nf["roll"]["white_balance_applied"], true, "{nf}");
 
@@ -10055,7 +10121,7 @@ fn the_gain_map_destination_writes_an_iso_only_jpeg_and_reports_its_map() {
 
     // Three stops up puts highlights above diffuse white: the map is live.
     let (report, bytes) = convert("live", &["--exposure", "3"]);
-    let gm = &report["new_flow"]["gain_map"];
+    let gm = &report["chain"]["gain_map"];
     assert_eq!(gm["flat"], false, "{gm}");
     assert!(
         gm["max"]
@@ -10069,7 +10135,7 @@ fn the_gain_map_destination_writes_an_iso_only_jpeg_and_reports_its_map() {
         (Some(251), Some(231))
     );
     assert_eq!(gm["base_fit_range"]["display_peak"], 1.0, "{gm}");
-    let hdr_peak = report["new_flow"]["fit_range"]["display_peak"]
+    let hdr_peak = report["chain"]["fit_range"]["display_peak"]
         .as_f64()
         .unwrap();
     assert!((hdr_peak - 1000.0 / 203.0).abs() < 1e-5, "{report}");
@@ -10099,7 +10165,7 @@ fn the_gain_map_destination_writes_an_iso_only_jpeg_and_reports_its_map() {
     // Five stops down leaves nothing above white: the map is flat, and says so in the
     // report — not as a warning, so `--strict` still passes.
     let (report, _) = convert("flat", &["--exposure=-5", "--strict"]);
-    let gm = &report["new_flow"]["gain_map"];
+    let gm = &report["chain"]["gain_map"];
     assert_eq!(gm["flat"], true, "{gm}");
     assert_eq!(gm["min"], serde_json::json!([1.0, 1.0, 1.0]), "{gm}");
     assert_eq!(gm["max"], serde_json::json!([1.0, 1.0, 1.0]), "{gm}");
@@ -10117,7 +10183,7 @@ fn the_film_master_runs_no_rendering_and_refuses_a_look() {
     assert_eq!(code, 0, "{err}");
     let out = PathBuf::from(format!("{}.tiff", stem.display()));
     assert_eq!(read_tiff_bits(&out), 32);
-    let nf = &json(&stdout)["new_flow"];
+    let nf = &json(&stdout)["chain"];
     assert_eq!(nf["destination"], "film-master");
     assert_eq!(nf["stages"], serde_json::json!([]));
     assert!(nf.get("look").is_none(), "{nf}");
@@ -10162,10 +10228,7 @@ fn the_hdr_hand_off_counts_what_it_clamps_and_strict_sees_it() {
     );
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
-    assert_eq!(
-        report["new_flow"]["peak_clamp"]["above_peak"], 0,
-        "{report}"
-    );
+    assert_eq!(report["chain"]["peak_clamp"]["above_peak"], 0, "{report}");
     // Three stops up with fit range at its identity puts content past the 1000-nit peak:
     // clamped at the hand-off, counted there, folded into the report's clip count.
     let over = [
@@ -10183,7 +10246,7 @@ fn the_hdr_hand_off_counts_what_it_clamps_and_strict_sees_it() {
     let (code, stdout, err) = convert_48bit(&tmp.path("b"), &over);
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
-    let above = report["new_flow"]["peak_clamp"]["above_peak"]
+    let above = report["chain"]["peak_clamp"]["above_peak"]
         .as_u64()
         .unwrap();
     assert!(above > 0, "{report}");
@@ -10527,11 +10590,11 @@ fn a_roll_frame_axis_joins_the_shared_recipes_axes() {
         "avif"
     );
     let report = json(&stdout);
-    let axes = &report["frames"][0]["new_flow"]["destination"]["display"];
+    let axes = &report["frames"][0]["chain"]["destination"]["display"];
     assert_eq!(axes["transfer"], "pq", "{report}");
     assert_eq!(axes["container"], "avif", "{report}");
     // The other frame keeps the roll's destination: a PQ TIFF.
-    let axes = &report["frames"][1]["new_flow"]["destination"]["display"];
+    let axes = &report["frames"][1]["chain"]["destination"]["display"];
     assert_eq!(
         (axes["transfer"].as_str(), axes["container"].as_str()),
         (Some("pq"), Some("tiff")),
@@ -10588,10 +10651,11 @@ fn a_roll_names_each_frame_from_its_destination() {
         32
     );
     let report = json(&stdout);
-    assert_eq!(
-        report["frames"][1]["new_flow"]["destination"],
-        "film-master"
-    );
+    assert_eq!(report["frames"][1]["chain"]["destination"], "film-master");
+    // A roll frame carries its encoder's block, as `convert` does; the film master has
+    // none.
+    assert_eq!(report["frames"][0]["avif"]["bit_depth"], 10, "{stdout}");
+    assert!(report["frames"][1].get("avif").is_none(), "{stdout}");
     // A frame switching the roll's destination is warned about, naming the frame.
     let warned: Vec<&str> = report["warnings"]
         .as_array()

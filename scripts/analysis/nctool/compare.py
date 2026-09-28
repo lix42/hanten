@@ -34,7 +34,7 @@ difference in the recorded statistics", not "the same image".
 functions depending on the depth of the artifact actually produced — quantized to
 `[0, 1]` for integer output, verbatim and unclamped for f32 — so a u16-vs-f32
 comparison would report a *unit* change as a rendering regression. That depth comes
-from what the report says was written: `new_flow.destination` on a build that takes
+from what the report says was written: `chain.destination` on a build that takes
 destinations, `output_render.encoding` on one that takes presets (the reference
 build) — never from a preset build's `output.depth` knob, which its atomic presets
 ignore.
@@ -43,9 +43,9 @@ ignore.
 states its output as a destination, an earlier one (the reference build) as a preset.
 `run` reads which from the binary's `--version` banner, and a case adds
 `destination_args` or `preset_args` to its shared `args` accordingly — so one set,
-and one case name per frame, serves both builds of a comparison. A destination build
-reports no `params_hash`; it is read from the run's telemetry record instead, which
-is therefore required there.
+and one case name per frame, serves both builds of a comparison. `params_hash` is read
+from the report's `identity`; a destination build from before `nf-core/report-contract`
+reports none, and it is read from the run's telemetry record instead.
 `identity.target` is likewise a real axis: transcendental
 libm results and the lcms2 transform differ by target (design-spec §8), so a
 cross-target diff must be read as such. `diff` surfaces `output_depth_changed`,
@@ -205,8 +205,8 @@ REQUIRED_RECORD_IDENTITY = ("nc_version", "pipeline_version", "target")
 # predating `core/conversion-versioning` has none of them; a *malformed* report may
 # have the block and not the field, which is just as unusable and must be as loud.
 #
-# `params_hash` is not among them: a preset build reports it in `identity`, a
-# destination build only in telemetry, so `params_hash_for` checks it separately.
+# `params_hash` is not among them: an early destination build reports it only in
+# telemetry, so `params_hash_for` checks it separately.
 REQUIRED_REPORT = {
     "identity": ("pipeline_version", "nc_version", "target"),
     "output_stats": ("mean",),
@@ -411,7 +411,7 @@ def clip_fraction(loss: dict) -> float:
 
 
 def depth_for_destination(destination) -> str | None:
-    """The primary artifact's depth for a resolved destination (`new_flow.destination`),
+    """The primary artifact's depth for a resolved destination (`chain.destination`),
     or `None` for one this does not know — refused by the caller, never guessed.
 
     The film master and a `linear` transfer write unclamped f32; otherwise the
@@ -427,17 +427,18 @@ def depth_for_destination(destination) -> str | None:
 
 def primary_depth(report: dict) -> str | None:
     """The depth of the artifact a run wrote, from what its report says it resolved:
-    `new_flow.destination` on a destination build, `output_render.encoding` on a
+    `chain.destination` on a destination build, `output_render.encoding` on a
     preset build. `None` when neither is present and known."""
-    new_flow = _dict(report.get("new_flow"))
-    if "destination" in new_flow:
-        return depth_for_destination(new_flow["destination"])
+    chain = _manifest.chain_block(report)
+    if "destination" in chain:
+        return depth_for_destination(chain["destination"])
     return PRIMARY_DEPTH_BY_ENCODING.get(_dict(report.get("output_render")).get("encoding"))
 
 
 def params_hash_for(report: dict, telemetry: dict | None) -> str | None:
-    """The run's `params_hash`: in the report's `identity` on a preset build, in the
-    telemetry record's `conversion` on a destination build."""
+    """The run's `params_hash`: in the report's `identity`, or — on a destination
+    build from before `nf-core/report-contract` — in the telemetry record's
+    `conversion`."""
     value = _dict(report.get("identity")).get("params_hash")
     if value is None:
         value = _dict(_dict(telemetry).get("conversion")).get("params_hash")
@@ -463,7 +464,7 @@ def _report_gaps(report: dict) -> list[str]:
                                      and all(isinstance(v, (int, float)) for v in mean)):
             gaps.append("output_stats.mean (must be three numbers)")
     if primary_depth(report) is None:
-        gaps.append("the output's depth (a known new_flow.destination, or a known "
+        gaps.append("the output's depth (a known chain.destination, or a known "
                     "output_render.encoding)")
     return gaps
 
@@ -524,8 +525,8 @@ def convert_case(nc: str, case: dict, workdir: str,
     record, tel_err = load_json(tel)
     phash = params_hash_for(report, record)
     if phash is None:
-        # A destination build states `params_hash` only in telemetry, so there the
-        # record is not optional: a frame with no hash cannot say which recipe ran.
+        # An early destination build states `params_hash` only in telemetry, so there
+        # the record is not optional: a frame with no hash cannot say which recipe ran.
         return None, {}, (
             f"case {case['name']!r}: no params_hash in the report's identity or the "
             f"telemetry record's conversion ({tel_err or 'the record has none'})")
@@ -901,8 +902,11 @@ def _determinism_confidence(a: dict) -> str:
 
 def _timing_delta(a: dict, b: dict) -> dict:
     """Per-stage wall-clock delta, rounded. Present for information; two runs of one
-    build always differ here, which is why it never decides `identical`."""
-    return {k: round(_number(b.get(k)) - _number(a.get(k)), 3)
+    build always differ here, which is why it never decides `identical`. A key not a
+    number on both sides (a stage one schema has and the other lacks) is `None`."""
+    def num(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return {k: round(b[k] - a[k], 3) if num(a.get(k)) and num(b.get(k)) else None
             for k in sorted(set(a) | set(b))}
 
 

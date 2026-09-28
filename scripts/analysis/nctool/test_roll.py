@@ -203,7 +203,7 @@ class TestConvert(unittest.TestCase):
                 {"input": path, "status": "ok", "output_stats": {"mean": [.1, .2, .3]},
                  "loss": {"total_samples": 3, "clipped_low": 0, "clipped_high": 0},
                  "identity": {"nc_version": "x", "pipeline_version": 8},
-                 "new_flow": {"destination": "film-master"}}
+                 "chain": {"destination": "film-master"}}
                 for path in inputs
             ],
             "summary": {"total": 2, "succeeded": 2, "failed": 0},
@@ -340,7 +340,7 @@ class TestAnalyze(unittest.TestCase):
             frame.update(dmax=1.3, identity={"params_hash": config})
             recipe = {"output": {"preset": "legacy"}}
         else:
-            frame["new_flow"] = {"destination": destination}
+            frame["chain"] = {"destination": destination}
             recipe = {"recipe_version": 2, "output": {"display": {}}}
         report = {"identity": {"pipeline_version": 7 if destination is None else 8},
                   "summary": {"total": 1, "succeeded": 1, "failed": 0},
@@ -391,7 +391,7 @@ class TestAnalyze(unittest.TestCase):
             result = json.loads(
                 (self.root / f"converted/nc/{config}/R/analysis.json").read_text())
             self.assertEqual(result["output_depth"], depth)
-            self.assertEqual(result["frames"][0]["new_flow"], {"destination": destination})
+            self.assertEqual(result["frames"][0]["chain"], {"destination": destination})
 
     def edit_report(self, config: str, edit) -> None:
         path = self.root / f"converted/nc/{config}/R/roll-report.json"
@@ -415,7 +415,7 @@ class TestAnalyze(unittest.TestCase):
         def add_frames(report):
             first = report["frames"][0]
             report["frames"] += [
-                dict(first, input="/assets/rolls/R/b.tif", new_flow={"destination": tiff}),
+                dict(first, input="/assets/rolls/R/b.tif", chain={"destination": tiff}),
                 {"input": "/assets/rolls/R/c.tif", "status": "failed", "error": "x"}]
         self.edit_report("mixed", add_frames)
         self.assertEqual(self.analyze("mixed")[0], 0)
@@ -435,7 +435,7 @@ class TestAnalyze(unittest.TestCase):
                                  "error": "x"}]
 
         def unknown(report):
-            report["frames"][0]["new_flow"] = {
+            report["frames"][0]["chain"] = {
                 "destination": {"display": {"container": "webp"}}}
 
         def no_build(report):

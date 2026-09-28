@@ -15,9 +15,10 @@ The new chain is the only one. The epic built it behind `--new-flow` — the sel
 the stage module tree, a minimal end-to-end render, the knob audit, the recipe — and
 **`default-flip`** (2026-09-27, `pipeline_version` 8) made it the default and deleted
 the old chain, its presets, its print stage, its recipe, its sidecar and
-`ultrahdr-sys`. `--new-flow` is now a removed-flag error. Open: `report-contract`
-(the report, sidecar and telemetry shape), `subcommands` (`roll`'s per-frame overrides;
-re-scoped 2026-09-28), `buffer-strategy`, `three-step-pipeline`.
+`ultrahdr-sys`. `--new-flow` is now a removed-flag error. **`report-contract`**
+settled the report (`chain`, the `recipe` echo and its hash, no sidecar) and telemetry
+schema 9. Open: `subcommands` (`roll`'s per-frame overrides; re-scoped 2026-09-28),
+`buffer-strategy`, `three-step-pipeline`.
 
 **Adding or changing a knob** (what used to be the availability tables in `src/flow.rs`,
 deleted by the flip):
@@ -55,12 +56,15 @@ SDR/HDR split splits *from*.
 - **The destination decides the output path** (`cli::OutputTarget`): `-o out`
   completes to the container's suffix, and a stated suffix the destination does not
   write is refused, offering the axes that would write it.
-- **No sidecar, no `params_hash` in the report, no `recipe` echo**: the report carries
-  a provisional `new_flow` block (decode facts, each stage's `applied`, the
-  destination); `nf-core/report-contract` owns the real shape. A sidecar a pre-flip
-  run left beside a replaced image is removed, and reported.
-- **Telemetry is `schema_version` 8**: `conversion.destination` for the old preset,
-  `params_hash` over the v2 recipe.
+- **No sidecar; the report is the record** (`report-contract`): a `convert` report
+  echoes the `recipe` and `identity.params_hash` hashes its `--dump-params` bytes (so
+  does telemetry's); each roll frame hashes the recipe it ran. The `chain` block holds
+  the decode facts, each stage's `applied`, the stages' values and the destination. A
+  sidecar a pre-flip run left beside a replaced image is removed, and reported.
+- **Stages are named once, in `crate::stage::StageKind`**, and timed through a
+  `StageClock` the orchestrator passes the chain; telemetry schema 9's `timing_ms` has
+  one field per stage. A new stage is a `StageKind` member, a `TimingInfo` field, and a
+  `clock.time` call where it runs.
 - **Memory profiles are per buffer shape** (`RunProfile::{U16Tiff, F32Tiff, Avif,
   GainMapJpeg}`); a buffer added to a stage must move its arm.
 
@@ -952,10 +956,39 @@ SDR/HDR split splits *from*.
 
 ## report-contract
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-28
 
 - 2026-09-19: filed after the plan review. Goal: the report and telemetry shape for the new chain.
+- 2026-09-28: re-scoped after the flip and implemented. **Decisions (user):** no
+  sidecar — the report echoes the recipe and its hash; `new_flow` becomes `chain`,
+  same nesting; telemetry times every stage in a fixed field. The hash moved at the
+  flip and is not compared across it — `pipeline_version` 8 is the announcement.
+
+  **Timing without a clock in the stages.** `StageClock::time(stage, f)` is generic,
+  so `TimingInfo` implements it with `Instant` and tests pass `Untimed`; `chain::render`
+  and `render_pair` take it and time each stage, the gain map's second rendition summing
+  into the same fields. The film base's one-pixel grade runs through the same clock, so
+  its cost lands in `scene_correction` / `look` — microseconds, and not worth a second
+  path. `destination` is what `color` used to hold minus the chain: the display curve
+  and ICC profile, the Rec.2100 signal, or the gain map's clamp, ratio and encode.
+
+  **One hash.** `Recipe::params_hash` is the only caller of `version::stable_hash` over
+  a recipe; `telemetry::params_hash` is gone. The replay test writes the report's
+  `recipe` back through `--params` and asserts identical bytes and hash.
+
+  **Roll frames lost their HDR encoder blocks at the flip** (`frame_report_ok` copied
+  only the fields it knew); they carry `avif` / `hdr_linear_tiff` / `hdr_coded_tiff`
+  again, boxed for `clippy::large_enum_variant`.
+
+  **Checked and left:** `hdr_coded_tiff.interoperability` is constant prose naming the
+  AVIF and gain-map destinations, but as advice about alternatives that exist for that
+  range, not a claim about the run. `nctool roll`'s `_preset_depth` is not a leftover:
+  reference-build rolls still read their depth from the preset. `nctool` reads `chain`
+  or `new_flow` (`manifest.chain_block`), since both shapes are `pipeline_version` 8.
+
+  **Found, not fixed:** `roll` emits no telemetry record, and `fit_gamut` returns no
+  counts for the report to state (both recorded in the task file).
 
 ## recipe-schema
 
@@ -1089,6 +1122,24 @@ SDR/HDR split splits *from*.
   done in a rebase. #141's tests that fed unversioned recipes to `--new-flow` now state
   `recipe_version`, and the "never removes the recipe it read" case uses an enveloped v2
   recipe, since a stripped legacy sidecar no longer loads under the flag.
+
+- 2026-09-28: done, after two review rounds (Codex + `nc-reviewer`, then the user's
+  `/code-review`) and a ship review. Beyond the first entry: the film base's
+  `ir_separability` and `effective_area` are timed under `film_base` too; telemetry
+  reads the hash from the report's `identity` rather than recomputing it;
+  `StageKind::ALL` (test-only) ties the stage list to `timing_ms`'s keys; a gain map's
+  branch copy counts only toward `total`; `nctool compare diff` gives `null` for a
+  timing key one record lacks (schema 8 against 9). Rejected: the echoed recipe
+  replays `input.export_ir` (so does every `--dump-params` file). Filed with
+  `telemetry/schema-v2`: the clock records a failed stage's time.
+
+  **For dependent tasks.** `telemetry/schema-v2` is unblocked: key failure events and
+  the upload projection on `crate::stage::StageKind`, and read the timing shape off
+  `TimingInfo`. A new stage is a `StageKind` member, a `TimingInfo` field and a
+  `clock.time` call. A roll report still echoes no recipe (its record is the
+  `--params` / `--frames` files plus each frame's `overrides` and hash); a roll-level
+  echo, or the version-skew warning a replayed echo no longer carries, would be a new
+  task.
 
 ## subcommands
 

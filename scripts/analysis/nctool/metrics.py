@@ -42,6 +42,8 @@ import math
 import sys
 from pathlib import Path
 
+from . import manifest as _manifest
+
 SCHEMA = 2
 
 #: Mid grey. The anchor for every value reported in stops.
@@ -1315,7 +1317,7 @@ def space_for_destination(output: object) -> tuple[str, str]:
 
     `output` is the recipe's `output` value — `"film-master"`, or `{"display": {...}}`
     with **every** axis stated, as nc's report records the resolved destination
-    (`new_flow.destination`). An axis left to nc's derivation is refused rather than
+    (`chain.destination`). An axis left to nc's derivation is refused rather than
     derived here: a second copy of the destination table is the drift the table exists
     to prevent.
     """
@@ -1329,7 +1331,7 @@ def space_for_destination(output: object) -> tuple[str, str]:
     if missing:
         raise MetricsError(
             "the destination leaves " + ", ".join(missing) + " to nc's derivation; read "
-            "the resolved one from the report's new_flow.destination, or declare --space")
+            "the resolved one from the report's chain.destination, or declare --space")
     if display["container"] == "avif":
         raise MetricsError("the destination writes AVIF")
     if display["transfer"] in DESTINATION_UNREADABLE:
@@ -1350,17 +1352,16 @@ def space_for_run(recipe: dict, report: dict) -> tuple[str, str]:
 
     A `recipe_version` 2 recipe routinely leaves destination axes to nc (`hanten
     params` writes `{"display": {}}`), and `space_for_destination` refuses to derive
-    them. The report states them resolved (`new_flow.destination`), so they are read
+    them. The report states them resolved (`chain.destination`), so they are read
     from there — and must agree across frames, since one space measures them all.
     """
     if recipe.get("recipe_version") != 2:
         return space_for_recipe(recipe)
     resolved = []
     for frame in report.get("frames", []):
-        new_flow = frame.get("new_flow") if isinstance(frame, dict) else None
-        if isinstance(new_flow, dict) and "destination" in new_flow:
-            if new_flow["destination"] not in resolved:
-                resolved.append(new_flow["destination"])
+        chain = _manifest.chain_block(frame)
+        if "destination" in chain and chain["destination"] not in resolved:
+            resolved.append(chain["destination"])
     if len(resolved) == 1:
         return space_for_destination(resolved[0])
     if not resolved:

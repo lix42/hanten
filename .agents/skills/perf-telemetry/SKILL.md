@@ -5,7 +5,7 @@ description: >-
   and extending it. Use when adding a telemetry field or event to a new feature,
   turning on / collecting perf logs from `hanten convert` (`--telemetry`,
   `--telemetry-file`, `NC_TELEMETRY_LOG`), reading or analyzing the telemetry JSONL
-  log (jq over timing / algorithm / megapixels), bumping the record
+  log (jq over per-stage timing / megapixels), bumping the record
   `schema_version`, or reasoning about the determinism and fail-soft invariants the
   telemetry code must preserve.
 ---
@@ -19,9 +19,10 @@ local append-only JSONL log and/or a one-off file. It is **opt-in**,
 the success signal (there is no `outcome.success` field), so a run that exits
 non-zero — including a `--strict` warning promotion — writes **no** record. Full design: design-spec §9 (record shape) and §12
 (roadmap). Code: `src/telemetry.rs` (record + builder + sinks), wired from
-`cli::run_convert` / `cli::emit_telemetry`; per-stage timings come from
-`cli::render_frame` (the fixed decode, then the chain and its destination render,
-`cli::render_destination`) via `StageTimings`.
+`cli::run_convert` / `cli::emit_telemetry`. Per-stage timings are a `TimingInfo`, one
+field per `crate::stage::StageKind`: it is the `StageClock` the orchestrator
+(`cli::convert_frame`, `render_frame`, `render_destination`) and `pipeline::chain`
+time each stage through, so the stages themselves never read a clock.
 
 ## 1. Adding telemetry when you build a feature
 
@@ -35,14 +36,14 @@ TelemetryRecord` (`src/telemetry.rs`). To add a field:
    some runs (as `timing_ms.ir_export` does).
 2. Feed it in: add a field to `RecordInputs<'a>` and set it in `build_record`; then
    populate it at the call site in `cli::emit_telemetry` (which gathers everything
-   after the conversion has succeeded). If it's a new timing, measure it with an
-   `Instant` pair like the existing stages — per-stage timings for the pure core
-   live on `stages::StageTimings`, orchestrator-side ones (decode/encode/ir_export)
-   are measured in `run_convert`.
+   after the conversion has succeeded). A new stage is a `StageKind` member, a
+   `TimingInfo` field and a `TimingInfo::add` arm, timed with `clock.time(stage, ||
+   …)` where it runs — never an `Instant` inside a stage.
 3. **Bump `SCHEMA_VERSION`** (`src/telemetry.rs`) whenever the wire shape changes —
    a new/removed/renamed field, or a changed type. Note this also applies to the
-   embedded domain enums (`Algorithm`, `FilmBaseSource`, `SilverFastFormat`): if
-   *their* serialization changes, bump too. The server keys ingestion off this.
+   embedded domain types (`OutputSection`, `FilmBaseSource`, `SilverFastFormat`,
+   and `StageKind` through the timing field names): if *their* serialization changes,
+   bump too. The server keys ingestion off this.
 4. Prefer fixed-width wire types (`u32`/`u64`, not `usize`) and reuse domain enums
    rather than restringifying them.
 
@@ -95,22 +96,29 @@ N runs append N lines. `--telemetry-file <path>` overwrites (a single record).
 Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
 
 ```json
-{ "schema_version":8, "timestamp_ms":1790569820202,
+{ "schema_version":9, "timestamp_ms":1790633724299,
   "nc_version":"0.1.0", "target":"aarch64-apple-darwin", "cpu_count":11,
   "image":{"format":"hdri","width":502,"height":462,"megapixels":0.231924,
            "bit_depth":16,"channels":3,"ir_present":true,
            "input_bytes":2017230,"output_bytes":1392366},
-  "timing_ms":{"total":73.4,"decode":18.3,"film_base":0.0,"algorithm":6.1,
-               "color":22.8,"encode":8.0,"ir_export":11.6},
+  "timing_ms":{"total":59.9,"decode":15.3,"film_base":0.0,"reconstruction":5.6,
+               "scene_correction":0.0,"look":1.7,"fit_range":4.0,"fit_gamut":7.8,
+               "destination":5.8,"encode":6.0,"ir_export":6.2},
   "conversion":{"destination":{"display":{"range":"sdr","transfer":"native",
                                           "gamut":"display-p3","container":"tiff"}},
-                "params_hash":"3edbc0135f3469fd",
+                "params_hash":"a6bcbaf9b33f4480",
                 "film_base_source":{"explicit":[0.9,0.55,0.42]},
                 "output_depth":"u16"},
-  "outcome":{"warnings":0,"clipped":0,"non_finite":0} }
+  "outcome":{"warnings":1,"clipped":0,"non_finite":0} }
 ```
 
-`timing_ms.ir_export` appears only when `--export-ir` ran. (Schema v2 replaced v1's
+`timing_ms.ir_export` appears only when `--export-ir` ran, and the four chain stages
+(`scene_correction` … `fit_gamut`) not for the film master, which runs none; a gain
+map's `fit_range` and `fit_gamut` sum its two renditions (the copy that splits them
+counts only toward `total`), and `scene_correction` and `look` include the film base's
+one-pixel grade. **v9**
+(`nf-core/report-contract`) replaced `algorithm` with `reconstruction` and split `color`
+into the four chain stages and `destination`. (Schema v2 replaced v1's
 `conversion.algorithm` with the `reconstruction` + `curve` pair; **v5** dropped
 `reconstruction` when `simple` retired and made `curve` always present. Records
 written before it carry `reconstruction` and may name `simple` or `sigmoid`. **v6**
@@ -127,8 +135,9 @@ the **primary image's** depth (`cli::primary_depth`), which for the JPEG and AVI
 destinations is the container's fixed 8/10-bit.
 `params_hash` is a stable FNV-1a (`version::stable_hash`) of the canonical
 effective-recipe JSON — the `"recipe_version": 2` document, the exact bytes
-`--dump-params` writes — so identical conversions share a hash. Records before v8
-hashed the removed chain's recipe, so the two never compare. The sample value above is
+`--dump-params` writes — so identical conversions share a hash, and it equals the
+report's `identity.params_hash`. Records before v8 hashed the removed chain's recipe,
+so the two never compare. The sample value above is
 **illustrative**: it covers the whole recipe and changes when any key is added, removed,
 or re-defaulted. Do not assert it as a constant.
 
@@ -138,8 +147,11 @@ or re-defaulted. Do not assert it as a constant.
 LOG="${NC_TELEMETRY_LOG:-${XDG_DATA_HOME:-$HOME/.local/share}/nc/telemetry.jsonl}"
 
 # Per-stage timing for every run.
-jq -c '{ts:.timestamp_ms, total:.timing_ms.total, decode:.timing_ms.decode, \
-         algo:.timing_ms.algorithm, color:.timing_ms.color, encode:.timing_ms.encode}' "$LOG"
+jq -c '{ts:.timestamp_ms} + .timing_ms' "$LOG"
+
+# Where a run's time went: the chain's four stages together, beside the rest.
+jq -c '.timing_ms | {total, decode, reconstruction, destination, encode, \
+         chain: ([.scene_correction, .look, .fit_range, .fit_gamut] | map(. // 0) | add)}' "$LOG"
 
 # Only film-master runs.
 jq -c 'select(.conversion.destination == "film-master")' "$LOG"

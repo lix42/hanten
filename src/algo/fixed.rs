@@ -273,7 +273,7 @@ impl Default for DecodeParams {
 /// What the decode resolved, for the report.
 ///
 /// The values, not new knobs. The CLI serializes it as the report's
-/// `new_flow.decode` block.
+/// `chain.decode` block.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DecodeReport {
     /// The corrected density that rendered to `1.0`, and therefore what sets the

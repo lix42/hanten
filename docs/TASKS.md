@@ -1156,8 +1156,8 @@ the design in `docs/design-update.md`:
   per-curve case; the stock *data* stays (`nf-look/stock-data-home`) and becomes
   `#[cfg(test)]`
 - `nf-core/report-contract` (new flow): `nf-core/stage-skeleton`
-  — ~20 report sections and the per-stage timing buckets are keyed to the old
-  chain, and `nctool` parses both
+  — the report names the chain's stages and echoes the recipe, and telemetry
+  times each `StageKind`; `nctool` parses both
 - `nf-core/recipe-schema` (new flow): `nf-core/stage-skeleton`
   — `deny_unknown_fields` cannot see a *known but meaningless* key, so a stale
   `print.*` section is accepted-and-ignored
@@ -1677,12 +1677,11 @@ the design in `docs/design-update.md`:
   deleted, and `pipeline_version` 8 defaults to an SDR Display P3 16-bit TIFF — v7's
   `--new-flow` render byte for byte (`docs/reports/default-flip.md`). Supersedes the flip
   half of `algo/split-default-migration`
-- [ ] [The report and telemetry shape for the new
-  chain](tasks/nf-core/report-contract.md) — ~20 report sections and the
-  per-stage timing buckets are keyed to the old chain, and `nctool` parses
-  both. *Premise moved (`nf-core/default-flip`, 2026-09-27): the old chain and its
-  report sections are gone; telemetry is schema 8 with `conversion.destination`, and
-  `nctool` reads the interface from `pipeline_version` — re-scope before starting*
+- [x] [The report and telemetry shape for the new
+  chain](tasks/nf-core/report-contract.md) — **done 2026-09-28.** Re-scoped after the flip: the
+  provisional `new_flow` block becomes `chain`, the report echoes the `recipe` and its
+  `params_hash` (no sidecar), roll frames keep theirs, and telemetry schema 9 times each
+  `StageKind`
 - [x] [The recipe schema across the flow
   boundary](tasks/nf-core/recipe-schema.md) — the new chain reads its own
   `"recipe_version": 2` document (`src/recipe.rs`, one section per stage), and
@@ -1881,7 +1880,7 @@ the design in `docs/design-update.md`:
   `--range hdr` alone writes the new chain's HDR JPEG: a Display P3 SDR base and a
   half-resolution, per-channel gain map, ISO 21496-1 metadata only, in an MPF container
   nc writes (`io::iso_gain_map`, no libultrahdr; gain map typed `050000`). A flat map is
-  `new_flow.gain_map.flat`, never a warning. Apple ImageIO reads it `PRESENT` with three
+  `chain.gain_map.flat`, never a warning. Apple ImageIO reads it `PRESENT` with three
   distinct channel entries; `NewFlowGainMapJpeg` is provisional
 - [ ] [Easy destination
   rows](tasks/nf-destinations/easy-destination-rows.md) — the rows a 2026-09-27 survey

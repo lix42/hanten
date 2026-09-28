@@ -9,8 +9,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 8`, on branch
+> `nf-core/report-contract` (the report's `chain` block and recipe, §10), after
 > `nf-core/default-flip` (the rendering chain of [`design-update.md`](design-update.md)
-> became the only one), including `nf-calibration/roll-section` and
+> became the only one), `nf-calibration/roll-section` and
 > `nf-destinations/direct-preset` (§7). The staleness signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
@@ -417,10 +418,10 @@ hanten convert scan.tif -o out --params roll-recipe.json --exposure 0.5
 
 ### No sidecar is written
 
-Earlier builds wrote a `<output>.json` sidecar beside every image; this one does not
-yet — what a run records beside its output, and in what shape, is
-`nf-core/report-contract`'s to decide. To keep a conversion reproducible, write the
-recipe yourself with `--dump-params`, which replays byte-identically:
+Earlier builds wrote a `<output>.json` sidecar beside every image; this one does not.
+A `convert` report carries the resolved recipe (§10); a `roll` report does not, and
+records each frame's `overrides` and `identity.params_hash` instead. To keep a recipe
+file, write it with `--dump-params`, which replays byte-identically:
 
 ```sh
 hanten convert scan.tif -o out --film-base … --contrast 1.3 --dump-params out.json
@@ -430,7 +431,7 @@ hanten convert scan.tif -o repro --params out.json
 
 A sidecar an earlier build left at the same path is **removed** when a run replaces
 its image — it describes the picture just overwritten — and the report names it in
-`new_flow.removed_sidecar`. A file there that is not one of Hanten's sidecars is left
+`chain.removed_sidecar`. A file there that is not one of Hanten's sidecars is left
 alone, and so is one this run read as its `--params` recipe (with a warning, since it
 still pairs by name with an image it no longer describes).
 
@@ -484,7 +485,7 @@ where a picture is made contrasty or warm.
 | `--density-gamma G` | `linearization` | the film's linearization, default `1.8` |
 | `--anchor-mid-offset D` | `anchor` = `{"mid-at-base-offset": D}` | where mid-grey sits above the base, default `0.62` |
 
-The report states what the decode ran, in `new_flow.decode` (`anchor`,
+The report states what the decode ran, in `chain.decode` (`anchor`,
 `anchor_rule`, `linearization`, `scale`, `offset`).
 
 ### The decode's slope and the picture's contrast are two knobs
@@ -594,10 +595,10 @@ dropped: a flag that quietly did nothing would be worse than a failure.
 Four stages make a picture of the decoded scene, in a fixed order: **scene
 correction** → **the look** → **fit range** → **fit gamut**. Each is a section of the
 recipe, each is always in the chain (its defaults are either the shipped look or the
-identity), and the report lists what each applied in `new_flow.stages`:
+identity), and the report lists what each applied in `chain.stages`:
 
 ```console
-$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 | jq -c '[.new_flow.stages[].applied]'
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 | jq -c '[.chain.stages[].applied]'
 ["identity","contrast+highlight-desaturation","reinhard-peak-lifted-v1+log-shift-to-mid-grey-v1","acescg-to-display-p3-matrix+neutral-axis-radial-boundary-v2"]
 ```
 
@@ -623,7 +624,7 @@ The removed chain's print controls are refused, each saying where the knob went:
 
 | | `default` | `direct` |
 |---|---|---|
-| the roll's measurements (`roll`) | applied | left out, and reported so (`new_flow.roll.*_applied: false`) |
+| the roll's measurements (`roll`) | applied | left out, and reported so (`chain.roll.*_applied: false`) |
 | white balance / look contrast | the roll's; without them neutral / 2.0/1.8, and a warning | neutral / 2.0/1.8 |
 | highlight desaturation | 0.8 | off |
 | display black / headroom | 6 / 6 | 6 / 6, pinned |
@@ -639,11 +640,11 @@ takes a lossy container by default — only when you state one, or when your sta
 leave no lossless row: `--rendering direct --gamut display-p3` is an SDR Display P3 TIFF
 (not the gain-map JPEG) and `--transfer native` the Adobe RGB TIFF, while `--container
 jpeg`, or `--range hdr --gamut display-p3` (the one row left), is the gain map. The
-report states it in `new_flow.rendering`.
+report states it in `chain.rendering`.
 
 ```console
 $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
-    | jq -c '.output, .new_flow.destination'
+    | jq -c '.output, .chain.destination'
 "d1.tiff"
 {"display":{"range":"hdr","transfer":"linear","gamut":"bt2020","container":"tiff"}}
 ```
@@ -712,7 +713,7 @@ recipes accepted, is refused. The report states what was applied:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
-    --white-balance 1.2,1,0.8 --exposure 0.5 | jq -c '.new_flow.scene_correction'
+    --white-balance 1.2,1,0.8 --exposure 0.5 | jq -c '.chain.scene_correction'
 {"white_balance":[1.2,1.0,0.8],"exposure":0.5}
 ```
 
@@ -785,7 +786,7 @@ Contrast and highlight desaturation are **on by default**; the grade is off.
 
   ```console
   $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
-      | jq -c '{look: .new_flow.look, stage: .new_flow.stages[1]}'
+      | jq -c '{look: .chain.look, stage: .chain.stages[1]}'
   {"look":{"contrast":1.1111112,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":0.8,"start_stops":-1.0,"band":[0.015,0.025]}},"stage":{"stage":"look","applied":"contrast+highlight-desaturation"}}
   ```
 
@@ -813,7 +814,7 @@ not the recipe — `1` for SDR, `1000/203 ≈ 4.93` for HDR. The report names wh
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
-    | jq '.new_flow.fit_range'
+    | jq '.chain.fit_range'
 {
   "operator": "reinhard-peak-lifted-v1",
   "headroom_stops": 6.0,
@@ -947,7 +948,7 @@ Each is optional. The report says what applied:
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
     --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --white-balance 1.2,1,1 \
-    | jq -c '.new_flow.roll, .new_flow.scene_correction'
+    | jq -c '.chain.roll, .chain.scene_correction'
 {"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"contrast":1.4552535,"white_balance_applied":true,"contrast_applied":true}
 {"white_balance":[1.32,1.0,0.9],"exposure":0.0}
 ```
@@ -1095,17 +1096,17 @@ usage: no destination combines --range hdr and --gamut adobe-rgb (recipe keys
        --gamut display-p3, or --gamut bt2020 with --transfer linear|pq|hlg
 ```
 
-The report records every resolved axis in `new_flow.destination`
+The report records every resolved axis in `chain.destination`
 (`{"display": {"range": "hdr", "transfer": "pq", "gamut": "bt2020", "container":
 "avif"}}`, or `"film-master"`), which is exactly the recipe `output` that replays it.
 
 ### HDR destinations
 
 An HDR destination clamps its rendition to the 1000 cd/m² peak and counts what that
-clamped in `new_flow.peak_clamp` and in `loss`, where `--strict` sees it. Each also
+clamped in `chain.peak_clamp` and in `loss`, where `--strict` sees it. Each also
 fills a block stating what the encoder wrote and the luminance anchors no container
 can carry — `avif` for the AVIF pair, `hdr_coded_tiff` for the PQ/HLG TIFFs,
-`hdr_linear_tiff` for the float TIFF:
+`hdr_linear_tiff` for the float TIFF (in a `roll` report, on each frame):
 
 ```console
 $ hanten convert scan.tif -o out --film-base … --transfer pq --container avif | jq -c .avif.rendering
@@ -1115,16 +1116,16 @@ $ hanten convert scan.tif -o out --film-base … --transfer pq --container avif 
 A TIFF or AVIF whose brightest pixel stays at or below reference white is warned
 about (`HDR output carries an SDR-range signal`), naming `--exposure` and `--range sdr`
 as the remedies. The gain-map JPEG is not: an SDR-range frame makes a **flat** gain
-map, which `new_flow.gain_map.flat` states and which is a correct file (it displays as
+map, which `chain.gain_map.flat` states and which is a correct file (it displays as
 its base), so `--strict` passes it. Its `loss` counts both renditions — the SDR base's
-clip and the HDR rendition's clamp — over both renditions' samples. `new_flow.gain_map`
+clip and the HDR rendition's clamp — over both renditions' samples. `chain.gain_map`
 also carries the per-channel gain range at full resolution (`min`, `max`, linear), the
 stored map's `width` and `height`, and `base_fit_range` — fit range as the SDR base ran
-it, since `new_flow.fit_range` is the HDR rendition's:
+it, since `chain.fit_range` is the HDR rendition's:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --range hdr \
-    | jq -c '.new_flow.gain_map | {min, max, flat, width, height}'
+    | jq -c '.chain.gain_map | {min, max, flat, width, height}'
 {"min":[0.9999999,1.0,1.0],"max":[1.9145154,1.9127859,1.9116272],"flat":false,"width":251,"height":231}
 ```
 
@@ -1417,7 +1418,7 @@ effect on that run.
 
 The JSON report on stdout carries the run identity (`nc_version`, the commit,
 `pipeline_version`, the target), the resolved input semantics and film base, the
-measurement region, the memory decision, `new_flow` — what the decode, each stage and
+measurement region, the memory decision, `chain` — what the decode, each stage and
 the destination ran (§6–§8) — encode loss statistics, `output_stats` (the written
 samples' mean, the cross-build comparison basis), and warnings:
 
@@ -1425,9 +1426,19 @@ samples' mean, the cross-build comparison basis), and warnings:
 hanten convert scan.tif -o out --film-base … | jq '.loss, .warnings'
 ```
 
-The report's shape is provisional: the block is still named `new_flow`, it echoes no
-recipe, and `identity` carries no `params_hash`. Its final form is
-`nf-core/report-contract`'s.
+A `convert` report also carries `recipe`, the resolved recipe exactly as
+`--dump-params` would write it — save it and it reloads through `--params` to the same
+image — and `identity.params_hash`, a stable hash of those bytes (the telemetry
+record's `conversion.params_hash`). Each `roll` frame's `identity.params_hash` hashes
+the recipe that frame ran, the shared one plus its overrides; the roll report does not
+echo the recipe. No other `identity` carries a hash — not `inspect`, `estimate`,
+`measure-roll`, nor the roll-level one.
+
+```sh
+hanten convert scan.tif -o out --film-base … | jq .recipe > out-recipe.json
+hanten convert scan.tif -o repro --params out-recipe.json
+# → repro.tiff is byte-identical to out.tiff
+```
 
 Clipping is reported, never silent:
 
@@ -1484,7 +1495,7 @@ them and exit 2 if given one:
 
 | Flag | Purpose |
 |---|---|
-| `--telemetry` / `--telemetry-file` | Opt-in, fail-soft performance record (JSONL, `schema_version` 8: `conversion.destination` is the resolved `output`). Also `NC_TELEMETRY_LOG`. |
+| `--telemetry` / `--telemetry-file` | Opt-in, fail-soft performance record (JSONL, `schema_version` 9: `conversion.destination` is the resolved `output`, `conversion.params_hash` the report's, and `timing_ms` one field per stage). Also `NC_TELEMETRY_LOG`. |
 | `--seed N` | Reserved; nothing is stochastic today |
 
 > **Caveat on `--max-memory`:** the budget also caps the TIFF read buffers, so a

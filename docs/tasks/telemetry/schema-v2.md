@@ -19,6 +19,9 @@ two disagree.
   stage enum and timing fields below are the legacy chain's buckets, which
   `nf-core/default-flip` deletes. The new chain's stage/timing shape is that task's
   decision, so this contract waits for it instead of being built twice.
+  *Settled 2026-09-28:* the stage enum is `crate::stage::StageKind` (reuse it; the
+  Design's "introduce `StageKind`" is done), and `timing_ms` (schema 9) has one field
+  per stage, the four chain stages absent for the film master.
 - **Legacy local records are never uploaded.** Neither the projection nor the
   uploader reads any record older than the new local event schema. This removes
   the legacy-projection, `source_schema_version: 1` and known-16-bit legacy-fixture
@@ -29,7 +32,7 @@ two disagree.
 The strategy note predates later changes, so the upload manifest needs revising
 (and the user's approval) before implementation:
 
-- **Local schema numbering.** The local record is `SCHEMA_VERSION` 7, not 1, so
+- **Local schema numbering.** The local record is `SCHEMA_VERSION` 9, not 1, so
   "local v2" means the next bump, and `source_schema_version` takes that value.
 - **`conversion.algorithm`** (`simple|density|sigmoid`) names retired
   reconstructions and curves. What replaces it, if anything, follows the new
@@ -43,6 +46,9 @@ The strategy note predates later changes, so the upload manifest needs revising
   validation against the JSON Schema needs a validator.
 - **Size:** consider splitting typed local events (+ orchestrator) from the upload
   projection + schema/corpus.
+- **A failed stage's time.** `TimingInfo`'s clock records a stage even when it returns
+  `Err`, so a failure event must decide whether that time counts as completed-stage
+  performance.
 
 ## Design
 

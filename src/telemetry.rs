@@ -31,12 +31,13 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
 use crate::destination::OutputSection;
 use crate::io::decode::{DecodeInfo, SilverFastFormat};
+use crate::stage::{StageClock, StageKind};
 use crate::types::{EncodeReport, FilmBaseSource};
 
 /// Telemetry record schema version. Bump on any change to [`TelemetryRecord`]'s
@@ -89,9 +90,13 @@ use crate::types::{EncodeReport, FilmBaseSource};
 /// recipe's `output` section (`"film-master"`, or `{"display": {range, transfer, gamut,
 /// container}}` with every axis resolved). `params_hash` hashes the recipe that
 /// replaced the old one (`crate::recipe`), and `timing_ms.algorithm` / `color` time the
-/// fixed decode and the chain with its destination transfer. The record's final shape
-/// is `nf-core/report-contract`'s.
-pub const SCHEMA_VERSION: u32 = 8;
+/// fixed decode and the chain with its destination transfer.
+///
+/// v9: `timing_ms` names each stage (`crate::stage::StageKind`, `nf-core/report-contract`):
+/// `algorithm` is `reconstruction`, and `color` splits into `scene_correction`, `look`,
+/// `fit_range`, `fit_gamut` (absent for the film master, which runs none) and
+/// `destination`.
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// Default local JSONL log path, honoring `NC_TELEMETRY_LOG` then the platform
 /// data dir; `None` when no home/data dir can be located (the caller then warns
@@ -162,9 +167,8 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 ///
 /// Optional fields follow two wire conventions: an absent `cpu_count` /
 /// `image.input_bytes` / `image.output_bytes` serializes as JSON `null` (the key
-/// is always present, fixed shape), whereas `timing_ms.ir_export` is
-/// `skip_serializing_if = "Option::is_none"` and vanishes from the JSON entirely when
-/// not applicable to the run.
+/// is always present, fixed shape), whereas the optional `timing_ms` fields are
+/// skipped entirely when not applicable to the run.
 #[derive(Clone, Debug, Serialize)]
 pub struct TelemetryRecord {
     /// Record schema version ([`SCHEMA_VERSION`]) for server forward-compat.
@@ -201,25 +205,66 @@ pub struct ImageInfo {
     pub ir_present: bool,
     /// Input scan size in bytes; `None` if it couldn't be stat'd.
     pub input_bytes: Option<u64>,
-    /// Written output TIFF size in bytes; `None` if it couldn't be stat'd.
+    /// Written primary image size in bytes; `None` if it couldn't be stat'd.
     pub output_bytes: Option<u64>,
 }
 
-/// Per-stage wall-clock timings in milliseconds. `total` is the whole
-/// orchestrated run up to the commit (the clock stops before the report is
-/// emitted); the per-stage values sum to less than it (the remainder is recipe
-/// merge, validation, and the commit).
-#[derive(Clone, Copy, Debug, Serialize)]
+/// Per-stage wall-clock timings in milliseconds, one field per
+/// [`StageKind`]. `total` is the whole run up to the report (recipe load, merge and
+/// validation, the memory preflight, the commit and the stale-sidecar cleanup
+/// included), so the stages sum to less than it.
+///
+/// A gain map renders two renditions, so its `fit_range` and `fit_gamut` sum both
+/// branches, and the copy that splits them counts only toward `total`.
+/// `scene_correction` and `look` include the film base's one-pixel grade. The four
+/// chain stages are absent for the film master, and `ir_export` without `--export-ir`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct TimingInfo {
     pub total: f64,
     pub decode: f64,
     pub film_base: f64,
-    pub algorithm: f64,
-    pub color: f64,
+    pub reconstruction: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene_correction: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub look: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit_range: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit_gamut: Option<f64>,
+    pub destination: f64,
     pub encode: f64,
-    /// IR-export time, present only when `--export-ir` ran.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ir_export: Option<f64>,
+}
+
+impl TimingInfo {
+    /// Add `ms` to `stage`'s field; a stage that runs twice sums.
+    pub fn add(&mut self, stage: StageKind, ms: f64) {
+        let optional = |field: &mut Option<f64>| *field = Some(field.unwrap_or(0.0) + ms);
+        match stage {
+            StageKind::Decode => self.decode += ms,
+            StageKind::FilmBase => self.film_base += ms,
+            StageKind::Reconstruction => self.reconstruction += ms,
+            StageKind::SceneCorrection => optional(&mut self.scene_correction),
+            StageKind::Look => optional(&mut self.look),
+            StageKind::FitRange => optional(&mut self.fit_range),
+            StageKind::FitGamut => optional(&mut self.fit_gamut),
+            StageKind::Destination => self.destination += ms,
+            StageKind::Encode => self.encode += ms,
+            StageKind::IrExport => optional(&mut self.ir_export),
+        }
+    }
+}
+
+/// The run's wall clock: each stage's time lands in its field.
+impl StageClock for TimingInfo {
+    fn time<T>(&mut self, stage: StageKind, run: impl FnOnce() -> T) -> T {
+        let started = Instant::now();
+        let out = run();
+        self.add(stage, started.elapsed().as_secs_f64() * 1000.0);
+        out
+    }
 }
 
 /// Compact conversion summary. A full `params_hash` (over the effective recipe
@@ -348,20 +393,6 @@ pub fn cpu_count() -> Option<u32> {
         .ok()
 }
 
-/// Stable 64-bit FNV-1a hash of the canonical resolved-recipe JSON, hex-formatted
-/// — [`crate::version::stable_hash`] under the name the record's field uses.
-///
-/// The implementation lives in `version` because the report/sidecar identity block
-/// (`core/conversion-versioning`) hashes the **same bytes** with the same function:
-/// one hash function means a record's `params_hash` and a report's
-/// `identity.params_hash` are directly comparable, and can't drift apart. It stays
-/// hand-rolled (not `std::hash::DefaultHasher`, whose output isn't guaranteed
-/// stable across toolchains) so the value a server sees is reproducible build to
-/// build.
-pub fn params_hash(recipe_json: &str) -> String {
-    crate::version::stable_hash(recipe_json)
-}
-
 // ---------------------------------------------------------------------------
 // Sinks (the only I/O)
 // ---------------------------------------------------------------------------
@@ -439,10 +470,26 @@ mod tests {
             total: 100.0,
             decode: 40.0,
             film_base: 5.0,
-            algorithm: 20.0,
-            color: 15.0,
+            reconstruction: 20.0,
+            scene_correction: Some(1.0),
+            look: Some(4.0),
+            fit_range: Some(3.0),
+            fit_gamut: Some(2.0),
+            destination: 5.0,
             encode: 18.0,
             ir_export: Some(2.0),
+        }
+    }
+
+    /// Every `StageKind` wire name is a `timing_ms` key, so a rename moves both.
+    #[test]
+    fn every_stage_kind_names_a_timing_field() {
+        // `sample_timings` sets every optional field.
+        let timings = serde_json::to_value(sample_timings()).unwrap();
+        for stage in StageKind::ALL {
+            let name = serde_json::to_value(stage).unwrap();
+            let name = name.as_str().unwrap();
+            assert!(timings.get(name).is_some(), "no timing_ms.{name}");
         }
     }
 
@@ -469,7 +516,7 @@ mod tests {
             warnings: 4,
         });
 
-        assert_eq!(rec.schema_version, 8);
+        assert_eq!(rec.schema_version, 9);
         assert_eq!(rec.image.width, 2000);
         assert_eq!(rec.image.height, 3000);
         // 2000 * 3000 = 6e6 pixels → 6.0 MP.
@@ -551,13 +598,25 @@ mod tests {
     }
 
     #[test]
-    fn params_hash_is_stable_and_input_sensitive() {
-        let a = params_hash(r#"{"algorithm":"density"}"#);
-        let b = params_hash(r#"{"algorithm":"density"}"#);
-        let c = params_hash(r#"{"algorithm":"simple"}"#);
-        assert_eq!(a, b, "same input → same hash");
-        assert_ne!(a, c, "different input → different hash");
-        assert_eq!(a.len(), 16, "hex-formatted 64-bit hash");
+    fn a_stage_that_runs_twice_sums_and_one_that_never_ran_is_absent() {
+        let mut t = TimingInfo::default();
+        t.add(StageKind::FitRange, 1.5);
+        t.add(StageKind::FitRange, 2.0);
+        t.add(StageKind::Decode, 4.0);
+        assert_eq!(t.fit_range, Some(3.5));
+        assert_eq!(t.decode, 4.0);
+        assert_eq!(t.look, None);
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(!json.contains("look"), "{json}");
+    }
+
+    #[test]
+    fn the_clock_times_into_the_stage_it_names() {
+        let mut t = TimingInfo::default();
+        let out = t.time(StageKind::Look, || 7);
+        assert_eq!(out, 7);
+        assert!(t.look.is_some_and(|ms| ms >= 0.0));
+        assert_eq!(t.fit_gamut, None);
     }
 
     #[test]
@@ -666,8 +725,12 @@ mod tests {
                 total: 30.0,
                 decode: 5.0,
                 film_base: 1.0,
-                algorithm: 10.0,
-                color: 8.0,
+                reconstruction: 10.0,
+                scene_correction: Some(0.5),
+                look: Some(3.0),
+                fit_range: Some(2.0),
+                fit_gamut: Some(1.5),
+                destination: 1.0,
                 encode: 4.0,
                 ir_export: Some(2.0),
             },
@@ -684,13 +747,14 @@ mod tests {
             },
         };
         let expected_full = concat!(
-            r#"{"schema_version":8,"timestamp_ms":1700000000000,"nc_version":"9.9.9","#,
+            r#"{"schema_version":9,"timestamp_ms":1700000000000,"nc_version":"9.9.9","#,
             r#""target":"test-triple","cpu_count":8,"#,
             r#""image":{"format":"hdri","width":100,"height":200,"megapixels":0.25,"#,
             r#""bit_depth":16,"channels":3,"ir_present":true,"input_bytes":1000,"#,
             r#""output_bytes":2000},"#,
-            r#""timing_ms":{"total":30.0,"decode":5.0,"film_base":1.0,"algorithm":10.0,"#,
-            r#""color":8.0,"encode":4.0,"ir_export":2.0},"#,
+            r#""timing_ms":{"total":30.0,"decode":5.0,"film_base":1.0,"reconstruction":10.0,"#,
+            r#""scene_correction":0.5,"look":3.0,"fit_range":2.0,"fit_gamut":1.5,"#,
+            r#""destination":1.0,"encode":4.0,"ir_export":2.0},"#,
             r#""conversion":{"destination":{"display":{"range":"sdr","transfer":"native","#,
             r#""gamut":"display-p3","container":"tiff"}},"params_hash":"0123456789abcdef","#,
             r#""film_base_source":{"explicit":[0.5,0.25,0.125]},"output_depth":"u16"},"#,
@@ -698,8 +762,8 @@ mod tests {
         );
         assert_eq!(serde_json::to_string(&full).unwrap(), expected_full);
 
-        // Minimal: cpu_count / input_bytes / output_bytes serialize as null;
-        // ir_export is skipped entirely.
+        // Minimal: cpu_count / input_bytes / output_bytes serialize as null; the
+        // optional timings are skipped entirely.
         let minimal = TelemetryRecord {
             schema_version: SCHEMA_VERSION,
             timestamp_ms: 0,
@@ -717,15 +781,8 @@ mod tests {
                 input_bytes: None,
                 output_bytes: None,
             },
-            timing_ms: TimingInfo {
-                total: 0.0,
-                decode: 0.0,
-                film_base: 0.0,
-                algorithm: 0.0,
-                color: 0.0,
-                encode: 0.0,
-                ir_export: None,
-            },
+            // The film master runs no chain stage, so those four are absent.
+            timing_ms: TimingInfo::default(),
             // A film-master run: `output_depth = f32`, fixed by the destination. Snapshotted
             // here so the `"film-master"` wire name and that depth pairing are both pinned.
             conversion: ConversionInfo {
@@ -741,13 +798,13 @@ mod tests {
             },
         };
         let expected_minimal = concat!(
-            r#"{"schema_version":8,"timestamp_ms":0,"nc_version":"9.9.9","#,
+            r#"{"schema_version":9,"timestamp_ms":0,"nc_version":"9.9.9","#,
             r#""target":"test-triple","cpu_count":null,"#,
             r#""image":{"format":"hdr","width":1,"height":1,"megapixels":0.0,"#,
             r#""bit_depth":16,"channels":3,"ir_present":false,"input_bytes":null,"#,
             r#""output_bytes":null},"#,
-            r#""timing_ms":{"total":0.0,"decode":0.0,"film_base":0.0,"algorithm":0.0,"#,
-            r#""color":0.0,"encode":0.0},"#,
+            r#""timing_ms":{"total":0.0,"decode":0.0,"film_base":0.0,"reconstruction":0.0,"#,
+            r#""destination":0.0,"encode":0.0},"#,
             r#""conversion":{"destination":"film-master","params_hash":"0","#,
             r#""film_base_source":"auto","output_depth":"f32"},"#,
             r#""outcome":{"warnings":0,"clipped":0,"non_finite":0}}"#,

@@ -50,7 +50,7 @@ hanten convert <scan> -o /tmp/iso-oracle/gain-map --film-base <r,g,b> --range hd
 Measure `<r,g,b>` once per roll the usual way — `hanten estimate`, or the frozen
 `scripts/real-scan-verify/recipes/<roll>.json`. The default render is not flat on a
 real frame, so no exposure push is needed; a flat frame reports `GainMapMax = 0` on
-every channel and nc's report says `new_flow.gain_map.flat: true`.
+every channel and nc's report says `chain.gain_map.flat: true`.
 
 The legacy Ultra HDR v1 and dual-dialect files the earlier results cover can no longer
 be written by this build; they are reproducible only from the reference build
@@ -75,7 +75,7 @@ The gate wants:
   serialization one. `PRESENT` with every `GainMapMax ≈ 0` means the metadata parsed
   but the gain map is inert: structurally fine and photographically a no-op, which
   cannot discriminate an HDR rendition from an SDR one — check nc's report
-  (`new_flow.gain_map.flat`) before reading it as a defect.
+  (`chain.gain_map.flat`) before reading it as a defect.
 - **The three `ChannelMetadata` entries differ from each other** — the map is
   per-channel. This is the evidence that the per-channel fields are read, not just
   parsed. Three entries is `is_multichannel = true` read back; that is deliberate and
@@ -93,7 +93,7 @@ The gate wants:
   failure mode makes the gate unfalsifiable.
 - The `meta:` lines are ImageIO's own parse of each ISO field, and *this* is the
   substantive evidence: compare each against what nc wrote (the report's
-  `new_flow.gain_map`, and `exiftool -a -G1` shows the segments).
+  `chain.gain_map`, and `exiftool -a -G1` shows the segments).
 
   | ImageIO prints | nc's `IsoGainMapFields` |
   |---|---|

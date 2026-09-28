@@ -42,7 +42,8 @@ use crate::pipeline::{
     working_space,
 };
 use crate::recipe::{self, KnobNames, Recipe};
-use crate::telemetry;
+use crate::stage::{StageClock, StageKind};
+use crate::telemetry::{self, TimingInfo};
 use crate::types::{
     DEFAULT_MEASURE_INSET, EncodeOutcome, EncodeReport, FilmBase, FilmBaseSource, FilmType,
     InputParams, LinearImage, MeaningAssertion, NcError, OutDepth, OutputStats,
@@ -1109,16 +1110,15 @@ pub struct HdrCodedTiffResult {
 /// What a conversion ran: the fixed decode's resolved parameters, what each stage of
 /// the chain applied, and the destination. Serialize-only.
 ///
-/// **Provisional**, and so is its `new_flow` key: it exists so the report says
-/// something true while `nf-core/report-contract` decides the real shape. Every field
-/// is a fact read off the resolved chain — no prose.
+/// Every field is a fact read off the resolved chain, never prose: a stage that moved
+/// no pixel says `"identity"` rather than being left out.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct NewFlowResult {
+pub struct ChainResult {
     /// The fixed decode's resolved parameters, as the render used them.
     pub decode: fixed::DecodeReport,
     /// Each stage of the chain in order, with what it applied. Empty for the film
     /// master, which runs none.
-    pub stages: Vec<NewFlowStageResult>,
+    pub stages: Vec<StageResult>,
     /// The rendering the stages started from (`--rendering`, `crate::rendering`).
     pub rendering: crate::rendering::Rendering,
     /// The recipe's `roll` section and what the run applied of it; absent when the
@@ -1149,11 +1149,9 @@ pub struct NewFlowResult {
     /// The gain map the gain-map destination wrote. Absent for every other destination.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gain_map: Option<GainMapResult>,
-    /// Always `false`: no sidecar is written yet. The recipe exists (`crate::recipe`);
-    /// writing it beside the output is `nf-core/report-contract`'s.
-    pub sidecar_written: bool,
-    /// A sidecar an earlier run left beside this output, removed because it
-    /// described the image this run replaced. Absent when there was none.
+    /// A sidecar a pre-`pipeline_version` 8 run left beside this output, removed
+    /// because it described the image this run replaced. Absent when there was none;
+    /// no run writes a sidecar now.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removed_sidecar: Option<PathBuf>,
 }
@@ -1178,8 +1176,8 @@ pub struct GainMapResult {
 
 /// One stage of the chain and what it applied under the run's parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-pub struct NewFlowStageResult {
-    pub stage: &'static str,
+pub struct StageResult {
+    pub stage: StageKind,
     pub applied: &'static str,
 }
 
@@ -1215,9 +1213,13 @@ pub struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_mapping: Option<&'static str>,
     /// What the conversion ran (`convert` and each `roll` frame): the decode, each
-    /// stage and the destination. See [`NewFlowResult`].
+    /// stage and the destination. See [`ChainResult`].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_flow: Option<NewFlowResult>,
+    pub chain: Option<ChainResult>,
+    /// The resolved recipe (`convert`): what `--dump-params` would write, so it
+    /// reloads through `--params` to this run. `identity.params_hash` hashes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<Recipe>,
     /// What the AVIF encoder actually coded (a PQ or HLG AVIF destination): the
     /// profile the file may claim and why, the AV1 profile/level read back out of the
     /// codestream, the CICP triple, and the coded size. Absent for every other
@@ -3014,9 +3016,7 @@ fn convert_frame(
 
     let mut report = Report {
         command: Some(command),
-        // No `params_hash` yet: what it hashes, and where the recipe is echoed, is
-        // `nf-core/report-contract`'s.
-        identity: Some(Identity::new()),
+        identity: Some(Identity::new().with_params_hash(recipe.params_hash())),
         input: Some(input.to_path_buf()),
         output: Some(output.to_path_buf()),
         film_base_source: Some(base_source.clone()),
@@ -3044,15 +3044,14 @@ fn convert_frame(
     *memory_out = Some(mem);
     report.memory = Some(mem);
 
-    // Stage 1 — decode. Per-stage wall clocks feed the telemetry record only
-    // (they never touch the image); measure them regardless of whether
-    // telemetry is enabled so the render path is uniform.
+    // Stage 1 — decode. Per-stage wall clocks (`TimingInfo`, one field per
+    // `StageKind`) feed the telemetry record only and never touch the image; they are
+    // measured whether or not telemetry is enabled, so the render path is uniform.
     // `decode_for_roll_white` (`measure-roll`) repeats this front half — preflight,
     // decode, input semantics, positive-mode refusal, effective area and its warnings —
     // up to the chain; a gate added here belongs there too.
-    let stage_started = Instant::now();
-    let (image, info) = decode_within(input, budget.bytes())?;
-    let decode_ms = elapsed_ms(stage_started);
+    let mut timings = TimingInfo::default();
+    let (image, info) = timings.time(StageKind::Decode, || decode_within(input, budget.bytes()))?;
     log.info(format_args!(
         "decoded {:?} {}x{} (ir={})",
         info.format, info.width, info.height, info.ir_present
@@ -3114,7 +3113,7 @@ fn convert_frame(
     // refusing to find a rebate is exactly when "the IR plane could not help" is
     // worth reading — and a failed stage 2 returns no `BaseEstimate` to carry it.
     // Both calls are bounded strided samples, so the duplication is ~100k reads.
-    let ir_separability = film_base::ir_separability(&image);
+    let ir_separability = timings.time(StageKind::FilmBase, || film_base::ir_separability(&image));
     let ir_usable = ir_separability.is_some_and(|s| s.usable);
 
     // When holder detection wanted the IR mask but the plane is shape-only, it
@@ -3160,9 +3159,9 @@ fn convert_frame(
     // JSON report on a successful run. (A hard render failure propagates its error
     // and exit code like every other error path and emits no report; the stderr
     // warnings still stand.)
-    let stage_started = Instant::now();
-    let base = film_base::estimate(&image, &base_source)?;
-    let film_base_ms = elapsed_ms(stage_started);
+    let base = timings.time(StageKind::FilmBase, || {
+        film_base::estimate(&image, &base_source)
+    })?;
     report.film_base = Some(base.base);
     for w in base.warnings {
         push_warning_buf(warnings, log, w);
@@ -3180,7 +3179,10 @@ fn convert_frame(
     // so an **empty** region is a warning rather than a refusal, with no
     // `report.effective_area`, because there is no region to report. A consumer added
     // here must decide whether an empty region becomes fatal for it.
-    match film_base::effective_area(&image, recipe.measure.inset) {
+    let area = timings.time(StageKind::FilmBase, || {
+        film_base::effective_area(&image, recipe.measure.inset)
+    });
+    match area {
         Ok(area) => {
             report.effective_area = Some(area);
             for w in film_base::effective_area_warnings(&area) {
@@ -3246,8 +3248,7 @@ fn convert_frame(
             output,
             report,
             info,
-            decode_ms,
-            film_base_ms,
+            timings,
             read_inputs,
         },
         log,
@@ -3498,7 +3499,7 @@ enum DestinationRender {
 /// What the chain applied, kept once its image has moved to the encoder — the report's
 /// account of the run.
 struct ChainAccount {
-    applied: [(&'static str, &'static str); 4],
+    applied: [(StageKind, &'static str); 4],
     scene_correction: scene_correction::SceneCorrection,
     look: look::LookSection,
     fit_range: fit_range::FitRange,
@@ -3613,39 +3614,44 @@ fn render_destination(
     base: &FilmBase,
     recipe: &Recipe,
     destination: recipe::Destination,
+    clock: &mut impl StageClock,
 ) -> Result<DestinationRender> {
     let d = match destination {
         recipe::Destination::FilmMaster => {
             // Profile only — no transform: the tag names the space the pixels are in.
+            let icc = clock.time(StageKind::Destination, || {
+                color::icc_profile(&color::OutputSpace::AcesCg)
+            })?;
             return Ok(DestinationRender::FilmMaster {
                 image: aces.into_linear(),
-                icc: color::icc_profile(&color::OutputSpace::AcesCg)?,
+                icc,
             });
         }
         recipe::Destination::Display(d) => d,
     };
-    let film_base =
-        working_space::map_nc_film_rgb_v1(fixed::decode_film_base(base, &recipe.reconstruction)?);
+    let film_base = clock.time(StageKind::Reconstruction, || {
+        fixed::decode_film_base(base, &recipe.reconstruction).map(working_space::map_nc_film_rgb_v1)
+    })?;
     // One match on the encoding, so a new row cannot reach an encoder it was not written
     // for: the gain map renders a pair, every other destination one rendition.
     match d.encoding {
-        Encoding::GainMapJpeg => render_gain_map(aces, film_base, recipe, d),
-        Encoding::SdrTiff => render_one(aces, film_base, recipe, d, |r| {
+        Encoding::GainMapJpeg => render_gain_map(aces, film_base, recipe, d, clock),
+        Encoding::SdrTiff => render_one(aces, film_base, recipe, d, clock, |r| {
             let (image, icc) = color::encode_display_linear(r.linear, r.gamut)?;
             Ok(DestinationPixels::Sdr { image, icc })
         }),
-        Encoding::HdrLinearTiff => render_one(aces, film_base, recipe, d, |r| {
+        Encoding::HdrLinearTiff => render_one(aces, film_base, recipe, d, clock, |r| {
             let (hdr, clamp) = r.bt2020()?;
             Ok(DestinationPixels::HdrLinear(hdr, clamp))
         }),
-        Encoding::HdrCodedTiff(transfer) => render_one(aces, film_base, recipe, d, |r| {
+        Encoding::HdrCodedTiff(transfer) => render_one(aces, film_base, recipe, d, clock, |r| {
             let (hdr, clamp) = r.bt2020()?;
             Ok(DestinationPixels::HdrCoded(
                 hdr::encode_transfer(hdr, transfer)?,
                 clamp,
             ))
         }),
-        Encoding::HdrAvif(transfer) => render_one(aces, film_base, recipe, d, |r| {
+        Encoding::HdrAvif(transfer) => render_one(aces, film_base, recipe, d, clock, |r| {
             let (hdr, clamp) = r.bt2020()?;
             Ok(DestinationPixels::HdrAvif(
                 hdr::encode_transfer(hdr, transfer)?,
@@ -3680,12 +3686,13 @@ impl OneRendition {
 }
 
 /// Render one rendition through the chain for `d`, then `encode` it into its encoder's
-/// input.
+/// input — the destination stage.
 fn render_one(
     aces: AcesCgImage,
     film_base: AcesCgImage,
     recipe: &Recipe,
     d: Resolved,
+    clock: &mut impl StageClock,
     encode: impl FnOnce(OneRendition) -> Result<DestinationPixels>,
 ) -> Result<DestinationRender> {
     let params = recipe.chain_params(d.range.peak()?, d.gamut.destination());
@@ -3695,13 +3702,15 @@ fn render_one(
         scene_correction,
         look,
         fit_range,
-    } = chain::render(aces, film_base, &params)?;
+    } = chain::render(aces, film_base, &params, clock)?;
     let (linear, gamut) = image.into_parts();
-    let pixels = encode(OneRendition {
-        linear,
-        gamut,
-        tone_curve: fit_range.applied(),
-        gamut_mapping: applied[3].1,
+    let pixels = clock.time(StageKind::Destination, || {
+        encode(OneRendition {
+            linear,
+            gamut,
+            tone_curve: fit_range.applied(),
+            gamut_mapping: applied[3].1,
+        })
     })?;
     Ok(DestinationRender::Rendered {
         rendered: Box::new(ChainAccount {
@@ -3727,6 +3736,7 @@ fn render_gain_map(
     film_base: AcesCgImage,
     recipe: &Recipe,
     d: Resolved,
+    clock: &mut impl StageClock,
 ) -> Result<DestinationRender> {
     let peak = d.range.peak()?;
     // Neither JPEG stores the IR plane (`--export-ir` reads the decoded image), so it is
@@ -3737,22 +3747,26 @@ fn render_gain_map(
         &recipe.shared_params(),
         d.gamut.destination(),
         peak,
+        clock,
     )?;
     let base_fit_range = sdr.fit_range;
     let (sdr_linear, gamut) = sdr.image.into_parts();
     let (mut hdr_linear, _) = hdr.image.into_parts();
-    let clamp = hdr::clamp_to_peak(&mut hdr_linear.rgb)?;
-    let ratios = gain_ratio::between(&sdr_linear, &hdr_linear, gain_encode::OFFSET)?;
-    drop(hdr_linear);
-    let map = gain_encode::encode(&ratios)?;
-    let report = GainMapResult {
-        range: ratios.range(),
-        width: map.width,
-        height: map.height,
-        base_fit_range,
-    };
-    drop(ratios);
-    let (base, icc) = color::encode_display_linear(sdr_linear, gamut)?;
+    let (base, icc, map, clamp, report) = clock.time(StageKind::Destination, || {
+        let clamp = hdr::clamp_to_peak(&mut hdr_linear.rgb)?;
+        let ratios = gain_ratio::between(&sdr_linear, &hdr_linear, gain_encode::OFFSET)?;
+        drop(hdr_linear);
+        let map = gain_encode::encode(&ratios)?;
+        let report = GainMapResult {
+            range: ratios.range(),
+            width: map.width,
+            height: map.height,
+            base_fit_range,
+        };
+        drop(ratios);
+        let (base, icc) = color::encode_display_linear(sdr_linear, gamut)?;
+        Ok::<_, NcError>((base, icc, map, clamp, report))
+    })?;
     Ok(DestinationRender::Rendered {
         rendered: Box::new(ChainAccount {
             applied: hdr.applied,
@@ -3848,8 +3862,8 @@ struct DecodedFrame<'a> {
     output: &'a Path,
     report: Report,
     info: DecodeInfo,
-    decode_ms: f64,
-    film_base_ms: f64,
+    /// The run's stage clock, holding the decode's and the film base's times.
+    timings: TimingInfo,
     read_inputs: &'a [&'a Path],
 }
 
@@ -3858,8 +3872,7 @@ struct DecodedFrame<'a> {
 /// (`crate::destination`), or straight to the film master.
 ///
 /// The optional IR export and the primary are staged, then committed together with the
-/// primary last — but **no sidecar** yet: what a sidecar holds is
-/// `nf-core/report-contract`'s. The report says so in `new_flow`.
+/// primary last. No sidecar is written.
 fn render_frame(
     frame: DecodedFrame<'_>,
     log: &Log,
@@ -3874,17 +3887,16 @@ fn render_frame(
         output,
         mut report,
         info,
-        decode_ms,
-        film_base_ms,
+        mut timings,
         read_inputs,
     } = frame;
     let decode_params = recipe.reconstruction;
 
     // Reconstruction: the fixed decode, then the pinned NC film RGB v1 3×3.
-    let stage_started = Instant::now();
-    let (film, decoded) = fixed::decode(&image, &base, &decode_params)?;
-    let aces = working_space::map_nc_film_rgb_v1(film);
-    let algorithm_ms = elapsed_ms(stage_started);
+    let (aces, decoded) = timings.time(StageKind::Reconstruction, || {
+        fixed::decode(&image, &base, &decode_params)
+            .map(|(film, decoded)| (working_space::map_nc_film_rgb_v1(film), decoded))
+    })?;
 
     // The NC film RGB v1 3×3 into ACEScg runs on this flow too, so the pinned
     // interpretation is a fact about the run.
@@ -3897,9 +3909,7 @@ fn render_frame(
     // The chain, then the destination's transfer. Clear any stale lcms2 flag first so
     // only a fault from *this* transform is counted.
     let _ = cms_error_occurred();
-    let stage_started = Instant::now();
-    let render = render_destination(aces, &base, recipe, destination)?;
-    let color_ms = elapsed_ms(stage_started);
+    let render = render_destination(aces, &base, recipe, destination, &mut timings)?;
     if cms_error_occurred() {
         return Err(NcError::Other(
             "color management (lcms2) reported a runtime error; see stderr".into(),
@@ -3919,11 +3929,11 @@ fn render_frame(
     if let Some(message) = rendered.and_then(|r| r.fit_range.display_black.warning()) {
         push_warning_buf(warnings, log, message);
     }
-    report.new_flow = Some(NewFlowResult {
+    report.chain = Some(ChainResult {
         decode: decoded,
         stages: rendered.map_or_else(Vec::new, |r| {
             r.applied
-                .map(|(stage, applied)| NewFlowStageResult { stage, applied })
+                .map(|(stage, applied)| StageResult { stage, applied })
                 .to_vec()
         }),
         rendering: recipe.rendering,
@@ -3937,24 +3947,23 @@ fn render_frame(
         },
         peak_clamp,
         gain_map: render.gain_map(),
-        sidecar_written: false,
         removed_sidecar: None,
     });
 
     // The IR export reads the *decoded* image and is staged before the primary, at
     // the destination's depth (f32 for a float TIFF, else u16).
     let mut pending: Vec<staged::Staged> = Vec::new();
-    let mut ir_export_ms = None;
     if let Some(path) = &export_ir {
-        let stage_started = Instant::now();
-        pending.push(encode::export_ir(&image, render.ir_depth(), path)?);
-        ir_export_ms = Some(elapsed_ms(stage_started));
+        let depth = render.ir_depth();
+        pending.push(timings.time(StageKind::IrExport, || {
+            encode::export_ir(&image, depth, path)
+        })?);
         report.ir_exported = Some(path.clone());
     }
 
-    let stage_started = Instant::now();
-    let (primary, mut outcome) = encode_render(render, output, &mut report, log, warnings)?;
-    let encode_ms = elapsed_ms(stage_started);
+    let (primary, mut outcome) = timings.time(StageKind::Encode, || {
+        encode_render(render, output, &mut report, log, warnings)
+    })?;
     if cms_error_occurred() {
         return Err(NcError::Other(
             "color management (lcms2) reported a runtime error; see stderr".into(),
@@ -4012,8 +4021,8 @@ fn render_frame(
         match std::fs::remove_file(&stale) {
             Ok(()) => {
                 log.info(format_args!("removed stale sidecar {}", stale.display()));
-                if let Some(nf) = report.new_flow.as_mut() {
-                    nf.removed_sidecar = Some(stale);
+                if let Some(chain) = report.chain.as_mut() {
+                    chain.removed_sidecar = Some(stale);
                 }
             }
             Err(e) => push_warning_buf(
@@ -4032,15 +4041,7 @@ fn render_frame(
     Ok(ConvertedFrame {
         report,
         info,
-        timings: telemetry::TimingInfo {
-            total: 0.0,
-            decode: decode_ms,
-            film_base: film_base_ms,
-            algorithm: algorithm_ms,
-            color: color_ms,
-            encode: encode_ms,
-            ir_export: ir_export_ms,
-        },
+        timings,
         loss: outcome.loss,
     })
 }
@@ -4197,6 +4198,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
 
     let total_ms = elapsed_ms(started);
     report.elapsed_ms = Some(total_ms);
+    report.recipe = Some(recipe.clone());
 
     // Emit the report before the `--strict` gate so the machine-readable record lands
     // even when a warning then fails the run. (A hard I/O error above returns earlier —
@@ -4229,7 +4231,6 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         emit_telemetry(
             &args,
             &output,
-            &recipe,
             target.destination,
             &info,
             timings,
@@ -4299,9 +4300,9 @@ struct PlannedFrame {
 struct RollReport {
     command: &'static str,
     /// What produced this batch: build identity + the behavioral `pipeline_version`.
-    /// No `params_hash`, and no echo of the shared recipe: what they carry is
-    /// `nf-core/report-contract`'s. Operational provenance only — no CLI flag, no
-    /// recipe key, no effect on a single output pixel.
+    /// No `params_hash`: each frame's own identity hashes the recipe that frame ran
+    /// (the shared recipe with its overrides). Operational provenance only — no CLI
+    /// flag, no recipe key, no effect on a single output pixel.
     identity: Identity,
     /// Roll-level warnings not tied to a single frame (e.g. the film base is not
     /// frozen because the shared recipe's `calibration.film_base` is not `explicit`).
@@ -4395,16 +4396,22 @@ enum FrameStatus {
         /// field (omitted when `unknown`).
         #[serde(skip_serializing_if = "Option::is_none")]
         film_type: Option<FilmType>,
-        /// This frame's own identity, beside the roll's. (The per-frame recipe hash it
-        /// carried before `pipeline_version` 8 is `nf-core/report-contract`'s to
-        /// restore.) Boxed with `new_flow` below: adding that block tipped `Ok` over
-        /// `clippy::large_enum_variant`, and this is the largest remaining field.
+        /// This frame's own identity, beside the roll's, with the hash of the recipe
+        /// the frame ran. Boxed with `chain` below (`clippy::large_enum_variant`).
         #[serde(skip_serializing_if = "Option::is_none")]
         identity: Option<Box<Identity>>,
         /// What the frame ran — mirrors the single-frame `Report` field.
         /// Boxed like `effective_area` (`clippy::large_enum_variant`).
         #[serde(skip_serializing_if = "Option::is_none")]
-        new_flow: Option<Box<NewFlowResult>>,
+        chain: Option<Box<ChainResult>>,
+        /// What the encoder wrote, for an HDR destination — mirrors the single-frame
+        /// `Report` fields. Boxed (`clippy::large_enum_variant`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        avif: Option<Box<AvifResult>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hdr_linear_tiff: Option<Box<HdrLinearTiffResult>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hdr_coded_tiff: Option<Box<HdrCodedTiffResult>>,
     },
     /// A frame that failed to convert: the failure message. The roll records it
     /// and continues (the loud non-zero exit is the batch-level signal).
@@ -4802,7 +4809,10 @@ fn frame_report_ok(pf: &PlannedFrame, report: Report) -> FrameReport {
             output_stats: report.output_stats,
             film_type: report.film_type,
             identity: report.identity.map(Box::new),
-            new_flow: report.new_flow.map(Box::new),
+            chain: report.chain.map(Box::new),
+            avif: report.avif.map(Box::new),
+            hdr_linear_tiff: report.hdr_linear_tiff.map(Box::new),
+            hdr_coded_tiff: report.hdr_coded_tiff.map(Box::new),
         },
         memory: report.memory,
         warnings: report.warnings,
@@ -6224,7 +6234,6 @@ fn emit_telemetry(
     // The **resolved** output path, not `args.output`: `output_bytes` must stat the
     // file that was written, which a completed suffix makes a different path.
     output: &Path,
-    recipe: &Recipe,
     destination: recipe::Destination,
     info: &DecodeInfo,
     timings: telemetry::TimingInfo,
@@ -6243,6 +6252,13 @@ fn emit_telemetry(
         "telemetry runs only after a successful conversion, which means `validate` \
          accepted a stated film base"
     );
+    debug_assert!(
+        report
+            .identity
+            .as_ref()
+            .is_some_and(|i| i.params_hash.is_some()),
+        "a convert report's identity carries its recipe's hash"
+    );
     let record = telemetry::build_record(telemetry::RecordInputs {
         info,
         // The ambient reads live here in the orchestrator; `build_record` stays a
@@ -6253,12 +6269,13 @@ fn emit_telemetry(
         loss,
         input_bytes: file_len(&args.input),
         output_bytes: file_len(output),
-        // The recipe exactly as `--dump-params` writes it, so identical conversions
-        // share a hash. It cannot fail to serialize (plain data), and telemetry must
-        // never fail a run, so the unreachable arm degrades to an empty document.
-        params_hash: telemetry::params_hash(
-            &serde_json::to_string_pretty(recipe).unwrap_or_default(),
-        ),
+        // The report's hash, read rather than recomputed. Always `Some` on a
+        // convert report; the unreachable arm degrades rather than panics.
+        params_hash: report
+            .identity
+            .as_ref()
+            .and_then(|i| i.params_hash.clone())
+            .unwrap_or_default(),
         // The report's copy is the source `convert_frame` actually resolved and
         // ran, so it cannot disagree with the conversion. It is always `Some`
         // here — telemetry is emitted only after a conversion succeeded, which
@@ -8315,7 +8332,7 @@ mod tests {
         // recipe pins an explicit base, meaningful under `auto`/`region`). The per-frame
         // entry is the data-carrying `FrameStatus` — an "ok" frame serializes the flat
         // `"status":"ok"` with its payload as sibling keys. The shared recipe is not
-        // echoed: what the report carries of it is `nf-core/report-contract`'s.
+        // echoed: each frame's identity hashes the recipe that frame ran.
         let roll = RollReport {
             command: "roll",
             identity: Identity::new(),
@@ -8333,7 +8350,10 @@ mod tests {
                     }),
                     film_type: Some(FilmType::Silver),
                     identity: Some(Box::new(Identity::new())),
-                    new_flow: None,
+                    chain: None,
+                    avif: None,
+                    hdr_linear_tiff: None,
+                    hdr_coded_tiff: None,
                 },
                 memory: None,
                 warnings: vec![],

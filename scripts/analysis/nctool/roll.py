@@ -471,15 +471,15 @@ class DepthError(ValueError):
 
 
 def _frame_depth(frame: dict) -> str | None:
-    """The depth a destination build's frame resolved (`new_flow.destination`), or
+    """The depth a destination build's frame resolved (`chain.destination`), or
     `None` when it resolved none (a frame that failed first)."""
-    new_flow = frame.get("new_flow")
-    if not isinstance(new_flow, dict) or "destination" not in new_flow:
+    chain = _manifest.chain_block(frame)
+    if "destination" not in chain:
         return None
-    depth = _compare.depth_for_destination(new_flow["destination"])
+    depth = _compare.depth_for_destination(chain["destination"])
     if depth is None:
         raise DepthError("a frame resolved a destination of unknown depth ("
-                         + json.dumps(new_flow["destination"], sort_keys=True) + ")")
+                         + json.dumps(chain["destination"], sort_keys=True) + ")")
     return depth
 
 
@@ -550,11 +550,11 @@ def _analysis_frame(frame: dict, source_by_name: dict[str, str],
         "source": source_by_name.get(name, name),
         "status": frame.get("status"),
     }
-    # `dmax` is still read: reports from the reference build carry it. `new_flow`
-    # is a destination build's per-frame rendering facts (the resolved destination
-    # among them).
+    # `dmax` is still read: reports from the reference build carry it. `chain` (or
+    # `new_flow`, its name before `nf-core/report-contract`) is a destination build's
+    # per-frame rendering facts, the resolved destination among them.
     for key in ("film_base", "dmax", "white_balance", "input_color", "loss",
-                "output_stats", "identity", "new_flow", "warnings", "error"):
+                "output_stats", "identity", "chain", "new_flow", "warnings", "error"):
         if key in frame:
             result[key] = frame[key]
     if depth is not None:
