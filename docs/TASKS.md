@@ -1881,7 +1881,7 @@ the design in `docs/design-update.md`:
   measurement](tasks/nf-calibration/no-roll-defaults.md) — the fallbacks a frame
   gets without `measure-roll`, first the whole contrast (2.0 today; the rolls measure
   2.23–2.97)
-- [~] [The roll's measurements as their own recipe
+- [x] [The roll's measurements as their own recipe
   section](tasks/nf-calibration/roll-section.md) — `roll.white_balance` and
   `roll.white_stops`, out of `scene_correction` and `look`, so a rendering can apply
   them or not
