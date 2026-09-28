@@ -1833,7 +1833,7 @@ the design in `docs/design-update.md`:
   (default, unchanged) or Adobe RGB; HDR BT.2020 `linear` f32 TIFF, `pq`/`hlg` TIFF or
   AVIF, clamped to the peak and counted. The film master refuses every stage it does
   not run. The gain-map JPEG split to `gain-map-destination`
-- [~] [Two renderings: `direct` and
+- [x] [Two renderings: `direct` and
   `default`](tasks/nf-destinations/direct-preset.md) — `--rendering`: `direct` loses
   as little as possible (HDR float TIFF by default, Adobe RGB when SDR; roll section
   unapplied) for an editor and, stated SDR, the calibration loop; `default` is our code plus the roll's measurements. Re-planned
@@ -1891,9 +1891,10 @@ the design in `docs/design-update.md`:
 - [ ] [The white rule in
   HDR](tasks/nf-calibration/white-rule-hdr.md) — the rule's values stay provisional
   until its HDR rendition and headroom are looked at; every round so far was SDR
-- [ ] [Tune `scale` and `gamma` by
+- [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
-  owns, tuned against a held-fixed rendering. Supersedes
+  owns, tuned against a held-fixed rendering; one round, nothing moved, the
+  calibrated re-run is `neutrality-gate`'s. Supersedes
   `algo/sigmoid-parameter-calibration` and
   `film-base/dmax-per-channel-reduction`
 - [ ] [Does `density.offset` earn a

@@ -40,8 +40,15 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
 - **Unset-axis defaults and the derivation order come from the rendering**
   (`destination::Defaults`, `direct-preset`): `Defaults::STANDARD` derives range,
   transfer, gamut, container; `direct` sets `container_first`, so it derives TIFF before
-  its `hdr` range and never reaches a lossy container unless one is stated. Anything
-  resolving or offering a destination takes the run's `Defaults`.
+  its `hdr` range and never reaches a lossy container by default (only when one is
+  stated, or the stated axes leave no lossless row). Anything resolving or offering a
+  destination takes the run's `Defaults`.
+- **Two renderings have landed** (`direct-preset`, 2026-09-27): `--rendering default`
+  applies the recipe's `roll` section and every other default; `direct` leaves the roll
+  out and starts from values pinned in `rendering::DIRECT` (changing them:
+  design-update Part 2, "Keeping `direct` current"). A knob a rendering sets is unset
+  (`null`) in the recipe until stated, so a new rendering-dependent knob needs a base in
+  both.
 
 ## preset-set
 
@@ -107,7 +114,7 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
 
 ## direct-preset
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-09-27
 
 - 2026-09-19: created with the new-flow plan. Goal: the direct destination for external editing.
@@ -190,6 +197,19 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   or contrast beside a `roll` section warns on replay — is documented; "never lossy" now
   reads "never lossy by default" (stated axes can leave only the gain map); under a
   recipe film master plus `direct`, both roll-flag remedies carry `--rendering default`.
+- 2026-09-27: **done**, merged as #184; its comments were shortened in a follow-up
+  (#186, the detail moved to design-update). What dependents need: `--rendering`
+  (recipe `rendering`) picks the base; `direct`'s values are pinned in
+  `rendering::DIRECT` and guarded by `direct_is_pinned`; the calibration loop holds
+  `--rendering direct --range sdr` (put it in a review matrix's `common_args`); when
+  `easy-destination-rows` adds the Adobe RGB float row, `direct` resolves to it unaided
+  — a move of its output, to log in `nf-calibration`'s progress.
+- 2026-09-27: first use as the held rendering (`nf-calibration/scale-gamma-loop`, round
+  S1, 18 frames on nine rolls): it worked as intended (user) — a scale candidate's cast
+  shows with nothing masking it. Correction to the entry above: `--rendering direct` goes
+  in `common_args`, but `range: sdr` goes in the matrix's `destination` (the generator
+  owns `--range`). The set was still rendered by hand: the new-flow SDR destinations are
+  TIFF only, which the review app cannot show.
 
 ## memory-profiles
 

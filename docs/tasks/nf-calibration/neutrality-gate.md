@@ -37,6 +37,11 @@ unchanged in substance:
   named as the path, deliberately not as an edge, since the measurement may show
   the residual is tolerable under the decode that ships.
 
+- **It is also the calibrated pass of `scale` and the linearization.**
+  [`scale-gamma-loop`](scale-gamma-loop.md) closed on review with nothing moved: `scale`
+  splits by roll, and whether 1.8 linearizes needs a bracket. Measure both here from the
+  bracketed neutrals, and move them (with their version bump) before gating.
+
 Open: **what "the default move" means under the new flow** — the gate was written
 against one migration, and now the default chain, the default decode values and the
 default destination all move, so decide whether it fires once at the flip or per
@@ -49,10 +54,12 @@ per-roll, given the recorded spread.
   stated before the number is read; the verdict recorded in the progress log
   whichever way it goes.
 - No default that touches per-channel colour ships without that record.
+- `scale` and the linearization measured from the bracketed neutrals, and moved or
+  kept with the reason recorded.
 
 ## Dependencies
 
-- [Tune `scale` and `gamma` by review](scale-gamma-loop.md) — the gate is applied
-  to the values that loop settles
+- [Tune `scale` and `gamma` by review](scale-gamma-loop.md) — the review pass; its
+  values are this task's starting point
 - [Capture the calibration frames](../analysis/calibration-frame-capture.md) —
   produces the known-neutral reference the gate names

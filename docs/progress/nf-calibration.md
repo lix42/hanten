@@ -46,6 +46,14 @@ gains multiply a stated white balance, and a stated contrast wins. A rendering d
 whether it applies (`--rendering default` does, `direct` does not). The fallback when a
 roll has no measurement is `no-roll-defaults`'.
 
+**`scale-gamma-loop` is done (2026-09-27): nothing moved.** One review round on blue
+under `--rendering direct --range sdr` could not tell 0.68 / 0.73 / 0.78 apart;
+`[1, 0.84, 0.73]` and the linearization 1.8 (the datasheets' `1/0.55`, not reviewable by
+eye) stand. Blue splits by roll as green does (July ~0.72, four September rolls ~0.78;
+09-09 confounded by skylight), so no global
+value closes it. The calibrated re-run is `neutrality-gate`'s, against the calibration
+frames; the look's default contrast is `no-roll-defaults`'.
+
 ## anchor-comparison
 
 **Status:** done
@@ -614,14 +622,62 @@ roll has no measurement is `no-roll-defaults`'.
 
 ## scale-gamma-loop
 
-**Status:** not started
-**Updated:** 2026-09-26
+**Status:** done
+**Updated:** 2026-09-27
 
 - 2026-09-19: created with the new-flow plan. Goal: tune `scale` and `gamma` by review.
 - 2026-09-26: two dependencies added (user). `nf-destinations/direct-preset`: the
   rendering the loop holds fixed is the direct destination, which did not exist yet.
   `nf-display-stages/parametric-operator`: it changes that rendering's operator and adds
   its black point, so rounds judged before it would be re-judged.
+- 2026-09-27: **scope set (user): one `scale` round now, `gamma` not tuned, then close.**
+  The calibration frames need time to prepare, so this round checks what the new chain
+  shows today; the calibrated pass runs once they exist (`neutrality-gate`).
+  - **The linearization stays 1.8.** It is the datasheets' slope, not a C-41 process
+    constant: `1/0.55`, inside the digitized stocks' red film gamma 0.53–0.61 (1.64–1.89;
+    the generic 0.541 would be 1.85; ACES's generic film 0.55). Two reasons it is not reviewable: on a
+    neutral it enters only as the product with `look.contrast`, so a round varying it at a
+    pinned contrast judges contrast, and holding the product fixed leaves only its effect
+    through the 3×3 on colour. And whether 1.8 truly linearizes depends on scanner density
+    matching datasheet density (design-update Appendix B), which only the bracket measures.
+  - **The look's default 1.11 is `no-roll-defaults`'** (user), not this task's.
+- 2026-09-27: **round S1, blue scale — no change** (user). Set `../temp/scale-loop/`
+  (`review.json`; `scripts/round1.py`, the rendering binary, `nulls.py`): 18 frames, two per
+  roll on all nine rolls (marked-patch frames where a roll has them), blue 0.68 / 0.73
+  (shipped) / 0.78, red 1 and green 0.84 held. Held rendering `--rendering direct --range
+  sdr` (Display P3 TIFF → JPEG). Blue was chosen as the judged axis; green is the one the
+  user does not see, so it was left to the ladder's measurement.
+
+  Blue at which each unclipped marked patch reads b\* = 0 (per-roll median; 09-13 has no
+  marked patches):
+
+  | roll | patches | blue null |
+  |---|---|---|
+  | 07-15 Ektar100 | 1 | 0.707 |
+  | 07-23 Portra160 | 4 | 0.725 |
+  | 07-24 Gold200 | 2 | 0.727 |
+  | 09-09 Ektar100 | 4 | 0.642 (0.53 shaded cloth … 0.72 sunlit flag) |
+  | 09-11 Portra400 | 3 | 0.780 |
+  | 09-14 Ektar100 | 4 | 0.778 |
+  | 09-18 Gold200 | 5 | 0.789 |
+  | 09-20 Portra400 | 2 | 0.762 |
+
+  **Blue splits by roll, as green does** (`scale-ladder`): July at the shipped 0.73, four
+  September rolls at 0.76–0.79; pooled 0.745–0.757. Green at 0.84 shows the ladder's split
+  too (July patches magenta, September green). Under `direct` there is no white balance,
+  so a patch's level carries its light and the roll's cast — 09-09's shade/sun gap is
+  skylight — and only a within-roll trend with L\* is the scale's signal (09-18 1810 and
+  09-14 1713 yellow as L\* rises, favouring higher blue there). Verdict: **hard to tell by
+  eye; `[1, 0.84, 0.73]` stays.** One global value cannot close a between-roll spread;
+  that needs the known-neutral frames.
+- 2026-09-27: **the direct rendering works as the held rendering** (user): with the roll
+  unapplied and desaturation off, a candidate's cast shows and nothing masks it.
+- 2026-09-27: **done.** No value moved, so no `pipeline_version` bump or fingerprint row.
+  **For dependents:** `scale` `[1, 0.84, 0.73]` and linearization 1.8 stand as picks; the
+  per-roll split (green and blue) is real and one global value cannot remove it. The
+  re-run against the calibration frames — `scale` from a bracketed neutral's slope, and
+  whether 1.8 linearizes — is `neutrality-gate`'s. `offset-question` and
+  `user-calibration-procedure` inherit the values unchanged.
 
 ## offset-question
 

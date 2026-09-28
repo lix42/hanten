@@ -318,14 +318,14 @@ const KEPT_FLAGS: &[KeptEntry] = &[
     // `reconstruction` section; `crate::recipe::merge` sets each one there.
     KeptEntry {
         covers: &["--density-scale", "--density-offset"],
-        why: "the decode's own calibration — `nf-calibration/scale-gamma-loop` owns the \
+        why: "the decode's own calibration — `nf-calibration/neutrality-gate` owns the \
               values, this gate only keeps them reachable",
     },
     KeptEntry {
         covers: &["--density-gamma"],
         why: "the fixed decode's linearization (recipe `reconstruction.linearization`) — \
-              the calibrated half of `gamma`, which `nf-calibration/scale-gamma-loop` tunes \
-              with `scale`; print contrast is `--contrast`",
+              the calibrated half of `gamma`, which `nf-calibration/neutrality-gate` \
+              measures with `scale`; print contrast is `--contrast`",
     },
     // Scene correction (`nf-scene-correction/stage`). `--exposure` is the new chain's
     // own spelling; white balance keeps the current chain's, since the knob means the
@@ -431,9 +431,8 @@ fn output_preset_counterpart(args: &ConvertArgs) -> Option<String> {
     let name = args.output_opts.output_preset.as_deref()?;
     let preset = crate::types::OutputPreset::parse(name).ok()?;
     Some(match counterpart(preset) {
-        // The film master runs no rendering, so `direct` is refused beside it: name the
-        // way back when `direct` may be in play — typed, or from a recipe this refusal
-        // runs too early to read.
+        // `direct` is refused beside the film master: name the way back when it may be
+        // in play (typed, or from a recipe this refusal runs too early to read).
         Counterpart::Flags(flags) if preset == crate::types::OutputPreset::FilmMaster => {
             let direct = args.rendering.rendering == Some(crate::rendering::Rendering::Direct);
             let rendering = if direct {
@@ -460,9 +459,8 @@ fn output_preset_counterpart(args: &ConvertArgs) -> Option<String> {
 /// The new chain's counterpart of a current-chain output preset.
 #[derive(Debug)]
 enum Counterpart {
-    /// These flags write the same kind of file — under either rendering: each set states
-    /// enough axes to resolve to the same destination whatever the rendering's defaults
-    /// (`counterparts_resolve`), since this refusal runs before the recipe is read.
+    /// These flags write the same kind of file under either rendering: this refusal runs
+    /// before the recipe says which (`counterparts_resolve`).
     Flags(&'static str),
     /// No destination writes the same file, and none is planned; `flags` write the
     /// closest one, and `differs` says how it differs.
@@ -485,8 +483,6 @@ enum Counterpart {
 fn counterpart(preset: crate::types::OutputPreset) -> Counterpart {
     use crate::types::OutputPreset as P;
     match preset {
-        // Stated rather than "drop the flag": unset, `--rendering direct` writes the HDR
-        // float TIFF.
         P::DisplayP3 => Counterpart::Flags("--gamut display-p3"),
         P::FilmMaster => Counterpart::Flags("--film-master"),
         P::HdrLinearTiff => Counterpart::Flags("--transfer linear"),
@@ -496,7 +492,6 @@ fn counterpart(preset: crate::types::OutputPreset) -> Counterpart {
         P::HdrHlg => Counterpart::Flags("--transfer hlg --container avif"),
         // Neither is the same file: the new flow's map is per-channel and ISO-only, so a
         // reader that knows only the Ultra HDR v1 XMP shows its SDR base.
-        // The container stated: under `direct`, `--range hdr` alone is the float TIFF.
         P::GainMapHdr => Counterpart::Nearest {
             flags: "--range hdr --container jpeg",
             differs: "its gain map is per-channel and carries ISO 21496-1 metadata only, \
@@ -1130,8 +1125,7 @@ mod tests {
     #[test]
     fn counterparts_resolve() {
         use crate::destination::{Defaults, Gamut, parse, resolve};
-        // Under every rendering's defaults, and to the same destination under each: the
-        // refusal runs before the recipe, so it cannot know which rendering applies.
+        // The same destination under every rendering's defaults.
         let renderings = [Defaults::STANDARD, crate::rendering::DIRECT.axes];
         let same_under_each = |preset, flags: &str| {
             let axes = stated(flags).expect("an axis set");
@@ -1188,7 +1182,6 @@ mod tests {
             "{}",
             text(&["--params", "r.json"])
         );
-        // No longer "drop the flag": unset is the float TIFF under `direct`.
         let p3 =
             output_preset_counterpart(&parse_convert(true, &["--output-preset", "display-p3"]))
                 .unwrap();

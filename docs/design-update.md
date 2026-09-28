@@ -202,8 +202,8 @@ reference white, where the renderer's range check rejects the frame.)
 anchor rule, `gamma` split into a calibrated half and a look half, `Dmax` out of
 the default path — those are the design, and moving one is a design change. The
 values in them — `d ≈ 0.62`, the linearization ≈1.8, `density.scale`, and
-`offset = [0, 0, 0]` — are today's best estimates and are **expected to move**: by
-visual review now (Part 3), and by the bracketed calibration frames later. That
+`offset = [0, 0, 0]` — are today's best estimates and are **expected to move**: `scale`
+by visual review now (Part 3), all of them by the bracketed calibration frames later. That
 is not free (every default pixel moves, so it costs a `pipeline_version` bump
 and a drift-gate row) but it is planned, not a regression. Whether a value
 should also stay reachable by the end user is a separate question this doc does
@@ -337,8 +337,8 @@ not "datasheet vs content" but **fitted per frame vs measured per roll**.
   `gamma`'s print- contrast half; `shadow_balance` / `highlight_balance` (a
   grade — see Part 2's per-channel control, which subsumes them; retired in
   `nf-retire/regional-balance`).
-- **Tuned by review:** `scale` and `gamma` are the two knobs a visual review can
-  settle. `#124` (the `scale` recalibration) was the first such round; `#120`
+- **Tuned by review:** `scale` is the knob a visual review can settle; `gamma`'s
+  linearization is measured from the bracket (`nf-calibration/neutrality-gate`). `#124` (the `scale` recalibration) was the first such round; `#120`
   moved the shared *brightness* target, which this design puts in rendering, so
   it is not a precedent for the loop.
 
@@ -771,13 +771,38 @@ is defined as `BUNDLED_CONTRAST / LINEARIZATION`, so the whole contrast holds wh
 linearization moves. Which whole contrast the fallback should be (the user's prior is
 about 2.5, i.e. `look.contrast ≈ 1.39`) is `nf-calibration/no-roll-defaults`'s.
 
-**Keeping `direct` current as stages change.** `direct`'s values are one struct built
-without `..`, so a new stage knob fails to compile until someone decides its `direct`
-value by the principle above. A pinned test holds the resolved values and names the
-module doc that says how to re-decide them. When `direct`'s output moves, the move is
-logged in `nf-calibration`'s progress, because review rounds judged before and after it
-no longer compare like for like. A task that changes a stage (say, a new fit-range
-operator) decides `direct`'s part as its own work.
+**Recipe warnings, not refusals** (`Recipe::recipe_warnings`). A file cannot say who
+chose a value, and a `--dump-params` recipe must replay as it rendered, so nothing is read
+as unset by its value and nothing is refused; the run warns once instead, and a typed flag
+(a choice made now) never does. What the warnings catch is a value nobody chose: earlier
+builds wrote every default into a recipe, and an earlier `measure-roll` wrote its gains
+into `scene_correction.white_balance` and its contrast into `look.contrast`.
+
+- `default` without a roll measurement: what fell back.
+- `default`, a recipe value beside a roll measurement: a white balance that multiplies the
+  roll's gains, a contrast that overrides the roll's white.
+- `direct`, narrowly: only highlight desaturation at 0.8 (every other old default equals
+  `direct`'s base) and a white balance or contrast beside a `roll` section (old
+  `measure-roll` output). Narrow so a dump of a deliberate adjustment replays under
+  `--strict`; the one carve-out is a value typed beside a `roll` section, which warns on
+  replay unless the flag is typed again.
+
+**Keeping `direct` current as stages change.** `direct`'s values are its own constants
+(`rendering::DIRECT`), never today's defaults read through, so moving a default does not
+move the rendering the calibration loop holds. The resolver destructures every stage
+section without `..`, so a new stage knob fails to compile until it has a base, and
+`direct_is_pinned` fails on any change to `DIRECT`. When either happens:
+
+1. **Decide the knob's `direct` value by the principle.** Needed to land in the
+   container: the gentlest fixed value. A choice of taste: its identity.
+   Information-preserving, like display black's monotone stretch: it may stay.
+2. **Update `DIRECT`, the pinned test and the table above together.**
+3. **If `direct`'s output moved, log it** as a dated entry in `nf-calibration`'s
+   progress: review rounds judged before and after the move no longer compare like for
+   like.
+
+A task that changes a stage (say, a new fit-range operator) decides `direct`'s part as
+its own work.
 
 ## `film-master` is the reconstruction output
 
@@ -908,7 +933,7 @@ direction* is evidence where one disagreeing is not.
 
 ## Tuning order
 
-The loop tunes **decode** knobs — `scale` and `gamma` — while rendering is held
+The loop tunes the **decode's** `scale` while rendering is held
 fixed, and `--rendering direct --range sdr` (Part 2, "Two renderings") is the
 rendering to hold:
 with the roll section unapplied, white balance identity and the look reduced to the
@@ -921,8 +946,11 @@ The loop settles the **common-ground** values, not per-frame neutrality: one
 `scale` cannot fit every scan, and the residual is rendering's to grade. `scale`
 first, then `gamma`: the cast is the open question, and contrast is easier to
 judge once the cast is settled. Two or three candidates per review set
-keeps a frame's toggle manageable. `#124` and the 2026-09-17 offset test are the
-rounds so far.
+keeps a frame's toggle manageable. `#124`, the 2026-09-17 offset test and the
+2026-09-27 blue round (`nf-calibration/scale-gamma-loop`: nothing moved; `scale` splits
+by roll) are the rounds so far. The linearization is not judged this way: on a neutral it
+acts only through its product with `look.contrast`. The next pass is against the
+calibration frames (`nf-calibration/neutrality-gate`).
 
 **Note what the offset test showed about the loop itself.** The candidates were
 built from patch arithmetic and the arithmetic preferred them; the eye rejected
