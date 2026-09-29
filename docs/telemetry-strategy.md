@@ -1,6 +1,6 @@
 # Telemetry strategy
 
-**Status:** approved 2026-07-23; amended 2026-09-27 (see Amendments)
+**Status:** approved 2026-07-23; amended 2026-09-27 and 2026-09-28 (see Amendments)
 
 ## Amendments
 
@@ -15,6 +15,18 @@
   `timing_ms` has one field per `crate::stage::StageKind` rather than `algorithm` /
   `color`; retired reconstructions in `conversion.algorithm`; `u8`/`u10` outputs;
   exit 6). `telemetry/schema-v2` revises it — see that task file's open questions.
+
+**2026-09-28** (at `telemetry/schema-v2`, user-approved):
+
+- **The upload manifest's revision is recorded in
+  [`telemetry/upload-schema`](tasks/telemetry/upload-schema.md)**, which now owns the
+  projection, JSON Schema and corpus; `telemetry/schema-v2` keeps the local events.
+  Where the manifest below and that task file disagree, the task file wins.
+- **Every local event carries its `event_id`** from the moment it is written; the
+  uploader assigns none, and the projection copies it.
+- **`convert` parse failures** are recorded only under persistent consent
+  (`telemetry/upload`): before parsing, nc cannot know whether `--telemetry` was
+  passed.
 
 This note decides how `nc` grows the shipped local-only performance record into
 anonymous, explicitly consented remote telemetry. It is the output of the
@@ -685,14 +697,17 @@ rates are intentionally unavailable.
 ```mermaid
 graph TD
   telemetry/strategy --> telemetry/schema-v2
-  telemetry/schema-v2 --> telemetry/ingestion-service
-  telemetry/schema-v2 --> telemetry/upload
+  telemetry/schema-v2 --> telemetry/upload-schema
+  telemetry/upload-schema --> telemetry/ingestion-service
+  telemetry/upload-schema --> telemetry/upload
   telemetry/ingestion-service --> telemetry/upload
   telemetry/upload --> telemetry/panic-hook
 ```
 
 - [`telemetry/schema-v2`](tasks/telemetry/schema-v2.md) owns typed success/failure
-  events and the privacy projection.
+  local events.
+- [`telemetry/upload-schema`](tasks/telemetry/upload-schema.md) owns the privacy
+  projection, the upload JSON Schema and the shared corpus.
 - [`telemetry/ingestion-service`](tasks/telemetry/ingestion-service.md) owns the
   Worker, D1 schema, validation, retention, and initial queries.
 - [`telemetry/upload`](tasks/telemetry/upload.md) owns persistent consent,

@@ -14,6 +14,13 @@ Amendments). The local-v1 import and legacy-projection requirements below are
 withdrawn; decide here whether legacy lines in a selected file are skipped,
 quarantined or left alone.
 
+**Amended 2026-09-28** (at `telemetry/schema-v2`): every local event carries its
+own `event_id` from the moment it is written, so the uploader assigns no IDs; the
+ID-assignment/persistence passages below reduce to "keep the event's ID". Recording
+`convert` **parse** failures (before `--telemetry` is known) moves here: under
+persistent consent, classify a clap error as `convert` without copying any argv
+text, and write a `stage: "parse"` failure event.
+
 ## Design
 
 Add a `hanten telemetry` maintenance surface:
@@ -163,7 +170,7 @@ local `status`; never emit recursive telemetry about telemetry. Preserve the
 existing one-off-file behavior outside this cap.
 
 The endpoint is configured at build/release time and accepts only the separate
-upload-v1 shape from `telemetry/schema-v2`. No client secret or stable identity is
+upload-v1 shape from `telemetry/upload-schema`. No client secret or stable identity is
 embedded in the public binary.
 
 Purge is allowed only from inactive consent. It takes exclusive collection
@@ -230,14 +237,14 @@ race networking.
   output TIFF, sidecar, and report unchanged; a separate platform-tolerant test
   checks bounded launch overhead rather than impossible wall-clock equality.
 - The canonical local-v2 ready panic fixture owned by
-  `telemetry/schema-v2`'s shared corpus is consumed
+  `telemetry/upload-schema`'s shared corpus is consumed
   through projection, acknowledgement/deletion, retry/deduplication, and
   permanent rejection/quarantine.
 
 ## Dependencies
 
-- [Telemetry event schema v2](schema-v2.md) — supplies local event
-  parsing, pure legacy projection, shared fixtures, and the upload privacy
-  projection.
+- [Telemetry upload schema v1](upload-schema.md) — supplies the upload privacy
+  projection of the local events `telemetry/schema-v2` writes, and the shared
+  fixtures.
 - [Telemetry ingestion service](ingestion-service.md) — supplies the
   deployed `/v1/events` acknowledgement and retry contract.

@@ -68,8 +68,8 @@ termination.
   cannot remove the spool while the hook may still publish;
 - the previous/default hook still runs.
 
-The canonical local-v2 `panic-ready` byte fixture is owned by
-`telemetry/schema-v2`'s shared corpus. Panic-hook tests must emit a byte-compatible
+The canonical local `panic-ready` byte fixture is owned by
+`telemetry/upload-schema`'s shared corpus. Panic-hook tests must emit a byte-compatible
 ready file. Uploader tests independently consume that shared fixture through
 projection and delivery; neither task produces an artifact for the other, so the
 fixture does not add a separate direct schema dependency. Schema remains
@@ -82,5 +82,5 @@ Document manual expectations for uncaptured native termination classes.
 - [Background telemetry upload](upload.md) — supplies the managed
   consent generation, invocation collection lease, private spool lifecycle,
   uploader reconciliation, and purge synchronization required by the hook.
-  Its schema-v2 dependency transitively supplies the common envelope, enums,
+  Its upload-schema dependency transitively supplies the common envelope, enums,
   privacy projection, shared fixture, and panic upload shape.

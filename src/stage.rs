@@ -10,6 +10,8 @@
 
 use serde::Serialize;
 
+use crate::types::Result;
+
 /// One stage of a conversion, in run order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,8 +53,11 @@ impl StageKind {
 }
 
 /// Times a stage by running it. The one impure seam a stage's caller holds.
+///
+/// `run` returns a `Result` so the clock knows which stage failed. A stage whose
+/// error is not the run's (a fallback, a warning) returns `Ok` of its inner result.
 pub trait StageClock {
-    fn time<T>(&mut self, stage: StageKind, run: impl FnOnce() -> T) -> T;
+    fn time<T>(&mut self, stage: StageKind, run: impl FnOnce() -> Result<T>) -> Result<T>;
 }
 
 /// A clock that records nothing.
@@ -61,7 +66,7 @@ pub struct Untimed;
 
 #[cfg(test)]
 impl StageClock for Untimed {
-    fn time<T>(&mut self, _: StageKind, run: impl FnOnce() -> T) -> T {
+    fn time<T>(&mut self, _: StageKind, run: impl FnOnce() -> Result<T>) -> Result<T> {
         run()
     }
 }

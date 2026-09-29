@@ -60,7 +60,7 @@ algorithm, platform, CPU/image/input-size/output cohorts.
 ## How to Verify
 
 - Worker tests accept every canonical upload fixture from
-  `telemetry/schema-v2`'s shared schema/corpus, reject unsupported
+  `telemetry/upload-schema`'s shared schema/corpus, reject unsupported
   versions/unknown keys/wrong types/enums/encodings/ranges/forbidden
   fields/oversized batches, and return stable rejection codes.
 - Replaying an `event_id` returns `duplicate` and leaves one D1 row.
@@ -81,5 +81,5 @@ algorithm, platform, CPU/image/input-size/output cohorts.
 
 ## Dependencies
 
-- [Telemetry event schema v2](schema-v2.md) — supplies the canonical
+- [Telemetry upload schema v1](upload-schema.md) — supplies the canonical
   upload-v1 fixtures, bounds, enums, and privacy allowlist.

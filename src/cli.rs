@@ -43,7 +43,7 @@ use crate::pipeline::{
 };
 use crate::recipe::{self, KnobNames, Recipe};
 use crate::stage::{StageClock, StageKind};
-use crate::telemetry::{self, TimingInfo};
+use crate::telemetry;
 use crate::types::{
     DEFAULT_MEASURE_INSET, EncodeOutcome, EncodeReport, FilmBase, FilmBaseSource, FilmType,
     InputParams, LinearImage, MeaningAssertion, NcError, OutDepth, OutputStats,
@@ -2890,16 +2890,22 @@ fn input_assertions(input: &InputParams, from_cli: InputFromCli) -> InputAsserti
 }
 
 /// Everything one frame's pipeline produced, for the orchestrator to emit or
-/// aggregate. `convert` (single frame) reads all of it — the report to emit, and
-/// `info` / `timings` / `loss` for its optional telemetry record; `roll` reads only
-/// `report` (telemetry is `convert`-only, design-spec §9).
+/// aggregate. `convert` reads the report and `loss` (for its telemetry event); `roll`
+/// reads only `report` (telemetry is `convert`-only, design-spec §9).
 struct ConvertedFrame {
     report: Report,
-    info: DecodeInfo,
-    /// Per-stage wall clocks; `total` is left `0.0` for the orchestrator to fill
-    /// from its own whole-run clock (this struct times only the stages here).
-    timings: telemetry::TimingInfo,
     loss: EncodeReport,
+}
+
+/// What a frame learned before it ended, owned by the caller so a frame that fails
+/// still hands it back: `roll` reports the preflight's decision, and `convert`'s
+/// telemetry event the decode's facts and the stages' times.
+#[derive(Default)]
+struct FrameFacts {
+    memory: Option<MemoryReport>,
+    info: Option<DecodeInfo>,
+    /// The stages' wall clocks; `total` stays `0.0` for the orchestrator to fill.
+    clock: telemetry::StageTimer,
 }
 
 /// Run the memory preflight for one input and fold its outcome into the run:
@@ -2977,10 +2983,11 @@ fn sample_plan(source: &FilmBaseSource) -> SamplePlan {
 /// stderr as they occur) so they survive an early failure: on success they are
 /// also moved into the returned report, but on the `Err` path they stay in the
 /// caller's buffer — the roll orchestrator attaches them to a failed frame's
-/// report. The caller decides whether `--strict` promotes them. `memory_out`
-/// carries the preflight's decision back the same way and for the same reason: a
-/// frame that passed the gate and then failed later is exactly where a reader wants
-/// the estimate, so it must not be lost with the returned report.
+/// report. The caller decides whether `--strict` promotes them. `facts` carries the
+/// preflight's decision, the decode's facts and the stage clock back the same way
+/// and for the same reason: a frame that passed the gate and then failed later is
+/// exactly where a reader wants the estimate, so it must not be lost with the
+/// returned report.
 // One over clippy's argument cap: the orchestration core legitimately threads the
 // frame identity, the recipe, the run's memory budget, and the two report-provenance
 // out-params; a struct wrapping a handful of one-off values would only obscure the
@@ -2996,7 +3003,7 @@ fn convert_frame(
     // cleanup never removes one — see `render_frame`.
     read_inputs: &[&Path],
     budget: memory::Budget,
-    memory_out: &mut Option<MemoryReport>,
+    facts: &mut FrameFacts,
     log: &Log,
     warnings: &mut Vec<String>,
 ) -> Result<ConvertedFrame> {
@@ -3041,17 +3048,18 @@ fn convert_frame(
     // Out-param first, so the diagnostic survives a later failure on this frame:
     // the roll orchestrator attaches it to the frame report either way (a frame that
     // passed the gate and then failed is exactly where a reader wants the estimate).
-    *memory_out = Some(mem);
+    facts.memory = Some(mem);
     report.memory = Some(mem);
 
-    // Stage 1 — decode. Per-stage wall clocks (`TimingInfo`, one field per
-    // `StageKind`) feed the telemetry record only and never touch the image; they are
-    // measured whether or not telemetry is enabled, so the render path is uniform.
+    // Stage 1 — decode. The stage clock (`StageTimer`) feeds telemetry only and never
+    // touches the image; it runs whether or not telemetry is enabled, so the render
+    // path is uniform.
     // `decode_for_roll_white` (`measure-roll`) repeats this front half — preflight,
     // decode, input semantics, positive-mode refusal, effective area and its warnings —
     // up to the chain; a gate added here belongs there too.
-    let mut timings = TimingInfo::default();
-    let (image, info) = timings.time(StageKind::Decode, || decode_within(input, budget.bytes()))?;
+    let clock = &mut facts.clock;
+    let (image, info) = clock.time(StageKind::Decode, || decode_within(input, budget.bytes()))?;
+    let info: &DecodeInfo = facts.info.insert(info);
     log.info(format_args!(
         "decoded {:?} {}x{} (ir={})",
         info.format, info.width, info.height, info.ir_present
@@ -3067,7 +3075,7 @@ fn convert_frame(
     // unsupported error — never a quietly-wrong image. The resolution rides into
     // the report (with evidence + a safe ICC summary) regardless.
     let input_meta = input_semantics::resolve(
-        &container_color_facts(&info),
+        &container_color_facts(info),
         &input_assertions(&recipe.input, input_from_cli),
     )?;
     let input_report = InputColorReport::from_metadata(&input_meta);
@@ -3084,7 +3092,7 @@ fn convert_frame(
     // A SilverFast positive-mode scan passes the transfer/meaning gate (it is raw
     // linear scanner data) but must not be converted as a negative — reject it
     // loudly with a distinct message rather than silently misconvert.
-    reject_positive_mode(&info)?;
+    reject_positive_mode(info)?;
 
     // `--export-ir` on a scan with no IR plane can't be honored: fail fast,
     // before writing any output, rather than after the main encode.
@@ -3113,7 +3121,9 @@ fn convert_frame(
     // refusing to find a rebate is exactly when "the IR plane could not help" is
     // worth reading — and a failed stage 2 returns no `BaseEstimate` to carry it.
     // Both calls are bounded strided samples, so the duplication is ~100k reads.
-    let ir_separability = timings.time(StageKind::FilmBase, || film_base::ir_separability(&image));
+    let ir_separability = clock.time(StageKind::FilmBase, || {
+        Ok(film_base::ir_separability(&image))
+    })?;
     let ir_usable = ir_separability.is_some_and(|s| s.usable);
 
     // When holder detection wanted the IR mask but the plane is shape-only, it
@@ -3159,7 +3169,7 @@ fn convert_frame(
     // JSON report on a successful run. (A hard render failure propagates its error
     // and exit code like every other error path and emits no report; the stderr
     // warnings still stand.)
-    let base = timings.time(StageKind::FilmBase, || {
+    let base = clock.time(StageKind::FilmBase, || {
         film_base::estimate(&image, &base_source)
     })?;
     report.film_base = Some(base.base);
@@ -3179,9 +3189,11 @@ fn convert_frame(
     // so an **empty** region is a warning rather than a refusal, with no
     // `report.effective_area`, because there is no region to report. A consumer added
     // here must decide whether an empty region becomes fatal for it.
-    let area = timings.time(StageKind::FilmBase, || {
-        film_base::effective_area(&image, recipe.measure.inset)
-    });
+    // Timed as a success whatever it returns: an empty region is a warning, not the
+    // run's failure.
+    let area = clock.time(StageKind::FilmBase, || {
+        Ok(film_base::effective_area(&image, recipe.measure.inset))
+    })?;
     match area {
         Ok(area) => {
             report.effective_area = Some(area);
@@ -3247,10 +3259,9 @@ fn convert_frame(
             export_ir,
             output,
             report,
-            info,
-            timings,
             read_inputs,
         },
+        clock,
         log,
         warnings,
     )
@@ -3861,9 +3872,6 @@ struct DecodedFrame<'a> {
     export_ir: Option<PathBuf>,
     output: &'a Path,
     report: Report,
-    info: DecodeInfo,
-    /// The run's stage clock, holding the decode's and the film base's times.
-    timings: TimingInfo,
     read_inputs: &'a [&'a Path],
 }
 
@@ -3875,6 +3883,8 @@ struct DecodedFrame<'a> {
 /// primary last. No sidecar is written.
 fn render_frame(
     frame: DecodedFrame<'_>,
+    // The run's stage clock, holding the decode's and the film base's times.
+    clock: &mut telemetry::StageTimer,
     log: &Log,
     warnings: &mut Vec<String>,
 ) -> Result<ConvertedFrame> {
@@ -3886,14 +3896,12 @@ fn render_frame(
         export_ir,
         output,
         mut report,
-        info,
-        mut timings,
         read_inputs,
     } = frame;
     let decode_params = recipe.reconstruction;
 
     // Reconstruction: the fixed decode, then the pinned NC film RGB v1 3×3.
-    let (aces, decoded) = timings.time(StageKind::Reconstruction, || {
+    let (aces, decoded) = clock.time(StageKind::Reconstruction, || {
         fixed::decode(&image, &base, &decode_params)
             .map(|(film, decoded)| (working_space::map_nc_film_rgb_v1(film), decoded))
     })?;
@@ -3909,7 +3917,7 @@ fn render_frame(
     // The chain, then the destination's transfer. Clear any stale lcms2 flag first so
     // only a fault from *this* transform is counted.
     let _ = cms_error_occurred();
-    let render = render_destination(aces, &base, recipe, destination, &mut timings)?;
+    let render = render_destination(aces, &base, recipe, destination, clock)?;
     if cms_error_occurred() {
         return Err(NcError::Other(
             "color management (lcms2) reported a runtime error; see stderr".into(),
@@ -3955,13 +3963,13 @@ fn render_frame(
     let mut pending: Vec<staged::Staged> = Vec::new();
     if let Some(path) = &export_ir {
         let depth = render.ir_depth();
-        pending.push(timings.time(StageKind::IrExport, || {
+        pending.push(clock.time(StageKind::IrExport, || {
             encode::export_ir(&image, depth, path)
         })?);
         report.ir_exported = Some(path.clone());
     }
 
-    let (primary, mut outcome) = timings.time(StageKind::Encode, || {
+    let (primary, mut outcome) = clock.time(StageKind::Encode, || {
         encode_render(render, output, &mut report, log, warnings)
     })?;
     if cms_error_occurred() {
@@ -4040,8 +4048,6 @@ fn render_frame(
     report.warnings = std::mem::take(warnings);
     Ok(ConvertedFrame {
         report,
-        info,
-        timings,
         loss: outcome.loss,
     })
 }
@@ -4050,21 +4056,114 @@ fn render_frame(
 /// chain → encode (+ optional IR export). Warnings are
 /// collected into the report and echoed to stderr; `--strict` promotes any of
 /// them to a non-zero exit.
+///
+/// Telemetry (opt-in) is emitted here, once the run's outcome is fixed: a success
+/// event, or a failure event carrying what [`ConvertAttempt`] had learned.
 fn run_convert(args: ConvertArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
+    // Read once, so the guarded and the written log path are the same.
+    let telemetry_log = if args.telemetry {
+        telemetry::default_log_path()
+    } else {
+        None
+    };
+    let mut attempt = ConvertAttempt::default();
+    let result = convert_attempt(&args, &log, started, telemetry_log.as_deref(), &mut attempt);
+    if telemetry_requested(&args) {
+        emit_telemetry(
+            &args,
+            &log,
+            started,
+            &attempt,
+            result.as_ref().err(),
+            telemetry_log.as_deref(),
+        );
+    }
+    result
+}
 
+/// Where a `convert` is, for a failure event's `stage`.
+#[derive(Clone, Copy, Debug, Default)]
+enum ConvertPhase {
+    /// Before the frame: recipe, validation, output path, the write-target guard.
+    #[default]
+    Setup,
+    /// Inside [`convert_frame`]; its stage clock says where.
+    Frame,
+    /// After the frame: the report and the `--strict` gate.
+    Finalize(FinishedFrame),
+}
+
+/// What a frame that succeeded hands the rest of the run's telemetry.
+#[derive(Clone, Copy, Debug)]
+struct FinishedFrame {
+    loss: EncodeReport,
+    /// The report's warning count.
+    warnings: usize,
+    /// The run's time up to the report.
+    total_ms: f64,
+}
+
+/// What a `convert` learned as it ran, filled in as each fact becomes known, so a
+/// failure event carries exactly what the run reached. Its `warnings` are the run's
+/// own buffer; the rest is read only by telemetry.
+#[derive(Default)]
+struct ConvertAttempt {
+    phase: ConvertPhase,
+    frame: FrameFacts,
+    /// Accumulated as they are raised; moved into the report on success.
+    warnings: Vec<String>,
+    /// The resolved output path and the recipe's `--export-ir` path, once known — the
+    /// paths a failure event's sinks must not land on.
+    output: Option<PathBuf>,
+    export_ir: Option<PathBuf>,
+    /// Set once the destination resolved.
+    conversion: Option<telemetry::ConversionInfo>,
+    /// The write-target guard passed, telemetry's sinks included.
+    guarded: bool,
+    /// The run failed on `--strict`, not on an error of its own.
+    strict: bool,
+}
+
+impl ConvertAttempt {
+    /// The stage a failure happened in.
+    fn failed_stage(&self) -> telemetry::EventStage {
+        match self.phase {
+            ConvertPhase::Setup => telemetry::EventStage::Setup,
+            ConvertPhase::Frame => self.frame.clock.failed_stage(),
+            ConvertPhase::Finalize(_) => telemetry::EventStage::Finalize,
+        }
+    }
+
+    fn finished(&self) -> Option<FinishedFrame> {
+        match self.phase {
+            ConvertPhase::Finalize(finished) => Some(finished),
+            _ => None,
+        }
+    }
+}
+
+/// The body of [`run_convert`], recording what it learns into `attempt`.
+fn convert_attempt(
+    args: &ConvertArgs,
+    log: &Log,
+    started: Instant,
+    telemetry_log: Option<&Path>,
+    attempt: &mut ConvertAttempt,
+) -> Result<()> {
     reject_deprecated_input_flags(&args.input_opts)?;
     // Removed flags run first, so a retired spelling is diagnosed as retired before any
     // rule reasons about the values the recipe resolves.
-    reject_removed_flags(&args)?;
+    reject_removed_flags(args)?;
     // A recipe written for the removed chain is refused inside the load, by name.
     let loaded = load_recipe(args.recipe_in.as_deref())?;
     // The flags win over the recipe.
-    let recipe = recipe::merge(loaded.recipe, &args);
+    let recipe = recipe::merge(loaded.recipe, args);
+    attempt.export_ir = recipe.input.export_ir.as_deref().map(PathBuf::from);
     // A flag-presence rule, ahead of every value rule that could refuse first.
-    reject_roll_flags_nothing_applies(&args, &recipe)?;
-    validate_convert(&recipe, &args)?;
+    reject_roll_flags_nothing_applies(args, &recipe)?;
+    validate_convert(&recipe, args)?;
 
     // The path nc actually writes: `-o out` under the default becomes `out.tiff`.
     // Resolved **here**, before anything derives from it — the write-target guard, the
@@ -4074,6 +4173,8 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     let target =
         OutputTarget::resolve(&recipe, KnobNames::FlagAndKey, args.destination.film_master)?;
     let output = resolve_output_path(&args.output, target, SuffixContext::Convert)?;
+    attempt.output = Some(output.clone());
+    attempt.conversion = Some(conversion_info(&recipe, target.destination));
     if output != args.output {
         log.info(format!(
             "output path completed from the destination {}: writing {}",
@@ -4083,70 +4184,51 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     }
 
     // Guard every write target against the input and against each other before
-    // anything is decoded or written.
-    //
-    // The persistent `--telemetry` log is also a write target: a `NC_TELEMETRY_LOG` /
-    // default path that collides with the input or an artifact is rejected up front
-    // like `--telemetry-file`, so an odd log path can't silently append into (and
-    // corrupt) the input scan or the output. Resolved here so the borrow outlives
-    // `targets`.
-    let telemetry_log = if args.telemetry {
-        telemetry::default_log_path()
-    } else {
-        None
-    };
-    let mut targets: Vec<(&str, &Path)> = vec![("--output", &output)];
-    if let Some(p) = &args.dump_params {
-        targets.push(("--dump-params", p));
+    // anything is decoded or written — telemetry's sinks included, so an odd
+    // `NC_TELEMETRY_LOG` or `--telemetry-file` can't append into (and corrupt) the
+    // input scan or an artifact. A collision is a config error, distinct from a
+    // telemetry *write* failure, which is fail-soft.
+    ensure_write_targets_distinct(
+        &args.input,
+        &write_targets(args, &output, attempt.export_ir.as_deref(), telemetry_log),
+    )?;
+    if let Some(msg) =
+        telemetry_sink_collision(args, &output, attempt.export_ir.as_deref(), telemetry_log)
+    {
+        return Err(NcError::Usage(msg));
     }
-    if let Some(p) = args.report.report_file.as_deref() {
-        targets.push(("--report-file", p));
-    }
-    if let Some(p) = recipe.input.export_ir.as_deref() {
-        targets.push(("--export-ir", Path::new(p)));
-    }
-    // A `--telemetry-file` pointing at a real artifact would clobber it (the record is
-    // written last, after the output). A path collision is a config error, so it fails
-    // loudly up front like the other targets — distinct from a telemetry *write*
-    // failure, which is fail-soft (handled after the conversion). `-` (stdout) is not a
-    // filesystem target, so it's excluded from the check.
-    if let Some(p) = telemetry_file_target(&args) {
-        targets.push(("--telemetry-file", p));
-    }
-    if let Some(p) = &telemetry_log {
-        targets.push(("the telemetry log", p));
-    }
-    ensure_write_targets_distinct(&args.input, &targets)?;
+    attempt.guarded = true;
 
     // The resolved recipe, which reloads through `--params` to the same run.
     if let Some(path) = &args.dump_params {
-        write_json(path, &recipe, &log)?;
+        write_json(path, &recipe, log)?;
     }
     // `--seed` is reserved (no stochastic step in Step 1) but accepted so the
     // documented flag isn't rejected; nothing consumes it yet.
     let _ = args.seed;
 
-    // The per-frame pipeline core (decode → film-base → render → encode), shared
-    // byte-for-byte with `roll`. Operational concerns the two orchestrators layer
-    // differently — report emission, `--strict` gating, telemetry — stay out here.
-    let mut warnings = Vec::new();
     // Replaying a sidecar captured under a *different* behavioral `pipeline_version`
     // still applies its parameters, but the default render has changed underneath
     // them — so the pixels won't match the original. Loud and `--strict`-promotable
     // rather than a silently-different image: exposing exactly that mismatch is why
     // `pipeline_version` exists. Pushed before the conversion so it is on stderr before
-    // any work happens; note that on a *failed* frame `convert_frame(…)?` propagates
-    // and no report is emitted, so stderr is the only place it appears there. (`roll`
-    // differs: it records per-frame failures and still emits its report, so the
-    // roll-level warning survives a bad frame.)
+    // any work happens; note that on a *failed* frame no report is emitted, so stderr
+    // is the only place it appears there. (`roll` differs: it records per-frame
+    // failures and still emits its report, so the roll-level warning survives a bad
+    // frame.)
     if let Some(msg) = pipeline_version_warning(loaded.meta_pipeline_version) {
-        push_warning_buf(&mut warnings, &log, msg);
+        push_warning_buf(&mut attempt.warnings, log, msg);
     }
     // What the run's recipe falls back on, or states that nobody may have chosen — a fact
     // about the run's recipe, not the frame; a typed flag never warns.
-    for msg in recipe.recipe_warnings(recipe::TypedStyle::of(&args)) {
-        push_warning_buf(&mut warnings, &log, msg);
+    for msg in recipe.recipe_warnings(recipe::TypedStyle::of(args)) {
+        push_warning_buf(&mut attempt.warnings, log, msg);
     }
+
+    // The per-frame pipeline core (decode → film-base → render → encode), shared
+    // byte-for-byte with `roll`. Operational concerns the two orchestrators layer
+    // differently — report emission, `--strict` gating, telemetry — stay out here.
+    attempt.phase = ConvertPhase::Frame;
     let frame = convert_frame(
         "convert",
         &args.input,
@@ -4162,11 +4244,9 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
             .map(PathBuf::as_path)
             .collect::<Vec<_>>(),
         args.memory.budget(),
-        // `convert` reads the preflight decision off the returned report; the
-        // out-param exists for `roll`'s failed frames.
-        &mut None,
-        &log,
-        &mut warnings,
+        &mut attempt.frame,
+        log,
+        &mut attempt.warnings,
     );
 
     // A failure here drops the report, and with it every warning accumulated before
@@ -4175,30 +4255,28 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
     // but `--quiet` suppresses that, so under `--quiet` they would be lost on *both*
     // channels. Re-emit unconditionally (the `warn_always` treatment clipping already
     // gets) before propagating. `roll` honours this via `frame_report_err`.
-    let frame = match frame {
+    let ConvertedFrame { mut report, loss } = match frame {
         Ok(frame) => frame,
         Err(e) => {
             // Only the warnings `--quiet` swallowed: `push_warning_buf` already echoed
             // each one through `log.warn` as it was raised, so re-emitting
             // unconditionally would double-print them on a normal run.
             if log.quiet {
-                for w in &warnings {
+                for w in &attempt.warnings {
                     log.warn_always(w);
                 }
             }
             return Err(e);
         }
     };
-    let ConvertedFrame {
-        mut report,
-        info,
-        timings: stage_timings,
-        loss,
-    } = frame;
-
     let total_ms = elapsed_ms(started);
     report.elapsed_ms = Some(total_ms);
-    report.recipe = Some(recipe.clone());
+    report.recipe = Some(recipe);
+    attempt.phase = ConvertPhase::Finalize(FinishedFrame {
+        loss,
+        warnings: report.warnings.len(),
+        total_ms,
+    });
 
     // Emit the report before the `--strict` gate so the machine-readable record lands
     // even when a warning then fails the run. (A hard I/O error above returns earlier —
@@ -4207,47 +4285,47 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         &report,
         args.report.report,
         args.report.report_file.as_deref(),
-        &log,
+        log,
     )?;
 
-    // `--strict` promotes any present warning to a non-zero exit. Decide it here,
-    // *before* telemetry: a telemetry record's existence is the success signal (there
-    // is no `outcome.success` field — see telemetry/strategy), so a run that is about to
-    // exit non-zero must not leave a record that would read as a successful run. The
-    // report emitted above already carries the warning detail either way.
-    let strict_failure = args.strict && !report.warnings.is_empty();
-
-    // Telemetry (opt-in) is emitted after the deterministic output is written and only
-    // reads its facts, so it can't perturb it. It is best-effort: a write failure is
-    // warned on stderr and never fails the run (and `--strict` does not promote it), so
-    // it runs *after* the report and is kept out of `report.warnings` — see
-    // `emit_telemetry`. Skipped on a `--strict` failure so the log stays "one record per
-    // successful run".
-    if telemetry_requested(&args) && !strict_failure {
-        // `convert_frame` measured the per-stage wall clocks; the total is this
-        // orchestrator's whole-run clock.
-        let mut timings = stage_timings;
-        timings.total = total_ms;
-        emit_telemetry(
-            &args,
-            &output,
-            target.destination,
-            &info,
-            timings,
-            loss,
-            &report,
-            &log,
-            telemetry_log.as_deref(),
-        );
-    }
-
-    if strict_failure {
+    // `--strict` promotes any present warning to a non-zero exit — a failure event of
+    // its own kind, `strict`, not a successful conversion.
+    if args.strict && !report.warnings.is_empty() {
+        attempt.strict = true;
         return Err(NcError::Other(format!(
             "--strict: {} warning(s) present (see report)",
             report.warnings.len()
         )));
     }
     Ok(())
+}
+
+/// Every path a `convert` writes, labelled for [`ensure_write_targets_distinct`]:
+/// the output, `--dump-params`, `--report-file`, `--export-ir`, and telemetry's
+/// sinks (`--telemetry-file` unless it is `-`, and the resolved log).
+fn write_targets<'a>(
+    args: &'a ConvertArgs,
+    output: &'a Path,
+    export_ir: Option<&'a Path>,
+    telemetry_log: Option<&'a Path>,
+) -> Vec<(&'static str, &'a Path)> {
+    let mut targets: Vec<(&str, &Path)> = vec![("--output", output)];
+    if let Some(p) = &args.dump_params {
+        targets.push(("--dump-params", p));
+    }
+    if let Some(p) = args.report.report_file.as_deref() {
+        targets.push(("--report-file", p));
+    }
+    if let Some(p) = export_ir {
+        targets.push(("--export-ir", p));
+    }
+    if let Some(p) = telemetry_file_target(args) {
+        targets.push(("--telemetry-file", p));
+    }
+    if let Some(p) = telemetry_log {
+        targets.push(("the telemetry log", p));
+    }
+    targets
 }
 
 // ---------------------------------------------------------------------------
@@ -4964,7 +5042,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
         // that warns / gets sized and *then* fails still hands them back (the report
         // only rides out on success).
         let mut warnings = Vec::new();
-        let mut memory = None;
+        let mut facts = FrameFacts::default();
         match convert_frame(
             "roll",
             &pf.input,
@@ -4978,7 +5056,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
                 .map(PathBuf::as_path)
                 .collect::<Vec<_>>(),
             args.memory.budget(),
-            &mut memory,
+            &mut facts,
             &log,
             &mut warnings,
         ) {
@@ -4992,7 +5070,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
                 // continues (the loud non-zero exit + per-frame `error` are the
                 // signal). Echo to stderr too; stdout stays the JSON report.
                 log.warn(&format!("frame {} failed: {e}", pf.input.display()));
-                frames.push(frame_report_err(pf, &e, memory, warnings));
+                frames.push(frame_report_err(pf, &e, facts.memory, warnings));
             }
         }
     }
@@ -6218,95 +6296,109 @@ fn telemetry_file_target(args: &ConvertArgs) -> Option<&Path> {
     }
 }
 
-/// Build the telemetry record for a finished conversion and write it to the
-/// requested sink(s): the persistent JSONL log (`--telemetry`) and/or a one-off
-/// file or stdout (`--telemetry-file`). `telemetry_log` is the pre-resolved log
-/// path the caller already collision-checked, so the guarded and written paths
-/// are the same by construction (and the env is read only once). Best-effort —
-/// every failure is warned on stderr and swallowed (the conversion already
-/// succeeded), and nothing here enters `report.warnings`, so `--strict` cannot
-/// turn a telemetry write failure into a conversion failure. This is the one
-/// documented deviation from the house fail-loudly rule (telemetry is
-/// non-critical observability).
-#[allow(clippy::too_many_arguments)]
+/// Build this run's telemetry event — a success, or a failure from what `attempt`
+/// had learned — and write it to the requested sink(s): the persistent JSONL log
+/// (`--telemetry`) and/or a one-off file or stdout (`--telemetry-file`).
+/// `telemetry_log` is the log path resolved once, so the guarded and the written
+/// path are the same. Best-effort — every failure is warned on stderr and
+/// swallowed, and nothing here enters `report.warnings`, so neither `--strict` nor
+/// a telemetry fault can change the run's exit code. This is the one documented
+/// deviation from the house fail-loudly rule (telemetry is non-critical
+/// observability). `error` is never read for its text: only its kind and exit code
+/// reach the event.
 fn emit_telemetry(
     args: &ConvertArgs,
-    // The **resolved** output path, not `args.output`: `output_bytes` must stat the
-    // file that was written, which a completed suffix makes a different path.
-    output: &Path,
-    destination: recipe::Destination,
-    info: &DecodeInfo,
-    timings: telemetry::TimingInfo,
-    loss: EncodeReport,
-    report: &Report,
     log: &Log,
+    started: Instant,
+    attempt: &ConvertAttempt,
+    error: Option<&NcError>,
     telemetry_log: Option<&Path>,
 ) {
-    // Falsifiable in a debug build: the `unwrap_or` below is unreachable, and if it
-    // ever *were* reached it would silently record a plausible-but-wrong `auto` for
-    // a run that resolved something else — the one failure mode a telemetry field
-    // cannot recover from after the fact. A schema bump to make the field optional
-    // is not worth it for an arm `validate` already forecloses; this assertion is.
-    debug_assert!(
-        report.film_base_source.is_some(),
-        "telemetry runs only after a successful conversion, which means `validate` \
-         accepted a stated film base"
-    );
-    debug_assert!(
-        report
-            .identity
-            .as_ref()
-            .is_some_and(|i| i.params_hash.is_some()),
-        "a convert report's identity carries its recipe's hash"
-    );
-    let record = telemetry::build_record(telemetry::RecordInputs {
-        info,
-        // The ambient reads live here in the orchestrator; `build_record` stays a
-        // pure function of its inputs (mirrors `default_log_path`/`resolve_log_path`).
-        timestamp_ms: telemetry::now_unix_millis(),
-        cpu_count: telemetry::cpu_count(),
-        timings,
-        loss,
-        input_bytes: file_len(&args.input),
-        output_bytes: file_len(output),
-        // The report's hash, read rather than recomputed. Always `Some` on a
-        // convert report; the unreachable arm degrades rather than panics.
-        params_hash: report
-            .identity
-            .as_ref()
-            .and_then(|i| i.params_hash.clone())
-            .unwrap_or_default(),
-        // The report's copy is the source `convert_frame` actually resolved and
-        // ran, so it cannot disagree with the conversion. It is always `Some`
-        // here — telemetry is emitted only after a conversion succeeded, which
-        // means `validate` accepted the source — and telemetry must never fail a
-        // run, so the unreachable arm degrades instead of panicking.
-        film_base_source: report
-            .film_base_source
-            .clone()
-            .unwrap_or(FilmBaseSource::Auto),
-        destination: match destination {
-            recipe::Destination::FilmMaster => OutputSection::FilmMaster,
-            recipe::Destination::Display(d) => OutputSection::Display(d.axes()),
-        },
-        output_depth: primary_depth(destination),
-        warnings: report.warnings.len(),
-    });
-
     // A telemetry write failure warns but never fails the run. Unlike ordinary
     // warnings, these are deliberately kept out of `report.warnings` (so
     // `--strict` can't promote them), which means the report can't carry them
-    // either — so they must show even under `--quiet` (the `non_finite` precedent
-    // above): an opted-in feature failing silently would defeat the opt-in.
-    // `warn_always` is the one-liner for exactly this. The successful-write
-    // notices stay `log.info` (visible only under `-v`).
+    // either — so they must show even under `--quiet` (the `non_finite` precedent):
+    // an opted-in feature failing silently would defeat the opt-in. The
+    // successful-write notices stay `log.info` (visible only under `-v`).
     let warn = |msg: String| log.warn_always(&msg);
 
+    // A run that failed before the write-target guard has not proven its sinks safe:
+    // write only if none lands on a file the run read or might have written. The
+    // output is the resolved path once known, else `-o` as typed or completed with
+    // any suffix; `--export-ir` the recipe's once merged, else the flag's.
+    if !attempt.guarded {
+        let output = attempt.output.as_deref().unwrap_or(&args.output);
+        let export_ir = attempt.export_ir.as_deref().or(args
+            .input_opts
+            .export_ir
+            .as_deref()
+            .map(Path::new));
+        let collision =
+            telemetry_sink_collision(args, output, export_ir, telemetry_log).or_else(|| {
+                let completed = [telemetry_file_target(args), telemetry_log];
+                (attempt.output.is_none()
+                    && completed
+                        .into_iter()
+                        .flatten()
+                        .any(|sink| completes(sink, &args.output)))
+                .then(|| format!("it may be --output ({}) completed", args.output.display()))
+            });
+        if let Some(msg) = collision {
+            warn(format!("telemetry: no event written: {msg}"));
+            return;
+        }
+    }
+    let Some(event_id) = telemetry::EventId::random() else {
+        warn("telemetry: no event written: the system random source failed".into());
+        return;
+    };
+
+    let outcome = match error {
+        None => telemetry::Outcome::Success,
+        Some(e) => telemetry::Outcome::Failure {
+            stage: attempt.failed_stage(),
+            kind: if attempt.strict {
+                telemetry::ErrorKind::Strict
+            } else {
+                telemetry::ErrorKind::of(e)
+            },
+            exit_code: e.exit_code() as u8,
+        },
+    };
+    // The primary exists to be measured only once the frame committed it; before
+    // that a file at the path is an earlier run's.
+    let finished = attempt.finished();
+    let output_bytes = finished.and(attempt.output.as_deref()).and_then(file_len);
+    let event = telemetry::build_event(telemetry::EventInputs {
+        outcome,
+        event_id,
+        // The ambient reads live here in the orchestrator; `build_event` stays a
+        // pure function of its inputs (mirrors `default_log_path`/`resolve_log_path`).
+        timestamp_ms: telemetry::now_unix_millis(),
+        cpu_count: telemetry::cpu_count(),
+        timings: telemetry::TimingInfo {
+            total: finished.map_or_else(|| elapsed_ms(started), |f| f.total_ms),
+            ..attempt.frame.clock.timings
+        },
+        image: attempt
+            .frame
+            .info
+            .as_ref()
+            .map(|info| telemetry::ImageFacts {
+                info,
+                input_bytes: file_len(&args.input),
+                output_bytes,
+            }),
+        conversion: attempt.conversion.clone(),
+        loss: finished.map(|f| f.loss),
+        warnings: finished.map_or(attempt.warnings.len(), |f| f.warnings),
+    });
+
     // One compact JSON object (one line for the JSONL log).
-    let line = match serde_json::to_string(&record) {
+    let line = match serde_json::to_string(&event) {
         Ok(line) => line,
         Err(e) => {
-            warn(format!("telemetry: could not serialize record: {e}"));
+            warn(format!("telemetry: could not serialize event: {e}"));
             return;
         }
     };
@@ -6335,10 +6427,10 @@ fn emit_telemetry(
         if target == "-" {
             // `-` = stdout. Written fail-soft with `writeln!` (not `println!`,
             // which panics on a broken pipe) so a closed stdout reader can't turn
-            // a succeeded conversion into a panic. Note: if the JSON report is
-            // also on stdout (the default), stdout then carries the report plus
-            // this one line — pair `--telemetry-file -` with
-            // `--report none`/`--report-file` when a parser consumes stdout.
+            // the run into a panic. Note: if the JSON report is also on stdout (the
+            // default), stdout then carries the report plus this one line — pair
+            // `--telemetry-file -` with `--report none`/`--report-file` when a
+            // parser consumes stdout.
             if let Err(e) = writeln!(std::io::stdout(), "{line}") {
                 warn(format!("telemetry: could not write to stdout: {e}"));
             }
@@ -6347,6 +6439,65 @@ fn emit_telemetry(
         } else {
             log.info(format_args!("telemetry: wrote {target}"));
         }
+    }
+}
+
+/// Where a telemetry sink would land on a file it must not overwrite — the input,
+/// the `--params` recipe the run reads, an output, or the other sink — as a message
+/// naming both; `None` when every sink is clear. `--params` is guarded here rather
+/// than in [`write_targets`], which would refuse `--dump-params X --params X`.
+fn telemetry_sink_collision(
+    args: &ConvertArgs,
+    output: &Path,
+    export_ir: Option<&Path>,
+    telemetry_log: Option<&Path>,
+) -> Option<String> {
+    let is_sink = |label: &str| matches!(label, "--telemetry-file" | "the telemetry log");
+    let targets = write_targets(args, output, export_ir, telemetry_log);
+    let (sinks, mut others): (Vec<_>, Vec<_>) =
+        targets.into_iter().partition(|(label, _)| is_sink(label));
+    others.push(("the input scan", &args.input));
+    if let Some(p) = &args.recipe_in {
+        others.push(("--params", p));
+    }
+    sinks.iter().enumerate().find_map(|(i, (label, sink))| {
+        let key = collision_key(sink);
+        others
+            .iter()
+            .chain(&sinks[i + 1..])
+            .find(|(_, other)| keys_collide(&key, &collision_key(other)))
+            .map(|(other, _)| format!("{label} ({}) would overwrite {other}", sink.display()))
+    })
+}
+
+/// Whether `path` is `stem` with a suffix appended (`out` → `out.tiff`), the way
+/// [`resolve_output_path`] completes `-o`; compared as [`keys_collide`] does.
+fn completes(path: &Path, stem: &Path) -> bool {
+    let (path, stem) = (collision_key(path), collision_key(stem));
+    let (path, stem) = (path.to_string_lossy(), stem.to_string_lossy());
+    path.len() > stem.len() + 1
+        && path.as_bytes()[stem.len()] == b'.'
+        && path.is_char_boundary(stem.len())
+        && path[..stem.len()].eq_ignore_ascii_case(&stem)
+}
+
+/// The event's conversion summary, known once the destination resolved.
+fn conversion_info(recipe: &Recipe, destination: recipe::Destination) -> telemetry::ConversionInfo {
+    telemetry::ConversionInfo {
+        destination: match destination {
+            recipe::Destination::FilmMaster => OutputSection::FilmMaster,
+            recipe::Destination::Display(d) => OutputSection::Display(d.axes()),
+        },
+        params_hash: recipe.params_hash(),
+        // `validate_convert` refuses a recipe with no film base before this is
+        // built, so the fallback is unreachable; telemetry degrades rather than
+        // panics.
+        film_base_source: recipe
+            .calibration
+            .film_base
+            .clone()
+            .unwrap_or(FilmBaseSource::Auto),
+        output_depth: primary_depth(destination),
     }
 }
 

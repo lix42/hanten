@@ -17,7 +17,7 @@ entries — don't rewrite earlier ones.
 
 ## Epic summary
 
-What other epics need to know about `telemetry` (refreshed 2026-09-27):
+What other epics need to know about `telemetry` (refreshed 2026-09-28):
 
 - **Telemetry is operational, never a conversion knob.** `--telemetry`,
   `--telemetry-file`, and `NC_TELEMETRY_LOG` live on the CLI arg struct only —
@@ -25,25 +25,25 @@ What other epics need to know about `telemetry` (refreshed 2026-09-27):
   and must never reach `ResolvedConfig`, the sidecar, or `merge`/`validate`. This
   is the documented exception to the "every knob is a flag *and* a recipe key"
   rule, alongside `--report` and `--max-memory`.
-- **It must not perturb output.** The record is emitted last, after the artifacts
-  and sidecar are written, and only reads their facts. Per-stage timings ride a
-  report-only channel. An e2e test asserts byte-identical output **and** sidecar
-  with telemetry on vs off — keep that true.
+- **It must not perturb output.** The event is emitted last, once the run's
+  outcome is fixed, and only reads facts the run recorded. Per-stage timings ride a
+  report-only channel (`telemetry::StageTimer`). An e2e test asserts byte-identical
+  output with telemetry on vs off — keep that true.
 - **Fail-soft, deliberately.** A telemetry *write* failure warns on stderr (even
   under `--quiet`) and never fails the run, and is kept out of `report.warnings`
   so `--strict` can't promote it. The one exception is a `--telemetry-file` or
   log path colliding with a real artifact, which is a config error caught up
   front (exit 2).
-- **The local record is `SCHEMA_VERSION` 4** (`src/telemetry.rs`), serialize-only,
+- **The local event is `SCHEMA_VERSION` 10** (`src/telemetry.rs`), serialize-only,
   with a pinned wire-shape snapshot test — any field or ordering drift fails a
-  test, which is your signal to bump the version. The v1→v4 history is in the
-  `## perf-telemetry` section below and on the constant's rustdoc. It carries
-  **no pixels and no file paths**; keep that invariant. *Adding* an
-  `OutputPreset` member has never bumped it; whether it should is still owned by
-  `output/sdr-preset-followups`.
-- **Records only exist for successful converts today.** There is no `success`
-  field — its existence implies success. Typed failure events arrive with
-  `telemetry/schema-v2`.
+  test, which is your signal to bump the version. The history is on the
+  constant's rustdoc. It carries **no pixels, no file paths and no error text**;
+  keep that invariant.
+- **Every `convert` that parses writes one event** (`telemetry/schema-v2`): a
+  success, or a failure with its `stage`, `error_kind` and exit code, carrying only
+  what the run reached. `StageKind` names the stages; `setup` / `preflight` /
+  `finalize` the phases around them. A stage's clock closure returns `Result`, which
+  is how the failed stage is known. `roll` and the other commands write none.
 - **The JSONL log is the queue to drain.** Appends are a single `write_all` to an
   `O_APPEND` handle so concurrent runs can't interleave lines.
 - **`docs/telemetry-strategy.md` is the authoritative contract** for everything
@@ -57,8 +57,9 @@ What other epics need to know about `telemetry` (refreshed 2026-09-27):
 - **Explicitly rejected by the user:** persistent install identity, uploading
   `params_hash`, and (2026-09-27) uploading any legacy local record. Backend spend
   is capped at $10/month.
-- **`schema-v2` waits on `nf-core/report-contract`** (2026-09-27): the strategy's
-  upload manifest is stale against the code; see the strategy's Amendments.
+- **The upload projection is `telemetry/upload-schema`** (split from `schema-v2`,
+  2026-09-28), which records the user-approved revision of the strategy's upload
+  manifest; the local event carries its own `event_id`.
 - **`telemetry/perf-instrumentation` is parked, not pending** — the criterion
   lab-benchmark approach was superseded by real-world telemetry and survives only
   on the remote branch `origin/prototype/perf-bench-instrumentation` (no local
@@ -193,11 +194,11 @@ What shipped, and the parts the open tasks build on:
 
 
 ## schema-v2
-**Status:** blocked on `nf-core/report-contract`
-**Updated:** 2026-09-27
+**Status:** done
+**Updated:** 2026-09-28
 
-- Goal: add typed local success/failure events and a separately versioned,
-  allowlisted upload projection with random per-event deduplication IDs.
+- Goal: add typed local success/failure events with random per-event
+  deduplication IDs (the upload projection moved to `upload-schema`, 2026-09-28).
 
 ### 2026-09-27 — start review: blocked, no code
 - The strategy (2026-07-23) predates six local schema bumps (now v7), the
@@ -210,6 +211,94 @@ What shipped, and the parts the open tasks build on:
   records** (only the new local schema projects). Recorded in the task file's
   Decisions, the strategy's Amendments and `upload.md`; the stale manifest items
   are the task file's open questions.
+
+### 2026-09-28 — split, and typed local events
+- **User decisions:** split the task — this one ships the local events,
+  [`upload-schema`](../tasks/telemetry/upload-schema.md) the projection, JSON Schema
+  and corpus, with the revised upload manifest approved there; every local event
+  carries its `event_id` (the uploader assigns none); clap parse failures wait for
+  persistent consent in `telemetry/upload` (before parsing, `--telemetry` is
+  unknown); a failed stage's time counts only toward `total`.
+- **Local schema 10.** `event_id` (`getrandom`, already locked, now direct),
+  `event`, `command`, `stage`, and `outcome.status` / `error_kind` / `exit_code`.
+  `image`, `conversion`, `outcome.clipped` / `non_finite` and every `timing_ms`
+  stage field are absent until reached. `ErrorKind` adds `resource` (exit 6) beside
+  the strategy's list.
+- **How the failed stage is known.** `StageClock::time` now takes a closure returning
+  `Result`, so `telemetry::StageTimer` records the stage that returned `Err` and
+  leaves its time out; a check *between* stages (input semantics after decode, the
+  commit after encode) belongs to the stage last entered. Two call sites wrap a
+  non-failure in `Ok`: `ir_separability`, and `effective_area`, whose `Err` is a
+  warning, not the run's failure. The unreadable-file case fails in `preflight`:
+  the memory preflight's header probe reads the file before decode does.
+- **Orchestration.** `run_convert` is a thin wrapper: `convert_attempt` fills a
+  `ConvertAttempt` (phase, the frame's `FrameFacts`, the resolved output, the
+  conversion summary) and `emit_telemetry` builds the event from it, whatever the
+  result. `convert_frame`'s `memory_out` became `FrameFacts` (preflight decision,
+  decode info, stage clock), so a failed frame keeps them; `roll` reads only
+  `memory`.
+- **Gotcha: a failure before the write-target guard.** The guard (which covers the
+  telemetry sinks) runs after recipe load and validation, so a failure event from
+  there has unchecked sinks. `sinks_are_distinct` writes it only if no sink lands
+  on the input or on an output the run knew of (the resolved output once known, else
+  `-o` as typed); otherwise it warns and writes nothing — the input is never
+  overwritten (`a_failure_event_never_lands_on_the_input`).
+- **Found, not fixed:** the guard does not count `--params` (a file the run
+  *reads*) as a target, so `--telemetry-file` or `--dump-params` naming the recipe
+  overwrites it. Pre-existing; making it a target would also refuse
+  `--dump-params X --params X`.
+
+### 2026-09-28 — review round (`/code-review`)
+- **Fixed the found-not-fixed `--params` hole**, since failure events made it easy
+  to hit (a bad recipe named as `--telemetry-file` was overwritten by the event
+  about it): `telemetry_sink_collision` (was `sinks_are_distinct`) keeps telemetry's sinks off the input, the
+  `--params` recipe, the outputs and each other, as a usage error once targets are
+  known and as a skipped event before. `--params` is not a `write_targets` entry, so
+  `--dump-params X --params X` still works.
+- **A flag `--export-ir` path** was unchecked before the recipe merged; the
+  pre-guard check now falls back to the flag's value.
+- **`StageTimer.failed` dropped:** every clock caller propagates `Err`, so the
+  stage last entered is always the failed one. The frame's finish (`loss`, warning
+  count, `total_ms`) is one `ConvertPhase::Finalize(FinishedFrame)` rather than three
+  parallel `Option`s.
+- **The decode stage has its own test:** a scan truncated after its header passes
+  the memory probe and fails inside decode (`stage: "decode"`).
+- **Pushed back:** skipping the attempt's bookkeeping when telemetry is off — one
+  recipe hash per run, and gating it would couple the run's warning buffer to
+  telemetry.
+
+### 2026-09-28 — pre-ship review (`ship:diff-reviewer`; Codex failed to start)
+- **Two more pre-guard overwrite holes, both reproduced:** a recipe's
+  `input.export_ir` (it was recorded only after the destination resolved, so a
+  validation failure missed it — now recorded right after `merge`), and the path
+  `-o out` completes to (`out.tiff`), unknown until resolution — now any sink that
+  `completes` the typed `-o` is off-limits while the output is unresolved.
+- `clipped` / `non_finite` are absent unless the frame *finished*, not merely "before
+  the encode": a failure in the commit after encode carries `stage: "encode"` with
+  `timing_ms.encode` but no loss counts. Prose corrected.
+
+### 2026-09-28 — done
+- **Landed:** local schema 10 (`telemetry::TelemetryEvent`, `build_event`), the
+  Result-aware `StageClock`, `cli::ConvertAttempt` + `emit_telemetry`, and
+  `telemetry_sink_collision`. Verified by pinned full/minimal wire snapshots and
+  end-to-end events for success and usage, decode (in `preflight` and in `decode`),
+  unsupported, write and strict failures; telemetry on/off byte-identical; a
+  telemetry write failure keeps the run's exit code; five overwrite cases.
+- **For `upload-schema`:** project from `TelemetryEvent`'s wire form. `stage` never
+  holds `unknown`; `error_kind` includes `resource`; a success always has
+  `stage: "finalize"`. `outcome.clipped`/`non_finite` are absent unless the frame
+  finished.
+- **For `upload`:** parse-failure events (`EventStage::Parse`, reserved) and ID
+  handling are recorded in its task file's 2026-09-28 amendment.
+
+
+## upload-schema
+**Status:** not started
+**Updated:** 2026-09-28
+
+- Goal: the privacy-minimized upload projection of `schema-v2`'s local events, the
+  upload-v1 JSON Schema and the shared valid/invalid corpus. Split from `schema-v2`
+  (2026-09-28); the task file holds the user-approved manifest revision.
 
 
 ## ingestion-service
