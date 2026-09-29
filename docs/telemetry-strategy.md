@@ -299,7 +299,7 @@ change together.
 In v1 the only telemetry-supported command is `convert`. This includes
 recoverable `convert` parse/usage failures when the parser can safely classify
 the intended subcommand without retaining malformed text. `roll`, `inspect`,
-`estimate`, `params`, and unknown-subcommand parse failures are out of scope, so
+`measure-base`, `measure-roll`, `params`, and unknown-subcommand parse failures are out of scope, so
 they cannot silently enter a denominator whose meaning is ambiguous.
 
 When persistent consent is enabled, `nc` emits an event for every safely

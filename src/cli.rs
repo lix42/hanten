@@ -6,12 +6,13 @@
 //! report, and stable exit codes via [`NcError`]. The conversion runs here:
 //! `convert` drives the full read → film-base → fixed decode → scene correction →
 //! look → fit range → fit gamut → encode chain (delegating the pure stages to
-//! `pipeline`/`algo`/`io`); `inspect` and `estimate` decode and report without
+//! `pipeline`/`algo`/`io`); `inspect` and `measure-base` decode and report without
 //! writing an image.
 //!
 //! Determinism rule: stdout carries *only* the JSON report / params; all logs and
 //! warnings go to stderr, so an agent can pipe stdout straight into a parser.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt::Display;
 use std::io::Write;
@@ -46,8 +47,9 @@ use crate::stage::{StageClock, StageKind};
 use crate::telemetry;
 use crate::types::{
     DEFAULT_MEASURE_INSET, EncodeOutcome, EncodeReport, FilmBase, FilmBaseProvenance,
-    FilmBaseSource, FilmType, InputParams, LinearImage, MeaningAssertion, NcError, OutDepth,
-    OutputStats, REMOVED_SIMPLE_RECONSTRUCTION, Result, TransferAssertion, check_measure_inset,
+    FilmBaseSource, FilmType, InputParams, LinearImage, MeaningAssertion, MeasureParams, NcError,
+    OutDepth, OutputStats, REMOVED_SIMPLE_RECONSTRUCTION, Result, TransferAssertion,
+    check_measure_inset,
 };
 use crate::version::{self, Identity};
 
@@ -87,9 +89,14 @@ pub enum Command {
     Roll(RollArgs),
     /// Inspect a scan and emit a JSON report (no output image).
     Inspect(IoArgs),
-    /// Run only film-base / Dmin estimation; emit JSON.
-    Estimate(EstimateArgs),
-    /// Measure a roll's white balance and white once, for its recipe; emit JSON.
+    /// Measure the film base (Dmin) alone, from one frame or a region; emit JSON, and
+    /// write it as a recipe with --out.
+    MeasureBase(MeasureBaseArgs),
+    /// Removed: renamed `measure-base`. Hidden, and kept only to emit a migration error.
+    #[command(hide = true, disable_help_flag = true)]
+    Estimate(RemovedCommandArgs),
+    /// Measure what a roll shares — its white balance and white, and with --unexposed
+    /// its film base — once; emit JSON, and write it as a recipe with --out.
     MeasureRoll(MeasureRollArgs),
     /// Print the full default parameter set as JSON (recipe scaffolding).
     Params(ParamsArgs),
@@ -191,11 +198,32 @@ pub struct IoArgs {
     pub report: ReportArgs,
 }
 
-/// `estimate`: an input scan, the film-base source flags (so the
+/// A removed subcommand's arguments: anything, so the migration error is what the user
+/// sees rather than a parse error about a flag.
+#[derive(Args, Debug)]
+pub struct RemovedCommandArgs {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+    pub rest: Vec<std::ffi::OsString>,
+}
+
+/// Where a measuring command writes its recipe (`docs/design/roll-workflow.md`).
+#[derive(Args, Debug, Default)]
+pub struct RecipeOutArgs {
+    /// Write the measurement as a recipe (`"recipe_version": 2`) to PATH, for
+    /// `--params`. Refused if PATH exists, unless --force. Not written when the run
+    /// fails, including under --strict.
+    #[arg(long = "out", value_name = "PATH")]
+    pub out: Option<PathBuf>,
+    /// Replace an existing --out file.
+    #[arg(long, requires = "out")]
+    pub force: bool,
+}
+
+/// `measure-base`: an input scan, the film-base source flags (so the
 /// calibrate-once-from-a-reference workflow works, design-spec §8), and reporting
 /// controls.
 #[derive(Args, Debug)]
-pub struct EstimateArgs {
+pub struct MeasureBaseArgs {
     /// Input negative scan (SilverFast HDR/HDRi TIFF). With no source flag, an
     /// unexposed frame: the base is the median over its effective area.
     pub input: PathBuf,
@@ -217,12 +245,14 @@ pub struct EstimateArgs {
     #[command(flatten)]
     pub measure: MeasureOverrides,
     /// Treat estimation warnings (a non-uniform area or `--base-region`, decode
-    /// notes, …) as a hard error. `estimate` produces the
+    /// notes, …) as a hard error. `measure-base` produces the
     /// `Dmin` a roll is calibrated on, so a script baking the result into a
     /// recipe wants a plausible-looking-but-bad base to fail loudly rather than
     /// be echoed back.
     #[arg(long)]
     pub strict: bool,
+    #[command(flatten)]
+    pub out: RecipeOutArgs,
     #[command(flatten)]
     pub memory: MemoryArgs,
     #[command(flatten)]
@@ -249,13 +279,19 @@ pub struct MeasureRollArgs {
     /// the decode the gains and the white are measured under. Its `scene_correction` and
     /// `look` values are not read — this command measures the white balance and the
     /// contrast — though the recipe must still load (a retired or unknown key there is
-    /// refused).
+    /// refused). Its `input`, `measure` and `reconstruction` keys, when stated, travel
+    /// into `--out`: the gains hold only under that decode.
     #[arg(long = "params", value_name = "JSON")]
     pub recipe_in: Option<PathBuf>,
+    /// The roll's unexposed frame: measure the film base from it first — the median
+    /// over its effective area, as `hanten measure-base` does with no source flag — and
+    /// decode every frame with it.
+    /// Refused beside `--film-base` or a recipe stating `calibration.film_base`.
+    #[arg(long, value_name = "PATH")]
+    pub unexposed: Option<PathBuf>,
     /// The roll's film base (Dmin) as `R,G,B`, over the recipe's. Required one way or
-    /// the other, and explicit: a base estimated per frame would measure each frame
-    /// under a different decode. Measure it once with `hanten estimate` on the
-    /// unexposed base frame.
+    /// the other — this, the recipe, or `--unexposed` — and explicit: a base estimated
+    /// per frame would measure each frame under a different decode.
     #[arg(long = "film-base", value_name = "R,G,B", value_parser = parse_rgb)]
     pub film_base: Option<[f32; 3]>,
     #[command(flatten)]
@@ -264,6 +300,8 @@ pub struct MeasureRollArgs {
     /// refuse to measure without `--leader`.
     #[arg(long)]
     pub strict: bool,
+    #[command(flatten)]
+    pub out: RecipeOutArgs,
     #[command(flatten)]
     pub memory: MemoryArgs,
     #[command(flatten)]
@@ -523,7 +561,7 @@ pub struct InputOverrides {
 #[derive(Args, Debug, Default)]
 pub struct FilmBaseOverrides {
     /// Explicit per-channel base transmission — a `Dmin` measured once per roll
-    /// (`hanten estimate` on the unexposed frame).
+    /// (`hanten measure-base` on the unexposed frame).
     #[arg(long, value_name = "R,G,B", value_parser = parse_rgb,
           conflicts_with = "base_region")]
     pub film_base: Option<[f32; 3]>,
@@ -853,61 +891,17 @@ pub struct RemovedOutputFlags {
 // Report
 // ---------------------------------------------------------------------------
 
-/// The reuse-ready forms of a measured film base, kept as one unit so the flag
-/// and the recipe value are both-present-or-both-absent — the illegal
-/// flag-without-recipe (or recipe-without-flag) state two parallel `Option`s
-/// would permit is unrepresentable.
-///
-/// **The pairing is per measurement, not per section.** The flag half becomes the
-/// flat report key `film_base_flag`; the recipe half is copied into the report's
-/// [`CalibrationFragment`]. A future calibration value measured across many frames
-/// (a roll content white) would have no flag form at all, which a section-wide
-/// both-present rule would forbid. Serialize-only.
+/// The reuse-ready forms of a measured film base, both present or both absent: the
+/// flag for a single `convert`, and the recipe value `--out` writes.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ReuseReady {
     /// Ready-to-paste `--film-base R,G,B` flag for the measured base; the values
     /// round-trip to the exact measured `f32`s.
     #[serde(rename = "film_base_flag")]
     pub flag: String,
-    /// The same measurement as the `calibration.film_base` value —
-    /// `{"explicit":[r,g,b]}` — ready to merge into a roll recipe. Not serialized
-    /// here: it is emitted once, inside [`Report::calibration`].
+    /// The same measurement as the `calibration.film_base` value `--out` writes.
     #[serde(skip)]
     pub source: FilmBaseSource,
-}
-
-/// The report's `calibration` object: the calibration values this invocation
-/// resolved, in exactly the recipe shape, so
-/// `hanten estimate … | jq '{recipe_version: 2, calibration}' > roll-cal.json` writes
-/// a reusable roll calibration with nothing to hand-edit.
-///
-/// `core/measure-base` replaces this `jq` step with a recipe file the command writes
-/// (`docs/design/roll-workflow.md`).
-///
-/// **Partial by construction, and that is load-bearing.** It is not the recipe's
-/// [`recipe::Calibration`]: every member is skipped when absent, so a run that measured
-/// nothing pins nothing over a later `--params` layer, and a member is added by adding
-/// one field here — the section is open (see [`recipe::Calibration`]), so nothing may
-/// assume the set is exactly the one member it has today.
-///
-/// It reports *what was measured here*, never "the roll's calibration": a complete
-/// one may need several invocations, and a future member is measured across many
-/// frames rather than from one. Assembling it is `core/measure-base`.
-#[derive(Clone, Debug, PartialEq, Default, Serialize)]
-pub struct CalibrationFragment {
-    /// The measured base as `calibration.film_base` — present exactly when
-    /// `film_base_flag` is.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub film_base: Option<FilmBaseSource>,
-}
-
-impl CalibrationFragment {
-    /// Whether anything was measured; an empty fragment is omitted from the report
-    /// rather than emitted as `{}`, which would pipe into `--params` as a no-op the
-    /// user could mistake for a calibration.
-    fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
 }
 
 /// What the AVIF encoder coded, for the resolved report. Serialize-only.
@@ -1177,7 +1171,7 @@ pub struct StageResult {
 /// `EncodeReport`, and nothing deserializes a report.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Report {
-    /// The subcommand that produced this report (`convert`/`inspect`/`estimate`).
+    /// The subcommand that produced this report (`convert`/`inspect`/`measure-base`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<&'static str>,
     /// What produced this output: build identity (`nc_version`, `git_commit`,
@@ -1250,10 +1244,6 @@ pub struct Report {
     /// Estimated / resolved film base (the `Dmin` anchor).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub film_base: Option<FilmBase>,
-    /// The calibration values this invocation measured, in recipe shape
-    /// (`estimate`) — see [`CalibrationFragment`]. Absent when nothing measured.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub calibration: Option<CalibrationFragment>,
     /// Where the film base came from ([`FilmBaseProvenance`]): the effective area, a
     /// stated region, or an explicit value.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1267,12 +1257,12 @@ pub struct Report {
     /// (`ir-usability-detection`); it is recorded so a declaration a user made is
     /// visible in the artifact the run produced — without it the flag would be parsed
     /// and dropped, accepted-and-ignored, which this project treats as a bug.
-    /// `inspect` / `estimate` echo the `--film-type` flag; `convert` (and each `roll`
+    /// `inspect` / `measure-base` echo the `--film-type` flag; `convert` (and each `roll`
     /// frame, as `FrameStatus::Ok::film_type`) echo the resolved recipe's
     /// `input.film_type`. Omitted for `unknown` (the default), even when stated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub film_type: Option<FilmType>,
-    /// The measured IR usability verdict (`inspect` / `estimate`, only on a scan
+    /// The measured IR usability verdict (`inspect` / `measure-base`, only on a scan
     /// carrying an IR plane): the interior IR transmission and whether it clears the bar for
     /// telling the opaque holder from film on **this frame**. Reported so the
     /// verdict — and the threshold behind it — is falsifiable from a run rather
@@ -1280,7 +1270,7 @@ pub struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ir_separability: Option<film_base::IrSeparability>,
     /// The resolved **effective measurement area** (every command that decodes —
-    /// `inspect`, `estimate`, `convert`, and each `roll` frame via
+    /// `inspect`, `measure-base`, `convert`, and each `roll` frame via
     /// `FrameStatus::Ok`): the rectangle a measurement may be read over, after the
     /// IR-measured holder cut and the static inset. Reported so both cuts are
     /// falsifiable from a run —
@@ -1291,15 +1281,9 @@ pub struct Report {
     /// this is where statistics are read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_area: Option<film_base::EffectiveArea>,
-    /// Reuse-ready forms of the measured base (`estimate`): a ready-to-paste
-    /// `--film-base R,G,B` flag and the matching `film_base` recipe fragment, so
-    /// the calibrate-once → reuse workflow (design-spec §8) is copy-paste smooth.
-    /// Both forms are present together or both absent — the pair only exists when
-    /// the measurement is usable as an explicit base (each channel in `(0, 1]`),
-    /// so a single [`ReuseReady`] (both-or-neither) replaces two parallel
-    /// `Option`s that could encode the illegal flag-without-recipe state. Flattened
-    /// so the flag stays a flat top-level key (`film_base_flag`) on the wire; the
-    /// recipe half is emitted inside [`Self::calibration`]; `None` emits neither.
+    /// Reuse-ready forms of the measured base (`measure-base`), only when it is usable
+    /// as an explicit base (each channel in `(0, 1]`). Flattened, so the flag is the
+    /// top-level key `film_base_flag`; the recipe half is what `--out` writes.
     #[serde(flatten)]
     pub reuse: Option<ReuseReady>,
     /// Path the IR plane was exported to, when `--export-ir` was given.
@@ -1583,7 +1567,7 @@ fn pipeline_version_warning(loaded_version: Option<u32>) -> Option<String> {
 
 /// Map the (clap-mutually-exclusive) film-base flags to a [`FilmBaseSource`],
 /// or `None` when none was passed. Shared by `convert`'s merge ([`recipe::merge`]) and
-/// `estimate`, so they resolve the source identically.
+/// `measure-base`, so they resolve the source identically.
 pub(crate) fn film_base_source_override(o: &FilmBaseOverrides) -> Option<FilmBaseSource> {
     if let Some(v) = o.film_base {
         Some(FilmBaseSource::Explicit(v))
@@ -1597,11 +1581,11 @@ pub(crate) fn film_base_source_override(o: &FilmBaseOverrides) -> Option<FilmBas
 /// accepts.
 pub(crate) const AUTO_BASE_RETIRED: &str = "the automatic film base searched each edge for a \
      thin unexposed rebate, and it retired with that search. Measure the roll's base once \
-     from its unexposed frame with `hanten estimate <unexposed-frame>`";
+     from its unexposed frame with `hanten measure-base <unexposed-frame>`";
 
 /// Validate that an explicit film base is a per-channel transmission in `(0, 1]`
 /// — the one invariant that must hold wherever an explicit base enters (a recipe
-/// via [`validate_shared`], or the `--film-base` flag on `estimate`). Non-positive /
+/// via [`validate_shared`], or the `--film-base` flag on `measure-base`). Non-positive /
 /// non-finite would divide into inf/NaN downstream; a value above 1.0 (e.g. a
 /// "90" typo for "0.90") would render every real sample above white.
 fn validate_explicit_film_base(base: &[f32; 3]) -> Result<()> {
@@ -2027,7 +2011,7 @@ impl FilmBaseRemedy {
 pub fn missing_film_base_message(remedy: FilmBaseRemedy) -> String {
     match remedy {
         FilmBaseRemedy::Flags => "no film base selected: pass --film-base R,G,B (a Dmin measured \
-             once per roll with `hanten estimate <unexposed-frame>`), or --base-region X,Y,W,H \
+             once per roll with `hanten measure-base <unexposed-frame>`), or --base-region X,Y,W,H \
              to read it from a region of unexposed film. Recipe key: `calibration.film_base`."
             .to_string(),
         // `roll` deliberately does not repeat the flag names as an option: it has
@@ -2035,8 +2019,9 @@ pub fn missing_film_base_message(remedy: FilmBaseRemedy) -> String {
         // that exit 2.
         FilmBaseRemedy::SharedRecipe => "no film base selected: `roll` takes no film-base flags, \
              so set `calibration.film_base` in the shared --params recipe. Measuring once per roll is \
-             the intended workflow: run `hanten estimate <unexposed-frame>` and paste the \
-             reported `calibration` object straight in \
+             the intended workflow: `hanten measure-roll <frames> --unexposed <unexposed-scan> --out \
+             roll.json` writes a recipe with the base and the roll's white balance, and \
+             `hanten measure-base <unexposed-scan> --out base.json` one with the base alone \
              (`\"calibration\": {\"film_base\": {\"explicit\": [R, G, B]}}`) — that is \
              also the only source that keeps every frame on one frozen Dmin. \
              `{\"region\": [X, Y, W, H]}` is accepted too, but re-reads each frame, so \
@@ -2276,7 +2261,14 @@ pub fn run() -> Result<()> {
         Command::Convert(args) => run_convert(args),
         Command::Roll(args) => run_roll(args),
         Command::Inspect(args) => run_inspect(args),
-        Command::Estimate(args) => run_estimate(args),
+        Command::MeasureBase(args) => run_measure_base(args),
+        Command::Estimate(_) => Err(NcError::Usage(
+            "`hanten estimate` was renamed `hanten measure-base`, with the same flags; \
+             `--out PATH` now writes the measured base as a recipe for `--params`. To \
+             measure a roll's base with its white balance and white, use \
+             `hanten measure-roll --unexposed <unexposed.tif>`"
+                .into(),
+        )),
         Command::MeasureRoll(args) => run_measure_roll(args),
     }
 }
@@ -2359,13 +2351,19 @@ fn keys_collide(a: &Path, b: &Path) -> bool {
 /// case-only difference can't slip a second write onto the same file on a
 /// case-insensitive filesystem.
 fn ensure_write_targets_distinct(input: &Path, targets: &[(&str, &Path)]) -> Result<()> {
+    ensure_write_targets_spare(input, "the input scan", targets)
+}
+
+/// [`ensure_write_targets_distinct`] for a read file that is not the scan (a recipe,
+/// a leader), named by `what` in the refusal.
+fn ensure_write_targets_spare(input: &Path, what: &str, targets: &[(&str, &Path)]) -> Result<()> {
     let input_key = collision_key(input);
     let mut seen: Vec<(&str, PathBuf)> = Vec::with_capacity(targets.len());
     for (label, path) in targets {
         let key = collision_key(path);
         if keys_collide(&key, &input_key) {
             return Err(NcError::Usage(format!(
-                "{label} ({}) would overwrite the input scan",
+                "{label} ({}) would overwrite {what}",
                 path.display()
             )));
         }
@@ -2707,7 +2705,7 @@ fn removed_dmax_flag(flags: &RemovedDmaxFlags) -> Option<(&'static str, &'static
 }
 
 /// The migration error for a retired reference-density or anchor flag — shared by
-/// `convert` and `estimate --d-max-region` so they say the same thing. The remedy is
+/// `convert` and `measure-base --d-max-region` so they say the same thing. The remedy is
 /// "drop the flag", which holds everywhere.
 fn removed_dmax_message(flag: &str, what: &str) -> String {
     format!(
@@ -2877,8 +2875,8 @@ struct FrameFacts {
 /// `sampling`, reject loudly when it would exceed `budget` (exit 6), and push the
 /// RAM-pressure warning when it fits the budget but not the machine.
 ///
-/// Shared by `convert`/`roll` and by `inspect`/`estimate` so the four commands
-/// gate identically — each with its own profile, since `inspect`/`estimate` stop
+/// Shared by `convert`/`roll` and by `inspect`/`measure-base` so the four commands
+/// gate identically — each with its own profile, since `inspect`/`measure-base` stop
 /// after decode and must not be judged on a render they never run, and its own
 /// [`SamplePlan`], since the film-base phase's cost depends on which rectangles the
 /// run samples.
@@ -2899,14 +2897,19 @@ fn preflight_memory(
 ) -> Result<MemoryReport> {
     let shape = probe(input)?;
     let mem = memory::preflight(&shape, profile, sampling, budget, total_ram)?;
-    log.info(format_args!(
-        "memory preflight: estimated peak {} bytes, budget {} bytes ({:?})",
-        mem.estimate.estimated_peak_bytes, mem.budget_bytes, mem.budget_source
-    ));
+    log_memory_preflight(&mem, log);
     if let Some(msg) = memory::warn_message(&mem) {
         push_warning_buf(warnings, log, msg);
     }
     Ok(mem)
+}
+
+/// The preflight's `-v` progress line.
+fn log_memory_preflight(mem: &MemoryReport, log: &Log) {
+    log.info(format_args!(
+        "memory preflight: estimated peak {} bytes, budget {} bytes ({:?})",
+        mem.estimate.estimated_peak_bytes, mem.budget_bytes, mem.budget_source
+    ));
 }
 
 /// The film-base sampling a resolved [`FilmBaseSource`] will perform, for the
@@ -4044,11 +4047,22 @@ fn convert_attempt(
     reject_removed_flags(args)?;
     // A recipe written for the removed chain is refused inside the load, by name.
     let loaded = load_recipe(args.recipe_in.as_deref())?;
-    // The flags win over the recipe.
-    let recipe = recipe::merge(loaded.recipe, args);
+    // The frame's own roll values first, then the flags win over the recipe.
+    let stated_roll = loaded.recipe.roll.clone();
+    let recipe = recipe::merge(loaded.recipe.for_frame(&args.input), args);
     attempt.export_ir = recipe.input.export_ir.as_deref().map(PathBuf::from);
     // A flag-presence rule, ahead of every value rule that could refuse first.
     reject_roll_flags_nothing_applies(args, &recipe)?;
+    // The table as stated: `for_frame` moved this frame's entry into `roll.white_stops`,
+    // where `validate` would name the wrong key. Only over a sound decode, as in
+    // `validate`: a bad linearization is its own fault, not an entry's.
+    if recipe.reconstruction.check().is_ok() {
+        recipe::validate_roll_frames(
+            &stated_roll,
+            recipe.reconstruction.linearization,
+            KnobNames::FlagAndKey,
+        )?;
+    }
     validate_convert(&recipe, args)?;
 
     // The path nc actually writes: `-o out` under the default becomes `out.tiff`.
@@ -4640,8 +4654,8 @@ const DECODED_APART: &str = "this frame's densities decode differently from the 
 
 /// The roll-wide values. A frame's `params` override that resolves one differently from
 /// the shared recipe is applied and warned about (`--strict` refuses it). Every other key
-/// is frame-local: `roll.white_stops` is how `measure-roll`'s `reuse.frames` states a
-/// clamped frame's white, and `input` describes each file, not the roll.
+/// is frame-local: `roll.white_stops` is a clamped frame's own white (`roll.frames`, or a
+/// manifest's `params`), and `input` describes each file, not the roll.
 /// `roll_classifies_every_recipe_key` holds the split.
 const ROLL_WIDE: &[RollWide] = &[
     RollWide {
@@ -4774,12 +4788,8 @@ fn resolve_frames(
                     manifest_path.display()
                 )));
             }
-            // The shared recipe as JSON, so a per-frame partial override can be
-            // deep-merged onto it and deserialized back with `deny_unknown_fields`.
-            // Serialized once, cloned per frame.
-            let shared_value = serde_json::to_value(shared)
-                .map_err(|e| NcError::Other(format!("serializing shared recipe: {e}")))?;
             for mf in manifest.frames {
+                let own = shared.clone().for_frame(&mf.input);
                 let (recipe, overrides) = match mf.params {
                     Some(ov) => {
                         // A per-frame override carrying a removed key gets the same
@@ -4788,7 +4798,19 @@ fn resolve_frames(
                         let context =
                             format!("frame {}: per-frame `params` override", mf.input.display());
                         recipe::check_body(&ov, false, &context)?;
-                        let mut v = shared_value.clone();
+                        if ov.pointer("/roll/frames").is_some() {
+                            return Err(NcError::Usage(format!(
+                                "{context}: `roll.frames` names frames, so it belongs in the \
+                                 shared recipe; state this frame's own white as \
+                                 `roll.white_stops` here"
+                            )));
+                        }
+                        // This frame's recipe as JSON, so the partial override
+                        // deep-merges onto it and deserializes back with
+                        // `deny_unknown_fields`.
+                        let mut v = serde_json::to_value(&own).map_err(|e| {
+                            NcError::Other(format!("serializing shared recipe: {e}"))
+                        })?;
                         merge_json(&mut v, &ov);
                         let r: Recipe = serde_json::from_value(v).map_err(|e| {
                             NcError::Usage(format!(
@@ -4803,7 +4825,7 @@ fn resolve_frames(
                         }
                         (r, Some(ov))
                     }
-                    None => (shared.clone(), None),
+                    None => (own, None),
                 };
                 let output = resolve_frame_output(
                     mf.output.as_deref(),
@@ -4834,10 +4856,11 @@ fn resolve_frames(
             let target = OutputTarget::resolve(shared, KnobNames::KeyOnly, false)?;
             for input in inputs {
                 let output = default_output_name(&input, out_dir, target);
+                let recipe = shared.clone().for_frame(&input);
                 planned.push(PlannedFrame {
                     input,
                     output,
-                    recipe: shared.clone(),
+                    recipe,
                     overrides: None,
                 });
             }
@@ -4970,9 +4993,10 @@ fn run_roll(args: RollArgs) -> Result<()> {
     ) {
         let msg = "roll film base is NOT frozen: calibration.film_base is a `region`, so \
              every frame reads its own Dmin — the roll is not color-consistent and the \
-             shared recipe is not truly shared. Measure the base once (`hanten estimate \
-             <unexposed-frame>`), then set the reported explicit base as \
-             `calibration.film_base` in the shared recipe."
+             shared recipe is not truly shared. Measure the base once — `hanten measure-roll \
+             <frames> --unexposed <unexposed-frame> --out roll.json`, or `hanten measure-base \
+             <unexposed-frame> --out base.json` — and pass that file as --params: it states \
+             the explicit `calibration.film_base`."
             .to_string();
         log.warn(&msg);
         roll_warnings.push(msg);
@@ -5111,7 +5135,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
 
 /// `hanten inspect` — decode a scan and report what was found (format, dimensions,
 /// channels, bit depth, IR presence, scanner metadata) and the effective
-/// measurement area. It measures no base: that is `estimate`'s. No output image is
+/// measurement area. It measures no base: that is `measure-base`'s. No output image is
 /// written.
 fn run_inspect(args: IoArgs) -> Result<()> {
     let started = Instant::now();
@@ -5272,196 +5296,175 @@ fn reuse_ready(rgb: [f32; 3]) -> Option<(String, FilmBaseSource)> {
     ))
 }
 
-/// `hanten estimate` — measure the film base (`Dmin`) and emit it as JSON, with
-/// reuse-ready forms of it (a `--film-base` flag string and a `calibration` recipe
-/// fragment) when the measurement is usable as an explicit base (each channel in
-/// `(0, 1]`; otherwise a warning explains why not), so the measured value drops
-/// straight into a `convert` call or a roll recipe (design-spec §8). `--strict`
-/// promotes warnings to a failing exit after the report is emitted.
-///
-/// With no source flag it measures the frame's **effective area** at the median
-/// (`film_base::measure_area`) — the unexposed-frame workflow. `--base-region` reads
-/// that region at p97 instead, and `--film-base` echoes a value back through the same
-/// checks.
-///
-/// **No fingerprint watches the unstated default.** `version::PIPELINE_FINGERPRINTS`
-/// hashes what a *conversion* runs (a stated region), so changing the area
-/// measurement would move every `hanten estimate` result with the drift gate green —
-/// verify such a change by hand.
-fn run_estimate(args: EstimateArgs) -> Result<()> {
-    let started = Instant::now();
-    let log = Log::new(&args.report);
+/// One film-base measurement's evidence: `measure-base`'s report fields, and
+/// `measure-roll --unexposed`'s `unexposed` object. **One function produces it**
+/// ([`measure_base`]), so the two commands cannot drift into different measurements.
+#[derive(Clone, Debug, Serialize)]
+struct BaseMeasurement {
+    input: PathBuf,
+    memory: MemoryReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    film_type: Option<FilmType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ir_separability: Option<film_base::IrSeparability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effective_area: Option<film_base::EffectiveArea>,
+    film_base: FilmBase,
+    film_base_source: FilmBaseProvenance,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    film_base_percentile: Option<f32>,
+    #[serde(flatten)]
+    reuse: Option<ReuseReady>,
+}
 
-    if args.d_max_region.is_some() {
-        return Err(NcError::Usage(removed_dmax_message(
-            "--d-max-region",
-            "measured the roll reference density off a light-struck leader",
-        )));
-    }
-    if args.grid {
-        return Err(NcError::Usage(
-            "--grid was removed: with no source flag `estimate` measures the whole \
-             effective area of the frame at its median, which is what the grid was for. \
-             Drop the flag."
-                .into(),
-        ));
-    }
-    if args.film_base.auto_base {
-        return Err(NcError::Usage(
-            "--auto-base was removed with the rebate search: with no source flag \
-             `estimate` measures the frame's effective area. Drop the flag, and give it \
-             the roll's unexposed frame."
-                .into(),
-        ));
-    }
+/// What [`measure_base`] measures: which file, from what, and the evidence's inputs.
+struct BaseRequest<'a> {
+    input: &'a Path,
+    /// A stated region or explicit base; `None` measures the frame's effective area at
+    /// the median — the unexposed-frame workflow.
+    source: Option<&'a FilmBaseSource>,
+    /// The static inset of the effective area.
+    inset: f32,
+    /// The declared chemistry, echoed (it gates nothing).
+    film_type: Option<FilmType>,
+}
 
-    // A bad `--measure-inset` is a *usage* error (exit 2), not a diagnostic that
-    // degrades to a warning: these commands resolve no recipe, so `validate` never
-    // sees the flag. Checked before the decode, so a 160 MB read is not wasted on a
-    // typo.
-    if let Some(f) = args.measure.measure_inset {
-        check_measure_inset(f)?;
+/// Measure the film base of `input`: memory preflight, decode, the IR verdict and
+/// effective area as evidence, then the base — the area's median with no source, else
+/// the stated source. Each warning is pushed to `warnings`, prefixed with the input
+/// when `label` is set (a command measuring several files).
+fn measure_base(
+    req: &BaseRequest,
+    budget: memory::Budget,
+    label: bool,
+    log: &Log,
+    warnings: &mut Vec<String>,
+) -> Result<BaseMeasurement> {
+    let mut own = Vec::new();
+    let result = measure_base_into(req, budget, log, &mut own);
+    for w in own {
+        let w = if label {
+            format!("{}: {w}", req.input.display())
+        } else {
+            w
+        };
+        push_warning_buf(warnings, log, w);
     }
+    result
+}
 
-    if let Some(rf) = args.report.report_file.as_deref() {
-        ensure_write_targets_distinct(&args.input, &[("--report-file", rf)])?;
-    }
-    let source = film_base_source_override(&args.film_base);
-    // Guard an explicit base with the same check `convert` applies (a recipe
-    // never reaches estimate, but a bad `--film-base` must fail loudly rather
-    // than be echoed back). Region bounds are checked by `film_base::estimate`.
-    if let Some(FilmBaseSource::Explicit(b)) = &source {
-        validate_explicit_film_base(b)?;
-    }
-
-    let mut report = Report {
-        command: Some("estimate"),
-        // Same contract as `inspect`: build identity on every report, no
-        // `params_hash` because no recipe was resolved. An estimated `Dmin` is
-        // routinely frozen into a roll recipe, so which build measured it matters.
-        identity: Some(Identity::new()),
-        input: Some(args.input.clone()),
-        ..Report::default()
+/// [`measure_base`]'s body; its warnings are collected unprefixed and not yet logged.
+fn measure_base_into(
+    req: &BaseRequest,
+    budget: memory::Budget,
+    log: &Log,
+    warnings: &mut Vec<String>,
+) -> Result<BaseMeasurement> {
+    let BaseRequest {
+        input,
+        source,
+        inset,
+        film_type,
+    } = *req;
+    // Decode-only: a stated region is gathered whole; the effective area is counted
+    // into a fixed-size histogram. Collected here and echoed once by the caller,
+    // prefixed, so not logged twice.
+    let quiet = Log {
+        verbose: log.verbose,
+        quiet: true,
     };
-
-    // Memory preflight before decode (decode-only profile — `estimate` samples the
-    // decoded image and stops). A stated region is gathered whole; the effective
-    // area is counted into a fixed-size histogram.
-    let budget = args.memory.budget();
-    report.memory = Some(preflight_memory(
-        &args.input,
+    let memory = preflight_memory(
+        input,
         RunProfile::DecodeOnly,
-        source.as_ref().map_or(SamplePlan::none(), sample_plan),
+        source.map_or(SamplePlan::none(), sample_plan),
         budget,
         memory::detect_total_ram(),
-        &log,
-        &mut report.warnings,
-    )?);
+        &quiet,
+        warnings,
+    )?;
+    log_memory_preflight(&memory, log);
 
-    let (image, info) = decode_within(&args.input, budget.bytes())?;
+    let (image, info) = decode_within(input, budget.bytes())?;
     log.info(format_args!(
         "decoded {:?} {}x{} (ir={})",
         info.format, info.width, info.height, info.ir_present
     ));
+    warnings.extend(info.warnings.iter().cloned());
 
-    for w in &info.warnings {
-        push_warning(&mut report, &log, w.clone());
-    }
-
-    report.film_type = args.film_type.filter(|&t| t != FilmType::Unknown);
     // The calibration command reports the IR verdict itself, not just a warning
     // about it: it decides whether the holder was measured.
-    report.ir_separability = film_base::ir_separability(&image);
-    let area = film_base::effective_area(
-        &image,
-        args.measure.measure_inset.unwrap_or(DEFAULT_MEASURE_INSET),
-    );
-
-    let est = match &source {
+    let ir_separability = film_base::ir_separability(&image);
+    let area = film_base::effective_area(&image, inset);
+    let (effective_area, film_base_source, est) = match source {
         // A stated source does not read the area, so a failure to resolve it is a
         // diagnostic, not a refusal.
         Some(source) => {
-            match &area {
-                Ok(area) => report.effective_area = Some(*area),
-                Err(e) => push_warning(
-                    &mut report,
-                    &log,
+            let area = match area {
+                Ok(area) => Some(area),
+                Err(e) => {
                     // `message()`, not `{e}`: `Display` prefixes the kind.
-                    format!("effective-area resolution skipped — {}", e.message()),
-                ),
-            }
-            report.film_base_source = Some(FilmBaseProvenance::from(source));
-            film_base::estimate(&image, source)?
+                    warnings.push(format!(
+                        "effective-area resolution skipped — {}",
+                        e.message()
+                    ));
+                    None
+                }
+            };
+            (
+                area,
+                FilmBaseProvenance::from(source),
+                film_base::estimate(&image, source)?,
+            )
         }
         // The base *is* the area's median, so an empty area refuses.
         None => {
             let area = area?;
-            report.effective_area = Some(area);
-            report.film_base_source = Some(FilmBaseProvenance::EffectiveArea);
             // The measurement then rests on the inset alone, which the user sizes —
             // true of a scan with no IR plane as much as of one whose plane declined.
             if area.holder.is_none() {
-                let note = holder_not_measured_note(&image, report.ir_separability);
-                push_warning(&mut report, &log, note);
+                warnings.push(holder_not_measured_note(&image, ir_separability));
             }
-            film_base::measure_area(&image, &area)?
+            (
+                Some(area),
+                FilmBaseProvenance::EffectiveArea,
+                film_base::measure_area(&image, &area)?,
+            )
         }
     };
-    if let Some(area) = report.effective_area {
-        for w in film_base::effective_area_warnings(&area) {
-            push_warning(&mut report, &log, w);
-        }
+    if let Some(area) = effective_area {
+        warnings.extend(film_base::effective_area_warnings(&area));
     }
-    for w in est.warnings {
-        push_warning(&mut report, &log, w);
-    }
-    report.film_base_percentile = est.percentile;
-    let base = est.base;
-    report.film_base = Some(base);
+    warnings.extend(est.warnings);
+    let film_base = est.base;
 
-    // Reuse-ready forms — attached only when the measurement passes the
-    // explicit-base validation `convert` applies: a base outside `(0, 1]` on any
-    // channel (a channel `> 1`; `<= 0` already errored at birth) is still reported
-    // as the measurement, but never as "reuse-ready". A warning does not withhold
-    // them: it rides `warnings`, and `--strict` is the hard gate. (Design-spec §8.)
-    match reuse_ready(<[f32; 3]>::from(base)) {
-        Some((flag, source)) => {
-            report.reuse = Some(ReuseReady { flag, source });
-        }
-        None => push_warning(
-            &mut report,
-            &log,
-            format!(
+    // Reuse-ready only when the measurement passes the explicit-base validation
+    // `convert` applies: a base outside `(0, 1]` on any channel (a channel `> 1`;
+    // `<= 0` already errored at birth) is still reported, never as reusable. A warning
+    // does not withhold it: `--strict` is the hard gate. (Design-spec §8.)
+    let reuse = match reuse_ready(<[f32; 3]>::from(film_base)) {
+        Some((flag, source)) => Some(ReuseReady { flag, source }),
+        None => {
+            warnings.push(format!(
                 "measured base {:?} is not usable as an explicit --film-base \
                  (channels must be in (0, 1]) — was the sampled area unexposed \
                  film base? No reuse-ready output emitted",
-                <[f32; 3]>::from(base)
-            ),
-        ),
-    }
+                <[f32; 3]>::from(film_base)
+            ));
+            None
+        }
+    };
 
-    // The recipe-shaped handoff, assembled from the reuse-ready pairs rather than
-    // from the measurements directly: that is what keeps each key present exactly
-    // when its flag is, and withholds a value the reuse gates declined to advertise.
-    report.calibration = calibration_fragment(&report);
-
-    report.elapsed_ms = Some(elapsed_ms(started));
-    // Emit the report before the `--strict` gate so the machine-readable record
-    // (the measured base) lands even when a warning then fails the run (same
-    // contract as `convert`).
-    emit_report(
-        &report,
-        args.report.report,
-        args.report.report_file.as_deref(),
-        &log,
-    )?;
-    if args.strict && !report.warnings.is_empty() {
-        return Err(NcError::Other(format!(
-            "--strict: {} warning(s) present (see report)",
-            report.warnings.len()
-        )));
-    }
-    Ok(())
+    Ok(BaseMeasurement {
+        input: input.to_path_buf(),
+        memory,
+        film_type: film_type.filter(|&t| t != FilmType::Unknown),
+        ir_separability,
+        effective_area,
+        film_base,
+        film_base_source,
+        film_base_percentile: est.percentile,
+        reuse,
+    })
 }
 
 /// Why the film holder went unmeasured, for a measurement that then rests on the
@@ -5488,21 +5491,181 @@ fn holder_not_measured_note(image: &LinearImage, sep: Option<film_base::IrSepara
     )
 }
 
-/// The report's `calibration` object, derived from the reuse-ready pairs.
+/// `hanten measure-base` — measure the film base (`Dmin`) alone and emit it as JSON,
+/// with a paste-ready `--film-base` flag when it is usable as an explicit base, and
+/// with `--out` as a recipe. `--strict` promotes warnings to a failing exit after the
+/// report is emitted, and then writes no recipe.
 ///
-/// **Derived, never assembled separately.** Each key is present exactly when its
-/// own reuse-ready pair is, so the pairing invariant is enforced by construction
-/// rather than by two call sites agreeing — and a measurement the reuse gates
-/// declined to advertise (a base outside `(0, 1]`)
-/// cannot leak into a fragment a user would pipe straight into `--params`.
+/// With no source flag it measures the frame's **effective area** at the median
+/// (`film_base::measure_area`) — the unexposed-frame workflow. `--base-region` reads
+/// that region at p97 instead, and `--film-base` echoes a value back through the same
+/// checks.
 ///
-/// `None` when nothing was measured: an empty `{}` would pipe into `--params` as a
-/// no-op the user could mistake for a calibration.
-fn calibration_fragment(report: &Report) -> Option<CalibrationFragment> {
-    let fragment = CalibrationFragment {
-        film_base: report.reuse.as_ref().map(|r| r.source.clone()),
+/// **No fingerprint watches the unstated default.** `version::PIPELINE_FINGERPRINTS`
+/// hashes what a *conversion* runs (a stated region), so changing the area
+/// measurement would move every `measure-base` result with the drift gate green —
+/// verify such a change by hand.
+fn run_measure_base(args: MeasureBaseArgs) -> Result<()> {
+    let started = Instant::now();
+    let log = Log::new(&args.report);
+
+    if args.d_max_region.is_some() {
+        return Err(NcError::Usage(removed_dmax_message(
+            "--d-max-region",
+            "measured the roll reference density off a light-struck leader",
+        )));
+    }
+    if args.grid {
+        return Err(NcError::Usage(
+            "--grid was removed: with no source flag `measure-base` measures the whole \
+             effective area of the frame at its median, which is what the grid was for. \
+             Drop the flag."
+                .into(),
+        ));
+    }
+    if args.film_base.auto_base {
+        return Err(NcError::Usage(
+            "--auto-base was removed with the rebate search: with no source flag \
+             `measure-base` measures the frame's effective area. Drop the flag, and give it \
+             the roll's unexposed frame."
+                .into(),
+        ));
+    }
+
+    // A bad `--measure-inset` is a *usage* error (exit 2), not a diagnostic that
+    // degrades to a warning: this command resolves no recipe, so `validate` never
+    // sees the flag. Checked before the decode, so a 160 MB read is not wasted on a
+    // typo.
+    if let Some(f) = args.measure.measure_inset {
+        check_measure_inset(f)?;
+    }
+
+    let mut targets = Vec::new();
+    if let Some(out) = args.out.out.as_deref() {
+        targets.push(("--out", out));
+    }
+    if let Some(rf) = args.report.report_file.as_deref() {
+        targets.push(("--report-file", rf));
+    }
+    ensure_write_targets_distinct(&args.input, &targets)?;
+    check_recipe_out(&args.out)?;
+    let source = film_base_source_override(&args.film_base);
+    // Guard an explicit base with the same check `convert` applies: a bad
+    // `--film-base` must fail loudly rather than be echoed back. Region bounds are
+    // checked by `film_base::estimate`.
+    if let Some(FilmBaseSource::Explicit(b)) = &source {
+        validate_explicit_film_base(b)?;
+    }
+
+    let mut warnings = Vec::new();
+    let req = BaseRequest {
+        input: &args.input,
+        source: source.as_ref(),
+        inset: args.measure.measure_inset.unwrap_or(DEFAULT_MEASURE_INSET),
+        film_type: args.film_type,
     };
-    (!fragment.is_empty()).then_some(fragment)
+    let m = measure_base(&req, args.memory.budget(), false, &log, &mut warnings)?;
+    let recipe = m.reuse.as_ref().map(|r| MeasuredRecipe {
+        recipe_version: recipe::RecipeVersion,
+        input: None,
+        calibration: recipe::Calibration {
+            film_base: Some(r.source.clone()),
+        },
+        roll: None,
+        measure: None,
+        reconstruction: None,
+    });
+    let report = Report {
+        command: Some("measure-base"),
+        // Same contract as `inspect`: build identity on every report, no
+        // `params_hash` because no recipe was resolved. A measured `Dmin` is
+        // routinely frozen into a roll recipe, so which build measured it matters.
+        identity: Some(Identity::new()),
+        input: Some(m.input),
+        memory: Some(m.memory),
+        film_type: m.film_type,
+        ir_separability: m.ir_separability,
+        effective_area: m.effective_area,
+        film_base: Some(m.film_base),
+        film_base_source: Some(m.film_base_source),
+        film_base_percentile: m.film_base_percentile,
+        reuse: m.reuse,
+        warnings,
+        elapsed_ms: Some(elapsed_ms(started)),
+        ..Report::default()
+    };
+    // Emit the report before the `--strict` gate so the machine-readable record (the
+    // measured base) lands even when a warning then fails the run.
+    emit_report(
+        &report,
+        args.report.report,
+        args.report.report_file.as_deref(),
+        &log,
+    )?;
+    if args.strict && !report.warnings.is_empty() {
+        return Err(NcError::Other(format!(
+            "--strict: {} warning(s) present (see report){}",
+            report.warnings.len(),
+            if args.out.out.is_some() {
+                "; no recipe written"
+            } else {
+                ""
+            }
+        )));
+    }
+    if let Some(out) = args.out.out.as_deref() {
+        let recipe = recipe.ok_or_else(|| {
+            NcError::Other(format!(
+                "the measured base is not usable as an explicit film base (see the \
+                 report's warnings); {} not written",
+                out.display()
+            ))
+        })?;
+        write_recipe_out(out, &recipe, &log)?;
+    }
+    Ok(())
+}
+
+/// The recipe a measuring command writes with `--out`: only what the measurement
+/// holds, so a later layer is pinned by nothing else. `measure-base` states
+/// `calibration`; `measure-roll` states `calibration` and `roll`, plus the input and
+/// decode sections it measured under when they are not the defaults.
+#[derive(Debug, Serialize)]
+struct MeasuredRecipe {
+    recipe_version: recipe::RecipeVersion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input: Option<InputParams>,
+    calibration: recipe::Calibration,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roll: Option<recipe::RollSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    measure: Option<MeasureParams>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reconstruction: Option<fixed::DecodeParams>,
+}
+
+/// Refuse an existing `--out` file unless `--force`, before anything is decoded.
+fn check_recipe_out(out: &RecipeOutArgs) -> Result<()> {
+    match out.out.as_deref() {
+        Some(path) if !out.force && path.exists() => Err(NcError::Usage(format!(
+            "--out {} exists; pass --force to replace it",
+            path.display()
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// Write a `--out` recipe: pretty JSON with a trailing newline, staged so a failed
+/// write leaves no partial file.
+fn write_recipe_out(path: &Path, recipe: &MeasuredRecipe, log: &Log) -> Result<()> {
+    let mut json = serde_json::to_string_pretty(recipe)
+        .map_err(|e| NcError::Other(format!("serializing recipe: {e}")))?;
+    json.push('\n');
+    for note in staged::stage_bytes(path, json.as_bytes())?.commit()? {
+        log.warn_always(&note);
+    }
+    log.info(format_args!("wrote recipe {}", path.display()));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -5515,6 +5678,9 @@ struct MeasureRollReport {
     command: &'static str,
     /// Which build measured the gains — they are frozen into a recipe and outlive it.
     identity: Identity,
+    /// The `--unexposed` frame's base measurement, the evidence `measure-base` reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unexposed: Option<BaseMeasurement>,
     /// The film base every input was decoded with.
     film_base: FilmBase,
     /// The decode the gains belong to: they are measured at its output.
@@ -5634,51 +5800,12 @@ struct WhiteRule {
     saturation_margin_stops: Option<f32>,
 }
 
+/// The gains and the white as `convert` flags. The recipe form is the `--out` file.
 #[derive(Debug, Serialize)]
 struct RollReuse {
     /// For `convert`, on every frame but a clamped one, which takes its own
     /// `white.clamped[].flag`.
     flag: String,
-    /// A partial recipe, to merge into the roll's.
-    recipe: RollFragment,
-    /// A `roll --frames` manifest giving each clamped frame its own white (the cap); only
-    /// when a frame renders at a contrast other than the roll's. Input paths are as given
-    /// here.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    frames: Option<ClampManifest>,
-}
-
-/// `{"roll": {"white_balance": [r, g, b], "white_stops": w}}` — the recipe's `roll`
-/// section (`nf-calibration/roll-section`), typed rather than built as a
-/// `serde_json::Value` so the values print in their `f32` form — a `Value` widens them to
-/// `f64` digits the flag form does not show.
-#[derive(Debug, Serialize)]
-struct RollFragment {
-    roll: recipe::RollSection,
-}
-
-#[derive(Debug, Serialize)]
-struct ClampManifest {
-    frames: Vec<ClampManifestFrame>,
-}
-
-#[derive(Debug, Serialize)]
-struct ClampManifestFrame {
-    input: PathBuf,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    params: Option<ClampParams>,
-}
-
-/// A clamped frame's own white. Only `white_stops`, so merging it over the roll's
-/// recipe keeps the roll's gains.
-#[derive(Debug, Serialize)]
-struct ClampParams {
-    roll: ClampedWhite,
-}
-
-#[derive(Debug, Serialize)]
-struct ClampedWhite {
-    white_stops: f32,
 }
 
 /// One input decoded into linear ACEScg at the recipe's decode, plus its effective
@@ -5799,38 +5926,79 @@ fn measured_roll_white(
     })
 }
 
-/// The `roll --frames` manifest that renders each clamped frame at its own white, the
-/// cap — `None` when every frame renders at the roll's (none clamped, or the roll's white
-/// is the cap itself, which a clamped frame already has).
-fn clamp_manifest(frames: &[MeasuredFrame], white: &MeasuredRollWhite) -> Option<ClampManifest> {
-    let own = |f: &MeasuredFrame| {
-        (f.white_role == roll_white::FrameRole::Clamped
-            && white.bound != roll_white::WhiteBound::Cap)
-            .then_some(roll_white::WHITE_CAP_STOPS)
-    };
+/// The recipe's `roll.frames`: each clamped frame at its own white, the cap — empty when
+/// every frame renders at the roll's (none clamped, or the roll's white is the cap
+/// itself, which a clamped frame already has). Keyed by file name, which
+/// [`refuse_shared_file_names`] made unique.
+fn clamp_table(
+    frames: &[MeasuredFrame],
+    white: &MeasuredRollWhite,
+) -> BTreeMap<String, recipe::FrameRoll> {
     frames
         .iter()
-        .any(|f| own(f).is_some())
-        .then(|| ClampManifest {
-            frames: frames
-                .iter()
-                .map(|f| ClampManifestFrame {
-                    input: f.input.clone(),
-                    params: own(f).map(|white_stops| ClampParams {
-                        roll: ClampedWhite { white_stops },
-                    }),
-                })
-                .collect(),
+        .filter(|f| {
+            f.white_role == roll_white::FrameRole::Clamped
+                && white.bound != roll_white::WhiteBound::Cap
         })
+        .filter_map(|f| f.input.file_name()?.to_str().map(str::to_owned))
+        .map(|name| {
+            let white_stops = roll_white::WHITE_CAP_STOPS;
+            (name, recipe::FrameRoll { white_stops })
+        })
+        .collect()
 }
 
-/// `hanten measure-roll` — measure a roll's white balance and white once, over its
-/// picture frames, and report the gains and the contrast to freeze into its recipe.
+/// `roll.frames` keys a frame by its file name, so two inputs sharing one — or one that
+/// has none a recipe can state — would make the table ambiguous.
+fn refuse_shared_file_names(inputs: &[PathBuf]) -> Result<()> {
+    let mut seen: Vec<(&str, &Path)> = Vec::new();
+    for input in inputs {
+        let Some(name) = input.file_name().and_then(|n| n.to_str()) else {
+            return Err(NcError::Usage(format!(
+                "{}: --out keys a frame by its file name in `roll.frames`, and this path has \
+                 no UTF-8 file name",
+                input.display()
+            )));
+        };
+        if let Some((_, first)) = seen.iter().find(|(n, _)| *n == name) {
+            return Err(NcError::Usage(format!(
+                "{} and {} share the file name {name:?}; --out keys a frame by its file name \
+                 in `roll.frames`, so rename one",
+                first.display(),
+                input.display()
+            )));
+        }
+        seen.push((name, input));
+    }
+    Ok(())
+}
+
+/// `hanten measure-roll` — measure what a roll shares once: with `--unexposed` its film
+/// base ([`measure_base`]), then its white balance and white over its picture frames;
+/// report them, and with `--out` write them as one recipe `roll --params` renders alone.
 fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
 
     let mut recipe = load_recipe(args.recipe_in.as_deref())?.recipe;
+    // A measured base is not overridden: the unexposed frame is refused beside any
+    // other statement of the base, before a rule about that base could refuse first.
+    if let Some(unexposed) = &args.unexposed {
+        let stated = if args.film_base.is_some() {
+            Some("--film-base")
+        } else if recipe.calibration.film_base.is_some() {
+            Some("the recipe's `calibration.film_base`")
+        } else {
+            None
+        };
+        if let Some(stated) = stated {
+            return Err(NcError::Usage(format!(
+                "--unexposed {} measures the film base, and {stated} states one; the base \
+                 is measured or stated, never both. Drop one of them",
+                unexposed.display()
+            )));
+        }
+    }
     if let Some(b) = args.film_base {
         recipe.calibration.film_base = Some(FilmBaseSource::Explicit(b));
     }
@@ -5861,20 +6029,35 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     // A frame named twice would weigh twice in the pool — silently, since every
     // frame contributes the same sample count. The leader named as a frame too (the
     // natural glob when it sits beside them) would pool its unguarded edges.
+    // The unexposed frame likewise: it is film base, not picture.
     let mut seen: Vec<(PathBuf, &Path)> = Vec::new();
-    if let Some(leader) = &args.leader {
-        let key = collision_key(leader);
+    let references = [
+        ("--leader", "leader", args.leader.as_deref()),
+        ("--unexposed", "unexposed frame", args.unexposed.as_deref()),
+    ];
+    for (flag, what, path) in references {
+        let Some(path) = path else { continue };
+        let key = collision_key(path);
         if let Some(input) = args
             .inputs
             .iter()
             .find(|i| keys_collide(&collision_key(i), &key))
         {
             return Err(NcError::Usage(format!(
-                "{} is both the --leader and an input frame; every input is pooled as \
-                 picture, so leave the leader out of the frames",
+                "{} is both the {flag} and an input frame; every input is pooled as \
+                 picture, so leave the {what} out of the frames",
                 input.display()
             )));
         }
+    }
+    if let (Some(leader), Some(unexposed)) = (&args.leader, &args.unexposed)
+        && keys_collide(&collision_key(leader), &collision_key(unexposed))
+    {
+        return Err(NcError::Usage(format!(
+            "{} is both the --leader and the --unexposed frame; the leader is fully \
+             exposed and the unexposed frame is not exposed at all",
+            leader.display()
+        )));
     }
     for input in &args.inputs {
         let key = collision_key(input);
@@ -5892,37 +6075,89 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         }
         seen.push((key, input));
     }
-    let base = match recipe.calibration.film_base {
-        Some(FilmBaseSource::Explicit(b)) => {
-            validate_explicit_film_base(&b)?;
-            FilmBase::from(b)
+    // After the exact repeat above: a file named twice is that fault, not a clash.
+    if args.out.out.is_some() {
+        refuse_shared_file_names(&args.inputs)?;
+    }
+    let stated_base = match (&args.unexposed, &recipe.calibration.film_base) {
+        (Some(_), _) => None,
+        (None, Some(FilmBaseSource::Explicit(b))) => {
+            validate_explicit_film_base(b)?;
+            Some(FilmBase::from(*b))
         }
-        _ => {
+        (None, _) => {
             return Err(NcError::Usage(
-                "measure-roll needs the roll's film base stated explicitly — `--film-base \
-                 R,G,B` or `calibration.film_base` as `{\"explicit\": [r, g, b]}` in the \
-                 recipe: a base estimated per frame would measure each frame under a \
-                 different decode. Measure it once with `hanten estimate \
-                 <unexposed-frame>`"
+                "measure-roll needs the roll's film base: `--unexposed <unexposed.tif>` to \
+                 measure it here, or stated explicitly — `--film-base R,G,B`, or \
+                 `calibration.film_base` as `{\"explicit\": [r, g, b]}` in the recipe (what \
+                 `hanten measure-base --out` writes). A base estimated per frame would \
+                 measure each frame under a different decode"
                     .into(),
             ));
         }
     };
-    if let Some(rf) = args.report.report_file.as_deref() {
-        let inputs: Vec<&Path> = args
-            .inputs
-            .iter()
-            .map(PathBuf::as_path)
-            .chain(args.leader.as_deref())
-            .collect();
-        for input in inputs {
-            ensure_write_targets_distinct(input, &[("--report-file", rf)])?;
-        }
+    let mut targets = Vec::new();
+    if let Some(out) = args.out.out.as_deref() {
+        targets.push(("--out", out));
     }
+    if let Some(rf) = args.report.report_file.as_deref() {
+        targets.push(("--report-file", rf));
+    }
+    let read = args
+        .inputs
+        .iter()
+        .map(|p| (p.as_path(), "an input scan"))
+        .chain(args.leader.as_deref().map(|p| (p, "the --leader scan")))
+        .chain(
+            args.unexposed
+                .as_deref()
+                .map(|p| (p, "the --unexposed scan")),
+        )
+        .chain(
+            args.recipe_in
+                .as_deref()
+                .map(|p| (p, "the --params recipe")),
+        );
+    for (input, what) in read {
+        ensure_write_targets_spare(input, what, &targets)?;
+    }
+    check_recipe_out(&args.out)?;
 
     let budget = args.memory.budget();
     let mut warnings = Vec::new();
     let mut decode = None;
+
+    // The unexposed frame first: every other frame is decoded with its base. Measured
+    // exactly as `measure-base` measures it with no source flag: its effective area
+    // at the median.
+    let unexposed = match &args.unexposed {
+        Some(path) => {
+            let req = BaseRequest {
+                input: path,
+                source: None,
+                inset: recipe.measure.inset,
+                film_type: None,
+            };
+            let m = measure_base(&req, budget, true, &log, &mut warnings)?;
+            // Refused before this command's report, so the evidence is measure-base's.
+            if m.reuse.is_none() {
+                return Err(NcError::Other(format!(
+                    "{}: the measured base {:?} is not usable as an explicit film base \
+                     (channels must be in (0, 1]) — is it the roll's unexposed frame? \
+                     `hanten measure-base` on it reports the evidence",
+                    path.display(),
+                    <[f32; 3]>::from(m.film_base)
+                )));
+            }
+            Some(m)
+        }
+        None => None,
+    };
+    let base = match (&unexposed, stated_base) {
+        (Some(m), _) => m.film_base,
+        (None, Some(b)) => b,
+        (None, None) => unreachable!("refused above"),
+    };
 
     let leader = match &args.leader {
         Some(path) => {
@@ -6067,11 +6302,35 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         "roll white {:+.2} stops ({:?}), contrast {}",
         white.stops, white.bound, white.contrast
     ));
-    let clamps = clamp_manifest(&frames, &white);
+    // Everything a roll shares, as one recipe `roll --params` renders alone: the base,
+    // the roll section with its clamps, and the input and decode sections the gains
+    // were measured under, when stated — the gains hold only under that decode.
+    let measured = MeasuredRecipe {
+        recipe_version: recipe::RecipeVersion,
+        // The decode's input assertions only: an IR export path is one frame's output,
+        // and `roll` refuses it.
+        input: Some(InputParams {
+            export_ir: None,
+            ..recipe.input.clone()
+        })
+        .filter(|i| *i != InputParams::default()),
+        calibration: recipe::Calibration {
+            film_base: Some(FilmBaseSource::Explicit(base.into())),
+        },
+        roll: Some(recipe::RollSection {
+            white_balance: Some(gains),
+            white_stops: Some(white.stops),
+            frames: clamp_table(&frames, &white),
+        }),
+        measure: (recipe.measure != MeasureParams::default()).then(|| recipe.measure.clone()),
+        reconstruction: (recipe.reconstruction != fixed::DecodeParams::default())
+            .then_some(recipe.reconstruction),
+    };
 
     let report = MeasureRollReport {
         command: "measure-roll",
         identity: Identity::new(),
+        unexposed,
         film_base: base,
         decode: decode.expect("clap requires at least one input"),
         leader,
@@ -6083,13 +6342,6 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         },
         reuse: RollReuse {
             flag: reuse_flag(gains, white.stops),
-            recipe: RollFragment {
-                roll: recipe::RollSection {
-                    white_balance: Some(gains),
-                    white_stops: Some(white.stops),
-                },
-            },
-            frames: clamps,
         },
         white,
         warnings,
@@ -6103,9 +6355,17 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     )?;
     if args.strict && !report.warnings.is_empty() {
         return Err(NcError::Other(format!(
-            "--strict: {} warning(s) present (see report)",
-            report.warnings.len()
+            "--strict: {} warning(s) present (see report){}",
+            report.warnings.len(),
+            if args.out.out.is_some() {
+                "; no recipe written"
+            } else {
+                ""
+            }
         )));
+    }
+    if let Some(out) = args.out.out.as_deref() {
+        write_recipe_out(out, &measured, &log)?;
     }
     Ok(())
 }
@@ -7151,7 +7411,7 @@ mod tests {
         for expected in [
             "--film-base",
             "--base-region",
-            "hanten estimate <unexposed-frame>",
+            "hanten measure-base <unexposed-frame>",
             "calibration.film_base",
         ] {
             assert!(msg.contains(expected), "{expected} missing from: {msg}");
@@ -7188,8 +7448,13 @@ mod tests {
         for absent in ["--auto-base", "--film-base"] {
             assert!(!msg.contains(absent), "{absent} must not be offered: {msg}");
         }
-        assert!(!msg.contains("--base-region"), "not a `roll` flag: {msg}");
-        assert!(msg.contains("hanten estimate <unexposed-frame>"), "{msg}");
+        // The flags it does name (`--unexposed`, `--out`) are the measuring commands'
+        // it recommends, which accept them.
+        assert!(
+            msg.contains("hanten measure-roll <frames> --unexposed")
+                && msg.contains("hanten measure-base <unexposed-scan> --out"),
+            "{msg}"
+        );
         // The *requirement* is remedy-independent — only the wording moves.
         let mut stated = Recipe::default();
         stated.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
@@ -7390,41 +7655,38 @@ mod tests {
         );
     }
 
+    /// **Only what was measured is written**, so the file pins nothing a later layer
+    /// states — and what is written loads as a recipe with no hand editing.
     #[test]
-    fn the_calibration_fragment_round_trips_as_a_recipe() {
-        // The report's `calibration` object must drop into a recipe with no hand
-        // editing of its own — that is the workflow it exists for
-        // (`hanten estimate … | jq '{recipe_version: 2, calibration}' > roll-cal.json`).
-        let fragment = CalibrationFragment {
-            film_base: Some(FilmBaseSource::Explicit([0.553, 0.271, 0.159])),
+    fn a_measured_recipe_states_only_its_sections_and_loads() {
+        let base = MeasuredRecipe {
+            recipe_version: recipe::RecipeVersion,
+            input: None,
+            calibration: recipe::Calibration {
+                film_base: Some(FilmBaseSource::Explicit([0.553, 0.271, 0.159])),
+            },
+            roll: None,
+            measure: None,
+            reconstruction: None,
         };
-        let json = serde_json::to_string(&fragment).unwrap();
-        assert_eq!(json, r#"{"film_base":{"explicit":[0.553,0.271,0.159]}}"#);
-        let recipe: Recipe =
-            serde_json::from_str(&format!(r#"{{"recipe_version":2,"calibration":{json}}}"#))
-                .unwrap();
+        let json = serde_json::to_string(&base).unwrap();
         assert_eq!(
-            recipe.calibration.film_base,
-            Some(FilmBaseSource::Explicit([0.553, 0.271, 0.159]))
+            json,
+            r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.553,0.271,0.159]}}}"#
         );
+        let recipe: Recipe = serde_json::from_str(&json).unwrap();
         validate_shared(&recipe, FilmBaseRemedy::Flags).unwrap();
-    }
 
-    /// **Each member is emitted only when it was measured, and never defaulted**, so a
-    /// fragment piped into `--params` pins nothing a later layer states.
-    #[test]
-    fn the_calibration_fragment_omits_what_was_not_measured() {
-        let base_only = CalibrationFragment {
-            film_base: Some(FilmBaseSource::Explicit([0.5, 0.25, 0.125])),
+        let roll = MeasuredRecipe {
+            roll: Some(recipe::RollSection {
+                white_balance: Some([0.5, 1.0, 1.25]),
+                white_stops: Some(1.75),
+                frames: [("f2.tif".to_owned(), recipe::FrameRoll { white_stops: 2.0 })].into(),
+            }),
+            ..base
         };
-        assert_eq!(
-            serde_json::to_string(&base_only).unwrap(),
-            r#"{"film_base":{"explicit":[0.5,0.25,0.125]}}"#
-        );
-        // Nothing measured is `None`, not `{}`: an empty object would pipe into
-        // `--params` as a no-op a user could mistake for a calibration.
-        assert!(CalibrationFragment::default().is_empty());
-        assert!(calibration_fragment(&Report::default()).is_none());
+        let recipe: Recipe = serde_json::from_str(&serde_json::to_string(&roll).unwrap()).unwrap();
+        assert_eq!(Some(recipe.roll), roll.roll);
     }
 
     #[test]
@@ -7442,33 +7704,23 @@ mod tests {
 
     #[test]
     fn report_reuse_flattens_to_flat_keys_or_nothing() {
-        // The wire contract: the flag half serializes as the flat top-level key
-        // `film_base_flag`, the recipe half rides inside `calibration`, and the
+        // The wire contract: the flag serializes as the flat top-level key
+        // `film_base_flag`; the recipe value is `--out`'s, never the report's; and the
         // `ReuseReady` wrapper / `reuse` field name never leaks. `None` emits
         // neither. Locks the `#[serde(flatten)]` + rename shape so a refactor
         // can't silently change the agent-facing JSON.
-        // Values exactly representable in f32 (halves/quarters/eighths) so the
-        // JSON literals match without precision noise — the shape is the point.
-        let reuse = ReuseReady {
-            flag: "--film-base 0.5,0.25,0.125".to_string(),
-            source: FilmBaseSource::Explicit([0.5, 0.25, 0.125]),
-        };
         let with = Report {
-            calibration: calibration_fragment(&Report {
-                reuse: Some(reuse.clone()),
-                ..Report::default()
+            reuse: Some(ReuseReady {
+                flag: "--film-base 0.5,0.25,0.125".to_string(),
+                source: FilmBaseSource::Explicit([0.5, 0.25, 0.125]),
             }),
-            reuse: Some(reuse),
             ..Report::default()
         };
         let v = serde_json::to_value(&with).unwrap();
         assert_eq!(v["film_base_flag"], "--film-base 0.5,0.25,0.125");
-        assert_eq!(
-            v["calibration"],
-            serde_json::json!({ "film_base": { "explicit": [0.5, 0.25, 0.125] } })
-        );
-        // The old key is gone, not renamed in place: a consumer still reading it must
-        // fail loudly rather than silently see nothing.
+        // The old keys are gone, not renamed in place: a consumer still reading one
+        // must fail loudly rather than silently see nothing.
+        assert!(v.get("calibration").is_none());
         assert!(v.get("film_base_recipe").is_none());
         assert!(v.get("reuse").is_none(), "the wrapper name must not leak");
 
@@ -8010,6 +8262,8 @@ mod tests {
         "recipe_version",
         "input",
         "roll.white_stops",
+        // Resolved per frame; a manifest stating it is refused, not warned about.
+        "roll.frames",
         "measure",
         "scene_correction",
         "look",

@@ -13,7 +13,8 @@ requirements and defaults do not change.
 ## What is known
 
 - **`nctool roll` is an internal one-shot** (moved here from `nf-core/subcommands`,
-  2026-09-28): it calibrates with `estimate` alone, never `measure-roll`, then renders.
+  2026-09-28): it calibrates with `measure-base` (`estimate` on the reference build)
+  alone, never `measure-roll`, then renders.
   Once measure mode exists, `nctool roll` uses it on builds that have it and keeps its
   own steps for the reference build (`scripts/analysis/CLAUDE.md`).
 - Every command runs memory preflight; measure mode peaks at

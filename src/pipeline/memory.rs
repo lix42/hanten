@@ -70,15 +70,15 @@
 //!   rectangles, but `film_base::region_channels` materializes each one
 //!   *unstrided* into three `Vec<f32>` — 12 bytes per sampled pixel — live
 //!   alongside the decoded image, so a full-frame rectangle costs 28 B/px. For
-//!   [`RunProfile::DecodeOnly`] (`estimate --base-region`, which stops after
+//!   [`RunProfile::DecodeOnly`] (`measure-base --base-region`, which stops after
 //!   sampling) that phase **is** the peak, well above decode's 18 B/px; `inspect`
-//!   and a sourceless `estimate` gather nothing, so decode is theirs. For a
+//!   and a sourceless `measure-base` gather nothing, so decode is theirs. For a
 //!   conversion the phase itself stays under the render and encode phases — but the
 //!   sample is *retained* into them (see the retention rule above), so sampling still
 //!   raises `convert`'s peak rather than being free.
 //!
 //!   This note replaces an earlier claim that `film_base` allocated no full-frame
-//!   buffer. That claim was false twice over: it let `inspect`/`estimate` be
+//!   buffer. That claim was false twice over: it let `inspect`/`measure-base` be
 //!   admitted at 18 B/px and then exceed their own predicted peak (measured +26%
 //!   on the auto-interior rectangle, +43% on a full-frame one), and the first fix
 //!   — counting the phase but letting it *compete* — still under-estimated a
@@ -126,10 +126,10 @@
 //! | `convert` u16 74.65 MP | 3.396 GB | 3.146 GB | +8.0% |
 //! | `convert --export-ir` u16 74.65 MP | 3.568 GB | 3.146 GB | +13.4% |
 //! | `convert --output-hdr` 74.65 MP | 2.881 GB | 2.698 GB | +6.8% |
-//! | `estimate --film-base` 74.65 MP (no sampling) | 1.679 GB | 1.502 GB | +11.8% |
-//! | `estimate --grid` 74.65 MP | 1.679 GB | 1.558 GB | +7.8% |
-//! | `estimate --base-region` (auto-interior rect) 74.65 MP | 2.217 GB | 2.119 GB | +4.6% |
-//! | `estimate --base-region` (full frame) 74.65 MP | 2.538 GB | 2.398 GB | +5.8% |
+//! | `measure-base --film-base` 74.65 MP (no sampling) | 1.679 GB | 1.502 GB | +11.8% |
+//! | `measure-base --grid` 74.65 MP | 1.679 GB | 1.558 GB | +7.8% |
+//! | `measure-base --base-region` (auto-interior rect) 74.65 MP | 2.217 GB | 2.119 GB | +4.6% |
+//! | `measure-base --base-region` (full frame) 74.65 MP | 2.538 GB | 2.398 GB | +5.8% |
 //! | `convert --base-region` (full frame) 74.65 MP | 4.427 GB | 3.743 GB | +18.3% |
 //! | `convert` u16 18.66 MP | 0.950 GB | 0.681 GB | +39.4% |
 //! | `ultra-hdr-v1` 18.66 MP (explicit base, no IR export) | 1.851 GB | 1.681 GB | +10.1% |
@@ -238,7 +238,7 @@
 //! fraction of detected RAM. The one environment-dependent piece is the **warning
 //! tier**, which compares the estimate against detected physical RAM
 //! ([`detect_total_ram`]): the same input can warn on a small machine and stay
-//! quiet on a large one — and on `convert`/`roll`/`estimate`, where `--strict`
+//! quiet on a large one — and on `convert`/`roll`/`measure-base`, where `--strict`
 //! promotes warnings, can therefore *exit* differently. (`inspect` has no
 //! `--strict`, so there the warning is report-only.) That is deliberate — a small
 //! machine deserves the warning — but it means "same input + params ⇒ same exit"
@@ -339,7 +339,7 @@ const ALLOWANCE_FIXED_BYTES: u64 = 128 * 1024 * 1024;
 const RAM_WARN_PERCENT: u64 = 70;
 
 /// Which pipeline a preflight is sizing. The commands allocate very differently —
-/// `inspect`/`estimate` stop after decode, so gating them on the full-pipeline
+/// `inspect`/`measure-base` stop after decode, so gating them on the full-pipeline
 /// peak would reject inputs they could handle fine.
 ///
 /// One variant per **shape of buffers** a destination holds, not one per destination.
@@ -400,7 +400,7 @@ pub enum RunProfile {
         /// Whether a u16 IR TIFF is staged before the primary.
         export_ir: bool,
     },
-    /// `inspect` / `estimate`: decode, then sample — no render, no encode.
+    /// `inspect` / `measure-base`: decode, then sample — no render, no encode.
     DecodeOnly,
     /// `measure-roll`, per frame: the fixed decode into linear ACEScg, then a strided
     /// sample of it — no chain, no encode.
@@ -1125,7 +1125,7 @@ mod tests {
     #[test]
     fn film_base_phase_counts_the_sampled_rectangle() {
         // The film-base phase is the decoded image plus 12 B per sampled pixel —
-        // the omission that let `inspect`/`estimate` exceed their own estimate.
+        // the omission that let `inspect`/`measure-base` exceed their own estimate.
         let px = 1000u64 * 1000;
         let s = shape(1000, 1000, true);
 
@@ -1205,7 +1205,7 @@ mod tests {
 
     #[test]
     fn decode_only_profile_counts_no_render_or_encode() {
-        // `inspect`/`estimate` must not be gated on a render they never run.
+        // `inspect`/`measure-base` must not be gated on a render they never run.
         let e = estimate_peak(
             &shape(1000, 1000, true),
             RunProfile::DecodeOnly,

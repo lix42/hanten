@@ -9,8 +9,10 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 8`, on branch
-> `film-base/holder-masked-measurement` (`estimate` measures the effective area; the
-> `auto` film base retired, §4), after `telemetry/schema-v2` (telemetry success/failure
+> `core/measure-base` (`estimate` renamed `measure-base`; the measuring commands and
+> their `--out` recipes, §4 and §7), after `film-base/holder-masked-measurement` (the
+> base measured over the effective area; the `auto` film base retired, §4),
+> `telemetry/schema-v2` (telemetry success/failure
 > events, §10), `nf-core/report-contract` (the report's `chain` block and recipe, §10),
 > `nf-core/default-flip` (the rendering chain of [`design-update.md`](design-update.md)
 > became the only one), `nf-calibration/roll-section` and
@@ -51,15 +53,15 @@ shape every workflow below:
 That last point is the whole workflow:
 
 ```
-   plan                            freeze                    apply
-┌──────────────────┐          ┌───────────────┐        ┌──────────────────────┐
-│ hanten inspect   │  ──────► │ recipe.json   │ ─────► │ hanten convert       │
-│ hanten estimate  │          │ (Dmin, white  │        │ hanten roll          │
-│ hanten measure-  │          │  balance,     │        │                      │
-│   roll           │          │  look knobs)  │        │                      │
-└──────────────────┘          └───────────────┘        └──────────────────────┘
-  measure from the              reuse-ready forms         one shared recipe
-  roll's frames                 printed by each           across every frame
+   measure                        freeze                 apply
+┌────────────────────┐        ┌───────────────┐        ┌──────────────────────┐
+│ hanten inspect     │  ────► │ roll.json     │ ─────► │ hanten roll          │
+│ hanten measure-roll│        │ (Dmin, white  │        │ hanten convert       │
+│ hanten measure-base│        │  balance,     │        │                      │
+│   --out roll.json  │        │  clamps)      │        │                      │
+└────────────────────┘        └───────────────┘        └──────────────────────┘
+  measure from the              written by --out        one shared recipe
+  roll's frames                 (no jq, no copying)     across every frame
 ```
 
 Every conversion runs one chain: the **fixed decode** turns the negative into film
@@ -123,11 +125,11 @@ guaranteed byte-identical within one build and architecture.
 | Command | Purpose | Writes an image? |
 |---|---|---|
 | `hanten inspect` | **"What is this file?"** — format, dimensions, IR presence, scanner metadata, resolved input semantics, the effective area. | No |
-| `hanten estimate` | **"What number do I freeze?"** — measure the film base (`Dmin`). Prints **reuse-ready** flag and recipe forms. | No |
+| `hanten measure-base` | **"What is this film's base?"** — measure the film base (`Dmin`) alone, from an unexposed frame or a region. Prints a reuse-ready `--film-base` flag; `--out` writes it as a recipe. (Was `estimate`, which now exits 2 naming it.) | No |
 | `hanten params` | Print the full default recipe as JSON — the scaffolding starting point. | No |
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
 | `hanten roll` | Convert many frames from **one shared frozen recipe**. | Yes |
-| `hanten measure-roll` | **"What white balance and white does this roll have?"** — measured once over the roll's frames (§7). Prints reuse-ready flag, recipe and `roll --frames` forms for the recipe's `roll` section. | No |
+| `hanten measure-roll` | **"What does this roll share?"** — its white balance and white, measured once over its frames (§7), and with `--unexposed` its film base. `--out` writes it all as one recipe for `roll`. | No |
 
 Every command except `params` emits a **JSON report on stdout** on success
 (`--report none` to suppress, `--report-file PATH` to redirect); `params` takes no
@@ -135,7 +137,7 @@ flags at all and just prints the default recipe. Logs and warnings go to
 **stderr**, so stdout stays clean for piping into `jq`.
 
 > **A hard failure emits no report at all** — stdout is empty. A decode error, a
-> memory refusal, or a measurement that fails (`estimate` on a frame with no usable
+> memory refusal, or a measurement that fails (`measure-base` on a frame with no usable
 > signal) exits non-zero before the report is written. Only `roll` is different: it
 > aggregates per-frame failures into its report and still emits it. So a script
 > must check the exit code, not just parse stdout.
@@ -157,10 +159,10 @@ mode metadata, and — importantly — how `hanten` **resolved the input semanti
 
 `inspect` measures no film base. It does report the **effective area** — the region
 `hanten` reads measurements over, after the film holder and a border inset are
-removed — which is what `estimate` measures in step 2. Worth a look on any uncropped
+removed — which is what `measure-base` measures in step 2. Worth a look on any uncropped
 scan; see [The measurement region](#the-measurement-region-the-effective-area).
 
-### Step 2 — Measure the film base
+### Step 2 — Measure the roll, once
 
 **This step is mandatory.** `convert` and `roll` refuse to run without a stated
 film base — there is no default, because `Dmin` is the divisor of the density
@@ -168,17 +170,66 @@ conversion and sets the black point and the colour balance together:
 
 ```
 usage: no film base selected: pass --film-base R,G,B (a Dmin measured once per roll
-       with `hanten estimate <unexposed-frame>`), or --base-region X,Y,W,H to read it
-       from a region of unexposed film. Recipe key: `calibration.film_base`.
+       with `hanten measure-base <unexposed-frame>`), or --base-region X,Y,W,H to read
+       it from a region of unexposed film. Recipe key: `calibration.film_base`.
 ```
 
-`estimate` is the one command that measures a base, from one of two sources:
+One command measures everything a roll shares — the film base from its **unexposed
+frame**, and its white balance and white over its picture frames (§7) — and writes it
+as one recipe:
 
-**(a) An unexposed frame** — the intended source. With no source flag, `estimate`
+```sh
+hanten measure-roll frames/*.tif --unexposed unexposed.tif --leader leader.tif --out roll.json
+```
+
+`roll.json` is the measurement, ready for `--params` (a real Ektar 100 roll):
+
+```json
+{
+  "recipe_version": 2,
+  "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
+  "roll": {
+    "white_balance": [0.886392, 1.0, 1.188019],
+    "white_stops": 1.9509047,
+    "frames": { "971.tif": { "white_stops": 2.0 } }
+  }
+}
+```
+
+`roll.frames` holds the frames whose white is above the roll's cap, keyed by file name
+(§7). If your `--params` recipe stated `input`, `measure` or `reconstruction` keys, the
+file carries them too, because the gains hold only under the decode they were measured
+with — all but `input.export_ir`, one frame's output path, which `roll` refuses.
+
+- `--unexposed` measures the frame exactly as `measure-base` does with no source flag
+  (below), and reports that evidence under the report's `unexposed` object.
+- A measured base is not overridden: `--unexposed` beside `--film-base`, or beside a
+  `--params` recipe stating `calibration.film_base`, exits 2. So does the unexposed
+  file named among the frames or as the leader.
+- `--out` refuses a file that exists (exit 2, before anything is decoded) unless you
+  pass `--force`. A run that fails — including a `--strict` run with a warning —
+  writes no file.
+
+The report on stdout is the evidence (the base measurement, each frame's white, the
+warnings); it does not carry the recipe.
+
+#### The film base alone: `measure-base`
+
+`measure-base` measures the film base and nothing else, and `--out` writes it as a
+recipe (`{"recipe_version": 2, "calibration": {…}}`). Feed that to `measure-roll
+--params` and the roll is measured over that base — on the roll above,
+`measure-base base.tif --out base.json` followed by `measure-roll … --params
+base.json --out roll.json` writes a `roll.json` byte-identical to the one-command form.
+It is also the command for a single `convert`: its report prints a paste-ready flag,
+`"film_base_flag": "--film-base 0.485832,0.2621805,0.17726406"`.
+
+It measures from one of two sources:
+
+**(a) An unexposed frame** — the intended source. With no source flag, `measure-base`
 takes the per-channel **median** over the frame's effective area (§9):
 
 ```sh
-hanten estimate unexposed.tif
+hanten measure-base unexposed.tif --out base.json
 ```
 
 Over unexposed film the area is one population — the base plus grain and scanner
@@ -189,7 +240,7 @@ film warns (`--strict` fails on it):
 
 ```
 hanten: warning: the effective area is not uniform (worst per-channel spread
-(p90 - p10) / p50 = 1.84 > 0.50): it does not look like unexposed film, so the
+(p90 - p10) / p50 = 1.65 > 0.50): it does not look like unexposed film, so the
 median over it is not a film base. …
 ```
 
@@ -202,7 +253,7 @@ inset alone, so raise `--measure-inset` if the holder reaches past it.
 no unexposed frame:
 
 ```sh
-hanten estimate scan.tif --base-region 0,0,24,24
+hanten measure-base scan.tif --base-region 0,0,24,24 --out base.json
 ```
 
 A drawn rectangle may mix holder, film and picture, so the region is read at its
@@ -210,44 +261,42 @@ A drawn rectangle may mix holder, film and picture, so the region is read at its
 rectangle is not uniform.
 
 `--auto-base` and `--grid` (and a recipe's `"film_base": "auto"`) were removed with
-the rebate search and exit 2; `estimate` with no flag replaces both.
-
-Either way, `estimate` hands you the result in **reuse-ready form**:
-
-```json
-{
-  "film_base": { "r": 0.16311894, "g": 0.080109864, "b": 0.037720304 },
-  "film_base_flag": "--film-base 0.16311894,0.080109864,0.037720304",
-  "calibration": {
-    "film_base": { "explicit": [0.16311894, 0.080109864, 0.037720304] }
-  }
-}
-```
-
-Copy `film_base_flag` straight onto a command line, or take the whole
-`calibration` object as a recipe — `jq '{recipe_version: 2, calibration}'` writes one
-directly. That is the intended handoff — no manual transcription of floats.
+the rebate search and exit 2; `measure-base` with no flag replaces both.
 
 Add `--strict` when scripting: it turns "plausible-looking but bad" into a hard
 failure instead of a value your pipeline silently bakes in.
 
+> **Renamed:** `hanten estimate` is now `measure-base`, with the same flags; the old
+> name exits 2 naming it. Its report's `calibration` object is gone — `--out` writes
+> the recipe instead.
+>
 > **No `Dmax` step.** Earlier builds measured a roll reference density off the
-> light-struck leader (`estimate --d-max-region`); it retired with the placements that
-> read it, and the flag now exits 2. The anchor is placed from the film base (§6). The
-> leader still matters: pass it to `measure-roll` (§7).
+> light-struck leader (`--d-max-region`); it retired with the placements that read it,
+> and the flag now exits 2. The anchor is placed from the film base (§6). The leader
+> still matters: pass it to `measure-roll` (§7).
 
+### Step 3 — Convert the roll
 
-### Step 3 — Write the recipe
+```sh
+hanten roll frames/*.tif --out-dir positives/ --params roll.json
+```
 
-`roll` is configured **only** by recipe — it has no `--film-base` — so a roll needs
-a recipe file. `estimate`'s `calibration` object and `measure-roll`'s `reuse.recipe`
-(its `roll` section, §7) *are* the measured half; add your other choices beside them:
+Every frame gets the identical film base, white balance and rendering, so the roll is
+color-consistent; a frame in `roll.frames` renders at its own white. Outputs are named
+`<input-stem>_positive.<ext>`, the suffix coming from the destination's container
+(`.tiff` by default); a roll-level JSON report lands on stdout. A single frame takes
+the same file: `hanten convert frame.tif -o out --params roll.json` renders
+byte-identically to that frame of the roll, its `roll.frames` entry included.
+
+**Your look goes in the same file, for now.** `roll` takes one `--params` and has no
+override flags, so add your choices beside the measurement:
 
 ```jsonc
 {
   "recipe_version": 2,
-  "calibration": { "film_base": { "explicit": [0.163, 0.080, 0.0377] } },
-  "roll": { "white_balance": [1.0027, 1.0, 1.2466], "white_stops": 1.5 },
+  "calibration": { "film_base": { "explicit": [0.485832, 0.2621805, 0.17726406] } },
+  "roll": { "white_balance": [0.886392, 1.0, 1.188019], "white_stops": 1.9509047,
+            "frames": { "971.tif": { "white_stops": 2.0 } } },
   "scene_correction": { "exposure": 0.3 }
 }
 ```
@@ -267,18 +316,7 @@ scaffold to edit.
 > measured value is frozen only if you stated it: a run with `--base-region` dumps
 > the region, not the base it read, so a recipe dumped from it **re-reads the base on
 > every frame of the roll** — exactly what `roll` exists to prevent (`roll` warns
-> "roll film base is NOT frozen"). State the numbers `estimate` and `measure-roll` print.
-
-### Step 4 — Apply to the whole roll
-
-```sh
-hanten roll frames/*.tif --out-dir positives/ --params roll-recipe.json
-```
-
-Every frame gets the identical film base and rendering, so the roll is
-color-consistent. Outputs are named `<input-stem>_positive.<ext>`, the suffix coming
-from the destination's container (`.tiff` by default); a roll-level JSON report lands
-on stdout.
+> "roll film base is NOT frozen"). Use the file `--out` writes.
 
 ---
 
@@ -299,7 +337,7 @@ hanten params
   "input":       { "transfer": "auto", "meaning": "auto",
                    "film_type": "unknown", "export_ir": null },
   "calibration": { "film_base": null },
-  "roll":        { "white_balance": null, "white_stops": null },
+  "roll":        { "white_balance": null, "white_stops": null, "frames": {} },
   "measure":     { "inset": 0.05 },
   "reconstruction": {
     "scale": [1.0, 0.84, 0.73],
@@ -375,7 +413,7 @@ usage: recipe old.json: a recipe must state `"recipe_version": 2`. A document wi
        — describes the rendering chain that version removed, and there is no
        converter. `hanten params` writes the current layout: `input`, `measure` and
        a `region` or `explicit` `calibration.film_base` carry over unchanged (an
-       `"auto"` one retired: measure the base with `hanten estimate
+       `"auto"` one retired: measure the base with `hanten measure-base
        <unexposed-frame>`), and the rest is a stage section each (`reconstruction`,
        `scene_correction`, `look`, `fit_range`) plus `output`, the destination
 ```
@@ -539,7 +577,7 @@ usage: --anchor-mid-fraction was removed: it pinned mid-grey at a fraction of th
 ```
 
 (`--d-max`, `--fixed-d-max`, `--auto-d-max`, `--no-d-max`, `--anchor-white-at-reference`,
-`--anchor-black-floor` and `estimate --d-max-region` say the same.)
+`--anchor-black-floor` and `measure-base --d-max-region` say the same.)
 
 > **Provisional values.** `D = 0.62` is the generic C-41 profile's mid-grey aim above
 > the base, rounded and frozen. The anchor stays referenced to the base: a roll's own
@@ -664,7 +702,7 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   `measure-roll`:
 
   ```text
-  hanten: warning: no roll measurement: rendered with neutral white balance (no `roll.white_balance`) and the fallback contrast 1.1111112 (no `roll.white_stops`). Run `hanten measure-roll` over the roll and state what it reports (the `roll` section); or state the white balance and contrast you want (`scene_correction.white_balance`, `look.contrast`); or use the `direct` rendering (`rendering`: "direct"), the decode without a roll correction, whose unset destination is the HDR float TIFF
+  hanten: warning: no roll measurement: rendered with neutral white balance (no `roll.white_balance`) and the fallback contrast 1.1111112 (no `roll.white_stops`). Run `hanten measure-roll` over the roll and use the recipe it writes (its `roll` section); or state the white balance and contrast you want (`scene_correction.white_balance`, `look.contrast`); or use the `direct` rendering (`rendering`: "direct"), the decode without a roll correction, whose unset destination is the HDR float TIFF
   ```
 
   A typed `--white-balance` or `--contrast` is a choice — even `--white-balance 1,1,1` —
@@ -905,8 +943,8 @@ It measures two things a whole roll shares. The **white balance** removes the ca
 the film, the development and the scanner, and keeps the scene's light: one sunset
 frame barely moves a statistic taken over every frame. The **roll's white** sets the
 look's contrast, so the roll's highlights reach white with mid-grey held where it is.
-Give it the roll's picture frames, its leader, and its explicit film base (from
-`estimate`, §4):
+Give it the roll's picture frames, its leader, and its film base — measured here from
+the unexposed frame with `--unexposed` (§4), or stated explicitly:
 
 ```console
 $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.23244068,0.10803387
@@ -926,24 +964,19 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
                             "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 2" }, … ],
              "rule": { "channel": "max", "percentile": 0.97, "cap_stops": 2.0,
                        "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
-  "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5",
-             "recipe": { "roll": { "white_balance": [1.0026785, 1.0, 1.2466215],
-                                   "white_stops": 1.5 } },
-             "frames": { "frames": [ { "input": "frames/1774.tif" }, …,
-                         { "input": "frames/1816.tif",
-                           "params": { "roll": { "white_stops": 2.0 } } }, … ] } },
+  "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5" },
   "warnings": [ "frames/1816.tif: near film saturation — its white sits 0.29 stop under the leader (margin 0.5 stop); …", … ]
 }
 ```
 
 (Abridged; that is 35 frames of one roll.) Each frame is decoded under the fixed
 decode — at its linearization, before the look's contrast — and sampled over its
-**effective area** (§9). Freeze the result by pasting `reuse.flag` on `convert`, or
-by merging `reuse.recipe` into the roll's recipe for `roll`; when `reuse.frames` is
-present, pass it as the `roll --frames`
-manifest (its input paths are as you gave them here). A clamped frame converted on its
-own takes its own `white.clamped[].flag` instead: `reuse.flag` carries the roll's
-white, which would undo the clamp.
+**effective area** (§9). Freeze the result with `--out roll.json`, which writes the
+base, the `roll` section and its clamps as one recipe for `roll --params` or
+`convert --params` (§4) — or paste `reuse.flag` on `convert`. A clamped frame converted
+by flag takes its own `white.clamped[].flag` instead: `reuse.flag` carries the roll's
+white, which would undo the clamp. (By `--params`, the file's `roll.frames` entry does
+that for you.)
 
 The recipe keeps these in its **`roll` section**, apart from the style knobs, so a
 measured value is never mistaken for a chosen one:
@@ -952,6 +985,7 @@ measured value is never mistaken for a chosen one:
 |---|---|---|
 | `--roll-white-balance R,G,B` | `roll.white_balance` | the roll's gains; `--white-balance` multiplies them |
 | `--roll-white STOPS` | `roll.white_stops` | the roll's white; the look's contrast renders it at diffuse white unless `--contrast` is stated |
+| — | `roll.frames` | `{"<file name>": {"white_stops": …}}`: a frame's own white, in place of the roll's. `convert` and `roll` apply their input's entry, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
 
 Each is optional. The report says what applied:
 
@@ -1009,9 +1043,9 @@ derived from it at render time. `whole_contrast` is it times the decode's
 linearization, for comparison only.
 
 - **A frame above the cap is clamped**, not counted: it renders at the cap's contrast
-  (`white.clamped`, beside the roll's `contrast`), which is gentler; `reuse.frames` gives
-  it that contrast on `roll`, and its own `flag` on `convert`. An ordinary bright scene lands here too, so this is
-  reported, not warned about.
+  (`white.clamped`, beside the roll's `contrast`), which is gentler; `--out` records the
+  cap as its white in `roll.frames`, and its own `flag` is for `convert`. An ordinary
+  bright scene lands here too, so this is reported, not warned about.
 - **A frame near its leader warns.** A white within 0.5 stop of the leader
   (`leader_distance_stops`, the same brightest-channel measure) is near film saturation, where the film compresses
   highlights and the decode renders them flat. Without `--leader` nothing is checked.
@@ -1032,15 +1066,17 @@ linearization, for comparison only.
   saturation, and `--strict` refuses it before decoding anything (exit 2).
 - **Only picture frames, each once.** Every input is pooled as picture; leave out the
   unexposed base, the leader and any calibration frame. A frame named twice is
-  refused (exit 2) — it would weigh double — and so is the `--leader` file among the
-  inputs. A frame that contributes nothing, or whose
+  refused (exit 2) — it would weigh double — and so are the `--leader` and
+  `--unexposed` files among the inputs. With `--out`, two inputs sharing a file name are
+  refused too, since `roll.frames` keys by it. A frame that contributes nothing, or whose
   holder cut is not a measurement (the same warning `convert` gives), is warned about
   by name, so `--strict` catches both.
-- **The base must be explicit** — `--film-base`, or `calibration.film_base` in a
-  `--params` recipe (`"recipe_version": 2`, whose `reconstruction` it decodes under;
-  its `roll` section, which this measures, and its `scene_correction` and `look` are
-  not read). A base estimated per frame would decode every frame differently, so
-  anything else is refused (exit 2).
+- **The base is measured or explicit** — `--unexposed`, or `--film-base`, or
+  `calibration.film_base` in a `--params` recipe (`"recipe_version": 2`, whose
+  `reconstruction` it decodes under; its `roll` section, which this measures, and its
+  `scene_correction` and `look` are not read). A base estimated per frame would decode
+  every frame differently, so anything else is refused (exit 2) naming `--unexposed`
+  and `measure-base --out`. `--unexposed` beside either stated form is refused too.
 
 ---
 
@@ -1241,12 +1277,12 @@ The IR plane is decoded and **preserved, but no rendered pixel depends on it**:
   planes have to be exported frame by frame.
 - **IR film-holder measurement** runs by itself when the plane can do the job: it
   is the first cut of the [effective area](#the-measurement-region-the-effective-area),
-  which `estimate` and `measure-roll` measure over. Hanten measures the interior IR
+  which `measure-base` and `measure-roll` measure over. Hanten measures the interior IR
   transmission and, if the film reads IR-transparent, marches in from each edge to
   where the opaque holder ends. There is nothing to declare — `--film-type` does
   **not** gate it.
 
-  `--film-type silver|chromogenic|unknown` still exists on `convert`, `estimate`
+  `--film-type silver|chromogenic|unknown` still exists on `convert`, `measure-base`
   and `inspect` (recipe key `input.film_type`), as a **provenance declaration**:
   it records what stock a run was made from, and nothing reads it. Set it if you
   want the film chemistry captured beside the output: the report echoes it as
@@ -1254,7 +1290,7 @@ The IR plane is decoded and **preserved, but no rendered pixel depends on it**:
   `input.film_type`. Leave it out otherwise. Planned IR dust removal will need the same
   declaration, which is why it stays.
 
-  `hanten inspect` and `hanten estimate` report the verdict (the per-edge depths are
+  `hanten inspect` and `hanten measure-base` report the verdict (the per-edge depths are
   `effective_area.holder`):
 
   ```sh
@@ -1266,7 +1302,7 @@ The IR plane is decoded and **preserved, but no rendered pixel depends on it**:
 
   When the film itself is opaque to IR — a fully-exposed silver-halide frame, say
   — holder and film cannot be told apart, so the holder is not measured and
-  `inspect` and `estimate` say so, naming the measurement: the effective area is then
+  `inspect` and `measure-base` say so, naming the measurement: the effective area is then
   the inset alone. The same happens for an IR page identified by shape alone (no
   `NewSubfileType=4` marker), which is never trusted.
 
@@ -1281,7 +1317,7 @@ IR-based dust removal is not implemented.
 
 A region `hanten` resolves on every frame it decodes, so that a measurement reads the
 picture rather than the film holder: on an uncropped scan the holder is maximum
-density, so a whole-frame statistic measures the holder instead. `hanten estimate`
+density, so a whole-frame statistic measures the holder instead. `hanten measure-base`
 (its film base, §4) and `hanten measure-roll` (§7) measure over it; a `convert`
 resolves and reports it but reads nothing over it. The area is two cuts, in order:
 
@@ -1312,7 +1348,7 @@ hanten inspect --measure-inset 0 scan.tif | jq -c '.effective_area | {region, in
 Where the holder was *not* measured there is no measurement resolution to respect,
 and the fraction you state is exact.
 
-Every command that decodes reports the result — `inspect`, `estimate`, `convert`,
+Every command that decodes reports the result — `inspect`, `measure-base`, `convert`,
 and each frame of a `roll` (under its own `effective_area` key). `convert` and `roll` resolve it on every run, so `--measure-inset` and the
 recipe key are never silently ignored:
 
@@ -1391,11 +1427,11 @@ Two things this does *not* do:
   exactly as decoded. The effective area changes only which pixels a statistic is
   computed over.
 - **It never looks for the rebate.** The inset passes over it blind. That is why
-  `estimate` wants an unexposed frame, where the whole area is unexposed film; on a
+  `measure-base` wants an unexposed frame, where the whole area is unexposed film; on a
   picture frame, give it a region (`--base-region`).
 
 Every command that decodes resolves the area and reports it; a conversion reads
-nothing over it. So if the two cuts leave **nothing**, `estimate` (with no source
+nothing over it. So if the two cuts leave **nothing**, `measure-base` (with no source
 flag) refuses (exit 2), but `convert` and `roll` warn rather than refuse, and the report
 omits `effective_area` — there is no region to report, and `--measure-inset` has no
 effect on that run.
@@ -1428,7 +1464,7 @@ A `convert` report also carries `recipe`, the resolved recipe exactly as
 image — and `identity.params_hash`, a stable hash of those bytes (the telemetry
 record's `conversion.params_hash`). Each `roll` frame's `identity.params_hash` hashes
 the recipe that frame ran, the shared one plus its overrides; the roll report does not
-echo the recipe. No other `identity` carries a hash — not `inspect`, `estimate`,
+echo the recipe. No other `identity` carries a hash — not `inspect`, `measure-base`,
 `measure-roll`, nor the roll-level one.
 
 ```sh
@@ -1490,7 +1526,7 @@ recipe and can never perturb a pixel.
 | `-v` / `-vv` / `--quiet` | stderr verbosity — never pollutes stdout |
 | `--strict` | Promote warnings to errors |
 
-Two more are **`convert` only** — `roll`, `estimate` and `inspect` do not accept
+Two more are **`convert` only** — `roll`, `measure-base` and `inspect` do not accept
 them and exit 2 if given one:
 
 | Flag | Purpose |
@@ -1519,16 +1555,16 @@ when it became the only one; passing it exits 2 on every command.
 Neither `convert` nor `roll` has a default film base — but they take it from
 different places. On **`convert`**, pass `--film-base R,G,B` (measured once per
 roll) or `--base-region X,Y,W,H`. **`roll` accepts neither flag**: set
-`calibration.film_base` in the shared `--params` recipe instead. `hanten estimate
+`calibration.film_base` in the shared `--params` recipe instead. `hanten measure-base
 <unexposed-frame>` is the way to get a value in the first place.
 
 **"the effective area is not uniform … it does not look like unexposed film"**
-`estimate` was given a picture frame. Give it the roll's unexposed frame, or, if the
+`measure-base` was given a picture frame. Give it the roll's unexposed frame, or, if the
 roll has none, a region of unexposed film on another frame (`--base-region`).
 
 **"base-region … is not uniform (worst per-channel relative spread …)"**
 Your rectangle mixes unexposed film with image content. Check the coordinates, or run
-`estimate` on a genuinely unexposed frame.
+`measure-base` on a genuinely unexposed frame.
 
 **Heavy clipping in the report**
 Fit range does not clip ordinary content at its default headroom, so something pushed
@@ -1539,8 +1575,8 @@ the headroom, move the anchor up, or write a float output (`--transfer linear`,
 
 **"no roll measurement: rendered with …"**
 Every `convert` under the `default` rendering warns until the roll is measured, and
-`--strict` fails on it. Run `hanten measure-roll` and put its `reuse.recipe` (the `roll`
-section) in the recipe; or state `--white-balance` and `--contrast`; or render
+`--strict` fails on it. Run `hanten measure-roll … --out roll.json` and convert with
+`--params roll.json`; or state `--white-balance` and `--contrast`; or render
 `--rendering direct` (§7).
 
 **"a recipe must state `"recipe_version": 2`"**

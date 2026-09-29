@@ -31,6 +31,9 @@
 //! table, so the section says only what the user chose. Each key lands with the task that
 //! ships its knob — design-spec §9 states the shape, not keys written ahead of the code.
 
+use std::collections::BTreeMap;
+use std::path::Path;
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::algo::fixed::{AnchorRule, DecodeFault, DecodeParams, LINEARIZATION};
@@ -186,16 +189,28 @@ pub struct Calibration {
 ///
 /// Unset values are written as `null`, never left out: `cli::merge_json` reads a one-key
 /// object as an enum switch, and a per-frame `{"roll": {"white_stops": …}}` must merge.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RollSection {
     /// The roll's white-balance gains, green-anchored, as `measure-roll` reports them.
     pub white_balance: Option<[f32; 3]>,
     /// The roll's white, in scene stops above mid-grey — the measurement, not the
     /// contrast derived from it, so this section holds no contrast value
-    /// (`nf-look/contrast-definition`). A frame clamped to the cap states the cap here
-    /// in a `roll --frames` manifest.
+    /// (`nf-look/contrast-definition`).
     pub white_stops: Option<f32>,
+    /// The frames whose own white differs from the roll's (one clamped to the cap),
+    /// keyed by **file name** so the recipe still applies after the scans move.
+    /// [`Recipe::for_frame`] applies an entry; a `roll --frames` manifest's `params`
+    /// beat it.
+    pub frames: BTreeMap<String, FrameRoll>,
+}
+
+/// One frame's own roll values ([`RollSection::frames`]).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameRoll {
+    /// The frame's white, in place of the roll's `white_stops`.
+    pub white_stops: f32,
 }
 
 impl RollSection {
@@ -420,7 +435,7 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
                  8 — describes the rendering chain that version removed, and there is no \
                  converter. `hanten params` writes the current layout: `input`, `measure` and \
                  a `region` or `explicit` `calibration.film_base` carry over unchanged (an \
-                 `\"auto\"` one retired: measure the base with `hanten estimate \
+                 `\"auto\"` one retired: measure the base with `hanten measure-base \
                  <unexposed-frame>`), and the rest is a stage \
                  section each (`reconstruction`, `scene_correction`, `look`, `fit_range`) \
                  plus `output`, the destination"
@@ -676,6 +691,7 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
             // The roll's own values first: each is also a factor in what the stages
             // below receive, so a bad one must be named as itself.
             validate_roll(&r.roll, names)?;
+            validate_roll_frames(&r.roll, d.linearization, names)?;
             validate_scene_correction(r, names)?;
             let (contrast, source) = r.resolved_contrast();
             let contrast_name = match source {
@@ -852,6 +868,35 @@ fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
              measure-roll` reports them — got {stops}",
             knob_name(names, "roll", "--roll-white", "white_stops")
         )));
+    }
+    Ok(())
+}
+
+/// `roll.frames`' rules, each entry named as itself: a file-name key, and a white
+/// finite and positive whose whole contrast at `linearization` fits f32. Public so
+/// `convert` can judge the table as stated, before [`Recipe::for_frame`] moves its own
+/// entry into `roll.white_stops`.
+pub fn validate_roll_frames(p: &RollSection, linearization: f32, names: KnobNames) -> Result<()> {
+    for (name, frame) in &p.frames {
+        if name.is_empty() || Path::new(name).file_name() != Some(name.as_ref()) {
+            return Err(NcError::Usage(format!(
+                "recipe `roll.frames` keys are file names, not paths: got {name:?}"
+            )));
+        }
+        let stops = frame.white_stops;
+        if !(stops.is_finite() && stops > 0.0) {
+            return Err(NcError::Usage(format!(
+                "recipe `roll.frames.\"{name}\".white_stops` must be finite and positive — \
+                 stops above mid-grey, as `hanten measure-roll` reports them — got {stops}"
+            )));
+        }
+        validate_whole_contrast(
+            linearization,
+            roll_white::contrast_for(stops),
+            &format!("recipe `roll.frames.\"{name}\".white_stops`"),
+            ContrastSource::Roll,
+            names,
+        )?;
     }
     Ok(())
 }
@@ -1272,10 +1317,23 @@ impl Recipe {
         self.rendering.base()
     }
 
+    /// This recipe as `input` renders it: the frame's [`RollSection::frames`] entry, if
+    /// any, moves into `roll.white_stops`. `convert` and every `roll` frame go through
+    /// it, so the two stay byte-identical. The entry is removed, not copied, so a flag
+    /// that then beats it is what a `--dump-params` replay renders; the other entries
+    /// stay for [`validate`].
+    pub fn for_frame(mut self, input: &Path) -> Self {
+        let name = input.file_name().and_then(|n| n.to_str());
+        if let Some(frame) = name.and_then(|n| self.roll.frames.remove(n)) {
+            self.roll.white_stops = Some(frame.white_stops);
+        }
+        self
+    }
+
     /// The roll section as the rendering applies it: whole, or not at all.
     fn applied_roll(&self) -> RollSection {
         if self.base().applies_roll {
-            self.roll
+            self.roll.clone()
         } else {
             RollSection::default()
         }
@@ -1342,9 +1400,10 @@ impl Recipe {
     /// is whether any rendering stage ran — the film master applies neither value, and
     /// `--rendering direct` leaves the section out.
     pub fn roll_report(&self, rendered: bool) -> Option<RollReport> {
-        let r = self.roll;
+        let r = &self.roll;
         let applies = rendered && self.base().applies_roll;
-        (r != RollSection::default()).then(|| RollReport {
+        // Other frames' `frames` entries are not this frame's measurement.
+        (r.white_balance.is_some() || r.white_stops.is_some()).then(|| RollReport {
             white_balance: r.white_balance,
             white_stops: r.white_stops,
             contrast: r.contrast(),
@@ -1389,7 +1448,7 @@ impl Recipe {
         (!fell_back.is_empty()).then(|| {
             format!(
                 "no roll measurement: rendered with {}. Run `hanten measure-roll` over the \
-                 roll and state what it reports (the `roll` section); or state the white \
+                 roll and use the recipe it writes (its `roll` section); or state the white \
                  balance and contrast you want (`scene_correction.white_balance`, \
                  `look.contrast`); or use the `direct` rendering (`rendering`: \"direct\"), \
                  the decode without a roll correction, whose unset destination is the HDR \
@@ -1590,7 +1649,7 @@ mod tests {
         );
         assert_eq!(
             json["roll"],
-            serde_json::json!({"white_balance": null, "white_stops": null})
+            serde_json::json!({"white_balance": null, "white_stops": null, "frames": {}})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
@@ -1742,7 +1801,10 @@ mod tests {
             };
             let err = check(body, whole).unwrap_err();
             assert!(err.contains("`calibration.film_base` \"auto\""), "{err}");
-            assert!(err.contains("hanten estimate <unexposed-frame>"), "{err}");
+            assert!(
+                err.contains("hanten measure-base <unexposed-frame>"),
+                "{err}"
+            );
             assert!(err.contains(r#"{"explicit": [r, g, b]}"#), "{err}");
             // …and never serde's "unknown variant", which names no remedy.
             assert!(!err.contains("unknown variant"), "{err}");
@@ -2493,6 +2555,7 @@ mod tests {
             RollSection {
                 white_balance: Some([0.9, 1.0, 1.1]),
                 white_stops: Some(1.8),
+                frames: BTreeMap::new(),
             }
         );
         let r = merged(

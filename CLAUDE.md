@@ -306,7 +306,7 @@ committed.
 - There is no public spec for the SilverFast HDRi layout: validate the decoder
   against real scans and degrade gracefully on unknown layouts.
 - Real scans are laid out `holder → thin rebate → picture`, and nothing searches for
-  the rebate: measure `Dmin` once from an unexposed frame (`hanten estimate`) and
+  the rebate: measure `Dmin` once from an unexposed frame (`hanten measure-base`) and
   reuse it.
 - **Comparing renders by eye:** use `tools/review-app` with sets from the
   `render-review-set` skill. **Never commit or publish a review set** — the images

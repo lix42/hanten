@@ -59,7 +59,7 @@ and a rendition is just a path.
 once per roll from that roll's unexposed frame:
 
 ```sh
-./target/release/hanten estimate ../nc-assets/rolls/<roll>/base.tif --report json
+./target/release/hanten measure-base ../nc-assets/rolls/<roll>/base.tif --report json
 # take film_base_flag / the film_base object
 ```
 

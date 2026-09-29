@@ -42,10 +42,15 @@ and hardening work tracked in the task roadmap.
 ## Usage (current CLI)
 
 ```sh
-# Measure the film base (Dmin) once per roll from its unexposed frame (the median over
-# the frame, holder cut away). With no unexposed frame, read a region of unexposed
-# film instead: --base-region X,Y,W,H.
-hanten estimate unexposed.tiff
+# A roll: measure what it shares — the film base from its unexposed frame, and its
+# white balance and white over its frames — once, into a recipe; then convert it.
+hanten measure-roll frames/*.tif --unexposed unexposed.tif --leader leader.tif --out roll.json
+hanten roll frames/*.tif --out-dir out/ --params roll.json
+
+# The film base (Dmin) alone, from the unexposed frame (the median over the frame,
+# holder cut away) — or, with no unexposed frame, --base-region X,Y,W,H on a region
+# of unexposed film. --out writes it as a recipe for --params.
+hanten measure-base unexposed.tiff --out base.json
 
 # Convert a negative scan to a positive 16-bit Display P3 TIFF. Every conversion
 # must state where the film base comes from — there is no default, because Dmin sets

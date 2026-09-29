@@ -1,8 +1,10 @@
 # The roll workflow: measuring, composing and converting from the CLI
 
-**Status:** target design, decided 2026-09-28; not shipped. Where this document and a
-task file disagree, this document wins — change it first, then the task.
-`docs/using-nc.md` §4 describes what ships today.
+**Status:** target design, decided 2026-09-28. The measuring commands (`measure-base`,
+`measure-roll --unexposed`, `--out`) shipped with `core/measure-base`; layering, `roll`'s
+override flags and its measure mode have not. Where this document and a task file
+disagree, this document wins — change it first, then the task. `docs/using-nc.md` §4
+describes what ships today.
 
 **Implemented by:** [`core/measure-base`](../tasks/core/measure-base.md),
 [`nf-core/subcommands`](../tasks/nf-core/subcommands.md),
@@ -13,7 +15,8 @@ task file disagree, this document wins — change it first, then the task.
 
 ## The problem
 
-Converting a roll today takes four commands (one optional) joined by three `jq` steps:
+Before `core/measure-base`, converting a roll took four commands (one optional) joined by
+three `jq` steps:
 
 ```sh
 hanten inspect frame.tif                                         # optional
@@ -26,9 +29,10 @@ jq '.reuse.frames' measure.json > frames.json                    # jq: the clamp
 hanten roll --frames frames.json --out-dir out/ --params roll.json
 ```
 
-The measuring commands print a report and leave the user to extract the recipe from
-it; `--params` takes one file, so the parts must be merged by hand; and `roll` has no
-override flags, so every change is a file edit.
+The measuring commands printed a report and left the user to extract the recipe from
+it — `--out` now writes it. Still open: `--params` takes one file, so a look and a
+measurement must share one; and `roll` has no override flags, so every change is a file
+edit.
 
 ## Principles
 
@@ -98,9 +102,15 @@ the roll's measurements come from one command and live in one file.
   usual (the flag wins); `--unexposed`, a measurement, is refused beside either. The
   unexposed file is refused among the picture frames, like the leader. A base measured
   per frame stays refused: every frame's decode depends on it.
-- **The per-frame clamps** (`reuse.frames`, a frame whose white is above the cap)
-  travel in the same file, so the user never passes a manifest by hand; their shape
-  inside the recipe is open (see below).
+- **The per-frame clamps** (a frame whose white is above the cap) travel in the same
+  file as `roll.frames`, so the user never passes a manifest by hand (open question 3).
+- **The file renders alone**: `--out` also carries the `input`, `measure` and
+  `reconstruction` sections the measurement ran under when they are not the defaults,
+  since the gains hold only under that decode and `roll` takes one `--params` until
+  `core/recipe-composition` — never `input.export_ir`, a frame's output path.
+- **The report no longer carries the recipe** (`reuse.recipe`, `reuse.frames`, and
+  `measure-base`'s `calibration` object): they existed to be extracted with `jq`. The
+  `convert` flags (`reuse.flag`, `film_base_flag`) stay, and so do the measured values.
 
 ### `measure-base`
 
@@ -203,10 +213,15 @@ Each is owned by the task named; its answer is recorded here.
 2. **Does a `roll` flag beat a frame's manifest `params`?** The chain above has no
    place for the per-frame layer. A roll-wide flag that overrode a clamp would undo it,
    so the per-frame layer probably sits above the flags. — `core/recipe-composition`
-3. **The clamps' shape in the recipe**: a per-frame table beside the `roll` section is
-   a recipe schema change. — `core/measure-base`
-4. **`--out` over an existing file**: refuse unless forced? — `core/measure-base`,
-   `core/profile-authoring`
+3. ~~The clamps' shape in the recipe~~ **Resolved 2026-09-28: `roll.frames`**, a table
+   in the `roll` section from a frame's **file name** to its own
+   `{"white_stops": …}`, so the recipe survives the scans moving. `convert` and every
+   `roll` frame apply their input's entry before any flag; a `--frames` manifest's
+   `params` beat it (and may not state the table). `measure-roll --out` refuses two
+   inputs sharing a file name.
+4. ~~`--out` over an existing file~~ **Resolved 2026-09-28: refused (exit 2, before
+   anything is decoded) unless `--force`.** `core/profile-authoring` follows the same
+   rule.
 5. **Does `--dump-params` go?** It was to be deleted as a duplicate of the output
    sidecar, but no sidecar has been written since `nf-core/default-flip`, so it is the
    only recipe *file* a `convert` leaves (the report echoes the recipe). —

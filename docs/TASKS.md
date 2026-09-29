@@ -78,7 +78,7 @@ under, and the parenthesized paths are the modules it owns.
   Display P3 / SDR, BT.2020 PQ/HLG, explicit legacy Ultra HDR v1 gain-map JPEG
   (with final ISO metadata planned), AVIF, and the presets that resolve them
   together.
-- **core** (`cli.rs`, `main.rs`, `types.rs`, `pipeline/stages.rs`) — clap subcommands (`convert`/`inspect`/`estimate`/`params`/`roll`), recipe load/merge, JSON report, exit codes, the roll/batch workflow, the shared types, and the pure algorithm→output-color render core the CLI drives.
+- **core** (`cli.rs`, `main.rs`, `types.rs`, `pipeline/stages.rs`) — clap subcommands (`convert`/`inspect`/`measure-base`/`measure-roll`/`params`/`roll`), recipe load/merge, JSON report, exit codes, the roll/batch workflow, the shared types, and the pure algorithm→output-color render core the CLI drives.
 - **telemetry** (`src/telemetry.rs`) — that module and the opt-in upload stack. Operational, never a conversion knob.
 - **analysis** (`scripts/`) — the real-scan verification harness, the `nctool` Python toolkit, the asset manifest, and NLP comparison. Verifies the pipeline; is not part of it.
 
@@ -1235,11 +1235,12 @@ the design in `docs/design-update.md`:
 - [x] [CLI framework](tasks/core/cli-framework.md)
 - [x] [Pipeline orchestration](tasks/core/pipeline-orchestration.md)
 - [x] [Roll conversion (batch + frozen recipe)](tasks/core/roll-conversion.md)
-- [ ] [`measure-base`, and `measure-roll` as the one-stop measurement](tasks/core/measure-base.md) —
+- [x] [`measure-base`, and `measure-roll` as the one-stop measurement](tasks/core/measure-base.md) —
   `measure-roll --unexposed` measures the base too and writes one recipe (`calibration` + `roll`);
   `hanten estimate` becomes `measure-base`, kept for a single-frame `convert` and a roll with no
   unexposed frame, and writes its
-  fragment as a file. No `jq` between measuring and converting
+  fragment as a file. No `jq` between measuring and converting. **Done 2026-09-28**: `--out`
+  (refused over a file unless `--force`), clamps as `roll.frames` keyed by file name
 - [ ] [`roll`'s measure mode](tasks/core/roll-measure-mode.md) — `roll --measure-roll
   [--leader L]` measures the roll over the recipe's base, then converts; `--unexposed U`
   measures the base too and implies it. `roll`'s requirements and defaults are unchanged. Opt-in `--save-recipe` writes the
@@ -1325,7 +1326,7 @@ the design in `docs/design-update.md`:
   different sizes cannot reuse each other's freed buffers; the gate sees none of it
 
 ### film-base — [progress](progress/film-base.md)
-> `pipeline/film_base.rs` and the `hanten estimate` measurement surface: locating
+> `pipeline/film_base.rs` and the `hanten measure-base` measurement surface: locating
 > unexposed film, deriving the `Dmin` transmission anchor, and measuring the
 > roll-fixed `Dmax` density anchor. `Dmin` and `Dmax` are **different quantities**
 > (design-spec §4) that happen to share this code.

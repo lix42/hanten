@@ -126,6 +126,18 @@ def _run_json(argv: list[str], label: str) -> tuple[dict | None, str | None]:
     return value, None
 
 
+def _base_command(nc: str) -> str:
+    """The subcommand that measures the film base: ``measure-base``, or ``estimate``
+    on a build from before the rename (the reference build). Read off the binary by
+    asking it, never off its id: ``estimate --help`` exits 2 on a renamed build."""
+    try:
+        proc = subprocess.run([nc, "measure-base", "--help"], capture_output=True,
+                              text=True, check=False)
+    except OSError:
+        return "measure-base"  # the Dmin step reports the start failure itself
+    return "measure-base" if proc.returncode == 0 else "estimate"
+
+
 def _recipe_input(path: str | None) -> tuple[dict | None, str | None]:
     if path is None:
         return {}, None
@@ -395,7 +407,7 @@ def cmd_convert(args) -> int:
     source = [] if dmin_region is None else ["--base-region", dmin_region]
     grid = ["--grid"] if args.dmin_mode == "grid" else []
     dmin_report, error = _run_json(
-        [args.nc, "estimate", str(unexposed_path), *source, *grid, *film_type, *strict,
+        [args.nc, _base_command(args.nc), str(unexposed_path), *source, *grid, *film_type, *strict,
          *operational], "Dmin estimation")
     if error:
         print(f"error: {error}{_build_mismatch_hint(args.dmin_mode, error)}",

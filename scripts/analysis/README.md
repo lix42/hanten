@@ -86,7 +86,7 @@ It performs these operations:
 2. Verifies every source frame against its manifest SHA-256, so stale asset bytes
    cannot be attributed to a configuration change.
 3. Measures Dmin from the unexposed frame. By default (`--dmin-mode area`) that is
-   `hanten estimate` with no source: the median over the frame's effective area, which
+   `hanten measure-base` with no source: the median over the frame's effective area, which
    takes no region. `--dmin-mode region` reads the center 80% (`x=10%`, `y=10%`,
    `width=80%`, `height=80%`, or `--dmin-region`) at p97; `--dmin-mode grid` is the
    five-cell grid, for a build that predates the effective-area measurement (the
@@ -126,8 +126,9 @@ documented unused-IR warning.
 
 `tags.json` is a small index for the run. It records the configuration ID, source
 roll, source-frame checksums, frozen recipe, calibration frames/regions/values, build identity, report
-path, and roll summary. `calibration.json` retains the complete `hanten estimate`
-reports. The roll report carries each frame's identity (with the hash of the recipe
+path, and roll summary. `calibration.json` retains the complete `hanten measure-base`
+reports (`estimate` on a build from before the rename, which `nctool roll` detects by
+asking the binary). The roll report carries each frame's identity (with the hash of the recipe
 the frame ran) and, on a destination build, its resolved destination (`chain`, named
 `new_flow` by earlier builds); a destination build writes no per-image sidecar, so
 `recipe.json` plus that report is the whole record.
