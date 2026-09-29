@@ -28,6 +28,18 @@
   (`telemetry/upload`): before parsing, nc cannot know whether `--telemetry` was
   passed.
 
+**2026-09-28** (at `telemetry/upload-schema`):
+
+- **The upload field manifest is now
+  [`contracts/telemetry/upload-v1/`](../contracts/telemetry/upload-v1/README.md)** — the
+  JSON Schema, the corpus and a field table. The "Upload field manifest" section below
+  is history; where they disagree, the contract directory wins.
+- The upload projects local schema **11** (which added `outcome.total_samples`, the
+  clip counts' denominator), `film_base_source` is `region` or `explicit` (the
+  `auto` search retired), and a block the run never reached is absent rather than
+  `unknown` — so `image.format`, `image.ir_present`, `outcome.non_finite` and
+  `conversion.*` have no `unknown` member.
+
 This note decides how `nc` grows the shipped local-only performance record into
 anonymous, explicitly consented remote telemetry. It is the output of the
 [`telemetry/strategy`](tasks/telemetry/strategy.md) spike and scopes its

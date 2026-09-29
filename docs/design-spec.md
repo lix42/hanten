@@ -2301,11 +2301,11 @@ the output bytes (telemetry on or off ⇒ byte-identical output).
   usage error (a config mistake, caught up front — an odd log path must never
   silently append into the scan).
 
-**Telemetry event shape (`schema_version` 10, serialize-only JSON).** Designed for
+**Telemetry event shape (`schema_version` 11, serialize-only JSON).** Designed for
 a future background uploader (§12, `telemetry/upload`) to drain and ship. A success:
 ```json
 {
-  "schema_version": 10,
+  "schema_version": 11,
   "event_id": "5f0c3a9e81d24b7c9e0a6d3f2b1c8e47",
   "event": "conversion",
   "command": "convert",
@@ -2332,12 +2332,12 @@ a future background uploader (§12, `telemetry/upload`) to drain and ship. A suc
     "output_depth": "u16"
   },
   "outcome": { "status": "success", "error_kind": "none", "exit_code": 0,
-               "warnings": 1, "clipped": 0, "non_finite": 0 }
+               "warnings": 1, "total_samples": 695772, "clipped": 0, "non_finite": 0 }
 }
 ```
 A failure carries only what the run reached — here a scan refused right after decode:
 ```json
-{ "schema_version": 10, "event_id": "…", "event": "conversion", "command": "convert",
+{ "schema_version": 11, "event_id": "…", "event": "conversion", "command": "convert",
   "timestamp_ms": …, "nc_version": "0.1.0", "target": "…", "cpu_count": 11,
   "stage": "decode",
   "image": { "format": "hdr", …, "output_bytes": null },
@@ -2354,7 +2354,8 @@ gate, where every success ends); a check between two stages belongs to the one b
 it. `error_kind` is `none` exactly for a success, else `usage`, `decode`,
 `unsupported`, `write`, `resource`, `other` — the error's §11 category — or `strict`.
 `image` is absent before decode, `conversion` before the destination resolved,
-`clipped` / `non_finite` unless the frame finished, and `output_bytes` is `null` unless the
+`total_samples` / `clipped` / `non_finite` unless the frame finished (`total_samples`, the
+samples the encoder examined, is their denominator), and `output_bytes` is `null` unless the
 output was written.
 
 `timing_ms` has one field per stage (`crate::stage::StageKind`), present once that

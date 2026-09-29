@@ -34,7 +34,7 @@ What other epics need to know about `telemetry` (refreshed 2026-09-28):
   so `--strict` can't promote it. The one exception is a `--telemetry-file` or
   log path colliding with a real artifact, which is a config error caught up
   front (exit 2).
-- **The local event is `SCHEMA_VERSION` 10** (`src/telemetry.rs`), serialize-only,
+- **The local event is `SCHEMA_VERSION` 11** (`src/telemetry.rs`), serialize-only,
   with a pinned wire-shape snapshot test — any field or ordering drift fails a
   test, which is your signal to bump the version. The history is on the
   constant's rustdoc. It carries **no pixels, no file paths and no error text**;
@@ -57,9 +57,11 @@ What other epics need to know about `telemetry` (refreshed 2026-09-28):
 - **Explicitly rejected by the user:** persistent install identity, uploading
   `params_hash`, and (2026-09-27) uploading any legacy local record. Backend spend
   is capped at $10/month.
-- **The upload projection is `telemetry/upload-schema`** (split from `schema-v2`,
-  2026-09-28), which records the user-approved revision of the strategy's upload
-  manifest; the local event carries its own `event_id`.
+- **The upload contract is `contracts/telemetry/upload-v1/`** (`telemetry/upload-schema`):
+  JSON Schema, a corpus Rust and the Worker both test against, and the README that is
+  now the upload field manifest (the strategy's is history).
+  `telemetry::upload::to_upload_event` is the only projection; the local event
+  carries its own `event_id`. Bumping the local schema touches that contract too.
 - **`telemetry/perf-instrumentation` is parked, not pending** — the criterion
   lab-benchmark approach was superseded by real-world telemetry and survives only
   on the remote branch `origin/prototype/perf-bench-instrumentation` (no local
@@ -293,12 +295,61 @@ What shipped, and the parts the open tasks build on:
 
 
 ## upload-schema
-**Status:** not started
+**Status:** done
 **Updated:** 2026-09-28
 
 - Goal: the privacy-minimized upload projection of `schema-v2`'s local events, the
   upload-v1 JSON Schema and the shared valid/invalid corpus. Split from `schema-v2`
   (2026-09-28); the task file holds the user-approved manifest revision.
+
+### 2026-09-28 — implemented
+- **User decisions at start** (task file's Decisions): local schema **11** adds
+  `outcome.total_samples` (the clip fraction's denominator; a gain map counts two
+  renditions, so `width × height × 3` is wrong for it); `film_base_source` is
+  `region`/`explicit` (`auto` retired with #195); the projection takes the typed
+  `TelemetryEvent`; the contract lives in `contracts/telemetry/upload-v1/`, whose
+  README is now the field manifest.
+- **Landed:** `telemetry::upload` (`UploadEvent`, `to_upload_event` →
+  `Result<_, NotUploadable>`: wrong local version, a non-release `nc_version`, a
+  destination with no writable row, `effective_area`, or an outcome breaking the
+  schema's pairing rules); the schema, 21 valid and 260 invalid requests (each
+  invalid one names the Worker's answer), responses, and the local `panic-ready`
+  fixture.
+- **Absent vs `unknown`:** a block the run never reached is absent, as locally;
+  `unknown` only for a reached value that cannot be classified. So `image.format`,
+  `image.ir_present`, `non_finite` and `conversion.*` lost the strategy's `unknown`
+  member.
+- **Validator: `boon`, not `jsonschema`.** `jsonschema` 0.58 raised the lockfile's
+  `zmij` (serde_json's float formatter, in the binary), `num-bigint` and
+  `wasm-bindgen`; `boon` adds 40 dev-only crates and moves nothing locked. Gotcha:
+  `cargo add` re-resolves and bumps unrelated crates — restore `Cargo.lock` and let a
+  plain build add only the new ones.
+- **A panic records its active stage** (`panic-hook.md` asks for it), `unknown` only
+  when the hook cannot tell. A bad `event_id` is an HTTP 400: a rejection must name
+  a valid one.
+- `ingestion-service.md`'s "algorithm" cohort became `encoding` (the field is gone).
+
+### 2026-09-28 — done
+- **Review:** `nc-reviewer` (three rounds), `ship:diff-reviewer` and a user-run
+  `/code-review`; Codex could not run (workspace out of credits). What it changed:
+  the schema's `$defs/envelope` (validatable on its own; a bad `event_id` fails it),
+  the projection refusing outcomes that break the pairing rules, invalid cases
+  rebuilt so each fails only its named rule, `out_of_range` pinned to numeric
+  bounds by a test, and the encoding looked up through `destination::resolve`.
+- **Verified:** pinned full/minimal upload snapshots equal the corpus; every
+  projection (each writable row, every failure kind in every stage, finished-frame
+  failures) passes the schema; hostile local values never reach the wire; the
+  envelope rejects exactly the `http_400` cases; e2e `total_samples` equals
+  renditions × pixels × 3.
+- **For `ingestion-service`:** build from the contract README, not the strategy's
+  manifest — it defines the 400 cases (envelope, bad or duplicate `event_id`, body
+  over 262,144 bytes) and the rejection precedence.
+- **For `upload`:** `to_upload_event` takes the typed event; reading queued lines
+  back, and whether older local versions still project, is yours. Split batches by
+  size: 100 schema-valid panic events can exceed the body cap.
+- **For `panic-hook`:** the local fixture fixes the panic event's shape (with its
+  active `stage`); whether adding `EventName::Panic` bumps the local schema is
+  yours to settle (`SCHEMA_VERSION`'s rustdoc).
 
 
 ## ingestion-service

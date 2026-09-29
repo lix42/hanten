@@ -2423,7 +2423,7 @@ fn telemetry_file_writes_full_record() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
 
-    assert_eq!(record["schema_version"], 10);
+    assert_eq!(record["schema_version"], 11);
     assert!(record["timestamp_ms"].as_u64().unwrap() > 0);
     let id = record["event_id"].as_str().unwrap();
     let hex = |b: u8| b.is_ascii_hexdigit() && !b.is_ascii_uppercase();
@@ -2496,6 +2496,7 @@ fn telemetry_file_writes_full_record() {
     assert_eq!(outcome["error_kind"], "none");
     assert_eq!(outcome["exit_code"], 0);
     assert!(outcome["warnings"].is_number());
+    assert!(outcome["total_samples"].as_u64().unwrap() > 0);
     assert!(outcome["clipped"].is_number());
     assert!(outcome["non_finite"].is_number());
 }
@@ -2535,7 +2536,7 @@ fn telemetry_event(path: &Path) -> serde_json::Value {
 
 /// A failure event names where the run ended, its category and its exit code.
 fn assert_failure(event: &serde_json::Value, stage: &str, kind: &str, exit: i64) {
-    assert_eq!(event["schema_version"], 10, "{event}");
+    assert_eq!(event["schema_version"], 11, "{event}");
     assert_eq!(event["stage"], stage, "{event}");
     let outcome = &event["outcome"];
     assert_eq!(outcome["status"], "failure", "{event}");
@@ -2578,7 +2579,7 @@ fn a_usage_failure_before_decode_writes_a_setup_event_with_nothing_invented() {
     }
     let timing = event["timing_ms"].as_object().unwrap();
     assert_eq!(timing.keys().collect::<Vec<_>>(), ["total"], "{event}");
-    for absent in ["clipped", "non_finite"] {
+    for absent in ["total_samples", "clipped", "non_finite"] {
         assert!(event["outcome"].get(absent).is_none(), "{event}");
     }
 }
@@ -2870,7 +2871,7 @@ fn telemetry_log_appends_one_line_per_run() {
     // Each line is an independent, valid JSON object.
     for line in lines {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(v["schema_version"], 10);
+        assert_eq!(v["schema_version"], 11);
     }
 }
 
@@ -3084,7 +3085,7 @@ fn telemetry_file_dash_writes_json_to_stdout() {
     ]);
     assert_eq!(code, 0, "telemetry to stdout should succeed:\n{err}");
     let record = json(&stdout);
-    assert_eq!(record["schema_version"], 10);
+    assert_eq!(record["schema_version"], 11);
     assert_eq!(record["image"]["format"], "hdr");
 }
 
@@ -4359,7 +4360,7 @@ fn film_master_telemetry_names_the_destination_and_the_written_depth() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
     let conv = &record["conversion"];
-    assert_eq!(record["schema_version"], 10);
+    assert_eq!(record["schema_version"], 11);
     assert_eq!(conv["destination"], "film-master");
     // The film master runs no chain stage, so none is timed.
     for stage in ["scene_correction", "look", "fit_range", "fit_gamut"] {
@@ -6613,6 +6614,15 @@ fn telemetry_reports_the_primary_containers_depth_not_the_ir_planes() {
         assert_eq!(
             record["conversion"]["output_depth"], want,
             "{name} must report its primary container's depth"
+        );
+        // The clip counts' denominator: a gain map examined two renditions.
+        let image = &record["image"];
+        let pixels = image["width"].as_u64().unwrap() * image["height"].as_u64().unwrap();
+        let renditions = if name == "gain-map" { 2 } else { 1 };
+        assert_eq!(
+            record["outcome"]["total_samples"],
+            renditions * pixels * 3,
+            "{name}"
         );
     }
 }

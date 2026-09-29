@@ -37,6 +37,10 @@ serde_json = "1.0.150"
 tiff = "0.11.3"
 
 [dev-dependencies]
+# Validates the telemetry upload corpus against its JSON Schema
+# (`contracts/telemetry/upload-v1`). Chosen over `jsonschema`, whose minimum versions
+# bump crates the shipped binary locks (`zmij`, `num-bigint`).
+boon = "0.6.1"
 # Enables libaom's decoder for `io::avif`'s round-trip tests only. Resolver v3
 # keeps dev-dependency features out of a plain `cargo build`, so the shipped
 # binary stays encoder-only. Note this decoder shares an implementation with the
