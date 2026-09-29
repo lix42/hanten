@@ -921,10 +921,21 @@ no interactive prompts.
 
 ### Recipes (JSON in/out)
 
-- `--params recipe.json` — load a full parameter set from JSON.
-- `--dump-params out.json` — write the effective parameters (defaults + overrides)
-  to JSON. Individual `--flag` overrides take precedence over the loaded recipe,
-  so an agent can load a roll recipe and tweak one value per frame.
+- `--params recipe.json` — load a recipe from JSON, or `-` for stdin (once).
+  **Repeatable**: the recipes layer in order, `defaults < --params A < --params B < …
+  < flags`, a later layer winning key by key. A `null` states nothing, but any stated
+  value wins, a restated default included, so the measured file goes last (a look
+  layer states no `calibration` or `roll`: a `--dump-params` file is the whole run,
+  its `roll.frames` table included, until those are stripped, and its decode too
+  unless meant to carry); a tagged
+  value that switches variant (`region` → `explicit`) is replaced whole, and
+  `roll.frames` merges as a table, entry by entry. Flags win **by
+  source**: an explicit `--white-balance 1,1,1` means neutral gains, not "fall back to
+  the recipes". A frame's `roll.frames` entry applies before the flags, so
+  `--roll-white` beats it; on `roll`, a frame's manifest `params` land after the flags,
+  so they win over both (`docs/design/roll-workflow.md`).
+- `--dump-params out.json` — write the effective parameters (defaults + layers +
+  flags) to JSON: every layer collapsed into one file.
 
 The shipped recipe is grouped into `reconstruction`, `input`, `calibration`,
 `measure`, `print`, and `output`. The roll's measured values live in
@@ -1599,6 +1610,8 @@ hanten measure-roll frames/*.tif --unexposed blank.tif --leader leader.tif --out
 #   "roll": { "white_balance": [...], "white_stops": 1.5,
 #             "frames": { "f07.tif": { "white_stops": 2.0 } } } }   # a clamped frame
 hanten roll frames/*.tif --params roll.json -o out/
+# A look is its own layer, and a flag beats both:
+hanten roll frames/*.tif --params my-look.json --params roll.json --exposure 0.3 -o out/
 ```
 
 ## 9. Parameter reference (grouped by stage)
@@ -1793,8 +1806,8 @@ The base source is a single mutually-exclusive choice, recipe key
 `calibration.film_base` — `{"explicit": [r, g, b]}` or `{"region": [x, y, w, h]}`,
 **required, with no default**. `convert` and `roll` reject a config that does not
 state one (exit 2, naming `--film-base` measured with `hanten measure-base
-<unexposed-frame>` and `--base-region`; `roll` accepts neither flag, so its message
-points at the shared `--params` recipe instead). The retired `"auto"` value and
+<unexposed-frame>`, `--base-region`, and the recipe `measure-roll --unexposed --out`
+writes). The retired `"auto"` value and
 `--auto-base` flag are refused (exit 2) with a message naming the same route.
 
 Why it is required: `Dmin` is the divisor of the density conversion, so it sets
@@ -2245,22 +2258,20 @@ collision-checked against all inputs, outputs, and sidecars before writing.
 - `-v/--verbose`, `--quiet`
 
 **Roll (batch, `hanten roll` only — orchestration flags, NOT recipe keys).** `hanten roll`
-converts many frames from one shared `--params` recipe; it reuses the exact recipe
-shape above and adds no new conversion knobs. Its flags are operational (like
-`--report`): `--out-dir <dir>` (per-frame outputs `<stem>_positive.<ext>`, the
+converts many frames from one shared recipe, resolved like `convert`'s — the
+layered `--params` and every conversion flag `convert` takes — and adds no new
+conversion knobs. Its own flags are operational (like `--report`): `--out-dir <dir>` (per-frame outputs `<stem>_positive.<ext>`, the
 suffix following each frame's resolved preset),
 positional `inputs` (files and directories — a directory is expanded to its
 `.tif`/`.tiff` files, sorted; shell globs are expanded by the shell, not by nc)
 **or** `--frames <manifest.json>` (explicit per-frame `input`/`output`/partial-recipe
-`params` overrides, deep-merged onto the shared recipe for that frame only).
-**A `--params` recipe is effectively mandatory for `roll`**, because `roll`
-converts and `calibration.film_base` has no default while `RollArgs` accepts none of
-the film-base flags — the recipe is the only place a roll can state its
-base, and a roll with no recipe (or one omitting `calibration.film_base`) exits 2 with
-a message that says so. That is the intended workflow rather than a limitation:
-`Dmin` is measured once for the roll (`hanten measure-roll --unexposed`, or `hanten measure-base`) and frozen into the shared
-recipe as `calibration.film_base.explicit`, which is also the only source that keeps
-every frame on one base — see the roll-fixed invariant warnings below.
+`params` overrides, deep-merged onto that frame's resolved recipe — its `roll.frames`
+entry, then the flags — for that frame only, so they win over both).
+`calibration.film_base` has no default, so a roll states one, by `--film-base` or in
+a `--params` layer, or exits 2. `Dmin` is measured once for the roll (`hanten
+measure-roll --unexposed`, or `hanten measure-base`) and frozen as an explicit base,
+which is the only source that keeps every frame on one base — see the roll-fixed
+invariant warnings below.
 The shared recipe configuration appears once at the top of the roll report; each
 frame additionally reports the *resolved* base it used — a redundant echo when the
 recipe pins an explicit base, but meaningful under a `region` base that

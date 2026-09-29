@@ -84,10 +84,9 @@ pub(crate) fn nearest_rank_index(len: usize, p: f32) -> usize {
     (((len - 1) as f32) * p).round() as usize
 }
 
-/// The remedy when an estimate fails. Names the recipe key as well as the flag:
-/// `roll` takes no conversion flags.
+/// The remedy when an estimate fails, as flag and recipe key.
 const STATE_GAINS_INSTEAD: &str = "state explicit gains instead (`--white-balance` on \
-     `convert`, or the recipe's `scene_correction.white_balance` as \
+     `convert` or `roll`, or the recipe's `scene_correction.white_balance` as \
      `{\"explicit\": [r, g, b]}`)";
 
 /// Per-channel nearest-rank percentile `p` of an **already-sampled** `rgb` over its

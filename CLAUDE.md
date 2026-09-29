@@ -154,7 +154,7 @@ Read the module docs before changing these; they hold the traps.
 | Area | Read |
 |---|---|
 | output paths, suffixes, destination → container | `cli::resolve_output_path`, `OutputTarget`, `Unappendable` |
-| knob merge, validation order, removed flags and keys | `recipe::check_body`, `recipe::merge`, `recipe::validate`, `recipe::destination`; `cli::reject_removed_flags`, `validate_convert`, `validate_shared` |
+| knob merge, `--params` layering, validation order, removed flags and keys | `recipe::check_body`, `recipe::merge`, `recipe::compose`, `recipe::validate`, `recipe::destination`; `cli::reject_removed_flags`, `validate_convert`, `validate_shared` |
 | renderings (`direct` / `default`), `direct`'s pinned base | `src/rendering.rs` |
 | destination set (axes, table, derivation) | `src/destination.rs` |
 | decode, density scale, anchor | `algo/fixed.rs` |

@@ -31,6 +31,11 @@
 //! table, so the section says only what the user chose. Each key lands with the task that
 //! ships its knob — design-spec §9 states the shape, not keys written ahead of the code.
 
+mod compose;
+
+pub(crate) use compose::is_variant_switch;
+pub use compose::{compose, merge_json};
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -187,7 +192,7 @@ pub struct Calibration {
 /// What `hanten measure-roll` measured, kept apart from the style knobs so a rendering
 /// can apply it or leave it out. Applied in [`Recipe::shared_params`].
 ///
-/// Unset values are written as `null`, never left out: `cli::merge_json` reads a one-key
+/// Unset values are written as `null`, never left out: [`merge_json`] reads a one-key
 /// object as an enum switch, and a per-frame `{"roll": {"white_stops": …}}` must merge.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -312,7 +317,7 @@ pub struct RollReport {
 }
 
 /// Which style knobs this invocation typed as flags: [`Recipe::recipe_warnings`] never
-/// warns about those. `roll` takes no flags and passes the default.
+/// warns about those.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TypedStyle {
     /// `--white-balance` was typed.
@@ -324,8 +329,8 @@ pub struct TypedStyle {
 }
 
 impl TypedStyle {
-    /// What `convert`'s flags typed.
-    pub fn of(args: &crate::cli::ConvertArgs) -> Self {
+    /// What the conversion flags typed (`convert`'s, or `roll`'s).
+    pub fn of(args: &crate::cli::ConversionFlags) -> Self {
         Self {
             white_balance: args.scene.white_balance.is_some(),
             contrast: args.look.contrast.is_some(),
@@ -558,7 +563,7 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
 /// Every removed flag is refused before this runs (`cli`'s removed-flag check), so it
 /// has nothing to set. `every_flag_reaches_the_recipe` holds that each conversion flag
 /// has an arm here.
-pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
+pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     // Input color: transfer and meaning are independent axes — each flag replaces the
     // recipe's value on its own axis. The deprecated `--assume-linear` /
     // `--input-profile` flags are refused before this runs
@@ -663,9 +668,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConvertArgs) -> Recipe {
     r
 }
 
-/// How a validation message names a knob: by the flag and the recipe key on
-/// `convert`, which accepts both, and by the key alone on `roll`, which accepts no
-/// conversion flags — naming a flag there hands the user a remedy they cannot type.
+/// How a validation message names a knob: by the flag and the recipe key where both
+/// reach it, and by the key alone where no flag does (`measure-roll`, a roll frame's
+/// manifest `params`) — naming a flag there hands the user a remedy they cannot type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KnobNames {
     FlagAndKey,
@@ -1003,7 +1008,7 @@ pub fn destination(r: &Recipe, names: KnobNames) -> Result<Destination> {
     match &r.output {
         OutputSection::FilmMaster if r.rendering == Rendering::Direct => {
             // The remedy works whichever of the recipe or a flag stated `direct`: a flag
-            // overrides the recipe's rendering, and `roll` takes no flags.
+            // overrides the recipe's rendering.
             let (rendering, master, back) = match names {
                 KnobNames::FlagAndKey => (
                     "--rendering direct (recipe `rendering`)",
@@ -1120,7 +1125,7 @@ pub enum Destination {
     FilmMaster,
 }
 
-/// One axis value as a message names it: the flag on `convert`, the key on `roll`.
+/// One axis value as a message names it: the flag, or the key where no flag reaches.
 fn axis_value(names: KnobNames, flag: &str, key: &str, value: &str) -> String {
     match names {
         KnobNames::FlagAndKey => format!("{flag} {value}"),
@@ -1792,7 +1797,8 @@ mod tests {
 
     #[test]
     fn the_retired_auto_film_base_is_refused_with_a_remedy_a_recipe_can_take() {
-        // A recipe reaches `roll`, which has no flags, so the remedy is a recipe value.
+        // A recipe layer or a frame's manifest `params` may carry it, so the remedy is a
+        // recipe value.
         for whole in [true, false] {
             let body = if whole {
                 r#"{"recipe_version": 2, "calibration": {"film_base": "auto"}}"#
@@ -1984,8 +1990,8 @@ mod tests {
 
     #[test]
     fn roll_names_the_key_alone() {
-        // `roll` accepts no conversion flags, so naming one there is a remedy the
-        // user cannot type.
+        // `measure-roll` and a roll frame's manifest entry take no conversion flags, so
+        // naming one there is a remedy the user cannot type.
         let mut r = Recipe::default();
         r.reconstruction.linearization = 0.0;
         let msg = validate(&r, KnobNames::KeyOnly).unwrap_err();
@@ -2159,7 +2165,7 @@ mod tests {
         let Command::Convert(args) = Cli::try_parse_from(argv).unwrap().command else {
             unreachable!()
         };
-        merge(parse(json).unwrap(), &args)
+        merge(parse(json).unwrap(), &args.knobs)
     }
 
     #[test]
@@ -3111,7 +3117,7 @@ mod tests {
             let Command::Convert(args) = Cli::try_parse_from(argv).unwrap().command else {
                 unreachable!()
             };
-            let merged = merge(Recipe::default(), &args);
+            let merged = merge(Recipe::default(), &args.knobs);
             assert!(
                 landed(&merged),
                 "{flag} did not land in its field: {merged:?}"
