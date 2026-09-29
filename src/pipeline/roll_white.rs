@@ -11,15 +11,15 @@
 //!
 //! Pure statistics over samples the orchestrator takes at the **decode's output in
 //! linear ACEScg** — the input scene correction's gains multiply. The look's
-//! contrast is a channel-equal power pivoted at mid-grey, so a white these gains
-//! make neutral stays neutral under any contrast; the gain *values* belong to this
+//! slope is a channel-equal power pivoted at mid-grey, so a white these gains
+//! make neutral stays neutral under any slope; the gain *values* belong to this
 //! decode, which is why they are measured here and not at a rendered output.
 //!
 //! **The roll's white** (`nf-calibration/roll-white-rule`) is measured from the same
-//! per-frame samples and placed through the look's contrast, with mid-grey pinned, so the
+//! per-frame samples and placed through the look's slope, with mid-grey pinned, so the
 //! roll's white renders at diffuse white. The recipe stores the white
-//! (`roll.white_stops`), not the contrast: [`contrast_for`] is applied at render time,
-//! and a stated `look.contrast` wins over it. The rule was chosen by review on nine rolls
+//! (`roll.white_stops`), not the slope: [`slope_for`] is applied at render time, and
+//! `look.contrast` multiplies it. The rule was chosen by review on nine rolls
 //! (`nf-calibration/anchor-comparison`), with a black point in the chain; its values are
 //! provisional, since that sample held no deliberately bad frames:
 //!
@@ -29,7 +29,7 @@
 //!   ([`frame_white`]).
 //! - The roll's white is the brightest frame white at or under [`WHITE_CAP_STOPS`],
 //!   raised to at least [`WHITE_FLOOR_STOPS`]; if every frame is above the cap, it is the
-//!   cap. A frame above the cap is **clamped**: it renders at the cap's contrast, not the
+//!   cap. A frame above the cap is **clamped**: it renders at the cap's slope, not the
 //!   roll's, and the report discloses it — an ordinary bright scene is clamped too, so it
 //!   is not a warning.
 //! - A frame whose white is within [`SATURATION_MARGIN_STOPS`] of the leader is near film
@@ -38,7 +38,7 @@
 //! **A frame's white is measured before the leader guard.** The guard drops pixels
 //! within [`LEADER_GUARD_DENSITY`] (≈0.6 stop) of the leader — exactly the highlights of
 //! a frame near saturation. Measured after it, such a frame's white lands lower, can
-//! escape the clamp and set the roll's contrast, and can never come within the margin of
+//! escape the clamp and set the roll's slope, and can never come within the margin of
 //! its leader. The cap already keeps a blown frame from raising the roll's white, so the
 //! guard serves the white balance only.
 //!
@@ -260,11 +260,10 @@ pub fn scene_stops(level: f32) -> f32 {
     (level / MID_GREY).log2()
 }
 
-/// The `look.contrast` that renders a white `white_stops` above mid-grey at diffuse
-/// white, mid-grey pinned: the look maps `MID_GREY · 2^w` to `MID_GREY · 2^(k·w)`.
-/// Scene stops already include the decode's linearization, so it does not enter here —
-/// the whole contrast is this times `reconstruction.linearization`.
-pub fn contrast_for(white_stops: f32) -> f32 {
+/// The slope that renders a white `white_stops` above mid-grey at diffuse white,
+/// mid-grey pinned: the look maps `MID_GREY · 2^w` to `MID_GREY · 2^(k·w)`. Scene stops
+/// already include the decode's linearization, so it does not enter here.
+pub fn slope_for(white_stops: f32) -> f32 {
     (DIFFUSE_WHITE / MID_GREY).log2() / white_stops
 }
 
@@ -288,7 +287,7 @@ pub enum FrameRole {
     SetsRoll,
     /// At or under the cap, and not the roll's white (or the floor raised it).
     Under,
-    /// Above the cap: rendered at the cap's contrast, not the roll's.
+    /// Above the cap: rendered at the cap's slope, not the roll's.
     Clamped,
     /// No usable pixel, so no white.
     Unmeasured,
@@ -543,7 +542,7 @@ mod tests {
         assert_eq!(w.stops, WHITE_FLOOR_STOPS);
         assert_eq!(w.bound, WhiteBound::Floor);
         assert_eq!(w.roles, [FrameRole::Under]);
-        assert_eq!(contrast_for(w.stops), contrast_for(WHITE_FLOOR_STOPS));
+        assert_eq!(slope_for(w.stops), slope_for(WHITE_FLOOR_STOPS));
     }
 
     #[test]
@@ -567,10 +566,10 @@ mod tests {
         // The reviewed values: whole contrast 2.23 at the cap and 2.97 at the floor, at
         // the decode's linearization 1.8.
         let lin = crate::algo::fixed::LINEARIZATION;
-        assert!((contrast_for(WHITE_CAP_STOPS) * lin - 2.23).abs() < 0.01);
-        assert!((contrast_for(WHITE_FLOOR_STOPS) * lin - 2.97).abs() < 0.01);
+        assert!((slope_for(WHITE_CAP_STOPS) * lin - 2.23).abs() < 0.01);
+        assert!((slope_for(WHITE_FLOOR_STOPS) * lin - 2.97).abs() < 0.01);
         for w in [WHITE_FLOOR_STOPS, 1.8, WHITE_CAP_STOPS] {
-            let k = contrast_for(w);
+            let k = slope_for(w);
             let white = MID_GREY * (at(w) / MID_GREY).powf(k);
             assert!((white - DIFFUSE_WHITE).abs() < 1e-5, "{w}: {white}");
         }

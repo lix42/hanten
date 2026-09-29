@@ -356,8 +356,12 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         base: "01c5acccc36a3388",
         // Refreshed in place by `core/measure-base` (was `fe3d6808a270d45f`): the
         // per-frame `roll.frames` table arrived, empty by default, so no default pixel
-        // moved.
-        recipe: "0b06a154d01e61e5",
+        // moved. Refreshed again by `nf-look/contrast-definition` (was
+        // `0b06a154d01e61e5`): `recipe_version` 3, where `look.contrast` is a multiplier
+        // written `1.0` rather than an unset `null`. The default slope is unchanged, and
+        // a version 2 recipe stating a number is refused with its conversion, not
+        // rendered differently.
+        recipe: "c596525d9284f59c",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];

@@ -108,7 +108,7 @@ impl SceneCorrectionParams {
     /// Whether the user asked for a correction — whether the stage would move a pixel.
     /// The one predicate a destination that runs no scene correction (`film-master`)
     /// reads to refuse, rather than one rule per knob (the refusal is
-    /// `recipe::destination`; the look's is `LookSection::asks_for_a_look`).
+    /// `recipe::destination`; the look's is `recipe::LookKeys::asks_for_a_look`).
     ///
     /// Keyed on the folded **gains**, the test [`apply`] and the report use: the
     /// default is the identity, so there is no default to spare separately, and a

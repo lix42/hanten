@@ -64,8 +64,8 @@ roll, and the look file is the only one meant for other rolls.
 | Command | Does | Writes |
 |---|---|---|
 | `inspect` | what is this file (unchanged) | report |
-| `measure-roll` | **everything a roll shares**: the film base (`--unexposed`), white balance and white | report; `--out` → `{"recipe_version": 2, "calibration": {…}, "roll": {…}}`, plus the per-frame clamps |
-| **`measure-base`** (was `estimate`) | the film base alone, from one frame or a region — for a single-frame `convert`, or a roll with no unexposed frame | report; `--out` → `{"recipe_version": 2, "calibration": {…}}` |
+| `measure-roll` | **everything a roll shares**: the film base (`--unexposed`), white balance and white | report; `--out` → `{"recipe_version": 3, "calibration": {…}, "roll": {…}}`, plus the per-frame clamps |
+| **`measure-base`** (was `estimate`) | the film base alone, from one frame or a region — for a single-frame `convert`, or a roll with no unexposed frame | report; `--out` → `{"recipe_version": 3, "calibration": {…}}` |
 | **`profile`** (was `params`) | author a look from flags, no image | `--out` → annotated look file |
 | `roll` | convert frames from layered recipes and flags — or, with `--measure-roll` (implied by `--unexposed`), measure the roll first | images; report; opt-in recipe (`--save-recipe`) |
 

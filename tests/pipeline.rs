@@ -904,7 +904,7 @@ fn hdr_avif_destinations_reject_a_non_avif_suffix_and_roll_with_an_avif_name() {
     let recipe = tmp.path("roll.json");
     std::fs::write(
         &recipe,
-        r#"{"recipe_version":2,"output":{"display":{"transfer":"pq","container":"avif"}},
+        r#"{"recipe_version":3,"output":{"display":{"transfer":"pq","container":"avif"}},
             "calibration":{"film_base":{"explicit":[1,1,1]}}}"#,
     )
     .unwrap();
@@ -1054,7 +1054,7 @@ fn convert_writes_tiff_and_report() {
 
     let report = json(&stdout);
     assert_eq!(report["command"], "convert");
-    assert_eq!(report["recipe"]["recipe_version"], 2, "{stdout}");
+    assert_eq!(report["recipe"]["recipe_version"], 3, "{stdout}");
     assert!(report["chain"].get("sidecar_written").is_none(), "{stdout}");
     assert_eq!(
         report["chain"]["destination"]["display"]["container"],
@@ -1270,7 +1270,7 @@ fn measure_base_out_writes_a_recipe_that_round_trips() {
     assert_eq!(
         written,
         serde_json::json!({
-            "recipe_version": 2,
+            "recipe_version": 3,
             "calibration": {"film_base": {"explicit": [base["r"], base["g"], base["b"]]}}
         })
     );
@@ -1511,7 +1511,7 @@ fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
     // A calibration is "a recipe with nothing else".
     let calibration = write_file(
         &tmp.path("roll-cal.json"),
-        r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
+        r#"{"recipe_version":3,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
     );
     let from_recipe = tmp.path("recipe.tif");
     let (code, _, err) = {
@@ -1542,7 +1542,7 @@ fn a_calibration_only_recipe_matches_the_same_values_given_as_flags() {
     // somewhere, which is exactly why `calibration.film_base` has no default.
     let profile = write_file(
         &tmp.path("look.json"),
-        r#"{"recipe_version":2,
+        r#"{"recipe_version":3,
             "reconstruction":{"scale":[1.0,0.84,0.73],"linearization":1.8,
                               "anchor":{"mid-at-base-offset":0.62}},
             "look":{"contrast":1.2}}"#,
@@ -1902,7 +1902,7 @@ fn convert_rejects_the_retired_input_color_recipe_key() {
     let recipe = tmp.path("recipe.json");
     std::fs::write(
         &recipe,
-        r#"{"recipe_version":2,"input":{"color":"linear"}}"#,
+        r#"{"recipe_version":3,"input":{"color":"linear"}}"#,
     )
     .unwrap();
     let (code, _stdout, err) = run(&[
@@ -2005,7 +2005,7 @@ fn input_assertion_provenance_distinguishes_cli_from_recipe() {
     let recipe = tmp.path("recipe.json");
     std::fs::write(
         &recipe,
-        r#"{"recipe_version":2,"input":{"transfer":"linear","meaning":"scanner-device"},
+        r#"{"recipe_version":3,"input":{"transfer":"linear","meaning":"scanner-device"},
             "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
     )
     .unwrap();
@@ -2130,7 +2130,7 @@ fn roll_frame_report_includes_resolved_input_color() {
     let recipe = tmp.path("recipe.json");
     std::fs::write(
         &recipe,
-        r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
+        r#"{"recipe_version":3,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
     )
     .unwrap();
     let (code, stdout, err) = run(&[
@@ -2158,7 +2158,7 @@ fn roll_frame_report_makes_the_measurement_area_observable() {
     let recipe = tmp.path("recipe.json");
     std::fs::write(
         &recipe,
-        r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
+        r#"{"recipe_version":3,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
     )
     .unwrap();
     let frames = tmp.path("frames.json");
@@ -2206,7 +2206,7 @@ fn roll_rejects_colorimetric_shared_recipe_before_decode() {
     // is the colorimetric one, not the missing-base usage error.
     std::fs::write(
         &recipe,
-        r#"{"recipe_version":2,"input":{"meaning":"colorimetric"},"calibration":{"film_base":{"explicit":[0.9,0.6,0.5]}}}"#,
+        r#"{"recipe_version":3,"input":{"meaning":"colorimetric"},"calibration":{"film_base":{"explicit":[0.9,0.6,0.5]}}}"#,
     )
     .unwrap();
     let (code, _stdout, err) = run(&[
@@ -2709,7 +2709,7 @@ fn a_telemetry_file_over_the_params_recipe_is_refused_and_never_written() {
             recipe.to_str().unwrap(),
         ])
     };
-    std::fs::write(&recipe, r#"{"recipe_version": 2}"#).unwrap();
+    std::fs::write(&recipe, r#"{"recipe_version": 3}"#).unwrap();
     let (code, _stdout, err) = dump(&recipe);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("would overwrite --params"), "{err}");
@@ -2768,7 +2768,7 @@ fn a_failure_event_never_lands_on_a_recipe_export_ir_or_a_completed_output() {
 
     let ir = tmp.path("ir.tiff");
     let recipe = tmp.path("recipe.json");
-    let body = serde_json::json!({"recipe_version": 2, "input": {"export_ir": ir}});
+    let body = serde_json::json!({"recipe_version": 3, "input": {"export_ir": ir}});
     std::fs::write(&recipe, body.to_string()).unwrap();
     refuses(
         &ir,
@@ -3257,7 +3257,7 @@ fn telemetry_key_in_recipe_is_rejected() {
     // usage), never silently accepted as if telemetry were a conversion knob.
     let tmp = TempDir::new("tel-recipe-key");
     let recipe = tmp.path("recipe.json");
-    std::fs::write(&recipe, r#"{"recipe_version":2,"telemetry":true}"#).unwrap();
+    std::fs::write(&recipe, r#"{"recipe_version":3,"telemetry":true}"#).unwrap();
     let out = tmp.path("out.tiff");
     let (code, _stdout, err) = run(&[
         "convert",
@@ -3329,7 +3329,7 @@ fn write_file(path: &Path, contents: &str) -> PathBuf {
 /// so every frame is the default SDR TIFF; the container-aware naming has its own
 /// coverage in `roll_checks_explicit_manifest_suffixes_and_derives_per_frame_names`.
 const ROLL_RECIPE: &str = r#"{
-  "recipe_version": 2,
+  "recipe_version": 3,
   "calibration": {
     "film_base": { "explicit": [0.9, 0.55, 0.42] }
   }
@@ -3503,7 +3503,7 @@ fn a_roll_frame_resolves_as_the_equivalent_convert_and_warns_only_on_roll_wide_v
     // `rendering` switch whose destination is derived rather than stated, and a decode
     // key. Only the last two are roll-wide.
     let tmp = TempDir::new("roll-equivalence");
-    let shared = r#""recipe_version": 2,
+    let shared = r#""recipe_version": 3,
         "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}"#;
     let roll = r#""roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 1.7}"#;
     let recipe = write_file(&tmp.path("roll.json"), &format!("{{{shared}, {roll}}}"));
@@ -3751,7 +3751,7 @@ fn roll_empty_batch_errors_loudly_on_both_paths() {
 /// A shared recipe with a NON-explicit (region) film base — every frame
 /// re-estimates its own Dmin, so the roll is not truly frozen.
 const ROLL_RECIPE_REGION: &str = r#"{
-  "recipe_version": 2,
+  "recipe_version": 3,
   "calibration": { "film_base": { "region": [0, 0, 502, 462] } }
 }"#;
 
@@ -3902,7 +3902,7 @@ fn roll_failed_frame_keeps_a_warning_raised_before_the_failure() {
     let tmp = TempDir::new("roll-warn-then-fail");
     let recipe = write_file(
         &tmp.path("warn-then-fail.json"),
-        r#"{ "recipe_version": 2, "calibration": { "film_base": { "region": [0, 0, 40, 40] } } }"#,
+        r#"{ "recipe_version": 3, "calibration": { "film_base": { "region": [0, 0, 40, 40] } } }"#,
     );
     let out = tmp.path("out");
     std::fs::create_dir_all(out.join("frame.tiff")).unwrap();
@@ -4224,7 +4224,7 @@ fn film_master_writes_unclamped_float_acescg_and_reports_the_branch() {
     // The recipe that states the same values reproduces the master byte-for-byte.
     let recipe = write_file(
         &tmp.path("master.json"),
-        r#"{"recipe_version":2,
+        r#"{"recipe_version":3,
             "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "reconstruction":{"linearization":5.0,"anchor":{"mid-at-base-offset":0.05}},
             "output":"film-master"}"#,
@@ -4432,7 +4432,7 @@ fn roll_accepts_a_film_master_recipe() {
     let tmp = TempDir::new("roll-film-master");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
+        r#"{"recipe_version":3,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "output":"film-master"}"#,
     );
     let out_dir = tmp.path("out");
@@ -4478,7 +4478,7 @@ fn roll_frame_override_of_output_warns_and_is_strict_promotable() {
     let input = fixture("hdr-48bit.tif");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
+        r#"{"recipe_version":3,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "output":"film-master"}"#,
     );
     let manifest_for = |name: &str, body: &str| -> PathBuf { write_file(&tmp.path(name), body) };
@@ -4849,7 +4849,7 @@ fn identity_fields_are_not_recipe_keys() {
     ] {
         let recipe = write_file(
             &tmp.path("r.json"),
-            &format!(r#"{{ "recipe_version": 2, {key} }}"#),
+            &format!(r#"{{ "recipe_version": 3, {key} }}"#),
         );
         let out = tmp.path("out.tiff");
         let (code, _, err) = run(&[
@@ -4904,7 +4904,7 @@ fn unknown_meta_fields_are_ignored_but_the_recipe_body_is_still_strict() {
     let ok = write_file(
         &tmp.path("ok.json"),
         r#"{ "meta": { "invented_future_field": [1, 2], "pipeline_version": 8 },
-             "params": { "recipe_version": 2, "scene_correction": { "exposure": 0.25 } } }"#,
+             "params": { "recipe_version": 3, "scene_correction": { "exposure": 0.25 } } }"#,
     );
     let (code, _, err) = run(&[
         "convert",
@@ -4924,7 +4924,7 @@ fn unknown_meta_fields_are_ignored_but_the_recipe_body_is_still_strict() {
     // otherwise the exit code could be blamed on the missing `--film-base`.
     let bad = write_file(
         &tmp.path("bad.json"),
-        r#"{ "meta": {}, "params": { "recipe_version": 2, "scene_correction": { "exposur": 0.25 } } }"#,
+        r#"{ "meta": {}, "params": { "recipe_version": 3, "scene_correction": { "exposur": 0.25 } } }"#,
     );
     let (code, _, err) = run(&[
         "convert",
@@ -4949,7 +4949,7 @@ fn unknown_meta_fields_are_ignored_but_the_recipe_body_is_still_strict() {
     // can't quietly claim the name and turn every recipe into an envelope.
     let nested = write_file(
         &tmp.path("nested.json"),
-        r#"{ "meta": {}, "params": { "recipe_version": 2, "params": {} } }"#,
+        r#"{ "meta": {}, "params": { "recipe_version": 3, "params": {} } }"#,
     );
     let (code, _, err) = run(&[
         "convert",
@@ -5017,7 +5017,7 @@ fn an_unreadable_meta_pipeline_version_is_loud_not_silently_ignored() {
             &tmp.path(&format!("{tag}.json")),
             &format!(
                 r#"{{ "meta": {{ "pipeline_version": {value} }},
-                      "params": {{ "recipe_version": 2, "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }} }} }}"#
+                      "params": {{ "recipe_version": 3, "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }} }} }}"#
             ),
         );
         let (code, _, err) = run(&[
@@ -5055,7 +5055,7 @@ fn a_malformed_meta_container_is_refused_like_a_malformed_field() {
             &tmp.path(&format!("{tag}.json")),
             &format!(
                 r#"{{ "meta": {meta},
-                      "params": {{ "recipe_version": 2, "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }} }} }}"#
+                      "params": {{ "recipe_version": 3, "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }} }} }}"#
             ),
         );
         let (code, _, err) = run(&[
@@ -5216,7 +5216,7 @@ fn roll_warns_about_a_version_skewed_shared_recipe() {
     let stale = write_file(
         &tmp.path("stale.json"),
         r#"{ "meta": { "pipeline_version": 9999 },
-             "params": { "recipe_version": 2,
+             "params": { "recipe_version": 3,
                          "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } } }"#,
     );
     let out_dir = tmp.path("out");
@@ -5263,7 +5263,7 @@ fn replaying_another_pipeline_versions_recipe_warns_and_strict_promotes_it() {
     let stale = write_file(
         &tmp.path("stale.json"),
         r#"{ "meta": { "pipeline_version": 9999 },
-             "params": { "recipe_version": 2,
+             "params": { "recipe_version": 3,
                          "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } } }"#,
     );
     let out = tmp.path("out.tiff");
@@ -5317,7 +5317,7 @@ fn replaying_another_pipeline_versions_recipe_warns_and_strict_promotes_it() {
         &tmp.path("matching.json"),
         &format!(
             r#"{{ "meta": {{ "pipeline_version": {current} }},
-                  "params": {{ "recipe_version": 2, "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }} }} }}"#
+                  "params": {{ "recipe_version": 3, "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }} }} }}"#
         ),
     );
     // No `--strict` here: this HDRi fixture legitimately warns about its unconsumed
@@ -5866,7 +5866,7 @@ fn max_memory_is_operational_not_a_recipe_key() {
     // …and it is not accepted as a recipe key.
     let recipe = write_file(
         &tmp.path("bad.json"),
-        r#"{"recipe_version": 2, "max_memory": 4294967296,
+        r#"{"recipe_version": 3, "max_memory": 4294967296,
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
     );
     let out = tmp.path("nope.tiff");
@@ -6014,7 +6014,7 @@ fn roll_requires_a_stated_film_base_and_every_remedy_it_names_works() {
     // …and a recipe carrying `calibration.film_base`.
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version":2,"calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}}}"#,
+        r#"{"recipe_version":3,"calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}}}"#,
     );
     let (code, stdout, err) = run(&[
         "roll",
@@ -6041,7 +6041,7 @@ fn roll_reports_the_specific_problem_before_the_missing_base() {
     // Baseless AND colorimetric — two independent reasons to refuse.
     std::fs::write(
         &recipe,
-        r#"{"recipe_version":2,"input":{"meaning":"colorimetric"}}"#,
+        r#"{"recipe_version":3,"input":{"meaning":"colorimetric"}}"#,
     )
     .unwrap();
     let (code, _stdout, err) = run(&[
@@ -6220,7 +6220,7 @@ fn roll_refuses_an_out_of_range_headroom_in_the_shared_recipe() {
     let recipe = write_file(
         &tmp.path("roll.json"),
         r#"{
-  "recipe_version": 2,
+  "recipe_version": 3,
   "calibration": {
     "film_base": { "explicit": [0.9, 0.55, 0.42] }
   },
@@ -6266,7 +6266,7 @@ fn the_gain_map_jpeg_rejects_a_non_jpeg_suffix_and_rolls_with_a_jpg_name() {
     std::fs::create_dir_all(&out_dir).unwrap();
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version":2,"output":{"display":{"range":"hdr"}},
+        r#"{"recipe_version":3,"output":{"display":{"range":"hdr"}},
             "calibration":{"film_base":{"explicit":[1,1,1]}}}"#,
     );
     let (code, _stdout, err) = run(&[
@@ -6316,7 +6316,7 @@ fn roll_checks_explicit_manifest_suffixes_and_derives_per_frame_names() {
     };
     write_file(
         &tmp.path("shared.json"),
-        r#"{"recipe_version":2,"output":{"display":{"range":"hdr"}},
+        r#"{"recipe_version":3,"output":{"display":{"range":"hdr"}},
             "calibration":{"film_base":{"explicit":[1,1,1]}}}"#,
     );
 
@@ -6991,7 +6991,7 @@ fn the_retired_film_base_paths_name_the_measurement_that_replaced_them() {
     let recipe = dir.path("auto.json");
     std::fs::write(
         &recipe,
-        r#"{"recipe_version": 2, "calibration": {"film_base": "auto"}}"#,
+        r#"{"recipe_version": 3, "calibration": {"film_base": "auto"}}"#,
     )
     .unwrap();
     for argv in [
@@ -7599,7 +7599,7 @@ fn scene_correction_applies_the_stated_gains_and_exposure() {
     // The recipe spelling reaches the same knobs, and a dump writes them back.
     let recipe = write_file(
         &tmp.path("scene.json"),
-        r#"{ "recipe_version": 2,
+        r#"{ "recipe_version": 3,
              "scene_correction": { "white_balance": {"explicit": [1.3, 1.0, 0.7]} } }"#,
     );
     let dump = tmp.path("dump.json");
@@ -8125,7 +8125,7 @@ fn convert_refuses_a_recipe_calibration_dmax() {
     };
 
     let (code, err) = run_with(
-        r#"{"recipe_version":2,
+        r#"{"recipe_version":3,
             "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]},
                            "dmax":{"explicit":1.45}}}"#,
         "with-dmax.json",
@@ -8136,7 +8136,7 @@ fn convert_refuses_a_recipe_calibration_dmax() {
 
     // Falsifiable both ways. The base half is still read, so it renders…
     let (code, err) = run_with(
-        r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
+        r#"{"recipe_version":3,"calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}}}"#,
         "base-only.json",
     );
     assert_eq!(code, 0, "the base half must still be accepted: {err}");
@@ -8144,7 +8144,7 @@ fn convert_refuses_a_recipe_calibration_dmax() {
     // check, run on the overlay.
     let shared = write_file(
         &tmp.path("shared.json"),
-        r#"{"recipe_version":2,
+        r#"{"recipe_version":3,
             "calibration":{"film_base":{"explicit":[0.9,0.55,0.42]}},
             "measure":{"inset":0.05}}"#,
     );
@@ -8203,13 +8203,13 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
         "pre-flip.json",
     );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("\"recipe_version\": 2"), "{err}");
+    assert!(err.contains("\"recipe_version\": 3"), "{err}");
     assert!(err.contains("hanten params"), "{err}");
 
     // (2) Versioned, but still carrying the removed chain's reconstruction keys:
     // refused by key, with where each one went.
     let (code, err) = run_with(
-        r#"{"recipe_version": 2,
+        r#"{"recipe_version": 3,
             "reconstruction": {"density": {"scale": [1, 0.9, 0.8]}},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
         "old-keys.json",
@@ -8220,7 +8220,7 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
 
     // (3) A recipe stating the decode renders, with its values.
     let (code, err) = run_with(
-        r#"{"recipe_version": 2,
+        r#"{"recipe_version": 3,
             "reconstruction": {"scale": [1, 0.9, 0.8], "linearization": 1.7,
                                "anchor": {"mid-at-base-offset": 0.6}},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
@@ -8245,7 +8245,7 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
 
     // (4) Its values are checked, whichever provenance set them.
     let (code, err) = run_with(
-        r#"{"recipe_version": 2, "reconstruction": {"linearization": 0},
+        r#"{"recipe_version": 3, "reconstruction": {"linearization": 0},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
         "bad.json",
     );
@@ -8254,7 +8254,7 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
 
     // (5) A stage refuses a key it does not have.
     let (code, err) = run_with(
-        r#"{"recipe_version": 2, "look": {"saturation": 1.1},
+        r#"{"recipe_version": 3, "look": {"saturation": 1.1},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
         "look.json",
     );
@@ -8264,7 +8264,7 @@ fn convert_refuses_a_pre_flip_recipe_and_reads_a_current_one() {
     // (6) The decode's slope before the split is refused by name, with the split's
     // remedy — never read as the linearization it no longer is.
     let (code, err) = run_with(
-        r#"{"recipe_version": 2, "reconstruction": {"contrast": 2.0},
+        r#"{"recipe_version": 3, "reconstruction": {"contrast": 2.0},
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
         "old-contrast.json",
     );
@@ -8280,7 +8280,7 @@ fn hanten_params_writes_the_recipe_convert_reads() {
     let (code, params, err) = run(&["params"]);
     assert_eq!(code, 0, "{err}");
     let doc: serde_json::Value = serde_json::from_str(&params).unwrap();
-    assert_eq!(doc["recipe_version"], 2);
+    assert_eq!(doc["recipe_version"], 3);
     assert!(doc.get("print").is_none(), "{doc}");
 
     // The selector it once took is a removed flag.
@@ -8396,12 +8396,12 @@ fn a_print_section_or_an_output_preset_is_refused_by_name() {
     for (name, body, went) in [
         (
             "print",
-            r#"{ "recipe_version": 2, "print": { "print_exposure": 1.0 } }"#,
+            r#"{ "recipe_version": 3, "print": { "print_exposure": 1.0 } }"#,
             "scene_correction",
         ),
         (
             "output",
-            r#"{ "recipe_version": 2, "output": { "preset": "display-p3" } }"#,
+            r#"{ "recipe_version": 3, "output": { "preset": "display-p3" } }"#,
             "output.display",
         ),
     ] {
@@ -8572,7 +8572,7 @@ fn convert_never_removes_the_recipe_it_read() {
     write_stale_sidecar(
         &out,
         serde_json::json!({
-            "recipe_version": 2,
+            "recipe_version": 3,
             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } }
         }),
     );
@@ -8607,7 +8607,7 @@ fn roll_judges_a_manifest_suffix_against_the_destination() {
     let tmp = TempDir::new("roll-suffix");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{ "recipe_version": 2,
+        r#"{ "recipe_version": 3,
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
     );
     let roll_to = |output: &str, dir: &str| {
@@ -8650,7 +8650,7 @@ fn roll_renders_every_frame() {
     let recipe = write_file(
         &tmp.path("roll.json"),
         r#"{
-  "recipe_version": 2,
+  "recipe_version": 3,
   "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
   "measure": { "inset": 0.05 }
 }"#,
@@ -8690,7 +8690,7 @@ fn a_roll_frame_override_reaches_scene_correction() {
     let tmp = TempDir::new("roll-scene");
     let shared = write_file(
         &tmp.path("roll.json"),
-        r#"{ "recipe_version": 2,
+        r#"{ "recipe_version": 3,
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
     );
     let (a, b) = (fixture("hdr-48bit.tif"), fixture("hdri-64bit.tif"));
@@ -8777,7 +8777,7 @@ fn roll_refuses_an_unread_section_in_a_frame_override() {
     let tmp = TempDir::new("roll-overlay");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{ "recipe_version": 2,
+        r#"{ "recipe_version": 3,
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
     );
     let manifest = write_file(
@@ -8834,7 +8834,7 @@ fn roll_refuses_a_pre_flip_shared_recipe() {
         "none",
     ]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("\"recipe_version\": 2"), "{err}");
+    assert!(err.contains("\"recipe_version\": 3"), "{err}");
     assert!(!out_dir.exists(), "refused before anything is created");
 }
 
@@ -8866,7 +8866,7 @@ fn roll_refuses_the_removed_chains_keys_from_either_recipe_site() {
     let shared_typed = write_file(
         &tmp.path("shared.json"),
         r#"{
-             "recipe_version": 2,
+             "recipe_version": 3,
              "reconstruction": { "type": "density" },
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } }
            }"#,
@@ -8878,7 +8878,7 @@ fn roll_refuses_the_removed_chains_keys_from_either_recipe_site() {
     // (2) a per-frame override, on a shared recipe the gate accepts.
     let shared = write_file(
         &tmp.path("roll-new.json"),
-        r#"{ "recipe_version": 2,
+        r#"{ "recipe_version": 3,
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
     );
     let manifest_with = |name: &str, params: &str| {
@@ -8948,7 +8948,7 @@ fn roll_white_recipe(dir: &TempDir, base: &str) -> PathBuf {
     write_file(
         &dir.path("roll.json"),
         &format!(
-            r#"{{ "recipe_version": 2,
+            r#"{{ "recipe_version": 3,
                  "input": {{ "transfer": "linear", "meaning": "scanner-device" }},
                  "calibration": {{ "film_base": {{ "explicit": [{base}] }} }} }}"#
         ),
@@ -9031,23 +9031,23 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         "the flag's text round-trips the gains exactly"
     );
     assert_eq!(
-        converted["chain"]["look"]["contrast"], report["white"]["contrast"],
-        "and the contrast"
+        converted["chain"]["look"]["slope"], report["white"]["slope"],
+        "and the slope"
     );
     let roll = &converted["chain"]["roll"];
     assert_eq!(roll["white_stops"], report["white"]["stops"], "{converted}");
-    assert_eq!(roll["contrast"], report["white"]["contrast"], "{converted}");
+    assert_eq!(roll["slope"], report["white"]["slope"], "{converted}");
     assert_eq!(roll["white_balance_applied"], true, "{converted}");
-    assert_eq!(roll["contrast_applied"], true, "{converted}");
+    assert_eq!(roll["slope_applied"], true, "{converted}");
 
-    // The same values as style knobs: the section is where they live, not what they do.
+    // The gains as a style knob: the section is where they live, not what they do.
     let as_style = tmp.path("style.tiff");
     let gains_text = gains
         .iter()
         .map(|g| g.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let contrast_text = report["white"]["contrast"].to_string();
+    let stops_text = report["white"]["stops"].to_string();
     let (code, _, err) = run(&[
         "convert",
         &frame,
@@ -9055,8 +9055,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         "0.9,0.55,0.42",
         "--white-balance",
         &gains_text,
-        "--contrast",
-        &contrast_text,
+        "--roll-white",
+        &stops_text,
         "-o",
         as_style.to_str().unwrap(),
     ]);
@@ -9064,7 +9064,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(
         std::fs::read(&by_flag).unwrap(),
         std::fs::read(&as_style).unwrap(),
-        "the roll section renders what the same values as style knobs render"
+        "the roll section renders what the same gains as a style knob render"
     );
 
     // The written recipe states the base it measured under too, so it renders alone.
@@ -9104,12 +9104,13 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
 #[test]
 fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
     // Nothing is read as unset by its value: a `--dump-params` recipe replays exactly
-    // what it rendered, and a recipe an earlier build wrote (every one stated
-    // `look.contrast` 1.1111112) keeps its stated contrast over the roll's white. A
-    // *recipe* value beside a roll measurement may be such a leftover, so the run warns;
-    // a typed flag is a choice made now, and never does. `hdr-48bit.tif` is the IR-free
-    // fixture, so a `--strict` exit 1 is this warning's; the typed-flag and migrated
-    // runs are the controls.
+    // what it rendered. A recipe white balance beside the roll's gains may be a leftover
+    // an earlier `measure-roll` wrote there, so the run warns; a typed flag is a choice
+    // made now, and never does. A contrast beside the roll's white is not a leftover —
+    // it multiplies the roll's slope, and no earlier build wrote a multiplier — while a
+    // version 2 recipe's contrast, which was the slope itself, is refused with its
+    // conversion. `hdr-48bit.tif` is the IR-free fixture, so a `--strict` exit 1 is a
+    // warning's.
     let tmp = TempDir::new("roll-overlap");
     let overlap = |warnings: &serde_json::Value, key: &str| {
         let prefix = format!("the recipe's `{key}`");
@@ -9119,10 +9120,10 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
                 .count()
         })
     };
-    let contrast =
-        |report: &serde_json::Value| report["chain"]["look"]["contrast"].as_f64().unwrap();
+    let slope = |report: &serde_json::Value| report["chain"]["look"]["slope"].as_f64().unwrap();
 
-    // Typed flags beside the roll's: no warning, and `--strict` passes.
+    // Typed flags beside the roll's: no warning, and `--strict` passes. The contrast
+    // multiplies the roll's slope.
     let dumped = tmp.path("dumped.json");
     let (code, stdout, err) = convert_48bit(
         &tmp.path("a.tiff"),
@@ -9134,7 +9135,7 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
             "--roll-white",
             "1.7",
             "--contrast",
-            "1.1111112",
+            "1.2",
             "--dump-params",
             dumped.to_str().unwrap(),
             "--strict",
@@ -9142,7 +9143,12 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
     );
     assert_eq!(code, 0, "a typed flag never warns: {err}");
     let first = json(&stdout);
-    assert!((contrast(&first) - 1.111_111_2).abs() < 1e-6, "{first}");
+    let look = &first["chain"]["look"];
+    assert_eq!(look["contrast"], 1.2, "{first}");
+    assert_eq!(look["base_from"], "roll", "{first}");
+    let roll_slope = first["chain"]["roll"]["slope"].as_f64().unwrap();
+    assert_eq!(look["base_slope"].as_f64().unwrap(), roll_slope, "{first}");
+    assert!((slope(&first) - roll_slope * 1.2).abs() < 1e-6, "{first}");
     assert!(
         first
             .get("warnings")
@@ -9150,14 +9156,15 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
         "{first}"
     );
 
-    // The dump, read back: the same render, and now both values are the recipe's.
+    // The dump, read back: the same render, and now both values are the recipe's. Only
+    // the white balance warns; the roll's slope still applies under the contrast.
     let (code, stdout, err) =
         convert_48bit(&tmp.path("b.tiff"), &["--params", dumped.to_str().unwrap()]);
     assert_eq!(code, 0, "{err}");
     let replay = json(&stdout);
-    assert_eq!(contrast(&replay), contrast(&first), "{replay}");
-    assert_eq!(replay["chain"]["roll"]["contrast_applied"], false);
-    assert_eq!(overlap(&replay["warnings"], "look.contrast"), 1, "{replay}");
+    assert_eq!(slope(&replay), slope(&first), "{replay}");
+    assert_eq!(replay["chain"]["roll"]["slope_applied"], true);
+    assert_eq!(overlap(&replay["warnings"], "look.contrast"), 0, "{replay}");
     assert_eq!(
         overlap(&replay["warnings"], "scene_correction.white_balance"),
         1,
@@ -9168,7 +9175,7 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
         std::fs::read(tmp.path("b.tiff")).unwrap(),
         "the dump replays what it rendered"
     );
-    // The same recipe with both values typed over it: the flags are the choice.
+    // The same recipe with the white balance typed over it: the flag is the choice.
     let (code, _, err) = convert_48bit(
         &tmp.path("b2.tiff"),
         &[
@@ -9176,21 +9183,17 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
             dumped.to_str().unwrap(),
             "--white-balance",
             "1.05,1,1",
-            "--contrast",
-            "1.1111112",
             "--strict",
         ],
     );
     assert_eq!(code, 0, "{err}");
 
-    // An earlier build's recipe, with a `roll` section merged in: the stated contrast
-    // renders, and `--strict` promotes the warning.
-    let recipe = |look: &str, scene: &str| {
-        let path = tmp.path(&format!("r{}.json", look.len() + scene.len()));
+    let recipe = |version: u32, look: &str, scene: &str| {
+        let path = tmp.path(&format!("r{version}-{}.json", look.len() + scene.len()));
         write_file(
             &path,
             &format!(
-                r#"{{"recipe_version": 2,
+                r#"{{"recipe_version": {version},
                      "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
                      "roll": {{"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}},
                      "scene_correction": {{"white_balance": {{"explicit": {scene}}}}},
@@ -9198,30 +9201,34 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
             ),
         )
     };
-    let old = recipe("1.1111112", "[1, 1, 1]");
-    let (code, stdout, err) =
-        convert_48bit(&tmp.path("c.tiff"), &["--params", old.to_str().unwrap()]);
-    assert_eq!(code, 0, "{err}");
-    let report = json(&stdout);
-    assert!((contrast(&report) - 1.111_111_2).abs() < 1e-6, "{report}");
-    assert_eq!(overlap(&report["warnings"], "look.contrast"), 1, "{report}");
-    assert_eq!(
-        overlap(&report["warnings"], "scene_correction.white_balance"),
-        0,
-        "{report}"
-    );
-    let (code, _, err) = convert_48bit(
-        &tmp.path("d.tiff"),
-        &["--params", old.to_str().unwrap(), "--strict"],
-    );
-    assert_eq!(code, 1, "--strict must promote the warning: {err}");
+    // A version 2 recipe with a `roll` section merged in: its contrast was the slope,
+    // so it is refused rather than multiplied, and the conversion it names renders it.
+    let old = recipe(2, "1.1111112", "[1, 1, 1]");
+    let (code, _, err) = convert_48bit(&tmp.path("c.tiff"), &["--params", old.to_str().unwrap()]);
+    assert_eq!(code, 2, "{err}");
     assert!(
-        err.contains("the recipe's `look.contrast` 1.1111112 overrides"),
+        err.contains("`look.contrast` 1.1111112 in a `recipe_version` 2 recipe is the slope")
+            && err.contains("from `roll.white_stops` 1.7"),
         "{err}"
+    );
+    let k = err
+        .split("state `look.contrast` ")
+        .nth(1)
+        .and_then(|s| s.split(' ').next())
+        .unwrap();
+    let converted = recipe(3, k, "[1, 1, 1]");
+    let (code, stdout, err) = convert_48bit(
+        &tmp.path("c2.tiff"),
+        &["--params", converted.to_str().unwrap(), "--strict"],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        (slope(&json(&stdout)) - 1.111_111_2).abs() < 1e-6,
+        "{stdout}"
     );
 
     // Old gains still in `scene_correction.white_balance`: they multiply the roll's.
-    let squared = recipe("null", "[1.25, 1.0, 0.8]");
+    let squared = recipe(3, "null", "[1.25, 1.0, 0.8]");
     let (code, _, err) = convert_48bit(
         &tmp.path("e.tiff"),
         &["--params", squared.to_str().unwrap(), "--strict"],
@@ -9232,18 +9239,15 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
         "{err}"
     );
 
-    // The control: the migrated recipe — contrast `null`, gains dropped — is quiet.
-    let migrated = recipe("null", "[1, 1, 1]");
+    // The control: the migrated recipe — gains dropped — is quiet.
+    let migrated = recipe(3, "null", "[1, 1, 1]");
     let (code, stdout, err) = convert_48bit(
         &tmp.path("f.tiff"),
         &["--params", migrated.to_str().unwrap(), "--strict"],
     );
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
-    assert_eq!(
-        report["chain"]["roll"]["contrast_applied"], true,
-        "{report}"
-    );
+    assert_eq!(report["chain"]["roll"]["slope_applied"], true, "{report}");
 
     // `roll`: a shared-recipe fact, so it warns once for the roll, never per frame.
     let second = tmp.path("second.tif");
@@ -9255,25 +9259,25 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
         "--out-dir",
         tmp.path("roll").to_str().unwrap(),
         "--params",
-        old.to_str().unwrap(),
+        squared.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
-    assert_eq!(overlap(&report["warnings"], "look.contrast"), 1, "{report}");
+    let key = "scene_correction.white_balance";
+    assert_eq!(overlap(&report["warnings"], key), 1, "{report}");
     let frames = report["frames"].as_array().unwrap();
     assert_eq!(frames.len(), 2, "{report}");
     for frame in frames {
         assert_eq!(frame["status"], "ok", "{frame}");
-        assert_eq!(overlap(&frame["warnings"], "look.contrast"), 0, "{frame}");
+        assert_eq!(overlap(&frame["warnings"], key), 0, "{frame}");
     }
 }
 
 #[test]
 fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
     // A file cannot say who chose a value, so `direct` warns only for what an earlier
-    // build wrote unchosen (desaturation 0.8, a contrast or white balance beside a roll
-    // section): a dump of a deliberate adjustment must replay under `--strict`, to the
-    // same bytes. `hdr-48bit.tif` is the IR-free fixture, so an exit 1 is a warning.
+    // build wrote unchosen (desaturation 0.8, a white balance beside a roll section): a
+    // dump of a deliberate adjustment must replay under `--strict`, to the same bytes. `hdr-48bit.tif` is the IR-free fixture, so an exit 1 is a warning.
     let tmp = TempDir::new("direct-dump-replay");
     let dumped = tmp.path("d.json");
     let (code, _, err) = convert_48bit(
@@ -9301,7 +9305,7 @@ fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
     // The old serialized default still warns, and `--strict` refuses it.
     let old = write_file(
         &tmp.path("old.json"),
-        r#"{"recipe_version": 2, "rendering": "direct",
+        r#"{"recipe_version": 3, "rendering": "direct",
             "look": {"highlight_desaturation": {"strength": 0.8}}}"#,
     );
     let (code, _, err) = convert_48bit(
@@ -9314,17 +9318,16 @@ fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
         "{err}"
     );
 
-    // The carve-out: beside a recipe's `roll` section, a white balance or contrast typed
-    // now is dumped into the recipe, and a file cannot say who chose it — so the replay
-    // warns (as `default`'s overlap rule does). Typed again on replay, it is quiet.
+    // The carve-out: beside a recipe's `roll` section, a white balance typed now is
+    // dumped into the recipe, and a file cannot say who chose it — so the replay warns
+    // (as `default`'s overlap rule does). Typed again on replay, it is quiet. A contrast
+    // is spared: no earlier build wrote the multiplier.
     let roll = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version": 2, "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
+        r#"{"recipe_version": 3, "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
     );
-    for flag in [
-        &["--white-balance", "1.05,1,1"][..],
-        &["--contrast", "1.3"][..],
-    ] {
+    {
+        let flag = &["--white-balance", "1.05,1,1"][..];
         let dump = tmp.path("roll-dump.json");
         let (code, _, err) = convert_48bit(
             &tmp.path("r1.tiff"),
@@ -9359,6 +9362,30 @@ fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
         );
         assert_eq!(code, 0, "{flag:?}: typed on replay, it is quiet: {err}");
     }
+    let dump = tmp.path("contrast-dump.json");
+    let (code, _, err) = convert_48bit(
+        &tmp.path("k1.tiff"),
+        &[
+            "--params",
+            roll.to_str().unwrap(),
+            "--rendering",
+            "direct",
+            "--contrast",
+            "1.3",
+            "--dump-params",
+            dump.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = convert_48bit(
+        &tmp.path("k2.tiff"),
+        &["--params", dump.to_str().unwrap(), "--strict"],
+    );
+    assert_eq!(code, 0, "a dumped contrast replays quiet: {err}");
+    assert_eq!(
+        std::fs::read(tmp.path("k1.tiff")).unwrap(),
+        std::fs::read(tmp.path("k2.tiff")).unwrap()
+    );
 }
 
 #[test]
@@ -9369,7 +9396,7 @@ fn the_roll_flags_are_refused_under_the_direct_rendering() {
     let tmp = TempDir::new("roll-flag-direct");
     let direct = write_file(
         &tmp.path("direct.json"),
-        r#"{"recipe_version": 2, "rendering": "direct",
+        r#"{"recipe_version": 3, "rendering": "direct",
             "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
     );
     let params = ["--params", direct.to_str().unwrap()];
@@ -9406,7 +9433,7 @@ fn the_roll_flags_are_refused_under_the_direct_rendering() {
         .concat(),
     );
     assert_eq!(code, 0, "{err}");
-    assert_eq!(json(&stdout)["chain"]["roll"]["contrast_applied"], true);
+    assert_eq!(json(&stdout)["chain"]["roll"]["slope_applied"], true);
     // The recipe's own section alone is spared.
     let (code, _, err) = convert_48bit(&tmp.path("spared.tiff"), &params);
     assert_eq!(code, 0, "{err}");
@@ -9414,7 +9441,7 @@ fn the_roll_flags_are_refused_under_the_direct_rendering() {
     // clears `direct` too.
     let both = write_file(
         &tmp.path("both.json"),
-        r#"{"recipe_version": 2, "rendering": "direct", "output": "film-master"}"#,
+        r#"{"recipe_version": 3, "rendering": "direct", "output": "film-master"}"#,
     );
     let (code, _, err) = convert_48bit(
         &tmp.path("both.tiff"),
@@ -9461,7 +9488,7 @@ fn the_roll_flags_are_refused_under_the_film_master() {
     let tmp = TempDir::new("roll-flag-film-master");
     let master = write_file(
         &tmp.path("master.json"),
-        r#"{"recipe_version": 2, "output": "film-master",
+        r#"{"recipe_version": 3, "output": "film-master",
             "roll": {"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}}"#,
     );
     for flag in [
@@ -9680,10 +9707,10 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(white["from"], dim.to_str().unwrap());
     assert_eq!(report["frames"][0]["white_role"], "sets_roll");
     assert_eq!(report["frames"][1]["white_role"], "clamped");
-    let roll_contrast = white["contrast"].as_f64().unwrap();
+    let roll_slope = white["slope"].as_f64().unwrap();
     let clamped = &white["clamped"][0];
     assert_eq!(clamped["input"], bright.to_str().unwrap());
-    let cap_contrast = clamped["contrast"].as_f64().unwrap();
+    let cap_slope = clamped["slope"].as_f64().unwrap();
     assert!(
         clamped["flag"].as_str().unwrap().ends_with(&format!(
             "--roll-white {}",
@@ -9692,7 +9719,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         "a clamped frame's own flag carries the cap as its white: {report}"
     );
     assert!(
-        (cap_contrast * 1.8 - 2.23).abs() < 0.01 && roll_contrast > cap_contrast,
+        (cap_slope * 1.8 - 2.23).abs() < 0.01 && roll_slope > cap_slope,
         "{report}"
     );
     assert!(
@@ -9779,16 +9806,12 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
             .unwrap()
             .iter()
             .find(|f| f["input"] == path.to_str().unwrap())
-            .map(|f| f["chain"]["look"]["contrast"].clone())
+            .map(|f| f["chain"]["look"]["slope"].clone())
     };
-    assert_eq!(
-        rendered(&dim).as_ref(),
-        Some(&white["contrast"]),
-        "{rolled}"
-    );
+    assert_eq!(rendered(&dim).as_ref(), Some(&white["slope"]), "{rolled}");
     assert_eq!(
         rendered(&bright).as_ref(),
-        Some(&clamped["contrast"]),
+        Some(&clamped["slope"]),
         "{rolled}"
     );
 
@@ -9865,8 +9888,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(code, 0, "{err}");
     let beaten = json(&stdout);
     assert_eq!(
-        beaten["frames"][0]["chain"]["look"]["contrast"],
-        white["contrast"]
+        beaten["frames"][0]["chain"]["look"]["slope"],
+        white["slope"]
     );
     // A clamp is how a manifest states a frame's own white, not a roll-wide break.
     assert!(
@@ -9909,7 +9932,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(code, 0, "{err}");
     let capped = json(&stdout);
     assert_eq!(capped["white"]["bound"], "cap", "{capped}");
-    assert_eq!(capped["white"]["contrast"], clamped["contrast"], "{capped}");
+    assert_eq!(capped["white"]["slope"], clamped["slope"], "{capped}");
     assert_eq!(capped["frames"][0]["white_role"], "clamped", "{capped}");
     let written: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&capped_recipe).unwrap()).unwrap();
@@ -9930,7 +9953,7 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
     // Synthetic scans state their input; the base is what is being measured.
     let input = write_file(
         &tmp.path("input.json"),
-        r#"{ "recipe_version": 2,
+        r#"{ "recipe_version": 3,
              "input": { "transfer": "linear", "meaning": "scanner-device" } }"#,
     );
     let (blank, dim, bright, leader) = (
@@ -10022,7 +10045,7 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
     let shared = write_file(
         &tmp.path("shared.json"),
         &serde_json::json!({
-            "recipe_version": 2,
+            "recipe_version": 3,
             "input": { "transfer": "linear", "meaning": "scanner-device" },
             "calibration": {"film_base": {"explicit": [explicit["r"], explicit["g"], explicit["b"]]}},
             "roll": {
@@ -10075,7 +10098,7 @@ fn measure_roll_refuses_a_second_statement_of_the_base_and_misplaced_frames() {
     let blank = blank.display().to_string();
     let stated = write_file(
         &tmp.path("stated.json"),
-        r#"{"recipe_version": 2, "calibration": {"film_base": {"region": [0, 0, 8, 8]}}}"#,
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"region": [0, 0, 8, 8]}}}"#,
     );
     let copy = tmp.path("sub");
     std::fs::create_dir_all(&copy).unwrap();
@@ -10171,7 +10194,7 @@ fn measure_roll_out_diagnoses_the_specific_fault_and_writes_a_file_roll_accepts(
     // recipe, which `roll` would then refuse.
     let recipe = write_file(
         &tmp.path("in.json"),
-        r#"{ "recipe_version": 2,
+        r#"{ "recipe_version": 3,
              "input": { "transfer": "linear", "meaning": "scanner-device",
                         "export_ir": "ir.tif" },
              "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
@@ -10205,7 +10228,7 @@ fn convert_diagnoses_a_flag_its_branch_cannot_apply_before_a_bad_roll_table() {
     let tmp = TempDir::new("roll-frames-order");
     let recipe = write_file(
         &tmp.path("r.json"),
-        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "roll": {"frames": {"other.tif": {"white_stops": -1.0}}}}"#,
     );
     let (code, _, err) = run(&[
@@ -10229,7 +10252,7 @@ fn convert_diagnoses_a_flag_its_branch_cannot_apply_before_a_bad_roll_table() {
     // A bad decode is named as itself, not as another frame's entry.
     let sound = write_file(
         &tmp.path("sound.json"),
-        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "roll": {"frames": {"other.tif": {"white_stops": 2.0}}}}"#,
     );
     let (code, _, err) = run(&[
@@ -10255,7 +10278,7 @@ fn a_flag_over_a_frames_own_white_replays_from_dump_params() {
     let frame = fixture("hdr-48bit.tif");
     let recipe = write_file(
         &tmp.path("r.json"),
-        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "roll": {"white_stops": 1.6,
                      "frames": {"hdr-48bit.tif": {"white_stops": 2.0}, "other.tif": {"white_stops": 2.0}}}}"#,
     );
@@ -10341,7 +10364,7 @@ fn a_roll_frames_table_is_validated_by_key_and_value() {
         let recipe = write_file(
             &tmp.path("r.json"),
             &format!(
-                r#"{{"recipe_version": 2, "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
+                r#"{{"recipe_version": 3, "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
                     "roll": {{"white_stops": 1.6, "frames": {table}}}}}"#
             ),
         );
@@ -10408,7 +10431,7 @@ fn measure_roll_reads_a_roll_recipe_whatever_rendering_it_states() {
     let tmp = TempDir::new("measure-roll-direct-master");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version": 2, "rendering": "direct", "output": "film-master",
+        r#"{"recipe_version": 3, "rendering": "direct", "output": "film-master",
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
     );
     let (code, stdout, err) = run(&[
@@ -10493,7 +10516,7 @@ fn measure_roll_refuses_what_it_cannot_measure_under() {
         let recipe = write_file(
             &tmp.path(name),
             &format!(
-                r#"{{ "recipe_version": 2,
+                r#"{{ "recipe_version": 3,
                      "calibration": {{ "film_base": {{ "explicit": [0.9, 0.55, 0.42] }} }},
                      {section} }}"#
             ),
@@ -10506,7 +10529,7 @@ fn measure_roll_refuses_what_it_cannot_measure_under() {
     // here too: drop it, then state the gains this command reports.
     let retired = write_file(
         &tmp.path("retired.json"),
-        r#"{ "recipe_version": 2, "scene_correction": { "white_balance": "percentile" } }"#,
+        r#"{ "recipe_version": 3, "scene_correction": { "white_balance": "percentile" } }"#,
     );
     let (code, _, err) = run(&[
         "measure-roll",
@@ -10632,7 +10655,7 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
     // The recipe key is the same knob, and a dump writes it back.
     let recipe = write_file(
         &tmp.path("look.json"),
-        r#"{ "recipe_version": 2,
+        r#"{ "recipe_version": 3,
              "look": { "highlight_desaturation": { "strength": 1 } } }"#,
     );
     let dump = tmp.path("dump.json");
@@ -10684,9 +10707,17 @@ fn highlight_desaturation_reaches_the_pixels_by_flag_and_by_recipe() {
     assert_ne!(narrow, on, "the band must change which pixels are pulled");
 }
 
-/// The look's print contrast (`nf-reconstruction/gamma-split`): reachable by flag and
-/// by recipe, one knob, the flag winning; `1` is the identity, reported as such; and
-/// the decode it split from is untouched by it.
+/// The roll white whose slope is exactly 1 (`log2(1/0.18)`, the binary's own value
+/// printed so it parses back to the same `f32`): the look's contrast is then the
+/// identity, for a test that wants the look to do nothing else.
+fn scene_contrast_white() -> String {
+    (1.0f32 / 0.18).log2().to_string()
+}
+
+/// The look's contrast (`nf-look/contrast-definition`): a multiplier on the base slope,
+/// reachable by flag and by recipe, one knob, the flag winning; `1` keeps the base; the
+/// report states the knob, the base and where it came from, and the slope; and the
+/// decode is untouched by it.
 #[test]
 fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
     let tmp = TempDir::new("look-contrast");
@@ -10710,29 +10741,58 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
         (std::fs::read(&out).unwrap(), json(&stdout))
     };
     let applied = |r: &serde_json::Value| r["chain"]["stages"][1]["applied"].clone();
+    let look = |r: &serde_json::Value| {
+        let l = &r["chain"]["look"];
+        (
+            l["contrast"].as_f64().unwrap(),
+            l["base_slope"].as_f64().unwrap(),
+            l["base_from"].as_str().unwrap().to_owned(),
+            l["slope"].as_f64().unwrap(),
+        )
+    };
+    let fallback = 2.0 / 1.8;
 
     let (default, report) = convert("default.tiff", &[]);
     assert_eq!(applied(&report), "contrast", "{report}");
-    let reported = report["chain"]["look"]["contrast"].as_f64().unwrap();
+    let (k, base, from, slope) = look(&report);
+    assert!(
+        k == 1.0 && (base - fallback).abs() < 1e-6 && from == "fallback",
+        "{report}"
+    );
+    assert_eq!(slope, base, "{report}");
     let default_decode = report["chain"]["decode"].clone();
-    assert!((reported - 2.0 / 1.8).abs() < 1e-6, "{report}");
 
-    let (unity, report) = convert("unity.tiff", &["--contrast", "1"]);
-    assert_eq!(applied(&report), "identity", "{report}");
-    assert_ne!(unity, default, "the default contrast must move the pixels");
+    // 1 keeps the base: the same bytes as leaving it unstated.
+    let (kept, _) = convert("kept.tiff", &["--contrast", "1"]);
+    assert_eq!(kept, default, "--contrast 1 keeps the base");
 
     let (steep, report) = convert("steep.tiff", &["--contrast", "1.5"]);
     assert_ne!(steep, default);
-    // The decode block is the same at every look contrast.
+    let (k, base, _, slope) = look(&report);
+    assert_eq!(k, 1.5, "{report}");
+    assert!((slope - base * 1.5).abs() < 1e-6, "{report}");
+    // The decode block is the same at every contrast.
     assert_eq!(
         report["chain"]["decode"], default_decode,
         "the look contrast reached the decode"
     );
 
+    // On a roll white it builds on the roll's slope, not the fallback.
+    let (_, report) = convert("roll.tiff", &["--roll-white", "2", "--contrast", "1.2"]);
+    let (_, base, from, slope) = look(&report);
+    assert_eq!(from, "roll", "{report}");
+    assert_eq!(base, report["chain"]["roll"]["slope"].as_f64().unwrap());
+    assert!((slope - base * 1.2).abs() < 1e-6, "{report}");
+    // A slope of exactly 1 is the identity, reported as such.
+    let white = scene_contrast_white();
+    let (unity, report) = convert("unity.tiff", &["--roll-white", &white]);
+    assert_eq!(applied(&report), "identity", "{report}");
+    assert_ne!(unity, default);
+
     // The recipe key is the same knob, and a flag wins over it.
     let recipe = write_file(
         &tmp.path("look.json"),
-        r#"{ "recipe_version": 2, "look": { "contrast": 1.5 } }"#,
+        r#"{ "recipe_version": 3, "look": { "contrast": 1.5 } }"#,
     );
     let (from_recipe, _) = convert("recipe.tiff", &["--params", recipe.to_str().unwrap()]);
     assert_eq!(
@@ -10743,7 +10803,10 @@ fn the_look_contrast_reaches_the_pixels_by_flag_and_by_recipe() {
         "reset.tiff",
         &["--params", recipe.to_str().unwrap(), "--contrast", "1"],
     );
-    assert_eq!(reset, unity, "the flag's 1 must win over the recipe's 1.5");
+    assert_eq!(
+        reset, default,
+        "the flag's 1 must win over the recipe's 1.5"
+    );
 }
 
 #[test]
@@ -10788,6 +10851,7 @@ fn the_look_contrast_refuses_a_value_it_cannot_apply() {
 fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
     let tmp = TempDir::new("look-channel-grade");
     let input = fixture("hdr-48bit.tif").display().to_string();
+    let white = scene_contrast_white();
     let convert = |name: &str, extra: &[&str]| {
         let out = tmp.path(name);
         let mut argv = vec![
@@ -10798,8 +10862,8 @@ fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
             "--film-base",
             "0.9,0.55,0.42",
             // Contrast and desaturation off, so `applied` reads the grade alone.
-            "--contrast",
-            "1",
+            "--roll-white",
+            &white,
             "--highlight-desaturation",
             "0",
         ];
@@ -10824,7 +10888,7 @@ fn the_channel_grade_reaches_the_pixels_by_flag_and_by_recipe() {
 
     let recipe = write_file(
         &tmp.path("look.json"),
-        r#"{ "recipe_version": 2, "look": { "channel_grade": [1.2, 0.85] } }"#,
+        r#"{ "recipe_version": 3, "look": { "channel_grade": [1.2, 0.85] } }"#,
     );
     let (from_recipe, _) = convert("recipe.tiff", &["--params", recipe.to_str().unwrap()]);
     assert_eq!(
@@ -11011,7 +11075,7 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
     let tmp = TempDir::new("direct");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version": 2,
+        r#"{"recipe_version": 3,
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#,
     );
@@ -11049,7 +11113,7 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
         32
     );
     assert_eq!(nf["roll"]["white_balance_applied"], false, "{nf}");
-    assert_eq!(nf["roll"]["contrast_applied"], false, "{nf}");
+    assert_eq!(nf["roll"]["slope_applied"], false, "{nf}");
     assert_eq!(
         nf["scene_correction"]["white_balance"],
         serde_json::json!([1.0, 1.0, 1.0]),
@@ -11332,7 +11396,7 @@ fn the_film_master_refuses_every_stage_it_does_not_run() {
     }
     let recipe = write_file(
         &tmp.path("stages.json"),
-        r#"{"recipe_version": 2, "scene_correction": {"exposure": 1.5},
+        r#"{"recipe_version": 3, "scene_correction": {"exposure": 1.5},
             "fit_range": {"headroom_stops": 4, "display_black": 5}}"#,
     );
     let r = recipe.to_str().unwrap();
@@ -11445,7 +11509,7 @@ fn a_suffix_refusal_offers_only_a_destination_that_writes_it() {
     // offer restates it — and the printed remedy, followed as written, converts.
     let recipe = write_file(
         &tmp.path("adobe.json"),
-        r#"{"recipe_version": 2, "output": {"display": {"gamut": "adobe-rgb"}}}"#,
+        r#"{"recipe_version": 3, "output": {"display": {"gamut": "adobe-rgb"}}}"#,
     );
     let with_recipe = ["--params", recipe.to_str().unwrap()];
     let (code, _, err) = convert_48bit(&tmp.path("r.avif"), &with_recipe);
@@ -11479,7 +11543,7 @@ fn a_suffix_refusal_offers_only_a_destination_that_writes_it() {
     // conversion flags.
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}}"#,
     );
     let frames = write_file(
         &tmp.path("frames.json"),
@@ -11511,7 +11575,7 @@ fn a_recipe_film_master_suffix_refusal_names_no_flag_the_user_did_not_type() {
     let tmp = TempDir::new("recipe-master-suffix");
     let recipe = write_file(
         &tmp.path("master.json"),
-        r#"{"recipe_version": 2, "output": "film-master"}"#,
+        r#"{"recipe_version": 3, "output": "film-master"}"#,
     );
     let with_recipe = ["--params", recipe.to_str().unwrap()];
     let (code, _, err) = convert_48bit(&tmp.path("m.avif"), &with_recipe);
@@ -11549,7 +11613,7 @@ fn a_roll_frame_axis_joins_the_shared_recipes_axes() {
     let tmp = TempDir::new("roll-axis-merge");
     let recipe = write_file(
         &tmp.path("roll.json"),
-        r#"{"recipe_version": 2,
+        r#"{"recipe_version": 3,
             "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "output": {"display": {"transfer": "pq"}}}"#,
     );
@@ -11597,16 +11661,14 @@ fn a_roll_names_each_frame_from_its_destination() {
     // The shared recipe's `output` picks the container, so derived names follow it; a
     // per-frame override that changes the destination changes that frame's name.
     let tmp = TempDir::new("roll-destination");
-    // A roll measurement is stated (neutral gains, the default contrast), so the
-    // `--strict` runs below see only the destination warning, not the `default`
-    // rendering's fallback.
+    // A roll measurement is stated (neutral gains and a white), so the `--strict` runs
+    // below see only the destination warning, not the `default` rendering's fallback.
     let recipe = write_file(
         &tmp.path("roll.json"),
         r#"{
-  "recipe_version": 2,
+  "recipe_version": 3,
   "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
-  "roll": { "white_balance": [1.0, 1.0, 1.0] },
-  "look": { "contrast": 1.1111112 },
+  "roll": { "white_balance": [1.0, 1.0, 1.0], "white_stops": 2.0 },
   "output": { "display": { "transfer": "pq", "container": "avif" } }
 }"#,
     );
@@ -11689,7 +11751,7 @@ fn a_roll_names_each_frame_from_its_destination() {
     // The roll's recipe names flag and key: the fault can come from either.
     let bad = write_file(
         &tmp.path("bad.json"),
-        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
             "output": {"display": {"gamut": "bt2020"}}}"#,
     );
     let (code, _, err) = run(&[
@@ -12182,7 +12244,7 @@ fn a_frames_null_is_refused() {
     let tmp = TempDir::new("roll-frame-null");
     let shared = write_file(
         &tmp.path("shared.json"),
-        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
+        r#"{"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
             "look": {"contrast": 1.3}}"#,
     );
     let manifest = one_frame_manifest(

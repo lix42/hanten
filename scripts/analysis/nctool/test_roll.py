@@ -103,7 +103,7 @@ class TestRecipe(unittest.TestCase):
             recipe, error = roll._freeze_recipe({"output": {"preset": "display-p3"}},
                                                 [.1, .2, .3], None, output, exposure)
             self.assertIsNone(recipe)
-            self.assertIn("recipe_version 2", error)
+            self.assertIn("recipe_version 2 and later", error)
         recipe, error = roll._freeze_recipe({"output": {"preset": "display-p3"}},
                                             [.1, .2, .3], None)
         self.assertIsNone(error)
@@ -166,13 +166,14 @@ class TestConvert(unittest.TestCase):
         values.update(updates)
         return argparse.Namespace(**values)
 
-    #: `hanten params` from a build that takes destinations (`recipe_version` 2).
+    #: `hanten params` from a build that takes destinations (`recipe_version` 3).
     DEFAULTS = {
-        "recipe_version": 2,
+        "recipe_version": 3,
         "calibration": {"film_base": None},
         "reconstruction": {"scale": [1.0, 0.84, 0.73], "linearization": 1.8,
                            "anchor": {"mid-at-base-offset": .62}},
         "scene_correction": {"exposure": 0.0},
+        "look": {"contrast": 1.0, "channel_grade": [1.0, 1.0]},
         "output": {"display": {}},
     }
 
@@ -263,7 +264,7 @@ class TestConvert(unittest.TestCase):
                                               container="jpeg", exposure=.5))
         self.assertEqual(code, 0, err.getvalue())
         recipe = json.loads((self.root / "converted/nc/hdr/R/recipe.json").read_text())
-        self.assertEqual(recipe["recipe_version"], 2)
+        self.assertEqual(recipe["recipe_version"], 3)
         self.assertEqual(recipe["output"], {"display": {"range": "hdr",
                                                         "container": "jpeg"}})
         self.assertEqual(recipe["scene_correction"]["exposure"], .5)
@@ -276,8 +277,27 @@ class TestConvert(unittest.TestCase):
              contextlib.redirect_stderr(io.StringIO()) as err:
             code = roll.cmd_convert(self.args(film_master=True))
         self.assertEqual(code, 2)
-        self.assertIn("recipe_version 2", err.getvalue())
+        self.assertIn("recipe_version 2 and later", err.getvalue())
         self.assertEqual(run.call_count, 1)  # `params` only
+
+    def test_a_version_2_partial_recipe_takes_the_builds_version(self):
+        # `hanten params` writes `look.contrast` 1.0, a version 3 multiplier; merged under
+        # a stated version 2 it would read as an old slope and be refused.
+        for i, (partial, version) in enumerate((
+                ({"recipe_version": 2}, 3),
+                ({"recipe_version": 2, "look": {"contrast": None}}, 3),
+                ({"recipe_version": 2, "look": {"contrast": 1.3}}, 2))):
+            recipe_path = self.root / "partial.json"
+            recipe_path.write_text(json.dumps(partial))
+            with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
+                 contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()) as err:
+                code = roll.cmd_convert(self.args(config=f"v2-{i}", recipe=str(recipe_path)))
+            self.assertEqual(code, 0, err.getvalue())
+            recipe = json.loads(
+                (self.root / f"converted/nc/v2-{i}/R/recipe.json").read_text())
+            # A stated number keeps version 2, which `hanten` then refuses by name.
+            self.assertEqual(recipe["recipe_version"], version, partial)
 
     def test_the_retired_density_tag_does_not_replace_the_default_reconstruction(self):
         self.defaults = self.PRESET_DEFAULTS

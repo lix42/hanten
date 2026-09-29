@@ -125,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     rconvert.add_argument("--film-type", choices=("unknown", "silver", "chromogenic"),
                           help="record film chemistry in the estimate reports and "
                                "the frozen recipe (provenance; it gates nothing)")
-    # The destination flags and --exposure write recipe_version 2 keys; against a
+    # The destination flags and --exposure write keys of recipe_version 2 and later; against a
     # build that takes output presets (the reference build) they are refused, and
     # the partial --recipe states that build's own keys instead.
     rconvert.add_argument("--film-master", action="store_true",

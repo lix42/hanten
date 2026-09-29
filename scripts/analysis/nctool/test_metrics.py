@@ -1123,6 +1123,9 @@ class SpaceFromRecipe(unittest.TestCase):
             self.assertEqual(space, expected, axes)
         space, _ = metrics.space_for_recipe({"recipe_version": 2, "output": "film-master"})
         self.assertEqual(space, "linear-acescg")
+        # Every later version is a destination recipe too.
+        space, _ = metrics.space_for_recipe({"recipe_version": 3, "output": "film-master"})
+        self.assertEqual(space, "linear-acescg")
         for axes, expected in (({"range": "hdr", "transfer": "pq", "gamut": "bt2020"},
                                 "reference-white"),
                                ({"range": "hdr", "transfer": "pq", "gamut": "bt2020",

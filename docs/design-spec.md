@@ -752,7 +752,7 @@ the placement rule, and one rule ships:
 `0.745 = −log10(0.18)` is mid-grey's fixed distance below white on the *output* axis.
 At the defaults (contrast 2.0) `A ≈ 0.99`; the new chain's decode runs at its
 linearization alone (1.8, `A ≈ 1.03`) and leaves the rest of the contrast to the look
-(§9, `reconstruction.linearization` and `look.contrast`). The rule is **reference-free**: it reads only
+(§9, `reconstruction.linearization` and the look's slope). The rule is **reference-free**: it reads only
 the film base, which step 1 divides out, so the base *is* `D′ = 0` by construction
 (modulo `density.offset`). No leader or reference density
 enters the render, so a leader's roll-to-roll error cannot reach it, and nothing is
@@ -761,8 +761,8 @@ content. The other three placements — `white-at-dmax` and `mid-at-dmax-fractio
 read a roll reference density, and `black-at-base`, which pinned the base to an output
 floor — retired with that reference in `nf-retire/dmax-machinery`; a recipe naming one is refused naming `mid-at-base-offset`.
 `AnchorPlacement` stays a tagged enum, the form a content-referenced placement would
-need. `nf-calibration/anchor-comparison` placed the roll's white through `look.contrast`
-instead, leaving the anchor base-referenced, so no such placement is planned.
+need. `nf-calibration/anchor-comparison` placed the roll's white through the look's
+slope (`roll.white_stops`) instead, leaving the anchor base-referenced, so no such placement is planned.
 
 A recipe curve without `gamma` or `anchor` warns that it will pick up this build's
 (moved) defaults: this build always writes both keys, so their absence marks a file
@@ -915,8 +915,8 @@ no interactive prompts.
 | `hanten convert` | The main pipeline: negative file → positive image in the resolved preset's container (a gain-map JPEG by default; a TIFF or AVIF under the presets that say so). |
 | `hanten roll` | Convert a batch of frames from one shared, frozen recipe (the batch-**apply** scaffold). Per-frame outputs into `--out-dir` + a roll-level JSON report. Single-frame `convert` is unchanged; roll is additive. |
 | `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `measure-base`'s job. No output image. |
-| `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 2, "calibration": {…}}` for `--params`. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
-| `hanten measure-roll` | Measure a roll's white balance and white once, for its new-chain recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. Each frame's white is the p97 of its pixels' brightest film-RGB channel, in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's contrast with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. Reported as a reuse-ready `--roll-white-balance … --roll-white …` flag; `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white, and the input and decode sections it measured under when stated — that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, and warns on a frame whose white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
+| `hanten measure-base` | Measure the film base (`Dmin`) alone; emit JSON with a reuse-ready `--film-base` flag, and with `--out` write `{"recipe_version": 3, "calibration": {…}}` for `--params`. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). Was `estimate`, which now exits 2 naming it. |
+| `hanten measure-roll` | Measure a roll's white balance and white once, for its new-chain recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. Each frame's white is the p97 of its pixels' brightest film-RGB channel, in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's slope with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. Reported as a reuse-ready `--roll-white-balance … --roll-white …` flag; `--out` writes the whole measurement as one recipe — `calibration`, the `roll` section (`nf-calibration/roll-section`) with `roll.frames` giving each clamped frame, by file name, the cap as its white, and the input and decode sections it measured under when stated — that `roll --params` renders alone. `--unexposed` measures the film base first, exactly as `measure-base` does with no source flag, and is refused beside any other statement of the base (`core/measure-base`). `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, and warns on a frame whose white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
 | `hanten params`  | Print the full default/effective parameter set as JSON (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
 ### Recipes (JSON in/out)
@@ -1051,7 +1051,7 @@ top-level **document version** rather than per-object ones:
 
 ```json
 {
-  "recipe_version": 2,
+  "recipe_version": 3,
   "input": { "…": "as above" },
   "calibration": { "film_base": {"explicit": [0.163, 0.080, 0.0377]} },
   "roll": { "white_balance": [1.002, 1.0, 1.277], "white_stops": 1.5 },
@@ -1068,7 +1068,7 @@ top-level **document version** rather than per-object ones:
     "exposure": 0.0
   },
   "look": {
-    "contrast": null,
+    "contrast": 1.0,
     "channel_grade": [1.0, 1.0],
     "highlight_desaturation": {"strength": null, "start_stops": null, "band": null}
   },
@@ -1083,11 +1083,11 @@ top-level **document version** rather than per-object ones:
   decode reads no reference density. `reconstruction` is the fixed decode's
   parameters (`--density-scale`, `--density-offset`, `--density-gamma`,
   `--anchor-mid-offset`); its slope is `linearization`, the calibrated half of the
-  single `gamma` the current chain ships — print contrast is the look's
-  (`nf-reconstruction/gamma-split`). Only the products `linearization · scale_c` enter
-  the curve, pinned by the convention `scale_r = 1`. The pre-split
+  single `gamma` the removed chain shipped — how contrasty the picture is is the look's
+  slope (`nf-reconstruction/gamma-split`). Only the products `linearization · scale_c`
+  enter the curve, pinned by the convention `scale_r = 1`. The pre-split
   `reconstruction.contrast` is refused by name at every value, with the `look.contrast`
-  that would keep it as the whole contrast. `scene_correction` is white balance and
+  multiplier that would keep it as the whole slope. `scene_correction` is white balance and
   exposure and `fit_range` the operator's headroom and display black, and `look` contrast, the
   per-channel grade and highlight desaturation (all below).
   `fit_gamut` is empty and has no knob: it changes primaries into the destination's
@@ -1123,12 +1123,18 @@ top-level **document version** rather than per-object ones:
   described by ISO 21496-1 metadata only in an MPF container nc writes. The SDR JPEG
   is a planned row, refused as not yet. The current chain's `output.preset` (and the retired selectors) are
   refused by name under this document.
-- **The version is the chain declaration.** `recipe_version` is required and is
-  exactly `2`. Under `--new-flow` a recipe without it is refused; without the flag,
-  a recipe stating it is refused. The current chain's `print` section and `output` keys, its
-  `reconstruction`/`calibration` keys, and the keys both chains retired (top-level
-  `algorithm`/`density`/`film_base`, `input.color`, …) are refused in a v2 document by
-  name, each with where its knobs went — a migration error, no aliases.
+- **The version is the chain declaration.** `recipe_version` is required; a recipe
+  without it was written for the removed chain and is refused whole. This build writes
+  `3` and also reads `2`, which differs only in `look.contrast`: the slope itself in 2,
+  a multiplier in 3 (`nf-look/contrast-definition`). A version 2 recipe stating a number
+  there is refused with the multiplier that keeps it, computed against its own
+  rendering and roll white (bit for bit where one exists, else within one `f32` step,
+  and the message says which); its `null` reads as `1`. A per-frame override need not
+  state a version, except beside a `look.contrast` number. The removed chain's `print`
+  section and `output` keys, its `reconstruction`/`calibration` keys, and the keys
+  both chains retired (top-level `algorithm`/`density`/`film_base`, `input.color`, …)
+  are refused in a versioned document by name, each with where its knobs went — a
+  migration error, no aliases.
 - `hanten params --new-flow` writes the default document, and `--dump-params` under
   `--new-flow` writes the merged one (an unstated knob stays `null`, so the rendering
   decides it on replay too); either reloads under the flag unchanged.
@@ -1138,11 +1144,12 @@ top-level **document version** rather than per-object ones:
 - **`rendering`** (`nf-destinations/direct-preset`, `--rendering`, `crate::rendering`):
   `"default"` or `"direct"`, the base every stage knob starts from. A knob written
   `null` is unstated and takes its rendering's value; a stated one builds on it (the
-  white balance multiplies the base gains, every other knob replaces its base value).
+  white balance multiplies the base gains and `look.contrast` the base slope; every
+  other knob replaces its base value).
   `default` applies the `roll` section and leaves every other knob at its default,
   warning when it has no roll measurement to apply. `direct` leaves the `roll` section
-  out and starts from pinned values — white balance identity, `look.contrast`
-  `2.0 / 1.8`, highlight desaturation off, reinhard at 6 stops, display black at 6 — and
+  out and starts from pinned values — white balance identity, the slope `2.0 / 1.8`,
+  highlight desaturation off, reinhard at 6 stops, display black at 6 — and
   its unset destination axes default to HDR, `linear`, Adobe RGB, TIFF (so the float
   BT.2020 TIFF today, the Adobe RGB TIFF with `range` `sdr`); a stated axis is never
   overridden. `direct` with the film master is refused. A recipe value that moves
@@ -1153,20 +1160,22 @@ top-level **document version** rather than per-object ones:
   one. `white_balance` (`--roll-white-balance R,G,B`; finite and positive) is the
   roll's gains, multiplied into `scene_correction.white_balance`. `white_stops`
   (`--roll-white STOPS`; finite and positive) is the roll's white in scene stops above
-  mid-grey — the measurement, not a contrast: unless `look.contrast` is stated, the
-  look's contrast is `log2(1/0.18) / white_stops`, which renders it at diffuse white
-  with mid-grey pinned. Both optional; unset they are written as `null`, never left
+  mid-grey — the measurement, not a slope: the look's base slope is
+  `log2(1/0.18) / white_stops`, which renders it at diffuse white with mid-grey pinned,
+  and `look.contrast` multiplies it. Both optional; unset they are written as `null`, never left
   out, so a roll's one-key per-frame override merges instead of replacing the section.
   `frames` (no flag; `core/measure-base`) maps a **file name** to that frame's own
   `{"white_stops": …}` — the clamps `measure-roll --out` writes. `convert` and each
   `roll` frame apply their input's entry before any flag, and a `--frames` manifest's
   `params` beat it; a manifest may not state `roll.frames` itself.
-  The report's `chain.roll` states both, the contrast derived, and whether each was
-  applied (the film master applies neither). No value is read as unset by its value, or
+  The report's `chain.roll` states both, the `slope` derived, and whether each was
+  applied (`white_balance_applied`, `slope_applied`; the film master and `direct` apply
+  neither). No value is read as unset by its value, or
   a `--dump-params` recipe would not replay; instead a rendered run warns, once, where a
   value a recipe file stated — `scene_correction.white_balance` (not the identity)
-  beside `roll.white_balance`, or `look.contrast` beside `roll.white_stops` — may be an
-  earlier build's leftover, and names the migration (`Recipe::roll_overlap_warnings`).
+  beside `roll.white_balance` — may be an earlier build's leftover, and names the
+  migration (`Recipe::roll_overlap_warnings`). A contrast beside `roll.white_stops`
+  multiplies the roll's slope, as intended, and never warns.
   A typed flag is a choice made now and never warns.
 - **`scene_correction`** (`nf-scene-correction/stage`): per-channel gains on linear
   ACEScg, after the NC film RGB v1 3×3 and before the look. `white_balance` is
@@ -1185,15 +1194,19 @@ top-level **document version** rather than per-object ones:
   flare subtraction. At every control's identity the stage is a bit-exact identity and
   the report's `chain.stages` lists it as `"applied": "identity"`. Controls run in
   the order the section lists them.
-  `contrast` (`nf-reconstruction/gamma-split`, `--contrast`, new-flow only) — print
-  contrast pivoted at mid-grey, `out_c = 0.18 · (in_c / 0.18)^contrast` on each ACEScg
-  channel; non-positive and non-finite samples pass through. Finite and positive; `1`
-  is the identity. Unstated (`null`) it is the roll's (`roll.white_stops`), else
-  `2.0 / 1.8`, at which with the decode's linearization a
-  neutral renders where the single-slope decode rendered it (within a few f32 ULP);
-  saturated colour differs slightly, because the power acts after the NC film RGB v1
-  3×3 and the decode's slope before it. Scene correction runs first, so an exposure
-  of `e` stops leaves the look as `e · contrast` stops.
+  `contrast` (`nf-look/contrast-definition`, `--contrast`) — a multiplier on the base
+  slope, finite and positive, default `1`, which keeps the base. The look applies the
+  **slope**, `base × contrast`, pivoted at mid-grey:
+  `out_c = 0.18 · (in_c / 0.18)^slope` on each ACEScg channel; slope 1 reproduces the
+  scene's contrast, and non-positive and non-finite samples pass through. The base is
+  the applied roll's (`log2(1/0.18) / roll.white_stops`), else the fallback `2.0 / 1.8`
+  (`look::DEFAULT_SLOPE`, `nf-calibration/no-roll-defaults`), and `direct`'s pinned
+  `2.0 / 1.8`. At the fallback, with the decode's linearization, a neutral renders where
+  the single-slope decode rendered it (within a few f32 ULP); saturated colour differs
+  slightly, because the power acts after the NC film RGB v1 3×3 and the decode's slope
+  before it. Scene correction runs first, so an exposure of `e` stops leaves the look
+  as `e · slope` stops. The whole slope, `linearization · slope`, must be a normal
+  `f32`.
   `channel_grade` (`nf-look/per-channel-grade`, `--channel-grade R,B`, new-flow only)
   = `[r, b]` — red and blue exponents of a power pivoted at mid-grey,
   `p_c = 0.18 · (x_c / 0.18)^g_c` with `g = [r, 1, b]` (green fixed at 1: a common
@@ -1211,11 +1224,13 @@ top-level **document version** rather than per-object ones:
   `--highlight-desaturation-band`, new-flow only. Per pixel on scene-referred ACEScg:
   `rgb ← rgb + strength · b · w · (Y − rgb)`, where `b` is a smoothstep in stops from
   `start_stops` (default −1) up to diffuse white, held above it, and `w` a linear band
-  over `s = log10(max/min) / (reconstruction.linearization · look.contrast)` — the
-  negative's density spread, whichever stage carries the contrast — full pull at `s ≤ s0`, none at
+  over `s = log10(max/min) / (reconstruction.linearization · slope)` — the negative's
+  density spread, the same on a flat roll and a contrasty one — full pull at `s ≤ s0`, none at
   `s ≥ s1` (unset: `0.015, 0.025`). Luminance is kept. `strength` is in `[0, 1]`,
   unset `0.8` under `default` and `0` under `direct`; `0` is off, a bit-exact identity. It assumes a roll-level white
-  balance ahead of it. The report's `chain.look` echoes the section.
+  balance ahead of it. The report's `chain.look` states `contrast`, `base_slope`,
+  `base_from` (`roll`, `fallback` or `direct`) and the section as run, its `slope`
+  included.
 - **`fit_range`** (`nf-display-stages/fit-range`): fits the scene's range into the
   display's, with the display's **peak** as the operator's one per-destination
   argument — the destination states it, never the recipe (`1.0` for the SDR TIFF).
@@ -1578,7 +1593,7 @@ hanten measure-base reference.tiff --out roll-cal.json
 # → { "film_base": { "r": 0.553, "g": 0.271, "b": 0.159 },
 #     "film_base_source": "effective_area", "film_base_percentile": 0.5,
 #     "film_base_flag": "--film-base 0.553,0.271,0.159", … }
-# roll-cal.json: {"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.553, 0.271, 0.159]}}}
+# roll-cal.json: {"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.553, 0.271, 0.159]}}}
 hanten convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159
 # …or measure the roll's white balance over that base, into one recipe for `roll`
 # (`measure-roll --unexposed reference.tiff` runs this measurement itself):
@@ -1604,9 +1619,9 @@ hanten convert frame02.tiff -o frame02_pos.jpg --film-base 0.92,0.55,0.42 \
 hanten measure-roll frames/*.tif --unexposed blank.tif --leader leader.tif --out roll.json
 # → { "unexposed": { "film_base": …, "film_base_source": "effective_area", "film_base_percentile": 0.5, … },
 #     "white_balance": { "gains": [1.002, 1.0, 1.277], "percentile": 0.99, ... },
-#     "white": { "stops": 1.5, "bound": "floor", "contrast": 1.649, ... },
+#     "white": { "stops": 1.5, "bound": "floor", "slope": 1.649, ... },
 #     "reuse": { "flag": "--roll-white-balance 1.002,1,1.277 --roll-white 1.5" } }
-# roll.json: { "recipe_version": 2, "calibration": { "film_base": { "explicit": [...] } },
+# roll.json: { "recipe_version": 3, "calibration": { "film_base": { "explicit": [...] } },
 #   "roll": { "white_balance": [...], "white_stops": 1.5,
 #             "frames": { "f07.tif": { "white_stops": 2.0 } } } }   # a clamped frame
 hanten roll frames/*.tif --params roll.json -o out/
@@ -2432,7 +2447,7 @@ nc/
     ├── film_stock/       # test-only: the digitized per-stock curves, evidence for the decode's constants
     ├── flow.rs           # the transitional --new-flow selector (deleted by the flip)
     ├── destination.rs    # the new chain's destination set: four axes, one table
-    ├── recipe.rs         # the new chain's recipe (recipe_version 2), one section per stage
+    ├── recipe.rs         # the new chain's recipe (recipe_version 3), one section per stage
     ├── telemetry.rs      # opt-in JSONL perf/context record (never perturbs output)
     ├── version.rs        # build identity, pipeline_version, params hash
     └── types.rs          # LinearImage, FilmBase, Reconstruction, params, errors

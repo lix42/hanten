@@ -800,7 +800,7 @@ const LOOK_FILM: [f32; 12] = [
 fn look_params() -> LookParams {
     LookParams {
         section: LookSection {
-            contrast: 1.0,
+            slope: 1.0,
             channel_grade: look::IDENTITY_CHANNEL_GRADE,
             highlight_desaturation: HighlightDesaturation {
                 strength: 0.8,
@@ -944,7 +944,7 @@ const LOOK_CONTRAST_FILM: [f32; 12] = [
 /// The contrast alone, at its default, over the default linearization.
 fn look_contrast_params() -> LookParams {
     let mut params = LookParams::off();
-    params.section.contrast = look::DEFAULT_CONTRAST;
+    params.section.slope = look::DEFAULT_SLOPE;
     params
 }
 
@@ -968,7 +968,7 @@ fn golden_look_contrast_is_correct_within_its_libm_window() {
         .into_buffer()
         .into_linear()
         .rgb;
-    let k = params.section.contrast;
+    let k = params.section.slope;
     let mut widest = 0;
     for (i, (&x, &want)) in before.iter().zip(&LOOK_CONTRAST).enumerate() {
         let base = x / look::MID_GREY;

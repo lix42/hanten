@@ -105,6 +105,19 @@ percentile — never the base (it neutralises black) or the leader (1.5–3.5 st
 gains the wrong way). Under that white balance the operator's extra cleaning was not
 visible by eye; the band's value is keeping the pull off colour.
 
+**`contrast-definition` is done (2026-09-29): `look.contrast` is a multiplier.**
+`--contrast` multiplies the base slope — the applied roll white's
+(`roll_white::slope_for`), else `look::DEFAULT_SLOPE` (2.0/1.8), or `direct`'s pinned
+2.0/1.8 — default 1, so it builds on the roll's as `--white-balance` does. Only the knob
+is "contrast"; absolute values are **slopes** (`LookSection::slope`, reported as
+`chain.look.{contrast, base_slope, base_from, slope}`, `chain.roll.slope`/
+`slope_applied`, `measure-roll`'s `white.slope`); the whole slope is internal. Recipes
+are **`recipe_version` 3**; version 2 is read, except a `look.contrast` number (refused
+with its conversion), and a per-frame override stating one must state a version. The
+film master's look predicate is `recipe::LookKeys::asks_for_a_look`. For
+`no-roll-defaults`: moving `DEFAULT_SLOPE` moves every no-roll render, stated multiplier
+or not.
+
 **`look-presets` is done (2026-09-25): there are no look presets.** Nothing in the look
 is coupled the way the old bundles were, and a named look is a `--params` layer
 (`core/recipe-composition`), so `--preset` retired with the `characteristic` curve
@@ -836,10 +849,70 @@ preset row; do not reuse the name.
 
 ## contrast-definition
 
-**Status:** not started
-**Updated:** 2026-09-27
+**Status:** done
+**Updated:** 2026-09-29
 
 - 2026-09-27: filed while re-planning `nf-destinations/direct-preset`. Goal: restate what
   `look.contrast` means — three contrasts are in play (whole, rendering, linearization),
   and until it is restated an explicit `--contrast` replaces the rendering's base
   instead of building on the roll's.
+- 2026-09-28: **decided and built (user, on a plan): `look.contrast` is a multiplier on
+  the base slope.** Three options were weighed: the rendering value 1.11 as the knob
+  (a magic number to a user who does not know the 1.8), the whole value 2.0 (per unit of
+  negative density — not "stops from mid to white", and unreadable), and a multiplier
+  with default 1. The user's worry about the multiplier — a default that moves after
+  shipping — turned out small: a roll white is stored in the recipe and `direct` is
+  pinned, so only no-roll renders move, stated multiplier or not. Talking in the roll
+  white's stops was rejected: a higher white is a *flatter* picture, the opposite of
+  how "more stops" reads.
+  **Vocabulary:** only the knob is "contrast"; the absolute values are **slopes** —
+  `look::DEFAULT_SLOPE` (the fallback), `roll_white::slope_for`, `rendering::Base::slope`,
+  `LookSection::slope` (what the stage applies). The whole slope (× linearization) is
+  internal (`ResolvedSlope::whole` was not needed; the validator forms it). Report:
+  `chain.look` gains `contrast`, `base_slope`, `base_from` (`roll`/`fallback`/`direct`)
+  and its section's `slope`; `chain.roll` has `slope`/`slope_applied`; `measure-roll`'s
+  `white.slope`, `clamped[].slope`, and `whole_contrast` dropped.
+  **Migration: `recipe_version` 3**, since the key changed meaning in place. Version 2
+  is still read; a version 2 number in `look.contrast` is refused with the multiplier
+  that keeps it, computed against the recipe's own `rendering` and `roll.white_stops`
+  (`recipe::body_base_slope`), and version 2's `null` reads as 1. The v8 drift row's
+  `recipe` hash was refreshed in place: the default document changed, no default pixel
+  moved. The user intends to reset all versions before the first release.
+  **Consequences worth knowing:** the contrast halves of the overlap warnings are gone
+  (no earlier build wrote a multiplier, so a contrast beside a roll white is the
+  user's); the fallback warning's slope half is silenced like white balance's — a typed
+  `--contrast` or a recipe value off 1 — which many `--strict` tests and
+  `real-scan-verify/harness.sh` rely on (now `--contrast 1`); the film master's look
+  predicate moved to the knobs (`recipe::LookKeys::asks_for_a_look`: contrast off 1, a
+  grade, or desaturation neither off nor default), because slope 1 is no longer
+  reachable by `--contrast`. A test wanting an identity look states the roll white
+  `log2(1/0.18)`, whose slope is exactly 1 (`tests/pipeline.rs`, `scene_contrast_white`).
+  nctool reads any `recipe_version` ≥ 2 as a destination recipe
+  (`manifest.is_destination_recipe`), and the committed real-scan recipes are version 3.
+- 2026-09-29: **review round** (`/code-review high`, 10 findings; 9 applied, 1 declined).
+  Migration fixes: a per-frame override stating a `look.contrast` number must now state
+  its `recipe_version` (unversioned, it was silently read as a multiplier); the retired
+  `reconstruction.contrast` remedy tells a version 2 document to move to 3 too; a
+  version 2 recipe with `roll.frames` is told to drop the roll's whites and multiply
+  the fallback (a stated v2 slope overrode every frame's white, so one roll-relative
+  multiplier would move the clamped frames); a non-positive number gets the general
+  remedy. **An exact multiplier does not always exist:** `recipe::multiplier_for` picks
+  the neighbour of the quotient whose product lands closest, and on a base near 1.55
+  neighbouring products step over some slopes (1.8 among them), so the message says
+  "as before" only when it is bit-exact, else "within one f32 step". The committed
+  real-scan recipes and `harness.sh`'s writer went back to version 2 — they state no
+  contrast, so builds on either side read them. Declined: re-adding the v8 drift row
+  instead of refreshing its `recipe` hash — the row's own history sanctions the
+  in-place refresh for a document change with no pixel move.
+- 2026-09-29: **done.** Shipped after a second review (`ship:diff-reviewer` plus
+  Codex). Fixed from it: the retired `reconstruction.contrast` remedy in a per-frame
+  override now points at the frame's `chain.look.base_slope` and states the version;
+  `roll.frames` entries are validated at slope × `look.contrast`, not the slope alone
+  (an entry that fit alone could overflow once multiplied and reach the look stage as
+  an internal error); nctool's `roll convert` lets a version 2 partial recipe with no
+  contrast number take the build's version (`_adopt_the_builds_version`), since the
+  `hanten params` default `1.0` merged under a stated 2 would be refused as an old
+  slope. Verified: `cargo test` 611 + 211, nctool 420, clippy, doc; every changed
+  `docs/using-nc.md` claim re-run against the binary. Open for dependents:
+  `no-roll-defaults` chooses `DEFAULT_SLOPE`; a named "scene contrast" (slope exactly
+  1) has no spelling — `--contrast` reaches it only as the base's reciprocal.

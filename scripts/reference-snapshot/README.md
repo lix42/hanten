@@ -118,7 +118,7 @@ frame from step 3.
   (`git show origin/reserve:docs/using-nc.md`, §4 step 3 and §6) — the live guide
   dropped them when the reference density retired.
 - **A reference recipe only means something to the reference binary.** The current
-  binary refuses it because it has no `"recipe_version": 2`. Keep it beside the roll's output,
+  binary refuses it because it has no `"recipe_version"`. Keep it beside the roll's output,
   not in the tree.
 - Every reference output's `<out>.json` sidecar carries the build identity and the full
   recipe, and `--params <sidecar>` reproduces the output. (The current binary writes no

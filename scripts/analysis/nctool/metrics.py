@@ -1350,12 +1350,13 @@ def space_for_run(recipe: dict, report: dict) -> tuple[str, str]:
     destination build — from the destination its roll report says every frame
     resolved.
 
-    A `recipe_version` 2 recipe routinely leaves destination axes to nc (`hanten
+    A destination build's recipe (`recipe_version` 2 and later) routinely leaves
+    destination axes to nc (`hanten
     params` writes `{"display": {}}`), and `space_for_destination` refuses to derive
     them. The report states them resolved (`chain.destination`), so they are read
     from there — and must agree across frames, since one space measures them all.
     """
-    if recipe.get("recipe_version") != 2:
+    if not _manifest.is_destination_recipe(recipe):
         return space_for_recipe(recipe)
     resolved = []
     for frame in report.get("frames", []):
@@ -1379,7 +1380,7 @@ def space_for_recipe(recipe: dict) -> tuple[str, str]:
     under-determined space is exactly the condition that makes every number in
     the artifact wrong while every number still looks reasonable.
     """
-    if recipe.get("recipe_version") == 2:
+    if _manifest.is_destination_recipe(recipe):
         # A destination build's recipe: its `output` is a destination, not a preset.
         return space_for_destination(recipe.get("output", {"display": {}}))
     output = recipe.get("output") if isinstance(recipe.get("output"), dict) else {}

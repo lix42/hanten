@@ -204,16 +204,16 @@ mod tests {
     fn two_partial_layers_of_one_section_both_survive() {
         // Merged onto each other, the second one-key `look` would read as a variant
         // switch and drop the first; `compose` merges both onto the full default.
-        let a = json!({"recipe_version": 2, "look": {"contrast": 1.3}});
-        let b = json!({"recipe_version": 2, "look": {"channel_grade": [1.1, 0.9]}});
+        let a = json!({"recipe_version": 3, "look": {"contrast": 1.3}});
+        let b = json!({"recipe_version": 3, "look": {"channel_grade": [1.1, 0.9]}});
         let r = compose([&a, &b]).unwrap();
-        assert_eq!(r.look.contrast, Some(1.3));
+        assert_eq!(r.look.contrast, 1.3);
         assert_eq!(r.look.channel_grade, [1.1, 0.9]);
     }
 
     #[test]
     fn a_later_layer_wins_and_a_null_keeps_the_measured_base() {
-        let measured = json!({"recipe_version": 2,
+        let measured = json!({"recipe_version": 3,
             "calibration": {"film_base": {"explicit": [0.6, 0.3, 0.2]}},
             "roll": {"white_balance": [0.8, 1.0, 1.2], "white_stops": 2.5},
             "scene_correction": {"exposure": 0.5}});
@@ -234,9 +234,9 @@ mod tests {
     fn two_layers_frame_tables_union() {
         // Two one-entry tables have the variant-switch shape; `roll.frames` is a map, so
         // they union, and a later layer's entry for the same file wins.
-        let a = json!({"recipe_version": 2, "roll": {"frames": {"a.tif": {"white_stops": 2.0}}}});
-        let b = json!({"recipe_version": 2, "roll": {"frames": {"b.tif": {"white_stops": 1.8}}}});
-        let c = json!({"recipe_version": 2, "roll": {"frames": {"a.tif": {"white_stops": 1.6}}}});
+        let a = json!({"recipe_version": 3, "roll": {"frames": {"a.tif": {"white_stops": 2.0}}}});
+        let b = json!({"recipe_version": 3, "roll": {"frames": {"b.tif": {"white_stops": 1.8}}}});
+        let c = json!({"recipe_version": 3, "roll": {"frames": {"a.tif": {"white_stops": 1.6}}}});
         let r = compose([&a, &b, &c]).unwrap();
         let stops: Vec<(&str, f32)> = r
             .roll
@@ -250,8 +250,8 @@ mod tests {
     #[test]
     fn a_later_layer_switches_the_film_base_variant() {
         let a =
-            json!({"recipe_version": 2, "calibration": {"film_base": {"region": [1, 2, 3, 4]}}});
-        let b = json!({"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.6, 0.3, 0.2]}}});
+            json!({"recipe_version": 3, "calibration": {"film_base": {"region": [1, 2, 3, 4]}}});
+        let b = json!({"recipe_version": 3, "calibration": {"film_base": {"explicit": [0.6, 0.3, 0.2]}}});
         let r = compose([&a, &b]).unwrap();
         assert_eq!(
             r.calibration.film_base,

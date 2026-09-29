@@ -19,13 +19,25 @@ What is known (`docs/design-update.md`, Part 2, "Two renderings", 2026-09-27):
 - The two candidates: `look.contrast` as the **whole** contrast (2.0 reads as 2.0), or as
   a **multiplier** on the rendering's base with identity 1.0 (so it composes).
 
-Open:
+Decided (user, 2026-09-28):
 
-- Which of the two, or something else.
-- How recipes written under the current meaning are handled: a key that changes meaning
-  in place renders an old recipe differently with nothing to catch it (CLAUDE.md,
-  retiring a recipe key), so this is a rename, a refusal with a migration message, or a
-  `recipe_version` bump.
+- **A multiplier.** `look.contrast` / `--contrast` keeps its name and multiplies the
+  base slope; default 1 keeps the base. So a stated contrast builds on the roll's
+  exactly as `--white-balance` builds on the roll's gains, and a taste carries across
+  rolls as one number.
+- **Only the knob is called contrast.** The absolute values are **slopes**: `slope`
+  (scene to output, 1 reproducing the scene), reported with `base_slope` and
+  `base_from` (`roll`, `fallback`, `direct`); `look::DEFAULT_SLOPE` is the no-roll
+  fallback. The whole slope (× linearization) is internal only.
+- **Not the white in stops.** `roll.white_stops` stays the stored measurement, but it
+  is not the user's control: a higher white is a flatter picture, the opposite of how
+  "more stops" reads.
+- **`recipe_version` 3.** Version 2 is still read; a version 2 `look.contrast` number
+  is refused with the multiplier that keeps it (against the recipe's own rendering and
+  roll white), and its `null` reads as 1. The user plans to reset every version before
+  the first release.
+- The fallback warning's slope half is silenced as white balance's is: a typed
+  `--contrast`, or a recipe value off 1.
 
 ## How to Verify
 

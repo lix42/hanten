@@ -115,7 +115,7 @@ recipe (or a preset build's image sidecar envelope); the measured Dmin
 deliberately replaces any film base in it. `--film-type` is a convenience
 override, and so are the destination flags `--film-master` or `--range`,
 `--transfer`, `--gamut`, `--container` (the recipe `output`) and `--exposure`
-(`scene_correction.exposure`). Those write `recipe_version` 2 keys, so they need a
+(`scene_correction.exposure`). Those write keys of `recipe_version` 2 and later, so they need a
 build that takes destinations; against a preset build (the reference build) they
 are refused before anything is measured, and its output goes in `--recipe`
 instead. `--strict-estimate` is recommended for calibration; `--strict-roll` is

@@ -925,7 +925,7 @@ mod tests {
         // the contrast: the reference is graded with the frame.
         for contrast in [1.2_f32, 1.25, 1.4, 1.65] {
             let mut shared = shared_acting();
-            shared.look.section.contrast = contrast;
+            shared.look.section.slope = contrast;
             let p = ChainParams {
                 shared,
                 target: DisplayTarget {
@@ -955,7 +955,7 @@ mod tests {
         }
         let shift = |contrast: f32| {
             let mut shared = shared_acting();
-            shared.look.section.contrast = contrast;
+            shared.look.section.slope = contrast;
             let p = ChainParams {
                 shared,
                 target: DisplayTarget {
@@ -1310,7 +1310,7 @@ mod tests {
         let render_ramp = |contrast: f32, headroom_stops: f32| {
             let rgb: Vec<f32> = xs.iter().flat_map(|&v| [v, v, v]).collect();
             let mut p = params();
-            p.shared.look.section.contrast = contrast;
+            p.shared.look.section.slope = contrast;
             p.shared.headroom_stops = headroom_stops;
             let out = render(aces_from(3, 1, &rgb, None), film_base(), &p, &mut Untimed).unwrap();
             let y: Vec<f32> = out
@@ -1326,7 +1326,7 @@ mod tests {
             assert!((y[2] - 0.18).abs() < 1e-5, "mid-grey moved: {y:?}");
             (y[1] / y[0]).ln() / (xs[1] / xs[0]).ln()
         };
-        for contrast in [1.0, look::DEFAULT_CONTRAST, 1.5] {
+        for contrast in [1.0, look::DEFAULT_SLOPE, 1.5] {
             // Fit range off: the slope is the contrast, exactly.
             assert!((render_ramp(contrast, 0.0) - contrast).abs() < 1e-4);
             let slopes = [2.0, 3.0, 6.0].map(|h| render_ramp(contrast, h));
