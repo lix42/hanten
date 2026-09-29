@@ -290,6 +290,7 @@ graph TD
     telemetry/perf-telemetry
     telemetry/strategy
     telemetry/schema-v2
+    telemetry/upload-schema
     telemetry/ingestion-service
     telemetry/upload
     telemetry/panic-hook
@@ -436,8 +437,9 @@ graph TD
   telemetry/perf-telemetry --> telemetry/strategy
   telemetry/strategy --> telemetry/schema-v2
   nf-core/report-contract --> telemetry/schema-v2
-  telemetry/schema-v2 --> telemetry/ingestion-service
-  telemetry/schema-v2 --> telemetry/upload
+  telemetry/schema-v2 --> telemetry/upload-schema
+  telemetry/upload-schema --> telemetry/ingestion-service
+  telemetry/upload-schema --> telemetry/upload
   telemetry/ingestion-service --> telemetry/upload
   telemetry/upload --> telemetry/panic-hook
   algo/dmax-white-anchor --> analysis/real-scan-verification
@@ -947,8 +949,9 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `telemetry/perf-telemetry` (post-MVP): `core/pipeline-orchestration`
 - `telemetry/strategy` (post-MVP, spike): `telemetry/perf-telemetry`
 - `telemetry/schema-v2` (post-MVP): `telemetry/strategy`, `nf-core/report-contract`
-- `telemetry/ingestion-service` (post-MVP): `telemetry/schema-v2`
-- `telemetry/upload` (post-MVP): `telemetry/schema-v2`, `telemetry/ingestion-service`
+- `telemetry/upload-schema` (post-MVP): `telemetry/schema-v2`
+- `telemetry/ingestion-service` (post-MVP): `telemetry/upload-schema`
+- `telemetry/upload` (post-MVP): `telemetry/upload-schema`, `telemetry/ingestion-service`
 - `telemetry/panic-hook` (post-MVP): `telemetry/upload`
 - `analysis/real-scan-verification` (post-MVP): `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `film-base/dmax-reference`
 - `analysis/display-output-acceptance` (post-MVP): `output/presets`, `analysis/real-scan-verification`, `nf-core/default-flip`
@@ -1558,10 +1561,15 @@ the design in `docs/design-update.md`:
   [strategy](telemetry-strategy.md): custom JSON to Cloudflare Worker + D1,
   anonymous schema-minimized upload, persistent explicit consent, crash-safe
   detached draining, success/failure events, and sanitized panic reporting.
-- [ ] [Telemetry event schema v2](tasks/telemetry/schema-v2.md) — add typed
-  success/failure local events and a separately versioned, privacy-minimized
-  upload projection with random per-event deduplication IDs. Blocked on
-  `nf-core/report-contract` (the new chain's stage/timing shape).
+- [x] [Telemetry event schema v2](tasks/telemetry/schema-v2.md) — **done 2026-09-28.**
+  Typed success/failure local events (telemetry schema 10), each with a random
+  per-event deduplication ID; every `convert` that parses writes one, a failure naming
+  its stage, error kind and exit code. Telemetry's sinks may not land on the input,
+  the `--params` recipe or an output. No pixel, recipe or fingerprint change.
+- [ ] [Telemetry upload schema v1](tasks/telemetry/upload-schema.md) — the
+  separately versioned, privacy-minimized upload projection of those events, with
+  the checked-in JSON Schema and valid/invalid corpus the Worker and uploader share.
+  Split from `schema-v2` (2026-09-28); records the approved manifest revision.
 - [ ] [Telemetry ingestion service](tasks/telemetry/ingestion-service.md) — build
   the validating Cloudflare Worker + D1 endpoint, exact deduplication, 180-day
   retention, hard FREE-plan quotas, abuse quarantine/kill switch, and initial

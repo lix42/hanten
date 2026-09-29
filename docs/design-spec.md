@@ -2113,8 +2113,8 @@ does not:
 `--dump-params` and `--report-file` are staged individually but *not* held back to
 join that set: the former is written before anything is decoded, and the latter must
 land even when `--strict` then fails the run (and under `roll` it is a roll-level
-artifact no single frame's set could hold). Telemetry is unchanged — after the
-finalized output, best-effort, never part of the set. Directory fsync (power-loss
+artifact no single frame's set could hold). Telemetry is never part of the set: its
+event is written last, best-effort. Directory fsync (power-loss
 durability for the rename itself) is out of scope: the temp+rename pattern already
 covers a full disk, a permissions error, a crash and `SIGINT`, and the remaining gain
 would cost a Unix-only code path for output that is reproducible by re-running.
@@ -2326,30 +2326,40 @@ frame.
 performance + context telemetry. These are operational flags like `--report`, so
 they are **not** conversion knobs: they never enter the recipe and never affect
 the output bytes (telemetry on or off ⇒ byte-identical output).
-- `--telemetry` — append one JSON record for this run to the local JSONL log
+- `--telemetry` — append one JSON event for this run to the local JSONL log
   (default `$XDG_DATA_HOME/nc/telemetry.jsonl`, else `$HOME/.local/share/nc/…` on
   Unix / `%APPDATA%\nc\…` on Windows; override with the `NC_TELEMETRY_LOG` env
   var). Create-append; one object per line.
-- `--telemetry-file <path>` — also write the record to `<path>` (`-` = stdout;
-  overwrites a one-off file). May be combined with `--telemetry` (record lands in
+- `--telemetry-file <path>` — also write the event to `<path>` (`-` = stdout;
+  overwrites a one-off file). May be combined with `--telemetry` (event lands in
   both sinks). Telemetry is collected iff at least one of these flags is present.
-- **Best-effort:** a telemetry *write* failure is warned on stderr and never fails
-  the run (exit stays 0; `--strict` does not promote it) — the one deliberate
-  deviation from the fail-loudly rule, since telemetry is non-critical
-  observability and the image already succeeded. A `--telemetry-file` **or**
+- **Every run that parses writes one event**: a success, or a failure naming the
+  stage it ended in and its error kind and exit code — never the error's text. A
+  `--strict` promotion is a failure of kind `strict`. A run that fails before the
+  write-target guard writes its event only if the sink is clear of the input and
+  every output it knew of. A command line clap rejects writes none.
+- **Best-effort:** a telemetry failure is warned on stderr and never changes the
+  exit code (`--strict` does not promote it) — the one deliberate deviation from
+  the fail-loudly rule, since telemetry is non-critical observability. A
+  `--telemetry-file` **or**
   `--telemetry` log path (`NC_TELEMETRY_LOG` or the default path) that would *collide* with the
-  input/output/IR export/report-file is still a loud usage error (a config mistake,
-  caught up front — an odd log path must never silently append into the scan).
+  input, the `--params` recipe, or the output/IR export/report-file is still a loud
+  usage error (a config mistake, caught up front — an odd log path must never
+  silently append into the scan).
 
-**Telemetry record shape (`schema_version` 9, serialize-only JSON).** Designed for
-a future background uploader (§12, `telemetry/upload`) to drain and ship:
+**Telemetry event shape (`schema_version` 10, serialize-only JSON).** Designed for
+a future background uploader (§12, `telemetry/upload`) to drain and ship. A success:
 ```json
 {
-  "schema_version": 9,
+  "schema_version": 10,
+  "event_id": "5f0c3a9e81d24b7c9e0a6d3f2b1c8e47",
+  "event": "conversion",
+  "command": "convert",
   "timestamp_ms": 1790633724299,
   "nc_version": "0.1.0",
   "target": "aarch64-apple-darwin",
   "cpu_count": 11,
+  "stage": "finalize",
   "image": {
     "format": "hdri", "width": 502, "height": 462, "megapixels": 0.231924,
     "bit_depth": 16, "channels": 3, "ir_present": true,
@@ -2367,10 +2377,34 @@ a future background uploader (§12, `telemetry/upload`) to drain and ship:
     "film_base_source": { "explicit": [0.9, 0.55, 0.42] },
     "output_depth": "u16"
   },
-  "outcome": { "warnings": 1, "clipped": 0, "non_finite": 0 }
+  "outcome": { "status": "success", "error_kind": "none", "exit_code": 0,
+               "warnings": 1, "clipped": 0, "non_finite": 0 }
 }
 ```
-`timing_ms` has one field per stage (`crate::stage::StageKind`); `total` also covers
+A failure carries only what the run reached — here a scan refused right after decode:
+```json
+{ "schema_version": 10, "event_id": "…", "event": "conversion", "command": "convert",
+  "timestamp_ms": …, "nc_version": "0.1.0", "target": "…", "cpu_count": 11,
+  "stage": "decode",
+  "image": { "format": "hdr", …, "output_bytes": null },
+  "timing_ms": { "total": 20.4, "decode": 14.9 },
+  "conversion": { … },
+  "outcome": { "status": "failure", "error_kind": "unsupported", "exit_code": 4,
+               "warnings": 1 } }
+```
+`event_id` is 128 random bits, new for every event: the upload's deduplication key,
+never a correlation across events. `stage` is a `crate::stage::StageKind` name, or
+`setup` (recipe, validation, output path, the write-target guard), `preflight` (a
+frame's checks before its first stage) or `finalize` (the report and the `--strict`
+gate, where every success ends); a check between two stages belongs to the one before
+it. `error_kind` is `none` exactly for a success, else `usage`, `decode`,
+`unsupported`, `write`, `resource`, `other` — the error's §11 category — or `strict`.
+`image` is absent before decode, `conversion` before the destination resolved,
+`clipped` / `non_finite` unless the frame finished, and `output_bytes` is `null` unless the
+output was written.
+
+`timing_ms` has one field per stage (`crate::stage::StageKind`), present once that
+stage **completes** — a failed stage's time counts only toward `total`, which also covers
 recipe load, validation, the memory preflight and the commit. The four chain stages are
 absent for the film master, which runs none, and `ir_export` without `--export-ir`; a
 gain map's `fit_range` and `fit_gamut` sum its two renditions (the copy that splits
@@ -2598,8 +2632,9 @@ the NLP feature comparison, Phase 6).
     (the CLI-side uniformity warning and inspect candidates above are the
     building blocks).
 12. **Crash reporting & opt-in telemetry.** The **local, opt-in telemetry
-    record** has **shipped** as the `perf-telemetry` task: an embedded, opt-in
-    JSON record per `hanten convert` (image + per-stage timing + run context) written
+    record** has **shipped** as the `perf-telemetry` task, and `telemetry/schema-v2`
+    made it a typed success/failure event: an embedded, opt-in JSON event per
+    `hanten convert` (outcome + image + per-stage timing + run context) written
     to a local JSONL log and/or one-off file (`--telemetry` / `--telemetry-file`,
     `NC_TELEMETRY_LOG`; see §9), best-effort and byte-identical-output-preserving.
     The `telemetry/strategy` spike is **complete**; its approved
@@ -2622,7 +2657,8 @@ the NLP feature comparison, Phase 6).
     `NC_TELEMETRY=0` disables automatic collection/networking. Upload carries no
     persistent identity, `params_hash`, exact paths/timestamps/dimensions/sizes,
     messages, recipe/parameter values, or raw backtraces. The implementation is
-    split into `telemetry/schema-v2`, `telemetry/ingestion-service`,
+    split into `telemetry/schema-v2`, `telemetry/upload-schema`,
+    `telemetry/ingestion-service`,
     `telemetry/upload`, and `telemetry/panic-hook`; the latter is deliberately
     described as sanitized Rust **panic reporting**, not general native-crash
     capture. The anonymous endpoint cannot prove event provenance, so results are

@@ -2432,8 +2432,8 @@ fn silverfast_unrecognized_negative_value_still_converts_a_negative() {
 
 #[test]
 fn telemetry_file_writes_full_record() {
-    // `--telemetry-file <path>` writes one valid JSON record with every schema
-    // field populated (schema_version=3, finite timings, correct dims/bytes).
+    // `--telemetry-file <path>` writes one valid JSON event with every schema
+    // field populated (finite timings, correct dims/bytes).
     let tmp = TempDir::new("tel-file");
     let out = tmp.path("out.tiff");
     let rec = tmp.path("run.json");
@@ -2455,8 +2455,14 @@ fn telemetry_file_writes_full_record() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
 
-    assert_eq!(record["schema_version"], 9);
+    assert_eq!(record["schema_version"], 10);
     assert!(record["timestamp_ms"].as_u64().unwrap() > 0);
+    let id = record["event_id"].as_str().unwrap();
+    let hex = |b: u8| b.is_ascii_hexdigit() && !b.is_ascii_uppercase();
+    assert!(id.len() == 32 && id.bytes().all(hex), "event_id: {id}");
+    assert_eq!(record["event"], "conversion");
+    assert_eq!(record["command"], "convert");
+    assert_eq!(record["stage"], "finalize");
     assert!(record["nc_version"].is_string());
     assert!(record["target"].is_string());
     assert!(record["cpu_count"].is_number() || record["cpu_count"].is_null());
@@ -2518,46 +2524,314 @@ fn telemetry_file_writes_full_record() {
     assert_eq!(conv["output_depth"], "u16");
 
     let outcome = &record["outcome"];
-    // No `success` field today — a record is emitted only on success, so a
-    // constant flag would carry no information (see OutcomeInfo).
-    assert!(
-        outcome.get("success").is_none(),
-        "no success field: {outcome}"
-    );
+    assert_eq!(outcome["status"], "success");
+    assert_eq!(outcome["error_kind"], "none");
+    assert_eq!(outcome["exit_code"], 0);
     assert!(outcome["warnings"].is_number());
     assert!(outcome["clipped"].is_number());
     assert!(outcome["non_finite"].is_number());
 }
 
 #[test]
-fn strict_failure_writes_no_telemetry_record() {
-    // A telemetry record's existence is the success signal (there is no
-    // `outcome.success` field). A `--strict` run that exits non-zero on a warning
-    // must therefore leave NO record — otherwise the log would count a failed run
-    // as a successful one. Force a clipping warning with a large `--print-exposure`
-    // (as in `u16_clipping_is_reported_and_strict_promotes_it`), add `--strict`,
-    // and assert exit 1 with no telemetry file created.
+fn strict_failure_writes_a_strict_failure_event() {
+    // A `--strict` run that exits non-zero on a warning is a failure of its own
+    // kind, `strict`, not a successful conversion. The output was written, so the
+    // event carries the whole run. Force a clipping warning with a large
+    // `--exposure` (as in `u16_clipping_is_reported_and_strict_promotes_it`).
     let tmp = TempDir::new("tel-strict");
-    let out = tmp.path("out.tiff");
-    let rec = tmp.path("run.json");
-    let (code, _stdout, err) = run(&[
+    let (code, err, event) = convert_with_event(
+        &tmp,
+        &fixture("hdr-48bit.tif"),
+        &tmp.path("out.tiff"),
+        &[
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--exposure",
+            "12",
+            "--strict",
+        ],
+    );
+    assert_eq!(code, 1, "--strict clipping run must exit 1: {err}");
+    assert_failure(&event, "finalize", "strict", 1);
+    assert!(event["image"]["output_bytes"].as_u64().unwrap() > 0);
+    assert!(event["outcome"]["clipped"].as_u64().unwrap() > 0);
+    assert!(event["timing_ms"]["encode"].is_number(), "{event}");
+}
+
+/// The one event a `--telemetry-file` run wrote.
+fn telemetry_event(path: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("no telemetry event at {}: {e}", path.display()));
+    serde_json::from_str(&text).unwrap()
+}
+
+/// A failure event names where the run ended, its category and its exit code.
+fn assert_failure(event: &serde_json::Value, stage: &str, kind: &str, exit: i64) {
+    assert_eq!(event["schema_version"], 10, "{event}");
+    assert_eq!(event["stage"], stage, "{event}");
+    let outcome = &event["outcome"];
+    assert_eq!(outcome["status"], "failure", "{event}");
+    assert_eq!(outcome["error_kind"], kind, "{event}");
+    assert_eq!(outcome["exit_code"], exit, "{event}");
+}
+
+/// A convert of `input` with `--telemetry-file`, plus `extra` flags; the exit code,
+/// stderr and the event it wrote.
+fn convert_with_event(
+    tmp: &TempDir,
+    input: &Path,
+    out: &Path,
+    extra: &[&str],
+) -> (i32, String, serde_json::Value) {
+    let rec = tmp.path("event.json");
+    let mut args = vec![
         "convert",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
+        input.to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        "--film-base",
-        "0.9,0.55,0.42",
-        "--exposure",
-        "12",
-        "--strict",
         "--telemetry-file",
         rec.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 1, "--strict clipping run must exit 1: {err}");
-    assert!(
-        !rec.exists(),
-        "no telemetry record may be written for a --strict failure"
+    ];
+    args.extend_from_slice(extra);
+    let (code, _stdout, err) = run(&args);
+    (code, err, telemetry_event(&rec))
+}
+
+#[test]
+fn a_usage_failure_before_decode_writes_a_setup_event_with_nothing_invented() {
+    // No film base: refused by validation, before anything resolved or decoded.
+    let tmp = TempDir::new("tel-usage");
+    let (code, err, event) =
+        convert_with_event(&tmp, &fixture("hdr-48bit.tif"), &tmp.path("out.tiff"), &[]);
+    assert_eq!(code, 2, "{err}");
+    assert_failure(&event, "setup", "usage", 2);
+    for absent in ["image", "conversion"] {
+        assert!(event.get(absent).is_none(), "{absent}: {event}");
+    }
+    let timing = event["timing_ms"].as_object().unwrap();
+    assert_eq!(timing.keys().collect::<Vec<_>>(), ["total"], "{event}");
+    for absent in ["clipped", "non_finite"] {
+        assert!(event["outcome"].get(absent).is_none(), "{event}");
+    }
+}
+
+#[test]
+fn a_decode_failure_times_nothing_it_did_not_finish() {
+    let tmp = TempDir::new("tel-decode");
+    let bad = tmp.path("not-a.tiff");
+    std::fs::write(&bad, b"this is not a TIFF file").unwrap();
+    let (code, err, event) = convert_with_event(
+        &tmp,
+        &bad,
+        &tmp.path("out.tiff"),
+        &["--film-base", "0.9,0.55,0.42"],
     );
+    assert_eq!(code, 3, "{err}");
+    // The memory preflight probes the header before decode, so an unreadable file
+    // fails there; either way nothing after it ran.
+    assert_failure(&event, "preflight", "decode", 3);
+    assert!(event.get("image").is_none(), "{event}");
+    assert!(event["conversion"]["params_hash"].is_string(), "{event}");
+    assert!(event["timing_ms"].get("decode").is_none(), "{event}");
+}
+
+#[test]
+fn unsupported_input_names_the_stage_before_the_check_and_keeps_its_time() {
+    // `--export-ir` on an HDR scan (no IR plane) is refused right after decode:
+    // decode completed, so it is timed, and the refusal belongs to it.
+    let tmp = TempDir::new("tel-unsupported");
+    let ir = tmp.path("ir.tiff");
+    let (code, err, event) = convert_with_event(
+        &tmp,
+        &fixture("hdr-48bit.tif"),
+        &tmp.path("out.tiff"),
+        &[
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--export-ir",
+            ir.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 4, "{err}");
+    assert_failure(&event, "decode", "unsupported", 4);
+    assert_eq!(event["image"]["ir_present"], false, "{event}");
+    assert!(event["image"]["output_bytes"].is_null(), "{event}");
+    assert!(event["timing_ms"]["decode"].is_number(), "{event}");
+    assert!(event["timing_ms"].get("film_base").is_none(), "{event}");
+}
+
+#[test]
+fn a_write_failure_names_the_encode_stage_without_timing_it() {
+    // Output into a nonexistent directory: the encoder cannot create it.
+    let tmp = TempDir::new("tel-write");
+    let (code, err, event) = convert_with_event(
+        &tmp,
+        &fixture("hdr-48bit.tif"),
+        &tmp.path("no-such-dir/out.tiff"),
+        &["--film-base", "0.9,0.55,0.42"],
+    );
+    assert_eq!(code, 5, "{err}");
+    assert_failure(&event, "encode", "write", 5);
+    let timing = &event["timing_ms"];
+    assert!(timing["destination"].is_number(), "{event}");
+    assert!(timing.get("encode").is_none(), "{event}");
+    assert!(event["image"]["output_bytes"].is_null(), "{event}");
+    assert!(event["outcome"].get("clipped").is_none(), "{event}");
+}
+
+#[test]
+fn a_scan_truncated_after_its_header_fails_in_the_decode_stage() {
+    // The header probe passes; the pixel read inside the decode stage fails, so the
+    // stage is named and not timed.
+    let tmp = TempDir::new("tel-decode-stage");
+    let truncated = tmp.path("truncated.tif");
+    let bytes = std::fs::read(fixture("hdr-48bit.tif")).unwrap();
+    std::fs::write(&truncated, &bytes[..100_000]).unwrap();
+    let (code, err, event) = convert_with_event(
+        &tmp,
+        &truncated,
+        &tmp.path("out.tiff"),
+        &["--film-base", "0.9,0.55,0.42"],
+    );
+    assert_eq!(code, 3, "{err}");
+    assert_failure(&event, "decode", "decode", 3);
+    assert!(event.get("image").is_none(), "{event}");
+    assert!(event["timing_ms"].get("decode").is_none(), "{event}");
+}
+
+#[test]
+fn a_telemetry_file_over_the_params_recipe_is_refused_and_never_written() {
+    // The recipe the run reads is off-limits to telemetry: a good run refuses the
+    // pair up front, and a run whose recipe fails to load writes no event over it.
+    let tmp = TempDir::new("tel-onto-params");
+    let recipe = tmp.path("recipe.json");
+    let dump = |recipe: &Path| {
+        run(&[
+            "convert",
+            fixture("hdr-48bit.tif").to_str().unwrap(),
+            "-o",
+            tmp.path("out.tiff").to_str().unwrap(),
+            "--film-base",
+            "0.9,0.55,0.42",
+            "--params",
+            recipe.to_str().unwrap(),
+            "--telemetry-file",
+            recipe.to_str().unwrap(),
+        ])
+    };
+    std::fs::write(&recipe, r#"{"recipe_version": 2}"#).unwrap();
+    let (code, _stdout, err) = dump(&recipe);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("would overwrite --params"), "{err}");
+
+    let bad = br#"{"not": "a recipe"}"#;
+    std::fs::write(&recipe, bad).unwrap();
+    let (code, _stdout, err) = dump(&recipe);
+    assert_eq!(code, 2, "{err}");
+    assert_eq!(
+        std::fs::read(&recipe).unwrap(),
+        bad,
+        "the recipe was overwritten"
+    );
+    assert!(err.contains("telemetry: no event written"), "{err}");
+}
+
+#[test]
+fn a_failure_event_never_lands_on_a_flag_export_ir_path() {
+    // Validation fails (no film base) before the recipe resolves `--export-ir`; the
+    // flag's path is still off-limits.
+    let tmp = TempDir::new("tel-onto-ir");
+    let ir = tmp.path("ir.tiff");
+    std::fs::write(&ir, b"an earlier IR export").unwrap();
+    let (code, _stdout, err) = run(&[
+        "convert",
+        fixture("hdri-64bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("out.tiff").to_str().unwrap(),
+        "--export-ir",
+        ir.to_str().unwrap(),
+        "--telemetry-file",
+        ir.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert_eq!(std::fs::read(&ir).unwrap(), b"an earlier IR export");
+    assert!(err.contains("telemetry: no event written"), "{err}");
+}
+
+#[test]
+fn a_failure_event_never_lands_on_a_recipe_export_ir_or_a_completed_output() {
+    // Validation fails (no film base) before the write-target guard. The recipe's
+    // `--export-ir` path and the path `-o out` would complete to are off-limits.
+    let tmp = TempDir::new("tel-onto-recipe-ir");
+    let input = fixture("hdri-64bit.tif");
+    let refuses = |sink: &Path, args: &[&str]| {
+        std::fs::write(sink, b"an earlier artifact").unwrap();
+        let (code, _stdout, err) = run(args);
+        assert_eq!(code, 2, "{err}");
+        assert_eq!(
+            std::fs::read(sink).unwrap(),
+            b"an earlier artifact",
+            "{sink:?}"
+        );
+        assert!(err.contains("telemetry: no event written"), "{err}");
+    };
+
+    let ir = tmp.path("ir.tiff");
+    let recipe = tmp.path("recipe.json");
+    let body = serde_json::json!({"recipe_version": 2, "input": {"export_ir": ir}});
+    std::fs::write(&recipe, body.to_string()).unwrap();
+    refuses(
+        &ir,
+        &[
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            tmp.path("out2.tiff").to_str().unwrap(),
+            "--params",
+            recipe.to_str().unwrap(),
+            "--telemetry-file",
+            ir.to_str().unwrap(),
+        ],
+    );
+
+    let completed = tmp.path("out.tiff");
+    refuses(
+        &completed,
+        &[
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            tmp.path("out").to_str().unwrap(),
+            "--telemetry-file",
+            completed.to_str().unwrap(),
+        ],
+    );
+}
+
+#[test]
+fn a_failure_event_never_lands_on_the_input() {
+    // Before the write-target guard runs, a failure event is written only when its
+    // sink is clear of the input and the outputs. Here validation fails first (no
+    // film base) and the sink is the input: the scan must survive untouched.
+    let tmp = TempDir::new("tel-onto-input");
+    let input = tmp.path("scan.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &input).unwrap();
+    let before = std::fs::read(&input).unwrap();
+    let (code, _stdout, err) = run(&[
+        "convert",
+        input.to_str().unwrap(),
+        "-o",
+        tmp.path("out.tiff").to_str().unwrap(),
+        "--telemetry-file",
+        input.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert_eq!(
+        std::fs::read(&input).unwrap(),
+        before,
+        "the input was overwritten"
+    );
+    assert!(err.contains("telemetry: no event written"), "{err}");
 }
 
 #[test]
@@ -2628,7 +2902,7 @@ fn telemetry_log_appends_one_line_per_run() {
     // Each line is an independent, valid JSON object.
     for line in lines {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(v["schema_version"], 9);
+        assert_eq!(v["schema_version"], 10);
     }
 }
 
@@ -2708,6 +2982,25 @@ fn telemetry_does_not_perturb_the_output() {
     );
     // The telemetry record itself was produced (sanity: the feature actually ran).
     assert!(rec.exists() && log.exists());
+}
+
+#[test]
+fn a_telemetry_write_failure_keeps_a_failed_runs_exit_code() {
+    // The run fails on its own (no film base, exit 2); the event's sink is under a
+    // regular file, so writing it fails too. The exit code stays the run's.
+    let tmp = TempDir::new("tel-failsoft-failure");
+    let blocker = tmp.path("blocker");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    let (code, _stdout, stderr) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "-o",
+        tmp.path("out.tiff").to_str().unwrap(),
+        "--telemetry-file",
+        tmp.path("blocker/rec.json").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("telemetry: could not write"), "{stderr}");
 }
 
 #[test]
@@ -2823,7 +3116,7 @@ fn telemetry_file_dash_writes_json_to_stdout() {
     ]);
     assert_eq!(code, 0, "telemetry to stdout should succeed:\n{err}");
     let record = json(&stdout);
-    assert_eq!(record["schema_version"], 9);
+    assert_eq!(record["schema_version"], 10);
     assert_eq!(record["image"]["format"], "hdr");
 }
 
@@ -4099,7 +4392,7 @@ fn film_master_telemetry_names_the_destination_and_the_written_depth() {
     let record: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
     let conv = &record["conversion"];
-    assert_eq!(record["schema_version"], 9);
+    assert_eq!(record["schema_version"], 10);
     assert_eq!(conv["destination"], "film-master");
     // The film master runs no chain stage, so none is timed.
     for stage in ["scene_correction", "look", "fit_range", "fit_gamut"] {

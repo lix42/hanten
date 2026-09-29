@@ -705,6 +705,7 @@ name = "nc"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "getrandom",
  "image",
  "jpeg-encoder",
  "kamadak-exif",

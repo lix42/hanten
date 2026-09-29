@@ -12,6 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
+# The telemetry event's random `event_id` (`telemetry::EventId`). Already locked
+# through `jobserver` and `rand_core`, so no new crate.
+getrandom = "0.3.4"
 image = "0.25.10"
 jpeg-encoder = "0.7.1"
 kamadak-exif = "0.6.1"
