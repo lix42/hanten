@@ -1,6 +1,6 @@
 //! **Stage 2 of the new rendering chain — the look.**
 //!
-//! The creative stage: print contrast, the per-channel grade and highlight desaturation
+//! The creative stage: contrast, the per-channel grade and highlight desaturation
 //! today, and later print emulation and per-stock normalization. Scene-referred and
 //! linear. Each control lands here with its own task under `nf-look`, as its own key in
 //! the recipe's `look` section — not one CDL-style object, whose slope and offset would
@@ -32,17 +32,16 @@ use crate::types::{NcError, Result};
 /// ```text
 /// b  = smoothstep in stops: 0 at `start_stops` → 1 at diffuse white, held above
 /// w  = 1 at s ≤ band[0] → 0 at s ≥ band[1], linear in s,
-///      s = log10(max/min) / (linearization · contrast), over ACEScg channels
+///      s = log10(max/min) / (linearization · slope), over ACEScg channels
 /// rgb ← rgb + strength · b · w · (Y − rgb)            Y = ACEScg luminance
 /// ```
 ///
 /// - **Keyed on distance from the neutral axis as well as brightness**, or a bright
 ///   *coloured* surface is neutralised as hard as a bright white one — the sunset case
 ///   `docs/spike/highlight-desaturation.md` found on one marked patch. `s` is the
-///   negative's own density spread — the log ratio over **the whole contrast that
-///   shaped the pixel**, the decode's linearization times [`LookSection::contrast`],
-///   which runs first — so the band means the same on a flat roll and a contrasty one,
-///   and the same whether a roll's contrast is stated in the decode or in the look.
+///   negative's own density spread — the log ratio over **the whole slope that shaped
+///   the pixel**, the decode's linearization times [`LookSection::slope`], which runs
+///   first — so the band means the same on a flat roll and a contrasty one.
 /// - **The band assumes a roll-level white balance ahead of it**
 ///   (`hanten measure-roll`): `s` measures distance from R = G = B, which is distance
 ///   from white only once the roll's cast is gone (`docs/spike/desaturation-band.md`).
@@ -116,25 +115,21 @@ impl HighlightDesaturation {
     }
 }
 
-/// Mid-grey, the pivot [`LookSection::contrast`] turns about: the value the decode's
+/// Mid-grey, the pivot [`LookSection::slope`] turns about: the value the decode's
 /// anchor rule pins a correctly exposed grey card at, so changing contrast pivots the
 /// picture instead of moving it.
 pub const MID_GREY: f32 = 0.18;
 
-/// The look's default print contrast: `BUNDLED_CONTRAST / LINEARIZATION`, the half of
-/// the single `gamma` nc shipped before the split that was never the film's
-/// linearization (`nf-reconstruction/gamma-split`). At it, a neutral renders where the
-/// bundled decode rendered it. Provisional rather than a tuned value:
-/// `nf-calibration/anchor-comparison` chose a per-roll value, which a recipe's
-/// `roll.white_stops` gives (`pipeline::roll_white::contrast_for`); this stays what a
-/// recipe with neither that nor a stated `look.contrast` gets
-/// (`nf-calibration/no-roll-defaults`).
-pub const DEFAULT_CONTRAST: f32 =
+/// The slope when no roll white gives one: the `default` rendering's fallback
+/// (`nf-calibration/no-roll-defaults` chooses it). `BUNDLED_CONTRAST / LINEARIZATION`,
+/// so a neutral renders where the bundled decode rendered it — a continuity value, not
+/// a tuned one. Moving it moves only renders without a roll white; `direct` pins its own.
+pub const DEFAULT_SLOPE: f32 =
     crate::algo::fixed::BUNDLED_CONTRAST / crate::algo::fixed::LINEARIZATION;
 
-/// A [`LookSection::contrast`] the value rule refuses.
+/// A [`LookSection::slope`] the value rule refuses.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ContrastFault(pub f32);
+pub struct SlopeFault(pub f32);
 
 /// The per-channel grade's identity: red and blue exponents of 1 (green is always 1).
 pub const IDENTITY_CHANNEL_GRADE: [f32; 2] = [1.0, 1.0];
@@ -148,11 +143,12 @@ pub struct ChannelGradeFault(pub [f32; 2]);
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LookSection {
-    /// **Print contrast** (`look.contrast`, `--contrast`): the half of `gamma` that is a
-    /// look rather than the film's linearization.
+    /// **The slope**: the scene-to-output contrast about mid-grey, where 1 reproduces the
+    /// scene's own. The rendering's base times the `look.contrast` knob
+    /// (`recipe::Recipe::resolved_slope`); the decode's linearization is not part of it.
     ///
     /// ```text
-    /// out_c = MID_GREY · (in_c / MID_GREY)^contrast      per ACEScg channel
+    /// out_c = MID_GREY · (in_c / MID_GREY)^slope      per ACEScg channel
     /// ```
     ///
     /// - **One exponent on every channel, pivoted at mid-grey.** For a neutral this is
@@ -163,21 +159,21 @@ pub struct LookSection {
     ///   with a matrix that mixes channels. Saturated colour therefore differs slightly
     ///   from the bundled decode, by design.
     /// - **Neutral stays neutral**, so a white the roll's white balance made neutral
-    ///   stays neutral under any contrast (`pipeline::roll_white`).
-    /// - **Exposure is in scene stops, and contrast expands it.** Scene correction runs
-    ///   first, so a gain `e` becomes `e^contrast` in the output: `--exposure 1` at
-    ///   contrast 1.11 moves the picture 1.11 stops. Exposure adjusts the scene after
+    ///   stays neutral under any slope (`pipeline::roll_white`).
+    /// - **Exposure is in scene stops, and the slope expands it.** Scene correction runs
+    ///   first, so a gain `e` becomes `e^slope` in the output: `--exposure 1` at
+    ///   slope 1.11 moves the picture 1.11 stops. Exposure adjusts the scene after
     ///   reconstruction; contrast then expands everything about mid-grey, as paper
     ///   contrast does to a printing exposure.
     /// - **Runs before highlight desaturation**, which divides its saturation measure by
-    ///   the whole contrast and keys on diffuse white in the graded image
+    ///   the whole slope and keys on diffuse white in the graded image
     ///   ([`crate::algo::fixed::DIFFUSE_WHITE`]).
     /// - **A sample at or below zero, or non-finite, passes through**: a power is
     ///   defined on positive values, and a wide-gamut linear space holds negative ones.
     ///   Monotone either way.
     ///
     /// `1` is the identity, bit-exact.
-    pub contrast: f32,
+    pub slope: f32,
     /// **The per-channel grade** (`look.channel_grade`, `--channel-grade R,B`): a cast
     /// that grows away from mid-grey, the photographer-facing counterpart of the
     /// decode's per-channel `scale` (`nf-look/per-channel-grade`).
@@ -235,7 +231,7 @@ pub struct LookSection {
 impl Default for LookSection {
     fn default() -> Self {
         Self {
-            contrast: DEFAULT_CONTRAST,
+            slope: DEFAULT_SLOPE,
             channel_grade: IDENTITY_CHANNEL_GRADE,
             highlight_desaturation: HighlightDesaturation::default(),
         }
@@ -243,13 +239,13 @@ impl Default for LookSection {
 }
 
 impl LookSection {
-    /// The contrast's value rule: finite and positive — zero flattens every channel to
+    /// The slope's value rule: finite and positive — zero flattens every channel to
     /// mid-grey, and a negative exponent reverses the tone scale.
-    pub fn check_contrast(&self) -> std::result::Result<(), ContrastFault> {
-        if self.contrast.is_finite() && self.contrast > 0.0 {
+    pub fn check_slope(&self) -> std::result::Result<(), SlopeFault> {
+        if self.slope.is_finite() && self.slope > 0.0 {
             Ok(())
         } else {
-            Err(ContrastFault(self.contrast))
+            Err(SlopeFault(self.slope))
         }
     }
 
@@ -273,19 +269,9 @@ impl LookSection {
 
     /// Whether the look moves no pixel — what the report's `applied` reads.
     pub fn is_empty(&self) -> bool {
-        self.contrast == 1.0
+        self.slope == 1.0
             && self.channel_grade_is_identity()
             && self.highlight_desaturation.is_off()
-    }
-
-    /// Whether the user asked for a look — neither the default nor an empty one. The one
-    /// predicate a destination that runs no look (`film-master`) reads to refuse, rather
-    /// than one rule per knob (`nf-look/stage`; the refusal is `recipe::destination`).
-    /// The default is spared because every default
-    /// recipe carries it; an empty look because it renders exactly what such a
-    /// destination does, and refusing it would kill the flags-win reset.
-    pub fn asks_for_a_look(&self) -> bool {
-        !self.is_empty() && *self != Self::default()
     }
 }
 
@@ -301,12 +287,12 @@ pub struct LookParams {
 }
 
 impl LookParams {
-    /// **Test fixture**: an empty look (contrast 1, strength 0) at the fixed decode's
+    /// **Test fixture**: an empty look (slope 1, strength 0) at the fixed decode's
     /// default linearization — for tests that are not about the look.
     #[cfg(test)]
     pub fn off() -> Self {
         let mut section = LookSection {
-            contrast: 1.0,
+            slope: 1.0,
             ..LookSection::default()
         };
         section.highlight_desaturation.strength = 0.0;
@@ -325,7 +311,7 @@ impl LookParams {
     /// stage rather than by its caller, so filling the stage changes the report in the
     /// same edit.
     pub fn applied(&self) -> &'static str {
-        let contrast = self.section.contrast != 1.0;
+        let contrast = self.section.slope != 1.0;
         let grade = !self.section.channel_grade_is_identity();
         let desaturation = !self.section.highlight_desaturation.is_off();
         // The controls that ran, joined in the order the stage applies them.
@@ -378,11 +364,11 @@ pub fn apply(image: SceneReferredImage, params: &LookParams) -> Result<GradedIma
     let mut buffer = image.into_buffer();
     if !params.is_empty() {
         let section = &params.section;
-        if section.check_contrast().is_err() {
+        if section.check_slope().is_err() {
             return Err(NcError::Other(format!(
-                "the look was handed an unusable contrast ({}); the recipe's validation \
+                "the look was handed an unusable slope ({}); the recipe's validation \
                  should have refused it",
-                section.contrast
+                section.slope
             )));
         }
         if section.check_channel_grade().is_err() {
@@ -392,7 +378,7 @@ pub fn apply(image: SceneReferredImage, params: &LookParams) -> Result<GradedIma
                 section.channel_grade
             )));
         }
-        let contrast = (section.contrast != 1.0).then_some(section.contrast);
+        let contrast = (section.slope != 1.0).then_some(section.slope);
         let grade = (!section.channel_grade_is_identity()).then(|| {
             let [r, b] = section.channel_grade;
             [r, 1.0, b]
@@ -402,7 +388,7 @@ pub fn apply(image: SceneReferredImage, params: &LookParams) -> Result<GradedIma
         } else {
             Some(Pull::new(
                 &section.highlight_desaturation,
-                params.linearization * section.contrast,
+                params.linearization * section.slope,
             )?)
         };
         pixels::map_in_place(buffer.rgb_mut(), |px| {
@@ -420,7 +406,7 @@ pub fn apply(image: SceneReferredImage, params: &LookParams) -> Result<GradedIma
     Ok(GradedImage(buffer))
 }
 
-/// [`LookSection::contrast`] on one pixel.
+/// [`LookSection::slope`] on one pixel.
 fn apply_contrast(px: &mut [f32; 3], contrast: f32) {
     for channel in px.iter_mut() {
         if channel.is_finite() && *channel > 0.0 {
@@ -440,7 +426,7 @@ fn apply_contrast(px: &mut [f32; 3], contrast: f32) {
 /// pixel that ratio is a weighted mean of the per-channel ratios `x_c / p_c`, so it
 /// stays bounded. An exposure change never flips a channel's sign, so a pixel is graded
 /// along its whole exposure ray or not at all (within `f32` range), and the grade stays
-/// monotone in exposure for every pixel. This departs from [`LookSection::contrast`]'s
+/// monotone in exposure for every pixel. This departs from [`LookSection::slope`]'s
 /// per-channel pass-through on purpose: contrast has no restore to couple the channels.
 fn apply_channel_grade(px: &mut [f32; 3], exponents: [f32; 3]) {
     let usable = |v: f32| v.is_finite() && v > 0.0;
@@ -477,8 +463,8 @@ struct Pull {
     ratio_full: f32,
     ratio_none: f32,
     band: [f32; 2],
-    /// The whole contrast that shaped the pixel: the decode's linearization times the
-    /// look's contrast, which has already run.
+    /// The whole slope that shaped the pixel: the decode's linearization times the
+    /// look's slope, which has already run.
     contrast: f32,
 }
 
@@ -579,43 +565,36 @@ mod tests {
     }
 
     #[test]
-    fn a_look_is_asked_for_only_when_it_is_neither_the_default_nor_empty() {
+    fn a_look_is_empty_only_at_slope_one_with_desaturation_off_and_no_grade() {
         let with = |f: fn(&mut LookSection)| {
             let mut section = LookSection::default();
             f(&mut section);
             section
         };
-        // The default does something, yet asks for nothing.
-        let default = LookSection::default();
-        assert!(!default.is_empty() && !default.asks_for_a_look());
-        // Empty is an identity however the pull's inert knobs sit: contrast 1 and
+        // The default does something.
+        assert!(!LookSection::default().is_empty());
+        // Empty is an identity however the pull's inert knobs sit: slope 1 and
         // strength 0, both needed.
         let empty = |s: &mut LookSection| {
-            s.contrast = 1.0;
+            s.slope = 1.0;
             s.highlight_desaturation.strength = 0.0;
         };
-        assert!(with(empty).is_empty() && !with(empty).asks_for_a_look());
+        assert!(with(empty).is_empty());
         assert!(
-            !with(|s| {
-                s.contrast = 1.0;
+            with(|s| {
+                s.slope = 1.0;
                 s.highlight_desaturation.strength = 0.0;
                 s.highlight_desaturation.band = [0.02, 0.04];
                 s.highlight_desaturation.start_stops = -2.0;
             })
-            .asks_for_a_look()
+            .is_empty()
         );
-        // Either control alone, moved off its default, is a look.
-        assert!(with(|s| s.highlight_desaturation.strength = 0.0).asks_for_a_look());
-        assert!(with(|s| s.contrast = 1.0).asks_for_a_look());
-        assert!(with(|s| s.contrast = 1.4).asks_for_a_look());
-        assert!(with(|s| s.highlight_desaturation.strength = 0.5).asks_for_a_look());
-        assert!(with(|s| s.highlight_desaturation.band = [0.02, 0.04]).asks_for_a_look());
-        assert!(with(|s| s.channel_grade = [1.1, 0.9]).asks_for_a_look());
+        assert!(!with(|s| s.slope = 1.0).is_empty());
+        assert!(!with(|s| s.highlight_desaturation.strength = 0.0).is_empty());
         // An empty look stays empty only while the grade is the identity.
         let mut section = with(empty);
-        assert!(section.is_empty());
         section.channel_grade = [1.0, 0.9];
-        assert!(!section.is_empty() && section.asks_for_a_look());
+        assert!(!section.is_empty());
     }
 
     #[test]
@@ -776,7 +755,7 @@ mod tests {
     /// the identity.
     fn bundled_section(desaturation: HighlightDesaturation) -> LookSection {
         LookSection {
-            contrast: 1.0,
+            slope: 1.0,
             channel_grade: IDENTITY_CHANNEL_GRADE,
             highlight_desaturation: desaturation,
         }
@@ -874,12 +853,12 @@ mod tests {
         let split = graded(&scan, LINEARIZATION, LookSection::default());
         let right = widest(&split);
         // Falsifiability, through the stage: the same split with the band divided by the
-        // linearization alone (the look told `LINEARIZATION / DEFAULT_CONTRAST`, so the
+        // linearization alone (the look told `LINEARIZATION / DEFAULT_SLOPE`, so the
         // product it forms is `LINEARIZATION`) keys the ramp pixels differently.
         let wrong = widest(&graded_with(
             &scan,
             LINEARIZATION,
-            LINEARIZATION / DEFAULT_CONTRAST,
+            LINEARIZATION / DEFAULT_SLOPE,
             LookSection::default(),
         ));
         // Measured 8.6e-5 right and 1.3e-2 wrong.
@@ -901,7 +880,7 @@ mod tests {
 
     #[test]
     fn contrast_pivots_at_mid_grey_and_steepens_symmetrically() {
-        for k in [0.5, 1.0, DEFAULT_CONTRAST, 2.0, 3.7] {
+        for k in [0.5, 1.0, DEFAULT_SLOPE, 2.0, 3.7] {
             let mut px = [MID_GREY; 3];
             apply_contrast(&mut px, k);
             assert_eq!(px, [MID_GREY; 3], "mid-grey moved at contrast {k}");
@@ -919,7 +898,7 @@ mod tests {
     fn contrast_one_is_a_bit_exact_identity_and_the_report_says_which_ran() {
         let mut params = LookParams::off();
         assert_eq!(params.applied(), "identity");
-        params.section.contrast = 1.3;
+        params.section.slope = 1.3;
         assert!(!params.is_empty());
         assert_eq!(params.applied(), "contrast");
         params.section.highlight_desaturation.strength = 0.5;
@@ -975,15 +954,15 @@ mod tests {
     fn an_unusable_contrast_is_refused() {
         for k in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             let section = LookSection {
-                contrast: k,
+                slope: k,
                 ..LookSection::default()
             };
             assert!(
-                matches!(section.check_contrast(), Err(ContrastFault(v)) if v.to_bits() == k.to_bits()),
+                matches!(section.check_slope(), Err(SlopeFault(v)) if v.to_bits() == k.to_bits()),
                 "{k}"
             );
         }
-        assert!(LookSection::default().check_contrast().is_ok());
+        assert!(LookSection::default().check_slope().is_ok());
     }
 
     // --- the per-channel grade --------------------------------------------------
@@ -1013,14 +992,14 @@ mod tests {
         params.section.channel_grade = [1.1, 0.9];
         assert!(!params.is_empty());
         assert_eq!(params.applied(), "channel-grade");
-        params.section.contrast = 1.3;
+        params.section.slope = 1.3;
         assert_eq!(params.applied(), "contrast+channel-grade");
         params.section.highlight_desaturation.strength = 0.5;
         assert_eq!(
             params.applied(),
             "contrast+channel-grade+highlight-desaturation"
         );
-        params.section.contrast = 1.0;
+        params.section.slope = 1.0;
         assert_eq!(params.applied(), "channel-grade+highlight-desaturation");
 
         // Through the stage, at the identity grade with the other controls live: the
@@ -1048,12 +1027,12 @@ mod tests {
         let section = LookSection::default();
         let pull = Pull::new(
             &section.highlight_desaturation,
-            fixed::LINEARIZATION * section.contrast,
+            fixed::LINEARIZATION * section.slope,
         )
         .unwrap();
         for px in by_hand.chunks_mut(3) {
             let mut p = [px[0], px[1], px[2]];
-            apply_contrast(&mut p, section.contrast);
+            apply_contrast(&mut p, section.slope);
             pull.apply(&mut p);
             px.copy_from_slice(&p);
         }
@@ -1155,7 +1134,7 @@ mod tests {
             apply_channel_grade(&mut out, [g[0], 1.0, g[1]]);
             out
         };
-        for contrast in [1.0, DEFAULT_CONTRAST, 2.0] {
+        for contrast in [1.0, DEFAULT_SLOPE, 2.0] {
             for g in GRADES {
                 // Neutral luminance lands `contrast · stops` from mid.
                 let y = luminance(run(contrast, g, neutral(3.0)));

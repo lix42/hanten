@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::destination::{Container, Defaults, Gamut, Range, Transfer};
 use crate::pipeline::fit_range::{DEFAULT_DISPLAY_BLACK_STOPS, DisplayBlack};
-use crate::pipeline::look::{DEFAULT_CONTRAST, HighlightDesaturation};
+use crate::pipeline::look::{DEFAULT_SLOPE, HighlightDesaturation};
 use crate::types::DEFAULT_HEADROOM_STOPS;
 
 /// The rendering a run starts from.
@@ -40,8 +40,8 @@ impl Rendering {
 pub struct Base {
     /// Whether the recipe's `roll` section is applied.
     pub applies_roll: bool,
-    /// The look contrast when none is stated and no applied roll white gives one.
-    pub contrast: f32,
+    /// The slope `look.contrast` multiplies when no applied roll white gives one.
+    pub slope: f32,
     pub highlight_desaturation: HighlightDesaturation,
     pub headroom_stops: f32,
     pub display_black: DisplayBlack,
@@ -52,7 +52,7 @@ pub struct Base {
 /// `default`: the roll applied, everything else at its default.
 const DEFAULT: Base = Base {
     applies_roll: true,
-    contrast: DEFAULT_CONTRAST,
+    slope: DEFAULT_SLOPE,
     highlight_desaturation: HighlightDesaturation::DEFAULT,
     headroom_stops: DEFAULT_HEADROOM_STOPS,
     display_black: DisplayBlack::StopsBelowMid(DEFAULT_DISPLAY_BLACK_STOPS),
@@ -62,8 +62,8 @@ const DEFAULT: Base = Base {
 /// `direct`: every value written out, so a moved default leaves it alone.
 pub const DIRECT: Base = Base {
     applies_roll: false,
-    // A rendering contrast, so a moved linearization still shows.
-    contrast: 2.0 / 1.8,
+    // The slope, not the whole slope, so a moved linearization still shows.
+    slope: 2.0 / 1.8,
     // Off: it hides the residual cast an editor or the loop must see.
     highlight_desaturation: HighlightDesaturation {
         strength: 0.0,
@@ -92,14 +92,14 @@ mod tests {
         // `direct` moved: follow "Keeping `direct` current" in docs/design-update.md.
         let Base {
             applies_roll,
-            contrast,
+            slope,
             highlight_desaturation,
             headroom_stops,
             display_black,
             axes,
         } = DIRECT;
         assert!(!applies_roll);
-        assert_eq!(contrast, 1.111_111_2);
+        assert_eq!(slope, 1.111_111_2);
         assert_eq!(
             highlight_desaturation,
             HighlightDesaturation {
@@ -129,7 +129,7 @@ mod tests {
         // default it names.
         let base = Rendering::Default.base();
         assert!(base.applies_roll);
-        assert_eq!(base.contrast, DEFAULT_CONTRAST);
+        assert_eq!(base.slope, DEFAULT_SLOPE);
         assert_eq!(
             base.highlight_desaturation,
             HighlightDesaturation::default()

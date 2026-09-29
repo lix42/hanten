@@ -74,10 +74,11 @@
 //! placements costed in `docs/spike/white-placement.md`, **C** — the only one that
 //! pins mid *and* white — needs nothing from this module: it solves its contrast
 //! from a **content** white and the spike puts that per-roll contrast in the look
-//! stage — `look.contrast`, as `gamma / LINEARIZATION` — leaving the decode fixed.
+//! stage — the look's slope, `gamma / LINEARIZATION` — leaving the decode fixed.
 //! **B** and **D** would have handed this module a measured density.
 //! `nf-calibration/anchor-comparison` chose neither: its rule, a bounded C, places the
-//! roll's white through `look.contrast`, so no content-referenced variant is planned.
+//! roll's white through the look's slope (`roll.white_stops`), so no content-referenced
+//! variant is planned.
 //! [`AnchorRule`] stays an enum with one variant rather than a bare `f32` field, so a
 //! future one would add a variant instead of silently changing what a number means.
 //! No white reference is measured, read or representable here.

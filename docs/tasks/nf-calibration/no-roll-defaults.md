@@ -13,15 +13,17 @@ What is known:
 
 - **The first value is the default whole contrast.** Today it is `2.0`, which is
   `algo::fixed::BUNDLED_CONTRAST`: the decode's linearization `1.8` times the look's
-  default `look.contrast` of `2.0 / 1.8 ≈ 1.11`. It was kept so that the new flow renders
+  fallback slope `look::DEFAULT_SLOPE`, `2.0 / 1.8 ≈ 1.11`. It was kept so that the new flow renders
   a neutral where the bundled decode did — a continuity choice, never a tuned one.
 - **The roll-measured whole contrast runs 2.23–2.97** on the nine reviewed rolls
   (`anchor-comparison`, `roll-white-rule`), all above the fallback. The user has a
-  strong prior to raise it, to about `2.5` (`look.contrast ≈ 1.39` at the 1.8
+  strong prior to raise it, to about `2.5` (slope ≈ 1.39 at the 1.8
   linearization; 2026-09-27).
-- **Whole contrast, not `look.contrast`, is the number to choose.** The look's default is
+- **Whole contrast, not the slope, is the number to choose.** `DEFAULT_SLOPE` is
   derived as `whole / LINEARIZATION`, so the whole contrast holds if
   `neutrality-gate` moves the linearization (`scale-gamma-loop` kept it at 1.8).
+- **Moving it moves only renders without a roll white** (`nf-look/contrast-definition`):
+  `look.contrast` is a multiplier on this base, so a stated contrast moves with it too.
 - **`direct` does not follow this default by itself.** Its contrast is a separate
   pinned value (`2.0 / 1.8`, `direct-preset`), so moving the fallback does not move the
   rendering the calibration loop holds fixed.

@@ -1,6 +1,6 @@
 //! The recipe (`nf-core/recipe-schema`).
 //!
-//! One document, versioned **as a document**: a recipe states `"recipe_version": 2` at
+//! One document, versioned **as a document**: a recipe states `"recipe_version": 3` at
 //! top level, and that marker is what makes it self-describing. A document without it
 //! was written for the chain `nf-core/default-flip` removed (every sidecar and
 //! `--dump-params` file before `pipeline_version` 8), and is refused whole; one with it
@@ -49,16 +49,22 @@ use crate::pipeline::fit_range::{
     DisplayBlack, DisplayBlackFault, DisplayPeak, MAX_DISPLAY_BLACK_STOPS,
 };
 use crate::pipeline::look::{
-    ChannelGradeFault, ContrastFault, DEFAULT_CONTRAST, DesaturationFault, HighlightDesaturation,
-    IDENTITY_CHANNEL_GRADE, LookParams, LookSection, MAX_START_STOPS,
+    ChannelGradeFault, DesaturationFault, HighlightDesaturation, IDENTITY_CHANNEL_GRADE,
+    LookParams, LookSection, MAX_START_STOPS,
 };
 use crate::pipeline::roll_white;
 use crate::pipeline::scene_correction::{SceneCorrectionParams, SceneFault, WhiteBalance};
 use crate::rendering::{Base, Rendering};
 use crate::types::{FilmBaseSource, InputParams, MeasureParams, NcError, Result};
 
-/// The only document version this build reads.
-pub const RECIPE_VERSION: u32 = 2;
+/// The document version this build writes.
+pub const RECIPE_VERSION: u32 = 3;
+
+/// The earlier version this build still reads: version 3 changed only what a number in
+/// `look.contrast` means (the slope itself in 2, a multiplier on the base slope in 3,
+/// `nf-look/contrast-definition`), so a version 2 document without one reads unchanged,
+/// and [`check_body`] refuses one with it, naming the conversion.
+pub const V2_RECIPE_VERSION: u32 = 2;
 
 /// The top-level key carrying [`RECIPE_VERSION`].
 ///
@@ -99,8 +105,9 @@ pub struct Recipe {
     pub output: OutputSection,
 }
 
-/// The document version — a type with exactly one value, so a recipe cannot
-/// deserialize into a version this build does not read.
+/// The document version: it serializes as [`RECIPE_VERSION`] and deserializes only a
+/// version this build reads. Version 2 is accepted here because [`check_body`] has
+/// already refused its one ambiguous key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RecipeVersion;
 
@@ -113,11 +120,11 @@ impl Serialize for RecipeVersion {
 impl<'de> Deserialize<'de> for RecipeVersion {
     fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
         let v = u64::deserialize(d)?;
-        if v == u64::from(RECIPE_VERSION) {
+        if v == u64::from(RECIPE_VERSION) || v == u64::from(V2_RECIPE_VERSION) {
             Ok(RecipeVersion)
         } else {
             Err(serde::de::Error::custom(format!(
-                "`{VERSION_KEY}` is {v}; this build reads only {RECIPE_VERSION}"
+                "`{VERSION_KEY}` is {v}; this build reads {RECIPE_VERSION} and {V2_RECIPE_VERSION}"
             )))
         }
     }
@@ -147,7 +154,7 @@ impl FitRangeSection {
     /// Whether the user asked for a fit — a headroom, or a display black, that is
     /// neither its default nor its identity (`0`, `"off"`). The one predicate a
     /// destination that runs no fit range (`film-master`) reads to refuse
-    /// ([`destination()`]), as the look's is [`LookSection::asks_for_a_look`]: the
+    /// ([`destination()`]), as the look's is [`LookKeys::asks_for_a_look`]: the
     /// defaults are spared because every recipe carries them, the identities because
     /// they ask for nothing such a destination does not already do, and refusing them
     /// would kill the flags-win reset.
@@ -200,8 +207,8 @@ pub struct RollSection {
     /// The roll's white-balance gains, green-anchored, as `measure-roll` reports them.
     pub white_balance: Option<[f32; 3]>,
     /// The roll's white, in scene stops above mid-grey — the measurement, not the
-    /// contrast derived from it, so this section holds no contrast value
-    /// (`nf-look/contrast-definition`).
+    /// slope derived from it ([`roll_white::slope_for`]), so a measured value is never
+    /// mistaken for a chosen one.
     pub white_stops: Option<f32>,
     /// The frames whose own white differs from the roll's (one clamped to the cap),
     /// keyed by **file name** so the recipe still applies after the scans move.
@@ -219,9 +226,9 @@ pub struct FrameRoll {
 }
 
 impl RollSection {
-    /// The look contrast the roll's white renders at, if it has one.
-    pub fn contrast(&self) -> Option<f32> {
-        self.white_stops.map(roll_white::contrast_for)
+    /// The slope the roll's white renders at, if it has one.
+    pub fn slope(&self) -> Option<f32> {
+        self.white_stops.map(roll_white::slope_for)
     }
 }
 
@@ -231,8 +238,12 @@ impl RollSection {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LookKeys {
-    /// `look.contrast`, `--contrast`: the rendering contrast ([`LookSection::contrast`]).
-    pub contrast: Option<f32>,
+    /// `look.contrast`, `--contrast`: a multiplier on the base slope — the roll's, else
+    /// the rendering's own ([`Recipe::resolved_slope`]) — so `1` keeps the base, as
+    /// `--white-balance` keeps the roll's gains. `null`, what a version 2 recipe wrote
+    /// for "unset", reads as 1.
+    #[serde(deserialize_with = "null_is_identity")]
+    pub contrast: f32,
     /// `look.channel_grade`, `--channel-grade` ([`LookSection::channel_grade`]).
     pub channel_grade: [f32; 2],
     /// `look.highlight_desaturation`, `--highlight-desaturation*`: each key unset takes
@@ -243,7 +254,7 @@ pub struct LookKeys {
 impl Default for LookKeys {
     fn default() -> Self {
         Self {
-            contrast: None,
+            contrast: 1.0,
             channel_grade: IDENTITY_CHANNEL_GRADE,
             highlight_desaturation: DesaturationKeys::default(),
         }
@@ -251,12 +262,13 @@ impl Default for LookKeys {
 }
 
 impl LookKeys {
-    /// The stage's section: `contrast` when none is stated, and `desaturation`'s value
-    /// for each unstated desaturation key. Destructured without `..`, so a new look knob
-    /// does not compile until it has a base (`crate::rendering`'s module docs).
-    pub fn resolve(&self, contrast: f32, desaturation: HighlightDesaturation) -> LookSection {
+    /// The stage's section at `slope` (already the base times `contrast`), with
+    /// `desaturation`'s value for each unstated desaturation key. Destructured without
+    /// `..`, so a new look knob does not compile until it has a base
+    /// (`crate::rendering`'s module docs).
+    pub fn resolve(&self, slope: f32, desaturation: HighlightDesaturation) -> LookSection {
         let LookKeys {
-            contrast: stated_contrast,
+            contrast: _,
             channel_grade,
             highlight_desaturation:
                 DesaturationKeys {
@@ -266,7 +278,7 @@ impl LookKeys {
                 },
         } = *self;
         LookSection {
-            contrast: stated_contrast.unwrap_or(contrast),
+            slope,
             channel_grade,
             highlight_desaturation: HighlightDesaturation {
                 strength: strength.unwrap_or(desaturation.strength),
@@ -275,6 +287,25 @@ impl LookKeys {
             },
         }
     }
+
+    /// Whether the user asked for a look — the one predicate a destination that runs no
+    /// look (`film-master`) reads to refuse, rather than one rule per knob
+    /// (`nf-look/stage`; the refusal is `recipe::destination`). Spared: every knob at its
+    /// default, and highlight desaturation off — an identity renders what such a
+    /// destination does, and refusing it would kill the flags-win reset.
+    pub fn asks_for_a_look(&self) -> bool {
+        let pull = self
+            .resolve(1.0, HighlightDesaturation::DEFAULT)
+            .highlight_desaturation;
+        self.contrast != 1.0
+            || self.channel_grade != IDENTITY_CHANNEL_GRADE
+            || !(pull.is_off() || pull == HighlightDesaturation::DEFAULT)
+    }
+}
+
+/// Reads `null` as 1, the identity: version 2 wrote an unset `look.contrast` as `null`.
+fn null_is_identity<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<f32, D::Error> {
+    Ok(Option::<f32>::deserialize(d)?.unwrap_or(1.0))
 }
 
 /// The recipe's `look.highlight_desaturation` keys — the stage's
@@ -287,17 +318,38 @@ pub struct DesaturationKeys {
     pub band: Option<[f32; 2]>,
 }
 
-/// Where the look's resolved contrast came from — the report's
-/// `chain.roll.contrast_applied`, whose knob a contrast fault names, and whether the
-/// `default` rendering fell back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ContrastSource {
-    /// `look.contrast` was stated, and wins over the roll's.
-    Stated,
-    /// The roll's white, through [`roll_white::contrast_for`].
+/// Where the look's base slope came from — the report's `chain.look.base_from`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlopeBase {
+    /// The applied roll's white, through [`roll_white::slope_for`].
     Roll,
-    /// Neither: the rendering's base ([`Base::contrast`]).
-    Base,
+    /// No roll white under `default`: [`Base::slope`], the fallback.
+    Fallback,
+    /// `direct`, which applies no roll: its pinned [`Base::slope`].
+    Direct,
+}
+
+/// The look's slope and its parts: `base_slope × contrast` ([`Recipe::resolved_slope`]).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct ResolvedSlope {
+    /// `look.contrast`, the multiplier.
+    pub contrast: f32,
+    pub base_slope: f32,
+    pub base_from: SlopeBase,
+    /// What the look stage receives. Not serialized: the report's section states it.
+    #[serde(skip)]
+    pub slope: f32,
+}
+
+/// The report's `chain.look`: the knob and the base it multiplied, then the section the
+/// stage ran (its `slope` is their product).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct LookReport {
+    #[serde(flatten)]
+    pub slope: ResolvedSlope,
+    #[serde(flatten)]
+    pub section: LookSection,
 }
 
 /// What the roll section held and what the run applied of it — the report's
@@ -308,12 +360,12 @@ pub struct RollReport {
     pub white_balance: Option<[f32; 3]>,
     /// The section's white, as stated.
     pub white_stops: Option<f32>,
-    /// The look contrast `white_stops` renders at ([`roll_white::contrast_for`]).
-    pub contrast: Option<f32>,
+    /// The slope `white_stops` renders at ([`roll_white::slope_for`]).
+    pub slope: Option<f32>,
     /// Whether the gains reached scene correction (not under `direct` or the film master).
     pub white_balance_applied: bool,
-    /// Whether the look's contrast is the roll's (a stated `look.contrast` wins).
-    pub contrast_applied: bool,
+    /// Whether the look's base slope is the roll's.
+    pub slope_applied: bool,
 }
 
 /// Which style knobs this invocation typed as flags: [`Recipe::recipe_warnings`] never
@@ -367,8 +419,8 @@ const OLD_RECONSTRUCTION_KEYS: &[(&str, &str)] = &[
     ),
     (
         "curve",
-        "there is one curve: its slope is `reconstruction.linearization` (print contrast \
-         is `look.contrast`) and its placement \
+        "there is one curve: its slope is `reconstruction.linearization` (the picture's \
+         contrast is `look.contrast`) and its placement \
          `reconstruction.anchor` (`{\"mid-at-base-offset\": <d>}`)",
     ),
     (
@@ -398,8 +450,8 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
     ),
     (
         &["sigmoid"],
-        "there is one curve: its slope is `reconstruction.linearization` (print contrast \
-         is `look.contrast`) and its placement \
+        "there is one curve: its slope is `reconstruction.linearization` (the picture's \
+         contrast is `look.contrast`) and its placement \
          `reconstruction.anchor`",
     ),
     (
@@ -419,13 +471,147 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
     ),
 ];
 
+/// What a migration message converts an old slope against: the base slope a recipe
+/// body gives `look.contrast` under its own rendering and roll, how to name it, and the
+/// keys to drop first. With `roll.frames` the roll's slope differs per frame while a
+/// stated slope overrode them all, so the exact conversion drops the roll's whites and
+/// multiplies the fallback.
+struct BodyBase {
+    slope: f32,
+    named: String,
+    drop: String,
+}
+
+fn body_base(body: &serde_json::Value) -> BodyBase {
+    let base = |slope: f32, named: String, drop: String| BodyBase { slope, named, drop };
+    if body.get("rendering").and_then(|r| r.as_str()) == Some("direct") {
+        let s = Rendering::Direct.base().slope;
+        return base(
+            s,
+            format!("the `direct` rendering's slope {s}"),
+            String::new(),
+        );
+    }
+    let fallback = Rendering::Default.base().slope;
+    let white = body.pointer("/roll/white_stops").and_then(|w| w.as_f64());
+    let frames = body
+        .pointer("/roll/frames")
+        .and_then(|f| f.as_object())
+        .is_some_and(|f| !f.is_empty());
+    match white {
+        _ if frames => {
+            let keys = if white.is_some() {
+                "`roll.white_stops` and `roll.frames`"
+            } else {
+                "`roll.frames`"
+            };
+            base(
+                fallback,
+                format!("the fallback slope {fallback}"),
+                format!("drop {keys} (the stated slope overrode every frame's white), "),
+            )
+        }
+        Some(w) if w.is_finite() && w > 0.0 => {
+            let s = roll_white::slope_for(w as f32);
+            base(
+                s,
+                format!("the roll's slope {s} from `roll.white_stops` {w}"),
+                String::new(),
+            )
+        }
+        _ => base(
+            fallback,
+            format!("the fallback slope {fallback}"),
+            String::new(),
+        ),
+    }
+}
+
+/// The `look.contrast` multiplier whose product with `base` comes closest to `slope`,
+/// among the quotient and its `f32` neighbours, and whether it hits `slope` exactly.
+/// Exact is not always reachable: the products of neighbouring multipliers can step
+/// over `slope`. `None` when no usable multiplier comes out (a non-positive or
+/// non-finite slope or base).
+fn multiplier_for(slope: f32, base: f32) -> Option<(f32, bool)> {
+    let q = slope / base;
+    if !(q.is_normal() && q > 0.0) {
+        return None;
+    }
+    let k = (-2i32..=2)
+        .map(|step| f32::from_bits(q.to_bits().wrapping_add_signed(step)))
+        .filter(|k| k.is_normal())
+        .min_by(|a, b| {
+            (base * a - slope)
+                .abs()
+                .total_cmp(&(base * b - slope).abs())
+        })?;
+    Some((k, base * k == slope))
+}
+
+/// A version 2 `look.contrast` number: it was the slope, and is now a multiplier.
+/// `whole` is `false` for a per-frame override, whose base is the shared recipe's and
+/// so not in `body`.
+fn v2_contrast_message(body: &serde_json::Value, stated: f32, whole: bool) -> String {
+    let meaning = format!(
+        "`look.contrast` {stated} in a `{VERSION_KEY}` {V2_RECIPE_VERSION} recipe is the \
+         slope itself; since version {RECIPE_VERSION} it is a multiplier on the base slope \
+         (1 keeps it)"
+    );
+    let version = format!("`\"{VERSION_KEY}\": {RECIPE_VERSION}`");
+    let b = body_base(body);
+    let convert = match multiplier_for(stated, b.slope) {
+        Some((k, exact)) if whole => format!(
+            "{}, {}state `look.contrast` {k} ({stated} over {}; stacked with other \
+             `--params` files, over the base they compose to, the report's \
+             `chain.look.base_slope`) and {version}",
+            if exact {
+                "To render as before"
+            } else {
+                "To keep that slope (to within one f32 step: no multiplier hits it exactly)"
+            },
+            b.drop,
+            b.named
+        ),
+        Some(_) => format!(
+            "To render as before, state {stated} over the frame's base slope (its report's \
+             `chain.look.base_slope`) and {version}"
+        ),
+        None => format!("State a positive multiplier and {version}"),
+    };
+    format!(
+        "{meaning}. {convert}. If nobody chose the value (every recipe an earlier build wrote \
+         stated 1.1111112, and an earlier `hanten measure-roll` wrote the roll's contrast \
+         there), drop it and state {version} to use the base"
+    )
+}
+
+/// A per-frame override stating a `look.contrast` number but no version: the number
+/// means a multiplier since version 3 and a slope before, and nothing tells which.
+fn unversioned_contrast_message(stated: f32) -> String {
+    format!(
+        "`look.contrast` {stated} in a per-frame override that states no \
+         `{VERSION_KEY}`: since version {RECIPE_VERSION} it is a multiplier on the frame's \
+         base slope (1 keeps it), and in version {V2_RECIPE_VERSION} it was the slope \
+         itself. State `\"{VERSION_KEY}\": {RECIPE_VERSION}` beside it if {stated} is the \
+         multiplier; if it is a slope, divide it by the frame's base slope (its report's \
+         `chain.look.base_slope`) first"
+    )
+}
+
+/// A body's `look.contrast` when it is a number (in `f32`, as the recipe holds it).
+fn stated_contrast(body: &serde_json::Value) -> Option<f32> {
+    let v = body.get("look")?.get("contrast")?.as_f64()?;
+    Some(v as f32)
+}
+
 /// Refuse a recipe body written for the removed chain, before serde sees it.
 ///
 /// Run on the raw JSON, because the failure is about presence: a missing marker, or
 /// a key the removed chain read that means nothing here. `whole` is `true`
 /// for a whole recipe and `false` for a `roll` per-frame overlay, which is a partial
 /// document merged onto an already-versioned one and so need not restate the
-/// version (it may, and must then state the right one).
+/// version (it may, and must then state the right one) — unless it states a
+/// `look.contrast` number, whose meaning the version decides.
 ///
 /// One diagnosis per call, the first found: a user fixing a recipe removes keys one
 /// at a time, and a list reads as though all of them had to go before anything else
@@ -446,9 +632,20 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
                  plus `output`, the destination"
             ));
         }
+        Some(v) if v.as_u64() == Some(u64::from(V2_RECIPE_VERSION)) => {
+            if let Some(stated) = stated_contrast(body) {
+                return usage(v2_contrast_message(body, stated, whole));
+            }
+        }
+        None => {
+            if let Some(stated) = stated_contrast(body) {
+                return usage(unversioned_contrast_message(stated));
+            }
+        }
         Some(v) if v.as_u64() != Some(u64::from(RECIPE_VERSION)) => {
             return usage(format!(
-                "`{VERSION_KEY}` is {v}; this build reads only {RECIPE_VERSION}"
+                "`{VERSION_KEY}` is {v}; this build reads {RECIPE_VERSION} and \
+                 {V2_RECIPE_VERSION}"
             ));
         }
         _ => {}
@@ -526,22 +723,43 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
     // Retired by `nf-reconstruction/gamma-split`, which split the one slope in two.
     // Refused at every value, the old default included: no single new key replays it.
     if let Some(v) = body.get("reconstruction").and_then(|r| r.get("contrast")) {
-        let remedy = match v.as_f64() {
-            // In f32, as the recipe holds it, so the stated value prints as written.
-            // Only a look value validation accepts: a stated slope so small or so large
-            // that the quotient leaves the normal f32 range falls to the generic remedy.
-            Some(gamma) if (gamma as f32 / LINEARIZATION).is_normal() && gamma > 0.0 => {
-                format!(
-                    "to keep a stated {} as the whole contrast, write `look.contrast`: {} \
-                     and leave `reconstruction.linearization` at its default \
-                     {LINEARIZATION}",
-                    gamma as f32,
-                    gamma as f32 / LINEARIZATION,
-                )
-            }
+        let b = body_base(body);
+        // A version 2 document must move to 3 too, or its new multiplier is read as a
+        // version 2 slope and refused again; so must a per-frame override, which may
+        // state a `look.contrast` number only beside a version.
+        let v2 =
+            body.get(VERSION_KEY).and_then(|v| v.as_u64()) == Some(u64::from(V2_RECIPE_VERSION));
+        let version = if v2 || !whole {
+            format!(", and state `\"{VERSION_KEY}\": {RECIPE_VERSION}`")
+        } else {
+            String::new()
+        };
+        // In f32, as the recipe holds it, so the stated value prints as written. Only a
+        // multiplier validation accepts: anything else falls to the generic remedy. An
+        // override's base is the shared recipe's, not in `body`, so it gets no number.
+        let multiplier = v
+            .as_f64()
+            .filter(|_| whole)
+            .and_then(|gamma| multiplier_for(gamma as f32 / LINEARIZATION, b.slope))
+            .map(|(k, _)| k)
+            .filter(|k| (LINEARIZATION * b.slope * k).is_normal());
+        let remedy = match (v.as_f64(), multiplier) {
+            (Some(gamma), Some(k)) => format!(
+                "to keep a stated {} as the whole slope, {}write `look.contrast` {k} (over \
+                 {}) and leave `reconstruction.linearization` at its default \
+                 {LINEARIZATION}{version}",
+                gamma as f32, b.drop, b.named,
+            ),
+            (Some(gamma), None) if !whole && gamma > 0.0 => format!(
+                "to keep a stated {} as the whole slope, write `look.contrast` {} over the \
+                 frame's base slope (its report's `chain.look.base_slope`) and leave \
+                 `reconstruction.linearization` at its default {LINEARIZATION}{version}",
+                gamma as f32,
+                gamma as f32 / LINEARIZATION,
+            ),
             _ => format!(
-                "state `look.contrast` for the print contrast, and leave \
-                 `reconstruction.linearization` at its default {LINEARIZATION}"
+                "state `look.contrast`, a multiplier on the base slope, and leave \
+                 `reconstruction.linearization` at its default {LINEARIZATION}{version}"
             ),
         };
         return usage(format!(
@@ -591,9 +809,8 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(f) = args.measure.measure_inset {
         r.measure.inset = f;
     }
-    // The decode's own knobs. `--density-gamma` is the decode's linearization — the
-    // calibrated half of `gamma`; print contrast is `--contrast`, the look's
-    // (`nf-reconstruction/gamma-split`).
+    // The decode's own knobs. `--density-gamma` is the decode's linearization — a
+    // calibration; how contrasty the picture is is `--contrast`, the look's.
     if let Some(v) = args.density.density_scale {
         r.reconstruction.scale = v;
     }
@@ -623,7 +840,7 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
         r.scene_correction.exposure = stops;
     }
     if let Some(v) = args.look.contrast {
-        r.look.contrast = Some(v);
+        r.look.contrast = v;
     }
     if let Some(v) = args.look.channel_grade {
         r.look.channel_grade = v;
@@ -696,17 +913,9 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
             // The roll's own values first: each is also a factor in what the stages
             // below receive, so a bad one must be named as itself.
             validate_roll(&r.roll, names)?;
-            validate_roll_frames(&r.roll, d.linearization, names)?;
+            validate_roll_frames(&r.roll, d.linearization, r.look.contrast, names)?;
             validate_scene_correction(r, names)?;
-            let (contrast, source) = r.resolved_contrast();
-            let contrast_name = match source {
-                ContrastSource::Roll => knob_name(names, "roll", "--roll-white", "white_stops"),
-                ContrastSource::Stated | ContrastSource::Base => {
-                    knob_name(names, "look", "--contrast", "contrast")
-                }
-            };
-            validate_look(&r.resolved_look(), &contrast_name, source, names)?;
-            validate_whole_contrast(d.linearization, contrast, &contrast_name, source, names)?;
+            validate_look(r, names)?;
             validate_fit_range(&r.fit_range, names)?;
             return destination(r, names).map(|_| ());
         }
@@ -751,30 +960,37 @@ pub fn validate(r: &Recipe, names: KnobNames) -> Result<()> {
     Err(NcError::Usage(message))
 }
 
-/// The look's value rules ([`LookSection::check_contrast`],
-/// [`LookSection::check_channel_grade`], [`HighlightDesaturation::check`]), rendered as
-/// a usage error naming the knob the way `names` says the command spells it.
+/// The look's value rules, rendered as a usage error naming the knob the way `names`
+/// says the command spells it: the `contrast` multiplier, then the slope it makes with
+/// its base ([`validate_whole_slope`]), then the grade and highlight desaturation
+/// ([`LookSection::check_channel_grade`], [`HighlightDesaturation::check`]).
 ///
 /// [`HighlightDesaturation::check`]: crate::pipeline::look::HighlightDesaturation::check
-fn validate_look(
-    p: &LookSection,
-    contrast_name: &str,
-    source: ContrastSource,
-    names: KnobNames,
-) -> Result<()> {
-    if let Err(ContrastFault(v)) = p.check_contrast() {
-        // A white is finite and positive by its own rule, so only a tiny one reaches
-        // here, as an infinite contrast: the contrast is `log2(1/0.18)` over the white.
-        let hint = match source {
-            ContrastSource::Roll => {
-                "the contrast is log2(1/0.18) over the white, so use a larger white"
-            }
-            ContrastSource::Stated | ContrastSource::Base => "1 is the identity",
-        };
+fn validate_look(r: &Recipe, names: KnobNames) -> Result<()> {
+    let contrast_name = knob_name(names, "look", "--contrast", "contrast");
+    let k = r.look.contrast;
+    if !(k.is_finite() && k > 0.0) {
         return Err(NcError::Usage(format!(
-            "{contrast_name} must give a finite, positive contrast ({hint}), got {v}"
+            "{contrast_name} must be finite and positive (a multiplier on the base slope; \
+             1 keeps it), got {k}"
         )));
     }
+    let s = r.resolved_slope();
+    let white_name = knob_name(names, "roll", "--roll-white", "white_stops");
+    let base = match s.base_from {
+        SlopeBase::Roll => format!("the roll's slope {} from {white_name}", s.base_slope),
+        SlopeBase::Fallback => format!("the fallback slope {}", s.base_slope),
+        SlopeBase::Direct => format!("the `direct` rendering's slope {}", s.base_slope),
+    };
+    validate_whole_slope(
+        r.reconstruction.linearization,
+        s.slope,
+        &format!("{base} times {contrast_name} {k}"),
+        Some(&contrast_name),
+        (s.base_from == SlopeBase::Roll).then_some(white_name.as_str()),
+        names,
+    )?;
+    let p = r.resolved_look();
     if let Err(ChannelGradeFault([r, b])) = p.check_channel_grade() {
         return Err(NcError::Usage(format!(
             "{} must be two finite, positive exponents whose spread with green's 1 is \
@@ -810,48 +1026,49 @@ fn validate_look(
     Err(NcError::Usage(message))
 }
 
-/// The whole contrast, `linearization · look.contrast` — the divisor highlight
-/// desaturation normalises its saturation measure by — must be a normal positive f32.
-/// Each factor can pass its own rule while the product overflows to infinity or
-/// underflows to zero or a subnormal, which the stage cannot use. Keyed on the product
-/// whether or not desaturation is on: a whole contrast outside f32 describes no usable
-/// picture, and one rule is easier to state than a conditional one. Runs after both
-/// factors' own rules, so each is already finite and positive.
-fn validate_whole_contrast(
+/// The whole slope, `linearization × slope` — the divisor highlight desaturation
+/// normalises its saturation measure by — must be a normal positive f32. Each factor
+/// can pass its own rule while the product overflows to infinity or underflows to zero
+/// or a subnormal, which the stage cannot use; a whole slope in range puts the slope in
+/// range too. Keyed on the product whether or not desaturation is on: it describes no
+/// usable picture either way. `slope_parts` names the slope's factors; the remedy names
+/// each knob that can move it — the multiplier and the roll white when they are factors.
+fn validate_whole_slope(
     linearization: f32,
-    contrast: f32,
-    contrast_name: &str,
-    source: ContrastSource,
+    slope: f32,
+    slope_parts: &str,
+    contrast_name: Option<&str>,
+    white_name: Option<&str>,
     names: KnobNames,
 ) -> Result<()> {
-    let total = linearization * contrast;
-    if total.is_normal() {
+    let whole = linearization * slope;
+    if whole.is_normal() {
         return Ok(());
     }
     let gamma = knob_name(names, "reconstruction", "--density-gamma", "linearization");
-    let overflows = total.is_infinite();
+    let overflows = whole.is_infinite();
     let what = if overflows { "overflows" } else { "underflows" };
     let (toward, away) = if overflows {
         ("smaller", "larger")
     } else {
         ("larger", "smaller")
     };
-    // The roll's contrast is inversely proportional to its white, so the white moves
-    // the other way from the linearization.
-    let remedy = match source {
-        ContrastSource::Roll => format!("Use a {toward} {gamma} or a {away} {contrast_name}"),
-        ContrastSource::Stated | ContrastSource::Base => {
-            format!("Use a {toward} value for either")
-        }
-    };
+    let mut remedy = format!("Use a {toward} {gamma}");
+    if let Some(contrast) = contrast_name {
+        remedy += &format!(" or {contrast}");
+    }
+    // The roll's slope is inversely proportional to its white.
+    if let Some(white) = white_name {
+        remedy += &format!(", or a {away} {white}");
+    }
     Err(NcError::Usage(format!(
-        "the whole contrast, {gamma} {linearization:e} times the look contrast {contrast:e} \
-         from {contrast_name}, {what} f32 (highlight desaturation divides by it). {remedy}"
+        "the whole slope, {gamma} {linearization:e} times the slope {slope:e} \
+         ({slope_parts}), {what} f32 (highlight desaturation divides by it). {remedy}"
     )))
 }
 
 /// The roll section's value rules: gains finite and positive, as scene correction's
-/// are; a white finite and positive, since the contrast is `log2(1/0.18)` over it.
+/// are; a white finite and positive, since the slope is `log2(1/0.18)` over it.
 fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
     if let Some(gains) = p.white_balance
         && let Some((channel, value)) = gains
@@ -878,10 +1095,17 @@ fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
 }
 
 /// `roll.frames`' rules, each entry named as itself: a file-name key, and a white
-/// finite and positive whose whole contrast at `linearization` fits f32. Public so
-/// `convert` can judge the table as stated, before [`Recipe::for_frame`] moves its own
-/// entry into `roll.white_stops`.
-pub fn validate_roll_frames(p: &RollSection, linearization: f32, names: KnobNames) -> Result<()> {
+/// finite and positive whose whole slope — at `linearization`, times the `contrast`
+/// multiplier the frame renders under — fits f32. Public so `convert` can judge the
+/// table as stated, before [`Recipe::for_frame`] moves its own entry into
+/// `roll.white_stops`.
+pub fn validate_roll_frames(
+    p: &RollSection,
+    linearization: f32,
+    contrast: f32,
+    names: KnobNames,
+) -> Result<()> {
+    let contrast_name = knob_name(names, "look", "--contrast", "contrast");
     for (name, frame) in &p.frames {
         if name.is_empty() || Path::new(name).file_name() != Some(name.as_ref()) {
             return Err(NcError::Usage(format!(
@@ -895,11 +1119,14 @@ pub fn validate_roll_frames(p: &RollSection, linearization: f32, names: KnobName
                  stops above mid-grey, as `hanten measure-roll` reports them — got {stops}"
             )));
         }
-        validate_whole_contrast(
+        let white = format!("recipe `roll.frames.\"{name}\".white_stops`");
+        let base = roll_white::slope_for(stops);
+        validate_whole_slope(
             linearization,
-            roll_white::contrast_for(stops),
-            &format!("recipe `roll.frames.\"{name}\".white_stops`"),
-            ContrastSource::Roll,
+            base * contrast,
+            &format!("the frame's slope {base} from {white} times {contrast_name} {contrast}"),
+            Some(&contrast_name),
+            Some(&white),
             names,
         )?;
     }
@@ -999,7 +1226,7 @@ fn validate_fit_range(p: &FitRangeSection, names: KnobNames) -> Result<()> {
 /// `film-master` runs no rendering stage, so a stage the user asked for is refused,
 /// naming the stage: **one** rule per stage, never one per knob — scene correction
 /// keyed on [`SceneCorrectionParams::asks_for_a_correction`], the look on
-/// [`LookSection::asks_for_a_look`], fit range on [`FitRangeSection::asks_for_a_fit`]. Each
+/// [`LookKeys::asks_for_a_look`], fit range on [`FitRangeSection::asks_for_a_fit`]. Each
 /// spares its default, which every recipe carries, and its identity, which renders
 /// exactly what the film master does (refusing that would kill the flags-win reset).
 /// Fit gamut has no knob to ask with. Every stage asked for is named in one refusal, in
@@ -1084,12 +1311,9 @@ fn stages_the_master_cannot_run(r: &Recipe, names: KnobNames) -> Vec<(&'static s
             ),
         ));
     }
-    // The look as stated, every unstated key at its default: the roll's contrast is a
-    // measurement the film master leaves unapplied, not a look the user asked for.
-    if r.look
-        .resolve(DEFAULT_CONTRAST, HighlightDesaturation::DEFAULT)
-        .asks_for_a_look()
-    {
+    // The look's knobs as stated: the roll's slope is a measurement the film master
+    // leaves unapplied, not a look the user asked for.
+    if r.look.asks_for_a_look() {
         asked.push(pick(
             (
                 "the look (--contrast, --channel-grade, --highlight-desaturation*, \
@@ -1369,20 +1593,26 @@ impl Recipe {
         }
     }
 
-    /// The look's contrast as the stage receives it, and where it came from: a stated
-    /// `look.contrast` wins, else the applied roll's white, else the rendering's base.
-    pub fn resolved_contrast(&self) -> (f32, ContrastSource) {
-        match (self.look.contrast, self.applied_roll().contrast()) {
-            (Some(stated), _) => (stated, ContrastSource::Stated),
-            (None, Some(roll)) => (roll, ContrastSource::Roll),
-            (None, None) => (self.base().contrast, ContrastSource::Base),
+    /// The look's slope and its parts: the base — the applied roll's white, else the
+    /// rendering's [`Base::slope`] — times the `look.contrast` multiplier.
+    pub fn resolved_slope(&self) -> ResolvedSlope {
+        let (base_slope, base_from) = match (self.applied_roll().slope(), self.rendering) {
+            (Some(roll), _) => (roll, SlopeBase::Roll),
+            (None, Rendering::Default) => (self.base().slope, SlopeBase::Fallback),
+            (None, Rendering::Direct) => (self.base().slope, SlopeBase::Direct),
+        };
+        ResolvedSlope {
+            contrast: self.look.contrast,
+            base_slope,
+            base_from,
+            slope: base_slope * self.look.contrast,
         }
     }
 
     /// The look as the stage receives it.
     pub fn resolved_look(&self) -> LookSection {
         self.look.resolve(
-            self.resolved_contrast().0,
+            self.resolved_slope().slope,
             self.base().highlight_desaturation,
         )
     }
@@ -1411,9 +1641,9 @@ impl Recipe {
         (r.white_balance.is_some() || r.white_stops.is_some()).then(|| RollReport {
             white_balance: r.white_balance,
             white_stops: r.white_stops,
-            contrast: r.contrast(),
+            slope: r.slope(),
             white_balance_applied: applies && r.white_balance.is_some(),
-            contrast_applied: applies && self.resolved_contrast().1 == ContrastSource::Roll,
+            slope_applied: applies && self.resolved_slope().base_from == SlopeBase::Roll,
         })
     }
 
@@ -1434,8 +1664,9 @@ impl Recipe {
         }
     }
 
-    /// `default` without a roll measurement: what fell back. A typed flag, even
-    /// `--white-balance 1,1,1`, is a choice and silences its half.
+    /// `default` without a roll measurement: what fell back. Each half is silenced as
+    /// white balance's is: a typed flag, even the identity, is a choice, and so is a
+    /// recipe value off the identity — though both multiply the fallback.
     fn fallback_warning(&self, typed: TypedStyle) -> Option<String> {
         let mut fell_back = Vec::new();
         if !typed.white_balance
@@ -1444,18 +1675,22 @@ impl Recipe {
         {
             fell_back.push("neutral white balance (no `roll.white_balance`)".to_string());
         }
-        if self.resolved_contrast().1 == ContrastSource::Base {
+        if !typed.contrast
+            && self.look.contrast == 1.0
+            && self.resolved_slope().base_from == SlopeBase::Fallback
+        {
             fell_back.push(format!(
-                "the fallback contrast {} (no `roll.white_stops`)",
-                self.base().contrast
+                "the fallback slope {} (no `roll.white_stops`)",
+                self.base().slope
             ));
         }
         (!fell_back.is_empty()).then(|| {
             format!(
                 "no roll measurement: rendered with {}. Run `hanten measure-roll` over the \
                  roll and use the recipe it writes (its `roll` section); or state the white \
-                 balance and contrast you want (`scene_correction.white_balance`, \
-                 `look.contrast`); or use the `direct` rendering (`rendering`: \"direct\"), \
+                 balance you want (`scene_correction.white_balance`) and the roll's white \
+                 (`roll.white_stops`, which sets the base slope `look.contrast` multiplies); \
+                 or use the `direct` rendering (`rendering`: \"direct\"), \
                  the decode without a roll correction, whose unset destination is the HDR \
                  float TIFF",
                 fell_back.join(" and "),
@@ -1463,8 +1698,7 @@ impl Recipe {
         })
     }
 
-    /// `default`: a recipe's style value beside a roll measurement it multiplies or
-    /// overrides.
+    /// `default`: a recipe's white balance beside the roll's gains it multiplies.
     fn roll_overlap_warnings(&self, typed: TypedStyle) -> Vec<String> {
         let mut warnings = Vec::new();
         let WhiteBalance::Explicit(stated) = self.scene_correction.white_balance;
@@ -1479,20 +1713,6 @@ impl Recipe {
                  {product:?}. A stated white balance is an adjustment on top of the roll's \
                  measurement; if it holds gains an earlier `hanten measure-roll` wrote there, \
                  drop it — they now live in `roll.white_balance`"
-            ));
-        }
-        if !typed.contrast
-            && let (Some(stated), Some(white), Some(roll)) = (
-                self.look.contrast,
-                self.roll.white_stops,
-                self.roll.contrast(),
-            )
-        {
-            warnings.push(format!(
-                "the recipe's `look.contrast` {stated} overrides the roll's contrast {roll} \
-                 (from `roll.white_stops` {white}). If it came from a recipe an earlier build \
-                 wrote (every one stated `look.contrast` 1.1111112) or from an earlier `hanten \
-                 measure-roll`, set it to `null` to use the roll's"
             ));
         }
         warnings
@@ -1527,16 +1747,6 @@ impl Recipe {
                      [1, 1, 1])"
                 ));
             }
-            if !typed.contrast
-                && let Some(c) = self.look.contrast
-                && c != base.contrast
-            {
-                beside_roll = true;
-                moved.push(format!(
-                    "`look.contrast` {c} beside a `roll` section (direct: {})",
-                    base.contrast
-                ));
-            }
         }
         // Each case's remedy, never telling a deliberate adjuster to drop the value.
         let mut remedies: Vec<&str> = Vec::new();
@@ -1549,8 +1759,7 @@ impl Recipe {
         if beside_roll {
             remedies.push(
                 "if a value beside the `roll` section came from an earlier `hanten \
-                 measure-roll`, drop `scene_correction.white_balance` (and set \
-                 `look.contrast` to `null`)",
+                 measure-roll`, drop `scene_correction.white_balance`",
             );
         }
         let remedies = remedies.join("; ");
@@ -1573,6 +1782,7 @@ impl Recipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::look::DEFAULT_SLOPE;
 
     fn parse(json: &str) -> std::result::Result<Recipe, serde_json::Error> {
         serde_json::from_str(json)
@@ -1581,6 +1791,191 @@ mod tests {
     fn check(json: &str, whole: bool) -> std::result::Result<(), String> {
         let v: serde_json::Value = serde_json::from_str(json).unwrap();
         check_body(&v, whole, "recipe r.json").map_err(|e| e.message().to_string())
+    }
+
+    /// `json` with `err`'s suggested multiplier applied, the listed `roll` keys dropped,
+    /// and version 3 stated — the migration a v2 refusal names, as a user follows it.
+    fn converted(json: &str, err: &str, drop: &[&str]) -> Recipe {
+        let k = stated_number(err, "state `look.contrast` ");
+        let mut v: serde_json::Value = serde_json::from_str(json).unwrap();
+        v["recipe_version"] = 3.into();
+        v["look"]["contrast"] = k.into();
+        for key in drop {
+            v["roll"].as_object_mut().unwrap().remove(*key);
+        }
+        check(&v.to_string(), true).unwrap();
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// The number a message states right after `after`.
+    fn stated_number(message: &str, after: &str) -> f32 {
+        let rest =
+            &message[message.find(after).unwrap_or_else(|| panic!("{message}")) + after.len()..];
+        let end = rest.find(' ').unwrap_or(rest.len());
+        rest[..end].parse().unwrap_or_else(|_| panic!("{message}"))
+    }
+
+    #[test]
+    fn a_version_2_contrast_is_refused_with_the_multiplier_that_keeps_its_slope() {
+        // Version 2's number was the slope itself; read as a multiplier it would render
+        // differently in silence. Each case: the recipe, the stated slope, its base.
+        let direct = crate::rendering::DIRECT.slope;
+        for (json, slope, base) in [
+            (
+                r#"{"recipe_version": 2, "look": {"contrast": 1.1111112}}"#,
+                1.111_111_2,
+                DEFAULT_SLOPE,
+            ),
+            (
+                r#"{"recipe_version": 2, "roll": {"white_stops": 1.6}, "look": {"contrast": 1.8}}"#,
+                1.8,
+                roll_white::slope_for(1.6),
+            ),
+            (
+                r#"{"recipe_version": 2, "rendering": "direct", "roll": {"white_stops": 1.6},
+                    "look": {"contrast": 1.3}}"#,
+                1.3,
+                direct,
+            ),
+            // Awkward quotients: the multiplier is picked so the product is exact.
+            (
+                r#"{"recipe_version": 2, "roll": {"white_stops": 1.7}, "look": {"contrast": 1.1111112}}"#,
+                1.111_111_2,
+                roll_white::slope_for(1.7),
+            ),
+            (
+                r#"{"recipe_version": 2, "roll": {"white_stops": 1.93}, "look": {"contrast": 1.37}}"#,
+                1.37,
+                roll_white::slope_for(1.93),
+            ),
+        ] {
+            let err = check(json, true).unwrap_err();
+            assert!(
+                err.contains("is the slope itself")
+                    && err.contains("multiplier on the base slope")
+                    && err.contains("`\"recipe_version\": 3`")
+                    && err.contains("drop it"),
+                "{err}"
+            );
+            // The remedy works: the stated multiplier, in a version 3 recipe, renders the
+            // old slope — bit for bit when the message says "as before", else within one
+            // f32 step, which it says too.
+            let r = converted(json, &err, &[]);
+            let got = r.resolved_slope();
+            assert_eq!(got.base_slope, base, "{json}");
+            if err.contains("To render as before") {
+                assert_eq!(got.slope, slope, "{json}: {err}");
+            } else {
+                let step = f32::from_bits(slope.to_bits() + 1) - slope;
+                assert!(
+                    (got.slope - slope).abs() <= step && err.contains("within one f32 step"),
+                    "{json}: {err}"
+                );
+            }
+        }
+        // Both forms are reached: the fallback's own default converts exactly.
+        let err = check(
+            r#"{"recipe_version": 2, "look": {"contrast": 1.1111112}}"#,
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("To render as before"), "{err}");
+        // With `roll.frames` the old slope overrode every frame's white, so the exact
+        // conversion drops the roll's whites: every frame, clamped or not, renders it.
+        let frames = r#"{"recipe_version": 2,
+            "roll": {"white_stops": 1.6, "frames": {"f07.tif": {"white_stops": 2.0}}},
+            "look": {"contrast": 1.8}}"#;
+        let err = check(frames, true).unwrap_err();
+        assert!(
+            err.contains("drop `roll.white_stops` and `roll.frames`")
+                && err.contains("over the fallback slope"),
+            "{err}"
+        );
+        let r = converted(frames, &err, &["white_stops", "frames"]);
+        let step = f32::from_bits(1.8f32.to_bits() + 1) - 1.8;
+        for input in ["f01.tif", "f07.tif"] {
+            let frame = r.clone().for_frame(Path::new(input));
+            assert!(
+                (frame.resolved_slope().slope - 1.8).abs() <= step,
+                "{input}: {err}"
+            );
+        }
+        // A number no multiplier can keep gets the general remedy, never one validation
+        // would refuse.
+        for bad in ["0", "-1.2"] {
+            let json = format!(r#"{{"recipe_version": 2, "look": {{"contrast": {bad}}}}}"#);
+            let err = check(&json, true).unwrap_err();
+            assert!(
+                err.contains("State a positive multiplier")
+                    && !err.contains("state `look.contrast`"),
+                "{err}"
+            );
+        }
+        // Nothing ambiguous reads unchanged: no contrast, or the `null` a version 2 dump
+        // wrote for unset.
+        for json in [
+            r#"{"recipe_version": 2}"#,
+            r#"{"recipe_version": 2, "look": {"contrast": null}}"#,
+        ] {
+            check(json, true).unwrap();
+            assert_eq!(parse(json).unwrap().look.contrast, 1.0, "{json}");
+        }
+        // A per-frame override is held to the same rule; its base is the shared recipe's,
+        // so it is pointed at the report rather than handed a number. One stating no
+        // version cannot say which meaning it has, so it must state one.
+        let overlay = r#"{"recipe_version": 2, "look": {"contrast": 1.3}}"#;
+        let err = check(overlay, false).unwrap_err();
+        assert!(
+            err.contains("is the slope itself") && err.contains("`chain.look.base_slope`"),
+            "{err}"
+        );
+        let err = check(r#"{"look": {"contrast": 1.3}}"#, false).unwrap_err();
+        assert!(
+            err.contains("states no `recipe_version`")
+                && err.contains("`\"recipe_version\": 3` beside it"),
+            "{err}"
+        );
+        check(r#"{"recipe_version": 3, "look": {"contrast": 1.3}}"#, false).unwrap();
+        check(r#"{"look": {"contrast": null}}"#, false).unwrap();
+        // Version 3 states a multiplier, and a version this build never wrote is refused.
+        check(r#"{"recipe_version": 3, "look": {"contrast": 1.3}}"#, true).unwrap();
+        let err = check(r#"{"recipe_version": 4}"#, true).unwrap_err();
+        assert!(err.contains("this build reads 3 and 2"), "{err}");
+        // A version 2 document is written back as version 3.
+        let text = serde_json::to_string(&parse(r#"{"recipe_version": 2}"#).unwrap()).unwrap();
+        assert!(text.starts_with(r#"{"recipe_version":3,"#), "{text}");
+    }
+
+    #[test]
+    fn a_look_is_asked_for_only_by_a_knob_off_its_default_and_off_the_identity() {
+        let asks = |json: &str| {
+            parse(&format!(r#"{{"recipe_version": 3, "look": {json}}}"#))
+                .unwrap()
+                .look
+                .asks_for_a_look()
+        };
+        // Spared: the defaults, and highlight desaturation off however its inert knobs sit
+        // — the flags-win reset. A stated default strength is spared too.
+        for spared in [
+            "{}",
+            r#"{"contrast": 1}"#,
+            r#"{"channel_grade": [1, 1]}"#,
+            r#"{"highlight_desaturation": {"strength": 0}}"#,
+            r#"{"highlight_desaturation": {"strength": 0, "band": [0.02, 0.04]}}"#,
+            r#"{"highlight_desaturation": {"strength": 0.8}}"#,
+        ] {
+            assert!(!asks(spared), "{spared}");
+        }
+        // Asked: any knob moved off both.
+        for asked in [
+            r#"{"contrast": 1.3}"#,
+            r#"{"contrast": 0.9}"#,
+            r#"{"channel_grade": [1.1, 0.9]}"#,
+            r#"{"highlight_desaturation": {"strength": 0.5}}"#,
+            r#"{"highlight_desaturation": {"band": [0.02, 0.04]}}"#,
+        ] {
+            assert!(asks(asked), "{asked}");
+        }
     }
 
     /// Top-level keys of a serialized document, in the order they are written.
@@ -1631,9 +2026,9 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         // A stage with no knob is present as an empty object, not absent or `null`. A
         // knob whose base is the rendering's (`crate::rendering`) is written `null`,
-        // unstated — the look's contrast and highlight desaturation, fit range's headroom
-        // and display black — and so is the roll section; the rest are written at their
-        // identity (scene correction, the grade). Keys are written, never left out, so a
+        // unstated — highlight desaturation, fit range's headroom and display black — and
+        // so is the roll section; the rest are written at their identity (scene
+        // correction, the look's contrast multiplier, the grade). Keys are written, never left out, so a
         // per-frame override merges. (Fit gamut's map runs at every setting; it simply
         // has nothing for a recipe to set.)
         assert_eq!(json["rendering"], "default");
@@ -1642,7 +2037,7 @@ mod tests {
         assert_eq!(json["output"], serde_json::json!({"display": {}}));
         assert_eq!(
             serde_json::to_string(&Recipe::default().look).unwrap(),
-            r#"{"contrast":null,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":null,"start_stops":null,"band":null}}"#
+            r#"{"contrast":1.0,"channel_grade":[1.0,1.0],"highlight_desaturation":{"strength":null,"start_stops":null,"band":null}}"#
         );
         assert_eq!(
             json["scene_correction"],
@@ -1680,7 +2075,7 @@ mod tests {
         // shaped its input — the decode's half of it the look section cannot state, so
         // `chain_params` must.
         let r = parse(
-            r#"{"recipe_version": 2, "reconstruction": {"linearization": 3.1},
+            r#"{"recipe_version": 3, "reconstruction": {"linearization": 3.1},
                 "look": {"contrast": 1.2, "highlight_desaturation": {"strength": 0.5}}}"#,
         )
         .unwrap();
@@ -1689,7 +2084,7 @@ mod tests {
             .shared
             .look;
         assert_eq!(look.linearization, 3.1);
-        assert_eq!(look.section.contrast, 1.2);
+        assert_eq!(look.section.slope, DEFAULT_SLOPE * 1.2);
         assert_eq!(look.section.highlight_desaturation.strength, 0.5);
         assert_eq!(
             look.section.highlight_desaturation.band,
@@ -1713,21 +2108,21 @@ mod tests {
             let (film, _) = fixed::decode(&scan, &base, &r.reconstruction).unwrap();
             film.rgb().iter().map(|v| v.to_bits()).collect::<Vec<_>>()
         };
-        let plain = decoded(r#"{"recipe_version": 2}"#);
+        let plain = decoded(r#"{"recipe_version": 3}"#);
         assert_eq!(
             plain,
-            decoded(r#"{"recipe_version": 2, "look": {"contrast": 1.6}}"#)
+            decoded(r#"{"recipe_version": 3, "look": {"contrast": 1.6}}"#)
         );
         assert_ne!(
             plain,
-            decoded(r#"{"recipe_version": 2, "reconstruction": {"linearization": 2.0}}"#)
+            decoded(r#"{"recipe_version": 3, "reconstruction": {"linearization": 2.0}}"#)
         );
     }
 
     #[test]
     fn a_partial_recipe_takes_the_defaults_it_omits() {
         let r =
-            parse(r#"{"recipe_version": 2, "reconstruction": {"linearization": 1.7}}"#).unwrap();
+            parse(r#"{"recipe_version": 3, "reconstruction": {"linearization": 1.7}}"#).unwrap();
         assert_eq!(r.reconstruction.linearization, 1.7);
         assert_eq!(r.reconstruction.scale, DecodeParams::default().scale);
         assert_eq!(r.look, LookKeys::default());
@@ -1741,8 +2136,8 @@ mod tests {
                 .to_string()
                 .contains("recipe_version")
         );
-        let err = parse(r#"{"recipe_version": 3}"#).unwrap_err().to_string();
-        assert!(err.contains("reads only 2"), "{err}");
+        let err = parse(r#"{"recipe_version": 4}"#).unwrap_err().to_string();
+        assert!(err.contains("reads 3 and 2"), "{err}");
     }
 
     #[test]
@@ -1758,14 +2153,37 @@ mod tests {
             "fit_range",
             "fit_gamut",
         ] {
-            let json = format!(r#"{{"recipe_version": 2, "{section}": {{"nonsense": 1}}}}"#);
+            let json = format!(r#"{{"recipe_version": 3, "{section}": {{"nonsense": 1}}}}"#);
             let err = parse(&json).unwrap_err().to_string();
             assert!(err.contains("nonsense"), "{section}: {err}");
         }
-        let err = parse(r#"{"recipe_version": 2, "nonsense": {}}"#)
+        let err = parse(r#"{"recipe_version": 3, "nonsense": {}}"#)
             .unwrap_err()
             .to_string();
         assert!(err.contains("nonsense"), "{err}");
+    }
+
+    #[test]
+    fn a_roll_frames_white_is_judged_at_the_slope_it_renders_with_the_contrast() {
+        // Each frame renders at its own white's slope times the multiplier, so an entry
+        // that fits alone can overflow once multiplied — refused by name, not left for
+        // the look stage to fail on.
+        let json = r#"{"recipe_version": 3, "roll": {"white_stops": 1.6,
+            "frames": {"a.tif": {"white_stops": 1e-37}}}, "look": {"contrast": 100}}"#;
+        let r = parse(json).unwrap();
+        validate(
+            &parse(&json.replace("100", "1")).unwrap(),
+            KnobNames::FlagAndKey,
+        )
+        .unwrap();
+        let err = validate(&r, KnobNames::FlagAndKey).unwrap_err();
+        let msg = err.message();
+        assert!(
+            msg.contains("`roll.frames.\"a.tif\".white_stops`")
+                && msg.contains("--contrast (recipe `look.contrast`) 100")
+                && msg.contains("overflows"),
+            "{msg}"
+        );
     }
 
     #[test]
@@ -1801,7 +2219,7 @@ mod tests {
         // recipe value.
         for whole in [true, false] {
             let body = if whole {
-                r#"{"recipe_version": 2, "calibration": {"film_base": "auto"}}"#
+                r#"{"recipe_version": 3, "calibration": {"film_base": "auto"}}"#
             } else {
                 r#"{"calibration": {"film_base": "auto"}}"#
             };
@@ -1821,7 +2239,7 @@ mod tests {
     fn a_body_without_the_marker_is_refused_as_the_removed_chains() {
         let base = r#"{"calibration": {"film_base": {"explicit": [0.5, 0.4, 0.3]}}}"#;
         let err = check(base, true).unwrap_err();
-        assert!(err.contains("\"recipe_version\": 2"), "{err}");
+        assert!(err.contains("\"recipe_version\": 3"), "{err}");
         assert!(err.contains("`hanten params`"), "{err}");
         assert!(err.contains("pipeline_version` 8"), "{err}");
         assert!(!err.contains("--new-flow"), "{err}");
@@ -1829,12 +2247,12 @@ mod tests {
         check(base, false).unwrap();
         // …but may not state a wrong one.
         let err = check(r#"{"recipe_version": 1}"#, false).unwrap_err();
-        assert!(err.contains("reads only 2"), "{err}");
+        assert!(err.contains("reads 3 and 2"), "{err}");
     }
 
     #[test]
     fn an_old_section_is_refused_by_name_with_where_it_went() {
-        let err = check(r#"{"recipe_version": 2, "print": {}}"#, true).unwrap_err();
+        let err = check(r#"{"recipe_version": 3, "print": {}}"#, true).unwrap_err();
         assert!(
             err.contains("`print`") && err.contains("scene_correction"),
             "{err}"
@@ -1842,7 +2260,7 @@ mod tests {
         // `output` is shared by name, so the removed chain's keys under it are named
         // one by one, pointing at the destination's axes.
         for key in OLD_OUTPUT_KEYS {
-            let body = format!(r#"{{"recipe_version": 2, "output": {{"{key}": "x"}}}}"#);
+            let body = format!(r#"{{"recipe_version": 3, "output": {{"{key}": "x"}}}}"#);
             let err = check(&body, true).unwrap_err();
             assert!(
                 err.contains(&format!("`output.{key}`")) && err.contains("output.display"),
@@ -1850,24 +2268,24 @@ mod tests {
             );
         }
         check(
-            r#"{"recipe_version": 2, "output": {"display": {"gamut": "adobe-rgb"}}}"#,
+            r#"{"recipe_version": 3, "output": {"display": {"gamut": "adobe-rgb"}}}"#,
             true,
         )
         .unwrap();
         let err = check(
-            r#"{"recipe_version": 2, "reconstruction": {"density": {"scale": [1, 1, 1]}}}"#,
+            r#"{"recipe_version": 3, "reconstruction": {"density": {"scale": [1, 1, 1]}}}"#,
             true,
         )
         .unwrap_err();
         assert!(err.contains("reconstruction.density") && err.contains("reconstruction.scale"));
         let err = check(
-            r#"{"recipe_version": 2, "reconstruction": {"curve": {"type": "exponential"}}}"#,
+            r#"{"recipe_version": 3, "reconstruction": {"curve": {"type": "exponential"}}}"#,
             true,
         )
         .unwrap_err();
         assert!(err.contains("reconstruction.linearization"), "{err}");
         let err = check(
-            r#"{"recipe_version": 2, "calibration": {"dmax": "fixed"}}"#,
+            r#"{"recipe_version": 3, "calibration": {"dmax": "fixed"}}"#,
             true,
         )
         .unwrap_err();
@@ -1999,7 +2417,7 @@ mod tests {
         assert!(msg.contains("`reconstruction.linearization`"), "{msg}");
         assert!(!msg.contains("--density-gamma"), "{msg}");
         let mut r = Recipe::default();
-        r.look.contrast = Some(0.0);
+        r.look.contrast = 0.0;
         let msg = validate(&r, KnobNames::KeyOnly).unwrap_err();
         let msg = msg.message();
         assert!(msg.contains("`look.contrast`"), "{msg}");
@@ -2010,17 +2428,18 @@ mod tests {
     fn validate_refuses_an_unusable_look_contrast() {
         for bad in [0.0, -1.1, f32::NAN, f32::INFINITY] {
             let mut r = Recipe::default();
-            r.look.contrast = Some(bad);
+            r.look.contrast = bad;
             let msg = validate(&r, KnobNames::FlagAndKey).unwrap_err();
             assert!(
                 msg.message()
-                    .contains("--contrast (recipe `look.contrast`)"),
+                    .contains("--contrast (recipe `look.contrast`) must be finite and positive")
+                    && msg.message().contains("multiplier"),
                 "{bad}: {}",
                 msg.message()
             );
         }
         let mut r = Recipe::default();
-        r.look.contrast = Some(1.0);
+        r.look.contrast = 1.0;
         validate(&r, KnobNames::FlagAndKey).unwrap();
     }
 
@@ -2059,16 +2478,21 @@ mod tests {
     #[test]
     fn the_retired_contrast_key_is_refused_with_its_split() {
         // Refused at every value, the old default included: the key was both halves at
-        // once, and no single new key replays it. The remedy states the look value
-        // that keeps the stated slope as the whole contrast.
-        for (json, look) in [
+        // once, and no single new key replays it. The remedy states the multiplier that
+        // keeps the stated slope as the whole slope, over the recipe's own base.
+        for (json, multiplier) in [
             (
-                r#"{"recipe_version": 2, "reconstruction": {"contrast": 2.0}}"#,
-                "1.11",
+                r#"{"recipe_version": 3, "reconstruction": {"contrast": 2.0}}"#,
+                1.0,
             ),
             (
-                r#"{"recipe_version": 2, "reconstruction": {"contrast": 3.6}}"#,
-                "2",
+                r#"{"recipe_version": 3, "reconstruction": {"contrast": 3.6}}"#,
+                1.8,
+            ),
+            (
+                r#"{"recipe_version": 3, "roll": {"white_stops": 1.6},
+                    "reconstruction": {"contrast": 3.6}}"#,
+                3.6 / (LINEARIZATION * roll_white::slope_for(1.6)),
             ),
         ] {
             let err = check(json, true).unwrap_err();
@@ -2076,16 +2500,42 @@ mod tests {
                 err.contains("reconstruction.linearization") && err.contains("look.contrast"),
                 "{err}"
             );
-            assert!(err.contains(&format!("`look.contrast`: {look}")), "{err}");
+            let stated = stated_number(&err, "write `look.contrast` ");
+            assert!((stated - multiplier).abs() < 1e-5, "{json}: {err}");
         }
+        // In a version 2 document the remedy moves it to 3 too, or the new multiplier
+        // would be read as a version 2 slope.
+        let err = check(
+            r#"{"recipe_version": 2, "reconstruction": {"contrast": 2.4}}"#,
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("state `\"recipe_version\": 3`"), "{err}");
+        let err = check(
+            r#"{"recipe_version": 3, "reconstruction": {"contrast": 2.4}}"#,
+            true,
+        )
+        .unwrap_err();
+        assert!(!err.contains("recipe_version"), "{err}");
+        // In a per-frame override the base is the shared recipe's, so the remedy points
+        // at the frame's report instead of computing a number, and states the version an
+        // override needs beside a `look.contrast` number. Followed, it passes.
+        let err = check(r#"{"reconstruction": {"contrast": 2.0}}"#, false).unwrap_err();
+        assert!(
+            err.contains("`chain.look.base_slope`")
+                && err.contains("state `\"recipe_version\": 3`")
+                && !err.contains("over the fallback slope"),
+            "{err}"
+        );
+        check(r#"{"recipe_version": 3, "look": {"contrast": 1.0}}"#, false).unwrap();
         // A value whose quotient validation would refuse (zero, subnormal or infinite
         // in f32) gets the generic remedy, never a `look.contrast` it would then refuse.
         for json in [
-            r#"{"recipe_version": 2, "reconstruction": {"contrast": "steep"}}"#,
-            r#"{"recipe_version": 2, "reconstruction": {"contrast": 1e-50}}"#,
-            r#"{"recipe_version": 2, "reconstruction": {"contrast": 1e-39}}"#,
-            r#"{"recipe_version": 2, "reconstruction": {"contrast": 1e39}}"#,
-            r#"{"recipe_version": 2, "reconstruction": {"contrast": -2.0}}"#,
+            r#"{"recipe_version": 3, "reconstruction": {"contrast": "steep"}}"#,
+            r#"{"recipe_version": 3, "reconstruction": {"contrast": 1e-50}}"#,
+            r#"{"recipe_version": 3, "reconstruction": {"contrast": 1e-39}}"#,
+            r#"{"recipe_version": 3, "reconstruction": {"contrast": 1e39}}"#,
+            r#"{"recipe_version": 3, "reconstruction": {"contrast": -2.0}}"#,
         ] {
             let err = check(json, true).unwrap_err();
             assert!(err.contains("state `look.contrast`"), "{json}: {err}");
@@ -2094,13 +2544,13 @@ mod tests {
     }
 
     #[test]
-    fn validate_refuses_a_whole_contrast_outside_f32() {
+    fn validate_refuses_a_whole_slope_outside_f32() {
         // Each factor passes its own rule; the product, which highlight desaturation
         // divides by, does not. The remedy follows the direction.
         let with = |linearization: f32, contrast: f32, names| {
             let mut r = Recipe::default();
             r.reconstruction.linearization = linearization;
-            r.look.contrast = Some(contrast);
+            r.look.contrast = contrast;
             validate(&r, names).map_err(|e| (e.exit_code(), e.message().to_string()))
         };
         for (linearization, contrast, remedy) in [
@@ -2169,8 +2619,8 @@ mod tests {
     }
 
     #[test]
-    fn the_roll_section_reaches_the_stages_and_a_stated_contrast_wins() {
-        let roll = r#"{"recipe_version": 2,
+    fn the_roll_section_reaches_the_stages_and_the_contrast_multiplies_its_slope() {
+        let roll = r#"{"recipe_version": 3,
                        "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#;
         // The gains multiply the stated white balance; the white sets the contrast.
         let r = merged(roll, &["--white-balance", "1.25,1,1"]);
@@ -2179,26 +2629,43 @@ mod tests {
             shared.scene_correction.white_balance,
             WhiteBalance::Explicit([0.8 * 1.25, 1.0, 1.25])
         );
-        let from_white = roll_white::contrast_for(1.6);
-        assert_eq!(shared.look.section.contrast, from_white);
-        assert_eq!(r.resolved_contrast(), (from_white, ContrastSource::Roll));
+        let from_white = roll_white::slope_for(1.6);
+        assert_eq!(shared.look.section.slope, from_white);
+        assert_eq!(
+            r.resolved_slope(),
+            ResolvedSlope {
+                contrast: 1.0,
+                base_slope: from_white,
+                base_from: SlopeBase::Roll,
+                slope: from_white,
+            }
+        );
         // Alone, the gains reach the stage exactly: the identity multiplies nothing in.
         let alone = merged(roll, &[]).shared_params();
         assert_eq!(
             alone.scene_correction.white_balance,
             WhiteBalance::Explicit([0.8, 1.0, 1.25])
         );
-        // A stated contrast wins — at any value, the default's included.
-        let stated = merged(roll, &["--contrast", &DEFAULT_CONTRAST.to_string()]);
+        // A stated contrast builds on the roll's slope rather than replacing it.
+        let stated = merged(roll, &["--contrast", "1.2"]);
         assert_eq!(
-            stated.resolved_contrast(),
-            (DEFAULT_CONTRAST, ContrastSource::Stated)
+            stated.resolved_slope(),
+            ResolvedSlope {
+                contrast: 1.2,
+                base_slope: from_white,
+                base_from: SlopeBase::Roll,
+                slope: from_white * 1.2,
+            }
         );
-        // Neither: the default.
+        assert_eq!(stated.shared_params().look.section.slope, from_white * 1.2);
+        // No roll white: the fallback, which the contrast multiplies the same way.
+        let fallback = Recipe::default().resolved_slope();
         assert_eq!(
-            Recipe::default().resolved_contrast(),
-            (DEFAULT_CONTRAST, ContrastSource::Base)
+            (fallback.base_slope, fallback.base_from, fallback.slope),
+            (DEFAULT_SLOPE, SlopeBase::Fallback, DEFAULT_SLOPE)
         );
+        let flatter = merged(r#"{"recipe_version": 3}"#, &["--contrast", "0.9"]);
+        assert_eq!(flatter.resolved_slope().slope, DEFAULT_SLOPE * 0.9);
         assert_eq!(
             Recipe::default().shared_params().look.section,
             LookSection::default()
@@ -2210,7 +2677,7 @@ mod tests {
         use crate::rendering::DIRECT;
         let roll = r#""roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}"#;
         let direct = merged(
-            &format!(r#"{{"recipe_version": 2, {roll}}}"#),
+            &format!(r#"{{"recipe_version": 3, {roll}}}"#),
             &["--rendering", "direct"],
         );
         let p = direct.shared_params();
@@ -2219,28 +2686,29 @@ mod tests {
             WhiteBalance::Explicit([1.0, 1.0, 1.0]),
             "the roll's gains are not applied"
         );
-        assert_eq!(p.look.section.contrast, DIRECT.contrast, "nor its white");
+        assert_eq!(p.look.section.slope, DIRECT.slope, "nor its white");
+        assert_eq!(direct.resolved_slope().base_from, SlopeBase::Direct);
         assert!(p.look.section.highlight_desaturation.is_off());
         assert_eq!(p.headroom_stops, DIRECT.headroom_stops);
         assert_eq!(p.display_black, DIRECT.display_black);
         let report = direct.roll_report(true).unwrap();
-        assert!(!report.white_balance_applied && !report.contrast_applied);
+        assert!(!report.white_balance_applied && !report.slope_applied);
         // `default` on the same recipe applies the roll, with every other default.
-        let default = merged(&format!(r#"{{"recipe_version": 2, {roll}}}"#), &[]);
+        let default = merged(&format!(r#"{{"recipe_version": 3, {roll}}}"#), &[]);
         let q = default.shared_params();
         assert_eq!(
             q.scene_correction.white_balance,
             WhiteBalance::Explicit([0.8, 1.0, 1.25])
         );
-        assert_eq!(q.look.section.contrast, roll_white::contrast_for(1.6));
+        assert_eq!(q.look.section.slope, roll_white::slope_for(1.6));
         assert_eq!(
             q.look.section.highlight_desaturation,
             HighlightDesaturation::DEFAULT
         );
-        // A stated knob builds on either base: the white balance multiplies (the
-        // identity under `direct`), every other knob replaces.
+        // A stated knob builds on either base: the white balance and the contrast
+        // multiply, every other knob replaces.
         let adjusted = merged(
-            &format!(r#"{{"recipe_version": 2, {roll}}}"#),
+            &format!(r#"{{"recipe_version": 3, {roll}}}"#),
             &[
                 "--rendering",
                 "direct",
@@ -2259,7 +2727,7 @@ mod tests {
             adjusted.scene_correction.white_balance,
             WhiteBalance::Explicit([1.1, 1.0, 1.0])
         );
-        assert_eq!(adjusted.look.section.contrast, 1.3);
+        assert_eq!(adjusted.look.section.slope, DIRECT.slope * 1.3);
         assert_eq!(adjusted.look.section.highlight_desaturation.strength, 0.5);
         assert_eq!(adjusted.display_black, DisplayBlack::Off);
         assert_eq!(adjusted.headroom_stops, DIRECT.headroom_stops);
@@ -2270,7 +2738,7 @@ mod tests {
         use destination::{Container, Gamut, Range, Transfer};
         let resolved = |extra: &[&str]| {
             let r = merged(
-                r#"{"recipe_version": 2}"#,
+                r#"{"recipe_version": 3}"#,
                 &[&["--rendering", "direct"][..], extra].concat(),
             );
             match destination(&r, KnobNames::FlagAndKey).unwrap() {
@@ -2334,7 +2802,7 @@ mod tests {
         // `default` keeps the standard defaults and order, where the same stated gamut
         // is the gain map.
         let standard = |extra: &[&str]| {
-            let r = merged(r#"{"recipe_version": 2}"#, extra);
+            let r = merged(r#"{"recipe_version": 3}"#, extra);
             match destination(&r, KnobNames::FlagAndKey).unwrap() {
                 Destination::Display(d) => (d.range, d.transfer, d.gamut, d.container),
                 Destination::FilmMaster => unreachable!(),
@@ -2363,7 +2831,7 @@ mod tests {
     #[test]
     fn direct_is_refused_with_the_film_master_and_default_is_spared() {
         let r = merged(
-            r#"{"recipe_version": 2}"#,
+            r#"{"recipe_version": 3}"#,
             &["--rendering", "direct", "--film-master"],
         );
         let msg = destination(&r, KnobNames::FlagAndKey)
@@ -2377,7 +2845,7 @@ mod tests {
         // The stage rule's wording is not what fired: this is the more specific one.
         assert!(!msg.contains("cannot apply"), "{msg}");
         let r: Recipe =
-            parse(r#"{"recipe_version": 2, "rendering": "direct", "output": "film-master"}"#)
+            parse(r#"{"recipe_version": 3, "rendering": "direct", "output": "film-master"}"#)
                 .unwrap();
         let msg = destination(&r, KnobNames::KeyOnly)
             .unwrap_err()
@@ -2393,8 +2861,8 @@ mod tests {
         );
         // The flag remedy works whether a flag or the recipe stated `direct`.
         for (recipe, flags) in [
-            (r#"{"recipe_version": 2}"#, &["--rendering", "direct"][..]),
-            (r#"{"recipe_version": 2, "rendering": "direct"}"#, &[][..]),
+            (r#"{"recipe_version": 3}"#, &["--rendering", "direct"][..]),
+            (r#"{"recipe_version": 3, "rendering": "direct"}"#, &[][..]),
         ] {
             let r = merged(recipe, &[flags, &["--film-master"]].concat());
             let msg = destination(&r, KnobNames::FlagAndKey)
@@ -2410,7 +2878,7 @@ mod tests {
             );
         }
         let r = merged(
-            r#"{"recipe_version": 2}"#,
+            r#"{"recipe_version": 3}"#,
             &["--rendering", "default", "--film-master"],
         );
         assert_eq!(
@@ -2423,14 +2891,13 @@ mod tests {
     fn direct_warns_when_a_recipe_moves_its_pinned_base() {
         // An earlier build wrote every default into a recipe: under `direct`, its
         // highlight desaturation 0.8 would turn the pull back on unnoticed.
-        let old = r#"{"recipe_version": 2, "rendering": "direct",
-            "look": {"contrast": 1.1111112,
-                     "highlight_desaturation": {"strength": 0.8, "start_stops": -1.0,
+        let old = r#"{"recipe_version": 3, "rendering": "direct",
+            "look": {"highlight_desaturation": {"strength": 0.8, "start_stops": -1.0,
                                                 "band": [0.015, 0.025]}},
             "fit_range": {"headroom_stops": 6.0, "display_black": 6.0}}"#;
         let w = parse(old).unwrap().recipe_warnings(TypedStyle::default());
         assert_eq!(w.len(), 1, "{w:?}");
-        // Only what moves the base is named: the contrast, headroom and black match it.
+        // Only what moves the base is named: the headroom and black match it.
         assert!(
             w[0].contains("`look.highlight_desaturation.strength` 0.8")
                 && !w[0].contains("`look.contrast`")
@@ -2449,12 +2916,12 @@ mod tests {
         // A deliberate value — anything but the old serialized default — is what a
         // `--dump-params` recipe replays, so it must pass `--strict`: no warning.
         for deliberate in [
-            r#"{"recipe_version": 2, "rendering": "direct",
+            r#"{"recipe_version": 3, "rendering": "direct",
                 "look": {"highlight_desaturation": {"strength": 0.5, "start_stops": -2.0,
                                                     "band": [0.01, 0.03]}},
                 "fit_range": {"headroom_stops": 4.0, "display_black": "off"}}"#,
             // A contrast or white balance with no roll section is the user's own.
-            r#"{"recipe_version": 2, "rendering": "direct", "look": {"contrast": 1.3},
+            r#"{"recipe_version": 3, "rendering": "direct", "look": {"contrast": 1.3},
                 "scene_correction": {"white_balance": {"explicit": [1.1, 1, 1]}}}"#,
         ] {
             let w = parse(deliberate)
@@ -2462,10 +2929,10 @@ mod tests {
                 .recipe_warnings(TypedStyle::default());
             assert!(w.is_empty(), "{deliberate}: {w:?}");
         }
-        // Beside a roll section, a stated contrast or white balance is what an earlier
-        // `measure-roll` wrote, and `direct` would apply it although it leaves the roll
-        // out. A contrast at `direct`'s own base moves nothing.
-        let roll = r#"{"recipe_version": 2, "rendering": "direct",
+        // Beside a roll section, a stated white balance is what an earlier `measure-roll`
+        // wrote, and `direct` would apply it although it leaves the roll out. A contrast
+        // is not: no earlier build wrote the multiplier, so it is the user's.
+        let roll = r#"{"recipe_version": 3, "rendering": "direct",
             "roll": {"white_balance": [1.2, 1, 0.9], "white_stops": 1.7},
             "look": {"contrast": 1.3},
             "scene_correction": {"white_balance": {"explicit": [1.2, 1, 0.9]}}}"#;
@@ -2473,15 +2940,10 @@ mod tests {
         assert_eq!(w.len(), 1, "{w:?}");
         assert!(
             w[0].contains("`scene_correction.white_balance` [1.2, 1.0, 0.9] beside a `roll`")
-                && w[0].contains("`look.contrast` 1.3 beside a `roll` section"),
+                && !w[0].contains("`look.contrast`"),
             "{}",
             w[0]
         );
-        let at_base = roll.replace("1.3", "1.1111112");
-        let w = parse(&at_base)
-            .unwrap()
-            .recipe_warnings(TypedStyle::default());
-        assert!(!w[0].contains("`look.contrast` 1.1111112"), "{}", w[0]);
         // The remedy never tells a deliberate adjuster to drop the value.
         assert!(
             w[0].contains("If a value beside the `roll` section came from an earlier")
@@ -2491,12 +2953,11 @@ mod tests {
         );
         let typed = TypedStyle {
             white_balance: true,
-            contrast: true,
             ..TypedStyle::default()
         };
         assert!(parse(roll).unwrap().recipe_warnings(typed).is_empty());
         // `direct` never reads the roll, so it has no fallback to warn about.
-        let bare = r#"{"recipe_version": 2, "rendering": "direct"}"#;
+        let bare = r#"{"recipe_version": 3, "rendering": "direct"}"#;
         assert!(
             parse(bare)
                 .unwrap()
@@ -2513,8 +2974,8 @@ mod tests {
             w[0].contains("no roll measurement")
                 && w[0].contains("neutral white balance (no `roll.white_balance`)")
                 && w[0].contains(&format!(
-                    "the fallback contrast {} (no `roll.white_stops`)",
-                    DEFAULT_CONTRAST
+                    "the fallback slope {} (no `roll.white_stops`)",
+                    DEFAULT_SLOPE
                 )),
             "{}",
             w[0]
@@ -2522,7 +2983,9 @@ mod tests {
         // All three remedies, as recipe keys.
         assert!(
             w[0].contains("`hanten measure-roll`")
-                && w[0].contains("`scene_correction.white_balance`, `look.contrast`")
+                && w[0].contains(
+                    "`scene_correction.white_balance`) and the roll's white (`roll.white_stops`"
+                )
                 && w[0].contains("`rendering`: \"direct\"")
                 && w[0].contains("HDR float TIFF")
                 && !w[0].contains("--"),
@@ -2536,23 +2999,29 @@ mod tests {
         };
         let w = Recipe::default().recipe_warnings(typed);
         assert!(
-            w.len() == 1 && !w[0].contains("white balance (") && w[0].contains("contrast"),
+            w.len() == 1 && !w[0].contains("white balance (") && w[0].contains("slope"),
             "{w:?}"
         );
-        let typed = TypedStyle {
+        // The slope's half is silenced the same way — typed, or a recipe value off the
+        // identity — though the contrast multiplies the fallback; and by a roll white.
+        let contrast_typed = TypedStyle {
             white_balance: true,
             contrast: true,
             ..TypedStyle::default()
         };
+        assert!(Recipe::default().recipe_warnings(contrast_typed).is_empty());
         let mut r = Recipe::default();
-        r.look.contrast = Some(1.3);
+        r.look.contrast = 1.3;
+        assert!(r.recipe_warnings(typed).is_empty());
+        let mut r = Recipe::default();
+        r.roll.white_stops = Some(1.7);
         assert!(r.recipe_warnings(typed).is_empty());
     }
 
     #[test]
     fn the_roll_flags_land_in_the_roll_section() {
         let r = merged(
-            r#"{"recipe_version": 2, "roll": {"white_balance": [0.9, 1.0, 1.1], "white_stops": 1.5}}"#,
+            r#"{"recipe_version": 3, "roll": {"white_balance": [0.9, 1.0, 1.1], "white_stops": 1.5}}"#,
             &["--roll-white", "1.8"],
         );
         // One flag replaces its own key and leaves the other.
@@ -2565,7 +3034,7 @@ mod tests {
             }
         );
         let r = merged(
-            r#"{"recipe_version": 2}"#,
+            r#"{"recipe_version": 3}"#,
             &["--roll-white-balance", "1.2,1,0.8"],
         );
         assert_eq!(r.roll.white_balance, Some([1.2, 1.0, 0.8]));
@@ -2580,7 +3049,7 @@ mod tests {
         };
         for stops in ["0", "-1.5"] {
             let msg = refusal(
-                &format!(r#"{{"recipe_version": 2, "roll": {{"white_stops": {stops}}}}}"#),
+                &format!(r#"{{"recipe_version": 3, "roll": {{"white_stops": {stops}}}}}"#),
                 KnobNames::FlagAndKey,
             );
             assert!(
@@ -2589,7 +3058,7 @@ mod tests {
             );
         }
         let msg = refusal(
-            r#"{"recipe_version": 2, "roll": {"white_balance": [1, 0, 1]}}"#,
+            r#"{"recipe_version": 3, "roll": {"white_balance": [1, 0, 1]}}"#,
             KnobNames::KeyOnly,
         );
         assert!(
@@ -2599,31 +3068,32 @@ mod tests {
         // A contrast the roll's white gives, too small to survive the whole contrast:
         // named as the white, not as `--contrast`, which the user never typed.
         let msg = refusal(
-            r#"{"recipe_version": 2, "roll": {"white_stops": 1e38},
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1e38},
                 "reconstruction": {"linearization": 1e-8}}"#,
             KnobNames::FlagAndKey,
         );
         assert!(msg.contains("from --roll-white"), "{msg}");
-        assert!(!msg.contains("--contrast"), "{msg}");
-        // The remedy moves the white the other way: the contrast is inverse to it.
+        // The remedy moves the white the other way: the slope is inverse to it.
         assert!(
             msg.contains(
-                "Use a larger --density-gamma (recipe `reconstruction.linearization`) or a \
-                 smaller --roll-white (recipe `roll.white_stops`)"
+                "Use a larger --density-gamma (recipe `reconstruction.linearization`) or \
+                 --contrast (recipe `look.contrast`), or a smaller --roll-white (recipe \
+                 `roll.white_stops`)"
             ),
             "{msg}"
         );
         assert!(!msg.contains("value for either"), "{msg}");
         // Overflow, in `roll`'s key-only spelling: the reverse remedy.
         let msg = refusal(
-            r#"{"recipe_version": 2, "roll": {"white_stops": 1e-30},
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1e-30},
                 "reconstruction": {"linearization": 1e10}}"#,
             KnobNames::KeyOnly,
         );
         assert!(msg.contains("overflows"), "{msg}");
         assert!(
             msg.contains(
-                "Use a smaller `reconstruction.linearization` or a larger `roll.white_stops`"
+                "Use a smaller `reconstruction.linearization` or `look.contrast`, or a larger \
+                 `roll.white_stops`"
             ),
             "{msg}"
         );
@@ -2631,21 +3101,19 @@ mod tests {
             !msg.contains("value for either") && !msg.contains("--"),
             "{msg}"
         );
-        // A white so small its contrast is not finite: no identity hint, which is about
-        // a stated contrast.
+        // A white so small its slope is not finite overflows the same rule.
         let msg = refusal(
-            r#"{"recipe_version": 2, "roll": {"white_stops": 1e-45}}"#,
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1e-45}}"#,
             KnobNames::FlagAndKey,
         );
         assert!(
-            msg.contains("--roll-white (recipe `roll.white_stops`) must give a finite")
-                && msg.contains("use a larger white"),
+            msg.contains("overflows")
+                && msg.contains("or a larger --roll-white (recipe `roll.white_stops`)"),
             "{msg}"
         );
-        assert!(!msg.contains("identity"), "{msg}");
         // A product only the roll's gains make is named with both factors.
         let msg = refusal(
-            r#"{"recipe_version": 2, "roll": {"white_balance": [1e30, 1, 1]},
+            r#"{"recipe_version": 3, "roll": {"white_balance": [1e30, 1, 1]},
                 "scene_correction": {"white_balance": {"explicit": [1e10, 1, 1]}}}"#,
             KnobNames::FlagAndKey,
         );
@@ -2656,51 +3124,32 @@ mod tests {
     }
 
     #[test]
-    fn a_recipe_stated_style_value_that_meets_a_roll_measurement_warns() {
+    fn a_recipe_white_balance_that_meets_the_roll_gains_warns() {
         let warnings_typed = |json: &str, typed| parse(json).unwrap().roll_overlap_warnings(typed);
         let warnings = |json: &str| warnings_typed(json, TypedStyle::default());
-        // Both overlaps: the stated gains multiply the roll's, and the stated contrast
-        // wins over the roll's white.
-        let overlapping = r#"{"recipe_version": 2,
+        // The stated gains multiply the roll's. The contrast beside the roll's white is
+        // not an overlap: it multiplies the roll's slope, which is what it is for.
+        let overlapping = r#"{"recipe_version": 3,
                 "roll": {"white_balance": [1.25, 1, 0.5], "white_stops": 1.7},
                 "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}},
-                "look": {"contrast": 1.1111112}}"#;
-        let both = warnings(overlapping);
-        assert_eq!(both.len(), 2, "{both:?}");
+                "look": {"contrast": 1.2}}"#;
+        let only = warnings(overlapping);
+        assert_eq!(only.len(), 1, "{only:?}");
         assert!(
-            both[0].contains("the recipe's `scene_correction.white_balance` [2.0, 1.0, 2.0]")
-                && both[0].contains("`roll.white_balance` [1.25, 1.0, 0.5]")
-                && both[0].contains("the white balance applied is [2.5, 1.0, 1.0]")
-                && both[0].contains("drop it"),
+            only[0].contains("the recipe's `scene_correction.white_balance` [2.0, 1.0, 2.0]")
+                && only[0].contains("`roll.white_balance` [1.25, 1.0, 0.5]")
+                && only[0].contains("the white balance applied is [2.5, 1.0, 1.0]")
+                && only[0].contains("drop it")
+                && !only[0].contains("--"),
             "{}",
-            both[0]
+            only[0]
         );
-        let roll = roll_white::contrast_for(1.7);
-        assert!(
-            both[1].contains("the recipe's `look.contrast` 1.1111112 overrides the roll's")
-                && both[1].contains(&roll.to_string())
-                && both[1].contains("`roll.white_stops` 1.7")
-                && both[1].contains("`null`"),
-            "{}",
-            both[1]
-        );
-        // Recipe keys only: only a recipe value warns.
-        assert!(both.iter().all(|w| !w.contains("--")), "{both:?}");
-        // A typed flag is a choice made now: it silences its own warning, not the other.
+        // A typed flag is a choice made now: it silences the warning.
         let wb_typed = TypedStyle {
             white_balance: true,
             ..TypedStyle::default()
         };
-        let only = warnings_typed(overlapping, wb_typed);
-        assert_eq!(only, vec![both[1].clone()]);
-        let contrast_typed = TypedStyle {
-            contrast: true,
-            ..TypedStyle::default()
-        };
-        assert_eq!(
-            warnings_typed(overlapping, contrast_typed),
-            vec![both[0].clone()]
-        );
+        assert!(warnings_typed(overlapping, wb_typed).is_empty());
         // The film master renders nothing, so the run's recipe warnings are empty.
         let master = overlapping.replacen('{', r#"{"output": "film-master","#, 1);
         assert_eq!(
@@ -2712,19 +3161,16 @@ mod tests {
         // No overlap, no warning.
         for quiet in [
             // No roll section.
-            r#"{"recipe_version": 2,
-                "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}},
-                "look": {"contrast": 1.3}}"#,
-            // The roll's gains over the identity; the roll's white, contrast unstated.
+            r#"{"recipe_version": 3,
+                "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}}}"#,
+            // The roll's gains over the identity, and a version 2 `null` contrast.
             r#"{"recipe_version": 2,
                 "roll": {"white_balance": [1.25, 1, 0.5], "white_stops": 1.7},
                 "scene_correction": {"white_balance": {"explicit": [1, 1, 1]}},
                 "look": {"contrast": null}}"#,
-            // A stated value beside the *other* roll measurement.
-            r#"{"recipe_version": 2, "roll": {"white_stops": 1.7},
+            // A stated white balance beside the *other* roll measurement.
+            r#"{"recipe_version": 3, "roll": {"white_stops": 1.7},
                 "scene_correction": {"white_balance": {"explicit": [2, 1, 2]}}}"#,
-            r#"{"recipe_version": 2, "roll": {"white_balance": [1.25, 1, 0.5]},
-                "look": {"contrast": 1.3}}"#,
         ] {
             assert_eq!(warnings(quiet), Vec::<String>::new(), "{quiet}");
         }
@@ -2733,7 +3179,7 @@ mod tests {
     #[test]
     fn the_film_master_leaves_the_roll_section_unapplied_and_says_so() {
         let r: Recipe = parse(
-            r#"{"recipe_version": 2, "output": "film-master",
+            r#"{"recipe_version": 3, "output": "film-master",
                 "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#,
         )
         .unwrap();
@@ -2743,14 +3189,14 @@ mod tests {
             Destination::FilmMaster
         );
         let report = r.roll_report(false).unwrap();
-        assert!(!report.white_balance_applied && !report.contrast_applied);
-        assert_eq!(report.contrast, Some(roll_white::contrast_for(1.6)));
+        assert!(!report.white_balance_applied && !report.slope_applied);
+        assert_eq!(report.slope, Some(roll_white::slope_for(1.6)));
         let rendered = r.roll_report(true).unwrap();
-        assert!(rendered.white_balance_applied && rendered.contrast_applied);
-        // A stated contrast wins, and the report says the roll's did not apply.
+        assert!(rendered.white_balance_applied && rendered.slope_applied);
+        // A stated contrast multiplies the roll's slope, so the roll's still applies.
         let mut stated = r.clone();
-        stated.look.contrast = Some(1.3);
-        assert!(!stated.roll_report(true).unwrap().contrast_applied);
+        stated.look.contrast = 1.3;
+        assert!(stated.roll_report(true).unwrap().slope_applied);
         assert_eq!(Recipe::default().roll_report(true), None);
     }
 
@@ -2758,7 +3204,7 @@ mod tests {
     fn an_axis_flag_over_a_recipe_film_master_states_only_its_own_axes() {
         // The flag chose a rendered destination; the recipe stated none of its axes.
         let r = merged(
-            r#"{"recipe_version": 2, "output": "film-master"}"#,
+            r#"{"recipe_version": 3, "output": "film-master"}"#,
             &["--transfer", "pq"],
         );
         assert_eq!(
@@ -2773,7 +3219,7 @@ mod tests {
     #[test]
     fn the_film_master_flag_replaces_a_recipes_axes() {
         let r = merged(
-            r#"{"recipe_version": 2, "output": {"display": {"transfer": "pq", "container": "avif"}}}"#,
+            r#"{"recipe_version": 3, "output": {"display": {"transfer": "pq", "container": "avif"}}}"#,
             &["--film-master"],
         );
         assert_eq!(r.output, OutputSection::FilmMaster);
@@ -2788,7 +3234,7 @@ mod tests {
         // Flags win per axis, and the recipe's other axes stay stated: a flag that
         // contradicts one of them is a conflict naming both, never a silent override.
         let r = merged(
-            r#"{"recipe_version": 2, "output": {"display": {"gamut": "adobe-rgb"}}}"#,
+            r#"{"recipe_version": 3, "output": {"display": {"gamut": "adobe-rgb"}}}"#,
             &["--transfer", "pq"],
         );
         assert_eq!(
@@ -2804,7 +3250,7 @@ mod tests {
         assert!(msg.contains("--transfer pq and --gamut adobe-rgb"), "{msg}");
         // The same axis stated twice: the flag wins.
         let r = merged(
-            r#"{"recipe_version": 2, "output": {"display": {"gamut": "adobe-rgb"}}}"#,
+            r#"{"recipe_version": 3, "output": {"display": {"gamut": "adobe-rgb"}}}"#,
             &["--gamut", "display-p3"],
         );
         let Destination::Display(d) = destination(&r, KnobNames::FlagAndKey).unwrap() else {
@@ -2878,14 +3324,14 @@ mod tests {
 
     #[test]
     fn display_black_reads_off_from_a_recipe() {
-        let r = parse(r#"{"recipe_version": 2, "fit_range": {"display_black": "off"}}"#).unwrap();
+        let r = parse(r#"{"recipe_version": 3, "fit_range": {"display_black": "off"}}"#).unwrap();
         assert_eq!(r.fit_range.display_black, Some(DisplayBlack::Off));
-        let r = parse(r#"{"recipe_version": 2, "fit_range": {"display_black": 5}}"#).unwrap();
+        let r = parse(r#"{"recipe_version": 3, "fit_range": {"display_black": 5}}"#).unwrap();
         assert_eq!(
             r.fit_range.display_black,
             Some(DisplayBlack::StopsBelowMid(5.0))
         );
-        assert!(parse(r#"{"recipe_version": 2, "fit_range": {"display_black": "none"}}"#).is_err());
+        assert!(parse(r#"{"recipe_version": 3, "fit_range": {"display_black": "none"}}"#).is_err());
     }
 
     #[test]
@@ -2897,7 +3343,7 @@ mod tests {
         let p = r.chain_params(DisplayPeak::SDR, DestinationGamut::DisplayP3);
         assert_eq!(p.shared.headroom_stops, 4.0);
         assert_eq!(p.target.peak, DisplayPeak::SDR);
-        let err = parse(r#"{"recipe_version": 2, "fit_range": {"peak": 4.9}}"#)
+        let err = parse(r#"{"recipe_version": 3, "fit_range": {"peak": 4.9}}"#)
             .unwrap_err()
             .to_string();
         assert!(err.contains("peak"), "{err}");
@@ -2909,21 +3355,21 @@ mod tests {
         // than falling to an opaque "unknown field".
         for (json, needles) in [
             (
-                r#"{"recipe_version": 2, "density": {"scale": [1, 1, 1]}}"#,
+                r#"{"recipe_version": 3, "density": {"scale": [1, 1, 1]}}"#,
                 &["`density`", "`reconstruction.scale`"][..],
             ),
             (
-                r#"{"recipe_version": 2, "film_base": {"source": "auto"}}"#,
+                r#"{"recipe_version": 3, "film_base": {"source": "auto"}}"#,
                 &["`film_base`", "`calibration.film_base`"],
             ),
             (
-                r#"{"recipe_version": 2, "algorithm": "density"}"#,
+                r#"{"recipe_version": 3, "algorithm": "density"}"#,
                 &["`algorithm`"],
             ),
-            (r#"{"recipe_version": 2, "sigmoid": {}}"#, &["`sigmoid`"]),
-            (r#"{"recipe_version": 2, "simple": {}}"#, &["`simple`"]),
+            (r#"{"recipe_version": 3, "sigmoid": {}}"#, &["`sigmoid`"]),
+            (r#"{"recipe_version": 3, "simple": {}}"#, &["`simple`"]),
             (
-                r#"{"recipe_version": 2, "input": {"color": "linear"}}"#,
+                r#"{"recipe_version": 3, "input": {"color": "linear"}}"#,
                 &["`input.color`", "`input.transfer`"],
             ),
         ] {
@@ -2932,7 +3378,7 @@ mod tests {
                 assert!(err.contains(needle), "{json}: {err}");
             }
             // An overlay gets the same diagnosis.
-            let overlay = json.replace(r#""recipe_version": 2, "#, "");
+            let overlay = json.replace(r#""recipe_version": 3, "#, "");
             assert!(check(&overlay, false).unwrap_err().contains(needles[0]));
         }
     }
@@ -3039,7 +3485,7 @@ mod tests {
                 r.roll.white_stops == Some(1.7)
             }),
             ("--contrast", &["--contrast", "1.3"], |r| {
-                r.look.contrast == Some(1.3)
+                r.look.contrast == 1.3
             }),
             ("--channel-grade", &["--channel-grade", "1.1,0.9"], |r| {
                 r.look.channel_grade == [1.1, 0.9]

@@ -124,8 +124,9 @@ decode → film-base → algo::fixed decode → NC film RGB v1 → linear ACEScg
 A destination is four axes (`--range`, `--transfer`, `--gamut`, `--container`) or
 `--film-master`; `destination::ROWS` is the one table of what exists, and the stage
 order is pinned by boundary types (`pipeline/chain.rs`). A recipe is a
-`"recipe_version": 2` document (`crate::recipe`); one written before
-`pipeline_version` 8 is refused whole. The removed chain is the reference build.
+`"recipe_version": 3` document (`crate::recipe`; version 2 is still read, except a
+`look.contrast` number, which changed meaning); one written before `pipeline_version` 8
+is refused whole. The removed chain is the reference build.
 
 Rules every stage keeps:
 

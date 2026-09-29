@@ -209,7 +209,7 @@ pub struct RemovedCommandArgs {
 /// Where a measuring command writes its recipe (`docs/design/roll-workflow.md`).
 #[derive(Args, Debug, Default)]
 pub struct RecipeOutArgs {
-    /// Write the measurement as a recipe (`"recipe_version": 2`) to PATH, for
+    /// Write the measurement as a recipe (`"recipe_version": 3`) to PATH, for
     /// `--params`. Refused if PATH exists, unless --force. Not written when the run
     /// fails, including under --strict.
     #[arg(long = "out", value_name = "PATH")]
@@ -275,10 +275,10 @@ pub struct MeasureRollArgs {
     /// and `--strict` refuses before decoding anything.
     #[arg(long, value_name = "PATH")]
     pub leader: Option<PathBuf>,
-    /// The roll's recipe (`"recipe_version": 2`): the film base and
+    /// The roll's recipe (`"recipe_version": 3`): the film base and
     /// the decode the gains and the white are measured under. Its `scene_correction` and
     /// `look` values are not read — this command measures the white balance and the
-    /// contrast — though the recipe must still load (a retired or unknown key there is
+    /// white — though the recipe must still load (a retired or unknown key there is
     /// refused). Repeatable, and `-` reads stdin, as on `convert`. Its `input`, `measure`
     /// and `reconstruction` keys, when stated, travel into `--out`: the gains hold only
     /// under that decode.
@@ -726,8 +726,8 @@ pub struct RollOverrides {
     pub roll_white_balance: Option<[f32; 3]>,
     /// The roll's white, in scene stops above mid-grey, as `hanten measure-roll`
     /// measured it (recipe key `roll.white_stops`). The look renders it at diffuse white
-    /// with mid-grey pinned — a contrast of `log2(1/0.18) / STOPS` — unless `--contrast`
-    /// is stated, which wins.
+    /// with mid-grey pinned — a slope of `log2(1/0.18) / STOPS` — which `--contrast`
+    /// multiplies.
     #[arg(long, value_name = "STOPS")]
     pub roll_white: Option<f32>,
 }
@@ -759,12 +759,12 @@ pub struct SceneCorrectionOverrides {
 /// Look overrides (recipe section `look`).
 #[derive(Args, Debug, Default)]
 pub struct LookOverrides {
-    /// Print contrast, pivoted at mid-grey: every ACEScg channel becomes
-    /// `0.18 · (v / 0.18)^CONTRAST` (recipe key `look.contrast`; 1 is the identity).
-    /// Unstated, it is the roll's (`--roll-white`), else 2.0/1.8 ≈ 1.11, which with the
-    /// decode's linearization reproduces the pre-split contrast 2.0. Stated, it wins
-    /// over the roll's. Runs after scene correction, so an `--exposure` is expanded
-    /// with the rest of the picture.
+    /// Contrast, as a multiplier on the base slope (recipe key `look.contrast`; 1 keeps
+    /// the base): 1.2 is 20% more contrast than the roll's, 0.9 is flatter. The base is
+    /// the roll's slope (`--roll-white`), else the fallback ≈ 1.11 (`direct`: its pinned
+    /// ≈ 1.11). Every ACEScg channel becomes `0.18 · (v / 0.18)^slope`, pivoted at
+    /// mid-grey; slope 1 reproduces the scene's own contrast. Runs after scene
+    /// correction, so an `--exposure` is expanded with the rest of the picture.
     #[arg(long, value_name = "CONTRAST", allow_hyphen_values = true)]
     pub contrast: Option<f32>,
     /// The per-channel grade `R,B`: red and blue exponents pivoted at mid-grey, green
@@ -801,8 +801,8 @@ pub struct LookOverrides {
     pub highlight_desaturation_start: Option<f32>,
     /// Highlight desaturation's saturation band `S0,S1`: full pull at or below `S0`,
     /// none at or above `S1`, on `log10(max/min)` of the pixel's ACEScg channels over
-    /// the whole contrast, `--density-gamma` times `--contrast` (recipe key `look.highlight_desaturation.band`, default
-    /// `0.015,0.025`).
+    /// the whole slope, `--density-gamma` times the look's slope (recipe key
+    /// `look.highlight_desaturation.band`, default `0.015,0.025`).
     #[arg(
         long = "highlight-desaturation-band",
         value_name = "S0,S1",
@@ -833,7 +833,7 @@ pub struct DisplayOverrides {
     /// in stops below mid-grey on the display, or `off` (recipe key
     /// `fit_range.display_black`, default 6, about L* 2.5). Fewer stops give lighter
     /// shadows with more detail, more stops a deeper black. Display stops, not scene
-    /// stops: where the base lands before this is set by the look's contrast, and a
+    /// stops: where the base lands before this is set by the look's slope, and a
     /// base already that deep is left alone. Mid-grey and everything above it do not
     /// move.
     #[arg(
@@ -1123,10 +1123,11 @@ pub struct ChainResult {
     /// roll's gains included. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_correction: Option<scene_correction::SceneCorrection>,
-    /// The look's controls as applied — the contrast, and highlight desaturation's
-    /// strength, start and band. Absent for the film master.
+    /// The look's controls as applied: the `contrast` multiplier, the base slope it
+    /// multiplied and where that came from, the resulting `slope`, the grade and highlight
+    /// desaturation. Absent for the film master.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub look: Option<look::LookSection>,
+    pub look: Option<recipe::LookReport>,
     /// Fit range's operator by name, with the headroom, white point and display peak
     /// it ran at — what a non-default `fit_range.headroom_stops` changes. Absent for
     /// the film master.
@@ -3874,7 +3875,10 @@ fn render_frame(
         rendering: recipe.rendering,
         roll: recipe.roll_report(rendered.is_some()),
         scene_correction: rendered.map(|r| r.scene_correction),
-        look: rendered.map(|r| r.look),
+        look: rendered.map(|r| recipe::LookReport {
+            slope: recipe.resolved_slope(),
+            section: r.look,
+        }),
         fit_range: rendered.map(|r| r.fit_range),
         destination: match destination {
             recipe::Destination::FilmMaster => OutputSection::FilmMaster,
@@ -4098,6 +4102,7 @@ fn convert_attempt(
         recipe::validate_roll_frames(
             &stated_roll,
             recipe.reconstruction.linearization,
+            recipe.look.contrast,
             KnobNames::FlagAndKey,
         )?;
     }
@@ -5786,7 +5791,7 @@ struct MeasureRollReport {
     leader: Option<MeasuredLeader>,
     frames: Vec<MeasuredFrame>,
     white_balance: RollWhiteBalance,
-    /// The roll's white and the look contrast that places it (`nf-calibration/roll-white-rule`).
+    /// The roll's white and the slope that places it (`nf-calibration/roll-white-rule`).
     white: MeasuredRollWhite,
     /// The gains and the white in the forms a user freezes them in.
     reuse: RollReuse,
@@ -5849,14 +5854,12 @@ struct MeasuredRollWhite {
     /// The frame it was taken from, when no limit bound.
     #[serde(skip_serializing_if = "Option::is_none")]
     from: Option<PathBuf>,
-    /// The look contrast `roll.white_stops` renders at: the white at diffuse white,
-    /// mid-grey pinned — at `scene_correction.exposure` 0. The look expands an exposure too, so with one set
-    /// the white lands `exposure · contrast` stops off diffuse white.
-    contrast: f32,
-    /// `contrast` times the decode's linearization — the whole slope, for comparison
-    /// only; the recipe stores `stops` (`roll.white_stops`).
-    whole_contrast: f32,
-    /// Frames above the cap, rendered at the cap's contrast rather than the roll's.
+    /// The slope `roll.white_stops` renders at: the white at diffuse white, mid-grey
+    /// pinned, at `look.contrast` 1 and `scene_correction.exposure` 0 (the look expands
+    /// an exposure too, so with one set the white lands `exposure · slope` stops off
+    /// diffuse white). The recipe stores `stops`.
+    slope: f32,
+    /// Frames above the cap, rendered at the cap's slope rather than the roll's.
     /// Disclosed, not warned about: an ordinary bright scene lands here too.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     clamped: Vec<ClampedFrame>,
@@ -5867,8 +5870,8 @@ struct MeasuredRollWhite {
 struct ClampedFrame {
     input: PathBuf,
     white_stops: f32,
-    /// Its look contrast, the cap's — against the roll's `contrast`.
-    contrast: f32,
+    /// Its slope, the cap's — against the roll's `slope`.
+    slope: f32,
     /// This frame's own `convert` flags: `reuse.flag` carries the roll's white, which
     /// would undo the clamp on this frame.
     flag: String,
@@ -5983,7 +5986,6 @@ fn decode_for_roll_white<T>(
 fn measured_roll_white(
     frames: &mut [MeasuredFrame],
     guarded: bool,
-    linearization: f32,
     gains: [f32; 3],
 ) -> Result<MeasuredRollWhite> {
     let stops: Vec<Option<f32>> = frames.iter().map(|f| f.white_stops).collect();
@@ -5991,8 +5993,7 @@ fn measured_roll_white(
     for (f, role) in frames.iter_mut().zip(&placed.roles) {
         f.white_role = *role;
     }
-    let contrast = roll_white::contrast_for(placed.stops);
-    let cap_contrast = roll_white::contrast_for(roll_white::WHITE_CAP_STOPS);
+    let cap_slope = roll_white::slope_for(roll_white::WHITE_CAP_STOPS);
     Ok(MeasuredRollWhite {
         stops: placed.stops,
         bound: placed.bound,
@@ -6000,15 +6001,14 @@ fn measured_roll_white(
             .iter()
             .find(|f| f.white_role == roll_white::FrameRole::SetsRoll)
             .map(|f| f.input.clone()),
-        contrast,
-        whole_contrast: contrast * linearization,
+        slope: roll_white::slope_for(placed.stops),
         clamped: frames
             .iter()
             .filter(|f| f.white_role == roll_white::FrameRole::Clamped)
             .map(|f| ClampedFrame {
                 input: f.input.clone(),
                 white_stops: f.white_stops.expect("a clamped frame has a white"),
-                contrast: cap_contrast,
+                slope: cap_slope,
                 flag: reuse_flag(gains, roll_white::WHITE_CAP_STOPS),
             })
             .collect(),
@@ -6388,15 +6388,10 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     }
     let gains = roll_white::roll_gains(&pool)?;
     log.info(format_args!("roll white balance {gains:?}"));
-    let white = measured_roll_white(
-        &mut frames,
-        args.leader.is_some(),
-        recipe.reconstruction.linearization,
-        gains,
-    )?;
+    let white = measured_roll_white(&mut frames, args.leader.is_some(), gains)?;
     log.info(format_args!(
-        "roll white {:+.2} stops ({:?}), contrast {}",
-        white.stops, white.bound, white.contrast
+        "roll white {:+.2} stops ({:?}), slope {}",
+        white.stops, white.bound, white.slope
     ));
     // Everything a roll shares, as one recipe `roll --params` renders alone: the base,
     // the roll section with its clamps, and the input and decode sections the gains
@@ -7779,7 +7774,7 @@ mod tests {
         let json = serde_json::to_string(&base).unwrap();
         assert_eq!(
             json,
-            r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.553,0.271,0.159]}}}"#
+            r#"{"recipe_version":3,"calibration":{"film_base":{"explicit":[0.553,0.271,0.159]}}}"#
         );
         let recipe: Recipe = serde_json::from_str(&json).unwrap();
         validate_shared(&recipe).unwrap();
@@ -7868,7 +7863,7 @@ mod tests {
             ("malformed", "{ not json"),
             (
                 "unknown-key",
-                r#"{"recipe_version":2,"reconstruction":{"scal":[1,1,1]}}"#,
+                r#"{"recipe_version":3,"reconstruction":{"scal":[1,1,1]}}"#,
             ),
         ] {
             let got = load_recipe_body(tag, body);
@@ -7879,10 +7874,10 @@ mod tests {
         }
 
         // A valid partial recipe loads and fills defaults.
-        let got = load_recipe_body("ok", r#"{"recipe_version":2,"look":{"contrast":1.3}}"#)
+        let got = load_recipe_body("ok", r#"{"recipe_version":3,"look":{"contrast":1.3}}"#)
             .unwrap()
             .recipe;
-        assert_eq!(got.look.contrast, Some(1.3));
+        assert_eq!(got.look.contrast, 1.3);
         assert_eq!(got.reconstruction, Recipe::default().reconstruction);
     }
 
@@ -7906,7 +7901,7 @@ mod tests {
     fn load_recipe_accepts_the_envelope_and_the_bare_shape() {
         // Identity lives in a `meta` envelope beside the recipe, so both an enveloped
         // and a bare document load — and to the *same* recipe.
-        let bare = r#"{"recipe_version":2,"look":{"contrast":1.3}}"#;
+        let bare = r#"{"recipe_version":3,"look":{"contrast":1.3}}"#;
         let enveloped = format!(
             r#"{{"meta":{{"nc_version":"0.1.0","pipeline_version":7,
                           "params_hash":"0123456789abcdef","git_commit":"abc"}},
@@ -7918,7 +7913,7 @@ mod tests {
             flat.recipe, wrapped.recipe,
             "both shapes resolve to one recipe"
         );
-        assert_eq!(wrapped.recipe.look.contrast, Some(1.3));
+        assert_eq!(wrapped.recipe.look.contrast, 1.3);
         // A bare recipe records no provenance; the envelope's is read but never
         // applied — only compared (see `pipeline_version_warning`).
         assert_eq!(flat.meta_pipeline_version, None);
@@ -8029,14 +8024,14 @@ mod tests {
         // An OMITTED `meta` stays legal — a hand-wrapped `--dump-params` recipe has no
         // provenance to record, and that is not a malformed envelope.
         assert_eq!(
-            load_recipe_body("no-meta", r#"{"params":{"recipe_version":2}}"#)
+            load_recipe_body("no-meta", r#"{"params":{"recipe_version":3}}"#)
                 .unwrap()
                 .meta_pipeline_version,
             None
         );
         // An empty `meta` object is legal too, and records nothing.
         assert_eq!(
-            load_recipe_body("empty-meta", r#"{"meta":{},"params":{"recipe_version":2}}"#)
+            load_recipe_body("empty-meta", r#"{"meta":{},"params":{"recipe_version":3}}"#)
                 .unwrap()
                 .meta_pipeline_version,
             None
@@ -8046,7 +8041,7 @@ mod tests {
         assert_eq!(
             load_recipe_body(
                 "future-meta",
-                r#"{"meta":{"invented":[1],"pipeline_version":7},"params":{"recipe_version":2}}"#
+                r#"{"meta":{"invented":[1],"pipeline_version":7},"params":{"recipe_version":3}}"#
             )
             .unwrap()
             .meta_pipeline_version,
@@ -8109,8 +8104,8 @@ mod tests {
         // (`None`), which `validate_shared` later rejects for `convert`. "All defaults"
         // is not the same as "ready to run".
         for (tag, body) in [
-            ("obj-bare", r#"{"recipe_version": 2}"#),
-            ("obj-envelope", r#"{"params": {"recipe_version": 2}}"#),
+            ("obj-bare", r#"{"recipe_version": 3}"#),
+            ("obj-envelope", r#"{"params": {"recipe_version": 3}}"#),
         ] {
             assert_eq!(
                 load_recipe_body(tag, body).unwrap().recipe,
@@ -8429,7 +8424,7 @@ mod tests {
         let args = roll_args(&manifest, &dir);
         let mut shared = base_recipe();
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
-        shared.look.contrast = Some(1.3);
+        shared.look.contrast = 1.3;
         let log = Log::new(&args.report);
         let planned = resolve_frames(&args, &shared, &shared, &mut Vec::new(), &log);
         std::fs::remove_dir_all(&dir).ok();

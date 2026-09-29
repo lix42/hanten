@@ -40,7 +40,7 @@ This supersedes two tasks:
 ## Outcome (2026-09-27)
 
 One `scale` round (blue), no value moved; `gamma`'s linearization kept at 1.8, the
-datasheets' slope, since review cannot separate it from `look.contrast`. The re-run
+datasheets' slope, since review cannot separate it from the look's slope. The re-run
 against the calibration frames is [the neutrality gate](neutrality-gate.md)'s; the
 look's default contrast is [`no-roll-defaults`](no-roll-defaults.md)'. Evidence:
 `docs/progress/nf-calibration.md`.

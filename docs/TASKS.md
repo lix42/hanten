@@ -1820,9 +1820,11 @@ the design in `docs/design-update.md`:
 - [ ] [Spike: opt-in bounded scene-range
   mapping](tasks/nf-look/scene-range-mapping.md) — a spike: opt-in and
   bounded, never the default — roll consistency is the promise
-- [ ] [What `look.contrast` means](tasks/nf-look/contrast-definition.md) — three
-  contrasts are in play (whole, rendering, linearization); restate it as the whole
-  contrast or a multiplier, so an explicit contrast builds on the roll's
+- [x] [What `look.contrast` means](tasks/nf-look/contrast-definition.md) — **done
+  2026-09-29: a multiplier on the base slope** (the roll's, the fallback
+  `look::DEFAULT_SLOPE`, or `direct`'s), default 1; absolute values are slopes in the
+  report. `recipe_version` 3: a version 2 `look.contrast` number is refused with its
+  conversion
 
 ### nf-display-stages — [progress](progress/nf-display-stages.md)
 > Fit range and fit gamut as real stages shared by both display branches, plus the

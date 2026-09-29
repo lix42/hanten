@@ -192,6 +192,23 @@ def _drop_retired_curve_tag(defaults: dict, partial: dict) -> None:
         curve.pop("type")
 
 
+def _adopt_the_builds_version(defaults: dict, partial: dict) -> None:
+    """Let a version 2 partial recipe with no `look.contrast` number take the build's
+    `recipe_version`.
+
+    Version 3 changed only that key — a slope in 2, a multiplier on the base slope in
+    3 — and `hanten params` writes it as `1.0`. Merged under the partial's stated 2,
+    that default would read as an old slope and `hanten` would refuse it, though the
+    partial never stated one. A partial that states a number keeps its version, so
+    `hanten` refuses it with the conversion."""
+    look = partial.get("look")
+    stated = look.get("contrast") if isinstance(look, dict) else None
+    later = defaults.get("recipe_version")
+    if (partial.get("recipe_version") == 2 and isinstance(later, int) and later > 2
+            and not isinstance(stated, (int, float))):
+        partial["recipe_version"] = later
+
+
 #: The destination axes the convenience flags may set, as the recipe
 #: `output.display` names them.
 DISPLAY_AXES = ("range", "transfer", "gamut", "container")
@@ -216,7 +233,7 @@ def _freeze_recipe(base: dict, dmin: list[float],
                    exposure: float | None = None) -> tuple[dict | None, str | None]:
     """Overlay measured calibration and the convenience flags on a partial recipe.
 
-    `output` and `exposure` write `recipe_version` 2 keys (`output`,
+    `output` and `exposure` write destination-build keys (`output`,
     `scene_correction.exposure`), so they need a base from a build that takes
     destinations; on a preset build's recipe (the reference build) they are refused
     and the partial `--recipe` states that build's own keys instead.
@@ -250,11 +267,11 @@ def _freeze_recipe(base: dict, dmin: list[float],
         if not isinstance(input_cfg, dict):
             return None, "recipe `input` must be an object"
         input_cfg["film_type"] = film_type
-    if (output is not None or exposure is not None) and recipe.get("recipe_version") != 2:
+    if (output is not None or exposure is not None) and not _manifest.is_destination_recipe(recipe):
         return None, ("--film-master, --range, --transfer, --gamut, --container and "
-                      "--exposure set recipe_version 2 keys, and this build's recipe "
-                      "is not one (it takes output presets); state its output in "
-                      "--recipe instead")
+                      "--exposure set keys of recipe_version 2 and later, and this "
+                      "build's recipe is not one (it takes output presets); state its "
+                      "output in --recipe instead")
     if output == "film-master":
         recipe["output"] = "film-master"
     elif output is not None:
@@ -350,6 +367,7 @@ def cmd_convert(args) -> int:
     if isinstance(reconstruction, dict) and reconstruction.get("type") == "density":
         reconstruction.pop("type")
     _drop_retired_curve_tag(defaults, partial)
+    _adopt_the_builds_version(defaults, partial)
     base = _deep_merge(defaults, partial)
     # Everything but the measurement is known now, so a recipe the flags cannot be
     # frozen into is refused before the Dmin estimate spends its time.

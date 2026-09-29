@@ -701,7 +701,7 @@ applies them.
 **The roll's values get their own recipe section**, `roll`
 (`nf-calibration/roll-section`): the white-balance gains and the roll's white in scene
 stops. The white is stored as the measurement, and the rendering turns it into a
-contrast (`pipeline::roll_white::contrast_for`). Written into `scene_correction` or
+slope (`pipeline::roll_white::slope_for`). Written into `scene_correction` or
 `look`, as `measure-roll` first did, a measured value cannot be told from a chosen one.
 
 **`--rendering` chooses the base** (`nf-destinations/direct-preset`), and each has one
@@ -718,7 +718,7 @@ principle:
 |---|---|---|
 | roll section | not applied, and reported as not applied | applied |
 | white balance | identity | the roll's gains |
-| `look.contrast` | `2.0 / 1.8` (whole 2.0), pinned | the roll's, else the fallback with a warning |
+| base slope (`look.contrast` multiplies it) | `2.0 / 1.8` (whole 2.0), pinned | the roll's, else the fallback with a warning |
 | highlight desaturation | off | today's default (0.8) |
 | display black | on, 6 stops below mid-grey, pinned | today's default (6) |
 | fit range | reinhard at 6 stops of headroom, pinned | today's default |
@@ -749,40 +749,53 @@ principle:
   a default must not move the rendering the calibration loop holds.
 
 **Explicit knobs build on the base, under either rendering.** `--white-balance`
-multiplies the base gains, whose identity is 1. Every other knob replaces its base
-value — `--contrast` included, because `look.contrast` is an absolute rendering contrast
-with no identity to compose from. Contrast composes once `nf-look/contrast-definition`
-gives it one.
+multiplies the base gains and `--contrast` the base slope, each with identity 1; every
+other knob replaces its base value. So one taste — "a little more contrast" — carries
+across rolls as the same number.
 
-**Three contrasts, not interchangeable:**
+**One contrast knob, three quantities** (`nf-look/contrast-definition`, user
+2026-09-28). Only the knob is called contrast; the absolute values are slopes:
 
 | | example | where |
 |---|---|---|
-| whole contrast | 2.0 bundled · 2.23–2.97 roll-measured | not stored: `look.contrast × reconstruction.linearization` |
-| rendering contrast, `look.contrast` | `2.0 / 1.8 ≈ 1.11` · 1.24–1.65 | the look; what `measure-roll`'s `contrast_for` computes |
-| the decode's linearization | 1.8 | `reconstruction.linearization` — a calibration, not a look |
+| `contrast`, the knob | 1 by default; 1.2 is 20% more | `look.contrast`, `--contrast` — a multiplier, so higher is always more |
+| slope | `2.0 / 1.8 ≈ 1.11` fallback · 1.24–1.65 roll-measured | what the look applies: base × `contrast`; the base is the roll's (`roll_white::slope_for`), `look::DEFAULT_SLOPE`, or `direct`'s pinned value. Reported as `base_slope`, `base_from`, `slope` |
+| whole slope | 2.0 bundled · 2.23–2.97 roll-measured | internal only: slope × `reconstruction.linearization`, what highlight desaturation's band divides by |
+
+The slope is the one that means something to a reader: scene to output, 1 reproducing
+the scene's own contrast. The whole slope is per unit of negative density, and it moves
+if the linearization is recalibrated even when the picture does not, so no report states
+it. The roll's white stays a measurement in scene stops (`roll.white_stops`) and is not
+the knob: a higher white is a flatter picture, the opposite of what "more stops" reads
+as.
 
 The linearization stays out of the look because it is a calibration: at 1.8 the decode's
 output is scene-linear (double the exposure and the value doubles), which `film-master`,
-the roll's gains and `scale` all rely on. The look's `1.11` is the part that is not the
-film: it was kept so the new flow renders a neutral where the bundled decode did, and it
-is defined as `BUNDLED_CONTRAST / LINEARIZATION`, so the whole contrast holds when the
-linearization moves. Which whole contrast the fallback should be (the user's prior is
-about 2.5, i.e. `look.contrast ≈ 1.39`) is `nf-calibration/no-roll-defaults`'s.
+the roll's gains and `scale` all rely on. The fallback slope `1.11` is the part that is
+not the film: it was kept so the new flow renders a neutral where the bundled decode
+did, and it is defined as `BUNDLED_CONTRAST / LINEARIZATION`, so the whole slope holds
+when the linearization moves. Which slope the fallback should be (the user's prior is a
+whole 2.5, i.e. slope ≈ 1.39) is `nf-calibration/no-roll-defaults`'s; moving it moves
+only renders without a roll white, stated multiplier or not.
+
+`look.contrast` changed meaning in place (a slope before, a multiplier now), so the
+recipe went to version 3. A version 2 recipe is still read, and one stating a number
+there is refused with the multiplier that keeps it — never rendered differently in
+silence.
 
 **Recipe warnings, not refusals** (`Recipe::recipe_warnings`). A file cannot say who
 chose a value, and a `--dump-params` recipe must replay as it rendered, so nothing is read
 as unset by its value and nothing is refused; the run warns once instead, and a typed flag
 (a choice made now) never does. What the warnings catch is a value nobody chose: earlier
 builds wrote every default into a recipe, and an earlier `measure-roll` wrote its gains
-into `scene_correction.white_balance` and its contrast into `look.contrast`.
+into `scene_correction.white_balance` (and its contrast into `look.contrast`, which a
+version 2 recipe now refuses — above).
 
 - `default` without a roll measurement: what fell back.
-- `default`, a recipe value beside a roll measurement: a white balance that multiplies the
-  roll's gains, a contrast that overrides the roll's white.
+- `default`, a recipe white balance beside the roll's gains, which it multiplies.
 - `direct`, narrowly: only highlight desaturation at 0.8 (every other old default equals
-  `direct`'s base) and a white balance or contrast beside a `roll` section (old
-  `measure-roll` output). Narrow so a dump of a deliberate adjustment replays under
+  `direct`'s base) and a white balance beside a `roll` section (old `measure-roll`
+  output). Narrow so a dump of a deliberate adjustment replays under
   `--strict`; the one carve-out is a value typed beside a `roll` section, which warns on
   replay unless the flag is typed again.
 
@@ -948,7 +961,7 @@ judge once the cast is settled. Two or three candidates per review set
 keeps a frame's toggle manageable. `#124`, the 2026-09-17 offset test and the
 2026-09-27 blue round (`nf-calibration/scale-gamma-loop`: nothing moved; `scale` splits
 by roll) are the rounds so far. The linearization is not judged this way: on a neutral it
-acts only through its product with `look.contrast`. The next pass is against the
+acts only through its product with the look's slope. The next pass is against the
 calibration frames (`nf-calibration/neutrality-gate`).
 
 **Note what the offset test showed about the loop itself.** The candidates were

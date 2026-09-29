@@ -43,7 +43,7 @@ The numbers and the round are in `docs/progress/nf-display-stages.md`.
   shadows untouched, paid for by the speculars. It was reviewed at +0.15 and +0.30 stop
   and reinhard was preferred.
 - So the open questions (what "beats reinhard" means, how many parameters) are moot.
-  Where white renders is already a knob, `look.contrast` (via the white rule).
+  Where white renders is already a knob, the look's slope (via the white rule).
   `--display-tone-headroom` barely moves white; it sets how hard the stops above white
   are compressed.
 

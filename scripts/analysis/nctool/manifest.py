@@ -115,6 +115,15 @@ DESTINATION_PIPELINE = 8
 PIPELINE_LINE = re.compile(r"^pipeline_version: (\d+)", re.M)
 
 
+def is_destination_recipe(recipe: object) -> bool:
+    """Whether a recipe is a destination build's (`recipe_version` 2 and later, whose
+    `output` is a destination) rather than a preset build's (no version)."""
+    if not isinstance(recipe, dict):
+        return False
+    version = recipe.get("recipe_version")
+    return isinstance(version, int) and not isinstance(version, bool) and version >= 2
+
+
 def chain_block(report: object) -> dict:
     """A destination build's per-run rendering facts: the report's (or roll frame's)
     `chain` block, or `new_flow` from a build before `nf-core/report-contract` renamed
