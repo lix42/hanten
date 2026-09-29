@@ -1610,17 +1610,6 @@ fn pipeline_version_warning(loaded_version: Option<u32>) -> Option<String> {
     })
 }
 
-/// Whether a recipe/override JSON object explicitly carries
-/// `calibration.film_base` — the raw-JSON witness behind `roll`'s per-frame
-/// roll-consistency warning. A key probe, not a value comparison, for the same
-/// reason as its siblings: an override that merely *restates* the shared base is
-/// still a per-frame assertion of a roll calibration.
-fn sets_calibration_film_base(v: &serde_json::Value) -> bool {
-    v.get("calibration")
-        .and_then(|c| c.get("film_base"))
-        .is_some()
-}
-
 /// Map the (clap-mutually-exclusive) film-base flags to a [`FilmBaseSource`],
 /// or `None` when none was passed. Shared by `convert`'s merge ([`recipe::merge`]) and
 /// `estimate`, so they resolve the source identically.
@@ -4635,15 +4624,164 @@ fn validate_roll_recipe(r: &Recipe, context: &str) -> Result<()> {
     validate_shared(r, FilmBaseRemedy::SharedRecipe)
 }
 
+/// A value every frame of a roll shares ([`ROLL_WIDE`]).
+struct RollWide {
+    key: &'static str,
+    /// What differs about the frame when the value does.
+    breaks: &'static str,
+    compare: fn(frame: &Recipe, roll: &Recipe) -> Result<Option<Difference>>,
+}
+
+/// The frame's value and the roll's, as a roll warning prints them.
+type Difference = (String, String);
+
+/// A recipe value as a roll warning prints it.
+fn roll_value_text<T: Serialize>(v: &T) -> Result<String> {
+    // To text directly: through a `Value` an f32 widens and prints its f64 digits.
+    match serde_json::to_string(v) {
+        Ok(s) if s == "null" => Ok("unset".into()),
+        Ok(s) => Ok(s),
+        Err(e) => Err(NcError::Other(format!("serializing a recipe value: {e}"))),
+    }
+}
+
+/// Both values as text when they differ, compared as values (`-0.0` is `0.0`).
+fn changed<T: PartialEq + Serialize>(frame: &T, roll: &T) -> Result<Option<Difference>> {
+    if frame == roll {
+        return Ok(None);
+    }
+    Ok(Some((roll_value_text(frame)?, roll_value_text(roll)?)))
+}
+
+/// A resolved destination as a roll warning prints it.
+fn destination_text(d: recipe::Destination) -> Result<String> {
+    match d {
+        recipe::Destination::FilmMaster => roll_value_text(&OutputSection::FilmMaster),
+        recipe::Destination::Display(d) => roll_value_text(&d.axes()),
+    }
+}
+
+const DECODED_APART: &str = "this frame's densities decode differently from the rest of the roll's";
+
+/// The roll-wide values. A frame's `params` override that resolves one differently from
+/// the shared recipe is applied and warned about (`--strict` refuses it). Every other key
+/// is frame-local: `roll.white_stops` is how `measure-roll`'s `reuse.frames` states a
+/// clamped frame's white, and `input` describes each file, not the roll.
+/// `roll_classifies_every_recipe_key` holds the split.
+const ROLL_WIDE: &[RollWide] = &[
+    RollWide {
+        key: "calibration.film_base",
+        breaks: "this frame's Dmin differs from the rest of the roll's, breaking colour \
+                 consistency",
+        compare: |f, r| changed(&f.calibration.film_base, &r.calibration.film_base),
+    },
+    RollWide {
+        key: "roll.white_balance",
+        breaks: "this frame is balanced with other gains than the roll's",
+        // Only gains that reach both: a frame that leaves them out entirely is the
+        // `rendering` or `output` row's.
+        compare: |f, r| {
+            if !(f.applies_roll_white_balance() && r.applies_roll_white_balance()) {
+                return Ok(None);
+            }
+            changed(&f.roll.white_balance, &r.roll.white_balance)
+        },
+    },
+    RollWide {
+        key: "reconstruction.scale",
+        breaks: DECODED_APART,
+        compare: |f, r| changed(&f.reconstruction.scale, &r.reconstruction.scale),
+    },
+    RollWide {
+        key: "reconstruction.offset",
+        breaks: DECODED_APART,
+        compare: |f, r| changed(&f.reconstruction.offset, &r.reconstruction.offset),
+    },
+    RollWide {
+        key: "reconstruction.linearization",
+        breaks: DECODED_APART,
+        compare: |f, r| {
+            changed(
+                &f.reconstruction.linearization,
+                &r.reconstruction.linearization,
+            )
+        },
+    },
+    RollWide {
+        key: "reconstruction.anchor",
+        breaks: DECODED_APART,
+        compare: |f, r| changed(&f.reconstruction.anchor, &r.reconstruction.anchor),
+    },
+    RollWide {
+        key: "rendering",
+        breaks: "the rendering decides whether the roll's measurement applies at all, and \
+                 derives an unset destination",
+        // Names the destination too when the rendering moved it: the `output` row is
+        // silent then.
+        compare: |f, r| {
+            let Some((own, roll)) = changed(&f.rendering, &r.rendering)? else {
+                return Ok(None);
+            };
+            let (df, dr) = (
+                recipe::destination(f, KnobNames::KeyOnly)?,
+                recipe::destination(r, KnobNames::KeyOnly)?,
+            );
+            if df == dr {
+                return Ok(Some((own, roll)));
+            }
+            Ok(Some((
+                format!("{own} (destination {})", destination_text(df)?),
+                format!("{roll} (destination {})", destination_text(dr)?),
+            )))
+        },
+    },
+    RollWide {
+        key: "output",
+        breaks: "this frame is a different image from the rest of the roll's",
+        // Only when the frame states another `output`: a destination derived from a
+        // `rendering` change is that row's.
+        compare: |f, r| {
+            if f.output == r.output {
+                return Ok(None);
+            }
+            let (df, dr) = (
+                recipe::destination(f, KnobNames::KeyOnly)?,
+                recipe::destination(r, KnobNames::KeyOnly)?,
+            );
+            if df == dr {
+                return Ok(None);
+            }
+            Ok(Some((destination_text(df)?, destination_text(dr)?)))
+        },
+    },
+];
+
+/// One warning per [`ROLL_WIDE`] value `frame` resolves differently from `shared`.
+fn roll_wide_breaks(input: &Path, frame: &Recipe, shared: &Recipe) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    for w in ROLL_WIDE {
+        if let Some((own, roll)) = (w.compare)(frame, shared)? {
+            warnings.push(format!(
+                "frame {}: its `params` override resolves `{}` to {own}, where the roll's is \
+                 {roll} — {}. Drop what changes it from this frame's `params` to keep the \
+                 roll consistent.",
+                input.display(),
+                w.key,
+                w.breaks,
+            ));
+        }
+    }
+    Ok(warnings)
+}
+
 /// Build the per-frame plan from the `--frames` manifest or the positional inputs,
 /// resolving each frame's recipe (shared recipe + any per-frame override) and output
 /// path. Config errors (a bad override, an unsupported knob) fail loudly here, before
 /// any frame is converted; runtime errors (a bad decode, a degenerate base) surface
-/// per frame during conversion. A per-frame override that touches a roll-fixed choice
-/// (`calibration.film_base`, or `output`) is not rejected — it is applied, with a loud
-/// roll-level warning pushed to `roll_warnings` (like the not-frozen warning), so a
-/// deliberate per-frame value stays possible while the consistency break is surfaced
-/// and `--strict`-promotable.
+/// per frame during conversion. A per-frame override that changes a [`ROLL_WIDE`] value
+/// is not rejected — it is applied, with a roll-level warning pushed to `roll_warnings`,
+/// so a deliberate per-frame value stays possible while the break is surfaced and
+/// `--strict`-promotable.
 fn resolve_frames(
     args: &RollArgs,
     shared: &Recipe,
@@ -4675,46 +4813,6 @@ fn resolve_frames(
                         let context =
                             format!("frame {}: per-frame `params` override", mf.input.display());
                         recipe::check_body(&ov, false, &context)?;
-                        // `calibration.film_base` is a roll calibration: the whole batch
-                        // is meant to share one frozen base (Dmin). A per-frame override
-                        // *may* still set it (a deliberate per-frame value stays
-                        // possible), but doing so gives this frame a different Dmin from
-                        // the rest of the roll and breaks color consistency — so warn
-                        // loudly (roll-level, `--strict`-promotable) and continue,
-                        // applying the override, rather than rejecting.
-                        if sets_calibration_film_base(&ov) {
-                            let msg = format!(
-                                "frame {}: a per-frame `params` override sets \
-                                 `calibration.film_base`, overriding the roll-fixed base — \
-                                 this frame's Dmin differs from the rest of the roll, \
-                                 breaking color consistency. Set the base once in the shared \
-                                 --params recipe (and drop the per-frame \
-                                 `calibration.film_base`) if you want a frozen, consistent \
-                                 roll.",
-                                mf.input.display()
-                            );
-                            log.warn(&msg);
-                            roll_warnings.push(msg);
-                        }
-                        // `output` is the destination, so a per-frame one can switch this
-                        // frame to the film master (an unrendered linear ACEScg master) or
-                        // to another range, gamut or container. A key probe on the raw
-                        // overlay, so a restatement is surfaced too: the roll report has
-                        // no other place to show it.
-                        if ov.get("output").is_some() {
-                            let msg = format!(
-                                "frame {}: a per-frame `params` override sets `output`, \
-                                 overriding the roll's destination — this frame may be a \
-                                 different image class (the unrendered film master vs a \
-                                 rendered destination) or a different range, gamut or \
-                                 container from the rest of the roll. Set `output` once in \
-                                 the shared --params recipe (and drop the per-frame \
-                                 `output`) if you want one consistent roll.",
-                                mf.input.display()
-                            );
-                            log.warn(&msg);
-                            roll_warnings.push(msg);
-                        }
                         let mut v = shared_value.clone();
                         merge_json(&mut v, &ov);
                         let r: Recipe = serde_json::from_value(v).map_err(|e| {
@@ -4724,6 +4822,10 @@ fn resolve_frames(
                             ))
                         })?;
                         validate_roll_recipe(&r, &context)?;
+                        for msg in roll_wide_breaks(&mf.input, &r, shared)? {
+                            log.warn(&msg);
+                            roll_warnings.push(msg);
+                        }
                         (r, Some(ov))
                     }
                     None => (shared.clone(), None),
@@ -4908,7 +5010,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
         roll_warnings.push(msg);
     }
 
-    // Resolve the plan. A per-frame override that touches a roll-fixed choice appends
+    // Resolve the plan. A per-frame override that changes a roll-wide value appends
     // its own roll-level warning here (warn-and-continue, like the not-frozen warning
     // above), so `roll_warnings` is passed in to collect it.
     let planned = resolve_frames(&args, &shared, &mut roll_warnings, &log)?;
@@ -8085,6 +8187,152 @@ mod tests {
             !warnings.is_empty(),
             "overriding the roll-fixed film base must still warn"
         );
+    }
+
+    /// Every recipe key a roll frame may set with no warning: the complement of
+    /// [`ROLL_WIDE`].
+    const FRAME_LOCAL: &[&str] = &[
+        "recipe_version",
+        "input",
+        "roll.white_stops",
+        "measure",
+        "scene_correction",
+        "look",
+        "fit_range",
+        "fit_gamut",
+    ];
+
+    #[test]
+    fn roll_classifies_every_recipe_key() {
+        let doc = serde_json::to_value(Recipe::default()).unwrap();
+        let wide: Vec<&str> = ROLL_WIDE.iter().map(|w| w.key).collect();
+        let classified = |k: &str| FRAME_LOCAL.contains(&k) || wide.contains(&k);
+        let mut keys = Vec::new();
+        for (section, v) in doc.as_object().unwrap() {
+            if classified(section) {
+                keys.push(section.clone());
+                continue;
+            }
+            let fields = v
+                .as_object()
+                .unwrap_or_else(|| panic!("`{section}` is neither roll-wide nor frame-local"));
+            for field in fields.keys() {
+                let key = format!("{section}.{field}");
+                assert!(
+                    classified(&key),
+                    "`{key}` is neither roll-wide nor frame-local"
+                );
+                keys.push(key);
+            }
+        }
+        for k in wide.iter().chain(FRAME_LOCAL) {
+            assert!(keys.iter().any(|x| x == k), "`{k}` names no recipe key");
+        }
+    }
+
+    #[test]
+    fn every_roll_wide_value_warns_on_its_own_key() {
+        let mut shared = base_recipe();
+        shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
+        shared.roll.white_balance = Some([1.05, 1.0, 0.95]);
+        type Change = (&'static str, fn(&mut Recipe));
+        let changes: [Change; 8] = [
+            ("calibration.film_base", |r| {
+                r.calibration.film_base = Some(FilmBaseSource::Explicit([0.8, 0.5, 0.4]))
+            }),
+            ("roll.white_balance", |r| {
+                r.roll.white_balance = Some([1.1, 1.0, 0.9])
+            }),
+            ("reconstruction.scale", |r| {
+                r.reconstruction.scale = [1.0, 0.9, 0.8]
+            }),
+            ("reconstruction.offset", |r| {
+                r.reconstruction.offset = [0.1, 0.0, 0.0]
+            }),
+            ("reconstruction.linearization", |r| {
+                r.reconstruction.linearization = 1.7
+            }),
+            ("reconstruction.anchor", |r| {
+                r.reconstruction.anchor = fixed::AnchorRule::MidAboveBase(0.5)
+            }),
+            ("rendering", |r| {
+                r.rendering = crate::rendering::Rendering::Direct
+            }),
+            ("output", |r| r.output = OutputSection::FilmMaster),
+        ];
+        assert_eq!(changes.len(), ROLL_WIDE.len(), "a row with no case");
+        for (key, change) in changes {
+            let mut frame = shared.clone();
+            change(&mut frame);
+            let w = roll_wide_breaks(Path::new("a.tif"), &frame, &shared).unwrap();
+            assert_eq!(w.len(), 1, "{key}: {w:?}");
+            assert!(
+                w[0].contains(&format!("resolves `{key}` to ")),
+                "{key}: {}",
+                w[0]
+            );
+        }
+    }
+
+    #[test]
+    fn a_roll_wide_value_warns_only_when_it_changes_and_names_both() {
+        let mut shared = base_recipe();
+        shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
+        let frame = Path::new("a.tif");
+        // A restatement (even as -0.0), and a frame-local change, are silent.
+        let mut same = shared.clone();
+        same.roll.white_stops = Some(1.7);
+        same.scene_correction.exposure = 0.3;
+        same.reconstruction.offset = [-0.0, 0.0, 0.0];
+        assert!(roll_wide_breaks(frame, &same, &shared).unwrap().is_empty());
+
+        // Gains that never reach the frame are not a break: `direct` leaves the roll
+        // out, and the film master runs no scene correction.
+        for leaves_out_the_roll in [
+            |r: &mut Recipe| r.rendering = crate::rendering::Rendering::Direct,
+            |r: &mut Recipe| r.output = OutputSection::FilmMaster,
+        ] {
+            let mut roll = shared.clone();
+            leaves_out_the_roll(&mut roll);
+            let mut gains = roll.clone();
+            gains.roll.white_balance = Some([1.1, 1.0, 0.9]);
+            assert!(roll_wide_breaks(frame, &gains, &roll).unwrap().is_empty());
+        }
+
+        let mut moved = shared.clone();
+        moved.reconstruction.linearization = 0.5;
+        moved.roll.white_balance = Some([1.1, 1.0, 0.9]);
+        let w = roll_wide_breaks(frame, &moved, &shared).unwrap();
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(
+            w[0].contains("`roll.white_balance` to [1.1,1.0,0.9]"),
+            "{}",
+            w[0]
+        );
+        assert!(w[0].contains("the roll's is unset"), "{}", w[0]);
+        assert!(
+            w[1].contains("`reconstruction.linearization` to 0.5"),
+            "{}",
+            w[1]
+        );
+        assert!(w.iter().all(|m| m.starts_with("frame a.tif:")), "{w:?}");
+
+        // A `rendering` change that moves the derived destination is one warning, naming
+        // both destinations; `output` warns only when the frame states another.
+        let mut direct = shared.clone();
+        direct.rendering = crate::rendering::Rendering::Direct;
+        let w = roll_wide_breaks(frame, &direct, &shared).unwrap();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("`rendering` to \"direct\" (destination {"),
+            "{}",
+            w[0]
+        );
+        let mut master = shared.clone();
+        master.output = OutputSection::FilmMaster;
+        let w = roll_wide_breaks(frame, &master, &shared).unwrap();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("`output` to \"film-master\""), "{}", w[0]);
     }
 
     #[test]

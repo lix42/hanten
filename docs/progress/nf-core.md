@@ -17,8 +17,9 @@ the stage module tree, a minimal end-to-end render, the knob audit, the recipe �
 the old chain, its presets, its print stage, its recipe, its sidecar and
 `ultrahdr-sys`. `--new-flow` is now a removed-flag error. **`report-contract`**
 settled the report (`chain`, the `recipe` echo and its hash, no sidecar) and telemetry
-schema 9. Open: `subcommands` (`roll`'s per-frame overrides; re-scoped 2026-09-28),
-`buffer-strategy`, `three-step-pipeline`.
+schema 9. **`subcommands`** settled `roll`'s per-frame overrides: a frame resolves as
+`convert` would, and an override that changes a roll-wide value (`cli::ROLL_WIDE`)
+warns naming both values. Open: `buffer-strategy`, `three-step-pipeline`.
 
 **Adding or changing a knob** (what used to be the availability tables in `src/flow.rs`,
 deleted by the flip):
@@ -1143,8 +1144,8 @@ SDR/HDR split splits *from*.
 
 ## subcommands
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-28
 
 - 2026-09-19: filed after the plan review. Goal: `roll`, `inspect` and `estimate` under the new chain.
 - **2026-09-28 — re-scoped to `roll`'s per-frame overrides.** Checked against the code
@@ -1157,6 +1158,41 @@ SDR/HDR split splits *from*.
   the error-code check. Now blocks `core/recipe-composition`, which layers on the same
   resolution. The pinned test the old file named,
   `roll_refuses_the_current_chains_keys_from_either_recipe_site`, no longer exists.
+- 2026-09-28: done. **Decisions (user):** `rendering` is roll-wide; a warning fires when
+  the frame's *resolved* value differs from the shared one and names both (a
+  restatement is silent — this replaced the old key-presence probe on
+  `calibration.film_base` and `output`); a bad override stays an up-front exit 2, and
+  only a frame refused while converting is per-frame (exit 1, siblings written).
+
+  **What landed.** `cli::ROLL_WIDE` is one table of roll-wide values —
+  `calibration.film_base`, `roll.white_balance`, each `reconstruction` key, `rendering`,
+  `output` — each row comparing typed values (`-0.0` is `0.0`) and printing them only
+  for the message. Everything else is frame-local: `roll.white_stops` (a clamp from
+  `reuse.frames`) and `input` (it describes each file). `roll_classifies_every_recipe_key`
+  fails on a recipe key in neither list and on a row naming no key.
+
+  **One change, one warning.** A frame switching `rendering` also moves its derived
+  destination and drops the roll's gains; the `rendering` row names both destinations,
+  the `output` row fires only when the frame states another `output`, and the
+  white-balance row compares only gains that reach both frame and roll
+  (`Recipe::applies_roll_white_balance`: not under `direct`, not on the film master).
+  The first version warned three times for that one key.
+
+  **The merge needed no change.** No `recipe_version` 2 default keys off a key's
+  absence: unset values serialize as `null`, and unset destination axes are skipped and
+  derive from the frame's own `rendering`. Pinned through the binary by
+  `a_roll_frame_resolves_as_the_equivalent_convert_and_warns_only_on_roll_wide_values`
+  (bytes and `params_hash` against `convert --params <merged>` for a clamp, a
+  `rendering` switch and a decode key).
+
+  **Verified:** every CI gate; each new test falsified by breaking its guard; the
+  guide's claims by running the binary. **Gotcha:** falsification probes leave the
+  built binary stale — rebuild after restoring the source before running it by hand.
+
+  **For `core/recipe-composition`:** the per-frame warnings compare the frame against
+  the shared recipe *as resolved*, so once flags layer onto the roll they must be
+  applied before `resolve_frames` compares, or a flag-set value will read as a frame
+  break.
 
 ## buffer-strategy
 

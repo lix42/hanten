@@ -126,9 +126,9 @@ neutral gains, not "fall back to the recipe". `roll` gains every override flag
 `convert` has, so a one-off change needs no file.
 
 A frame's own override (the `--frames` manifest's `params`) resolves the same config
-a single `convert` of that frame would. An override on a roll-fixed key warns
-(`--strict` refuses it); a per-frame `roll.white_stops` is **not** roll-fixed — it is
-how a clamp is expressed.
+a single `convert` of that frame would. An override that changes a roll-wide value
+warns (`--strict` refuses it), and a restatement does not; a per-frame
+`roll.white_stops` is **not** roll-wide — it is how a clamp is expressed.
 
 ### `roll`'s measure mode
 

@@ -1264,6 +1264,12 @@ impl Recipe {
         }
     }
 
+    /// Whether the roll's gains reach scene correction: not under a rendering that leaves
+    /// the roll out, nor on the film master, which runs no scene correction.
+    pub fn applies_roll_white_balance(&self) -> bool {
+        self.output != OutputSection::FilmMaster && self.base().applies_roll
+    }
+
     /// Scene correction as the stage receives it: the applied roll's gains multiplied
     /// into the stated white balance — which is `1,1,1` unless the user set it, so a
     /// roll's gains alone reach the stage exactly. Both renderings start the white
