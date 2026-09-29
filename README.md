@@ -42,13 +42,14 @@ and hardening work tracked in the task roadmap.
 ## Usage (current CLI)
 
 ```sh
-# Measure the film base (Dmin) once per roll from an unexposed border.
-hanten estimate reference.tiff --base-region 0,0,120,40
+# Measure the film base (Dmin) once per roll from its unexposed frame (the median over
+# the frame, holder cut away). With no unexposed frame, read a region of unexposed
+# film instead: --base-region X,Y,W,H.
+hanten estimate unexposed.tiff
 
 # Convert a negative scan to a positive 16-bit Display P3 TIFF. Every conversion
 # must state where the film base comes from — there is no default, because Dmin sets
-# both the black point and the colour balance. Use the measured value, or
-# --auto-base to detect the rebate band (best-effort; it fails loudly when it can't).
+# both the black point and the colour balance.
 hanten convert in.tiff -o out.tiff --film-base 0.92,0.55,0.42
 
 # Half a stop brighter, with a little more contrast.

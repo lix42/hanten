@@ -7,7 +7,8 @@
 # acceptance, streaming-tiled-io) reuse the frozen recipes + measured peak here.
 #
 # Stages (pass a stage name to run one; default runs B..E):
-#   classify  - grid-classify every frame per roll (unexposed / full-exp / real)
+#   classify  - classify every frame per roll by its effective-area median and
+#               uniformity (unexposed / full-exp / real)
 #   freeze    - measure per-roll Dmin (unexposed), freeze recipes
 #   convert   - roll-convert every real frame, 16-bit + float HDR
 #   ir        - export IR plane, check --strict behaviour
@@ -62,11 +63,6 @@ if [ ${#ROLLS[@]} -eq 0 ]; then
   echo "         python3 -m nctool manifest generate --asset-root $A" >&2
   exit 2
 fi
-
-center_region() { # file -> "X,Y,W,H" for a holder-free center 40% box
-  read w h <<<"$($NC inspect "$1" 2>/dev/null | jq -r '"\(.decode.width) \(.decode.height)"')"
-  python3 -c "w,h=$w,$h; print(f'{round(0.3*w)},{round(0.3*h)},{round(0.4*w)},{round(0.4*h)}')"
-}
 
 require_file() { # path description
   if [ ! -f "$1" ]; then
@@ -142,18 +138,21 @@ require_entry_count() { # directory expected-count description
 }
 
 stage_classify() {
-  printf "%-24s %-22s %8s %6s  %s\n" FRAME ROLL cLuma agree CLASS
+  printf "%-24s %-22s %8s %7s  %s\n" FRAME ROLL luma uniform CLASS
   for row in "${ROLLS[@]}"; do IFS='|' read -r roll uf ff reals <<<"$row"
     # Match both .tif and .tiff (list_imgs / the manifest accept either); the
     # `-e` guard is nullglob-safe on bash 3.2 (an unmatched glob stays literal, so
     # skip it rather than passing a bogus path to `hanten estimate`).
     for f in "$A/rolls/$roll"/*.tif "$A/rolls/$roll"/*.tiff; do
       [ -e "$f" ] || continue
-      j=$($NC estimate --grid "$f" 2>/dev/null)
-      read cr cg cb ag <<<"$(echo "$j" | jq -r '.grid.cells[4].base as $c|"\($c.r) \($c.g) \($c.b) \(.grid.agreement)"')"
+      # The effective-area median, and whether `estimate` found the area uniform
+      # (it warns "not uniform" over a picture).
+      j=$($NC estimate "$f" 2>/dev/null)
+      read cr cg cb un <<<"$(echo "$j" | jq -r '.film_base as $c|"\($c.r) \($c.g) \($c.b) \([.warnings[]? | select(test("not uniform"))] | length == 0)"')"
       lum=$(python3 -c "print(f'{0.2126*$cr+0.7152*$cg+0.0722*$cb:.4f}')")
-      cls=$(python3 -c "l=$lum;print('full-exp' if l<0.08 else ('unexposed' if '$ag'=='true' else 'real'))")
-      printf "%-24s %-22s %8s %6s  %s\n" "$(basename "$f")" "$roll" "$lum" "$ag" "$cls"
+      # Uniformity first: a picture's median is often as dense as a leader's.
+      cls=$(python3 -c "l=$lum;print('real' if '$un'!='true' else ('full-exp' if l<0.08 else 'unexposed'))")
+      printf "%-24s %-22s %8s %7s  %s\n" "$(basename "$f")" "$roll" "$lum" "$un" "$cls"
     done
   done
 }
@@ -163,8 +162,8 @@ stage_freeze() {
     U="$A/rolls/$roll/$uf"
     # The leader frame (`$ff`) is no longer measured: the roll reference density it
     # supplied retired with the placements that read it (`nf-retire/dmax-machinery`).
-    ureg=$(center_region "$U")
-    jmin=$($NC estimate --base-region "$ureg" "$U" 2>"$ART/$roll.dmin.warn")
+    # The unexposed frame's effective area, at its median: the measure-once workflow.
+    jmin=$($NC estimate "$U" 2>"$ART/$roll.dmin.warn")
     dmin=$(echo "$jmin" | jq -c '.film_base')
     # The destination is stated, every axis, not defaulted: this harness converts to
     # TIFFs throughout — the 16-bit SDR Display P3 one and the float linear HDR one —
@@ -173,11 +172,12 @@ stage_freeze() {
       '{recipe_version:2,calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]}},output:{display:{range:"sdr",transfer:"native",gamut:"display-p3",container:"tiff"}}}' > "$REC/$roll.json"
     jq -n --argjson b "$dmin" \
       '{recipe_version:2,calibration:{film_base:{explicit:[$b.r,$b.g,$b.b]}},output:{display:{range:"hdr",transfer:"linear",gamut:"bt2020",container:"tiff"}}}' > "$REC/$roll.hdr.json"
-    jq -n --arg roll "$roll" --arg uf "$uf" --arg ureg "$ureg" \
+    jq -n --arg roll "$roll" --arg uf "$uf" \
+      --argjson area "$(echo "$jmin" | jq -c '.effective_area')" \
       --argjson b "$dmin" \
       --arg mw "$(tr '\n' ' ' <"$ART/$roll.dmin.warn")" '{
-        roll:$roll, dmin:{frame:$uf,region:$ureg,base:$b,warnings:$mw},
-        note:"center 40% region excludes film holder; the base is frozen for deterministic apply"
+        roll:$roll, dmin:{frame:$uf,effective_area:$area,base:$b,warnings:$mw},
+        note:"median over the effective area (holder and inset cut); the base is frozen for deterministic apply"
       }' > "$REC/$roll.provenance.json"
     echo "froze $roll: Dmin=$dmin"
   done

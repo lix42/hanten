@@ -85,10 +85,12 @@ It performs these operations:
    `manifest.json`.
 2. Verifies every source frame against its manifest SHA-256, so stale asset bytes
    cannot be attributed to a configuration change.
-3. Measures Dmin from the unexposed frame, over the center 80% (`x=10%`, `y=10%`,
-   `width=80%`, `height=80%`) unless `--dmin-region` says otherwise. Dmin uses a
-   five-cell grid by default; pass `--dmin-mode region` to aggregate its selected
-   region without the grid. No `Dmax` is measured: the roll reference density
+3. Measures Dmin from the unexposed frame. By default (`--dmin-mode area`) that is
+   `hanten estimate` with no source: the median over the frame's effective area, which
+   takes no region. `--dmin-mode region` reads the center 80% (`x=10%`, `y=10%`,
+   `width=80%`, `height=80%`, or `--dmin-region`) at p97; `--dmin-mode grid` is the
+   five-cell grid, for a build that predates the effective-area measurement (the
+   reference build). No `Dmax` is measured: the roll reference density
    retired with the placements that read it (`nf-retire/dmax-machinery`).
 4. Reads the tested binary's complete `hanten params` document, overlays the optional
    partial recipe, then freezes the measurements. This pins defaults such as the

@@ -517,31 +517,48 @@ pub struct InputParams {
     pub export_ir: Option<String>,
 }
 
-/// Where the film base comes from (design-spec §9, stage 2).
+/// Where a conversion's film base comes from (design-spec §9, stage 2): stated
+/// outright, or read from a stated region. Serializes as
+/// `{ "region": [x, y, w, h] }` / `{ "explicit": [r, g, b] }`.
 ///
-/// A single mutually-exclusive choice, not independent flags: more-specific
-/// sources always win with no fallback, so this is one selection. Serializes as
-/// `"auto"` / `{ "region": [x, y, w, h] }` / `{ "explicit": [r, g, b] }`.
+/// Every source is a *statement*. Measuring a reference frame's effective area
+/// (`film_base::measure_area`) is not a source: it runs in the measurement commands,
+/// and its result reaches a conversion as `Explicit`. The retired `"auto"` rebate
+/// search is refused with a migration message (`recipe::check_body`).
 ///
-/// The acquisition-ladder tier 3 **content-based source**
-/// (`calibration.film_base = "content"` / `--base-content`) is owned by the separate
-/// `film-base/content-fallback` task and is deliberately **not** a variant here —
-/// the auto detector only *suggests* it on refusal, never falls back to it.
-/// **Deliberately has no `Default`.** `Dmin` is a roll calibration, and picking
-/// one silently is the difference between a measured conversion and a guessed
-/// one — so `convert` requires the choice to be stated (see
-/// [`crate::recipe::Calibration::film_base`]). `Auto` remains a perfectly good *stated* answer;
-/// what is gone is arriving at it by omission.
+/// **Deliberately has no `Default`.** `Dmin` sets black point and colour balance
+/// together, so `convert` requires the choice to be stated (see
+/// [`crate::recipe::Calibration::film_base`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FilmBaseSource {
-    /// Estimate the base from the detected unexposed rebate band behind the
-    /// film holder (the inward-scan detector; fails loudly on low confidence).
-    Auto,
-    /// Sample the base from this border region `[x, y, w, h]`.
+    /// Read the base from this region `[x, y, w, h]`.
     Region([u32; 4]),
     /// Explicit per-channel base transmission `[r, g, b]`.
     Explicit([f32; 3]),
+}
+
+/// Where a report's film base came from: a stated [`FilmBaseSource`], or the
+/// effective-area measurement (`film_base::measure_area`), which a recipe cannot
+/// state. Serializes as `"effective_area"` / `{"region":[…]}` / `{"explicit":[…]}`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilmBaseProvenance {
+    /// The median over the effective area (`report.effective_area`).
+    EffectiveArea,
+    /// A stated region.
+    Region([u32; 4]),
+    /// An explicit value.
+    Explicit([f32; 3]),
+}
+
+impl From<&FilmBaseSource> for FilmBaseProvenance {
+    fn from(source: &FilmBaseSource) -> Self {
+        match *source {
+            FilmBaseSource::Region(r) => Self::Region(r),
+            FilmBaseSource::Explicit(b) => Self::Explicit(b),
+        }
+    }
 }
 
 /// Default specular headroom for fit range (`fit_range.headroom_stops`), in stops.
@@ -789,14 +806,12 @@ mod tests {
 
     #[test]
     fn film_base_source_serializes_all_variants() {
-        // Unit variants are bare lowercase strings; data variants are tagged
-        // objects.
+        // Both variants are tagged objects.
         assert_eq!(
-            serde_json::to_string(&FilmBaseSource::Auto).unwrap(),
-            "\"auto\""
+            serde_json::to_string(&FilmBaseSource::Region([1, 2, 3, 4])).unwrap(),
+            r#"{"region":[1,2,3,4]}"#
         );
         for src in [
-            FilmBaseSource::Auto,
             FilmBaseSource::Region([1, 2, 3, 4]),
             FilmBaseSource::Explicit([0.9, 0.5, 0.4]),
         ] {

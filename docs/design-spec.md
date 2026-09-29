@@ -61,7 +61,7 @@ The deterministic core owns the image science. Any future ML assistance (see
 - All conversion parameters controllable via CLI flags and/or a JSON recipe file.
 - Write **TIFF** output, selectable as **16-bit integer** or transitional
   **32-bit rendered float** via a flag.
-- Auto-estimate film base (`Dmin`) from the unexposed border, with full CLI override.
+- Measure the film base (`Dmin`) once per roll from unexposed film, with full CLI override.
 - JSON report output (estimated parameters, warnings) and JSON recipe load/dump.
 
 ### Out of scope (Step 1) — see §12 Roadmap
@@ -172,7 +172,7 @@ plane is a separate single channel, carried but not consumed (§6.1).
 | Space | Meaning | "Higher" means | Range (`f32`) | Where in code |
 |---|---|---|---|---|
 | **transmission** (raw scan value) | fraction of light the film passes | more transparent film, thinner negative, brighter pixel *in the raw scan* — a **darker** scene | `[0, 1]` (= `u16`/65535) | `io::decode`, `LinearImage.rgb` |
-| **film base / `Dmin`** | the unexposed rebate's transmission — the per-channel *relative* maximum transmission | (the ceiling of transmission) | `(0, 1]` | `FilmBase`, `film_base::estimate` |
+| **film base / `Dmin`** | the unexposed film's transmission — the per-channel *relative* maximum transmission | (the ceiling of transmission) | `(0, 1]` | `FilmBase`, `film_base::estimate`, `film_base::measure_area` |
 | **density `D` / `D′`** | `D = −log10(scan / Dmin)`, log-scale opacity; `D′ = density_scale·D + density_offset` (per-channel corrected density, §7.2) | **denser** negative — a **brighter** scene | `D`: `0` at base, `≈ [0, 6]` (slightly `< 0` if a pixel out-transmits the base); `D′` shifted by the offset | `density::to_density`, `DensityImage.density` |
 | **`D′` at the reconstruction→curve handoff** | the same corrected density `D′` (row above), named at the point it is passed to the selected density-to-positive curve | **denser** negative — a **brighter** scene | density units — `D′`'s range as defined in the row above (no re-clamping at the boundary) | reconstruction→curve handoff inside `density::reconstruct` |
 | **NC film RGB v1** (`FilmRgbImage`) | intentional positive film rendering from the exponential density curve or the fixed decode; interpreted consistently as linear Rec.709/D65 | **brighter** positive — a **brighter** rendered scene | curve-defined and unclamped `f32` | `algo::FilmRgbImage`, `algo::reconstruct` (shipped typed reconstruction output) |
@@ -191,7 +191,7 @@ base) is the **thinnest** negative and the **highest** transmission. So in any
 mixed or ambiguous context never call a high-transmission value "bright" — say
 "high-transmission". (A module working *purely* in the raw-scan transmission
 domain may adopt a local "'bright' = raw-scan transmission" convention, stated
-with an explicit §4 cross-reference — as the auto-base detector does, §8.) When
+with an explicit §4 cross-reference.) When
 naming a numeric value, name its space: "high density", "high transmission",
 "bright positive".
 
@@ -221,16 +221,17 @@ photographic film `Dmax` (the negative's physical maximum density), from diffuse
 (a datasheet reference number, `d + 0.36`), and from a roll's content white (not
 measured) — `src/algo/fixed.rs`'s "Five quantities" table keeps them apart.
 
-**Domain glossary.** *auto-base* — auto-detecting `Dmin` from the unexposed rebate
-(`FilmBaseSource::Auto`). *rebate* — the unexposed film leader between holder and
+**Domain glossary.** *rebate* — the unexposed film strip between holder and
 picture; maximum transmission, zero density. *holder* — the opaque scanner carrier;
-near-zero transmission (`< 0.05`). *base-region* — a user rectangle sampled for
-`Dmin` (`FilmBaseSource::Region`). *scene white / scene black* — the brightest /
+near-zero transmission (`< 0.05`). *effective area* — a frame minus its measured
+holder and a static inset (§9 `measure`); `estimate` reads an unexposed frame's
+`Dmin` over it. *base-region* — a user rectangle sampled for `Dmin`
+(`FilmBaseSource::Region`). *scene white / scene black* — the brightest /
 darkest depicted scene luminance (highest / lowest `D′`). *display (paper) white /
-black* — the output extremes (`1.0` / `0.0`). *uniform / spread* — a region is
-uniform when its per-channel relative spread `(p_hi − p_lo) / p_hi ≤ 0.15`; "spread"
-is that confidence figure. *candidate* — a holder-backed uniform band the auto
-detector proposes as possible rebate.
+black* — the output extremes (`1.0` / `0.0`). *uniform / spread* — a stated region is
+uniform when every channel's relative spread `(p97 − p10) / p97 ≤ 0.15`; an effective
+area passes when `(p90 − p10) / p50 ≤ 0.5`, a coarse "is this a picture?" guard.
+"Spread" is that figure.
 
 ## 5. Output formats
 
@@ -490,7 +491,7 @@ See the "Architecture" section of `CLAUDE.md` for the current-vs-target framing.
                                      │ linear scanner RGB (f32), IR (f32, opt)
                                      ▼
                  ┌──────────────────────────────────────────────┐
-                 │ 2. Film-base / Dmin estimate (auto or CLI)    │
+                 │ 2. Film-base / Dmin (explicit or region)      │
                  └──────────────────────────────────────────────┘
                                      ▼
                  ┌──────────────────────────────────────────────┐
@@ -632,34 +633,27 @@ common linear Display P3 domain used by the SDR rendition.
 
 ### 6.1 IR channel handling (Step 1)
 
-The IR plane (when present) is decoded and carried alongside RGB. With one
-exception it is **not consumed** by any conversion stage in Step 1: when the scan
-carries a marker-verified IR plane that **measures able to separate holder from
-film on that frame**, **film-base estimation (stage 2) consumes it** — the opaque
-scanner holder reads dark in IR while IR-transparent film (base, rebate, picture)
-reads bright, so holder-occluded spans are excluded from the auto rebate/`Dmin`
-search (the `ir-holder-detection` feature, adjacent to the roadmap's IR item 1;
-§9 film base).
+The IR plane (when present) is decoded and carried alongside RGB. **No conversion
+stage consumes it**: every HDRi `convert` notes that the plane is preserved but not
+used, unless `--export-ir <path>` writes it out for inspection or downstream tooling.
+Its one reader is the **effective area** (§9 `measure`): where a marker-verified
+plane **measures able to separate holder from film on that frame**, the opaque
+scanner holder (dark in IR) is cut from the frame's edges, since IR-transparent film
+(base, rebate, picture) reads bright. That area is what `estimate`, `inspect` and
+`measure-roll` measure over; it reaches a conversion only as a stated base.
 
 The usability verdict is **measured, not declared** (`ir-usability-detection`).
 The interior IR transmission is sampled and compared against a threshold
-(2.5x the holder classifier's); below it, film and holder cannot be told apart and
-detection falls back to RGB-only with a report warning naming the measurement.
-`--film-type` does not gate this: silver-halide blocks IR *in proportion to
-accumulated density*, so an unexposed silver frame is IR-transparent against an
-opaque holder (measured ~20:1) while its own fully-exposed leader is opaque
-throughout — the declared chemistry mispredicts both.
+(2.5x the holder classifier's); below it, film and holder cannot be told apart, the
+holder is not measured, and the effective area is the inset alone — a report
+warning says so. `--film-type` does not gate this: silver-halide blocks IR *in
+proportion to accumulated density*, so an unexposed silver frame is IR-transparent
+against an opaque holder (measured ~20:1) while its own fully-exposed leader is
+opaque throughout — the declared chemistry mispredicts both. An IR page identified
+by shape alone is likewise not trusted to measure the holder.
 
-Detection falls back to RGB-only in **four** cases: no IR plane; an IR page
-identified by shape alone; a frame measured unable to separate holder from film;
-and a mask that classifies *every* edge entirely as holder, which would leave the
-rebate search no span to scan on any edge and is therefore strictly worse than not
-masking (the RGB-only search still scans inward past the holder). In the last case
-the plane is carried but unconsumed, and the report says so — the orchestrator
-reads what stage 2 actually did rather than predicting it from the inputs. Otherwise the IR plane
-is only carried, and can be exported with `--export-ir <path>` for inspection or
-downstream tooling. The broader dust-removal stage that *consumes* the IR mask for
-defect inpainting is a deliberate follow-up (§12).
+The broader dust-removal stage that *consumes* the IR plane for defect inpainting
+is a deliberate follow-up (§12).
 
 *Why IR is powerful and why we defer it:* the color dye image is transparent to
 infrared while physical defects (dust, scratches, hair) are opaque to it, so the
@@ -920,8 +914,8 @@ no interactive prompts.
 |---|---|
 | `hanten convert` | The main pipeline: negative file → positive image in the resolved preset's container (a gain-map JPEG by default; a TIFF or AVIF under the presets that say so). |
 | `hanten roll` | Convert a batch of frames from one shared, frozen recipe (the batch-**apply** scaffold). Per-frame outputs into `--out-dir` + a roll-level JSON report. Single-frame `convert` is unchanged; roll is additive. |
-| `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, candidate rebate regions (coordinates + spread, ready for `--base-region`), suggested `Dmin`. No output image. |
-| `hanten estimate` | Run only film-base/`Dmin` estimation; emit JSON with a reuse-ready `--film-base` flag and a `calibration` object in recipe shape. `--grid` adds 5-cell agreement-checked sampling for blank reference frames. |
+| `hanten inspect` | Read a scan and emit a JSON report of format, channels, bit depth, input colour, the IR usability verdict and the effective area. No `Dmin`: that is `estimate`'s job. No output image. |
+| `hanten estimate` | Run only film-base/`Dmin` estimation; emit JSON with a reuse-ready `--film-base` flag and a `calibration` object in recipe shape. With no source flag it measures an unexposed frame: the per-channel median over its effective area, warning when the area is too uneven to be unexposed film; `--base-region` reads a stated rectangle instead (§9 film base). |
 | `hanten measure-roll` | Measure a roll's white balance and white once, for its new-chain recipe (`nf-scene-correction/roll-white-balance`, `nf-calibration/roll-white-rule`): decode every picture frame with the roll's explicit film base, pool the effective areas' pixels, and report the green-anchored gains that equalize their per-channel p99. Each frame's white is the p97 of its pixels' brightest film-RGB channel, in scene stops; the roll's white is the brightest at or under a cap (+2.0), raised to a floor (+1.5), placed through the look's contrast with mid-grey pinned; a frame above the cap is clamped to the cap and disclosed. Reported for the recipe's `roll` section (`nf-calibration/roll-section`) as a reuse-ready `--roll-white-balance … --roll-white …` flag, a recipe fragment, and a `roll --frames` manifest giving each clamped frame the cap as its white. `--leader` leaves out any pixel within 0.1 density of the leader from the gains, so a fully exposed frame cannot set them, and warns on a frame whose white is within 0.5 stop of it (near film saturation); without it the run warns and nothing is checked for saturation. |
 | `hanten params`  | Print the full default/effective parameter set as JSON (for discovery and recipe scaffolding). The scaffold is a **template to edit, not a runnable recipe**: `calibration.film_base` has no default, so it prints as `null` and `convert`/`roll` reject it until you state a base. |
 
@@ -1006,7 +1000,7 @@ in which file:
 }
 ```
 
-`calibration.film_base` accepts `"auto"`, `{"region": [x, y, w, h]}` or
+`calibration.film_base` accepts `{"region": [x, y, w, h]}` or
 `{"explicit": [r, g, b]}` and has **no default** — `convert` and `roll` refuse an
 unstated one (§9). It is the section's only member today. A pipeline profile is then
 "a recipe with no `calibration` section", and a roll calibration is "a recipe with
@@ -1297,18 +1291,18 @@ changed output pixel.
   (`version::PIPELINE_FINGERPRINTS`) pairs each version with three fingerprints —
   the default **render** (the fixed decode and the ACEScg mapping over five near-base
   pixels; it stops at scene correction's input, since every rendering stage after it
-  makes libm calls a windowless hash cannot absorb), the default **film-base estimate** (stage 2, `auto`
-  over the frozen scan in `pipeline::film_base::golden`, because the render
-  fingerprint is handed a hardcoded base and the recipe fingerprint sees only
-  `null` — `calibration.film_base` has no default, so the base fingerprint names `auto`
-  explicitly), and the default **recipe values**. Change a default in those
+  makes libm calls a windowless hash cannot absorb), the **film-base estimate** (stage 2: a stated region of
+  the frozen scan in `pipeline::film_base::golden`, because the render fingerprint is
+  handed a hardcoded base and `calibration.film_base` has no default for the recipe
+  fingerprint to see), and the default **recipe values**. Change a default in those
   stages and the test fails until the version and the fingerprints are updated
   together. It does **not** cover container decode (`io::decode`), stage-1b input
   semantics, the rendering stages' arithmetic (the stage goldens'), the lcms2 output
   transform or embedded ICC bytes (excluded deliberately — both differ by target, so
-  no cross-platform hash of them exists), encode/quantization, the non-default
-  film-base sources, or the auto detector's behavior on *real* scan geometry. A
-  change confined to those can move default output with every test green;
+  no cross-platform hash of them exists), encode/quantization, or the effective-area
+  measurement `estimate` makes (no conversion runs it; its result arrives as an
+  explicit base, so a change there moves every *measured* base). A change confined to
+  those can move output with every test green;
   `scripts/real-scan-verify/` and `nctool compare` are the tools for that half.
 - `params_hash` — a stable 64-bit FNV-1a hash of the canonical resolved-recipe
   JSON: **the exact bytes `--dump-params` writes**, so an agent can reproduce it
@@ -1468,16 +1462,18 @@ allocator slack and fixed costs — the number the gate compares:
 }
 ```
 
-(A 10368x7200 HDRi `convert` at `u16`, default budget, auto film base. The
-`film_base_bytes` figure is the decoded image plus the three `f32` channel vectors
-of the frame-interior rectangle the auto detector samples — ~69% of the frame; an
-explicit `--film-base` samples nothing and the phase is the decoded image alone.)
+(A 10368x7200 HDRi `convert` at `u16`, default budget, with a `--base-region` of
+about half the frame. The `film_base_bytes` figure is the decoded image plus the
+three `f32` channel vectors that rectangle is gathered into; an explicit
+`--film-base` gathers nothing, and neither does `estimate`'s effective-area median
+(a fixed-size histogram), so there the phase is the decoded image alone.)
 
 `budget_source` is `default|flag`, `decision` is `ok|warn` (a rejected run emits
 no report at all), and `detected_total_ram_bytes` is omitted when the platform
 can't report it (which also disables the warn tier). `render_bytes`/`encode_bytes`
-are `0` on `inspect`/`estimate`, which decode, sample, and stop — so for them the
-**film-base** phase, not decode, is usually the peak. `hanten roll` reports the same
+are `0` on `inspect`/`estimate`, which decode, measure, and stop — so for them the
+**film-base** phase is the peak when a `--base-region` is gathered, and decode
+otherwise. `hanten roll` reports the same
 block **per frame** (frames may differ in dimensions, and the gate runs per
 frame), not once for the roll — including for a frame that passed the gate and then
 failed for another reason, whose entry carries both its `memory` block and its
@@ -1489,12 +1485,12 @@ failed for another reason, whose entry carries both its `memory` block and its
 # Default density conversion: base-derived anchor, gain-map JPEG, JSON report.
 # The curve flag is optional (it is the default); the film-base flag
 # is **not** — `calibration.film_base` has no default, so every `convert` must state
-# one of `--film-base` / `--base-region` / `--auto-base`. The `.jpg` suffix *is*
+# one of `--film-base` / `--base-region`. The `.jpg` suffix *is*
 # optional: `-o out` writes `out.jpg`, because the default preset is
 # `gain-map-hdr`. Stating it is still checked — nc never renames a suffix you give
 # it (add `--output-preset display-p3` for a 16-bit TIFF).
 hanten convert in.tiff -o out.jpg \
-  --auto-base --report json
+  --film-base 0.553,0.271,0.159 --report json
 
 # Rendered float TIFF: display-linear BT.2020 after the print controls and the HDR
 # display render. This is NOT film-master.
@@ -1556,43 +1552,26 @@ hanten inspect in.tiff --report json
 
 # Calibrate once from an unexposed reference frame, then reuse for the roll.
 # (Product tip: wind past the light-struck leader, shoot a lens-cap frame, and
-# scan it — a full frame of clean base beats sampling the thin rebate. Don't use
-# the auto-burned wind-on frames; they are fogged leader. See §9 film-base.)
-# `estimate` measures Dmin from the sampled rectangle and reports it in
+# scan it. Don't use the auto-burned wind-on frames; they are fogged leader. See
+# §9 film-base.) With no source flag `estimate` reads the frame's effective area
+# (holder and inset cut away) at the per-channel median, and reports it in
 # directly reusable forms: a paste-ready --film-base flag string and a
 # `calibration` object already in recipe shape (emitted only when the measurement
 # is a valid explicit base — each channel in (0, 1] — else a warning explains why
-# not).
-hanten estimate reference.tiff --base-region 200,0,300,3600 --report json
+# not). An area too uneven to be unexposed film (a picture frame) keeps its value
+# but warns; --strict fails on it.
+hanten estimate reference.tiff --report json
 # → { "film_base": { "r": 0.553, "g": 0.271, "b": 0.159 },
-#     "film_base_source": { "region": [200, 0, 300, 3600] },
+#     "film_base_source": "effective_area", "film_base_percentile": 0.5,
 #     "film_base_flag": "--film-base 0.553,0.271,0.159",
 #     "calibration": { "film_base": { "explicit": [0.553, 0.271, 0.159] } }, … }
 hanten convert frame01.tiff -o frame01_pos.jpg --film-base 0.553,0.271,0.159
 # …or write the calibration straight out and batch with it:
-hanten estimate reference.tiff --base-region 200,0,300,3600 | jq '{recipe_version: 2, calibration}' > roll-cal.json
+hanten estimate reference.tiff | jq '{recipe_version: 2, calibration}' > roll-cal.json
 
-# On a dedicated blank frame, `estimate --grid` samples a fixed 5-cell grid
-# (corners + center) over the frame (or over --base-region) instead of a single
-# measurement: the report gains a `grid` object (per-cell regions/values, the
-# per-channel relative spread, the tolerance, and the agreement verdict), the
-# combined base is the per-channel median across cells, and disagreement beyond
-# the tolerance is a loud warning (--strict promotes it to a failing exit) —
-# it diagnoses light leaks, scanner illumination falloff, or dust.
-# A cells-disagree *warning* does NOT suppress the reuse-ready output: when the
-# combined median base is in range it is still offered (film_base_flag and the
-# `calibration` object), because the median resists a single bad cell. A consumer
-# treating that base as authoritative should check `warnings`, or run --strict,
-# which promotes the disagreement to a hard failure. (A *degenerate* base — see
-# below — is different: it is a hard error, not a warning, and no reuse output.)
-# A degenerate combined base (non-finite or <= 0 on any channel — e.g. --grid
-# --base-region on the dark holder) is not a usable Dmin anchor, so --grid emits
-# the diagnostic report (with grid.cells) and then **fails loudly regardless of
-# --strict** (exit 1), matching the single-measurement path's finite-and-positive
-# guard.
-# --grid conflicts with --film-base (nothing to sample) and --auto-base (the
-# grid replaces border detection). Deterministic: fixed layout, fixed percentile.
-hanten estimate blank.tiff --grid --report json
+# No unexposed frame: state a rectangle of unexposed film instead (read at p97,
+# with a uniformity warning for a rectangle that mixes in picture or holder).
+hanten estimate frame01.tiff --base-region 200,0,300,3600 --report json
 
 # Auto neutral white balance: estimate per-frame gains (percentile ≈ NLP
 # Auto-Neutral; gray-world ≈ Auto-AVG), read the resolved gains back from the
@@ -1655,12 +1634,9 @@ not specified here.
   on `roll`; omitted for `unknown`) so a declaration is never parsed and dropped.
   `hanten inspect` and `hanten estimate` report `ir_separability` (the measured
   interior IR transmission and the verdict) on any scan carrying an IR plane, and
-  on a usable one additionally reports a `holder_mask`: the per-edge along-edge
-  segments, each with its span `[start, end)`, holder/film class, and
-  representative median IR transmission, so the occluded spans are inspectable.
-  Where auto detection runs and the IR plane is present but unusable — shape-only
-  provenance, or a frame whose own film is IR-opaque — the RGB-only fallback is a
-  report warning promotable under `--strict`.
+  the measured holder depths inside `effective_area` (§9 `measure`). Where the
+  holder was not measured — no IR plane, shape-only provenance, or a frame whose own
+  film is IR-opaque — `estimate` warns that the effective area is the inset alone.
 - Input color is resolved as **two independent axes** before Dmin/density — the
   transfer encoding and the measurement meaning — never a single combined
   assertion. Each is a mutually-exclusive assertion with its own recipe key; the
@@ -1800,46 +1776,56 @@ measured over, so their depths may be artifacts rather than floors.
 **Nothing in `convert` measures over the area today** — its one consumer there, the
 per-frame reference density, retired with `nf-retire/dmax-machinery` — so an *empty*
 region is always a warning on `convert` (with no reported area), never a refusal.
-`measure.inset` stays live for `hanten measure-roll`, which samples each frame over the
-area. For the same reason `holder_applied` does not suppress `convert`'s "IR preserved
-but not used" warning: a marched holder moves the reported rectangle but no rendered
-pixel, so only the film-base stage consuming the plane (`BaseEstimate::ir_mask_applied`)
-counts as use. (`inspect`, which renders nothing, still counts the march.)
+`measure.inset` stays live for `hanten estimate` and `hanten measure-roll`, which
+measure over the area. For the same reason `holder_applied` does not suppress
+`convert`'s "IR preserved but not used" note: a marched holder moves the reported
+rectangle but no rendered pixel. (`inspect`, which renders nothing, counts the march
+as use.)
 
 ### Film base / Dmin (stage 2)
 The base source is a single mutually-exclusive choice, recipe key
-`calibration.film_base` — **required, with no default**. `convert` and `roll` reject a
-config that does not state one (exit 2, naming the three ways to supply it —
-`roll` accepts none of the flags, so its message points at the shared `--params`
-recipe instead). The measurement commands exist to *produce* a base, so requiring
-one first would be circular: `estimate` resolves an unstated source to `"auto"`,
-and `inspect` takes no film-base flags at all — it always runs the detector.
+`calibration.film_base` — `{"explicit": [r, g, b]}` or `{"region": [x, y, w, h]}`,
+**required, with no default**. `convert` and `roll` reject a config that does not
+state one (exit 2, naming `--film-base` measured with `hanten estimate
+<unexposed-frame>` and `--base-region`; `roll` accepts neither flag, so its message
+points at the shared `--params` recipe instead). The retired `"auto"` value and
+`--auto-base` flag are refused (exit 2) with a message naming the same route.
 
 Why it is required: `Dmin` is the divisor of the density conversion, so it sets
-the black point and the colour balance together, and auto-detection is
-best-effort on real scans (the rebate is a thin inset band behind the holder, not
-the outer margin). Defaulting silently meant the single most consequential
-parameter of a conversion was one nobody had decided. `--auto-base` is still one
-flag — the requirement is that the choice be *stated*, not that it be explicit.
+the black point and the colour balance together. Defaulting silently meant the
+single most consequential parameter of a conversion was one nobody had decided.
 
-The three flags conflict (passing more
-than one is a usage error); whichever is given replaces a recipe's source:
-- `--film-base R,G,B` ⇒ `{ "explicit": [r, g, b] }` — explicit base transmission.
-- `--base-region x,y,w,h` ⇒ `{ "region": [x, y, w, h] }` — sample this rectangle.
-  A non-uniform rectangle (one that mixes rebate with image content) keeps its
-  sampled value but raises a **uniformity warning** in the report (`--strict`
-  promotes it) — a mixed rectangle otherwise yields a plausible-looking bad base
-  with no signal.
-- `--auto-base` ⇒ `"auto"` — detect the unexposed rebate band behind
-  the film holder (the inward-scan detector; see the ladder below). On no
-  confident band it **fails loudly** and *suggests* `--base-content` — the opt-in
-  content source owned by the separate `film-base/content-fallback` task (ladder
-  tier 3 below); auto never silently falls back to it.
+**A base is an area read by a method** (`pipeline::film_base`), and nc never
+searches a frame for one (§9 `measure`):
 
-**How to obtain `Dmin` — the acquisition ladder.** `Dmin` is a property of the
-*film stock + development + scanner settings*, not of an individual frame, so
-measure it **once per roll** and reuse it (recipe / `--film-base`) rather than
-re-detecting per frame — measured this way the base is identical across frames,
+- **The effective area of an unexposed frame**, read at the per-channel **median**
+  — `hanten estimate FRAME` with no source flag. With the holder cut away the area
+  is one population (unexposed film plus grain and scanner noise); a high percentile
+  would land in its noise tail and read the base too transparent, understating every
+  density. The median holds until half the area is contaminated. It is a
+  **measurement, not a source**: no conversion runs it; its result reaches one as an
+  explicit base. Over a picture it returns a plausible, wrong base, so the report
+  warns (`--strict` fails) when the area's worst per-channel spread
+  `(p90 − p10) / p50` exceeds 0.5 — unexposed frames measure 0.06–0.29, picture frames
+  0.87–2.26. It is a coarse "is this a picture?" guard, not a uniformity verdict: a
+  leader passes. An empty area is a usage error (exit 2).
+- **A stated region** — `--base-region x,y,w,h` ⇒ `{ "region": [x, y, w, h] }`,
+  read at the per-channel **p97**. A hand-drawn rectangle may mix holder, rebate
+  and picture, and the base is its most transparent sub-population, which a high
+  percentile reaches past the rest (below the maximum, so a hot pixel cannot become
+  it). A non-uniform rectangle keeps its value but raises a **uniformity warning**
+  (`--strict` promotes it) — a mixed rectangle otherwise yields a plausible-looking
+  bad base with no signal.
+- **An explicit value** — `--film-base R,G,B` ⇒ `{ "explicit": [r, g, b] }`.
+
+The report's `film_base_source` is `"effective_area"`, `{"region": […]}` or
+`{"explicit": […]}`, and `film_base_percentile` (`0.5` / `0.97`) names the method;
+it is absent for an explicit base. The two flags conflict (passing both is a usage
+error); whichever is given replaces a recipe's source. `inspect` measures no base.
+
+**How to obtain `Dmin`.** `Dmin` is a property of the *film stock + development +
+scanner settings*, not of an individual frame, so measure it **once per roll** and
+reuse it (recipe / `--film-base`) — the base is then identical across frames,
 keeping the roll color-consistent. The sources, in decreasing reliability:
 
 1. **A dedicated unexposed frame (best).** Recommended shooting workflow: after
@@ -1848,73 +1834,35 @@ keeping the roll color-consistent. The sources, in decreasing reliability:
    blank frame alongside the roll. Do **not** rely on the 1–2 auto-burned
    wind-on frames — that leader area was exposed while loading with the back
    open, so it is fogged film, denser than clean base, and would bake a wrong
-   `Dmin` into the whole roll. A true cap-on frame provides a full frame of
-   clean base — far more area than the rebate
-   — measured with `hanten estimate` and frozen into the roll recipe (§8 example).
-   The large area also enables multi-region sampling with an agreement check
-   (`hanten estimate --grid`, §8), which doubles as a light-leak /
-   illumination-falloff diagnostic.
-2. **The rebate (the unexposed strip around each frame).** Reliable form: point
-   `--base-region` at a visible rebate patch manually — `hanten inspect` reports the
-   detector's candidate rectangles (edge, coordinates, value, spread) so you can
-   confirm one instead of measuring it in an image viewer (UI-assisted picking
-   is a roadmap item, §12). Convenience form: `--auto-base` — real
-   scans are laid out as
-   `dark film holder → thin unexposed rebate → exposed picture`, the rebate being
-   a narrow, uniform, bright band *inset behind the holder*, possibly on only
-   some edges. The **inward-scan detector** marches 1-px strips in from each edge
-   and keeps the first bright, uniform, value-continuous band sitting **behind**
-   a contiguous dark-holder run; the base is the highest-transmission such
-   candidate, higher-transmission than the frame interior on *every* channel (the
-   rebate is per-channel minimum density = maximum transmission — nothing genuine
-   can out-transmit clean base; "bright" here is raw-scan transmission, see §4
-   Terminology). Requiring the
-   holder outside the band defeats the bright-surround false positive (a uniform
-   bright scene region bleeding to the frame edge has no holder outside it);
-   cross-edge disagreement between surviving candidates is surfaced as a report
-   warning. Confidence gates stay **deliberately strict** and detection **fails
-   loudly** (naming the recovery flags) rather than emit a silently-wrong base.
-   Threshold tuning against full-size scans (`real-scan-verification`) and a
-   `--holder white|black` control for light holders are roadmap items (§12).
-   **Known residual limit:** a flat, bright *scene* region sitting behind the
-   holder on a rebate-less / cropped scan (e.g. sky along one edge) can still
-   satisfy every RGB gate and, as the sole candidate, be taken as the base — a
-   wrong `Dmin`, which shows up as a correctable global per-channel cast (the §8
-   failure geometry), not a crossover. Distinguishing it needs signals this
-   single-frame RGB pass lacks — colour-independent corroboration
-   (`auto-base-neutral-stock`) and opacity-based film-boundary detection
-   (`ir-holder-detection`); until those land, pin the base with
-   `--base-region` / `--film-base` for work you're keeping.
-3. **Content-based estimation (last resort, opt-in).** When the scan is cropped
-   to the image with no unexposed film visible, a per-channel high percentile of
-   the *exposed content* approximates the base (the thinnest area of a negative
-   is the scene's deepest black, close to true base). This is an **explicit
-   opt-in source** owned by the dedicated `film-base/content-fallback` task
-   (`--base-content` / `calibration.film_base = "content"`) — it is **not** part of
-   the auto detector: auto refusal only *suggests* it and never silently falls
-   back, and the report will record that the base came from content statistics.
-   When the assumption fails (foggy/high-key scenes), blacks wash out and pick up
-   a cast — recoverable downstream as a global cast (`density_offset` / white
-   balance).
+   `Dmin` into the whole roll. Measure it with `hanten estimate` and freeze the
+   result into the roll recipe (§8 example).
+2. **Unexposed film on a picture frame.** Point `--base-region` at a visible
+   rebate patch, located by hand (UI-assisted picking is a roadmap item, §12). Real
+   scans are laid out `dark film holder → thin unexposed rebate → exposed picture`,
+   the rebate a narrow band behind the holder, possibly on only some edges — so the
+   rectangle is small and easily mixed, which is what p97 and the uniformity
+   warning are for.
+3. **Content-based estimation (last resort, opt-in, not built).** When the scan is
+   cropped to the image with no unexposed film visible, a per-channel high
+   percentile of the *exposed content* approximates the base (the thinnest area of
+   a negative is the scene's deepest black, close to true base). It would be an
+   **explicit opt-in source** owned by `film-base/content-fallback`
+   (`--base-content` / `calibration.film_base = "content"`), recorded as such in the
+   report — never a silent fallback. When the assumption fails (foggy/high-key
+   scenes), blacks wash out and pick up a cast — recoverable downstream as a global
+   cast (`density_offset` / white balance).
 
-**When every source is missing** (no explicit base, auto refuses, content mode
-not requested), `convert` **fails loudly** with an actionable message naming the
-recovery flags — an agent can catch the exit code and re-run with an explicit
-choice. Estimator selection is never silent. **A degenerate resolved base** (a
-zero / negative / non-finite channel — e.g. a `--base-region` on the dark holder)
-is likewise rejected at the estimation stage rather than left to poison the
-density divide or be echoed back by `hanten estimate` as a trustworthy `Dmin`. This
-holds for the `hanten estimate --grid` combined base too: it emits the diagnostic
-report (with `grid.cells`) and then fails loudly on a degenerate combined base
-regardless of `--strict` (exit 1), the same code the single-measurement guard
-returns. A
-neutral base `[1,1,1]` is
-representable but not recommended: it forfeits the per-channel orange-mask
-neutralization (content estimation strictly dominates it). Note the failure
-geometry is forgiving: because `D = -log10(scan/base)`, a base error is a
-*constant per-channel density offset* — a global cast/exposure error correctable
-downstream (`density_offset`, white balance) — never a shadow/highlight
-crossover.
+**When no base is stated**, `convert` **fails loudly** with an actionable message
+naming the recovery flags — an agent can catch the exit code and re-run with an
+explicit choice. Estimator selection is never silent. **A degenerate resolved
+base** (a zero / negative / non-finite channel — e.g. a `--base-region` on the dark
+holder, or an all-black frame) is rejected at the estimation stage (exit 1) rather
+than left to poison the density divide or be echoed back by `hanten estimate` as a
+trustworthy `Dmin`. A neutral base `[1,1,1]` is representable but not recommended:
+it forfeits the per-channel orange-mask neutralization. Note the failure geometry is
+forgiving: because `D = -log10(scan/base)`, a base error is a *constant per-channel
+density offset* — a global cast/exposure error correctable downstream
+(`density_offset`, white balance) — never a shadow/highlight crossover.
 
 ### Named conversion presets — retired
 - `--preset` retired with the `characteristic` curve (`nf-retire/characteristic`): its
@@ -2265,8 +2213,8 @@ collision-checked against all inputs, outputs, and sidecars before writing.
 ### Global
 - `--params <json>`, `--dump-params <json>`
 - `--report json|none`, `--report-file <path>`
-- `--strict` — promote report warnings (clipping, non-finite samples, grid
-  disagreement, …) to a failing exit (see §11); on `convert`, `roll`, and `estimate`
+- `--strict` — promote report warnings (clipping, non-finite samples, a
+  non-uniform film-base area or region, …) to a failing exit (see §11); on `convert`, `roll`, and `estimate`
 - `--max-memory <bytes>` — peak-memory budget for the run (`8GiB`, `512MB`, or raw
   bytes). Every command that decodes a scan (`convert`, `roll`, `inspect`,
   `estimate`) estimates its peak allocation from a **metadata-only header probe
@@ -2301,7 +2249,7 @@ positional `inputs` (files and directories — a directory is expanded to its
 `params` overrides, deep-merged onto the shared recipe for that frame only).
 **A `--params` recipe is effectively mandatory for `roll`**, because `roll`
 converts and `calibration.film_base` has no default while `RollArgs` accepts none of
-the three film-base flags — the recipe is the only place a roll can state its
+the film-base flags — the recipe is the only place a roll can state its
 base, and a roll with no recipe (or one omitting `calibration.film_base`) exits 2 with
 a message that says so. That is the intended workflow rather than a limitation:
 `Dmin` is measured once for the roll (`hanten estimate`) and frozen into the shared
@@ -2309,7 +2257,7 @@ recipe as `calibration.film_base.explicit`, which is also the only source that k
 every frame on one base — see the roll-fixed invariant warnings below.
 The shared recipe configuration appears once at the top of the roll report; each
 frame additionally reports the *resolved* base it used — a redundant echo when the
-recipe pins an explicit base, but meaningful under an `auto`/`region` base that
+recipe pins an explicit base, but meaningful under a `region` base that
 resolves per frame. Frame-local knobs are the per-frame `params` overrides. Roll-fixed
 invariant violations are **loud, `--strict`-promotable warnings** rather than hard
 errors, so a deliberate best-effort batch remains usable: (1) a shared
@@ -2551,12 +2499,10 @@ piece — so under `--strict` the same input can exit differently on a small
 machine than on a large one.
 
 A **degenerate resolved film base** (a zero / negative / non-finite channel)
-maps to exit 1 (generic error) on both estimate paths: the single-measurement
-path via `film_base::estimate`'s finite-and-positive guard, and `hanten estimate
---grid` via a post-report guard on the combined base — the latter emits the
-diagnostic report (with `grid.cells`) first, then fails regardless of `--strict`
-(see §8). This is unconditional, distinct from the `--strict`-only promotion of
-the grid *disagreement* warning.
+maps to exit 1 (generic error) on every measurement — a stated region
+(`film_base::estimate`) and `estimate`'s effective area (`film_base::measure_area`)
+share the finite-and-positive guard. This is unconditional, distinct from the
+`--strict`-only promotion of the non-uniformity warnings.
 
 ## 12. Roadmap (follow-up tasks, explicitly out of Step 1)
 
@@ -2600,37 +2546,30 @@ the NLP feature comparison, Phase 6).
    selected correction profiles. It is not part of the default film-preserving
    pipeline and is distinct from blindly applying a conventional positive-scanner
    ICC before density.
-8. **Robust auto film-base detection.** *(Done — implemented as the inward-scan
-   detector, see §9 film-base.)* The kept scope shipped together: the detector
-   for the real `holder → thin rebate → picture` layout (deterministic,
-   fail-loud), the **uniformity warning on `--base-region`** (a mixed
-   rebate/image rectangle otherwise yields a plausible-looking bad base
-   silently), and `hanten inspect` reporting **candidate rebate regions**
-   (coordinates + spread) so CLI users confirm instead of measuring — the same
-   data a future UI would highlight. The opt-in **content-based source**
-   (`calibration.film_base = "content"` / `--base-content`, §9 ladder tier 3) is
-   **reassigned** to the dedicated `film-base/content-fallback` task (item 13)
-   and is **not** implemented here — the auto-refusal message only *suggests* it.
-   Remaining: threshold tuning against full-size scans rides
-   `real-scan-verification`.
-9. **Light film holders.** Auto/border logic assumes a dark holder surround; some
-   holders are white. Add a `--holder white|black` control (recipe key
-   `measure.holder`) so detection knows the surround polarity. **Not** under
+8. **Auto film-base detection.** *(Shipped as an inward-scan rebate detector
+   with `inspect`'s candidate rebate regions, then retired by
+   `film-base/holder-masked-measurement`: nc no longer searches for a rebate, and an
+   unexposed frame's base is its effective area's median, §9 film base.)* The
+   **uniformity warning on `--base-region`** survives. The opt-in
+   **content-based source** (§9 source 3) belongs to `film-base/content-fallback`.
+9. **Light film holders.** The IR holder cut reads opacity, not colour (item 15),
+   so a white holder that blocks IR is cut like a dark one. A `--holder
+   white|black` control (recipe key `measure.holder`) would matter only to an RGB
+   holder measure, which nc does not have. **Not** under
    `calibration`: a holder-polarity declaration is a property of the scanner
    setup, not a measurement of the roll, so it fails that section's inclusion
    test (§8). The old `film_base.holder` spelling named a section that no longer
    exists.
 10. **Reuse-ready `hanten estimate` output — shipped** (`estimate-reuse-output`).
     The estimate report now carries the measured base in directly reusable
-    forms (`film_base_flag` and a recipe-shaped `calibration` object) and `--grid` provides the
-    5-cell agreement-checked sampling for unexposed-frame calibration (§9
-    ladder tier 1) with the spread reported and disagreement warned loudly.
+    forms (`film_base_flag` and a recipe-shaped `calibration` object). (Its
+    5-cell `--grid` sampling retired with `film-base/holder-masked-measurement`;
+    checking a reference frame for gradients is `film-base/tiling-uniformity-validator`.)
     See §8.
 11. **UI-assisted film-base picking.** Once a UI layer exists: visual region
-    picking for the rebate/reference frame, highlighting auto-detected
-    candidates, and feedback when a chosen region fails the uniformity check
-    (the CLI-side uniformity warning and inspect candidates above are the
-    building blocks).
+    picking for the rebate/reference frame, and feedback when a chosen region
+    fails the uniformity check (the CLI-side uniformity warning is the building
+    block).
 12. **Crash reporting & opt-in telemetry.** The **local, opt-in telemetry
     record** has **shipped** as the `perf-telemetry` task, and `telemetry/schema-v2`
     made it a typed success/failure event: an embedded, opt-in JSON event per
@@ -2674,9 +2613,8 @@ the NLP feature comparison, Phase 6).
     roll report while preserving the single-frame conversion core. Roll-fixed
     parameters (`Dmin`) versus frame-local print controls remain the
     model. The open `core/auto-calibration` owns the automatic **plan** half:
-    an acquisition cascade (unexposed reference → rebate region → `--auto-base`
-    → cross-frame agreement → drop-to-single; content estimation only on explicit
-    opt-in) emits the frozen recipe and provenance that `hanten roll` replays.
+    an acquisition cascade (unexposed reference → rebate region → cross-frame
+    agreement → drop-to-single; content estimation only on explicit opt-in) emits the frozen recipe and provenance that `hanten roll` replays.
     Tracked: shipped `roll-conversion`; open `core/measure-base`, `core/roll-measure-mode`,
     `core/auto-calibration` and
     `film-base/content-fallback`.
@@ -2691,9 +2629,10 @@ the NLP feature comparison, Phase 6).
     besides item 1. Chromogenic dyes are IR-transparent, so all such film (base,
     picture, even fully-exposed leader) is bright in IR while the opaque holder is
     dark — a content-independent holder mask that RGB can't produce (holder and
-    dense film are both dark in RGB). The mask is classified in **sub-edge
-    segments** (a holder may cover only part of an edge), and holder segments are
-    excluded before the RGB rebate search. Gated by **measuring the IR plane**
+    dense film are both dark in RGB). It is measured per edge in **sub-edge
+    segments** (a holder may cover only part of an edge) and today cuts the
+    effective area (§9 `measure`); it first fed the since-retired rebate search.
+    Gated by **measuring the IR plane**
     (§6.1, `ir-usability-detection`) — not by a declared film type, not by color
     model, and not by IR-plane presence. Also sidesteps holder *color* (item 9),
     since opacity, not color, is the IR signal. Tracked: `ir-holder-detection`.

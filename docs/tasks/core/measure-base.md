@@ -20,20 +20,21 @@ open question 3) is this task's, and so is `roll` applying them from the recipe.
   build (see `scripts/analysis/CLAUDE.md`).
 - **`measure-roll --unexposed` and `measure-base` share one base measurement** —
   one function, one report shape — or the two drift. `--unexposed` measures the whole
-  frame with the reference-frame method `film-base/holder-masked-measurement` and
-  `film-base/tiling-uniformity-validator` settle (today the grid).
+  frame with the reference-frame method `film-base/holder-masked-measurement`
+  settled: the effective-area median, which is `estimate FRAME` with no source flag.
 - Moved here from `nf-core/subcommands` (2026-09-28): `estimate`'s place in the
   workflow is this task's.
 
 ## Open questions
 
 - The design doc's open questions 3 (the per-frame clamps' shape in the recipe) and 4 (`--out` over an existing file); record answers there.
-- Does `--grid` stay here or retire with `film-base/tiling-uniformity-validator`?
+- ~~Does `--grid` stay?~~ **Answered 2026-09-28**: retired by
+  `film-base/holder-masked-measurement`.
 
 ## How to Verify
 
 - `measure-roll … --unexposed blank.tif --out roll.json` then `roll --params roll.json`
-  renders the same pixels as today's workflow with the base from `estimate --grid` on
+  renders the same pixels as today's workflow with the base from `estimate` on
   the same frame **and** `measure-roll`'s `reuse.frames` passed as `roll --frames` —
   without the manifest, a clamped frame differs by design.
 - `--unexposed` beside `--film-base`, or beside a `--params` stating a non-null

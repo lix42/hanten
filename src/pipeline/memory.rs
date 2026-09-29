@@ -40,12 +40,10 @@
 //! and could move a TIFF's peak to encode.
 //!
 //! `s` is the sampled rectangle as a fraction of the frame ([`SamplePlan`]): `0`
-//! for an explicit `--film-base` (nothing is sampled), ~0.69 for the `auto` path's
-//! frame interior on a 3:2 frame, up to 1.0 for a full-frame `--base-region`.
-//! `estimate --grid` gathers five cells of its rectangle one at
-//! a time, so it counts as one *cell*
-//! ([`grid_cell_pixels`](crate::pipeline::film_base::grid_cell_pixels), ~1/16 of
-//! the rectangle), not the whole rectangle.
+//! for an explicit `--film-base` (nothing is sampled), up to 1.0 for a full-frame
+//! `--base-region`. The effective-area measurement (`film_base::measure_area`) is
+//! `0` too: it counts 16-bit codes into a fixed ~1.5 MB histogram instead of
+//! copying pixels, which the allowance covers.
 //!
 //! Notes on the non-obvious entries:
 //!
@@ -70,13 +68,11 @@
 //!   *same* RSS, so summing over-counts by 2 B/px, which this module prefers.
 //! - **`film_base` *does* allocate a full-frame-scale buffer.** It samples
 //!   rectangles, but `film_base::region_channels` materializes each one
-//!   *unstrided* into three `Vec<f32>` — 12 bytes per sampled pixel — and the
-//!   `auto` path's interior rectangle
-//!   ([`film_base::auto_interior_pixels`])
-//!   is ~69% of a 3:2 frame. It is live alongside the decoded image, so the phase
-//!   costs ~24 B/px there, and 28 B/px for a full-frame rectangle. For
-//!   [`RunProfile::DecodeOnly`] (`inspect` / `estimate`, which stop after
-//!   sampling) that phase **is** the peak, well above decode's 18 B/px. For a
+//!   *unstrided* into three `Vec<f32>` — 12 bytes per sampled pixel — live
+//!   alongside the decoded image, so a full-frame rectangle costs 28 B/px. For
+//!   [`RunProfile::DecodeOnly`] (`estimate --base-region`, which stops after
+//!   sampling) that phase **is** the peak, well above decode's 18 B/px; `inspect`
+//!   and a sourceless `estimate` gather nothing, so decode is theirs. For a
 //!   conversion the phase itself stays under the render and encode phases — but the
 //!   sample is *retained* into them (see the retention rule above), so sampling still
 //!   raises `convert`'s peak rather than being free.
@@ -167,15 +163,11 @@
 //! five times stays flat (0.62 GB), and a five-frame `roll` grows the same way (0.70 →
 //! 1.30 GB). The gate still judges each frame alone
 //! (`io/multi-frame-memory-growth`).
-//! Two sources of slack are visible and deliberate. Small frames run looser
-//! (+39.4% for the u16 18.66 MP run) because [`ALLOWANCE_FIXED_BYTES`] stops being negligible —
-//! harmless, since they are nowhere near any plausible budget. And `inspect` on
-//! these assets measures far under its estimate (1.502 GB vs 2.217 GB) because the
-//! model charges the `auto` path's interior sample while the detector actually
-//! *refuses* on every real scan we have (no uniform rebate band ⇒ it errors before
-//! sampling). The model cannot know that in advance, so it charges the sample it
-//! would take. That is the conservative direction, and it will tighten on its own
-//! when `film-base/content-fallback` makes the auto path succeed.
+//! Small frames run looser (+39.4% for the u16 18.66 MP run) because
+//! [`ALLOWANCE_FIXED_BYTES`] stops being negligible — harmless, since they are nowhere
+//! near any plausible budget. The `estimate --grid` and auto-interior rows measured
+//! paths since retired (`film-base/holder-masked-measurement`); they stay as
+//! calibration points for the rectangle sizes they gathered.
 //!
 //! No Ultra HDR run with `--export-ir` has been measured. Its optional export
 //! therefore retains the TIFF model's conservative 2 B/px u16 staging term;
@@ -253,7 +245,6 @@
 //! holds only up to `--strict` plus the warn tier.
 
 use crate::io::decode::ImageShape;
-use crate::pipeline::film_base;
 use crate::types::{NcError, OutDepth, Result};
 
 use serde::Serialize;
@@ -422,92 +413,41 @@ pub enum RunProfile {
     MeasureRoll,
 }
 
-/// Which rectangles a run's film-base sampling will gather into per-channel `f32`
-/// vectors (`film_base::region_channels`, 12 B per sampled pixel), so the film-base
-/// phase can be sized before anything is decoded.
-///
-/// Today a run sets at most one field: the second rectangle an `estimate` could
-/// gather beside the base, `--d-max-region`, retired with the reference density
-/// (`nf-retire/dmax-machinery`). It stays a struct, and
-/// [`SamplePlan::sampled_pixels`] still takes the **largest**, because rectangles are
-/// gathered and dropped one at a time — a future second sample must not be summed.
+/// The rectangle a run's film-base sampling will gather into per-channel `f32`
+/// vectors (`film_base::region_channels`, 12 B per sampled pixel) — a stated
+/// `--base-region` — so the film-base phase can be sized before anything is decoded.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SamplePlan {
-    /// The `auto` film-base path runs, sampling the frame interior
-    /// ([`film_base::auto_interior_pixels`]).
-    pub auto_interior: bool,
-    /// Largest explicitly-bounded rectangle sampled, in pixels (`--base-region`,
-    /// `estimate --grid`'s rectangle). `0` for none.
-    ///
-    /// For `--grid` this is one *cell* of the rectangle
-    /// ([`film_base::grid_cell_pixels`]), not the whole rectangle: the five cells
-    /// are each ~1/16 of it and are gathered one at a time, so the rectangle would
-    /// over-count ~16x.
+    /// The sampled rectangle, in pixels. `0` for none.
     pub rect_pixels: u64,
-    /// `estimate --grid` runs over the **whole frame** (no `--base-region`) — the
-    /// one case whose rectangle isn't known until the frame is probed. Sized at
-    /// resolve time as one grid *cell* ([`film_base::grid_cell_pixels`]), since the
-    /// five cells are gathered and dropped one at a time.
-    pub whole_frame_grid: bool,
 }
 
 impl SamplePlan {
-    /// Nothing is sampled — an explicit `--film-base`, which reads no pixels.
+    /// Nothing is gathered: an explicit `--film-base`, or the effective-area
+    /// measurement, whose histogram is a fixed cost.
     pub fn none() -> Self {
         Self::default()
     }
 
-    /// The `auto` film-base path (its interior sample).
-    pub fn auto() -> Self {
-        Self {
-            auto_interior: true,
-            ..Self::default()
-        }
-    }
-
-    /// One explicitly-bounded rectangle of `pixels` px.
+    /// One stated rectangle of `pixels` px.
     pub fn rect(pixels: u64) -> Self {
         Self {
             rect_pixels: pixels,
-            ..Self::default()
         }
     }
 
-    /// `estimate --grid` over the whole frame (no `--base-region`).
-    pub fn with_whole_frame_grid(self) -> Self {
-        Self {
-            whole_frame_grid: true,
-            ..self
-        }
-    }
-
-    /// Pixels in the largest single rectangle this plan gathers, for `shape`.
+    /// Pixels this plan gathers, for `shape`.
     ///
     /// **Clamped to the frame.** `rect_pixels` comes from a user-supplied
-    /// `--base-region`, which this stage has no business
-    /// validating: `film_base::region_channels` is the authority on whether a
-    /// rectangle fits the image, and it rejects an out-of-bounds one as a *usage*
-    /// error (exit 2). Estimating the raw `w*h` instead would let a typo'd
-    /// `--base-region 0,0,999999,999999` be reported as a 12852 GiB **resource**
-    /// rejection (exit 6) — or, near `u32::MAX`, as an overflow error blaming the
-    /// image's own dimensions — burying the real mistake behind the wrong exit
-    /// code. No legal sample can exceed the frame, so clamping cannot
-    /// under-estimate a run that is actually going to happen; it just keeps the
-    /// gate quiet about rectangles that were never valid. Same probe-is-permissive
-    /// / decode-is-the-authority split this module already uses for color types.
+    /// `--base-region`, which this stage has no business validating:
+    /// `film_base::region_channels` rejects an out-of-bounds one as a *usage* error
+    /// (exit 2). Estimating the raw `w*h` instead would report a typo'd
+    /// `--base-region 0,0,999999,999999` as a 12852 GiB **resource** rejection
+    /// (exit 6), burying the real mistake behind the wrong exit code. No legal
+    /// sample can exceed the frame, so clamping cannot under-estimate a real run.
     fn sampled_pixels(&self, shape: &ImageShape) -> u64 {
-        let auto = if self.auto_interior {
-            film_base::auto_interior_pixels(shape.width, shape.height)
-        } else {
-            0
-        };
-        let frame = if self.whole_frame_grid {
-            film_base::grid_cell_pixels(shape.width, shape.height)
-        } else {
-            0
-        };
-        let frame_pixels = shape.width as u64 * shape.height as u64;
-        auto.max(frame).max(self.rect_pixels).min(frame_pixels)
+        self.rect_pixels
+            .min(shape.width as u64 * shape.height as u64)
     }
 }
 
@@ -1189,18 +1129,11 @@ mod tests {
         let px = 1000u64 * 1000;
         let s = shape(1000, 1000, true);
 
-        // `auto`: the interior rectangle `select_auto_base` samples. Sized from
-        // `film_base`'s own rule so the two cannot drift.
-        let interior = film_base::auto_interior_pixels(1000, 1000);
-        assert_eq!(interior, 800 * 800, "10% scan depth on each side");
-        let auto = estimate_peak(&s, RunProfile::DecodeOnly, SamplePlan::auto()).unwrap();
-        assert_eq!(auto.film_base_bytes, 16 * px + 12 * interior);
-        // …and it is the peak for a decode-only run (above decode's 18 B/px).
-        assert_eq!(auto.accounted_bytes, auto.film_base_bytes);
-
         // A full-frame rectangle (`--base-region 0,0,w,h`) is the worst case: 28 B/px.
         let whole = estimate_peak(&s, RunProfile::DecodeOnly, SamplePlan::rect(px)).unwrap();
         assert_eq!(whole.film_base_bytes, 28 * px);
+        // …and it is the peak for a decode-only run (above decode's 18 B/px).
+        assert_eq!(whole.accounted_bytes, whole.film_base_bytes);
 
         // …and it does NOT leave `convert` alone. The sample is freed before the
         // render, but freed pages stay resident, so it is retained into the later
@@ -1215,27 +1148,10 @@ mod tests {
         let explicit = estimate_peak(&s, convert_u16(), SamplePlan::none()).unwrap();
         assert_eq!(explicit.encode_bytes, 38 * px);
 
-        // `--grid` counts one cell (~1/16 of its rectangle), not the rectangle.
-        let cell = film_base::grid_cell_pixels(1000, 1000);
-        assert_eq!(cell, 250 * 250);
-        let grid = estimate_peak(
-            &s,
-            RunProfile::DecodeOnly,
-            SamplePlan::none().with_whole_frame_grid(),
-        )
-        .unwrap();
-        assert_eq!(grid.film_base_bytes, 16 * px + 12 * cell);
-
-        // A frame too small to scan samples no interior at all — and must not
-        // become a spurious rejection.
-        assert_eq!(film_base::auto_interior_pixels(4, 4), 0);
-        let tiny = estimate_peak(
-            &shape(4, 4, true),
-            RunProfile::DecodeOnly,
-            SamplePlan::auto(),
-        )
-        .unwrap();
-        assert_eq!(tiny.film_base_bytes, 16 * 16);
+        // Nothing sampled (an explicit base, or the effective-area histogram): the
+        // phase is the decoded image alone.
+        let none = estimate_peak(&s, RunProfile::DecodeOnly, SamplePlan::none()).unwrap();
+        assert_eq!(none.film_base_bytes, 16 * px);
     }
 
     #[test]
@@ -1359,14 +1275,6 @@ mod tests {
             assert_eq!(e.accounted_bytes, accounted, "{profile:?}");
             assert_eq!(e.estimated_peak_bytes, estimated, "{profile:?}");
         }
-
-        // The auto path's interior sample on the big frame: 8928x5760 px x 12 B on
-        // top of the 16 B/px decoded image. Derived, not measured — flagged in the
-        // module doc as an open calibration item.
-        let auto = estimate_peak(&big(), RunProfile::DecodeOnly, SamplePlan::auto()).unwrap();
-        assert_eq!(auto.film_base_bytes, 1_811_496_960);
-        assert_eq!(auto.accounted_bytes, 1_811_496_960);
-        assert_eq!(auto.estimated_peak_bytes, 2_217_439_223);
     }
 
     #[test]
@@ -1515,9 +1423,10 @@ mod tests {
     #[test]
     fn default_budget_admits_the_largest_real_scan() {
         // The whole point of the fixed default: the biggest scan on hand must pass
-        // it, on every machine, without a flag — including on the auto path, whose
-        // interior sample the first version of this model forgot.
-        for sampling in [SamplePlan::none(), SamplePlan::auto()] {
+        // it, on every machine, without a flag — including with a full-frame
+        // `--base-region`, the largest sample a run can gather.
+        let frame = big().width as u64 * big().height as u64;
+        for sampling in [SamplePlan::none(), SamplePlan::rect(frame)] {
             let report =
                 preflight(&big(), convert_u16(), sampling, Budget::resolve(None), None).unwrap();
             assert_eq!(report.budget_source, BudgetSource::Default);
@@ -1713,7 +1622,7 @@ mod tests {
         let report = preflight(
             &shape(1000, 1000, true),
             convert_u16(),
-            SamplePlan::auto(),
+            SamplePlan::rect(500 * 500),
             Budget::resolve(None),
             Some(48 * 1024 * 1024 * 1024),
         )

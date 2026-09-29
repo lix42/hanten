@@ -364,7 +364,7 @@ const OLD_RECONSTRUCTION_KEYS: &[(&str, &str)] = &[
 const RETIRED_KEYS: &[(&[&str], &str)] = &[
     (
         &["film_base"],
-        "the film base is `calibration.film_base` (`\"auto\"`, `{\"region\": [x, y, w, h]}` \
+        "the film base is `calibration.film_base` (`{\"region\": [x, y, w, h]}` \
          or `{\"explicit\": [r, g, b]}`)",
     ),
     (
@@ -419,7 +419,9 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
                  it — every sidecar and `--dump-params` file written before `pipeline_version` \
                  8 — describes the rendering chain that version removed, and there is no \
                  converter. `hanten params` writes the current layout: `input`, `measure` and \
-                 `calibration.film_base` carry over unchanged, and the rest is a stage \
+                 a `region` or `explicit` `calibration.film_base` carry over unchanged (an \
+                 `\"auto\"` one retired: measure the base with `hanten estimate \
+                 <unexposed-frame>`), and the rest is a stage \
                  section each (`reconstruction`, `scene_correction`, `look`, `fit_range`) \
                  plus `output`, the destination"
             ));
@@ -471,6 +473,21 @@ pub fn check_body(body: &serde_json::Value, whole: bool, context: &str) -> Resul
             .find(|(key, _)| fields.contains_key(*key))
             .map(|(key, why)| (*key, *why))
     };
+    // Retired by `film-base/holder-masked-measurement` with the rebate search it named.
+    // Named here rather than left to serde, whose "unknown variant" names no remedy.
+    if body
+        .get("calibration")
+        .and_then(|c| c.get("film_base"))
+        .and_then(|f| f.as_str())
+        == Some("auto")
+    {
+        return usage(format!(
+            "`calibration.film_base` \"auto\": {} and state the `calibration` object it \
+             reports (`{{\"film_base\": {{\"explicit\": [r, g, b]}}}}`), or read a region of \
+             unexposed film with `{{\"region\": [x, y, w, h]}}`",
+            crate::cli::AUTO_BASE_RETIRED
+        ));
+    }
     // Retired by `nf-scene-correction/roll-white-balance`. Named here rather than left
     // to serde, whose "unknown variant" says nothing about where the mode went.
     if let Some(mode) = body
@@ -1715,14 +1732,33 @@ mod tests {
     }
 
     #[test]
+    fn the_retired_auto_film_base_is_refused_with_a_remedy_a_recipe_can_take() {
+        // A recipe reaches `roll`, which has no flags, so the remedy is a recipe value.
+        for whole in [true, false] {
+            let body = if whole {
+                r#"{"recipe_version": 2, "calibration": {"film_base": "auto"}}"#
+            } else {
+                r#"{"calibration": {"film_base": "auto"}}"#
+            };
+            let err = check(body, whole).unwrap_err();
+            assert!(err.contains("`calibration.film_base` \"auto\""), "{err}");
+            assert!(err.contains("hanten estimate <unexposed-frame>"), "{err}");
+            assert!(err.contains(r#"{"explicit": [r, g, b]}"#), "{err}");
+            // …and never serde's "unknown variant", which names no remedy.
+            assert!(!err.contains("unknown variant"), "{err}");
+        }
+    }
+
+    #[test]
     fn a_body_without_the_marker_is_refused_as_the_removed_chains() {
-        let err = check(r#"{"calibration": {"film_base": "auto"}}"#, true).unwrap_err();
+        let base = r#"{"calibration": {"film_base": {"explicit": [0.5, 0.4, 0.3]}}}"#;
+        let err = check(base, true).unwrap_err();
         assert!(err.contains("\"recipe_version\": 2"), "{err}");
         assert!(err.contains("`hanten params`"), "{err}");
         assert!(err.contains("pipeline_version` 8"), "{err}");
         assert!(!err.contains("--new-flow"), "{err}");
         // A per-frame overlay is partial and may omit it…
-        check(r#"{"calibration": {"film_base": "auto"}}"#, false).unwrap();
+        check(base, false).unwrap();
         // …but may not state a wrong one.
         let err = check(r#"{"recipe_version": 1}"#, false).unwrap_err();
         assert!(err.contains("reads only 2"), "{err}");
@@ -2895,9 +2931,6 @@ mod tests {
             }),
             ("--base-region", &["--base-region", "0,0,10,10"], |r| {
                 matches!(r.calibration.film_base, Some(FilmBaseSource::Region(_)))
-            }),
-            ("--auto-base", &["--auto-base"], |r| {
-                r.calibration.film_base == Some(FilmBaseSource::Auto)
             }),
             ("--export-ir", &["--export-ir", "ir.tiff"], |r| {
                 r.input.export_ir.as_deref() == Some("ir.tiff")

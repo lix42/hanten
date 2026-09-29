@@ -32,8 +32,8 @@ use crate::types::{FilmBase, LinearImage};
 
 /// The rolls measured and each one's film base: `2026-09-09-Ektar100` from its frozen
 /// recipe (`scripts/real-scan-verify/recipes/2026-09-09-Ektar.json`), the other three
-/// from `hanten estimate --grid` on the roll's `base.tif` (the bases
-/// `nf-look/desaturation-band-fit` used). The four rolls `fit-gamut` measured.
+/// measured with the since-retired `hanten estimate --grid` on the roll's `base.tif`
+/// (the bases `nf-look/desaturation-band-fit` used). The four rolls `fit-gamut` measured.
 const ROLLS: &[(&str, [f32; 3])] = &[
     (
         "2026-09-09-Ektar100",

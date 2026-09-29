@@ -22,84 +22,47 @@ What other epics need to know about `film-base`:
 - **`Dmin` and `Dmax` are different quantities that share this code.** `Dmin` is
   a per-channel **transmission** (the film base). `Dmax` is a **scalar** anchor in
   **density** units. Never conflate them (design-spec §4).
-- **`film_base.source` has NO default — `convert` and `roll` refuse an unstated
+- **A base is an area x a method, and nothing searches for a rebate**
+  (`holder-masked-measurement`, 2026-09-28). `hanten estimate FRAME` with no source
+  flag measures an **unexposed** frame's effective area at the per-channel **median**
+  (`film_base::measure_area`); `--base-region` reads a stated region at p97. The area
+  measurement is **not** a `FilmBaseSource` — over a picture it is a plausible, wrong
+  base — so conversions take its result as `Explicit`. `--auto-base`, `"auto"` and
+  `estimate --grid` are refused with migration messages; `inspect` suggests no Dmin.
+- **`calibration.film_base` has NO default — `convert` and `roll` refuse an unstated
   source (exit 2).** `Dmin` is the divisor of the density conversion, so it sets
   black point and colour balance together; it must be a decision, not an omission.
-  `--auto-base` is still one flag and still means what it used to. `roll` accepts
-  none of the film-base flags, so its diagnosis points at `film_base.source` in
-  the shared `--params` recipe — a roll recipe must carry it. `estimate` resolves
-  an unstated source to `auto` and `inspect` always runs the detector, since both
-  exist to *produce* a base. Any orchestrator added later must call
-  `cli::validate` (or `validate_with_remedy`) rather than reaching for a default
-  that no longer exists.
-- **`estimate` returns `BaseEstimate { base, warnings, ir_mask_applied }`** and
-  **guards the resolved base finite-and-positive on every channel at birth** — a
-  region on the dark holder errors loudly here, not silently downstream. The
-  per-algo guards in `algo` remain defence-in-depth. Warnings ride to the report
-  and `--strict` promotes them. `ir_mask_applied` is a *fact about what stage 2
-  did*; callers key the "IR preserved but not used" note on it and must never
-  re-derive it from the inputs (that re-derivation silently broke `--strict` on
-  22 of 25 real frames once).
-- **Real scans are laid out `dark holder → thin inset rebate → picture`** — the
-  rebate is *not* the outer margin. Auto detection marches 1-px strips inward and
-  takes the first uniform, value-continuous band sitting **immediately behind a
-  holder run**; the brightest survivor wins. It uses **no orange/colour
-  assumption** (holder-backing + flatness + brightness only), so a near-neutral
-  base doesn't break it — **don't hard-code an orange-mask assumption anywhere.**
-- **Auto is best-effort and refuses loudly** when it can't find a rebate — and on
-  real full-size scans it has refused on **every frame tried** (11 frames, 6 rolls,
-  2026-09-04; the cropped film holder defeats the rebate-band detector). The
-  supported workflow is measure once from an unexposed reference, then reuse:
-  `nc estimate` emits paste-ready `--film-base` / recipe-fragment forms (only when
-  the measurement would actually be accepted by `convert`).
-- **IR is consumed here, and only here so far.** On a scan with a *marker-verified*
-  IR plane that **measures** able to separate holder from film on that frame
-  (`ir_separability`, interior IR median vs 2.5x the holder classifier threshold),
-  `ir_holder_mask` masks the opaque holder before the RGB rebate search.
+  `roll` accepts none of the film-base flags, so its diagnosis points at the shared
+  `--params` recipe. Any orchestrator added later must call `cli::validate_shared`
+  rather than reaching for a default that no longer exists.
+- **`estimate` / `measure_area` return `BaseEstimate { base, warnings, percentile }`**
+  and **guard the base finite-and-positive on every channel at birth**. Warnings ride
+  to the report and `--strict` promotes them; `percentile` is what the report states
+  as `film_base_percentile`. A fact a stage decides is returned, never re-derived by
+  the caller — re-deriving IR consumption from the inputs once silently broke
+  `--strict` on 22 of 25 real frames.
+- **Real scans are laid out `holder → thin rebate → picture`**, and the measure-once
+  workflow is the supported one: `hanten estimate unexposed.tif` emits paste-ready
+  `--film-base` / `calibration` forms (only when `convert` would accept them). Don't
+  hard-code an orange-mask assumption anywhere.
+- **IR is consumed here, and only here so far** — by the holder march under the
+  effective area, on a *marker-verified* plane that **measures** able to separate
+  holder from film on that frame (`ir_separability`, interior IR median vs 2.5x the
+  holder classifier threshold). No conversion reads it.
   `--film-type` gates nothing since `ir-usability-detection` — chemistry
   mispredicts, because separability tracks the frame's own density (an unexposed
   silver frame separates ~20:1; its own leader is opaque). `FilmType` (recipe key
   `input.film_type`) survives as a provenance axis `algo/bw-support` and IR dust
   removal are expected to use; whether *those* gates should also be measurements is
-  open. Known limitation, in the mask rather than the verdict: a thin holder margin
-  that is IR-dark only in the shallow probe can hide a rebate behind it; the
-  workaround is `--base-region`. The mask restricts **along** each edge only, not in
-  depth — depth is `film_base::effective_area`'s, **shipped 2026-09-18**
-  (`holder-depth-mask`): the per-edge IR holder march plus a user-sizable static inset
-  (`measure.inset` / `--measure-inset`, the recipe's sixth section), returned as a
-  rectangle with `holder_applied` and per-edge `capped`. Call it; do not re-derive it.
-  Two things constrain callers: **`converged` is not a quality signal on its own** — a
-  capped edge inflates its perpendicular edges at a stable fixed point, so read it with
-  per-edge `capped` (`film-base/holder-cap-contamination` narrows this) — and **which
-  region a measurement gets is `measures_over_region`, while whether the IR plane moved
-  a pixel is `region_reaches_a_rendered_pixel`**; a new consumer adds its condition to
-  one of those two, never to a merged one. `DmaxSource::Auto` is the only consumer so
-  far; `Dmin`/`Dmax` estimation is still unmoved (`holder-masked-measurement`). A holder covering *every* edge (22 of 25 real
-  chromogenic frames at the 0.5% probe depth) **is** handled: `ir_holder_mask`
-  returns no mask when no edge would yield a film range, so the search falls back
-  to RGB-only instead of getting nothing to scan.
-- **`Dmax` is roll-fixed, not per-frame.** The default is `Fixed` (the nominal
-  `NOMINAL_DMAX`, **1.3** in corrected-density units since 2026-08-08 /
-  `pipeline_version` 2 — a rounded median of measured rolls, not a calibration;
-  `dmax-anchor-reliability` owns the number); `nc estimate --d-max-region`
-  measures a calibrated scalar from a fully-exposed leader frame and emits it as
-  `{"explicit": d}`. Per-frame `Auto` is demoted to opt-in and is the marker that a
-  run is *not* film-master-compatible. A per-channel Dmax would smuggle in white
-  balance, so the anchor is scalar by construction (`reference_dmax` measures per
-  channel, then reduces by the gray mean — the per-channel values survive only for
-  the plausibility check). **The leader anchor's level is uncontrolled** (same
-  stock 0.295 density apart while the base agrees to 0.0005), and the leader is
-  disqualified as a per-channel source — see `dmax-anchor-reliability` and
-  `dmax-per-channel-reduction` (parked 2026-09-13 on the calibration shoot).
-- **Reusing an explicit `Dmax` has a domain caveat:** it is measured against raw
-  `D`, so non-default `density_scale`/`offset` or a non-neutral regional balance
-  shift the `D′` domain and mis-anchor it. The orchestrator warns; heed it.
-- **`--grid` still ships and is slated for retirement** by
-  `tiling-uniformity-validator`; nothing outside `estimate` reads it.
-- **Known gap:** the reference-Dmax plausibility floor
-  (`MIN_PLAUSIBLE_REFERENCE_DMAX = 1.0`) and the base-uniformity check are
-  C41-calibrated and **false-alarm on dense/neutral-base stocks** like Harman
-  Phoenix (`film-base/dense-base-dmax-plausibility`).
+  open. The effective area is `film_base::effective_area` (`holder-depth-mask`): the
+  per-edge IR holder march plus a user-sizable static inset (`measure.inset` /
+  `--measure-inset`), returned as a rectangle with `holder_applied` and per-edge
+  `capped`. Call it; do not re-derive it. **`converged` is not a quality signal on its
+  own** — a capped edge inflates its perpendicular edges at a stable fixed point, so
+  read it with per-edge `capped` (`film-base/holder-cap-contamination` narrows this).
+- **There is no `Dmax` here any more.** The leader `Dmax`, `reference_dmax` and
+  `--d-max-region` retired with `nf-retire/dmax-machinery`; the anchor is placed from
+  the film base. Sections below that describe them are history.
 
 
 ## estimation
@@ -980,8 +943,8 @@ re-reading the park above as a statement about the shipped value.
 
 ## holder-masked-measurement
 
-**Status:** not started
-**Updated:** 2026-08-11
+**Status:** done (2026-09-28)
+**Updated:** 2026-09-28
 
 - Goal: mask the holder per edge, then estimate the centre of the resulting single
   population. Pixel change, one `pipeline_version` bump.
@@ -999,6 +962,95 @@ re-reading the park above as a statement about the shipped value.
 - Fallback is a first-class path: for silver stock IR can never separate on a leader, so
   every silver `Dmax` takes it. Provenance is per-run (user decision 2026-08-11), not a
   persisted pre-processed input.
+
+### 2026-09-28 — implemented: `Dmin` on area x method
+
+**Scope as built.** The `Dmax` half was overtaken before work began: `nf-retire/dmax-machinery`
+retired the leader `Dmax`, `reference_dmax` and `--d-max-region`, so this is `Dmin` only. User
+decisions at the start: `--grid` retires here (not in `tiling-uniformity-validator`); the median;
+`auto` is refused rather than renamed; `ir_holder_mask` and `inspect`'s rebate candidates go.
+
+- **The area measurement is not a source.** Asked to rename `auto`, the pushback was that "median
+  over the effective area" is only a base on an *unexposed* frame — `convert picture.tif` would get a
+  plausible, wrong base silently. So `FilmBaseSource` is `Region | Explicit`, the measurement
+  (`film_base::measure_area`) runs only in `estimate` with no source flag, and `--auto-base` /
+  `"auto"` exit 2 naming `hanten estimate <unexposed-frame>` (the recipe spelling names the
+  `{"explicit": …}` form, since `roll` has no flags). `inspect` stops suggesting a Dmin for the
+  same reason (a deviation from the agreed plan, which had it report the area median).
+- **Histogram, not a copy.** Per-channel counts of the 16-bit codes: the decoder writes
+  `code / 65535`, so rounding back to the code is exact and the histogram's rounded-rank
+  percentile equals the sorted one bit for bit (pinned by a test). Fixed ~1.5 MB, so the memory
+  model lost its `auto` interior and grid-cell terms and gained nothing.
+- **No `pipeline_version` bump, and the `base` hash did not move.** No conversion measures the
+  area, so no conversion's pixels change. The drift gate's `base` now pins a stated region of the
+  frozen scan (`golden::REGION`); p97 over it gives the same bits the retired search chose (a band
+  of that region at the same percentile), so every recorded row stands unedited.
+- **Real scans (9 unexposed frames, derived numbers only).** The median sits **0.01-0.085
+  density** below the old `estimate --grid` value — the p97 noise-tail bias the task predicted,
+  larger on the 2026-09 rolls, which are scanned thinner (base 0.27-0.37 against 0.47-0.58) with
+  wider noise. It is noise, not a gradient: each frame's centre-only median (inset 0.35) matches
+  the whole-area one to <1%, and the old grid's five cells agree to a few percent.
+- **The uniformity guard was calibrated, not guessed.** Pooled `(p90 - p10) / p50`: unexposed
+  0.06-0.29, pictures 0.87-2.26, leaders 0.23-0.45. The first guess, 0.15, would have warned on 5
+  of 9 unexposed frames. Set at 0.5, the geometric midpoint; it is a "not a picture" guard, and a
+  leader passes it (its transmission is 10-40x below any base, but nothing checks that). The three
+  "real" frames that read under 0.5 are near-blank film (Portra 400 `1256`, `1641`, and the dense
+  `1255`).
+- **`nctool roll convert --dmin-mode`** is now `area` (default) | `grid` | `region`. `pipeline_version`
+  did not move, so the build cannot be told from its banner: a mode the build lacks fails loudly and
+  names the other one, and `area` refuses a report whose `film_base_source` is not
+  `effective_area` (an older build's sourceless `estimate` ran the rebate search).
+- **`harness.sh classify`** reads the area median and the uniformity warning. The rule had to test
+  uniformity **first**: a picture's median is often as dense as a leader's, and luminance-first
+  classified 88 pictures `full-exp`. Now 9/9 unexposed and 9/9 leaders classify correctly.
+- **IR in `convert`:** no conversion reads the plane any more, so the two fallback notes
+  (shape-only, not separable) left `convert` and the single "preserved but not used" note fires on
+  every HDRi conversion without `--export-ir`. `estimate` keeps a note when the holder was not
+  measured, because there the area rests on the inset alone.
+
+### 2026-09-28 (later) — review round: ten findings, all fixed
+
+- **The "holder not measured" note now fires on 48-bit scans too.** It was keyed on an IR
+  plane being present, but a scan with none rests on the inset alone just the same — and the
+  uniformity guard only notices a holder once it covers ~10% of the area.
+- **`convert`/`roll` report `film_base_percentile`** for a region base; the stage returned it and
+  the orchestrator dropped it.
+- **`nctool`'s mode hint fires only on a build mismatch** (`--grid was removed`, or the old
+  build's "auto film-base detection" refusal). Appended to every failure, it named a mode the
+  build refuses after a `--strict` warning or an empty area.
+- **No telemetry bump**, against the finding: `telemetry.rs`'s own history records that adding
+  and removing enum members are not bumps, and `region`/`explicit` kept their wire form. The
+  reasoning is recorded beside `SCHEMA_VERSION`.
+- Six prose fixes the change had falsified: the region warning's `hanten inspect` remedy, the
+  pre-v8 refusal's "`calibration.film_base` carries over unchanged", `CLAUDE.md`'s
+  `ir_mask_applied` example, the `nctool` README's default mode, stale test comments, and the
+  memory doc's claim that film-base is the peak for every `inspect`/`estimate`.
+
+### 2026-09-28 — close-out
+
+**Landed.** `hanten estimate FRAME` (no source flag) measures an unexposed frame's effective
+area at the per-channel median (`film_base::measure_area`, a 16-bit-code histogram);
+`--base-region` keeps p97; `FilmBaseSource` is `Region | Explicit`. Retired with exit-2
+migration messages: `--auto-base`, recipe `"auto"`, `estimate --grid`. `inspect` reports the
+effective area and suggests no Dmin. No `pipeline_version` bump; the drift gate is unedited.
+
+**Verified.** fmt, clippy, build, rustdoc, `nctool` (418), `cargo test` (601 + 193). Real scans:
+9/9 unexposed frames measure clean (median 0.01-0.085 density below the old grid value, flat
+to <1%); `harness.sh classify` gets 9/9 unexposed and 9/9 leaders. Two review rounds
+(`/code-review`, then `ship:diff-reviewer` + Codex) — the second found only stale prose
+(the README's `--auto-base` usage, comments citing the deleted detector), fixed.
+
+**What a dependent task needs to know.**
+
+- **`measure_area` is measurement-only.** It is a base only on an unexposed frame; a new caller
+  must not put it behind a conversion source. `core/measure-base` / `measure-roll --unexposed`
+  should call it (the reference-frame method is settled), and `core/auto-calibration` must
+  *detect* the unexposed frame first — the pooled spread (unexposed ≤0.29, pictures ≥0.87) is
+  the evidence to start from.
+- **`--strict` fails on every 48-bit scan** in `estimate`: the holder cannot be measured without
+  an IR plane, and that warning is deliberate (the area rests on the user-sized inset).
+- **`tiling-uniformity-validator`** tiles `measure_area`; per-tile histograms multiply its fixed
+  1.5 MB, and the 0.5 pooled gate may become redundant under a tiled verdict.
 
 ## tiling-uniformity-validator
 
