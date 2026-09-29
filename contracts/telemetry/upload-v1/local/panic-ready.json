@@ -1,0 +1,1 @@
+{"schema_version":11,"event_id":"5f0c3a9e81d24b7c9e0a6d3f2b1c8e47","event":"panic","command":"convert","timestamp_ms":1781000000000,"nc_version":"0.1.0","target":"aarch64-apple-darwin","cpu_count":11,"stage":"look","frames":["nc::pipeline::look::apply","nc::cli::convert_frame","nc::main"]}

@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hanten.invalid/telemetry/upload-v1.schema.json",
+  "title": "Hanten telemetry upload v1 request",
+  "description": "POST /v1/events body. $defs.response is the Worker's reply. See README.md.",
+  "allOf": [
+    { "$ref": "#/$defs/envelope" },
+    { "properties": { "events": { "items": { "$ref": "#/$defs/event" } } } }
+  ],
+  "$defs": {
+    "envelope": {
+      "description": "The body without its events' rules, but with a nameable event_id: the Worker's 400 check.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upload_schema_version", "events"],
+      "properties": {
+        "upload_schema_version": { "const": 1 },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": ["event_id"],
+            "properties": { "event_id": { "$ref": "#/$defs/event_id" } }
+          }
+        }
+      }
+    },
+    "event_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "ms": { "type": "integer", "minimum": 0, "maximum": 86400000 },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_schema_version", "event_id", "event_day", "event_name",
+        "nc_version", "platform", "command", "stage"
+      ],
+      "properties": {
+        "source_schema_version": { "const": 11 },
+        "event_id": { "$ref": "#/$defs/event_id" },
+        "event_day": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "event_name": { "enum": ["conversion", "panic"] },
+        "nc_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+        },
+        "platform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["os", "arch", "cpu_bucket"],
+          "properties": {
+            "os": { "enum": ["linux", "macos", "windows", "other", "unknown"] },
+            "arch": { "enum": ["x86_64", "aarch64", "x86", "arm", "other", "unknown"] },
+            "cpu_bucket": { "enum": ["1", "2", "4", "8", "16", "32", "64_plus", "unknown"] }
+          }
+        },
+        "command": { "const": "convert" },
+        "stage": {
+          "enum": [
+            "parse", "setup", "preflight",
+            "decode", "film_base", "reconstruction", "scene_correction", "look",
+            "fit_range", "fit_gamut", "destination", "encode", "ir_export",
+            "finalize", "unknown"
+          ]
+        },
+        "outcome": { "$ref": "#/$defs/outcome" },
+        "timing_ms": { "$ref": "#/$defs/timing_ms" },
+        "image": { "$ref": "#/$defs/image" },
+        "conversion": { "$ref": "#/$defs/conversion" },
+        "frames": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 192,
+            "pattern": "^nc(::[A-Za-z_][A-Za-z0-9_]*){0,15}$"
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "event_name": { "const": "conversion" },
+            "stage": { "not": { "const": "unknown" } },
+            "frames": false
+          },
+          "required": ["outcome", "timing_ms"]
+        },
+        {
+          "properties": {
+            "event_name": { "const": "panic" },
+            "outcome": false,
+            "timing_ms": false,
+            "image": false,
+            "conversion": false
+          },
+          "required": ["frames"]
+        }
+      ],
+      "if": {
+        "required": ["outcome"],
+        "properties": {
+          "outcome": { "required": ["status"], "properties": { "status": { "const": "success" } } }
+        }
+      },
+      "then": {
+        "properties": {
+          "stage": { "const": "finalize" },
+          "outcome": { "required": ["clipped_fraction_bucket", "non_finite"] }
+        },
+        "required": ["image", "conversion"]
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "exit_code", "error_kind", "warning_bucket"],
+      "properties": {
+        "status": { "enum": ["success", "failure"] },
+        "exit_code": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "error_kind": {
+          "enum": ["none", "usage", "decode", "unsupported", "write", "resource", "strict", "other"]
+        },
+        "warning_bucket": { "enum": ["0", "1", "2_3", "4_plus"] },
+        "clipped_fraction_bucket": {
+          "enum": ["0", "lt_0_1_pct", "lt_1_pct", "lt_10_pct", "gte_10_pct", "unknown"]
+        },
+        "non_finite": { "type": "boolean" }
+      },
+      "dependentRequired": {
+        "clipped_fraction_bucket": ["non_finite"],
+        "non_finite": ["clipped_fraction_bucket"]
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": { "const": "success" },
+            "error_kind": { "const": "none" },
+            "exit_code": { "const": 0 }
+          }
+        },
+        {
+          "properties": { "status": { "const": "failure" } },
+          "oneOf": [
+            { "properties": { "error_kind": { "const": "usage" }, "exit_code": { "const": 2 } } },
+            { "properties": { "error_kind": { "const": "decode" }, "exit_code": { "const": 3 } } },
+            { "properties": { "error_kind": { "const": "unsupported" }, "exit_code": { "const": 4 } } },
+            { "properties": { "error_kind": { "const": "write" }, "exit_code": { "const": 5 } } },
+            { "properties": { "error_kind": { "const": "resource" }, "exit_code": { "const": 6 } } },
+            { "properties": { "error_kind": { "enum": ["strict", "other"] }, "exit_code": { "const": 1 } } }
+          ]
+        }
+      ]
+    },
+    "timing_ms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total"],
+      "properties": {
+        "total": { "$ref": "#/$defs/ms" },
+        "decode": { "$ref": "#/$defs/ms" },
+        "film_base": { "$ref": "#/$defs/ms" },
+        "reconstruction": { "$ref": "#/$defs/ms" },
+        "scene_correction": { "$ref": "#/$defs/ms" },
+        "look": { "$ref": "#/$defs/ms" },
+        "fit_range": { "$ref": "#/$defs/ms" },
+        "fit_gamut": { "$ref": "#/$defs/ms" },
+        "destination": { "$ref": "#/$defs/ms" },
+        "encode": { "$ref": "#/$defs/ms" },
+        "ir_export": { "$ref": "#/$defs/ms" }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "megapixels_tenths", "input_size_bucket", "bit_depth", "ir_present"],
+      "properties": {
+        "format": { "enum": ["hdr", "hdri"] },
+        "megapixels_tenths": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "input_size_bucket": {
+          "enum": ["lt_8_mib", "8_31_mib", "32_127_mib", "128_511_mib", "512_plus_mib", "unknown"]
+        },
+        "bit_depth": { "enum": [16, "unknown"] },
+        "ir_present": { "type": "boolean" }
+      }
+    },
+    "conversion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoding", "film_base_source", "ir_exported"],
+      "properties": {
+        "encoding": {
+          "enum": [
+            "film_master", "sdr_tiff", "hdr_linear_tiff", "hdr_coded_tiff", "avif",
+            "gain_map_jpeg"
+          ]
+        },
+        "film_base_source": { "enum": ["region", "explicit"] },
+        "ir_exported": { "type": "boolean" }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upload_schema_version", "accepted", "duplicate", "rejected"],
+      "properties": {
+        "upload_schema_version": { "const": 1 },
+        "accepted": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/event_id" } },
+        "duplicate": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/event_id" } },
+        "rejected": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event_id", "code"],
+            "properties": {
+              "event_id": { "$ref": "#/$defs/event_id" },
+              "code": {
+                "enum": ["invalid_field", "unsupported_version", "out_of_range", "release_blocked"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

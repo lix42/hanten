@@ -168,7 +168,7 @@ Read the module docs before changing these; they hold the traps.
 | lcms2 transforms and fault handler | `pipeline/color.rs`; `cli.rs`'s `CMS_ERROR` handler, cleared before and checked after each render |
 | goldens, cross-platform bounds, drift gate | `pipeline/chain_golden.rs`, `version.rs` (`PipelineFingerprint`) |
 | diagnostic probes | `pipeline/shadow_metrics.rs` |
-| telemetry | `telemetry.rs`, the `perf-telemetry` skill |
+| telemetry | `telemetry.rs`, `telemetry/upload.rs`, `contracts/telemetry/upload-v1/README.md` (the upload field manifest), the `perf-telemetry` skill |
 | stage names, per-stage timing | `stage.rs` (`StageKind`, `StageClock`) |
 | build identity (`NC_GIT_*`) | `build.rs` |
 

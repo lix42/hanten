@@ -5,8 +5,8 @@
 //! per-stage timings and a compact conversion summary, each only as far as the run
 //! got — and emits it as JSON to a persistent append-only JSONL log and/or a
 //! one-off file (design-spec §8/§9). The JSONL log is the queue a future uploader
-//! (`telemetry/upload`) drains; this module only *produces* the event and writes
-//! the local sink(s).
+//! (`telemetry/upload`) drains; this module only *produces* the event, writes
+//! the local sink(s) and, in [`upload`], projects an event to its upload form.
 //!
 //! Two deliberate design boundaries:
 //!
@@ -38,6 +38,8 @@ use crate::destination::OutputSection;
 use crate::io::decode::{DecodeInfo, SilverFastFormat};
 use crate::stage::{StageClock, StageKind};
 use crate::types::{EncodeReport, FilmBaseProvenance, NcError, Result};
+
+pub mod upload;
 
 /// Telemetry event schema version. Bump on any change to [`TelemetryEvent`]'s
 /// shape so a server can ingest old and new records side by side. Note the event
@@ -106,7 +108,11 @@ use crate::types::{EncodeReport, FilmBaseProvenance, NcError, Result};
 /// lost the `"auto"` member (removal, as with `legacy`/`custom` above) and its type
 /// became `FilmBaseProvenance`, whose `region`/`explicit` wire form is unchanged and
 /// whose `"effective_area"` no conversion emits.
-pub const SCHEMA_VERSION: u32 = 10;
+///
+/// v11: `outcome.total_samples` (`telemetry/upload-schema`), the denominator of
+/// `clipped` / `non_finite` — a gain map counts both renditions, so the image's
+/// dimensions are not it. Present exactly when `clipped` is.
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// Default local JSONL log path, honoring `NC_TELEMETRY_LOG` then the platform
 /// data dir; `None` when no home/data dir can be located (the caller then warns
@@ -170,7 +176,7 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 
 // ---------------------------------------------------------------------------
 // Event schema (serialize-only — nothing deserializes a telemetry event here;
-// the upload projection is `telemetry/upload-schema`)
+// the upload projection is [`upload`])
 // ---------------------------------------------------------------------------
 
 /// One telemetry event for a single `hanten convert` run that got past argument
@@ -464,6 +470,10 @@ pub struct OutcomeInfo {
     pub exit_code: u8,
     /// Warnings raised before the run ended (clipping, IR-ignored, BigTIFF promote…).
     pub warnings: u32,
+    /// Output samples the encoder examined (`EncodeReport::total_samples`); absent
+    /// unless the frame finished.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_samples: Option<u64>,
     /// Finite samples clamped at a range end (`EncodeReport::clipped_total`); absent
     /// unless the frame finished.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -550,6 +560,7 @@ pub fn build_event(inputs: EventInputs<'_>) -> TelemetryEvent {
             error_kind,
             exit_code,
             warnings: warning_count(inputs.warnings),
+            total_samples: inputs.loss.map(|l| l.total_samples),
             clipped: inputs.loss.map(|l| l.clipped_total()),
             non_finite: inputs.loss.map(|l| l.non_finite),
         },
@@ -724,7 +735,7 @@ mod tests {
         let info = sample_info();
         let ev = build_event(success_inputs(&info));
 
-        assert_eq!(ev.schema_version, 10);
+        assert_eq!(ev.schema_version, 11);
         assert_eq!(ev.stage, EventStage::Finalize);
         assert_eq!(ev.outcome.status, OutcomeStatus::Success);
         assert_eq!(ev.outcome.error_kind, ErrorKind::None);
@@ -737,6 +748,7 @@ mod tests {
         assert!(image.ir_present);
         assert_eq!(image.input_bytes, Some(12_345));
         assert_eq!(image.output_bytes, Some(67_890));
+        assert_eq!(ev.outcome.total_samples, Some(100));
         assert_eq!(ev.outcome.clipped, Some(3)); // clipped_low + clipped_high
         assert_eq!(ev.outcome.non_finite, Some(7));
         assert_eq!(ev.outcome.warnings, 4);
@@ -1038,7 +1050,7 @@ mod tests {
         full.nc_version = "9.9.9";
         full.target = "test-triple";
         let expected_full = concat!(
-            r#"{"schema_version":10,"event_id":"0123456789abcdeffedcba9876543210","#,
+            r#"{"schema_version":11,"event_id":"0123456789abcdeffedcba9876543210","#,
             r#""event":"conversion","command":"convert","timestamp_ms":1700000000000,"#,
             r#""nc_version":"9.9.9","target":"test-triple","cpu_count":8,"stage":"finalize","#,
             r#""image":{"format":"hdri","width":100,"height":200,"megapixels":0.02,"#,
@@ -1051,7 +1063,7 @@ mod tests {
             r#""gamut":"display-p3","container":"tiff"}},"params_hash":"0123456789abcdef","#,
             r#""film_base_source":{"explicit":[0.5,0.25,0.125]},"output_depth":"u16"},"#,
             r#""outcome":{"status":"success","error_kind":"none","exit_code":0,"warnings":1,"#,
-            r#""clipped":2,"non_finite":0}}"#,
+            r#""total_samples":10,"clipped":2,"non_finite":0}}"#,
         );
         assert_eq!(serde_json::to_string(&full).unwrap(), expected_full);
 
@@ -1081,7 +1093,7 @@ mod tests {
         minimal.nc_version = "9.9.9";
         minimal.target = "test-triple";
         let expected_minimal = concat!(
-            r#"{"schema_version":10,"event_id":"00000000000000000000000000000000","#,
+            r#"{"schema_version":11,"event_id":"00000000000000000000000000000000","#,
             r#""event":"conversion","command":"convert","timestamp_ms":0,"#,
             r#""nc_version":"9.9.9","target":"test-triple","cpu_count":null,"stage":"decode","#,
             r#""timing_ms":{"total":0.0},"#,

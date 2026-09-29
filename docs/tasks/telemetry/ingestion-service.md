@@ -23,9 +23,10 @@ Deploy an nc-owned Cloudflare Worker with D1:
   event is reported as `duplicate`, not inserted again.
 - Return per-event `accepted`, `duplicate`, and permanently `rejected` IDs only
   after the transaction commits. Use 429/5xx for retryable service failures and
-  400 for a malformed top-level request.
+  400 for a malformed request (the cases and the rejection-code precedence are in
+  `contracts/telemetry/upload-v1/README.md`).
 - Store the sanitized payload plus indexed cohort columns needed for
-  version/platform/stage/algorithm/image-size/timing queries. Store client event
+  version/platform/stage/encoding/image-size/timing queries. Store client event
   and receipt time only at day granularity.
 - Expire remote events after 180 days with a scheduled deletion.
 - Keep the endpoint anonymous: there is no embedded client secret and no
@@ -55,7 +56,7 @@ explicit user approval first.
 Provide checked-in deployment/configuration, D1 migrations, a local Worker/D1
 test path, retention job, and documented SQL for the initial questions:
 failure rate by release/error/stage and timing distributions by release,
-algorithm, platform, CPU/image/input-size/output cohorts.
+encoding, platform, CPU/image/input-size cohorts.
 
 ## How to Verify
 

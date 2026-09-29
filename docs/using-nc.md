@@ -1531,7 +1531,7 @@ them and exit 2 if given one:
 
 | Flag | Purpose |
 |---|---|
-| `--telemetry` / `--telemetry-file` | Opt-in, fail-soft performance event (JSONL, `schema_version` 10), one per run — failed runs included, once the command line parses. `outcome.status` is `success` or `failure`; a failure names its `stage` (a stage, or `setup` / `preflight` / `finalize`), `error_kind` (`usage`, `decode`, …, or `strict` for a `--strict` promotion) and `exit_code`, and carries only what the run reached — never the error message. `timing_ms` has one field per completed stage, `conversion.params_hash` is the report's. Also `NC_TELEMETRY_LOG`. |
+| `--telemetry` / `--telemetry-file` | Opt-in, fail-soft performance event (JSONL, `schema_version` 11), one per run — failed runs included, once the command line parses. `outcome.status` is `success` or `failure`; a failure names its `stage` (a stage, or `setup` / `preflight` / `finalize`), `error_kind` (`usage`, `decode`, …, or `strict` for a `--strict` promotion) and `exit_code`, and carries only what the run reached — never the error message. `timing_ms` has one field per completed stage, `conversion.params_hash` is the report's, and a finished frame's `outcome.clipped` / `non_finite` counts come with their denominator, `outcome.total_samples`. Also `NC_TELEMETRY_LOG`. |
 | `--seed N` | Reserved; nothing is stochastic today |
 
 > **Caveat on `--max-memory`:** the budget also caps the TIFF read buffers, so a

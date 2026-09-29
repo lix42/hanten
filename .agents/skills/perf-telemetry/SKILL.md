@@ -50,6 +50,13 @@ TelemetryEvent` (`src/telemetry.rs`). To add a field:
    bump too. The server keys ingestion off this.
 4. Prefer fixed-width wire types (`u32`/`u64`, not `usize`) and reuse domain enums
    rather than restringifying them.
+5. **The upload side moves with it.** `source_schema_version` is the local version,
+   so a bump also changes `telemetry::upload` and the contract in
+   `contracts/telemetry/upload-v1/` (schema, corpus, README) — and the Worker, whose
+   accepted set widens rather than moves. Whether older queued lines still project is
+   `telemetry/upload`'s decision. A new
+   field is not uploaded unless the contract README's manifest adds it, which needs a
+   consent-version bump; a new stage or timing field needs its `timing_ms` key there.
 
 ### Two invariants every addition MUST preserve
 
@@ -105,7 +112,7 @@ N runs append N lines. `--telemetry-file <path>` overwrites (a single event).
 Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
 
 ```json
-{ "schema_version":10, "event_id":"5f0c3a9e81d24b7c9e0a6d3f2b1c8e47",
+{ "schema_version":11, "event_id":"5f0c3a9e81d24b7c9e0a6d3f2b1c8e47",
   "event":"conversion", "command":"convert", "timestamp_ms":1790633724299,
   "nc_version":"0.1.0", "target":"aarch64-apple-darwin", "cpu_count":11,
   "stage":"finalize",
@@ -121,18 +128,19 @@ Each line is a standalone JSON object with this shape (see `src/telemetry.rs`):
                 "film_base_source":{"explicit":[0.9,0.55,0.42]},
                 "output_depth":"u16"},
   "outcome":{"status":"success","error_kind":"none","exit_code":0,
-             "warnings":1,"clipped":0,"non_finite":0} }
+             "warnings":1,"total_samples":695772,"clipped":0,"non_finite":0} }
 ```
 
 A failure has the same keys as far as the run got: `image` is absent before decode,
-`conversion` before the destination resolved, `outcome.clipped`/`non_finite` unless
+`conversion` before the destination resolved, `outcome.total_samples`/`clipped`/`non_finite` unless
 the frame finished, and each `timing_ms` stage field until that stage completed (a failed
 stage's time is only in `total`). `stage` is a `StageKind` name or `setup` /
 `preflight` / `finalize` (`telemetry::EventStage`); `error_kind` is `usage`,
 `decode`, `unsupported`, `write`, `resource`, `other` or `strict`. **v10**
 (`telemetry/schema-v2`) introduced the event: before it, only successful runs wrote a
 record, with no `event_id`/`event`/`command`/`stage` and an `outcome` of just the
-three counts.
+three counts. **v11** (`telemetry/upload-schema`) added `outcome.total_samples`, the
+denominator of the clip counts (a gain map counts both renditions).
 
 `timing_ms.ir_export` appears only when `--export-ir` ran, and the four chain stages
 (`scene_correction` … `fit_gamut`) not for the film master, which runs none; a gain

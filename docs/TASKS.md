@@ -1564,10 +1564,12 @@ the design in `docs/design-update.md`:
   per-event deduplication ID; every `convert` that parses writes one, a failure naming
   its stage, error kind and exit code. Telemetry's sinks may not land on the input,
   the `--params` recipe or an output. No pixel, recipe or fingerprint change.
-- [ ] [Telemetry upload schema v1](tasks/telemetry/upload-schema.md) — the
-  separately versioned, privacy-minimized upload projection of those events, with
-  the checked-in JSON Schema and valid/invalid corpus the Worker and uploader share.
-  Split from `schema-v2` (2026-09-28); records the approved manifest revision.
+- [x] [Telemetry upload schema v1](tasks/telemetry/upload-schema.md) — **done
+  2026-09-28.** `telemetry::upload::to_upload_event` projects a local event (now
+  schema 11, with `outcome.total_samples`) to the privacy-minimized upload form, and
+  `contracts/telemetry/upload-v1/` holds the JSON Schema, the valid/invalid corpus
+  the Worker and uploader share, and the field manifest. No pixel, recipe or
+  fingerprint change.
 - [ ] [Telemetry ingestion service](tasks/telemetry/ingestion-service.md) — build
   the validating Cloudflare Worker + D1 endpoint, exact deduplication, 180-day
   retention, hard FREE-plan quotas, abuse quarantine/kill switch, and initial
