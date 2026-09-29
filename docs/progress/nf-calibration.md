@@ -489,6 +489,16 @@ frames; the look's default contrast is `no-roll-defaults`'.
   review the white rule on an HDR rendition so its cap, floor and target stop being
   provisional.
 
+## roll-exposure
+
+**Status:** not started
+**Updated:** 2026-09-29
+
+- 2026-09-29: filed (user) after converting the thin 2026-09-28 roll. Its whites bound
+  at the floor and the render was dark; `--exposure 1.4` fixed it, and the user wants
+  the darkest frames left dark. Goal: `measure-roll` measures one neutral exposure per
+  roll and writes it as `roll.exposure`.
+
 ## scale-ladder
 
 **Status:** done

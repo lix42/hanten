@@ -377,6 +377,7 @@ graph TD
     nf-calibration/no-roll-defaults
     nf-calibration/roll-section
     nf-calibration/white-rule-hdr
+    nf-calibration/roll-exposure
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -619,6 +620,9 @@ graph TD
   nf-display-stages/parametric-operator --> nf-display-stages/parametric-shoulder
   nf-calibration/roll-white-rule --> nf-display-stages/parametric-shoulder
   nf-calibration/roll-white-rule --> nf-calibration/white-rule-hdr
+  nf-calibration/roll-white-rule --> nf-calibration/roll-exposure
+  nf-calibration/roll-section --> nf-calibration/roll-exposure
+  nf-calibration/roll-exposure --> nf-calibration/white-rule-hdr
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
@@ -1208,9 +1212,13 @@ the design in `docs/design-update.md`:
   — filed 2026-09-27: the fallbacks are chosen against the per-roll contrasts it measures
 - `nf-calibration/roll-section` (new flow): `nf-calibration/roll-white-rule`
   — filed 2026-09-27: moves the values it measures out of the style knobs
-- `nf-calibration/white-rule-hdr` (new flow): `nf-calibration/roll-white-rule`, `nf-display-stages/parametric-shoulder`
+- `nf-calibration/white-rule-hdr` (new flow): `nf-calibration/roll-white-rule`, `nf-display-stages/parametric-shoulder`, `nf-calibration/roll-exposure`
   — filed 2026-09-27: the rule was reviewed on SDR only; `roll-white-rule` handed HDR to
-  `parametric-shoulder`, which kept reinhard and left it unreviewed
+  `parametric-shoulder`, which kept reinhard and left it unreviewed; after `roll-exposure`
+  (2026-09-29), which moves where the whites are measured
+- `nf-calibration/roll-exposure` (new flow): `nf-calibration/roll-white-rule`, `nf-calibration/roll-section`
+  — filed 2026-09-29: an under-exposed roll bound at the floor rendered dark, and no
+  contrast can lift it; a hand `--exposure 1.4` fixed it
 
 ## Tasks
 
@@ -1930,6 +1938,9 @@ the design in `docs/design-update.md`:
 - [ ] [The white rule in
   HDR](tasks/nf-calibration/white-rule-hdr.md) — the rule's values stay provisional
   until its HDR rendition and headroom are looked at; every round so far was SDR
+- [ ] [A measured roll exposure](tasks/nf-calibration/roll-exposure.md) — `measure-roll`
+  writes `roll.exposure`, one neutral gain for the roll from a central statistic of its
+  frames, so an under-exposed roll renders at a normal level; darker frames stay dark
 - [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering; one round, nothing moved, the
