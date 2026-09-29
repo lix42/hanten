@@ -1,5 +1,9 @@
 # Rebuild Dmin and Dmax measurement on area x method
 
+> **Overtaken in part, 2026-09-28.** The `Dmax` half is gone: `nf-retire/dmax-machinery`
+> retired the leader `Dmax`, `reference_dmax` and `--d-max-region`, so this task is
+> `Dmin` only. The open questions are answered below; the progress log has the record.
+
 ## Goal
 
 Migrate `Dmin` and `Dmax` measurement onto **two inputs and nothing else**
@@ -77,26 +81,27 @@ an untrusted user rectangle is the one remaining candidate.
 - Provenance is **per-run**: record whether the holder was masked, and how, in the
   report and the existing output sidecar. No persisted pre-processed input.
 
-## Open questions
+## Decisions (2026-09-28)
 
-1. **Does the grid survive as a method at all?** The user enumerated grid and
-   whole-area percentile and leans percentile. If percentile wins, `--grid` goes and
-   `tiling-uniformity-validator`'s planned retirement of it stands unchanged; if grid
-   stays, that task must not retire the flag it keeps. Settle it here, once.
-2. **Which percentile** — median, or a trimmed mean, and trimmed where? On a
-   distribution this symmetric they agree to a few thousandths, so pick for
-   robustness against the asymmetric case rather than for the symmetric one.
-3. ~~The fallback fraction.~~ **Answered 2026-09-16**: the inset and its override
-   belong to `holder-depth-mask`; this task neither sizes nor duplicates it.
-4. **Memory.** Materialising the whole masked region is ~900 MB of `Vec<f32>` on a
-   75 MP frame. A 16-bit histogram per channel gives exact percentiles and a
-   trimmed mean in O(1) — expected to be the shape here, which means
-   `pipeline::memory` gets *new* numbers rather than the current `12·s` term.
-5. **What do the film-base *sources* collapse to?** With no rebate search, `Auto`
-   and `Region` differ only in where the area came from, which is the "area" input.
-   Whether `FilmBaseSource` keeps three variants, or becomes an area plus a method,
-   is a CLI/recipe surface question — and `calibration.film_base` is the one knob with no
-   default, so whatever replaces it inherits that rule.
+1. **The grid does not survive.** `--grid` is removed (exit 2); the effective-area
+   measurement is what it was for. `tiling-uniformity-validator` keeps only the tiling.
+2. **The median** (`film_base::AREA_PERCENTILE`). Precision is irrelevant at millions of
+   pixels; contamination on an unexposed frame is one-sided, and the median holds until
+   half the area is bad.
+3. ~~The fallback fraction.~~ Owned by `holder-depth-mask` (2026-09-16).
+4. **Memory:** a per-channel histogram of the 16-bit codes — exact on decoded data, a
+   fixed ~1.5 MB, so `pipeline::memory` owes it no term.
+5. **Sources:** `FilmBaseSource` is `Region | Explicit`. The effective-area measurement is
+   **not** a source: over a picture frame its median is a plausible, wrong base, so it
+   runs only in `estimate` (no source flag), whose result a conversion takes as
+   `Explicit`. `--auto-base` and `"auto"` are refused with a migration message.
+   `inspect` no longer suggests a Dmin.
+6. **No `pipeline_version` bump.** No conversion measures the area, so no conversion's
+   pixels move; an `"auto"` recipe is refused rather than re-rendered. The drift gate's
+   `base` now pins a stated region of the frozen scan, and its hash did not change.
+7. **A coarse uniformity guard:** a warning when the area's pooled `(p90 - p10) / p50`
+   exceeds 0.5 — unexposed frames read 0.06-0.29, pictures 0.87-2.26. It does not catch
+   a leader; the tiling is `tiling-uniformity-validator`'s.
 
 ## How to Verify
 
@@ -108,9 +113,11 @@ an untrusted user rectangle is the one remaining candidate.
   population path does not.
 - Per-edge asymmetry is exercised: a fixture whose holder is deeper on one edge is
   masked per edge, not to the worst edge everywhere.
-- Silver-leader `Dmax` takes the fallback and **says so** in the report.
-- The `pipeline_version` bump has its fingerprint row, and the report/sidecar
-  record the masking provenance.
+- A holder that was not measured (no IR plane, or IR that cannot separate) **says
+  so** in the `estimate` report.
+- The report records the provenance (`film_base_source`, `film_base_percentile`,
+  `effective_area`); no conversion's pixels move, so the drift gate stays green with
+  no bump (Decision 6).
 
 ## Dependencies
 

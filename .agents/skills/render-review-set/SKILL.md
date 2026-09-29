@@ -59,14 +59,14 @@ and a rendition is just a path.
 once per roll from that roll's unexposed frame:
 
 ```sh
-./target/release/hanten estimate ../nc-assets/rolls/<roll>/base.tif --grid --report json
+./target/release/hanten estimate ../nc-assets/rolls/<roll>/base.tif --report json
 # take film_base_flag / the film_base object
 ```
 
-`--grid` samples five cells and reports `agreement`. **Never silently reuse a value where that
-is false** — say so, and check whether the cause is local (dust, a mark) or a smooth
-illumination gradient, which is common on these scans and benign. The reported base is the
-per-channel median of the five cells, so a gradient leaves it mid-spread and usable.
+It reads the median over the frame's effective area (holder and inset cut). **Never silently
+reuse a value that came with a warning** — a "not uniform" one means the frame is not
+unexposed film; a "film holder was not measured" one (every 48-bit scan) means the area
+rests on the inset alone. Say so. (A reference build predates this and needs `--grid`.)
 
 ## 3. The config set
 

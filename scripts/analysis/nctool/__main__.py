@@ -116,10 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
     rconvert.add_argument("--out-dir", help="output directory (default: converted/nc/CONFIG/ROLL)")
     rconvert.add_argument("--recipe", help="partial recipe (or a preset build's "
                                            "conversion sidecar) to extend")
-    rconvert.add_argument("--dmin-region", help="unexposed-frame X,Y,W,H (default: center 80%%)")
-    rconvert.add_argument("--dmin-mode", choices=("grid", "region"), default="grid",
-                          help="measure Dmin with a five-cell grid or one region "
-                               "aggregate (default: grid)")
+    rconvert.add_argument("--dmin-region", help="unexposed-frame X,Y,W,H for --dmin-mode "
+                                                "grid or region (default: center 80%%)")
+    rconvert.add_argument("--dmin-mode", choices=("area", "grid", "region"), default="area",
+                          help="measure Dmin over the frame's effective area (default), "
+                               "with a five-cell grid (builds before the effective-area "
+                               "measurement), or as one region's p97")
     rconvert.add_argument("--film-type", choices=("unknown", "silver", "chromogenic"),
                           help="record film chemistry in the estimate reports and "
                                "the frozen recipe (provenance; it gates nothing)")

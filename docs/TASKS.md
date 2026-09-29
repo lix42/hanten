@@ -773,19 +773,17 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   **Raising the cap is rejected** with reasons in the task file. Zero of 31 real IR frames cap,
   so this is a robustness gap — but `half-frame-calibration`'s geometry can reach it
 - `film-base/holder-masked-measurement` (post-MVP): `film-base/ir-usability-detection`, `film-base/holder-depth-mask`, `core/conversion-versioning`, `film-base/dmax-reference`
-  — **area x method** and nothing else (user, 2026-09-16): the effective area or a user-stated
-  one, measured by a whole-area percentile (leading) or the grid. **Retires the rebate-band
-  search** (`rebate_candidates` / `select_auto_base`) — accepted as a breaking change, nc is not
-  shipped — which parks `auto-base-real-scan-refusal`, `auto-base-neutral-stock` and
-  `white-holder-support` and changes `core/auto-calibration`'s automatic rung. Estimates the
-  **centre** instead of p97, which biases ~0.046 density (0.16 stops, the "pale" direction).
-  **Pixel change**: one `pipeline_version` bump. Provenance is per-run
+  — **area x method** and nothing else: the effective area of an unexposed frame at the
+  **median** (`estimate FRAME`, measurement-only), or a stated region at p97. **Retires** the
+  rebate-band search (`--auto-base`, `"auto"`), `estimate --grid` and `inspect`'s suggested Dmin
+  (decided 2026-09-28). The `Dmax` half was overtaken by `nf-retire/dmax-machinery`. No
+  conversion's pixels move, so no `pipeline_version` bump
 - `film-base/tiling-uniformity-validator` (post-MVP): `film-base/holder-masked-measurement`, `film-base/estimate-reuse-output`
   — coarse tiling in the estimate's own pass, reporting within-tile (grain) separately from
   between-tile (gradient): measured 0.0081 on Gold 200 against 0.0390 on Portra 160, reproducing
-  the baseline report's blue-gradient finding. Covers `Dmax`, which has no check today. **Retires
-  `--grid`** (it no longer selects an estimator) and absorbs the removed
-  `film-base/grid-verdict-enum`. Diagnostics only — no pixel change
+  the baseline report's blue-gradient finding. Tiles the effective-area measurement, whose only
+  check is one pooled spread (`--grid` already retired with `holder-masked-measurement`), and
+  absorbs the removed `film-base/grid-verdict-enum`. Diagnostics only — no pixel change
 - `core/calibration-recipe-section` (post-MVP): `core/roll-conversion`, `core/conversion-versioning`
 - `core/recipe-composition` (post-MVP): `core/cli-framework`, `core/roll-conversion`, `core/calibration-recipe-section`, `nf-core/subcommands`
   — repeatable `--params` (file or `-`), `roll` gains convert's override flags, one precedence
@@ -1355,15 +1353,14 @@ the design in `docs/design-update.md`:
   `holder-depth-mask` made it loud; make it right. Decline on a capped perpendicular pair, or find a
   trim that does not depend on the capped report. Raising the cap is rejected. Robustness gap —
   zero of 31 real frames cap. No pixel change
-- [ ] [Rebuild Dmin and Dmax measurement on area x method](tasks/film-base/holder-masked-measurement.md) —
-  area (the effective area, or a user-stated one) x method (whole-area percentile, or grid); retires the
-  rebate-band search. Estimate the centre of what is now one population rather
-  than reaching for p97, whose ~0.046-density bias costs 0.16 stops in the "pale" direction. **Pixel change,
-  one `pipeline_version` bump**
+- [x] [Rebuild Dmin and Dmax measurement on area x method](tasks/film-base/holder-masked-measurement.md) —
+  `estimate FRAME` measures an unexposed frame's effective area at the median (p97 over one
+  population sits 0.01-0.085 density pale on 9 real frames); a stated region keeps p97. Retires
+  `--auto-base` / `"auto"`, `--grid` and `inspect`'s suggested Dmin. No pixel change, no bump
 - [ ] [Validate reference frames by tiling](tasks/film-base/tiling-uniformity-validator.md) — coarse tiling in
   the estimate's own pass, separating within-tile grain from between-tile gradient: 0.0081 on Gold 200 against
   0.0390 on Portra 160, independently reproducing the baseline report's blue-gradient finding on that roll.
-  Extends the check to `Dmax`, which has none. **Retires `--grid`** and absorbs the removed
+  Tiles the effective-area measurement (`--grid` is already gone) and absorbs the removed
   `film-base/grid-verdict-enum`; diagnostics only, no pixel change
 - [ ] [Calibrate from a single part-exposed frame](tasks/film-base/half-frame-calibration.md) —
   **deferred, blocks nothing**: one frame that is part unexposed and part leader serving as both

@@ -37,11 +37,11 @@ use serde::Serialize;
 use crate::destination::OutputSection;
 use crate::io::decode::{DecodeInfo, SilverFastFormat};
 use crate::stage::{StageClock, StageKind};
-use crate::types::{EncodeReport, FilmBaseSource, NcError, Result};
+use crate::types::{EncodeReport, FilmBaseProvenance, NcError, Result};
 
 /// Telemetry event schema version. Bump on any change to [`TelemetryEvent`]'s
 /// shape so a server can ingest old and new records side by side. Note the event
-/// embeds domain types (`OutputSection`, `FilmBaseSource`, `SilverFastFormat`,
+/// embeds domain types (`OutputSection`, `FilmBaseProvenance`, `SilverFastFormat`,
 /// `StageKind`) whose serde representation lives elsewhere — a change to *their* wire form is also a schema change and must
 /// bump this too.
 ///
@@ -101,6 +101,11 @@ use crate::types::{EncodeReport, FilmBaseSource, NcError, Result};
 /// `exit_code`, and a failed run writes one too. What a failure had not reached is
 /// absent: `image`, `conversion`, `outcome.clipped` / `non_finite`, and every
 /// `timing_ms` stage field (all optional now) until that stage completes.
+///
+/// Still v10 after `film-base/holder-masked-measurement`: `conversion.film_base_source`
+/// lost the `"auto"` member (removal, as with `legacy`/`custom` above) and its type
+/// became `FilmBaseProvenance`, whose `region`/`explicit` wire form is unchanged and
+/// whose `"effective_area"` no conversion emits.
 pub const SCHEMA_VERSION: u32 = 10;
 
 /// Default local JSONL log path, honoring `NC_TELEMETRY_LOG` then the platform
@@ -442,8 +447,8 @@ pub struct ConversionInfo {
     /// Stable 64-bit hash (hex) of the effective recipe JSON (`crate::recipe`), so
     /// identical conversions share a hash.
     pub params_hash: String,
-    /// Film-base provenance (`"auto"` / `{"region":…}` / `{"explicit":…}`).
-    pub film_base_source: FilmBaseSource,
+    /// Film-base provenance (`{"region":…}` / `{"explicit":…}`).
+    pub film_base_source: FilmBaseProvenance,
     /// The primary image's sample depth as written (`u8` / `u10` / `u16` / `f32`),
     /// fixed by the destination's encoding.
     pub output_depth: &'static str,
@@ -668,7 +673,7 @@ mod tests {
         ConversionInfo {
             destination: sdr_p3_tiff(),
             params_hash: "deadbeef".into(),
-            film_base_source: FilmBaseSource::Auto,
+            film_base_source: FilmBaseProvenance::Region([0, 0, 40, 30]),
             output_depth: "u16",
         }
     }
@@ -984,7 +989,7 @@ mod tests {
         // Snapshot the exact serialized JSON for a fully-populated success and a
         // minimal failure. This catches silent wire-shape drift — a renamed/added/
         // removed field, a reordered struct, or a changed foreign-enum
-        // representation (`FilmBaseSource`/`SilverFastFormat`/`StageKind`) — any of
+        // representation (`FilmBaseProvenance`/`SilverFastFormat`/`StageKind`) — any of
         // which is a `SCHEMA_VERSION` bump. If this test fails, update the snapshot
         // *and* bump `SCHEMA_VERSION` (and the design-spec / SKILL examples).
         // `nc_version`/`target` are set to fixed literals here so the snapshot is
@@ -1018,7 +1023,7 @@ mod tests {
             conversion: Some(ConversionInfo {
                 destination: sdr_p3_tiff(),
                 params_hash: "0123456789abcdef".into(),
-                film_base_source: FilmBaseSource::Explicit([0.5, 0.25, 0.125]),
+                film_base_source: FilmBaseProvenance::Explicit([0.5, 0.25, 0.125]),
                 output_depth: "u16",
             }),
             loss: Some(EncodeReport {
@@ -1067,7 +1072,7 @@ mod tests {
             conversion: Some(ConversionInfo {
                 destination: OutputSection::FilmMaster,
                 params_hash: "0".into(),
-                film_base_source: FilmBaseSource::Auto,
+                film_base_source: FilmBaseProvenance::Region([1, 2, 3, 4]),
                 output_depth: "f32",
             }),
             loss: None,
@@ -1081,7 +1086,7 @@ mod tests {
             r#""nc_version":"9.9.9","target":"test-triple","cpu_count":null,"stage":"decode","#,
             r#""timing_ms":{"total":0.0},"#,
             r#""conversion":{"destination":"film-master","params_hash":"0","#,
-            r#""film_base_source":"auto","output_depth":"f32"},"#,
+            r#""film_base_source":{"region":[1,2,3,4]},"output_depth":"f32"},"#,
             r#""outcome":{"status":"failure","error_kind":"decode","exit_code":3,"warnings":0}}"#,
         );
         assert_eq!(serde_json::to_string(&minimal).unwrap(), expected_minimal);

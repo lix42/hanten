@@ -84,9 +84,8 @@ fn write_rgb16(path: &Path, xmp: Option<&str>, software: Option<&str>, with_ir: 
 }
 
 /// Write an HDRi-shaped TIFF: an RGB16 image plus a **marker-verified** Gray16 IR
-/// page (`NewSubfileType = 4`, the provenance the holder detector requires),
-/// filled with one uniform IR level. Big enough that the rebate scan window and
-/// the holder probe band are both real bands.
+/// page (`NewSubfileType = 4`, the provenance the holder march requires),
+/// filled with one uniform IR level.
 fn write_hdri_with_uniform_ir(path: &Path, w: u32, h: u32, rgb: [u16; 3], ir: u16) {
     let mut pixels = Vec::with_capacity((w * h * 3) as usize);
     for _ in 0..(w * h) {
@@ -112,65 +111,29 @@ fn write_hdri(path: &Path, w: u32, h: u32, pixels: &[u16], plane: &[u16]) {
     ir_page.write_data(plane).unwrap();
 }
 
-/// An HDRi scan with the real `dark holder -> thin inset rebate -> picture`
-/// geometry auto-base detection looks for: a 4 px opaque holder ring, a 6 px
-/// unexposed rebate band inset behind it on the bottom and left, and a varied
-/// picture interior. `ir_interior` sets the IR transmission of the film itself,
-/// which is what the usability verdict measures. `ir_dark_all_edges` puts the
-/// IR-dark holder on all four edges (the all-holder case, where the mask would
-/// leave the rebate search nothing) rather than only where it really sits.
-fn write_hdri_scan_with_rebate(path: &Path, ir_interior: u16, ir_dark_all_edges: bool) {
+/// An HDRi scan of an **unexposed frame** in its holder: a rippled field of
+/// unexposed film (~0.53 / 0.26 / 0.16) inside a holder ring that is deeper on the
+/// left (12 px) than on the right (4 px), top and bottom 6 px. `ir_film` sets the
+/// IR transmission of the film itself, which is what the usability verdict
+/// measures; the holder is IR-dark. `holder_rgb` is the holder's RGB, so a test can
+/// paint it any value and show it contributes nothing.
+fn write_hdri_unexposed(path: &Path, ir_film: u16, holder_rgb: [u16; 3]) {
     const W: u32 = 200;
     const H: u32 = 200;
-    const HOLDER: [u16; 3] = [655, 655, 655]; // ~0.01 transmission
-    const REBATE: [u16; 3] = [34734, 17040, 10486]; // 0.53 / 0.26 / 0.16
+    const FILM: [f32; 3] = [34734.0, 17040.0, 10486.0];
     const IR_HOLDER: u16 = 1300; // ~0.02, as real holders measure
-
-    let mut rgb = vec![0u16; (W * H * 3) as usize];
-    let mut ir = vec![ir_interior; (W * H) as usize];
-    let put = |buf: &mut Vec<u16>, x: u32, y: u32, v: [u16; 3]| {
-        let i = ((y * W + x) * 3) as usize;
-        buf[i..i + 3].copy_from_slice(&v);
-    };
+    let mut rgb = Vec::with_capacity((W * H * 3) as usize);
+    let mut ir = vec![ir_film; (W * H) as usize];
     for y in 0..H {
         for x in 0..W {
-            // Picture: a varied gradient, dimmer than the rebate on every channel
-            // so the brightness gate can tell them apart.
-            let t = (x + y) as f32 / (W + H) as f32;
-            let px = [
-                (3300.0 + 13000.0 * t) as u16,
-                (2000.0 + 7000.0 * t) as u16,
-                (1300.0 + 3300.0 * t) as u16,
-            ];
-            put(&mut rgb, x, y, px);
-        }
-    }
-    // Rebate band, inset behind the holder on the bottom and left edges. Rippled
-    // along the edge so a percentile has something to choose between.
-    for x in 0..W {
-        for y in H - 10..H - 4 {
-            let f = 0.93 + 0.07 * (x % 10) as f32 / 9.0;
-            put(&mut rgb, x, y, REBATE.map(|c| (c as f32 * f) as u16));
-        }
-    }
-    for y in 0..H {
-        for x in 4..10 {
-            let f = 0.93 + 0.07 * (y % 10) as f32 / 9.0;
-            put(&mut rgb, x, y, REBATE.map(|c| (c as f32 * f) as u16));
-        }
-    }
-    // A dark RGB border on all four edges — but IR-dark on only the top and right,
-    // where the opaque holder actually sits. The bottom and left border is dense
-    // *film* (dark in RGB, transparent in IR) in front of the rebate: the
-    // disambiguation RGB alone cannot make, and the reason a full IR-dark ring
-    // would leave the search nothing to look at.
-    for y in 0..H {
-        for x in 0..W {
-            if x < 4 || y < 4 || x >= W - 4 || y >= H - 4 {
-                put(&mut rgb, x, y, HOLDER);
-                if ir_dark_all_edges || y < 4 || x >= W - 4 {
-                    ir[(y * W + x) as usize] = IR_HOLDER;
-                }
+            let holder = !(6..H - 6).contains(&y) || !(12..W - 4).contains(&x);
+            if holder {
+                rgb.extend_from_slice(&holder_rgb);
+                ir[(y * W + x) as usize] = IR_HOLDER;
+            } else {
+                // A ±4% grain-like ripple, so the median has something to choose.
+                let f = 0.96 + 0.08 * ((x * 7 + y * 13) % 17) as f32 / 16.0;
+                rgb.extend(FILM.map(|c| (c * f) as u16));
             }
         }
     }
@@ -1059,8 +1022,7 @@ fn convert_writes_tiff_and_report() {
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        // Real scans are holder → rebate → picture, so auto-base fails loudly;
-        // supply an explicit base (the documented calibrate-once workflow).
+        // An explicit base: the documented calibrate-once workflow.
         "--film-base",
         "0.9,0.55,0.42",
     ]);
@@ -1329,99 +1291,73 @@ fn estimate_emits_reuse_ready_output_that_round_trips() {
 }
 
 #[test]
-fn estimate_grid_reports_spread_and_strict_promotes_disagreement() {
-    // `--grid` samples 5 fixed cells; on a real (non-blank) frame the cells
-    // disagree, which must be reported loudly — per-cell evidence in the
-    // report, a warning, and a failing exit under `--strict` — never averaged
-    // away silently.
+fn estimate_warns_that_a_picture_frame_is_not_unexposed_film() {
+    // The median over a picture's effective area is a plausible, wrong base: the
+    // spread is what says so, loudly enough for `--strict` to refuse it.
     let fix = fixture("hdr-48bit.tif");
-    let (code, stdout, err) = run(&["estimate", fix.to_str().unwrap(), "--grid"]);
-    assert_eq!(
-        code, 0,
-        "non-strict disagreement is a warning, not fatal: {err}"
-    );
+    let (code, stdout, err) = run(&["estimate", fix.to_str().unwrap()]);
+    assert_eq!(code, 0, "a non-uniform area is a warning, not fatal: {err}");
     let report = json(&stdout);
-    let grid = &report["grid"];
-    assert_eq!(grid["cells"].as_array().unwrap().len(), 5);
-    assert_eq!(grid["agreement"], false, "picture content must disagree");
-    assert!(grid["spread"][0].as_f64().unwrap() > grid["tolerance"].as_f64().unwrap());
+    assert_eq!(report["film_base_source"], "effective_area", "{report}");
     assert!(
-        grid["cells"][0]["region"].is_array() && grid["cells"][0]["base"]["r"].is_number(),
-        "per-cell evidence must be reported: {report}"
-    );
-    // The sampled rectangle (the fixture's full 502x462 frame) is recorded as
-    // the structured source.
-    assert_eq!(
-        report["film_base_source"]["region"],
-        serde_json::json!([0, 0, 502, 462])
-    );
-    // The grid path feeds the same reuse-ready output as a single measurement
-    // (the combined median base here is valid, so the flag must be present).
-    assert!(
-        report["film_base_flag"].is_string(),
-        "grid runs emit reuse-ready output too: {report}"
-    );
-    assert!(
-        report["warnings"]
-            .as_array()
+        report["warnings"].as_array().unwrap().iter().any(|w| w
+            .as_str()
             .unwrap()
-            .iter()
-            .any(|w| w.as_str().unwrap().contains("grid cells disagree")),
-        "disagreement must be a report warning: {report}"
+            .contains("does not look like unexposed film")),
+        "{report}"
     );
-
-    // `--strict` promotes the disagreement warning to exit 1 after the report.
-    let (code, stdout, err) = run(&["estimate", fix.to_str().unwrap(), "--grid", "--strict"]);
-    assert_eq!(code, 1, "--strict must fail on grid disagreement");
+    // A 48-bit scan has no IR plane, so the holder is never measured and the area
+    // rests on the inset alone — said, not left for the user to infer.
+    assert!(
+        report["warnings"].as_array().unwrap().iter().any(|w| {
+            let w = w.as_str().unwrap();
+            w.contains("the film holder was not measured") && w.contains("no IR plane")
+        }),
+        "{report}"
+    );
+    let (code, stdout, err) = run(&["estimate", fix.to_str().unwrap(), "--strict"]);
+    assert_eq!(code, 1, "--strict must fail on it");
     let _ = json(&stdout); // the report still lands on stdout before the gate
     assert!(err.contains("strict"), "stderr should explain: {err}");
 }
 
 #[test]
-fn estimate_grid_degenerate_base_hard_errors_without_strict() {
-    // A degenerate combined grid base (an all-black frame — the same condition a
-    // `--grid --base-region` on the dark holder produces) is not a usable Dmin
-    // anchor. The grid path must hard-error on it **without** `--strict`, mapping
-    // to the same exit code the single-measurement path's finite-and-positive
-    // guard returns for a degenerate base (`NcError::Other` → exit 1) — and the
-    // diagnostic report (with `grid.cells`) must still land on stdout first.
+fn a_conversion_reports_the_percentile_its_base_was_read_at() {
+    // The stage returns the method; the report states it rather than leaving a
+    // region base to be mistaken for an explicit one.
+    let dir = TempDir::new("convert-percentile");
+    let fix = fixture("hdr-48bit.tif");
+    let convert = |source: &[&str], name: &str| {
+        let out = dir.path(name);
+        let (code, stdout, err) = run(&[
+            &[
+                "convert",
+                fix.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+            ][..],
+            source,
+        ]
+        .concat());
+        assert_eq!(code, 0, "{err}");
+        json(&stdout)
+    };
+    let region = convert(&["--base-region", "0,0,60,60"], "region.tif");
+    assert_eq!(region["film_base_percentile"], 0.97, "{region}");
+    let explicit = convert(&["--film-base", "0.9,0.55,0.42"], "explicit.tif");
+    assert!(explicit.get("film_base_percentile").is_none(), "{explicit}");
+}
+
+#[test]
+fn estimate_refuses_a_degenerate_base_from_either_source() {
+    // An all-black frame is not a usable Dmin anchor, whether the base is read over
+    // the effective area or a stated region: both hit the birth guard, exit 1.
     let fix = fixture("black-48bit.tif");
-
-    // The single-measurement degenerate exit code, established on the same input:
-    // a `--base-region` on the all-black frame fails `estimate`'s birth guard.
-    let (single_code, _stdout, single_err) = run(&[
-        "estimate",
-        fix.to_str().unwrap(),
-        "--base-region",
-        "0,0,32,32",
-    ]);
-    assert_eq!(single_code, 1, "single-path degenerate base is exit 1");
-    assert!(
-        single_err.contains("finite and positive"),
-        "single-path error names the degenerate condition: {single_err}"
-    );
-
-    // The grid path on the same frame — no `--strict` — must match that exit code.
-    let (code, stdout, err) = run(&["estimate", fix.to_str().unwrap(), "--grid"]);
-    assert_eq!(
-        code, single_code,
-        "grid degenerate base must map to the single-path exit code without --strict: {err}"
-    );
-    // The report is emitted before the gate: stdout is clean JSON carrying the
-    // five grid cells that diagnose the degenerate sample.
-    let report = json(&stdout);
-    assert_eq!(report["command"], "estimate");
-    assert_eq!(report["grid"]["cells"].as_array().unwrap().len(), 5);
-    assert_eq!(report["grid"]["agreement"], false);
-    // No reuse-ready output for a degenerate base.
-    assert!(
-        report["film_base_flag"].is_null(),
-        "a degenerate base must not be advertised as reusable: {report}"
-    );
-    assert!(
-        err.contains("finite and positive"),
-        "the hard error names the degenerate condition: {err}"
-    );
+    for extra in [&[][..], &["--base-region", "0,0,32,32"][..]] {
+        let (code, _stdout, err) = run(&[&["estimate", fix.to_str().unwrap()][..], extra].concat());
+        assert_eq!(code, 1, "{extra:?}: {err}");
+        assert!(err.contains("finite and positive"), "{err}");
+    }
 }
 
 #[test]
@@ -1455,7 +1391,8 @@ fn export_ir_writes_plane_for_hdri_and_errors_for_hdr() {
         out_hdr.to_str().unwrap(),
         "--export-ir",
         ir_hdr.to_str().unwrap(),
-        "--auto-base",
+        "--film-base",
+        "0.9,0.55,0.42",
     ]);
     assert_eq!(code, 4, "export-ir on an HDR scan is Unsupported (exit 4)");
     assert!(
@@ -1739,7 +1676,8 @@ fn convert_rejects_in_place_output() {
         fix.to_str().unwrap(),
         // A base must be stated since `film_base.source` has no default; the
         // rule under test is the in-place-output guard, not that one.
-        "--auto-base",
+        "--film-base",
+        "0.9,0.55,0.42",
     ]);
     assert_eq!(code, 2, "in-place output must be a usage error: {err}");
     assert!(err.contains("overwrite the input"), "stderr: {err}");
@@ -3335,8 +3273,7 @@ fn write_file(path: &Path, contents: &str) -> PathBuf {
 }
 
 /// A hand-authored frozen roll recipe: an explicit roll-fixed film base, so
-/// every frame converts deterministically without auto-base (real scans are
-/// holder → rebate → picture, where auto-base fails loudly). It states no `output`,
+/// every frame converts deterministically. It states no `output`,
 /// so every frame is the default SDR TIFF; the container-aware naming has its own
 /// coverage in `roll_checks_explicit_manifest_suffixes_and_derives_per_frame_names`.
 const ROLL_RECIPE: &str = r#"{
@@ -5453,19 +5390,15 @@ fn memory_preflight_reports_the_estimate_and_budget_decision() {
         "film-base phase must be sized and below the encode peak: {mem}"
     );
 
-    // `inspect` gates on the decode-only profile — no render, no encode. It runs
-    // auto detection, so its peak is the film-base phase (the decoded image plus the
-    // sampled interior), *above* the decode phase.
+    // `inspect` gates on the decode-only profile — no render, no encode. It gathers
+    // no film-base sample, so its peak is the decode phase (the read buffer beside
+    // the image).
     let (code, stdout, _err) = run(&["inspect", fixture("hdri-64bit.tif").to_str().unwrap()]);
     assert_eq!(code, 0);
     let mem = json(&stdout)["memory"].clone();
     assert_eq!(mem["render_bytes"], 0);
     assert_eq!(mem["encode_bytes"], 0);
-    assert_eq!(mem["accounted_bytes"], mem["film_base_bytes"]);
-    assert!(
-        mem["film_base_bytes"].as_u64().unwrap() > mem["decode_bytes"].as_u64().unwrap(),
-        "the auto interior sample must be counted: {mem}"
-    );
+    assert_eq!(mem["accounted_bytes"], mem["decode_bytes"], "{mem}");
 
     // `estimate` reports the same block on the same profile — and its sampling plan
     // reaches the model rather than being a constant: the film-base term scales
@@ -5484,35 +5417,14 @@ fn memory_preflight_reports_the_estimate_and_budget_decision() {
     assert_eq!(small["encode_bytes"], 0);
     assert_eq!(small["accounted_bytes"], small["decode_bytes"]);
 
-    let (code, stdout, err) = run(&[
-        "estimate",
-        fixture("hdr-48bit.tif").to_str().unwrap(),
-        "--grid",
-    ]);
+    // With no source flag, `estimate` counts the effective area into a fixed-size
+    // histogram rather than gathering it, so it is charged no sample at all.
+    let (code, stdout, err) = run(&["estimate", fixture("hdr-48bit.tif").to_str().unwrap()]);
     assert_eq!(code, 0, "{err}");
-    let grid = json(&stdout)["memory"].clone();
-    // `--grid` over the whole frame samples five cells one at a time, so it is
-    // charged for one cell (~1/16 of the frame) — more than a 60x60 rectangle, but
-    // far less than the whole frame, and on a fixture this small still under
-    // decode's 18 B/px. (An earlier model charged the whole enclosing rectangle,
-    // a ~16x over-count that made this phase the peak here.)
+    let area = json(&stdout)["memory"].clone();
     assert!(
-        grid["film_base_bytes"].as_u64().unwrap() > small["film_base_bytes"].as_u64().unwrap(),
-        "a whole-frame grid must cost more than a 60x60 rectangle:\n{grid}\n{small}"
-    );
-    let whole_frame_sample = 12 * 502 * 462; // if it charged the whole rectangle
-    assert!(
-        grid["film_base_bytes"].as_u64().unwrap()
-            < grid["decode_bytes"].as_u64().unwrap() + whole_frame_sample,
-        "a grid cell must cost far less than the whole rectangle:\n{grid}"
-    );
-    assert_eq!(
-        grid["accounted_bytes"].as_u64().unwrap(),
-        grid["decode_bytes"]
-            .as_u64()
-            .unwrap()
-            .max(grid["film_base_bytes"].as_u64().unwrap()),
-        "accounted is the max over phases:\n{grid}"
+        area["film_base_bytes"].as_u64().unwrap() < small["film_base_bytes"].as_u64().unwrap(),
+        "the area measurement must cost less than a gathered 60x60 rectangle:\n{area}\n{small}"
     );
 }
 
@@ -5966,9 +5878,8 @@ fn convert_requires_a_stated_film_base_but_estimate_does_not() {
         "nothing may be written on the fast-fail path"
     );
 
-    // The same run with a stated base gets past the gate. (This fixture is
-    // synthetic and has no rebate band, so `--auto-base` would legitimately fail
-    // in the *detector*; an explicit base isolates the gate under test.)
+    // The same run with a stated base gets past the gate; an explicit base isolates
+    // the gate under test.
     let (code, _stdout, err) = run(&[
         "convert",
         scan.to_str().unwrap(),
@@ -5981,9 +5892,8 @@ fn convert_requires_a_stated_film_base_but_estimate_does_not() {
     assert!(out.exists());
 
     // `estimate` exists to *produce* a base, so it must not require one —
-    // otherwise the documented "measure once, reuse" workflow is circular. It
-    // resolves the unstated source to `auto` and reaches the detector, which on
-    // this rebate-less fixture fails on its own merits (exit 1, not exit 2).
+    // otherwise the documented "measure once, reuse" workflow is circular. With no
+    // source it measures the frame's effective area.
     let (code, _stdout, err) = run(&["estimate", scan.to_str().unwrap()]);
     assert_ne!(
         code, 2,
@@ -5998,9 +5908,9 @@ fn convert_requires_a_stated_film_base_but_estimate_does_not() {
 #[test]
 fn roll_requires_a_stated_film_base_and_says_so_in_roll_terms() {
     // `roll` converts, so it must state a base too — but `RollArgs` accepts none
-    // of the three film-base flags, so the diagnosis has to point at the shared
-    // `--params` recipe. A message naming `--auto-base` here would be advice the
-    // user cannot follow (that flag exits 2 on `roll`).
+    // of the film-base flags, so the diagnosis has to point at the shared
+    // `--params` recipe. A message naming a flag here would be advice the user
+    // cannot follow.
     let tmp = TempDir::new("roll-stated-base");
     let out_dir = tmp.path("out");
     let scan = fixture("hdr-48bit.tif");
@@ -6020,11 +5930,11 @@ fn roll_requires_a_stated_film_base_and_says_so_in_roll_terms() {
         err.contains("--params") && err.contains("calibration.film_base"),
         "roll's message must send the user to the shared recipe: {err}"
     );
-    // The flags it does not have must not be offered as the way out. (`--base-region`
-    // does appear, but only inside the recommended `hanten estimate` invocation — a
-    // different command, which accepts it.)
+    // The flags it does not have must not be offered as the way out.
     assert!(
-        !err.contains("--auto-base") && !err.contains("--film-base"),
+        !err.contains("--auto-base")
+            && !err.contains("--film-base")
+            && !err.contains("--base-region"),
         "roll must not advise flags it rejects: {err}"
     );
     assert!(
@@ -6790,8 +6700,8 @@ fn ir_holder_detection_is_decided_by_measurement_not_by_declaration() {
         "an IR-transparent frame must measure usable undeclared: {report}"
     );
     assert!(
-        report["holder_mask"].is_array(),
-        "the holder mask must build with no --film-type: {report}"
+        report["effective_area"]["holder"].is_object(),
+        "the holder must be measured with no --film-type: {report}"
     );
 
     // A declaration is echoed back rather than parsed and dropped: `inspect` and
@@ -6812,8 +6722,6 @@ fn ir_holder_detection_is_decided_by_measurement_not_by_declaration() {
         "estimate",
         "--film-type",
         "silver",
-        // A region, not `--auto-base`: this fixture is uniform, so auto has no
-        // rebate to find and would refuse before emitting a report.
         "--base-region",
         "20,20,40,40",
         clear.to_str().unwrap(),
@@ -6835,8 +6743,8 @@ fn ir_holder_detection_is_decided_by_measurement_not_by_declaration() {
         let mut without = report.clone();
         // Wall-clock legitimately differs run to run, and `film_type` is the
         // declaration itself echoed back as provenance. Everything else — the
-        // verdict, the mask, the candidates — must be identical: the declaration
-        // is recorded, and it decides nothing.
+        // verdict, the measured holder — must be identical: the declaration is
+        // recorded, and it decides nothing.
         for k in ["elapsed_ms", "film_type"] {
             with_flag[k] = serde_json::Value::Null;
             without[k] = serde_json::Value::Null;
@@ -6849,7 +6757,7 @@ fn ir_holder_detection_is_decided_by_measurement_not_by_declaration() {
 
     // A frame whose own film is IR-opaque — the Ilford HP5 leader, interior median
     // 0.0165. Holder and film are indistinguishable, so the plane is refused and
-    // detection falls back to RGB-only rather than labelling the film holder.
+    // the holder is not measured rather than the film labelled holder.
     let opaque = dir.path("opaque.tif");
     write_hdri_with_uniform_ir(&opaque, 200, 200, [20000, 12000, 8000], 1_081);
     let (code, stdout, _err) = run(&["inspect", opaque.to_str().unwrap()]);
@@ -6857,8 +6765,8 @@ fn ir_holder_detection_is_decided_by_measurement_not_by_declaration() {
     let report = json(&stdout);
     assert_eq!(report["ir_separability"]["usable"], false);
     assert!(
-        report["holder_mask"].is_null(),
-        "an opaque IR plane must build no mask: {report}"
+        report["effective_area"]["holder"].is_null(),
+        "an opaque IR plane must measure no holder: {report}"
     );
     let warnings = report["warnings"].as_array().unwrap();
     assert!(
@@ -6871,161 +6779,172 @@ fn ir_holder_detection_is_decided_by_measurement_not_by_declaration() {
     );
 }
 
-/// The measured verdict is not just reported — it decides whether `convert`
-/// actually consumes the IR plane for the film base, which is what clears the
-/// "IR preserved but not used" warning under `--strict`.
+/// `estimate` with no source flag measures an unexposed frame over its effective
+/// area at the median (`film-base/holder-masked-measurement`): the IR-measured holder
+/// is cut per edge, and the holder's own pixels contribute nothing.
 #[test]
-fn a_usable_ir_plane_is_consumed_by_the_auto_film_base() {
-    let dir = TempDir::new("ir-usability-convert");
+fn estimate_measures_an_unexposed_frame_over_its_effective_area() {
+    let dir = TempDir::new("estimate-area");
+    let dark = dir.path("dark-holder.tif");
+    let bright = dir.path("bright-holder.tif");
+    write_hdri_unexposed(&dark, 41_000, [655, 655, 655]);
+    write_hdri_unexposed(&bright, 41_000, [65535, 65535, 65535]);
 
-    // Film IR-transparent (0.63): the holder mask applies, so the plane is
-    // consumed and no "carried but unused" warning is left for --strict to promote.
-    let usable = dir.path("usable.tif");
-    write_hdri_scan_with_rebate(&usable, 41_000, false);
-    let out = dir.path("usable-out.tif");
-    let (code, stdout, err) = run(&[
-        &[
-            "convert",
-            "--auto-base",
-            "--strict",
-            // The synthetic fixture carries no SilverFast XMP, so state the input
-            // semantics the provenance gate would otherwise resolve from it.
-            "--input-transfer",
-            "linear",
-            "--input-meaning",
-            "scanner-device",
-            usable.to_str().unwrap(),
-            "-o",
-            out.to_str().unwrap(),
-        ][..],
-        &MEASURED,
-    ]
-    .concat());
+    let (code, stdout, err) = run(&["estimate", "--strict", dark.to_str().unwrap()]);
     assert_eq!(
         code, 0,
-        "a consumed IR plane must leave --strict clean:\n{err}"
+        "a clean unexposed frame must pass --strict:\n{err}"
     );
     let report = json(&stdout);
-    assert_eq!(
-        report["ir_separability"]["usable"],
-        serde_json::Value::Null,
-        "the verdict is an `inspect` diagnostic, not a convert report field"
-    );
+    assert_eq!(report["film_base_source"], "effective_area", "{report}");
+    assert_eq!(report["film_base_percentile"], 0.5, "{report}");
+    let area = &report["effective_area"];
+    assert_eq!(area["holder_applied"], true, "{report}");
     assert!(
-        report["warnings"].as_array().is_none_or(|ws| ws
-            .iter()
-            .all(|w| !w.as_str().unwrap().contains("preserved but not used"))),
-        "the IR plane was consumed, so it must not be reported unused: {report}"
+        area["holder"]["left"].as_u64().unwrap() > area["holder"]["right"].as_u64().unwrap(),
+        "the holder is cut per edge, not to the worst edge everywhere: {report}"
     );
+    assert!(report["film_base_flag"].is_string(), "{report}");
 
-    // The other side of that claim, and why consumption must be read off stage 2
-    // rather than predicted from the inputs: the same frame with the holder on
-    // *every* edge is marker-verified and measures usable, yet produces no mask
-    // (the all-holder fallback). Predicting consumption from those three facts
-    // suppressed this warning — and with it `--strict` — on exactly this case.
-    let all_holder = dir.path("all-holder.tif");
-    write_hdri_scan_with_rebate(&all_holder, 41_000, true);
-    let (code, stdout, err) = run(&[
-        &[
-            "convert",
-            "--auto-base",
-            "--strict",
-            "--input-transfer",
-            "linear",
-            "--input-meaning",
-            "scanner-device",
-            all_holder.to_str().unwrap(),
-            "-o",
-            dir.path("all-holder-out.tif").to_str().unwrap(),
-        ][..],
-        &MEASURED,
-    ]
-    .concat());
-    assert_eq!(
-        code, 1,
-        "an unconsumed IR plane must still fail --strict:\n{err}"
-    );
+    // The holder's RGB is extreme on the other side, and the base does not move.
+    let (code, stdout, err) = run(&["estimate", bright.to_str().unwrap()]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(json(&stdout)["film_base"], report["film_base"]);
+
+    // Film too IR-opaque to tell from the holder: the holder is not measured, the
+    // area is the inset alone, and the report says so — a warning `--strict` fails.
+    let opaque = dir.path("opaque.tif");
+    write_hdri_unexposed(&opaque, 1_081, [655, 655, 655]);
+    let (code, stdout, _err) = run(&["estimate", "--strict", opaque.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    let report = json(&stdout);
+    assert!(report["effective_area"]["holder"].is_null(), "{report}");
     assert!(
-        json(&stdout)["warnings"]
+        report["warnings"].as_array().unwrap().iter().any(|w| {
+            let w = w.as_str().unwrap();
+            w.contains("the film holder was not measured")
+                && w.contains("cannot separate the holder")
+                && w.contains("--measure-inset")
+        }),
+        "{report}"
+    );
+}
+
+/// No conversion reads the IR plane: a stated base reads no holder, and the
+/// effective area reaches no pixel. So `--strict` fails on the carried plane unless
+/// `--export-ir` takes it.
+#[test]
+fn a_conversion_never_consumes_the_ir_plane() {
+    let dir = TempDir::new("ir-convert");
+    let scan = dir.path("scan.tif");
+    write_hdri_unexposed(&scan, 41_000, [655, 655, 655]);
+    let convert = |extra: &[&str]| {
+        run(&[
+            &[
+                "convert",
+                "--film-base",
+                "0.53,0.26,0.16",
+                "--strict",
+                // The synthetic fixture carries no SilverFast XMP, so state the input
+                // semantics the provenance gate would otherwise resolve from it.
+                "--input-transfer",
+                "linear",
+                "--input-meaning",
+                "scanner-device",
+                scan.to_str().unwrap(),
+                "-o",
+                dir.path("out.tif").to_str().unwrap(),
+            ][..],
+            &MEASURED,
+            extra,
+        ]
+        .concat())
+    };
+    let (code, stdout, _err) = convert(&[]);
+    assert_eq!(code, 1, "an unconsumed IR plane must fail --strict");
+    let report = json(&stdout);
+    assert_eq!(report["effective_area"]["holder_applied"], true, "{report}");
+    assert!(
+        report["warnings"]
             .as_array()
             .unwrap()
             .iter()
             .any(|w| w.as_str().unwrap().contains("preserved but not used")),
-        "the fallback leaves the plane unused, and that must be reported:\n{stdout}"
+        "{report}"
     );
 
-    // The same geometry with IR-opaque film: the plane cannot separate holder from
-    // film, so detection falls back to RGB-only and says why. The base still
-    // resolves — the fallback is the path that was always there.
-    let opaque = dir.path("opaque.tif");
-    write_hdri_scan_with_rebate(&opaque, 1_081, false);
-    let out = dir.path("opaque-out.tif");
-    let (code, stdout, err) = run(&[
-        "convert",
-        "--auto-base",
-        "--input-transfer",
-        "linear",
-        "--input-meaning",
-        "scanner-device",
-        opaque.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "the RGB-only fallback must still convert:\n{err}");
-    let report = json(&stdout);
-    let warnings = report["warnings"].as_array().unwrap();
-    assert!(
-        warnings.iter().any(|w| w
-            .as_str()
-            .unwrap()
-            .contains("cannot separate the film holder")),
-        "the fallback must be reported, not silent: {warnings:?}"
-    );
-    // Both frames resolve the same base: the rebate is where it always was, and
-    // the mask only ever restricted *where* the search looked.
-    let usable_base =
-        json(&run(&["estimate", "--auto-base", usable.to_str().unwrap()]).1)["film_base"].clone();
-    assert_eq!(usable_base, report["film_base"]);
-}
-
-/// `--export-ir` is the documented escape hatch that keeps `--strict` usable on an
-/// HDRi scan: the user is taking the plane themselves, so no IR note may fire —
-/// including the fallback notes for a plane that cannot serve holder detection.
-#[test]
-fn export_ir_keeps_strict_clean_when_the_plane_cannot_serve_detection() {
-    let dir = TempDir::new("ir-export-strict");
-    let opaque = dir.path("opaque.tif");
-    write_hdri_scan_with_rebate(&opaque, 1_081, false); // film itself IR-opaque
-    let (code, _stdout, err) = run(&[
-        &[
-            "convert",
-            "--auto-base",
-            "--strict",
-            "--export-ir",
-            dir.path("ir.tif").to_str().unwrap(),
-            "--input-transfer",
-            "linear",
-            "--input-meaning",
-            "scanner-device",
-            opaque.to_str().unwrap(),
-            "-o",
-            dir.path("out.tif").to_str().unwrap(),
-        ][..],
-        &MEASURED,
-    ]
-    .concat());
+    let (code, _stdout, err) = convert(&["--export-ir", dir.path("ir.tif").to_str().unwrap()]);
     assert_eq!(
         code, 0,
         "--strict --export-ir must stay usable on an HDRi scan:\n{err}"
     );
 }
 
-/// A holder that occludes every edge leaves the masked rebate search nothing to
-/// scan, which is strictly worse than not masking. The mask falls back rather than
-/// claiming a mask it doesn't have — and the holder *march*, which does not inherit
-/// that decline, measures the ring instead, so the plane is still consumed.
+/// The removed film-base paths exit 2 with a remedy the command accepts, never
+/// clap's or serde's generic error.
 #[test]
-fn an_all_holder_border_falls_back_instead_of_emptying_the_search() {
+fn the_retired_film_base_paths_name_the_measurement_that_replaced_them() {
+    let dir = TempDir::new("retired-base");
+    let fix = fixture("hdr-48bit.tif");
+    let out = dir.path("out.tif");
+
+    let (code, _o, err) = run(&[
+        "convert",
+        "--auto-base",
+        fix.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--auto-base was removed"), "{err}");
+    assert!(err.contains("hanten estimate <unexposed-frame>"), "{err}");
+    assert!(err.contains("--film-base R,G,B"), "{err}");
+
+    for flag in ["--auto-base", "--grid"] {
+        let (code, _o, err) = run(&["estimate", flag, fix.to_str().unwrap()]);
+        assert_eq!(code, 2, "{flag}: {err}");
+        assert!(err.contains(&format!("{flag} was removed")), "{err}");
+        assert!(err.contains("Drop the flag"), "{err}");
+    }
+
+    // A recipe reaches `roll` too, which has no flags: the remedy is a recipe value.
+    let recipe = dir.path("auto.json");
+    std::fs::write(
+        &recipe,
+        r#"{"recipe_version": 2, "calibration": {"film_base": "auto"}}"#,
+    )
+    .unwrap();
+    for argv in [
+        vec![
+            "convert",
+            "--params",
+            recipe.to_str().unwrap(),
+            fix.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ],
+        vec![
+            "roll",
+            "--params",
+            recipe.to_str().unwrap(),
+            "-o",
+            dir.path("roll").to_str().unwrap(),
+            fix.to_str().unwrap(),
+        ],
+    ] {
+        let (code, _o, err) = run(&argv);
+        assert_eq!(code, 2, "{argv:?}: {err}");
+        assert!(err.contains("`calibration.film_base` \"auto\""), "{err}");
+        assert!(err.contains(r#"{"explicit": [r, g, b]}"#), "{err}");
+        assert!(!err.contains("unknown variant"), "{err}");
+    }
+}
+
+/// `inspect` measures the holder ring even where every along-edge segment reads
+/// holder at the edge — the normal case — and a plane the march read is not
+/// reported as unused.
+#[test]
+fn inspect_measures_a_holder_ring_and_counts_the_plane_as_read() {
     let dir = TempDir::new("ir-all-holder");
     let path = dir.path("ringed.tif");
     const W: u32 = 200;
@@ -7055,31 +6974,20 @@ fn an_all_holder_border_falls_back_instead_of_emptying_the_search() {
         report["ir_separability"]["usable"], true,
         "the frame's film is IR-transparent, so the verdict must be usable: {report}"
     );
-    assert!(
-        report["holder_mask"].is_null(),
-        "an all-holder mask must fall back rather than be reported: {report}"
-    );
-    // The plane is still consumed — by the *other* IR reader. The holder march
-    // deliberately does not inherit the mask's all-holder decline, so it measures
-    // the ring and moves the reported rectangle. Keying the note on the mask alone
-    // made one report carry both a measured `effective_area.holder` and "preserved
-    // but not used" (`film-base/holder-depth-mask` review, 2026-09-17).
     let area = &report["effective_area"];
     assert_eq!(
         area["holder_applied"], true,
-        "the march must measure the ring the mask declined: {report}"
+        "the march must measure the ring: {report}"
     );
     assert!(
         area["holder"]["left"].as_u64().unwrap() > 0,
         "and report a real depth for it: {report}"
     );
     assert!(
-        !report["warnings"]
-            .as_array()
-            .unwrap()
+        report["warnings"].as_array().is_none_or(|ws| ws
             .iter()
-            .any(|w| w.as_str().unwrap().contains("preserved but not used")),
-        "a plane the march consumed must not be reported as unused: {report}"
+            .all(|w| !w.as_str().unwrap().contains("preserved but not used"))),
+        "a plane the march read must not be reported as unused: {report}"
     );
 }
 
@@ -9856,7 +9764,9 @@ fn measure_roll_refuses_what_it_cannot_measure_under() {
     assert_eq!(code, 2, "{err}");
     assert!(stdout.is_empty());
     assert!(
-        err.contains("film base stated explicitly") && err.contains("estimate --grid"),
+        err.contains("film base stated explicitly")
+            && err.contains("hanten estimate <unexposed-frame>")
+            && !err.contains("--grid"),
         "{err}"
     );
 

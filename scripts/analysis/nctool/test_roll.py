@@ -159,7 +159,7 @@ class TestConvert(unittest.TestCase):
 
     def args(self, **updates):
         values = dict(asset_root=str(self.root), roll="R", nc="fake-nc", config="test",
-                      out_dir=None, recipe=None, dmin_region=None, dmin_mode="grid",
+                      out_dir=None, recipe=None, dmin_region=None, dmin_mode="area",
                       film_type=None, film_master=False, range=None, transfer=None,
                       gamut=None, container=None, exposure=None,
                       max_memory="1GiB", strict_estimate=False, strict_roll=False)
@@ -187,13 +187,17 @@ class TestConvert(unittest.TestCase):
     }
 
     defaults = DEFAULTS
+    #: What the fake build's sourceless `estimate` reports it measured.
+    area_source = "effective_area"
 
     def fake_run(self, argv, **_kwargs):
         if argv[1] == "params":
             return mock.Mock(returncode=0, stdout=json.dumps(self.defaults), stderr="")
         if argv[1] == "estimate":
-            return mock.Mock(returncode=0, stdout=json.dumps({
-                "film_base": {"r": .1, "g": .2, "b": .3}}), stderr="")
+            report = {"film_base": {"r": .1, "g": .2, "b": .3}}
+            if "--base-region" not in argv:
+                report["film_base_source"] = self.area_source
+            return mock.Mock(returncode=0, stdout=json.dumps(report), stderr="")
         self.assertEqual(argv[1], "roll")
         report_path = Path(argv[argv.index("--report-file") + 1])
         inputs = argv[2:argv.index("--out-dir")]
@@ -232,11 +236,15 @@ class TestConvert(unittest.TestCase):
         self.assertEqual(recipe["calibration"], {"film_base": {"explicit": [.1, .2, .3]}})
         # Only the unexposed frame is estimated; a manifest leader is not measured.
         self.assertEqual(len([a for a in seen if a[1] == "estimate"]), 1)
-        self.assertEqual(calibration["dmin"]["region"], "10,8,80,64")
-        self.assertEqual(calibration["dmin"]["mode"], "grid")
+        # The default measures the effective area: no region, no grid.
+        dmin_argv = next(a for a in seen if a[1] == "estimate")
+        self.assertNotIn("--base-region", dmin_argv)
+        self.assertNotIn("--grid", dmin_argv)
+        self.assertIsNone(calibration["dmin"]["region"])
+        self.assertEqual(calibration["dmin"]["mode"], "area")
         self.assertNotIn("dmax", calibration)
         self.assertEqual(tags["calibration"], {"dmin": {
-            "frame": "rolls/R/u.tif", "region": "10,8,80,64", "mode": "grid",
+            "frame": "rolls/R/u.tif", "region": None, "mode": "area",
             "value": [.1, .2, .3]}})
         self.assertEqual(json.loads(out.getvalue())["config"], "test")
 
@@ -288,6 +296,50 @@ class TestConvert(unittest.TestCase):
         self.assertEqual(code, 0, err.getvalue())
         tags = json.loads((self.root / "converted/nc/noleader/R/tags.json").read_text())
         self.assertNotIn("rolls/R/l.tif", [f["file"] for f in tags["source_frames"]])
+
+    def test_grid_mode_reads_the_default_region_with_the_grid(self):
+        seen = []
+
+        def capture(argv, **kwargs):
+            seen.append(argv)
+            return self.fake_run(argv, **kwargs)
+
+        with mock.patch.object(roll.subprocess, "run", side_effect=capture), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = roll.cmd_convert(self.args(config="grid", dmin_mode="grid"))
+        self.assertEqual(code, 0)
+        dmin_argv = next(argv for argv in seen if argv[1] == "estimate")
+        self.assertIn("--grid", dmin_argv)
+        self.assertEqual(dmin_argv[dmin_argv.index("--base-region") + 1], "10,8,80,64")
+
+    def test_area_mode_refuses_a_build_that_did_not_measure_the_area(self):
+        # An older build's sourceless `estimate` runs the rebate search instead.
+        self.area_source = "auto"
+        with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            code = roll.cmd_convert(self.args(config="old"))
+        self.assertEqual(code, 1)
+        self.assertIn("--dmin-mode grid", err.getvalue())
+
+    def test_the_mode_hint_names_a_remedy_only_for_a_build_mismatch(self):
+        hint = roll._build_mismatch_hint
+        self.assertIn("--dmin-mode area",
+                      hint("grid", "usage: --grid was removed: with no source flag"))
+        self.assertIn("--dmin-mode grid",
+                      hint("area", "auto film-base detection found no uniform band"))
+        # A frame's own failure is not a build mismatch: no mode is offered.
+        for mode in ("area", "grid"):
+            self.assertEqual(hint(mode, "--strict: 1 warning(s) present (see report)"), "")
+            self.assertEqual(hint(mode, "the measurement region is empty"), "")
+
+    def test_area_mode_refuses_a_region(self):
+        with contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as err, \
+             mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run):
+            code = roll.cmd_convert(self.args(config="x", dmin_region="1,1,5,5"))
+        self.assertEqual(code, 2)
+        self.assertIn("--dmin-region applies to", err.getvalue())
 
     def test_region_mode_omits_grid_flag(self):
         seen = []

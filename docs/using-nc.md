@@ -9,8 +9,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 8`, on branch
-> `telemetry/schema-v2` (telemetry success/failure events, §10), after
-> `nf-core/report-contract` (the report's `chain` block and recipe, §10),
+> `film-base/holder-masked-measurement` (`estimate` measures the effective area; the
+> `auto` film base retired, §4), after `telemetry/schema-v2` (telemetry success/failure
+> events, §10), `nf-core/report-contract` (the report's `chain` block and recipe, §10),
 > `nf-core/default-flip` (the rendering chain of [`design-update.md`](design-update.md)
 > became the only one), `nf-calibration/roll-section` and
 > `nf-destinations/direct-preset` (§7). The staleness signal is `pipeline_version`: if
@@ -121,7 +122,7 @@ guaranteed byte-identical within one build and architecture.
 
 | Command | Purpose | Writes an image? |
 |---|---|---|
-| `hanten inspect` | **"What is this file?"** — format, dimensions, IR presence, scanner metadata, resolved input semantics, candidate rebate regions. | No |
+| `hanten inspect` | **"What is this file?"** — format, dimensions, IR presence, scanner metadata, resolved input semantics, the effective area. | No |
 | `hanten estimate` | **"What number do I freeze?"** — measure the film base (`Dmin`). Prints **reuse-ready** flag and recipe forms. | No |
 | `hanten params` | Print the full default recipe as JSON — the scaffolding starting point. | No |
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
@@ -134,8 +135,8 @@ flags at all and just prints the default recipe. Logs and warnings go to
 **stderr**, so stdout stays clean for piping into `jq`.
 
 > **A hard failure emits no report at all** — stdout is empty. A decode error, a
-> memory refusal, or a measurement that fails (`estimate` finding no rebate band)
-> exits non-zero before the report is written. Only `roll` is different: it
+> memory refusal, or a measurement that fails (`estimate` on a frame with no usable
+> signal) exits non-zero before the report is written. Only `roll` is different: it
 > aggregates per-frame failures into its report and still emits it. So a script
 > must check the exit code, not just parse stdout.
 
@@ -154,20 +155,10 @@ present (HDRi 64-bit input), the scanner make/model/software, the SilverFast XMP
 mode metadata, and — importantly — how `hanten` **resolved the input semantics**
 (`transfer` and `meaning`) with the evidence behind each.
 
-`inspect` is non-fatal by design: if a rebate band is detectable it suggests a
-`Dmin`, and if selection *refuses* it still reports the candidate rectangles it
-found:
-
-```sh
-hanten inspect scan.tif | jq '.base_candidates'
-```
-
-Confirm one of those rectangles and pass it to step 2 as `--base-region` — that
-saves measuring coordinates by hand on a scan where auto-detection won't commit.
-
-`inspect` also reports the **effective area** — the region `hanten` reads measurements
-over, after the film holder and a border inset are removed. Worth a look on any
-uncropped scan; see [The measurement region](#the-measurement-region-the-effective-area).
+`inspect` measures no film base. It does report the **effective area** — the region
+`hanten` reads measurements over, after the film holder and a border inset are
+removed — which is what `estimate` measures in step 2. Worth a look on any uncropped
+scan; see [The measurement region](#the-measurement-region-the-effective-area).
 
 ### Step 2 — Measure the film base
 
@@ -176,47 +167,50 @@ film base — there is no default, because `Dmin` is the divisor of the density
 conversion and sets the black point and the colour balance together:
 
 ```
-usage: no film base selected: pass --film-base R,G,B (a Dmin measured once per
-       roll, e.g. with `hanten estimate`), --base-region X,Y,W,H to sample an
-       unexposed border, or --auto-base to detect the rebate band …
+usage: no film base selected: pass --film-base R,G,B (a Dmin measured once per roll
+       with `hanten estimate <unexposed-frame>`), or --base-region X,Y,W,H to read it
+       from a region of unexposed film. Recipe key: `calibration.film_base`.
 ```
 
-`estimate` and `inspect` are the deliberate exceptions — `estimate` exists to
-*produce* a base, so it still resolves an unstated source to `auto`, and `inspect`
-always runs the detector. Requiring a base there would make the measure-once
-workflow circular.
+`estimate` is the one command that measures a base, from one of two sources:
 
-Three sources, in descending order of reliability:
-
-**(a) An unexposed reference frame** — the best option. Use `--grid` to sample five
-cells (corners + center) and cross-check them:
+**(a) An unexposed frame** — the intended source. With no source flag, `estimate`
+takes the per-channel **median** over the frame's effective area (§9):
 
 ```sh
-hanten estimate unexposed-leader.tif --grid
+hanten estimate unexposed.tif
 ```
 
-Disagreement between cells warns loudly — that diagnoses light leaks, illumination
-falloff, or dust *before* it silently poisons a whole roll.
+Over unexposed film the area is one population — the base plus grain and scanner
+noise — so the median is the base, where a high percentile would land in the noise
+tail and understate every density. The report says `"film_base_source":
+"effective_area"` and `"film_base_percentile": 0.5`. A frame that is not unexposed
+film warns (`--strict` fails on it):
 
-**(b) A known border region** on a normal frame:
+```
+hanten: warning: the effective area is not uniform (worst per-channel spread
+(p90 - p10) / p50 = 1.84 > 0.50): it does not look like unexposed film, so the
+median over it is not a film base. …
+```
+
+It is a coarse guard — it catches a picture frame, not a leader — so point it at the
+right frame. A scan whose holder was not measured also warns — every 48-bit scan
+(no IR plane), and an HDRi scan whose IR plane could not do it: the area is then the
+inset alone, so raise `--measure-inset` if the holder reaches past it.
+
+**(b) A region of unexposed film** on another frame — the fallback for a roll with
+no unexposed frame:
 
 ```sh
 hanten estimate scan.tif --base-region 0,0,24,24
 ```
 
-`hanten` checks the rectangle for uniformity and warns if it looks like it mixes rebate
-with image content.
+A drawn rectangle may mix holder, film and picture, so the region is read at its
+**97th percentile** (`"film_base_percentile": 0.97`), and `hanten` warns if the
+rectangle is not uniform.
 
-**(c) Auto-detection** — scans inward for the unexposed rebate band behind the
-film holder. Still one flag; what's gone is arriving there by omission:
-
-```sh
-hanten estimate scan.tif --auto-base
-```
-
-> **Real scans are laid out `dark holder → thin inset rebate → picture`** — the
-> rebate is *not* the outer margin. Auto-detection is therefore best-effort and
-> **fails loudly** rather than guessing. Prefer (a) or (b) for production work.
+`--auto-base` and `--grid` (and a recipe's `"film_base": "auto"`) were removed with
+the rebate search and exit 2; `estimate` with no flag replaces both.
 
 Either way, `estimate` hands you the result in **reuse-ready form**:
 
@@ -270,10 +264,10 @@ scaffold to edit.
 
 > **`--dump-params` writes what you stated**, and it replays byte-identically. A knob
 > you left unstated stays `null`, so the rendering still decides it on replay. A
-> measured value is frozen only if you stated it: a run with `--auto-base` dumps
-> `"auto"`, not the base it found, so a recipe dumped from an auto run **re-measures
-> on every frame of the roll** — exactly what `roll` exists to prevent. State the
-> numbers `estimate` and `measure-roll` print.
+> measured value is frozen only if you stated it: a run with `--base-region` dumps
+> the region, not the base it read, so a recipe dumped from it **re-reads the base on
+> every frame of the roll** — exactly what `roll` exists to prevent (`roll` warns
+> "roll film base is NOT frozen"). State the numbers `estimate` and `measure-roll` print.
 
 ### Step 4 — Apply to the whole roll
 
@@ -380,9 +374,10 @@ usage: recipe old.json: a recipe must state `"recipe_version": 2`. A document wi
        it — every sidecar and `--dump-params` file written before `pipeline_version` 8
        — describes the rendering chain that version removed, and there is no
        converter. `hanten params` writes the current layout: `input`, `measure` and
-       `calibration.film_base` carry over unchanged, and the rest is a stage section
-       each (`reconstruction`, `scene_correction`, `look`, `fit_range`) plus `output`,
-       the destination
+       a `region` or `explicit` `calibration.film_base` carry over unchanged (an
+       `"auto"` one retired: measure the base with `hanten estimate
+       <unexposed-frame>`), and the rest is a stage section each (`reconstruction`,
+       `scene_correction`, `look`, `fit_range`) plus `output`, the destination
 ```
 
 Carry the film base across by hand; render the old recipe itself with the reference
@@ -1045,7 +1040,7 @@ linearization, for comparison only.
   `--params` recipe (`"recipe_version": 2`, whose `reconstruction` it decodes under;
   its `roll` section, which this measures, and its `scene_correction` and `look` are
   not read). A base estimated per frame would decode every frame differently, so
-  anything else is refused (exit 2) pointing at `estimate --grid`.
+  anything else is refused (exit 2).
 
 ---
 
@@ -1239,16 +1234,17 @@ has no validated placement in the pipeline yet.
 
 ### IR (HDRi 64-bit input)
 
-The IR plane is decoded and **preserved but not acted on** by default, with one
-exception that needs nothing from you:
+The IR plane is decoded and **preserved, but no rendered pixel depends on it**:
 
 - `--export-ir PATH` writes the decoded plane out. **`convert` only** — `roll`
   rejects `input.export_ir`, because one path cannot serve every frame, so IR
   planes have to be exported frame by frame.
-- **IR-assisted film-holder detection** runs by itself when the plane can do the
-  job. Hanten measures the interior IR transmission and, if the film reads
-  IR-transparent, masks the opaque holder off before the auto rebate search.
-  There is nothing to declare — `--film-type` does **not** gate it.
+- **IR film-holder measurement** runs by itself when the plane can do the job: it
+  is the first cut of the [effective area](#the-measurement-region-the-effective-area),
+  which `estimate` and `measure-roll` measure over. Hanten measures the interior IR
+  transmission and, if the film reads IR-transparent, marches in from each edge to
+  where the opaque holder ends. There is nothing to declare — `--film-type` does
+  **not** gate it.
 
   `--film-type silver|chromogenic|unknown` still exists on `convert`, `estimate`
   and `inspect` (recipe key `input.film_type`), as a **provenance declaration**:
@@ -1258,8 +1254,8 @@ exception that needs nothing from you:
   `input.film_type`. Leave it out otherwise. Planned IR dust removal will need the same
   declaration, which is why it stays.
 
-  `hanten inspect` and `hanten estimate` report the verdict, and `inspect` adds the
-  per-edge mask when it passes:
+  `hanten inspect` and `hanten estimate` report the verdict (the per-edge depths are
+  `effective_area.holder`):
 
   ```sh
   hanten inspect scan.tif | jq -c '.ir_separability'
@@ -1268,19 +1264,11 @@ exception that needs nothing from you:
   {"interior_median":0.67963684,"usable":true}
   ```
 
-  ```sh
-  hanten inspect scan.tif | jq -c '.holder_mask[0].segments[0]'
-  ```
-  ```json
-  {"span":[0,20],"class":"film","ir":0.6301823}
-  ```
-
   When the film itself is opaque to IR — a fully-exposed silver-halide frame, say
-  — holder and film cannot be told apart, so detection falls back to RGB-only and
-  says so, naming the measurement. The same happens for an IR page identified by
-  shape alone (no `NewSubfileType=4` marker), which is never trusted for
-  detection, and for a holder that wraps all four edges: masking it away would
-  leave nothing to search, so the RGB-only search runs instead.
+  — holder and film cannot be told apart, so the holder is not measured and
+  `inspect` and `estimate` say so, naming the measurement: the effective area is then
+  the inset alone. The same happens for an IR page identified by shape alone (no
+  `NewSubfileType=4` marker), which is never trusted.
 
   Why measured and not declared: silver blocks IR *in proportion to accumulated
   density*, so an **unexposed** silver frame is IR-transparent against an opaque
@@ -1293,9 +1281,9 @@ IR-based dust removal is not implemented.
 
 A region `hanten` resolves on every frame it decodes, so that a measurement reads the
 picture rather than the film holder: on an uncropped scan the holder is maximum
-density, so a whole-frame statistic measures the holder instead. Today only
-`hanten measure-roll` (§7) measures over it; a `convert` resolves and reports it but
-reads nothing over it. The area is two cuts, in order:
+density, so a whole-frame statistic measures the holder instead. `hanten estimate`
+(its film base, §4) and `hanten measure-roll` (§7) measure over it; a `convert`
+resolves and reports it but reads nothing over it. The area is two cuts, in order:
 
 1. **The film holder**, measured per edge from the IR plane — the same separability
    verdict above. Nothing to configure.
@@ -1402,27 +1390,21 @@ Two things this does *not* do:
 - **It never crops the image.** Written dimensions, aspect ratio and pixel count are
   exactly as decoded. The effective area changes only which pixels a statistic is
   computed over.
-- **It never looks for the rebate.** The inset passes over it blind. Where a
-  measurement needs unexposed film, give it a region (`--base-region`) or measure a
-  reference frame.
+- **It never looks for the rebate.** The inset passes over it blind. That is why
+  `estimate` wants an unexposed frame, where the whole area is unexposed film; on a
+  picture frame, give it a region (`--base-region`).
 
 Every command that decodes resolves the area and reports it; a conversion reads
-nothing over it (its one consumer, the per-frame auto `Dmax`, retired). So if the two
-cuts leave **nothing**, `convert` and `roll` warn rather than refuse, and the report
+nothing over it. So if the two cuts leave **nothing**, `estimate` (with no source
+flag) refuses (exit 2), but `convert` and `roll` warn rather than refuse, and the report
 omits `effective_area` — there is no region to report, and `--measure-inset` has no
 effect on that run.
 
-> A scan carrying an IR plane that nothing consumes emits an "IR preserved but
-> not used" warning, which **`--strict` promotes to a failure**. One thing in a
-> conversion consumes the plane: **film-base holder detection**, when it actually
-> masked something — the base source must be `auto`, the plane marker-verified and
-> measured usable, *and* the resulting mask must leave some film to search (a holder
-> wrapping all four edges falls back to RGB-only). The effective area's holder march
-> reads the plane too (`holder_applied: true`), but no rendered pixel depends on it,
-> so it does not count.
->
-> So a frozen explicit `--film-base` — the recommended roll workflow — still warns.
-> Either drop `--strict` for those runs, or use `--export-ir` so the plane is consumed.
+> Every `convert` of a scan carrying an IR plane warns "input carries an IR plane; it
+> is preserved but not used in the conversion", which **`--strict` promotes to a
+> failure**. The effective area's holder march reads the plane, but no rendered pixel
+> depends on it, so it does not count. Either drop `--strict` for those runs, or use
+> `--export-ir` so the plane is consumed.
 
 `--export-ir PATH` writes the plane from the decoded image at the destination's depth —
 32-bit float beside a float TIFF, 16-bit otherwise.
@@ -1536,19 +1518,17 @@ when it became the only one; passing it exits 2 on every command.
 **"no film base selected"**
 Neither `convert` nor `roll` has a default film base — but they take it from
 different places. On **`convert`**, pass `--film-base R,G,B` (measured once per
-roll), `--base-region X,Y,W,H`, or `--auto-base`. **`roll` accepts none of those
-flags**: set `calibration.film_base` in the shared `--params` recipe instead.
-`estimate` still defaults to auto, so `hanten estimate scan.tif` remains the way to
-get a value in the first place.
+roll) or `--base-region X,Y,W,H`. **`roll` accepts neither flag**: set
+`calibration.film_base` in the shared `--params` recipe instead. `hanten estimate
+<unexposed-frame>` is the way to get a value in the first place.
 
-**"auto film-base detection found no uniform unexposed rebate band"**
-The scan has no detectable rebate — it's cropped, or the holder covers it. Measure
-the base from a reference frame and pass `--film-base`, or point at a known region
-with `--base-region`. Content-based estimation is planned but not shipped.
+**"the effective area is not uniform … it does not look like unexposed film"**
+`estimate` was given a picture frame. Give it the roll's unexposed frame, or, if the
+roll has none, a region of unexposed film on another frame (`--base-region`).
 
 **"base-region … is not uniform (worst per-channel relative spread …)"**
-Your rectangle mixes rebate with image content. Check the coordinates against
-`hanten inspect`, or use `estimate --grid` on a genuinely unexposed frame.
+Your rectangle mixes unexposed film with image content. Check the coordinates, or run
+`estimate` on a genuinely unexposed frame.
 
 **Heavy clipping in the report**
 Fit range does not clip ordinary content at its default headroom, so something pushed
@@ -1569,12 +1549,9 @@ from `hanten params`, carry `calibration.film_base` across, and render the old r
 itself with the reference build.
 
 **`--strict` fails on every frame of an IR scan**
-Expected — see §9: an unconsumed IR plane warns, and `--strict` promotes it. The
-plane is consumed only when the base source is `auto` *and* the plane is
-marker-verified *and* it measures able to separate holder from film, so a frozen
-explicit `--film-base` — the recommended roll workflow — still warns. Passing
-`--film-type` does not change this; it gates nothing. Either drop `--strict` for
-those runs, or use `--export-ir` so the plane is consumed.
+Expected — see §9: no conversion reads the IR plane, so it warns, and `--strict`
+promotes it. Passing `--film-type` does not change this; it gates nothing. Either
+drop `--strict` for those runs, or use `--export-ir` so the plane is consumed.
 
 **Output differs between two machines**
 Determinism is scoped to one build and architecture. Transcendental FP and the

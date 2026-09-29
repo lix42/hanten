@@ -17,7 +17,7 @@ Converting a roll today takes four commands (one optional) joined by three `jq` 
 
 ```sh
 hanten inspect frame.tif                                         # optional
-hanten estimate unexposed.tif --grid > estimate.json
+hanten estimate unexposed.tif > estimate.json
 jq '{recipe_version: 2, calibration}' estimate.json > base.json  # jq
 hanten measure-roll frames/*.tif --leader leader.tif --params base.json > measure.json
 jq -n --slurpfile b base.json --slurpfile m measure.json \
@@ -87,12 +87,13 @@ already takes every picture frame and the leader; `--unexposed` adds the film ba
 the roll's measurements come from one command and live in one file.
 
 - **One base measurement, not two.** `--unexposed` runs exactly `measure-base`'s code
-  and reports the same evidence (the grid cells, their spread, the warnings).
-- **`--unexposed` measures the whole unexposed frame** with the reference-frame method
-  that `film-base/holder-masked-measurement` and `film-base/tiling-uniformity-validator`
-  settle (today the grid). A user naming another base source (a region, auto) uses
-  `measure-base` and passes its file with `--params`. (Automatic calibration's cascade
-  may still reach region and auto measurement — below.)
+  and reports the same evidence (the effective area, the spread warning, the other
+  warnings).
+- **`--unexposed` measures the whole unexposed frame** with the reference-frame
+  method: the per-channel median over its effective area (`estimate FRAME` with no
+  source flag; `film-base/tiling-uniformity-validator` may add a gradient check). A
+  user stating a region uses `measure-base` and passes its file with `--params`.
+  (Automatic calibration's cascade may still reach region measurement — below.)
 - **A measured base is not overridden.** `--film-base` over a recipe's base layers as
   usual (the flag wins); `--unexposed`, a measurement, is refused beside either. The
   unexposed file is refused among the picture frames, like the leader. A base measured
@@ -104,7 +105,7 @@ the roll's measurements come from one command and live in one file.
 ### `measure-base`
 
 `estimate` measures the film base and nothing else — everything else in its report is
-evidence for that one measurement (source, grid cells, effective area), and the
+evidence for that one measurement (source, method, effective area), and the
 general "what is this file" command is `inspect`. So it is **renamed, not split**. The
 old name is a removed command: it exits 2 naming `measure-base`, never an alias.
 

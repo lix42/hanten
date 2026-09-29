@@ -38,8 +38,8 @@ Stages (no argument runs `freeze → convert → ir → determinism → resource
 
 | Stage | What it does |
 |---|---|
-| `classify` | grid-classify every frame per roll → unexposed / fully-exposed / real |
-| `freeze` | measure per-roll `Dmin` (unexposed frame), write `recipes/` |
+| `classify` | classify every frame per roll by its effective-area median and uniformity → unexposed / fully-exposed / real |
+| `freeze` | measure per-roll `Dmin` (the unexposed frame's effective area, at its median), write `recipes/` |
 | `convert` | roll-convert every real frame, 16-bit + float HDR, into the output dir |
 | `ir` | export the IR plane; check `--strict` promotes warnings to a hard error |
 | `determinism` | re-run byte-identical + `--dump-params` reload byte-identical |

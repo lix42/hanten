@@ -28,9 +28,14 @@ its default (2026-09-28: finding the frames is measurement).
   region on a picture frame → the automatic measurement → cross-frame agreement over
   the roll → drop to single. Content-based estimation (`film-base/content-fallback`)
   is **never** a rung: it is scene-dependent, and is used only on explicit opt-in.
-- **The automatic rung is changing.** `film-base/holder-masked-measurement` rebuilds
-  the base measurement on area × method and retires the rebate-band search, so
-  "try auto" means "measure the effective area", not "detect a rebate".
+- **There is no rebate search to fall back on** (`film-base/holder-masked-measurement`,
+  2026-09-28). The automatic measurement is the effective-area median
+  (`film_base::measure_area`), and it is only a base on an *unexposed* frame — over a
+  picture it is plausible and wrong. So the automatic rung is "detect the unexposed
+  frame, then measure its area". Evidence for the detection: the area's pooled
+  `(p90 - p10) / p50` spread reads 0.06-0.29 on 9 real unexposed frames against
+  0.87-2.26 on pictures, and `scripts/real-scan-verify/harness.sh classify`
+  (uniformity, then luminance) classifies all 9 unexposed frames and all 9 leaders.
 - **Cross-frame agreement** is the roll's corroborator: the same base from ≥ 2 frames
   beats one frame's edge. One frame alone is uncorroborated — low confidence.
 - **Reference frames are detectable but never assumed:** an unexposed frame is

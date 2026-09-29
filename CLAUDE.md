@@ -105,7 +105,7 @@ rollup may contain cycles; the task graph must not.
 
 A pure-function pipeline orchestrated by a thin CLI. Stages are pure
 `(input, params) -> output`; `main`/`cli` are the only orchestrators, and a fact a
-stage decides (e.g. `BaseEstimate::ir_mask_applied`) is **returned**, never
+stage decides (e.g. `EffectiveArea::holder_applied`) is **returned**, never
 re-derived by the caller.
 
 **The chain** — `cli::convert_frame` renders the recipe's resolved destination
@@ -158,7 +158,7 @@ Read the module docs before changing these; they hold the traps.
 | renderings (`direct` / `default`), `direct`'s pinned base | `src/rendering.rs` |
 | destination set (axes, table, derivation) | `src/destination.rs` |
 | decode, density scale, anchor | `algo/fixed.rs` |
-| film base, IR holder mask, measurement region | `pipeline/film_base.rs` |
+| film base, holder march, measurement region | `pipeline/film_base.rs` |
 | film-stock data | `film_stock/` (test-only: evidence for the decode's constants; `docs/datasheets/`) |
 | rendering stages, SDR/HDR bounds | `pipeline/scene_correction.rs`, `look.rs`, `fit_range.rs`, `fit_gamut.rs`, `hdr.rs`; the SDR/HDR branch contract in `pipeline/chain.rs` |
 | gain map, ISO 21496-1 container | `pipeline/gain_ratio.rs`, `gain_encode.rs`, `io/iso_gain_map.rs` (+ `metadata.rs`), `scripts/iso-decoder-oracle/` |
@@ -305,8 +305,9 @@ committed.
   `nctool metrics` for output pixels. Decoder fixtures are in `tests/fixtures/`.
 - There is no public spec for the SilverFast HDRi layout: validate the decoder
   against real scans and degrade gracefully on unknown layouts.
-- Real scans are laid out `holder → thin rebate → picture`, so `--auto-base` is
-  best-effort; measure `Dmin` once from an unexposed frame and reuse it.
+- Real scans are laid out `holder → thin rebate → picture`, and nothing searches for
+  the rebate: measure `Dmin` once from an unexposed frame (`hanten estimate`) and
+  reuse it.
 - **Comparing renders by eye:** use `tools/review-app` with sets from the
   `render-review-set` skill. **Never commit or publish a review set** — the images
   are the user's photographs.

@@ -23,9 +23,9 @@ balance is a smaller stage-4 gain on top.
 
 **Film base — yes, and you should make it so.** The base (Dmin) depends only on
 the stock, development, and scanner, so it is identical for every frame on the
-roll. Measure it once from an unexposed rebate/leader and pin it with
-`--film-base` (or `--base-region`) across the whole roll. `--auto-base`
-re-estimates per frame and drifts slightly; for consistency, pin it.
+roll. Measure it once from the roll's unexposed frame (`hanten estimate
+<unexposed-frame>`) and pin it with `--film-base` across the whole roll; a
+`--base-region` re-reads the base on every frame.
 
 **Auto white balance (`--auto-wb gray-world` / `percentile`) — no, by
 design.** The auto modes estimate the gains *per frame* from that frame's own

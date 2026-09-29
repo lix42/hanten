@@ -379,12 +379,15 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   reconstruction over another vector. They are history: the gate checks only the
 ///   current version's row.)
 /// - `base` — [`stable_hash`] over `film_base::estimate`'s result (the resolved
-///   base's `f32` bit patterns plus its warnings) for [`FilmBaseSource::Auto`]
-///   over the frozen synthetic scan in `pipeline::film_base::golden`. This is
-///   **stage 2**, which `render` structurally cannot see: `render` is handed a
-///   hardcoded base, while `auto` estimates one from pixels on every run that
-///   selects it. Retuning the rebate detector or its
-///   percentile changes every default conversion and nothing else here would move.
+///   base's `f32` bit patterns plus its warnings) for a stated
+///   [`FilmBaseSource::Region`] of the frozen synthetic scan in
+///   `pipeline::film_base::golden`. This is **stage 2**, which `render` structurally
+///   cannot see: `render` is handed a hardcoded base, while a region is read from
+///   pixels on every run that states one. Retuning the region's percentile changes
+///   every such conversion and nothing else here would move. (Until
+///   `film-base/holder-masked-measurement` it hashed the retired `auto` rebate search
+///   over the same scan, which chose a band of this region at the same percentile:
+///   the bits, and so every recorded `base`, are unchanged.)
 /// - `recipe` — [`stable_hash`] over the canonical JSON of `recipe::Recipe::default()`
 ///   (v1–v7: the removed chain's config). This is the default *configuration*: it
 ///   covers default **values** the other two cannot see — every rendering stage's
@@ -410,14 +413,10 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   *deliberately*, since both differ by target and no cross-platform hash of them
 ///   is possible (design-spec §8);
 /// - `io::encode` (u16 quantization, clip accounting, BigTIFF promotion);
-/// - the `Region` / `Explicit` film-base sources and `estimate_grid`, none of which
-///   are the default;
-/// - the auto detector's behavior on **real** scans — `base` pins it on one frozen
-///   synthetic layout, which catches a retuned constant but not a regression that
-///   only shows up on real rebate geometry;
-/// - the IR holder mask (`film_base::ir_separability` / `ir_holder_mask`): `base`'s
-///   frozen scan carries no IR plane, so a change there moves the film base of every
-///   HDRi auto-base run and none of the three hashes.
+/// - the effective-area measurement `hanten estimate` makes
+///   (`film_base::measure_area`) and the holder march under it: no conversion runs
+///   them — their result reaches one as an explicit base — so a change there moves
+///   every *measured* base with the gate green.
 ///
 /// A change confined to those areas can move default output with every test green.
 /// The `scripts/real-scan-verify/` harness and `nctool compare` are the tools for
@@ -710,18 +709,12 @@ pub(crate) mod drift_gate {
     }
 
     /// The **stage 2** fingerprint input: what `film_base::estimate` resolves for
-    /// [`FilmBaseSource::Auto`] over the frozen synthetic scan, plus any warnings
-    /// it raised. Parameterized for the same reason as the render text.
-    ///
-    /// It pins `Auto` **explicitly** rather than "whatever the default is",
-    /// because this fingerprint exists to catch drift in the *detector*. Since
-    /// `calibration.film_base` lost its default, tying the gate to the default would
-    /// have meant the estimator's fingerprint moving for a reason that has
-    /// nothing to do with the estimator. (`Auto` was that default, so the
-    /// recorded hash is unchanged by the switch.)
+    /// `source` over the frozen synthetic scan, plus any warnings it raised.
+    /// Parameterized for the same reason as the render text; the gate passes
+    /// [`stated_region`].
     fn base_fingerprint_text(source: &FilmBaseSource) -> String {
         let est = film_base::estimate(&film_base::golden::scan(), source)
-            .expect("the `auto` film-base estimate must succeed on the frozen scan");
+            .expect("the film-base estimate must succeed on the frozen scan");
         let rgb: Vec<String> = <[f32; 3]>::from(est.base)
             .iter()
             .copied()
@@ -732,6 +725,11 @@ pub(crate) mod drift_gate {
             rgb.join(","),
             est.warnings.join("|")
         )
+    }
+
+    /// The source the `base` fingerprint pins: the frozen region of the frozen scan.
+    fn stated_region() -> FilmBaseSource {
+        FilmBaseSource::Region(film_base::golden::REGION)
     }
 
     /// The default *configuration*'s fingerprint input: the default recipe document —
@@ -745,7 +743,7 @@ pub(crate) mod drift_gate {
     /// add. Shared by the gate and the tests that reason about the table.
     fn recorded_row() -> &'static PipelineFingerprint {
         let render = stable_hash(&render_fingerprint_text(&DecodeParams::default()));
-        let base = stable_hash(&base_fingerprint_text(&FilmBaseSource::Auto));
+        let base = stable_hash(&base_fingerprint_text(&stated_region()));
         let recipe = stable_hash(&recipe_fingerprint_text());
         PIPELINE_FINGERPRINTS
             .iter()
@@ -839,21 +837,22 @@ pub(crate) mod drift_gate {
             render_fingerprint_text(&DecodeParams::default())
         );
 
-        let base = stable_hash(&base_fingerprint_text(&FilmBaseSource::Auto));
+        let base = stable_hash(&base_fingerprint_text(&stated_region()));
         assert_eq!(
             base,
             row.base,
-            "the DEFAULT FILM-BASE ESTIMATE changed but PIPELINE_VERSION is still \
+            "the STATED-REGION FILM-BASE ESTIMATE changed but PIPELINE_VERSION is still \
              {PIPELINE_VERSION}.\n\n\
-             `calibration.film_base` has NO default, so this stage runs only on runs that asked for \
-             `auto` — but for those it resolves the divisor of the density conversion, and a \
-             detector change moves every one of their outputs: raise PIPELINE_VERSION, update \
-             PIPELINE_BEHAVIOR, add a history-table row, and ADD a new row with base: \
-             \"{base}\" (never edit an existing row's `base`).\n\n\
-             If you changed `film_base::golden::scan` instead of the detector, revert it — that \
-             fixture is frozen precisely so this hash means \"the algorithm moved\".\n\n\
+             `calibration.film_base` has NO default, so this stage runs only on runs that \
+             state a region — but for those it resolves the divisor of the density \
+             conversion, and an estimator change moves every one of their outputs: raise \
+             PIPELINE_VERSION, update PIPELINE_BEHAVIOR, add a history-table row, and ADD a \
+             new row with base: \"{base}\" (never edit an existing row's `base`).\n\n\
+             If you changed `film_base::golden::scan` or `golden::REGION` instead of the \
+             estimator, revert it — they are frozen precisely so this hash means \"the \
+             algorithm moved\".\n\n\
              fingerprint input was:\n{}",
-            base_fingerprint_text(&FilmBaseSource::Auto)
+            base_fingerprint_text(&stated_region())
         );
 
         let recipe = stable_hash(&recipe_fingerprint_text());
@@ -917,7 +916,7 @@ pub(crate) mod drift_gate {
             row.render
         );
         assert_eq!(
-            stable_hash(&base_fingerprint_text(&FilmBaseSource::Auto)),
+            stable_hash(&base_fingerprint_text(&stated_region())),
             row.base
         );
     }

@@ -290,6 +290,21 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _build_mismatch_hint(mode: str, error: str) -> str:
+    """The other `--dmin-mode`, only when the failure says the build lacks this one.
+
+    Any other failure (a `--strict` warning, an empty area, a degenerate base) is the
+    frame's, and naming a mode there would be a remedy that cannot work.
+    """
+    if mode == "grid" and "--grid was removed" in error:
+        return " (this build measures the effective area instead: pass --dmin-mode area)"
+    # An older build's sourceless `estimate` runs the rebate search, whose refusal
+    # names it.
+    if mode == "area" and "auto film-base detection" in error:
+        return " (this build predates the effective-area measurement: pass --dmin-mode grid)"
+    return ""
+
+
 def cmd_convert(args) -> int:
     output, error = _output_override(args)
     if error:
@@ -332,11 +347,20 @@ def cmd_convert(args) -> int:
         return 2
 
     unexposed = roles["unexposed"][0]
-    dmin_region, error = _region(args.dmin_region, unexposed, "Dmin")
-    if error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
-    assert dmin_region
+    # `area` measures the frame's effective area and takes no region; `grid` (builds
+    # before `film-base/holder-masked-measurement`) and `region` read one.
+    if args.dmin_mode == "area":
+        if args.dmin_region is not None:
+            print("error: --dmin-region applies to --dmin-mode grid or region; `area` "
+                  "measures the frame's effective area", file=sys.stderr)
+            return 2
+        dmin_region = None
+    else:
+        dmin_region, error = _region(args.dmin_region, unexposed, "Dmin")
+        if error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        assert dmin_region
 
     operational = ["--max-memory", args.max_memory]
     strict = ["--strict"] if args.strict_estimate else []
@@ -368,14 +392,22 @@ def cmd_convert(args) -> int:
         sources.append({"file": frame["file"], "role": frame.get("role", "real"),
                         "sha256": actual})
 
-    dmin_mode = ["--grid"] if args.dmin_mode == "grid" else []
+    source = [] if dmin_region is None else ["--base-region", dmin_region]
+    grid = ["--grid"] if args.dmin_mode == "grid" else []
     dmin_report, error = _run_json(
-        [args.nc, "estimate", str(unexposed_path), "--base-region", dmin_region,
-         *dmin_mode, *film_type, *strict, *operational], "Dmin estimation")
+        [args.nc, "estimate", str(unexposed_path), *source, *grid, *film_type, *strict,
+         *operational], "Dmin estimation")
     if error:
-        print(f"error: {error}", file=sys.stderr)
+        print(f"error: {error}{_build_mismatch_hint(args.dmin_mode, error)}",
+              file=sys.stderr)
         return 1
     assert dmin_report is not None
+    # An older build's `estimate` with no source ran the rebate search instead, so the
+    # report must say it measured the area.
+    if args.dmin_mode == "area" and dmin_report.get("film_base_source") != "effective_area":
+        print("error: the build did not measure the effective area (its `estimate` "
+              "predates it): pass --dmin-mode grid", file=sys.stderr)
+        return 1
     dmin = _float3(dmin_report, "film_base")
     if dmin is None:
         print("error: Dmin report has no finite three-channel `film_base`", file=sys.stderr)

@@ -45,9 +45,9 @@ use crate::recipe::{self, KnobNames, Recipe};
 use crate::stage::{StageClock, StageKind};
 use crate::telemetry;
 use crate::types::{
-    DEFAULT_MEASURE_INSET, EncodeOutcome, EncodeReport, FilmBase, FilmBaseSource, FilmType,
-    InputParams, LinearImage, MeaningAssertion, NcError, OutDepth, OutputStats,
-    REMOVED_SIMPLE_RECONSTRUCTION, Result, TransferAssertion, check_measure_inset,
+    DEFAULT_MEASURE_INSET, EncodeOutcome, EncodeReport, FilmBase, FilmBaseProvenance,
+    FilmBaseSource, FilmType, InputParams, LinearImage, MeaningAssertion, NcError, OutDepth,
+    OutputStats, REMOVED_SIMPLE_RECONSTRUCTION, Result, TransferAssertion, check_measure_inset,
 };
 use crate::version::{self, Identity};
 
@@ -192,20 +192,16 @@ pub struct IoArgs {
 }
 
 /// `estimate`: an input scan, the film-base source flags (so the
-/// calibrate-once-from-a-reference workflow works, design-spec §8), the grid
-/// calibration mode, and reporting controls.
+/// calibrate-once-from-a-reference workflow works, design-spec §8), and reporting
+/// controls.
 #[derive(Args, Debug)]
 pub struct EstimateArgs {
-    /// Input negative scan (SilverFast HDR/HDRi TIFF).
+    /// Input negative scan (SilverFast HDR/HDRi TIFF). With no source flag, an
+    /// unexposed frame: the base is the median over its effective area.
     pub input: PathBuf,
-    /// Sample a fixed 5-cell grid (corners + center) over the frame — or over
-    /// `--base-region` — instead of a single measurement. For unexposed
-    /// reference frames (design-spec §9 ladder tier 1): the per-cell spread is
-    /// reported and disagreement warns loudly (it diagnoses light leaks,
-    /// illumination falloff, or dust). Incompatible with an explicit
-    /// `--film-base` (nothing to sample) and with `--auto-base` (grid replaces
-    /// border detection).
-    #[arg(long, conflicts_with_all = ["film_base", "auto_base"])]
+    /// Retired: the five-cell grid (`film-base/holder-masked-measurement`). Hidden,
+    /// and kept only to emit a migration error.
+    #[arg(long, hide = true)]
     pub grid: bool,
     /// Retired with the roll reference density (`nf-retire/dmax-machinery`). Hidden,
     /// and kept only to emit a migration error.
@@ -220,8 +216,8 @@ pub struct EstimateArgs {
     pub film_base: FilmBaseOverrides,
     #[command(flatten)]
     pub measure: MeasureOverrides,
-    /// Treat estimation warnings (a non-uniform `--base-region`, grid
-    /// disagreement, decode notes, …) as a hard error. `estimate` produces the
+    /// Treat estimation warnings (a non-uniform area or `--base-region`, decode
+    /// notes, …) as a hard error. `estimate` produces the
     /// `Dmin` a roll is calibrated on, so a script baking the result into a
     /// recipe wants a plausible-looking-but-bad base to fail loudly rather than
     /// be echoed back.
@@ -258,7 +254,7 @@ pub struct MeasureRollArgs {
     pub recipe_in: Option<PathBuf>,
     /// The roll's film base (Dmin) as `R,G,B`, over the recipe's. Required one way or
     /// the other, and explicit: a base estimated per frame would measure each frame
-    /// under a different decode. Measure it once with `hanten estimate --grid` on the
+    /// under a different decode. Measure it once with `hanten estimate` on the
     /// unexposed base frame.
     #[arg(long = "film-base", value_name = "R,G,B", value_parser = parse_rgb)]
     pub film_base: Option<[f32; 3]>,
@@ -519,31 +515,24 @@ pub struct InputOverrides {
 
 /// Film-base / Dmin overrides (design-spec §9, stage 2).
 ///
-/// The three source flags are mutually exclusive (clap rejects passing more than
-/// one); whichever is given replaces the recipe's `calibration.film_base` entirely.
+/// The two source flags are mutually exclusive (clap rejects passing both); either
+/// replaces the recipe's `calibration.film_base` entirely. `convert` requires one of
+/// them **or** the recipe key, because `Dmin` sets black point and colour balance
+/// together; `roll` takes none of them — only the recipe key, in the shared
+/// `--params` file.
 #[derive(Args, Debug, Default)]
 pub struct FilmBaseOverrides {
-    /// Explicit per-channel base transmission.
+    /// Explicit per-channel base transmission — a `Dmin` measured once per roll
+    /// (`hanten estimate` on the unexposed frame).
     #[arg(long, value_name = "R,G,B", value_parser = parse_rgb,
-          conflicts_with_all = ["base_region", "auto_base"])]
+          conflicts_with = "base_region")]
     pub film_base: Option<[f32; 3]>,
-    /// Region of the unexposed border to sample.
-    #[arg(long, value_name = "X,Y,W,H", value_parser = parse_region,
-          conflicts_with = "auto_base")]
+    /// A region of unexposed film to read the base from, at its 97th percentile.
+    #[arg(long, value_name = "X,Y,W,H", value_parser = parse_region)]
     pub base_region: Option<[u32; 4]>,
-    /// Detect the unexposed rebate band behind the film holder. Best-effort and
-    /// fails loudly when no confident band exists — real scans put a thin inset
-    /// rebate *behind* the holder, not at the outer margin. **No longer the
-    /// default**: `convert` requires one of these three flags **or** the
-    /// `calibration.film_base` recipe key, because `Dmin` is a per-roll calibration
-    /// that sets black point and colour balance together, and arriving at it by
-    /// omission decided that for you. `roll` requires the same choice but takes
-    /// **none of these flags** — it accepts only the recipe key, in the shared
-    /// `--params` file. The measurement commands are unaffected,
-    /// since they exist to produce a base: `estimate` resolves an unstated source
-    /// to this, and `inspect` always runs the detector (it takes no film-base
-    /// flags at all).
-    #[arg(long)]
+    /// Retired with the rebate search (`film-base/holder-masked-measurement`).
+    /// Hidden, and kept only to emit a migration error.
+    #[arg(long, hide = true)]
     pub auto_base: bool,
 }
 
@@ -1265,20 +1254,15 @@ pub struct Report {
     /// (`estimate`) — see [`CalibrationFragment`]. Absent when nothing measured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calibration: Option<CalibrationFragment>,
-    /// How the film base was chosen, as the structured [`FilmBaseSource`]
-    /// (`"auto"` / `{"region":[…]}` / `{"explicit":[…]}`) so an agent gets the
-    /// sampled rectangle / explicit values without string-parsing a label.
-    /// For `estimate --grid` this is the overall rectangle the grid sampled
-    /// (`{"region":[…]}`); the `grid` field documents the per-cell method.
+    /// Where the film base came from ([`FilmBaseProvenance`]): the effective area, a
+    /// stated region, or an explicit value.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub film_base_source: Option<FilmBaseSource>,
-    /// Candidate unexposed-rebate bands from the inward-scan detector
-    /// (`inspect` only): edge, a rectangle usable verbatim as `--base-region`,
-    /// the proposed base, and the measured spread (lower = more uniform). Lets
-    /// a user confirm a region instead of measuring one in an image viewer —
-    /// and a future UI draws its highlight rectangles from the same data.
+    pub film_base_source: Option<FilmBaseProvenance>,
+    /// The per-channel percentile the base was read at: `0.5` over the effective
+    /// area, `0.97` over a stated region. Absent for an explicit base, which reads
+    /// no pixels.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_candidates: Option<Vec<film_base::RebateCandidate>>,
+    pub film_base_percentile: Option<f32>,
     /// The declared film chemistry, echoed back. It gates nothing
     /// (`ir-usability-detection`); it is recorded so a declaration a user made is
     /// visible in the artifact the run produced — without it the flag would be parsed
@@ -1295,14 +1279,6 @@ pub struct Report {
     /// than only from the source (`ir-usability-detection`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ir_separability: Option<film_base::IrSeparability>,
-    /// IR film-holder classification per edge (`inspect`, on a scan whose IR plane
-    /// is marker-verified and measures usable): which along-edge
-    /// segments the opaque holder occludes (dark in IR) vs actual film (bright).
-    /// Holder segments are excluded from the rebate search; a fully-film or
-    /// fully-holder edge is the all-segments-agree case. RGB alone cannot make
-    /// this call — holder and dense film are both dark in RGB.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub holder_mask: Option<Vec<film_base::EdgeHolderMask>>,
     /// The resolved **effective measurement area** (every command that decodes —
     /// `inspect`, `estimate`, `convert`, and each `roll` frame via
     /// `FrameStatus::Ok`): the rectangle a measurement may be read over, after the
@@ -1326,11 +1302,6 @@ pub struct Report {
     /// recipe half is emitted inside [`Self::calibration`]; `None` emits neither.
     #[serde(flatten)]
     pub reuse: Option<ReuseReady>,
-    /// Grid-sampling result (`estimate --grid`): the per-cell values, their
-    /// per-channel spread, the agreement tolerance and verdict. Disagreement
-    /// additionally lands in `warnings` (and fails under `--strict`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grid: Option<film_base::GridEstimate>,
     /// Path the IR plane was exported to, when `--export-ir` was given.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ir_exported: Option<PathBuf>,
@@ -1616,14 +1587,17 @@ fn pipeline_version_warning(loaded_version: Option<u32>) -> Option<String> {
 pub(crate) fn film_base_source_override(o: &FilmBaseOverrides) -> Option<FilmBaseSource> {
     if let Some(v) = o.film_base {
         Some(FilmBaseSource::Explicit(v))
-    } else if let Some(v) = o.base_region {
-        Some(FilmBaseSource::Region(v))
-    } else if o.auto_base {
-        Some(FilmBaseSource::Auto)
     } else {
-        None
+        o.base_region.map(FilmBaseSource::Region)
     }
 }
+
+/// What retired with `--auto-base` and the recipe's `"auto"` (`recipe::check_body`),
+/// and the measurement that replaces it. Each caller appends the remedy its surface
+/// accepts.
+pub(crate) const AUTO_BASE_RETIRED: &str = "the automatic film base searched each edge for a \
+     thin unexposed rebate, and it retired with that search. Measure the roll's base once \
+     from its unexposed frame with `hanten estimate <unexposed-frame>`";
 
 /// Validate that an explicit film base is a per-channel transmission in `(0, 1]`
 /// — the one invariant that must hold wherever an explicit base enters (a recipe
@@ -2023,12 +1997,12 @@ fn required_extensions(target: OutputTarget) -> &'static [&'static str] {
 /// How the calling command can state a film base — the one thing the
 /// missing-base diagnosis must vary on, because the remedies are disjoint.
 ///
-/// `convert` has all three film-base flags; `roll` has **none** of them
+/// `convert` has both film-base flags; `roll` has **none** of them
 /// (`RollArgs` flattens only `MemoryArgs`/`ReportArgs`), so telling a `roll` user
-/// to "pass `--auto-base`" is advice they cannot follow — the flag exits 2.
+/// to "pass `--film-base`" is advice they cannot follow — the flag exits 2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilmBaseRemedy {
-    /// `convert` — `--film-base` / `--base-region` / `--auto-base`, or the recipe.
+    /// `convert` — `--film-base` / `--base-region`, or the recipe.
     Flags,
     /// `roll` — the shared `--params` recipe only.
     SharedRecipe,
@@ -2053,22 +2027,20 @@ impl FilmBaseRemedy {
 pub fn missing_film_base_message(remedy: FilmBaseRemedy) -> String {
     match remedy {
         FilmBaseRemedy::Flags => "no film base selected: pass --film-base R,G,B (a Dmin measured \
-             once per roll, e.g. with `hanten estimate`), --base-region X,Y,W,H to sample an \
-             unexposed border, or --auto-base to detect the rebate band (best-effort: real scans \
-             put a thin inset rebate behind the holder, so it can fail). Recipe key: \
-             `calibration.film_base`."
+             once per roll with `hanten estimate <unexposed-frame>`), or --base-region X,Y,W,H \
+             to read it from a region of unexposed film. Recipe key: `calibration.film_base`."
             .to_string(),
         // `roll` deliberately does not repeat the flag names as an option: it has
         // none of them, and the first version of this message sent users to flags
         // that exit 2.
         FilmBaseRemedy::SharedRecipe => "no film base selected: `roll` takes no film-base flags, \
              so set `calibration.film_base` in the shared --params recipe. Measuring once per roll is \
-             the intended workflow: run `hanten estimate --base-region X,Y,W,H <reference-scan>` on \
-             one frame and paste the reported `calibration` object straight in \
+             the intended workflow: run `hanten estimate <unexposed-frame>` and paste the \
+             reported `calibration` object straight in \
              (`\"calibration\": {\"film_base\": {\"explicit\": [R, G, B]}}`) — that is \
              also the only source that keeps every frame on one frozen Dmin. \
-             `\"auto\"` and `{\"region\": [X, Y, W, H]}` are accepted \
-             too, but re-estimate per frame, so the roll is not colour-consistent."
+             `{\"region\": [X, Y, W, H]}` is accepted too, but re-reads each frame, so \
+             the roll is not colour-consistent."
             .to_string(),
     }
 }
@@ -2086,7 +2058,7 @@ pub fn validate_shared(r: &Recipe, remedy: FilmBaseRemedy) -> Result<()> {
     // Film base: an explicit base is a per-channel transmission in (0, 1] — the
     // decoded scan is [0, 1]-normalized, so a value above 1 (e.g. a "90" typo for
     // "0.90") would silently render every real sample denser than the base; a
-    // sampled region must have non-zero extent; auto needs nothing.
+    // sampled region must have non-zero extent.
     // The *unstated* case is deliberately not handled here — it is the last rule in
     // this function. "You have not chosen a film base" is the least specific
     // diagnosis there is, so letting it run first would pre-empt every rule below
@@ -2099,7 +2071,7 @@ pub fn validate_shared(r: &Recipe, remedy: FilmBaseRemedy) -> Result<()> {
                 "--base-region width and height must be > 0".into(),
             ));
         }
-        Some(FilmBaseSource::Region(_)) | Some(FilmBaseSource::Auto) | None => {}
+        Some(FilmBaseSource::Region(_)) | None => {}
     }
 
     // Measurement region: a *value* rule, so `roll` and every per-frame override reach
@@ -2109,10 +2081,7 @@ pub fn validate_shared(r: &Recipe, remedy: FilmBaseRemedy) -> Result<()> {
     check_measure_inset(r.measure.inset)?;
 
     // Last, deliberately: `calibration.film_base` has no default, and `Dmin` is the
-    // divisor of the density conversion, so falling into auto-detection by omission
-    // decided the most consequential parameter for the user. `--auto-base` is still
-    // one flag away — the requirement is that the choice be *stated*, not that it be
-    // explicit.
+    // divisor of the density conversion, so it must be stated.
     if r.calibration.film_base.is_none() {
         return Err(NcError::Usage(missing_film_base_message(remedy)));
     }
@@ -2465,6 +2434,12 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
     }
     if let Some((flag, what)) = removed_dmax_flag(&args.dmax) {
         return Err(NcError::Usage(removed_dmax_message(flag, what)));
+    }
+    if args.film_base.auto_base {
+        return Err(NcError::Usage(format!(
+            "--auto-base was removed: {AUTO_BASE_RETIRED} and pass the `--film-base R,G,B` it \
+             reports, or read a region of unexposed film with --base-region X,Y,W,H."
+        )));
     }
     if let Some(flag) = removed_balance_flag(&args.balance) {
         return Err(NcError::Usage(format!(
@@ -2936,14 +2911,11 @@ fn preflight_memory(
 
 /// The film-base sampling a resolved [`FilmBaseSource`] will perform, for the
 /// memory model's film-base phase: an explicit base reads no pixels, a region
-/// materializes exactly its rectangle, and `auto` materializes the frame interior
-/// (`film_base::auto_interior_pixels`, resolved inside the model against the probed
-/// shape). `estimate --grid` substitutes its own rectangle.
+/// materializes exactly its rectangle.
 fn sample_plan(source: &FilmBaseSource) -> SamplePlan {
     match source {
         FilmBaseSource::Explicit(_) => SamplePlan::none(),
         FilmBaseSource::Region([_, _, w, h]) => SamplePlan::rect(*w as u64 * *h as u64),
-        FilmBaseSource::Auto => SamplePlan::auto(),
     }
 }
 
@@ -3015,7 +2987,7 @@ fn convert_frame(
         identity: Some(Identity::new().with_params_hash(recipe.params_hash())),
         input: Some(input.to_path_buf()),
         output: Some(output.to_path_buf()),
-        film_base_source: Some(base_source.clone()),
+        film_base_source: Some(FilmBaseProvenance::from(&base_source)),
         ..Report::default()
     };
 
@@ -3091,69 +3063,8 @@ fn convert_frame(
             "--export-ir requested but the input has no IR plane (HDRi input only)".into(),
         ));
     }
-    // Whether film-base estimation will actually consume the IR plane for holder
-    // detection: on a scan carrying a **marker-verified** IR plane that measures
-    // usable on this frame, and only when the base is being auto-detected (an
-    // explicit `--film-base` / `--base-region` runs no detection at all). A
-    // shape-only IR plane (unverified provenance) is not trusted, so it degrades to
-    // RGB-only. These govern the two fallback notes below; whether the plane was
-    // *actually* consumed is read off stage 2 afterwards, not predicted here.
-    let auto_base = matches!(base_source, FilmBaseSource::Auto);
-    let ir_shape_only = info.ir_present && !image.ir_verified;
-    // Whether the IR plane can separate holder from film **on this frame**. A
-    // measurement, not the `--film-type chromogenic` declaration that used to gate
-    // this (`ir-usability-detection`): chemistry mispredicts separability in both
-    // directions, so the plane is asked directly. `None` when there is no IR plane.
-    //
-    // Measured here even though `ir_holder_mask` measures again inside stage 2: the
-    // fallback note below must fire even when `estimate` then *errors* — auto
-    // refusing to find a rebate is exactly when "the IR plane could not help" is
-    // worth reading — and a failed stage 2 returns no `BaseEstimate` to carry it.
-    // Both calls are bounded strided samples, so the duplication is ~100k reads.
-    let ir_separability = clock.time(StageKind::FilmBase, || {
-        Ok(film_base::ir_separability(&image))
-    })?;
-    let ir_usable = ir_separability.is_some_and(|s| s.usable);
-
-    // When holder detection wanted the IR mask but the plane is shape-only, it
-    // silently degraded to RGB-only — say so (a `--strict`-promotable warning, like
-    // the no-IR note). Emitting it here means the generic "carried but unused" note
-    // below is skipped for the same plane, so only one IR note fires. Suppressed
-    // under `--export-ir` for the same reason that note is: the user is taking the
-    // plane themselves, and failing their `--strict` run over a detection path that
-    // fell back to the one every 48-bit scan uses silently would be wrong.
-    let shape_only_holder_note = auto_base && ir_shape_only && export_ir.is_none();
-    if shape_only_holder_note {
-        push_warning_buf(
-            warnings,
-            log,
-            "an IR plane is present, but it is identified by shape alone (no \
-             NewSubfileType=4 marker) and not trusted for holder detection; using \
-             RGB-only film-holder detection for the film base"
-                .into(),
-        );
-    }
-
-    // Trusted IR that still cannot do the job: this frame's own film is too opaque
-    // to tell from the holder (a fully-exposed frame on silver stock, say). Say so
-    // with the measurement, so the fallback is diagnosable rather than silent.
-    let ir_unusable_note =
-        auto_base && info.ir_present && image.ir_verified && !ir_usable && export_ir.is_none();
-    if ir_unusable_note {
-        push_warning_buf(
-            warnings,
-            log,
-            format!(
-                "the IR plane cannot separate the film holder on this frame (interior \
-                 IR transmission {:.4}); using RGB-only film-holder detection for the \
-                 film base",
-                ir_separability.map_or(0.0, |s| s.interior_median)
-            ),
-        );
-    }
-
     // Stage 2 — film-base estimate. Resolved before the render so its quality
-    // warnings (non-uniform region, cross-edge disagreement) are pushed — and so
+    // warning (a non-uniform region) is pushed — and so
     // echoed to stderr — *before* the fallible render runs, and ride out in the
     // JSON report on a successful run. (A hard render failure propagates its error
     // and exit code like every other error path and emits no report; the stderr
@@ -3162,6 +3073,7 @@ fn convert_frame(
         film_base::estimate(&image, &base_source)
     })?;
     report.film_base = Some(base.base);
+    report.film_base_percentile = base.percentile;
     for w in base.warnings {
         push_warning_buf(warnings, log, w);
     }
@@ -3206,29 +3118,14 @@ fn convert_frame(
         }
     }
 
-    // Note an IR plane that's carried but not consumed. Keyed on what each stage
-    // actually did, never on a prediction from the inputs: a marker-verified plane
-    // that measures usable can still produce no mask (the all-holder fallback), and
-    // predicting consumption silently suppressed this warning — and so `--strict` —
-    // on exactly that case.
+    // Note an IR plane that's carried but not consumed. Nothing in a conversion reads
+    // it: a stated base reads no holder, and the effective area — which a marched
+    // holder does move (`effective_area.holder_applied`) — reaches no rendered pixel.
+    // That is why the wording names `effective_area`.
     //
-    // The measurement area never suppresses it: nothing in the render reads the region,
-    // so a marched holder (`effective_area.holder_applied`) reaches no pixel. That is
-    // also why the wording is about the **conversion** and names `effective_area`:
-    // `convert` resolves the area unconditionally, so a run legitimately reports a
-    // measured `holder_applied: true` beside this note.
-    //
-    // Not emitted when the plane is being exported
-    // (`--export-ir` is the user handling it, so warning — and failing under
-    // `--strict` — would be wrong; keeps `--strict --export-ir` usable on the
-    // primary HDRi format), and not when one of the two fallback notes above
-    // already covered this plane.
-    if info.ir_present
-        && export_ir.is_none()
-        && !base.ir_mask_applied
-        && !shape_only_holder_note
-        && !ir_unusable_note
-    {
+    // Not emitted when the plane is being exported: `--export-ir` is the user
+    // handling it, so warning — and failing under `--strict` — would be wrong.
+    if info.ir_present && export_ir.is_none() {
         push_warning_buf(
             warnings,
             log,
@@ -5047,8 +4944,8 @@ fn run_roll(args: RollArgs) -> Result<()> {
     validate_roll_recipe(&shared, "shared recipe")?;
 
     // A roll's headline guarantee is one frozen, roll-fixed film base shared by
-    // every frame. Only an *explicit* base delivers that: `auto`/`region`
-    // re-estimate `Dmin` from each frame's own pixels, so the roll is neither
+    // every frame. Only an *explicit* base delivers that: a region re-reads `Dmin`
+    // from each frame's own pixels, so the roll is neither
     // frozen nor color-consistent even though the report still prints "one shared
     // recipe". Warn loudly (report + stderr, `--strict`-promotable) rather than
     // hard-failing, so a best-effort batch stays usable.
@@ -5066,24 +4963,17 @@ fn run_roll(args: RollArgs) -> Result<()> {
         log.warn(&msg);
         roll_warnings.push(msg);
     }
-    if !matches!(
+    // `validate_shared` above already rejected `None`, so only a region reaches here.
+    if matches!(
         shared.calibration.film_base,
-        Some(FilmBaseSource::Explicit(_))
+        Some(FilmBaseSource::Region(_))
     ) {
-        // `validate_shared` above already rejected `None`, so only the two estimating
-        // sources reach here.
-        let kind = match shared.calibration.film_base {
-            Some(FilmBaseSource::Auto) => "auto",
-            Some(FilmBaseSource::Region(_)) => "region",
-            Some(FilmBaseSource::Explicit(_)) | None => unreachable!("validate rejects both"),
-        };
-        let msg = format!(
-            "roll film base is NOT frozen: calibration.film_base is `{kind}`, so every frame \
-             estimates its own Dmin — the roll is not color-consistent and the shared \
-             recipe is not truly shared. Calibrate the base once (e.g. `hanten estimate \
-             --base-region X,Y,W,H <reference-scan>`), then set the reported explicit base \
-             as `calibration.film_base` in the shared recipe."
-        );
+        let msg = "roll film base is NOT frozen: calibration.film_base is a `region`, so \
+             every frame reads its own Dmin — the roll is not color-consistent and the \
+             shared recipe is not truly shared. Measure the base once (`hanten estimate \
+             <unexposed-frame>`), then set the reported explicit base as \
+             `calibration.film_base` in the shared recipe."
+            .to_string();
         log.warn(&msg);
         roll_warnings.push(msg);
     }
@@ -5220,8 +5110,9 @@ fn run_roll(args: RollArgs) -> Result<()> {
 }
 
 /// `hanten inspect` — decode a scan and report what was found (format, dimensions,
-/// channels, bit depth, IR presence, scanner metadata) plus a best-effort
-/// suggested `Dmin`. No output image is written.
+/// channels, bit depth, IR presence, scanner metadata) and the effective
+/// measurement area. It measures no base: that is `estimate`'s. No output image is
+/// written.
 fn run_inspect(args: IoArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
@@ -5252,13 +5143,12 @@ fn run_inspect(args: IoArgs) -> Result<()> {
 
     // Memory preflight before decode, on the decode-only profile: `inspect` never
     // renders or encodes, so gating it on the full-pipeline peak would reject
-    // scans it can diagnose comfortably. It always runs the auto detector below
-    // (the suggested `Dmin`), so the film-base phase counts its interior sample.
+    // scans it can diagnose comfortably. It gathers no film-base sample.
     let budget = args.memory.budget();
     report.memory = Some(preflight_memory(
         &args.input,
         RunProfile::DecodeOnly,
-        SamplePlan::auto(),
+        SamplePlan::none(),
         budget,
         memory::detect_total_ram(),
         &log,
@@ -5293,37 +5183,14 @@ fn run_inspect(args: IoArgs) -> Result<()> {
     }
     report.input_color = Some(input_report);
 
-    // IR film-holder mask (on a scan carrying a *marker-verified* IR plane that
-    // measures usable). Diagnostic on `inspect`: it shows which along-edge segments
-    // the opaque holder occludes, and drives the film-segment restriction the
-    // candidate search below uses. The verdict is measured
-    // (`ir-usability-detection`) — `--film-type` takes no part in it.
+    // The IR usability verdict, and the effective measurement area it gates: the
+    // holder march plus the static inset. The verdict is measured
+    // (`ir-usability-detection`) — `--film-type` takes no part in it. Best-effort like
+    // every other `inspect` diagnostic.
     let ir_separability = film_base::ir_separability(&image);
     let ir_usable = ir_separability.is_some_and(|s| s.usable);
     report.ir_separability = ir_separability;
     report.film_type = args.film_type.filter(|&t| t != FilmType::Unknown);
-    // Build the mask *before* the notes, so each one describes what actually
-    // happened rather than predicting it: a usable plane can still produce no mask
-    // (a too-small image errors on `scan_depth`; an all-holder mask falls back).
-    // Best-effort, like the candidate search below — `inspect` is informational and
-    // must not abort over a diagnostic.
-    let mut mask_error = false;
-    match film_base::ir_holder_mask(&image) {
-        Ok(mask) => report.holder_mask = mask,
-        Err(e) => {
-            mask_error = true;
-            push_warning(
-                &mut report,
-                &log,
-                format!("holder-mask detection skipped — {e}"),
-            );
-        }
-    }
-    // The effective measurement area: the holder depth march plus the static
-    // inset. Independent of the along-edge mask above — it deliberately does not
-    // inherit `ir_holder_mask`'s all-holder decline, so a frame whose holder wraps
-    // the whole border is measured here even when the mask above is `None`.
-    // Best-effort like every other `inspect` diagnostic.
     match film_base::effective_area(
         &image,
         args.measure.measure_inset.unwrap_or(DEFAULT_MEASURE_INSET),
@@ -5343,91 +5210,42 @@ fn run_inspect(args: IoArgs) -> Result<()> {
             format!("effective-area resolution skipped — {}", e.message()),
         ),
     }
-    // Both IR consumers, each reporting what it did rather than what the inputs
-    // predict. The holder march is the second one: on 22 of 25 real chromogenic
-    // frames the mask above declines while the march measures a holder and moves
-    // the reported rectangle, and keying the note on the mask alone made one report
-    // carry both a measured `effective_area.holder` and "preserved but not used".
-    let ir_consumed = report.holder_mask.is_some()
-        || report
-            .effective_area
-            .is_some_and(|a: film_base::EffectiveArea| a.holder_applied);
 
+    // Each note says why the plane did not measure the holder, from what the march
+    // returned (`effective_area.holder`), never predicted from the inputs.
     if info.ir_present && !image.ir_verified {
-        // Shape-only IR plane: carried/exportable but not trusted for detection.
         push_warning(
             &mut report,
             &log,
             "an IR plane is present, but it is identified by shape alone (no \
-             NewSubfileType=4 marker) and not trusted for holder detection; \
-             film-holder detection is RGB-only"
+             NewSubfileType=4 marker) and not trusted for holder measurement; the \
+             effective area is the inset alone"
                 .into(),
         );
     } else if info.ir_present && !ir_usable {
-        // Trusted, but this frame's own film is too opaque to tell from the holder.
         push_warning(
             &mut report,
             &log,
             format!(
                 "the IR plane cannot separate the film holder on this frame (interior \
-                 IR transmission {:.4}); film-holder detection is RGB-only",
+                 IR transmission {:.4}); the effective area is the inset alone",
                 ir_separability.map_or(0.0, |s| s.interior_median)
             ),
         );
-    } else if info.ir_present && !ir_consumed && !mask_error {
-        // Marker-verified and measured usable, yet **neither** reader consumed it:
-        // "both declined for a reason neither note above named". This is no longer
-        // the all-holder fallback — that frame marches to a ring, so
-        // `holder_applied` is true and `ir_consumed` short-circuits here. With a
-        // usable plane the only combination left is an errored `effective_area`
-        // beside an all-holder mask, and the "effective-area resolution skipped"
-        // warning above already describes that event.
-        //
-        // Kept as a safety net all the same, and deliberately *not* gated on
-        // `report.effective_area.is_some()`: if a third IR reader ever lands, this
-        // is the branch that keeps saying so rather than going quiet.
-        // (`mask_error` already said its piece.)
+    } else if info.ir_present
+        && report
+            .effective_area
+            .is_some_and(|a: film_base::EffectiveArea| a.holder.is_none())
+    {
+        // Usable and trusted, yet the march declined: a frame too small to hold one
+        // probe band.
         push_warning(
             &mut report,
             &log,
-            "input carries an IR plane; preserved but not used in Step 1 \
-             (use `convert --export-ir` to write it out)"
+            "input carries an IR plane; preserved but not used — the frame is too \
+             small to measure the holder on (use `convert --export-ir` to write it out)"
                 .into(),
         );
-    }
-
-    // Candidate rebate bands + suggested Dmin via the inward-scan detector. For
-    // inspect this is informational — a refusal is a note, not fatal — and the
-    // candidates are reported even when selection refuses, so the user can
-    // confirm a rectangle for `--base-region` instead of measuring one.
-    match film_base::rebate_candidates(&image, report.holder_mask.as_deref()) {
-        Ok(candidates) => {
-            match film_base::select_auto_base(&image, &candidates) {
-                Ok(est) => {
-                    report.film_base = Some(est.base);
-                    report.film_base_source = Some(FilmBaseSource::Auto);
-                    for w in est.warnings {
-                        push_warning(&mut report, &log, w);
-                    }
-                }
-                // The selection error already carries actionable advice (pass
-                // --base-region/--film-base, or --base-content per the
-                // film-base/content-fallback task); short lead-in only.
-                Err(e) => push_warning(
-                    &mut report,
-                    &log,
-                    format!("suggested Dmin unavailable — {e}"),
-                ),
-            }
-            if !candidates.is_empty() {
-                report.base_candidates = Some(candidates);
-            }
-        }
-        Err(e) => push_warning(
-            &mut report,
-            &log,
-            format!("film-base detection skipped — {e}"),
-        ),
     }
 
     report.decode = Some(info);
@@ -5454,26 +5272,22 @@ fn reuse_ready(rgb: [f32; 3]) -> Option<(String, FilmBaseSource)> {
     ))
 }
 
-/// `hanten estimate` — run only film-base / `Dmin` estimation from the selected
-/// source (default `auto`, or `--base-region`/`--film-base`; `--grid` samples
-/// a 5-cell grid for unexposed-frame calibration) and emit the resolved
-/// [`FilmBase`] as JSON — together with reuse-ready forms of it (a
-/// `--film-base` flag string and a `film_base` recipe fragment) when the
-/// measurement is usable as an explicit base (each channel in `(0, 1]`;
-/// otherwise a warning explains why not) — so the measured value drops
-/// straight into a `convert` call or a roll recipe (design-spec §8). Auto
-/// detection may fail loudly on real scans; that propagates as an error (the
-/// user asked for an estimate we can't give). `--strict` promotes warnings
-/// (e.g. grid disagreement) to a failing exit after the report is emitted.
+/// `hanten estimate` — measure the film base (`Dmin`) and emit it as JSON, with
+/// reuse-ready forms of it (a `--film-base` flag string and a `calibration` recipe
+/// fragment) when the measurement is usable as an explicit base (each channel in
+/// `(0, 1]`; otherwise a warning explains why not), so the measured value drops
+/// straight into a `convert` call or a roll recipe (design-spec §8). `--strict`
+/// promotes warnings to a failing exit after the report is emitted.
 ///
-/// **The `unwrap_or(FilmBaseSource::Auto)` below is the only surviving default
-/// film-base choice in the crate, and no fingerprint watches it.** Since
-/// `calibration.film_base` lost its default, `version::PIPELINE_FINGERPRINTS` no
-/// longer covers this decision from either side: `base` pins the detector by
-/// naming `Auto` explicitly, and `recipe` sees the resolved config's `null`.
-/// Changing what an unstated `estimate` resolves to would therefore move every
-/// `hanten estimate` result with the whole drift gate green — verify such a change by
-/// hand, and do not assume the gate is watching.
+/// With no source flag it measures the frame's **effective area** at the median
+/// (`film_base::measure_area`) — the unexposed-frame workflow. `--base-region` reads
+/// that region at p97 instead, and `--film-base` echoes a value back through the same
+/// checks.
+///
+/// **No fingerprint watches the unstated default.** `version::PIPELINE_FINGERPRINTS`
+/// hashes what a *conversion* runs (a stated region), so changing the area
+/// measurement would move every `hanten estimate` result with the drift gate green —
+/// verify such a change by hand.
 fn run_estimate(args: EstimateArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
@@ -5484,11 +5298,26 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
             "measured the roll reference density off a light-struck leader",
         )));
     }
+    if args.grid {
+        return Err(NcError::Usage(
+            "--grid was removed: with no source flag `estimate` measures the whole \
+             effective area of the frame at its median, which is what the grid was for. \
+             Drop the flag."
+                .into(),
+        ));
+    }
+    if args.film_base.auto_base {
+        return Err(NcError::Usage(
+            "--auto-base was removed with the rebate search: with no source flag \
+             `estimate` measures the frame's effective area. Drop the flag, and give it \
+             the roll's unexposed frame."
+                .into(),
+        ));
+    }
 
     // A bad `--measure-inset` is a *usage* error (exit 2), not a diagnostic that
     // degrades to a warning: these commands resolve no recipe, so `validate` never
-    // sees the flag and the best-effort `effective_area` call below would swallow
-    // it at exit 0. Checked before the decode, so a 160 MB read is not wasted on a
+    // sees the flag. Checked before the decode, so a 160 MB read is not wasted on a
     // typo.
     if let Some(f) = args.measure.measure_inset {
         check_measure_inset(f)?;
@@ -5497,13 +5326,11 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     if let Some(rf) = args.report.report_file.as_deref() {
         ensure_write_targets_distinct(&args.input, &[("--report-file", rf)])?;
     }
-    // `estimate` exists to *produce* a base, so requiring one first would be
-    // circular: here — and only here — an unstated source still means `auto`.
-    let source = film_base_source_override(&args.film_base).unwrap_or(FilmBaseSource::Auto);
+    let source = film_base_source_override(&args.film_base);
     // Guard an explicit base with the same check `convert` applies (a recipe
     // never reaches estimate, but a bad `--film-base` must fail loudly rather
     // than be echoed back). Region bounds are checked by `film_base::estimate`.
-    if let FilmBaseSource::Explicit(b) = &source {
+    if let Some(FilmBaseSource::Explicit(b)) = &source {
         validate_explicit_film_base(b)?;
     }
 
@@ -5518,25 +5345,13 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     };
 
     // Memory preflight before decode (decode-only profile — `estimate` samples the
-    // decoded image and stops). Its film-base phase is the largest rectangle this
-    // invocation will gather: the base source's own sample (`--grid` samples cells
-    // of `--base-region`, or of the whole frame when it is absent — counted
-    // conservatively as the whole rectangle).
+    // decoded image and stops). A stated region is gathered whole; the effective
+    // area is counted into a fixed-size histogram.
     let budget = args.memory.budget();
-    let sampling = if args.grid {
-        match args.film_base.base_region {
-            // `--grid` samples five cells of the rectangle, one at a time, so the
-            // phase peaks at one cell — not at the whole rectangle.
-            Some([_, _, w, h]) => SamplePlan::rect(film_base::grid_cell_pixels(w, h)),
-            None => SamplePlan::none().with_whole_frame_grid(),
-        }
-    } else {
-        sample_plan(&source)
-    };
     report.memory = Some(preflight_memory(
         &args.input,
         RunProfile::DecodeOnly,
-        sampling,
+        source.as_ref().map_or(SamplePlan::none(), sample_plan),
         budget,
         memory::detect_total_ram(),
         &log,
@@ -5553,154 +5368,62 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
         push_warning(&mut report, &log, w.clone());
     }
 
-    // Mirror `convert`'s notes: only the `auto` single-measurement path consults the
-    // IR holder mask, so it degrades to RGB-only when the IR plane is shape-only
-    // (unverified provenance) or measures unable to separate holder from film. The
-    // `--grid` and explicit/region paths never touch IR, so they need no note.
     report.film_type = args.film_type.filter(|&t| t != FilmType::Unknown);
-    // The calibration command reports the measurement itself, not just a warning
-    // about it: `estimate` is where a user decides how to acquire a base, so the
-    // number that drove the decision belongs in its artifact too.
+    // The calibration command reports the IR verdict itself, not just a warning
+    // about it: it decides whether the holder was measured.
     report.ir_separability = film_base::ir_separability(&image);
-    // Same rationale for the effective area: `estimate` is where a user decides how
-    // to acquire a base, so the region a measurement would be read over belongs in
-    // its artifact. It does not (yet) drive this command's estimate — that is
-    // `film-base/holder-masked-measurement`'s change.
-    match film_base::effective_area(
+    let area = film_base::effective_area(
         &image,
         args.measure.measure_inset.unwrap_or(DEFAULT_MEASURE_INSET),
-    ) {
-        Ok(area) => {
-            report.effective_area = Some(area);
-            for w in film_base::effective_area_warnings(&area) {
-                push_warning(&mut report, &log, w);
-            }
-        }
-        Err(e) => push_warning(
-            &mut report,
-            &log,
-            // `message()`, not `{e}`: `Display` prefixes the kind, so this
-            // rendered as "skipped — usage: …" — a warning announcing an error
-            // inside itself.
-            format!("effective-area resolution skipped — {}", e.message()),
-        ),
-    }
-    let mut ir_note_pending = !args.grid && matches!(source, FilmBaseSource::Auto);
-    if ir_note_pending && info.ir_present {
-        let sep = report.ir_separability;
-        if !image.ir_verified {
-            ir_note_pending = false;
-            push_warning(
-                &mut report,
-                &log,
-                "an IR plane is present, but it is identified by shape alone (no \
-                 NewSubfileType=4 marker) and not trusted for holder detection; \
-                 using RGB-only film-holder detection for the film base"
-                    .into(),
-            );
-        } else if !sep.is_some_and(|s| s.usable) {
-            ir_note_pending = false;
-            push_warning(
-                &mut report,
-                &log,
-                format!(
-                    "the IR plane cannot separate the film holder on this frame \
-                     (interior IR transmission {:.4}); using RGB-only film-holder \
-                     detection for the film base",
-                    sep.map_or(0.0, |s| s.interior_median)
-                ),
-            );
-        }
-    }
+    );
 
-    let base = if args.grid {
-        // Grid calibration: clap rejects `--grid` with `--film-base` /
-        // `--auto-base`, so the rectangle is `--base-region` or the full frame.
-        let rect = args
-            .film_base
-            .base_region
-            .unwrap_or([0, 0, image.width, image.height]);
-        let grid = film_base::estimate_grid(&image, rect)?;
-        if !grid.agreement {
-            // The 1.0 spread sentinel also fires when a channel's cells all
-            // measure ~0 (a degenerate sample, not a light leak); diagnose by
-            // the combined base so the warning names the actual problem.
-            let msg = if <[f32; 3]>::from(grid.base).iter().any(|v| *v <= 0.0) {
-                format!(
-                    "grid measured non-positive transmission (combined base \
-                     [{}, {}, {}]) — degenerate sample, not film base; was the \
-                     sampled area unexposed film? See the report's grid.cells",
-                    grid.base.r, grid.base.g, grid.base.b
-                )
-            } else {
-                format!(
-                    "grid cells disagree: per-channel relative spread \
-                     [{:.4}, {:.4}, {:.4}] exceeds tolerance {} — possible light \
-                     leak, scanner illumination falloff, or dust; see the \
-                     report's grid.cells for the per-region values",
-                    grid.spread[0], grid.spread[1], grid.spread[2], grid.tolerance
-                )
-            };
-            push_warning(&mut report, &log, msg);
+    let est = match &source {
+        // A stated source does not read the area, so a failure to resolve it is a
+        // diagnostic, not a refusal.
+        Some(source) => {
+            match &area {
+                Ok(area) => report.effective_area = Some(*area),
+                Err(e) => push_warning(
+                    &mut report,
+                    &log,
+                    // `message()`, not `{e}`: `Display` prefixes the kind.
+                    format!("effective-area resolution skipped — {}", e.message()),
+                ),
+            }
+            report.film_base_source = Some(FilmBaseProvenance::from(source));
+            film_base::estimate(&image, source)?
         }
-        // The source records the overall rectangle the grid sampled; the
-        // `grid` report field documents the per-cell method.
-        report.film_base_source = Some(FilmBaseSource::Region(rect));
-        let base = grid.base;
-        report.grid = Some(grid);
-        base
-    } else {
-        // Single-measurement path: `film_base::estimate` guards the base
-        // finite-and-positive at birth (auto-base-redesign) and may attach
-        // quality warnings (non-uniform region, cross-edge disagreement). The
-        // `auto` source uses the IR holder mask when the scan carries an IR plane
-        // that measures able to separate holder from film.
-        let est = film_base::estimate(&image, &source)?;
-        report.film_base_source = Some(source);
-        for w in est.warnings {
+        // The base *is* the area's median, so an empty area refuses.
+        None => {
+            let area = area?;
+            report.effective_area = Some(area);
+            report.film_base_source = Some(FilmBaseProvenance::EffectiveArea);
+            // The measurement then rests on the inset alone, which the user sizes —
+            // true of a scan with no IR plane as much as of one whose plane declined.
+            if area.holder.is_none() {
+                let note = holder_not_measured_note(&image, report.ir_separability);
+                push_warning(&mut report, &log, note);
+            }
+            film_base::measure_area(&image, &area)?
+        }
+    };
+    if let Some(area) = report.effective_area {
+        for w in film_base::effective_area_warnings(&area) {
             push_warning(&mut report, &log, w);
         }
-        // A plane that survived both notes above and still went unused **for the
-        // film base**. Read off what stage 2 did, never predicted.
-        //
-        // The all-holder fallback is no longer the only route here: since
-        // `holder-depth-mask`, `estimate` also resolves the effective area, whose
-        // march can measure a holder on the same frame. This note deliberately does
-        // **not** gain that disjunct — the scoping to "for the film base" is what
-        // makes it honest, and it is load-bearing rather than incidental. The film
-        // base really did not use the plane, which is the verdict a calibration
-        // command owes; `inspect` (which reports on the whole Step-1 read) counts
-        // both readers, and `convert` counts the region only when it reaches a
-        // pixel. Three questions, three rules, each individually honest — adding the
-        // march here would make *this* message wrong.
-        if info.ir_present && image.ir_verified && !est.ir_mask_applied && ir_note_pending {
-            push_warning(
-                &mut report,
-                &log,
-                "input carries an IR plane; preserved but not used for the film base".into(),
-            );
-        }
-        est.base
-    };
+    }
+    for w in est.warnings {
+        push_warning(&mut report, &log, w);
+    }
+    report.film_base_percentile = est.percentile;
+    let base = est.base;
     report.film_base = Some(base);
 
     // Reuse-ready forms — attached only when the measurement passes the
     // explicit-base validation `convert` applies: a base outside `(0, 1]` on any
-    // channel is still reported as the measurement, but never as "reuse-ready".
-    // The single-measurement path already errors on a degenerate base via
-    // `estimate`'s guard; the grid path's degenerate (`<= 0` / non-finite)
-    // combined base is hard-errored below, *after* the report is emitted — so
-    // this suppression keeps that emitted report from advertising the degenerate
-    // value as reusable, and still stands alone for a non-degenerate but
-    // out-of-range base (a channel `> 1`).
-    //
-    // Deliberately independent of grid *agreement*: a `--grid` run whose cells
-    // disagree (light leak / falloff / dust) still emits reuse-ready output when
-    // the combined median base is in range — the median resists a single bad
-    // cell, and the disagreement already rides `warnings`. A consumer treating
-    // the base as authoritative must check `warnings` (or run `--strict`, which
-    // promotes the disagreement to a hard failure); only a *degenerate* base
-    // withholds the reuse forms. (Design-spec §8.)
+    // channel (a channel `> 1`; `<= 0` already errored at birth) is still reported
+    // as the measurement, but never as "reuse-ready". A warning does not withhold
+    // them: it rides `warnings`, and `--strict` is the hard gate. (Design-spec §8.)
     match reuse_ready(<[f32; 3]>::from(base)) {
         Some((flag, source)) => {
             report.reuse = Some(ReuseReady { flag, source });
@@ -5720,7 +5443,6 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
     // The recipe-shaped handoff, assembled from the reuse-ready pairs rather than
     // from the measurements directly: that is what keeps each key present exactly
     // when its flag is, and withholds a value the reuse gates declined to advertise.
-    // Built here, after every gate above has decided.
     report.calibration = calibration_fragment(&report);
 
     report.elapsed_ms = Some(elapsed_ms(started));
@@ -5733,26 +5455,6 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
         args.report.report_file.as_deref(),
         &log,
     )?;
-    // A degenerate grid combined base (non-finite or <= 0 on any channel — e.g.
-    // `--grid --base-region` on the dark holder) cannot anchor the density
-    // divide, so hard-error **regardless of `--strict`**, mirroring the
-    // single-measurement path where `film_base::estimate`'s finite-and-positive
-    // guard rejects the same condition at birth. Same `NcError::Other` (exit 1)
-    // as that guard, so both estimate paths map a degenerate base to one exit
-    // code. The diagnostic report (with `grid.cells` and the per-cell warning) is
-    // emitted above first, so the evidence lands before this gate.
-    if args.grid
-        && <[f32; 3]>::from(base)
-            .iter()
-            .any(|v| !v.is_finite() || *v <= 0.0)
-    {
-        return Err(NcError::Other(format!(
-            "grid combined film base {:?} is not finite and positive on every \
-             channel; it cannot anchor the density divide — was the sampled area \
-             unexposed film base? See the report's grid.cells",
-            <[f32; 3]>::from(base)
-        )));
-    }
     if args.strict && !report.warnings.is_empty() {
         return Err(NcError::Other(format!(
             "--strict: {} warning(s) present (see report)",
@@ -5760,6 +5462,30 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Why the film holder went unmeasured, for a measurement that then rests on the
+/// inset alone.
+fn holder_not_measured_note(image: &LinearImage, sep: Option<film_base::IrSeparability>) -> String {
+    let why = if image.ir.is_none() {
+        "the scan has no IR plane".to_string()
+    } else if !image.ir_verified {
+        "its IR plane is identified by shape alone (no NewSubfileType=4 marker) and not \
+         trusted"
+            .to_string()
+    } else if let Some(s) = sep.filter(|s| !s.usable) {
+        format!(
+            "its IR plane cannot separate the holder on this frame (interior IR \
+             transmission {:.4})",
+            s.interior_median
+        )
+    } else {
+        "the frame is too small to measure the holder on".to_string()
+    };
+    format!(
+        "the film holder was not measured — {why} — so the effective area is the \
+         inset alone; raise --measure-inset if the holder reaches past it"
+    )
 }
 
 /// The report's `calibration` object, derived from the reuse-ready pairs.
@@ -6176,8 +5902,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
                 "measure-roll needs the roll's film base stated explicitly — `--film-base \
                  R,G,B` or `calibration.film_base` as `{\"explicit\": [r, g, b]}` in the \
                  recipe: a base estimated per frame would measure each frame under a \
-                 different decode. Measure it once with `hanten estimate --grid \
-                 <base.tif>`"
+                 different decode. Measure it once with `hanten estimate \
+                 <unexposed-frame>`"
                     .into(),
             ));
         }
@@ -6593,12 +6319,12 @@ fn conversion_info(recipe: &Recipe, destination: recipe::Destination) -> telemet
         params_hash: recipe.params_hash(),
         // `validate_convert` refuses a recipe with no film base before this is
         // built, so the fallback is unreachable; telemetry degrades rather than
-        // panics.
+        // panics, to `effective_area`, which no conversion resolves.
         film_base_source: recipe
             .calibration
             .film_base
-            .clone()
-            .unwrap_or(FilmBaseSource::Auto),
+            .as_ref()
+            .map_or(FilmBaseProvenance::EffectiveArea, FilmBaseProvenance::from),
         output_depth: primary_depth(destination),
     }
 }
@@ -6643,7 +6369,7 @@ mod tests {
     /// unrelated assertion would trip that rule instead of the one under test.
     fn base_recipe() -> Recipe {
         let mut r = Recipe::default();
-        r.calibration.film_base = Some(FilmBaseSource::Auto);
+        r.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         r
     }
 
@@ -7403,17 +7129,14 @@ mod tests {
         // Falsifiable control: the same document with a base stated does validate,
         // so the rejection above is about the film base and nothing else.
         let mut runnable = back.clone();
-        runnable.calibration.film_base = Some(FilmBaseSource::Auto);
+        runnable.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         validate_shared(&runnable, FilmBaseRemedy::Flags).unwrap();
     }
 
     #[test]
     fn validate_requires_a_stated_film_base() {
         // `calibration.film_base` has no default: `Dmin` is the divisor of the density
-        // conversion, so falling into auto-detection by omission decided the most
-        // consequential parameter for the user. All three stated forms are fine —
-        // including `auto`, which is what this used to default to. The rule is
-        // that the choice is *made*, not that it is explicit.
+        // conversion, so it must be stated. Both stated forms are fine.
         let unstated = Recipe::default();
         assert_eq!(
             unstated.calibration.film_base, None,
@@ -7423,19 +7146,23 @@ mod tests {
             Err(NcError::Usage(m)) => m,
             other => panic!("an unstated film base must be a usage error, got {other:?}"),
         };
-        // The message has to be actionable: name every way out, since a user who
-        // hit this has no idea which of the three they wanted.
+        // The message has to be actionable: name every way out, and how to measure
+        // the base it asks for.
         for expected in [
             "--film-base",
             "--base-region",
-            "--auto-base",
+            "hanten estimate <unexposed-frame>",
             "calibration.film_base",
         ] {
             assert!(msg.contains(expected), "{expected} missing from: {msg}");
         }
 
+        assert!(
+            !msg.contains("--auto-base"),
+            "the retired flag is no remedy: {msg}"
+        );
+
         for stated in [
-            FilmBaseSource::Auto,
             FilmBaseSource::Region([0, 0, 100, 40]),
             FilmBaseSource::Explicit([0.9, 0.55, 0.42]),
         ] {
@@ -7461,18 +7188,11 @@ mod tests {
         for absent in ["--auto-base", "--film-base"] {
             assert!(!msg.contains(absent), "{absent} must not be offered: {msg}");
         }
-        // `--base-region` *does* appear — but only inside the `hanten estimate`
-        // invocation the message recommends, which is a different command and does
-        // accept it. What must never appear is a `roll` flag.
-        assert!(
-            msg.matches("--base-region")
-                .count()
-                .eq(&msg.matches("hanten estimate --base-region").count()),
-            "--base-region may only appear as an argument of `hanten estimate`: {msg}"
-        );
+        assert!(!msg.contains("--base-region"), "not a `roll` flag: {msg}");
+        assert!(msg.contains("hanten estimate <unexposed-frame>"), "{msg}");
         // The *requirement* is remedy-independent — only the wording moves.
         let mut stated = Recipe::default();
-        stated.calibration.film_base = Some(FilmBaseSource::Auto);
+        stated.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         validate_shared(&stated, FilmBaseRemedy::SharedRecipe).unwrap();
         // And `convert_frame`'s totality guard shares the same two spellings, so
         // the unreachable restatement cannot drift from the gate's.
@@ -7514,17 +7234,8 @@ mod tests {
                 .to_string()
                 .contains("no film base selected")
         );
-        only_unstated.calibration.film_base = Some(FilmBaseSource::Auto);
+        only_unstated.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         validate_shared(&only_unstated, FilmBaseRemedy::Flags).unwrap();
-    }
-
-    #[test]
-    fn auto_base_flag_states_the_source_rather_than_relying_on_a_default() {
-        // The flag is the migration path for anyone who *wanted* detection: it
-        // resolves to exactly the source that used to be implicit.
-        let cfg = recipe::merge(Recipe::default(), &parse_convert(&["--auto-base"]));
-        assert_eq!(cfg.calibration.film_base, Some(FilmBaseSource::Auto));
-        validate_shared(&cfg, FilmBaseRemedy::Flags).unwrap();
     }
 
     #[test]
@@ -7670,19 +7381,6 @@ mod tests {
                 "i",
                 "-o",
                 "o",
-                "--auto-base",
-                "--film-base",
-                "0.9,0.5,0.4"
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "hanten",
-                "convert",
-                "i",
-                "-o",
-                "o",
                 "--base-region",
                 "0,0,1,1",
                 "--film-base",
@@ -7690,40 +7388,6 @@ mod tests {
             ])
             .is_err()
         );
-    }
-
-    #[test]
-    fn estimate_grid_conflicts_with_explicit_and_auto_base() {
-        // Grid replaces sampling/detection, so an explicit base or auto-base
-        // alongside it is contradictory — clap must reject, not silently pick.
-        for bad in [
-            ["--grid", "--film-base", "0.9,0.5,0.4"].as_slice(),
-            ["--grid", "--auto-base"].as_slice(),
-        ] {
-            let mut argv = vec!["hanten", "estimate", "in.tiff"];
-            argv.extend_from_slice(bad);
-            assert!(
-                Cli::try_parse_from(argv).is_err(),
-                "{bad:?} should conflict"
-            );
-        }
-        // `--grid` with `--base-region` is the documented sub-rectangle mode.
-        let cli = Cli::try_parse_from([
-            "hanten",
-            "estimate",
-            "in.tiff",
-            "--grid",
-            "--base-region",
-            "0,0,9,9",
-        ])
-        .unwrap();
-        match cli.command {
-            Command::Estimate(a) => {
-                assert!(a.grid);
-                assert_eq!(a.film_base.base_region, Some([0, 0, 9, 9]));
-            }
-            _ => unreachable!("expected estimate"),
-        }
     }
 
     #[test]
@@ -7751,11 +7415,11 @@ mod tests {
     #[test]
     fn the_calibration_fragment_omits_what_was_not_measured() {
         let base_only = CalibrationFragment {
-            film_base: Some(FilmBaseSource::Auto),
+            film_base: Some(FilmBaseSource::Explicit([0.5, 0.25, 0.125])),
         };
         assert_eq!(
             serde_json::to_string(&base_only).unwrap(),
-            r#"{"film_base":"auto"}"#
+            r#"{"film_base":{"explicit":[0.5,0.25,0.125]}}"#
         );
         // Nothing measured is `None`, not `{}`: an empty object would pipe into
         // `--params` as a no-op a user could mistake for a calibration.
@@ -8799,7 +8463,7 @@ mod tests {
         let mem = memory::preflight(
             &crate::io::decode::ImageShape::new(1000, 1000, 3, 16, true).unwrap(),
             RunProfile::DecodeOnly,
-            SamplePlan::auto(),
+            SamplePlan::rect(500 * 500),
             memory::Budget::resolve(None),
             None,
         )
@@ -8835,7 +8499,7 @@ mod tests {
         let quiet = preflight_memory(
             &input,
             RunProfile::DecodeOnly,
-            SamplePlan::auto(),
+            SamplePlan::rect(500 * 500),
             budget,
             Some(64 * 1024 * 1024 * 1024),
             &log,
@@ -8851,7 +8515,7 @@ mod tests {
         let warned = preflight_memory(
             &input,
             RunProfile::DecodeOnly,
-            SamplePlan::auto(),
+            SamplePlan::rect(500 * 500),
             budget,
             Some(tiny_ram),
             &log,
