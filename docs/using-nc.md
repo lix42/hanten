@@ -464,11 +464,25 @@ removed chain's key in it is refused the same way, naming its frame. An explicit
 (§8): an extension it states must match the frame's destination, and one it omits is
 completed, so `"output": "b-brighter"` writes `b-brighter.tiff` on a default roll.
 
-Some keys describe the *roll*, not the frame: `calibration.film_base` and `output`.
-Overriding one per frame is applied but warns loudly (and `--strict` turns the warning
-into a failing exit), because the frame then renders differently from its siblings —
-a roll is one piece of film through one process. A per-frame `output.display` joins
-the shared recipe's axes, axis by axis.
+A frame renders exactly as `convert --params` would with the shared recipe and its
+override merged. Some keys describe the *roll*, not the frame:
+`calibration.film_base`, `roll.white_balance`, `reconstruction` (every key),
+`rendering` and `output`. An override that changes one is applied but warns, naming
+both values (and `--strict` turns the warning into a failing exit), because the frame
+then renders apart from its siblings — a roll is one piece of film through one
+process. What counts is what the frame renders: restating the roll's value does not
+warn, nor do gains the frame never applies (under `direct` or the film master), and a
+`rendering` change names the destination it derives.
+`roll.white_stops` is per frame: it is how `measure-roll` gives a clamped frame its
+own white. With `"reconstruction": {"linearization": 1.7}` added to `b.tif`'s
+`params`:
+
+```console
+$ hanten roll --frames frames.json --out-dir positives/ --params roll-recipe.json --report none
+hanten: warning: frame b.tif: its `params` override resolves `reconstruction.linearization` to 1.7, where the roll's is 1.8 — this frame's densities decode differently from the rest of the roll's. Drop what changes it from this frame's `params` to keep the roll consistent.
+```
+
+A per-frame `output.display` joins the shared recipe's axes, axis by axis.
 
 ---
 

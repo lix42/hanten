@@ -3507,6 +3507,119 @@ fn roll_frame_local_override_applies_to_just_that_frame() {
 }
 
 #[test]
+fn a_roll_frame_resolves_as_the_equivalent_convert_and_warns_only_on_roll_wide_values() {
+    // Each frame's `params` merges onto the shared recipe; the frame must render, and
+    // hash its recipe, exactly as `convert --params <the merged recipe>`. The overrides
+    // pick the cases a merge could resolve differently: a clamp (frame-local), a
+    // `rendering` switch whose destination is derived rather than stated, and a decode
+    // key. Only the last two are roll-wide.
+    let tmp = TempDir::new("roll-equivalence");
+    let shared = r#""recipe_version": 2,
+        "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}}"#;
+    let roll = r#""roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 1.7}"#;
+    let recipe = write_file(&tmp.path("roll.json"), &format!("{{{shared}, {roll}}}"));
+    let input = fixture("hdr-48bit.tif");
+    let cases = [
+        (
+            "clamp",
+            r#"{"roll": {"white_stops": 2.0}}"#,
+            r#""roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.0}"#.to_string(),
+        ),
+        (
+            "direct",
+            r#"{"rendering": "direct"}"#,
+            format!(r#"{roll}, "rendering": "direct""#),
+        ),
+        (
+            "decode",
+            r#"{"reconstruction": {"linearization": 1.7}}"#,
+            format!(r#"{roll}, "reconstruction": {{"linearization": 1.7}}"#),
+        ),
+    ];
+    let frames: Vec<String> = cases
+        .iter()
+        .map(|(name, params, _)| {
+            format!(r#"{{"input": {input:?}, "output": "{name}.tiff", "params": {params}}}"#)
+        })
+        .collect();
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &format!(r#"{{"frames": [{}]}}"#, frames.join(",")),
+    );
+    let out_dir = tmp.path("out");
+    let (code, stdout, err) = run(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+
+    for (i, (name, _, merged)) in cases.iter().enumerate() {
+        let merged = write_file(
+            &tmp.path(&format!("{name}.json")),
+            &format!("{{{shared}, {merged}}}"),
+        );
+        let reference = tmp.path(&format!("{name}-convert.tiff"));
+        let (code, stdout, err) = run(&[
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            reference.to_str().unwrap(),
+            "--params",
+            merged.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "{name}: {err}");
+        let frame = &report["frames"][i];
+        assert_eq!(
+            frame["identity"]["params_hash"],
+            json(&stdout)["identity"]["params_hash"],
+            "{name}"
+        );
+        assert_eq!(
+            std::fs::read(out_dir.join(format!("{name}.tiff"))).unwrap(),
+            std::fs::read(&reference).unwrap(),
+            "{name}"
+        );
+    }
+    // `direct` derived its own destination (the HDR float TIFF), not the roll's.
+    assert_eq!(read_tiff_bits(&out_dir.join("direct.tiff")), 32);
+
+    let warned: Vec<&str> = report["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|w| w.as_str())
+        .filter(|w| w.contains("override resolves"))
+        .collect();
+    let keys: Vec<&str> = warned
+        .iter()
+        .map(|w| w.split('`').nth(3).unwrap())
+        .collect();
+    assert_eq!(
+        keys,
+        ["rendering", "reconstruction.linearization"],
+        "{warned:#?}"
+    );
+    // The derived destination rides the `rendering` warning; no `output` one names a
+    // key the frame never wrote.
+    assert!(
+        warned[0].contains(r#"to "direct" (destination {"range":"hdr""#),
+        "{}",
+        warned[0]
+    );
+    assert!(
+        warned[1].contains("to 1.7, where the roll's is 1.8"),
+        "{}",
+        warned[1]
+    );
+}
+
+#[test]
 fn roll_records_a_failed_frame_and_exits_nonzero() {
     // Batch resilience: a bad frame (missing input → decode error) is recorded in
     // the report and the roll continues, converting the good frame; the roll then
@@ -3768,11 +3881,11 @@ fn roll_warns_on_per_frame_film_base_override() {
         w.iter().any(|m| m
             .as_str()
             .unwrap()
-            .contains("overriding the roll-fixed base")),
+            .contains("resolves `calibration.film_base`")),
         "the per-frame film_base override warns loudly: {report}"
     );
     assert!(
-        err.contains("overriding the roll-fixed base"),
+        err.contains("resolves `calibration.film_base`"),
         "warning echoed to stderr: {err}"
     );
 
@@ -4354,7 +4467,7 @@ fn roll_accepts_a_film_master_recipe() {
     assert!(
         !warnings
             .iter()
-            .any(|w| w.as_str().unwrap_or("").contains("sets `output`")),
+            .any(|w| w.as_str().unwrap_or("").contains("resolves `output`")),
         "an un-overridden roll must not warn about the destination: {warnings:?}"
     );
 }
@@ -4430,11 +4543,14 @@ fn roll_frame_override_of_output_warns_and_is_strict_promotable() {
         .collect();
     let hit = warnings
         .iter()
-        .find(|w| w.contains("sets `output`"))
+        .find(|w| w.contains("resolves `output`"))
         .unwrap_or_else(|| panic!("no `output` override warning in {warnings:?}"));
     assert!(hit.contains("hdr-48bit.tif"), "{hit}");
-    assert!(hit.contains("image class"), "{hit}");
-    assert!(err.contains("sets `output`"), "and on stderr too: {err}");
+    assert!(hit.contains("a different image"), "{hit}");
+    assert!(
+        err.contains("resolves `output`"),
+        "and on stderr too: {err}"
+    );
 
     // The override really did produce a different image class — that is the harm.
     assert_eq!(read_tiff_bits(&out_dir.join("master.tiff")), 32);
@@ -5627,7 +5743,7 @@ fn roll_gates_each_frame_against_the_shared_budget() {
         "--max-memory",
         &between,
     ]);
-    assert_ne!(code, 0, "the over-budget frame must fail the roll:\n{err}");
+    assert_eq!(code, 1, "the over-budget frame must fail the roll:\n{err}");
     let report = json(&stdout);
     assert_eq!(report["summary"]["succeeded"], 1);
     assert_eq!(report["summary"]["failed"], 1);
@@ -6267,7 +6383,7 @@ fn roll_checks_explicit_manifest_suffixes_and_derives_per_frame_names() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|w| w.as_str().unwrap_or_default().contains("sets `output`")),
+            .any(|w| w.as_str().unwrap_or_default().contains("resolves `output`")),
         "a per-frame destination override must still warn: {report}"
     );
 
@@ -9648,6 +9764,11 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     let rendered = |i: usize| &rolled["frames"][i]["chain"]["look"]["contrast"];
     assert_eq!(rendered(0), &white["contrast"], "{rolled}");
     assert_eq!(rendered(1), &clamped["contrast"], "{rolled}");
+    // A clamp is how the manifest states a frame's own white, not a roll-wide break.
+    assert!(
+        !rolled.to_string().contains("override resolves"),
+        "{rolled}"
+    );
 
     // A roll whose every frame is above the cap lands on the cap: its frames are still
     // disclosed as clamped, but they render at the roll's own contrast, so there is no
@@ -10955,7 +11076,7 @@ fn a_roll_names_each_frame_from_its_destination() {
         .expect("roll report must carry a warnings array")
         .iter()
         .filter_map(|w| w.as_str())
-        .filter(|w| w.contains("overriding the roll's destination"))
+        .filter(|w| w.contains("resolves `output`"))
         .collect();
     assert_eq!(warned.len(), 1, "{report}");
     assert!(warned[0].contains("hdri-64bit.tif"), "{}", warned[0]);
@@ -10985,7 +11106,7 @@ fn a_roll_names_each_frame_from_its_destination() {
     );
     let (code, _, err) = strict_roll(&overridden, "strict-a");
     assert_eq!(code, 1, "--strict must promote the warning: {err}");
-    assert!(err.contains("overriding the roll's destination"), "{err}");
+    assert!(err.contains("resolves `output`"), "{err}");
     let control = write_file(&tmp.path("control.json"), &one(""));
     let (code, _, err) = strict_roll(&control, "strict-b");
     assert_eq!(code, 0, "{err}");

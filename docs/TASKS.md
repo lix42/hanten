@@ -1165,7 +1165,7 @@ the design in `docs/design-update.md`:
   — `deny_unknown_fields` cannot see a *known but meaningless* key, so a stale
   `print.*` section is accepted-and-ignored
 - `nf-core/subcommands` (new flow): `nf-core/minimal-end-to-end`
-  — roll's per-frame overrides: the merge onto the serialized shared recipe, roll-fixed
+  — roll's per-frame overrides: the merge onto the serialized shared recipe, roll-wide
   warnings for new-chain keys, and the error-code check
 - `nf-core/buffer-strategy` (new flow): `nf-core/stage-skeleton`
   — the GPU spike decided the seams are the existing typed boundaries, not one
@@ -1694,10 +1694,10 @@ the design in `docs/design-update.md`:
   boundary](tasks/nf-core/recipe-schema.md) — the new chain reads its own
   `"recipe_version": 2` document (`src/recipe.rs`, one section per stage), and
   each chain refuses the other's recipe by name
-- [ ] [`roll`'s per-frame overrides under the new
+- [x] [`roll`'s per-frame overrides under the new
   chain](tasks/nf-core/subcommands.md) — a frame's override resolves as `convert`
-  would, and the new chain's roll-fixed keys warn (`roll.white_stops` per frame is
-  legitimate). *Re-scoped 2026-09-28: `inspect` is done, `estimate` moved to
+  would, and an override that changes a roll-wide value warns (`roll.white_stops` per
+  frame is legitimate). *Re-scoped 2026-09-28: `inspect` is done, `estimate` moved to
   `core/measure-base`, `nctool roll`'s calibrate step to `core/roll-measure-mode`*
 - [ ] [Stage seams, buffers and the IR
   plane](tasks/nf-core/buffer-strategy.md) — the GPU spike decided the seams

@@ -2313,18 +2313,13 @@ recipe pins an explicit base, but meaningful under an `auto`/`region` base that
 resolves per frame. Frame-local knobs are the per-frame `params` overrides. Roll-fixed
 invariant violations are **loud, `--strict`-promotable warnings** rather than hard
 errors, so a deliberate best-effort batch remains usable: (1) a shared
-`calibration.film_base` other than `explicit` re-estimates Dmin per frame; a per-frame
-override that sets (2) `calibration.film_base` changes that frame's Dmin, (3)
-`reconstruction.curve.anchor` places that frame's mid-grey on a different rule, and
-(4) `output.preset` gives it a different output **policy** — a different branch out of
-the ACEScg boundary, so a different *image class* (unclamped linear master vs rendered
-TIFF), not merely a different rendering. The override warnings key on the key's
-presence, so they fire even when the override restates the shared value: `frames[]`
-carries no `output_render` block (a `convert`-only field), leaving the
-`frames[].overrides` echo as the only other trace. A per-frame `calibration.dmax`
-follows the recipe rule (§8): dropped at `"fixed"`, refused otherwise (under
-`--new-flow`, refused outright — no new-chain recipe ever carried it). `input.export_ir` is rejected in roll mode (one
-path, N frames). Determinism: same batch + same recipe ⇒ byte-identical output per
+`calibration.film_base` other than `explicit` re-estimates Dmin per frame; (2) a
+per-frame override that resolves a **roll-wide** value differently from the shared
+recipe — `calibration.film_base`, the applied `roll.white_balance`, any
+`reconstruction` key, `rendering`, or a stated `output` — warns, naming both values
+(`cli::ROLL_WIDE`). A restatement does not; `frames[].overrides` records it.
+`roll.white_stops` is frame-local: it is how a clamped frame states its own white.
+`input.export_ir` is rejected in roll mode (one path, N frames). Determinism: same batch + same recipe ⇒ byte-identical output per
 frame.
 
 **Telemetry (operational, `convert` only — NOT recipe keys).** Opt-in
