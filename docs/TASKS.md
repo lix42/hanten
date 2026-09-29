@@ -2023,8 +2023,10 @@ the design in `docs/design-update.md`:
   `balance_range` is gone. No pixel moved (`render`/`base` reproduced, `recipe`
   refreshed); on a synthetic crossover a hand-matched grade leaves C\* ≤ 0.71 where the
   balance left 2.16
-- [ ] [Rename the `print.*` prefix](tasks/nf-retire/print-prefix-rename.md) —
-  after the second implementation is gone, so nothing is renamed twice
+- [x] [Rename the `print.*` prefix](tasks/nf-retire/print-prefix-rename.md) — **done
+  2026-09-29, no code.** `nf-core/default-flip` already retired it: a `print` section
+  is refused naming each knob's new key, and the removed flags name theirs; the spec's
+  stale `print.*` sections pass to `nf-docs/design-spec`
 - [x] [Retire the `characteristic` curve
   path](tasks/nf-retire/characteristic.md) — **done 2026-09-26.** The curve
   (`algo/characteristic.rs` and `algo/curve_probe.rs` deleted whole), `--density-curve`,
