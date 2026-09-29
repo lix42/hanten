@@ -378,6 +378,7 @@ graph TD
     nf-calibration/roll-section
     nf-calibration/white-rule-hdr
     nf-calibration/roll-exposure
+    nf-calibration/thin-frame-lift
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -623,6 +624,8 @@ graph TD
   nf-calibration/roll-white-rule --> nf-calibration/roll-exposure
   nf-calibration/roll-section --> nf-calibration/roll-exposure
   nf-calibration/roll-exposure --> nf-calibration/white-rule-hdr
+  nf-calibration/roll-exposure --> nf-calibration/thin-frame-lift
+  nf-calibration/roll-white-rule --> nf-calibration/thin-frame-lift
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
@@ -1219,6 +1222,9 @@ the design in `docs/design-update.md`:
 - `nf-calibration/roll-exposure` (new flow): `nf-calibration/roll-white-rule`, `nf-calibration/roll-section`
   — filed 2026-09-29: an under-exposed roll bound at the floor rendered dark, and no
   contrast can lift it; a hand `--exposure 1.4` fixed it
+- `nf-calibration/thin-frame-lift` (new flow): `nf-calibration/roll-exposure`, `nf-calibration/roll-white-rule`
+  — filed 2026-09-29: an opt-in per-frame exposure and slope for frames far thinner than
+  the roll; hand-solved pairs at slope 2.0 and 2.4 passed review
 
 ## Tasks
 
@@ -1943,6 +1949,9 @@ the design in `docs/design-update.md`:
 - [ ] [A measured roll exposure](tasks/nf-calibration/roll-exposure.md) — `measure-roll`
   writes `roll.exposure`, one neutral gain for the roll from a central statistic of its
   frames, so an under-exposed roll renders at a normal level; darker frames stay dark
+- [ ] [Opt-in lift for a thin frame](tasks/nf-calibration/thin-frame-lift.md) — a frame far
+  thinner than its roll gets a solved exposure and a steeper slope, bounded, written to
+  `roll.frames`; more grain is the accepted price, and it is off by default
 - [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering; one round, nothing moved, the

@@ -499,6 +499,17 @@ frames; the look's default contrast is `no-roll-defaults`'.
   the darkest frames left dark. Goal: `measure-roll` measures one neutral exposure per
   roll and writes it as `roll.exposure`.
 
+## thin-frame-lift
+
+**Status:** not started
+**Updated:** 2026-09-29
+
+- 2026-09-29: filed (user) after hand-lifting frames 2005 and 1983 of the 2026-09-28 roll
+  with a `roll --frames` manifest. Slope 2.0 and 2.4 (×1.21 and ×1.46 the roll's), with the
+  exposure solved to put each white at diffuse white, both passed. Grain at 2.4 is fine,
+  and its white a little dark. Goal: an opt-in, bounded per-frame lift that `measure-roll`
+  writes to `roll.frames`.
+
 ## scale-ladder
 
 **Status:** done
