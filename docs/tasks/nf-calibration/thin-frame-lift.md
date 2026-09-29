@@ -20,9 +20,10 @@ What is known:
   steeper slope together**: the slope spreads the short range, and the exposure is
   solved from it.
 - **Grain rises with the slope.** The user accepts that as the price, within a bound.
-- **Evidence, 2026-09-29** (roll `20260928-film-*`, over the roll's +1.4 EV and slope
-  1.649; frames 2005 and 1983, whites −1.23 and −1.06). Hand-solved pairs put each white at
-  diffuse white:
+- **Evidence, 2026-09-29** (roll `20260928-film-*`: roll exposure +1.4 EV, slope 1.649;
+  frames 2005 and 1983, whites −1.23 and −1.06). Hand-solved pairs put each white at
+  diffuse white. Each exposure below is the frame's **total**, replacing the roll's +1.4
+  (a manifest `params` exposure replaces the flag):
   - slope 2.0 (about ×1.21 the roll's): exposure +2.47 and +2.30. The base landed 2.2 and
     2.6 stops under mid-grey.
   - slope 2.4 (about ×1.46 the roll's): exposure +2.26 and +2.09. The base landed 3.2 and
@@ -51,10 +52,12 @@ Open:
   It could be lifted to the bound and reported, or left alone.
 - **How to pick the slope and exposure within the bounds.** The minimum slope that keeps
   the base clear of display black's warning, or a fixed ratio.
-- **Colour.** Lifted, 1983 grew bluer (written blue 0.52 against red and green about 0.30).
-  It is either the scene or the roll's white balance failing near the base, where the
-  channels' toes differ. Not yet judged. If it is a cast, decide whether this task owns a
-  correction (`--channel-grade`) or hands it off.
+- **Colour.** Lifted, 1983 grew bluer (written blue 0.52 against red and green about
+  0.30). The user judged this to be the scene, not a toe cast. So no cast appeared on
+  these frames, but a thinner frame on another roll could still show one.
+- **Total or delta.** Whether a lifted frame's exposure in `roll.frames` replaces the roll's
+  or adds to it (on 2005: +2.26 total, or +0.86 over the roll). `roll-exposure` makes the
+  stated exposure add to the roll's, so the entry's merge must be pinned either way.
 - **Keys and flags.** How the option is spelled on `measure-roll`, and how a lifted frame's
   entry is marked in `roll.frames`, so it reads as a choice, not a measurement.
 
@@ -63,7 +66,8 @@ Open:
 - On the 2026-09-28 roll, the option lifts 1983, 1984, 2000 and 2005 (and 1992 if it
   qualifies) to renders comparable with the hand-solved slope-2.4 pairs, and leaves every
   other frame's entry untouched.
-- Without the option, `measure-roll --out` writes byte-identically to today.
+- Without the option, `measure-roll --out` writes byte-identically to the build before this
+  task (after `roll-exposure`).
 - A frame that the bounds stop from being fully lifted is reported by name.
 - A review round on at least one more roll with thin frames confirms the bounds.
 
