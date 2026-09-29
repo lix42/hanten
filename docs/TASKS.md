@@ -1250,7 +1250,7 @@ the design in `docs/design-update.md`:
   cross-frame agreement, provenance + confidence, loud drop to single. An opt-in mode of
   `measure-roll`
 - [x] [The `calibration` recipe section](tasks/core/calibration-recipe-section.md) — `film_base` and `dmax` move into their own top-level section; no pixel change
-- [ ] [Layered recipe composition](tasks/core/recipe-composition.md) — repeatable `--params`
+- [x] [Layered recipe composition](tasks/core/recipe-composition.md) — repeatable `--params`
   (file or `-` for stdin), `roll` gains convert's override flags, one precedence chain
   `defaults < params A < params B < … < flags`. Enables the look / roll-measurement split;
   layering needs no schema change, an in-recipe clamp table would

@@ -41,8 +41,9 @@ What other epics need to know about `core`:
   stage-0 memory preflight first (`io/memory-preflight`, exit 6 over budget).
 - **`ResolvedConfig` is the recipe.** One nested per-stage struct doubles as the
   recipe, `--dump-params`, and `hanten params` output, so the three can't drift.
-  Merge model is `defaults ← recipe ← CLI` (flags win, **by source rather than by
-  value**); an absent presence flag never clobbers a recipe value. Every recipe
+  Merge model is `defaults ← --params layers ← CLI` (flags win, **by source rather
+  than by value**; `recipe::compose`, `core/recipe-composition`); an absent presence
+  flag never clobbers a recipe value. Every recipe
   struct uses `deny_unknown_fields`, so a misplaced key is a loud error — keep
   new knobs in the section design-spec §9 assigns them. `params` and `meta` are
   reserved top-level keys (the sidecar envelope), pinned by test.
@@ -93,10 +94,10 @@ What other epics need to know about `core`:
   per-frame core `convert_frame` — so a roll frame is **byte-identical** to the
   equivalent single `convert`. Config errors fail up front (exit 2/4); per-frame
   runtime errors are recorded and the roll continues, exiting 1. A roll whose
-  recipe isn't an explicit film base warns loudly rather than failing. Roll is
-  recipe-only today (`--frames`, `--out-dir`, `--params`, `--strict`,
-  `--max-memory`, reporting) — `core/recipe-composition` gives it convert's
-  override flags.
+  recipe isn't an explicit film base warns loudly rather than failing. `roll` takes
+  every conversion flag `convert` does (`cli::ConversionFlags`) and the same layered
+  `--params`; a frame resolves layers → its `roll.frames` entry → flags → its manifest
+  `params`.
 - **Conversion identity is stamped into every report** (`src/version.rs`,
   `core/conversion-versioning`, shipped 2026-07-28): build identity (semver +
   git commit + dirty + target), the behavioral **`pipeline_version`**, and a
@@ -798,8 +799,8 @@ heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`
 
 ## recipe-composition
 
-**Status:** not started
-**Updated:** 2026-08-11
+**Status:** done (2026-09-28)
+**Updated:** 2026-09-28
 
 - Goal: `--params` repeatable (file or `-`), `roll` gains convert's override flags,
   one precedence chain. Enables the pipeline/calibration split.
@@ -814,6 +815,86 @@ heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`
   now also what removes the hand merge between measuring and `roll` (two layers: the
   measured file from `measure-roll --out` with `calibration` and `roll`, and the look), and
   `roll-measure-mode` depends on it for `roll`'s override flags.
+
+### 2026-09-28 — executed
+
+- **Shipped:** `--params` is repeatable on `convert`, `roll` and `measure-roll`, and `-`
+  reads stdin (a second `-` exits 2). `roll` takes every conversion flag `convert` does:
+  the knob and removed-flag groups moved into one flattened `cli::ConversionFlags`, and
+  `roll_takes_every_conversion_flag_convert_does` holds the two surfaces together. "No
+  schema change" held.
+- **Decisions (user, 2026-09-28):** a `null` in any layer — or a frame's manifest
+  `params` — states nothing (design-doc question 10), so a complete look file after a
+  measured one keeps the measurement, and a layer cannot unset an earlier value; a
+  frame's manifest `params` sit above the flags (question 2); `measure-roll`'s `--params`
+  is repeatable too.
+- **Layers merge onto the serialized default recipe, never onto each other**
+  (`recipe::compose`). Two partial layers `{"look": {"contrast"}}` and
+  `{"look": {"channel_grade"}}` have `merge_json`'s variant-switch shape, and merged
+  directly the second dropped the first. Each layer is still checked alone first, so a
+  fault names its file.
+- **`roll.frames` is a map, not a tag** (`recipe::compose::MAPS`): two layers with one
+  entry each also have the variant-switch shape and would have replaced rather than
+  unioned. Found while rebasing onto `core/measure-base` (#196).
+- **Frame order on `roll`**, taken from #196: layers → the frame's `roll.frames` entry
+  (`Recipe::for_frame`) → flags → manifest `params`. So `--roll-white` beats a table
+  clamp, as on `convert`, but not a manifest one. `resolve_frames` takes the recipes
+  alone (`stated`) and the flagged roll (`shared`, what the roll-wide warnings compare
+  against); `a_roll_flag_beats_a_frames_table_entry_as_on_convert` pins the order and
+  fails when flags are merged first.
+- **`FilmBaseRemedy` is gone**: `roll` takes the film-base flags, so one missing-base
+  message serves both commands. `roll`'s stage-rule messages name flag and key; a
+  frame override's name the key alone (the fault is in the manifest).
+- **Verified:** every CI gate (615 unit, 220 integration, 419 `nctool`); a flag-only
+  `roll` is byte-identical to `convert` with the same flags; layered and hand-merged
+  recipes render byte-identically with one `params_hash`; the guide's §4, §5 and §8
+  re-run against the binary. The null rule, the merge-onto-defaults rule, the map rule
+  and the frame order were each checked falsifiable.
+
+### 2026-09-28 — closed
+
+Review (`nc-reviewer` in five rounds, a user-run `/code-review`, then ship's
+`ship:diff-reviewer`; Codex never ran — its workspace was out of credits). This
+supersedes two claims in the entry above:
+- **A complete look file does not keep the measurement.** Only its `null` keys state
+  nothing; every value it states wins, a restated default included (`hanten params`
+  states `reconstruction`, `input`, `measure`). So **the measured file goes last**:
+  `--params look.json --params roll.json`. A `--dump-params` file is the whole run
+  (base, roll values, `roll.frames`), not a look: layered under another roll's file its
+  table entries survive and clamp same-named frames. Strip `calibration` and `roll` —
+  and the decode unless meant to carry — to reuse one. Authoring looks is
+  `core/profile-authoring`'s job.
+- **A `null` in a roll frame's manifest `params` is refused** (user decision after
+  review), exit 2 naming the frame and key path — it can only be an attempt to unset.
+  `--params` layers keep skipping nulls. Order in `resolve_frames`: a null-free merge
+  first (so a typo or bad type is named), then unknown null keys, then the refusal;
+  arrays are named by index, and a switched tagged value (`{"region": [.., null]}` over
+  an explicit base) is not mistaken for an unknown key (`recipe::is_variant_switch`).
+
+Also landed from review:
+- `--dump-params` over a `--params` file is allowed only for a **sole** layer; with
+  several it would fold the whole run into one of them.
+- `convert` refuses `-o`, `--report-file` and `--export-ir` over a `--params` file, as
+  `roll` and `measure-roll` do.
+- A frame whose `params` state `input.transfer`/`meaning` is no longer credited to the
+  flag (`InputFromCli::under`, per frame).
+- `measure-roll` reports a layer's `pipeline_version` mismatch like the other commands.
+- The roll's own validation errors carry no "the roll's recipe" prefix (a flag may be
+  the cause); protected-input collisions name the file kind.
+
+Left open, recorded for the user: `--roll-white` on `roll` silently beats every
+`roll.frames` clamp (documented, matches `convert`; a warning is undecided); a
+flag-configured `roll` leaves no replayable recipe (`roll` has no `--dump-params`) until
+`--save-recipe` (`core/roll-measure-mode`); a typed `--contrast 50` passes validation
+and fails at render with an internal "by construction" message (pre-existing).
+
+Final gates: 616 unit, 227 integration, 419 `nctool`; fmt, clippy, doc clean.
+
+**For dependent tasks.** `core/roll-measure-mode`: `roll`'s flags and layers exist;
+build on `resolve_frames(args, stated, shared, …)` and keep the frame order.
+`core/profile-authoring`: a profile is a look, so it should state no `calibration` or
+`roll`; design-doc open question 6 (complete vs partial) now has a concrete cost — a
+complete profile restates the decode, so it must be layered before the measured file.
 
 ## profile-authoring
 

@@ -1,8 +1,8 @@
 # The roll workflow: measuring, composing and converting from the CLI
 
 **Status:** target design, decided 2026-09-28. The measuring commands (`measure-base`,
-`measure-roll --unexposed`, `--out`) shipped with `core/measure-base`; layering, `roll`'s
-override flags and its measure mode have not. Where this document and a task file
+`measure-roll --unexposed`, `--out`) shipped with `core/measure-base`, and layering and
+`roll`'s override flags with `core/recipe-composition`; `roll`'s measure mode has not. Where this document and a task file
 disagree, this document wins — change it first, then the task. `docs/using-nc.md` §4
 describes what ships today.
 
@@ -30,9 +30,8 @@ hanten roll --frames frames.json --out-dir out/ --params roll.json
 ```
 
 The measuring commands printed a report and left the user to extract the recipe from
-it — `--out` now writes it. Still open: `--params` takes one file, so a look and a
-measurement must share one; and `roll` has no override flags, so every change is a file
-edit.
+it — `--out` now writes it; `--params` took one file, so a look and a measurement had
+to share one; and `roll` had no override flags, so every change was a file edit.
 
 ## Principles
 
@@ -106,8 +105,8 @@ the roll's measurements come from one command and live in one file.
   file as `roll.frames`, so the user never passes a manifest by hand (open question 3).
 - **The file renders alone**: `--out` also carries the `input`, `measure` and
   `reconstruction` sections the measurement ran under when they are not the defaults,
-  since the gains hold only under that decode and `roll` takes one `--params` until
-  `core/recipe-composition` — never `input.export_ir`, a frame's output path.
+  since the gains hold only under that decode — never `input.export_ir`, a frame's
+  output path.
 - **The report no longer carries the recipe** (`reuse.recipe`, `reuse.frames`, and
   `measure-base`'s `calibration` object): they existed to be extracted with `jq`. The
   `convert` flags (`reuse.flag`, `film_base_flag`) stay, and so do the measured values.
@@ -129,17 +128,28 @@ frame with a visible rebate, whose `--out` file then feeds `measure-roll --param
 chain; later wins:
 
 ```text
-defaults  <  --params A  <  --params B  <  …  <  individual flags
+defaults  <  --params A  <  --params B  <  …  <  the frame's roll.frames entry
+          <  individual flags  <  a roll frame's manifest params
 ```
 
 Flags win **by source, not by value** — an explicit `--white-balance 1,1,1` means
 neutral gains, not "fall back to the recipe". `roll` gains every override flag
-`convert` has, so a one-off change needs no file.
+`convert` has, so a one-off change needs no file. A layer merges key by key; **a
+`null` states nothing** (no layer unsets an earlier value), but any stated value wins,
+a restated default included — so the measured file goes last; a tagged value that
+switches variant (`region` → `explicit`) is replaced whole, and `roll.frames` merges
+entry by entry. A look layer states no `calibration` or `roll`; a `--dump-params` file
+is the whole run, table included, so it is a look only once those are stripped
+(and `reconstruction` and `input`, unless its decode is meant to carry; authoring
+looks: `core/profile-authoring`).
 
-A frame's own override (the `--frames` manifest's `params`) resolves the same config
-a single `convert` of that frame would. An override that changes a roll-wide value
-warns (`--strict` refuses it), and a restatement does not; a per-frame
-`roll.white_stops` is **not** roll-wide — it is how a clamp is expressed.
+A frame's own override (the `--frames` manifest's `params`) lands on that frame's
+recipe with its flags applied, and resolves the same config a single `convert` of
+that frame would. So a manifest clamp survives `--roll-white`; a `roll.frames` clamp,
+being recipe, does not. An override that changes a roll-wide value warns (`--strict` refuses
+it), and a restatement of the resolved value does not; a per-frame `roll.white_stops`
+is **not** roll-wide — it is how a clamp is expressed. A `null` in the override is
+refused (Q10).
 
 ### `roll`'s measure mode
 
@@ -158,8 +168,8 @@ measure mode.
 | `--unexposed U` | — | measures the base and the roll, then converts |
 | none | refused, as today | refused |
 
-¹ `roll` has no `--film-base` today; it arrives with `roll`'s override flags
-(`core/recipe-composition`), as do the `--roll-*` flags below.
+¹ `--film-base`, like the `--roll-*` flags below, is one of `roll`'s override flags
+(`core/recipe-composition`).
 
 - **Measure mode adds no measurement of its own**: its images are byte-identical to
   `measure-roll` then `roll` over the same inputs.
@@ -210,9 +220,9 @@ Each is owned by the task named; its answer is recorded here.
 
 1. ~~The one-shot's name, or a mode of `roll`?~~ **Resolved 2026-09-28: a mode of
    `roll`**, entered by `--measure-roll`, which `--unexposed` implies (above).
-2. **Does a `roll` flag beat a frame's manifest `params`?** The chain above has no
-   place for the per-frame layer. A roll-wide flag that overrode a clamp would undo it,
-   so the per-frame layer probably sits above the flags. — `core/recipe-composition`
+2. ~~Does a `roll` flag beat a frame's manifest `params`?~~ **Resolved 2026-09-28: no —
+   the frame's `params` sit above the flags** (above), so a roll-wide flag cannot undo
+   a clamp stated there. A clamp in `roll.frames` is recipe, and a flag beats it (3).
 3. ~~The clamps' shape in the recipe~~ **Resolved 2026-09-28: `roll.frames`**, a table
    in the `roll` section from a frame's **file name** to its own
    `{"white_stops": …}`, so the recipe survives the scans moving. `convert` and every
@@ -235,10 +245,13 @@ Each is owned by the task named; its answer is recorded here.
 9. **`roll --frames manifest.json` in measure mode**: measuring over the manifest's frames
    is clear; how the clamps it measures combine with the manifest's own per-frame
    `params` is not. — `core/roll-measure-mode`
-10. **Does a `null` in a later layer override an earlier value?** A complete look file
-    (`profile`, `--dump-params`, `--save-recipe`) holds `calibration.film_base` and the
-    `roll` values as `null`; layered after `roll.json`, a replacing merge would erase
-    the measurement. — `core/recipe-composition`
+10. ~~Does a `null` in a later layer override an earlier value?~~ **Resolved
+    2026-09-28: no — a `null` states nothing** in a `--params` layer (above), and a
+    frame's `params` refuses one: hand-written there, it is an attempt to unset,
+    which the merge cannot do. `hanten params` holds `calibration.film_base` and the
+    `roll` values as `null`, and a replacing merge would have erased the measurement
+    layered before it. Every value it states still wins, so the measured file goes
+    last.
 
 ## Order
 

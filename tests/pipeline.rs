@@ -200,6 +200,27 @@ fn spawn(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
     )
 }
 
+/// Like [`run`], with `input` piped to the child's stdin.
+fn run_stdin(args: &[&str], input: &str) -> (i32, String, String) {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(NC)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn nc binary");
+    // A child that refuses before reading closes the pipe; that is its answer.
+    let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+    let out = child.wait_with_output().expect("failed to wait on nc");
+    (
+        out.status.code().expect("process terminated by signal"),
+        String::from_utf8(out.stdout).expect("stdout is not UTF-8"),
+        String::from_utf8(out.stderr).expect("stderr is not UTF-8"),
+    )
+}
+
 /// Parse stdout as JSON, failing with the raw text if it isn't clean JSON.
 fn json(stdout: &str) -> serde_json::Value {
     serde_json::from_str(stdout)
@@ -5937,11 +5958,9 @@ fn convert_requires_a_stated_film_base_but_estimate_does_not() {
 }
 
 #[test]
-fn roll_requires_a_stated_film_base_and_says_so_in_roll_terms() {
-    // `roll` converts, so it must state a base too — but `RollArgs` accepts none
-    // of the film-base flags, so the diagnosis has to point at the shared
-    // `--params` recipe. A message naming a flag here would be advice the user
-    // cannot follow.
+fn roll_requires_a_stated_film_base_and_every_remedy_it_names_works() {
+    // `roll` converts, so it must state a base too, and it takes `convert`'s film-base
+    // flags — so the diagnosis is `convert`'s, and each way out it names must run.
     let tmp = TempDir::new("roll-stated-base");
     let out_dir = tmp.path("out");
     let scan = fixture("hdr-48bit.tif");
@@ -5957,24 +5976,42 @@ fn roll_requires_a_stated_film_base_and_says_so_in_roll_terms() {
         "roll with no stated film base must be a usage error: {err}"
     );
     assert!(err.contains("no film base selected"), "stderr: {err}");
+    for remedy in ["--film-base", "--base-region", "calibration.film_base"] {
+        assert!(err.contains(remedy), "{remedy} is not offered: {err}");
+    }
     assert!(
-        err.contains("--params") && err.contains("calibration.film_base"),
-        "roll's message must send the user to the shared recipe: {err}"
-    );
-    // The flags it does not have must not be offered as the way out.
-    assert!(
-        !err.contains("--auto-base")
-            && !err.contains("--film-base")
-            && !err.contains("--base-region"),
-        "roll must not advise flags it rejects: {err}"
+        !err.contains("--auto-base"),
+        "a removed flag is offered: {err}"
     );
     assert!(
         !out_dir.exists(),
         "nothing may be written on the fast-fail path"
     );
 
-    // Falsifiable control: the same invocation with a recipe carrying
-    // `calibration.film_base` gets past the gate and converts.
+    // Each remedy gets past the gate and converts: the flag…
+    let (code, stdout, err) = run(&[
+        "roll",
+        scan.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.6,0.5",
+    ]);
+    assert_eq!(code, 0, "--film-base must convert:\n{stdout}\n{err}");
+    std::fs::remove_dir_all(&out_dir).unwrap();
+    // …the region, which converts with its not-frozen warning…
+    let (code, stdout, err) = run(&[
+        "roll",
+        scan.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--base-region",
+        "0,0,40,40",
+    ]);
+    assert_eq!(code, 0, "--base-region must convert:\n{stdout}\n{err}");
+    assert!(err.contains("NOT frozen"), "{err}");
+    std::fs::remove_dir_all(&out_dir).unwrap();
+    // …and a recipe carrying `calibration.film_base`.
     let recipe = write_file(
         &tmp.path("roll.json"),
         r#"{"recipe_version":2,"calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}}}"#,
@@ -11649,7 +11686,7 @@ fn a_roll_names_each_frame_from_its_destination() {
     let control = write_file(&tmp.path("control.json"), &one(""));
     let (code, _, err) = strict_roll(&control, "strict-b");
     assert_eq!(code, 0, "{err}");
-    // A roll names keys, not flags: it accepts no conversion flags.
+    // The roll's recipe names flag and key: the fault can come from either.
     let bad = write_file(
         &tmp.path("bad.json"),
         r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
@@ -11664,6 +11701,745 @@ fn a_roll_names_each_frame_from_its_destination() {
         bad.to_str().unwrap(),
     ]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("`output.display.transfer`"), "{err}");
-    assert!(!err.contains("--transfer"), "{err}");
+    assert!(err.contains("`.transfer`"), "{err}");
+    assert!(err.contains("--transfer"), "{err}");
+}
+
+// --- layered `--params` (core/recipe-composition) ---------------------------------
+
+/// A measured roll file: the film base and the roll section.
+const MEASURED_LAYER: &str = r#"{"recipe_version": 2,
+    "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
+    "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5}}"#;
+/// A look: no measurement.
+const LOOK_LAYER: &str = r#"{"recipe_version": 2,
+    "scene_correction": {"exposure": 0.3},
+    "look": {"channel_grade": [1.1, 0.95]}}"#;
+/// The two, merged by hand.
+const MERGED_LAYERS: &str = r#"{"recipe_version": 2,
+    "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
+    "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5},
+    "scene_correction": {"exposure": 0.3},
+    "look": {"channel_grade": [1.1, 0.95]}}"#;
+
+/// `convert` the IR-free fixture into `tmp/name` with `extra`, expecting success;
+/// returns the report and the written bytes.
+fn convert_ok(tmp: &TempDir, name: &str, extra: &[&str]) -> (serde_json::Value, Vec<u8>) {
+    let out = tmp.path(name);
+    let scan = fixture("hdr-48bit.tif");
+    let mut args = vec![
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ];
+    args.extend_from_slice(extra);
+    let (code, stdout, err) = run(&args);
+    assert_eq!(code, 0, "{args:?}:\n{err}");
+    let report = json(&stdout);
+    let written = PathBuf::from(report["output"].as_str().unwrap());
+    (report, std::fs::read(written).unwrap())
+}
+
+/// A one-frame `--frames` manifest for the IR-free fixture, with `params` as its
+/// override.
+fn one_frame_manifest(path: &Path, params: &str) -> PathBuf {
+    write_file(
+        path,
+        &format!(
+            r#"{{"frames": [{{"input": "{}", "params": {params}}}]}}"#,
+            fixture("hdr-48bit.tif").display()
+        ),
+    )
+}
+
+#[test]
+fn two_layers_convert_as_their_merged_recipe() {
+    let tmp = TempDir::new("layers-merge");
+    let measured = write_file(&tmp.path("measured.json"), MEASURED_LAYER);
+    let look = write_file(&tmp.path("look.json"), LOOK_LAYER);
+    let merged = write_file(&tmp.path("merged.json"), MERGED_LAYERS);
+    let (layered, layered_bytes) = convert_ok(
+        &tmp,
+        "layered",
+        &[
+            "--params",
+            measured.to_str().unwrap(),
+            "--params",
+            look.to_str().unwrap(),
+        ],
+    );
+    let (single, single_bytes) =
+        convert_ok(&tmp, "single", &["--params", merged.to_str().unwrap()]);
+    assert_eq!(layered["recipe"], single["recipe"]);
+    assert_eq!(
+        layered["identity"]["params_hash"],
+        single["identity"]["params_hash"]
+    );
+    assert!(
+        layered_bytes == single_bytes,
+        "the layers render differently"
+    );
+    // Falsifiable: the measurement alone renders differently.
+    let (_, alone) = convert_ok(&tmp, "alone", &["--params", measured.to_str().unwrap()]);
+    assert!(alone != single_bytes, "the look layer changed nothing");
+}
+
+#[test]
+fn a_later_layer_wins_and_a_flag_beats_every_layer_by_source() {
+    let tmp = TempDir::new("layers-order");
+    let measured = write_file(&tmp.path("measured.json"), MEASURED_LAYER);
+    let a = write_file(
+        &tmp.path("a.json"),
+        r#"{"recipe_version": 2, "scene_correction":
+            {"exposure": 0.3, "white_balance": {"explicit": [1.25, 1.0, 0.75]}}}"#,
+    );
+    let b = write_file(
+        &tmp.path("b.json"),
+        r#"{"recipe_version": 2, "scene_correction": {"exposure": -0.25}}"#,
+    );
+    let (m, a, b) = (
+        measured.to_str().unwrap(),
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    );
+    let scene = |extra: &[&str], name: &str| {
+        let (report, _) = convert_ok(&tmp, name, extra);
+        report["recipe"]["scene_correction"].clone()
+    };
+    // Same key in both: the later one wins; a key only the earlier states survives.
+    let ab = scene(&["--params", m, "--params", a, "--params", b], "ab");
+    assert_eq!(ab["exposure"], -0.25, "{ab}");
+    assert_eq!(
+        ab["white_balance"],
+        serde_json::json!({"explicit": [1.25, 1.0, 0.75]})
+    );
+    let ba = scene(&["--params", m, "--params", b, "--params", a], "ba");
+    assert_eq!(ba["exposure"], 0.3, "{ba}");
+    // An explicit neutral gain is a value, not "fall back to the layers".
+    let flagged = scene(
+        &[
+            "--params",
+            m,
+            "--params",
+            a,
+            "--params",
+            b,
+            "--white-balance",
+            "1,1,1",
+        ],
+        "flag",
+    );
+    assert_eq!(
+        flagged["white_balance"],
+        serde_json::json!({"explicit": [1.0, 1.0, 1.0]})
+    );
+    assert_eq!(flagged["exposure"], -0.25);
+}
+
+#[test]
+fn a_complete_look_file_layered_after_the_measurement_keeps_it() {
+    // `hanten params` states every key, the unset base and roll ones `null`. A `null`
+    // states nothing, so either order keeps those; but its restated default
+    // `reconstruction.linearization` wins wherever it lands, so the measured file
+    // goes last.
+    let tmp = TempDir::new("layers-null");
+    let measured = write_file(
+        &tmp.path("measured.json"),
+        r#"{"recipe_version": 2,
+            "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
+            "reconstruction": {"linearization": 1.6},
+            "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.5}}"#,
+    );
+    let (code, complete, err) = run(&["params"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(complete.contains(r#""film_base": null"#), "{complete}");
+    assert!(complete.contains(r#""linearization": 1.8"#), "{complete}");
+    let look = write_file(&tmp.path("complete.json"), &complete);
+    let (measured, look) = (measured.to_str().unwrap(), look.to_str().unwrap());
+    for (name, layers, linearization) in [
+        ("measured-last", [look, measured], 1.6),
+        ("measured-first", [measured, look], 1.8),
+    ] {
+        let (report, _) = convert_ok(&tmp, name, &["--params", layers[0], "--params", layers[1]]);
+        let recipe = &report["recipe"];
+        assert_eq!(
+            recipe["calibration"]["film_base"],
+            serde_json::json!({"explicit": [0.9, 0.6, 0.5]}),
+            "{name}"
+        );
+        assert_eq!(recipe["roll"]["white_stops"], 2.5, "{name}");
+        let got = recipe["reconstruction"]["linearization"].as_f64().unwrap();
+        assert!((got - linearization).abs() < 1e-6, "{name}: {got}");
+    }
+}
+
+#[test]
+fn a_dump_is_the_whole_run_and_a_look_only_once_stripped() {
+    // A `--dump-params` file carries its roll's `roll.frames` table. Tables union and
+    // absence states nothing, so layered under another roll's file its clamp survives;
+    // with `calibration` and `roll` stripped, only the measured file's roll applies.
+    let tmp = TempDir::new("layers-dump-as-look");
+    let roll1 = write_file(
+        &tmp.path("roll1.json"),
+        r#"{"recipe_version": 2,
+            "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
+            "roll": {"white_balance": [1.05, 1.0, 0.95], "white_stops": 2.0,
+                     "frames": {"hdr-48bit.tif": {"white_stops": 1.7}}}}"#,
+    );
+    let roll2 = write_file(
+        &tmp.path("roll2.json"),
+        r#"{"recipe_version": 2,
+            "calibration": {"film_base": {"explicit": [0.8, 0.5, 0.4]}},
+            "roll": {"white_balance": [1.0, 1.0, 1.0], "white_stops": 1.8}}"#,
+    );
+    // Dumped from another frame of roll 1, so the table stays a table.
+    let other = tmp.path("other.tif");
+    std::fs::copy(fixture("hdr-48bit.tif"), &other).unwrap();
+    let dump = tmp.path("dump.json");
+    let (code, _, err) = run(&[
+        "convert",
+        other.to_str().unwrap(),
+        "-o",
+        tmp.path("dumped").to_str().unwrap(),
+        "--params",
+        roll1.to_str().unwrap(),
+        "--exposure",
+        "0.3",
+        "--dump-params",
+        dump.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let mut look: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+    let obj = look.as_object_mut().unwrap();
+    obj.remove("calibration");
+    obj.remove("roll");
+    let look = write_file(&tmp.path("look.json"), &look.to_string());
+    let roll2 = roll2.to_str().unwrap();
+    for (name, first, white_stops) in [
+        ("unstripped", dump.to_str().unwrap(), 1.7),
+        ("stripped", look.to_str().unwrap(), 1.8),
+    ] {
+        let (report, _) = convert_ok(&tmp, name, &["--params", first, "--params", roll2]);
+        let recipe = &report["recipe"];
+        assert_eq!(
+            recipe["calibration"]["film_base"],
+            serde_json::json!({"explicit": [0.8, 0.5, 0.4]}),
+            "{name}"
+        );
+        assert_eq!(recipe["scene_correction"]["exposure"], 0.3, "{name}");
+        let got = recipe["roll"]["white_stops"].as_f64().unwrap();
+        assert!((got - white_stops).abs() < 1e-6, "{name}: {got}");
+    }
+}
+
+#[test]
+fn convert_refuses_a_report_file_or_a_layered_dump_over_a_params_layer() {
+    let tmp = TempDir::new("layers-report-over-params");
+    let measured = write_file(&tmp.path("measured.json"), MEASURED_LAYER);
+    let look = write_file(&tmp.path("look.json"), LOOK_LAYER);
+    let (m, l) = (measured.to_str().unwrap(), look.to_str().unwrap());
+    let scan = fixture("hdr-48bit.tif");
+    let out = tmp.path("out.tiff");
+    let convert = |extra: &[&str]| {
+        let mut args = vec![
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--params",
+            m,
+            "--params",
+            l,
+        ];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+    let (code, _, err) = convert(&["--report-file", l]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--report-file") && err.contains("would overwrite the --params recipe"),
+        "{err}"
+    );
+    assert!(!out.exists());
+    assert_eq!(std::fs::read_to_string(&look).unwrap(), LOOK_LAYER);
+    // A dump over one of several layers would fold the others into it.
+    let (code, _, err) = convert(&["--dump-params", m]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("--params layer") && err.contains("measured.json"),
+        "{err}"
+    );
+    assert!(err.contains("Dump to another path"), "{err}");
+    assert!(!out.exists());
+    assert_eq!(std::fs::read_to_string(&measured).unwrap(), MEASURED_LAYER);
+    // Over the sole layer, rewriting the recipe it replays stays allowed.
+    let (code, _, err) = run(&[
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--params",
+        m,
+        "--dump-params",
+        m,
+    ]);
+    assert_eq!(code, 0, "{err}");
+}
+
+#[test]
+fn params_dash_reads_stdin_once() {
+    let tmp = TempDir::new("layers-stdin");
+    let look = write_file(&tmp.path("look.json"), LOOK_LAYER);
+    let merged = write_file(&tmp.path("merged.json"), MERGED_LAYERS);
+    let scan = fixture("hdr-48bit.tif");
+    let out = tmp.path("stdin.tiff");
+    let (code, stdout, err) = run_stdin(
+        &[
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--params",
+            "-",
+            "--params",
+            look.to_str().unwrap(),
+        ],
+        MEASURED_LAYER,
+    );
+    assert_eq!(code, 0, "{err}");
+    let (single, single_bytes) =
+        convert_ok(&tmp, "single", &["--params", merged.to_str().unwrap()]);
+    assert_eq!(json(&stdout)["recipe"], single["recipe"]);
+    assert!(std::fs::read(&out).unwrap() == single_bytes);
+
+    // Twice is refused before anything is read or written.
+    let twice = tmp.path("twice.tiff");
+    let (code, _, err) = run_stdin(
+        &[
+            "convert",
+            scan.to_str().unwrap(),
+            "-o",
+            twice.to_str().unwrap(),
+            "--params",
+            "-",
+            "--params",
+            "-",
+        ],
+        MEASURED_LAYER,
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("more than once"), "{err}");
+    assert!(!twice.exists());
+}
+
+#[test]
+fn a_layer_fault_names_its_file() {
+    let tmp = TempDir::new("layers-fault");
+    let measured = write_file(&tmp.path("measured.json"), MEASURED_LAYER);
+    let bad = write_file(
+        &tmp.path("typo.json"),
+        r#"{"recipe_version": 2, "look": {"contrst": 1.2}}"#,
+    );
+    let scan = fixture("hdr-48bit.tif");
+    let out = tmp.path("out");
+    let (code, _, err) = run(&[
+        "convert",
+        scan.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--params",
+        measured.to_str().unwrap(),
+        "--params",
+        bad.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("typo.json") && err.contains("contrst"),
+        "{err}"
+    );
+}
+
+#[test]
+fn roll_runs_from_flags_alone_and_from_layers() {
+    let tmp = TempDir::new("roll-flags");
+    let scan = fixture("hdr-48bit.tif");
+    let flags = [
+        "--film-base",
+        "0.9,0.6,0.5",
+        "--exposure",
+        "0.3",
+        "--roll-white",
+        "2.5",
+    ];
+    let (_, convert_bytes) = convert_ok(&tmp, "convert", &flags);
+    let out_dir = tmp.path("flags");
+    let mut args = vec![
+        "roll",
+        scan.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+    ];
+    args.extend_from_slice(&flags);
+    let (code, _, err) = run(&args);
+    assert_eq!(code, 0, "{err}");
+    assert!(std::fs::read(out_dir.join("hdr-48bit_positive.tiff")).unwrap() == convert_bytes);
+
+    // Layers, as on `convert`.
+    let measured = write_file(&tmp.path("measured.json"), MEASURED_LAYER);
+    let look = write_file(&tmp.path("look.json"), LOOK_LAYER);
+    let merged = write_file(&tmp.path("merged.json"), MERGED_LAYERS);
+    let (_, merged_bytes) = convert_ok(&tmp, "merged", &["--params", merged.to_str().unwrap()]);
+    let out_dir = tmp.path("layers");
+    let (code, _, err) = run(&[
+        "roll",
+        scan.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--params",
+        measured.to_str().unwrap(),
+        "--params",
+        look.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(std::fs::read(out_dir.join("hdr-48bit_positive.tiff")).unwrap() == merged_bytes);
+
+    // A removed flag is refused on `roll` as on `convert`.
+    let (code, _, err) = run(&[
+        "roll",
+        scan.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("removed").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.6,0.5",
+        "--print-exposure",
+        "1",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--print-exposure was removed"), "{err}");
+}
+
+#[test]
+fn a_frames_override_beats_a_roll_flag() {
+    let tmp = TempDir::new("roll-frame-over-flag");
+    let measured = write_file(&tmp.path("measured.json"), MEASURED_LAYER);
+    let roll = |manifest: &Path, extra: &[&str], dir: &str| {
+        let out_dir = tmp.path(dir);
+        let mut args = vec![
+            "roll",
+            "--frames",
+            manifest.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--params",
+            measured.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        let (code, stdout, err) = run(&args);
+        assert_eq!(code, 0, "{err}");
+        json(&stdout)
+    };
+    // A clamp survives a roll-wide `--roll-white`, and is frame-local: no warning.
+    let clamp = one_frame_manifest(&tmp.path("clamp.json"), r#"{"roll": {"white_stops": 1.5}}"#);
+    let report = roll(&clamp, &["--roll-white", "3.0"], "clamp");
+    assert_eq!(
+        report["frames"][0]["chain"]["roll"]["white_stops"], 1.5,
+        "{report}"
+    );
+    assert!(
+        report["warnings"].as_array().is_none_or(Vec::is_empty),
+        "{report}"
+    );
+    // A frame's value over a flag-set roll-wide value still warns, naming both…
+    let gains = one_frame_manifest(
+        &tmp.path("gains.json"),
+        r#"{"roll": {"white_balance": [1.1, 1.0, 0.9]}}"#,
+    );
+    let report = roll(&gains, &["--roll-white-balance", "1,1,1"], "gains");
+    let warnings = report["warnings"].to_string();
+    assert!(
+        warnings.contains("roll.white_balance") && warnings.contains("[1.0,1.0,1.0]"),
+        "{warnings}"
+    );
+    // …and restating the flag's value is silent: the frame compares against the roll
+    // as resolved, flags applied, not against the recipes alone.
+    let same = one_frame_manifest(
+        &tmp.path("same.json"),
+        r#"{"roll": {"white_balance": [1, 1, 1]}}"#,
+    );
+    let report = roll(&same, &["--roll-white-balance", "1,1,1"], "same");
+    assert!(
+        report["warnings"].as_array().is_none_or(Vec::is_empty),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_frames_null_is_refused() {
+    // The merge skips a `null`, so a frame's `null` (an attempt to unset) would do
+    // nothing: it is refused, naming the frame and the key, before anything is written.
+    let tmp = TempDir::new("roll-frame-null");
+    let shared = write_file(
+        &tmp.path("shared.json"),
+        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
+            "look": {"contrast": 1.3}}"#,
+    );
+    let manifest = one_frame_manifest(
+        &tmp.path("m.json"),
+        r#"{"scene_correction": {"exposure": 0.2}, "look": {"contrast": null}}"#,
+    );
+    let out = tmp.path("out");
+    let (code, _, err) = run(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        out.to_str().unwrap(),
+        "--params",
+        shared.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("frame ") && err.contains("hdr-48bit.tif"),
+        "{err}"
+    );
+    assert!(err.contains("`look.contrast` is null"), "{err}");
+    assert!(err.contains("Omit `look.contrast`"), "{err}");
+    assert!(!out.exists());
+
+    // A mistyped key is that fault, even when its value is null.
+    let typo = one_frame_manifest(&tmp.path("typo.json"), r#"{"look": {"contrst": null}}"#);
+    let (code, _, err) = run(&[
+        "roll",
+        "--frames",
+        typo.to_str().unwrap(),
+        "--out-dir",
+        out.to_str().unwrap(),
+        "--params",
+        shared.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("unknown field `contrst`"), "{err}");
+    assert!(!err.contains("is null"), "{err}");
+
+    // A null inside an array is named by its index.
+    let element = one_frame_manifest(
+        &tmp.path("element.json"),
+        r#"{"roll": {"white_balance": [1, null, 1]}}"#,
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        "--frames",
+        element.to_str().unwrap(),
+        "--out-dir",
+        out.to_str().unwrap(),
+        "--params",
+        shared.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("`roll.white_balance[1]` is null"), "{err}");
+
+    // A null inside a tagged value that switches variant is refused by path too.
+    let switch = one_frame_manifest(
+        &tmp.path("switch.json"),
+        r#"{"calibration": {"film_base": {"region": [1, 2, 3, null]}}}"#,
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        "--frames",
+        switch.to_str().unwrap(),
+        "--out-dir",
+        out.to_str().unwrap(),
+        "--params",
+        shared.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("`calibration.film_base.region[3]` is null"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_frames_input_axis_is_not_credited_to_the_flag() {
+    // The manifest `params` win over the flags, so an input axis they state is the
+    // recipe's in the frame's provenance; the axis they leave stays the flag's.
+    let tmp = TempDir::new("roll-frame-input-provenance");
+    let manifest = one_frame_manifest(&tmp.path("m.json"), r#"{"input": {"transfer": "linear"}}"#);
+    let (code, stdout, err) = run(&[
+        "roll",
+        "--frames",
+        manifest.to_str().unwrap(),
+        "--out-dir",
+        tmp.path("out").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.6,0.5",
+        "--input-transfer",
+        "linear",
+        "--input-meaning",
+        "scanner-device",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+    let provenance = |axis: &str| {
+        report["frames"][0]["input_color"]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["axis"] == axis && e["kind"] == "user-assertion")
+            .map(|e| e["provenance"].clone())
+    };
+    assert_eq!(
+        provenance("transfer").unwrap(),
+        "input.transfer (recipe)",
+        "{report}"
+    );
+    assert_eq!(
+        provenance("meaning").unwrap(),
+        "--input-meaning (CLI flag)",
+        "{report}"
+    );
+}
+
+#[test]
+fn roll_names_the_params_recipe_a_report_file_would_overwrite() {
+    let tmp = TempDir::new("roll-report-over-params");
+    let recipe = write_file(&tmp.path("r.json"), MEASURED_LAYER);
+    let r = recipe.to_str().unwrap();
+    let (code, _, err) = run(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--out-dir",
+        tmp.path("out").to_str().unwrap(),
+        "--params",
+        r,
+        "--report-file",
+        r,
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("would overwrite the --params recipe"), "{err}");
+    assert!(!err.contains("input scan"), "{err}");
+    assert_eq!(std::fs::read_to_string(&recipe).unwrap(), MEASURED_LAYER);
+}
+
+#[test]
+fn a_bad_roll_flag_is_not_blamed_on_the_recipe() {
+    // The roll's recipe includes the flags, so its fault is reported as `convert`
+    // reports it: naming the flag, with no "the roll's recipe" prefix.
+    let tmp = TempDir::new("roll-bad-flag");
+    let (code, _, err) = run(&[
+        "roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--out-dir",
+        tmp.path("out").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.6,0.5",
+        "--contrast",
+        "0",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--contrast"), "{err}");
+    assert!(!err.contains("the roll's recipe"), "{err}");
+}
+
+#[test]
+fn measure_roll_warns_on_a_layer_from_another_pipeline_version() {
+    let tmp = TempDir::new("measure-roll-layer-skew");
+    let base = write_file(
+        &tmp.path("base.json"),
+        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}}}"#,
+    );
+    let stale = write_file(
+        &tmp.path("stale.json"),
+        r#"{"meta": {"pipeline_version": 9999}, "params": {"recipe_version": 2}}"#,
+    );
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--params",
+        base.to_str().unwrap(),
+        "--params",
+        stale.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let warnings = json(&stdout)["warnings"].to_string();
+    assert!(warnings.contains("pipeline_version 9999"), "{warnings}");
+}
+
+#[test]
+fn measure_roll_composes_its_params_layers() {
+    let tmp = TempDir::new("measure-roll-layers");
+    let base = write_file(
+        &tmp.path("base.json"),
+        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}}}"#,
+    );
+    let decode = write_file(
+        &tmp.path("decode.json"),
+        r#"{"recipe_version": 2, "reconstruction": {"linearization": 1.6}}"#,
+    );
+    let both = write_file(
+        &tmp.path("both.json"),
+        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
+            "reconstruction": {"linearization": 1.6}}"#,
+    );
+    let scan = fixture("hdr-48bit.tif");
+    let measure = |layers: &[&Path]| {
+        let mut args = vec!["measure-roll", scan.to_str().unwrap()];
+        for l in layers {
+            args.extend(["--params", l.to_str().unwrap()]);
+        }
+        let (code, stdout, err) = run(&args);
+        assert_eq!(code, 0, "{err}");
+        let mut report = json(&stdout);
+        report.as_object_mut().unwrap().remove("elapsed_ms");
+        report
+    };
+    let layered = measure(&[&base, &decode]);
+    assert_eq!(layered, measure(&[&both]));
+    // Falsifiable: the decode layer moves the measurement.
+    assert_ne!(layered, measure(&[&base]));
+}
+
+#[test]
+fn a_roll_flag_beats_a_frames_table_entry_as_on_convert() {
+    // A `roll.frames` entry is recipe, applied before the flags: `--roll-white` beats it
+    // on `roll` exactly as on `convert`, and each frame still matches its `convert`.
+    let tmp = TempDir::new("roll-table-flag");
+    let measured = write_file(
+        &tmp.path("roll.json"),
+        r#"{"recipe_version": 2,
+            "calibration": {"film_base": {"explicit": [0.9, 0.6, 0.5]}},
+            "roll": {"white_stops": 2.5, "frames": {"hdr-48bit.tif": {"white_stops": 1.5}}}}"#,
+    );
+    let scan = fixture("hdr-48bit.tif");
+    let roll = |extra: &[&str], dir: &str| {
+        let out_dir = tmp.path(dir);
+        let mut args = vec![
+            "roll",
+            scan.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--params",
+            measured.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        let (code, stdout, err) = run(&args);
+        assert_eq!(code, 0, "{err}");
+        let report = json(&stdout);
+        let white = report["frames"][0]["chain"]["roll"]["white_stops"].clone();
+        (
+            white,
+            std::fs::read(out_dir.join("hdr-48bit_positive.tiff")).unwrap(),
+        )
+    };
+    let m = measured.to_str().unwrap();
+    let (white, bytes) = roll(&[], "entry");
+    assert_eq!(white, 1.5, "the entry applies");
+    let (_, convert_bytes) = convert_ok(&tmp, "entry", &["--params", m]);
+    assert!(bytes == convert_bytes);
+    let (white, bytes) = roll(&["--roll-white", "3.0"], "flag");
+    assert_eq!(white, 3.0, "the flag beats the entry");
+    let (_, convert_bytes) = convert_ok(&tmp, "flag", &["--params", m, "--roll-white", "3.0"]);
+    assert!(bytes == convert_bytes);
 }

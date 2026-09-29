@@ -91,7 +91,7 @@ impl Defaults {
 
 /// The recipe keys of `output.display`, in resolution order — one per axis, taken from
 /// [`Axis::KEY`] so no second list can drift. A consumer that must tell this object
-/// from an externally tagged enum (`cli::merge_json`: both serialize as small objects,
+/// from an externally tagged enum (`recipe::merge_json`: both serialize as small objects,
 /// and a one-axis `output.display` is a single-key object) reads it.
 pub const AXIS_KEYS: [&str; 4] = [Range::KEY, Transfer::KEY, Gamut::KEY, Container::KEY];
 

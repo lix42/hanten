@@ -1,8 +1,8 @@
 //! CLI orchestration — the agent-facing command surface.
 //!
 //! This is the scriptable contract an agent drives: clap argument parsing for
-//! every subcommand and flag (design-spec §8–9), JSON recipe load/merge (flags
-//! override a loaded recipe), `--dump-params` / `params` for discovery, a JSON
+//! every subcommand and flag (design-spec §8–9), layered JSON recipes (flags
+//! override every `--params` layer; `recipe::compose`), `--dump-params` / `params` for discovery, a JSON
 //! report, and stable exit codes via [`NcError`]. The conversion runs here:
 //! `convert` drives the full read → film-base → fixed decode → scene correction →
 //! look → fit range → fit gamut → encode chain (delegating the pure stages to
@@ -279,10 +279,11 @@ pub struct MeasureRollArgs {
     /// the decode the gains and the white are measured under. Its `scene_correction` and
     /// `look` values are not read — this command measures the white balance and the
     /// contrast — though the recipe must still load (a retired or unknown key there is
-    /// refused). Its `input`, `measure` and `reconstruction` keys, when stated, travel
-    /// into `--out`: the gains hold only under that decode.
+    /// refused). Repeatable, and `-` reads stdin, as on `convert`. Its `input`, `measure`
+    /// and `reconstruction` keys, when stated, travel into `--out`: the gains hold only
+    /// under that decode.
     #[arg(long = "params", value_name = "JSON")]
-    pub recipe_in: Option<PathBuf>,
+    pub recipe_in: Vec<PathBuf>,
     /// The roll's unexposed frame: measure the film base from it first — the median
     /// over its effective area, as `hanten measure-base` does with no source flag — and
     /// decode every frame with it.
@@ -309,10 +310,6 @@ pub struct MeasureRollArgs {
 }
 
 /// `convert`: input, output, and every conversion knob (design-spec §9).
-///
-/// Stage knobs are grouped into flattened `*Overrides` structs; each field is an
-/// `Option` (or a presence flag) so [`recipe::merge`] can tell "explicitly passed"
-/// from "left at the recipe / default value".
 #[derive(Args, Debug)]
 pub struct ConvertArgs {
     /// Input negative scan (SilverFast HDR/HDRi TIFF).
@@ -322,6 +319,50 @@ pub struct ConvertArgs {
     /// suffix is never rewritten, so it must be one that destination writes.
     #[arg(short = 'o', long, value_name = "PATH")]
     pub output: PathBuf,
+    #[command(flatten)]
+    pub knobs: ConversionFlags,
+
+    /// A JSON recipe, or `-` for stdin. Repeatable: the recipes layer in order, a
+    /// later one winning key by key (a `null` states nothing), and individual
+    /// `--flag`s win over them all.
+    #[arg(long = "params", value_name = "JSON")]
+    pub recipe_in: Vec<PathBuf>,
+    /// Write the effective (resolved) parameters to JSON and continue.
+    #[arg(long, value_name = "JSON")]
+    pub dump_params: Option<PathBuf>,
+    /// Treat warnings (clipping, IR-ignored, …) as hard errors.
+    #[arg(long)]
+    pub strict: bool,
+    /// Fix any stochastic step for reproducibility (none in Step 1; reserved).
+    #[arg(long, value_name = "N")]
+    pub seed: Option<u64>,
+
+    /// Append a telemetry record for this run to the local JSONL log (under the
+    /// platform data dir, e.g. `$XDG_DATA_HOME/nc/telemetry.jsonl` or
+    /// `~/.local/share/nc/telemetry.jsonl`; override with `NC_TELEMETRY_LOG`).
+    /// Operational flag — not a recipe key; never affects the output image.
+    #[arg(long)]
+    pub telemetry: bool,
+    /// Also write this run's telemetry record to `<path>` (`-` = stdout). May be
+    /// combined with `--telemetry`. Operational flag — not a recipe key.
+    #[arg(long, value_name = "PATH")]
+    pub telemetry_file: Option<String>,
+
+    #[command(flatten)]
+    pub memory: MemoryArgs,
+    #[command(flatten)]
+    pub report: ReportArgs,
+}
+
+/// Every conversion knob as a flag, plus the retired ones kept hidden only to be
+/// refused (`reject_removed_flags`). Shared by `convert` and `roll`, so the two cannot
+/// grow different surfaces.
+///
+/// Stage knobs are grouped into flattened `*Overrides` structs; each field is an
+/// `Option` (or a presence flag) so [`recipe::merge`] can tell "explicitly passed"
+/// from "left at the recipe / default value".
+#[derive(Args, Debug, Default)]
+pub struct ConversionFlags {
     /// Removed with `simple` reconstruction: density is the only reconstruction.
     /// Hidden, and kept only to emit a migration error — there is no alias.
     #[arg(long, hide = true, value_name = "TYPE")]
@@ -368,50 +409,19 @@ pub struct ConvertArgs {
     #[command(flatten)]
     pub destination: DestinationOverrides,
 
-    /// Load a JSON recipe; individual `--flag`s override its values.
-    #[arg(long = "params", value_name = "JSON")]
-    pub recipe_in: Option<PathBuf>,
-    /// Write the effective (resolved) parameters to JSON and continue.
-    #[arg(long, value_name = "JSON")]
-    pub dump_params: Option<PathBuf>,
-    /// Treat warnings (clipping, IR-ignored, …) as hard errors.
-    #[arg(long)]
-    pub strict: bool,
-    /// Fix any stochastic step for reproducibility (none in Step 1; reserved).
-    #[arg(long, value_name = "N")]
-    pub seed: Option<u64>,
-
-    /// Append a telemetry record for this run to the local JSONL log (under the
-    /// platform data dir, e.g. `$XDG_DATA_HOME/nc/telemetry.jsonl` or
-    /// `~/.local/share/nc/telemetry.jsonl`; override with `NC_TELEMETRY_LOG`).
-    /// Operational flag — not a recipe key; never affects the output image.
-    #[arg(long)]
-    pub telemetry: bool,
-    /// Also write this run's telemetry record to `<path>` (`-` = stdout). May be
-    /// combined with `--telemetry`. Operational flag — not a recipe key.
-    #[arg(long, value_name = "PATH")]
-    pub telemetry_file: Option<String>,
-
     /// Removed: see [`reject_new_flow`].
     #[arg(long = "new-flow", hide = true)]
     pub new_flow: bool,
-
-    #[command(flatten)]
-    pub memory: MemoryArgs,
-    #[command(flatten)]
-    pub report: ReportArgs,
 }
 
 /// `hanten roll`: convert a batch of frames from ONE shared, frozen recipe so the
 /// whole roll is color-consistent and reproducible (design-spec §8, §12 item 6).
 ///
 /// This is the batch-**apply** half of plan→recipe→apply: it replays a *provided*
-/// frozen recipe (hand-authored or `hanten params`/`--dump-params`-produced) over N
-/// frames. It deliberately owns no auto-cascade that *generates* the recipe —
-/// that is `core/auto-calibration`. Roll-fixed params (the
-/// film base) live in the shared `--params` recipe and appear
-/// once in the roll report; frame-local params can be overridden per frame via a
-/// `--frames` manifest.
+/// frozen recipe — resolved like `convert`'s, from `--params` layers and the same
+/// flags — over N frames. It deliberately owns no auto-cascade that *generates* the
+/// recipe — that is `core/auto-calibration`. Frame-local params can be overridden per
+/// frame via a `--frames` manifest.
 ///
 /// Unlike `convert`'s single `-o <file>`, roll writes per-frame outputs into an
 /// `--out-dir` (named `<stem>_positive.<ext>`, the suffix of the frame's resolved
@@ -436,17 +446,18 @@ pub struct RollArgs {
     /// destination — unless the manifest gives an explicit output path.
     #[arg(short = 'o', long = "out-dir", value_name = "DIR")]
     pub out_dir: PathBuf,
-    /// Shared frozen recipe applied to every frame (the roll-fixed film base,
-    /// …). Same JSON shape as `convert --params`.
+    /// The roll's recipe, or `-` for stdin. Repeatable, as on `convert`: the recipes
+    /// layer in order — typically the measured file (`calibration`, `roll`) and a look
+    /// — and individual `--flag`s win over them all. A frame's manifest `params` wins
+    /// over both.
     #[arg(long = "params", value_name = "JSON")]
-    pub recipe_in: Option<PathBuf>,
+    pub recipe_in: Vec<PathBuf>,
+    #[command(flatten)]
+    pub knobs: ConversionFlags,
     /// Treat any frame's warnings as a hard error (after the roll report is
     /// emitted), like `convert --strict`.
     #[arg(long)]
     pub strict: bool,
-    /// Removed: see [`reject_new_flow`].
-    #[arg(long = "new-flow", hide = true)]
-    pub new_flow: bool,
     #[command(flatten)]
     pub memory: MemoryArgs,
     #[command(flatten)]
@@ -554,10 +565,9 @@ pub struct InputOverrides {
 /// Film-base / Dmin overrides (design-spec §9, stage 2).
 ///
 /// The two source flags are mutually exclusive (clap rejects passing both); either
-/// replaces the recipe's `calibration.film_base` entirely. `convert` requires one of
-/// them **or** the recipe key, because `Dmin` sets black point and colour balance
-/// together; `roll` takes none of them — only the recipe key, in the shared
-/// `--params` file.
+/// replaces the recipe's `calibration.film_base` entirely. `convert` and `roll` require
+/// one of them **or** the recipe key, because `Dmin` sets black point and colour
+/// balance together.
 #[derive(Args, Debug, Default)]
 pub struct FilmBaseOverrides {
     /// Explicit per-channel base transmission — a `Dmin` measured once per roll
@@ -1363,10 +1373,9 @@ fn parse_floats<const N: usize>(s: &str) -> std::result::Result<[f32; N], String
 #[derive(Debug)]
 struct LoadedRecipe {
     recipe: Recipe,
-    /// `meta.pipeline_version` from an envelope, when the loaded file carried one.
-    /// Provenance only — never applied, only compared (see
-    /// [`pipeline_version_warning`]).
-    meta_pipeline_version: Option<u32>,
+    /// One per layer whose envelope records another `pipeline_version`
+    /// ([`pipeline_version_warning`]). Provenance only — never applied.
+    provenance_warnings: Vec<String>,
 }
 
 /// The read side of the envelope `{ "meta": {…identity…}, "params": {…recipe…} }` a
@@ -1385,31 +1394,83 @@ struct SidecarEnvelopeIn {
     params: serde_json::Value,
 }
 
-/// Load a recipe file, or the defaults when no recipe is given. A read failure or
-/// invalid/unknown-key JSON is a usage error; a document written for the removed chain,
-/// and keys that retired before it, get migration errors naming where each knob went
-/// ([`recipe::check_body`]) rather than opaque serde messages.
+/// The `--params` value that reads the recipe from stdin.
+const STDIN_RECIPE: &str = "-";
+
+fn is_stdin_recipe(p: &Path) -> bool {
+    p.as_os_str() == STDIN_RECIPE
+}
+
+/// The `--params` files a run reads from disk — every layer but stdin — which no write
+/// target may overwrite.
+fn recipe_files(paths: &[PathBuf]) -> impl Iterator<Item = &PathBuf> {
+    paths.iter().filter(|p| !is_stdin_recipe(p))
+}
+
+/// Load the `--params` layers, in order, into one recipe; the defaults when there are
+/// none. Each layer is checked on its own first ([`read_layer`]), so a fault is named
+/// against its file, and then they compose, later winning ([`recipe::compose`]).
+///
+/// `-` reads stdin, and only once: a second `-` is refused rather than read as empty.
+fn load_recipes(paths: &[PathBuf]) -> Result<LoadedRecipe> {
+    if paths.iter().filter(|p| is_stdin_recipe(p)).count() > 1 {
+        return Err(NcError::Usage(
+            "--params - is given more than once, but stdin can be read only once: save \
+             the other recipe to a file and pass its path"
+                .into(),
+        ));
+    }
+    let mut layers = Vec::with_capacity(paths.len());
+    let mut provenance_warnings = Vec::new();
+    for p in paths {
+        let (txt, name) = if is_stdin_recipe(p) {
+            let txt = std::io::read_to_string(std::io::stdin())
+                .map_err(|e| NcError::Usage(format!("cannot read the recipe on stdin: {e}")))?;
+            (txt, "on stdin (--params -)".to_string())
+        } else {
+            let txt = std::fs::read_to_string(p)
+                .map_err(|e| NcError::Usage(format!("cannot read recipe {}: {e}", p.display())))?;
+            (txt, p.display().to_string())
+        };
+        let layer = read_layer(&txt, &name)?;
+        provenance_warnings.extend(pipeline_version_warning(layer.meta_pipeline_version, &name));
+        layers.push(layer.body);
+    }
+    let recipe = recipe::compose(&layers).map_err(|e| {
+        NcError::Usage(format!(
+            "the --params recipes each load, but not together: {e}"
+        ))
+    })?;
+    Ok(LoadedRecipe {
+        recipe,
+        provenance_warnings,
+    })
+}
+
+/// One `--params` layer as read: its recipe body, and `meta.pipeline_version` when the
+/// file is an envelope.
+struct Layer {
+    body: serde_json::Value,
+    meta_pipeline_version: Option<u32>,
+}
+
+/// Check one recipe document on its own, named `recipe {name}` in every message.
+/// Invalid or unknown-key JSON is a usage error; a document written for the removed
+/// chain, and keys that retired before it, get migration errors naming where each knob
+/// went ([`recipe::check_body`]) rather than opaque serde messages.
 ///
 /// Accepts **both** shapes: the envelope `{ "meta": …, "params": {…recipe…} }` —
 /// identity read for provenance and otherwise ignored — and a bare recipe object (a
 /// hand-written recipe, or `--dump-params` output). The two are told apart by the
 /// presence of a top-level `params` key, which is not (and must never become) a recipe
 /// key.
-fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
-    let Some(p) = path else {
-        return Ok(LoadedRecipe {
-            recipe: Recipe::default(),
-            meta_pipeline_version: None,
-        });
-    };
-    let txt = std::fs::read_to_string(p)
-        .map_err(|e| NcError::Usage(format!("cannot read recipe {}: {e}", p.display())))?;
+fn read_layer(txt: &str, name: &str) -> Result<Layer> {
     // Parse to a raw Value first to pick the shape and to run the migration checks on
     // the recipe *body*; the typed parse below still owns shape and unknown-key
     // validation. Unparseable JSON falls through to the typed parse's error (its
     // message names the recipe).
-    let value: Option<serde_json::Value> = serde_json::from_str(&txt).ok();
-    let context = format!("recipe {}", p.display());
+    let value: Option<serde_json::Value> = serde_json::from_str(txt).ok();
+    let context = format!("recipe {name}");
     // A recipe (or an envelope) is an OBJECT. serde's derived visitor accepts a
     // sequence for a struct, so a bare `[]` would otherwise reach the typed parse with
     // a message about a sequence rather than about the document.
@@ -1429,15 +1490,21 @@ fn load_recipe(path: Option<&Path>) -> Result<LoadedRecipe> {
     if let Some(v) = envelope_body.as_ref().or(value.as_ref()) {
         recipe::check_body(v, true, &context)?;
     }
-    let usage = |e| NcError::Usage(format!("invalid recipe {}: {e}", p.display()));
-    // Bare recipes parse straight from the file text, so their (line/column-bearing)
-    // serde diagnostics survive.
-    let recipe = match envelope_body {
-        Some(v) => serde_json::from_value(v).map_err(usage)?,
-        None => serde_json::from_str(&txt).map_err(usage)?,
+    let usage = |e| NcError::Usage(format!("invalid recipe {name}: {e}"));
+    // The typed parse, for its diagnostics: a bare recipe parses straight from the
+    // text, so its (line/column-bearing) serde errors survive.
+    let body = match envelope_body {
+        Some(v) => {
+            serde_json::from_value::<Recipe>(v.clone()).map_err(usage)?;
+            v
+        }
+        None => {
+            serde_json::from_str::<Recipe>(txt).map_err(usage)?;
+            value.expect("text that parses as a recipe parses as JSON")
+        }
     };
-    Ok(LoadedRecipe {
-        recipe,
+    Ok(Layer {
+        body,
         meta_pipeline_version,
     })
 }
@@ -1553,11 +1620,11 @@ fn json_kind(v: &serde_json::Value) -> &'static str {
 /// default render it was captured under has changed, so the pixels will not match
 /// the original output. Loud (and `--strict`-promotable) rather than silent — that
 /// mismatch is exactly what `pipeline_version` exists to make visible.
-fn pipeline_version_warning(loaded_version: Option<u32>) -> Option<String> {
+fn pipeline_version_warning(loaded_version: Option<u32>, name: &str) -> Option<String> {
     let recorded = loaded_version?;
     (recorded != version::PIPELINE_VERSION).then(|| {
         format!(
-            "the loaded recipe was produced by pipeline_version {recorded}, but this build is \
+            "recipe {name} was produced by pipeline_version {recorded}, but this build is \
              pipeline_version {} — the parameters still apply, but the default conversion \
              behavior changed between them, so the output will not match the original",
             version::PIPELINE_VERSION
@@ -1602,7 +1669,7 @@ fn validate_explicit_film_base(base: &[f32; 3]) -> Result<()> {
 /// named first. A presence rule, so it runs before `recipe::validate`, whose value rules
 /// would otherwise refuse first with remedies that cannot work. A recipe's `roll` section
 /// is spared.
-fn reject_roll_flags_nothing_applies(args: &ConvertArgs, r: &Recipe) -> Result<()> {
+fn reject_roll_flags_nothing_applies(args: &ConversionFlags, r: &Recipe) -> Result<()> {
     let direct = r.rendering == crate::rendering::Rendering::Direct;
     if !args.roll.any() || (r.output != OutputSection::FilmMaster && !direct) {
         return Ok(());
@@ -1670,16 +1737,15 @@ fn reject_roll_flags_nothing_applies(args: &ConvertArgs, r: &Recipe) -> Result<(
 /// with no base demands a base first and only then mentions the suffix, making the
 /// user fix two things in series.
 ///
-/// `roll` composes the same pieces itself (`resolve_frames`): it has no `-o`, and it
-/// names knobs by recipe key alone.
+/// `roll` composes the same pieces itself (`validate_roll_recipe`): it has no `-o`.
 pub fn validate_convert(r: &Recipe, args: &ConvertArgs) -> Result<()> {
     recipe::validate(r, KnobNames::FlagAndKey)?;
     resolve_output_path(
         &args.output,
-        OutputTarget::resolve(r, KnobNames::FlagAndKey, args.destination.film_master)?,
+        OutputTarget::resolve(r, KnobNames::FlagAndKey, args.knobs.destination.film_master)?,
         SuffixContext::Convert,
     )?;
-    validate_shared(r, FilmBaseRemedy::Flags)
+    validate_shared(r)
 }
 
 /// Where the output path came from, which is what a suffix diagnosis must vary on:
@@ -1879,7 +1945,8 @@ fn suffix_mismatch_error(
         defaults,
         film_master_flag,
     } = target;
-    // A roll takes no conversion flags, so its frame names the recipe keys.
+    // A frame's path comes from its manifest entry, whose `params` win over every
+    // flag, so the remedy names the recipe keys it can state there.
     let (frame, names) = match context {
         SuffixContext::RollFrame(input) => {
             (format!("frame {}: ", input.display()), KnobNames::KeyOnly)
@@ -1950,8 +2017,7 @@ struct OutputTarget {
 
 impl OutputTarget {
     /// The target a run's output is judged against. `film_master_flag` is whether
-    /// `--film-master` was typed (always `false` on `roll`, which takes no conversion
-    /// flags).
+    /// `--film-master` was typed; only a `convert` suffix remedy reads it.
     fn resolve(r: &Recipe, names: KnobNames, film_master_flag: bool) -> Result<Self> {
         Ok(Self {
             destination: recipe::destination(r, names)?,
@@ -1978,57 +2044,15 @@ fn required_extensions(target: OutputTarget) -> &'static [&'static str] {
     target.container().accepted()
 }
 
-/// How the calling command can state a film base — the one thing the
-/// missing-base diagnosis must vary on, because the remedies are disjoint.
-///
-/// `convert` has both film-base flags; `roll` has **none** of them
-/// (`RollArgs` flattens only `MemoryArgs`/`ReportArgs`), so telling a `roll` user
-/// to "pass `--film-base`" is advice they cannot follow — the flag exits 2.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FilmBaseRemedy {
-    /// `convert` — `--film-base` / `--base-region`, or the recipe.
-    Flags,
-    /// `roll` — the shared `--params` recipe only.
-    SharedRecipe,
-}
-
-impl FilmBaseRemedy {
-    /// The remedy available to the command named in a report's `command` field.
-    fn for_command(command: &str) -> Self {
-        match command {
-            "roll" => Self::SharedRecipe,
-            _ => Self::Flags,
-        }
-    }
-}
-
 /// The **one** spelling of "no film base was stated", so the two places that can
 /// report it ([`validate_shared`] and [`convert_frame`]'s totality guard) cannot drift
-/// into two differently-worded diagnoses of the same condition.
-///
-/// Command-aware by [`FilmBaseRemedy`]: the requirement is identical, but what the
-/// user can do about it is not.
-pub fn missing_film_base_message(remedy: FilmBaseRemedy) -> String {
-    match remedy {
-        FilmBaseRemedy::Flags => "no film base selected: pass --film-base R,G,B (a Dmin measured \
-             once per roll with `hanten measure-base <unexposed-frame>`), or --base-region X,Y,W,H \
-             to read it from a region of unexposed film. Recipe key: `calibration.film_base`."
-            .to_string(),
-        // `roll` deliberately does not repeat the flag names as an option: it has
-        // none of them, and the first version of this message sent users to flags
-        // that exit 2.
-        FilmBaseRemedy::SharedRecipe => "no film base selected: `roll` takes no film-base flags, \
-             so set `calibration.film_base` in the shared --params recipe. Measuring once per roll is \
-             the intended workflow: `hanten measure-roll <frames> --unexposed <unexposed-scan> --out \
-             roll.json` writes a recipe with the base and the roll's white balance, and \
-             `hanten measure-base <unexposed-scan> --out base.json` one with the base alone \
-             (`\"calibration\": {\"film_base\": {\"explicit\": [R, G, B]}}`) — that is \
-             also the only source that keeps every frame on one frozen Dmin. \
-             `{\"region\": [X, Y, W, H]}` is accepted too, but re-reads each frame, so \
-             the roll is not colour-consistent."
-            .to_string(),
-    }
-}
+/// into two differently-worded diagnoses of the same condition. `convert` and `roll`
+/// take the same flags, so one remedy serves both.
+pub const MISSING_FILM_BASE: &str = "no film base selected: pass --film-base R,G,B (a Dmin \
+     measured once per roll with `hanten measure-base <unexposed-frame>`), or --base-region \
+     X,Y,W,H to read it from a region of unexposed film. Recipe key: \
+     `calibration.film_base`, which `hanten measure-roll <frames> --unexposed \
+     <unexposed-scan> --out roll.json` writes for `--params`.";
 
 /// Validate the recipe's **shared** sections — the input, the film base and the
 /// measurement region, which the decode and the film-base stage read before any
@@ -2036,10 +2060,8 @@ pub fn missing_film_base_message(remedy: FilmBaseRemedy) -> String {
 /// Every failure is a [`NcError::Usage`] (exit 2).
 ///
 /// Shared verbatim by `convert` and `roll` (and each `roll` per-frame override); the
-/// stage sections' rules are [`recipe::validate`]'s. The caller states which remedy its
-/// users have for an unstated film base: only the wording of that one diagnosis
-/// differs.
-pub fn validate_shared(r: &Recipe, remedy: FilmBaseRemedy) -> Result<()> {
+/// stage sections' rules are [`recipe::validate`]'s.
+pub fn validate_shared(r: &Recipe) -> Result<()> {
     // Film base: an explicit base is a per-channel transmission in (0, 1] — the
     // decoded scan is [0, 1]-normalized, so a value above 1 (e.g. a "90" typo for
     // "0.90") would silently render every real sample denser than the base; a
@@ -2068,7 +2090,7 @@ pub fn validate_shared(r: &Recipe, remedy: FilmBaseRemedy) -> Result<()> {
     // Last, deliberately: `calibration.film_base` has no default, and `Dmin` is the
     // divisor of the density conversion, so it must be stated.
     if r.calibration.film_base.is_none() {
-        return Err(NcError::Usage(missing_film_base_message(remedy)));
+        return Err(NcError::Usage(MISSING_FILM_BASE.into()));
     }
 
     Ok(())
@@ -2409,7 +2431,7 @@ fn reject_deprecated_input_flags(o: &InputOverrides) -> Result<()> {
 /// Migration errors for every removed conversion flag. nc is unreleased, so these flags
 /// survive only as hidden args that emit actionable guidance, never as aliases. The
 /// recipe-side mirror is [`recipe::check_body`].
-fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
+fn reject_removed_flags(args: &ConversionFlags, has_recipe: bool) -> Result<()> {
     reject_new_flow(args.new_flow)?;
     if let Some(name) = &args.algorithm {
         return Err(NcError::Usage(format!(
@@ -2448,7 +2470,7 @@ fn reject_removed_flags(args: &ConvertArgs) -> Result<()> {
     if let Some(message) = removed_print_message(&args.removed_print) {
         return Err(NcError::Usage(message));
     }
-    if let Some(message) = removed_output_message(args) {
+    if let Some(message) = removed_output_message(args, has_recipe) {
         return Err(NcError::Usage(message));
     }
     // The removed simple-reconstruction controls, and the controls that replaced them,
@@ -2553,7 +2575,7 @@ fn removed_print_message(flags: &RemovedPrintFlags) -> Option<String> {
 }
 
 /// The migration error for a removed output selector, or `None` when none was passed.
-fn removed_output_message(args: &ConvertArgs) -> Option<String> {
+fn removed_output_message(args: &ConversionFlags, has_recipe: bool) -> Option<String> {
     let flags = &args.removed_output;
     const AXES: &str = "a destination is four separate knobs — --range, --transfer, \
                         --gamut, --container (recipe `output.display`) — or --film-master";
@@ -2561,7 +2583,7 @@ fn removed_output_message(args: &ConvertArgs) -> Option<String> {
         return Some(format!(
             "--output-preset was removed with the chain its presets named: {AXES}. {} \
              There is no alias.",
-            preset_counterpart(name, args)
+            preset_counterpart(name, args, has_recipe)
         ));
     }
     for (flag, present) in [
@@ -2608,7 +2630,7 @@ const PRESET_COUNTERPARTS: &[(&str, &str)] = &[
 
 /// What replaces a removed output preset, as a sentence — for a name with no counterpart
 /// (`legacy`, `custom`, which retired before the chain did, or a typo), how to choose.
-fn preset_counterpart(name: &str, args: &ConvertArgs) -> String {
+fn preset_counterpart(name: &str, args: &ConversionFlags, has_recipe: bool) -> String {
     let Some(&(_, flags)) = PRESET_COUNTERPARTS.iter().find(|(n, _)| *n == name) else {
         return if name == "compatibility" {
             "`compatibility`'s sRGB has no destination yet \
@@ -2630,7 +2652,7 @@ fn preset_counterpart(name: &str, args: &ConvertArgs) -> String {
             let direct = args.rendering.rendering == Some(crate::rendering::Rendering::Direct);
             let rendering = if direct {
                 ", with --rendering default in place of --rendering direct"
-            } else if args.recipe_in.is_some() {
+            } else if has_recipe {
                 " (with --rendering default if the recipe states `rendering`: \"direct\")"
             } else {
                 ""
@@ -2781,8 +2803,7 @@ const REGIONAL_BALANCE_RETIRED: &str = "per-channel density offsets ramped betwe
 
 /// Which input axes were asserted via a **CLI flag** (vs the recipe) — threaded
 /// into [`convert_frame`] so the resolver records literal CLI-vs-recipe
-/// provenance. `roll` has no per-frame input flags, so it passes
-/// [`InputFromCli::none`].
+/// provenance.
 #[derive(Clone, Copy, Debug, Default)]
 struct InputFromCli {
     transfer: bool,
@@ -2790,9 +2811,26 @@ struct InputFromCli {
 }
 
 impl InputFromCli {
-    /// No CLI input assertions (the recipe-driven `roll` case).
+    /// No CLI input assertions (`measure-roll`, which takes no input flags).
     fn none() -> Self {
         Self::default()
+    }
+
+    fn of(flags: &InputOverrides) -> Self {
+        Self {
+            transfer: flags.input_transfer.is_some(),
+            meaning: flags.input_meaning.is_some(),
+        }
+    }
+
+    /// The flags' provenance under a `roll` frame's manifest `params`, which win over
+    /// them: an axis the override states is the manifest's, not the CLI's.
+    fn under(self, overrides: &serde_json::Value) -> Self {
+        let states = |ptr| overrides.pointer(ptr).is_some_and(|v| !v.is_null());
+        Self {
+            transfer: self.transfer && !states("/input/transfer"),
+            meaning: self.meaning && !states("/input/meaning"),
+        }
     }
 }
 
@@ -2974,13 +3012,13 @@ fn convert_frame(
     // `calibration.film_base` has no default, and the gate rejects `None` before any
     // frame runs (`validate_shared`, for `convert` and each `roll` frame). Restating it
     // here keeps this function total rather than relying on an `unwrap` whose safety
-    // lives in another module — sharing `missing_film_base_message` so this unreachable
+    // lives in another module — sharing `MISSING_FILM_BASE` so this unreachable
     // spelling cannot drift into a second, thinner diagnosis of the same condition.
-    let base_source = recipe.calibration.film_base.clone().ok_or_else(|| {
-        NcError::Usage(missing_film_base_message(FilmBaseRemedy::for_command(
-            command,
-        )))
-    })?;
+    let base_source = recipe
+        .calibration
+        .film_base
+        .clone()
+        .ok_or_else(|| NcError::Usage(MISSING_FILM_BASE.into()))?;
     // Validated before anything was decoded; resolved again here from the same recipe,
     // so what renders is what was checked.
     let destination = recipe::destination(recipe, KnobNames::FlagAndKey)?;
@@ -4041,18 +4079,18 @@ fn convert_attempt(
     telemetry_log: Option<&Path>,
     attempt: &mut ConvertAttempt,
 ) -> Result<()> {
-    reject_deprecated_input_flags(&args.input_opts)?;
+    reject_deprecated_input_flags(&args.knobs.input_opts)?;
     // Removed flags run first, so a retired spelling is diagnosed as retired before any
     // rule reasons about the values the recipe resolves.
-    reject_removed_flags(args)?;
+    reject_removed_flags(&args.knobs, !args.recipe_in.is_empty())?;
     // A recipe written for the removed chain is refused inside the load, by name.
-    let loaded = load_recipe(args.recipe_in.as_deref())?;
-    // The frame's own roll values first, then the flags win over the recipe.
+    let loaded = load_recipes(&args.recipe_in)?;
+    // The frame's own roll values first, then the flags win over every recipe.
     let stated_roll = loaded.recipe.roll.clone();
-    let recipe = recipe::merge(loaded.recipe.for_frame(&args.input), args);
+    let recipe = recipe::merge(loaded.recipe.for_frame(&args.input), &args.knobs);
     attempt.export_ir = recipe.input.export_ir.as_deref().map(PathBuf::from);
     // A flag-presence rule, ahead of every value rule that could refuse first.
-    reject_roll_flags_nothing_applies(args, &recipe)?;
+    reject_roll_flags_nothing_applies(&args.knobs, &recipe)?;
     // The table as stated: `for_frame` moved this frame's entry into `roll.white_stops`,
     // where `validate` would name the wrong key. Only over a sound decode, as in
     // `validate`: a bad linearization is its own fault, not an entry's.
@@ -4070,8 +4108,11 @@ fn convert_attempt(
     // report's `output` and telemetry's `output_bytes` must all see the completed path,
     // never the stem. (`validate_convert` ran the same rule and discarded the value;
     // this is the one call that keeps it.)
-    let target =
-        OutputTarget::resolve(&recipe, KnobNames::FlagAndKey, args.destination.film_master)?;
+    let target = OutputTarget::resolve(
+        &recipe,
+        KnobNames::FlagAndKey,
+        args.knobs.destination.film_master,
+    )?;
     let output = resolve_output_path(&args.output, target, SuffixContext::Convert)?;
     attempt.output = Some(output.clone());
     attempt.conversion = Some(conversion_info(&recipe, target.destination));
@@ -4088,10 +4129,31 @@ fn convert_attempt(
     // `NC_TELEMETRY_LOG` or `--telemetry-file` can't append into (and corrupt) the
     // input scan or an artifact. A collision is a config error, distinct from a
     // telemetry *write* failure, which is fail-soft.
-    ensure_write_targets_distinct(
-        &args.input,
-        &write_targets(args, &output, attempt.export_ir.as_deref(), telemetry_log),
-    )?;
+    let targets = write_targets(args, &output, attempt.export_ir.as_deref(), telemetry_log);
+    ensure_write_targets_distinct(&args.input, &targets)?;
+    // `--dump-params X --params X` is allowed only when X is the sole layer: it
+    // rewrites the recipe it replays. Over one of several, it would fold the others in.
+    if let Some(dump) = &args.dump_params
+        && args.recipe_in.len() > 1
+        && let Some(layer) = recipe_files(&args.recipe_in)
+            .find(|p| keys_collide(&collision_key(p), &collision_key(dump)))
+    {
+        return Err(NcError::Usage(format!(
+            "--dump-params ({}) would overwrite the --params layer {}: with several layers \
+             it would rewrite that layer into the whole resolved run (its base, roll values \
+             and roll.frames table), carrying them into later runs. Dump to another path",
+            dump.display(),
+            layer.display()
+        )));
+    }
+    let spare_recipes: Vec<_> = targets
+        .iter()
+        .copied()
+        .filter(|(label, _)| matches!(*label, "--output" | "--report-file" | "--export-ir"))
+        .collect();
+    for recipe_file in recipe_files(&args.recipe_in) {
+        ensure_write_targets_spare(recipe_file, "the --params recipe", &spare_recipes)?;
+    }
     if let Some(msg) =
         telemetry_sink_collision(args, &output, attempt.export_ir.as_deref(), telemetry_log)
     {
@@ -4116,12 +4178,12 @@ fn convert_attempt(
     // is the only place it appears there. (`roll` differs: it records per-frame
     // failures and still emits its report, so the roll-level warning survives a bad
     // frame.)
-    if let Some(msg) = pipeline_version_warning(loaded.meta_pipeline_version) {
+    for msg in loaded.provenance_warnings {
         push_warning_buf(&mut attempt.warnings, log, msg);
     }
     // What the run's recipe falls back on, or states that nobody may have chosen — a fact
     // about the run's recipe, not the frame; a typed flag never warns.
-    for msg in recipe.recipe_warnings(recipe::TypedStyle::of(args)) {
+    for msg in recipe.recipe_warnings(recipe::TypedStyle::of(&args.knobs)) {
         push_warning_buf(&mut attempt.warnings, log, msg);
     }
 
@@ -4134,13 +4196,8 @@ fn convert_attempt(
         &args.input,
         &output,
         &recipe,
-        InputFromCli {
-            transfer: args.input_opts.input_transfer.is_some(),
-            meaning: args.input_opts.input_meaning.is_some(),
-        },
-        &args
-            .recipe_in
-            .iter()
+        InputFromCli::of(&args.knobs.input_opts),
+        &recipe_files(&args.recipe_in)
             .map(PathBuf::as_path)
             .collect::<Vec<_>>(),
         args.memory.budget(),
@@ -4268,6 +4325,8 @@ struct PlannedFrame {
     /// report so a reader sees exactly what differed for this frame; `None` when
     /// the frame ran the shared recipe unchanged.
     overrides: Option<serde_json::Value>,
+    /// Which input axes the CLI asserted for this frame, its `overrides` accounted for.
+    input_from_cli: InputFromCli,
 }
 
 /// The roll-level JSON report emitted on stdout (or `--report-file`): any roll-level
@@ -4484,71 +4543,8 @@ fn resolve_frame_output(
     resolve_output_path(&path, target, SuffixContext::RollFrame(input))
 }
 
-/// Deep-merge `overlay` into `base`: JSON objects merge key-by-key (recursively),
-/// any other value replaces. Layers a per-frame partial-recipe override onto the
-/// shared recipe's JSON before it is deserialized back to a validated [`Recipe`]
-/// — a partial override keeps the shared values it doesn't
-/// mention (a plain `serde` deserialize of the partial would reset them to
-/// defaults instead).
-///
-/// Switching a multi-variant enum via an override is safe, not silent: the merged
-/// value must still deserialize as that enum. An **externally tagged** one (e.g.
-/// [`FilmBaseSource`]) is a one-key map (`{"region":[…]}`), and flipping it to another
-/// variant (`{"explicit":[…]}`) must *replace* the whole map — a key-by-key merge would
-/// union the tags into `{"region":…, "explicit":…}`, which no externally-tagged enum can
-/// deserialize, turning an override that should apply into a confusing `from_value`
-/// rejection. [`is_variant_switch`] catches exactly that signature (both sides
-/// single-key objects with *different* keys). No recipe section is internally tagged
-/// any more: the `reconstruction` selector went with `simple` and the curve's with
-/// `characteristic`, so an overlay's retired `type` merges in as a key and the
-/// deserializer strips or refuses it.
-///
-/// A malformed override is still rejected loudly by the `from_value` in
-/// [`resolve_frames`], never applied half-merged.
-fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
-    if is_variant_switch(base, overlay) {
-        *base = overlay.clone();
-        return;
-    }
-    match (base, overlay) {
-        (serde_json::Value::Object(b), serde_json::Value::Object(o)) => {
-            for (k, v) in o {
-                merge_json(b.entry(k.clone()).or_insert(serde_json::Value::Null), v);
-            }
-        }
-        (b, o) => *b = o.clone(),
-    }
-}
-
-/// The externally-tagged-enum-variant-switch signature: `base` and `overlay` are
-/// both single-key objects with *different* keys (e.g. `{"region":[…]}` vs
-/// `{"explicit":[…]}`). Deep-merging such a pair would leave a two-tag object that
-/// no externally-tagged enum deserializes, so [`merge_json`] replaces it wholesale
-/// instead. A unit variant serializes as a bare string (`"auto"`), not an object,
-/// so switching to/from it never reaches here — the plain replace arm handles it.
-///
-/// **Not a struct of optional fields that happens to state one key.** The recipe's
-/// `output.display` serializes only its stated axes, so a shared `{"transfer": "pq"}`
-/// and a per-frame `{"container": "avif"}` have the same shape as a variant switch;
-/// replacing would drop the roll's transfer. Two keys that are both destination axes
-/// ([`crate::destination::AXIS_KEYS`]) are therefore merged field by field. No
-/// externally tagged enum in either recipe has a variant of those names.
-fn is_variant_switch(base: &serde_json::Value, overlay: &serde_json::Value) -> bool {
-    let axis =
-        |k: Option<&String>| k.is_some_and(|k| crate::destination::AXIS_KEYS.contains(&k.as_str()));
-    match (base, overlay) {
-        (serde_json::Value::Object(b), serde_json::Value::Object(o)) => {
-            b.len() == 1
-                && o.len() == 1
-                && b.keys().next() != o.keys().next()
-                && !(axis(b.keys().next()) && axis(o.keys().next()))
-        }
-        _ => false,
-    }
-}
-
 /// Load a `--frames` manifest. A read failure or invalid/unknown-key JSON is a
-/// usage error (a config mistake), like [`load_recipe`].
+/// usage error (a config mistake), like [`load_recipes`].
 fn load_manifest(path: &Path) -> Result<RollManifest> {
     let txt = std::fs::read_to_string(path).map_err(|e| {
         NcError::Usage(format!(
@@ -4600,17 +4596,26 @@ fn reject_roll_unsupported_input(r: &Recipe) -> Result<()> {
     Ok(())
 }
 
-/// `roll`'s whole gate for one recipe — the shared one, or a frame's after its override
+/// `roll`'s whole gate for one recipe — the roll's, or a frame's after its override
 /// merged: the roll-specific rejections first, then the stage sections' rules, then the
 /// shared sections, whose missing-base rule is the least specific diagnosis there is.
-/// `context` prefixes a stage rule's message, which names recipe keys only (`roll`
-/// accepts no conversion flags).
-fn validate_roll_recipe(r: &Recipe, context: &str) -> Result<()> {
+/// A frame's `context` prefixes a stage rule's message and it names the key alone, since
+/// the fault is in its manifest entry; the roll's recipe (`None`) names flag and key
+/// unprefixed, as on `convert`.
+fn validate_roll_recipe(r: &Recipe, frame_context: Option<&str>) -> Result<()> {
     reject_roll_unsupported(r)?;
     reject_roll_unsupported_input(r)?;
-    recipe::validate(r, KnobNames::KeyOnly)
-        .map_err(|e| NcError::Usage(format!("{context}: {}", e.message())))?;
-    validate_shared(r, FilmBaseRemedy::SharedRecipe)
+    let names = match frame_context {
+        Some(_) => KnobNames::KeyOnly,
+        None => KnobNames::FlagAndKey,
+    };
+    recipe::validate(r, names).map_err(|e| {
+        NcError::Usage(match frame_context {
+            Some(context) => format!("{context}: {}", e.message()),
+            None => e.message().to_string(),
+        })
+    })?;
+    validate_shared(r)
 }
 
 /// A value every frame of a roll shares ([`ROLL_WIDE`]).
@@ -4771,12 +4776,19 @@ fn roll_wide_breaks(input: &Path, frame: &Recipe, shared: &Recipe) -> Result<Vec
 /// is not rejected — it is applied, with a roll-level warning pushed to `roll_warnings`,
 /// so a deliberate per-frame value stays possible while the break is surfaced and
 /// `--strict`-promotable.
+///
+/// A frame resolves as `convert` would: `stated` (the `--params` layers) with its own
+/// `roll.frames` entry, then the flags, then its manifest `params`. `shared` is the
+/// roll's recipe with the flags applied, which the roll-wide warnings compare against.
 fn resolve_frames(
     args: &RollArgs,
+    stated: &Recipe,
     shared: &Recipe,
     roll_warnings: &mut Vec<String>,
     log: &Log,
 ) -> Result<Vec<PlannedFrame>> {
+    let own = |input: &Path| recipe::merge(stated.clone().for_frame(input), &args.knobs);
+    let from_cli = InputFromCli::of(&args.knobs.input_opts);
     let out_dir = args.out_dir.as_path();
     let mut planned = Vec::new();
     match &args.frames {
@@ -4789,7 +4801,7 @@ fn resolve_frames(
                 )));
             }
             for mf in manifest.frames {
-                let own = shared.clone().for_frame(&mf.input);
+                let own = own(&mf.input);
                 let (recipe, overrides) = match mf.params {
                     Some(ov) => {
                         // A per-frame override carrying a removed key gets the same
@@ -4807,18 +4819,30 @@ fn resolve_frames(
                         }
                         // This frame's recipe as JSON, so the partial override
                         // deep-merges onto it and deserializes back with
-                        // `deny_unknown_fields`.
+                        // `deny_unknown_fields`. What holds a null is left out of the
+                        // merge, then put back where the full document has no such key,
+                        // so a mistyped key is named as unknown before a null is refused.
                         let mut v = serde_json::to_value(&own).map_err(|e| {
                             NcError::Other(format!("serializing shared recipe: {e}"))
                         })?;
-                        merge_json(&mut v, &ov);
-                        let r: Recipe = serde_json::from_value(v).map_err(|e| {
+                        recipe::merge_json(&mut v, &without_nulls(&ov));
+                        let invalid = |e: serde_json::Error| {
                             NcError::Usage(format!(
                                 "frame {}: invalid params override: {e}",
                                 mf.input.display()
                             ))
-                        })?;
-                        validate_roll_recipe(&r, &context)?;
+                        };
+                        let r: Recipe = serde_json::from_value(v.clone()).map_err(invalid)?;
+                        if let Some(key) = first_null_key(&ov) {
+                            restore_unknown(&mut v, &ov);
+                            serde_json::from_value::<Recipe>(v).map_err(invalid)?;
+                            return Err(NcError::Usage(format!(
+                                "{context}: `{key}` is null, and a `null` states nothing — \
+                                 it cannot unset the roll's value. Omit `{key}` to use the \
+                                 roll's value"
+                            )));
+                        }
+                        validate_roll_recipe(&r, Some(&context))?;
                         for msg in roll_wide_breaks(&mf.input, &r, shared)? {
                             log.warn(&msg);
                             roll_warnings.push(msg);
@@ -4837,6 +4861,7 @@ fn resolve_frames(
                     input: mf.input,
                     output,
                     recipe,
+                    input_from_cli: overrides.as_ref().map_or(from_cli, |ov| from_cli.under(ov)),
                     overrides,
                 });
             }
@@ -4853,15 +4878,16 @@ fn resolve_frames(
                     "no input frames to convert (the inputs matched no files)".into(),
                 ));
             }
-            let target = OutputTarget::resolve(shared, KnobNames::KeyOnly, false)?;
+            let target = OutputTarget::resolve(shared, KnobNames::FlagAndKey, false)?;
             for input in inputs {
                 let output = default_output_name(&input, out_dir, target);
-                let recipe = shared.clone().for_frame(&input);
+                let recipe = own(&input);
                 planned.push(PlannedFrame {
                     input,
                     output,
                     recipe,
                     overrides: None,
+                    input_from_cli: from_cli,
                 });
             }
         }
@@ -4869,19 +4895,81 @@ fn resolve_frames(
     Ok(planned)
 }
 
+/// The path of the first `null` in `v` (`look.contrast`, `roll.white_balance[1]`),
+/// depth first in key order. A frame's `params` refuses one: the merge skips a `null`,
+/// so a hand-written one (an attempt to unset) would silently do nothing.
+fn first_null_key(v: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    let join = |head: String, rest: String| match rest.starts_with('[') {
+        true => format!("{head}{rest}"),
+        false => format!("{head}.{rest}"),
+    };
+    match v {
+        Value::Object(map) => map.iter().find_map(|(k, v)| match v {
+            Value::Null => Some(k.clone()),
+            _ => first_null_key(v).map(|rest| join(k.clone(), rest)),
+        }),
+        Value::Array(items) => items.iter().enumerate().find_map(|(i, v)| match v {
+            Value::Null => Some(format!("[{i}]")),
+            _ => first_null_key(v).map(|rest| join(format!("[{i}]"), rest)),
+        }),
+        _ => None,
+    }
+}
+
+/// `v` with every member that holds a `null` anywhere left out, so what remains can be
+/// checked for unknown keys before [`first_null_key`] refuses the null.
+fn without_nulls(v: &serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::Object(map) => map
+            .iter()
+            .filter(|(_, v)| !v.is_null() && (v.is_object() || first_null_key(v).is_none()))
+            .map(|(k, v)| (k.clone(), without_nulls(v)))
+            .collect(),
+        _ => v.clone(),
+    }
+}
+
+/// Put back into `doc` (a full recipe document) the members of `overlay` it has no key
+/// for — what [`without_nulls`] dropped at an unknown key — so deserializing `doc` names
+/// that key as unknown. A variant switch is not an unknown key: its new tag stays out,
+/// as the merge would replace the value, and the null in it is refused by path.
+fn restore_unknown(doc: &mut serde_json::Value, overlay: &serde_json::Value) {
+    if recipe::is_variant_switch(doc, overlay) {
+        return;
+    }
+    let (serde_json::Value::Object(d), serde_json::Value::Object(o)) = (doc, overlay) else {
+        return;
+    };
+    for (k, v) in o {
+        match d.get_mut(k) {
+            Some(existing) => restore_unknown(existing, v),
+            None => {
+                d.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
+
 /// Guard every roll write target (per-frame outputs, `--report-file`)
 /// against every input scan and against one another — so a same-stem collision or
 /// a target aimed at an input fails loudly up front rather than clobbering a scan
 /// or a just-written sibling. The roll-input analogue of
 /// [`ensure_write_targets_distinct`] (multiple inputs, case-insensitivity-aware).
-fn ensure_roll_targets_distinct(inputs: &[&Path], targets: &[(String, PathBuf)]) -> Result<()> {
-    let input_keys: Vec<PathBuf> = inputs.iter().map(|p| collision_key(p)).collect();
+fn ensure_roll_targets_distinct(
+    inputs: &[(&Path, &str)],
+    targets: &[(String, PathBuf)],
+) -> Result<()> {
+    let input_keys: Vec<(PathBuf, &str)> = inputs
+        .iter()
+        .map(|(p, what)| (collision_key(p), *what))
+        .collect();
     let mut seen: Vec<(&str, PathBuf)> = Vec::with_capacity(targets.len());
     for (label, path) in targets {
         let key = collision_key(path);
-        if input_keys.iter().any(|ik| keys_collide(ik, &key)) {
+        if let Some((_, what)) = input_keys.iter().find(|(ik, _)| keys_collide(ik, &key)) {
             return Err(NcError::Usage(format!(
-                "{label} ({}) would overwrite an input scan",
+                "{label} ({}) would overwrite {what}",
                 path.display()
             )));
         }
@@ -4953,18 +5041,24 @@ fn frame_report_err(
 fn run_roll(args: RollArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
-    reject_new_flow(args.new_flow)?;
+    // As on `convert`: removed flags first, then the recipes, then the flags over them.
+    reject_deprecated_input_flags(&args.knobs.input_opts)?;
+    reject_removed_flags(&args.knobs, !args.recipe_in.is_empty())?;
+    let loaded = load_recipes(&args.recipe_in)?;
+    // The roll's recipe, flags applied: what the roll-wide warnings compare each frame
+    // against, so a value a flag set is not read as a frame's break. Each frame resolves
+    // from the recipes alone (`resolve_frames`), since its `roll.frames` entry comes
+    // before the flags.
+    let stated = loaded.recipe;
+    let shared = recipe::merge(stated.clone(), &args.knobs);
+    reject_roll_flags_nothing_applies(&args.knobs, &shared)?;
 
-    // Shared frozen recipe — validated once up front so a broken recipe fails
-    // loudly before any frame is touched. Roll-specific rejections run first and the
-    // missing-base rule last (`validate_roll_recipe`): a recipe that is both baseless
-    // and roll-invalid should surface the roll problem first, or the user adds a base
-    // only to meet a second error.
-    let LoadedRecipe {
-        recipe: shared,
-        meta_pipeline_version,
-    } = load_recipe(args.recipe_in.as_deref())?;
-    validate_roll_recipe(&shared, "shared recipe")?;
+    // Validated once up front so a broken recipe fails loudly before any frame is
+    // touched. Roll-specific rejections run first and the missing-base rule last
+    // (`validate_roll_recipe`): a recipe that is both baseless and roll-invalid should
+    // surface the roll problem first, or the user adds a base only to meet a second
+    // error.
+    validate_roll_recipe(&shared, None)?;
 
     // A roll's headline guarantee is one frozen, roll-fixed film base shared by
     // every frame. Only an *explicit* base delivers that: a region re-reads `Dmin`
@@ -4976,13 +5070,14 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // A frozen recipe replayed under a different behavioral `pipeline_version` than
     // it was captured under is a roll-level fact (one shared recipe, N frames), so
     // it rides `roll_warnings` rather than any single frame's list.
-    if let Some(msg) = pipeline_version_warning(meta_pipeline_version) {
+    for msg in loaded.provenance_warnings {
         log.warn(&msg);
         roll_warnings.push(msg);
     }
-    // The shared recipe's fallbacks and possible leftovers, once for the roll. A
-    // per-frame override is that frame's explicit choice, so it does not warn.
-    for msg in shared.recipe_warnings(recipe::TypedStyle::default()) {
+    // The shared recipe's fallbacks and possible leftovers, once for the roll; a typed
+    // flag never warns. A per-frame override is that frame's explicit choice, so it
+    // does not warn either.
+    for msg in shared.recipe_warnings(recipe::TypedStyle::of(&args.knobs)) {
         log.warn(&msg);
         roll_warnings.push(msg);
     }
@@ -4995,8 +5090,8 @@ fn run_roll(args: RollArgs) -> Result<()> {
              every frame reads its own Dmin — the roll is not color-consistent and the \
              shared recipe is not truly shared. Measure the base once — `hanten measure-roll \
              <frames> --unexposed <unexposed-frame> --out roll.json`, or `hanten measure-base \
-             <unexposed-frame> --out base.json` — and pass that file as --params: it states \
-             the explicit `calibration.film_base`."
+             <unexposed-frame> --out base.json` — and pass that file as --params, or its base \
+             as --film-base R,G,B."
             .to_string();
         log.warn(&msg);
         roll_warnings.push(msg);
@@ -5005,17 +5100,19 @@ fn run_roll(args: RollArgs) -> Result<()> {
     // Resolve the plan. A per-frame override that changes a roll-wide value appends
     // its own roll-level warning here (warn-and-continue, like the not-frozen warning
     // above), so `roll_warnings` is passed in to collect it.
-    let planned = resolve_frames(&args, &shared, &mut roll_warnings, &log)?;
+    let planned = resolve_frames(&args, &stated, &shared, &mut roll_warnings, &log)?;
 
     // Guard every write target (per-frame outputs, and the report file) against every
     // input and against one another before writing anything. The `--frames` manifest
     // is a read input too — a write target aimed at it (e.g. `--report-file` equal to
     // the manifest path) must be rejected, not silently clobbered — so include it in
     // the protected read set.
-    let mut inputs: Vec<&Path> = planned.iter().map(|p| p.input.as_path()).collect();
-    if let Some(frames) = args.frames.as_deref() {
-        inputs.push(frames);
-    }
+    let mut inputs: Vec<(&Path, &str)> = planned
+        .iter()
+        .map(|p| (p.input.as_path(), "an input scan"))
+        .collect();
+    inputs.extend(args.frames.as_deref().map(|p| (p, "the --frames manifest")));
+    inputs.extend(recipe_files(&args.recipe_in).map(|p| (p.as_path(), "the --params recipe")));
     let mut targets: Vec<(String, PathBuf)> = Vec::new();
     for pf in &planned {
         targets.push((
@@ -5050,6 +5147,10 @@ fn run_roll(args: RollArgs) -> Result<()> {
         }
     }
 
+    let read_files: Vec<&Path> = recipe_files(&args.recipe_in)
+        .chain(args.frames.iter())
+        .map(PathBuf::as_path)
+        .collect();
     let mut frames = Vec::with_capacity(planned.len());
     let (mut succeeded, mut failed) = (0usize, 0usize);
     for pf in &planned {
@@ -5064,13 +5165,8 @@ fn run_roll(args: RollArgs) -> Result<()> {
             &pf.input,
             &pf.output,
             &pf.recipe,
-            InputFromCli::none(),
-            &args
-                .recipe_in
-                .iter()
-                .chain(args.frames.iter())
-                .map(PathBuf::as_path)
-                .collect::<Vec<_>>(),
+            pf.input_from_cli,
+            &read_files,
             args.memory.budget(),
             &mut facts,
             &log,
@@ -5980,7 +6076,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     let started = Instant::now();
     let log = Log::new(&args.report);
 
-    let mut recipe = load_recipe(args.recipe_in.as_deref())?.recipe;
+    let loaded = load_recipes(&args.recipe_in)?;
+    let mut recipe = loaded.recipe;
     // A measured base is not overridden: the unexposed frame is refused beside any
     // other statement of the base, before a rule about that base could refuse first.
     if let Some(unexposed) = &args.unexposed {
@@ -6113,11 +6210,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
                 .as_deref()
                 .map(|p| (p, "the --unexposed scan")),
         )
-        .chain(
-            args.recipe_in
-                .as_deref()
-                .map(|p| (p, "the --params recipe")),
-        );
+        .chain(recipe_files(&args.recipe_in).map(|p| (p.as_path(), "the --params recipe")));
     for (input, what) in read {
         ensure_write_targets_spare(input, what, &targets)?;
     }
@@ -6125,6 +6218,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
 
     let budget = args.memory.budget();
     let mut warnings = Vec::new();
+    for msg in loaded.provenance_warnings {
+        push_warning_buf(&mut warnings, &log, msg);
+    }
     let mut decode = None;
 
     // The unexposed frame first: every other frame is decoded with its base. Measured
@@ -6417,6 +6513,7 @@ fn emit_telemetry(
     if !attempt.guarded {
         let output = attempt.output.as_deref().unwrap_or(&args.output);
         let export_ir = attempt.export_ir.as_deref().or(args
+            .knobs
             .input_opts
             .export_ir
             .as_deref()
@@ -6533,7 +6630,8 @@ fn emit_telemetry(
 /// Where a telemetry sink would land on a file it must not overwrite — the input,
 /// the `--params` recipe the run reads, an output, or the other sink — as a message
 /// naming both; `None` when every sink is clear. `--params` is guarded here rather
-/// than in [`write_targets`], which would refuse `--dump-params X --params X`.
+/// than in [`write_targets`], which would refuse `--dump-params X --params X` (allowed
+/// when X is the sole layer; `convert_attempt` refuses it over one of several).
 fn telemetry_sink_collision(
     args: &ConvertArgs,
     output: &Path,
@@ -6545,9 +6643,7 @@ fn telemetry_sink_collision(
     let (sinks, mut others): (Vec<_>, Vec<_>) =
         targets.into_iter().partition(|(label, _)| is_sink(label));
     others.push(("the input scan", &args.input));
-    if let Some(p) = &args.recipe_in {
-        others.push(("--params", p));
-    }
+    others.extend(recipe_files(&args.recipe_in).map(|p| ("--params", p.as_path())));
     sinks.iter().enumerate().find_map(|(i, (label, sink))| {
         let key = collision_key(sink);
         others
@@ -6622,6 +6718,16 @@ fn elapsed_ms(started: Instant) -> f64 {
 mod tests {
     use super::*;
 
+    /// `recipe::merge` with a parsed `convert`'s flags.
+    fn merged(base: Recipe, args: &ConvertArgs) -> Recipe {
+        recipe::merge(base, &args.knobs)
+    }
+
+    /// `reject_removed_flags` as a parsed `convert` runs it.
+    fn removed(args: &ConvertArgs) -> Result<()> {
+        reject_removed_flags(&args.knobs, !args.recipe_in.is_empty())
+    }
+
     /// A recipe whose film base is **stated**.
     ///
     /// `calibration.film_base` has no default, so `validate_shared` rejects an
@@ -6669,7 +6775,7 @@ mod tests {
         for bad in [-0.1, 0.5, 1.0, f32::NAN, f32::INFINITY] {
             let mut cfg = base_recipe();
             cfg.measure.inset = bad;
-            let err = validate_shared(&cfg, FilmBaseRemedy::Flags).unwrap_err();
+            let err = validate_shared(&cfg).unwrap_err();
             assert!(
                 format!("{err}").contains("measure-inset"),
                 "inset {bad} must be refused by name, got: {err}"
@@ -6688,10 +6794,7 @@ mod tests {
         // over the area at all.
         let mut over = base_recipe();
         over.measure.inset = 0.5;
-        let err = format!(
-            "{}",
-            validate_shared(&over, FilmBaseRemedy::Flags).unwrap_err()
-        );
+        let err = format!("{}", validate_shared(&over).unwrap_err());
         assert!(
             err.contains("lower the fraction") && !err.contains("--auto-d-max"),
             "{err}"
@@ -6699,13 +6802,13 @@ mod tests {
         let mut ok = base_recipe();
         ok.measure.inset = 0.0;
         assert!(
-            validate_shared(&ok, FilmBaseRemedy::Flags).is_ok(),
+            validate_shared(&ok).is_ok(),
             "zero is legal — the stage floors it at one probe step on a measured \
              frame, which is not a usage question"
         );
         ok.measure.inset = crate::types::MAX_MEASURE_INSET;
         assert!(
-            validate_shared(&ok, FilmBaseRemedy::Flags).is_ok(),
+            validate_shared(&ok).is_ok(),
             "the bound itself is inclusive"
         );
     }
@@ -6713,7 +6816,7 @@ mod tests {
     #[test]
     fn removed_algorithm_and_simple_flags_are_migration_errors() {
         // `--algorithm` is rejected with guidance naming the replacement.
-        let err = reject_removed_flags(&parse_convert(&["--algorithm", "sigmoid"])).unwrap_err();
+        let err = removed(&parse_convert(&["--algorithm", "sigmoid"])).unwrap_err();
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("recipe `reconstruction`"), "{err}");
         // The remedy is to drop the flag, not to reach for the removed curve selector.
@@ -6722,8 +6825,7 @@ mod tests {
 
         // `--reconstruction`, whatever its value — density is the only one left.
         for value in ["simple", "density"] {
-            let err =
-                reject_removed_flags(&parse_convert(&["--reconstruction", value])).unwrap_err();
+            let err = removed(&parse_convert(&["--reconstruction", value])).unwrap_err();
             assert_eq!(err.exit_code(), 2, "{value}");
             assert!(
                 err.to_string().contains(REMOVED_SIMPLE_RECONSTRUCTION),
@@ -6737,13 +6839,13 @@ mod tests {
             ["--clip-low", "0.1"].as_slice(),
             ["--clip-high", "0.9"].as_slice(),
         ] {
-            let err = reject_removed_flags(&parse_convert(flags)).unwrap_err();
+            let err = removed(&parse_convert(flags)).unwrap_err();
             assert_eq!(err.exit_code(), 2, "{flags:?}");
             assert!(err.to_string().contains("was removed"), "{flags:?}: {err}");
         }
 
         // A clean invocation passes.
-        assert!(reject_removed_flags(&parse_convert(&[])).is_ok());
+        assert!(removed(&parse_convert(&[])).is_ok());
     }
 
     /// Whether `convert` has a visible flag spelled `flag` — a remedy a message names
@@ -6779,7 +6881,7 @@ mod tests {
                 "--anchor-mid-offset",
             ),
         ] {
-            let err = reject_removed_flags(&parse_convert(flags)).unwrap_err();
+            let err = removed(&parse_convert(flags)).unwrap_err();
             assert_eq!(err.exit_code(), 2, "{flags:?}");
             let msg = err.to_string();
             assert!(msg.contains("removed with the sigmoid"), "{flags:?}: {msg}");
@@ -6817,9 +6919,7 @@ mod tests {
             (&["--preset"], "--preset was removed"),
         ];
         for (flags, want) in cases {
-            let err = reject_removed_flags(&parse_convert(flags))
-                .unwrap_err()
-                .to_string();
+            let err = removed(&parse_convert(flags)).unwrap_err().to_string();
             assert!(err.contains(want), "{flags:?}: {err}");
             assert!(err.contains("rop the flag"), "{flags:?}: {err}");
             for gone in ["--density-curve exponential", "Pass --", "--film-stock <"] {
@@ -6828,7 +6928,7 @@ mod tests {
         }
         // `characteristic` and `sigmoid` get their own history; the plain identity does not.
         let why = |v: &str| {
-            reject_removed_flags(&parse_convert(&["--density-curve", v]))
+            removed(&parse_convert(&["--density-curve", v]))
                 .unwrap_err()
                 .to_string()
         };
@@ -6859,7 +6959,7 @@ mod tests {
             vec!["--anchor-mid-fraction", "0.5"],
             vec!["--anchor-black-floor", "0.005"],
         ] {
-            let err = reject_removed_flags(&parse_convert(&flags)).unwrap_err();
+            let err = removed(&parse_convert(&flags)).unwrap_err();
             assert_eq!(err.exit_code(), 2, "{flags:?}");
             let msg = err.to_string();
             assert!(
@@ -6878,12 +6978,12 @@ mod tests {
             vec!["--anchor-mid-fraction", "-0.5"],
             vec!["--anchor-black-floor"],
         ] {
-            let err = reject_removed_flags(&parse_convert(&argv)).unwrap_err();
+            let err = removed(&parse_convert(&argv)).unwrap_err();
             assert!(err.to_string().contains("was removed"), "{argv:?}: {err}");
         }
         let remedy = parse_convert(&["--anchor-mid-offset", "0.5"]);
-        reject_removed_flags(&remedy).unwrap();
-        let r = recipe::merge(base_recipe(), &remedy);
+        removed(&remedy).unwrap();
+        let r = merged(base_recipe(), &remedy);
         assert_eq!(
             r.reconstruction.anchor,
             crate::algo::fixed::AnchorRule::MidAboveBase(0.5)
@@ -6980,7 +7080,7 @@ mod tests {
                 Some("--white-balance"),
             ),
         ] {
-            let err = reject_removed_flags(&parse_convert(&argv)).unwrap_err();
+            let err = removed(&parse_convert(&argv)).unwrap_err();
             assert_eq!(err.exit_code(), 2, "{argv:?}");
             let msg = err.to_string();
             assert!(msg.contains(names), "{argv:?}: {msg}");
@@ -6995,17 +7095,17 @@ mod tests {
                 "{argv:?}: a sentence is missing: {msg}"
             );
         }
-        let msg = reject_removed_flags(&parse_convert(&["--output-preset", "legacy"]))
+        let msg = removed(&parse_convert(&["--output-preset", "legacy"]))
             .unwrap_err()
             .to_string();
         assert!(msg.contains("Drop the flag, or state the axes"), "{msg}");
         // `display-p3` names its gamut rather than "the default": under `--rendering
         // direct` the default is the HDR float TIFF.
-        let msg = reject_removed_flags(&parse_convert(&["--output-preset", "display-p3"]))
+        let msg = removed(&parse_convert(&["--output-preset", "display-p3"]))
             .unwrap_err()
             .to_string();
         assert!(msg.contains("pass --gamut display-p3"), "{msg}");
-        assert!(reject_removed_flags(&parse_convert(&[])).is_ok());
+        assert!(removed(&parse_convert(&[])).is_ok());
     }
 
     #[test]
@@ -7015,7 +7115,7 @@ mod tests {
         use crate::destination::{Defaults, resolve};
         for &(name, flags) in PRESET_COUNTERPARTS {
             let argv: Vec<&str> = flags.split_whitespace().collect();
-            let r = crate::recipe::merge(Recipe::default(), &parse_convert(&argv));
+            let r = merged(Recipe::default(), &parse_convert(&argv));
             let OutputSection::Display(axes) = r.output else {
                 assert_eq!(flags, "--film-master", "{name}");
                 continue;
@@ -7031,7 +7131,7 @@ mod tests {
     #[test]
     fn the_film_master_counterpart_names_the_way_out_of_direct() {
         let text = |extra: &[&str]| {
-            reject_removed_flags(&parse_convert(
+            removed(&parse_convert(
                 &[&["--output-preset", "film-master"][..], extra].concat(),
             ))
             .unwrap_err()
@@ -7077,8 +7177,8 @@ mod tests {
             };
             // The two gates `run_convert` opens with, in its order.
             let args = parse_convert(&argv);
-            let err = reject_deprecated_input_flags(&args.input_opts)
-                .and_then(|()| reject_removed_flags(&args))
+            let err = reject_deprecated_input_flags(&args.knobs.input_opts)
+                .and_then(|()| removed(&args))
                 .err()
                 .unwrap_or_else(|| panic!("{flag} parsed and was not refused"));
             assert_eq!(err.exit_code(), 2, "{flag}");
@@ -7090,6 +7190,36 @@ mod tests {
         );
     }
 
+    /// `roll` takes every flag `convert` does — knobs and removed ones alike — but the
+    /// single-output plumbing, so a knob added to `ConvertArgs` directly is caught.
+    #[test]
+    fn roll_takes_every_conversion_flag_convert_does() {
+        use clap::CommandFactory;
+        const CONVERT_ONLY: &[&str] = &[
+            "--output",
+            "--dump-params",
+            "--seed",
+            "--telemetry",
+            "--telemetry-file",
+        ];
+        let cli = Cli::command();
+        let longs = |name: &str| -> std::collections::BTreeSet<String> {
+            cli.find_subcommand(name)
+                .unwrap()
+                .get_arguments()
+                .filter_map(|a| a.get_long().map(|l| format!("--{l}")))
+                .collect()
+        };
+        let roll = longs("roll");
+        let convert = longs("convert");
+        let missing: Vec<_> = convert
+            .iter()
+            .filter(|f| !CONVERT_ONLY.contains(&f.as_str()) && !roll.contains(*f))
+            .collect();
+        assert!(missing.is_empty(), "`roll` lacks {missing:?}");
+        assert!(convert.len() > 60, "only {} flags found", convert.len());
+    }
+
     #[test]
     fn new_flow_is_a_removed_flag_on_every_command_that_took_it() {
         for argv in [
@@ -7098,8 +7228,8 @@ mod tests {
             vec!["hanten", "params", "--new-flow"],
         ] {
             let new_flow = match Cli::try_parse_from(&argv).unwrap().command {
-                Command::Convert(a) => a.new_flow,
-                Command::Roll(a) => a.new_flow,
+                Command::Convert(a) => a.knobs.new_flow,
+                Command::Roll(a) => a.knobs.new_flow,
                 Command::Params(a) => a.new_flow,
                 _ => unreachable!(),
             };
@@ -7112,8 +7242,7 @@ mod tests {
         reject_new_flow(false).unwrap();
         // `convert` refuses it before anything else, so a removed flag beside it is not
         // diagnosed first.
-        let err = reject_removed_flags(&parse_convert(&["--new-flow", "--print-exposure", "1"]))
-            .unwrap_err();
+        let err = removed(&parse_convert(&["--new-flow", "--print-exposure", "1"])).unwrap_err();
         assert!(err.to_string().contains("--new-flow was removed"), "{err}");
     }
 
@@ -7126,27 +7255,32 @@ mod tests {
             ("reinhard", "always"),
             ("sigmoid", "was never a tone"),
         ] {
-            let msg = reject_removed_flags(&parse_convert(&["--display-tone", value]))
+            let msg = removed(&parse_convert(&["--display-tone", value]))
                 .unwrap_err()
                 .to_string();
             assert!(msg.contains("--display-tone was removed"), "{value}: {msg}");
             assert!(msg.contains(remedy), "{value}: {msg}");
             assert!(msg.contains("fit_range.headroom_stops"), "{value}: {msg}");
         }
-        let msg = reject_removed_flags(&parse_convert(&["--highlight-compress", "0"]))
+        let msg = removed(&parse_convert(&["--highlight-compress", "0"]))
             .unwrap_err()
             .to_string();
         assert!(msg.contains("--highlight-compress was removed"), "{msg}");
         assert!(msg.contains("--display-tone-headroom"), "{msg}");
         // Falsifiable: the headroom flag itself is not a removed flag.
-        reject_removed_flags(&parse_convert(&["--display-tone-headroom", "4"])).unwrap();
+        removed(&parse_convert(&["--display-tone-headroom", "4"])).unwrap();
     }
 
     /// The output target a `convert` command line's destination flags resolve.
     fn target_of(extra: &[&str]) -> OutputTarget {
         let args = parse_convert(extra);
-        let r = recipe::merge(base_recipe(), &args);
-        OutputTarget::resolve(&r, KnobNames::FlagAndKey, args.destination.film_master).unwrap()
+        let r = merged(base_recipe(), &args);
+        OutputTarget::resolve(
+            &r,
+            KnobNames::FlagAndKey,
+            args.knobs.destination.film_master,
+        )
+        .unwrap()
     }
 
     /// The gain-map JPEG destination (`--range hdr`).
@@ -7169,7 +7303,7 @@ mod tests {
         ] {
             let mut args = parse_convert(extra);
             args.output = PathBuf::from("positive");
-            validate_convert(&recipe::merge(base_recipe(), &args), &args).unwrap();
+            validate_convert(&merged(base_recipe(), &args), &args).unwrap();
             assert_eq!(
                 resolve_output_path(&args.output, target_of(extra), SuffixContext::Convert)
                     .unwrap(),
@@ -7187,7 +7321,7 @@ mod tests {
         // destination that writes the suffix given.
         let mut args = parse_convert(&[]);
         args.output = PathBuf::from("positive.jpg");
-        let err = validate_convert(&recipe::merge(base_recipe(), &args), &args)
+        let err = validate_convert(&merged(base_recipe(), &args), &args)
             .unwrap_err()
             .to_string();
         assert!(err.contains(".tif or .tiff"), "{err}");
@@ -7198,13 +7332,13 @@ mod tests {
         // The converse: the gain map refuses a TIFF path and names itself.
         let mut hdr = parse_convert(&["--range", "hdr"]);
         hdr.output = PathBuf::from("positive.tiff");
-        let err = validate_convert(&recipe::merge(base_recipe(), &hdr), &hdr)
+        let err = validate_convert(&merged(base_recipe(), &hdr), &hdr)
             .unwrap_err()
             .to_string();
         assert!(err.contains(".jpg or .jpeg"), "{err}");
         // Control: the matching suffix is accepted.
         hdr.output = PathBuf::from("positive.jpg");
-        validate_convert(&recipe::merge(base_recipe(), &hdr), &hdr).unwrap();
+        validate_convert(&merged(base_recipe(), &hdr), &hdr).unwrap();
     }
 
     #[test]
@@ -7377,7 +7511,7 @@ mod tests {
         // ...and the scaffold is deliberately NOT runnable as printed: it states no
         // film base, so `validate_shared` rejects it — `hanten params` emits a template to
         // edit, not a recipe to run.
-        let msg = match validate_shared(&back, FilmBaseRemedy::Flags) {
+        let msg = match validate_shared(&back) {
             Err(NcError::Usage(m)) => m,
             other => panic!(
                 "the printed default scaffold must be rejected until a film base is \
@@ -7390,7 +7524,7 @@ mod tests {
         // so the rejection above is about the film base and nothing else.
         let mut runnable = back.clone();
         runnable.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
-        validate_shared(&runnable, FilmBaseRemedy::Flags).unwrap();
+        validate_shared(&runnable).unwrap();
     }
 
     #[test]
@@ -7402,7 +7536,7 @@ mod tests {
             unstated.calibration.film_base, None,
             "there must be no default"
         );
-        let msg = match validate_shared(&unstated, FilmBaseRemedy::Flags) {
+        let msg = match validate_shared(&unstated) {
             Err(NcError::Usage(m)) => m,
             other => panic!("an unstated film base must be a usage error, got {other:?}"),
         };
@@ -7428,47 +7562,31 @@ mod tests {
         ] {
             let mut cfg = Recipe::default();
             cfg.calibration.film_base = Some(stated.clone());
-            validate_shared(&cfg, FilmBaseRemedy::Flags)
+            validate_shared(&cfg)
                 .unwrap_or_else(|e| panic!("a stated {stated:?} base must be accepted: {e}"));
         }
     }
 
     #[test]
-    fn roll_is_told_about_the_shared_recipe_rather_than_flags_it_rejects() {
-        // Same rule, different remedy: `RollArgs` flattens only `MemoryArgs` /
-        // `ReportArgs`, so every film-base flag exits 2 on `roll`. Naming them
-        // would be advice the user cannot follow.
-        let unstated = Recipe::default();
-        let msg = match validate_shared(&unstated, FilmBaseRemedy::SharedRecipe) {
+    fn the_missing_base_message_names_remedies_both_commands_take() {
+        // `convert` and `roll` take the same film-base flags, so one message serves
+        // both; the measuring command it names accepts what it is shown with.
+        let msg = match validate_shared(&Recipe::default()) {
             Err(NcError::Usage(m)) => m,
             other => panic!("an unstated film base must be a usage error, got {other:?}"),
         };
-        assert!(msg.contains("--params"), "{msg}");
-        assert!(msg.contains("calibration.film_base"), "{msg}");
-        for absent in ["--auto-base", "--film-base"] {
-            assert!(!msg.contains(absent), "{absent} must not be offered: {msg}");
+        assert_eq!(msg, MISSING_FILM_BASE);
+        for remedy in [
+            "--film-base",
+            "--base-region",
+            "calibration.film_base",
+            "hanten measure-base <unexposed-frame>",
+            "hanten measure-roll <frames> --unexposed",
+            "--params",
+        ] {
+            assert!(msg.contains(remedy), "{remedy} is not offered: {msg}");
         }
-        // The flags it does name (`--unexposed`, `--out`) are the measuring commands'
-        // it recommends, which accept them.
-        assert!(
-            msg.contains("hanten measure-roll <frames> --unexposed")
-                && msg.contains("hanten measure-base <unexposed-scan> --out"),
-            "{msg}"
-        );
-        // The *requirement* is remedy-independent — only the wording moves.
-        let mut stated = Recipe::default();
-        stated.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
-        validate_shared(&stated, FilmBaseRemedy::SharedRecipe).unwrap();
-        // And `convert_frame`'s totality guard shares the same two spellings, so
-        // the unreachable restatement cannot drift from the gate's.
-        assert_eq!(
-            missing_film_base_message(FilmBaseRemedy::for_command("roll")),
-            missing_film_base_message(FilmBaseRemedy::SharedRecipe)
-        );
-        assert_eq!(
-            missing_film_base_message(FilmBaseRemedy::for_command("convert")),
-            missing_film_base_message(FilmBaseRemedy::Flags)
-        );
+        assert!(!msg.contains("--auto-base"), "{msg}");
     }
 
     #[test]
@@ -7481,9 +7599,7 @@ mod tests {
         let mut contradictory = Recipe::default();
         contradictory.measure.inset = 0.9;
         assert_eq!(contradictory.calibration.film_base, None);
-        let msg = validate_shared(&contradictory, FilmBaseRemedy::Flags)
-            .unwrap_err()
-            .to_string();
+        let msg = validate_shared(&contradictory).unwrap_err().to_string();
         assert!(
             msg.contains("measure-inset"),
             "the bad value must be diagnosed ahead of the missing base: {msg}"
@@ -7494,13 +7610,13 @@ mod tests {
         // missing-base rule having stopped working.
         let mut only_unstated = Recipe::default();
         assert!(
-            validate_shared(&only_unstated, FilmBaseRemedy::Flags)
+            validate_shared(&only_unstated)
                 .unwrap_err()
                 .to_string()
                 .contains("no film base selected")
         );
         only_unstated.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
-        validate_shared(&only_unstated, FilmBaseRemedy::Flags).unwrap();
+        validate_shared(&only_unstated).unwrap();
     }
 
     #[test]
@@ -7509,33 +7625,24 @@ mod tests {
         // so validate is the only guard for these once they're in the config.
         let mut cfg = base_recipe();
         cfg.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.0, 0.4])); // zero transmission
-        assert!(matches!(
-            validate_shared(&cfg, FilmBaseRemedy::Flags),
-            Err(NcError::Usage(_))
-        ));
+        assert!(matches!(validate_shared(&cfg), Err(NcError::Usage(_))));
 
         let mut cfg = base_recipe();
         cfg.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 90.0, 0.4])); // "90" typo for "0.90"
-        assert!(matches!(
-            validate_shared(&cfg, FilmBaseRemedy::Flags),
-            Err(NcError::Usage(_))
-        ));
+        assert!(matches!(validate_shared(&cfg), Err(NcError::Usage(_))));
         let mut cfg = base_recipe();
         cfg.calibration.film_base = Some(FilmBaseSource::Explicit([1.0, 1.0, 1.0])); // 1.0 exactly is valid
-        validate_shared(&cfg, FilmBaseRemedy::Flags).unwrap();
+        validate_shared(&cfg).unwrap();
 
         let mut cfg = base_recipe();
         cfg.calibration.film_base = Some(FilmBaseSource::Region([0, 0, 0, 0])); // zero-area region
-        assert!(matches!(
-            validate_shared(&cfg, FilmBaseRemedy::Flags),
-            Err(NcError::Usage(_))
-        ));
+        assert!(matches!(validate_shared(&cfg), Err(NcError::Usage(_))));
     }
 
     #[test]
     fn export_ir_and_seed_parse_into_the_right_homes() {
         // `--export-ir` is an input/decode key (design-spec §9), not output.
-        let cfg = recipe::merge(base_recipe(), &parse_convert(&["--export-ir", "ir.tiff"]));
+        let cfg = merged(base_recipe(), &parse_convert(&["--export-ir", "ir.tiff"]));
         assert_eq!(cfg.input.export_ir.as_deref(), Some("ir.tiff"));
 
         // The reserved `--seed` flag parses rather than being rejected by clap.
@@ -7548,7 +7655,7 @@ mod tests {
         // No flag → the recipe's mutually-exclusive choice survives.
         let mut recipe = base_recipe();
         recipe.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.5, 0.4]));
-        let cfg = recipe::merge(recipe.clone(), &parse_convert(&[]));
+        let cfg = merged(recipe.clone(), &parse_convert(&[]));
         assert_eq!(
             cfg.calibration.film_base,
             Some(FilmBaseSource::Explicit([0.9, 0.5, 0.4]))
@@ -7556,7 +7663,7 @@ mod tests {
 
         // A flag replaces the whole source — no field is left behind to win on
         // precedence (the #5/#6 fix). `--base-region` beats a recipe explicit base.
-        let cfg = recipe::merge(recipe, &parse_convert(&["--base-region", "0,0,100,40"]));
+        let cfg = merged(recipe, &parse_convert(&["--base-region", "0,0,100,40"]));
         assert_eq!(
             cfg.calibration.film_base,
             Some(FilmBaseSource::Region([0, 0, 100, 40]))
@@ -7572,12 +7679,12 @@ mod tests {
         recipe.input.meaning = MeaningAssertion::ScannerDevice;
 
         // No flags → both recipe values survive.
-        let cfg = recipe::merge(recipe.clone(), &parse_convert(&[]));
+        let cfg = merged(recipe.clone(), &parse_convert(&[]));
         assert_eq!(cfg.input.transfer, TransferAssertion::Auto);
         assert_eq!(cfg.input.meaning, MeaningAssertion::ScannerDevice);
 
         // `--input-transfer` replaces only the transfer axis.
-        let cfg = recipe::merge(
+        let cfg = merged(
             recipe.clone(),
             &parse_convert(&["--input-transfer", "linear"]),
         );
@@ -7585,7 +7692,7 @@ mod tests {
         assert_eq!(cfg.input.meaning, MeaningAssertion::ScannerDevice);
 
         // `--input-meaning` replaces only the meaning axis (over a recipe value).
-        let cfg = recipe::merge(recipe, &parse_convert(&["--input-meaning", "colorimetric"]));
+        let cfg = merged(recipe, &parse_convert(&["--input-meaning", "colorimetric"]));
         assert_eq!(cfg.input.transfer, TransferAssertion::Auto);
         assert_eq!(cfg.input.meaning, MeaningAssertion::Colorimetric);
     }
@@ -7599,21 +7706,21 @@ mod tests {
         recipe.input.film_type = FilmType::Silver;
 
         // No flag → the recipe value survives.
-        let cfg = recipe::merge(recipe.clone(), &parse_convert(&[]));
+        let cfg = merged(recipe.clone(), &parse_convert(&[]));
         assert_eq!(cfg.input.film_type, FilmType::Silver);
 
         // The flag wins over the recipe.
-        let cfg = recipe::merge(recipe, &parse_convert(&["--film-type", "chromogenic"]));
+        let cfg = merged(recipe, &parse_convert(&["--film-type", "chromogenic"]));
         assert_eq!(cfg.input.film_type, FilmType::Chromogenic);
 
         // Over the default recipe, the flag sets the declared type.
-        let cfg = recipe::merge(
+        let cfg = merged(
             base_recipe(),
             &parse_convert(&["--film-type", "chromogenic"]),
         );
         assert_eq!(cfg.input.film_type, FilmType::Chromogenic);
         // ...and the untouched default is `unknown` (the safe off state).
-        let cfg = recipe::merge(base_recipe(), &parse_convert(&[]));
+        let cfg = merged(base_recipe(), &parse_convert(&[]));
         assert_eq!(cfg.input.film_type, FilmType::Unknown);
     }
 
@@ -7622,7 +7729,7 @@ mod tests {
         // The old combined assertion must never silently assert both axes — it is a
         // loud usage error (exit 2) pointing at the two independent flags.
         let args = parse_convert(&["--assume-linear"]);
-        let err = reject_deprecated_input_flags(&args.input_opts).unwrap_err();
+        let err = reject_deprecated_input_flags(&args.knobs.input_opts).unwrap_err();
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("--input-transfer"));
     }
@@ -7632,7 +7739,7 @@ mod tests {
         // `--input-profile` is reserved (deferred experiment) — rejected loudly
         // (exit 4) rather than silently ignored.
         let args = parse_convert(&["--input-profile", "scanner.icc"]);
-        let err = reject_deprecated_input_flags(&args.input_opts).unwrap_err();
+        let err = reject_deprecated_input_flags(&args.knobs.input_opts).unwrap_err();
         assert_eq!(err.exit_code(), 4);
     }
 
@@ -7675,7 +7782,7 @@ mod tests {
             r#"{"recipe_version":2,"calibration":{"film_base":{"explicit":[0.553,0.271,0.159]}}}"#
         );
         let recipe: Recipe = serde_json::from_str(&json).unwrap();
-        validate_shared(&recipe, FilmBaseRemedy::Flags).unwrap();
+        validate_shared(&recipe).unwrap();
 
         let roll = MeasuredRecipe {
             roll: Some(recipe::RollSection {
@@ -7749,15 +7856,12 @@ mod tests {
     #[test]
     fn load_recipe_maps_failures_to_usage() {
         // No path → defaults, infallibly.
-        let loaded = load_recipe(None).unwrap();
+        let loaded = load_recipes(&[]).unwrap();
         assert_eq!(loaded.recipe, Recipe::default());
 
         // Missing file → Usage (exit 2), not Other.
         let missing = std::env::temp_dir().join("nc-no-such-recipe-xyz.json");
-        assert!(matches!(
-            load_recipe(Some(&missing)),
-            Err(NcError::Usage(_))
-        ));
+        assert!(matches!(load_recipes(&[missing]), Err(NcError::Usage(_))));
 
         // Malformed JSON and unknown keys both map to Usage.
         for (tag, body) in [
@@ -7782,13 +7886,20 @@ mod tests {
         assert_eq!(got.reconstruction, Recipe::default().reconstruction);
     }
 
-    /// Write `body` to a temp recipe, load it, clean up, return the result.
-    fn load_recipe_body(tag: &str, body: &str) -> Result<LoadedRecipe> {
-        let p = std::env::temp_dir().join(format!("nc-env-{tag}-{}.json", std::process::id()));
-        std::fs::write(&p, body).unwrap();
-        let got = load_recipe(Some(&p));
-        std::fs::remove_file(&p).ok();
-        got
+    /// One recipe document as a lone `--params` loads it.
+    #[derive(Debug)]
+    struct Loaded {
+        recipe: Recipe,
+        meta_pipeline_version: Option<u32>,
+    }
+
+    /// Load `body` as a lone `--params` layer named `tag`.
+    fn load_recipe_body(tag: &str, body: &str) -> Result<Loaded> {
+        let layer = read_layer(body, tag)?;
+        Ok(Loaded {
+            recipe: recipe::compose([&layer.body]).map_err(|e| NcError::Usage(e.to_string()))?,
+            meta_pipeline_version: layer.meta_pipeline_version,
+        })
     }
 
     #[test]
@@ -7859,16 +7970,17 @@ mod tests {
     #[test]
     fn pipeline_version_warning_fires_only_on_a_real_mismatch() {
         // No recorded version (a bare/legacy recipe) ⇒ nothing to compare, no noise.
-        assert_eq!(pipeline_version_warning(None), None);
+        assert_eq!(pipeline_version_warning(None, "r.json"), None);
         // The current version ⇒ no warning.
         assert_eq!(
-            pipeline_version_warning(Some(version::PIPELINE_VERSION)),
+            pipeline_version_warning(Some(version::PIPELINE_VERSION), "r.json"),
             None
         );
         // Any other version ⇒ a warning naming both numbers, so the operator can
         // see which direction the skew runs.
         let other = version::PIPELINE_VERSION.wrapping_add(1);
-        let msg = pipeline_version_warning(Some(other)).expect("mismatch must warn");
+        let msg = pipeline_version_warning(Some(other), "r.json").expect("mismatch must warn");
+        assert!(msg.contains("recipe r.json"), "names the layer: {msg}");
         assert!(msg.contains(&format!("pipeline_version {other}")), "{msg}");
         assert!(
             msg.contains(&format!("pipeline_version {}", version::PIPELINE_VERSION)),
@@ -8069,119 +8181,15 @@ mod tests {
         assert!(Cli::try_parse_from(["hanten", "roll", "a.tif"]).is_err());
     }
 
-    /// A bare tag over a newtype variant **replaces** it, so serde rejects the incomplete
-    /// override. Every externally-tagged recipe variant is a newtype carrying a positional
-    /// payload, where a bare tag states nothing *and there is nothing it could state*. A
-    /// guard that once kept the base on a matching tag (for the since-retired
-    /// `print.display_tone` struct variant) silently turned a malformed per-frame
-    /// `{"film_base": {"source": "explicit"}}` into an inherit at exit 0.
-    #[test]
-    fn a_bare_tag_overlay_replaces_a_newtype_variant() {
-        for base in [
-            serde_json::json!({"explicit": [0.9, 0.55, 0.42]}), // FilmBaseSource / WbSource
-            serde_json::json!({"region": [1, 2, 3, 4]}),        // FilmBaseSource::Region
-        ] {
-            let tag = base.as_object().unwrap().keys().next().unwrap().clone();
-            let mut merged = base.clone();
-            merge_json(&mut merged, &serde_json::json!(tag.clone()));
-            assert_eq!(
-                merged,
-                serde_json::json!(tag),
-                "a bare tag over the newtype variant {base} must replace it, so serde still \
-                 rejects the incomplete override rather than silently inheriting"
-            );
-        }
-    }
-
-    #[test]
-    fn merge_json_deep_merges_objects_and_replaces_other_values() {
-        // Objects merge key-by-key (recursively); scalars/arrays replace wholesale.
-        let mut base = serde_json::json!({"a": {"x": 1, "y": 2}, "b": 3});
-        let overlay = serde_json::json!({"a": {"y": 20, "z": 30}, "b": [1, 2]});
-        merge_json(&mut base, &overlay);
-        assert_eq!(
-            base,
-            serde_json::json!({"a": {"x": 1, "y": 20, "z": 30}, "b": [1, 2]})
-        );
-    }
-
-    #[test]
-    fn merge_json_merges_destination_axes_but_switches_the_output_variant() {
-        // One stated axis each, different keys: the shape of a variant switch, but a
-        // struct of optional fields — the frame's container joins the roll's transfer.
-        let mut base = serde_json::json!({"output": {"display": {"transfer": "pq"}}});
-        let overlay = serde_json::json!({"output": {"display": {"container": "avif"}}});
-        merge_json(&mut base, &overlay);
-        assert_eq!(
-            base,
-            serde_json::json!({"output": {"display": {"transfer": "pq", "container": "avif"}}})
-        );
-        // The genuine enum level still switches: the film master replaces the display
-        // arm, and a display arm replaces the film master.
-        let mut base = serde_json::json!({"output": {"display": {"transfer": "pq"}}});
-        merge_json(&mut base, &serde_json::json!({"output": "film-master"}));
-        assert_eq!(base, serde_json::json!({"output": "film-master"}));
-        let overlay = serde_json::json!({"output": {"display": {"gamut": "adobe-rgb"}}});
-        merge_json(&mut base, &overlay);
-        assert_eq!(base, overlay);
-        // An externally tagged enum elsewhere is unaffected.
-        let mut base = serde_json::json!({"film_base": {"region": [1, 2, 3, 4]}});
-        merge_json(
-            &mut base,
-            &serde_json::json!({"film_base": {"explicit": [0.9, 0.5, 0.4]}}),
-        );
-        assert_eq!(
-            base,
-            serde_json::json!({"film_base": {"explicit": [0.9, 0.5, 0.4]}})
-        );
-    }
-
-    #[test]
-    fn a_frames_own_roll_white_keeps_the_rolls_gains() {
-        // `roll --frames` merges over the *serialized* shared recipe, where an unset roll
-        // value is a `null` key, so a one-key overlay is never read as an enum switch.
-        let mut shared = crate::recipe::Recipe::default();
-        shared.roll.white_balance = Some([0.8, 1.0, 1.25]);
-        let mut v = serde_json::to_value(&shared).unwrap();
-        merge_json(&mut v, &serde_json::json!({"roll": {"white_stops": 2.0}}));
-        let frame: crate::recipe::Recipe = serde_json::from_value(v).unwrap();
-        assert_eq!(frame.roll.white_balance, Some([0.8, 1.0, 1.25]));
-        assert_eq!(frame.roll.white_stops, Some(2.0));
-    }
-
-    #[test]
-    fn merge_json_replaces_enum_variant_switch_but_deep_merges_same_tag() {
-        // An externally-tagged enum variant switch (`region` → `explicit`) must
-        // REPLACE the one-key map, not union the tags — a `{"region":…,
-        // "explicit":…}` object deserializes as no enum variant. Regression guard
-        // for the per-frame `calibration.film_base` override path.
-        let mut base = serde_json::json!({"film_base": {"source": {"region": [1, 2, 3, 4]}}});
-        let overlay = serde_json::json!({"film_base": {"source": {"explicit": [0.9, 0.5, 0.4]}}});
-        merge_json(&mut base, &overlay);
-        assert_eq!(
-            base,
-            serde_json::json!({"film_base": {"source": {"explicit": [0.9, 0.5, 0.4]}}})
-        );
-        // The SAME tag on both sides is not a variant switch: recurse into it so a
-        // partial override of one sub-field keeps its siblings.
-        let mut base = serde_json::json!({"curve": {"dmax": {"auto": {"p": 0.5, "q": 1}}}});
-        let overlay = serde_json::json!({"curve": {"dmax": {"auto": {"p": 0.9}}}});
-        merge_json(&mut base, &overlay);
-        assert_eq!(
-            base,
-            serde_json::json!({"curve": {"dmax": {"auto": {"p": 0.9, "q": 1}}}})
-        );
-    }
-
     /// `roll` over a `--frames` manifest at `manifest`, writing into `dir`.
     fn roll_args(manifest: &Path, dir: &Path) -> RollArgs {
         RollArgs {
             inputs: vec![],
             frames: Some(manifest.to_path_buf()),
             out_dir: dir.to_path_buf(),
-            recipe_in: None,
+            recipe_in: vec![],
+            knobs: ConversionFlags::default(),
             strict: false,
-            new_flow: false,
             memory: MemoryArgs::default(),
             report: ReportArgs::default(),
         }
@@ -8199,7 +8207,7 @@ mod tests {
         let log = Log::new(&args.report);
         let plan = |frames: &str| {
             std::fs::write(&manifest, frames).unwrap();
-            resolve_frames(&args, &base_recipe(), &mut Vec::new(), &log)
+            resolve_frames(&args, &base_recipe(), &base_recipe(), &mut Vec::new(), &log)
         };
         for (params, names) in [
             (r#"{"print":{"print_exposure":0.2}}"#, "`print`"),
@@ -8242,7 +8250,7 @@ mod tests {
         shared.calibration.film_base = Some(FilmBaseSource::Region([10, 10, 20, 20]));
         let mut warnings = Vec::new();
         let log = Log::new(&args.report);
-        let planned = resolve_frames(&args, &shared, &mut warnings, &log);
+        let planned = resolve_frames(&args, &shared, &shared, &mut warnings, &log);
         std::fs::remove_dir_all(&dir).ok();
         let planned = planned.expect("region→explicit override should apply, not error");
         assert_eq!(planned.len(), 1);
@@ -8423,7 +8431,7 @@ mod tests {
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         shared.look.contrast = Some(1.3);
         let log = Log::new(&args.report);
-        let planned = resolve_frames(&args, &shared, &mut Vec::new(), &log);
+        let planned = resolve_frames(&args, &shared, &shared, &mut Vec::new(), &log);
         std::fs::remove_dir_all(&dir).ok();
         let planned = planned.unwrap();
         let a = &planned[0].recipe;
@@ -8517,14 +8525,14 @@ mod tests {
             );
         }
         // An **explicit** manifest path is checked, and the diagnosis names the frame
-        // and the way out rather than just the rule — by recipe key, since `roll`
-        // takes no conversion flags.
+        // and the way out rather than just the rule — by recipe key, which the frame's
+        // manifest entry can state.
         let err = resolve_frame_output(
             Some(Path::new("frame.tiff")),
             Path::new("/s/f.tif"),
             Path::new("/out"),
             OutputTarget::resolve(
-                &recipe::merge(base_recipe(), &parse_convert(&["--range", "hdr"])),
+                &merged(base_recipe(), &parse_convert(&["--range", "hdr"])),
                 KnobNames::KeyOnly,
                 false,
             )
@@ -8592,7 +8600,10 @@ mod tests {
     fn ensure_roll_targets_distinct_catches_input_and_sibling_collisions() {
         // A target aimed at an input scan, and two frames colliding on one output
         // (e.g. same stem from different dirs), both fail loudly.
-        let inputs = [Path::new("/scans/a.tif"), Path::new("/scans/b.tif")];
+        let inputs = [
+            (Path::new("/scans/a.tif"), "an input scan"),
+            (Path::new("/scans/b.tif"), "an input scan"),
+        ];
         let clobber_input = vec![("output for a".to_string(), PathBuf::from("/scans/a.tif"))];
         assert!(matches!(
             ensure_roll_targets_distinct(&inputs, &clobber_input),
@@ -8627,19 +8638,49 @@ mod tests {
     }
 
     #[test]
+    fn first_null_key_names_the_nested_member() {
+        use serde_json::json;
+        assert_eq!(
+            first_null_key(
+                &json!({"look": {"contrast": 1.2, "highlight_desaturation": {"band": null}}})
+            ),
+            Some("look.highlight_desaturation.band".into())
+        );
+        assert_eq!(first_null_key(&json!({"roll": null})), Some("roll".into()));
+        assert_eq!(
+            first_null_key(&json!({"roll": {"white_balance": [1, null, 1]}})),
+            Some("roll.white_balance[1]".into())
+        );
+        assert_eq!(
+            without_nulls(
+                &json!({"roll": {"white_balance": [1, null, 1], "white_stops": 2},
+                                  "look": {"contrst": null}})
+            ),
+            json!({"roll": {"white_stops": 2}, "look": {}})
+        );
+        assert_eq!(
+            first_null_key(&json!({"look": {"channel_grade": [1.1, 0.9]}})),
+            None
+        );
+    }
+
+    #[test]
     fn ensure_roll_targets_distinct_protects_the_frames_manifest() {
         // `run_roll` adds the `--frames` manifest to the protected read set, so a
         // write target aimed at it (e.g. `--report-file` equal to the manifest
         // path) is rejected up front rather than clobbering the manifest.
         let manifest = Path::new("/rolls/frames.json");
-        let inputs = [Path::new("/scans/a.tif"), manifest];
+        let inputs = [
+            (Path::new("/scans/a.tif"), "an input scan"),
+            (manifest, "the --frames manifest"),
+        ];
         let clobber_manifest = vec![(
             "--report-file".to_string(),
             PathBuf::from("/rolls/frames.json"),
         )];
         assert!(matches!(
             ensure_roll_targets_distinct(&inputs, &clobber_manifest),
-            Err(NcError::Usage(_))
+            Err(NcError::Usage(m)) if m.contains("would overwrite the --frames manifest")
         ));
     }
 
@@ -8712,6 +8753,7 @@ mod tests {
             output: PathBuf::from("out/bad_positive.tiff"),
             recipe: base_recipe(),
             overrides: None,
+            input_from_cli: InputFromCli::none(),
         };
         let warnings = vec!["a warning raised before the failure".to_string()];
         let mem = memory::preflight(
