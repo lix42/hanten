@@ -23,6 +23,11 @@ the destination.
   task states the *design* and each knob's key lands with the task that ships it.
   A §9 written ahead of the code is a second source of truth that drifts before
   anyone reads it.
+- **The print stage is gone but the spec still describes it** (found closing
+  `nf-retire/print-prefix-rename`, 2026-09-29): §7.2's white balance and
+  `linear_range`, "Print / tone render", "Removed `simple` controls", the `film-master`
+  bullet's print controls, and the §8 example invocations (`--auto-wb`,
+  `print.print_exposure`). Their keys are named in `recipe::SECTIONS_WITH_NO_COUNTERPART`.
 - Can run at any point, and earlier is better: a spec that still describes the
   preset-dispatch chain makes every reader re-derive the design from a changelog.
 
