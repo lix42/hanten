@@ -18,7 +18,9 @@ Remove the old paths once the reference build exists: `legacy`/`custom`, the bou
 Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration.md`).
 Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-09-23),
 **`display-tones`** (2026-09-24), **`dmax-machinery`** (2026-09-24),
-**`regional-balance`** (2026-09-25), **`characteristic`** (2026-09-26).
+**`regional-balance`** (2026-09-25), **`characteristic`** (2026-09-26),
+**`print-prefix-rename`** (2026-09-29, closed without code: `default-flip` had removed
+the `print` section).
 
 **What `legacy-custom` means for the rest of the epic.**
 
@@ -537,10 +539,23 @@ Landed so far: **`legacy-custom`** (2026-09-23), **`sigmoid-and-simple`** (2026-
 
 ## print-prefix-rename
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-29
 
 - 2026-09-19: created with the new-flow plan. Goal: rename the `print.*` prefix.
+- 2026-09-29: **done, no code — `nf-core/default-flip` did the work.** Recipe v2 has no
+  `print` section: one is refused (exit 2) with a message naming each knob's home
+  (`recipe::SECTIONS_WITH_NO_COUNTERPART`) — white balance and exposure are
+  `scene_correction.*`, the black point's surviving half is `fit_range.display_black`,
+  the display tone is `fit_range.headroom_stops`. The removed flags (`--print-exposure`,
+  `--black-point`, `--auto-wb`, `--linear-range`) each exit 2 naming their replacement,
+  with no alias (`cli::removed_print_message`). `--auto-wb` retired rather than moved, as
+  the task planned. Verified on the binary: each removed flag and a `print` recipe exit
+  2; `hanten params` and a `--dump-params` document carry no `print` key and replay (the
+  dump byte-identically). Left elsewhere: `linear_range` has no home
+  (`nf-scene-correction/levels-knob`); the spec still describes the print stage in
+  §7.2, "Print / tone render", "Removed `simple` controls", the `film-master` preset
+  bullet and the §8 example invocations — handed to `nf-docs/design-spec`.
 
 ## characteristic
 
