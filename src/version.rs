@@ -354,7 +354,10 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // one render; only its witness changed (see `PIPELINE_FINGERPRINTS`).
         render: "f51d3397c7364160",
         base: "01c5acccc36a3388",
-        recipe: "fe3d6808a270d45f",
+        // Refreshed in place by `core/measure-base` (was `fe3d6808a270d45f`): the
+        // per-frame `roll.frames` table arrived, empty by default, so no default pixel
+        // moved.
+        recipe: "0b06a154d01e61e5",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];
@@ -413,7 +416,7 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
 ///   *deliberately*, since both differ by target and no cross-platform hash of them
 ///   is possible (design-spec §8);
 /// - `io::encode` (u16 quantization, clip accounting, BigTIFF promotion);
-/// - the effective-area measurement `hanten estimate` makes
+/// - the effective-area measurement `hanten measure-base` makes
 ///   (`film_base::measure_area`) and the holder march under it: no conversion runs
 ///   them — their result reaches one as an explicit base — so a change there moves
 ///   every *measured* base with the gate green.
@@ -982,7 +985,7 @@ mod tests {
         assert_eq!(obj["nc_version"], NC_VERSION);
         assert_eq!(obj["pipeline_version"], PIPELINE_VERSION);
         assert_eq!(obj["target"], TARGET);
-        // `inspect`/`estimate` identity carries no recipe hash, and absence is an
+        // `inspect`/`measure-base` identity carries no recipe hash, and absence is an
         // OMITTED key — never a `null` a consumer could read as a value.
         assert!(!obj.contains_key("params_hash"), "{json}");
 

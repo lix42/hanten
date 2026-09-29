@@ -31,6 +31,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def base_command(binary: str) -> str:
+    """`measure-base`, or `estimate` on a build from before the rename — asked of the
+    binary, as `nctool roll` does."""
+    probe = subprocess.run([binary, "measure-base", "--help"], capture_output=True)
+    return "measure-base" if probe.returncode == 0 else "estimate"
+
+
 def run(binary: str, *args: str) -> tuple[dict, str]:
     proc = subprocess.run([binary, *args], capture_output=True, text=True, check=False)
     if proc.returncode != 0:
@@ -73,7 +80,8 @@ def main() -> None:
         for roll, unexposed, frame in rolls(assets):
             base_frame = assets / "rolls" / roll / unexposed
             region = centre_region(args.new, base_frame)
-            b = run(args.new, "estimate", "--base-region", region, str(base_frame))[0]["film_base"]
+            b = run(args.new, base_command(args.new), "--base-region", region,
+                    str(base_frame))[0]["film_base"]
             base = f"{b['r']},{b['g']},{b['b']}"
             src = str(assets / "rolls" / roll / frame)
             before, _ = run(args.old, "convert", src, "-o", str(tmp / "b.jpg"), "--film-base", base)

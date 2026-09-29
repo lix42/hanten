@@ -187,13 +187,20 @@ class TestConvert(unittest.TestCase):
     }
 
     defaults = DEFAULTS
-    #: What the fake build's sourceless `estimate` reports it measured.
+    #: What the fake build's sourceless film-base command reports it measured.
     area_source = "effective_area"
+    #: The film-base command the fake binary has: `estimate` before the rename.
+    base_command = "measure-base"
 
     def fake_run(self, argv, **_kwargs):
         if argv[1] == "params":
             return mock.Mock(returncode=0, stdout=json.dumps(self.defaults), stderr="")
-        if argv[1] == "estimate":
+        if argv[1:] == ["measure-base", "--help"]:
+            ok = self.base_command == "measure-base"
+            return mock.Mock(returncode=0 if ok else 2, stdout="", stderr="")
+        if argv[1] in ("measure-base", "estimate"):
+            if argv[1] != self.base_command:
+                return mock.Mock(returncode=2, stdout="", stderr="unrecognized subcommand")
             report = {"film_base": {"r": .1, "g": .2, "b": .3}}
             if "--base-region" not in argv:
                 report["film_base_source"] = self.area_source
@@ -235,9 +242,9 @@ class TestConvert(unittest.TestCase):
         self.assertEqual(tags["summary"]["succeeded"], 2)
         self.assertEqual(recipe["calibration"], {"film_base": {"explicit": [.1, .2, .3]}})
         # Only the unexposed frame is estimated; a manifest leader is not measured.
-        self.assertEqual(len([a for a in seen if a[1] == "estimate"]), 1)
+        self.assertEqual(len([a for a in seen if a[1] == "measure-base" and a[2:] != ["--help"]]), 1)
         # The default measures the effective area: no region, no grid.
-        dmin_argv = next(a for a in seen if a[1] == "estimate")
+        dmin_argv = next(a for a in seen if a[1] == "measure-base" and a[2:] != ["--help"])
         self.assertNotIn("--base-region", dmin_argv)
         self.assertNotIn("--grid", dmin_argv)
         self.assertIsNone(calibration["dmin"]["region"])
@@ -308,7 +315,7 @@ class TestConvert(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             code = roll.cmd_convert(self.args(config="grid", dmin_mode="grid"))
         self.assertEqual(code, 0)
-        dmin_argv = next(argv for argv in seen if argv[1] == "estimate")
+        dmin_argv = next(argv for argv in seen if argv[1] == "measure-base" and argv[2:] != ["--help"])
         self.assertIn("--grid", dmin_argv)
         self.assertEqual(dmin_argv[dmin_argv.index("--base-region") + 1], "10,8,80,64")
 
@@ -352,8 +359,19 @@ class TestConvert(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             code = roll.cmd_convert(self.args(config="region", dmin_mode="region"))
         self.assertEqual(code, 0)
-        dmin_argv = next(argv for argv in seen if argv[1] == "estimate")
+        dmin_argv = next(argv for argv in seen
+                         if argv[1] == "measure-base" and argv[2:] != ["--help"])
         self.assertNotIn("--grid", dmin_argv)
+
+    def test_the_film_base_command_is_chosen_per_build(self):
+        # The reference build predates the rename; a current one refuses `estimate`.
+        for command in ("measure-base", "estimate"):
+            self.base_command = command
+            with mock.patch.object(roll.subprocess, "run", side_effect=self.fake_run), \
+                 contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()) as err:
+                code = roll.cmd_convert(self.args(config=f"by-{command}"))
+            self.assertEqual(code, 0, f"{command}: {err.getvalue()}")
 
     def test_refuses_nonempty_output_before_roll(self):
         run = self.root / "converted/nc/test/R"
@@ -364,8 +382,8 @@ class TestConvert(unittest.TestCase):
         # Calibration precedes config hashing/output resolution, but the existing
         # directory is still refused before hanten roll can overwrite an artifact.
         self.assertEqual(code, 2)
-        # `params` and the Dmin estimate.
-        self.assertEqual(run_mock.call_count, 2)
+        # `params`, the film-base command probe, and the Dmin measurement.
+        self.assertEqual(run_mock.call_count, 3)
 
 
 class TestAnalyze(unittest.TestCase):

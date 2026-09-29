@@ -142,12 +142,12 @@ stage_classify() {
   for row in "${ROLLS[@]}"; do IFS='|' read -r roll uf ff reals <<<"$row"
     # Match both .tif and .tiff (list_imgs / the manifest accept either); the
     # `-e` guard is nullglob-safe on bash 3.2 (an unmatched glob stays literal, so
-    # skip it rather than passing a bogus path to `hanten estimate`).
+    # skip it rather than passing a bogus path to `hanten measure-base`).
     for f in "$A/rolls/$roll"/*.tif "$A/rolls/$roll"/*.tiff; do
       [ -e "$f" ] || continue
-      # The effective-area median, and whether `estimate` found the area uniform
+      # The effective-area median, and whether `measure-base` found the area uniform
       # (it warns "not uniform" over a picture).
-      j=$($NC estimate "$f" 2>/dev/null)
+      j=$($NC measure-base "$f" 2>/dev/null)
       read cr cg cb un <<<"$(echo "$j" | jq -r '.film_base as $c|"\($c.r) \($c.g) \($c.b) \([.warnings[]? | select(test("not uniform"))] | length == 0)"')"
       lum=$(python3 -c "print(f'{0.2126*$cr+0.7152*$cg+0.0722*$cb:.4f}')")
       # Uniformity first: a picture's median is often as dense as a leader's.
@@ -163,7 +163,7 @@ stage_freeze() {
     # The leader frame (`$ff`) is no longer measured: the roll reference density it
     # supplied retired with the placements that read it (`nf-retire/dmax-machinery`).
     # The unexposed frame's effective area, at its median: the measure-once workflow.
-    jmin=$($NC estimate "$U" 2>"$ART/$roll.dmin.warn")
+    jmin=$($NC measure-base "$U" 2>"$ART/$roll.dmin.warn")
     dmin=$(echo "$jmin" | jq -c '.film_base')
     # The destination is stated, every axis, not defaulted: this harness converts to
     # TIFFs throughout — the 16-bit SDR Display P3 one and the float linear HDR one —

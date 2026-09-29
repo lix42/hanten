@@ -1128,14 +1128,14 @@ fn inspect_reports_decode_facts() {
 #[test]
 fn estimate_from_region_reports_film_base() {
     let (code, stdout, _err) = run(&[
-        "estimate",
+        "measure-base",
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "--base-region",
         "0,0,60,60",
     ]);
     assert_eq!(code, 0, "region estimate should succeed:\n{stdout}");
     let report = json(&stdout);
-    assert_eq!(report["command"], "estimate");
+    assert_eq!(report["command"], "measure-base");
     assert!(report["film_base"]["r"].is_number());
     assert!(report["film_base"]["g"].is_number());
     assert!(report["film_base"]["b"].is_number());
@@ -1153,7 +1153,7 @@ fn mixed_base_region_warns_and_strict_refuses_it() {
     // promote it to a failure (convert) — while the non-strict convert still
     // succeeds with the warning recorded.
     let (code, stdout, _err) = run(&[
-        "estimate",
+        "measure-base",
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "--base-region",
         "0,0,502,462",
@@ -1188,7 +1188,7 @@ fn mixed_base_region_warns_and_strict_refuses_it() {
     // `estimate --strict` refuses it too — the command that bakes the Dmin a
     // roll is calibrated on must not echo a plausible-looking-but-bad base.
     let (code, _stdout, err) = run(&[
-        "estimate",
+        "measure-base",
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "--base-region",
         "0,0,502,462",
@@ -1201,45 +1201,82 @@ fn mixed_base_region_warns_and_strict_refuses_it() {
 }
 
 #[test]
-fn estimate_emits_reuse_ready_output_that_round_trips() {
-    // The calibrate-once → reuse workflow (design-spec §8): `estimate` must emit
-    // the measured base as a paste-ready `--film-base` flag and a `film_base`
-    // recipe fragment, and feeding either back to `convert` must reproduce the
-    // exact same base (and thus a byte-identical output).
+fn measure_base_out_writes_a_recipe_that_round_trips() {
+    // The calibrate-once → reuse workflow (design-spec §8): `measure-base` reports the
+    // measured base as a paste-ready `--film-base` flag and, with `--out`, writes it as
+    // a recipe; feeding either back to `convert` must reproduce the exact same base
+    // (and thus a byte-identical output).
     let tmp = TempDir::new("reuse");
     let fix = fixture("hdr-48bit.tif");
     // Focus: the reuse round-trip. (This real-photo fixture has no
     // region-uniform patch, so the inward-scan uniformity check warns on any
-    // `--base-region` here — `--strict` estimate behavior is covered separately
-    // by `mixed_base_region_warns_and_strict_refuses_it`.)
-    let (code, stdout, err) = run(&[
-        "estimate",
-        fix.to_str().unwrap(),
-        "--base-region",
-        "0,0,60,60",
-    ]);
-    assert_eq!(code, 0, "estimate should succeed: {err}");
+    // `--base-region` here — which the `--strict` case below relies on.)
+    let region = ["--base-region", "0,0,60,60"];
+    let recipe = tmp.path("base.json");
+    let measure = |extra: &[&str]| {
+        run(&[
+            &["measure-base", fix.to_str().unwrap()][..],
+            &region,
+            &["--out", recipe.to_str().unwrap()],
+            extra,
+        ]
+        .concat())
+    };
+    // `--strict` fails on the warning after the report lands, and writes no recipe.
+    let (code, stdout, err) = measure(&["--strict"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("no recipe written"), "{err}");
+    assert!(json(&stdout)["film_base_flag"].is_string());
+    assert!(!recipe.exists(), "a failed run writes no recipe");
+
+    let (code, stdout, err) = measure(&[]);
+    assert_eq!(code, 0, "measure-base should succeed: {err}");
     let report = json(&stdout);
+    assert_eq!(report["command"], "measure-base");
     let base = report["film_base"].clone();
+    assert!(
+        report.get("calibration").is_none(),
+        "the recipe is the file, not a report field: {report}"
+    );
 
     // The flag string is `--film-base R,G,B` with the measured values.
     let flag = report["film_base_flag"].as_str().expect("flag emitted");
     let value = flag.strip_prefix("--film-base ").expect("flag prefix");
-    // The recipe handoff is the `calibration` object, in the documented
-    // `{"film_base":{"explicit":[…]}}` shape, carrying exactly the same numbers as
-    // the measurement.
-    let calibration = &report["calibration"];
+    // The file states the measurement and nothing else, so a later layer is pinned by
+    // nothing the run did not measure.
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&recipe).unwrap()).unwrap();
     assert_eq!(
-        calibration["film_base"]["explicit"],
-        serde_json::json!([base["r"], base["g"], base["b"]]),
-        "the calibration must carry the measured base: {report}"
+        written,
+        serde_json::json!({
+            "recipe_version": 2,
+            "calibration": {"film_base": {"explicit": [base["r"], base["g"], base["b"]]}}
+        })
     );
-    // Nothing else was measured, so nothing else is claimed — piping this into
-    // `--params` must not pin a reference the run never resolved.
-    assert!(
-        calibration.get("dmax").is_none(),
-        "an unmeasured reference must not appear: {report}"
+
+    // An existing file is refused before anything is decoded, unless `--force`.
+    let before = std::fs::read(&recipe).unwrap();
+    let (code, _, err) = measure(&[]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("exists") && err.contains("--force"), "{err}");
+    std::fs::write(&recipe, "stale").unwrap();
+    let (code, _, err) = measure(&["--force"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&recipe).unwrap(),
+        before,
+        "--force replaces it"
     );
+    // Nor may it overwrite the scan.
+    let (code, _, err) = run(&[
+        "measure-base",
+        fix.to_str().unwrap(),
+        "--out",
+        fix.to_str().unwrap(),
+        "--force",
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("would overwrite the input scan"), "{err}");
 
     // Round-trip A: the flag value fed to `convert` reproduces the base.
     let out_flag = tmp.path("flag.tiff");
@@ -1259,34 +1296,26 @@ fn estimate_emits_reuse_ready_output_that_round_trips() {
         "--film-base from the flag string must reproduce the measured base"
     );
 
-    // Round-trip B: the fragment pasted into a recipe reproduces the base and
-    // a byte-identical output (determinism across the two reuse forms).
-    let recipe = tmp.path("roll.json");
-    // No hand editing: exactly what `jq '{recipe_version: 2, calibration}'` hands
-    // `--params`.
-    std::fs::write(
-        &recipe,
-        serde_json::json!({ "recipe_version": 2, "calibration": calibration }).to_string(),
-    )
-    .unwrap();
+    // Round-trip B: the written recipe reproduces the base and a byte-identical output
+    // (determinism across the two reuse forms).
     let out_recipe = tmp.path("recipe.tiff");
     let (code, stdout, err) = run(&[
         "convert",
         fix.to_str().unwrap(),
         "-o",
         out_recipe.to_str().unwrap(),
-        // The fragment states only a film base, so the destination comes from the
+        // The recipe states only a film base, so the destination comes from the
         // flag, matching round-trip A.
         "--film-master",
         "--params",
         recipe.to_str().unwrap(),
     ]);
-    assert_eq!(code, 0, "fragment must load as a valid recipe: {err}");
+    assert_eq!(code, 0, "the written recipe must load: {err}");
     assert_eq!(json(&stdout)["film_base"], base);
     assert_eq!(
         std::fs::read(&out_flag).unwrap(),
         std::fs::read(&out_recipe).unwrap(),
-        "flag and fragment reuse must produce byte-identical outputs"
+        "flag and recipe reuse must produce byte-identical outputs"
     );
 }
 
@@ -1295,7 +1324,7 @@ fn estimate_warns_that_a_picture_frame_is_not_unexposed_film() {
     // The median over a picture's effective area is a plausible, wrong base: the
     // spread is what says so, loudly enough for `--strict` to refuse it.
     let fix = fixture("hdr-48bit.tif");
-    let (code, stdout, err) = run(&["estimate", fix.to_str().unwrap()]);
+    let (code, stdout, err) = run(&["measure-base", fix.to_str().unwrap()]);
     assert_eq!(code, 0, "a non-uniform area is a warning, not fatal: {err}");
     let report = json(&stdout);
     assert_eq!(report["film_base_source"], "effective_area", "{report}");
@@ -1315,7 +1344,7 @@ fn estimate_warns_that_a_picture_frame_is_not_unexposed_film() {
         }),
         "{report}"
     );
-    let (code, stdout, err) = run(&["estimate", fix.to_str().unwrap(), "--strict"]);
+    let (code, stdout, err) = run(&["measure-base", fix.to_str().unwrap(), "--strict"]);
     assert_eq!(code, 1, "--strict must fail on it");
     let _ = json(&stdout); // the report still lands on stdout before the gate
     assert!(err.contains("strict"), "stderr should explain: {err}");
@@ -1354,7 +1383,8 @@ fn estimate_refuses_a_degenerate_base_from_either_source() {
     // the effective area or a stated region: both hit the birth guard, exit 1.
     let fix = fixture("black-48bit.tif");
     for extra in [&[][..], &["--base-region", "0,0,32,32"][..]] {
-        let (code, _stdout, err) = run(&[&["estimate", fix.to_str().unwrap()][..], extra].concat());
+        let (code, _stdout, err) =
+            run(&[&["measure-base", fix.to_str().unwrap()][..], extra].concat());
         assert_eq!(code, 1, "{extra:?}: {err}");
         assert!(err.contains("finite and positive"), "{err}");
     }
@@ -3729,7 +3759,7 @@ fn roll_warns_when_film_base_is_not_frozen() {
         .expect("roll-level warnings array");
     assert!(
         w.iter().any(|m| m.as_str().unwrap().contains("NOT frozen")
-            && m.as_str().unwrap().contains("hanten estimate")),
+            && m.as_str().unwrap().contains("hanten measure-base")),
         "roll-level not-frozen warning present: {report}"
     );
     assert!(
@@ -4596,7 +4626,7 @@ fn inspect_and_estimate_carry_build_identity_without_a_params_hash() {
     for args in [
         vec!["inspect", fixture("hdri-64bit.tif").to_str().unwrap()],
         vec![
-            "estimate",
+            "measure-base",
             fixture("hdri-64bit.tif").to_str().unwrap(),
             "--base-region",
             "0,0,502,462",
@@ -4642,7 +4672,7 @@ fn convert_report_echoes_a_declared_film_type_only() {
     let scan = scan.to_str().unwrap();
     for argv in [
         &["inspect", scan][..],
-        &["estimate", scan, "--base-region", "0,0,60,60"],
+        &["measure-base", scan, "--base-region", "0,0,60,60"],
     ] {
         let command = argv[0];
         let (code, stdout, err) = run(&[argv, &["--film-type", "unknown"]].concat());
@@ -5404,7 +5434,7 @@ fn memory_preflight_reports_the_estimate_and_budget_decision() {
     // reaches the model rather than being a constant: the film-base term scales
     // with the rectangle actually sampled.
     let (code, stdout, err) = run(&[
-        "estimate",
+        "measure-base",
         fixture("hdr-48bit.tif").to_str().unwrap(),
         "--base-region",
         "0,0,60,60",
@@ -5419,7 +5449,7 @@ fn memory_preflight_reports_the_estimate_and_budget_decision() {
 
     // With no source flag, `estimate` counts the effective area into a fixed-size
     // histogram rather than gathering it, so it is charged no sample at all.
-    let (code, stdout, err) = run(&["estimate", fixture("hdr-48bit.tif").to_str().unwrap()]);
+    let (code, stdout, err) = run(&["measure-base", fixture("hdr-48bit.tif").to_str().unwrap()]);
     assert_eq!(code, 0, "{err}");
     let area = json(&stdout)["memory"].clone();
     assert!(
@@ -5687,7 +5717,7 @@ fn over_budget_rejection_covers_inspect_estimate_and_roll() {
 
     let (code, _out, err) = run(&["inspect", in_str, "--max-memory", "1KiB"]);
     assert_eq!(code, 6, "inspect must be gated too:\n{err}");
-    let (code, _out, err) = run(&["estimate", in_str, "--max-memory", "1KiB"]);
+    let (code, _out, err) = run(&["measure-base", in_str, "--max-memory", "1KiB"]);
     assert_eq!(code, 6, "estimate must be gated too:\n{err}");
 
     let recipe = write_file(&tmp.path("roll.json"), ROLL_RECIPE);
@@ -5894,7 +5924,7 @@ fn convert_requires_a_stated_film_base_but_estimate_does_not() {
     // `estimate` exists to *produce* a base, so it must not require one —
     // otherwise the documented "measure once, reuse" workflow is circular. With no
     // source it measures the frame's effective area.
-    let (code, _stdout, err) = run(&["estimate", scan.to_str().unwrap()]);
+    let (code, _stdout, err) = run(&["measure-base", scan.to_str().unwrap()]);
     assert_ne!(
         code, 2,
         "estimate must not demand a base it is being asked to measure: {err}"
@@ -6719,7 +6749,7 @@ fn ir_holder_detection_is_decided_by_measurement_not_by_declaration() {
         "an undeclared run must omit the field, not report null: {report}"
     );
     let (_, est_out, _) = run(&[
-        "estimate",
+        "measure-base",
         "--film-type",
         "silver",
         "--base-region",
@@ -6790,7 +6820,7 @@ fn estimate_measures_an_unexposed_frame_over_its_effective_area() {
     write_hdri_unexposed(&dark, 41_000, [655, 655, 655]);
     write_hdri_unexposed(&bright, 41_000, [65535, 65535, 65535]);
 
-    let (code, stdout, err) = run(&["estimate", "--strict", dark.to_str().unwrap()]);
+    let (code, stdout, err) = run(&["measure-base", "--strict", dark.to_str().unwrap()]);
     assert_eq!(
         code, 0,
         "a clean unexposed frame must pass --strict:\n{err}"
@@ -6807,7 +6837,7 @@ fn estimate_measures_an_unexposed_frame_over_its_effective_area() {
     assert!(report["film_base_flag"].is_string(), "{report}");
 
     // The holder's RGB is extreme on the other side, and the base does not move.
-    let (code, stdout, err) = run(&["estimate", bright.to_str().unwrap()]);
+    let (code, stdout, err) = run(&["measure-base", bright.to_str().unwrap()]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(json(&stdout)["film_base"], report["film_base"]);
 
@@ -6815,7 +6845,7 @@ fn estimate_measures_an_unexposed_frame_over_its_effective_area() {
     // area is the inset alone, and the report says so — a warning `--strict` fails.
     let opaque = dir.path("opaque.tif");
     write_hdri_unexposed(&opaque, 1_081, [655, 655, 655]);
-    let (code, stdout, _err) = run(&["estimate", "--strict", opaque.to_str().unwrap()]);
+    let (code, stdout, _err) = run(&["measure-base", "--strict", opaque.to_str().unwrap()]);
     assert_eq!(code, 1);
     let report = json(&stdout);
     assert!(report["effective_area"]["holder"].is_null(), "{report}");
@@ -6897,11 +6927,14 @@ fn the_retired_film_base_paths_name_the_measurement_that_replaced_them() {
     ]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("--auto-base was removed"), "{err}");
-    assert!(err.contains("hanten estimate <unexposed-frame>"), "{err}");
+    assert!(
+        err.contains("hanten measure-base <unexposed-frame>"),
+        "{err}"
+    );
     assert!(err.contains("--film-base R,G,B"), "{err}");
 
     for flag in ["--auto-base", "--grid"] {
-        let (code, _o, err) = run(&["estimate", flag, fix.to_str().unwrap()]);
+        let (code, _o, err) = run(&["measure-base", flag, fix.to_str().unwrap()]);
         assert_eq!(code, 2, "{flag}: {err}");
         assert!(err.contains(&format!("{flag} was removed")), "{err}");
         assert!(err.contains("Drop the flag"), "{err}");
@@ -7835,7 +7868,7 @@ fn the_reference_density_and_retired_placements_are_migration_errors() {
 
     // (b) `estimate`'s reference half.
     let (code, _, err) = run(&[
-        "estimate",
+        "measure-base",
         scan.to_str().unwrap(),
         "--d-max-region",
         "0,0,1,1",
@@ -8885,12 +8918,15 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     let frame = fixture("hdr-48bit.tif").display().to_string();
     let second = tmp.path("second.tif");
     std::fs::copy(&frame, &second).unwrap();
+    let recipe = tmp.path("wb.json");
     let (code, stdout, err) = run(&[
         "measure-roll",
         &frame,
         second.to_str().unwrap(),
         "--film-base",
         "0.9,0.55,0.42",
+        "--out",
+        recipe.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{err}");
     let report = json(&stdout);
@@ -8984,15 +9020,27 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         "the roll section renders what the same values as style knobs render"
     );
 
-    let mut recipe = report["reuse"]["recipe"].clone();
-    recipe["recipe_version"] = 2.into();
-    let recipe = write_file(&tmp.path("wb.json"), &recipe.to_string());
+    // The written recipe states the base it measured under too, so it renders alone.
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&recipe).unwrap()).unwrap();
+    assert_eq!(
+        written["calibration"]["film_base"]["explicit"],
+        serde_json::json!([0.9, 0.55, 0.42]),
+        "{written}"
+    );
+    assert_eq!(
+        written["roll"]["white_balance"],
+        report["white_balance"]["gains"]
+    );
+    assert_eq!(written["roll"]["white_stops"], report["white"]["stops"]);
+    assert!(
+        report["reuse"].get("recipe").is_none(),
+        "the recipe is the file, not a report field: {report}"
+    );
     let by_recipe = tmp.path("recipe.tiff");
     let (code, _, err) = run(&[
         "convert",
         &frame,
-        "--film-base",
-        "0.9,0.55,0.42",
         "--params",
         recipe.to_str().unwrap(),
         "-o",
@@ -9002,7 +9050,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(
         std::fs::read(&by_flag).unwrap(),
         std::fs::read(&by_recipe).unwrap(),
-        "the reported flag and recipe fragment are one knob"
+        "the reported flag and the written recipe are one knob"
     );
 }
 
@@ -9628,8 +9676,9 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         report["frames"][1]["white_stops"]
     );
 
-    // The reuse forms: the roll's white by flag and fragment, and the clamped frame's
-    // (the cap) through a `roll --frames` manifest.
+    // The reuse forms: the roll's white by flag, and the whole measurement — the
+    // clamped frame's own white (the cap) included — as the `--out` recipe, which
+    // `roll` renders with no manifest.
     assert!(
         report["reuse"]["flag"]
             .as_str()
@@ -9640,47 +9689,166 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
             )),
         "{report}"
     );
+    assert!(report["reuse"].get("frames").is_none(), "{report}");
+    let measured = tmp.path("measured.json");
+    let (code, _, err) = run(&[
+        "measure-roll",
+        "--params",
+        recipe.to_str().unwrap(),
+        dim.to_str().unwrap(),
+        bright.to_str().unwrap(),
+        "--leader",
+        far.to_str().unwrap(),
+        "--out",
+        measured.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&measured).unwrap()).unwrap();
+    assert_eq!(written["roll"]["white_stops"], white["stops"], "{written}");
     assert_eq!(
-        report["reuse"]["recipe"]["roll"]["white_stops"],
-        white["stops"]
+        written["roll"]["frames"],
+        serde_json::json!({"bright.tif": {"white_stops": white["rule"]["cap_stops"]}}),
+        "keyed by file name, the clamped frame only: {written}"
     );
-    let manifest = &report["reuse"]["frames"];
-    assert!(manifest["frames"][0].get("params").is_none(), "{manifest}");
-    assert_eq!(
-        manifest["frames"][1]["params"]["roll"]["white_stops"],
-        white["rule"]["cap_stops"]
-    );
-    let mut shared: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&recipe).unwrap()).unwrap();
-    for (k, v) in report["reuse"]["recipe"].as_object().unwrap() {
-        shared[k] = v.clone();
-    }
-    let shared = write_file(&tmp.path("shared.json"), &shared.to_string());
-    let manifest = write_file(&tmp.path("frames.json"), &manifest.to_string());
+    // The input it was decoded under travels too: these scans state no transfer.
+    assert_eq!(written["input"]["transfer"], "linear", "{written}");
     let out = tmp.path("out");
     let (code, stdout, err) = run(&[
+        "roll",
+        dim.to_str().unwrap(),
+        bright.to_str().unwrap(),
+        "--params",
+        measured.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let rolled = json(&stdout);
+    // `roll` sorts positional inputs, so find each frame by name.
+    let rendered = |path: &Path| {
+        rolled["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["input"] == path.to_str().unwrap())
+            .map(|f| f["chain"]["look"]["contrast"].clone())
+    };
+    assert_eq!(
+        rendered(&dim).as_ref(),
+        Some(&white["contrast"]),
+        "{rolled}"
+    );
+    assert_eq!(
+        rendered(&bright).as_ref(),
+        Some(&clamped["contrast"]),
+        "{rolled}"
+    );
+
+    // The same pixels as the route it replaces: the base and the roll section merged
+    // by hand, and the clamp handed over as a `--frames` manifest.
+    let mut shared: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&recipe).unwrap()).unwrap();
+    shared["roll"] = serde_json::json!({
+        "white_balance": written["roll"]["white_balance"],
+        "white_stops": written["roll"]["white_stops"],
+    });
+    let shared = write_file(&tmp.path("shared.json"), &shared.to_string());
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &serde_json::json!({"frames": [
+            {"input": dim},
+            {"input": bright, "params": {"roll": {"white_stops": white["rule"]["cap_stops"]}}},
+        ]})
+        .to_string(),
+    );
+    let by_manifest = tmp.path("by-manifest");
+    let (code, _, err) = run(&[
         "roll",
         "--params",
         shared.to_str().unwrap(),
         "--frames",
         manifest.to_str().unwrap(),
         "-o",
-        out.to_str().unwrap(),
+        by_manifest.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{err}");
-    let rolled = json(&stdout);
-    let rendered = |i: usize| &rolled["frames"][i]["chain"]["look"]["contrast"];
-    assert_eq!(rendered(0), &white["contrast"], "{rolled}");
-    assert_eq!(rendered(1), &clamped["contrast"], "{rolled}");
-    // A clamp is how the manifest states a frame's own white, not a roll-wide break.
-    assert!(
-        !rolled.to_string().contains("override resolves"),
-        "{rolled}"
+    for name in ["dim_positive.tiff", "bright_positive.tiff"] {
+        assert_eq!(
+            std::fs::read(out.join(name)).unwrap(),
+            std::fs::read(by_manifest.join(name)).unwrap(),
+            "{name}: the recipe's table renders what the manifest did"
+        );
+    }
+
+    // A single `convert` of the clamped frame takes its entry too, by file name.
+    let single = tmp.path("single.tiff");
+    let (code, _, err) = run(&[
+        "convert",
+        bright.to_str().unwrap(),
+        "--params",
+        measured.to_str().unwrap(),
+        "-o",
+        single.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&single).unwrap(),
+        std::fs::read(out.join("bright_positive.tiff")).unwrap(),
+        "a roll frame is byte-identical to a single convert of it"
     );
 
+    // A manifest's `params` beat the table; a table in a manifest is refused.
+    let beats = write_file(
+        &tmp.path("beats.json"),
+        &serde_json::json!({"frames": [
+            {"input": bright, "params": {"roll": {"white_stops": white["stops"]}}},
+        ]})
+        .to_string(),
+    );
+    let (code, stdout, err) = run(&[
+        "roll",
+        "--params",
+        measured.to_str().unwrap(),
+        "--frames",
+        beats.to_str().unwrap(),
+        "-o",
+        tmp.path("beats").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let beaten = json(&stdout);
+    assert_eq!(
+        beaten["frames"][0]["chain"]["look"]["contrast"],
+        white["contrast"]
+    );
+    // A clamp is how a manifest states a frame's own white, not a roll-wide break.
+    assert!(
+        !beaten.to_string().contains("override resolves"),
+        "{beaten}"
+    );
+    let nested = write_file(
+        &tmp.path("nested.json"),
+        &serde_json::json!({"frames": [
+            {"input": bright, "params": {"roll": {"frames": {"bright.tif": {"white_stops": 2.0}}}}},
+        ]})
+        .to_string(),
+    );
+    let (code, _, err) = run(&[
+        "roll",
+        "--params",
+        measured.to_str().unwrap(),
+        "--frames",
+        nested.to_str().unwrap(),
+        "-o",
+        tmp.path("nested").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("belongs in the shared recipe"), "{err}");
+
     // A roll whose every frame is above the cap lands on the cap: its frames are still
-    // disclosed as clamped, but they render at the roll's own contrast, so there is no
-    // manifest to hand `roll`.
+    // disclosed as clamped, but they render at the roll's own contrast, so the table
+    // names no frame.
+    let capped_recipe = tmp.path("capped.json");
     let (code, stdout, err) = run(&[
         "measure-roll",
         "--params",
@@ -9688,13 +9856,466 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         bright.to_str().unwrap(),
         "--leader",
         far.to_str().unwrap(),
+        "--out",
+        capped_recipe.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{err}");
     let capped = json(&stdout);
     assert_eq!(capped["white"]["bound"], "cap", "{capped}");
     assert_eq!(capped["white"]["contrast"], clamped["contrast"], "{capped}");
     assert_eq!(capped["frames"][0]["white_role"], "clamped", "{capped}");
-    assert!(capped["reuse"].get("frames").is_none(), "{capped}");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&capped_recipe).unwrap()).unwrap();
+    assert_eq!(
+        written["roll"]["frames"],
+        serde_json::json!({}),
+        "{written}"
+    );
+}
+
+#[test]
+fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
+    // `measure-roll --unexposed` then `roll --params` renders what the route it replaces
+    // rendered: `measure-base` on the same frame, `measure-roll` over that base,
+    // the parts merged by hand and the clamp handed over as a manifest.
+    let tmp = TempDir::new("measure-roll-unexposed");
+    let base = [0.9f32, 0.55, 0.42];
+    // Synthetic scans state their input; the base is what is being measured.
+    let input = write_file(
+        &tmp.path("input.json"),
+        r#"{ "recipe_version": 2,
+             "input": { "transfer": "linear", "meaning": "scanner-device" } }"#,
+    );
+    let (blank, dim, bright, leader) = (
+        tmp.path("blank.tif"),
+        tmp.path("dim.tif"),
+        tmp.path("bright.tif"),
+        tmp.path("leader.tif"),
+    );
+    write_uniform_density(&blank, base, 0.0);
+    write_uniform_density(&dim, base, 0.904);
+    write_uniform_density(&bright, base, 1.122);
+    write_uniform_density(&leader, base, 1.5);
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let frames = [s(&dim), s(&bright)];
+
+    let measured = tmp.path("roll.json");
+    let (blank_s, leader_s, input_s, measured_s) = (s(&blank), s(&leader), s(&input), s(&measured));
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        &frames[0],
+        &frames[1],
+        "--unexposed",
+        &blank_s,
+        "--leader",
+        &leader_s,
+        "--params",
+        &input_s,
+        "--out",
+        &measured_s,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let report = json(&stdout);
+
+    // One base measurement, one report shape: the `unexposed` object is exactly
+    // `measure-base`'s evidence for the same frame.
+    let (code, stdout, err) = run(&["measure-base", &s(&blank)]);
+    assert_eq!(code, 0, "{err}");
+    let alone = json(&stdout);
+    let unexposed = report["unexposed"]
+        .as_object()
+        .expect("an unexposed object");
+    for key in [
+        "film_base",
+        "film_base_source",
+        "film_base_percentile",
+        "film_base_flag",
+        "effective_area",
+    ] {
+        assert!(unexposed.contains_key(key), "{key}: {report}");
+    }
+    for (key, value) in unexposed {
+        assert_eq!(&alone[key], value, "`unexposed.{key}` matches measure-base");
+    }
+    assert_eq!(
+        report["film_base"], alone["film_base"],
+        "every frame decodes with it"
+    );
+
+    let out = tmp.path("out");
+    let (code, _, err) = run(&[
+        "roll",
+        &frames[0],
+        &frames[1],
+        "--params",
+        &s(&measured),
+        "-o",
+        &s(&out),
+    ]);
+    assert_eq!(code, 0, "{err}");
+
+    // The replaced route.
+    let flag = alone["film_base_flag"].as_str().unwrap();
+    let flag_value = flag.strip_prefix("--film-base ").unwrap();
+    let (code, stdout, err) = run(&[
+        "measure-roll",
+        &frames[0],
+        &frames[1],
+        "--leader",
+        &s(&leader),
+        "--params",
+        &s(&input),
+        "--film-base",
+        flag_value,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let by_hand = json(&stdout);
+    assert_eq!(by_hand["white_balance"], report["white_balance"]);
+    let explicit = alone["film_base"].clone();
+    let shared = write_file(
+        &tmp.path("shared.json"),
+        &serde_json::json!({
+            "recipe_version": 2,
+            "input": { "transfer": "linear", "meaning": "scanner-device" },
+            "calibration": {"film_base": {"explicit": [explicit["r"], explicit["g"], explicit["b"]]}},
+            "roll": {
+                "white_balance": by_hand["white_balance"]["gains"],
+                "white_stops": by_hand["white"]["stops"],
+            },
+        })
+        .to_string(),
+    );
+    let clamped = by_hand["white"]["clamped"].as_array().unwrap();
+    assert_eq!(
+        clamped.len(),
+        1,
+        "not vacuous: one frame is clamped: {by_hand}"
+    );
+    let manifest = write_file(
+        &tmp.path("frames.json"),
+        &serde_json::json!({"frames": [
+            {"input": dim},
+            {"input": bright, "params": {"roll": {"white_stops": by_hand["white"]["rule"]["cap_stops"]}}},
+        ]})
+        .to_string(),
+    );
+    let old = tmp.path("old");
+    let (code, _, err) = run(&[
+        "roll",
+        "--params",
+        &s(&shared),
+        "--frames",
+        &s(&manifest),
+        "-o",
+        &s(&old),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    for name in ["dim_positive.tiff", "bright_positive.tiff"] {
+        assert_eq!(
+            std::fs::read(out.join(name)).unwrap(),
+            std::fs::read(old.join(name)).unwrap(),
+            "{name}: byte-identical to the replaced route"
+        );
+    }
+}
+
+#[test]
+fn measure_roll_refuses_a_second_statement_of_the_base_and_misplaced_frames() {
+    let tmp = TempDir::new("measure-roll-unexposed-refusals");
+    let frame = fixture("hdr-48bit.tif").display().to_string();
+    let blank = tmp.path("blank.tif");
+    std::fs::copy(&frame, &blank).unwrap();
+    let blank = blank.display().to_string();
+    let stated = write_file(
+        &tmp.path("stated.json"),
+        r#"{"recipe_version": 2, "calibration": {"film_base": {"region": [0, 0, 8, 8]}}}"#,
+    );
+    let copy = tmp.path("sub");
+    std::fs::create_dir_all(&copy).unwrap();
+    let twin = copy.join("hdr-48bit.tif");
+    std::fs::copy(&frame, &twin).unwrap();
+    let out = tmp.path("roll.json").display().to_string();
+    for (args, expect, absent) in [
+        (
+            vec![
+                frame.as_str(),
+                "--unexposed",
+                &blank,
+                "--film-base",
+                "0.9,0.55,0.42",
+            ],
+            "--film-base states one",
+            "stated explicitly",
+        ),
+        (
+            vec![
+                frame.as_str(),
+                "--unexposed",
+                &blank,
+                "--params",
+                stated.to_str().unwrap(),
+            ],
+            "the recipe's `calibration.film_base` states one",
+            "stated explicitly",
+        ),
+        (
+            vec![frame.as_str(), "--unexposed", &frame],
+            "is both the --unexposed and an input frame",
+            "film base",
+        ),
+        (
+            vec![frame.as_str(), "--unexposed", &blank, "--leader", &blank],
+            "is both the --leader and the --unexposed frame",
+            "input frame",
+        ),
+        (
+            vec![
+                frame.as_str(),
+                twin.to_str().unwrap(),
+                "--unexposed",
+                &blank,
+                "--out",
+                &out,
+            ],
+            "share the file name",
+            "named twice",
+        ),
+    ] {
+        let (code, stdout, err) = run(&[&["measure-roll"][..], &args].concat());
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(stdout.is_empty(), "{args:?}");
+        assert!(err.contains(expect), "{args:?}: {err}");
+        assert!(
+            !err.contains(absent),
+            "{args:?}: the coarser rule lost: {err}"
+        );
+        assert!(
+            !err.contains("decoded"),
+            "{args:?}: refused before decoding: {err}"
+        );
+    }
+    assert!(!Path::new(&out).exists());
+}
+
+#[test]
+fn measure_roll_out_diagnoses_the_specific_fault_and_writes_a_file_roll_accepts() {
+    let tmp = TempDir::new("measure-roll-out-review");
+    let base = [0.9f32, 0.55, 0.42];
+    let frame = tmp.path("f.tif");
+    write_uniform_density(&frame, base, 0.904);
+    let f = frame.to_str().unwrap();
+    let out = tmp.path("roll.json");
+    let o = out.to_str().unwrap();
+    // A frame named twice is that fault, not a file-name clash to rename away.
+    let (code, _, err) = run(&[
+        "measure-roll",
+        f,
+        f,
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--out",
+        o,
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("is named twice"), "{err}");
+    assert!(!err.contains("share the file name"), "{err}");
+
+    // An IR export path is one frame's output: it does not travel into the roll's
+    // recipe, which `roll` would then refuse.
+    let recipe = write_file(
+        &tmp.path("in.json"),
+        r#"{ "recipe_version": 2,
+             "input": { "transfer": "linear", "meaning": "scanner-device",
+                        "export_ir": "ir.tif" },
+             "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } } }"#,
+    );
+    let r = recipe.to_str().unwrap();
+    // `--out` over the recipe it reads says so, not "the input scan".
+    let (code, _, err) = run(&["measure-roll", f, "--params", r, "--out", r, "--force"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("would overwrite the --params recipe"), "{err}");
+    assert!(!err.contains("input scan"), "{err}");
+
+    let (code, _, err) = run(&["measure-roll", f, "--params", r, "--out", o]);
+    assert_eq!(code, 0, "{err}");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(written["input"]["transfer"], "linear", "{written}");
+    assert!(written["input"]["export_ir"].is_null(), "{written}");
+    let (code, _, err) = run(&[
+        "roll",
+        f,
+        "--params",
+        o,
+        "-o",
+        tmp.path("out").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+}
+
+#[test]
+fn convert_diagnoses_a_flag_its_branch_cannot_apply_before_a_bad_roll_table() {
+    let tmp = TempDir::new("roll-frames-order");
+    let recipe = write_file(
+        &tmp.path("r.json"),
+        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"frames": {"other.tif": {"white_stops": -1.0}}}}"#,
+    );
+    let (code, _, err) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--film-master",
+        "--roll-white",
+        "2",
+        "--params",
+        recipe.to_str().unwrap(),
+        "-o",
+        tmp.path("o.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--roll-white"), "{err}");
+    assert!(
+        !err.contains("roll.frames"),
+        "the presence rule runs first: {err}"
+    );
+
+    // A bad decode is named as itself, not as another frame's entry.
+    let sound = write_file(
+        &tmp.path("sound.json"),
+        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"frames": {"other.tif": {"white_stops": 2.0}}}}"#,
+    );
+    let (code, _, err) = run(&[
+        "convert",
+        fixture("hdr-48bit.tif").to_str().unwrap(),
+        "--density-gamma",
+        "0",
+        "--params",
+        sound.to_str().unwrap(),
+        "-o",
+        tmp.path("g.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("must be finite and positive, got 0"), "{err}");
+    assert!(!err.contains("roll.frames"), "{err}");
+}
+
+#[test]
+fn a_flag_over_a_frames_own_white_replays_from_dump_params() {
+    // `--roll-white` beats the frame's `roll.frames` entry; the dumped recipe must
+    // replay what rendered, not re-apply the entry the flag overrode.
+    let tmp = TempDir::new("roll-frames-replay");
+    let frame = fixture("hdr-48bit.tif");
+    let recipe = write_file(
+        &tmp.path("r.json"),
+        r#"{"recipe_version": 2, "calibration": {"film_base": {"explicit": [0.9, 0.55, 0.42]}},
+            "roll": {"white_stops": 1.6,
+                     "frames": {"hdr-48bit.tif": {"white_stops": 2.0}, "other.tif": {"white_stops": 2.0}}}}"#,
+    );
+    let (dump, first, replay) = (tmp.path("d.json"), tmp.path("a.tiff"), tmp.path("b.tiff"));
+    let (code, stdout, err) = run(&[
+        "convert",
+        frame.to_str().unwrap(),
+        "--params",
+        recipe.to_str().unwrap(),
+        "--roll-white",
+        "1.7",
+        "--dump-params",
+        dump.to_str().unwrap(),
+        "-o",
+        first.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(json(&stdout)["chain"]["roll"]["white_stops"], 1.7);
+    let dumped: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+    assert!(
+        dumped["roll"]["frames"].get("hdr-48bit.tif").is_none()
+            && dumped["roll"]["frames"].get("other.tif").is_some(),
+        "the frame's own entry is resolved away, the others kept: {dumped}"
+    );
+    let (code, _, err) = run(&[
+        "convert",
+        frame.to_str().unwrap(),
+        "--params",
+        dump.to_str().unwrap(),
+        "-o",
+        replay.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(&first).unwrap(),
+        std::fs::read(&replay).unwrap(),
+        "the dump replays byte-identically"
+    );
+}
+
+#[test]
+fn the_removed_estimate_command_names_measure_base() {
+    for args in [
+        vec!["estimate", "in.tif", "--grid"],
+        vec!["estimate", "--help"],
+        vec!["estimate"],
+    ] {
+        let (code, stdout, err) = run(&args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+        assert!(stdout.is_empty(), "{args:?}");
+        assert!(
+            err.contains("renamed `hanten measure-base`"),
+            "{args:?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_roll_frames_table_is_validated_by_key_and_value() {
+    let tmp = TempDir::new("roll-frames-table");
+    let frame = fixture("hdr-48bit.tif").display().to_string();
+    for (table, expect) in [
+        (
+            r#"{"sub/f.tif": {"white_stops": 2.0}}"#,
+            "file names, not paths",
+        ),
+        (
+            r#"{"hdr-48bit.tif": {"white_stops": -1.0}}"#,
+            "must be finite and positive",
+        ),
+        (
+            r#"{"hdr-48bit.tif": {"white_stops": 2.0, "contrast": 1}}"#,
+            "unknown field",
+        ),
+        // Finite and positive, but its whole contrast overflows: named as the entry,
+        // not as the `roll.white_stops` it resolves into.
+        (
+            r#"{"hdr-48bit.tif": {"white_stops": 1e-38}}"#,
+            "`roll.frames.\"hdr-48bit.tif\".white_stops`",
+        ),
+    ] {
+        let recipe = write_file(
+            &tmp.path("r.json"),
+            &format!(
+                r#"{{"recipe_version": 2, "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
+                    "roll": {{"white_stops": 1.6, "frames": {table}}}}}"#
+            ),
+        );
+        for command in ["convert", "roll"] {
+            let out = tmp.path(&format!("o-{command}.tiff"));
+            let (code, _, err) = run(&[
+                command,
+                &frame,
+                "--params",
+                recipe.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+            ]);
+            assert_eq!(code, 2, "{command} {table}: {err}");
+            assert!(err.contains(expect), "{command} {table}: {err}");
+            assert!(
+                !err.contains("recipe `roll.white_stops`"),
+                "{command} {table}: the stated 1.6 is not at fault: {err}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -9764,9 +10385,7 @@ fn measure_roll_refuses_what_it_cannot_measure_under() {
     assert_eq!(code, 2, "{err}");
     assert!(stdout.is_empty());
     assert!(
-        err.contains("film base stated explicitly")
-            && err.contains("hanten estimate <unexposed-frame>")
-            && !err.contains("--grid"),
+        err.contains("--unexposed <unexposed.tif>") && err.contains("measure-base --out"),
         "{err}"
     );
 

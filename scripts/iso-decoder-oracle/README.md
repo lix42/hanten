@@ -47,7 +47,7 @@ hanten convert <scan> -o /tmp/iso-oracle/gain-map --film-base <r,g,b> --range hd
 
 `--range hdr` writes the gain-map JPEG (`nf-destinations/gain-map-destination`): ISO
 21496-1 metadata only, a **three-channel** map, and MPF written by `io::iso_gain_map`.
-Measure `<r,g,b>` once per roll the usual way — `hanten estimate`, or the frozen
+Measure `<r,g,b>` once per roll the usual way — `hanten measure-base`, or the frozen
 `scripts/real-scan-verify/recipes/<roll>.json`. The default render is not flat on a
 real frame, so no exposure push is needed; a flat frame reports `GainMapMax = 0` on
 every channel and nc's report says `chain.gain_map.flat: true`.

@@ -647,7 +647,7 @@ pub struct HolderDepths {
     /// The over-cut is not free either: the merge can raise `top + bottom` to the
     /// frame height (or `left + right` to its width), which with the inset added
     /// trips [`effective_area`]'s empty-region error. The orchestrator decides how
-    /// loud that is — exit 2 on an `estimate` that measures over the area, a warning
+    /// loud that is — exit 2 on a `measure-base` that measures over the area, a warning
     /// with no reported area otherwise. So a far enough over-cut is a hard refusal
     /// for a run that would have read it, rather than a degraded measurement.
     pub converged: bool,
@@ -1360,7 +1360,7 @@ mod tests {
     #[test]
     fn degenerate_region_base_errors_loudly() {
         // A `--base-region` on the dark holder yields a zero channel; `estimate`
-        // must reject it at birth (not print a poison Dmin `hanten estimate` would
+        // must reject it at birth (not print a poison Dmin `hanten measure-base` would
         // echo back), naming a recovery flag.
         let mut img = solid(50, 50, [0.4, 0.3, 0.2]);
         fill_rect(&mut img, [0, 0, 10, 10], [0.0, 0.0, 0.0]);

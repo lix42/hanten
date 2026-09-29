@@ -31,9 +31,10 @@ after `nf-core/default-flip` left only one chain. What moved out:
   (`--strict`-promotable) on `calibration.film_base` and `output`. Nothing warned on
   `reconstruction.anchor` or `reconstruction.linearization`, which pin a frame on a
   different rule or slope than its roll.
-- **`roll.white_stops` per frame is legitimate.** `measure-roll`'s `reuse.frames`
-  gives each clamped frame its own white, so a warning on the `roll` section would
-  fire on correct use. `roll.white_balance` per frame is the consistency break.
+- **`roll.white_stops` per frame is legitimate.** `measure-roll --out` gives each
+  clamped frame its own white (the recipe's `roll.frames`, `core/measure-base`), and a
+  manifest may state one, so a warning on the `roll` section would fire on correct use.
+  `roll.white_balance` per frame is the consistency break.
 - **The error surface is a contract.** Removed flags and values exit with their
   design-spec §11 codes (largely delivered by `nf-retire`). A bad override is a config
   error: it refuses the whole roll at exit 2 before any frame is written. A frame

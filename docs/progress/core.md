@@ -72,6 +72,13 @@ What other epics need to know about `core`:
 - **The roll CLI workflow's design is `docs/design/roll-workflow.md`** (2026-09-28),
   built by `core/measure-base`, `core/recipe-composition`, `core/roll-measure-mode`,
   `core/auto-calibration` and `nf-core/subcommands`; it wins over their task files.
+  **Measuring writes recipes** (`core/measure-base`): `estimate` is now `measure-base`,
+  and the old name exits 2 naming it. `measure-base --out` and `measure-roll [--unexposed]
+  --out` write `"recipe_version": 2` files, refused over an existing file unless
+  `--force`. Reports no longer carry a recipe (`calibration`, `reuse.recipe`,
+  `reuse.frames` are gone). Per-frame clamps are the recipe key `roll.frames`,
+  `{"<file name>": {"white_stops": …}}`. `Recipe::for_frame` applies an entry for
+  `convert` and every `roll` frame before flags merge, and a manifest's `params` beat it.
 - **Exit codes (design-spec §11):** Usage=2, Decode=3, Unsupported=4, Write=5,
   Resource=6, Other=1. `NcError::exit_code()` is the single mapping.
 - **stdout is report-only**; logs and warnings go to stderr. Reports emit
@@ -384,7 +391,7 @@ of plan → recipe → apply. The **plan** half is `core/base-acquisition-planne
 
 ## measure-base
 
-**Status:** not started
+**Status:** done (2026-09-28)
 **Updated:** 2026-09-28
 
 - Goal: `hanten estimate` → `hanten measure-base`, writing its `calibration` fragment as
@@ -396,6 +403,124 @@ of plan → recipe → apply. The **plan** half is `core/base-acquisition-planne
   it measure the base too (the whole frame, through `measure-base`'s code), writing one
   recipe with `calibration` and `roll`. `measure-base` stays, for a single-frame `convert`
   and a roll with no unexposed frame. Design: `docs/design/roll-workflow.md`.
+
+### 2026-09-28 — executed
+
+- **Shipped:** `estimate` → `measure-base` (the old name is a hidden subcommand taking
+  any arguments, so even `estimate --help` gets the exit-2 migration message);
+  `--out PATH` / `--force` on both measuring commands; `measure-roll --unexposed`;
+  `roll.frames`, the clamps in the recipe. The report's `calibration` object and
+  `measure-roll`'s `reuse.recipe` / `reuse.frames` are gone; `film_base_flag` and
+  `reuse.flag` stay.
+- **Decisions (user, 2026-09-28):** the clamps are `roll.frames` keyed by **file name**
+  (the recipe survives the scans moving; `measure-roll --out` refuses two inputs sharing
+  one), resolved shared recipe → table → manifest `params`, and `convert` applies the
+  table too, so a roll frame stays byte-identical to a single `convert`. `--out` over an
+  existing file exits 2 unless `--force`. `--grid` stays until
+  `film-base/tiling-uniformity-validator` decides otherwise.
+- **Departure from the agreed plan:** the plan said `measure-roll --out` would *warn*
+  when its `--params` stated non-default decode keys; it **carries** `input`, `measure`
+  and `reconstruction` instead when they differ from the defaults. With one `--params`
+  on `roll`, a file without `input` fails on any scan whose recipe states its transfer,
+  and one without the decode renders the gains under a decode they were not measured
+  under — silently.
+- **One measurement:** `measure_base` (a `BaseRequest` → `BaseMeasurement`) is the body
+  of both `measure-base` and `--unexposed`; the latter serializes it as `unexposed`,
+  and a test asserts every key there equals `measure-base --grid`'s report on the same
+  frame. Warnings are collected unlogged and echoed once by the caller, prefixed with
+  the file under `measure-roll`.
+- **Gotchas:** `Recipe::for_frame` drops the table once resolved, so `convert` must
+  check `roll.frames` *before* it (`recipe::validate_roll_frames`) — a bad key or value
+  otherwise passed at exit 0. `RollSection` lost `Copy` with the map. `roll` sorts
+  positional inputs, so a test indexing its report frames by argument order is wrong.
+  The no-roll-measurement warning is shared with `roll`, which takes no flags, and its
+  test forbids `--` in it — remedies there name no flag.
+- **Drift gate:** the v8 row's `recipe` refreshed in place (`fe3d6808a270d45f` →
+  `0b06a154d01e61e5`) for the empty `roll.frames` default; `render` and `base` held.
+- **Verified on a real roll** (`2026-07-15-Ektar100`, three frames, two clamped):
+  `measure-roll --unexposed --out` and `measure-base --grid --out` → `measure-roll
+  --params` write byte-identical recipes; `convert --params roll.json` of a clamped
+  frame is byte-identical to its `roll` output. The byte-identity to the replaced
+  route (`measure-base --grid` + hand merge + `--frames` manifest) is pinned in
+  `tests/pipeline.rs` on synthetic frames. `nctool roll` picks the command by asking the
+  binary (`measure-base --help`); checked against the cached reference build, which
+  answers `estimate`.
+- **Code review (`/code-review high`), fixed:** the file-name clash ran before the
+  exact-repeat check, so a frame named twice was told to rename one; `--out` carried
+  `input.export_ir`, which `roll` refuses; the degenerate `--unexposed` grid pointed at
+  report cells that path never emits; the missing-base remedy named `measure-base` with
+  no source (auto, best-effort) — now `--grid`, or `--base-region`; the collision message
+  called a `--params` recipe "the input scan"; `scripts/default-flip/measure.py` still
+  ran `estimate` (it probes now, like `nctool`). **`Recipe::for_frame` now keeps the
+  table**, which retired the `convert` pre-check: that check had run a value rule ahead
+  of `reject_roll_flags_nothing_applies`, and any later caller would have had to
+  remember it. A replay of the resolved recipe resolves the same.
+- **Ship review (Codex + `ship:diff-reviewer`), fixed — this supersedes "keeps the
+  table" above:** `for_frame` now *removes* the frame's own entry as it moves it into
+  `roll.white_stops`. Keeping it broke `--dump-params` replay: a `--roll-white` flag
+  beat the entry, the dump kept both, and the replay re-applied the entry (pinned by
+  `a_flag_over_a_frames_own_white_replays_from_dump_params`). Each entry's whole
+  contrast is now checked in `validate_roll_frames`, under its own key. `convert` runs
+  that rule on the table *as stated*, after the flag-presence rule, because its own
+  entry has already moved. Before this, an overflowing entry was blamed on the valid
+  `roll.white_stops`, and `roll` refused a frame whose manifest `params` replaced the
+  entry. `frame_recipe`'s pre-merge re-validation is gone. `chain.roll` is absent when
+  the section holds only other frames' entries.
+- **Rejected:** warning on a `roll.frames` key that matches no frame. Rendering a subset
+  with the whole roll's numbers is a designed use, where most keys miss; the warning
+  would fire on it and `--strict` would refuse it.
+
+### 2026-09-28 — rebased onto #193, #194, #195
+
+This entry supersedes every `--grid` in the entries above.
+`film-base/holder-masked-measurement` (#195) landed first, retiring `--grid` and
+`--auto-base` and making a sourceless measurement the effective-area median. Its design
+was taken, and this change re-applied over it:
+- `measure_base` is #195's `run_estimate` body, with the grid gone. It has two paths:
+  the area median with no source, or a stated region or explicit base.
+- `measure-roll --unexposed` takes the area path. The design doc's "the method
+  holder-masked-measurement settles" is that path.
+- `nf-core/subcommands` (#193) replaced the key-presence warnings with `ROLL_WIDE`.
+  `roll.frames` is classified frame-local, and the manifest refusal and per-frame
+  `for_frame` sit on top of #193's merge.
+- `telemetry/schema-v2` (#194) changed `run_convert` to borrow its args and record an
+  attempt. It needed only the call sites.
+
+Re-verified on the real Ektar 100 roll with the area method:
+- `measure-roll --unexposed --out`: base `[0.485832, 0.2621805, 0.17726406]`, one frame
+  clamped.
+- `measure-base --out` then `measure-roll --params` writes a byte-identical recipe.
+- A single `convert` of the clamped frame is byte-identical to its `roll` output.
+
+Gotcha: a blanket `"estimate"` → `"measure-base"` sed over `tests/pipeline.rs` also
+rewrote the removed-command test's own arguments. It then asserted that
+`measure-base` names itself as renamed. Grep for the old name's deliberate uses first.
+
+### 2026-09-28 — closed
+
+Landed as one commit on `core/measure-base`, with every CI gate green (608 unit, 211
+integration, 419 `nctool`). For the dependent tasks:
+- **`core/roll-measure-mode`** reuses `measure_base` (`BaseRequest { source: None, … }`
+  is `--unexposed`) and `run_measure_roll`'s body. `MeasuredRecipe` is the shape
+  `--save-recipe` can extend. `roll.frames` is how clamps travel; measure mode should
+  write the table, not a manifest.
+- **`core/recipe-composition`**: `--out` files are partial by design, so they state
+  only what was measured, plus `input`/`measure`/`reconstruction` when non-default.
+  Layering them needs open question 10's answer, because a later complete look file
+  must not null them out. `Recipe::for_frame` runs **before** flags merge. Keep that
+  order in the layered chain, or `--roll-white` stops beating a clamp.
+- **`core/profile-authoring`**: `--out` over an existing file exits 2 unless
+  `--force` (open question 4). `RecipeOutArgs` and `check_recipe_out` are reusable.
+- **`core/auto-calibration`**: builds on `measure-roll`, whose `--unexposed` measures a
+  named frame's effective area. Detecting that frame is still its job.
+
+A post-rebase review found four more issues, all fixed:
+- `convert`'s stated-table check ran before the decode's own rules, so
+  `--density-gamma 0` was blamed on another frame's entry. It now runs only over a
+  sound decode, as in `validate`.
+- The quiet preflight logger also swallowed `-v`'s memory line.
+- A comment and a design-spec example still named `reuse.frames` and `grid`.
+- `--strict` claimed "no recipe written" without `--out`.
 
 ## roll-measure-mode
 
