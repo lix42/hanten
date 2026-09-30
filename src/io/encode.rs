@@ -200,6 +200,9 @@ pub fn hdr_linear_pixel_contract(gamut: DestinationGamut) -> &'static str {
         DestinationGamut::AdobeRgb => {
             "rgb-f32-display-linear-adobe-rgb-d65-relative-to-203-nit-reference-white"
         }
+        DestinationGamut::Srgb => {
+            "rgb-f32-display-linear-srgb-d65-relative-to-203-nit-reference-white"
+        }
         DestinationGamut::Bt2020 => {
             "rgb-f32-display-linear-bt2020-d65-relative-to-203-nit-reference-white"
         }

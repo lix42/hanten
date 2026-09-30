@@ -2617,6 +2617,7 @@ fn removed_output_message(args: &ConversionFlags, has_recipe: bool) -> Option<St
 /// recipe says which (`the_preset_counterparts_resolve_the_same_under_every_rendering`).
 const PRESET_COUNTERPARTS: &[(&str, &str)] = &[
     ("display-p3", "--range sdr --gamut display-p3"),
+    ("compatibility", "--range sdr --gamut srgb"),
     ("film-master", "--film-master"),
     ("hdr-linear-tiff", "--transfer linear --gamut bt2020"),
     ("hdr-pq-tiff", "--transfer pq"),
@@ -2633,14 +2634,7 @@ const PRESET_COUNTERPARTS: &[(&str, &str)] = &[
 /// (`legacy`, `custom`, which retired before the chain did, or a typo), how to choose.
 fn preset_counterpart(name: &str, args: &ConversionFlags, has_recipe: bool) -> String {
     let Some(&(_, flags)) = PRESET_COUNTERPARTS.iter().find(|(n, _)| *n == name) else {
-        return if name == "compatibility" {
-            "`compatibility`'s sRGB has no destination yet \
-             (`nf-destinations/easy-destination-rows`); the SDR gamuts written are \
-             --gamut display-p3 and --gamut adobe-rgb."
-                .into()
-        } else {
-            "Drop the flag, or state the axes you want.".into()
-        };
+        return "Drop the flag, or state the axes you want.".into();
     };
     match name {
         "gain-map-hdr" | "ultra-hdr-v1" => format!(
@@ -3400,6 +3394,7 @@ fn linear_interoperability(gamut: DestinationGamut) -> &'static str {
     match gamut {
         DestinationGamut::DisplayP3 => says!("Display P3/D65"),
         DestinationGamut::AdobeRgb => says!("Adobe RGB (1998)/D65"),
+        DestinationGamut::Srgb => says!("sRGB/D65"),
         DestinationGamut::Bt2020 => says!("BT.2020/D65"),
     }
 }

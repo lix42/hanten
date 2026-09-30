@@ -11019,6 +11019,7 @@ fn every_destination_renders_end_to_end() {
     for (i, (extra, container, suffix, block)) in [
         (vec![], "tiff", "tiff", None),
         (vec!["--gamut", "adobe-rgb"], "tiff", "tiff", None),
+        (vec!["--gamut", "srgb"], "tiff", "tiff", None),
         (
             vec!["--transfer", "linear", "--gamut", "bt2020"],
             "tiff",
@@ -11094,7 +11095,7 @@ fn every_destination_renders_end_to_end() {
         if let Some(block) = block {
             assert!(report[block].is_object(), "{extra:?}: no `{block}` block");
         }
-        if extra.is_empty() || extra == ["--gamut", "adobe-rgb"] {
+        if extra.is_empty() || extra == ["--gamut", "adobe-rgb"] || extra == ["--gamut", "srgb"] {
             assert_eq!(read_tiff_bits(&out), 16, "{extra:?}");
         }
     }

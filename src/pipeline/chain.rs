@@ -387,7 +387,8 @@ mod tests {
     use crate::algo::FilmRgbImage;
     use crate::pipeline::colorimetry::dot;
     use crate::pipeline::colorimetry::pinned::{
-        ACESCG_TO_ADOBE_RGB, ACESCG_TO_DISPLAY_P3, ADOBE_RGB_LUMA, DISPLAY_P3_LUMA,
+        ACESCG_TO_ADOBE_RGB, ACESCG_TO_DISPLAY_P3, ACESCG_TO_SRGB, ADOBE_RGB_LUMA, DISPLAY_P3_LUMA,
+        SRGB_LUMA,
     };
     use crate::pipeline::fit_range::RangeFittedImage;
     use crate::pipeline::gain_ratio;
@@ -561,6 +562,7 @@ mod tests {
                 ACESCG_TO_ADOBE_RGB,
                 ADOBE_RGB_LUMA,
             ),
+            (DestinationGamut::Srgb, ACESCG_TO_SRGB, SRGB_LUMA),
         ] {
             let aces = aces_from(3, 1, &rgb, None);
             let expected = to_destination(aces.rgb(), matrix);

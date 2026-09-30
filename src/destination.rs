@@ -252,6 +252,7 @@ axis_serde!(Transfer);
 pub enum Gamut {
     DisplayP3,
     AdobeRgb,
+    Srgb,
     Bt2020,
 }
 
@@ -261,13 +262,19 @@ impl Gamut {
         match self {
             Gamut::DisplayP3 => DestinationGamut::DisplayP3,
             Gamut::AdobeRgb => DestinationGamut::AdobeRgb,
+            Gamut::Srgb => DestinationGamut::Srgb,
             Gamut::Bt2020 => DestinationGamut::Bt2020,
         }
     }
 }
 
 impl Axis for Gamut {
-    const ALL: &'static [Self] = &[Gamut::DisplayP3, Gamut::AdobeRgb, Gamut::Bt2020];
+    const ALL: &'static [Self] = &[
+        Gamut::DisplayP3,
+        Gamut::AdobeRgb,
+        Gamut::Srgb,
+        Gamut::Bt2020,
+    ];
     const DEFAULT: Self = Gamut::DisplayP3;
     const FLAG: &'static str = "--gamut";
     const KEY: &'static str = "gamut";
@@ -275,6 +282,7 @@ impl Axis for Gamut {
         match self {
             Gamut::DisplayP3 => "display-p3",
             Gamut::AdobeRgb => "adobe-rgb",
+            Gamut::Srgb => "srgb",
             Gamut::Bt2020 => "bt2020",
         }
     }
@@ -428,6 +436,13 @@ pub const ROWS: &[Row] = &[
         Range::Sdr,
         Transfer::Native,
         Gamut::AdobeRgb,
+        Container::Tiff,
+        Status::Ready(Encoding::SdrTiff),
+    ),
+    row(
+        Range::Sdr,
+        Transfer::Native,
+        Gamut::Srgb,
         Container::Tiff,
         Status::Ready(Encoding::SdrTiff),
     ),
@@ -1343,7 +1358,7 @@ mod tests {
     #[test]
     fn parse_is_case_insensitive_and_lists_every_value() {
         assert_eq!(parse::<Gamut>(" Display-P3 "), Ok(Gamut::DisplayP3));
-        let err = parse::<Gamut>("srgb").unwrap_err();
+        let err = parse::<Gamut>("rec709").unwrap_err();
         for v in Gamut::ALL {
             assert!(err.contains(v.name()), "{err}");
         }
@@ -1364,11 +1379,11 @@ mod tests {
             r#""film-master""#
         );
         assert!(serde_json::from_str::<OutputSection>(r#"{"display":{"depth":"u16"}}"#).is_err());
-        let err = serde_json::from_str::<OutputSection>(r#"{"display":{"gamut":"srgb"}}"#)
+        let err = serde_json::from_str::<OutputSection>(r#"{"display":{"gamut":"rec709"}}"#)
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("accepted: display-p3, adobe-rgb, bt2020"),
+            err.contains("accepted: display-p3, adobe-rgb, srgb, bt2020"),
             "{err}"
         );
     }

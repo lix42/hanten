@@ -1117,6 +1117,7 @@ class SpaceFromRecipe(unittest.TestCase):
             return {"recipe_version": 2, "output": {"display": full}}
         for axes, expected in (({}, "display-p3"),
                                ({"gamut": "adobe-rgb"}, "adobe-rgb"),
+                               ({"gamut": "srgb"}, "srgb"),
                                ({"range": "hdr", "transfer": "linear", "gamut": "bt2020"},
                                 "linear-bt2020"),
                                ({"range": "hdr", "transfer": "linear", "gamut": "display-p3"},

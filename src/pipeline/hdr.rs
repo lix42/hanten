@@ -261,6 +261,7 @@ fn linear_domain(gamut: DestinationGamut) -> &'static str {
     match gamut {
         DestinationGamut::DisplayP3 => "display-p3-linear-relative-to-203-nit-reference-white",
         DestinationGamut::AdobeRgb => "adobe-rgb-linear-relative-to-203-nit-reference-white",
+        DestinationGamut::Srgb => "srgb-linear-relative-to-203-nit-reference-white",
         DestinationGamut::Bt2020 => "bt2020-linear-relative-to-203-nit-reference-white",
     }
 }
