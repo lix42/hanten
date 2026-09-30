@@ -51,7 +51,9 @@ validates the body against `$defs/envelope` (400 on failure; an event without a 
 `event_id` fails it, since a rejection must name one), then each event against
 `$defs/event`, rejecting only the bad ones. An event breaking several rules
 gets the first of `unsupported_version`, `out_of_range`, `invalid_field`;
-`release_blocked` is judged only for an event that passes the schema. Only a
+`release_blocked` is judged only for an event that passes the schema, and only
+for a release the Worker blocks outright: an event from a release it does not yet
+know is accepted and held out of analysis, not rejected. Only a
 numeric `minimum`/`maximum` failure is `out_of_range`; a length, item-count or
 pattern failure is `invalid_field`.
 

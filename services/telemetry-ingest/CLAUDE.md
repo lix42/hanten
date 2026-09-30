@@ -13,5 +13,9 @@ Read `README.md` first. This file holds only what it does not.
 - **Never log a request, header or body**, and never add a column holding one: the
   privacy test dumps every table and fails on a canary. A new table must be added to
   its expected list.
-- **Every index costs a written row per insert and per delete**; update the README's
-  cost model when adding one.
+- **Every index and trigger costs a written row per insert and per delete**; update
+  the README's cost model when adding one.
+- **Migrations only add, and an applied one is never edited** (README): the deploy
+  applies them while the previous Worker is still serving.
+- **Simulate a D1 failure with a temporary trigger** (`RAISE(ABORT, …)`), never by
+  dropping and recreating a table: a copied `CREATE TABLE` drifts from the migration.

@@ -1,5 +1,5 @@
-// Post-deploy smoke test: exercises validation, D1 and the allowlist without
-// storing an event (a release no allowlist names is rejected before any insert).
+// Post-deploy smoke test. It stores nothing: it posts a release the migration
+// puts in blocked_releases, which is rejected before any insert.
 // Usage: node scripts/smoke.mjs https://hanten-telemetry.<subdomain>.workers.dev
 import { readFileSync } from "node:fs";
 
@@ -17,22 +17,26 @@ const event = {
 
 const post = (body) =>
   fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-const checks = [];
+let failed = false;
 const check = (name, ok, detail) => {
-  checks.push(ok);
+  failed ||= !ok;
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok ? "" : `: ${detail}`}`);
 };
 
-const blocked = await post({ upload_schema_version: 1, events: [event] });
-const reply = await blocked.json().catch(() => null);
-check(
-  "unlisted release is rejected, nothing stored",
-  blocked.status === 200 && reply?.rejected?.[0]?.code === "release_blocked" && reply.accepted.length === 0,
-  `${blocked.status} ${JSON.stringify(reply)}`,
-);
+const res = await post({ upload_schema_version: 1, events: [event] });
+const reply = await res.json().catch(() => null);
+if (res.status === 503 && reply?.error === "ingestion_disabled") {
+  console.log("note ingestion is disabled (kill switch); the D1 path was not exercised");
+} else {
+  check(
+    "a blocked release is rejected, nothing stored",
+    res.status === 200 && reply?.rejected?.[0]?.code === "release_blocked" && reply.accepted.length === 0,
+    `${res.status} ${JSON.stringify(reply)}`,
+  );
+}
 const malformed = await post({ upload_schema_version: 2, events: [] });
-check("malformed envelope is 400", malformed.status === 400, malformed.status);
+check("a malformed envelope is 400", malformed.status === 400, malformed.status);
 const get = await fetch(url);
 check("GET is 405", get.status === 405, get.status);
 
-if (checks.includes(false)) process.exit(1);
+if (failed) process.exit(1);

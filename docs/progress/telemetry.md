@@ -62,8 +62,9 @@ What other epics need to know about `telemetry` (refreshed 2026-09-30):
   TypeScript on Cloudflare Workers + D1, its own `pnpm verify` gate and CI job, and a
   manual deploy workflow from `main`. It imports the contract's schema file and runs
   the whole corpus, so a contract change must pass both suites. Its README is the
-  runbook: kill switch and release allowlist are D1 rows, and **a release must be
-  added to `allowed_releases` before it ships**, or its events are rejected for good.
+  runbook: the kill switch and release lists are D1 rows. Add a release to
+  `allowed_releases` when it ships; until then its events are accepted but held in
+  quarantine, and `queries/promote_release.sql` moves them once it is listed.
 - **The upload contract is `contracts/telemetry/upload-v1/`** (`telemetry/upload-schema`):
   JSON Schema, a corpus Rust and the Worker both test against, and the README that is
   now the upload field manifest (the strategy's is history).
@@ -414,6 +415,41 @@ What shipped, and the parts the open tasks build on:
   (the corpus's 21 valid and 260 invalid requests through the Worker's real entry
   point, 26 behaviour tests, retention, queries); mutations removing the kill switch
   or the date rule fail them. Not yet verified: the live deploy and its smoke test.
+
+### 2026-09-30 — review round (`/code-review high`, two runs)
+- **Ceilings are now CHECK constraints** (`daily_limit` on `daily_usage`,
+  `storage_limit` on `storage`) raised inside the write batch, with the limits
+  written from the Worker's vars each time. The first version checked a snapshot
+  read before the batch, so concurrent requests from different IPs all passed; a
+  five-request concurrency test now holds the ceiling exactly. The read-time checks
+  stay as fast refusals only.
+- **Storage is a row count, not `meta.size_after`.** D1 does not shrink its file when
+  retention deletes, so a size ceiling, once reached, would stay tripped; the size
+  field is also not guaranteed. `MAX_STORED_EVENTS` (1.75 M ≈ 2 GB) is kept by
+  triggers on both tables. Gotcha: D1's `meta.changes` counts trigger writes too, so
+  retention counts deleted rows with `RETURNING`.
+- **Cohort counts come from a trigger on `events`**, so a resent duplicate no longer
+  uses up a cohort's day. The daily cost counters still count every event received,
+  deliberately: those requests are what is billed.
+- **Unknown releases are quarantined (`release`), not rejected;** `release_blocked`
+  is now for `blocked_releases` only (user decision). A release allowlisted late
+  loses nothing: `queries/promote_release.sql` moves its events. The smoke test
+  posts `0.0.0-smoke`, which the migration blocks, so it still stores nothing.
+- **Deploy workflow:** `shell: bash` (pipefail) so a failed `wrangler deploy | tee`
+  fails the step; the dry run is a separate job with no environment and no
+  credentials; the credentials reach only the Cloudflare steps; the account is
+  checked by finding the configured D1 database id; the kill switch goes to the job
+  summary; a failed smoke test rolls the Worker back. Migrations must only add, as
+  they apply while the previous Worker still serves.
+- **Smaller:** any unexpected throw (a binding, a client disconnect) answers 503
+  instead of 500; the supported source version is read from the schema; the state
+  read looks up only the batch's releases; `limits.cpu_ms` 200 → 100 to keep the
+  worst case under $9 with the trigger writes; tests inject a D1 failure with a
+  temporary `RAISE(ABORT)` trigger instead of copying a `CREATE TABLE`.
+- `0001_init.sql` was edited in place: nothing had applied it yet.
+- **Verified:** `pnpm verify`, 322 tests; mutations loosening either CHECK fail the
+  concurrency and storage tests. Measured: an analysed insert writes 5 rows, a
+  quarantined one 3; a delete measured 2 locally, modelled as 4.
 
 ## upload
 **Status:** not started

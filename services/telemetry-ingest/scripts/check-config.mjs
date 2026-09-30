@@ -31,7 +31,7 @@ expect(config.observability?.logs?.enabled === false, "observability.logs.enable
 expect(config.observability?.logs?.invocation_logs === false, "observability.logs.invocation_logs must be false");
 expect(config.logpush === false, "logpush must be false");
 expect(config.preview_urls === false, "preview_urls must be false");
-expect(config.limits?.cpu_ms > 0 && config.limits.cpu_ms <= 200, "limits.cpu_ms must be in (0, 200]");
+expect(config.limits?.cpu_ms > 0 && config.limits.cpu_ms <= 100, "limits.cpu_ms must be in (0, 100]");
 
 const d1 = config.d1_databases ?? [];
 expect(
@@ -54,7 +54,7 @@ const MAXIMA = {
   MAX_EVENTS_PER_DAY: 20_000,
   MAX_BYTES_PER_DAY: 50_000_000,
   MAX_COHORT_EVENTS_PER_DAY: 20_000,
-  MAX_DB_BYTES: 2_000_000_000,
+  MAX_STORED_EVENTS: 1_750_000,
   RETENTION_DELETE_ROWS_PER_RUN: 200_000,
 };
 const vars = config.vars ?? {};

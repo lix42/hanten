@@ -1,8 +1,13 @@
 name: Deploy telemetry ingestion
 
-# Manual only: deploys services/telemetry-ingest to Cloudflare from main, applies
-# pending D1 migrations first, then smoke-tests the live endpoint. A dry run
-# builds the bundle without touching the account and may run from any branch.
+# Manual only. A real deploy runs from main: it checks the target account,
+# applies pending D1 migrations, deploys, smoke-tests the live endpoint and rolls
+# the Worker back if the smoke test fails. A dry run builds the bundle with no
+# environment and no credentials, so it may run from any branch.
+#
+# Keep CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID as secrets of the
+# telemetry-production environment, restricted to main, so no other branch can
+# read them.
 on:
   workflow_dispatch:
     inputs:
@@ -18,54 +23,81 @@ concurrency:
   group: telemetry-deploy
   cancel-in-progress: false
 
+env:
+  WRANGLER_SEND_METRICS: "false"
+
 jobs:
+  dry-run:
+    name: dry run
+    if: ${{ inputs.dry_run }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: services/telemetry-ingest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: corepack enable pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm exec wrangler deploy --dry-run --outdir dist
+
   deploy:
-    name: deploy (${{ inputs.dry_run && 'dry run' || 'production' }})
+    name: deploy (production)
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: telemetry-production
     defaults:
       run:
+        # bash here means -eo pipefail: a failed command in a pipe fails the step.
+        shell: bash
         working-directory: services/telemetry-ingest
-    env:
-      WRANGLER_SEND_METRICS: "false"
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
-      - name: Refuse a real deploy from anything but main
-        if: ${{ !inputs.dry_run && github.ref != 'refs/heads/main' }}
+      - name: Refuse a deploy from anything but main
+        if: ${{ github.ref != 'refs/heads/main' }}
         working-directory: .
         run: |
           echo "::error::Deploy from main only (got ${GITHUB_REF}); use dry_run to test a branch."
           exit 1
 
       - uses: actions/checkout@v6
-
       - uses: actions/setup-node@v6
         with:
           node-version: 24
+      - run: corepack enable pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
 
-      - name: Enable pnpm
-        run: corepack enable pnpm
+      # The credentials reach only the steps below that talk to Cloudflare.
+      - name: Check the target account
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/remote.mjs account
 
-      - name: Install
-        run: pnpm install --frozen-lockfile
-
-      - name: Check (format, types, deploy contract)
-        run: pnpm check
-
-      - name: Test
-        run: pnpm test
-
-      - name: Dry run
-        if: ${{ inputs.dry_run }}
-        run: pnpm exec wrangler deploy --dry-run --outdir dist
-
+      # Migrations only add (README): the Worker still serving keeps working.
       - name: Apply D1 migrations
-        if: ${{ !inputs.dry_run }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm exec wrangler d1 migrations apply hanten-telemetry --remote
 
+      - name: Report the kill switch
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/remote.mjs state | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Deploy
-        if: ${{ !inputs.dry_run }}
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           pnpm exec wrangler deploy | tee deploy.log
           url=$(grep -oE 'https://hanten-telemetry\.[a-z0-9-]+\.workers\.dev' deploy.log | head -n1)
@@ -74,5 +106,13 @@ jobs:
           echo "Deployed to $url/v1/events" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Smoke test
-        if: ${{ !inputs.dry_run }}
         run: pnpm smoke "$WORKER_URL"
+
+      - name: Roll back a Worker that failed its smoke test
+        if: ${{ failure() && steps.deploy.outcome == 'success' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          pnpm exec wrangler rollback --message "smoke test failed (run ${GITHUB_RUN_ID})" --yes \
+            || echo "::warning::no earlier version to roll back to (first deploy?)"

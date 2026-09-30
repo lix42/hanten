@@ -19,8 +19,16 @@ const event = validator("event", true);
 const eventAllErrors = validator("event", false);
 const response = validator("response", true);
 
-/** Local schema versions this Worker accepts (`source_schema_version`). */
-export const SUPPORTED_SOURCE_VERSIONS: readonly number[] = [11];
+/** Local schema versions this Worker accepts, read from the schema's `source_schema_version`. */
+export const SUPPORTED_SOURCE_VERSIONS: readonly number[] = supportedVersions();
+
+function supportedVersions(): number[] {
+  const rule = (schemaJson as { $defs: { event: { properties: { source_schema_version: unknown } } } }).$defs.event
+    .properties.source_schema_version as { const?: number; enum?: number[] };
+  const versions = rule.enum ?? (rule.const === undefined ? [] : [rule.const]);
+  if (versions.length === 0) throw new Error("the schema names no source_schema_version");
+  return versions;
+}
 
 /** The body cap; a larger body is a malformed request. */
 export const MAX_BODY_BYTES = 262_144;

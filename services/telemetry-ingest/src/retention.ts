@@ -15,12 +15,14 @@ export async function expire(env: Env, nowMs: number): Promise<{ deleted: number
       const n = Math.min(CHUNK, cfg.retentionDeleteRowsPerRun - deleted);
       const r = await env.DB.prepare(
         `DELETE FROM ${table} WHERE event_id IN
-           (SELECT event_id FROM ${table} WHERE received_day < ?1 LIMIT ?2)`,
+           (SELECT event_id FROM ${table} WHERE received_day < ?1 LIMIT ?2)
+         RETURNING event_id`,
       )
         .bind(cutoff, n)
-        .run();
-      deleted += r.meta.changes;
-      if (r.meta.changes < n) break;
+        .all();
+      // Counted from RETURNING: meta.changes also counts the storage trigger's writes.
+      deleted += r.results.length;
+      if (r.results.length < n) break;
     }
   }
   await env.DB.batch([

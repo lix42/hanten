@@ -73,9 +73,16 @@ export async function reset(): Promise<void> {
       "DELETE FROM cohort_usage",
       "DELETE FROM allowed_releases",
       "INSERT INTO allowed_releases (nc_version) VALUES ('0.1.0')",
+      "DELETE FROM blocked_releases",
+      "INSERT INTO blocked_releases (nc_version) VALUES ('0.0.0-smoke')",
       "UPDATE control SET value = '1' WHERE key = 'ingest_enabled'",
     ].map((s) => env.DB.prepare(s)),
   );
+}
+
+/** Rows held in events + quarantine, as the storage ceiling counts them. */
+export async function stored(): Promise<number> {
+  return (await env.DB.prepare("SELECT events FROM storage").first<{ events: number }>())!.events;
 }
 
 export async function count(table: string): Promise<number> {

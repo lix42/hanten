@@ -5,7 +5,7 @@ export interface Limits {
   maxEventsPerDay: number;
   maxBytesPerDay: number;
   maxCohortEventsPerDay: number;
-  maxDbBytes: number;
+  maxStoredEvents: number;
   retentionDays: number;
   retentionDeleteRowsPerRun: number;
 }
@@ -15,7 +15,7 @@ export function limits(env: Env): Limits {
     maxEventsPerDay: positive(env.MAX_EVENTS_PER_DAY, "MAX_EVENTS_PER_DAY"),
     maxBytesPerDay: positive(env.MAX_BYTES_PER_DAY, "MAX_BYTES_PER_DAY"),
     maxCohortEventsPerDay: positive(env.MAX_COHORT_EVENTS_PER_DAY, "MAX_COHORT_EVENTS_PER_DAY"),
-    maxDbBytes: positive(env.MAX_DB_BYTES, "MAX_DB_BYTES"),
+    maxStoredEvents: positive(env.MAX_STORED_EVENTS, "MAX_STORED_EVENTS"),
     retentionDays: positive(env.RETENTION_DAYS, "RETENTION_DAYS"),
     retentionDeleteRowsPerRun: positive(env.RETENTION_DELETE_ROWS_PER_RUN, "RETENTION_DELETE_ROWS_PER_RUN"),
   };

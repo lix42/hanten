@@ -11,8 +11,8 @@ The service contract is fixed by
 
 **Amended 2026-09-30** (user): v1 runs on the owner's existing Workers Paid
 account, not a dedicated FREE-plan one; cost is bounded by the Worker's own
-ceilings and the $10/month approval gate stays. The free-plan and no-payment-method
-requirements below are withdrawn. Deploys run from a manual GitHub Actions workflow.
+ceilings and the $10/month approval gate stays. The requirements below are
+rewritten to match. Deploys run from a manual GitHub Actions workflow.
 
 **Status 2026-09-30:** built in `services/telemetry-ingest/` (see
 `progress/telemetry.md`); remaining is the first deploy from `main` and its smoke
@@ -49,18 +49,16 @@ public client or prove genuine nc provenance. Enforce a release/version
 allowlist, quarantine anomalous or suspicious-volume cohorts outside analytical
 tables, and provide an operational ingestion kill switch. Do not embed a client
 secret. Telemetry is fail-soft, so service unavailability, kill switch, or a
-free-tier limit never affects an nc command.
+ceiling never affects an nc command.
 
-Deploy v1 only in a dedicated Cloudflare FREE-plan account/project with no
-payment method or billing-enabled resource. Check in a cost model covering
-bytes/event, requests and rows/day, D1 writes including indexes and retention
-deletes, reads/query, and rolling 180-day storage at low/expected/worst accepted
-volume. Enforce application daily event/byte/write/storage ceilings below
-platform free limits. Quota exhaustion rejects fail closed with 429/503; clients
-retain then locally expire data. Deployment must assert the expected account,
-plan, bindings, quotas, logging state, kill switch, and absence of paid
-resources. Any paid migration or possible spend above $10/month requires
-explicit user approval first.
+Deploy v1 on the owner's paid Cloudflare account (amended above). Check in a
+cost model covering bytes/event, requests and rows/day, D1 writes including
+indexes and retention deletes, reads/query, and rolling 180-day storage at
+low/expected/worst accepted volume. Enforce application ceilings that bound the
+worst case. Quota exhaustion rejects fail closed with 429/503; clients retain
+then locally expire data. Deployment must assert the expected account, bindings,
+quotas, logging state and kill switch. Any change whose worst case can pass
+$10/month requires explicit user approval first.
 
 Provide checked-in deployment/configuration, D1 migrations, a local Worker/D1
 test path, retention job, and documented SQL for the initial questions:
@@ -85,9 +83,9 @@ encoding, platform, CPU/image/input-size cohorts.
 - Limit/load tests hit request, event, byte, D1-write, storage, and
   retention-delete ceilings and prove fail-closed rejection without paid
   overflow.
-- Deployment documentation includes the hard free-plan boundary, cost model,
-  explicit approval gate for paid migration, schema migration/rollback, and
-  endpoint configuration for the client.
+- Deployment documentation includes the cost model and its ceilings, the
+  $10/month approval gate, schema migration/rollback, and endpoint configuration
+  for the client.
 
 ## Dependencies
 

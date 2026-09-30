@@ -57,6 +57,7 @@ beforeEach(async () => {
       panic(12, "nc::pipeline::look"),
       // Quarantined: never counted.
       failure(13, "decode", "decode", 3, { event_day: 0 }),
+      success(14, 50, { nc_version: "7.7.7" }),
     ]),
   );
   expect(r.status).toBe(200);
@@ -121,10 +122,14 @@ it("operations: volume against the ceilings and the quarantine", async () => {
     {
       day: DAY,
       requests: 1,
-      events: 13,
+      events: 14,
       bytes: expect.any(Number),
+      max_events: 20_000,
+      max_bytes: 50_000_000,
       quarantined_event_day: 1,
+      quarantined_release: 1,
       quarantined_cohort_volume: 0,
+      stored_events: 14,
     },
   ]);
 });

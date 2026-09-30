@@ -1,6 +1,5 @@
 // POST /v1/events. Status codes: 200 with per-event results; 400 for a malformed
-// request (never retried); 429 and 503 for retryable refusals — rate limit, a
-// daily ceiling, the kill switch, full storage or a D1 failure.
+// request (never retried); 429 and 503 for retryable refusals (README).
 import { MAX_BODY_BYTES, isValidEnvelope, judgeEvent, type RejectionCode, type UploadEvent } from "./contract";
 import { dayOf, limits, MS_PER_DAY, type Limits } from "./config";
 
@@ -11,15 +10,25 @@ interface Rejection {
 
 interface State {
   enabled: boolean;
-  releases: Set<string>;
+  allowed: Set<string>;
+  blocked: Set<string>;
   usage: { events: number; bytes: number };
   cohorts: Map<string, number>;
-  dbBytes: number;
+  stored: number;
 }
 
 type Route = { event: UploadEvent; table: "events" } | { event: UploadEvent; table: "quarantine"; reason: string };
 
+/** Never throws: anything unexpected is a retryable 503. */
 export async function handleEvents(request: Request, env: Env, nowMs: number): Promise<Response> {
+  try {
+    return await ingest(request, env, nowMs);
+  } catch {
+    return refuse(503, "unavailable", 60);
+  }
+}
+
+async function ingest(request: Request, env: Env, nowMs: number): Promise<Response> {
   const key = request.headers.get("cf-connecting-ip") ?? "unknown";
   if (!(await env.RATE_LIMITER.limit({ key })).success) return refuse(429, "rate_limited", 60);
 
@@ -33,62 +42,54 @@ export async function handleEvents(request: Request, env: Env, nowMs: number): P
   }
   if (!isValidEnvelope(body)) return refuse(400, "invalid_envelope");
 
-  let cfg: Limits;
-  let state: State;
+  const cfg = limits(env);
   const today = dayOf(nowMs);
-  try {
-    cfg = limits(env);
-    state = await readState(env.DB, today);
-  } catch {
-    return refuse(503, "unavailable", 60);
-  }
   const untilTomorrow = Math.ceil(((today + 1) * MS_PER_DAY - nowMs) / 1000);
+  const events = body.events as UploadEvent[];
+  const state = await readState(env.DB, today, events);
+  // Fast refusals; the CHECK constraints in the write batch are the real bounds.
   if (!state.enabled) return refuse(503, "ingestion_disabled", 3600);
-  if (state.dbBytes > cfg.maxDbBytes) return refuse(503, "storage_full", 3600);
-  if (state.usage.events + body.events.length > cfg.maxEventsPerDay) {
-    return refuse(429, "daily_event_limit", untilTomorrow);
-  }
-  if (state.usage.bytes + bytes.byteLength > cfg.maxBytesPerDay) {
-    return refuse(429, "daily_byte_limit", untilTomorrow);
+  if (state.stored >= cfg.maxStoredEvents) return refuse(503, "storage_full", 3600);
+  if (
+    state.usage.events + events.length > cfg.maxEventsPerDay ||
+    state.usage.bytes + bytes.byteLength > cfg.maxBytesPerDay
+  ) {
+    return refuse(429, "daily_limit", untilTomorrow);
   }
 
   const rejected: Rejection[] = [];
   const routes: Route[] = [];
   const cohortAdds = new Map<string, number>();
-  for (const raw of body.events) {
-    const event = raw as UploadEvent;
-    const code = judgeEvent(event) ?? (state.releases.has(event.nc_version) ? null : "release_blocked");
-    if (code) {
-      rejected.push({ event_id: event.event_id, code });
-      continue;
-    }
-    routes.push(route(event, today, cfg, state.cohorts, cohortAdds));
+  for (const event of events) {
+    const code = judgeEvent(event) ?? (state.blocked.has(event.nc_version) ? "release_blocked" : null);
+    if (code) rejected.push({ event_id: event.event_id, code });
+    else routes.push(route(event, today, cfg, state, cohortAdds));
+  }
+
+  let results: D1Result[];
+  try {
+    results = await env.DB.batch([
+      env.DB.prepare(`UPDATE storage SET max_events = ?1 WHERE id = 1 AND max_events != ?1`).bind(cfg.maxStoredEvents),
+      env.DB.prepare(
+        `INSERT INTO daily_usage (day, requests, events, bytes, max_events, max_bytes)
+         VALUES (?1, 1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (day) DO UPDATE SET requests = requests + 1,
+           events = events + excluded.events, bytes = bytes + excluded.bytes,
+           max_events = excluded.max_events, max_bytes = excluded.max_bytes`,
+      ).bind(today, events.length, bytes.byteLength, cfg.maxEventsPerDay, cfg.maxBytesPerDay),
+      ...routes.map((r) => insert(env.DB, r, today)),
+    ]);
+  } catch (e) {
+    const message = String(e instanceof Error ? `${e.message} ${String(e.cause ?? "")}` : e);
+    if (message.includes("daily_limit")) return refuse(429, "daily_limit", untilTomorrow);
+    if (message.includes("storage_limit")) return refuse(503, "storage_full", 3600);
+    throw e;
   }
 
   const inserted = new Set<string>();
-  try {
-    const results = await env.DB.batch([
-      ...routes.map((r) => insert(env.DB, r, today)),
-      env.DB.prepare(
-        `INSERT INTO daily_usage (day, requests, events, bytes) VALUES (?1, 1, ?2, ?3)
-         ON CONFLICT (day) DO UPDATE SET requests = requests + 1,
-           events = events + excluded.events, bytes = bytes + excluded.bytes`,
-      ).bind(today, body.events.length, bytes.byteLength),
-      ...[...cohortAdds].map(([cohort, n]) => {
-        const [nc_version, os, arch] = cohort.split("\0");
-        return env.DB.prepare(
-          `INSERT INTO cohort_usage (day, nc_version, os, arch, events) VALUES (?1, ?2, ?3, ?4, ?5)
-           ON CONFLICT (day, nc_version, os, arch) DO UPDATE SET events = events + excluded.events`,
-        ).bind(today, nc_version, os, arch, n);
-      }),
-    ]);
-    for (const r of results.slice(0, routes.length)) {
-      for (const row of r.results as { event_id: string }[]) inserted.add(row.event_id);
-    }
-  } catch {
-    return refuse(503, "unavailable", 60);
+  for (const r of results.slice(2)) {
+    for (const row of r.results as { event_id: string }[]) inserted.add(row.event_id);
   }
-
   const accepted: string[] = [];
   const duplicate: string[] = [];
   for (const { event } of routes) (inserted.has(event.event_id) ? accepted : duplicate).push(event.event_id);
@@ -96,21 +97,17 @@ export async function handleEvents(request: Request, env: Env, nowMs: number): P
 }
 
 /**
- * Where an accepted event goes. Anomalous days and a cohort over its daily volume
- * are kept out of the analytical table; the client still sees them accepted.
+ * Where an accepted event goes. An anomalous day, a release not yet allowlisted,
+ * or a cohort past its daily volume is kept out of the analytical table; the
+ * client still sees the event accepted.
  */
-function route(
-  event: UploadEvent,
-  today: number,
-  cfg: Limits,
-  stored: Map<string, number>,
-  adds: Map<string, number>,
-): Route {
+function route(event: UploadEvent, today: number, cfg: Limits, state: State, adds: Map<string, number>): Route {
   if (event.event_day > today + 1 || event.event_day < today - cfg.retentionDays) {
     return { event, table: "quarantine", reason: "event_day" };
   }
+  if (!state.allowed.has(event.nc_version)) return { event, table: "quarantine", reason: "release" };
   const cohort = cohortKey(event.nc_version, event.platform.os, event.platform.arch);
-  const count = (stored.get(cohort) ?? 0) + (adds.get(cohort) ?? 0);
+  const count = (state.cohorts.get(cohort) ?? 0) + (adds.get(cohort) ?? 0);
   if (count >= cfg.maxCohortEventsPerDay) return { event, table: "quarantine", reason: "cohort_volume" };
   adds.set(cohort, (adds.get(cohort) ?? 0) + 1);
   return { event, table: "events" };
@@ -127,11 +124,11 @@ function insert(db: D1Database, r: Route, today: number): D1PreparedStatement {
   if (r.table === "quarantine") {
     return db
       .prepare(
-        `INSERT INTO quarantine (event_id, received_day, reason, payload)
-         SELECT ?1, ?2, ?3, ?4 WHERE NOT EXISTS (SELECT 1 FROM events WHERE event_id = ?1)
+        `INSERT INTO quarantine (event_id, received_day, reason, nc_version, payload)
+         SELECT ?1, ?2, ?3, ?4, ?5 WHERE NOT EXISTS (SELECT 1 FROM events WHERE event_id = ?1)
          ON CONFLICT (event_id) DO NOTHING RETURNING event_id`,
       )
-      .bind(e.event_id, today, r.reason, payload);
+      .bind(e.event_id, today, r.reason, e.nc_version, payload);
   }
   return db
     .prepare(
@@ -164,25 +161,41 @@ function insert(db: D1Database, r: Route, today: number): D1PreparedStatement {
     );
 }
 
-async function readState(db: D1Database, today: number): Promise<State> {
-  const [control, releases, usage, cohorts] = await db.batch([
+/** One read batch, limited to the releases the request names. */
+async function readState(db: D1Database, today: number, events: UploadEvent[]): Promise<State> {
+  // Unvalidated events may lack a string nc_version; they never reach a lookup.
+  const versions = JSON.stringify([...new Set(events.map((e) => e.nc_version).filter((v) => typeof v === "string"))]);
+  const [control, allowed, blocked, usage, cohorts, storage] = await db.batch([
     db.prepare(`SELECT value FROM control WHERE key = 'ingest_enabled'`),
-    db.prepare(`SELECT nc_version FROM allowed_releases`),
+    db
+      .prepare(`SELECT nc_version FROM allowed_releases WHERE nc_version IN (SELECT value FROM json_each(?1))`)
+      .bind(versions),
+    db
+      .prepare(`SELECT nc_version FROM blocked_releases WHERE nc_version IN (SELECT value FROM json_each(?1))`)
+      .bind(versions),
     db.prepare(`SELECT events, bytes FROM daily_usage WHERE day = ?1`).bind(today),
-    db.prepare(`SELECT nc_version, os, arch, events FROM cohort_usage WHERE day = ?1`).bind(today),
+    db
+      .prepare(
+        `SELECT nc_version, os, arch, events FROM cohort_usage
+         WHERE day = ?1 AND nc_version IN (SELECT value FROM json_each(?2))`,
+      )
+      .bind(today, versions),
+    db.prepare(`SELECT events FROM storage WHERE id = 1`),
   ]);
-  const u = (usage!.results as { events: number; bytes: number }[])[0];
+  const rows = <T>(r: D1Result | undefined) => (r?.results ?? []) as T[];
+  const u = rows<{ events: number; bytes: number }>(usage)[0];
   return {
-    enabled: (control!.results as { value: string }[])[0]?.value === "1",
-    releases: new Set((releases!.results as { nc_version: string }[]).map((r) => r.nc_version)),
+    enabled: rows<{ value: string }>(control)[0]?.value === "1",
+    allowed: new Set(rows<{ nc_version: string }>(allowed).map((r) => r.nc_version)),
+    blocked: new Set(rows<{ nc_version: string }>(blocked).map((r) => r.nc_version)),
     usage: { events: u?.events ?? 0, bytes: u?.bytes ?? 0 },
     cohorts: new Map(
-      (cohorts!.results as { nc_version: string; os: string; arch: string; events: number }[]).map((r) => [
+      rows<{ nc_version: string; os: string; arch: string; events: number }>(cohorts).map((r) => [
         cohortKey(r.nc_version, r.os, r.arch),
         r.events,
       ]),
     ),
-    dbBytes: control!.meta.size_after,
+    stored: rows<{ events: number }>(storage)[0]!.events,
   };
 }
 
