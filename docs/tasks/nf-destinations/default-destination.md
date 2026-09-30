@@ -45,6 +45,13 @@ Open:
   to the HDR float TIFF, `default` keeps SDR Display P3). What this task moves is
   `default`'s.
 
+- **2026-09-29: closed as absorbed by `nf-core/default-flip`.** That task set the
+  default to the new chain's axis defaults, so `pipeline_version` 8 moved chain and
+  container together — once, in one bump — from the `gain-map-hdr` JPEG to the SDR
+  Display P3 16-bit TIFF, with its before/after report
+  ([`docs/reports/default-flip.md`](../../reports/default-flip.md)). That is the
+  decided product shape, so there is nothing left to move.
+
 ## How to Verify
 
 - A bare `hanten convert` resolves the intended destination with no output-selection

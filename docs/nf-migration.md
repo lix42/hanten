@@ -51,8 +51,9 @@ authoritative for status and dependencies.
   gained white balance and exposure (`nf-scene-correction/stage`) and fit range its
   reinhard operator (`nf-display-stages/fit-range`), and the look highlight
   desaturation (`nf-look/path-to-white`, on by default). The availability refusals went live before the render did.
-- **The container default is untouched by all of this**, so it moves once, when
-  `nf-destinations/default-destination` says so.
+- **The container default moved once**, with the chain: `nf-core/default-flip`
+  (`pipeline_version` 8) took it from the `gain-map-hdr` JPEG to the SDR Display P3
+  16-bit TIFF, which closed `nf-destinations/default-destination`.
 - **New stages are written fresh.** See CLAUDE.md's migration rule: structure for
   the long term beats reusing the old seams, and retiring an old path is a list of
   abilities the new code may need, not a capability loss.

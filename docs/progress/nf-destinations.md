@@ -56,6 +56,9 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   design-update Part 2, "Keeping `direct` current"). A knob a rendering sets is unset
   (`null`) in the recipe until stated, so a new rendering-dependent knob needs a base in
   both.
+- **The default destination is settled** (`default-destination`, absorbed by
+  `nf-core/default-flip` at v8): `default` resolves the SDR Display P3 16-bit TIFF,
+  `direct` the Adobe RGB float TIFF. Moving `default`'s is a `pipeline_version` bump.
 
 ## preset-set
 
@@ -227,10 +230,22 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
 
 ## default-destination
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-29
 
 - 2026-09-19: created with the new-flow plan. Goal: which destination the default resolves.
+- 2026-09-29: **done, absorbed by `nf-core/default-flip`** (agreed with the user). That
+  task took the new chain's axis defaults as the default destination, so
+  `pipeline_version` 8 moved chain and container in one bump — the `gain-map-hdr` JPEG
+  to the SDR Display P3 16-bit TIFF — with its before/after report
+  (`docs/reports/default-flip.md`). The open "once or twice?" is answered: once.
+  Verified on this base (`e40e06f`) with the binary: a `convert` stating only a film
+  base writes `.tiff` and reports `{sdr, native, display-p3, tiff}`; `hanten roll`'s
+  `<stem>_positive.tiff` naming is pinned by
+  `roll_converts_a_batch_from_a_shared_frozen_recipe`; `docs/using-nc.md` §8 already
+  states it. No bump and no fingerprint row: the default did not move. Found stale and
+  handed to `nf-docs/design-spec`: `design-spec.md` §5 (and the §12 roadmap) still
+  describes `--output-preset` with a `gain-map-hdr` default.
 
 ## gain-map-destination
 

@@ -28,6 +28,10 @@ the destination.
   `linear_range`, "Print / tone render", "Removed `simple` controls", the `film-master`
   bullet's print controls, and the §8 example invocations (`--auto-wb`,
   `print.print_exposure`). Their keys are named in `recipe::SECTIONS_WITH_NO_COUNTERPART`.
+- **§5 still describes the preset world** (found closing
+  `nf-destinations/default-destination`, 2026-09-29): `--output-preset` with a
+  `gain-map-hdr` default, and the §12 roadmap entries around it. Since v8 a destination
+  is the four axes or `--film-master`, and the default is the SDR Display P3 TIFF.
 - Can run at any point, and earlier is better: a spec that still describes the
   preset-dispatch chain makes every reader re-derive the design from a changelog.
 
