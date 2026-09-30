@@ -34,7 +34,8 @@ the film base renders, so judge any white placement with it at its default. Impl
 `roll-white-rule`: `hanten measure-roll` reports the white and the `look.contrast` placing
 it, measured over the shared effective area in film RGB before the working-space matrix;
 a white target 0.15–0.31 stop above diffuse white was reviewed and not adopted. The warning's margin is
-`saturation-margin`. Every round was judged on SDR; the values stay provisional until
+`saturation-margin`, which waits on the calibration shoot's +3/+4 frames: a leader can sit
+below the film's shoulder and varies by roll, not stock (2026-09-29). Every round was judged on SDR; the values stay provisional until
 `white-rule-hdr` reviews the HDR rendition. Fit range stays reinhard
 (`nf-display-stages/parametric-shoulder`), so the rule's cap and floor stand as chosen. Ranked rule > fixed anchor > content white with solved contrast
 (noise up to 5.4× the scan's floor) > level move (mid-grey up to L\* 82). Levels here
@@ -384,11 +385,49 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## saturation-margin
 
-**Status:** not started
-**Updated:** 2026-09-25
+**Status:** not started — waits on `analysis/calibration-frame-capture`
+**Updated:** 2026-09-29
 
 - 2026-09-25: filed from `anchor-comparison`. Goal: the leader margin the saturation
   warning keys on, and whether frames near saturation need their own treatment.
+- 2026-09-29: **measured; the value waits on over-exposed frames** (user). `measure-roll
+  --unexposed … --leader …` on all ten rolls (default area, so distances differ from
+  `roll-white-rule`'s table by the area rule). Leader in scene stops above mid-grey
+  (`log2(film_peak / 0.18)`), frames within 0.5 stop of it:
+
+  | roll | leader | within 0.5 |
+  |---|---|---|
+  | 07-15 Ektar100 | +3.74 | — |
+  | 07-23 Portra160 | +4.72 | 1121 (0.22) |
+  | 07-24 Gold200 | +3.53 | 1151 (0.38) |
+  | 09-09 Ektar100 | +3.43 | 1635 (0.10) |
+  | 09-11 Portra400 | +4.03 | — |
+  | 09-13 Portra400 | +3.83 | — |
+  | 09-14 Ektar100 | +3.09 | — (1737 0.53) |
+  | 09-18 Gold200 | +2.39 | 1816 (0.29), 1815 (0.34) |
+  | 09-20 Portra400 | +5.11 | — |
+  | 09-28 Portra400 dark | +5.65 | — |
+
+  - **The leader is no stock constant**: Gold200 +3.53 / +2.39, Portra400 +3.83–+5.65.
+    "Gold200's leader sits ~1.5 stops above content" was 09-18 alone, the lowest leader
+    of the ten. A margin per stock is unsupported (and `measure-roll` has no stock).
+    `film-base/dmax-anchor-reliability` found the same: two rolls of one stock 0.295
+    density apart at the leader.
+  - **Leaders sit below the datasheet shoulders on several rolls.** Red shoulder onset
+    (local slope under 0.8× the mid slope, `src/film_stock/curves.json`, log-exposure
+    stops above the mid aim): Gold200 +3.9 (green/blue +4.5), Portra160 +4.6, Ektar100
+    +5.3, Portra400 none to +6.9. Scanner density is uncalibrated against the sheets, so
+    these are rough. A leader marks the light it got, not film saturation; 1816's warning
+    comes from 09-18's low leader.
+  - **Absolute white separates the verdicts; leader distance does not.** Whites above
+    +2.5: 1121 +4.51 (overexposed), 1635 +3.33 (unjudged, edge content), 1868 +3.26
+    (bright scene), 1151 +3.15 (ambiguous), 2011 +2.59, 1737 +2.56. 1816 (not
+    overexposed) is +2.10. By distance, 1816 sits between 1121 and 1151.
+  - Decisions (user): the task depends on `analysis/calibration-frame-capture`, whose
+    bracket gains +3/+4 frames (at +2 the white patch lands near +4.3, 1121's level); the
+    bracket tests both references (leader distance vs an absolute white level); the
+    treatment stays **the warning only**, a follow-up only if the clamp proves
+    insufficient. `SATURATION_MARGIN_STOPS` stays 0.5.
 
 ## no-roll-defaults
 

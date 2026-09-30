@@ -880,6 +880,9 @@ What other epics need to know about `analysis`:
   serves all three consumers or each wants its own read.
 - 2026-09-29: marked **blocked** (user). Not executable until the user unblocks it, even
   though its dependencies are done.
+- 2026-09-29: `nf-calibration/saturation-margin` now depends on this task (user), and the
+  protocol's bracket gains **+3 and +4**, one roll Gold200: the rolls hold a single
+  overexposed frame, and the margin needs whites past the film's shoulder.
 
 ## review-reference-cells
 
