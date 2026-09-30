@@ -1302,6 +1302,7 @@ DESTINATION_SPACES: dict[tuple[str, str], str] = {
     ("srgb", "native"): "srgb",
     ("display-p3", "linear"): "linear-display-p3",
     ("adobe-rgb", "linear"): "linear-adobe-rgb",
+    ("srgb", "linear"): "linear-srgb",
     ("bt2020", "linear"): "linear-bt2020",
 }
 

@@ -11039,6 +11039,12 @@ fn every_destination_renders_end_to_end() {
             Some("hdr_linear_tiff"),
         ),
         (
+            vec!["--transfer", "linear", "--gamut", "srgb"],
+            "tiff",
+            "tiff",
+            Some("hdr_linear_tiff"),
+        ),
+        (
             vec!["--transfer", "pq"],
             "tiff",
             "tiff",
@@ -11063,6 +11069,12 @@ fn every_destination_renders_end_to_end() {
             Some("avif"),
         ),
         (vec!["--range", "hdr"], "jpeg", "jpg", None),
+        (
+            vec!["--range", "hdr", "--gamut", "srgb"],
+            "jpeg",
+            "jpg",
+            None,
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -11087,10 +11099,8 @@ fn every_destination_renders_end_to_end() {
         assert_eq!(nf["peak_clamp"].is_object(), hdr, "{extra:?}: {nf}");
         let gain_map = axes["container"] == "jpeg";
         assert_eq!(nf["gain_map"].is_object(), gain_map, "{extra:?}: {nf}");
-        if hdr && axes["transfer"] != "linear" {
-            // Coded HDR is BT.2020; the gain map shares its SDR base's.
-            let gamut = if gain_map { "display-p3" } else { "bt2020" };
-            assert_eq!(axes["gamut"], gamut, "{extra:?}");
+        if hdr && axes["transfer"] != "linear" && !gain_map {
+            assert_eq!(axes["gamut"], "bt2020", "{extra:?}: coded HDR is BT.2020");
         }
         if let Some(block) = block {
             assert!(report[block].is_object(), "{extra:?}: no `{block}` block");
@@ -11108,6 +11118,7 @@ fn a_linear_tiff_names_its_gamut_and_keeps_values_above_white() {
     for (gamut, description) in [
         ("display-p3", "NC Display-Linear Display P3 (D65)"),
         ("adobe-rgb", "NC Display-Linear Adobe RGB (D65)"),
+        ("srgb", "NC Display-Linear sRGB (D65)"),
         ("bt2020", "NC Display-Linear BT.2020 (D65)"),
     ] {
         let stem = tmp.path(gamut);
@@ -11532,21 +11543,26 @@ fn a_destination_the_table_lacks_is_refused_with_a_remedy_that_works() {
     // A linear TIFF is written in several gamuts, so the default one is not taken.
     let (code, _, err) = convert_48bit(&tmp.path("b2"), &["--transfer", "linear"]);
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("--gamut display-p3|adobe-rgb|bt2020"), "{err}");
+    assert!(
+        err.contains("--gamut display-p3|adobe-rgb|srgb|bt2020"),
+        "{err}"
+    );
     // A planned row names its task and what is ready now, as the fewest flags to add
     // to what was stated — and following that remedy converts.
     let (code, _, err) = convert_48bit(&tmp.path("c"), &["--container", "jpeg"]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("output/sdr-jpeg-preset"), "{err}");
     assert!(
-        err.contains("adding to what is stated: --range hdr "),
+        err.contains("adding to what is stated: --range hdr; --gamut srgb "),
         "{err}"
     );
-    let (code, _, err) = convert_48bit(
-        &tmp.path("c2.jpg"),
-        &["--container", "jpeg", "--range", "hdr"],
-    );
-    assert_eq!(code, 0, "{err}");
+    for (i, add) in [["--range", "hdr"], ["--gamut", "srgb"]].iter().enumerate() {
+        let (code, _, err) = convert_48bit(
+            &tmp.path(&format!("c{i}.jpg")),
+            &[&["--container", "jpeg"][..], &add[..]].concat(),
+        );
+        assert_eq!(code, 0, "{add:?}: {err}");
+    }
     // A stated suffix the destination does not write is refused, naming it.
     let (code, _, err) = convert_48bit(
         &tmp.path("e.tiff"),
@@ -11600,18 +11616,24 @@ fn a_suffix_refusal_offers_only_a_destination_that_writes_it() {
         );
         assert_eq!(code, 0, "following `{offer}` must convert: {err}");
     }
-    // The one ready JPEG is the gain map, offered beside dropping the suffix, and the
+    // The ready JPEGs are the gain maps, offered beside dropping the suffix, and each
     // offer converts as written.
     let (code, _, err) = convert_48bit(&tmp.path("b.jpg"), &[]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("drop .jpg"), "{err}");
-    let (_, offer) = err
+    let (_, offers) = err
         .split_once("state a destination that writes it: ")
         .unwrap_or_else(|| panic!("no offer: {err}"));
-    assert_eq!(offer.trim(), "--range hdr --container jpeg", "{err}");
-    let flags: Vec<&str> = offer.split_whitespace().collect();
-    let (code, _, err) = convert_48bit(&tmp.path("b.jpg"), &flags);
-    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        offers.trim(),
+        "--range hdr --container jpeg; --gamut srgb --container jpeg",
+        "{err}"
+    );
+    for offer in offers.trim().split("; ") {
+        let flags: Vec<&str> = offer.split_whitespace().collect();
+        let (code, _, err) = convert_48bit(&tmp.path("b.jpg"), &flags);
+        assert_eq!(code, 0, "following `{offer}` must convert: {err}");
+    }
 
     // A roll frame's explicit path is refused naming recipe keys: a roll takes no
     // conversion flags.

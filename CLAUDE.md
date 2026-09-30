@@ -116,9 +116,9 @@ decode → film-base → algo::fixed decode → NC film RGB v1 → linear ACEScg
   ├ --film-master → encode (unclamped f32 ACEScg TIFF, no rendering stage)
   └ scene_correction → look → fit_range → fit_gamut → destination encode
       ├ SDR (default)  → Display P3, Adobe RGB or sRGB → 16-bit TIFF
-      ├ HDR linear     → Display P3, Adobe RGB or BT.2020, no transfer → 32-bit float TIFF
+      ├ HDR linear     → Display P3, Adobe RGB, sRGB or BT.2020, no transfer → 32-bit float TIFF
       ├ HDR PQ / HLG   → Rec.2100 → full-range 16-bit TIFF, or 10-bit 4:4:4 AVIF
-      └ HDR gain map   → SDR base + HDR rendition → ISO 21496-1 gain-map JPEG
+      └ HDR gain map   → Display P3 or sRGB base + HDR rendition → ISO 21496-1 gain-map JPEG
 ```
 
 A destination is four axes (`--range`, `--transfer`, `--gamut`, `--container`) or

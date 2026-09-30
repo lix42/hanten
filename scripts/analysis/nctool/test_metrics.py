@@ -1123,7 +1123,9 @@ class SpaceFromRecipe(unittest.TestCase):
                                ({"range": "hdr", "transfer": "linear", "gamut": "display-p3"},
                                 "linear-display-p3"),
                                ({"range": "hdr", "transfer": "linear", "gamut": "adobe-rgb"},
-                                "linear-adobe-rgb")):
+                                "linear-adobe-rgb"),
+                               ({"range": "hdr", "transfer": "linear", "gamut": "srgb"},
+                                "linear-srgb")):
             space, _ = metrics.space_for_recipe(display(**axes))
             self.assertEqual(space, expected, axes)
         space, _ = metrics.space_for_recipe({"recipe_version": 2, "output": "film-master"})

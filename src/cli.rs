@@ -2626,8 +2626,14 @@ const PRESET_COUNTERPARTS: &[(&str, &str)] = &[
     ("hdr-hlg", "--transfer hlg --container avif"),
     // Neither is the same file: the map is per-channel and ISO-only, so a reader that
     // knows only the Ultra HDR v1 XMP shows the SDR base.
-    ("gain-map-hdr", "--range hdr --container jpeg"),
-    ("ultra-hdr-v1", "--range hdr --container jpeg"),
+    (
+        "gain-map-hdr",
+        "--range hdr --gamut display-p3 --container jpeg",
+    ),
+    (
+        "ultra-hdr-v1",
+        "--range hdr --gamut display-p3 --container jpeg",
+    ),
 ];
 
 /// What replaces a removed output preset, as a sentence — for a name with no counterpart

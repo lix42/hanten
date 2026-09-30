@@ -2459,8 +2459,8 @@ migration's chain (`docs/design-update.md`, `docs/nf-migration.md`). `--new-flow
 runs them — the fixed decode, scene correction's white balance and exposure, the
 look, fit range, fit gamut's radial map into the destination's gamut, and the
 destination set in `destination.rs` (SDR TIFFs in Display P3, Adobe RGB or sRGB, HDR
-as a float TIFF in Display P3, Adobe RGB or BT.2020, BT.2020 as a PQ or HLG TIFF or
-AVIF, the gain-map JPEG, and the film master) — but
+as a float TIFF in Display P3, Adobe RGB, sRGB or BT.2020, BT.2020 as a PQ or HLG TIFF
+or AVIF, the gain-map JPEG on a Display P3 or sRGB base, and the film master) — but
 nothing in this spec's pipeline runs through them yet.
 
 ### Candidate crates

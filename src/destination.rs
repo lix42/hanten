@@ -422,8 +422,8 @@ const fn row(
 ///
 /// Why the gaps: PQ and HLG are Rec.2100 signals, so BT.2020 only; AVIF is written only
 /// for a Rec.2100 signal; a linear float TIFF is the lossless HDR master, in the gamut
-/// an editor works in; a JPEG is 8-bit, so it carries HDR only as a gain map, whose
-/// base only Display P3 has been verified with a decoder.
+/// an editor works in; a JPEG is 8-bit, so it carries HDR only as a gain map, on a base
+/// verified with a decoder (Display P3, sRGB).
 pub const ROWS: &[Row] = &[
     row(
         Range::Sdr,
@@ -457,6 +457,13 @@ pub const ROWS: &[Row] = &[
         Range::Hdr,
         Transfer::Linear,
         Gamut::AdobeRgb,
+        Container::Tiff,
+        Status::Ready(Encoding::HdrLinearTiff),
+    ),
+    row(
+        Range::Hdr,
+        Transfer::Linear,
+        Gamut::Srgb,
         Container::Tiff,
         Status::Ready(Encoding::HdrLinearTiff),
     ),
@@ -499,6 +506,13 @@ pub const ROWS: &[Row] = &[
         Range::Hdr,
         Transfer::Native,
         Gamut::DisplayP3,
+        Container::Jpeg,
+        Status::Ready(Encoding::GainMapJpeg),
+    ),
+    row(
+        Range::Hdr,
+        Transfer::Native,
+        Gamut::Srgb,
         Container::Jpeg,
         Status::Ready(Encoding::GainMapJpeg),
     ),
@@ -1131,7 +1145,7 @@ mod tests {
             Err(Fault::Ambiguous {
                 flag: "--gamut",
                 key: "gamut",
-                choices: vec!["display-p3", "adobe-rgb", "bt2020"],
+                choices: vec!["display-p3", "adobe-rgb", "srgb", "bt2020"],
             })
         );
         // `direct` names its linear gamut.
@@ -1143,7 +1157,12 @@ mod tests {
         // The gamut default still applies off the linear rows.
         let r = resolve(&axes(Some(Range::Sdr), None, None, None), &STD).unwrap();
         assert_eq!(r.gamut, Gamut::DisplayP3);
-        for g in [Gamut::DisplayP3, Gamut::AdobeRgb, Gamut::Bt2020] {
+        for g in [
+            Gamut::DisplayP3,
+            Gamut::AdobeRgb,
+            Gamut::Srgb,
+            Gamut::Bt2020,
+        ] {
             let r = resolve(&axes(None, Some(Transfer::Linear), Some(g), None), &STD).unwrap();
             assert_eq!((r.range, r.encoding), (Range::Hdr, Encoding::HdrLinearTiff));
         }
@@ -1194,13 +1213,13 @@ mod tests {
             panic!("expected NotYet");
         };
         assert_eq!((row.range, row.container), (Range::Sdr, Container::Jpeg));
-        // The one ready JPEG, as the fewest flags to add: `--range hdr`.
-        let offered: Vec<_> = adding.iter().map(|a| a.stated_axes()).collect();
-        assert_eq!(offered.len(), 1, "{offered:?}");
-        assert!(
-            offered[0].len() == 1 && offered[0][0].value == "hdr",
-            "{offered:?}"
-        );
+        // The ready JPEGs, each as the fewest flags to add: `--range hdr` for the
+        // Display P3 gain map, `--gamut srgb` for the sRGB one.
+        let offered: Vec<Vec<_>> = adding
+            .iter()
+            .map(|a| a.stated_axes().iter().map(|s| s.value).collect())
+            .collect();
+        assert_eq!(offered, [vec!["hdr"], vec!["srgb"]]);
     }
 
     #[test]

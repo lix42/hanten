@@ -205,7 +205,10 @@
 //! default — with `accounted` 0.87x of measured at both sizes, and confirm the Adobe RGB
 //! SDR TIFF shares [`RunProfile::U16Tiff`]: it measured within 33 KB of a Display
 //! P3 run of the same frame at each size, as a matrix change inside an in-place map
-//! should.
+//! should. Likewise, on a 16.6 MP frame (2026-09-29,
+//! `nf-destinations/easy-destination-rows`), the float TIFF in each of its four gamuts,
+//! the sRGB SDR TIFF and the sRGB-based gain map each peaked within 1 MB of the row
+//! sharing their profile.
 //!
 //! The two `hdr-pq` rows are the *pair* that solved
 //! [`AVIF_STAGING_BYTES_PER_PX`] — they are a fit, not two independent

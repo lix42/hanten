@@ -2800,16 +2800,20 @@ mod tests {
             resolved(&["--transfer", "pq"]),
             (Range::Hdr, Transfer::Pq, Gamut::Bt2020, Container::Tiff)
         );
-        // Only a stated container reaches a lossy one.
+        // Only a stated container reaches a lossy one, and its gamut is asked for:
+        // `direct`'s Adobe RGB has no gain map, and two gamuts do.
         assert_eq!(
-            resolved(&["--container", "jpeg"]),
-            (
-                Range::Hdr,
-                Transfer::Native,
-                Gamut::DisplayP3,
-                Container::Jpeg
-            )
+            resolved(&["--container", "jpeg", "--gamut", "srgb"]),
+            (Range::Hdr, Transfer::Native, Gamut::Srgb, Container::Jpeg)
         );
+        let r = merged(
+            r#"{"recipe_version": 3}"#,
+            &["--rendering", "direct", "--container", "jpeg"],
+        );
+        let err = destination(&r, KnobNames::FlagAndKey)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--gamut display-p3|srgb"), "{err}");
         // `default` keeps the standard defaults and order, where the same stated gamut
         // is the gain map.
         let standard = |extra: &[&str]| {
