@@ -40,7 +40,7 @@ assistance is opt-in and sits *around* a deterministic core.
 | `README.md`, `docs/design-spec.md`, `docs/using-nc.md`, `docs/TASKS.md`, progress-log titles | titles and opening prose |
 | the binary, and every command line in a **live** doc, skill or script | anything written before 2026-09-21 spells it `nc` |
 | clap's `about` line | do **not** also prefix `version_string()` — it would print `hanten Hanten 0.1.0` |
-| the `(Hanten)` suffix in the Adobe RGB ICC description (`pipeline::color`) | a profile name is user-visible; like the `(nc)` one it is in every file's bytes once written, so it is an identifier too — don't "tidy" it to `(nc)` |
+| the `(Hanten)` suffix in the Adobe RGB and sRGB ICC descriptions (`pipeline::color`) | a profile name is user-visible; like the `(nc)` one it is in every file's bytes once written, so it is an identifier too — don't "tidy" it to `(nc)` |
 | the stderr prefix (`hanten: warning:`) | `scripts/real-scan-verify/harness.sh` greps the *message*, never the prefix |
 
 `nctool` must keep accepting the pre-rename `nc` banner — see
@@ -115,10 +115,10 @@ re-derived by the caller.
 decode → film-base → algo::fixed decode → NC film RGB v1 → linear ACEScg
   ├ --film-master → encode (unclamped f32 ACEScg TIFF, no rendering stage)
   └ scene_correction → look → fit_range → fit_gamut → destination encode
-      ├ SDR (default)  → Display P3 or Adobe RGB → 16-bit TIFF
-      ├ HDR linear     → BT.2020, no transfer → 32-bit float TIFF
+      ├ SDR (default)  → Display P3, Adobe RGB or sRGB → 16-bit TIFF
+      ├ HDR linear     → Display P3, Adobe RGB, sRGB or BT.2020, no transfer → 32-bit float TIFF
       ├ HDR PQ / HLG   → Rec.2100 → full-range 16-bit TIFF, or 10-bit 4:4:4 AVIF
-      └ HDR gain map   → SDR base + HDR rendition → ISO 21496-1 gain-map JPEG
+      └ HDR gain map   → Display P3 or sRGB base + HDR rendition → ISO 21496-1 gain-map JPEG
 ```
 
 A destination is four axes (`--range`, `--transfer`, `--gamut`, `--container`) or

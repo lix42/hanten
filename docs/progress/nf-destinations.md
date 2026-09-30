@@ -39,6 +39,11 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   RGB), `NewFlowF32Tiff` (measured for the linear HDR TIFF, not the film master),
   `NewFlowAvif` and `NewFlowGainMapJpeg` provisional.
 - nctool keys metrics on (gamut, transfer); a review matrix may state a `destination`.
+- **The gamuts are Display P3, Adobe RGB, sRGB and BT.2020** (`easy-destination-rows`,
+  2026-09-30): the linear float TIFF is written in all four, so `--transfer linear` alone
+  asks for `--gamut` unless the rendering names one (`Defaults::linear_gamut`; `direct`:
+  Adobe RGB, now its unset destination); SDR TIFFs in the first three; the gain map on a
+  Display P3 or sRGB base; PQ/HLG in BT.2020 only.
 - **Unset-axis defaults and the derivation order come from the rendering**
   (`destination::Defaults`, `direct-preset`): `Defaults::STANDARD` derives range,
   transfer, gamut, container; `direct` sets `container_first`, so it derives TIFF before
@@ -312,8 +317,8 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
 
 ## easy-destination-rows
 
-**Status:** not started
-**Updated:** 2026-09-27
+**Status:** done
+**Updated:** 2026-09-30
 
 - 2026-09-27: created from a survey (with the user) of lossless × HDR × gamut: the rows
   classed easy — linear float HDR in Adobe RGB and Display P3, sRGB as a gamut, then
@@ -325,3 +330,58 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   unknown), ProPhoto (D50: the gamut stage is D65), lossless AVIF and lossless
   gain-map containers (JPEG XL, AVIF with a gain map); PQ/HLG in Adobe RGB or ProPhoto
   have no standard signalling code at all.
+- 2026-09-29: started. The user settled the open questions: a **Display P3 float row too**,
+  with `--transfer linear` alone **refused, asking for `--gamut`** (the gamut default would
+  otherwise silently turn it from BT.2020 into P3); new linear profiles named in the
+  sibling's family (`NC Display-Linear <gamut> (D65)`); one PR, one commit per step.
+- 2026-09-29: implemented, awaiting review. What landed:
+  - **The linear hand-off carries its gamut** (`hdr::LinearHdr`, was `LinearBt2020Hdr`):
+    content light is weighted by the gamut's own luma; the report's `linear_domain`,
+    `pixel_contract` and `interoperability` name it; `color::hdr_linear_icc(gamut)` builds
+    the profile. `hdr::encode_transfer` refuses any gamut but BT.2020 (the check moved there
+    from `cli`). The BT.2020 float TIFF is **byte-identical** to origin/main on both
+    fixtures, its report differing only in the now-stated gamut.
+  - **The refusal is `Defaults::linear_gamut`**: the gamut an unset gamut takes when every
+    row left is linear, `None` (ask) under `default`, Adobe RGB under `direct`. So `direct`
+    resolves to the Adobe RGB float TIFF unaided, as `direct-preset` planned, and with
+    `--gamut display-p3` to the P3 float TIFF rather than the SDR TIFF the `direct-preset`
+    review round had set (a stated gamut now has a lossless float row). Logged in
+    `nf-calibration`: its held form `--rendering direct --range sdr` did not move.
+  - **sRGB** (`Gamut::Srgb`, `DestinationGamut::Srgb`): SDR 16-bit TIFF under "sRGB
+    IEC61966-2.1 compatible (Hanten)", colorants checked against Little CMS's built-in sRGB
+    (published sRGB tables differ by 2e-4 in blue Z: they adapt to a D50 of Z 0.82521, not
+    the PCS's 0.8249); a fit-gamut golden; `compatibility` now names `--range sdr --gamut
+    srgb`. Then the sRGB float TIFF and the gain map on an sRGB base, a table row each:
+    the gain-map path was already gamut-generic.
+  - **Oracle** (Apple ImageIO, macOS 26.5, 2026-09-09-Ektar100 `1605`, default render):
+    the sRGB gain map reads `PRESENT`, `GainMapMax` 2.031 / 1.467 / 1.188 log2 (nc's
+    `max` 4.087 / 2.765 / 2.278), base profile `sRGB IEC61966-2.1`, HDR headroom 4.926.
+    The P3 file reads 1.918 / 1.486 / 1.192, as `gain-map-destination` recorded.
+  - **Memory**, measured on that frame (16.6 MP, release, peak RSS): the float TIFF 0.607 GB
+    in all four gamuts, the SDR TIFF 0.707 GB in P3 and sRGB, the gain map 1.025 / 1.026 GB
+    — each row shares its sibling's `RunProfile`.
+  - Knock-ons: with two gain-map bases, `--container jpeg` under `direct` (whose Adobe RGB
+    has none) asks for the gamut; the removed presets' counterparts now state their gamut
+    (`display-p3` → `--range sdr --gamut display-p3`, `hdr-linear-tiff` → `--transfer
+    linear --gamut bt2020`, the gain-map presets `--gamut display-p3`), since each must
+    name one row under both renderings. nctool maps the new (gamut, transfer) pairs onto
+    its existing `linear-display-p3`, `linear-adobe-rgb`, `srgb`, `linear-srgb` spaces.
+- 2026-09-30: review rounds (`/code-review`, then the ship review: `ship:diff-reviewer` and
+  Codex, which found nothing). Fixed: a planned **SDR sRGB JPEG** row, so `--gamut srgb
+  --container jpeg` is refused as not yet (like Display P3) instead of quietly writing the
+  HDR gain map; an open axis whose every value is unwritten is a `NotYet` naming the open
+  axis (`Fault::NotYet::open`), never an empty "choose one" or a false "resolves to";
+  every per-gamut identifier of the linear rendition in one table, `hdr::linear_labels`
+  (BT.2020's pinned); the linear-TRC test reads each gamut's embedded profile; the
+  `--gamut`/`--container` help, nctool's `roll convert --gamut` and several docs caught
+  up. Declined: replacing `Axis::default_in(d, rows)` with a row flag — the rule rests on
+  transfer being decided before gamut, true in both orders and commented.
+- 2026-09-30: **done.** What dependents need:
+  - A linear float TIFF is `--transfer linear --gamut <any of the four>`; the gamut is
+    asked for unless the rendering names one (`Defaults::linear_gamut`, Adobe RGB under
+    `direct`). Profiles `NC Display-Linear <gamut> (D65)`; the report's
+    `hdr_linear_tiff` strings come from `hdr::linear_labels`.
+  - The gain map is written on a Display P3 (`--range hdr` alone) or sRGB base; under
+    `direct` (Adobe RGB) a JPEG asks for its gamut.
+  - `output/sdr-jpeg-preset` makes two `NotYet` rows ready — Display P3 and sRGB.
+  - `memory-profiles`: every new row measured within 1 MB of its sibling's arm.

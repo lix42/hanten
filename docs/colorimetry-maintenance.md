@@ -137,13 +137,14 @@ embeds an affected space, and compare output checksums:
 hanten convert <scan> -o before/film-master --film-base <r,g,b> --film-master        # ACEScg
 hanten convert <scan> -o before/p3          --film-base <r,g,b>                      # Display P3 SDR TIFF (the default)
 hanten convert <scan> -o before/adobe       --film-base <r,g,b> --gamut adobe-rgb    # Adobe RGB
-hanten convert <scan> -o before/linear      --film-base <r,g,b> --transfer linear    # BT.2020 float TIFF
+hanten convert <scan> -o before/srgb        --film-base <r,g,b> --gamut srgb         # sRGB
+hanten convert <scan> -o before/linear      --film-base <r,g,b> --transfer linear --gamut bt2020  # BT.2020 float TIFF
 hanten convert <scan> -o before/pq          --film-base <r,g,b> --transfer pq        # BT.2020 PQ TIFF
 hanten convert <scan> -o before/gain-map    --film-base <r,g,b> --range hdr          # Display P3 gain-map JPEG
 ```
 
-sRGB has no destination in this build; only the reference build
-(`scripts/reference-snapshot/`) writes one.
+The float TIFF is also written in `display-p3`, `adobe-rgb` and `srgb`, and the gain map
+on an `srgb` base: add the row for any gamut whose definition you touched.
 
 ### 6. Decide: representation-only, or a pixel change?
 

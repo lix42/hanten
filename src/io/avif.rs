@@ -1222,7 +1222,13 @@ mod tests {
     /// could drift from its contract.
     fn render_tiny(transfer: hdr::HdrTransfer, rgb: &[f32], w: u32, h: u32) -> RenderedHdr {
         let image = crate::types::LinearImage::new(w, h, rgb.to_vec(), None).unwrap();
-        let (linear, _) = hdr::from_new_chain(image, "reinhard", "radial").unwrap();
+        let (linear, _) = hdr::from_new_chain(
+            image,
+            crate::pipeline::fit_gamut::DestinationGamut::Bt2020,
+            "reinhard",
+            "radial",
+        )
+        .unwrap();
         hdr::encode_transfer(linear, transfer).unwrap()
     }
 

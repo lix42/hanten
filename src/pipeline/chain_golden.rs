@@ -1318,3 +1318,24 @@ fn the_chain_threaded_refuses_the_nan_pixel() {
         .expect("a NaN pixel");
     assert!(err.message().contains("pixel 7"), "{}", err.message());
 }
+
+/// [`FIT_GAMUT_P3`]'s input into sRGB, the narrowest SDR gamut, through its own pinned
+/// matrix and luma row. Captured 2026-09-29 when the gamut landed
+/// (`nf-destinations/easy-destination-rows`).
+const FIT_GAMUT_SRGB: [u32; 21] = [
+    0x3e3851ea, 0x3e3851ee, 0x3e3851eb, 0x3b0314e0, 0x3b8311ce, 0x3f666667, 0x3f556241, 0x3cb22126,
+    0x00000000, 0x3f800000, 0x3f800000, 0x3f7ffffe, 0x404b4c7c, 0x404b4c7c, 0x404b4c7c, 0x00000000,
+    0x00000000, 0x00000000, 0x3b449ba3, 0x3b831270, 0x3b03126e,
+];
+
+#[test]
+fn golden_fit_gamut_srgb_is_bit_identical() {
+    let fitted = through_fit_range(&fit_range_params(0.0, DisplayPeak::SDR));
+    let params = FitGamutParams {
+        target: DestinationGamut::Srgb,
+    };
+    let (out, gamut) = fit_gamut::apply(fitted, &params).unwrap().into_parts();
+    assert_stage_bits("fit-gamut-srgb", &out.rgb, &FIT_GAMUT_SRGB);
+    assert_eq!(gamut, DestinationGamut::Srgb);
+    assert_eq!(out.ir.as_deref(), Some(&FILM_IR[..FINITE_PIXELS]));
+}

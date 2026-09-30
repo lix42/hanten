@@ -210,7 +210,7 @@ pub const ADOBE_RGB: ColorSpace = ColorSpace {
 /// the Rec.2100 PQ/HLG renditions in `pipeline::hdr` share this definition.
 ///
 /// ⚠ **Also fed straight to Little CMS**, by
-/// `color::hdr_linear_bt2020_icc` for the `hdr-linear-tiff` output — so an edit
+/// `color::hdr_linear_icc` for the linear HDR TIFF — so an edit
 /// here changes embedded ICC bytes even when `pinned.rs` is untouched and every
 /// audit `ulps` is 0. See the module note's warning about the lcms2-consumed
 /// definitions; this is one of the five.

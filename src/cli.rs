@@ -483,15 +483,16 @@ pub struct DestinationOverrides {
     /// signals). Recipe key `output.display.transfer`.
     #[arg(long, value_enum, ignore_case = true, value_name = "TRANSFER")]
     pub transfer: Option<Transfer>,
-    /// The primaries to render into: `display-p3` (the default), `adobe-rgb` (SDR
-    /// only) or `bt2020` (HDR only). Recipe key `output.display.gamut`.
+    /// The primaries to render into: `display-p3` (the default), `adobe-rgb`, `srgb`
+    /// or `bt2020` (HDR only). Recipe key `output.display.gamut`.
     #[arg(long, value_enum, ignore_case = true, value_name = "GAMUT")]
     pub gamut: Option<Gamut>,
     /// The file container: `tiff` (the default), `jpeg` (HDR with a gain map) or
-    /// `avif` (PQ/HLG only). Destinations: SDR `native` TIFF in Display P3 or Adobe RGB;
-    /// HDR BT.2020 as a `linear` float TIFF, or `pq`/`hlg` in a 16-bit TIFF or a 10-bit
-    /// AVIF; HDR Display P3 as a JPEG with an ISO 21496-1 gain map (`--range hdr`
-    /// alone). An SDR JPEG is not written yet. Recipe key `output.display.container`.
+    /// `avif` (PQ/HLG only). Destinations: SDR `native` TIFF in Display P3, Adobe RGB or
+    /// sRGB; HDR as a `linear` float TIFF in any gamut (stated with `--gamut`),
+    /// or BT.2020 `pq`/`hlg` in a 16-bit TIFF or a 10-bit AVIF; HDR as a JPEG with an ISO
+    /// 21496-1 gain map on a Display P3 (`--range hdr` alone) or sRGB base. An SDR JPEG
+    /// is not written yet. Recipe key `output.display.container`.
     #[arg(long, value_enum, ignore_case = true, value_name = "CONTAINER")]
     pub container: Option<Container>,
     /// Write the fixed decode's linear ACEScg, unclamped 32-bit float TIFF, with no
@@ -999,7 +1000,7 @@ pub struct AvifRenderingResult {
 /// cannot state for itself. Serialize-only.
 ///
 /// **This block is authoritative for the HDR semantics, and deliberately so.** The
-/// embedded ICC profile describes the colorimetry (BT.2020 primaries, D65, a linear
+/// embedded ICC profile describes the colorimetry (the gamut's primaries, D65, a linear
 /// TRC) but its PCS stops at the media white, so no v4 profile can express that
 /// `1.0` is 203 cd/m² and that highlights legitimately run to
 /// `linear_headroom`. Anything consuming these files for luminance must read this,
@@ -1008,7 +1009,7 @@ pub struct AvifRenderingResult {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct HdrLinearTiffResult {
     /// Stable identifier of the pixel contract
-    /// ([`encode::HDR_LINEAR_PIXEL_CONTRACT`]).
+    /// ([`hdr::LinearLabels::pixel_contract`]).
     pub pixel_contract: &'static str,
     /// Bits per sample as written (32).
     pub bits_per_sample: u16,
@@ -1016,7 +1017,7 @@ pub struct HdrLinearTiffResult {
     pub sample_format: u16,
     /// Whether the file was written as BigTIFF.
     pub bigtiff: bool,
-    /// Size of the embedded linear-BT.2020 ICC profile, in bytes.
+    /// Size of the embedded linear ICC profile, in bytes.
     pub icc_bytes: usize,
     /// The sample value that represents diffuse reference white, always `1.0`.
     pub reference_white_sample: f32,
@@ -2597,7 +2598,7 @@ fn removed_output_message(args: &ConversionFlags, has_recipe: bool) -> Option<St
             return Some(format!(
                 "{flag} was removed: every destination resolves its own depth and embeds \
                  the profile its pixels are in; {AXES} (a float TIFF is `--transfer linear` \
-                 or `--film-master`). Drop the flag."
+                 with a `--gamut`, or `--film-master`). Drop the flag."
             ));
         }
     }
@@ -2616,31 +2617,31 @@ fn removed_output_message(args: &ConversionFlags, has_recipe: bool) -> Option<St
 /// names **one** destination under either rendering, since this refusal runs before the
 /// recipe says which (`the_preset_counterparts_resolve_the_same_under_every_rendering`).
 const PRESET_COUNTERPARTS: &[(&str, &str)] = &[
-    ("display-p3", "--gamut display-p3"),
+    ("display-p3", "--range sdr --gamut display-p3"),
+    ("compatibility", "--range sdr --gamut srgb"),
     ("film-master", "--film-master"),
-    ("hdr-linear-tiff", "--transfer linear"),
+    ("hdr-linear-tiff", "--transfer linear --gamut bt2020"),
     ("hdr-pq-tiff", "--transfer pq"),
     ("hdr-hlg-tiff", "--transfer hlg"),
     ("hdr-pq", "--transfer pq --container avif"),
     ("hdr-hlg", "--transfer hlg --container avif"),
     // Neither is the same file: the map is per-channel and ISO-only, so a reader that
     // knows only the Ultra HDR v1 XMP shows the SDR base.
-    ("gain-map-hdr", "--range hdr --container jpeg"),
-    ("ultra-hdr-v1", "--range hdr --container jpeg"),
+    (
+        "gain-map-hdr",
+        "--range hdr --gamut display-p3 --container jpeg",
+    ),
+    (
+        "ultra-hdr-v1",
+        "--range hdr --gamut display-p3 --container jpeg",
+    ),
 ];
 
 /// What replaces a removed output preset, as a sentence — for a name with no counterpart
 /// (`legacy`, `custom`, which retired before the chain did, or a typo), how to choose.
 fn preset_counterpart(name: &str, args: &ConversionFlags, has_recipe: bool) -> String {
     let Some(&(_, flags)) = PRESET_COUNTERPARTS.iter().find(|(n, _)| *n == name) else {
-        return if name == "compatibility" {
-            "`compatibility`'s sRGB has no destination yet \
-             (`nf-destinations/easy-destination-rows`); the SDR gamuts written are \
-             --gamut display-p3 and --gamut adobe-rgb."
-                .into()
-        } else {
-            "Drop the flag, or state the axes you want.".into()
-        };
+        return "Drop the flag, or state the axes you want.".into();
     };
     match name {
         "gain-map-hdr" | "ultra-hdr-v1" => format!(
@@ -3380,11 +3381,7 @@ fn report_hdr_linear_tiff(
         linear_domain: linear.linear_domain,
         max_cll_nits: summary.content_light.max_cll_nits,
         max_fall_nits: summary.content_light.max_fall_nits,
-        interoperability: "the embedded ICC profile states the BT.2020/D65 \
-                           primaries and the linear transfer only; its PCS stops \
-                           at the media white, so the reference-white, peak and \
-                           headroom values in this block — not the profile — \
-                           define the luminance semantics of these samples",
+        interoperability: hdr::linear_labels(summary.gamut).interoperability,
     });
 }
 
@@ -3449,8 +3446,8 @@ struct ChainAccount {
 enum DestinationPixels {
     /// The destination's display curve applied, with its ICC profile.
     Sdr { image: LinearImage, icc: Vec<u8> },
-    /// Display-linear BT.2020, clamped to the peak.
-    HdrLinear(hdr::LinearBt2020Hdr, hdr::PeakClamp),
+    /// Display-linear in the destination's gamut, clamped to the peak.
+    HdrLinear(hdr::LinearHdr, hdr::PeakClamp),
     /// A Rec.2100 signal for the 16-bit TIFF.
     HdrCoded(hdr::RenderedHdr, hdr::PeakClamp),
     /// A Rec.2100 signal for the AVIF.
@@ -3580,18 +3577,18 @@ fn render_destination(
             Ok(DestinationPixels::Sdr { image, icc })
         }),
         Encoding::HdrLinearTiff => render_one(aces, film_base, recipe, d, clock, |r| {
-            let (hdr, clamp) = r.bt2020()?;
+            let (hdr, clamp) = r.hdr()?;
             Ok(DestinationPixels::HdrLinear(hdr, clamp))
         }),
         Encoding::HdrCodedTiff(transfer) => render_one(aces, film_base, recipe, d, clock, |r| {
-            let (hdr, clamp) = r.bt2020()?;
+            let (hdr, clamp) = r.hdr()?;
             Ok(DestinationPixels::HdrCoded(
                 hdr::encode_transfer(hdr, transfer)?,
                 clamp,
             ))
         }),
         Encoding::HdrAvif(transfer) => render_one(aces, film_base, recipe, d, clock, |r| {
-            let (hdr, clamp) = r.bt2020()?;
+            let (hdr, clamp) = r.hdr()?;
             Ok(DestinationPixels::HdrAvif(
                 hdr::encode_transfer(hdr, transfer)?,
                 clamp,
@@ -3610,17 +3607,10 @@ struct OneRendition {
 }
 
 impl OneRendition {
-    /// The HDR hand-off. Every single-rendition HDR encoding is a BT.2020 one; the
-    /// destination table pairs them, and this names the break rather than encoding
-    /// other primaries under a BT.2020 tag.
-    fn bt2020(self) -> Result<(hdr::LinearBt2020Hdr, hdr::PeakClamp)> {
-        if self.gamut != DestinationGamut::Bt2020 {
-            return Err(NcError::Other(format!(
-                "an HDR destination reached its encoder in {} rather than BT.2020",
-                self.gamut.name()
-            )));
-        }
-        hdr::from_new_chain(self.linear, self.tone_curve, self.gamut_mapping)
+    /// The HDR hand-off, in the rendition's gamut. A Rec.2100 encoder refuses any but
+    /// BT.2020 (`hdr::encode_transfer`).
+    fn hdr(self) -> Result<(hdr::LinearHdr, hdr::PeakClamp)> {
+        hdr::from_new_chain(self.linear, self.gamut, self.tone_curve, self.gamut_mapping)
     }
 }
 
@@ -3757,7 +3747,7 @@ fn encode_render(
             (staged, outcome)
         }
         DestinationPixels::HdrLinear(hdr, _) => {
-            let icc = color::hdr_linear_bt2020_icc()?;
+            let icc = color::hdr_linear_icc(hdr.gamut())?;
             let (staged, outcome, summary) = encode::encode_hdr_linear(hdr, &icc, output)?;
             report_hdr_linear_tiff(report, &summary, log, warnings);
             (staged, outcome)
@@ -7099,7 +7089,7 @@ mod tests {
         let msg = removed(&parse_convert(&["--output-preset", "display-p3"]))
             .unwrap_err()
             .to_string();
-        assert!(msg.contains("pass --gamut display-p3"), "{msg}");
+        assert!(msg.contains("pass --range sdr --gamut display-p3"), "{msg}");
         assert!(removed(&parse_convert(&[])).is_ok());
     }
 

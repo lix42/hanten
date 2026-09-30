@@ -2,8 +2,8 @@
 //!
 //! No transform here changes primaries: `fit_gamut` has already moved the pixels into
 //! the destination's, so [`encode_display_linear`] applies only the transfer, and the
-//! profile is chosen by `DestinationGamut` — Display P3 (P3 primaries, D65, the sRGB
-//! curve) or Adobe RGB (1998): its primaries, D65, the pure `563/256` power law. The
+//! profile is chosen by `DestinationGamut` — Display P3 or sRGB (their primaries, D65,
+//! the sRGB curve) or Adobe RGB (1998): its primaries, D65, the pure `563/256` power law. The
 //! film master's pixels are already linear ACEScg, so [`icc_profile`] only tags them
 //! (AP1, ~D60, linear). The HDR profiles are built for their encoders below.
 //!
@@ -80,6 +80,7 @@ pub fn encode_display_linear(
     let (linear, output) = match gamut {
         DestinationGamut::DisplayP3 => display_p3_transfer_profiles()?,
         DestinationGamut::AdobeRgb => adobe_rgb_transfer_profiles()?,
+        DestinationGamut::Srgb => srgb_transfer_profiles()?,
         // BT.2020 is rendered only for HDR, whose transfers (PQ, HLG, or none) and
         // profiles are `pipeline::hdr`'s and the HDR encoders'. The destination table
         // (`crate::destination::ROWS`) has no SDR row in it.
@@ -113,11 +114,24 @@ fn display_p3_transfer_profiles() -> Result<(Profile, Profile)> {
 /// string is in every file's bytes too, so it is an identifier from then on.
 const ADOBE_RGB_DESCRIPTION: &str = "Adobe RGB (1998) compatible (Hanten)";
 
+/// The sRGB profile's `profileDescriptionTag`: "compatible" and `(Hanten)` for the
+/// reasons [`ADOBE_RGB_DESCRIPTION`] gives, and an identifier once written.
+const SRGB_DESCRIPTION: &str = "sRGB IEC61966-2.1 compatible (Hanten)";
+
+/// Linear sRGB → the sRGB output profile: Rec.709 primaries, D65, the piecewise sRGB
+/// curve — the transfer only, as for Display P3.
+fn srgb_transfer_profiles() -> Result<(Profile, Profile)> {
+    let (white, primaries) = lcms_inputs(definitions::REC709);
+    let mut output = synth_curve(white, primaries, &srgb_trc()?)?;
+    describe(&mut output, SRGB_DESCRIPTION)?;
+    Ok((synth(white, primaries, 1.0)?, output))
+}
+
 /// Linear Adobe RGB → the Adobe RGB output profile: the same primaries on both sides,
 /// so the transform applies the `563/256` power law and nothing else.
 ///
 /// Named, unlike the Display P3 profile's `"RGB built-in"` (whose bytes already
-/// shipped, see [`hdr_linear_bt2020_icc`]): this destination exists for a workflow
+/// shipped, see [`hdr_linear_icc`]): this destination exists for a workflow
 /// that continues in an editor, where the profile is what the user sees.
 fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
     let (white, primaries) = lcms_inputs(definitions::ADOBE_RGB);
@@ -126,12 +140,12 @@ fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
     Ok((synth(white, primaries, 1.0)?, output))
 }
 
-/// The ICC blob for the linear HDR TIFF destination: linear BT.2020 / D65.
+/// The ICC blob for a linear HDR TIFF destination: `gamut`'s primaries, D65, linear.
 ///
-/// **No transform runs here, and that is the whole point.** `pipeline::hdr` already
-/// rendered into BT.2020 primaries, so this only *describes* the samples the
+/// **No transform runs here, and that is the whole point.** Fit gamut already
+/// rendered into `gamut`'s primaries, so this only *describes* the samples the
 /// encoder writes verbatim. A transform from another profile would treat
-/// display-linear BT.2020 as that space and remap it a second time — the same trap
+/// display-linear samples as that space and remap them a second time — the same trap
 /// [`encode_display_linear`] avoids for the SDR rendition.
 ///
 /// Two deliberate omissions, both recorded so they are not "fixed" later:
@@ -148,23 +162,24 @@ fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
 ///   4.926108 means 1000 cd/m²". The report owns those facts; the task
 ///   requires that this profile never be claimed to carry them.
 ///
-/// ⚠ This is a runtime consumer of a `colorimetry::definitions` colour space
-/// (beside `REC709`, `DISPLAY_P3`, `ACESCG` and `ADOBE_RGB`): editing
-/// `definitions::BT2020` now changes ICC bytes and every lcms2-transformed pixel on
-/// this path *even with `pinned.rs` untouched and every audit ulp at 0*. Nothing
-/// automated catches it — `PIPELINE_FINGERPRINTS` stops before lcms2 and the audit
-/// only compares pinned artifacts. Treat a `BT2020` edit as a pixel change.
-pub fn hdr_linear_bt2020_icc() -> Result<Vec<u8>> {
-    let (white, primaries) = lcms_inputs(definitions::BT2020);
+/// ⚠ This is a runtime consumer of the `colorimetry::definitions` colour spaces:
+/// editing `definitions::BT2020` (or `DISPLAY_P3`, `ADOBE_RGB`, `REC709`) changes these ICC bytes
+/// *even with `pinned.rs` untouched and every audit ulp at 0*. Nothing automated
+/// catches it — `PIPELINE_FINGERPRINTS` stops before lcms2 and the audit only compares
+/// pinned artifacts. Treat such an edit as an output change.
+pub fn hdr_linear_icc(gamut: DestinationGamut) -> Result<Vec<u8>> {
+    let space = match gamut {
+        DestinationGamut::DisplayP3 => definitions::DISPLAY_P3,
+        DestinationGamut::AdobeRgb => definitions::ADOBE_RGB,
+        DestinationGamut::Srgb => definitions::REC709,
+        DestinationGamut::Bt2020 => definitions::BT2020,
+    };
+    let (white, primaries) = lcms_inputs(space);
     let mut profile = synth(white, primaries, 1.0)?;
-    // A real name, like the coded-HDR profiles carry. `Profile::new_rgb` leaves
-    // Little CMS's default `"RGB built-in"`, which is useless in an application's
-    // profile list — and this profile is one a user picks out of such a list.
-    //
-    // Deliberately **not** applied to the older sRGB/P3/ACEScg builders:
-    // doing that in the shared `synth` helper would change the embedded ICC bytes of
-    // already-shipped outputs, which is a separate reviewed decision.
-    describe(&mut profile, "NC Display-Linear BT.2020 (D65)")?;
+    // A real name: `Profile::new_rgb` leaves Little CMS's `"RGB built-in"`. Named here,
+    // not in the shared `synth`, which would rename the shipped Display P3 and ACEScg
+    // profiles too.
+    describe(&mut profile, hdr::linear_labels(gamut).icc_description)?;
     profile_icc(&profile)
 }
 
@@ -363,7 +378,7 @@ pub fn hdr_hlg_tiff_icc() -> Result<Vec<u8>> {
 ///   D65→D50 adapted and `mediaWhitePointTag` declares D50, so `chad` is required;
 ///   it carries `pinned::BRADFORD_D65_TO_ICC_PCS`, the same adaptation the colorants
 ///   were built with. Every profile Little CMS builds for nc gets one automatically
-///   — including `hdr_linear_bt2020_icc` — because `Profile::new_rgb` writes it;
+///   — including `hdr_linear_icc`'s — because `Profile::new_rgb` writes it;
 ///   an authored profile does not.
 ///
 /// **Input class was evaluated and rejected.** ICC §8.3.2 requires no `BToA0Tag` for
@@ -1173,7 +1188,7 @@ mod tests {
     }
 
     #[test]
-    fn hdr_linear_bt2020_profile_is_rgb_display_class_with_a_linear_trc() {
+    fn every_hdr_linear_profile_is_rgb_display_class_with_a_linear_trc() {
         // Two properties, both load-bearing.
         //
         // **Linear TRC.** A gamma-1.0 curve is what makes the profile describe the
@@ -1182,24 +1197,31 @@ mod tests {
         //
         // **RGB data space + Display class.** ICC.1:2022 §9.2.17 permits a `cicpTag`
         // only for an RGB/YCbCr/XYZ data space in an Input or Display profile. This
-        // profile carries no `cicpTag` (see `hdr_linear_bt2020_icc`), but the PQ/HLG
+        // profile carries no `cicpTag` (see `hdr_linear_icc`), but the PQ/HLG
         // TIFFs in this task's second half must, and they are built by the same
         // `synth` helper — so pinning the class and space here is what tells the next
         // author the permission holds before they add the tag.
         use lcms2::{ColorSpaceSignature, ProfileClassSignature, Tag, TagSignature};
-        let (white, primaries) = lcms_inputs(definitions::BT2020);
-        let profile = synth(white, primaries, 1.0).unwrap();
-
-        let Tag::ToneCurve(trc) = profile.read_tag(TagSignature::RedTRCTag) else {
-            panic!("missing red TRC");
-        };
-        assert!(
-            trc.is_linear(),
-            "the linear-BT.2020 profile's TRC must be linear (parametric type {})",
-            trc.parametric_type()
-        );
-        assert_eq!(profile.color_space(), ColorSpaceSignature::RgbData);
-        assert_eq!(profile.device_class(), ProfileClassSignature::DisplayClass);
+        for gamut in LINEAR_GAMUTS {
+            // The bytes a file embeds, not a rebuilt profile.
+            let profile = Profile::new_icc(&hdr_linear_icc(gamut).unwrap()).unwrap();
+            for sig in [
+                TagSignature::RedTRCTag,
+                TagSignature::GreenTRCTag,
+                TagSignature::BlueTRCTag,
+            ] {
+                let Tag::ToneCurve(trc) = profile.read_tag(sig) else {
+                    panic!("{gamut:?}: missing {sig:?}");
+                };
+                assert!(
+                    trc.is_linear(),
+                    "{gamut:?}: {sig:?} must be linear (parametric type {})",
+                    trc.parametric_type()
+                );
+            }
+            assert_eq!(profile.color_space(), ColorSpaceSignature::RgbData);
+            assert_eq!(profile.device_class(), ProfileClassSignature::DisplayClass);
+        }
     }
 
     #[test]
@@ -1245,28 +1267,45 @@ mod tests {
         }
     }
 
+    /// Every gamut a linear HDR TIFF is written in.
+    const LINEAR_GAMUTS: [DestinationGamut; 4] = [
+        DestinationGamut::DisplayP3,
+        DestinationGamut::AdobeRgb,
+        DestinationGamut::Srgb,
+        DestinationGamut::Bt2020,
+    ];
+
     #[test]
-    fn hdr_linear_bt2020_icc_is_deterministic_and_named() {
-        // Same dateTime-zeroing guarantee the other synthesized profiles get: two
-        // builds seconds apart must be byte-identical, or the TIFF's determinism
-        // contract fails on a single seconds byte buried in the profile header.
-        let first = hdr_linear_bt2020_icc().unwrap();
-        let second = hdr_linear_bt2020_icc().unwrap();
-        assert_eq!(first, second);
-        assert!(!first.is_empty());
-        // And it is *not* the ACEScg or Display P3 profile — a copy-paste of the wrong
-        // `definitions` constant would otherwise pass every assertion above.
-        assert_ne!(first, icc_profile(&OutputSpace::AcesCg).unwrap());
-        assert_ne!(first, icc_profile(&OutputSpace::DisplayP3).unwrap());
-        // Carries a real description, not Little CMS's default "RGB built-in".
-        let profile = Profile::new_icc(&first).unwrap();
-        let description = profile
-            .info(lcms2::InfoType::Description, lcms2::Locale::none())
-            .unwrap_or_default();
-        assert!(
-            description.contains("BT.2020") && description.contains("Linear"),
-            "unexpected profile description {description:?}"
-        );
+    fn hdr_linear_icc_is_deterministic_distinct_and_named() {
+        let mut seen = Vec::new();
+        for gamut in LINEAR_GAMUTS {
+            // Same dateTime-zeroing guarantee the other synthesized profiles get: two
+            // builds seconds apart must be byte-identical, or the TIFF's determinism
+            // contract fails on a single seconds byte buried in the profile header.
+            let first = hdr_linear_icc(gamut).unwrap();
+            assert_eq!(first, hdr_linear_icc(gamut).unwrap());
+            // Not another profile: a copy-paste of the wrong `definitions` constant
+            // would otherwise pass every assertion here.
+            assert_ne!(first, icc_profile(&OutputSpace::AcesCg).unwrap());
+            assert_ne!(first, icc_profile(&OutputSpace::DisplayP3).unwrap());
+            assert!(
+                !seen.contains(&first),
+                "{gamut:?} repeats another gamut's profile"
+            );
+            // The description is in every file's bytes: pinned, not merely present.
+            let description = Profile::new_icc(&first)
+                .unwrap()
+                .info(lcms2::InfoType::Description, lcms2::Locale::none())
+                .unwrap_or_default();
+            let expected = match gamut {
+                DestinationGamut::DisplayP3 => "NC Display-Linear Display P3 (D65)",
+                DestinationGamut::AdobeRgb => "NC Display-Linear Adobe RGB (D65)",
+                DestinationGamut::Srgb => "NC Display-Linear sRGB (D65)",
+                DestinationGamut::Bt2020 => "NC Display-Linear BT.2020 (D65)",
+            };
+            assert_eq!(description, expected);
+            seen.push(first);
+        }
     }
 
     /// The language/country of tag `sig`'s first `multiLocalizedUnicodeType` record,
@@ -1303,12 +1342,13 @@ mod tests {
         // profile used to write the null locale while Little CMS's own default path
         // put `enUS` on the *same profile's* `cprt` — internally inconsistent, which
         // is the shape of the bug this pins.
-        for icc in [
-            hdr_linear_bt2020_icc().unwrap(),
+        let linear = LINEAR_GAMUTS.map(|g| hdr_linear_icc(g).unwrap());
+        for icc in linear.into_iter().chain([
             hdr_pq_tiff_icc().unwrap(),
             hdr_hlg_tiff_icc().unwrap(),
             adobe_rgb_icc(),
-        ] {
+            srgb_icc(),
+        ]) {
             assert_eq!(
                 mluc_locale(&icc, b"desc"),
                 (b"en".to_vec(), b"US".to_vec()),
@@ -1626,6 +1666,76 @@ mod tests {
         assert_eq!(
             desc.text(lcms2::Locale::new("en_US")).unwrap(),
             ADOBE_RGB_DESCRIPTION
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // sRGB, the third SDR destination gamut
+    // -----------------------------------------------------------------------
+
+    /// The sRGB profile's bytes, as [`encode_display_linear`] embeds them.
+    fn srgb_icc() -> Vec<u8> {
+        let image = LinearImage::new(1, 1, vec![0.5; 3], None).unwrap();
+        encode_display_linear(image, DestinationGamut::Srgb)
+            .unwrap()
+            .1
+    }
+
+    #[test]
+    fn srgb_colorants_match_little_cms_built_in_srgb() {
+        // Little CMS's `new_srgb()` hard-codes the sRGB primaries and D65 in its own
+        // source, so it checks `definitions::REC709` independently. (Published sRGB
+        // colorant tables disagree in the fourth decimal of blue Z: some adapt to a D50
+        // of Z 0.82521, not the ICC PCS's 0.8249.)
+        use lcms2::{Tag, TagSignature};
+        let ours = Profile::new_icc(&srgb_icc()).unwrap();
+        let reference = Profile::new_srgb();
+        for sig in [
+            TagSignature::RedColorantTag,
+            TagSignature::GreenColorantTag,
+            TagSignature::BlueColorantTag,
+        ] {
+            let (Tag::CIEXYZ(got), Tag::CIEXYZ(want)) =
+                (ours.read_tag(sig), reference.read_tag(sig))
+            else {
+                panic!("missing colorant tag {sig:?}");
+            };
+            for (got, want) in [got.X, got.Y, got.Z]
+                .into_iter()
+                .zip([want.X, want.Y, want.Z])
+            {
+                assert!(
+                    (got - want).abs() < ADOBE_RGB_COLORANT_TOLERANCE,
+                    "{sig:?} colorant {got} != Little CMS's {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn srgb_encode_applies_only_the_srgb_curve_and_is_named() {
+        let linear = [0.002, 0.002, 0.002, 0.5, 0.5, 0.5, 0.8, 0.1, 0.4];
+        let image = LinearImage::new(3, 1, linear.to_vec(), Some(vec![0.1, 0.2, 0.3])).unwrap();
+        let (encoded, icc) = encode_display_linear(image, DestinationGamut::Srgb).unwrap();
+        assert_eq!(icc, srgb_icc(), "must serialize to identical bytes");
+        assert!(icc[24..36].iter().all(|&b| b == 0), "dateTime not zeroed");
+        assert_ne!(icc, icc_profile(&OutputSpace::DisplayP3).unwrap());
+        assert_eq!(encoded.ir, Some(vec![0.1, 0.2, 0.3]));
+        for (got, inp) in encoded.rgb.iter().zip(linear) {
+            let want = srgb_encode(inp);
+            assert!(
+                (got - want).abs() < 2e-3,
+                "{got} != sRGB-encoded {want} (input {inp})"
+            );
+        }
+        let profile = Profile::new_icc(&icc).unwrap();
+        let lcms2::Tag::MLU(desc) = profile.read_tag(lcms2::TagSignature::ProfileDescriptionTag)
+        else {
+            panic!("missing description");
+        };
+        assert_eq!(
+            desc.text(lcms2::Locale::new("en_US")).unwrap(),
+            SRGB_DESCRIPTION
         );
     }
 

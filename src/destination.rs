@@ -61,8 +61,8 @@ pub trait Axis: Copy + Eq + fmt::Debug + 'static {
     fn stated(axes: &DisplayAxes) -> Option<Self>;
     /// State this axis's value.
     fn set(axes: &mut DisplayAxes, value: Self);
-    /// This axis's value in a set of defaults.
-    fn default_in(d: &Defaults) -> Self;
+    /// This axis's default in `d` over the rows still consistent, if it has one there.
+    fn default_in(d: &Defaults, rows: &[Row]) -> Option<Self>;
 }
 
 /// The rendering's defaults for unset axes, and their derivation order
@@ -73,8 +73,12 @@ pub struct Defaults {
     pub transfer: Transfer,
     pub gamut: Gamut,
     pub container: Container,
+    /// The gamut an unset gamut takes when every row left is linear, or `None` to refuse
+    /// and ask. A linear TIFF is written in several gamuts, and `gamut`'s default there
+    /// would silently turn `--transfer linear` from BT.2020 into Display P3.
+    pub linear_gamut: Option<Gamut>,
     /// Derive the container first, so `direct`'s lossless TIFF default is not lost to its
-    /// `hdr` default (range first, `--gamut display-p3` would land on the gain-map JPEG).
+    /// `hdr` default (range first, `--transfer native` would land on the gain-map JPEG).
     pub container_first: bool,
 }
 
@@ -85,6 +89,7 @@ impl Defaults {
         transfer: Transfer::DEFAULT,
         gamut: Gamut::DEFAULT,
         container: Container::DEFAULT,
+        linear_gamut: None,
         container_first: false,
     };
 }
@@ -189,8 +194,8 @@ impl Axis for Range {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.range = Some(value);
     }
-    fn default_in(d: &Defaults) -> Self {
-        d.range
+    fn default_in(d: &Defaults, _: &[Row]) -> Option<Self> {
+        Some(d.range)
     }
 }
 axis_serde!(Range);
@@ -236,8 +241,8 @@ impl Axis for Transfer {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.transfer = Some(value);
     }
-    fn default_in(d: &Defaults) -> Self {
-        d.transfer
+    fn default_in(d: &Defaults, _: &[Row]) -> Option<Self> {
+        Some(d.transfer)
     }
 }
 axis_serde!(Transfer);
@@ -247,6 +252,7 @@ axis_serde!(Transfer);
 pub enum Gamut {
     DisplayP3,
     AdobeRgb,
+    Srgb,
     Bt2020,
 }
 
@@ -256,13 +262,19 @@ impl Gamut {
         match self {
             Gamut::DisplayP3 => DestinationGamut::DisplayP3,
             Gamut::AdobeRgb => DestinationGamut::AdobeRgb,
+            Gamut::Srgb => DestinationGamut::Srgb,
             Gamut::Bt2020 => DestinationGamut::Bt2020,
         }
     }
 }
 
 impl Axis for Gamut {
-    const ALL: &'static [Self] = &[Gamut::DisplayP3, Gamut::AdobeRgb, Gamut::Bt2020];
+    const ALL: &'static [Self] = &[
+        Gamut::DisplayP3,
+        Gamut::AdobeRgb,
+        Gamut::Srgb,
+        Gamut::Bt2020,
+    ];
     const DEFAULT: Self = Gamut::DisplayP3;
     const FLAG: &'static str = "--gamut";
     const KEY: &'static str = "gamut";
@@ -270,6 +282,7 @@ impl Axis for Gamut {
         match self {
             Gamut::DisplayP3 => "display-p3",
             Gamut::AdobeRgb => "adobe-rgb",
+            Gamut::Srgb => "srgb",
             Gamut::Bt2020 => "bt2020",
         }
     }
@@ -282,8 +295,13 @@ impl Axis for Gamut {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.gamut = Some(value);
     }
-    fn default_in(d: &Defaults) -> Self {
-        d.gamut
+    fn default_in(d: &Defaults, rows: &[Row]) -> Option<Self> {
+        // Transfer is derived before gamut in either order, so `rows` share one transfer.
+        if rows.iter().all(|r| r.transfer == Transfer::Linear) {
+            d.linear_gamut
+        } else {
+            Some(d.gamut)
+        }
     }
 }
 axis_serde!(Gamut);
@@ -342,8 +360,8 @@ impl Axis for Container {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.container = Some(value);
     }
-    fn default_in(d: &Defaults) -> Self {
-        d.container
+    fn default_in(d: &Defaults, _: &[Row]) -> Option<Self> {
+        Some(d.container)
     }
 }
 axis_serde!(Container);
@@ -403,9 +421,10 @@ const fn row(
 
 /// **The destination set.** Every combination not listed is refused.
 ///
-/// Why the gaps: PQ and HLG are Rec.2100 signals, so BT.2020 only; Adobe RGB is an
-/// SDR editing space; AVIF is written only for a Rec.2100 signal; a linear float TIFF
-/// is the HDR interchange master; a JPEG is 8-bit, so it carries HDR only as a gain map.
+/// Why the gaps: PQ and HLG are Rec.2100 signals, so BT.2020 only; AVIF is written only
+/// for a Rec.2100 signal; a linear float TIFF is the lossless HDR master, in the gamut
+/// an editor works in; a JPEG is 8-bit, so it carries HDR only as a gain map, on a base
+/// verified with a decoder (Display P3, sRGB).
 pub const ROWS: &[Row] = &[
     row(
         Range::Sdr,
@@ -420,6 +439,34 @@ pub const ROWS: &[Row] = &[
         Gamut::AdobeRgb,
         Container::Tiff,
         Status::Ready(Encoding::SdrTiff),
+    ),
+    row(
+        Range::Sdr,
+        Transfer::Native,
+        Gamut::Srgb,
+        Container::Tiff,
+        Status::Ready(Encoding::SdrTiff),
+    ),
+    row(
+        Range::Hdr,
+        Transfer::Linear,
+        Gamut::DisplayP3,
+        Container::Tiff,
+        Status::Ready(Encoding::HdrLinearTiff),
+    ),
+    row(
+        Range::Hdr,
+        Transfer::Linear,
+        Gamut::AdobeRgb,
+        Container::Tiff,
+        Status::Ready(Encoding::HdrLinearTiff),
+    ),
+    row(
+        Range::Hdr,
+        Transfer::Linear,
+        Gamut::Srgb,
+        Container::Tiff,
+        Status::Ready(Encoding::HdrLinearTiff),
     ),
     row(
         Range::Hdr,
@@ -464,9 +511,25 @@ pub const ROWS: &[Row] = &[
         Status::Ready(Encoding::GainMapJpeg),
     ),
     row(
+        Range::Hdr,
+        Transfer::Native,
+        Gamut::Srgb,
+        Container::Jpeg,
+        Status::Ready(Encoding::GainMapJpeg),
+    ),
+    row(
         Range::Sdr,
         Transfer::Native,
         Gamut::DisplayP3,
+        Container::Jpeg,
+        Status::NotYet {
+            arriving_with: "the SDR JPEG destination (`output/sdr-jpeg-preset`)",
+        },
+    ),
+    row(
+        Range::Sdr,
+        Transfer::Native,
+        Gamut::Srgb,
         Container::Jpeg,
         Status::NotYet {
             arriving_with: "the SDR JPEG destination (`output/sdr-jpeg-preset`)",
@@ -586,8 +649,8 @@ pub enum Fault {
         changes: Vec<Change>,
         instead: Vec<DisplayAxes>,
     },
-    /// An unset axis the table cannot decide: its default is not on any consistent row,
-    /// and more than one value is. `choices` are the values that lead to a ready row.
+    /// An unset axis the table cannot decide: its default is not on any consistent row
+    /// (or it has none there, [`Defaults::linear_gamut`]), and more than one value is. `choices` are the values that lead to a ready row.
     Ambiguous {
         flag: &'static str,
         key: &'static str,
@@ -602,6 +665,9 @@ pub enum Fault {
         arriving_with: &'static str,
         adding: Vec<DisplayAxes>,
         instead: Vec<DisplayAxes>,
+        /// The axis (flag, key) the stated axes leave open when every value of it names a
+        /// row not written yet: `row` is then the first of those, not a resolution.
+        open: Option<(&'static str, &'static str)>,
     },
 }
 
@@ -642,35 +708,66 @@ pub fn resolve(axes: &DisplayAxes, d: &Defaults) -> std::result::Result<Resolved
                 container: row.container,
                 encoding,
             }),
-            Status::NotYet { arriving_with } => {
-                let adding: Vec<DisplayAxes> = ROWS
-                    .iter()
-                    .filter(|r| is_ready(r) && axes.admits(r))
-                    .map(|r| fewest(axes, r, d))
-                    .collect();
-                let instead = if adding.is_empty() {
-                    closest(axes, d)
-                } else {
-                    Vec::new()
-                };
-                Err(Fault::NotYet {
-                    row,
-                    arriving_with,
-                    adding,
-                    instead,
-                })
-            }
+            Status::NotYet { arriving_with } => Err(not_yet(row, arriving_with, None, axes, d)),
         },
         Derivation::NoRow => Err(conflict(axes, d)),
         Derivation::Open {
             flag,
             key,
             candidates,
-        } => Err(Fault::Ambiguous {
-            flag,
-            key,
-            choices: resolving(&candidates, d),
-        }),
+        } => {
+            let choices = resolving(&candidates, d);
+            // No choice reaches a written row: asking would offer nothing, so name the
+            // first row not written yet instead.
+            match first_row(&candidates, d) {
+                Some(
+                    row @ Row {
+                        status: Status::NotYet { arriving_with },
+                        ..
+                    },
+                ) if choices.is_empty() => {
+                    Err(not_yet(row, arriving_with, Some((flag, key)), axes, d))
+                }
+                _ => Err(Fault::Ambiguous { flag, key, choices }),
+            }
+        }
+    }
+}
+
+/// A [`Fault::NotYet`] for `row`, its remedies computed against what was stated.
+fn not_yet(
+    row: Row,
+    arriving_with: &'static str,
+    open: Option<(&'static str, &'static str)>,
+    axes: &DisplayAxes,
+    d: &Defaults,
+) -> Fault {
+    let adding: Vec<DisplayAxes> = ROWS
+        .iter()
+        .filter(|r| is_ready(r) && axes.admits(r))
+        .map(|r| fewest(axes, r, d))
+        .collect();
+    let instead = if adding.is_empty() {
+        closest(axes, d)
+    } else {
+        Vec::new()
+    };
+    Fault::NotYet {
+        row,
+        arriving_with,
+        adding,
+        instead,
+        open,
+    }
+}
+
+/// The row the first candidate of an open axis leads to, settling any axis it leaves
+/// open the same way.
+fn first_row(candidates: &[(&'static str, DisplayAxes)], d: &Defaults) -> Option<Row> {
+    match derive(&candidates.first()?.1, d) {
+        Derivation::Row(row) => Some(row),
+        Derivation::Open { candidates, .. } => first_row(&candidates, d),
+        Derivation::NoRow => None,
     }
 }
 
@@ -735,8 +832,8 @@ fn narrow<A: Axis>(
         .copied()
         .filter(|v| rows.iter().any(|r| A::of(r) == *v))
         .collect();
-    let chosen = if values.contains(&A::default_in(d)) {
-        A::default_in(d)
+    let chosen = if let Some(default) = A::default_in(d, rows).filter(|v| values.contains(v)) {
+        default
     } else if let [only] = values.as_slice() {
         *only
     } else {
@@ -1080,8 +1177,39 @@ mod tests {
         );
         let r = resolve(&axes(None, None, Some(Gamut::AdobeRgb), None), &STD).unwrap();
         assert_eq!(r.encoding, Encoding::SdrTiff);
-        let r = resolve(&axes(None, Some(Transfer::Linear), None, None), &STD).unwrap();
-        assert_eq!(r.encoding, Encoding::HdrLinearTiff);
+    }
+
+    #[test]
+    fn linear_alone_asks_for_the_gamut_unless_the_rendering_names_one() {
+        // Display P3, the gamut default, is on a linear row: taking it would silently
+        // turn what was the BT.2020 TIFF into a P3 one.
+        let linear = axes(None, Some(Transfer::Linear), None, None);
+        assert_eq!(
+            resolve(&linear, &STD),
+            Err(Fault::Ambiguous {
+                flag: "--gamut",
+                key: "gamut",
+                choices: vec!["display-p3", "adobe-rgb", "srgb", "bt2020"],
+            })
+        );
+        // `direct` names its linear gamut.
+        let r = resolve(&linear, &crate::rendering::DIRECT.axes).unwrap();
+        assert_eq!(
+            (r.gamut, r.encoding),
+            (Gamut::AdobeRgb, Encoding::HdrLinearTiff)
+        );
+        // The gamut default still applies off the linear rows.
+        let r = resolve(&axes(Some(Range::Sdr), None, None, None), &STD).unwrap();
+        assert_eq!(r.gamut, Gamut::DisplayP3);
+        for g in [
+            Gamut::DisplayP3,
+            Gamut::AdobeRgb,
+            Gamut::Srgb,
+            Gamut::Bt2020,
+        ] {
+            let r = resolve(&axes(None, Some(Transfer::Linear), Some(g), None), &STD).unwrap();
+            assert_eq!((r.range, r.encoding), (Range::Hdr, Encoding::HdrLinearTiff));
+        }
     }
 
     #[test]
@@ -1129,12 +1257,27 @@ mod tests {
             panic!("expected NotYet");
         };
         assert_eq!((row.range, row.container), (Range::Sdr, Container::Jpeg));
-        // The one ready JPEG, as the fewest flags to add: `--range hdr`.
-        let offered: Vec<_> = adding.iter().map(|a| a.stated_axes()).collect();
-        assert_eq!(offered.len(), 1, "{offered:?}");
+        // The ready JPEGs, each as the fewest flags to add: `--range hdr` for the
+        // Display P3 gain map, and the sRGB one's gamut beside it (`--gamut srgb` alone
+        // is the sRGB SDR JPEG, also not written yet).
+        let offered: Vec<Vec<_>> = adding
+            .iter()
+            .map(|a| a.stated_axes().iter().map(|s| s.value).collect())
+            .collect();
+        assert_eq!(offered, [vec!["hdr"], vec!["hdr", "srgb"]]);
+        // Under `direct` the gamut is open between two rows not written yet: that is
+        // what the refusal says, not an empty "choose one".
+        let sdr_jpeg = axes(Some(Range::Sdr), None, None, Some(Container::Jpeg));
+        let err = resolve(&sdr_jpeg, &crate::rendering::DIRECT.axes).unwrap_err();
         assert!(
-            offered[0].len() == 1 && offered[0][0].value == "hdr",
-            "{offered:?}"
+            matches!(
+                err,
+                Fault::NotYet {
+                    open: Some(("--gamut", "gamut")),
+                    ..
+                }
+            ),
+            "{err:?}"
         );
     }
 
@@ -1143,9 +1286,9 @@ mod tests {
         // `--container tiff` is stated and innocent; the pair is range × gamut.
         let err = resolve(
             &axes(
-                Some(Range::Hdr),
+                Some(Range::Sdr),
                 None,
-                Some(Gamut::AdobeRgb),
+                Some(Gamut::Bt2020),
                 Some(Container::Tiff),
             ),
             &STD,
@@ -1293,7 +1436,7 @@ mod tests {
     #[test]
     fn parse_is_case_insensitive_and_lists_every_value() {
         assert_eq!(parse::<Gamut>(" Display-P3 "), Ok(Gamut::DisplayP3));
-        let err = parse::<Gamut>("srgb").unwrap_err();
+        let err = parse::<Gamut>("rec709").unwrap_err();
         for v in Gamut::ALL {
             assert!(err.contains(v.name()), "{err}");
         }
@@ -1314,11 +1457,11 @@ mod tests {
             r#""film-master""#
         );
         assert!(serde_json::from_str::<OutputSection>(r#"{"display":{"depth":"u16"}}"#).is_err());
-        let err = serde_json::from_str::<OutputSection>(r#"{"display":{"gamut":"srgb"}}"#)
+        let err = serde_json::from_str::<OutputSection>(r#"{"display":{"gamut":"rec709"}}"#)
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("accepted: display-p3, adobe-rgb, bt2020"),
+            err.contains("accepted: display-p3, adobe-rgb, srgb, bt2020"),
             "{err}"
         );
     }

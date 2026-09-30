@@ -709,6 +709,11 @@ frames; the look's default contrast is `no-roll-defaults`'.
   re-run against the calibration frames — `scale` from a bracketed neutral's slope, and
   whether 1.8 linearizes — is `neutrality-gate`'s. `offset-question` and
   `user-calibration-procedure` inherit the values unchanged.
+- 2026-09-29: **`direct`'s unset destination moved** (`nf-destinations/easy-destination-rows`):
+  `--rendering direct` alone now writes the Adobe RGB float TIFF, where it wrote the BT.2020
+  one, and `--gamut display-p3` under `direct` the Display P3 float TIFF, where it wrote the
+  SDR TIFF. The held form, `--rendering direct --range sdr`, is unchanged (the Adobe RGB
+  16-bit TIFF), so no round above is affected.
 
 ## offset-question
 

@@ -29,8 +29,8 @@ use std::fmt;
 
 use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::{
-    ACESCG_TO_ADOBE_RGB, ACESCG_TO_BT2020, ACESCG_TO_DISPLAY_P3, ADOBE_RGB_LUMA, BT2020_LUMA,
-    DISPLAY_P3_LUMA,
+    ACESCG_TO_ADOBE_RGB, ACESCG_TO_BT2020, ACESCG_TO_DISPLAY_P3, ACESCG_TO_SRGB, ADOBE_RGB_LUMA,
+    BT2020_LUMA, DISPLAY_P3_LUMA, SRGB_LUMA,
 };
 use crate::pipeline::fit_range::RangeFittedImage;
 use crate::pipeline::pixels;
@@ -60,6 +60,9 @@ pub enum DestinationGamut {
     /// that editors expect it is why `nf-destinations/direct-preset` wants it, not
     /// why it belongs here.
     AdobeRgb,
+    /// sRGB (Rec.709) primaries, D65 white — the gamut a viewer that ignores profiles
+    /// assumes.
+    Srgb,
     /// ITU-R BT.2020 primaries, D65 white — the gamut of the Rec.2100 HDR signals (PQ,
     /// HLG) and of the linear HDR interchange TIFF. Encoded only by the HDR encoders:
     /// no SDR destination renders into it.
@@ -72,6 +75,7 @@ impl DestinationGamut {
         match self {
             DestinationGamut::DisplayP3 => ACESCG_TO_DISPLAY_P3,
             DestinationGamut::AdobeRgb => ACESCG_TO_ADOBE_RGB,
+            DestinationGamut::Srgb => ACESCG_TO_SRGB,
             DestinationGamut::Bt2020 => ACESCG_TO_BT2020,
         }
     }
@@ -82,6 +86,7 @@ impl DestinationGamut {
         match self {
             DestinationGamut::DisplayP3 => DISPLAY_P3_LUMA,
             DestinationGamut::AdobeRgb => ADOBE_RGB_LUMA,
+            DestinationGamut::Srgb => SRGB_LUMA,
             DestinationGamut::Bt2020 => BT2020_LUMA,
         }
     }
@@ -91,6 +96,7 @@ impl DestinationGamut {
         match self {
             DestinationGamut::DisplayP3 => "display-p3",
             DestinationGamut::AdobeRgb => "adobe-rgb",
+            DestinationGamut::Srgb => "srgb",
             DestinationGamut::Bt2020 => "bt2020",
         }
     }
@@ -114,6 +120,7 @@ impl FitGamutParams {
             DestinationGamut::AdobeRgb => {
                 "acescg-to-adobe-rgb-matrix+neutral-axis-radial-boundary-v2"
             }
+            DestinationGamut::Srgb => "acescg-to-srgb-matrix+neutral-axis-radial-boundary-v2",
             DestinationGamut::Bt2020 => "acescg-to-bt2020-matrix+neutral-axis-radial-boundary-v2",
         }
     }
@@ -280,6 +287,7 @@ mod tests {
         let m = match gamut {
             DestinationGamut::DisplayP3 => ACESCG_TO_DISPLAY_P3,
             DestinationGamut::AdobeRgb => ACESCG_TO_ADOBE_RGB,
+            DestinationGamut::Srgb => ACESCG_TO_SRGB,
             DestinationGamut::Bt2020 => ACESCG_TO_BT2020,
         };
         let pre_map = aces
@@ -330,6 +338,12 @@ mod tests {
                 film_for([0.06, 0.8, 0.1], ADOBE_RGB),
                 DestinationGamut::AdobeRgb,
                 DestinationGamut::DisplayP3,
+            ),
+            // A green Adobe RGB holds is past sRGB's, which shares its red and blue.
+            (
+                film_for([0.06, 0.8, 0.1], ADOBE_RGB),
+                DestinationGamut::AdobeRgb,
+                DestinationGamut::Srgb,
             ),
         ];
         for (film, holds, cannot) in cases {

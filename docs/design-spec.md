@@ -455,7 +455,7 @@ curve) and owns the resulting `FilmRgbImage` boundary:
   render, stopped one stage earlier: `render_linear` runs, `encode_transfer` does
   **not**, and `io::encode::encode_hdr_linear` writes the display-linear BT.2020
   samples verbatim as 32-bit float with the linear-BT.2020 profile from
-  `color::hdr_linear_bt2020_icc`. Its peak memory phase is the render rather
+  `color::hdr_linear_icc`. Its peak memory phase is the render rather
   than the encode — f32 needs no quantization buffer and the `tiff` writer streams
   strips instead of assembling a container in memory. It is not alone in that:
   `hdr-pq-tiff`/`hdr-hlg-tiff` and the SDR presets `display-p3`/`compatibility`
@@ -1098,10 +1098,10 @@ top-level **document version** rather than per-object ones:
   the report's clip count), otherwise at the encode. A pixel whose destination
   luminance is `≤ 0` renders black. The report names it after the destination's gamut,
   `acescg-to-<gamut>-matrix+neutral-axis-radial-boundary-v2` (`display-p3`,
-  `adobe-rgb` or `bt2020`).
+  `adobe-rgb`, `srgb` or `bt2020`).
 - **`output` is the destination, as four separate axes** (`nf-destinations/preset-set`,
   `crate::destination`): `output.display` with `range` (`sdr`|`hdr`), `transfer`
-  (`native`|`linear`|`pq`|`hlg`), `gamut` (`display-p3`|`adobe-rgb`|`bt2020`) and
+  (`native`|`linear`|`pq`|`hlg`), `gamut` (`display-p3`|`adobe-rgb`|`srgb`|`bt2020`) and
   `container` (`tiff`|`jpeg`|`avif`), flags `--range`/`--transfer`/`--gamut`/
   `--container`; or `"film-master"` (`--film-master`), the fixed decode's linear
   ACEScg with no rendering stage, which refuses any stage the recipe asks for — scene
@@ -2458,8 +2458,9 @@ and is worth re-checking whenever one is added. The six new-flow modules are the
 migration's chain (`docs/design-update.md`, `docs/nf-migration.md`). `--new-flow`
 runs them — the fixed decode, scene correction's white balance and exposure, the
 look, fit range, fit gamut's radial map into the destination's gamut, and the
-destination set in `destination.rs` (SDR TIFFs in Display P3 or Adobe RGB, HDR
-BT.2020 as a float, PQ or HLG TIFF or a PQ or HLG AVIF, and the film master) — but
+destination set in `destination.rs` (SDR TIFFs in Display P3, Adobe RGB or sRGB, HDR
+as a float TIFF in Display P3, Adobe RGB, sRGB or BT.2020, BT.2020 as a PQ or HLG TIFF
+or AVIF, the gain-map JPEG on a Display P3 or sRGB base, and the film master) — but
 nothing in this spec's pipeline runs through them yet.
 
 ### Candidate crates
