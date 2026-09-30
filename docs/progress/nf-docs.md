@@ -18,6 +18,8 @@ The only change so far is CLAUDE.md's layout (2026-09-24, `claude-md`): it now
 holds only cross-cutting rules, and subsystem traps live in module docs.
 `design-spec.md` became the design on 2026-09-30 (`design-spec`); `design-update.md`
 keeps its evidence (Part 3, the appendices) and a map of where Parts 1–2 went.
+`using-nc.md` was re-verified against the binary on 2026-09-30 (`using-nc`); what is
+left is `claude-md`.
 
 ## design-spec
 
@@ -71,10 +73,26 @@ keeps its evidence (Part 3, the appendices) and a map of where Parts 1–2 went.
 
 ## using-nc
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-30
 
 - 2026-09-19: created with the new-flow plan. Goal: bring the guide up to the new flow.
+- 2026-09-30: **done — a re-verification, not the rewrite the task expected.** Each
+  task that shipped a knob had already moved the guide onto the chain (the convention
+  that a user-visible change updates the guide in its own PR held), so the shape was
+  right. Every command, quoted message, report value and exit code was re-run against
+  the binary at `038e7a3` on `tests/fixtures/`. Six had drifted:
+  - the "no film base selected" message now also names `measure-roll --out`;
+  - `hanten params` prints `roll.exposure` (added by `nf-calibration/roll-exposure`);
+  - `chain.decode` also carries `reads_reference`;
+  - §7 said a scene-side veil/fog subtraction "has not landed" — `flare-removal` closed
+    it as not needed;
+  - the gain-map example's `max` moved (≈1.91 → ≈1.43 on the HDRi fixture);
+  - `measure-roll` also refuses the `convert`-only operational flags.
+  The header's verification pin is now one line and a commit, not a list of tasks.
+  Examples still quoting a real roll or an uncropped scan are marked as such.
+  Closed `core/unfrozen-auto-mode-warning` and `output/sdr-report-block` as moot in
+  the same pass (user, 2026-09-30).
 
 ## claude-md
 

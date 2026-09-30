@@ -1495,12 +1495,16 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 ## sdr-report-block
 
-**Status:** not started
-**Updated:** 2026-09-13
+**Status:** closed — moot
+**Updated:** 2026-09-30
 
 - Goal: a machine-readable SDR contract block in the report, the `hdr_coded_tiff`
   shape. Split out of `sdr-preset-followups`; `RenderedSdr::metadata()`'s
   `#[allow(dead_code)]` is the marker.
+- 2026-09-30: **closed — moot.** `RenderedSdr`, `SdrRenderMetadata` and the SDR presets
+  went with `nf-core/default-flip`; the report's `chain` block (`nf-core/report-contract`)
+  states every destination's render as fields. Closed with the user during
+  `nf-docs/using-nc`.
 
 ## sdr-jpeg-preset
 

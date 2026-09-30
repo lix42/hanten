@@ -917,8 +917,8 @@ complete profile restates the decode, so it must be layered before the measured 
 
 ## unfrozen-auto-mode-warning
 
-**Status:** not started
-**Updated:** 2026-08-11
+**Status:** closed — moot
+**Updated:** 2026-09-30
 
 - Goal: warn when a recipe applied to a roll still re-measures per frame.
 - The gap, one run with `--base-region … --auto-wb percentile --auto-d-max`: the
@@ -932,6 +932,13 @@ complete profile restates the decode, so it must be layered before the measured 
 
 The 2026-09-01 `conversion-versioning` cross-reference that had been appended under this
 heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`).
+
+### 2026-09-30 — closed, moot
+
+Both auto modes it warns about retired (`dmax: "auto"` in `nf-retire/dmax-machinery`,
+the per-frame white balance in `nf-scene-correction/roll-white-balance`); the `region`
+film base left is the case `roll` already warns about. Closed with the user during
+`nf-docs/using-nc`.
 
 ## calibration-recipe-section
 

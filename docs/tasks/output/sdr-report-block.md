@@ -1,5 +1,12 @@
 # Machine-readable SDR contract in the report
 
+> **Closed — moot (2026-09-30).** It was written against the `display-p3` /
+> `compatibility` presets and the `SdrRenderMetadata` their renderer dropped; both went
+> with `nf-core/default-flip`. Every destination's report now states its render as
+> fields in `chain` (`nf-core/report-contract`): `fit_range` (operator, headroom, white
+> point, display peak, display black), the fit-gamut map in `stages`, and `destination`.
+> What follows is the plan as it stood.
+
 ## Goal
 
 Make the SDR presets' render contract machine-readable in the JSON report, the way
