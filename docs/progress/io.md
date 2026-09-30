@@ -553,7 +553,7 @@ pre-change binary: byte-identical primary, sidecar differing only in
 ## gray-primary-decode
 
 **Status:** not started
-**Updated:** 2026-08-11
+**Updated:** 2026-09-29
 
 - Goal: accept a SilverFast scan whose primary is 16-bit grayscale; IR page unchanged.
 - Found 2026-08-11 while testing whether IR can identify the film holder without a
@@ -565,6 +565,7 @@ pre-change binary: byte-identical primary, sidecar differing only in
   the IR plane beside an RGB `IFD0`; `algo/bw-support` explicitly excludes input-format
   work ("16-bit RAW scan *input* is a separate concern"). So `bw-support` was blocked on
   a task that did not exist.
+- 2026-09-29: marked **low priority** (user), so it is not suggested first.
 
 ## positive-input-mode
 

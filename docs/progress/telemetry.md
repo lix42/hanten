@@ -354,11 +354,11 @@ What shipped, and the parts the open tasks build on:
 
 ## ingestion-service
 **Status:** not started
-**Updated:** 2026-07-23
+**Updated:** 2026-09-29
 
 - Goal: implement the validating Cloudflare Worker + D1 ingestion, exact
   deduplication, retention, and initial performance/failure analysis queries.
-
+- 2026-09-29: marked **low priority** (user), so it is not suggested first.
 
 ## upload
 **Status:** not started

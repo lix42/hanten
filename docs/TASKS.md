@@ -727,7 +727,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `io/multi-frame-memory-growth` (hardening): `io/memory-preflight`
   — the gate judges each frame alone, and a roll of slightly different frame sizes
   peaks several times higher (0.6 → 2.8 GB over 35 frames)
-- `io/gray-primary-decode` (post-MVP): `io/silverfast-decode`
+- `io/gray-primary-decode` (post-MVP, **low priority**): `io/silverfast-decode`
   — accept a 16-bit **grayscale primary** (IR page unchanged). Neither existing task owns it:
   `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and
   `algo/bw-support` explicitly excludes input-format work. Blocks `algo/bw-support`
@@ -955,7 +955,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 - `telemetry/strategy` (post-MVP, spike): `telemetry/perf-telemetry`
 - `telemetry/schema-v2` (post-MVP): `telemetry/strategy`, `nf-core/report-contract`
 - `telemetry/upload-schema` (post-MVP): `telemetry/schema-v2`
-- `telemetry/ingestion-service` (post-MVP): `telemetry/upload-schema`
+- `telemetry/ingestion-service` (post-MVP, **low priority**): `telemetry/upload-schema`
 - `telemetry/upload` (post-MVP): `telemetry/upload-schema`, `telemetry/ingestion-service`
 - `telemetry/panic-hook` (post-MVP): `telemetry/upload`
 - `analysis/real-scan-verification` (post-MVP): `core/pipeline-orchestration`, `algo/dmax-white-anchor`, `film-base/dmax-reference`
@@ -971,7 +971,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   places with all four gates green, one of them **silently** (`hanten roll` succeeded, wrote
   `_positive.jpg`, and the `*_positive.tiff` rename glob stranded the outputs while the
   stage printed success). The harness has no automated coverage at all
-- `analysis/calibration-frame-capture` (post-MVP, **asset acquisition — mostly photographic**): `analysis/asset-manifest`
+- `analysis/calibration-frame-capture` (post-MVP, **asset acquisition — mostly photographic**, **blocked**): `analysis/asset-manifest`
   — filed 2026-09-12. Three tasks named these frames as a precondition in their own words and
   none owned producing them, so the graph reported work executable when the thing blocking it
   was a roll of film that did not exist. It gates `io/scanner-density-calibration`,
@@ -1320,7 +1320,7 @@ the design in `docs/design-update.md`:
   exit code 6; peak on the 74.65 MP `largest.tif` 3.808 → 3.146 GB and 975 → 681 MB
   at 18.66 MP (decimal GB/MB, a 30% cut), output byte-identical. Re-measurement
   feeds `io/streaming-tiled-io` STEP 0 (still a conditional GO).
-- [ ] [Decode a single-channel gray SilverFast scan](tasks/io/gray-primary-decode.md) — accept a 16-bit **grayscale primary** (IR page unchanged). nc refuses these outright today: seven real Ilford HP5 frames fail with `found Gray(16)`, each carrying a marker-verified IR page. Neither existing task owns it — `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and `algo/bw-support` explicitly excludes input-format work — so `algo/bw-support` is blocked behind this
+- [ ] [Decode a single-channel gray SilverFast scan](tasks/io/gray-primary-decode.md) — **low priority** (user, 2026-09-29). Accept a 16-bit **grayscale primary** (IR page unchanged). nc refuses these outright today: seven real Ilford HP5 frames fail with `found Gray(16)`, each carrying a marker-verified IR page. Neither existing task owns it — `io/silverfast-decode` required `Gray(16)` only for the IR plane beside an RGB IFD0, and `algo/bw-support` explicitly excludes input-format work — so `algo/bw-support` is blocked behind this
 - [ ] [Positive-mode and ICC-embedded input](tasks/io/positive-input-mode.md) — convert an already-positive SilverFast scan through the display path; refused today with exit 4
 - [ ] [Scanner density calibration](tasks/io/scanner-density-calibration.md) — turn the
   density-scale question into a shipped, reusable scanner profile. Tier 1 (unexposed
@@ -1584,7 +1584,8 @@ the design in `docs/design-update.md`:
   `contracts/telemetry/upload-v1/` holds the JSON Schema, the valid/invalid corpus
   the Worker and uploader share, and the field manifest. No pixel, recipe or
   fingerprint change.
-- [ ] [Telemetry ingestion service](tasks/telemetry/ingestion-service.md) — build
+- [ ] [Telemetry ingestion service](tasks/telemetry/ingestion-service.md) — **low
+  priority** (user, 2026-09-29). Build
   the validating Cloudflare Worker + D1 endpoint, exact deduplication, 180-day
   retention, hard FREE-plan quotas, abuse quarantine/kill switch, and initial
   advisory performance/failure queries.
@@ -1626,7 +1627,7 @@ the design in `docs/design-update.md`:
   TIFF/sidecar contracts, and reproduces the successful-wrong-container failure; the full
   analysis suite runs in Linux and macOS CI
 - [ ] [Capture the calibration frames](tasks/analysis/calibration-frame-capture.md) —
-  **asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket on
+  **blocked** (user, 2026-09-29). **Asset acquisition, mostly photographic**: shoot / develop / scan a ColorChecker bracket on
   two rolls to the protocol agreed 2026-09-08, register them in `manifest.json`, and take a
   first neutrality measurement. **Four** tasks named these frames as a precondition and none
   owned producing them, so the graph reported work executable when the blocker was film that

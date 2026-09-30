@@ -863,7 +863,7 @@ What other epics need to know about `analysis`:
 ## calibration-frame-capture
 
 **Status:** not started
-**Updated:** 2026-09-12
+**Updated:** 2026-09-29
 
 - Goal: shoot, develop, scan and register the ColorChecker bracket rolls three other tasks
   name as a precondition, and take a first neutrality measurement against them.
@@ -878,6 +878,8 @@ What other epics need to know about `analysis`:
 - Mostly photographic work. The code half is the manifest role for a bracketed target frame
   (exposure offset + lighting recorded alongside it) and whether one measurement command
   serves all three consumers or each wants its own read.
+- 2026-09-29: marked **blocked** (user). Not executable until the user unblocks it, even
+  though its dependencies are done.
 
 ## review-reference-cells
 
