@@ -12,7 +12,7 @@ the code half is registering the result in `manifest.json` and measuring it.
 
 ## Why it is its own task
 
-**Four** tasks name these frames as a precondition, each in its own words, and none of
+**Five** tasks name these frames as a precondition, each in its own words, and none of
 them owns producing them:
 
 - `io/scanner-density-calibration` — needs them for the 3×3 + offset fit. Its tier 1
@@ -26,6 +26,8 @@ them owns producing them:
 - `nf-calibration/neutrality-gate` — the release gate is neutrality checked against a
   **known-neutral reference, not the leader**. That gate is evidence, not a task, so
   the graph could not see it.
+- `nf-calibration/saturation-margin` (added 2026-09-29) — the over end of the bracket,
+  to learn where a frame's white saturates the film.
 
 `io/scanner-density-calibration` and `nf-calibration/scale-gamma-loop` each carry a
 dated note reaching the same conclusion independently (#115, 2026-09-13: "plan it once",
@@ -48,7 +50,10 @@ short note on why each requirement exists for the fit it performs.
 - **Bracket, always: −2, −1, 0, +1, +2 stops** off a metered reading of the grey
   patch. This is what makes a single patch usable at all — the residual is a
   *slope*, and one patch at one exposure fits an offset without separating it from
-  the slope.
+  the slope. **Add +3 and +4** for `nf-calibration/saturation-margin` (2026-09-29): at
+  +2 the white patch sits near +4.3 scene stops above mid-grey, where the rolls' one
+  overexposed frame is; +3/+4 carry it past every stock's datasheet shoulder. At least
+  one of the two rolls should be Gold200, the earliest shoulder.
 - **Light**, in preference order: bright overcast (most even, repeatable); direct sun
   from behind the camera with the card tilted 10–15° against sheen (best channel balance,
   ≈5500 K); clear-sky open shade last — 7000–12000 K starves red into its noisy toe, and

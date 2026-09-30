@@ -2,47 +2,49 @@
 
 ## Goal
 
-Settle how close to its leader a frame's white may get before `measure-roll` warns that
-the frame is near film saturation, and decide whether such a frame needs a treatment of
-its own.
+Settle when `measure-roll` warns that a frame is near film saturation. The warning keys
+on the frame's distance from its leader today, with a placeholder margin (0.5 stop).
 
 ## Design
 
-What is known (`docs/progress/nf-calibration.md`, `anchor-comparison`, 2026-09-25):
+What is known (`docs/progress/nf-calibration.md`: `anchor-comparison` 2026-09-25, and
+this task's measurement on 2026-09-29):
 
-- **The leader tells what the cap cannot.** A frame above the roll's cap is either a
-  bright scene well inside the film's latitude or a frame running into the film's
-  shoulder, and only its distance from the leader separates the two. Distances in
-  scene stops, with the user's verdicts: 1121 0.13 (overexposed), 1151 0.39
-  (ambiguous), 1816 0.27 (not judged overexposed), 1868 1.81 (a bright scene).
-- **One margin may not fit every stock.** The leader sits ~1.5 stops above the content on
-  both Gold200 rolls and ~3.3–3.8 on the Portra400 rolls, so a margin that catches
-  Portra's overexposed frames flags ordinary Gold200 ones.
-- **Near the leader the film compresses highlights**, and the straight-line decode
-  renders that compression flat and bright; clamping such a frame to the cap was the
-  review's preference (1121: "much safer at highlight").
-- **What `measure-roll` does today** (`roll-white-rule`, 2026-09-27): a frame's white is
-  the p97 of its pixels' brightest film-RGB channel over its effective area, measured
-  before the leader guard, and its distance is taken to the leader's brightest-channel
-  median. At the placeholder 0.5 stop it warns on 1121 (0.22), 1151 (0.38), 1635 (0.20),
-  1815 (0.28) and 1816 (0.29). 1816 was not judged overexposed; 1635 (bright content at
-  the frame edge, a hand-cropped scan) and 1815 are unjudged. With no leader nothing is
-  checked.
+- **The user's verdicts**, as white in scene stops above mid-grey / distance under the
+  leader: 1121 +4.51 / 0.22 (overexposed), 1151 +3.15 / 0.38 (ambiguous), 1868
+  +3.26 / 1.85 (a bright scene), 1816 +2.10 / 0.29 (not judged overexposed). 1635 and
+  1815 warn today and are unjudged. That is **one** overexposed frame.
+- **The leader is not a stock constant.** Across the ten rolls it sits +2.39 to +5.65
+  stops above mid-grey, and within one stock it varies by up to 1.8 stops (Gold200 +3.53
+  and +2.39). How far a leader sits above content depends on the roll, so a margin per
+  stock has no support, and `measure-roll` knows no stock anyway.
+- **Several leaders sit below the datasheets' shoulders** (red shoulder onset, roughly:
+  Gold200 +3.9, Portra160 +4.6, Ektar100 +5.3, Portra400 none within the sheet; scanner
+  density is uncalibrated against the sheets). A leader then marks how much light it
+  got, not where the film saturates. 1816 warns only because 09-18's leader is the
+  lowest of the ten.
+- **A frame's absolute white separates the verdicts; its leader distance does not.**
+  By distance, 1816 (not overexposed) falls between 1121 and 1151. By white, 1121 stands
+  more than a stop above every other frame. An absolute level also works without a
+  leader. It rests on one frame, so it is a candidate, not a finding.
+- **Treatment: the warning only.** The clamp to the cap already gave 1121 the safer
+  highlight in review. A treatment of its own becomes a follow-up only if the bracket
+  shows the clamp is not enough.
 
 Open:
 
-- A margin per stock or one margin, and in what unit.
-- Whether a saturated frame gets a different default — a lower contrast, a lower
-  exposure, a gentler roll-off — or only the warning.
-- The fallback when there is no leader.
-- The evidence: the current sample holds no deliberately over- or underexposed frames.
-  Collect some before fixing a value.
+- Which reference the warning keys on — the leader distance, an absolute white level,
+  or both — and its value.
+- The fallback without a leader, which an absolute level would answer.
 
 ## How to Verify
 
-A review on frames at known leader distances across more than one stock, recording which
-the user calls saturated; the chosen margin separates them.
+On the calibration shoot's over-exposed frames (+3/+4 on at least two stocks, one of them
+Gold200), plus the rolls' judged frames, the chosen reference and value separate the
+frames the user calls saturated from the rest.
 
 ## Dependencies
 
 - [`measure-roll` places the roll's white](roll-white-rule.md) — the warning this tunes
+- [Capture the calibration frames](../analysis/calibration-frame-capture.md) — the
+  over-exposed bracket frames the value is set from
