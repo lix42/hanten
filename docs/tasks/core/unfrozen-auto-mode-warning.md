@@ -1,5 +1,12 @@
 # Warn when a recipe's auto modes silently defeat a roll
 
+> **Closed — moot (2026-09-30).** Every auto mode retired: `dmax: "auto"` in
+> `nf-retire/dmax-machinery`, `balance_range: "auto"` in `nf-retire/regional-balance`,
+> and the per-frame white balance (`--auto-wb`, `"percentile"`, `"gray-world"`) in
+> `nf-scene-correction/roll-white-balance`, which measures the gains once per roll. The one per-frame measurement left, a `region` film base, is the case
+> `roll` already warns about ("roll film base is NOT frozen"). What follows is the plan
+> as it stood.
+
 ## Goal
 
 Say something when a recipe applied to a roll still re-measures per frame. A

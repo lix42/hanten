@@ -55,10 +55,10 @@ the "no schema change" claim before starting.*
 3. **Should `--params -` be allowed more than once?** Reading stdin twice cannot
    work; refuse the second rather than silently reusing the buffer.
 4. **Which of `convert`'s overrides make sense roll-wide?** Most do. The
-   frame-local measurement left is the auto white balance (`--auto-wb`; `--auto-d-max`
-   and `--auto-balance-range` retired in `nf-retire/dmax-machinery` and
-   `nf-retire/regional-balance`), and it is exactly what breaks roll consistency —
-   see `core/unfrozen-auto-mode-warning`.
+   frame-local measurement left is a `region` film base (`--base-region`), which
+   re-reads the base on every frame and which `roll` warns about. (The auto modes —
+   `--auto-wb`, `--auto-d-max`, `--auto-balance-range` — all retired;
+   `core/unfrozen-auto-mode-warning` closed with them.)
 5. **Does a `roll` flag beat a frame's manifest `params`?** Tracked in the design
    doc's open questions; record the answer there.
 

@@ -8,24 +8,11 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *intent* — but this document is verified against the binary, so it wins on
 > *what the CLI currently accepts*.
 >
-> **Verified against:** `hanten 0.1.0`, `pipeline_version 8`, on branch
-> `nf-calibration/roll-exposure` (the roll's measured exposure, `roll.exposure`, §4, §5
-> and §7), after `nf-look/contrast-definition` (`--contrast` a multiplier on the base
-> slope, recipe version 3, §5 and §7), `core/recipe-composition` (repeatable `--params` and
-> `roll`'s conversion flags, §4,
-> §5, §8), `core/measure-base` (`estimate` renamed `measure-base`; the measuring
-> commands and their `--out` recipes, §4 and §7), `film-base/holder-masked-measurement` (the
-> base measured over the effective area; the `auto` film base retired, §4),
-> `telemetry/schema-v2` (telemetry success/failure
-> events, §10), `nf-core/report-contract` (the report's `chain` block and recipe, §10),
-> `nf-core/default-flip` (the rendering chain of [`design-update.md`](design-update.md)
-> became the only one), `nf-calibration/roll-section`,
-> `nf-destinations/direct-preset` (§7) and `nf-destinations/easy-destination-rows` (the
-> float TIFF in four gamuts, sRGB, the sRGB gain map, §7 and §8; checked at `53ffb61`) and
-> `nf-verification/film-rgb-export` (`--export-film-rgb`, §8 and §11; checked at `f1b0d0e`).
-> The staleness signal is `pipeline_version`: if
-> `hanten --version` reports a different one, treat this document as suspect and
-> re-verify.
+> **Verified against:** `hanten 0.1.0`, `pipeline_version 8`, at `038e7a3`
+> (`nf-docs/using-nc`: every command and quoted message below re-run on
+> `tests/fixtures/`, except the few marked as from a real roll or scan). The staleness signal is
+> `pipeline_version`: if `hanten --version` reports a different one, treat this
+> document as suspect and re-verify.
 >
 > **Before `pipeline_version` 8** there was a second rendering chain, chosen by
 > **output presets** (`--output-preset`: `gain-map-hdr`, `display-p3`, `hdr-pq`, …)
@@ -179,7 +166,9 @@ conversion and sets the black point and the colour balance together:
 ```
 usage: no film base selected: pass --film-base R,G,B (a Dmin measured once per roll
        with `hanten measure-base <unexposed-frame>`), or --base-region X,Y,W,H to read
-       it from a region of unexposed film. Recipe key: `calibration.film_base`.
+       it from a region of unexposed film. Recipe key: `calibration.film_base`, which
+       `hanten measure-roll <frames> --unexposed <unexposed-scan> --out roll.json`
+       writes for `--params`.
 ```
 
 One command measures everything a roll shares — the film base from its **unexposed
@@ -249,7 +238,7 @@ film warns (`--strict` fails on it):
 
 ```
 hanten: warning: the effective area is not uniform (worst per-channel spread
-(p90 - p10) / p50 = 1.65 > 0.50): it does not look like unexposed film, so the
+(p90 - p10) / p50 = 1.08 > 0.50): it does not look like unexposed film, so the
 median over it is not a film base. …
 ```
 
@@ -344,7 +333,8 @@ hanten params
   "input":       { "transfer": "auto", "meaning": "auto",
                    "film_type": "unknown", "export_ir": null },
   "calibration": { "film_base": null },
-  "roll":        { "white_balance": null, "white_stops": null, "frames": {} },
+  "roll":        { "white_balance": null, "white_stops": null, "exposure": null,
+                   "frames": {} },
   "measure":     { "inset": 0.05 },
   "reconstruction": {
     "scale": [1.0, 0.84, 0.73],
@@ -590,7 +580,8 @@ where a picture is made contrasty or warm.
 | `--anchor-mid-offset D` | `anchor` = `{"mid-at-base-offset": D}` | where mid-grey sits above the base, default `0.62` |
 
 The report states what the decode ran, in `chain.decode` (`anchor`,
-`anchor_rule`, `linearization`, `scale`, `offset`).
+`anchor_rule`, `reads_reference` — always `false`, see Anchoring below — `linearization`, `scale`,
+`offset`).
 
 ### The decode's slope and the picture's contrast are two knobs
 
@@ -984,8 +975,9 @@ stops `shift_stops` reports.
   is skipped. Either way the report warns, naming
   `--exposure` and `--display-black off` as the remedies.
 - **Not the removed `--black-point`**, a subtraction on every channel that crushed
-  and tinted the shadows. Removing scanner veil or base fog is a separate, scene-side
-  correction that has not landed.
+  and tinted the shadows. There is no scene-side subtraction either: base fog is
+  already in the measured film base, and scanner veil is a highlight and
+  scanner-calibration question (`nf-scene-correction/flare-removal`).
 
 ```console
 $ hanten convert … --display-black 0
@@ -1283,7 +1275,7 @@ stored map's `width` and `height`, and `base_fit_range` — fit range as the SDR
 it, since `chain.fit_range` is the HDR rendition's:
 
 ```console
-$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --range hdr \
+$ hanten convert tests/fixtures/hdr-48bit.tif -o out --film-base 0.9,0.55,0.42 --range hdr \
     | jq -c '.chain.gain_map | {min, max, flat, width, height}'
 {"min":[0.9999999,1.0,1.0],"max":[1.9145154,1.9127859,1.9116272],"flat":false,"width":251,"height":231}
 ```
@@ -1449,7 +1441,9 @@ median only means the holder covers less than half that band, so up to half a ba
 of it can sit inboard of any reported depth (a measured `0` included). The floor
 absorbs that band. It binds only near zero — a 3600 px frame insets 180 px against
 an 18 px step — and `inset` is the **applied** value, so `--measure-inset 0` on a
-measured frame reads back as the step, not as 0:
+measured frame reads back as the step, not as 0 (this example and the two below are
+from real uncropped scans; the HDRi fixture is cropped, so its holder measures `0`, and
+the 48-bit fixtures have no IR plane, so theirs is `null`):
 
 ```sh
 hanten inspect --measure-inset 0 scan.tif | jq -c '.effective_area | {region, inset}'
@@ -1630,7 +1624,8 @@ else.
 ## 11. Operational flags
 
 The flags in the tables below are **not** conversion knobs: they never appear in a
-recipe and can never perturb a pixel.
+recipe and can never perturb a pixel. `params` takes none of them, and `inspect` has no
+`--strict`.
 
 | Flag | Purpose |
 |---|---|
@@ -1639,8 +1634,7 @@ recipe and can never perturb a pixel.
 | `-v` / `-vv` / `--quiet` | stderr verbosity — never pollutes stdout |
 | `--strict` | Promote warnings to errors |
 
-These are **`convert` only** — `roll`, `measure-base` and `inspect` do not accept
-them and exit 2 if given one:
+These are **`convert` only** — every other command exits 2 if given one:
 
 | Flag | Purpose |
 |---|---|

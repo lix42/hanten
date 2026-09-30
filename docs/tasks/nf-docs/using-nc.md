@@ -1,5 +1,9 @@
 # Bring the guide up to the new flow
 
+> **Done (2026-09-30), as a re-verification, not a rewrite.** The tasks that shipped each
+> knob had already moved the guide onto the chain; every command was re-run on the
+> fixtures instead. What drifted is in `docs/progress/nf-docs.md`.
+
 ## Goal
 
 Re-verify `docs/using-nc.md` against the binary once the default is the new
