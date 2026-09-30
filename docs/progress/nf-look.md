@@ -638,8 +638,8 @@ preset row; do not reuse the name.
 
 ## scene-range-mapping
 
-**Status:** not started
-**Updated:** 2026-09-25
+**Status:** done (closed, folded into `nf-calibration/thin-frame-lift`)
+**Updated:** 2026-09-29
 
 - 2026-09-19: created with the new-flow plan. Goal: spike: opt-in bounded scene-range mapping.
 - 2026-09-25: from [`nf-calibration/anchor-comparison`](../tasks/nf-calibration/anchor-comparison.md): **a reviewed noise budget for a lone dark frame.** Treating
@@ -648,6 +648,10 @@ preset row; do not reuse the name.
   Delivered noise there was 1.75× the scan's floor on 09-11, against 5.4× at the contrast an
   unbounded solve asks for. That is the number "bounded" needs, measured rather than
   picked.
+- 2026-09-29: **closed, folded into `nf-calibration/thin-frame-lift`**, which owns the
+  per-frame opt-in. The task file now carries this spike's success criterion, the
+  single-surface caution and the 09-25 noise budget. The roll-level solve became
+  `nf-calibration/roll-exposure`. Nothing was rendered under this task.
 
 ## desaturation-band-refit
 

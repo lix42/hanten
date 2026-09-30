@@ -1073,7 +1073,7 @@ the design in `docs/design-update.md`:
 - `nf-look/stock-data-home` (new flow): `nf-look/stage`
   — the registry and datasheets lose their consumer when `characteristic`
   leaves the decode
-- `nf-look/scene-range-mapping` (new flow): `nf-look/stage`, `nf-scene-correction/stage`
+- `nf-look/scene-range-mapping` (new flow, **closed: folded into `nf-calibration/thin-frame-lift`**): `nf-look/stage`, `nf-scene-correction/stage`
   — a spike: opt-in and bounded, never the default — roll consistency is the
   promise
 - `nf-look/contrast-definition` (new flow): `nf-destinations/direct-preset`
@@ -1824,9 +1824,10 @@ the design in `docs/design-update.md`:
   data stays as `film_stock/`, the evidence for the fixed decode's constants; the
   inversion is split into `algo/characteristic.rs` for its retirement, and
   `--film-stock` leaves with the curve
-- [ ] [Spike: opt-in bounded scene-range
-  mapping](tasks/nf-look/scene-range-mapping.md) — a spike: opt-in and
-  bounded, never the default — roll consistency is the promise
+- [x] [Spike: opt-in bounded scene-range
+  mapping](tasks/nf-look/scene-range-mapping.md) — **closed 2026-09-29, folded into
+  `nf-calibration/thin-frame-lift`**, which solves the per-frame exposure and slope; the
+  roll-level solve is `nf-calibration/roll-exposure`
 - [x] [What `look.contrast` means](tasks/nf-look/contrast-definition.md) — **done
   2026-09-29: a multiplier on the base slope** (the roll's, the fallback
   `look::DEFAULT_SLOPE`, or `direct`'s), default 1; absolute values are slopes in the

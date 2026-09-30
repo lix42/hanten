@@ -1,5 +1,11 @@
 # Spike: opt-in bounded scene-range mapping
 
+> **Folded into `nf-calibration/thin-frame-lift` on 2026-09-29.** That task solves a
+> per-frame exposure and slope from `measure-roll`'s measurements, as an opt-in, bounded
+> lift. It carries this spike's success criterion, its single-surface caution and the
+> 2026-09-25 noise budget. The roll-level solve considered here is
+> `nf-calibration/roll-exposure`. This file is kept so existing references resolve.
+
 ## Goal
 
 Find out whether measuring a frame's own range and mapping it to the output earns
