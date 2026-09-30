@@ -3,7 +3,7 @@
 //! its default; `direct` leaves the roll out and starts from pinned values ([`DIRECT`]).
 //! A stated knob builds on either (`Recipe::shared_params`).
 //!
-//! Design, and the procedure for changing `DIRECT`: `docs/design-update.md`, Part 2,
+//! Design, and the procedure for changing `DIRECT`: design-spec §6,
 //! "Two renderings".
 
 use serde::{Deserialize, Serialize};
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn direct_is_pinned() {
-        // `direct` moved: follow "Keeping `direct` current" in docs/design-update.md.
+        // `direct` moved: follow design-spec §6, "Two renderings".
         let Base {
             applies_roll,
             slope,

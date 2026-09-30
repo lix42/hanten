@@ -13,9 +13,9 @@
 //!
 //! The corrections act on working-space channels, **after** the NC film RGB v1 3×3 —
 //! so this white balance is not reconstruction's `offset`, and this exposure is not
-//! its anchor (`docs/design-update.md` Part 1 measures the two white-balance bases
-//! ≈2.6 % apart on a neutral). With the anchor a reference-free convention,
-//! exposure here is where brightness is set.
+//! its anchor (design-spec §7.2: the two white-balance bases sit ≈2.6 % apart on a
+//! neutral). With the anchor a reference-free convention, exposure here is where
+//! brightness is set.
 //!
 //! **Where an already-positive scan will enter** (`io/positive-input-mode`): ahead of
 //! this stage, at the working space — a positive is brought to linear ACEScg and

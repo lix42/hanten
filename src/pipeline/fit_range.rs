@@ -742,9 +742,8 @@ mod tests {
     #[test]
     fn reinhard_compresses_upward_only() {
         // Below mid-grey the curve is nearly a gain: its log-log slope is 1 deep in the
-        // shadows and still 0.94 near 0.05 (design-update Part 2, "The shadow end") —
-        // which is why display black shapes the shadow end (module docs). Pinned so a
-        // change there is a decision.
+        // shadows and still 0.94 near 0.05 — which is why display black shapes the
+        // shadow end (module docs). Pinned so a change there is a decision.
         let o = op(DEFAULT_HEADROOM_STOPS, 1.0);
         let slope = |v: f32| (o.apply(v * 1.001) / o.apply(v)).ln() / 1.001f32.ln();
         assert!((slope(0.002) - 1.0).abs() < 0.01, "{}", slope(0.002));

@@ -80,7 +80,7 @@ The load-bearing rules you review against:
   must see flag *presence* (not just the resolved value) belongs there. Reject by presence only when a flag *forces*
   something the branch cannot produce; an identity value that asks for nothing
   stays accepted where a recipe could have set the knob.
-- **Recipe shape mirrors design-spec §9** and structs use `deny_unknown_fields`,
+- **Recipe shape mirrors design-spec §8–§9** and structs use `deny_unknown_fields`,
   so a key in the wrong section silently rejects docs-shaped recipes. `params`
   is a reserved top-level key. Mutually-exclusive knobs are one enum field, not
   parallel `Option`/bool fields.

@@ -1016,7 +1016,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 
 
 **New-flow migration** (`docs/nf-migration.md`) — the `nf-*` epics that move nc to
-the design in `docs/design-update.md`:
+the design now in `docs/design-spec.md` (§6–§7):
 
 - `nf-core/new-flow-flag` (new flow): none
   — scaffolding with a written expiry — CLI-only, never a recipe key, removed
@@ -2085,8 +2085,11 @@ the design in `docs/design-update.md`:
 ### nf-docs — [progress](progress/nf-docs.md)
 > Fold the new design into the spec, the user guide and CLAUDE.md.
 
-- [ ] [Fold the new design into the spec](tasks/nf-docs/design-spec.md) —
-  principle 2, the NC film RGB v1 contract, and the curves section
+- [x] [Fold the new design into the spec](tasks/nf-docs/design-spec.md) — **done
+  2026-09-30.** `design-spec.md` is the design: §5 the destination set, §6 the chain and
+  the two renderings, §7 the fixed decode and the NC film RGB v1 contract, §9 the
+  parameters by stage, §13 the live open questions. `design-update.md` keeps Part 3,
+  the appendices and a map of where each Part 1–2 heading went
 - [ ] [Bring the guide up to the new flow](tasks/nf-docs/using-nc.md) —
   verified against the binary, never against a diff
 - [~] [Update CLAUDE.md for the new architecture](tasks/nf-docs/claude-md.md)
