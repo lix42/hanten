@@ -810,10 +810,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   annotated JSONC look with `--out`, no image. Whether `--dump-params` goes is open
   (roll-workflow open question 5): no sidecar is written since `nf-core/default-flip`, so it is
   the only recipe a `convert` leaves
-- `core/unfrozen-auto-mode-warning` (post-MVP): `core/roll-conversion`
-  — a recipe carrying `dmax: "auto"` or an auto white balance re-measures every frame, defeating
-  the roll, and nothing warns today. Roll already warns on a non-explicit base; same hazard,
-  same plumbing
+- `core/unfrozen-auto-mode-warning` (post-MVP, **closed—moot**; the deps below are decision history, not a live prerequisite set): `core/roll-conversion`
 - `core/product-naming` (cross-cutting): none
   — name the product Hanten; the **binary is `hanten`** while `nc` stays the crate and
   every identifier. The boundary's home is CLAUDE.md. No dependencies, but it touches
@@ -1289,8 +1286,9 @@ the design now in `docs/design-spec.md` (§6–§7):
   question 5: no sidecar is written since `nf-core/default-flip`, so it is the only recipe a
   run leaves
 - [x] [Warn when auto modes defeat a roll](tasks/core/unfrozen-auto-mode-warning.md) — **closed—moot
-  2026-09-30**: both auto modes retired (`dmax: "auto"` with the reference density, the per-frame
-  white balance with `nf-scene-correction/roll-white-balance`), and the one per-frame
+  2026-09-30**: every auto mode retired (`dmax: "auto"` and `balance_range: "auto"` with the
+  reference density and the regional balance, the per-frame white balance with
+  `nf-scene-correction/roll-white-balance`), and the one per-frame
   measurement left, a `region` film base, is the one `roll` already warns about
 - [x] [Conversion versioning & baseline comparison](tasks/core/conversion-versioning.md) — report `identity`, `pipeline_version` **1** (not 0 — `film-base/dmax-reference` already moved the default render) + the golden drift gate, `{meta,params}` sidecar envelope with bare legacy recipes still loading, and `nctool compare run|diff`; `v0` history in [reports/v0-baseline.md](reports/v0-baseline.md).
 - [ ] [Recipe replay fidelity for non-default behavior changes](tasks/core/recipe-replay-fidelity.md) — `pipeline_version` covers the **default** path only, so a recipe opting into a non-default curve replays under a new build with the same label and different pixels (first instance: the 2026-08-03 sigmoid defaults). Decide the policy — widen the label, add a second one, generalize the drift warning, or keep historical defaults — then retrofit that instance and retire its bespoke warning.
@@ -1510,11 +1508,10 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [ ] [Gain-map dialect activation](tasks/output/gain-map-dialect-activation.md) — **Android 15+** decoder verification, the half `iso-gain-map-metadata` shipped without; the CLI path landed as the `gain-map-hdr` default (`output/presets`, 2026-08-09). *Premise moved (`nf-core/default-flip`, 2026-09-27): the gain map is now `--range hdr`'s ISO-only per-channel JPEG and not the default; re-scope before starting*
 - [ ] [SDR preset follow-ups (carried-over findings)](tasks/output/sdr-preset-followups.md) — the bounded review findings the SDR preset PRs left out; its three design questions are now the tasks below
 - [x] [Adobe RGB (1998) as an output gamut](tasks/output/adobe-rgb-gamut.md) — **done 2026-09-24.** The gamut-mapped render into Adobe RGB, on the new chain: `DestinationGamut::AdobeRgb`, its pinned matrix and luma, and a `563/256` encode with a `(Hanten)`-named profile. No selector — `NEW_FLOW_GAMUT` stays Display P3, so no default render or fingerprint moved; selecting it is `nf-destinations/direct-preset`'s
-- [x] [Machine-readable SDR contract in the report](tasks/output/sdr-report-block.md) — **closed—moot
-  2026-09-30**: the SDR presets and the dropped `SdrRenderMetadata` it was written against went with
-  `nf-core/default-flip`, and every destination's report now states its render as fields in `chain`
-  (`nf-core/report-contract`): the fit-range operator, headroom and peak, the gamut map, the
-  destination
+- [ ] [Machine-readable SDR contract in the report](tasks/output/sdr-report-block.md) — *re-scoped
+  2026-09-30*: the render is in `chain` now; open is whether the SDR TIFF (and the gain-map base)
+  needs an encoder block like `hdr_linear_tiff` / `hdr_coded_tiff`, or whether its ICC profile
+  already says everything
 - [ ] [A plain SDR JPEG output](tasks/output/sdr-jpeg-preset.md) — the SDR rendition as an 8-bit JPEG with no gain map; nc has none today
 - [x] [Linear display render](tasks/output/linear-render.md) — `print.display_tone` /
   `--display-tone <shoulder|none>`, on **both** display branches. Measured on ten fixture
@@ -2097,7 +2094,7 @@ the design now in `docs/design-spec.md` (§6–§7):
   the appendices and a map of where each Part 1–2 heading went
 - [x] [Bring the guide up to the new flow](tasks/nf-docs/using-nc.md) — **done
   2026-09-30.** The per-knob tasks had already reshaped the guide around the chain; every
-  command and quoted message was re-run on the fixtures, and six had drifted
+  command and quoted message was re-run on the fixtures, and five had drifted
 - [~] [Update CLAUDE.md for the new architecture](tasks/nf-docs/claude-md.md)
   — the architecture map, the HDR framing, and retiring the migration rule
   itself

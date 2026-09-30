@@ -935,8 +935,9 @@ heading now lives in `## conversion-versioning` (and `## recipe-replay-fidelity`
 
 ### 2026-09-30 — closed, moot
 
-Both auto modes it warns about retired (`dmax: "auto"` in `nf-retire/dmax-machinery`,
-the per-frame white balance in `nf-scene-correction/roll-white-balance`); the `region`
+Every auto mode it warns about retired (`dmax: "auto"` in `nf-retire/dmax-machinery`,
+`balance_range: "auto"` in `nf-retire/regional-balance`, the per-frame white balance in
+`nf-scene-correction/roll-white-balance`); the `region`
 film base left is the case `roll` already warns about. Closed with the user during
 `nf-docs/using-nc`.
 

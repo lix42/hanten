@@ -14,12 +14,11 @@ ones.
 Fold the new design into the spec, the user guide and CLAUDE.md.
 
 Created on 2026-09-19 with the new-flow migration plan (`docs/nf-migration.md`).
-The only change so far is CLAUDE.md's layout (2026-09-24, `claude-md`): it now
-holds only cross-cutting rules, and subsystem traps live in module docs.
-`design-spec.md` became the design on 2026-09-30 (`design-spec`); `design-update.md`
-keeps its evidence (Part 3, the appendices) and a map of where Parts 1–2 went.
-`using-nc.md` was re-verified against the binary on 2026-09-30 (`using-nc`); what is
-left is `claude-md`.
+Done: `design-spec.md` is the design (`design-spec`; `design-update.md` keeps the
+evidence, Part 3 and the appendices, and a map of where Parts 1–2 went); pointers to
+retired tasks are re-pointed (`reference-sweep`); `using-nc.md` is re-verified against
+the binary (`using-nc`). Left: `claude-md`, whose layout half landed 2026-09-24
+(CLAUDE.md holds only cross-cutting rules; subsystem traps live in module docs).
 
 ## design-spec
 
@@ -93,6 +92,16 @@ left is `claude-md`.
   Examples still quoting a real roll or an uncropped scan are marked as such.
   Closed `core/unfrozen-auto-mode-warning` and `output/sdr-report-block` as moot in
   the same pass (user, 2026-09-30).
+- 2026-09-30: **corrections after review.** The gain-map example did **not** drift: its
+  old values still reproduce exactly on `tests/fixtures/hdr-48bit.tif`; the re-run used the
+  HDRi fixture. The example now names its fixture and keeps its values, so five things had
+  drifted, not six. Two further stale quotes were missed on the first pass and are fixed: the
+  `measure-base` non-uniform warning's `p50` (now the HDRi fixture's 1.08), and the
+  effective-area aside, which claimed every fixture's holder measures `0` (only the HDRi
+  one; the 48-bit ones have no IR plane, so `null`). §11 now says which commands take
+  which operational flags (`params` none, `inspect` no `--strict`). And
+  `output/sdr-report-block` is re-opened, re-scoped: the encoder half (a block of what the
+  SDR TIFF's encoder wrote) is still missing.
 
 ## claude-md
 

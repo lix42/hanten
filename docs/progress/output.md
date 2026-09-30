@@ -1495,16 +1495,17 @@ claim after changing behaviour. All of these are in CLAUDE.md now.
 
 ## sdr-report-block
 
-**Status:** closed — moot
+**Status:** not started (re-scoped)
 **Updated:** 2026-09-30
 
 - Goal: a machine-readable SDR contract block in the report, the `hdr_coded_tiff`
   shape. Split out of `sdr-preset-followups`; `RenderedSdr::metadata()`'s
   `#[allow(dead_code)]` is the marker.
-- 2026-09-30: **closed — moot.** `RenderedSdr`, `SdrRenderMetadata` and the SDR presets
-  went with `nf-core/default-flip`; the report's `chain` block (`nf-core/report-contract`)
-  states every destination's render as fields. Closed with the user during
-  `nf-docs/using-nc`.
+- 2026-09-30: **closed — moot**, then **re-opened, re-scoped** the same day. `RenderedSdr`,
+  `SdrRenderMetadata` and the SDR presets went with `nf-core/default-flip`, and `chain`
+  states the render. But review found the encoder half still open: the HDR TIFFs and AVIF
+  report what their encoder wrote, the SDR TIFF and gain-map base do not. The task file's
+  header states the question.
 
 ## sdr-jpeg-preset
 
