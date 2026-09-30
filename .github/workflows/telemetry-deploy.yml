@@ -1,0 +1,78 @@
+name: Deploy telemetry ingestion
+
+# Manual only: deploys services/telemetry-ingest to Cloudflare from main, applies
+# pending D1 migrations first, then smoke-tests the live endpoint. A dry run
+# builds the bundle without touching the account and may run from any branch.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and check only; deploy nothing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telemetry-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy (${{ inputs.dry_run && 'dry run' || 'production' }})
+    runs-on: ubuntu-latest
+    environment: telemetry-production
+    defaults:
+      run:
+        working-directory: services/telemetry-ingest
+    env:
+      WRANGLER_SEND_METRICS: "false"
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Refuse a real deploy from anything but main
+        if: ${{ !inputs.dry_run && github.ref != 'refs/heads/main' }}
+        working-directory: .
+        run: |
+          echo "::error::Deploy from main only (got ${GITHUB_REF}); use dry_run to test a branch."
+          exit 1
+
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Check (format, types, deploy contract)
+        run: pnpm check
+
+      - name: Test
+        run: pnpm test
+
+      - name: Dry run
+        if: ${{ inputs.dry_run }}
+        run: pnpm exec wrangler deploy --dry-run --outdir dist
+
+      - name: Apply D1 migrations
+        if: ${{ !inputs.dry_run }}
+        run: pnpm exec wrangler d1 migrations apply hanten-telemetry --remote
+
+      - name: Deploy
+        if: ${{ !inputs.dry_run }}
+        run: |
+          pnpm exec wrangler deploy | tee deploy.log
+          url=$(grep -oE 'https://hanten-telemetry\.[a-z0-9-]+\.workers\.dev' deploy.log | head -n1)
+          test -n "$url" || { echo "::error::no workers.dev URL in the deploy output"; exit 1; }
+          echo "WORKER_URL=$url" >> "$GITHUB_ENV"
+          echo "Deployed to $url/v1/events" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke test
+        if: ${{ !inputs.dry_run }}
+        run: pnpm smoke "$WORKER_URL"

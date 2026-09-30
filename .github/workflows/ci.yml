@@ -126,3 +126,31 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  # The telemetry ingestion Worker (services/telemetry-ingest) gates on its own
+  # toolchain, like the review app: its tests run in workerd with a local D1 and
+  # read the same contracts/telemetry/upload-v1/ corpus the Rust tests do.
+  telemetry-ingest:
+    name: telemetry-ingest (check / test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/telemetry-ingest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Check (format, types, deploy contract)
+        run: pnpm check
+
+      - name: Test
+        run: pnpm test

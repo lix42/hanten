@@ -1,6 +1,6 @@
 # Telemetry strategy
 
-**Status:** approved 2026-07-23; amended 2026-09-27 and 2026-09-28 (see Amendments)
+**Status:** approved 2026-07-23; amended 2026-09-27, 2026-09-28 and 2026-09-30 (see Amendments)
 
 ## Amendments
 
@@ -40,6 +40,19 @@
   `unknown` — so `image.format`, `image.ir_present`, `outcome.non_finite` and
   `conversion.*` have no `unknown` member.
 
+**2026-09-30** (at `telemetry/ingestion-service`, user-approved):
+
+- **V1 runs on the owner's existing Workers Paid account**, not a dedicated
+  FREE-plan account. Paying for the service is acceptable; cost is controlled
+  instead of made impossible. The Worker's own ceilings (daily events and bytes,
+  database size, CPU per request) bound the worst case, and
+  `services/telemetry-ingest/README.md` holds the cost model and the deploy check
+  that refuses a ceiling above it. The $10/month approval gate stands: a change
+  whose worst case can pass it needs explicit approval first. Requests the Worker
+  refuses still bill per request; a dashboard billing notification is the backstop.
+  Passages below that require a FREE-plan account, no payment method or no
+  billing-enabled resource are withdrawn.
+
 This note decides how `nc` grows the shipped local-only performance record into
 anonymous, explicitly consented remote telemetry. It is the output of the
 [`telemetry/strategy`](tasks/telemetry/strategy.md) spike and scopes its
@@ -55,9 +68,9 @@ implementation children.
   OTel Collector on user machines.
 - Host the first ingestion service as a **Cloudflare Worker backed by D1**.
   This is managed infrastructure with an nc-owned contract: low operational
-  burden, exact event rows and SQL. V1 runs in a dedicated Cloudflare FREE-plan
-  account with no billing-enabled resources; hard platform and application
-  quotas fail closed before the approved $10/month ceiling can be crossed.
+  burden, exact event rows and SQL. Application quotas fail closed before the
+  approved $10/month ceiling can be crossed (on a paid account since the
+  2026-09-30 amendment).
 - Separate local collection from transmission consent. `hanten telemetry enable`
   persistently opts into automatic collection and upload, including upload of
   records previously collected through the explicit local `--telemetry` flag.
@@ -126,7 +139,7 @@ over a managed observability product or Cloudflare Analytics Engine for v1:
 - Exact retained rows matter for retry deduplication and reproducible
   event-cohort queries. Analytics Engine may sample at high volume and has a
   fixed three-month retention window.
-- The cost model below keeps v1 within a dedicated FREE-plan account. No paid
+- *(Withdrawn 2026-09-30: v1 runs on a paid account; see Amendments.)* The cost model below keeps v1 within a dedicated FREE-plan account. No paid
   Worker, paid D1 capacity, or other billing-enabled resource is attached.
 - There is no vendor SDK or credential in the distributed binary. A secret in a
   public CLI would not authenticate individual anonymous installations anyway.
@@ -597,7 +610,7 @@ No path acquires these locks in reverse order.
 
 The v1 deployment has a hard cost boundary, not merely an alert:
 
-- it uses a dedicated Cloudflare FREE-plan account/project with no payment
+- *(withdrawn 2026-09-30, see Amendments)* it uses a dedicated Cloudflare FREE-plan account/project with no payment
   method, paid plan, paid D1 capacity, R2, log retention, or billing-enabled
   add-on;
 - a checked-in volume model computes bytes/event, requests/day, rows/day,

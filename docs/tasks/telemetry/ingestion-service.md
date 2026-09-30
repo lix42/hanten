@@ -9,6 +9,15 @@ $10/month initial budget.
 The service contract is fixed by
 [`docs/telemetry-strategy.md`](../../telemetry-strategy.md).
 
+**Amended 2026-09-30** (user): v1 runs on the owner's existing Workers Paid
+account, not a dedicated FREE-plan one; cost is bounded by the Worker's own
+ceilings and the $10/month approval gate stays. The free-plan and no-payment-method
+requirements below are withdrawn. Deploys run from a manual GitHub Actions workflow.
+
+**Status 2026-09-30:** built in `services/telemetry-ingest/` (see
+`progress/telemetry.md`); remaining is the first deploy from `main` and its smoke
+test, after which the uploader's endpoint URL goes into the contract README.
+
 ## Design
 
 Deploy an nc-owned Cloudflare Worker with D1:

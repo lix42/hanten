@@ -1,0 +1,5 @@
+# wrangler bundles with esbuild and runs workerd; both fetch a platform binary in
+# their install script, which pnpm 11 will not run until it is allowed here.
+allowBuilds:
+  esbuild: true
+  workerd: true
