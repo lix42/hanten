@@ -828,8 +828,9 @@ artifact on which a reconstruction is measured. Caveats:
   `nf-retire/characteristic` it is the only curve.
 - **The 3×3 treats the dye-layer channels as Rec.709.** Neutrality checks
   survive, since white maps to white. Per-layer slope measurements get slightly
-  mixed. The cleanest measurement point is `FilmRgbImage`, before the matrix,
-  which nc can't export today.
+  mixed. The cleanest measurement point is `FilmRgbImage`, before the matrix:
+  `--export-film-rgb` writes it as an untagged f32 TIFF (`nctool metrics --space
+  film-rgb`).
 - **Numbers can be read from it directly. Visual review can't:** it's linear,
   exceeds 1.0 and has no white balance. Comparing reconstructions by eye needs
   one fixed reference rendering held constant across them.

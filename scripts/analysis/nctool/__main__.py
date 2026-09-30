@@ -189,6 +189,11 @@ def build_parser() -> argparse.ArgumentParser:
              "base image — which is also what a plain JPEG has). `hdr` needs the "
              "gain map applied and is not implemented; it says so rather than "
              "measuring the base and calling it HDR")
+    mimage.add_argument(
+        "--channels", action="store_true",
+        help="also measure each channel alone (`channels`), the block a `film-rgb` "
+             "record has instead of tone and colour — e.g. on a film master, to "
+             "compare with its --export-film-rgb file")
     mimage.add_argument("--out", help="write the record here (default: stdout)")
     mimage.add_argument(
         "--no-checksum", action="store_true",

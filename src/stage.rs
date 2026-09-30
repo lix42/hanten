@@ -29,7 +29,7 @@ pub enum StageKind {
     /// The destination's transfer: the display curve and ICC profile, the Rec.2100
     /// signal, or the gain map.
     Destination,
-    /// Writing the container.
+    /// Writing the container, and the `--export-film-rgb` file.
     Encode,
     /// Writing the `--export-ir` plane.
     IrExport,

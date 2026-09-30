@@ -42,6 +42,10 @@ except ImportError:  # pragma: no cover - exercised by the guard test below
 REPO = Path(__file__).resolve().parents[3]
 COLORIMETRY = REPO / "src" / "pipeline" / "colorimetry"
 
+#: The declarable spaces that have primaries — every one but `film-rgb`.
+COLORIMETRIC = {name: space for name, space in metrics.SPACES.items()
+                if space.primaries is not None}
+
 needs_deps = unittest.skipUnless(
     HAVE_DEPS,
     "numpy/Pillow/tifffile not installed (scripts/analysis/requirements.txt)")
@@ -119,7 +123,7 @@ class ColorimetrySource(unittest.TestCase):
         self.assertEqual(set(metrics.PRIMARIES), checked,
                          "a space in PRIMARIES is not cross-checked against "
                          "definitions.rs; add it to the maps in this class")
-        self.assertEqual({space.white for space in metrics.SPACES.values()},
+        self.assertEqual({space.white for space in COLORIMETRIC.values()},
                          set(metrics.WHITE))
 
     def test_space_whites_match_definitions_rs(self):
@@ -128,7 +132,7 @@ class ColorimetrySource(unittest.TestCase):
                    "adobe-rgb": "ADOBE_RGB", "bt2020": "BT2020",
                    "prophoto": "PROPHOTO", "acescg": "ACESCG"}
         expected = {"D65": "d65", "D50": "d50", "ACES_WHITE": "aces"}
-        for space in metrics.SPACES.values():
+        for space in COLORIMETRIC.values():
             rust_white = rust[symbols[space.primaries]][1]
             self.assertEqual(space.white, expected[rust_white],
                              f"{space.name} adopted white disagrees with the Rust")
@@ -261,7 +265,7 @@ class ColorimetrySource(unittest.TestCase):
         self.assertAlmostEqual(sum(adapted), 1.0, places=9)
 
     def test_luma_rows_sum_to_one(self):
-        for name, space in metrics.SPACES.items():
+        for name, space in COLORIMETRIC.items():
             self.assertAlmostEqual(sum(metrics.luminance_weights(space)), 1.0,
                                    places=9, msg=name)
 
@@ -1038,6 +1042,65 @@ class Command(unittest.TestCase):
         self.assertEqual(len(record["sha256"]), 64)
 
 
+class Channels(unittest.TestCase):
+    """The per-channel block, and `film-rgb`, the space that has nothing else."""
+
+    def setUp(self):
+        if not HAVE_DEPS:
+            self.skipTest("numpy/Pillow/tifffile not installed")
+        self._tmp = tempfile.TemporaryDirectory(prefix="nctool-channels-")
+        self.dir = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _measure(self, array, space: str, channels: bool = False) -> dict:
+        return metrics.measure(write_tiff(self.dir, f"{space}.tif", array), space,
+                               digest=False, channels=channels)
+
+    def test_film_rgb_measures_channels_and_nothing_colorimetric(self):
+        array = np.full((16, 16, 3), 0.18, dtype=np.float32)
+        record = self._measure(array, "film-rgb")
+        self.assertNotIn("tone", record)
+        self.assertNotIn("color", record)
+        self.assertNotIn("bands", record)
+        self.assertNotIn("bands", record["channels"]["g"])
+        self.assertIsNone(record["space"]["primaries"])
+        for name in "rgb":
+            self.assertAlmostEqual(record["channels"][name]["key_stops"], 0.0, places=5)
+
+    def test_a_channel_reads_its_own_offset_in_stops(self):
+        """Halving blue and doubling red move only those channels, by one stop each."""
+        array = np.full((16, 16, 3), 0.18, dtype=np.float32)
+        array[..., 0] *= 2.0
+        array[..., 2] *= 0.5
+        channels = self._measure(array, "film-rgb")["channels"]
+        self.assertAlmostEqual(channels["r"]["key_stops"], 1.0, places=5)
+        self.assertAlmostEqual(channels["g"]["key_stops"], 0.0, places=5)
+        self.assertAlmostEqual(channels["b"]["key_stops"], -1.0, places=5)
+
+    def test_a_non_finite_sample_counts_only_in_its_own_channel(self):
+        array = np.full((10, 10, 3), 0.18, dtype=np.float32)
+        array[0, 0, 1] = np.nan
+        channels = self._measure(array, "film-rgb")["channels"]
+        self.assertAlmostEqual(channels["g"]["non_finite_sample_fraction"], 0.01)
+        self.assertEqual(channels["r"]["non_finite_sample_fraction"], 0.0)
+        self.assertNotIn("non_finite_pixel_fraction", channels["g"])
+        self.assertEqual(channels["b"]["measured"], 100)
+
+    def test_channels_do_not_depend_on_the_declared_primaries(self):
+        """A linear file's channels read the same whatever primaries are declared."""
+        rng = np.random.default_rng(7)
+        array = rng.uniform(0.01, 2.0, (24, 24, 3)).astype(np.float32)
+        film = self._measure(array, "film-rgb")["channels"]
+        aces = self._measure(array, "linear-acescg", channels=True)
+        self.assertEqual(film, aces["channels"])
+        self.assertIn("tone", aces)
+
+    def test_a_colorimetric_record_measures_channels_only_when_asked(self):
+        """Three more full-frame passes, so a review set does not pay for them."""
+        array = np.full((16, 16, 3), 0.18, dtype=np.float32)
+        self.assertNotIn("channels", self._measure(array, "linear-srgb"))
+
+
 class Help(unittest.TestCase):
     """`--help` is what a user reads, so it must not drift from the table.
 
@@ -1271,6 +1334,14 @@ class Rollup(unittest.TestCase):
         self.assertEqual(key["min_frame"], "c.tif")
         self.assertEqual(key["max_frame"], "b.tif")
         self.assertEqual(key["frames"], 3)
+
+    def test_film_rgb_is_refused_with_the_per_image_remedy(self):
+        """A roll tracks tone and colour axes, which a primary-less space has none of."""
+        base = self.write_run([("a", 1.0, "ok")])
+        code, err = self._run(space="film-rgb")
+        self.assertEqual(code, 2, err)
+        self.assertIn("metrics image --space film-rgb", err)
+        self.assertFalse((base / "metrics.json").exists())
 
     def test_a_failed_or_missing_frame_is_recorded_not_dropped(self):
         """A roll must not lose its other frames to one bad one, and the bad one

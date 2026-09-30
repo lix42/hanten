@@ -3578,6 +3578,7 @@ mod tests {
         "--dump-params",
         "--strict",
         "--seed",
+        "--export-film-rgb",
         "--telemetry",
         "--telemetry-file",
         "--max-memory",

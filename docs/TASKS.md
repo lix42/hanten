@@ -393,6 +393,7 @@ graph TD
     nf-verification/stage-goldens
     nf-verification/benchmark-set
     nf-verification/film-rgb-export
+    nf-verification/roll-side-exports
   end
   subgraph nf-retire
     nf-retire/characteristic
@@ -679,6 +680,7 @@ graph TD
   nf-verification/reference-snapshot --> nf-verification/benchmark-set
   nf-core/minimal-end-to-end --> nf-verification/benchmark-set
   nf-reconstruction/fixed-decode --> nf-verification/film-rgb-export
+  nf-verification/film-rgb-export --> nf-verification/roll-side-exports
   nf-core/minimal-end-to-end --> nf-retire/legacy-custom
   nf-verification/reference-snapshot --> nf-retire/legacy-custom
   nf-retire/legacy-custom --> nf-retire/display-tones
@@ -1136,8 +1138,9 @@ the design in `docs/design-update.md`:
   — the cases are a holding set since `legacy` retired; comparability comes from
   the tagged build
 - `nf-verification/film-rgb-export` (new flow): `nf-reconstruction/fixed-decode`
-  — the cleanest measurement point is before the 3×3, which nc cannot export
-  today
+  — the cleanest measurement point is before the 3×3; `--export-film-rgb` writes it
+- `nf-verification/roll-side-exports` (new flow): `nf-verification/film-rgb-export`
+  — `roll` refuses the per-frame exports because one path cannot serve every frame
 - `nf-retire/legacy-custom` (new flow): `nf-core/minimal-end-to-end`, `nf-verification/reference-snapshot`
   — removes the second implementation of the print controls
 - `nf-retire/display-tones` (new flow): `nf-retire/legacy-custom`, `nf-display-stages/fit-range`
@@ -2014,9 +2017,13 @@ the design in `docs/design-update.md`:
   flow](tasks/nf-verification/benchmark-set.md) — the cases are a `display-p3` /
   `film-master` holding set since `legacy` retired; comparability comes from the
   reference build
-- [ ] [Export the pre-matrix film
-  RGB](tasks/nf-verification/film-rgb-export.md) — the cleanest measurement
-  point is before the 3×3, which nc cannot export today
+- [x] [Export the pre-matrix film
+  RGB](tasks/nf-verification/film-rgb-export.md) — **done 2026-09-30.**
+  `convert --export-film-rgb` writes the decode before the 3×3 as an untagged f32
+  TIFF; `nctool metrics --space film-rgb` measures it per channel
+- [ ] [Per-frame side exports from
+  `roll`](tasks/nf-verification/roll-side-exports.md) — `--export-film-rgb` and
+  `--export-ir` per frame in `--out-dir`, which `roll` refuses today
 
 ### nf-retire — [progress](progress/nf-retire.md)
 > Remove the old paths once the reference build exists: `legacy`/`custom`, the bounded
