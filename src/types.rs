@@ -650,8 +650,8 @@ pub const MID_GREY_OUTPUT_DECADES: f32 = 0.744_727_5;
 /// Ektar 100, Portra 160 and Portra 400 all give 0.36 (Gold 200, a consumer stock, 0.40).
 /// Sources: Kodak E-4046, E-4051, E-4050, E-7022.
 ///
-/// A per-stock value belongs to `algo/film-stock-profiles`; until that registry exists this
-/// single professional-film figure is the reference.
+/// The decode is stock-agnostic (design-spec §7), so this single professional-film figure
+/// is the reference.
 #[cfg(test)]
 pub const REFERENCE_MID_TO_WHITE_DELTA: f32 = 0.36;
 

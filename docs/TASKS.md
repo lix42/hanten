@@ -2095,6 +2095,7 @@ the design now in `docs/design-spec.md` (§6–§7):
 - [~] [Update CLAUDE.md for the new architecture](tasks/nf-docs/claude-md.md)
   — the architecture map, the HDR framing, and retiring the migration rule
   itself
-- [ ] [Re-point references to retired and superseded
-  tasks](tasks/nf-docs/reference-sweep.md) — about a dozen `src/` and doc
-  pointers still assert an inactive task is live or owns a decision
+- [x] [Re-point references to retired and superseded
+  tasks](tasks/nf-docs/reference-sweep.md) — **done 2026-09-30.** Most pointers had gone
+  with the code the retirements deleted; four were left (an IR premise credited to a
+  retired task, a stale guide row, a dead id, an owner for a retired question)

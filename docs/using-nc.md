@@ -717,7 +717,7 @@ The removed chain's print controls are refused, each saying where the knob went:
 | Refused | Where it went |
 |---|---|
 | `--print-exposure` | `--exposure`, scene correction (below) |
-| `--black-point` | its surviving half is display black, `--display-black` (below); a flare/fog subtraction in scene correction has not landed (`nf-scene-correction/flare-removal`) |
+| `--black-point` | display black, `--display-black` (below); a scene-side flare/fog subtraction was judged not needed (`nf-scene-correction/flare-removal`) |
 | `--auto-wb` | none per frame: `hanten measure-roll` measures the roll's white balance once (below) |
 | `--linear-range` | an affine levels remap with no home yet (`nf-scene-correction/levels-knob`); refused even at its old default `0,1` |
 | `--display-tone`, `--highlight-compress` | fit range's one operator; its parameter is `--display-tone-headroom` |

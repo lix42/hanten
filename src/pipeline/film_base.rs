@@ -520,9 +520,8 @@ pub struct EffectiveArea {
     /// about whether an IR-opaque holder exists, and "measured, and there is no
     /// holder" therefore rests on the march's own outermost band alone, with no
     /// corroborating evidence. It is asserted, not falsified. What makes that
-    /// tolerable is the project's physical premise (`film-base/white-holder-support`:
-    /// IR opacity comes from material thickness, not colour, so even a light holder
-    /// blocks 850-950 nm), which is why no plausible failing case has been
+    /// tolerable is the physical premise that IR opacity comes from material thickness,
+    /// not colour, so even a light holder blocks 850-950 nm — which is why no plausible failing case has been
     /// constructed — not a second measurement.
     pub holder: Option<HolderDepths>,
     /// Whether the holder measurement **moved this rectangle**: the holder was

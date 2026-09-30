@@ -93,7 +93,28 @@ keeps its evidence (Part 3, the appendices) and a map of where Parts 1–2 went.
 
 ## reference-sweep
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-30
 
 - 2026-09-19: filed after the plan review. Goal: re-point references to retired and superseded tasks.
+- 2026-09-30: **done**, after `nf-retire` landed, so this was the task's planned second
+  pass. The inactive set is the 16 task files with a *Superseded* or *Retired* header,
+  plus the five closed ones (`output/ultrahdr-dependency-externalization`,
+  `color/post-reconstruction-color-characterization`, `nf-scene-correction/flare-removal`,
+  `nf-look/scene-range-mapping`, `nf-destinations/default-destination`). Grepped for the
+  full ids and bare stems across `src/`, the spec, the guide, `CLAUDE.md`, skills, agents
+  and scripts; most sites the task file listed (`density.rs`, `stages.rs`, …) had
+  gone with the code the retirements deleted. Four were left:
+  - `film_base.rs`: the IR premise credited to the retired `film-base/white-holder-support`
+    — pointer dropped, fact kept.
+  - `using-nc.md`: `--black-point`'s row said a flare/fog subtraction "has not landed";
+    `flare-removal` closed it as not needed.
+  - `version.rs`: `core/input-semantics` never resolved; the task is
+    `io/input-data-semantics`.
+  - `version.rs`: "if revisited, `core/conversion-versioning` is its home" for the
+    `--auto-d-max` question, which retired with the flag — dropped (no successor).
+  Also `types.rs`: a per-stock mid-to-white value "belongs to `algo/film-stock-profiles`"
+  (done) — the decode is stock-agnostic now, so it says that instead.
+  Left alone on purpose: citations reading as history ("closed", "retired in X"), and
+  `design-update.md` Appendix D's `algo/contrast-latitude-spike`, which is evidence.
+  Every backticked task id in `src/`, the spec, the guide and `CLAUDE.md` now resolves.
