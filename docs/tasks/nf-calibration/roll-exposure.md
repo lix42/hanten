@@ -27,8 +27,9 @@ What is known:
   `roll`, apart from the style knobs. It needs a flag as well as the key. The
   stated `--exposure` then adjusts it rather than replacing it, the way `--white-balance`
   multiplies the roll's gains, and the report says both.
-- **Evidence, 2026-09-29.** A thin 2026-09-28 roll (`20260928-film-1980…2014`,
-  machine-local, not yet in `nc-assets`; 1978 leader, 1979 unexposed). Its frames'
+- **Evidence, 2026-09-29.** A thin 2026-09-28 roll (`nc-assets` roll
+  `2026-09-28-Portra400-dark`; scanned as `20260928-film-1978…2014`, 1978 the leader, 1979
+  the unexposed frame). Its frames'
   whites were −1.2 to +1.2 scene stops, median about +0.1, so the white bound at the
   floor. That rendered dark (written means about 0.15–0.20). A hand `--exposure 1.4`
   brought the ordinary frames to a normal level with 0.02% clipped at worst, and the user

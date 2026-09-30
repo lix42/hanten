@@ -243,8 +243,9 @@ not settle; today all of them are flags and recipe keys.
   gamma 2; red film gamma 0.53–0.61), and choosing either per stock would be
   per-stock exposure and contrast normalization inside a decode declared
   stock-agnostic — the thing this design demotes `characteristic` for. Fixed
-  values let film speed and stock contrast show through, which is the faithful
-  behaviour.
+  values let film speed and stock contrast show through the decode, which is the
+  faithful behaviour. A roll's level is set after it, by its measured exposure
+  (`roll.exposure`, a neutral gain; `nf-calibration/roll-exposure`).
 
 ## Methods under this goal
 

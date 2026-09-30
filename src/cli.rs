@@ -95,7 +95,7 @@ pub enum Command {
     /// Removed: renamed `measure-base`. Hidden, and kept only to emit a migration error.
     #[command(hide = true, disable_help_flag = true)]
     Estimate(RemovedCommandArgs),
-    /// Measure what a roll shares — its white balance and white, and with --unexposed
+    /// Measure what a roll shares — its white balance, white and exposure, and with --unexposed
     /// its film base — once; emit JSON, and write it as a recipe with --out.
     MeasureRoll(MeasureRollArgs),
     /// Print the full default parameter set as JSON (recipe scaffolding).
@@ -276,9 +276,9 @@ pub struct MeasureRollArgs {
     #[arg(long, value_name = "PATH")]
     pub leader: Option<PathBuf>,
     /// The roll's recipe (`"recipe_version": 3`): the film base and
-    /// the decode the gains and the white are measured under. Its `scene_correction` and
-    /// `look` values are not read — this command measures the white balance and the
-    /// white — though the recipe must still load (a retired or unknown key there is
+    /// the decode the gains, the white and the exposure are measured under. Its `scene_correction` and
+    /// `look` values are not read — this command measures the white balance, the white and
+    /// the exposure — though the recipe must still load (a retired or unknown key there is
     /// refused). Repeatable, and `-` reads stdin, as on `convert`. Its `input`, `measure`
     /// and `reconstruction` keys, when stated, travel into `--out`: the gains hold only
     /// under that decode.
@@ -498,13 +498,14 @@ pub struct DestinationOverrides {
     /// Write the fixed decode's linear ACEScg, unclamped 32-bit float TIFF, with no
     /// rendering stage (recipe `output`: `"film-master"`). Refuses a rendering stage
     /// the recipe or flags ask for (scene correction, the look, fit range), and the
-    /// roll flags (`--roll-white-balance`, `--roll-white`), which only a rendering
+    /// roll flags (`--roll-white-balance`, `--roll-white`, `--roll-exposure`), which only a rendering
     /// applies — refused under a recipe's film master too. A recipe's `roll` section is
     /// spared, since a measurement is not a stage asked for.
     #[arg(
         long = "film-master",
         conflicts_with_all = [
             "range", "transfer", "gamut", "container", "roll_white_balance", "roll_white",
+            "roll_exposure",
         ]
     )]
     pub film_master: bool,
@@ -731,12 +732,29 @@ pub struct RollOverrides {
     /// multiplies.
     #[arg(long, value_name = "STOPS")]
     pub roll_white: Option<f32>,
+    /// The roll's exposure in EV, as `hanten measure-roll` measured it (recipe key
+    /// `roll.exposure`): a neutral gain that brings the roll's median frame to a normal
+    /// level. Added to `--exposure`, which then adjusts it rather than replacing it.
+    #[arg(long, value_name = "EV", allow_hyphen_values = true)]
+    pub roll_exposure: Option<f32>,
 }
 
 impl RollOverrides {
+    /// The typed roll flags, by name.
+    pub(crate) fn typed(&self) -> Vec<&'static str> {
+        [
+            ("--roll-white-balance", self.roll_white_balance.is_some()),
+            ("--roll-white", self.roll_white.is_some()),
+            ("--roll-exposure", self.roll_exposure.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(flag, typed)| typed.then_some(flag))
+        .collect()
+    }
+
     /// Whether any roll flag was typed.
     pub(crate) fn any(&self) -> bool {
-        self.roll_white_balance.is_some() || self.roll_white.is_some()
+        !self.typed().is_empty()
     }
 }
 
@@ -752,7 +770,8 @@ pub struct SceneCorrectionOverrides {
     /// Exposure in stops (EV) — a scene-referred gain of `2^EV` on every channel,
     /// before the look and the display fit (recipe key `scene_correction.exposure`).
     /// Stops of the reconstructed scene: the look's `--contrast` then expands them with
-    /// the rest of the picture.
+    /// the rest of the picture. Added to the roll's exposure (`--roll-exposure`, which
+    /// `hanten measure-roll` measures), so it adjusts the roll's rather than replacing it.
     #[arg(long, allow_hyphen_values = true)]
     pub exposure: Option<f32>,
 }
@@ -1676,19 +1695,14 @@ fn reject_roll_flags_nothing_applies(args: &ConversionFlags, r: &Recipe) -> Resu
     if !args.roll.any() || (r.output != OutputSection::FilmMaster && !direct) {
         return Ok(());
     }
-    let typed = [
-        (
-            "--roll-white-balance",
-            args.roll.roll_white_balance.is_some(),
-        ),
-        ("--roll-white", args.roll.roll_white.is_some()),
-    ]
-    .into_iter()
-    .filter_map(|(flag, typed)| typed.then_some(flag))
-    .collect::<Vec<&str>>()
-    .join(" and ");
-    let (them, apply) = if args.roll.roll_white_balance.is_some() && args.roll.roll_white.is_some()
-    {
+    let flags = args.roll.typed();
+    let typed = match flags.as_slice() {
+        [.., last] if flags.len() > 1 => {
+            format!("{} and {last}", flags[..flags.len() - 1].join(", "))
+        }
+        _ => flags.join(""),
+    };
+    let (them, apply) = if flags.len() > 1 {
         ("them", "apply")
     } else {
         ("it", "applies")
@@ -2289,7 +2303,7 @@ pub fn run() -> Result<()> {
         Command::Estimate(_) => Err(NcError::Usage(
             "`hanten estimate` was renamed `hanten measure-base`, with the same flags; \
              `--out PATH` now writes the measured base as a recipe for `--params`. To \
-             measure a roll's base with its white balance and white, use \
+             measure a roll's base with its white balance, white and exposure, use \
              `hanten measure-roll --unexposed <unexposed.tif>`"
                 .into(),
         )),
@@ -4670,10 +4684,21 @@ const ROLL_WIDE: &[RollWide] = &[
         // Only gains that reach both: a frame that leaves them out entirely is the
         // `rendering` or `output` row's.
         compare: |f, r| {
-            if !(f.applies_roll_white_balance() && r.applies_roll_white_balance()) {
+            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction()) {
                 return Ok(None);
             }
             changed(&f.roll.white_balance, &r.roll.white_balance)
+        },
+    },
+    RollWide {
+        key: "roll.exposure",
+        breaks: "this frame is exposed apart from the roll's measured exposure (a frame's \
+                 own adjustment is `scene_correction.exposure`, which adds to it)",
+        compare: |f, r| {
+            if !(f.applies_roll_to_scene_correction() && r.applies_roll_to_scene_correction()) {
+                return Ok(None);
+            }
+            changed(&f.roll.exposure, &r.roll.exposure)
         },
     },
     RollWide {
@@ -5783,7 +5808,9 @@ struct MeasureRollReport {
     white_balance: RollWhiteBalance,
     /// The roll's white and the slope that places it (`nf-calibration/roll-white-rule`).
     white: MeasuredRollWhite,
-    /// The gains and the white in the forms a user freezes them in.
+    /// The roll's exposure (`nf-calibration/roll-exposure`).
+    exposure: MeasuredRollExposure,
+    /// The gains, the white and the exposure in the forms a user freezes them in.
     reuse: RollReuse,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
@@ -5819,6 +5846,10 @@ struct MeasuredFrame {
     /// How far the white sits under the leader, in scene stops; only with `--leader`.
     #[serde(skip_serializing_if = "Option::is_none")]
     leader_distance_stops: Option<f32>,
+    /// The frame's level — the log-average of its luma — in scene stops from mid-grey;
+    /// absent when no pixel was usable or the leader guard took every one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level_stops: Option<f32>,
     /// The frame's part in the roll's white.
     white_role: roll_white::FrameRole,
     memory: MemoryReport,
@@ -5845,9 +5876,9 @@ struct MeasuredRollWhite {
     #[serde(skip_serializing_if = "Option::is_none")]
     from: Option<PathBuf>,
     /// The slope `roll.white_stops` renders at: the white at diffuse white, mid-grey
-    /// pinned, at `look.contrast` 1 and `scene_correction.exposure` 0 (the look expands
-    /// an exposure too, so with one set the white lands `exposure · slope` stops off
-    /// diffuse white). The recipe stores `stops`.
+    /// pinned, at `look.contrast` 1 and no exposure. The white is measured before the
+    /// roll's exposure, which the look expands too, so the roll's white renders
+    /// `exposure.ev · slope` stops off diffuse white. The recipe stores `stops`.
     slope: f32,
     /// Frames above the cap, rendered at the cap's slope rather than the roll's.
     /// Disclosed, not warned about: an ordinary bright scene lands here too.
@@ -5867,11 +5898,22 @@ struct ClampedFrame {
     flag: String,
 }
 
-/// The `convert` flags that freeze `gains` and the white `white_stops` — `reuse.flag`,
-/// and a clamped frame's own.
-fn reuse_flag(gains: [f32; 3], white_stops: f32) -> String {
+/// The roll's exposure and the rule that measured it.
+#[derive(Debug, Serialize)]
+struct MeasuredRollExposure {
+    #[serde(flatten)]
+    measured: roll_white::RollExposure,
+    /// Where the exposure puts the median frame level, in scene stops from mid-grey.
+    target_stops: f32,
+    /// The most it moves either way, in EV.
+    bound_ev: f32,
+}
+
+/// The `convert` flags that freeze `gains`, the white `white_stops` and the exposure
+/// `ev` — `reuse.flag`, and a clamped frame's own.
+fn reuse_flag(gains: [f32; 3], white_stops: f32, ev: f32) -> String {
     format!(
-        "--roll-white-balance {},{},{} --roll-white {white_stops}",
+        "--roll-white-balance {},{},{} --roll-white {white_stops} --roll-exposure {ev}",
         gains[0], gains[1], gains[2]
     )
 }
@@ -5889,7 +5931,8 @@ struct WhiteRule {
     saturation_margin_stops: Option<f32>,
 }
 
-/// The gains and the white as `convert` flags. The recipe form is the `--out` file.
+/// The gains, the white and the exposure as `convert` flags. The recipe form is the
+/// `--out` file.
 #[derive(Debug, Serialize)]
 struct RollReuse {
     /// For `convert`, on every frame but a clamped one, which takes its own
@@ -5977,6 +6020,7 @@ fn measured_roll_white(
     frames: &mut [MeasuredFrame],
     guarded: bool,
     gains: [f32; 3],
+    ev: f32,
 ) -> Result<MeasuredRollWhite> {
     let stops: Vec<Option<f32>> = frames.iter().map(|f| f.white_stops).collect();
     let placed = roll_white::place_roll_white(&stops)?;
@@ -5999,7 +6043,7 @@ fn measured_roll_white(
                 input: f.input.clone(),
                 white_stops: f.white_stops.expect("a clamped frame has a white"),
                 slope: cap_slope,
-                flag: reuse_flag(gains, roll_white::WHITE_CAP_STOPS),
+                flag: reuse_flag(gains, roll_white::WHITE_CAP_STOPS, ev),
             })
             .collect(),
         rule: WhiteRule {
@@ -6060,7 +6104,7 @@ fn refuse_shared_file_names(inputs: &[PathBuf]) -> Result<()> {
 }
 
 /// `hanten measure-roll` — measure what a roll shares once: with `--unexposed` its film
-/// base ([`measure_base`]), then its white balance and white over its picture frames;
+/// base ([`measure_base`]), then its white balance, white and exposure over its picture frames;
 /// report them, and with `--out` write them as one recipe `roll --params` renders alone.
 fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     let started = Instant::now();
@@ -6326,6 +6370,8 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         for w in film_base::effective_area_warnings(&area) {
             push_warning_buf(&mut warnings, &log, format!("{}: {w}", input.display()));
         }
+        let level = roll_white::frame_level(aces.rgb(), aces.width(), area.region)
+            .map_err(|e| e.prefixed(input.display()))?;
         let counts = roll_white::pool_frame(
             aces.rgb(),
             aces.width(),
@@ -6370,6 +6416,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             counts,
             white_stops: white.map(roll_white::scene_stops),
             leader_distance_stops,
+            // A frame the leader guard emptied is not picture (the warning above says
+            // so), and would pull the roll's exposure toward the leader.
+            level_stops: level.filter(|_| counts.kept > 0),
             // Placed once every frame is measured, below.
             white_role: roll_white::FrameRole::Unmeasured,
             memory,
@@ -6378,7 +6427,28 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
     }
     let gains = roll_white::roll_gains(&pool)?;
     log.info(format_args!("roll white balance {gains:?}"));
-    let white = measured_roll_white(&mut frames, args.leader.is_some(), gains)?;
+    let levels: Vec<Option<f32>> = frames.iter().map(|f| f.level_stops).collect();
+    let exposure = roll_white::roll_exposure(&levels)?;
+    log.info(format_args!(
+        "roll exposure {:+.2} EV (median frame level {:+.2} stops)",
+        exposure.ev, exposure.level_stops
+    ));
+    if exposure.bounded {
+        push_warning_buf(
+            &mut warnings,
+            &log,
+            format!(
+                "the roll's median frame level is {:+.2} stops from mid-grey, so its exposure \
+                 is limited to {:+} EV (bound {} EV) and it renders off the normal level; \
+                 check the inputs are this roll's picture frames, or add --exposure to the \
+                 roll's",
+                exposure.level_stops,
+                exposure.ev,
+                roll_white::EXPOSURE_BOUND_EV
+            ),
+        );
+    }
+    let white = measured_roll_white(&mut frames, args.leader.is_some(), gains, exposure.ev)?;
     log.info(format_args!(
         "roll white {:+.2} stops ({:?}), slope {}",
         white.stops, white.bound, white.slope
@@ -6401,6 +6471,7 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
         roll: Some(recipe::RollSection {
             white_balance: Some(gains),
             white_stops: Some(white.stops),
+            exposure: Some(exposure.ev),
             frames: clamp_table(&frames, &white),
         }),
         measure: (recipe.measure != MeasureParams::default()).then(|| recipe.measure.clone()),
@@ -6422,9 +6493,14 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             pooled: pool.len() / 3,
         },
         reuse: RollReuse {
-            flag: reuse_flag(gains, white.stops),
+            flag: reuse_flag(gains, white.stops, exposure.ev),
         },
         white,
+        exposure: MeasuredRollExposure {
+            measured: exposure,
+            target_stops: roll_white::LEVEL_TARGET_STOPS,
+            bound_ev: roll_white::EXPOSURE_BOUND_EV,
+        },
         warnings,
         elapsed_ms: elapsed_ms(started),
     };
@@ -7773,6 +7849,7 @@ mod tests {
             roll: Some(recipe::RollSection {
                 white_balance: Some([0.5, 1.0, 1.25]),
                 white_stops: Some(1.75),
+                exposure: Some(1.2),
                 frames: [("f2.tif".to_owned(), recipe::FrameRoll { white_stops: 2.0 })].into(),
             }),
             ..base
@@ -8298,13 +8375,14 @@ mod tests {
         shared.calibration.film_base = Some(FilmBaseSource::Explicit([0.9, 0.55, 0.42]));
         shared.roll.white_balance = Some([1.05, 1.0, 0.95]);
         type Change = (&'static str, fn(&mut Recipe));
-        let changes: [Change; 8] = [
+        let changes: [Change; 9] = [
             ("calibration.film_base", |r| {
                 r.calibration.film_base = Some(FilmBaseSource::Explicit([0.8, 0.5, 0.4]))
             }),
             ("roll.white_balance", |r| {
                 r.roll.white_balance = Some([1.1, 1.0, 0.9])
             }),
+            ("roll.exposure", |r| r.roll.exposure = Some(0.5)),
             ("reconstruction.scale", |r| {
                 r.reconstruction.scale = [1.0, 0.9, 0.8]
             }),

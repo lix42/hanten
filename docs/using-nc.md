@@ -9,8 +9,9 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > *what the CLI currently accepts*.
 >
 > **Verified against:** `hanten 0.1.0`, `pipeline_version 8`, on branch
-> `nf-look/contrast-definition` (`--contrast` a multiplier on the base slope, recipe
-> version 3, §5 and §7), after `core/recipe-composition` (repeatable `--params` and
+> `nf-calibration/roll-exposure` (the roll's measured exposure, `roll.exposure`, §4, §5
+> and §7), after `nf-look/contrast-definition` (`--contrast` a multiplier on the base
+> slope, recipe version 3, §5 and §7), `core/recipe-composition` (repeatable `--params` and
 > `roll`'s conversion flags, §4,
 > §5, §8), `core/measure-base` (`estimate` renamed `measure-base`; the measuring
 > commands and their `--out` recipes, §4 and §7), `film-base/holder-masked-measurement` (the
@@ -50,7 +51,7 @@ shape every workflow below:
 - **Calibrate once, apply many.** The film base (`Dmin`) is a property of the
   *roll* — film stock, development, scanner — not of an individual frame. You
   measure it once and reuse it, which is what keeps a whole roll color-consistent;
-  the roll's white balance and white are measured once the same way
+  the roll's white balance, white and exposure are measured once the same way
   (`hanten measure-roll`, §7). **`Dmin` has no default: every `convert` must say
   where the film base comes from**, because it sets the black point and the colour
   balance together.
@@ -63,7 +64,8 @@ That last point is the whole workflow:
 │ hanten inspect     │  ────► │ roll.json     │ ─────► │ hanten roll          │
 │ hanten measure-roll│        │ (Dmin, white  │        │ hanten convert       │
 │ hanten measure-base│        │  balance,     │        │                      │
-│   --out roll.json  │        │  clamps)      │        │                      │
+│   --out roll.json  │        │  exposure,    │        │                      │
+│                    │        │  clamps)      │        │                      │
 └────────────────────┘        └───────────────┘        └──────────────────────┘
   measure from the              written by --out        one shared recipe
   roll's frames                 (no jq, no copying)     across every frame
@@ -134,7 +136,7 @@ guaranteed byte-identical within one build and architecture.
 | `hanten params` | Print the full default recipe as JSON — the scaffolding starting point. | No |
 | `hanten convert` | Convert one frame. The full parameter surface. | Yes |
 | `hanten roll` | Convert many frames from **one shared frozen recipe** — the same `--params` layers and flags as `convert`. | Yes |
-| `hanten measure-roll` | **"What does this roll share?"** — its white balance and white, measured once over its frames (§7), and with `--unexposed` its film base. `--out` writes it all as one recipe for `roll`. | No |
+| `hanten measure-roll` | **"What does this roll share?"** — its white balance, white and exposure, measured once over its frames (§7), and with `--unexposed` its film base. `--out` writes it all as one recipe for `roll`. | No |
 
 Every command except `params` emits a **JSON report on stdout** on success
 (`--report none` to suppress, `--report-file PATH` to redirect); `params` takes no
@@ -180,7 +182,7 @@ usage: no film base selected: pass --film-base R,G,B (a Dmin measured once per r
 ```
 
 One command measures everything a roll shares — the film base from its **unexposed
-frame**, and its white balance and white over its picture frames (§7) — and writes it
+frame**, and its white balance, white and exposure over its picture frames (§7) — and writes it
 as one recipe:
 
 ```sh
@@ -196,6 +198,7 @@ hanten measure-roll frames/*.tif --unexposed unexposed.tif --leader leader.tif -
   "roll": {
     "white_balance": [0.886392, 1.0, 1.188019],
     "white_stops": 1.9509047,
+    "exposure": 0.48546875,
     "frames": { "971.tif": { "white_stops": 2.0 } }
   }
 }
@@ -551,7 +554,7 @@ completed, so `"output": "b-brighter"` writes `b-brighter.tiff` on a default rol
 
 A frame renders exactly as `convert --params` would with the shared recipe and its
 override merged. Some keys describe the *roll*, not the frame:
-`calibration.film_base`, `roll.white_balance`, `reconstruction` (every key),
+`calibration.film_base`, `roll.white_balance`, `roll.exposure`, `reconstruction` (every key),
 `rendering` and `output`. An override that changes one is applied but warns, naming
 both values (and `--strict` turns the warning into a failing exit), because the frame
 then renders apart from its siblings — a roll is one piece of film through one
@@ -808,7 +811,7 @@ ACEScg — after the decode's 3×3, before the look — and clamps nothing:
 | Flag | Recipe key | |
 |---|---|---|
 | `--white-balance R,G,B` | `scene_correction.white_balance` = `{"explicit": [r, g, b]}` | stated gains, multiplied into the roll's (default `[1, 1, 1]`) |
-| `--exposure EV` | `scene_correction.exposure` | a gain of `2^EV` (default `0`) |
+| `--exposure EV` | `scene_correction.exposure` | a gain of `2^EV` (default `0`), added to the roll's exposure |
 
 The recipe takes only the tagged form — a bare `[r, g, b]` array, which earlier
 recipes accepted, is refused. The report states what was applied:
@@ -999,12 +1002,13 @@ empty. What can still clip is content brighter than fit range's headroom, which 
 the encoder above display white as a neutral: counted in `loss`, and failed by
 `--strict`.
 
-### `measure-roll` — a roll's white balance and white, measured once
+### `measure-roll` — a roll's white balance, white and exposure, measured once
 
-It measures two things a whole roll shares. The **white balance** removes the cast of
+It measures three things a whole roll shares. The **white balance** removes the cast of
 the film, the development and the scanner, and keeps the scene's light: one sunset
 frame barely moves a statistic taken over every frame. The **roll's white** sets the
 look's base slope, so the roll's highlights reach white with mid-grey held where it is.
+The **roll's exposure** brings an under- or over-exposed roll to a normal level.
 Give it the roll's picture frames, its leader, and its film base — measured here from
 the unexposed frame with `--unexposed` (§4), or stated explicitly:
 
@@ -1017,15 +1021,18 @@ $ hanten measure-roll frames/*.tif --leader leader.tif --film-base 0.47095445,0.
   "frames": [ { "input": "frames/1774.tif", "region": [167, 167, 4579, 3009],
                 "holder_applied": false, "sampled": 131072, "kept": 131065, "guarded": 7,
                 "unusable": 0, "white_stops": 0.52260643,
-                "leader_distance_stops": 2.0644333, "white_role": "under", … }, … ],
+                "leader_distance_stops": 2.0644333, "level_stops": -1.7618053,
+                "white_role": "under", … }, … ],
   "white_balance": { "gains": [1.0026785, 1.0, 1.2466215], "percentile": 0.99, … },
   "white": { "stops": 1.5, "bound": "floor", "slope": 1.6492873,
              "clamped": [ { "input": "frames/1816.tif", "white_stops": 2.297903,
                             "slope": 1.2369655,
-                            "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 2" }, … ],
+                            "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 2 --roll-exposure 0.45537937" }, … ],
              "rule": { "channel": "max", "percentile": 0.97, "cap_stops": 2.0,
                        "floor_stops": 1.5, "saturation_margin_stops": 0.5 } },
-  "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5" },
+  "exposure": { "ev": 0.45537937, "level_stops": -1.0553794, "bounded": false,
+                "target_stops": -0.6, "bound_ev": 2.0 },
+  "reuse": { "flag": "--roll-white-balance 1.0026785,1,1.2466215 --roll-white 1.5 --roll-exposure 0.45537937" },
   "warnings": [ "frames/1816.tif: near film saturation — its white sits 0.29 stop under the leader (margin 0.5 stop); …", … ]
 }
 ```
@@ -1046,28 +1053,37 @@ measured value is never mistaken for a chosen one:
 |---|---|---|
 | `--roll-white-balance R,G,B` | `roll.white_balance` | the roll's gains; `--white-balance` multiplies them |
 | `--roll-white STOPS` | `roll.white_stops` | the roll's white; the look's base slope renders it at diffuse white, and `--contrast` multiplies that slope |
+| `--roll-exposure EV` | `roll.exposure` | the roll's exposure, a neutral gain of `2^EV`; `--exposure` adds to it |
 | — | `roll.frames` | `{"<file name>": {"white_stops": …}}`: a frame's own white, in place of the roll's. `convert` and `roll` apply their input's entry, before any flag; a `roll --frames` manifest's `params` beat it, and may not state the table. Keys are file names, not paths (exit 2) |
 
 Each is optional. The report says what applied:
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 \
-    --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --white-balance 1.2,1,1 \
-    | jq -c '.chain.roll, .chain.scene_correction'
-{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"slope":1.4552535,"white_balance_applied":true,"slope_applied":true}
-{"white_balance":[1.32,1.0,0.9],"exposure":0.0}
+    --roll-white-balance 1.1,1,0.9 --roll-white 1.7 --roll-exposure 0.4 \
+    --white-balance 1.2,1,1 --exposure 0.2 | jq -c '.chain.roll, .chain.scene_correction'
+{"white_balance":[1.1,1.0,0.9],"white_stops":1.7,"slope":1.4552535,"exposure":0.4,"white_balance_applied":true,"slope_applied":true,"exposure_applied":true}
+{"white_balance":[1.32,1.0,0.9],"exposure":0.6}
 ```
 
 `slope_applied` stays `true` with `--contrast` stated: the contrast multiplies the
 roll's slope (`chain.look.base_from` is `roll`). The film master and `direct` apply
-neither value, and report both as not applied. The roll flags are
+none of the values, and report each as not applied. The roll flags are
 refused under it — a typed `--film-master` conflicts with them, and under a recipe's
 `"film-master"` the refusal says to drop them or choose a rendered destination — but a
 recipe's `roll` section is not.
 
 A white balance **a recipe states** beside the roll's gains is kept, and the run warns
 (so `--strict` refuses it): it may be gains an earlier `measure-roll` wrote there, not
-a choice. A typed `--white-balance` is a choice made now, and never warns. A
+a choice. An exposure a recipe states beside the roll's does the same, since it may be
+one chosen by hand before the roll's was measured:
+
+```console
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --params old-exp.json --report none
+hanten: warning: the recipe's `scene_correction.exposure` 1.4 adds to the roll's exposure, `roll.exposure` 0.4: the exposure applied is 1.8 EV. A stated exposure is an adjustment on top of the roll's measurement; if it is one chosen by hand before the roll's was measured, drop it
+```
+
+A typed `--white-balance` or `--exposure` is a choice made now, and never warns. A
 `--dump-params` recipe that states one beside the roll's gains does warn on replay,
 since a file cannot say who chose a value; type the flag on replay to keep it without
 the warning. A contrast beside the roll's white never warns: it multiplies the roll's
@@ -1108,14 +1124,35 @@ slope is derived from it at render time.
 - **A frame near its leader warns.** A white within 0.5 stop of the leader
   (`leader_distance_stops`, the same brightest-channel measure) is near film saturation, where the film compresses
   highlights and the decode renders them flat. Without `--leader` nothing is checked.
-- **An underexposed roll is lifted only as far as the floor**; below it the roll
-  renders dark.
+- **The contrast lifts an underexposed roll's white only as far as the floor**; its level
+  is the roll's exposure's (below).
 - **The slope places the white at exposure 0.** `measure-roll` does not read the
-  recipe's `scene_correction.exposure` or `look.contrast`, and the look's slope expands
-  an exposure too: with `--exposure 0.5` at slope 1.65 the white lands about 0.8 stop past diffuse
-  white. That is an exposure doing its job, not a mismeasured white.
+  recipe's `scene_correction.exposure` or `look.contrast`, and the white is measured
+  before the roll's exposure. The look's slope expands an exposure too: with the roll's
+  exposure plus `--exposure` at 0.5 and slope 1.65, the white lands about 0.8 stop past
+  diffuse white. That is an exposure doing its job, not a mismeasured white.
 - The cap, floor and margin are provisional: they were chosen by review on nine rolls
   with no deliberately bad frames.
+
+**The roll's exposure** is one neutral gain for the whole roll. Each frame's
+`level_stops` is the log-average of its luma in linear ACEScg, in scene stops from
+mid-grey; the exposure (`exposure.ev`) brings the **median** frame level to −0.6
+(`target_stops`), so one night scene or one bright frame does not set it. A frame darker
+than its roll stays dark — it renders what is on the film. The exposure is limited to
+±2 EV (`bound_ev`); a roll that needs more warns (`bounded: true`, so `--strict` refuses
+it) — check the inputs are this roll's picture frames, or add `--exposure`. The target
+was chosen by review on ten rolls, over −1.0 and −0.8 (both lost on nearly every frame)
+and −0.3 (split frame by frame); it measured +0.02 to +1.74 EV on them.
+
+A `roll.json` measured before `measure-roll` measured the exposure has gains and a white
+but no `roll.exposure`. It renders at exposure 0, as it did, and warns (so `--strict`
+refuses it) — re-run `measure-roll`, or state `roll.exposure` (`0` keeps the render).
+Typed roll flags are a choice made now, and never warn:
+
+```console
+$ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --params before.json --report none
+hanten: warning: the recipe's `roll` section has no `roll.exposure`, so the roll renders at exposure 0 and an under-exposed roll stays dark; it was measured before `hanten measure-roll` measured the exposure. Re-run `hanten measure-roll` over the roll, or state `roll.exposure` (0 keeps this render)
+```
 
 - **Pass the leader.** Any pixel within 0.1 density of it is left out of the white
   balance (`guarded`), so a fully exposed frame mixed into the inputs cannot set the

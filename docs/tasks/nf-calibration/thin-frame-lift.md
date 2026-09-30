@@ -23,7 +23,7 @@ What is known:
   steeper slope together**: the slope spreads the short range, and the exposure is
   solved from it.
 - **Grain rises with the slope.** The user accepts that as the price, within a bound.
-- **Evidence, 2026-09-29** (roll `20260928-film-*`: roll exposure +1.4 EV, slope 1.649;
+- **Evidence, 2026-09-29** (`nc-assets` roll `2026-09-28-Portra400-dark`: roll exposure +1.4 EV, slope 1.649;
   frames 2005 and 1983, whites −1.23 and −1.06). Hand-solved pairs put each white at
   diffuse white. Each exposure below is the frame's **total**, replacing the roll's +1.4
   (a manifest `params` exposure replaces the flag):

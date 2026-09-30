@@ -379,6 +379,8 @@ graph TD
     nf-calibration/white-rule-hdr
     nf-calibration/roll-exposure
     nf-calibration/thin-frame-lift
+    nf-calibration/frame-level-trim
+    nf-calibration/exposure-buckets
     nf-calibration/scale-ladder
     nf-calibration/scale-gamma-loop
     nf-calibration/offset-question
@@ -626,6 +628,8 @@ graph TD
   nf-calibration/roll-exposure --> nf-calibration/white-rule-hdr
   nf-calibration/roll-exposure --> nf-calibration/thin-frame-lift
   nf-calibration/roll-white-rule --> nf-calibration/thin-frame-lift
+  nf-calibration/roll-exposure --> nf-calibration/frame-level-trim
+  nf-calibration/roll-exposure --> nf-calibration/exposure-buckets
   nf-display-stages/parametric-shoulder --> nf-calibration/white-rule-hdr
   nf-reconstruction/fixed-decode --> nf-reconstruction/gamma-split
   nf-reconstruction/anchor-rule --> nf-reconstruction/curve-endpoint-warning
@@ -1225,6 +1229,12 @@ the design in `docs/design-update.md`:
 - `nf-calibration/thin-frame-lift` (new flow): `nf-calibration/roll-exposure`, `nf-calibration/roll-white-rule`
   — filed 2026-09-29: an opt-in per-frame exposure and slope for frames far thinner than
   the roll; hand-solved pairs at slope 2.0 and 2.4 passed review
+- `nf-calibration/frame-level-trim` (new flow): `nf-calibration/roll-exposure`
+  — filed 2026-09-29: `roll-exposure`'s round 2 split by frame, not by roll; the trim is
+  measured around the roll's exposure
+- `nf-calibration/exposure-buckets` (new flow): `nf-calibration/roll-exposure`
+  — filed 2026-09-29: a group of frames exposed apart from the rest (09-28's battery
+  change) is a roll in miniature, measured by the same rule
 
 ## Tasks
 
@@ -1952,12 +1962,18 @@ the design in `docs/design-update.md`:
 - [ ] [The white rule in
   HDR](tasks/nf-calibration/white-rule-hdr.md) — the rule's values stay provisional
   until its HDR rendition and headroom are looked at; every round so far was SDR
-- [ ] [A measured roll exposure](tasks/nf-calibration/roll-exposure.md) — `measure-roll`
+- [~] [A measured roll exposure](tasks/nf-calibration/roll-exposure.md) — `measure-roll`
   writes `roll.exposure`, one neutral gain for the roll from a central statistic of its
   frames, so an under-exposed roll renders at a normal level; darker frames stay dark
 - [ ] [Opt-in lift for a thin frame](tasks/nf-calibration/thin-frame-lift.md) — a frame far
   thinner than its roll gets a solved exposure and a steeper slope, bounded, written to
   `roll.frames`; more grain is the accepted price, and it is off by default
+- [ ] [A per-frame level trim](tasks/nf-calibration/frame-level-trim.md) — a small,
+  bounded exposure trim per frame around the roll's, so low-key frames render a little
+  brighter and bright ones a little darker
+- [ ] [Exposure buckets within a roll](tasks/nf-calibration/exposure-buckets.md) — detect
+  groups of frames exposed differently (a battery change mid-roll) and measure one
+  exposure per group
 - [x] [Tune `scale` and `gamma` by
   review](tasks/nf-calibration/scale-gamma-loop.md) — the two knobs the decode
   owns, tuned against a held-fixed rendering; one round, nothing moved, the
