@@ -1908,10 +1908,11 @@ the design in `docs/design-update.md`:
   nc writes (`io::iso_gain_map`, no libultrahdr; gain map typed `050000`). A flat map is
   `chain.gain_map.flat`, never a warning. Apple ImageIO reads it `PRESENT` with three
   distinct channel entries; `NewFlowGainMapJpeg` is provisional
-- [ ] [Easy destination
-  rows](tasks/nf-destinations/easy-destination-rows.md) — the rows a 2026-09-27 survey
-  classed as easy: linear float HDR TIFF in Adobe RGB and Display P3, sRGB as a gamut,
-  then sRGB's float and gain-map rows. Open: what `--transfer linear` alone resolves to
+- [x] [Easy destination
+  rows](tasks/nf-destinations/easy-destination-rows.md) — **done 2026-09-30.** The linear
+  float HDR TIFF in Display P3, Adobe RGB, sRGB and BT.2020 (`--transfer linear` alone
+  now asks for `--gamut`); `--gamut srgb` as an SDR gamut; a gain map on an sRGB base
+  (ImageIO reads it as HDR). `direct`'s unset destination is now the Adobe RGB float TIFF
 
 ### nf-calibration — [progress](progress/nf-calibration.md)
 > The numbers rather than the machinery: an early `scale` ladder, the `scale`/`gamma`

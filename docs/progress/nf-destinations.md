@@ -39,6 +39,11 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
   RGB), `NewFlowF32Tiff` (measured for the linear HDR TIFF, not the film master),
   `NewFlowAvif` and `NewFlowGainMapJpeg` provisional.
 - nctool keys metrics on (gamut, transfer); a review matrix may state a `destination`.
+- **The gamuts are Display P3, Adobe RGB, sRGB and BT.2020** (`easy-destination-rows`,
+  2026-09-30): the linear float TIFF is written in all four, so `--transfer linear` alone
+  asks for `--gamut` unless the rendering names one (`Defaults::linear_gamut`; `direct`:
+  Adobe RGB, now its unset destination); SDR TIFFs in the first three; the gain map on a
+  Display P3 or sRGB base; PQ/HLG in BT.2020 only.
 - **Unset-axis defaults and the derivation order come from the rendering**
   (`destination::Defaults`, `direct-preset`): `Defaults::STANDARD` derives range,
   transfer, gamut, container; `direct` sets `container_first`, so it derives TIFF before
@@ -312,8 +317,8 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
 
 ## easy-destination-rows
 
-**Status:** in progress
-**Updated:** 2026-09-29
+**Status:** done
+**Updated:** 2026-09-30
 
 - 2026-09-27: created from a survey (with the user) of lossless × HDR × gamut: the rows
   classed easy — linear float HDR in Adobe RGB and Display P3, sRGB as a gamut, then
@@ -361,3 +366,22 @@ tiff|jpeg|avif` (recipe `output.display`) — or `--film-master` (recipe `output
     linear --gamut bt2020`, the gain-map presets `--gamut display-p3`), since each must
     name one row under both renderings. nctool maps the new (gamut, transfer) pairs onto
     its existing `linear-display-p3`, `linear-adobe-rgb`, `srgb`, `linear-srgb` spaces.
+- 2026-09-30: review rounds (`/code-review`, then the ship review: `ship:diff-reviewer` and
+  Codex, which found nothing). Fixed: a planned **SDR sRGB JPEG** row, so `--gamut srgb
+  --container jpeg` is refused as not yet (like Display P3) instead of quietly writing the
+  HDR gain map; an open axis whose every value is unwritten is a `NotYet` naming the open
+  axis (`Fault::NotYet::open`), never an empty "choose one" or a false "resolves to";
+  every per-gamut identifier of the linear rendition in one table, `hdr::linear_labels`
+  (BT.2020's pinned); the linear-TRC test reads each gamut's embedded profile; the
+  `--gamut`/`--container` help, nctool's `roll convert --gamut` and several docs caught
+  up. Declined: replacing `Axis::default_in(d, rows)` with a row flag — the rule rests on
+  transfer being decided before gamut, true in both orders and commented.
+- 2026-09-30: **done.** What dependents need:
+  - A linear float TIFF is `--transfer linear --gamut <any of the four>`; the gamut is
+    asked for unless the rendering names one (`Defaults::linear_gamut`, Adobe RGB under
+    `direct`). Profiles `NC Display-Linear <gamut> (D65)`; the report's
+    `hdr_linear_tiff` strings come from `hdr::linear_labels`.
+  - The gain map is written on a Display P3 (`--range hdr` alone) or sRGB base; under
+    `direct` (Adobe RGB) a JPEG asks for its gamut.
+  - `output/sdr-jpeg-preset` makes two `NotYet` rows ready — Display P3 and sRGB.
+  - `memory-profiles`: every new row measured within 1 MB of its sibling's arm.
