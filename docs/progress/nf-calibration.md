@@ -45,9 +45,19 @@ density.
 **`roll-section` is done (2026-09-27): the roll's measurements are their own recipe
 section**, `roll.white_balance` and `roll.white_stops` (the white, not a contrast;
 `look.contrast` unset means the roll's, else the default). `measure-roll` writes it; the
-gains multiply a stated white balance, and a stated contrast wins. A rendering decides
+gains multiply a stated white balance, and `look.contrast` multiplies the roll's slope
+(`nf-look/contrast-definition`). A rendering decides
 whether it applies (`--rendering default` does, `direct` does not). The fallback when a
 roll has no measurement is `no-roll-defaults`'.
+
+**`roll-exposure` is done (2026-09-29): the roll's level is measured, as
+`roll.exposure`** — one neutral gain per roll that brings the median frame's log-average
+ACEScg luma to −0.6 scene stops from mid-grey (±2 EV), added to
+`scene_correction.exposure` under `default`. The decode still lets film speed show
+through; the roll's level is set after it. The white stays measured at exposure 0, so a
+lifted roll's white renders `ev · slope` stops past diffuse white. Measured +0.02 to
++1.74 EV on ten rolls. A per-frame trim and exposure groups within a roll are
+`frame-level-trim` and `exposure-buckets`.
 
 **`scale-gamma-loop` is done (2026-09-27): nothing moved.** One review round on blue
 under `--rendering direct --range sdr` could not tell 0.68 / 0.73 / 0.78 apart;
@@ -530,13 +540,91 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## roll-exposure
 
-**Status:** not started
+**Status:** done
 **Updated:** 2026-09-29
 
 - 2026-09-29: filed (user) after converting the thin 2026-09-28 roll. Its whites bound
   at the floor and the render was dark; `--exposure 1.4` fixed it, and the user wants
   the darkest frames left dark. Goal: `measure-roll` measures one neutral exposure per
   roll and writes it as `roll.exposure`.
+- 2026-09-29: **started; the roll is in `nc-assets`** as `2026-09-28-Portra400-dark`
+  (leader 1978, base 1979, Portra 400, NLP conversions in `converted/nlp/`; the suffix
+  marks it special). The user reports a weak camera battery for the first half of the
+  roll; the measured levels show no step, so it is treated as one thin roll. Sets and
+  scripts in `../temp/roll-exposure/` (`reports/` = a throwaway probe's per-frame level
+  statistics on all ten rolls, `review.json` round 1, `review-r2.json` round 2).
+
+  **Statistic: the median over frames of each frame's log-average luma.** Median frame
+  *white* cannot tell a thin roll from a normal one: 09-28 and 09-18 both read about
+  +0.1. The log-average separates them — 09-11 −2.35, 09-13 −1.95, 09-28 −1.98 scene
+  stops against −0.66 to −1.27 on the other seven. A median over frames, so a night
+  scene cannot set it.
+
+  **Round 1** (17 frames, 7 rolls): exposure 0 / target −1.0 / −0.6 / −1.0 with the white
+  rule re-run after the exposure. −0.6 beat −1.0 on 13 frames, normal rolls included;
+  07-15 (white near the cap) preferred −1.0 on both frames. Re-placing the white after
+  the exposure was better on 3, worse on 5, equal on 9, and a small exposure can push a
+  frame over the cap (07-15: +0.06 EV moved the slope 1.27 → 1.64). **The white stays
+  measured at exposure 0** (user).
+
+  **Round 2** (21 frames, 9 rolls; −0.8 / −0.6 / −0.3): −0.6 beat −0.8 on 17, lost on 1
+  (1739, clamped). −0.3 against −0.6 split 8 to 10 **by frame, not by roll**: low-key
+  frames (frame white −1.5 to +0.3) wanted −0.3, bright ones (+0.9 to +2.6) −0.6. One
+  exposure per roll can do no better; the per-frame split is handed on (`thin-frame-lift`
+  and a bucket question, below). **Target −0.6** (user).
+
+  **Domain.** The probe took luma on film RGB with ACEScg's weights; the implementation
+  takes it in linear ACEScg before white balance, where the exposure is a gain. Roll
+  levels agree within 0.04 stop on all ten rolls, so the reviewed target stands. Measured
+  exposures: +0.02 (09-09) to +1.74 (09-11); 09-28 +1.39.
+- 2026-09-29: **implemented.** `roll_white::frame_level`, `roll_exposure`
+  (`LEVEL_TARGET_STOPS` −0.6, `EXPOSURE_BOUND_EV` 2; a bound that binds warns);
+  `roll.exposure` / `--roll-exposure`, added to `scene_correction.exposure`, left out by
+  `direct` and the film master, reported as `chain.roll.exposure` / `exposure_applied`; a
+  recipe-stated exposure beside it warns (typed never does); a per-frame override of it is
+  roll-wide. `measure-roll` reports per-frame `level_stops` and an `exposure` section, and
+  writes the value to `reuse.flag`, clamped frames' flags and `--out`. The drift gate's
+  v8 `recipe` fingerprint was refreshed in place: the key is `null` by default, so no
+  default pixel moved.
+- 2026-09-29: `/code-review high`, 10 findings. Fixed: a frame the leader guard empties
+  no longer counts toward the exposure median (with 3–4 frames a stray leader moved it);
+  stale docs and help text; a `frame_level` error names its file. Not real: a luma
+  underflowing to 0 (green's term alone keeps it positive). Skipped: sampling each frame
+  twice (~1.5 MB), and the white landing `ev · slope` past diffuse white (the reviewed
+  design). **A `roll` section without `roll.exposure` now warns** (user): one written
+  before this task renders at exposure 0, which leaves a thin roll dark with no hint;
+  typed roll flags are spared, and stating `roll.exposure` 0 keeps the render quietly.
+- 2026-09-29: **display black checked** on the three dark rolls at their measured
+  exposures: 09-11 (+1.74) put the shallowest film base 3.01 stops under mid-grey, 09-13
+  (+1.34) 3.60, 09-28 (+1.39) 2.61 — all clear of the 2.0-stop warning; no frame warned.
+- 2026-09-29: review round. **Typed roll flags now warn too** (user): only a stated
+  exposure (`roll.exposure` / `--roll-exposure`) silences the no-exposure warning, which
+  no longer claims the section predates the measurement; the fallback warning's remedy
+  names `roll.exposure` beside `roll.white_stops`, so following it is quiet. A frame's
+  level now counts an out-of-gamut pixel whose luma is positive (every roll within 0.03
+  of the reviewed level). The bound warning's remedy names `--exposure` on
+  `convert`/`roll`, not `measure-roll`.
+- 2026-09-29: **the leader guard is not applied to the level.** Tried in the review loop,
+  it dropped ordinary near-saturation highlights and moved 07-24 from +0.47 to +0.99 EV
+  (07-15 +0.46 → +0.66, 09-14 +0.18 → +0.32). Only a frame the guard empties is left out.
+
+- 2026-09-29: **done.** Landed: `roll_white::frame_level` (log-average ACEScg luma over
+  pixels with finite channels and positive luma, before white balance, no leader guard)
+  and `roll_exposure` (median over frames to `LEVEL_TARGET_STOPS` −0.6, within
+  `EXPOSURE_BOUND_EV` 2, a binding bound warns); `roll.exposure` / `--roll-exposure`, added
+  to `scene_correction.exposure` under `default` only. Verified: unit and binary tests
+  (flag, recipe and style forms render byte-identically; `direct` and the film master leave
+  it out; the warnings and their remedies through the binary); ten rolls within 0.04 EV of
+  the reviewed values; display black clear on the three dark rolls; two review rounds with
+  the user. **For dependents:**
+  - The white and its clamps are measured at exposure 0; the roll's exposure moves where
+    the white renders by `ev · slope` stops (`white-rule-hdr` reviews at that level).
+  - A per-frame exposure in `roll.frames` or a manifest's `scene_correction.exposure` adds
+    to `roll.exposure`: `thin-frame-lift`'s hand-solved totals would double-count, and it
+    and `frame-level-trim` must settle total vs delta once.
+  - The per-frame split round 2 found is `frame-level-trim`'s; groups within a roll are
+    `exposure-buckets`'.
+  - A `roll` section without `roll.exposure` warns until one is stated (0 keeps a render).
 
 ## thin-frame-lift
 
@@ -556,6 +644,29 @@ frames; the look's default contrast is `no-roll-defaults`'.
   noise budget. That budget preferred whole contrast 2.97 over 4.45 for a lone dark frame,
   while slope 2.4 (whole 4.32) passed here, so measure noise before setting the slope
   bound.
+- 2026-09-29: from `roll-exposure` round 2 (`../temp/roll-exposure/review-r2.json`). With
+  one exposure per roll at target −0.6, a brighter target (−0.3, about +0.3 EV) won on
+  low-key frames of **normal** rolls too (frame white −1.5 to +0.3: 09-18 1798 and 1774,
+  09-20 1886, 07-15 989, and the dark rolls' darkest frames) and lost on bright ones.
+  That is a small per-frame trim on every frame, broader than this task's opt-in lift for
+  frames far thinner than their roll. The roll's measured exposure on 09-28 is +1.39.
+
+## frame-level-trim
+
+**Status:** not started
+**Updated:** 2026-09-29
+
+- 2026-09-29: filed (user) from `roll-exposure`'s round 2, which split by frame. Goal: a
+  small, bounded per-frame exposure trim around the roll's measured exposure.
+
+## exposure-buckets
+
+**Status:** not started
+**Updated:** 2026-09-29
+
+- 2026-09-29: filed (user) from `roll-exposure`: the 09-28 roll's battery change. Goal:
+  detect groups of frames exposed differently within a roll and measure one exposure per
+  group.
 
 ## scale-ladder
 
