@@ -170,7 +170,7 @@ Read the module docs before changing these; they hold the traps.
 | lcms2 transforms and fault handler | `pipeline/color.rs`; `cli.rs`'s `CMS_ERROR` handler, cleared before and checked after each render |
 | goldens, cross-platform bounds, drift gate | `pipeline/chain_golden.rs`, `version.rs` (`PipelineFingerprint`) |
 | diagnostic probes | `pipeline/shadow_metrics.rs` |
-| telemetry | `telemetry.rs`, `telemetry/upload.rs`, `contracts/telemetry/upload-v1/README.md` (the upload field manifest), the `perf-telemetry` skill |
+| telemetry | `telemetry.rs`, `telemetry/upload.rs`, `contracts/telemetry/upload-v1/README.md` (the upload field manifest), the `perf-telemetry` skill; the ingestion Worker in `services/telemetry-ingest/` (its `CLAUDE.md`) |
 | stage names, per-stage timing | `stage.rs` (`StageKind`, `StageClock`) |
 | build identity (`NC_GIT_*`) | `build.rs` |
 
@@ -205,7 +205,7 @@ committed.
 - **Item-level `allow(dead_code)` needs a comment naming its consumer.**
 - **The shell is zsh**: pass flag lists as arrays (`"${args[@]}"`), and quote a
   word starting with `=`.
-- `tools/review-app` has its own gates — see its `CLAUDE.md`.
+- `tools/review-app` and `services/telemetry-ingest` have their own gates — see their `CLAUDE.md`.
 
 ## Conventions
 

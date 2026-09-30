@@ -1,6 +1,6 @@
 # Telemetry strategy
 
-**Status:** approved 2026-07-23; amended 2026-09-27 and 2026-09-28 (see Amendments)
+**Status:** approved 2026-07-23; amended 2026-09-27, 2026-09-28 and 2026-09-30 (see Amendments)
 
 ## Amendments
 
@@ -40,6 +40,18 @@
   `unknown` — so `image.format`, `image.ir_present`, `outcome.non_finite` and
   `conversion.*` have no `unknown` member.
 
+**2026-09-30** (at `telemetry/ingestion-service`, user-approved):
+
+- **V1 runs on the owner's existing Workers Paid account**, not a dedicated
+  FREE-plan account. Paying for the service is acceptable; cost is controlled
+  instead of made impossible. The Worker's own ceilings (daily events and bytes,
+  database size, CPU per request) bound the worst case, and
+  `services/telemetry-ingest/README.md` holds the cost model and the deploy check
+  that refuses a ceiling above it. The $10/month approval gate stands: a change
+  whose worst case can pass it needs explicit approval first. Requests the Worker
+  refuses still bill per request; a dashboard billing notification is the backstop.
+  The passages below that required a FREE-plan account are rewritten to match.
+
 This note decides how `nc` grows the shipped local-only performance record into
 anonymous, explicitly consented remote telemetry. It is the output of the
 [`telemetry/strategy`](tasks/telemetry/strategy.md) spike and scopes its
@@ -55,9 +67,9 @@ implementation children.
   OTel Collector on user machines.
 - Host the first ingestion service as a **Cloudflare Worker backed by D1**.
   This is managed infrastructure with an nc-owned contract: low operational
-  burden, exact event rows and SQL. V1 runs in a dedicated Cloudflare FREE-plan
-  account with no billing-enabled resources; hard platform and application
-  quotas fail closed before the approved $10/month ceiling can be crossed.
+  burden, exact event rows and SQL. Application quotas fail closed before the
+  approved $10/month ceiling can be crossed (on a paid account since the
+  2026-09-30 amendment).
 - Separate local collection from transmission consent. `hanten telemetry enable`
   persistently opts into automatic collection and upload, including upload of
   records previously collected through the explicit local `--telemetry` flag.
@@ -126,8 +138,8 @@ over a managed observability product or Cloudflare Analytics Engine for v1:
 - Exact retained rows matter for retry deduplication and reproducible
   event-cohort queries. Analytics Engine may sample at high volume and has a
   fixed three-month retention window.
-- The cost model below keeps v1 within a dedicated FREE-plan account. No paid
-  Worker, paid D1 capacity, or other billing-enabled resource is attached.
+- V1 runs on the owner's Workers Paid account (2026-09-30 amendment); the
+  Worker's own ceilings bound its worst-case cost (below).
 - There is no vendor SDK or credential in the distributed binary. A secret in a
   public CLI would not authenticate individual anonymous installations anyway.
 
@@ -595,24 +607,29 @@ No path acquires these locks in reverse order.
 
 ## Server cost, storage, retention, and queries
 
-The v1 deployment has a hard cost boundary, not merely an alert:
+The v1 deployment runs on the owner's Workers Paid account, so its cost is
+bounded rather than made impossible:
 
-- it uses a dedicated Cloudflare FREE-plan account/project with no payment
-  method, paid plan, paid D1 capacity, R2, log retention, or billing-enabled
-  add-on;
-- a checked-in volume model computes bytes/event, requests/day, rows/day,
-  D1 writes (including indexes and retention deletes), reads/query, and
-  rolling 180-day storage at low/expected/worst accepted volume;
-- application daily accepted-event/write/storage ceilings stay below the
-  applicable platform free limits with documented safety margin; once any
-  ceiling or platform limit is reached, ingestion rejects fail closed (429/503)
-  and clients retain then locally expire events fail-soft;
-- deployment asserts the expected account/plan, bindings, quotas, kill switch,
-  logging state, and absence of paid resources. Limit/load tests cover event,
-  byte, write, storage, and retention-delete ceilings.
+- a checked-in volume model (`services/telemetry-ingest/README.md`) computes
+  bytes/event, requests/day, D1 writes (including indexes, triggers and retention
+  deletes), reads, and rolling 180-day storage at low/expected/worst accepted
+  volume;
+- application ceilings on daily events and bytes, stored rows, and CPU per
+  request bound the worst case. They are enforced by the database inside each
+  write transaction, so concurrent requests cannot overshoot them; once one is
+  reached, ingestion rejects fail closed (429/503) and clients retain then
+  locally expire events fail-soft;
+- deployment asserts the target account holds the configured database, reports
+  the kill switch, and refuses a configuration whose ceilings exceed the ones the
+  cost model was computed at. Limit tests cover the event, byte and storage
+  ceilings under concurrency, and retention's per-run delete cap.
 
-Any move to a paid plan/resource or change that can exceed $10/month requires
-explicit user approval and an updated cost model before deployment.
+Requests the Worker refuses still bill per request and cannot be capped by the
+application; the per-IP rate limit, Cloudflare's DDoS protection and a dashboard
+billing notification are the backstop.
+
+Any change whose worst case can exceed $10/month requires explicit user approval
+and an updated cost model before deployment.
 
 D1 stores the allowlisted event payload plus indexed cohort columns:
 `event_id`, `event_day`, `received_day`, versions, event/status/error/stage,
@@ -630,10 +647,11 @@ operational queries must cover:
 - panic counts and sanitized nc frame groups.
 
 No dashboard or query may invent a unique-user/install estimate from IP or other
-metadata. Suspicious-volume/anomalous/release-disallowed cohorts are quarantined
-from analytical tables. If D1 volume/query needs outgrow the hard v1 envelope,
-collection fails closed until an explicitly approved paid migration or another
-storage design lands.
+metadata. Suspicious-volume, anomalous and not-yet-allowlisted-release events are
+quarantined from analytical tables (a release allowlisted later can be promoted);
+only an explicitly blocked release is rejected. If D1 volume/query needs outgrow
+the v1 ceilings, collection fails closed until an explicitly approved change to
+the ceilings or another storage design lands.
 
 Reported rates describe **unverified events submitted through opt-in clients**,
 not all nc users and not unique people or machines. Selection bias, repeat

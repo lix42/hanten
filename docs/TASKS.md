@@ -1599,11 +1599,13 @@ the design now in `docs/design-spec.md` (§6–§7):
   `contracts/telemetry/upload-v1/` holds the JSON Schema, the valid/invalid corpus
   the Worker and uploader share, and the field manifest. No pixel, recipe or
   fingerprint change.
-- [ ] [Telemetry ingestion service](tasks/telemetry/ingestion-service.md) — **low
+- [~] [Telemetry ingestion service](tasks/telemetry/ingestion-service.md) — **low
   priority** (user, 2026-09-29). Build
   the validating Cloudflare Worker + D1 endpoint, exact deduplication, 180-day
-  retention, hard FREE-plan quotas, abuse quarantine/kill switch, and initial
-  advisory performance/failure queries.
+  retention, cost ceilings, abuse quarantine/kill switch, and initial
+  advisory performance/failure queries. **Built 2026-09-30** as
+  `services/telemetry-ingest/` on the owner's paid Cloudflare account (strategy
+  amendment); done once the first deploy from `main` passes its smoke test.
 - [ ] [Background telemetry upload](tasks/telemetry/upload.md) — ship the local
   consent-selected active JSONL through generation-bound collection/request
   leases and its private spool, durable recovery, detached helpers, retries,
