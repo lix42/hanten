@@ -1898,9 +1898,12 @@ the design in `docs/design-update.md`:
 - [ ] [A memory profile per
   destination](tasks/nf-destinations/memory-profiles.md) — a `RunProfile` per
   destination; sharing an arm is measured, not assumed
-- [ ] [Which destination the default
-  resolves](tasks/nf-destinations/default-destination.md) — supersedes
-  `output/display-p3-default`; one bump rather than two
+- [x] [Which destination the default
+  resolves](tasks/nf-destinations/default-destination.md) — **done 2026-09-29, absorbed
+  by `nf-core/default-flip`**: `pipeline_version` 8 moved chain and container in one
+  bump, from the `gain-map-hdr` JPEG to the SDR Display P3 16-bit TIFF
+  ([`docs/reports/default-flip.md`](reports/default-flip.md)). Supersedes
+  `output/display-p3-default`
 - [x] [The gain-map
   destination](tasks/nf-destinations/gain-map-destination.md) — **done 2026-09-27.**
   `--range hdr` alone writes the new chain's HDR JPEG: a Display P3 SDR base and a
