@@ -8,6 +8,9 @@ per-frame exposure and a steeper slope are solved so the frame's white reaches d
 white. This trades more grain for a usable print, within bounds, and the recipe and report
 show what was applied.
 
+It also owns the question `nf-look/scene-range-mapping` asked, which was folded in
+2026-09-29: whether a frame's own measured range should set its render as a per-frame opt-in.
+
 ## Design
 
 What is known:
@@ -38,6 +41,16 @@ What is known:
   already measures each frame's white and knows the base, and would write the solved values
   as `roll.frames` entries, where they can be read and deleted. Without the option, nothing
   changes.
+- **Two existing knobs, no new operator.** The measurement resolves exposure and slope,
+  so the render path is the same whether the lift fires or not. The statistics are the
+  ones `measure-roll` already reads over the effective area, never a second pass over the
+  same pixels.
+- **A measured noise budget exists, and it points the other way.** Round 2026-09-25
+  (`anchor-comparison`, a lone dark frame treated as a roll of one): the user preferred
+  whole contrast 2.97 over 4.45. Delivered noise was 1.75× the scan's floor at 2.97, and
+  5.4× at the contrast an unbounded solve asks for. Slope 2.4 is whole contrast 4.32, which
+  passed on 2005 and 1983 with an exposure lift beside it. That round had no exposure lift,
+  and neither round measured noise on these renders.
 
 Open:
 
@@ -58,11 +71,19 @@ Open:
 - **Total or delta.** Whether a lifted frame's exposure in `roll.frames` replaces the roll's
   or adds to it (on 2005: +2.26 total, or +0.86 over the roll). `roll-exposure` makes the
   stated exposure add to the roll's, so the entry's merge must be pinned either way.
+- **Scope beyond thin frames.** The folded spike asked about any frame's own range,
+  NLP-style (`docs/design-update.md` Appendix D), where a frame filled by one surface
+  visibly fails. The appendix treats that collapse as an observation to explain, not as
+  evidence, and no stage has been identified as losing the detail. Decide whether a dense
+  or flat frame is in scope. If one is, locate the mechanism before choosing a guard.
 - **Keys and flags.** How the option is spelled on `measure-roll`, and how a lifted frame's
   entry is marked in `roll.frames`, so it reads as a choice, not a measurement.
 
 ## How to Verify
 
+- The success criterion, stated before any render: the lift beats the roll's render on the
+  frames it fires on, and changes no other frame. "Sometimes better" with no rule for when
+  has not concluded.
 - On the 2026-09-28 roll, the option lifts 1983, 1984, 2000 and 2005 (and 1992 if it
   qualifies) to renders comparable with the hand-solved slope-2.4 pairs, and leaves every
   other frame's entry untouched.

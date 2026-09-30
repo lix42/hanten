@@ -512,6 +512,11 @@ frames; the look's default contrast is `no-roll-defaults`'.
 - 2026-09-29: the user judged 1983's blue to be the scene, not a cast. PR review found that
   the evidence exposures are totals that replace the roll's +1.4. The task now says so, and
   whether a `roll.frames` exposure is a total or a delta is left open.
+- 2026-09-29: `nf-look/scene-range-mapping` was folded in: this task gained its success
+  criterion, its single-surface caution (scope beyond thin frames is open) and the 09-25
+  noise budget. That budget preferred whole contrast 2.97 over 4.45 for a lone dark frame,
+  while slope 2.4 (whole 4.32) passed here, so measure noise before setting the slope
+  bound.
 
 ## scale-ladder
 
