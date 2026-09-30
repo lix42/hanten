@@ -483,15 +483,16 @@ pub struct DestinationOverrides {
     /// signals). Recipe key `output.display.transfer`.
     #[arg(long, value_enum, ignore_case = true, value_name = "TRANSFER")]
     pub transfer: Option<Transfer>,
-    /// The primaries to render into: `display-p3` (the default), `adobe-rgb` (SDR
-    /// only) or `bt2020` (HDR only). Recipe key `output.display.gamut`.
+    /// The primaries to render into: `display-p3` (the default), `adobe-rgb`, `srgb`
+    /// or `bt2020` (HDR only). Recipe key `output.display.gamut`.
     #[arg(long, value_enum, ignore_case = true, value_name = "GAMUT")]
     pub gamut: Option<Gamut>,
     /// The file container: `tiff` (the default), `jpeg` (HDR with a gain map) or
-    /// `avif` (PQ/HLG only). Destinations: SDR `native` TIFF in Display P3 or Adobe RGB;
-    /// HDR BT.2020 as a `linear` float TIFF, or `pq`/`hlg` in a 16-bit TIFF or a 10-bit
-    /// AVIF; HDR Display P3 as a JPEG with an ISO 21496-1 gain map (`--range hdr`
-    /// alone). An SDR JPEG is not written yet. Recipe key `output.display.container`.
+    /// `avif` (PQ/HLG only). Destinations: SDR `native` TIFF in Display P3, Adobe RGB or
+    /// sRGB; HDR as a `linear` float TIFF in any gamut (stated with `--gamut`),
+    /// or BT.2020 `pq`/`hlg` in a 16-bit TIFF or a 10-bit AVIF; HDR as a JPEG with an ISO
+    /// 21496-1 gain map on a Display P3 (`--range hdr` alone) or sRGB base. An SDR JPEG
+    /// is not written yet. Recipe key `output.display.container`.
     #[arg(long, value_enum, ignore_case = true, value_name = "CONTAINER")]
     pub container: Option<Container>,
     /// Write the fixed decode's linear ACEScg, unclamped 32-bit float TIFF, with no
@@ -999,7 +1000,7 @@ pub struct AvifRenderingResult {
 /// cannot state for itself. Serialize-only.
 ///
 /// **This block is authoritative for the HDR semantics, and deliberately so.** The
-/// embedded ICC profile describes the colorimetry (BT.2020 primaries, D65, a linear
+/// embedded ICC profile describes the colorimetry (the gamut's primaries, D65, a linear
 /// TRC) but its PCS stops at the media white, so no v4 profile can express that
 /// `1.0` is 203 cd/m² and that highlights legitimately run to
 /// `linear_headroom`. Anything consuming these files for luminance must read this,
@@ -1008,7 +1009,7 @@ pub struct AvifRenderingResult {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct HdrLinearTiffResult {
     /// Stable identifier of the pixel contract
-    /// ([`encode::hdr_linear_pixel_contract`]).
+    /// ([`hdr::LinearLabels::pixel_contract`]).
     pub pixel_contract: &'static str,
     /// Bits per sample as written (32).
     pub bits_per_sample: u16,
@@ -3380,29 +3381,8 @@ fn report_hdr_linear_tiff(
         linear_domain: linear.linear_domain,
         max_cll_nits: summary.content_light.max_cll_nits,
         max_fall_nits: summary.content_light.max_fall_nits,
-        interoperability: linear_interoperability(summary.gamut),
+        interoperability: hdr::linear_labels(summary.gamut).interoperability,
     });
-}
-
-/// What a linear HDR TIFF's profile does and does not say, for the report.
-fn linear_interoperability(gamut: DestinationGamut) -> &'static str {
-    macro_rules! says {
-        ($primaries:literal) => {
-            concat!(
-                "the embedded ICC profile states the ",
-                $primaries,
-                " primaries and the linear transfer only; its PCS stops at the media \
-                 white, so the reference-white, peak and headroom values in this block — \
-                 not the profile — define the luminance semantics of these samples"
-            )
-        };
-    }
-    match gamut {
-        DestinationGamut::DisplayP3 => says!("Display P3/D65"),
-        DestinationGamut::AdobeRgb => says!("Adobe RGB (1998)/D65"),
-        DestinationGamut::Srgb => says!("sRGB/D65"),
-        DestinationGamut::Bt2020 => says!("BT.2020/D65"),
-    }
 }
 
 /// Whether `path` holds one of nc's sidecars, recognised by its provenance rather

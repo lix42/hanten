@@ -168,14 +168,11 @@ fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
 /// catches it — `PIPELINE_FINGERPRINTS` stops before lcms2 and the audit only compares
 /// pinned artifacts. Treat such an edit as an output change.
 pub fn hdr_linear_icc(gamut: DestinationGamut) -> Result<Vec<u8>> {
-    let (space, description) = match gamut {
-        DestinationGamut::DisplayP3 => (
-            definitions::DISPLAY_P3,
-            "NC Display-Linear Display P3 (D65)",
-        ),
-        DestinationGamut::AdobeRgb => (definitions::ADOBE_RGB, "NC Display-Linear Adobe RGB (D65)"),
-        DestinationGamut::Srgb => (definitions::REC709, "NC Display-Linear sRGB (D65)"),
-        DestinationGamut::Bt2020 => (definitions::BT2020, "NC Display-Linear BT.2020 (D65)"),
+    let space = match gamut {
+        DestinationGamut::DisplayP3 => definitions::DISPLAY_P3,
+        DestinationGamut::AdobeRgb => definitions::ADOBE_RGB,
+        DestinationGamut::Srgb => definitions::REC709,
+        DestinationGamut::Bt2020 => definitions::BT2020,
     };
     let (white, primaries) = lcms_inputs(space);
     let mut profile = synth(white, primaries, 1.0)?;
@@ -187,8 +184,7 @@ pub fn hdr_linear_icc(gamut: DestinationGamut) -> Result<Vec<u8>> {
     // doing that in the shared `synth` helper would change the embedded ICC bytes of
     // already-shipped outputs, which is a separate reviewed decision.
     //
-    // In every file's bytes once written, so an identifier: never renamed.
-    describe(&mut profile, description)?;
+    describe(&mut profile, hdr::linear_labels(gamut).icc_description)?;
     profile_icc(&profile)
 }
 
@@ -387,7 +383,7 @@ pub fn hdr_hlg_tiff_icc() -> Result<Vec<u8>> {
 ///   D65→D50 adapted and `mediaWhitePointTag` declares D50, so `chad` is required;
 ///   it carries `pinned::BRADFORD_D65_TO_ICC_PCS`, the same adaptation the colorants
 ///   were built with. Every profile Little CMS builds for nc gets one automatically
-///   — including `hdr_linear_bt2020_icc` — because `Profile::new_rgb` writes it;
+///   — including `hdr_linear_icc`'s — because `Profile::new_rgb` writes it;
 ///   an authored profile does not.
 ///
 /// **Input class was evaluated and rejected.** ICC §8.3.2 requires no `BToA0Tag` for
@@ -1197,7 +1193,7 @@ mod tests {
     }
 
     #[test]
-    fn hdr_linear_bt2020_profile_is_rgb_display_class_with_a_linear_trc() {
+    fn every_hdr_linear_profile_is_rgb_display_class_with_a_linear_trc() {
         // Two properties, both load-bearing.
         //
         // **Linear TRC.** A gamma-1.0 curve is what makes the profile describe the
@@ -1206,24 +1202,31 @@ mod tests {
         //
         // **RGB data space + Display class.** ICC.1:2022 §9.2.17 permits a `cicpTag`
         // only for an RGB/YCbCr/XYZ data space in an Input or Display profile. This
-        // profile carries no `cicpTag` (see `hdr_linear_bt2020_icc`), but the PQ/HLG
+        // profile carries no `cicpTag` (see `hdr_linear_icc`), but the PQ/HLG
         // TIFFs in this task's second half must, and they are built by the same
         // `synth` helper — so pinning the class and space here is what tells the next
         // author the permission holds before they add the tag.
         use lcms2::{ColorSpaceSignature, ProfileClassSignature, Tag, TagSignature};
-        let (white, primaries) = lcms_inputs(definitions::BT2020);
-        let profile = synth(white, primaries, 1.0).unwrap();
-
-        let Tag::ToneCurve(trc) = profile.read_tag(TagSignature::RedTRCTag) else {
-            panic!("missing red TRC");
-        };
-        assert!(
-            trc.is_linear(),
-            "the linear-BT.2020 profile's TRC must be linear (parametric type {})",
-            trc.parametric_type()
-        );
-        assert_eq!(profile.color_space(), ColorSpaceSignature::RgbData);
-        assert_eq!(profile.device_class(), ProfileClassSignature::DisplayClass);
+        for gamut in LINEAR_GAMUTS {
+            // The bytes a file embeds, not a rebuilt profile.
+            let profile = Profile::new_icc(&hdr_linear_icc(gamut).unwrap()).unwrap();
+            for sig in [
+                TagSignature::RedTRCTag,
+                TagSignature::GreenTRCTag,
+                TagSignature::BlueTRCTag,
+            ] {
+                let Tag::ToneCurve(trc) = profile.read_tag(sig) else {
+                    panic!("{gamut:?}: missing {sig:?}");
+                };
+                assert!(
+                    trc.is_linear(),
+                    "{gamut:?}: {sig:?} must be linear (parametric type {})",
+                    trc.parametric_type()
+                );
+            }
+            assert_eq!(profile.color_space(), ColorSpaceSignature::RgbData);
+            assert_eq!(profile.device_class(), ProfileClassSignature::DisplayClass);
+        }
     }
 
     #[test]

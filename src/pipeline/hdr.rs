@@ -142,7 +142,7 @@ impl LinearHdr {
         self.gamut
     }
 
-    /// Borrow the finite, non-negative, reference-white-relative BT.2020 pixels.
+    /// Borrow the finite, non-negative, reference-white-relative pixels.
     #[cfg(test)]
     pub fn image(&self) -> &LinearImage {
         &self.image
@@ -256,13 +256,49 @@ impl RenderedHdr {
     }
 }
 
-/// The linear domain a rendition in `gamut` is stated in.
-fn linear_domain(gamut: DestinationGamut) -> &'static str {
+/// The identifiers a linear rendition in one gamut is written under — in the report,
+/// or (the ICC description) in the file's bytes, so none may change once shipped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinearLabels {
+    /// `LinearHdrMetadata::linear_domain`.
+    pub domain: &'static str,
+    /// The linear TIFF's pixel contract.
+    pub pixel_contract: &'static str,
+    /// The embedded profile's `profileDescriptionTag`.
+    pub icc_description: &'static str,
+    /// What the file alone does and does not state, for the linear TIFF's report.
+    pub interoperability: &'static str,
+}
+
+/// [`LinearLabels`] for `gamut`: every per-gamut spelling in one place.
+pub fn linear_labels(gamut: DestinationGamut) -> LinearLabels {
+    // `$slug` is `DestinationGamut::name` (pinned by a test), `$icc` the profile's
+    // name for it, `$primaries` the report's.
+    macro_rules! labels {
+        ($slug:literal, $icc:literal, $primaries:literal) => {
+            LinearLabels {
+                domain: concat!($slug, "-linear-relative-to-203-nit-reference-white"),
+                pixel_contract: concat!(
+                    "rgb-f32-display-linear-",
+                    $slug,
+                    "-d65-relative-to-203-nit-reference-white"
+                ),
+                icc_description: concat!("NC Display-Linear ", $icc, " (D65)"),
+                interoperability: concat!(
+                    "the embedded ICC profile states the ",
+                    $primaries,
+                    " primaries and the linear transfer only; its PCS stops at the media \
+                     white, so the reference-white, peak and headroom values in this block \
+                     — not the profile — define the luminance semantics of these samples"
+                ),
+            }
+        };
+    }
     match gamut {
-        DestinationGamut::DisplayP3 => "display-p3-linear-relative-to-203-nit-reference-white",
-        DestinationGamut::AdobeRgb => "adobe-rgb-linear-relative-to-203-nit-reference-white",
-        DestinationGamut::Srgb => "srgb-linear-relative-to-203-nit-reference-white",
-        DestinationGamut::Bt2020 => "bt2020-linear-relative-to-203-nit-reference-white",
+        DestinationGamut::DisplayP3 => labels!("display-p3", "Display P3", "Display P3/D65"),
+        DestinationGamut::AdobeRgb => labels!("adobe-rgb", "Adobe RGB", "Adobe RGB (1998)/D65"),
+        DestinationGamut::Srgb => labels!("srgb", "sRGB", "sRGB/D65"),
+        DestinationGamut::Bt2020 => labels!("bt2020", "BT.2020", "BT.2020/D65"),
     }
 }
 
@@ -359,7 +395,7 @@ pub fn from_new_chain(
                 linear_headroom: LINEAR_HEADROOM,
                 tone_curve,
                 gamut_mapping,
-                linear_domain: linear_domain(gamut),
+                linear_domain: linear_labels(gamut).domain,
             },
         },
         clamp,
@@ -550,7 +586,45 @@ mod tests {
     use crate::pipeline::colorimetry::pinned::ACESCG_TO_BT2020;
     use crate::types::LinearImage;
 
-    /// A row of display-linear BT.2020 pixels as the chain hands them over — within
+    #[test]
+    fn linear_labels_keep_the_shipped_bt2020_strings_and_name_each_gamut() {
+        let bt2020 = linear_labels(DestinationGamut::Bt2020);
+        assert_eq!(
+            bt2020.domain,
+            "bt2020-linear-relative-to-203-nit-reference-white"
+        );
+        assert_eq!(
+            bt2020.pixel_contract,
+            "rgb-f32-display-linear-bt2020-d65-relative-to-203-nit-reference-white"
+        );
+        assert_eq!(bt2020.icc_description, "NC Display-Linear BT.2020 (D65)");
+        assert_eq!(
+            bt2020.interoperability,
+            "the embedded ICC profile states the BT.2020/D65 primaries and the linear \
+             transfer only; its PCS stops at the media white, so the reference-white, peak \
+             and headroom values in this block — not the profile — define the luminance \
+             semantics of these samples"
+        );
+        for gamut in [
+            DestinationGamut::DisplayP3,
+            DestinationGamut::AdobeRgb,
+            DestinationGamut::Srgb,
+            DestinationGamut::Bt2020,
+        ] {
+            let l = linear_labels(gamut);
+            assert!(
+                l.domain.starts_with(&format!("{}-linear-", gamut.name())),
+                "{l:?}"
+            );
+            assert!(
+                l.pixel_contract
+                    .contains(&format!("-linear-{}-d65-", gamut.name())),
+                "{l:?}"
+            );
+        }
+    }
+
+    /// A row of display-linear pixels as the chain hands them over — within
     /// the peak, so nothing is clamped and the values reach the encoder as given.
     fn linear(rgb: &[f32]) -> LinearHdr {
         let image = LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap();

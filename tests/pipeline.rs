@@ -11553,10 +11553,16 @@ fn a_destination_the_table_lacks_is_refused_with_a_remedy_that_works() {
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("output/sdr-jpeg-preset"), "{err}");
     assert!(
-        err.contains("adding to what is stated: --range hdr; --gamut srgb "),
+        err.contains("adding to what is stated: --range hdr; --range hdr --gamut srgb "),
         "{err}"
     );
-    for (i, add) in [["--range", "hdr"], ["--gamut", "srgb"]].iter().enumerate() {
+    for (i, add) in [
+        &["--range", "hdr"][..],
+        &["--range", "hdr", "--gamut", "srgb"],
+    ]
+    .iter()
+    .enumerate()
+    {
         let (code, _, err) = convert_48bit(
             &tmp.path(&format!("c{i}.jpg")),
             &[&["--container", "jpeg"][..], &add[..]].concat(),
@@ -11617,7 +11623,8 @@ fn a_suffix_refusal_offers_only_a_destination_that_writes_it() {
         assert_eq!(code, 0, "following `{offer}` must convert: {err}");
     }
     // The ready JPEGs are the gain maps, offered beside dropping the suffix, and each
-    // offer converts as written.
+    // offer converts as written. `--gamut srgb` alone would be the SDR JPEG, not written
+    // yet, so the sRGB offer states its range.
     let (code, _, err) = convert_48bit(&tmp.path("b.jpg"), &[]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("drop .jpg"), "{err}");
@@ -11626,7 +11633,7 @@ fn a_suffix_refusal_offers_only_a_destination_that_writes_it() {
         .unwrap_or_else(|| panic!("no offer: {err}"));
     assert_eq!(
         offers.trim(),
-        "--range hdr --container jpeg; --gamut srgb --container jpeg",
+        "--range hdr --container jpeg; --range hdr --gamut srgb --container jpeg",
         "{err}"
     );
     for offer in offers.trim().split("; ") {

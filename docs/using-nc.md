@@ -739,9 +739,9 @@ base value. A stated axis is
 never overridden, and `direct` decides its container before its range, so it never
 takes a lossy container by default — only when you state one, or when your stated axes
 leave no lossless row: `--rendering direct --gamut display-p3` is the Display P3 float
-TIFF and `--transfer native` the Adobe RGB 16-bit TIFF, while `--container jpeg` (or
-`--range hdr --transfer native`) is a gain map, and asks for its gamut — `direct`'s
-Adobe RGB has none, so state `--gamut display-p3` or `--gamut srgb`. The report states
+TIFF and `--transfer native` the Adobe RGB 16-bit TIFF. `--container jpeg` or `--range
+hdr --transfer native` names a gain map but is refused, asking for its gamut: `direct`'s
+Adobe RGB has none, so add `--gamut display-p3` or `--gamut srgb`. The report states
 the rendering in `chain.rendering`.
 
 ```console
@@ -1157,8 +1157,8 @@ spelling is the one `hanten` writes when you leave the suffix off:
 
 With no destination flag the result is an **SDR Display P3 16-bit TIFF** under the
 default rendering, and the HDR float TIFF under `--rendering direct` (§7). An SDR JPEG
-(`--container jpeg` alone) is planned (`output/sdr-jpeg-preset`), and refused as not
-written yet; ProPhoto has no destination.
+(`--container jpeg` alone, or with `--gamut srgb`) is planned (`output/sdr-jpeg-preset`),
+and refused as not written yet; ProPhoto has no destination.
 
 **`--film-master`** writes the fixed decode's linear ACEScg as an unclamped 32-bit
 float TIFF with **no** rendering stage, so it refuses any stage you ask for, naming the
@@ -1275,7 +1275,7 @@ usage: the output path out.jpg does not end in .tif or .tiff: the destination is
        --range sdr --transfer native --gamut display-p3 --container tiff, which writes
        .tif or .tiff. Hanten never renames a suffix you state — drop .jpg and the path
        is completed for you, or state a destination that writes it: --range hdr
-       --container jpeg; --gamut srgb --container jpeg
+       --container jpeg; --range hdr --gamut srgb --container jpeg
 ```
 
 `-o out.avif` offers `--transfer pq --container avif; --transfer hlg --container

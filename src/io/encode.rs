@@ -127,7 +127,7 @@ pub struct HdrLinearTiffSummary {
     pub content_light: ContentLightLevel,
 }
 
-/// Write the display-linear BT.2020 HDR rendition as a 32-bit float TIFF.
+/// Write the display-linear HDR rendition, in its gamut, as a 32-bit float TIFF.
 ///
 /// **The lossless contract:** every finite sample is written verbatim, so an
 /// independent decoder recovers bit-identical `f32` values. Nothing is clamped,
@@ -176,7 +176,7 @@ fn encode_hdr_linear_with(
     );
     let summary = HdrLinearTiffSummary {
         gamut,
-        pixel_contract: hdr_linear_pixel_contract(gamut),
+        pixel_contract: crate::pipeline::hdr::linear_labels(gamut).pixel_contract,
         bigtiff: big,
         bits_per_sample: 32,
         sample_format: SAMPLE_FORMAT_IEEE_FLOAT,
@@ -188,25 +188,6 @@ fn encode_hdr_linear_with(
         encode_hdr_linear_to_writer(writer, &image, big, icc)
     })?;
     Ok((staged, outcome, summary))
-}
-
-/// Stable identifier for a linear HDR TIFF's pixel contract, shared by the encoder
-/// summary and the report so the two cannot drift.
-pub fn hdr_linear_pixel_contract(gamut: DestinationGamut) -> &'static str {
-    match gamut {
-        DestinationGamut::DisplayP3 => {
-            "rgb-f32-display-linear-display-p3-d65-relative-to-203-nit-reference-white"
-        }
-        DestinationGamut::AdobeRgb => {
-            "rgb-f32-display-linear-adobe-rgb-d65-relative-to-203-nit-reference-white"
-        }
-        DestinationGamut::Srgb => {
-            "rgb-f32-display-linear-srgb-d65-relative-to-203-nit-reference-white"
-        }
-        DestinationGamut::Bt2020 => {
-            "rgb-f32-display-linear-bt2020-d65-relative-to-203-nit-reference-white"
-        }
-    }
 }
 
 fn encode_hdr_linear_to_writer<W: Write + Seek>(

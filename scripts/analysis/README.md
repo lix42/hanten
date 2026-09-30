@@ -384,7 +384,8 @@ recipe may leave its axes to nc; the frames must agree:
 |---|---|---|
 | `display-p3`, `native` | `display-p3` | a gain-map JPEG is read as its **SDR base**, per `--jpeg-image` |
 | `adobe-rgb`, `native` | `adobe-rgb` | |
-| `bt2020`, `linear` | `linear-bt2020` | |
+| `srgb`, `native` | `srgb` | a gain-map JPEG as above |
+| `display-p3` / `adobe-rgb` / `srgb` / `bt2020`, `linear` | `linear-display-p3` / `linear-adobe-rgb` / `linear-srgb` / `linear-bt2020` | |
 | `"film-master"` | `linear-acescg` | |
 
 `pq`/`hlg` transfers and the AVIF container are refused with the reason. On a

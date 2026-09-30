@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
                           help="set output.display.range in the recipe")
     rconvert.add_argument("--transfer", choices=("native", "linear", "pq", "hlg"),
                           help="set output.display.transfer in the recipe")
-    rconvert.add_argument("--gamut", choices=("display-p3", "adobe-rgb", "bt2020"),
+    rconvert.add_argument("--gamut", choices=("display-p3", "adobe-rgb", "srgb", "bt2020"),
                           help="set output.display.gamut in the recipe")
     rconvert.add_argument("--container", choices=("tiff", "jpeg", "avif"),
                           help="set output.display.container in the recipe")

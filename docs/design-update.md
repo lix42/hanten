@@ -743,7 +743,8 @@ principle:
   gamut keeps the float TIFF in that gamut, a stated axis that rules the float TIFF out
   (`--transfer native`) falls back to the lossless 16-bit TIFF, and the gain map is
   reached only by a stated `--container jpeg` or by stated axes that leave no lossless
-  row (`--range hdr --transfer native`).
+  row (`--range hdr --transfer native`) — each asking for its gamut, since Adobe RGB has
+  no gain map.
 - **"Pinned" means `direct`'s own constants**, not today's defaults read through: moving
   a default must not move the rendering the calibration loop holds.
 

@@ -296,6 +296,7 @@ impl Axis for Gamut {
         axes.gamut = Some(value);
     }
     fn default_in(d: &Defaults, rows: &[Row]) -> Option<Self> {
+        // Transfer is derived before gamut in either order, so `rows` share one transfer.
         if rows.iter().all(|r| r.transfer == Transfer::Linear) {
             d.linear_gamut
         } else {
@@ -525,6 +526,15 @@ pub const ROWS: &[Row] = &[
             arriving_with: "the SDR JPEG destination (`output/sdr-jpeg-preset`)",
         },
     ),
+    row(
+        Range::Sdr,
+        Transfer::Native,
+        Gamut::Srgb,
+        Container::Jpeg,
+        Status::NotYet {
+            arriving_with: "the SDR JPEG destination (`output/sdr-jpeg-preset`)",
+        },
+    ),
 ];
 
 /// The recipe's `output` section: a rendered destination, or the film master.
@@ -695,35 +705,57 @@ pub fn resolve(axes: &DisplayAxes, d: &Defaults) -> std::result::Result<Resolved
                 container: row.container,
                 encoding,
             }),
-            Status::NotYet { arriving_with } => {
-                let adding: Vec<DisplayAxes> = ROWS
-                    .iter()
-                    .filter(|r| is_ready(r) && axes.admits(r))
-                    .map(|r| fewest(axes, r, d))
-                    .collect();
-                let instead = if adding.is_empty() {
-                    closest(axes, d)
-                } else {
-                    Vec::new()
-                };
-                Err(Fault::NotYet {
-                    row,
-                    arriving_with,
-                    adding,
-                    instead,
-                })
-            }
+            Status::NotYet { arriving_with } => Err(not_yet(row, arriving_with, axes, d)),
         },
         Derivation::NoRow => Err(conflict(axes, d)),
         Derivation::Open {
             flag,
             key,
             candidates,
-        } => Err(Fault::Ambiguous {
-            flag,
-            key,
-            choices: resolving(&candidates, d),
-        }),
+        } => {
+            let choices = resolving(&candidates, d);
+            // No choice reaches a written row: asking would offer nothing, so name the
+            // first row not written yet instead.
+            match first_row(&candidates, d) {
+                Some(
+                    row @ Row {
+                        status: Status::NotYet { arriving_with },
+                        ..
+                    },
+                ) if choices.is_empty() => Err(not_yet(row, arriving_with, axes, d)),
+                _ => Err(Fault::Ambiguous { flag, key, choices }),
+            }
+        }
+    }
+}
+
+/// A [`Fault::NotYet`] for `row`, its remedies computed against what was stated.
+fn not_yet(row: Row, arriving_with: &'static str, axes: &DisplayAxes, d: &Defaults) -> Fault {
+    let adding: Vec<DisplayAxes> = ROWS
+        .iter()
+        .filter(|r| is_ready(r) && axes.admits(r))
+        .map(|r| fewest(axes, r, d))
+        .collect();
+    let instead = if adding.is_empty() {
+        closest(axes, d)
+    } else {
+        Vec::new()
+    };
+    Fault::NotYet {
+        row,
+        arriving_with,
+        adding,
+        instead,
+    }
+}
+
+/// The row the first candidate of an open axis leads to, settling any axis it leaves
+/// open the same way.
+fn first_row(candidates: &[(&'static str, DisplayAxes)], d: &Defaults) -> Option<Row> {
+    match derive(&candidates.first()?.1, d) {
+        Derivation::Row(row) => Some(row),
+        Derivation::Open { candidates, .. } => first_row(&candidates, d),
+        Derivation::NoRow => None,
     }
 }
 
@@ -1214,12 +1246,18 @@ mod tests {
         };
         assert_eq!((row.range, row.container), (Range::Sdr, Container::Jpeg));
         // The ready JPEGs, each as the fewest flags to add: `--range hdr` for the
-        // Display P3 gain map, `--gamut srgb` for the sRGB one.
+        // Display P3 gain map, and the sRGB one's gamut beside it (`--gamut srgb` alone
+        // is the sRGB SDR JPEG, also not written yet).
         let offered: Vec<Vec<_>> = adding
             .iter()
             .map(|a| a.stated_axes().iter().map(|s| s.value).collect())
             .collect();
-        assert_eq!(offered, [vec!["hdr"], vec!["srgb"]]);
+        assert_eq!(offered, [vec!["hdr"], vec!["hdr", "srgb"]]);
+        // Under `direct` the gamut is open between two rows not written yet: that is
+        // what the refusal says, not an empty "choose one".
+        let sdr_jpeg = axes(Some(Range::Sdr), None, None, Some(Container::Jpeg));
+        let err = resolve(&sdr_jpeg, &crate::rendering::DIRECT.axes).unwrap_err();
+        assert!(matches!(err, Fault::NotYet { .. }), "{err:?}");
     }
 
     #[test]
