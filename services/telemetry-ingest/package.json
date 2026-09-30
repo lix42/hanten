@@ -1,0 +1,29 @@
+{
+  "name": "@nc/telemetry-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hanten's telemetry ingestion Worker: validates, deduplicates, stores and expires upload-v1 events in D1.",
+  "type": "module",
+  "scripts": {
+    "check": "prettier --check . && tsc --noEmit && node scripts/check-config.mjs",
+    "fix": "prettier --write .",
+    "test": "vitest run",
+    "types": "wrangler types --include-runtime=false --strict-vars=false",
+    "dev": "wrangler dev",
+    "smoke": "node scripts/smoke.mjs",
+    "verify": "pnpm check && pnpm test"
+  },
+  "dependencies": {
+    "@cfworker/json-schema": "^4.1.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260929.1",
+    "jsonc-parser": "^3.3.1",
+    "prettier": "^3.9.9",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.143.1"
+  },
+  "packageManager": "pnpm@11.25.0"
+}

@@ -1,0 +1,45 @@
+// The ingestion Worker for telemetry upload-v1 (docs/telemetry-strategy.md).
+// scripts/check-config.mjs asserts the privacy and cost settings below before
+// every check and deploy; change the two together.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hanten-telemetry",
+  "main": "src/index.ts",
+  // No later than the newest date the locked workerd supports, or tests cannot start.
+  "compatibility_date": "2026-08-15",
+  "workers_dev": true,
+  "preview_urls": false,
+
+  // Privacy: no request, body or invocation log leaves the Worker.
+  "observability": { "enabled": false, "logs": { "enabled": false, "invocation_logs": false } },
+  "logpush": false,
+
+  // Cost: a runaway request cannot bill more than this much CPU.
+  "limits": { "cpu_ms": 100 },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hanten-telemetry",
+      "database_id": "111f0a71-85cc-4ef1-9bcc-e72227bb17f9",
+      "migrations_dir": "migrations",
+    },
+  ],
+
+  // The coarse transient rate limit, keyed by the connecting IP, which is never stored.
+  "ratelimits": [{ "name": "RATE_LIMITER", "namespace_id": "4217", "simple": { "limit": 30, "period": 60 } }],
+
+  // Daily retention and counter cleanup.
+  "triggers": { "crons": ["17 3 * * *"] },
+
+  // Cost ceilings (README.md "Cost model"). Kill switch and release allowlist are
+  // D1 rows, so they change without a deploy.
+  "vars": {
+    "MAX_EVENTS_PER_DAY": "20000",
+    "MAX_BYTES_PER_DAY": "50000000",
+    "MAX_COHORT_EVENTS_PER_DAY": "5000",
+    "MAX_STORED_EVENTS": "1750000",
+    "RETENTION_DAYS": "180",
+    "RETENTION_DELETE_ROWS_PER_RUN": "200000",
+  },
+}

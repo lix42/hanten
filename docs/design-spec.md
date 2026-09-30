@@ -2060,9 +2060,10 @@ shipped or retired item keeps its number and shrinks to one line.
     `telemetry/upload`, and `telemetry/panic-hook`; the latter is deliberately
     described as sanitized Rust **panic reporting**, not general native-crash
     capture. The anonymous endpoint cannot prove event provenance, so results are
-    advisory/opt-in/unverified rather than exact population rates. V1 is hard
-    capped in a dedicated Cloudflare FREE-plan account with no billing-enabled
-    resources; any paid migration requires explicit approval. Note: the original
+    advisory/opt-in/unverified rather than exact population rates. V1 runs on a
+    paid Cloudflare account with application ceilings bounding the worst case
+    (`services/telemetry-ingest/README.md`); any change whose worst case can pass
+    $10/month requires explicit approval. Note: the original
     LAB-benchmark `perf-instrumentation` task is **parked** (prototype on
     `prototype/perf-bench-instrumentation`); `perf-telemetry` is the real-world
     successor.

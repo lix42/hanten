@@ -17,7 +17,7 @@ entries — don't rewrite earlier ones.
 
 ## Epic summary
 
-What other epics need to know about `telemetry` (refreshed 2026-09-28):
+What other epics need to know about `telemetry` (refreshed 2026-09-30):
 
 - **Telemetry is operational, never a conversion knob.** `--telemetry`,
   `--telemetry-file`, and `NC_TELEMETRY_LOG` live on the CLI arg struct only —
@@ -56,7 +56,15 @@ What other epics need to know about `telemetry` (refreshed 2026-09-28):
   full.
 - **Explicitly rejected by the user:** persistent install identity, uploading
   `params_hash`, and (2026-09-27) uploading any legacy local record. Backend spend
-  is capped at $10/month.
+  is capped at $10/month — on the owner's paid Cloudflare account since 2026-09-30,
+  bounded by the Worker's ceilings rather than by a free plan.
+- **The ingestion Worker is `services/telemetry-ingest/`** (`telemetry/ingestion-service`):
+  TypeScript on Cloudflare Workers + D1, its own `pnpm verify` gate and CI job, and a
+  manual deploy workflow from `main`. It imports the contract's schema file and runs
+  the whole corpus, so a contract change must pass both suites. Its README is the
+  runbook: the kill switch and release lists are D1 rows. Add a release to
+  `allowed_releases` when it ships; until then its events are accepted but held in
+  quarantine, and `queries/promote_release.sql` moves them once it is listed.
 - **The upload contract is `contracts/telemetry/upload-v1/`** (`telemetry/upload-schema`):
   JSON Schema, a corpus Rust and the Worker both test against, and the README that is
   now the upload field manifest (the strategy's is history).
@@ -353,12 +361,95 @@ What shipped, and the parts the open tasks build on:
 
 
 ## ingestion-service
-**Status:** not started
-**Updated:** 2026-09-29
+**Status:** in progress — built and tested; the first deploy runs after merge
+**Updated:** 2026-09-30
 
 - Goal: implement the validating Cloudflare Worker + D1 ingestion, exact
   deduplication, retention, and initial performance/failure analysis queries.
 - 2026-09-29: marked **low priority** (user), so it is not suggested first.
+
+### 2026-09-30 — implemented
+- **User decisions at start:** use the owner's existing Cloudflare account, which is
+  on Workers Paid, instead of the strategy's dedicated FREE-plan account; paying is
+  fine if cost is controlled (strategy amendment 2026-09-30). Deploy through GitHub
+  Actions: this container's proxy refuses `api.cloudflare.com`, so `wrangler deploy`
+  cannot run here, while the Cloudflare connector can create D1 databases and query
+  them but not upload a Worker. The D1 database `hanten-telemetry` was created
+  through the connector; its id is in `wrangler.jsonc`, and it stays empty until the
+  deploy workflow applies the migrations (applying them by hand would leave
+  `d1_migrations` unaware and break that step).
+- **Landed:** `services/telemetry-ingest/` — validation, dedup insert, quarantine,
+  kill switch, release allowlist, daily ceilings, per-IP rate limit, 180-day cron,
+  five queries, `scripts/check-config.mjs` (the deploy contract), `scripts/smoke.mjs`,
+  the `telemetry-ingest` CI job and `.github/workflows/telemetry-deploy.yml`.
+- **Validator: `@cfworker/json-schema`,** an interpreter, because Workers forbid
+  `eval`/`new Function`, which Ajv needs unless precompiled. It accepts all 180
+  events of the valid corpus; a 100-event batch validates in ~7 ms (Node, warm).
+  Only a failed event is re-validated with all errors, to classify it.
+- **Rejection classification mirrors the Rust test**
+  (`out_of_range_means_a_numeric_bound_and_unsupported_version_the_version`): an
+  integer `source_schema_version` outside the supported set is
+  `unsupported_version`; otherwise a numeric-bound failure anywhere in the error set
+  is `out_of_range`; anything else `invalid_field`. `release_blocked` applies only to
+  an event that passes the schema.
+- **Dedup across two tables:** an event id lives in `events` or `quarantine`, never
+  both; each insert is `INSERT … SELECT … WHERE NOT EXISTS (other table) ON CONFLICT
+  DO NOTHING RETURNING event_id`, so the returned ids are exactly the new ones and
+  the whole batch plus counters is one D1 transaction.
+- **Quarantine rules chosen here:** `event_day` outside `[received − 180, received + 1]`,
+  and a cohort (release × OS × arch) past `MAX_COHORT_EVENTS_PER_DAY` today. Cohort
+  counters count routed events before dedup, so a resent batch overcounts slightly —
+  the conservative direction.
+- **Storage ceiling without scans:** D1's `meta.size_after` on the state read gives the
+  database size for free; `COUNT(*)` would bill a row read per stored event.
+- **Measured (local `workerd`):** 768 wire bytes and ~1.14 KB stored per full-success
+  event; an insert writes 3 rows (table + 2 indexes). Cost model in the service README:
+  $0 marginal at low and expected volume, ≤ $9/month at every ceiling even with the
+  account's included usage exhausted.
+- **Gotchas:** `compatibility_date` cannot pass the locked `workerd`'s newest date,
+  or the test runtime refuses to start (2026-09-01 failed; 2026-08-15 is set). pnpm 11
+  holds back packages newer than its minimum release age, so `wrangler` resolved to
+  4.143.1, not the newest. `exports.default.scheduled` cannot take a
+  `ScheduledController` across the test boundary; call the module's handler directly.
+- **Verified:** `pnpm verify` — prettier, `tsc`, the deploy contract and 317 tests
+  (the corpus's 21 valid and 260 invalid requests through the Worker's real entry
+  point, 26 behaviour tests, retention, queries); mutations removing the kill switch
+  or the date rule fail them. Not yet verified: the live deploy and its smoke test.
+
+### 2026-09-30 — review round (`/code-review high`, two runs)
+- **Ceilings are now CHECK constraints** (`daily_limit` on `daily_usage`,
+  `storage_limit` on `storage`) raised inside the write batch, with the limits
+  written from the Worker's vars each time. The first version checked a snapshot
+  read before the batch, so concurrent requests from different IPs all passed; a
+  five-request concurrency test now holds the ceiling exactly. The read-time checks
+  stay as fast refusals only.
+- **Storage is a row count, not `meta.size_after`.** D1 does not shrink its file when
+  retention deletes, so a size ceiling, once reached, would stay tripped; the size
+  field is also not guaranteed. `MAX_STORED_EVENTS` (1.75 M ≈ 2 GB) is kept by
+  triggers on both tables. Gotcha: D1's `meta.changes` counts trigger writes too, so
+  retention counts deleted rows with `RETURNING`.
+- **Cohort counts come from a trigger on `events`**, so a resent duplicate no longer
+  uses up a cohort's day. The daily cost counters still count every event received,
+  deliberately: those requests are what is billed.
+- **Unknown releases are quarantined (`release`), not rejected;** `release_blocked`
+  is now for `blocked_releases` only (user decision). A release allowlisted late
+  loses nothing: `queries/promote_release.sql` moves its events. The smoke test
+  posts `0.0.0-smoke`, which the migration blocks, so it still stores nothing.
+- **Deploy workflow:** `shell: bash` (pipefail) so a failed `wrangler deploy | tee`
+  fails the step; the dry run is a separate job with no environment and no
+  credentials; the credentials reach only the Cloudflare steps; the account is
+  checked by finding the configured D1 database id; the kill switch goes to the job
+  summary; a failed smoke test rolls the Worker back. Migrations must only add, as
+  they apply while the previous Worker still serves.
+- **Smaller:** any unexpected throw (a binding, a client disconnect) answers 503
+  instead of 500; the supported source version is read from the schema; the state
+  read looks up only the batch's releases; `limits.cpu_ms` 200 → 100 to keep the
+  worst case under $9 with the trigger writes; tests inject a D1 failure with a
+  temporary `RAISE(ABORT)` trigger instead of copying a `CREATE TABLE`.
+- `0001_init.sql` was edited in place: nothing had applied it yet.
+- **Verified:** `pnpm verify`, 322 tests; mutations loosening either CHECK fail the
+  concurrency and storage tests. Measured: an analysed insert writes 5 rows, a
+  quarantined one 3; a delete measured 2 locally, modelled as 4.
 
 ## upload
 **Status:** not started
