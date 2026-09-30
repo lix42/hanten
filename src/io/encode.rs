@@ -1,7 +1,8 @@
 //! [`LinearImage`] → 16-bit / 32-bit-float TIFF with an embedded ICC, and the optional
 //! IR export — plus the domain-typed HDR TIFF entry points.
 //!
-//! [`encode_u16`] writes an SDR display rendition and [`encode_f32`] the film master. The two HDR entry points are separate on purpose,
+//! [`encode_u16`] writes an SDR display rendition, [`encode_f32`] the film master and
+//! [`encode_film_rgb`] the pre-matrix film RGB. The two HDR entry points are separate on purpose,
 //! because each takes one of `pipeline::hdr`'s opaque types rather than a bare
 //! [`LinearImage`], so an HDR domain cannot be confused with an SDR display's:
 //! [`encode_hdr_linear`] takes [`LinearHdr`] (display-linear, written verbatim
@@ -26,6 +27,7 @@ use tiff::encoder::colortype::{ColorType, Gray16, Gray32Float, RGB16, RGB32Float
 use tiff::encoder::{TiffEncoder, TiffKind, TiffKindBig, TiffKindStandard, TiffValue};
 use tiff::tags::Tag;
 
+use crate::algo::FilmRgbImage;
 use crate::io::QUANTIZE_BAND_SAMPLES;
 use crate::io::staged::{self, Staged};
 use crate::pipeline::fit_gamut::DestinationGamut;
@@ -70,6 +72,51 @@ pub fn encode_f32(
     path: &Path,
 ) -> Result<(Staged, EncodeOutcome, bool)> {
     encode_at(image, OutDepth::F32, icc, path)
+}
+
+/// Encode the fixed decode's [`FilmRgbImage`] — the values *before* the NC film RGB v1
+/// 3×3 — as an unclamped 32-bit float TIFF (`--export-film-rgb`). **No ICC profile**:
+/// the channels are the dye layers' exposures, which have no primaries, so any tag
+/// would name a space the samples are not in. The IR plane is not written.
+///
+/// Returns only the staged file: a non-finite sample reaches the primary too, whose
+/// encode counts it (film master) or whose chain refuses it (every rendered destination).
+pub fn encode_film_rgb(film: &FilmRgbImage, path: &Path) -> Result<Staged> {
+    let (w, h) = (film.width(), film.height());
+    let big = resolve_bigtiff(BigTiff::Auto, w, h, 3, depth_bytes(OutDepth::F32), 0);
+    let (staged, ()) = staged::stage(path, |writer| {
+        write_rgb_f32(writer, w, h, film.rgb(), big, None)
+    })?;
+    Ok(staged)
+}
+
+/// Write interleaved f32 RGB verbatim, as classic or BigTIFF, embedding `icc` when
+/// given — the one writer every float RGB TIFF goes through.
+fn write_rgb_f32<W: Write + Seek>(
+    writer: W,
+    width: u32,
+    height: u32,
+    rgb: &[f32],
+    big: bool,
+    icc: Option<&[u8]>,
+) -> Result<()> {
+    if big {
+        encode_planar::<_, TiffKindBig, RGB32Float>(
+            TiffEncoder::new_big(writer)?,
+            width,
+            height,
+            rgb,
+            icc,
+        )
+    } else {
+        encode_planar::<_, TiffKindStandard, RGB32Float>(
+            TiffEncoder::new(writer)?,
+            width,
+            height,
+            rgb,
+            icc,
+        )
+    }
 }
 
 fn encode_at(
@@ -200,23 +247,14 @@ fn encode_hdr_linear_to_writer<W: Write + Seek>(
     // no `clipped_*` tally is meaningful, but a non-finite sample is still a fault.
     let loss = scan_non_finite(&image.rgb);
     let stats = channel_means_f32(&image.rgb);
-    if big {
-        encode_planar::<_, TiffKindBig, RGB32Float>(
-            TiffEncoder::new_big(writer)?,
-            image.width,
-            image.height,
-            &image.rgb,
-            Some(icc),
-        )?;
-    } else {
-        encode_planar::<_, TiffKindStandard, RGB32Float>(
-            TiffEncoder::new(writer)?,
-            image.width,
-            image.height,
-            &image.rgb,
-            Some(icc),
-        )?;
-    }
+    write_rgb_f32(
+        writer,
+        image.width,
+        image.height,
+        &image.rgb,
+        big,
+        Some(icc),
+    )?;
     Ok(EncodeOutcome { loss, stats })
 }
 
@@ -467,31 +505,10 @@ fn encode_to_writer<W: Write + Seek>(
                 stats,
             })
         }
-        (OutDepth::F32, false) => {
+        (OutDepth::F32, big) => {
             let report = scan_non_finite(&image.rgb);
             let stats = channel_means_f32(&image.rgb);
-            encode_planar::<_, TiffKindStandard, RGB32Float>(
-                TiffEncoder::new(writer)?,
-                w,
-                h,
-                &image.rgb,
-                icc,
-            )?;
-            Ok(EncodeOutcome {
-                loss: report,
-                stats,
-            })
-        }
-        (OutDepth::F32, true) => {
-            let report = scan_non_finite(&image.rgb);
-            let stats = channel_means_f32(&image.rgb);
-            encode_planar::<_, TiffKindBig, RGB32Float>(
-                TiffEncoder::new_big(writer)?,
-                w,
-                h,
-                &image.rgb,
-                icc,
-            )?;
+            write_rgb_f32(writer, w, h, &image.rgb, big, icc)?;
             Ok(EncodeOutcome {
                 loss: report,
                 stats,
