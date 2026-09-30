@@ -451,6 +451,19 @@ What shipped, and the parts the open tasks build on:
   concurrency and storage tests. Measured: an analysed insert writes 5 rows, a
   quarantined one 3; a delete measured 2 locally, modelled as 4.
 
+### 2026-09-30 — first deploy (run 36782364543)
+- The account check, migrations, kill-switch report and deploy passed:
+  `https://hanten-telemetry.i-70e.workers.dev`, version `fb8f05ae`, cron `17 3 * * *`.
+  D1 afterwards: `0001_init.sql` applied, no row stored, ingestion enabled.
+- **The smoke test failed on propagation, not the Worker.** It ran 0.4 s after the
+  upload. The two POSTs got a non-JSON 500 and a 404, which the Worker cannot
+  return for them, and no `daily_usage` row was written, although any request
+  reaching the Worker's write path writes one; the GET right after got the Worker's
+  own 405. `scripts/smoke.mjs` now waits for three consecutive Worker-own 405s
+  (up to 90 s) and prints response bodies on failure.
+- The rollback step found no earlier version (first deploy) and left the Worker
+  up, as intended.
+
 ## upload
 **Status:** not started
 **Updated:** 2026-07-23
