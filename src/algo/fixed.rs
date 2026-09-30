@@ -59,7 +59,7 @@
 //! |---|---|---|---|
 //! | **film base** (`Dmin`) | per-roll transmission of unexposed film | measured from that roll's rebate | an input; `D′ = 0` by construction |
 //! | **leader `Dmax`** | film **saturation** density | a light-struck leader; `estimate --d-max-region` measured it until `nf-retire/dmax-machinery` | **retired**; nothing reads it |
-//! | **anchor `A`** | the corrected density that renders to `1.0` | derived: [`AnchorRule::anchor`] | `0.9924` at the defaults; reported |
+//! | **anchor `A`** | the corrected density that renders to `1.0` | derived: [`AnchorRule::anchor`] | `≈1.034` at the defaults (`d + 0.745/1.8`); reported |
 //! | **diffuse white** | scene white on a correctly exposed negative | the datasheets: `d + types::REFERENCE_MID_TO_WHITE_DELTA` | `0.98` — a reference number, not an input |
 //! | **content white `W`** | a roll's bright end (red p97 of picture density) | `docs/spike/white-placement.md` | **not measured, not shipped** |
 //! | **specular headroom** | ~1 stop above diffuse white | where an HDR rendition lives | a consequence, not a knob |

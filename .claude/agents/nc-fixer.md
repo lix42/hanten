@@ -44,7 +44,7 @@ in-progress changes, fix them, and prove the tree green — nothing more.
   section's field (`recipe.rs` or the stage's params), a `recipe::merge` arm, and
   usually a `recipe::validate` check — plus a merge test. A fix that touches a knob
   touches all of them.
-- **Recipe shape mirrors design-spec §9** (`deny_unknown_fields`); `params` is
+- **Recipe shape mirrors design-spec §8–§9** (`deny_unknown_fields`); `params` is
   a reserved top-level key; mutually-exclusive knobs are one enum field.
 - **Standards coefficients live only in `pipeline/colorimetry/`** — never add a
   matrix or luma literal inline in a stage; import it.

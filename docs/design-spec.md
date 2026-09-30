@@ -165,7 +165,7 @@ plane is a separate single channel, carried but not consumed (§6.1).
 | **film base / `Dmin`** | the unexposed film's transmission — the per-channel *relative* maximum transmission | (the ceiling of transmission) | `(0, 1]` | `FilmBase`, `film_base::estimate`, `film_base::measure_area` |
 | **density `D` / `D′`** | `D = −log10(scan / Dmin)`, log-scale opacity; `D′ = scale·D + offset` (per-channel corrected density, §7.2) | **denser** negative — a **brighter** scene | `D`: `0` at base, `≈ [0, 6]` (slightly `< 0` if a pixel out-transmits the base); `D′` shifted by the offset | inside `algo::fixed::decode`, fused per sample (never a buffer) |
 | **NC film RGB v1** (`FilmRgbImage`) | the fixed decode's positive: how much light each dye layer received, declared linear Rec.709/D65 (§7.5) | **brighter** positive — a **brighter** scene | unclamped `f32`; mid-grey `0.18` at the anchor rule's placement | `algo::FilmRgbImage`, `algo::fixed::decode` |
-| **linear ACEScg** (`AcesCgImage`) | NC film RGB v1 mapped into linear ACEScg/D60; keeps film/lens/development/scanner character and is not physical scene recovery. The working space of every rendering stage up to fit gamut | **brighter** rendered value | unclamped `f32`; diffuse white `1.0` (`algo::fixed::DIFFUSE_WHITE`) | `pipeline::working_space`, then the stage modules of `pipeline::chain` |
+| **linear ACEScg** (`AcesCgImage`) | NC film RGB v1 mapped into linear ACEScg/D60; keeps film/lens/development/scanner character and is not physical scene recovery. The working space of every rendering stage up to fit gamut | **brighter** rendered value | unclamped `f32`; the datasheets' diffuse white decodes to ≈0.80 here, and reaches `1.0` only after the look's contrast (`algo::fixed::DIFFUSE_WHITE`) | `pipeline::working_space`, then the stage modules of `pipeline::chain` |
 | **display-referred positive** | after fit range and fit gamut: display-linear, in the destination's gamut, `1.0` = reference white (203 cd/m²) | **brighter** rendered value | `≥ 0`; content past fit range's white point exceeds the peak and is clamped at the encode (at the HDR hand-off on an HDR destination), counted | `pipeline::fit_gamut::DisplayReferredImage` |
 | **output sample** (terminal) | the written image value | brighter | destination-defined integer or float encoding | `io::encode`, `io::avif`, `io::iso_gain_map` |
 
@@ -207,7 +207,7 @@ be placed from — a nominal constant, a value measured from a light-struck lead
 per-frame percentile. `nf-retire/dmax-machinery` retired it: **it is no longer an input
 anywhere**, and nothing measures, reads or reports it. ⚠️ Distinct from classic
 photographic film `Dmax` (the negative's physical maximum density), from diffuse white
-(a datasheet reference number, `d + 0.36`; `1.0` in ACEScg), and from a roll's content white (not
+(a datasheet reference number, `d + 0.36`; `1.0` in the graded image, after the look), and from a roll's content white (not
 measured) — `src/algo/fixed.rs`'s "Five quantities" table keeps them apart.
 
 **Domain glossary.** *rebate* — the unexposed film strip between holder and
@@ -292,7 +292,7 @@ earlier build left beside the output is removed, and the report says so
 (`chain.removed_sidecar`). The HDR TIFF reports' `hdr_linear_tiff` /
 `hdr_coded_tiff` blocks are **authoritative** for reference white, peak and
 headroom, which no ICC profile can express. The recipe is deliberately not embedded
-in the image container (§13). Per-destination encoding details are in §9
+in the image container; the report carries it. Per-destination encoding details are in §9
 "Output / encode".
 
 ## 6. Pipeline architecture
@@ -302,7 +302,7 @@ parameters, orchestrated by `cli::convert_frame`:
 
 ```text
 decode ─ input semantics ─ film base ─ fixed decode ─ NC film RGB v1 → linear ACEScg
-  │         (stage 1)       (stage 2)     (§7)            (§7.5)
+  │  (stage 1)  (stage 1b)   (stage 2)     (§7)            (§7.5)
   │
   ├─ film master ─────────────────────────────────────── encode (f32 ACEScg TIFF)
   │
@@ -402,7 +402,8 @@ The formulas and each knob's range are in §9; this is what each stage is for.
   and shadow contrast) (`nf-display-stages/parametric-operator`).
 - **Fit gamut** is one radial map toward neutral at constant luminance, against the
   cube `[0, max(peak, Y)]`, so highlights desaturate toward white instead of ringing.
-  Under reinhard it is near-inert where it matters (`docs/reports/gamut-map-share.md`).
+  Under reinhard it was near-inert where it matters on the removed chain's SDR renderer
+  (`docs/reports/gamut-map-share.md`); the HDR branch is unmeasured (`nf-calibration/white-rule-hdr`).
   It has no knob.
 
 ### Two renderings: `direct` and `default`
@@ -453,7 +454,8 @@ knob starts from, and each has one principle (`crate::rendering`):
   gentlest fixed value; a choice of taste: its identity; information-preserving: it
   may stay), update `DIRECT`, the test and the table above together, and if
   `direct`'s output moved, log it as a dated entry in `nf-calibration`'s progress,
-  since review rounds before and after no longer compare like for like.
+  since review rounds before and after no longer compare like for like. A task that
+  changes a stage decides `direct`'s part as its own work.
 
 **Explicit knobs build on the base, under either rendering.** `--white-balance`
 multiplies the base gains and `--contrast` the base slope, each with identity 1; every
@@ -817,7 +819,9 @@ top level, one section per stage in chain order, the destination last:
   `--dump-params` file before `pipeline_version` 8) and is refused whole. This build
   writes `3` and also reads `2`, which differs only in `look.contrast`: the slope itself
   in 2, a multiplier in 3 (`nf-look/contrast-definition`). A version 2 recipe stating a
-  number there is refused with the multiplier that keeps it; its `null` reads as `1`. A
+  number there is refused with the multiplier that keeps it — bit for bit where one
+  exists, else within one `f32` step, and the message says which; its `null` reads as
+  `1`. A
   per-frame override need not state a version, except beside a `look.contrast` number.
 - **Retired keys are refused by name** (`recipe::check_body`), each with where its knob
   went — the removed chain's `print` and `output.preset`, its `reconstruction` and
@@ -833,8 +837,9 @@ top level, one section per stage in chain order, the destination last:
 - **`recipe_version` and `params` are reserved** and never recipe keys.
 
 **The `calibration` section.** A key belongs here when it is (a) measured from the
-film, (b) fixed across the roll, and (c) an input to the decode. Today that is the film
-base alone: `calibration.film_base`, `{"region": [x, y, w, h]}` or
+film, (b) fixed across the roll, and (c) an input to the decode. The section is
+deliberately **open**: a later measurement joins it with its own task. Today it is the
+film base alone: `calibration.film_base`, `{"region": [x, y, w, h]}` or
 `{"explicit": [r, g, b]}`, with **no default** — `convert` and `roll` refuse an
 unstated one (§9). A pipeline profile is then "a recipe with no `calibration` or `roll`
 section", and a roll calibration "a recipe with nothing else".
@@ -851,9 +856,13 @@ chose a value, and a `--dump-params` recipe must replay as it rendered, so nothi
 read as unset by its value and nothing is refused; the run warns once instead, and a
 typed flag (a choice made now) never does. The warnings catch a value nobody chose:
 `default` without a roll measurement (what fell back); a recipe white balance or
-exposure beside the roll's, which it multiplies or adds to; a `roll` section without
-an exposure; and, under `direct`, a recipe value that moves its pinned base (narrowly,
-so a dump of a deliberate adjustment replays under `--strict`).
+exposure beside the roll's, which it multiplies or adds to; a `roll` section with gains
+or a white but no exposure; and, under `direct`, exactly two leftovers of earlier
+builds — highlight desaturation at the old default `0.8`, and a recipe white balance
+beside a `roll` section (old `measure-roll` output). `direct`'s list is narrow on
+purpose, so a dump of a deliberate adjustment replays under `--strict`; any other value
+that moves its pinned base does not warn. A contrast beside `roll.white_stops`
+multiplies the roll's slope, as intended, and never warns.
 
 ### Target: the roll workflow
 
@@ -869,12 +878,12 @@ own `calibration` and `roll` sections, described above.
 - `--seed <n>` — fix any stochastic step (none today, reserved).
 - Stable, documented **exit codes** (see §11).
 
-**What a `convert` report carries** (`cli::Report`): `identity` (below), `input`,
+**What a `convert` report carries** (`cli::Report`): `command`, `identity` (below), `input`,
 `output` (the completed path, §5), `working_mapping` (`"nc-film-rgb-v1"`), `chain`,
 `recipe` (the resolved recipe — what `--dump-params` writes, so it reloads through
-`--params` to this run), `memory`, `input_color`, `film_base` with its source,
-`effective_area`, `loss` (clamped and non-finite samples at the encode),
-`output_stats`, `warnings`, and the destination's own block where it has one (`avif`,
+`--params` to this run), `memory`, `input_color`, `film_base` with its source and percentile,
+`film_type` (when declared), `effective_area`, `loss` (clamped and non-finite samples at the encode),
+`output_stats`, `warnings`, `elapsed_ms`, and the destination's own block where it has one (`avif`,
 `hdr_linear_tiff`, `hdr_coded_tiff`). **`chain` records what ran**, so a consumer never
 re-derives it from the recipe:
 
@@ -1583,7 +1592,8 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   look or fit range, one rule per stage naming it — after merge, on the *resolved*
   value, whatever its source. Each rule spares its default and its identity, so a flag
   resetting a recipe value (`--exposure 0`) re-exports a graded roll recipe as a
-  master. There is no ignore mode; the rendered float output is the linear HDR TIFF.
+  master. The `--roll-*` flags are refused beside `--film-master` too. There is no ignore mode;
+  the rendered float output is the linear HDR TIFF.
 - BigTIFF promotion is always automatic: a file too large for classic TIFF is written
   as BigTIFF, and the report says so.
 
@@ -1653,7 +1663,8 @@ alias, on flags and recipe keys alike. The reference build
   `output.preset` (→ the four axes or `--film-master`), `--print-exposure` (→
   `--exposure`), `--black-point` (→ `--display-black`), `--auto-wb` (→ `measure-roll`
   and `--roll-white-balance`), `--linear-range` (levels are `nf-scene-correction/levels-knob`'s
-  open question), the whole `print` section, `--new-flow`, and the sidecar. Earlier:
+  open question), the whole `print` section, `--new-flow`, and the sidecar. Earlier
+  still, `--output-hdr` and `--output-sdr`, the names before the presets. Earlier:
   `--out-depth`, `--output-profile`, `--bigtiff` with the `legacy` and `custom` presets
   (`nf-retire/legacy-custom`), and `--display-tone` / `--highlight-compress` with the
   bounded display tones (`nf-retire/display-tones`).
@@ -1661,12 +1672,13 @@ alias, on flags and recipe keys alike. The reference build
   `--density-curve`, `--film-stock`, `--preset`, the `--sigmoid-*` flags; the
   reference-density flags `--d-max`, `--fixed-d-max`, `--auto-d-max`, `--no-d-max`,
   `--anchor-mid-fraction`, `--anchor-white-at-reference`, `--anchor-black-floor` and
-  `estimate --d-max-region`; the regional balance's `--shadow-balance`,
+  `measure-base --d-max-region`; the regional balance's `--shadow-balance`,
   `--highlight-balance`, `--balance-range`, `--auto-balance-range`; and `simple`'s
   `--invert-white-balance`, `--clip-low`, `--clip-high`.
 - **Film base and input**: `--auto-base` and `"auto"` (a base is always stated),
-  `--assume-linear` and `input.color` (→ the two input axes), and the `estimate`
-  subcommand (→ `measure-base`).
+  `--assume-linear` and `input.color` (→ the two input axes), the `estimate`
+  subcommand (→ `measure-base`), and `measure-base --grid` (→
+  `film-base/tiling-uniformity-validator`).
 
 ### Global
 - `--params <json>`, `--dump-params <json>`

@@ -250,7 +250,7 @@ committed.
   flags), and usually a `recipe::validate` rule. Flags win over the recipe.
   Exception: operational flags (`--report`, `--telemetry*`, `--max-memory`) never
   change the image and are not recipe keys.
-- **Recipe shape follows design-spec §9** (every struct is `deny_unknown_fields`).
+- **Recipe shape follows design-spec §8–§9** (every struct is `deny_unknown_fields`).
   Mutually exclusive knobs are one enum field, never parallel `Option`s or bools.
 - **Retiring a recipe key:** strip its old default (every `--dump-params` and
   `hanten params` document serializes it), refuse any other value with a migration

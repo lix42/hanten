@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn reinhard_compresses_upward_only() {
         // Below mid-grey the curve is nearly a gain: its log-log slope is 1 deep in the
-        // shadows and still 0.94 near 0.05 (design-spec §6, "The rendering stages") —
+        // shadows and still 0.94 near 0.05 (the module docs) —
         // which is why display black shapes the shadow end (module docs). Pinned so a
         // change there is a decision.
         let o = op(DEFAULT_HEADROOM_STOPS, 1.0);
