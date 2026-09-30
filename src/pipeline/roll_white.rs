@@ -103,8 +103,8 @@ pub const WHITE_FLOOR_STOPS: f32 = 1.5;
 
 /// How close to the leader, in scene stops, a frame's white may come before the frame
 /// warns as near film saturation. A placeholder, owned by
-/// `nf-calibration/saturation-margin`: set from one frame judged overexposed (0.13 stop)
-/// and one ambiguous (0.39), and Gold200's leader sits only ~1.5 stops above its content.
+/// `nf-calibration/saturation-margin`: set from one frame judged overexposed. A leader
+/// can sit below the film's shoulder, so a frame near it need not be saturated.
 pub const SATURATION_MARGIN_STOPS: f32 = 0.5;
 
 /// Where a roll's exposure puts its median frame level ([`frame_level`]), in scene stops

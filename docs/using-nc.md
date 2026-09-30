@@ -21,7 +21,8 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `nf-core/default-flip` (the rendering chain of [`design-update.md`](design-update.md)
 > became the only one), `nf-calibration/roll-section`,
 > `nf-destinations/direct-preset` (§7) and `nf-destinations/easy-destination-rows` (the
-> float TIFF in four gamuts, sRGB, the sRGB gain map, §7 and §8; checked at `53ffb61`).
+> float TIFF in four gamuts, sRGB, the sRGB gain map, §7 and §8; checked at `53ffb61`) and
+> `nf-verification/film-rgb-export` (`--export-film-rgb`, §8 and §11; checked at `f1b0d0e`).
 > The staleness signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
@@ -1218,6 +1219,14 @@ Each stage's default and its identity are accepted, since neither asks for anyth
 their defaults) — which is how a flag clears a recipe's stage for a master. The film
 master and a destination axis are one choice, refused at the parser.
 
+**`--export-film-rgb PATH`** (`convert` only, beside any destination) also writes the
+fixed decode *before* the NC film RGB v1 3×3 into ACEScg — the dye layers' values,
+unmixed, which is what a per-channel decode measurement wants. It is a 32-bit float
+TIFF with **no ICC profile**: the channels have no primaries, so a viewer shows it
+untagged. Measure it with `nctool metrics --space film-rgb`, whose `channels` block
+compares field for field with a film master's measured with `--channels`. The report names it in
+`film_rgb_exported`. Through the pinned 3×3 it is the film master to the bit.
+
 **The gain-map JPEG** renders one graded image twice — an SDR base and an HDR
 rendition clamped to the 1000 cd/m² peak — and stores the per-channel ratio between
 them as a half-resolution, three-channel gain map. It carries **ISO 21496-1 metadata
@@ -1630,13 +1639,14 @@ recipe and can never perturb a pixel.
 | `-v` / `-vv` / `--quiet` | stderr verbosity — never pollutes stdout |
 | `--strict` | Promote warnings to errors |
 
-Two more are **`convert` only** — `roll`, `measure-base` and `inspect` do not accept
+These are **`convert` only** — `roll`, `measure-base` and `inspect` do not accept
 them and exit 2 if given one:
 
 | Flag | Purpose |
 |---|---|
 | `--telemetry` / `--telemetry-file` | Opt-in, fail-soft performance event (JSONL, `schema_version` 11), one per run — failed runs included, once the command line parses. `outcome.status` is `success` or `failure`; a failure names its `stage` (a stage, or `setup` / `preflight` / `finalize`), `error_kind` (`usage`, `decode`, …, or `strict` for a `--strict` promotion) and `exit_code`, and carries only what the run reached — never the error message. `timing_ms` has one field per completed stage, `conversion.params_hash` is the report's, and a finished frame's `outcome.clipped` / `non_finite` counts come with their denominator, `outcome.total_samples`. Also `NC_TELEMETRY_LOG`. |
 | `--seed N` | Reserved; nothing is stochastic today |
+| `--export-film-rgb PATH` | The decode before the 3×3, untagged f32 TIFF ([§8](#8-destinations)) |
 
 > **Caveat on `--max-memory`:** the budget also caps the TIFF read buffers, so a
 > small-but-passing budget can turn a decodable file into an exit-3 decode failure.

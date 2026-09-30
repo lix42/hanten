@@ -195,7 +195,7 @@ sRGB profile, nc writes transfer-encoded u16, and SmartConvert writes u16 with
 no profile at all — so guessing produces a plausible wrong table rather than an
 error. Supported: `srgb`, `linear-srgb`, `display-p3`, `linear-display-p3`,
 `adobe-rgb`, `linear-adobe-rgb`, `prophoto`, `prophoto-gamma1.8`,
-`linear-prophoto`, `linear-bt2020`, `linear-acescg` — which covers the usual
+`linear-prophoto`, `linear-bt2020`, `linear-acescg`, `film-rgb` — which covers the usual
 Lightroom export choices. The two ProPhoto entries are deliberate: `prophoto` is
 ISO 22028-2 as specified, with the linear toe, and is right for a third-party
 export; `prophoto-gamma1.8` is the pure power law nc's retired
@@ -204,6 +204,14 @@ below it, so the wrong one silently rewrites the deep-shadow statistics. PQ and 
 recognized and refused with a reason: they are absolute or display-referred, so
 comparing them with an SDR rendition needs a reference-white normalization this
 command does not implement yet.
+
+`film-rgb` is for `hanten convert --export-film-rgb`: the fixed decode before the
+NC film RGB v1 3×3, whose channels are the dye layers and have no primaries. Its
+record has only `channels` (each channel's key, stop percentiles and spread, in the
+file's own channels) — no `tone`, `color` or `bands`, which need primaries. `metrics
+image --channels` adds the same block to any other space, so an export compares with
+its film master (`linear-acescg`) field for field. `metrics roll` refuses `film-rgb`:
+a roll tracks tone and colour axes.
 
 ### JPEG input
 

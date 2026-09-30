@@ -365,6 +365,7 @@ pub struct ImageInfo {
 /// branches, and the copy that splits them counts only toward `total`.
 /// `scene_correction` and `look` include the film base's one-pixel grade. The four
 /// chain stages are absent for the film master, and `ir_export` without `--export-ir`.
+/// `encode` includes the `--export-film-rgb` write.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct TimingInfo {
     pub total: f64,

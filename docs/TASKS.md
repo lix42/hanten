@@ -393,6 +393,7 @@ graph TD
     nf-verification/stage-goldens
     nf-verification/benchmark-set
     nf-verification/film-rgb-export
+    nf-verification/roll-side-exports
   end
   subgraph nf-retire
     nf-retire/characteristic
@@ -611,6 +612,7 @@ graph TD
   nf-calibration/anchor-comparison --> nf-calibration/roll-white-rule
   nf-display-stages/parametric-operator --> nf-calibration/roll-white-rule
   nf-calibration/roll-white-rule --> nf-calibration/saturation-margin
+  analysis/calibration-frame-capture --> nf-calibration/saturation-margin
   nf-calibration/roll-white-rule --> nf-calibration/no-roll-defaults
   nf-calibration/roll-white-rule --> nf-calibration/roll-section
   nf-calibration/roll-section --> nf-destinations/direct-preset
@@ -678,6 +680,7 @@ graph TD
   nf-verification/reference-snapshot --> nf-verification/benchmark-set
   nf-core/minimal-end-to-end --> nf-verification/benchmark-set
   nf-reconstruction/fixed-decode --> nf-verification/film-rgb-export
+  nf-verification/film-rgb-export --> nf-verification/roll-side-exports
   nf-core/minimal-end-to-end --> nf-retire/legacy-custom
   nf-verification/reference-snapshot --> nf-retire/legacy-custom
   nf-retire/legacy-custom --> nf-retire/display-tones
@@ -1135,8 +1138,9 @@ the design in `docs/design-update.md`:
   — the cases are a holding set since `legacy` retired; comparability comes from
   the tagged build
 - `nf-verification/film-rgb-export` (new flow): `nf-reconstruction/fixed-decode`
-  — the cleanest measurement point is before the 3×3, which nc cannot export
-  today
+  — the cleanest measurement point is before the 3×3; `--export-film-rgb` writes it
+- `nf-verification/roll-side-exports` (new flow): `nf-verification/film-rgb-export`
+  — `roll` refuses the per-frame exports because one path cannot serve every frame
 - `nf-retire/legacy-custom` (new flow): `nf-core/minimal-end-to-end`, `nf-verification/reference-snapshot`
   — removes the second implementation of the print controls
 - `nf-retire/display-tones` (new flow): `nf-retire/legacy-custom`, `nf-display-stages/fit-range`
@@ -1212,9 +1216,10 @@ the design in `docs/design-update.md`:
 - `nf-calibration/roll-white-rule` (new flow): `nf-calibration/anchor-comparison`, `nf-display-stages/parametric-operator`
   — filed 2026-09-25: implements the white rule `anchor-comparison` chose by review, which
   was chosen with a black point in the chain and is not valid without one
-- `nf-calibration/saturation-margin` (new flow): `nf-calibration/roll-white-rule`
+- `nf-calibration/saturation-margin` (new flow): `nf-calibration/roll-white-rule`, `analysis/calibration-frame-capture`
   — filed 2026-09-25: the leader margin the warning keys on was set from one ambiguous
-  frame and may be stock-dependent
+  frame. 2026-09-29: waits on the calibration shoot's +3/+4 frames, since the rolls hold
+  one overexposed frame
 - `nf-calibration/no-roll-defaults` (new flow): `nf-calibration/roll-white-rule`
   — filed 2026-09-27: the fallbacks are chosen against the per-roll contrasts it measures
 - `nf-calibration/roll-section` (new flow): `nf-calibration/roll-white-rule`
@@ -1643,7 +1648,8 @@ the design in `docs/design-update.md`:
   owned producing them, so the graph reported work executable when the blocker was film that
   did not exist. Gates `io/scanner-density-calibration`, `algo/sigmoid-parameter-calibration`,
   `film-base/dmax-per-channel-reduction` (parked 2026-09-13 for exactly this), and
-  `algo/split-default-migration`'s release gate
+  `algo/split-default-migration`'s release gate. Since 2026-09-29 also
+  `nf-calibration/saturation-margin`, which needs the bracket extended to +3/+4
 - [x] [Comparison review tooling](tasks/analysis/comparison-review-tooling.md) — the ad-hoc
   review pages from `algo/reference-anchored-sigmoid` are now a maintained tool. **Viewer**
   shipped 2026-09-02, fullstack since 2026-09-10 (`tools/review-app/`, TanStack Start on
@@ -1949,8 +1955,10 @@ the design in `docs/design-update.md`:
   effective area, before the leader guard); `measure-roll` reports `look.contrast` and a
   `roll --frames` manifest for clamped frames
 - [ ] [The saturation warning's margin, and frames near
-  saturation](tasks/nf-calibration/saturation-margin.md) — set from one ambiguous
-  frame; may depend on the stock
+  saturation](tasks/nf-calibration/saturation-margin.md) — waits on the calibration
+  shoot's +3/+4 frames. Measured 2026-09-29: the leader is no stock constant (it varies
+  by up to 1.8 stops within a stock), and a frame's absolute white separates the verdicts
+  the leader distance does not, so the bracket tests both references
 - [ ] [The default rendering without a roll
   measurement](tasks/nf-calibration/no-roll-defaults.md) — the fallbacks a frame
   gets without `measure-roll`, first the whole contrast (2.0 today; the rolls measure
@@ -2009,9 +2017,13 @@ the design in `docs/design-update.md`:
   flow](tasks/nf-verification/benchmark-set.md) — the cases are a `display-p3` /
   `film-master` holding set since `legacy` retired; comparability comes from the
   reference build
-- [ ] [Export the pre-matrix film
-  RGB](tasks/nf-verification/film-rgb-export.md) — the cleanest measurement
-  point is before the 3×3, which nc cannot export today
+- [x] [Export the pre-matrix film
+  RGB](tasks/nf-verification/film-rgb-export.md) — **done 2026-09-30.**
+  `convert --export-film-rgb` writes the decode before the 3×3 as an untagged f32
+  TIFF; `nctool metrics --space film-rgb` measures it per channel
+- [ ] [Per-frame side exports from
+  `roll`](tasks/nf-verification/roll-side-exports.md) — `--export-film-rgb` and
+  `--export-ir` per frame in `--out-dir`, which `roll` refuses today
 
 ### nf-retire — [progress](progress/nf-retire.md)
 > Remove the old paths once the reference build exists: `legacy`/`custom`, the bounded

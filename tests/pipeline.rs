@@ -1475,6 +1475,41 @@ fn export_ir_writes_plane_for_hdri_and_errors_for_hdr() {
 }
 
 #[test]
+fn export_film_rgb_is_convert_only_and_guarded_as_a_write_target() {
+    let tmp = TempDir::new("film-rgb");
+    let out = tmp.path("out.tiff");
+    let input = fixture("hdr-48bit.tif");
+    // Colliding with the primary would overwrite one artifact with the other.
+    let (code, _stdout, err) = run(&[
+        "convert",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--export-film-rgb",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--export-film-rgb"), "{err}");
+    assert!(!out.exists());
+
+    // `roll` has no such flag: every frame would overwrite the one path.
+    let (code, _stdout, err) = run(&[
+        "roll",
+        input.to_str().unwrap(),
+        "-o",
+        tmp.path("roll").to_str().unwrap(),
+        "--film-base",
+        "0.9,0.55,0.42",
+        "--export-film-rgb",
+        tmp.path("film.tiff").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--export-film-rgb"), "{err}");
+}
+
+#[test]
 fn bad_params_are_usage_errors() {
     let tmp = TempDir::new("usage");
     let out = tmp.path("out.tiff");

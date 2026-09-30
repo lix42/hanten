@@ -209,8 +209,8 @@ ADOBE_RGB_GAMMA = 563.0 / 256.0
 class Space:
     """A declarable input colour space: primaries, adopted white, transfer."""
 
-    def __init__(self, name: str, primaries: str, white: str, transfer: str,
-                 note: str = "") -> None:
+    def __init__(self, name: str, primaries: str | None, white: str | None,
+                 transfer: str, note: str = "") -> None:
         self.name = name
         self.primaries = primaries
         self.white = white
@@ -239,6 +239,10 @@ SPACES: dict[str, Space] = {
     "linear-prophoto": Space("linear-prophoto", "prophoto", "d50", "linear"),
     "linear-bt2020": Space("linear-bt2020", "bt2020", "d65", "linear"),
     "linear-acescg": Space("linear-acescg", "acescg", "aces", "linear"),
+    # nc's `--export-film-rgb`: the fixed decode before the NC film RGB v1 3×3. Its
+    # channels are the dye layers' exposures, which have no primaries, so only the
+    # per-channel `channels` block is measured.
+    "film-rgb": Space("film-rgb", None, None, "linear"),
 }
 
 #: Spaces named here are recognized and refused, so the message can say *why*
@@ -763,6 +767,30 @@ def tone_stats(linear, weights: tuple[float, float, float]) -> dict:
     y = (linear[:, :, 0] * np.float32(weights[0])
          + linear[:, :, 1] * np.float32(weights[1])
          + linear[:, :, 2] * np.float32(weights[2]))
+    return _stops_stats(y)
+
+
+def channel_stats(linear) -> dict:
+    """`tone_stats` for each channel alone, in the file's own channels.
+
+    Needs no primaries, so it is the whole measurement of a `film-rgb` file, and
+    on any other space (`--channels`) it is the per-channel counterpart a film-RGB
+    export is compared with. The fractions count one channel's samples, not pixels,
+    and are named so. No bands: they are cut in luminance lightness.
+    """
+    result = {}
+    for name, index in (("r", 0), ("g", 1), ("b", 2)):
+        stats = _stops_stats(linear[:, :, index], bands=False)
+        for kind in ("non_positive", "non_finite"):
+            stats[f"{kind}_sample_fraction"] = stats.pop(f"{kind}_pixel_fraction")
+        result[name] = stats
+    return result
+
+
+def _stops_stats(y, bands: bool = True) -> dict:
+    """Tone statistics of one series (luminance or a channel), in stops."""
+    import numpy as np
+
     total = int(y.size)
     finite = np.isfinite(y)
     positive = finite & (y > 0)
@@ -788,16 +816,17 @@ def tone_stats(linear, weights: tuple[float, float, float]) -> dict:
     values = np.percentile(stops, wanted)
     percentiles = {f"p{p:g}": _round(v) for p, v in zip(wanted, values)}
 
-    counts = np.histogram(stops, bins=list(BAND_EDGES))[0]
-    names = BAND_NAMES
-    bands = {name: _round(int(count) / total)
-             for name, count in zip(names, counts)}
-    # Every sample lands in exactly one band, so the shares sum to 1. The two
-    # non-logarithmic outcomes need entries of their own for that to hold: without
-    # a `non_finite` band the sum quietly becomes finite/total on any float file
-    # carrying a NaN.
-    bands["non_positive"] = result["non_positive_pixel_fraction"]
-    bands["non_finite"] = result["non_finite_pixel_fraction"]
+    if bands:
+        counts = np.histogram(stops, bins=list(BAND_EDGES))[0]
+        shares = {name: _round(int(count) / total)
+                  for name, count in zip(BAND_NAMES, counts)}
+        # Every sample lands in exactly one band, so the shares sum to 1. The two
+        # non-logarithmic outcomes need entries of their own for that to hold:
+        # without a `non_finite` band the sum quietly becomes finite/total on any
+        # float file carrying a NaN.
+        shares["non_positive"] = result["non_positive_pixel_fraction"]
+        shares["non_finite"] = result["non_finite_pixel_fraction"]
+        result["bands"] = shares
 
     result.update(
         # Mean of log2 luminance *is* the geometric mean expressed in stops, so
@@ -811,7 +840,6 @@ def tone_stats(linear, weights: tuple[float, float, float]) -> dict:
         ),
         toe_span_stops=_round(percentiles["p5"] - percentiles["p0.1"]),
         shoulder_span_stops=_round(percentiles["p99.9"] - percentiles["p95"]),
-        bands=bands,
     )
     return result
 
@@ -1171,8 +1199,12 @@ def describe_bands() -> dict:
 
 def measure(path: Path, space_name: str,
             fraction: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0),
-            digest: bool = True, jpeg_image: str = "sdr") -> dict:
+            digest: bool = True, jpeg_image: str = "sdr",
+            channels: bool = False) -> dict:
     """Measure one image and return its metric record.
+
+    `channels` adds the per-channel block (`channel_stats`), three more full-frame
+    passes; a `film-rgb` record always has it, since it has nothing else.
 
     Percentiles are taken over every sample in the region, not a subsample, so
     peak memory scales with the frame: measured at **1.43 GB for 18.66 MP**
@@ -1207,12 +1239,19 @@ def measure(path: Path, space_name: str,
 
     endpoints = endpoint_stats(view, meta)
     linear = _decode_transfer(view, space.transfer)
-    weights = luminance_weights(space)
-    tone = tone_stats(linear, weights)
-    # Composed here rather than inside `tone_stats`, which is not streamed: the
-    # histogram walks row blocks so it never holds a second full-frame temporary.
-    tone["histogram"] = histogram_stats(linear, weights)
-    color = color_stats(linear, space, weights)
+    # Luminance and CIELAB need primaries; a `film-rgb` file has none, so its record
+    # has neither `tone` nor `color`, nor the bands they are cut on.
+    measured = {}
+    if space.primaries is not None:
+        weights = luminance_weights(space)
+        tone = tone_stats(linear, weights)
+        # Composed here rather than inside `tone_stats`, which is not streamed: the
+        # histogram walks row blocks so it never holds a second full-frame temporary.
+        tone["histogram"] = histogram_stats(linear, weights)
+        measured = dict(bands=describe_bands(), tone=tone,
+                        color=color_stats(linear, space, weights))
+    if channels or space.primaries is None:
+        measured["channels"] = channel_stats(linear)
 
     record = dict(
         schema_version=SCHEMA,
@@ -1226,10 +1265,8 @@ def measure(path: Path, space_name: str,
                       if key in meta}),
         space=space.describe(),
         region=region,
-        bands=describe_bands(),
         endpoints=endpoints,
-        tone=tone,
-        color=color,
+        **measured,
     )
     if digest:
         record["sha256"] = sha256(path)
@@ -1710,7 +1747,8 @@ def cmd_image(args) -> int:
         if not path.is_file():
             raise MetricsError(f"not a file: {path}")
         record = measure(path, args.space, fraction, digest=not args.no_checksum,
-                         jpeg_image=getattr(args, "jpeg_image", "sdr"))
+                         jpeg_image=getattr(args, "jpeg_image", "sdr"),
+                         channels=getattr(args, "channels", False))
     except MetricsError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -1770,6 +1808,11 @@ def cmd_roll(args) -> int:
                 raise MetricsError(
                     f"unknown colour space {space_name!r}. Declare one of: "
                     + ", ".join(sorted(SPACES)))
+            if SPACES[space_name].primaries is None:
+                raise MetricsError(
+                    f"{space_name!r} has no primaries, so it has none of the tone and "
+                    "colour axes a roll tracks; measure each frame with "
+                    f"`metrics image --space {space_name}`")
 
         report_ref = tag.get("report_file")
         if not isinstance(report_ref, str):
