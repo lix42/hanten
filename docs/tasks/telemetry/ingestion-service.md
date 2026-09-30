@@ -14,9 +14,8 @@ account, not a dedicated FREE-plan one; cost is bounded by the Worker's own
 ceilings and the $10/month approval gate stays. The requirements below are
 rewritten to match. Deploys run from a manual GitHub Actions workflow.
 
-**Status 2026-09-30:** built in `services/telemetry-ingest/` (see
-`progress/telemetry.md`); remaining is the first deploy from `main` and its smoke
-test, after which the uploader's endpoint URL goes into the contract README.
+**Done 2026-09-30:** `services/telemetry-ingest/`, live at
+`https://hanten-telemetry.i-70e.workers.dev/v1/events` (see `progress/telemetry.md`).
 
 ## Design
 
