@@ -16,13 +16,50 @@ Fold the new design into the spec, the user guide and CLAUDE.md.
 Created on 2026-09-19 with the new-flow migration plan (`docs/nf-migration.md`).
 The only change so far is CLAUDE.md's layout (2026-09-24, `claude-md`): it now
 holds only cross-cutting rules, and subsystem traps live in module docs.
+`design-spec.md` became the design on 2026-09-30 (`design-spec`); `design-update.md`
+keeps its evidence (Part 3, the appendices) and a map of where Parts 1–2 went.
 
 ## design-spec
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done
+**Updated:** 2026-09-30
 
 - 2026-09-19: created with the new-flow plan. Goal: fold the new design into the spec.
+- 2026-09-30: **done.** Scope settled with the user before writing: rewrite every
+  section that described the removed chain, not only the three the task named; keep
+  retired things as one line each; trim `design-update.md` to its evidence; move the
+  open questions into spec §13.
+  - **Section numbers kept** (§1–§13, and §12's item numbers): other files cite §8, §9
+    and §12 items 1, 3, 6 and 7. A shipped or retired roadmap item shrinks to one line
+    and keeps its number.
+  - **Where things went.** Principle 2 is now "reconstruction is a fixed decode;
+    rendering owns the picture". §5 is the destination set (the axes, the rows, the
+    rendering's defaults, the output-path rule, no sidecar). §6 carries design-update
+    Part 2: the stage table, the order constraints and the branch contract, what each
+    rendering stage is for, the two renderings (with the procedure for keeping
+    `direct` current) and the film master. §7 carries Part 1: the model, the decode and
+    which of its parameters are really rendering, the decisions, the retired
+    reconstructions (§7.3, one line each), calibration toward Status M, and the NC film
+    RGB v1 contract (§7.5). §8 keeps the recipe document and its rules, the recipe
+    warnings, and a report section rewritten around `chain`. §9 is by stage, the
+    knob-level text moved from the old §8 "new chain's recipe", plus one "Retired flags
+    and keys" list. The removed chain's §9 print and preset sections are gone.
+  - **`design-update.md`** keeps Part 3, Part 4 and the appendices, and opens with a
+    table mapping every Part 1–2 heading to its spec section, since closed task files
+    and progress logs cite those headings. `src/` pointers, `CLAUDE.md`,
+    `scripts/reference-snapshot/README.md`, `docs/datasheets/README.md` and
+    `docs/design/README.md` now point at the spec.
+  - **Checked against the binary**, not the diff: destination derivation (`--range hdr`,
+    `--transfer linear`, `--transfer pq`, `direct` with and without `--range sdr`, the
+    planned SDR JPEG), the refusals the spec names (`--film-master` beside a stage knob
+    and beside `direct`, the retired flags' messages), a real `convert` and `roll`
+    report's shape, and every §8 example invocation on the fixtures.
+  - **Found on the way, not fixed here:** the `roll` report no longer echoes the shared
+    recipe (only its `identity`); the old spec claimed it did, the new one does not. A
+    recipe decode missing a key no longer warns, which the old §7.2 claimed; dropped.
+    `docs/using-nc.md` still points at `design-update.md` for the design
+    (`nf-docs/using-nc`'s). Closed task files still cite old spec section numbers
+    (§7.3 for the sigmoid); they record what was true then.
 
 ## using-nc
 

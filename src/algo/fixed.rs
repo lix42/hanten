@@ -1,5 +1,5 @@
 //! The fixed, stock-agnostic decode (`nf-reconstruction/fixed-decode`,
-//! `docs/design-update.md` Part 1) — the reconstruction every conversion runs.
+//! design-spec §7) — the reconstruction every conversion runs.
 //!
 //! ```text
 //! D_c  = −log10(scan_c / base_c)          measurement

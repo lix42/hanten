@@ -1,7 +1,6 @@
 //! The rendering chain, composed: scene correction → look → fit range → fit gamut.
 //!
-//! The chain every conversion runs (`docs/design-update.md` Part 2,
-//! `docs/nf-migration.md`), fed by the fixed decode (`algo::fixed`) and rendering
+//! The chain every conversion runs (design-spec §6), fed by the fixed decode (`algo::fixed`) and rendering
 //! into the destination `crate::destination` resolves (`cli::convert_frame`). Scene
 //! correction applies white balance and exposure; the look applies print contrast and
 //! the per-channel grade and desaturates near-neutral highlights (the rest of its epic

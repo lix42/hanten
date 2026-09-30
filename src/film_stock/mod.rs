@@ -11,13 +11,13 @@
 //! **Test-only: its one consumer is the evidence for the fixed decode's constants.**
 //! The `characteristic` curve that inverted these tables at runtime retired
 //! (`nf-retire/characteristic`); the data outlives it (`nf-look/stock-data-home`) because
-//! `algo::fixed::MID_ABOVE_BASE` is `generic-c41`'s mid aim, and `docs/design-update.md`
-//! Part 1 argues for fixed, stock-agnostic values from these tables' own spread (`d`
+//! `algo::fixed::MID_ABOVE_BASE` is `generic-c41`'s mid aim, and design-spec §7.2
+//! argues for fixed, stock-agnostic values from these tables' own spread (`d`
 //! 0.542–0.699, red film gamma 0.53–0.61). The tests below are that provenance, checked on
 //! every run — the `pipeline::colorimetry::derive` precedent.
 //!
 //! Its natural future runtime reader is **per-stock normalization**, an optional look
-//! control (design-update Part 2), which brings its own flag. It must not come back as a
+//! control (design-spec §6), which brings its own flag. It must not come back as a
 //! decode: a per-stock value inside reconstruction is the per-stock normalization the
 //! fixed decode exists to refuse.
 //!

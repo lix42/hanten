@@ -48,9 +48,8 @@ assistance is opt-in and sits *around* a deterministic core.
 
 ## The migration rule (read before writing any `nf` code)
 
-nc migrated to the design in `docs/design-update.md` (the fixed decode plus a
-staged rendering chain); `nf-core/default-flip` made it the only chain and deleted
-the old one. The remaining `nf-*` tasks keep this rule — **structure for the long
+nc migrated to the fixed decode plus a staged rendering chain (design-spec §6–§7);
+`nf-core/default-flip` made it the only chain and deleted the old one. The remaining `nf-*` tasks keep this rule — **structure for the long
 term beats reusing what is there**:
 
 - **Write the new stages fresh.** Do not shape a new stage around the old code's
@@ -66,10 +65,11 @@ term beats reusing what is there**:
 
 ## Source of truth (read these first)
 
-- `docs/design-spec.md` — the authoritative design: architecture, CLI surface,
-  §4 value terms, §8 determinism, §9 recipe schema, §11 exit codes.
-- `docs/design-update.md` — the design the migration built: the fixed decode and
-  the staged rendering chain.
+- `docs/design-spec.md` — the authoritative design: §4 value terms, §5 destinations,
+  §6 the chain, §7 the fixed decode, §8 recipe, reports and determinism, §9
+  parameters by stage, §11 exit codes.
+- `docs/design-update.md` — the evidence behind it: how the decode is tuned (Part 3)
+  and the measurements (appendices).
 - `docs/TASKS.md` — the plan: canonical dependency graph and task checklist by epic.
 - `docs/tasks/<epic>/<name>.md` — per-task file. Task ids are `<epic>/<name>`.
 - `docs/progress/<epic>.md` — **append-only** execution log per epic, opening with

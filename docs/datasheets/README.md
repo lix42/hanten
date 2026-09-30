@@ -38,7 +38,7 @@ it (`nf-look/stock-data-home`), for two reasons:
 
 - **It is the evidence for the fixed decode's constants.** `algo::fixed::MID_ABOVE_BASE` is
   `generic-c41`'s mid aim, and the case for fixed, stock-agnostic values rests on these
-  sheets' own spread (`docs/design-update.md` Part 1). `film_stock`'s tests check both on
+  sheets' own spread (`docs/design-spec.md` §7.2). `film_stock`'s tests check both on
   every run, reading the tables forward so they outlive the inversion.
 - **Its natural future reader is the look stage**, as an optional per-stock normalization
   — planned, not scheduled, and never again a per-stock decode.
