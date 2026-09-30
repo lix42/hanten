@@ -1478,6 +1478,7 @@ fn fault_message(axes: &DisplayAxes, fault: &Fault, names: KnobNames) -> String 
             arriving_with,
             adding,
             instead,
+            open,
         } => {
             let full = complete_destination(
                 names,
@@ -1488,10 +1489,20 @@ fn fault_message(axes: &DisplayAxes, fault: &Fault, names: KnobNames) -> String 
                     container: Some(row.container),
                 },
             );
-            let what = if stated == full {
-                full
-            } else {
-                format!("{stated} resolves to {full}, which")
+            let what = match open {
+                // Nothing resolved: the axis is open and none of its values is written.
+                Some((flag, key)) => {
+                    let axis = match names {
+                        KnobNames::FlagAndKey => (*flag).to_string(),
+                        KnobNames::KeyOnly => format!("`output.display.{key}`"),
+                    };
+                    format!(
+                        "{stated} leaves {axis} open, and none of its choices is written yet; \
+                         the first, {full},"
+                    )
+                }
+                None if stated == full => full,
+                None => format!("{stated} resolves to {full}, which"),
             };
             let ready = if adding.is_empty() {
                 format!("Written today, stated instead: {}", destinations(instead))
@@ -2814,6 +2825,26 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("--gamut display-p3|srgb"), "{err}");
+        // SDR stated too: both JPEGs are unwritten, so nothing is claimed resolved.
+        let r = merged(
+            r#"{"recipe_version": 3}"#,
+            &[
+                "--rendering",
+                "direct",
+                "--range",
+                "sdr",
+                "--container",
+                "jpeg",
+            ],
+        );
+        let err = destination(&r, KnobNames::FlagAndKey)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("leaves --gamut open, and none of its choices is written yet"),
+            "{err}"
+        );
+        assert!(!err.contains("resolves to"), "{err}");
         // `default` keeps the standard defaults and order, where the same stated gamut
         // is the gain map.
         let standard = |extra: &[&str]| {

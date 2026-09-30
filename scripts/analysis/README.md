@@ -222,8 +222,8 @@ has. The record marks `gain_map_present` so the base of a dual-image file is nev
 mistaken for the rendition an HDR-aware viewer shows. `hdr` is **not implemented**
 and says so: reconstructing it means applying the gain map with its ISO 21496-1 /
 Ultra HDR metadata, and a reconstruction that is subtly wrong yields plausible
-wrong numbers rather than an error. Measure nc's own `--range hdr --transfer
-linear` render (a linear BT.2020 float TIFF) of the same source instead.
+wrong numbers rather than an error. Measure nc's own `--transfer linear --gamut
+bt2020` render (a linear BT.2020 float TIFF) of the same source instead.
 
 `--inset F` trims that fraction off each edge and `--region x,y,w,h` takes an
 explicit rectangle; both are **fractions**, because the images being compared do

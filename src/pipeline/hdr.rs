@@ -587,6 +587,17 @@ mod tests {
     use crate::types::LinearImage;
 
     #[test]
+    fn a_rec2100_signal_refuses_primaries_other_than_bt2020() {
+        let image = LinearImage::new(1, 1, vec![0.5; 3], None).unwrap();
+        let (p3, _) = from_new_chain(image, DestinationGamut::DisplayP3, "tone", "gamut").unwrap();
+        let err = encode_transfer(p3, HdrTransfer::Pq).unwrap_err();
+        assert!(
+            err.to_string().contains("display-p3 rather than BT.2020"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn linear_labels_keep_the_shipped_bt2020_strings_and_name_each_gamut() {
         let bt2020 = linear_labels(DestinationGamut::Bt2020);
         assert_eq!(

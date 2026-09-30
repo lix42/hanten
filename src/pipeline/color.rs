@@ -176,14 +176,9 @@ pub fn hdr_linear_icc(gamut: DestinationGamut) -> Result<Vec<u8>> {
     };
     let (white, primaries) = lcms_inputs(space);
     let mut profile = synth(white, primaries, 1.0)?;
-    // A real name, like the coded-HDR profiles carry. `Profile::new_rgb` leaves
-    // Little CMS's default `"RGB built-in"`, which is useless in an application's
-    // profile list — and this profile is one a user picks out of such a list.
-    //
-    // Deliberately **not** applied to the older sRGB/P3/ACEScg builders:
-    // doing that in the shared `synth` helper would change the embedded ICC bytes of
-    // already-shipped outputs, which is a separate reviewed decision.
-    //
+    // A real name: `Profile::new_rgb` leaves Little CMS's `"RGB built-in"`. Named here,
+    // not in the shared `synth`, which would rename the shipped Display P3 and ACEScg
+    // profiles too.
     describe(&mut profile, hdr::linear_labels(gamut).icc_description)?;
     profile_icc(&profile)
 }

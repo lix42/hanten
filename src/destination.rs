@@ -78,7 +78,7 @@ pub struct Defaults {
     /// would silently turn `--transfer linear` from BT.2020 into Display P3.
     pub linear_gamut: Option<Gamut>,
     /// Derive the container first, so `direct`'s lossless TIFF default is not lost to its
-    /// `hdr` default (range first, `--gamut display-p3` would land on the gain-map JPEG).
+    /// `hdr` default (range first, `--transfer native` would land on the gain-map JPEG).
     pub container_first: bool,
 }
 
@@ -665,6 +665,9 @@ pub enum Fault {
         arriving_with: &'static str,
         adding: Vec<DisplayAxes>,
         instead: Vec<DisplayAxes>,
+        /// The axis (flag, key) the stated axes leave open when every value of it names a
+        /// row not written yet: `row` is then the first of those, not a resolution.
+        open: Option<(&'static str, &'static str)>,
     },
 }
 
@@ -705,7 +708,7 @@ pub fn resolve(axes: &DisplayAxes, d: &Defaults) -> std::result::Result<Resolved
                 container: row.container,
                 encoding,
             }),
-            Status::NotYet { arriving_with } => Err(not_yet(row, arriving_with, axes, d)),
+            Status::NotYet { arriving_with } => Err(not_yet(row, arriving_with, None, axes, d)),
         },
         Derivation::NoRow => Err(conflict(axes, d)),
         Derivation::Open {
@@ -722,7 +725,9 @@ pub fn resolve(axes: &DisplayAxes, d: &Defaults) -> std::result::Result<Resolved
                         status: Status::NotYet { arriving_with },
                         ..
                     },
-                ) if choices.is_empty() => Err(not_yet(row, arriving_with, axes, d)),
+                ) if choices.is_empty() => {
+                    Err(not_yet(row, arriving_with, Some((flag, key)), axes, d))
+                }
                 _ => Err(Fault::Ambiguous { flag, key, choices }),
             }
         }
@@ -730,7 +735,13 @@ pub fn resolve(axes: &DisplayAxes, d: &Defaults) -> std::result::Result<Resolved
 }
 
 /// A [`Fault::NotYet`] for `row`, its remedies computed against what was stated.
-fn not_yet(row: Row, arriving_with: &'static str, axes: &DisplayAxes, d: &Defaults) -> Fault {
+fn not_yet(
+    row: Row,
+    arriving_with: &'static str,
+    open: Option<(&'static str, &'static str)>,
+    axes: &DisplayAxes,
+    d: &Defaults,
+) -> Fault {
     let adding: Vec<DisplayAxes> = ROWS
         .iter()
         .filter(|r| is_ready(r) && axes.admits(r))
@@ -746,6 +757,7 @@ fn not_yet(row: Row, arriving_with: &'static str, axes: &DisplayAxes, d: &Defaul
         arriving_with,
         adding,
         instead,
+        open,
     }
 }
 
@@ -1257,7 +1269,16 @@ mod tests {
         // what the refusal says, not an empty "choose one".
         let sdr_jpeg = axes(Some(Range::Sdr), None, None, Some(Container::Jpeg));
         let err = resolve(&sdr_jpeg, &crate::rendering::DIRECT.axes).unwrap_err();
-        assert!(matches!(err, Fault::NotYet { .. }), "{err:?}");
+        assert!(
+            matches!(
+                err,
+                Fault::NotYet {
+                    open: Some(("--gamut", "gamut")),
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]
