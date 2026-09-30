@@ -23,12 +23,12 @@ Many documents cite this file by part and heading. Each heading now lives here:
 | 1, "Methods under this goal", "The sigmoid shoulder is a contract violation" | design-spec §7.3 (retired); the exponential-vs-`generic-c41` question, §13 |
 | 1, "Calibration: the part that is a measurement", "Why dividing by the base is not enough" | design-spec §7.4; the numbers, Appendices B and C |
 | 1, "What NLP's white-balance step does, and why ours differs" | Appendix D |
-| 1, "Colour: what 'character' is", "Dye layers and the NC film RGB v1 3×3" | design-spec §7.5 |
+| 1, "Colour: what 'character' is", "Kinds of character", "Dye layers and the NC film RGB v1 3×3" | design-spec §7.5 |
 | 1, "Handed to rendering" | design-spec §6, "The rendering stages" |
 | 1, "Removal constraints", "Reference for the migration" | done (`nf-retire/*`); the reference build is `scripts/reference-snapshot/` |
 | 1 and 2, "Open questions" | design-spec §13 |
 | 2, "The stages", "Decisions" | design-spec §6; the retired flags, §9 |
-| 2, "A per-channel grade with a pivot", "Highlight desaturation (path to white)" | design-spec §6, "The rendering stages"; the knobs, §9 Look |
+| 2, "Three controls the look stage owes", "A per-channel grade with a pivot", "Highlight desaturation (path to white)" | design-spec §6, "The rendering stages"; the knobs, §9 Look |
 | 2, "The shadow end: reinhard compresses upward only" | design-spec §6, "The rendering stages"; §9 Fit range; the slope measurements, `pipeline::fit_range`'s docs |
 | 2, "A 'direct' preset for external editing", "Two renderings: `direct` and `default`", "Keeping `direct` current as stages change" | design-spec §6, "Two renderings" |
 | 2, "One contrast knob, three quantities" | design-spec §9 Look |

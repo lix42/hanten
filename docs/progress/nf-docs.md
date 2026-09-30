@@ -60,6 +60,14 @@ keeps its evidence (Part 3, the appendices) and a map of where Parts 1–2 went.
     `docs/using-nc.md` still points at `design-update.md` for the design
     (`nf-docs/using-nc`'s). Closed task files still cite old spec section numbers
     (§7.3 for the sigmoid); they record what was true then.
+- 2026-09-30: **two review rounds, then merged `main`.** An nc-reviewer pass and two
+  `/code-review` passes, each finding checked against the binary before fixing. Worth
+  knowing for the next edit: diffuse white is `1.0` in the **graded** image, ≈0.80 at the
+  decode's own output; `direct` warns on exactly two leftovers, and a white balance typed
+  beside a `roll` section is dumped and warns on replay; typed `--roll-*` flags are
+  refused under `direct` and beside `--film-master`, and do not silence the
+  missing-exposure warning; the linear HDR TIFF is clamped at the peak. Merging `main`
+  brought `--export-film-rgb` (`nf-verification/film-rgb-export`), now in §6 and §9.
 
 ## using-nc
 

@@ -54,7 +54,7 @@ commit with the same toolchain were byte-identical — even the binaries were. A
 ```
 
 - **`sigmoid-knees`** is the best result reviewed before the migration
-  (recorded in git: `docs/design-update.md`'s "Reference for the migration", before `nf-docs/design-spec` folded it into the spec).
+  (`docs/design-update.md`'s "Reference for the migration", in git before 2026-09-30).
 - **`display-p3`** writes the same container as the current binary's default destination
   (SDR, native, Display P3, TIFF): 16-bit TIFF, Display P3 ICC. That means a reference cell
   and a current cell differ in the pipeline and not in the container. To view one in a browser, convert it to sRGB JPEG the same way as another

@@ -101,8 +101,7 @@ The deterministic core owns the image science. Any future ML assistance (see
    converters — measured against Negative Lab Pro on three frames of one roll,
    Hanten's `p95 − p5` moves **0.96 stops** where NLP's moves **4.3–4.5** (see
    `docs/progress/analysis.md`, `analysis/nlp-comparison`). A frame's own statistics
-   read a night scene as under-exposure, which is why per-frame auto white balance
-   retired. Per-frame adjustment returns only as a bounded, visible opt-in
+   read a sunset as a cast, which is why per-frame auto white balance retired. Per-frame adjustment returns only as a bounded, visible opt-in
    (`nf-calibration/thin-frame-lift`, `nf-calibration/frame-level-trim`).
 
 ## 4. Input formats
@@ -338,8 +337,8 @@ allocation.
   map requires its two renditions to agree below diffuse white; if contrast or
   character lived in fit range, whose argument is the display's peak, the midtones
   would disagree. So the chain splits after the look, and the branches differ in one
-  argument: the peak. Fit range's headroom and display black are shared above the
-  split, with the film base graded once for both.
+  argument: the peak. Fit range runs once per branch, but its headroom and display
+  black are fixed above the split, with the film base graded once for both.
 - **The branch contract** (`pipeline::chain`, checked bit for bit by
   `chain::contract::check`): below diffuse white the two renditions are identical
   except where the SDR cube binds a saturated colour the HDR display can show — real
@@ -472,8 +471,8 @@ reconstruction is measured, and it refuses any stage the recipe asks for (§9).
   rendering held constant across them — `direct`.
 - **The 3×3 treats the dye-layer channels as Rec.709** (§7.5). Neutrality checks
   survive, since white maps to white; per-layer slope measurements get slightly mixed.
-  The cleanest measurement point is `FilmRgbImage`, before the matrix, which nc cannot
-  export yet (`nf-verification/film-rgb-export`).
+  The cleanest measurement point is `FilmRgbImage`, before the matrix:
+  `--export-film-rgb` writes it as an untagged f32 TIFF (§9).
 
 ### 6.1 IR channel handling
 
@@ -618,8 +617,9 @@ bracketed calibration frames. Moving one moves every default pixel, so it costs 
   the decode's output is scene-linear (double the exposure, double the value), which
   the film master, the roll's gains and `scale` rely on. Print contrast is the look's
   slope. The single `2.0` the removed chain shipped bundled both.
-- **`d` and the linearization are fixed nominal values, not per-stock ones.**
-  Choosing either per stock would be per-stock exposure and contrast normalization
+- **`d` and the linearization are fixed nominal values, not per-stock ones.** Both
+  are per stock in the datasheet registry (`d` 0.542–0.699, i.e. 1.06 stops at gamma 2;
+  red film gamma 0.53–0.61, `film_stock/`), and choosing either per stock would be per-stock exposure and contrast normalization
   inside a decode declared stock-agnostic. Fixed values let film speed and stock
   contrast show through, which is the faithful behaviour.
 - **`density.scale` is one global value**, `[1, 0.84, 0.73]` (§9): the decode's
@@ -713,7 +713,7 @@ not a measurement:
   is scene-linear in exposure at the calibrated linearization, and carries the film's,
   lens's, development's and scanner's character.
 - **It is one pinned mapping**, a total pure matrix transform with no knob, shared by
-  every conversion and every destination. Every report names it (`working_mapping:
+  every conversion and every destination. The `convert` report names it (`working_mapping:
   "nc-film-rgb-v1"`); a different mapping is a new identifier (`v2`), never a silent
   change to v1.
 - **Only the mapper can mint `AcesCgImage`**, so no named output can merely tag
@@ -854,14 +854,17 @@ look's base slope), its exposure, and `frames`, a per-file table of frame-local 
 **Recipe warnings, not refusals** (`Recipe::recipe_warnings`). A file cannot say who
 chose a value, and a `--dump-params` recipe must replay as it rendered, so nothing is
 read as unset by its value and nothing is refused; the run warns once instead, and a
-typed flag (a choice made now) never does. The warnings catch a value nobody chose:
+typed style flag (a choice made now) never does. The warnings catch a value nobody chose:
 `default` without a roll measurement (what fell back); a recipe white balance or
 exposure beside the roll's, which it multiplies or adds to; a `roll` section with gains
 or a white but no exposure; and, under `direct`, exactly two leftovers of earlier
 builds — highlight desaturation at the old default `0.8`, and a recipe white balance
 beside a `roll` section (old `measure-roll` output). `direct`'s list is narrow on
-purpose, so a dump of a deliberate adjustment replays under `--strict`; any other value
-that moves its pinned base does not warn. A contrast beside `roll.white_stops`
+purpose, so a dump of a deliberate adjustment replays under `--strict` — with one
+carve-out: a white balance typed beside a `roll` section is written into the dump and
+warns on replay unless the flag is typed again. Any other value that moves `direct`'s
+pinned base does not warn. The missing-exposure warning ignores typing: typed
+`--roll-white` or `--roll-white-balance` without `--roll-exposure` warns too. A contrast beside `roll.white_stops`
 multiplies the roll's slope, as intended, and never warns.
 
 ### Target: the roll workflow
@@ -1014,7 +1017,7 @@ allocator slack and fixed costs — the number the gate compares:
     "film_base_bytes": 1811496960,
     "render_bytes": 2388787200,
     "encode_bytes": 2836684800,
-    "budget_bytes": 4294967296,
+    "budget_bytes": 6442450944,
     "budget_source": "default",
     "decision": "ok",
     "detected_total_ram_bytes": 51539607552
@@ -1108,7 +1111,7 @@ hanten inspect in.tif --report json
 Every conversion flag has a recipe key (for example, `--exposure` ⇒
 `scene_correction.exposure`), and flags win over the recipe (§8). Names are binding and
 unknown keys are rejected (`deny_unknown_fields`). The **operational** flags
-(`--report`, `--telemetry*`, `--max-memory`) are the exception: they touch no
+(`--report`, `--telemetry*`, `--max-memory`, `--export-film-rgb`) are the exception: they touch no
 parameter at all, so they have no recipe key. Retired flags and keys are listed at the
 end of this section.
 
@@ -1118,6 +1121,13 @@ end of this section.
   (the film master, the linear HDR TIFF) and 16-bit otherwise. The IR *samples* never
   change: the plane is carried through the pipeline untouched, so only the
   quantization headroom differs. Refused on `roll` (one path, N frames).
+- `--export-film-rgb <path>` (`convert` only; operational, no recipe key) — write the
+  fixed decode's output **before** the NC film RGB v1 3×3 as an f32 TIFF with no ICC
+  profile, since the dye layers have no primaries (`nf-verification/film-rgb-export`).
+  Sent through the pinned mapper it equals the film master bit for bit. The cleanest
+  point for per-layer measurement (`nctool metrics --space film-rgb`). Reported as
+  `film_rgb_exported`; per-frame exports from `roll` are
+  `nf-verification/roll-side-exports`.
 - `--film-type <silver|chromogenic|unknown>` ⇒ `input.film_type` (default
   `"unknown"`) — the declared film chemistry. **Provenance only: it gates nothing.**
   IR-assisted film-holder detection (§6.1) is enabled by *measuring* the IR plane,
@@ -1363,7 +1373,9 @@ density offset* — a global cast/exposure error correctable downstream
 What `hanten measure-roll` measured (§8, `nf-calibration/roll-section`). All optional;
 unset they are written as `null`, never left out, so a roll's one-key per-frame
 override merges instead of replacing the section. `default` applies them, `direct` and
-the film master apply none.
+the film master apply none — a recipe's `roll` section is carried and reported as
+unapplied, but a typed `--roll-*` flag beside `--rendering direct` or `--film-master`
+is refused (exit 2), since it asks for something the run will not do.
 
 - `--roll-white-balance R,G,B` ⇒ `roll.white_balance` — the roll's gains, finite and
   positive, multiplied into `scene_correction.white_balance`.
@@ -1385,7 +1397,8 @@ applied (`white_balance_applied`, `slope_applied`, `exposure_applied`). A render
 warns once where a recipe file's `scene_correction.white_balance` (not the identity)
 or non-zero `scene_correction.exposure` sits beside the roll's — a possible leftover
 (`Recipe::roll_overlap_warnings`) — and where a section with gains or a white has no
-`exposure`, naming `measure-roll` and `roll.exposure`. A typed style flag never warns.
+`exposure`, naming `measure-roll` and `roll.exposure`. A typed style flag never warns; typed `--roll-*` flags do not silence the
+missing-exposure warning.
 
 ### Reconstruction (`reconstruction`, the fixed decode)
 - `--density-scale R,G,B` ⇒ `reconstruction.scale` — the per-channel density gain
@@ -1533,7 +1546,7 @@ boundary. The stage list names it after the destination's gamut,
 ### Output / encode
 
 **How artifacts reach disk (`io/transactional-output-writes`).** Every file `nc`
-writes — the primary output, the IR export, `--dump-params`,
+writes — the primary output, the IR export, the film RGB export, `--dump-params`,
 `--report-file` — is written to a **same-directory temp**, flushed, **fsynced**, and
 only then renamed onto its final path. Two guarantees follow, and one deliberately
 does not:
@@ -1563,9 +1576,9 @@ does not:
   a signal that kills the process does **not** run destructors, so `SIGINT`/`SIGKILL`
   can leave an inert `*.nctmp` beside the output. No signal handler or startup
   scavenging is installed, so the guarantee is stated for ordinary error paths only.
-- **One conversion's artifacts commit together.** The IR export and the primary are
-  both staged before either is renamed, so a failure in the later one leaves *no*
-  primary output. The renames are
+- **One conversion's artifacts commit together.** The film RGB export, the IR export
+  and the primary are all staged before any is renamed, so a failure in a later one
+  leaves *no* primary output. The renames are
   pre-checked (a target occupied by a directory fails before anything is promoted) and
   the **primary is renamed last**, because its presence is what reads as success.
 - **Not a multi-file transaction.** POSIX `rename` is atomic per *file*; a set cannot
@@ -1626,8 +1639,8 @@ would cost a Unix-only code path for output that is reproducible by re-running.
   never derived from the machine: libaom documents no thread-count independence, so it
   is measured (identical bytes for every count from 2 upward on libaom 3.11.0) and
   pinned by a test. No EXIF, XMP, ICC, timestamp or identifier is written.
-- **Linear HDR TIFF** — the HDR rendition's display-linear samples verbatim as
-  unclamped 32-bit float in Display P3, Adobe RGB, sRGB or BT.2020, with a synthesized
+- **Linear HDR TIFF** — the HDR rendition's display-linear samples, clamped at the
+  peak and counted (`chain.peak_clamp`), written verbatim as 32-bit float in Display P3, Adobe RGB, sRGB or BT.2020, with a synthesized
   linear ICC profile of that gamut: `1.0` is the 203 cd/m² reference white, the peak
   `1000/203 ≈ 4.926108`. Because the ICC PCS stops at the media white, no profile can
   state the luminance mapping, so the report's `hdr_linear_tiff` block is
@@ -1687,7 +1700,7 @@ alias, on flags and recipe keys alike. The reference build
   non-uniform film-base area or region, …) to a failing exit (see §11); on `convert`, `roll`, `measure-base` and `measure-roll`
 - `--max-memory <bytes>` — peak-memory budget for the run (`8GiB`, `512MB`, or raw
   bytes). Every command that decodes a scan (`convert`, `roll`, `inspect`,
-  `measure-base`) estimates its peak allocation from a **metadata-only header probe
+  `measure-base`, `measure-roll`) estimates its peak allocation from a **metadata-only header probe
   before decoding** and fails with exit 6 when it would exceed the budget. `roll`
   gates **per frame**, and follows its usual per-frame error handling: the frame's
   resource error is recorded in its report entry, sibling frames are still
@@ -1945,7 +1958,8 @@ allocation from a metadata-only header probe and compares it against the budget.
 Over budget is a **resource** error, deliberately distinct from *unsupported*
 (exit 4) — the input is fine; it is this run on this budget that cannot proceed,
 so an agent can retry with a larger `--max-memory` (or on a bigger machine)
-rather than discard the file. On `convert`, `inspect`, and `measure-base` no image
+rather than discard the file. `measure-roll` gates each frame it decodes, and a refusal
+keeps exit 6. On `convert`, `inspect`, and `measure-base` no image
 or report is produced on that path — though `--dump-params`, which is
 written during argument resolution, lands before the gate runs and so survives a
 rejection. On **`roll`** the same rejection is

@@ -49,8 +49,9 @@ assistance is opt-in and sits *around* a deterministic core.
 ## The migration rule (read before writing any `nf` code)
 
 nc migrated to the fixed decode plus a staged rendering chain (design-spec §6–§7);
-`nf-core/default-flip` made it the only chain and deleted the old one. The remaining `nf-*` tasks keep this rule — **structure for the long
-term beats reusing what is there**:
+`nf-core/default-flip` made it the only chain and deleted the old one. The remaining
+`nf-*` tasks keep this rule — **structure for the long term beats reusing what is
+there**:
 
 - **Write the new stages fresh.** Do not shape a new stage around the old code's
   seams, types or fusions, and do not "extract" a stage out of a per-pixel body

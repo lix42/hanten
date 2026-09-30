@@ -1016,7 +1016,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 
 
 **New-flow migration** (`docs/nf-migration.md`) — the `nf-*` epics that move nc to
-the design in `docs/design-update.md`:
+the design now in `docs/design-spec.md` (§6–§7):
 
 - `nf-core/new-flow-flag` (new flow): none
   — scaffolding with a written expiry — CLI-only, never a recipe key, removed
