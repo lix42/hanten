@@ -92,7 +92,8 @@ use crate::types::{FilmBase, LinearImage, MID_GREY_OUTPUT_DECADES, NcError, Resu
 /// A **convention, not a per-stock value**: stocks measure 0.542–0.699, ≈1.06 stops
 /// at the default total contrast 2.0, and choosing per stock would be per-stock
 /// exposure normalization inside a decode declared stock-agnostic. A fixed value lets film speed show
-/// through, which is the faithful behaviour.
+/// through the decode, which is the faithful behaviour; a roll's level is set after it, by
+/// its measured exposure (`roll.exposure`, a neutral gain; `nf-calibration/roll-exposure`).
 ///
 /// **Where the number comes from:** `generic-c41`'s mid-grey aim, 0.624 above base on
 /// red — the averaged curve's own aim, inside the nine stocks' 0.542–0.699 — rounded.

@@ -173,10 +173,17 @@ fn run(args: &[&str]) -> (i32, String, String) {
     spawn(args, &[])
 }
 
-/// Identity roll gains and a stated contrast, for a `--strict` test whose subject is
-/// not the roll: without them the `default` rendering warns that it fell back, and
-/// `--strict` fails on that instead.
-const MEASURED: [&str; 4] = ["--roll-white-balance", "1,1,1", "--contrast", "1.1111112"];
+/// Identity roll gains and exposure and a stated contrast, for a `--strict` test whose
+/// subject is not the roll: without them the `default` rendering warns that it fell back,
+/// or that the roll has no exposure, and `--strict` fails on that instead.
+const MEASURED: [&str; 6] = [
+    "--roll-white-balance",
+    "1,1,1",
+    "--roll-exposure",
+    "0",
+    "--contrast",
+    "1.1111112",
+];
 
 /// Like [`run`], but with extra environment variables set for the child (used to
 /// point `NC_TELEMETRY_LOG` at a temp file so telemetry tests never touch the
@@ -9031,6 +9038,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         .collect();
     assert_eq!(flag[0], "--roll-white-balance", "{report}");
     assert_eq!(flag[2], "--roll-white", "{report}");
+    assert_eq!(flag[4], "--roll-exposure", "{report}");
     let (code, stdout, err) = run(&[
         &[
             "convert",
@@ -9058,6 +9066,12 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
     assert_eq!(roll["slope"], report["white"]["slope"], "{converted}");
     assert_eq!(roll["white_balance_applied"], true, "{converted}");
     assert_eq!(roll["slope_applied"], true, "{converted}");
+    assert_eq!(roll["exposure"], report["exposure"]["ev"], "{converted}");
+    assert_eq!(roll["exposure_applied"], true, "{converted}");
+    assert_eq!(
+        converted["chain"]["scene_correction"]["exposure"], report["exposure"]["ev"],
+        "the flag's text round-trips the exposure exactly"
+    );
 
     // The gains as a style knob: the section is where they live, not what they do.
     let as_style = tmp.path("style.tiff");
@@ -9067,6 +9081,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         .collect::<Vec<_>>()
         .join(",");
     let stops_text = report["white"]["stops"].to_string();
+    let exposure_text = report["exposure"]["ev"].to_string();
     let (code, _, err) = run(&[
         "convert",
         &frame,
@@ -9074,6 +9089,8 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         "0.9,0.55,0.42",
         "--white-balance",
         &gains_text,
+        "--exposure",
+        &exposure_text,
         "--roll-white",
         &stops_text,
         "-o",
@@ -9099,6 +9116,7 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         report["white_balance"]["gains"]
     );
     assert_eq!(written["roll"]["white_stops"], report["white"]["stops"]);
+    assert_eq!(written["roll"]["exposure"], report["exposure"]["ev"]);
     assert!(
         report["reuse"].get("recipe").is_none(),
         "the recipe is the file, not a report field: {report}"
@@ -9117,6 +9135,101 @@ fn measure_roll_gains_reach_convert_unchanged_by_flag_and_by_recipe() {
         std::fs::read(&by_flag).unwrap(),
         std::fs::read(&by_recipe).unwrap(),
         "the reported flag and the written recipe are one knob"
+    );
+}
+
+#[test]
+fn the_roll_exposure_adds_to_the_stated_one_and_direct_leaves_it_out() {
+    // `nf-calibration/roll-exposure`: the roll's exposure is a neutral gain the stated
+    // exposure adjusts, as the stated white balance adjusts the roll's gains.
+    let tmp = TempDir::new("roll-exposure");
+    let (code, stdout, err) = convert_48bit(
+        &tmp.path("sum.tiff"),
+        &["--roll-exposure", "0.5", "--exposure", "0.25"],
+    );
+    assert_eq!(code, 0, "{err}");
+    let summed = json(&stdout);
+    assert_eq!(
+        summed["chain"]["scene_correction"]["exposure"], 0.75,
+        "{summed}"
+    );
+    assert_eq!(summed["chain"]["roll"]["exposure"], 0.5, "{summed}");
+    assert_eq!(
+        summed["chain"]["roll"]["exposure_applied"], true,
+        "{summed}"
+    );
+    let (code, _, err) = convert_48bit(&tmp.path("stated.tiff"), &["--exposure", "0.75"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read(tmp.path("sum.tiff")).unwrap(),
+        std::fs::read(tmp.path("stated.tiff")).unwrap(),
+        "the roll's exposure renders what the same sum stated renders"
+    );
+
+    // From a recipe: a stated exposure beside the roll's warns, since it may be one chosen
+    // by hand before the roll's was measured; typed over it, it does not.
+    let recipe = write_file(
+        &tmp.path("recipe.json"),
+        r#"{"recipe_version": 3, "roll": {"exposure": 0.5},
+            "scene_correction": {"exposure": 0.25}}"#,
+    );
+    let (code, stdout, err) = convert_48bit(
+        &tmp.path("replay.tiff"),
+        &["--params", recipe.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{err}");
+    let replay = json(&stdout);
+    assert_eq!(
+        replay["chain"]["scene_correction"]["exposure"], 0.75,
+        "{replay}"
+    );
+    let warned = |report: &serde_json::Value| {
+        report.get("warnings").is_some_and(|w| {
+            w.as_array().unwrap().iter().any(|w| {
+                w.as_str()
+                    .unwrap()
+                    .starts_with("the recipe's `scene_correction.exposure`")
+            })
+        })
+    };
+    assert!(warned(&replay), "{replay}");
+    let (code, stdout, err) = convert_48bit(
+        &tmp.path("typed.tiff"),
+        &["--params", recipe.to_str().unwrap(), "--exposure", "0.25"],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(!warned(&json(&stdout)), "{stdout}");
+
+    // `direct` leaves the recipe's roll exposure out, and refuses a typed one.
+    let (code, stdout, err) = convert_48bit(
+        &tmp.path("direct.tiff"),
+        &[
+            "--params",
+            recipe.to_str().unwrap(),
+            "--rendering",
+            "direct",
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let direct = json(&stdout);
+    assert_eq!(
+        direct["chain"]["scene_correction"]["exposure"], 0.25,
+        "{direct}"
+    );
+    assert_eq!(
+        direct["chain"]["roll"]["exposure_applied"], false,
+        "{direct}"
+    );
+    let (code, _, err) = convert_48bit(
+        &tmp.path("direct-typed.tiff"),
+        &["--rendering", "direct", "--roll-exposure", "0.5"],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains(
+            "--roll-exposure applies the roll's measurements, but the rendering is `direct`"
+        ),
+        "{err}"
     );
 }
 
@@ -9153,6 +9266,8 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
             "1.05,1,1",
             "--roll-white",
             "1.7",
+            "--roll-exposure",
+            "0",
             "--contrast",
             "1.2",
             "--dump-params",
@@ -9214,7 +9329,8 @@ fn a_recipe_style_value_beside_the_roll_replays_as_stated_and_warns() {
             &format!(
                 r#"{{"recipe_version": {version},
                      "calibration": {{"film_base": {{"explicit": [0.9, 0.55, 0.42]}}}},
-                     "roll": {{"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7}},
+                     "roll": {{"white_balance": [1.25, 1.0, 0.8], "white_stops": 1.7,
+                               "exposure": 0.0}},
                      "scene_correction": {{"white_balance": {{"explicit": {scene}}}}},
                      "look": {{"contrast": {look}}}}}"#
             ),
@@ -9405,6 +9521,39 @@ fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
         std::fs::read(tmp.path("k1.tiff")).unwrap(),
         std::fs::read(tmp.path("k2.tiff")).unwrap()
     );
+}
+
+#[test]
+fn a_roll_white_without_an_exposure_warns_until_one_is_stated() {
+    // Recipe or flag, a roll white or gains without `roll.exposure` render at exposure 0
+    // and warn; the fallback warning's remedy (state `roll.white_stops`) names the
+    // exposure too, so following it is quiet. The IR-free fixture, so `--strict` sees
+    // only these warnings.
+    let tmp = TempDir::new("roll-no-exposure");
+    let white_only = write_file(
+        &tmp.path("white.json"),
+        r#"{"recipe_version": 3, "roll": {"white_stops": 1.7},
+            "scene_correction": {"white_balance": {"explicit": [1.1, 1, 0.9]}}}"#,
+    );
+    let recipe = ["--params", white_only.to_str().unwrap()];
+    let typed = ["--roll-white", "1.7", "--white-balance", "1.1,1,0.9"];
+    for source in [&recipe[..], &typed[..]] {
+        let (code, _, err) = convert_48bit(&tmp.path("w.tiff"), &[source, &["--strict"]].concat());
+        assert_eq!(code, 1, "{source:?}: {err}");
+        assert!(
+            err.contains("the roll section has no `roll.exposure`")
+                && err.contains("`--roll-exposure` (0 keeps this render)")
+                && !err.contains("measured before")
+                && !err.contains("no roll measurement"),
+            "{source:?}: {err}"
+        );
+        // The remedy, followed: a stated exposure of 0 is quiet.
+        let (code, _, err) = convert_48bit(
+            &tmp.path("e.tiff"),
+            &[source, &["--roll-exposure", "0", "--strict"]].concat(),
+        );
+        assert_eq!(code, 0, "{source:?}: {err}");
+    }
 }
 
 #[test]
@@ -9731,8 +9880,8 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     assert_eq!(clamped["input"], bright.to_str().unwrap());
     let cap_slope = clamped["slope"].as_f64().unwrap();
     assert!(
-        clamped["flag"].as_str().unwrap().ends_with(&format!(
-            "--roll-white {}",
+        clamped["flag"].as_str().unwrap().contains(&format!(
+            "--roll-white {} ",
             white["rule"]["cap_stops"].as_f64().unwrap() as f32
         )),
         "a clamped frame's own flag carries the cap as its white: {report}"
@@ -9768,6 +9917,16 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
         report_near["frames"][1]["white_stops"],
         report["frames"][1]["white_stops"]
     );
+    // An emptied frame is not picture, so it has no say in the roll's exposure.
+    assert!(
+        report["frames"][1].get("level_stops").is_some()
+            && report_near["frames"][1].get("level_stops").is_none(),
+        "{report_near}"
+    );
+    assert_eq!(
+        report_near["exposure"]["level_stops"], report_near["frames"][0]["level_stops"],
+        "{report_near}"
+    );
 
     // The reuse forms: the roll's white by flag, and the whole measurement — the
     // clamped frame's own white (the cap) included — as the `--out` recipe, which
@@ -9777,8 +9936,9 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
             .as_str()
             .unwrap()
             .ends_with(&format!(
-                "--roll-white {}",
-                white["stops"].as_f64().unwrap() as f32
+                "--roll-white {} --roll-exposure {}",
+                white["stops"].as_f64().unwrap() as f32,
+                report["exposure"]["ev"].as_f64().unwrap() as f32
             )),
         "{report}"
     );
@@ -9841,6 +10001,7 @@ fn measure_roll_places_the_white_and_clamps_a_frame_above_the_cap() {
     shared["roll"] = serde_json::json!({
         "white_balance": written["roll"]["white_balance"],
         "white_stops": written["roll"]["white_stops"],
+        "exposure": written["roll"]["exposure"],
     });
     let shared = write_file(&tmp.path("shared.json"), &shared.to_string());
     let manifest = write_file(
@@ -10070,6 +10231,7 @@ fn measure_roll_unexposed_measures_the_base_and_writes_the_whole_roll() {
             "roll": {
                 "white_balance": by_hand["white_balance"]["gains"],
                 "white_stops": by_hand["white"]["stops"],
+                "exposure": by_hand["exposure"]["ev"],
             },
         })
         .to_string(),
@@ -11247,10 +11409,10 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
 #[test]
 fn the_gain_map_destination_writes_an_iso_only_jpeg_and_reports_its_map() {
     // `hdr-48bit.tif` is 502×462 and IR-free, and every run states a roll measurement
-    // (neutral gains, the default contrast), so a `--strict` exit is this run's own — not
-    // the `default` rendering's no-roll fallback warning.
+    // (neutral gains, exposure 0, the default contrast), so a `--strict` exit is this run's
+    // own — not the `default` rendering's no-roll warnings.
     let tmp = TempDir::new("gain-map");
-    let measured = ["--roll-white-balance", "1,1,1", "--contrast", "1.1111112"];
+    let measured = MEASURED;
     let convert = |name: &str, extra: &[&str]| {
         let (code, stdout, err) = convert_48bit(
             &tmp.path(name),
@@ -11359,10 +11521,10 @@ fn the_film_master_runs_no_rendering_and_refuses_a_look() {
 #[test]
 fn the_hdr_hand_off_counts_what_it_clamps_and_strict_sees_it() {
     // `hdr-48bit.tif` is the IR-free fixture, and every run states a roll measurement
-    // (neutral gains, the default contrast), so a `--strict` exit 1 is this warning's —
-    // not the `default` rendering's fallback warning.
+    // (neutral gains, exposure 0, the default contrast), so a `--strict` exit 1 is this
+    // warning's — not the `default` rendering's no-roll warnings.
     let tmp = TempDir::new("peak-clamp");
-    let measured = ["--roll-white-balance", "1,1,1", "--contrast", "1.1111112"];
+    let measured = MEASURED;
     // The control: at the defaults nothing sits above the peak, and `--strict` passes.
     let (code, stdout, err) = convert_48bit(
         &tmp.path("a"),
@@ -11771,7 +11933,7 @@ fn a_roll_names_each_frame_from_its_destination() {
         r#"{
   "recipe_version": 3,
   "calibration": { "film_base": { "explicit": [0.9, 0.55, 0.42] } },
-  "roll": { "white_balance": [1.0, 1.0, 1.0], "white_stops": 2.0 },
+  "roll": { "white_balance": [1.0, 1.0, 1.0], "white_stops": 2.0, "exposure": 0.0 },
   "output": { "display": { "transfer": "pq", "container": "avif" } }
 }"#,
     );
@@ -12299,6 +12461,9 @@ fn a_frames_override_beats_a_roll_flag() {
             out_dir.to_str().unwrap(),
             "--params",
             measured.to_str().unwrap(),
+            // The layer has no exposure; stating one keeps its warning out of these.
+            "--roll-exposure",
+            "0",
         ];
         args.extend_from_slice(extra);
         let (code, stdout, err) = run(&args);

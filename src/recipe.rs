@@ -210,6 +210,9 @@ pub struct RollSection {
     /// slope derived from it ([`roll_white::slope_for`]), so a measured value is never
     /// mistaken for a chosen one.
     pub white_stops: Option<f32>,
+    /// The roll's exposure in EV, a neutral gain added to `scene_correction.exposure`
+    /// (`roll_white::roll_exposure`).
+    pub exposure: Option<f32>,
     /// The frames whose own white differs from the roll's (one clamped to the cap),
     /// keyed by **file name** so the recipe still applies after the scans move.
     /// [`Recipe::for_frame`] applies an entry; a `roll --frames` manifest's `params`
@@ -362,10 +365,14 @@ pub struct RollReport {
     pub white_stops: Option<f32>,
     /// The slope `white_stops` renders at ([`roll_white::slope_for`]).
     pub slope: Option<f32>,
+    /// The section's exposure, as stated.
+    pub exposure: Option<f32>,
     /// Whether the gains reached scene correction (not under `direct` or the film master).
     pub white_balance_applied: bool,
     /// Whether the look's base slope is the roll's.
     pub slope_applied: bool,
+    /// Whether the exposure reached scene correction.
+    pub exposure_applied: bool,
 }
 
 /// Which style knobs this invocation typed as flags: [`Recipe::recipe_warnings`] never
@@ -376,6 +383,8 @@ pub struct TypedStyle {
     pub white_balance: bool,
     /// `--contrast` was typed.
     pub contrast: bool,
+    /// `--exposure` was typed.
+    pub exposure: bool,
     /// `--highlight-desaturation` (the strength; no warning reads the start or band).
     pub highlight_desaturation_strength: bool,
 }
@@ -386,6 +395,7 @@ impl TypedStyle {
         Self {
             white_balance: args.scene.white_balance.is_some(),
             contrast: args.look.contrast.is_some(),
+            exposure: args.scene.exposure.is_some(),
             highlight_desaturation_strength: args.look.highlight_desaturation.is_some(),
         }
     }
@@ -831,6 +841,9 @@ pub fn merge(mut r: Recipe, args: &crate::cli::ConversionFlags) -> Recipe {
     if let Some(stops) = args.roll.roll_white {
         r.roll.white_stops = Some(stops);
     }
+    if let Some(ev) = args.roll.roll_exposure {
+        r.roll.exposure = Some(ev);
+    }
     // Scene correction. `--auto-wb` never reaches here: it is a removed flag, since the
     // chain has no per-frame estimate.
     if let Some(gains) = args.scene.white_balance {
@@ -1091,6 +1104,19 @@ fn validate_roll(p: &RollSection, names: KnobNames) -> Result<()> {
             knob_name(names, "roll", "--roll-white", "white_stops")
         )));
     }
+    if let Some(ev) = p.exposure
+        && let Err(SceneFault::Exposure(_)) = (SceneCorrectionParams {
+            exposure: ev,
+            ..SceneCorrectionParams::default()
+        })
+        .check()
+    {
+        return Err(NcError::Usage(format!(
+            "{} must be finite, with a gain 2^EV that is a normal f32 (roughly -126 to \
+             +127 stops), got {ev}",
+            knob_name(names, "roll", "--roll-exposure", "exposure")
+        )));
+    }
     Ok(())
 }
 
@@ -1137,34 +1163,53 @@ pub fn validate_roll_frames(
 /// usage error naming the knob the way `names` says the command spells it.
 ///
 /// The stated section is checked first, so a bad stated value is named as itself; then
-/// the section the stage receives, with the roll's gains multiplied in
-/// ([`Recipe::resolved_scene_correction`]) — only a product can fail there, and the
-/// message names both factors.
+/// the section the stage receives, with the roll's gains and exposure folded in
+/// ([`Recipe::resolved_scene_correction`]) — only a combination can fail there, and the
+/// message names every factor.
 fn validate_scene_correction(r: &Recipe, names: KnobNames) -> Result<()> {
     let name = |flag: &str, key: &str| knob_name(names, "scene_correction", flag, key);
     scene_correction_fault(&r.scene_correction, names)?;
-    // A product can fail either way: as a gain no longer finite, or as a gain whose
-    // product with the exposure's is not a normal f32.
-    let product = match r
-        .roll
-        .white_balance
-        .map(|_| r.resolved_scene_correction().check())
-    {
-        Some(Err(SceneFault::WhiteBalance { channel, value })) => Some((channel, value)),
-        Some(Err(SceneFault::Combined { channel, gain })) => Some((channel, gain)),
-        _ => None,
-    };
-    if let Some((channel, gain)) = product {
-        return Err(NcError::Usage(format!(
-            "{} times {} times the exposure gain from {} is {gain:e} on channel {channel}, \
-             which is not a normal f32 — every sample of that channel would render as 0 or \
-             inf. Move the white balance or the exposure toward neutral",
-            knob_name(names, "roll", "--roll-white-balance", "white_balance"),
-            name("--white-balance", "white_balance"),
-            name("--exposure", "exposure"),
-        )));
+    // A gain no longer finite, a gain whose product with the exposure's is not a normal
+    // f32, or two exposures whose sum is not.
+    let roll = &r.roll;
+    if roll.white_balance.is_none() && roll.exposure.is_none() {
+        return Ok(());
     }
-    Ok(())
+    let (channel, gain) = match r.resolved_scene_correction().check() {
+        Ok(()) => return Ok(()),
+        Err(SceneFault::WhiteBalance { channel, value }) => (channel, value),
+        Err(SceneFault::Combined { channel, gain }) => (channel, gain),
+        // The sum of two exposures, each checked on its own already.
+        Err(SceneFault::Exposure(ev)) => {
+            return Err(NcError::Usage(format!(
+                "{} plus {} is {ev} EV, whose gain 2^EV is not a normal f32 (roughly -126 \
+                 to +127 stops). Move the exposure toward 0",
+                knob_name(names, "roll", "--roll-exposure", "exposure"),
+                name("--exposure", "exposure")
+            )));
+        }
+    };
+    let white_balance = match roll.white_balance {
+        Some(_) => format!(
+            "{} times {}",
+            knob_name(names, "roll", "--roll-white-balance", "white_balance"),
+            name("--white-balance", "white_balance")
+        ),
+        None => name("--white-balance", "white_balance"),
+    };
+    let exposure = match roll.exposure {
+        Some(_) => format!(
+            "{} plus {}",
+            knob_name(names, "roll", "--roll-exposure", "exposure"),
+            name("--exposure", "exposure")
+        ),
+        None => name("--exposure", "exposure"),
+    };
+    Err(NcError::Usage(format!(
+        "{white_balance} times the exposure gain from {exposure} is {gain:e} on channel \
+         {channel}, which is not a normal f32 — every sample of that channel would render as \
+         0 or inf. Move the white balance or the exposure toward neutral"
+    )))
 }
 
 /// [`SceneCorrectionParams::check`] on the stated section, as a usage error.
@@ -1579,28 +1624,29 @@ impl Recipe {
         }
     }
 
-    /// Whether the roll's gains reach scene correction: not under a rendering that leaves
-    /// the roll out, nor on the film master, which runs no scene correction.
-    pub fn applies_roll_white_balance(&self) -> bool {
+    /// Whether the roll's gains and exposure reach scene correction: not under a rendering
+    /// that leaves the roll out, nor on the film master, which runs no scene correction.
+    pub fn applies_roll_to_scene_correction(&self) -> bool {
         self.output != OutputSection::FilmMaster && self.base().applies_roll
     }
 
     /// Scene correction as the stage receives it: the applied roll's gains multiplied
-    /// into the stated white balance — which is `1,1,1` unless the user set it, so a
-    /// roll's gains alone reach the stage exactly. Both renderings start the white
-    /// balance and the exposure at the identity.
+    /// into the stated white balance, and its exposure added to the stated one — each
+    /// the identity unless the user set it, so a roll's values alone reach the stage
+    /// exactly. Both renderings start the white balance and the exposure at the identity.
     pub fn resolved_scene_correction(&self) -> SceneCorrectionParams {
         let SceneCorrectionParams {
             white_balance: WhiteBalance::Explicit(stated),
             exposure,
         } = self.scene_correction;
-        let white_balance = match self.applied_roll().white_balance {
-            Some(roll) => std::array::from_fn(|c| roll[c] * stated[c]),
+        let roll = self.applied_roll();
+        let white_balance = match roll.white_balance {
+            Some(gains) => std::array::from_fn(|c| gains[c] * stated[c]),
             None => stated,
         };
         SceneCorrectionParams {
             white_balance: WhiteBalance::Explicit(white_balance),
-            exposure,
+            exposure: roll.exposure.map_or(exposure, |ev| ev + exposure),
         }
     }
 
@@ -1649,12 +1695,16 @@ impl Recipe {
         let r = &self.roll;
         let applies = rendered && self.base().applies_roll;
         // Other frames' `frames` entries are not this frame's measurement.
-        (r.white_balance.is_some() || r.white_stops.is_some()).then(|| RollReport {
-            white_balance: r.white_balance,
-            white_stops: r.white_stops,
-            slope: r.slope(),
-            white_balance_applied: applies && r.white_balance.is_some(),
-            slope_applied: applies && self.resolved_slope().base_from == SlopeBase::Roll,
+        (r.white_balance.is_some() || r.white_stops.is_some() || r.exposure.is_some()).then(|| {
+            RollReport {
+                white_balance: r.white_balance,
+                white_stops: r.white_stops,
+                slope: r.slope(),
+                exposure: r.exposure,
+                white_balance_applied: applies && r.white_balance.is_some(),
+                slope_applied: applies && self.resolved_slope().base_from == SlopeBase::Roll,
+                exposure_applied: applies && r.exposure.is_some(),
+            }
         })
     }
 
@@ -1668,6 +1718,7 @@ impl Recipe {
         match self.rendering {
             Rendering::Default => {
                 let mut w = self.roll_overlap_warnings(typed);
+                w.extend(self.unmeasured_exposure_warning());
                 w.extend(self.fallback_warning(typed));
                 w
             }
@@ -1700,7 +1751,8 @@ impl Recipe {
                 "no roll measurement: rendered with {}. Run `hanten measure-roll` over the \
                  roll and use the recipe it writes (its `roll` section); or state the white \
                  balance you want (`scene_correction.white_balance`) and the roll's white \
-                 (`roll.white_stops`, which sets the base slope `look.contrast` multiplies); \
+                 (`roll.white_stops`, which sets the base slope `look.contrast` multiplies) \
+                 and exposure (`roll.exposure`); \
                  or use the `direct` rendering (`rendering`: \"direct\"), \
                  the decode without a roll correction, whose unset destination is the HDR \
                  float TIFF",
@@ -1709,7 +1761,23 @@ impl Recipe {
         })
     }
 
-    /// `default`: a recipe's white balance beside the roll's gains it multiplies.
+    /// `default`: a roll's gains or white without its exposure render at exposure 0, which
+    /// leaves a thin roll dark. Only a stated exposure silences it, typed or not.
+    fn unmeasured_exposure_warning(&self) -> Option<String> {
+        let r = &self.roll;
+        (r.exposure.is_none() && (r.white_balance.is_some() || r.white_stops.is_some())).then(
+            || {
+                "the roll section has no `roll.exposure`, so the roll renders at exposure 0 \
+                 and an under-exposed roll stays dark. Run `hanten measure-roll` over the \
+                 roll (a `roll.json` written before it measured the exposure has none), or \
+                 state `roll.exposure` / `--roll-exposure` (0 keeps this render)"
+                    .to_string()
+            },
+        )
+    }
+
+    /// `default`: a recipe's white balance or exposure beside the roll's value it
+    /// multiplies or adds to.
     fn roll_overlap_warnings(&self, typed: TypedStyle) -> Vec<String> {
         let mut warnings = Vec::new();
         let WhiteBalance::Explicit(stated) = self.scene_correction.white_balance;
@@ -1724,6 +1792,19 @@ impl Recipe {
                  {product:?}. A stated white balance is an adjustment on top of the roll's \
                  measurement; if it holds gains an earlier `hanten measure-roll` wrote there, \
                  drop it — they now live in `roll.white_balance`"
+            ));
+        }
+        let stated = self.scene_correction.exposure;
+        if !typed.exposure
+            && let Some(roll) = self.roll.exposure
+            && stated != 0.0
+        {
+            warnings.push(format!(
+                "the recipe's `scene_correction.exposure` {stated} adds to the roll's \
+                 exposure, `roll.exposure` {roll}: the exposure applied is {} EV. A stated \
+                 exposure is an adjustment on top of the roll's measurement; if it is one \
+                 chosen by hand before the roll's was measured, drop it",
+                roll + stated
             ));
         }
         warnings
@@ -2060,7 +2141,7 @@ mod tests {
         );
         assert_eq!(
             json["roll"],
-            serde_json::json!({"white_balance": null, "white_stops": null, "frames": {}})
+            serde_json::json!({"white_balance": null, "white_stops": null, "exposure": null, "frames": {}})
         );
         assert_eq!(json[VERSION_KEY], RECIPE_VERSION);
         let back: Recipe = serde_json::from_str(&text).unwrap();
@@ -2630,6 +2711,40 @@ mod tests {
     }
 
     #[test]
+    fn a_roll_exposure_is_checked_alone_then_as_a_sum() {
+        let err = |json: &str, extra: &[&str]| {
+            validate(&merged(json, extra), KnobNames::FlagAndKey)
+                .unwrap_err()
+                .message()
+                .to_string()
+        };
+        let msg = err(r#"{"recipe_version": 3}"#, &["--roll-exposure", "200"]);
+        assert!(
+            msg.starts_with("--roll-exposure (recipe `roll.exposure`) must be finite"),
+            "{msg}"
+        );
+        // Each usable alone; their sum is not, and the message names both.
+        let msg = err(
+            r#"{"recipe_version": 3, "roll": {"exposure": 100}}"#,
+            &["--exposure", "100"],
+        );
+        assert!(
+            msg.starts_with(
+                "--roll-exposure (recipe `roll.exposure`) plus --exposure (recipe \
+                 `scene_correction.exposure`) is 200 EV"
+            ),
+            "{msg}"
+        );
+        // Under `direct` the roll is left out, so only the stated exposure counts.
+        let r = merged(
+            r#"{"recipe_version": 3, "rendering": "direct", "roll": {"exposure": 100}}"#,
+            &["--exposure", "100"],
+        );
+        validate(&r, KnobNames::FlagAndKey).unwrap();
+        assert_eq!(r.resolved_scene_correction().exposure, 100.0);
+    }
+
+    #[test]
     fn the_roll_section_reaches_the_stages_and_the_contrast_multiplies_its_slope() {
         let roll = r#"{"recipe_version": 3,
                        "roll": {"white_balance": [0.8, 1.0, 1.25], "white_stops": 1.6}}"#;
@@ -3032,6 +3147,7 @@ mod tests {
                 && w[0].contains(
                     "`scene_correction.white_balance`) and the roll's white (`roll.white_stops`"
                 )
+                && w[0].contains("and exposure (`roll.exposure`)")
                 && w[0].contains("`rendering`: \"direct\"")
                 && w[0].contains("HDR float TIFF")
                 && !w[0].contains("--"),
@@ -3061,21 +3177,43 @@ mod tests {
         assert!(r.recipe_warnings(typed).is_empty());
         let mut r = Recipe::default();
         r.roll.white_stops = Some(1.7);
+        r.roll.exposure = Some(0.0);
         assert!(r.recipe_warnings(typed).is_empty());
+        // A roll white without an exposure says so, however it was given; only a stated
+        // exposure (0 keeps the render) silences it.
+        r.roll.exposure = None;
+        let w = r.recipe_warnings(typed);
+        assert!(
+            w.len() == 1
+                && w[0].starts_with("the roll section has no `roll.exposure`")
+                && w[0].contains("`--roll-exposure`")
+                && !w[0].contains("measured before"),
+            "{w:?}"
+        );
+        r.roll.exposure = Some(0.0);
+        assert!(r.recipe_warnings(typed).is_empty());
+        r.roll.exposure = None;
+        r.rendering = Rendering::Direct;
+        assert!(
+            r.recipe_warnings(typed).is_empty(),
+            "direct applies no roll"
+        );
     }
 
     #[test]
     fn the_roll_flags_land_in_the_roll_section() {
         let r = merged(
-            r#"{"recipe_version": 3, "roll": {"white_balance": [0.9, 1.0, 1.1], "white_stops": 1.5}}"#,
+            r#"{"recipe_version": 3, "roll": {"white_balance": [0.9, 1.0, 1.1], "white_stops": 1.5,
+                "exposure": 0.7}}"#,
             &["--roll-white", "1.8"],
         );
-        // One flag replaces its own key and leaves the other.
+        // One flag replaces its own key and leaves the others.
         assert_eq!(
             r.roll,
             RollSection {
                 white_balance: Some([0.9, 1.0, 1.1]),
                 white_stops: Some(1.8),
+                exposure: Some(0.7),
                 frames: BTreeMap::new(),
             }
         );
@@ -3529,6 +3667,9 @@ mod tests {
             ),
             ("--roll-white", &["--roll-white", "1.7"], |r| {
                 r.roll.white_stops == Some(1.7)
+            }),
+            ("--roll-exposure", &["--roll-exposure", "-0.4"], |r| {
+                r.roll.exposure == Some(-0.4)
             }),
             ("--contrast", &["--contrast", "1.3"], |r| {
                 r.look.contrast == 1.3

@@ -360,8 +360,10 @@ pub const PIPELINE_FINGERPRINTS: &[PipelineFingerprint] = &[
         // `0b06a154d01e61e5`): `recipe_version` 3, where `look.contrast` is a multiplier
         // written `1.0` rather than an unset `null`. The default slope is unchanged, and
         // a version 2 recipe stating a number is refused with its conversion, not
-        // rendered differently.
-        recipe: "c596525d9284f59c",
+        // rendered differently. Refreshed again by `nf-calibration/roll-exposure` (was
+        // `c596525d9284f59c`): `roll.exposure` arrived, `null` by default, so no default
+        // pixel moved.
+        recipe: "e9cf2eb90d49d086",
         behavior: PIPELINE_BEHAVIOR,
     },
 ];

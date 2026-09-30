@@ -43,7 +43,7 @@ and hardening work tracked in the task roadmap.
 
 ```sh
 # A roll: measure what it shares — the film base from its unexposed frame, and its
-# white balance and white over its frames — once, into a recipe; then convert it.
+# white balance, white and exposure over its frames — once, into a recipe; then convert it.
 hanten measure-roll frames/*.tif --unexposed unexposed.tif --leader leader.tif --out roll.json
 hanten roll frames/*.tif --out-dir out/ --params roll.json
 

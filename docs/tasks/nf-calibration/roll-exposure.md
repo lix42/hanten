@@ -27,33 +27,26 @@ What is known:
   `roll`, apart from the style knobs. It needs a flag as well as the key. The
   stated `--exposure` then adjusts it rather than replacing it, the way `--white-balance`
   multiplies the roll's gains, and the report says both.
-- **Evidence, 2026-09-29.** A thin 2026-09-28 roll (`20260928-film-1980…2014`,
-  machine-local, not yet in `nc-assets`; 1978 leader, 1979 unexposed). Its frames'
+- **Evidence, 2026-09-29.** A thin 2026-09-28 roll (`nc-assets` roll
+  `2026-09-28-Portra400-dark`; scanned as `20260928-film-1978…2014`, 1978 the leader, 1979
+  the unexposed frame). Its frames'
   whites were −1.2 to +1.2 scene stops, median about +0.1, so the white bound at the
   floor. That rendered dark (written means about 0.15–0.20). A hand `--exposure 1.4`
   brought the ordinary frames to a normal level with 0.02% clipped at worst, and the user
   accepted it. The darkest five frames stayed dark, which is the intended behaviour.
   +1.4 is what puts the median frame white at the floor.
 
-Open:
+Settled (details in `docs/progress/nf-calibration.md`, `## roll-exposure`):
 
-- **The statistic.** A central one, so one bright frame cannot set it. Candidates are the
-  median of the frame whites `measure-roll` already computes, and a pooled mid-tone
-  statistic (e.g. log-average luminance). The roll's white stays a max-like value under
-  the cap.
-- **The target**, in scene stops: the floor (+1.5), or a value of its own.
-- **The order.** The whites are measured at exposure 0 today. With a roll exposure,
-  the white and the clamps should be measured after it. Then decide whether the floor,
-  cap and clamps keep their meaning, or need a re-review.
-- **Bounds.** Most likely about ±2 EV. An over-exposed roll gets a negative value. What a
-  bound that binds reports, and what `--strict` does with it.
-- **Renderings.** Whether `direct` applies it, as with the other `roll` values.
-- **The stated rationale moves.** `algo/fixed.rs` says the fixed anchor "lets film
-  speed show through, which is the faithful behaviour". The decode stays true to that,
-  but with a measured roll exposure a roll no longer shows its film speed. Update that
-  doc, the user guide's §7, and `docs/design/roll-workflow.md` to match.
-- **Display black.** A positive exposure raises the base toward mid-grey. At the roll's
-  contrast, check how close the bounds get to display black's warning.
+- **The statistic:** the median over frames of each frame's log-average ACEScg luma.
+- **The target:** −0.6 scene stops from mid-grey.
+- **The order:** the white and the clamps stay measured at exposure 0.
+- **Bounds:** ±2 EV; a bound that binds warns, so `--strict` refuses it.
+- **Renderings:** `direct` leaves it out, as it does the other `roll` values.
+- **The stated rationale moves:** done — `algo/fixed.rs`, the user guide's §7 and
+  `docs/design/roll-workflow.md` updated.
+- **Display black:** on the three dark rolls the shallowest rendered film base sat 2.61
+  stops under mid-grey, clear of the 2.0-stop warning.
 
 ## How to Verify
 

@@ -72,7 +72,8 @@ impl Default for WhiteBalance {
 pub struct SceneCorrectionParams {
     /// Where the white-balance gains come from (default neutral).
     pub white_balance: WhiteBalance,
-    /// Exposure in stops (EV); `0` is neutral. Applied as the gain `2^exposure`.
+    /// Exposure in stops (EV); `0` is neutral. The roll's `roll.exposure` is added to it
+    /// before the gain `2^exposure` is applied.
     pub exposure: f32,
 }
 

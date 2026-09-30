@@ -40,15 +40,28 @@
 //! a frame near saturation. Measured after it, such a frame's white lands lower, can
 //! escape the clamp and set the roll's slope, and can never come within the margin of
 //! its leader. The cap already keeps a blown frame from raising the roll's white, so the
-//! guard serves the white balance only.
+//! guard serves the white balance only; a frame it empties is also left out of the
+//! exposure.
 //!
 //! **The two measurements take different domains from one decode**: the gains are
 //! measured in ACEScg, where they multiply; the white in film RGB, the domain the rule was
 //! reviewed in. The orchestrator reads the film RGB before mapping it.
+//!
+//! **The roll's exposure** (`nf-calibration/roll-exposure`) lifts an under-exposed roll,
+//! which the white rule cannot: it pins mid-grey and only moves contrast. It is one
+//! neutral gain for the whole roll (`roll.exposure`, added to scene correction's), so a
+//! frame darker than its roll stays dark. Each frame's level is the log-average of its
+//! luma in ACEScg ([`frame_level`]); the roll's exposure brings the median frame level to
+//! [`LEVEL_TARGET_STOPS`], within [`EXPOSURE_BOUND_EV`] ([`roll_exposure`]). A median over
+//! frames, so one night scene cannot set it — the failure that retired per-frame auto
+//! white balance. **The white is measured at exposure 0**: re-placing it after the
+//! exposure was not better in review, and a small exposure could push one frame over the
+//! cap and move the roll's slope by a third.
 
 use serde::Serialize;
 
 use crate::algo::fixed::DIFFUSE_WHITE;
+use crate::pipeline::colorimetry::pinned::ACESCG_LUMA;
 use crate::pipeline::look::MID_GREY;
 use crate::pipeline::white_balance::{
     green_anchored_gains, nearest_rank_index, percentile_levels, sample_region,
@@ -83,9 +96,9 @@ pub const WHITE_PERCENTILE: f32 = 0.97;
 /// is clamped to it. Chosen by review over +2.5 and +3.0 (flatter).
 pub const WHITE_CAP_STOPS: f32 = 2.0;
 
-/// The dimmest a roll's white may sit, in scene stops above mid-grey: an underexposed
-/// roll is lifted only this far, and below it renders dark. Chosen by review over +1.0
-/// (contrast 4.45, worst on nearly every frame) and +2.0.
+/// The dimmest a roll's white may sit, in scene stops above mid-grey: the contrast lifts
+/// an underexposed roll's white only this far (its level is the roll's exposure's).
+/// Chosen by review over +1.0 (contrast 4.45, worst on nearly every frame) and +2.0.
 pub const WHITE_FLOOR_STOPS: f32 = 1.5;
 
 /// How close to the leader, in scene stops, a frame's white may come before the frame
@@ -93,6 +106,15 @@ pub const WHITE_FLOOR_STOPS: f32 = 1.5;
 /// `nf-calibration/saturation-margin`: set from one frame judged overexposed (0.13 stop)
 /// and one ambiguous (0.39), and Gold200's leader sits only ~1.5 stops above its content.
 pub const SATURATION_MARGIN_STOPS: f32 = 0.5;
+
+/// Where a roll's exposure puts its median frame level ([`frame_level`]), in scene stops
+/// from mid-grey. Chosen by review over -1.0 and -0.8 (both lost on nearly every frame)
+/// and -0.3 (split frame by frame: low-key frames wanted it, bright ones did not).
+pub const LEVEL_TARGET_STOPS: f32 = -0.6;
+
+/// The most a measured roll exposure moves, either way, in EV. The ten rolls reviewed
+/// measured +0.02 to +1.74.
+pub const EXPOSURE_BOUND_EV: f32 = 2.0;
 
 /// The leader measurement the guard reads, **written fresh** — the retiring
 /// leader-`Dmax` anchor is not reused (`nf-retire/dmax-machinery`).
@@ -237,6 +259,65 @@ fn nearest_rank_of(mut values: Vec<f32>, p: f32) -> f32 {
 pub fn frame_white(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Option<f32>> {
     let peaks = usable_peaks(&sample_region(rgb, width, region, FRAME_SAMPLE_PIXELS)?);
     Ok((!peaks.is_empty()).then(|| nearest_rank_of(peaks, WHITE_PERCENTILE)))
+}
+
+/// A frame's level: the log-average luma over `region` of its pixels with finite channels
+/// and positive luma — an out-of-gamut pixel with a negative channel still counts — in
+/// scene stops from mid-grey; `None` when no pixel counts. **No leader guard**: it would
+/// drop the real highlights of a frame near saturation. `rgb` is the decode's **linear
+/// ACEScg** — where the roll's exposure is a gain, so an exposure of `e` moves the level
+/// by exactly `e` — before white balance, whose green-anchored gains move it a few
+/// hundredths of a stop. Summed in f64 in sample order, so it is deterministic.
+pub fn frame_level(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Option<f32>> {
+    let sample = sample_region(rgb, width, region, FRAME_SAMPLE_PIXELS)?;
+    let (sum, n) = sample
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|px| px.iter().all(|v| v.is_finite()))
+        .map(|px| (0..3).map(|c| ACESCG_LUMA[c] * px[c]).sum::<f32>())
+        .filter(|y| *y > 0.0)
+        .fold((0.0f64, 0usize), |(s, n), y| {
+            (s + f64::from(y).log2(), n + 1)
+        });
+    Ok((n > 0).then(|| (sum / n as f64) as f32 - MID_GREY.log2()))
+}
+
+/// The roll's exposure, from each frame's level.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct RollExposure {
+    /// The gain, in EV: what `roll.exposure` stores.
+    pub ev: f32,
+    /// The median frame level it was measured from, in scene stops.
+    pub level_stops: f32,
+    /// Whether [`EXPOSURE_BOUND_EV`] limited it.
+    pub bounded: bool,
+}
+
+/// The exposure that brings the median of the frames' levels ([`frame_level`]; `None`
+/// for a frame with no usable pixel, or one the leader guard emptied) to [`LEVEL_TARGET_STOPS`], within
+/// [`EXPOSURE_BOUND_EV`]. An even count takes the mean of the middle two.
+pub fn roll_exposure(levels: &[Option<f32>]) -> Result<RollExposure> {
+    let mut known: Vec<f32> = levels.iter().flatten().copied().collect();
+    if known.is_empty() {
+        return Err(NcError::Other(
+            "roll exposure: no frame has a usable pixel, so the roll has no level".into(),
+        ));
+    }
+    known.sort_by(f32::total_cmp);
+    let mid = known.len() / 2;
+    let level_stops = if known.len().is_multiple_of(2) {
+        (known[mid - 1] + known[mid]) / 2.0
+    } else {
+        known[mid]
+    };
+    let wanted = LEVEL_TARGET_STOPS - level_stops;
+    let ev = wanted.clamp(-EXPOSURE_BOUND_EV, EXPOSURE_BOUND_EV);
+    Ok(RollExposure {
+        ev,
+        level_stops,
+        bounded: ev != wanted,
+    })
 }
 
 /// The median of the leader's brightest channel over its centre half, in the same
@@ -386,6 +467,52 @@ mod tests {
             pool_frame(f, n, [0, 0, n, 1], guard, &mut pool).unwrap();
         }
         pool
+    }
+
+    #[test]
+    fn a_frames_level_is_its_log_average_luma() {
+        // Half the pixels a stop over mid-grey, half a stop under: the log-average is
+        // mid-grey, where the arithmetic mean would sit a quarter-stop over it.
+        let mut rgb = field([0.36, 0.36, 0.36], 50);
+        rgb.extend(field([0.09, 0.09, 0.09], 50));
+        let level = frame_level(&rgb, 100, [0, 0, 100, 1]).unwrap().unwrap();
+        assert!(level.abs() < 1e-5, "{level}");
+        // A pixel with no positive luma, or a non-finite channel, is left out, not read as
+        // black.
+        rgb.extend(field([-0.5, 0.0, 0.0], 10));
+        rgb.extend(field([f32::NAN, 0.36, 0.36], 10));
+        let level = frame_level(&rgb, 120, [0, 0, 120, 1]).unwrap().unwrap();
+        assert!(level.abs() < 1e-5, "{level}");
+        assert_eq!(
+            frame_level(&field([0.0; 3], 4), 4, [0, 0, 4, 1]).unwrap(),
+            None
+        );
+        // An out-of-gamut pixel whose luma is positive counts, negative channel and all.
+        let px = [-0.05f32, 0.2, 0.2];
+        let y: f32 = (0..3).map(|c| ACESCG_LUMA[c] * px[c]).sum();
+        assert!(y > 0.0);
+        let level = frame_level(&field(px, 4), 4, [0, 0, 4, 1])
+            .unwrap()
+            .unwrap();
+        assert!(
+            (level - (y.log2() - MID_GREY.log2())).abs() < 1e-5,
+            "{level}"
+        );
+    }
+
+    #[test]
+    fn the_roll_exposure_brings_the_median_level_to_the_target() {
+        // One night frame and one bright frame move the median by nothing.
+        let e = roll_exposure(&[Some(-6.0), Some(-2.0), None, Some(-1.8), Some(3.0)]).unwrap();
+        assert_eq!(e.level_stops, -1.9);
+        assert!((e.ev - (LEVEL_TARGET_STOPS + 1.9)).abs() < 1e-6, "{e:?}");
+        assert!(!e.bounded);
+        // Both ways within the bound, and a bound that binds says so.
+        let dark = roll_exposure(&[Some(-4.0)]).unwrap();
+        assert_eq!((dark.ev, dark.bounded), (EXPOSURE_BOUND_EV, true));
+        let bright = roll_exposure(&[Some(3.0)]).unwrap();
+        assert_eq!((bright.ev, bright.bounded), (-EXPOSURE_BOUND_EV, true));
+        assert!(roll_exposure(&[None, None]).is_err());
     }
 
     #[test]
