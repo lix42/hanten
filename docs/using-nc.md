@@ -18,8 +18,10 @@ A practical guide to converting film negative scans to positives with `hanten`.
 > `telemetry/schema-v2` (telemetry success/failure
 > events, §10), `nf-core/report-contract` (the report's `chain` block and recipe, §10),
 > `nf-core/default-flip` (the rendering chain of [`design-update.md`](design-update.md)
-> became the only one), `nf-calibration/roll-section` and
-> `nf-destinations/direct-preset` (§7). The staleness signal is `pipeline_version`: if
+> became the only one), `nf-calibration/roll-section`,
+> `nf-destinations/direct-preset` (§7) and `nf-destinations/easy-destination-rows` (the
+> float TIFF in four gamuts, sRGB, the sRGB gain map, §7 and §8; checked at `53ffb61`).
+> The staleness signal is `pipeline_version`: if
 > `hanten --version` reports a different one, treat this document as suspect and
 > re-verify.
 >
@@ -726,7 +728,7 @@ The removed chain's print controls are refused, each saying where the knob went:
 | white balance / base slope | the roll's; without them neutral / 2.0/1.8, and a warning | neutral / 2.0/1.8 |
 | highlight desaturation | 0.8 | off |
 | display black / headroom | 6 / 6 | 6 / 6, pinned |
-| destination, axes unset | SDR Display P3 TIFF | HDR 32-bit float BT.2020 TIFF; a stated axis that rules it out falls back to the lossless 16-bit TIFF (Adobe RGB unless a gamut is stated) |
+| destination, axes unset | SDR Display P3 TIFF | HDR 32-bit float Adobe RGB TIFF; a stated gamut keeps the float TIFF in it, and a stated axis that rules it out falls back to the lossless 16-bit TIFF |
 
 `default` is Hanten's picture from what was measured; `direct` loses as little as it
 can and applies only what the container needs — the handoff to an editor, and (as
@@ -736,16 +738,17 @@ multiplies the base gains and `--contrast` the base slope; every other knob repl
 base value. A stated axis is
 never overridden, and `direct` decides its container before its range, so it never
 takes a lossy container by default — only when you state one, or when your stated axes
-leave no lossless row: `--rendering direct --gamut display-p3` is an SDR Display P3 TIFF
-(not the gain-map JPEG) and `--transfer native` the Adobe RGB TIFF, while `--container
-jpeg`, or `--range hdr --gamut display-p3` (the one row left), is the gain map. The
-report states it in `chain.rendering`.
+leave no lossless row: `--rendering direct --gamut display-p3` is the Display P3 float
+TIFF and `--transfer native` the Adobe RGB 16-bit TIFF, while `--container jpeg` (or
+`--range hdr --transfer native`) is a gain map, and asks for its gamut — `direct`'s
+Adobe RGB has none, so state `--gamut display-p3` or `--gamut srgb`. The report states
+the rendering in `chain.rendering`.
 
 ```console
 $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
     | jq -c '.output, .chain.destination'
 "d1.tiff"
-{"display":{"range":"hdr","transfer":"linear","gamut":"bt2020","container":"tiff"}}
+{"display":{"range":"hdr","transfer":"linear","gamut":"adobe-rgb","container":"tiff"}}
 ```
 
 - **`default` without a roll measurement warns**, since what it renders then is a
@@ -1146,16 +1149,16 @@ spelling is the one `hanten` writes when you leave the suffix off:
 
 | `--range` | `--transfer` | `--gamut` | `--container` | Suffix | writes |
 |---|---|---|---|---|---|
-| `sdr` *(default)* | `native` | `display-p3` *(default)* / `adobe-rgb` | `tiff` | `.tif` / **`.tiff`** | 16-bit TIFF in the gamut's own curve (sRGB curve / `563/256`) |
-| `hdr` | `linear` | `bt2020` | `tiff` | `.tif` / **`.tiff`** | 32-bit float display-linear TIFF (1.0 = 203 cd/m²) |
+| `sdr` *(default)* | `native` | `display-p3` *(default)* / `adobe-rgb` / `srgb` | `tiff` | `.tif` / **`.tiff`** | 16-bit TIFF in the gamut's own curve (sRGB curve / `563/256` / sRGB curve) |
+| `hdr` | `linear` | `display-p3` / `adobe-rgb` / `srgb` / `bt2020` | `tiff` | `.tif` / **`.tiff`** | 32-bit float display-linear TIFF (1.0 = 203 cd/m²) |
 | `hdr` | `pq` / `hlg` | `bt2020` | `tiff` | `.tif` / **`.tiff`** | Rec.2100 signal as full-range 16-bit TIFF codes |
 | `hdr` | `pq` / `hlg` | `bt2020` | `avif` | **`.avif`** | 10-bit 4:4:4 AVIF |
-| `hdr` | `native` | `display-p3` | `jpeg` | **`.jpg`** / `.jpeg` | gain-map JPEG: an 8-bit SDR base with a per-channel ISO 21496-1 gain map |
+| `hdr` | `native` | `display-p3` / `srgb` | `jpeg` | **`.jpg`** / `.jpeg` | gain-map JPEG: an 8-bit SDR base with a per-channel ISO 21496-1 gain map |
 
 With no destination flag the result is an **SDR Display P3 16-bit TIFF** under the
 default rendering, and the HDR float TIFF under `--rendering direct` (§7). An SDR JPEG
 (`--container jpeg` alone) is planned (`output/sdr-jpeg-preset`), and refused as not
-written yet; sRGB and ProPhoto have no destination yet.
+written yet; ProPhoto has no destination.
 
 **`--film-master`** writes the fixed decode's linear ACEScg as an unclamped 32-bit
 float TIFF with **no** rendering stage, so it refuses any stage you ask for, naming the
@@ -1179,7 +1182,8 @@ master and a destination axis are one choice, refused at the parser.
 rendition clamped to the 1000 cd/m² peak — and stores the per-channel ratio between
 them as a half-resolution, three-channel gain map. It carries **ISO 21496-1 metadata
 only**, in a Multi-Picture Format container Hanten writes itself: no Ultra HDR v1 XMP,
-which cannot describe a per-channel map. Apple ImageIO reads it as HDR; a reader that
+which cannot describe a per-channel map. Apple ImageIO reads it as HDR on either base;
+a reader that
 knows only the Ultra HDR v1 XMP, or no gain maps at all, shows the SDR base.
 
 ### Leave an axis unset and it is derived
@@ -1187,15 +1191,18 @@ knows only the Ultra HDR v1 XMP, or no gain maps at all, shows the SDR base.
 In the order range, transfer, gamut, container (under `--rendering direct`, the
 container first): its default when a destination fits,
 else the one value left, else a refusal listing the choices. So `--range hdr` alone is
-the gain-map JPEG, `--transfer pq` alone an HDR BT.2020 TIFF and `--gamut adobe-rgb`
-alone the Adobe RGB TIFF, while `--gamut bt2020` asks which transfer. A value you
-**state** is never overridden — a combination the table lacks is refused, naming the
-conflicting pair and a flag that fixes it:
+the Display P3 gain-map JPEG, `--transfer pq` alone an HDR BT.2020 TIFF and `--gamut
+adobe-rgb` alone the Adobe RGB TIFF, while `--gamut bt2020` asks which transfer.
+`--transfer linear` alone asks for the gamut: the float TIFF is written in four, and
+the gamut default would quietly pick Display P3 (under `--rendering direct` it is
+Adobe RGB). A value you **state** is never overridden — a combination the table lacks
+is refused, naming the conflicting pair and a flag that fixes it:
 
 ```
-usage: no destination combines --range hdr and --gamut adobe-rgb (recipe keys
-       `output.display.range`, `.transfer`, `.gamut`, `.container`). Use --range sdr,
-       --gamut display-p3, or --gamut bt2020 with --transfer linear|pq|hlg
+usage: no destination combines --range sdr and --gamut bt2020 (recipe keys
+       `output.display.range`, `.transfer`, `.gamut`, `.container`). Use --range hdr
+       with --transfer linear|pq|hlg, --gamut display-p3, --gamut adobe-rgb, or
+       --gamut srgb
 ```
 
 The report records every resolved axis in `chain.destination`
@@ -1208,7 +1215,8 @@ An HDR destination clamps its rendition to the 1000 cd/m² peak and counts what 
 clamped in `chain.peak_clamp` and in `loss`, where `--strict` sees it. Each also
 fills a block stating what the encoder wrote and the luminance anchors no container
 can carry — `avif` for the AVIF pair, `hdr_coded_tiff` for the PQ/HLG TIFFs,
-`hdr_linear_tiff` for the float TIFF (in a `roll` report, on each frame):
+`hdr_linear_tiff` for the float TIFF, whose `pixel_contract`, `linear_domain` and
+embedded profile name its gamut (in a `roll` report, on each frame):
 
 ```console
 $ hanten convert scan.tif -o out --film-base … --transfer pq --container avif | jq -c .avif.rendering
@@ -1267,7 +1275,7 @@ usage: the output path out.jpg does not end in .tif or .tiff: the destination is
        --range sdr --transfer native --gamut display-p3 --container tiff, which writes
        .tif or .tiff. Hanten never renames a suffix you state — drop .jpg and the path
        is completed for you, or state a destination that writes it: --range hdr
-       --container jpeg
+       --container jpeg; --gamut srgb --container jpeg
 ```
 
 `-o out.avif` offers `--transfer pq --container avif; --transfer hlg --container
@@ -1300,10 +1308,10 @@ usage: --output-preset was removed with the chain its presets named: a destinati
 ```
 
 Each named set resolves to the same destination under either rendering (so
-`display-p3` names `--gamut display-p3` rather than "the default").
-`gain-map-hdr` and `ultra-hdr-v1`'s nearest is `--range hdr --container jpeg`, a
-different file (a per-channel, ISO-only map); `compatibility`'s sRGB has no destination
-yet. To reproduce a preset's render, use the reference build.
+`display-p3` names `--range sdr --gamut display-p3` rather than "the default", and
+`compatibility` `--range sdr --gamut srgb`). `gain-map-hdr` and `ultra-hdr-v1`'s nearest
+is `--range hdr --gamut display-p3 --container jpeg`, a different file (a per-channel,
+ISO-only map). To reproduce a preset's render, use the reference build.
 
 ---
 
@@ -1626,8 +1634,8 @@ Your rectangle mixes unexposed film with image content. Check the coordinates, o
 Fit range does not clip ordinary content at its default headroom, so something pushed
 content past it: a positive `--exposure`, too little `--display-tone-headroom`, or a
 low anchor (`--anchor-mid-offset` smaller than the default). Lower the exposure, raise
-the headroom, move the anchor up, or write a float output (`--transfer linear`,
-`--film-master`) for an unclamped result.
+the headroom, move the anchor up, or write a float output (`--transfer linear` with a
+`--gamut`, or `--film-master`) for an unclamped result.
 
 **"no roll measurement: rendered with …"**
 Every `convert` under the `default` rendering warns until the roll is measured, and
