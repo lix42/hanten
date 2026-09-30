@@ -1,7 +1,8 @@
 # Telemetry upload v1 contract
 
 The wire contract between Hanten's uploader and the ingestion Worker
-(`docs/telemetry-strategy.md`). **This directory is the field manifest**: where the
+(`docs/telemetry-strategy.md`), live at `https://hanten-telemetry.i-70e.workers.dev/v1/events`
+(`services/telemetry-ingest/`). **This directory is the field manifest**: where the
 strategy's "Upload field manifest" table disagrees, this directory wins. Rust
 (`src/telemetry/upload.rs` and its tests) and the Worker read the same files; neither
 keeps a looser copy.

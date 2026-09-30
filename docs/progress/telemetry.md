@@ -64,7 +64,8 @@ What other epics need to know about `telemetry` (refreshed 2026-09-30):
   the whole corpus, so a contract change must pass both suites. Its README is the
   runbook: the kill switch and release lists are D1 rows. Add a release to
   `allowed_releases` when it ships; until then its events are accepted but held in
-  quarantine, and `queries/promote_release.sql` moves them once it is listed.
+  quarantine, and `queries/promote_release.sql` moves them once it is listed. It is
+  live at `https://hanten-telemetry.i-70e.workers.dev/v1/events` (recorded in the contract README).
 - **The upload contract is `contracts/telemetry/upload-v1/`** (`telemetry/upload-schema`):
   JSON Schema, a corpus Rust and the Worker both test against, and the README that is
   now the upload field manifest (the strategy's is history).
@@ -361,7 +362,7 @@ What shipped, and the parts the open tasks build on:
 
 
 ## ingestion-service
-**Status:** in progress — built and tested; the first deploy runs after merge
+**Status:** done
 **Updated:** 2026-09-30
 
 - Goal: implement the validating Cloudflare Worker + D1 ingestion, exact
@@ -463,6 +464,18 @@ What shipped, and the parts the open tasks build on:
   (up to 90 s) and prints response bodies on failure.
 - The rollback step found no earlier version (first deploy) and left the Worker
   up, as intended.
+
+### 2026-09-30 — done (run 36784186776)
+- Re-deployed after #214: every step green, version `0c0ed5d8`. The smoke test saw
+  the Worker answer its own 405 within ~2 s, then a blocked release rejected and a
+  malformed envelope refused. D1 afterwards: one `daily_usage` request row (the
+  smoke POST went through the whole write batch), `storage.max_events` set to
+  1,750,000, no event stored.
+- The same PR fixed a flaky rate-limit test: the local limiter counts per fixed 60 s
+  window, so 31 requests straddling a minute edge could all pass. It now sends 61,
+  which puts at least 31 in one window.
+- For `telemetry/upload`: the endpoint is in `contracts/telemetry/upload-v1/README.md`.
+  Add each release to `allowed_releases` when it ships.
 
 ## upload
 **Status:** not started
