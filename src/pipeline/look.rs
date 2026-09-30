@@ -10,7 +10,7 @@
 //! **Its position is a constraint, not a preference.** The look sits after scene
 //! correction and *above* the SDR/HDR branch, because a gain map requires the two
 //! renditions to agree below diffuse white — so anything shaping midtone character
-//! must be applied once, before the split (`docs/design-update.md` Part 2). Only
+//! must be applied once, before the split (design-spec §6). Only
 //! fit range and later may differ per branch.
 
 use std::fmt;

@@ -336,6 +336,11 @@ pub struct ConvertArgs {
     /// Fix any stochastic step for reproducibility (none in Step 1; reserved).
     #[arg(long, value_name = "N")]
     pub seed: Option<u64>,
+    /// Also write the fixed decode's film RGB — before the NC film RGB v1 3×3 — as an
+    /// untagged 32-bit float TIFF: the dye layers' values, for measuring the decode.
+    /// Operational flag — not a recipe key; never affects the output image.
+    #[arg(long, value_name = "PATH")]
+    pub export_film_rgb: Option<PathBuf>,
 
     /// Append a telemetry record for this run to the local JSONL log (under the
     /// platform data dir, e.g. `$XDG_DATA_HOME/nc/telemetry.jsonl` or
@@ -1320,6 +1325,11 @@ pub struct Report {
     /// Path the IR plane was exported to, when `--export-ir` was given.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ir_exported: Option<PathBuf>,
+    /// Path the film RGB was exported to, when `--export-film-rgb` was given: the
+    /// fixed decode's output before the NC film RGB v1 3×3, as an f32 TIFF with no
+    /// ICC profile. Its channels are the dye layers, not a colour space.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub film_rgb_exported: Option<PathBuf>,
     /// Encode-time sample loss (clipped / non-finite counts), for `convert`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loss: Option<EncodeReport>,
@@ -3015,6 +3025,8 @@ fn convert_frame(
     command: &'static str,
     input: &Path,
     output: &Path,
+    // `convert`'s `--export-film-rgb`; `roll` has no such flag.
+    export_film_rgb: Option<&Path>,
     recipe: &Recipe,
     input_from_cli: InputFromCli,
     // Files this run *read* besides the scan (`--params`, a roll's `--frames`), so a
@@ -3200,6 +3212,7 @@ fn convert_frame(
             image,
             base: base.base,
             export_ir,
+            export_film_rgb,
             output,
             report,
             read_inputs,
@@ -3802,6 +3815,7 @@ struct DecodedFrame<'a> {
     image: LinearImage,
     base: FilmBase,
     export_ir: Option<PathBuf>,
+    export_film_rgb: Option<&'a Path>,
     output: &'a Path,
     report: Report,
     read_inputs: &'a [&'a Path],
@@ -3811,8 +3825,8 @@ struct DecodedFrame<'a> {
 /// film RGB v1 → `pipeline::chain` → the destination the recipe's `output` resolves to
 /// (`crate::destination`), or straight to the film master.
 ///
-/// The optional IR export and the primary are staged, then committed together with the
-/// primary last. No sidecar is written.
+/// The optional film RGB and IR exports and the primary are staged, then committed
+/// together with the primary last. No sidecar is written.
 fn render_frame(
     frame: DecodedFrame<'_>,
     // The run's stage clock, holding the decode's and the film base's times.
@@ -3826,16 +3840,26 @@ fn render_frame(
         image,
         base,
         export_ir,
+        export_film_rgb,
         output,
         mut report,
         read_inputs,
     } = frame;
     let decode_params = recipe.reconstruction;
 
-    // Reconstruction: the fixed decode, then the pinned NC film RGB v1 3×3.
-    let (aces, decoded) = clock.time(StageKind::Reconstruction, || {
+    // Reconstruction: the fixed decode, then the pinned NC film RGB v1 3×3 — with the
+    // film RGB export, if asked for, staged between them. It writes the decode's buffer
+    // before the in-place 3×3, so it adds no image buffer; it is timed as `encode`.
+    let (film, decoded) = clock.time(StageKind::Reconstruction, || {
         fixed::decode(&image, &base, &decode_params)
-            .map(|(film, decoded)| (working_space::map_nc_film_rgb_v1(film), decoded))
+    })?;
+    let mut pending: Vec<staged::Staged> = Vec::new();
+    if let Some(path) = export_film_rgb {
+        pending.push(clock.time(StageKind::Encode, || encode::encode_film_rgb(&film, path))?);
+        report.film_rgb_exported = Some(path.to_path_buf());
+    }
+    let aces = clock.time(StageKind::Reconstruction, || {
+        Ok(working_space::map_nc_film_rgb_v1(film))
     })?;
 
     // The NC film RGB v1 3×3 into ACEScg runs on this flow too, so the pinned
@@ -3895,7 +3919,6 @@ fn render_frame(
 
     // The IR export reads the *decoded* image and is staged before the primary, at
     // the destination's depth (f32 for a float TIFF, else u16).
-    let mut pending: Vec<staged::Staged> = Vec::new();
     if let Some(path) = &export_ir {
         let depth = render.ir_depth();
         pending.push(clock.time(StageKind::IrExport, || {
@@ -3929,6 +3952,9 @@ fn render_frame(
     pending.push(primary);
     for note in staged::commit_all(std::mem::take(&mut pending))? {
         push_warning_buf(warnings, log, note);
+    }
+    if let Some(path) = export_film_rgb {
+        log.info(format_args!("wrote film RGB {}", path.display()));
     }
     if let Some(path) = &export_ir {
         log.info(format_args!("wrote IR plane {}", path.display()));
@@ -4158,7 +4184,12 @@ fn convert_attempt(
     let spare_recipes: Vec<_> = targets
         .iter()
         .copied()
-        .filter(|(label, _)| matches!(*label, "--output" | "--report-file" | "--export-ir"))
+        .filter(|(label, _)| {
+            matches!(
+                *label,
+                "--output" | "--report-file" | "--export-ir" | "--export-film-rgb"
+            )
+        })
         .collect();
     for recipe_file in recipe_files(&args.recipe_in) {
         ensure_write_targets_spare(recipe_file, "the --params recipe", &spare_recipes)?;
@@ -4204,6 +4235,7 @@ fn convert_attempt(
         "convert",
         &args.input,
         &output,
+        args.export_film_rgb.as_deref(),
         &recipe,
         InputFromCli::of(&args.knobs.input_opts),
         &recipe_files(&args.recipe_in)
@@ -4267,8 +4299,8 @@ fn convert_attempt(
 }
 
 /// Every path a `convert` writes, labelled for [`ensure_write_targets_distinct`]:
-/// the output, `--dump-params`, `--report-file`, `--export-ir`, and telemetry's
-/// sinks (`--telemetry-file` unless it is `-`, and the resolved log).
+/// the output, `--dump-params`, `--report-file`, `--export-ir`, `--export-film-rgb`,
+/// and telemetry's sinks (`--telemetry-file` unless it is `-`, and the resolved log).
 fn write_targets<'a>(
     args: &'a ConvertArgs,
     output: &'a Path,
@@ -4284,6 +4316,9 @@ fn write_targets<'a>(
     }
     if let Some(p) = export_ir {
         targets.push(("--export-ir", p));
+    }
+    if let Some(p) = args.export_film_rgb.as_deref() {
+        targets.push(("--export-film-rgb", p));
     }
     if let Some(p) = telemetry_file_target(args) {
         targets.push(("--telemetry-file", p));
@@ -5184,6 +5219,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
             "roll",
             &pf.input,
             &pf.output,
+            None,
             &pf.recipe,
             pf.input_from_cli,
             &read_files,
@@ -7264,6 +7300,7 @@ mod tests {
             "--output",
             "--dump-params",
             "--seed",
+            "--export-film-rgb",
             "--telemetry",
             "--telemetry-file",
         ];
@@ -8899,5 +8936,84 @@ mod tests {
             !report.warnings.is_empty(),
             "the warning must be `--strict`-promotable"
         );
+    }
+
+    /// Decode an f32 RGB TIFF: its samples and whether it embeds an ICC profile.
+    fn read_f32_tiff(path: &Path) -> (u32, u32, Vec<f32>, bool) {
+        use tiff::decoder::{Decoder, DecodingResult};
+        let mut decoder = Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+        let (w, h) = decoder.dimensions().unwrap();
+        let tagged = decoder.get_tag_u8_vec(tiff::tags::Tag::IccProfile).is_ok();
+        match decoder.read_image().unwrap() {
+            DecodingResult::F32(data) => (w, h, data, tagged),
+            other => panic!("expected f32 samples, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_film_rgb_export_is_the_film_master_before_the_pinned_matrix() {
+        /// Removes the directory even when an assertion fails.
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).ok();
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("nc-film-rgb-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = Cleanup(dir.clone());
+        let input = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hdr-48bit.tif");
+        let convert = |output: &Path, export: &Path, destination: &[&str]| {
+            let mut argv = vec![
+                "hanten",
+                "convert",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+                "--film-base",
+                "0.9,0.55,0.42",
+                "--export-film-rgb",
+                export.to_str().unwrap(),
+                "--quiet",
+                "--report-file",
+            ];
+            let report = output.with_extension("report.json");
+            argv.push(report.to_str().unwrap());
+            argv.extend_from_slice(destination);
+            let Command::Convert(args) = Cli::try_parse_from(argv).unwrap().command else {
+                unreachable!("expected convert")
+            };
+            run_convert(args).unwrap();
+            let report: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+            assert_eq!(report["film_rgb_exported"], export.to_str().unwrap());
+        };
+
+        let (master, film) = (dir.join("master.tiff"), dir.join("film.tiff"));
+        convert(&master, &film, &["--film-master"]);
+        let (w, h, film_rgb, film_tagged) = read_f32_tiff(&film);
+        let (_, _, master_rgb, master_tagged) = read_f32_tiff(&master);
+        assert!(!film_tagged, "film RGB has no primaries, so no profile");
+        assert!(master_tagged);
+
+        // Through the shipped mapper, so the matrix is the pinned one, not a copy.
+        let fixture =
+            FilmRgbImage::fixture(LinearImage::new(w, h, film_rgb.clone(), None).unwrap());
+        let mapped = working_space::map_nc_film_rgb_v1(fixture).into_linear().rgb;
+        assert_eq!(mapped.len(), master_rgb.len());
+        let differ = mapped
+            .iter()
+            .zip(&master_rgb)
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count();
+        assert_eq!(differ, 0, "the export mapped must be the master to the bit");
+        // …and the export is not the master renamed.
+        assert_ne!(film_rgb, master_rgb);
+
+        // A rendered destination exports the same film RGB: the export sits before
+        // every rendering stage.
+        let (sdr, film_sdr) = (dir.join("sdr.tiff"), dir.join("film-sdr.tiff"));
+        convert(&sdr, &film_sdr, &[]);
+        assert_eq!(read_f32_tiff(&film_sdr).2, film_rgb);
     }
 }

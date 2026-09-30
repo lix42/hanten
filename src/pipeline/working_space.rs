@@ -1,4 +1,4 @@
-//! NC film RGB v1 working-space mapping (design-spec §7, stage 4):
+//! NC film RGB v1 working-space mapping (design-spec §7.5):
 //!
 //! ```text
 //! FilmRgbImage → NC film RGB v1 interpretation → linear ACEScg/AP1 at D60
@@ -157,7 +157,7 @@ impl std::fmt::Debug for AcesCgImage {
 }
 
 /// Map a reconstructed [`FilmRgbImage`] through NC film RGB v1 into linear
-/// ACEScg/D60 (design-spec §7, stage 4). The **same** mapper for every density
+/// ACEScg/D60 (design-spec §7.5). The **same** mapper for every density
 /// curve — it consumes the typed film-RGB
 /// boundary and returns the typed ACEScg boundary, so the reconstruction path
 /// makes no difference to how the mapping is applied.

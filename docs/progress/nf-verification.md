@@ -31,6 +31,11 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
   2026-09-28): the decode plus the ACEScg mapping, over samples at the minimum decode
   window. A decode or mapping default change bumps the version; a rendering stage's
   default *value* moves `recipe`, and its arithmetic is only the goldens'.
+- **The decode before the 3×3 is exportable** (`film-rgb-export`, 2026-09-30):
+  `convert --export-film-rgb PATH` writes an untagged f32 TIFF of the dye layers, which
+  `nctool metrics --space film-rgb` measures per channel. It is the point for per-layer
+  (`scale`) measurements; `film-master` mixes the layers. `roll` refuses it for now
+  (`roll-side-exports`).
 - **A review matrix states `destination` for builds at `pipeline_version` 8 and later,
   and `output_preset` for older ones** (the reference build); a matrix mixing both
   states both, and each build takes the flags its banner's `pipeline_version` says it
@@ -301,7 +306,76 @@ Created on 2026-09-19 as part of the new-flow migration plan (`docs/nf-migration
 
 ## film-rgb-export
 
-**Status:** not started
-**Updated:** 2026-09-19
+**Status:** done (2026-09-30)
+**Updated:** 2026-09-30
 
 - 2026-09-19: created with the new-flow plan. Goal: export the pre-matrix film rgb.
+
+### 2026-09-29 — implemented
+
+- **The matrix has not moved**, so the task still has content: no task plans moving the
+  3×3 into scene correction, and `working_mapping` still runs in reconstruction.
+- **User decisions:** `--export-film-rgb PATH` is an **operational flag, not a recipe
+  key** (like `--report`), so `DecodeParams` stays the `reconstruction` section field for
+  field and `--dump-params` / the `recipe` fingerprint did not move. `convert` only: `roll`
+  has no such flag (clap exit 2). The file is an f32 TIFF with **no ICC profile**.
+  `nctool metrics` gained a `film-rgb` space rather than reading it as `linear-srgb`.
+- **Where:** `cli::render_frame` stages the export between `fixed::decode` and
+  `map_nc_film_rgb_v1` (`io::encode::encode_film_rgb`), so it writes the decode's own
+  buffer before the in-place 3×3: no new image buffer, and the memory model gains no
+  term. It is committed before the primary like the IR plane, is guarded as a write
+  target, and the report names it in `film_rgb_exported`.
+- **Timed as `encode`, not a new `StageKind`:** a stage is a telemetry wire field, so a
+  new one is a `SCHEMA_VERSION` bump and an upload-manifest change for a diagnostic flag.
+- **`nctool metrics`:** every record now carries `channels` (per-channel key, stop
+  percentiles and spread, in the file's own channels; additive, `SCHEMA` stays 2).
+  `film-rgb` has no primaries, so its record has only `channels`, no `tone` / `color`.
+- **Verified:**
+  - `the_film_rgb_export_is_the_film_master_before_the_pinned_matrix`: one fixture run
+    with `--film-master --export-film-rgb`, and the export sent through the shipped
+    mapper is the master **to the bit**. A rendered destination exports the same film RGB.
+  - Real scan (Ektar `971.tif`, base from `base.tif`, 5% inset). Film RGB vs master
+    per-channel key: r−g −0.127 → −0.050 stops, b−g +0.211 → +0.190. Red's p95−p5 is
+    4.96 → 4.85. The 3×3 mixes the channels, so the per-channel differences shrink,
+    which is the direction it predicts. The export is measurably not a renamed master.
+  - Local gates green (rustc 1.98.1, aarch64): fmt, clippy, build, doc, nctool (424),
+    test (641 + 229).
+
+### 2026-09-30 — review fixes
+
+- **`nctool metrics roll --space film-rgb` crashed** (a `KeyError` on `tone`): it now
+  refuses the space, since a roll tracks tone and colour axes, and names
+  `metrics image` as the remedy.
+- **`channels` is opt-in** (user decision): three more full-frame passes on every
+  review-set cell was a cost for a block only this comparison reads. `film-rgb` always
+  has it; any other space takes `metrics image --channels`. Its fractions are
+  `non_*_sample_fraction` (one channel's samples, not pixels), and neither it nor a
+  `film-rgb` record carries `bands`.
+- **One f32 RGB TIFF writer** (`encode::write_rgb_f32`) for the export, the film master
+  and the linear HDR TIFF. The export no longer runs the non-finite and channel-mean
+  scans nobody read; it returns only the staged file.
+- **Kept, with the reason:** timing under `encode` (a new stage is a telemetry schema
+  bump), and staging the export before the chain (staging it after needs a copy of the
+  frame, since the 3×3 runs in place).
+
+### 2026-09-30 — done
+
+- **Landed:** `hanten convert --export-film-rgb PATH` (operational, `convert` only) and
+  `nctool metrics --space film-rgb` / `--channels`. The export mapped through the pinned
+  3×3 is the film master to the bit (fixture test); on a real frame the master's
+  per-channel differences are the smaller ones, as the matrix predicts.
+- A second review (`ship:diff-reviewer`) found nothing at its bar. Its note about the
+  comment on `encode_film_rgb` was right: a non-finite sample is counted by a film master's
+  encode but *refused* by every rendered destination's chain, and the comment now says
+  so. Codex was skipped (out of credits).
+- **For dependents:** `roll-side-exports` owns the export from `roll`. If the 3×3 ever
+  moves into scene correction, `film-master` becomes film RGB and this flag collapses
+  into it.
+
+## roll-side-exports
+
+**Status:** not started
+**Updated:** 2026-09-29
+
+- 2026-09-29: created as a follow-up to `film-rgb-export`, which made the export
+  `convert`-only. Goal: per-frame film RGB and IR exports from `roll`.

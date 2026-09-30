@@ -1710,7 +1710,7 @@ impl Recipe {
 
     /// The run's warnings about its recipe, emitted once per run (once per roll, from the
     /// shared recipe). `typed` spares what was given as a flag; empty for the film master.
-    /// Why these and not refusals: design-update Part 2, "Recipe warnings, not refusals".
+    /// Why these and not refusals: design-spec §8, "Recipe warnings, not refusals".
     pub fn recipe_warnings(&self, typed: TypedStyle) -> Vec<String> {
         if self.output == OutputSection::FilmMaster {
             return Vec::new();
@@ -1811,7 +1811,7 @@ impl Recipe {
     }
 
     /// `direct`: a recipe value that moves its pinned base and that an earlier build could
-    /// have written unchosen — narrow on purpose (design-update, "Recipe warnings").
+    /// have written unchosen — narrow on purpose (design-spec §8, "Recipe warnings").
     fn direct_override_warning(&self, typed: TypedStyle) -> Option<String> {
         // The strength every recipe an earlier build wrote states — a historical value,
         // pinned here rather than read from today's default.
@@ -3578,6 +3578,7 @@ mod tests {
         "--dump-params",
         "--strict",
         "--seed",
+        "--export-film-rgb",
         "--telemetry",
         "--telemetry-file",
         "--max-memory",

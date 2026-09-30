@@ -393,6 +393,7 @@ graph TD
     nf-verification/stage-goldens
     nf-verification/benchmark-set
     nf-verification/film-rgb-export
+    nf-verification/roll-side-exports
   end
   subgraph nf-retire
     nf-retire/characteristic
@@ -679,6 +680,7 @@ graph TD
   nf-verification/reference-snapshot --> nf-verification/benchmark-set
   nf-core/minimal-end-to-end --> nf-verification/benchmark-set
   nf-reconstruction/fixed-decode --> nf-verification/film-rgb-export
+  nf-verification/film-rgb-export --> nf-verification/roll-side-exports
   nf-core/minimal-end-to-end --> nf-retire/legacy-custom
   nf-verification/reference-snapshot --> nf-retire/legacy-custom
   nf-retire/legacy-custom --> nf-retire/display-tones
@@ -1014,7 +1016,7 @@ Dependency list (a task is executable when all its deps are `[x]` done):
 
 
 **New-flow migration** (`docs/nf-migration.md`) — the `nf-*` epics that move nc to
-the design in `docs/design-update.md`:
+the design now in `docs/design-spec.md` (§6–§7):
 
 - `nf-core/new-flow-flag` (new flow): none
   — scaffolding with a written expiry — CLI-only, never a recipe key, removed
@@ -1136,8 +1138,9 @@ the design in `docs/design-update.md`:
   — the cases are a holding set since `legacy` retired; comparability comes from
   the tagged build
 - `nf-verification/film-rgb-export` (new flow): `nf-reconstruction/fixed-decode`
-  — the cleanest measurement point is before the 3×3, which nc cannot export
-  today
+  — the cleanest measurement point is before the 3×3; `--export-film-rgb` writes it
+- `nf-verification/roll-side-exports` (new flow): `nf-verification/film-rgb-export`
+  — `roll` refuses the per-frame exports because one path cannot serve every frame
 - `nf-retire/legacy-custom` (new flow): `nf-core/minimal-end-to-end`, `nf-verification/reference-snapshot`
   — removes the second implementation of the print controls
 - `nf-retire/display-tones` (new flow): `nf-retire/legacy-custom`, `nf-display-stages/fit-range`
@@ -2016,9 +2019,13 @@ the design in `docs/design-update.md`:
   flow](tasks/nf-verification/benchmark-set.md) — the cases are a `display-p3` /
   `film-master` holding set since `legacy` retired; comparability comes from the
   reference build
-- [ ] [Export the pre-matrix film
-  RGB](tasks/nf-verification/film-rgb-export.md) — the cleanest measurement
-  point is before the 3×3, which nc cannot export today
+- [x] [Export the pre-matrix film
+  RGB](tasks/nf-verification/film-rgb-export.md) — **done 2026-09-30.**
+  `convert --export-film-rgb` writes the decode before the 3×3 as an untagged f32
+  TIFF; `nctool metrics --space film-rgb` measures it per channel
+- [ ] [Per-frame side exports from
+  `roll`](tasks/nf-verification/roll-side-exports.md) — `--export-film-rgb` and
+  `--export-ir` per frame in `--out-dir`, which `roll` refuses today
 
 ### nf-retire — [progress](progress/nf-retire.md)
 > Remove the old paths once the reference build exists: `legacy`/`custom`, the bounded
@@ -2080,13 +2087,17 @@ the design in `docs/design-update.md`:
 ### nf-docs — [progress](progress/nf-docs.md)
 > Fold the new design into the spec, the user guide and CLAUDE.md.
 
-- [ ] [Fold the new design into the spec](tasks/nf-docs/design-spec.md) —
-  principle 2, the NC film RGB v1 contract, and the curves section
+- [x] [Fold the new design into the spec](tasks/nf-docs/design-spec.md) — **done
+  2026-09-30.** `design-spec.md` is the design: §5 the destination set, §6 the chain and
+  the two renderings, §7 the fixed decode and the NC film RGB v1 contract, §9 the
+  parameters by stage, §13 the live open questions. `design-update.md` keeps Part 3,
+  the appendices and a map of where each Part 1–2 heading went
 - [ ] [Bring the guide up to the new flow](tasks/nf-docs/using-nc.md) —
   verified against the binary, never against a diff
 - [~] [Update CLAUDE.md for the new architecture](tasks/nf-docs/claude-md.md)
   — the architecture map, the HDR framing, and retiring the migration rule
   itself
-- [ ] [Re-point references to retired and superseded
-  tasks](tasks/nf-docs/reference-sweep.md) — about a dozen `src/` and doc
-  pointers still assert an inactive task is live or owns a decision
+- [x] [Re-point references to retired and superseded
+  tasks](tasks/nf-docs/reference-sweep.md) — **done 2026-09-30.** Most pointers had gone
+  with the code the retirements deleted; four were left (an IR premise credited to a
+  retired task, a stale guide row, a dead id, an owner for a retired question)
