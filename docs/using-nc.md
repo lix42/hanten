@@ -759,7 +759,7 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
   `measure-roll`:
 
   ```text
-  hanten: warning: no roll measurement: rendered with neutral white balance (no `roll.white_balance`) and the fallback slope 1.1111112 (no `roll.white_stops`). Run `hanten measure-roll` over the roll and use the recipe it writes (its `roll` section); or state the white balance you want (`scene_correction.white_balance`) and the roll's white (`roll.white_stops`, which sets the base slope `look.contrast` multiplies); or use the `direct` rendering (`rendering`: "direct"), the decode without a roll correction, whose unset destination is the HDR float TIFF
+  hanten: warning: no roll measurement: rendered with neutral white balance (no `roll.white_balance`) and the fallback slope 1.1111112 (no `roll.white_stops`). Run `hanten measure-roll` over the roll and use the recipe it writes (its `roll` section); or state the white balance you want (`scene_correction.white_balance`) and the roll's white (`roll.white_stops`, which sets the base slope `look.contrast` multiplies) and exposure (`roll.exposure`); or use the `direct` rendering (`rendering`: "direct"), the decode without a roll correction, whose unset destination is the HDR float TIFF
   ```
 
   A typed `--white-balance` or `--contrast` is a choice — even `--white-balance 1,1,1` or
@@ -800,7 +800,8 @@ $ hanten convert scan.tif -o d1 --film-base 0.9,0.55,0.42 --rendering direct \
 
   On `roll` the remedy is the key: set `rendering` to `"default"` (or remove it).
 - **The roll flags are refused under `direct`**, which leaves the roll out: drop
-  `--roll-white-balance` / `--roll-white`, or pass `--rendering default`. A recipe's
+  `--roll-white-balance` / `--roll-white` / `--roll-exposure`, or pass
+  `--rendering default`. A recipe's
   `roll` section is not refused.
 
 ### Scene correction
@@ -1136,28 +1137,30 @@ slope is derived from it at render time.
 
 **The roll's exposure** is one neutral gain for the whole roll. Each frame's
 `level_stops` is the log-average of its luma in linear ACEScg, in scene stops from
-mid-grey; the exposure (`exposure.ev`) brings the **median** frame level to −0.6
-(`target_stops`), so one night scene or one bright frame does not set it. A frame darker
-than its roll stays dark — it renders what is on the film. The exposure is limited to
-±2 EV (`bound_ev`); a roll that needs more warns (`bounded: true`, so `--strict` refuses
-it) — check the inputs are this roll's picture frames, or add `--exposure`. The target
-was chosen by review on ten rolls, over −1.0 and −0.8 (both lost on nearly every frame)
-and −0.3 (split frame by frame); it measured +0.02 to +1.74 EV on them.
+mid-grey, over the pixels with positive luma; the exposure (`exposure.ev`) brings the
+**median** frame level to −0.6 (`target_stops`), so one night scene or one bright frame does not set it. A frame darker than its roll stays
+dark — it renders what is on the film. The exposure is limited to ±2 EV (`bound_ev`); a
+roll that needs more warns (`bounded: true`), and `measure-roll --strict` refuses it.
+That usually means wrong inputs: check they are this roll's picture frames under its
+film base. If the roll really is that far off, add `--exposure` when converting
+(`convert`, `roll`), which adds to `roll.exposure`. The target was chosen by review on
+ten rolls, over −1.0 and −0.8 (both lost on nearly every frame) and −0.3 (split frame by
+frame); it measured +0.02 to +1.74 EV on them.
 
-A `roll.json` measured before `measure-roll` measured the exposure has gains and a white
-but no `roll.exposure`. It renders at exposure 0, as it did, and warns (so `--strict`
-refuses it) — re-run `measure-roll`, or state `roll.exposure` (`0` keeps the render).
-Typed roll flags are a choice made now, and never warn:
+A roll section with gains or a white but no `roll.exposure` — a `roll.json` written
+before `measure-roll` measured the exposure, or roll flags typed without
+`--roll-exposure` — renders at exposure 0 and warns (so `--strict` refuses it). Re-run
+`measure-roll`, or state `roll.exposure` / `--roll-exposure` (`0` keeps the render):
 
 ```console
 $ hanten convert scan.tif -o out --film-base 0.9,0.55,0.42 --params before.json --report none
-hanten: warning: the recipe's `roll` section has no `roll.exposure`, so the roll renders at exposure 0 and an under-exposed roll stays dark; it was measured before `hanten measure-roll` measured the exposure. Re-run `hanten measure-roll` over the roll, or state `roll.exposure` (0 keeps this render)
+hanten: warning: the roll section has no `roll.exposure`, so the roll renders at exposure 0 and an under-exposed roll stays dark. Run `hanten measure-roll` over the roll (a `roll.json` written before it measured the exposure has none), or state `roll.exposure` / `--roll-exposure` (0 keeps this render)
 ```
 
 - **Pass the leader.** Any pixel within 0.1 density of it is left out of the white
   balance (`guarded`), so a fully exposed frame mixed into the inputs cannot set the
-  gains — measured, it would move them 0.4–1.3 stops. A frame's white is measured
-  before that guard, so a frame near saturation still shows it; the cap keeps it from
+  gains — measured, it would move them 0.4–1.3 stops — and a frame it empties is left out
+  of the exposure. A frame's white is measured before that guard, so a frame near saturation still shows it; the cap keeps it from
   raising the roll's white. Without `--leader` the run warns, no frame is checked for
   saturation, and `--strict` refuses it before decoding anything (exit 2).
 - **Only picture frames, each once.** Every input is pooled as picture; leave out the

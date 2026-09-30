@@ -385,8 +385,6 @@ pub struct TypedStyle {
     pub contrast: bool,
     /// `--exposure` was typed.
     pub exposure: bool,
-    /// A roll flag (`--roll-white-balance`, `--roll-white`, `--roll-exposure`) was typed.
-    pub roll: bool,
     /// `--highlight-desaturation` (the strength; no warning reads the start or band).
     pub highlight_desaturation_strength: bool,
 }
@@ -398,7 +396,6 @@ impl TypedStyle {
             white_balance: args.scene.white_balance.is_some(),
             contrast: args.look.contrast.is_some(),
             exposure: args.scene.exposure.is_some(),
-            roll: args.roll.any(),
             highlight_desaturation_strength: args.look.highlight_desaturation.is_some(),
         }
     }
@@ -1721,7 +1718,7 @@ impl Recipe {
         match self.rendering {
             Rendering::Default => {
                 let mut w = self.roll_overlap_warnings(typed);
-                w.extend(self.unmeasured_exposure_warning(typed));
+                w.extend(self.unmeasured_exposure_warning());
                 w.extend(self.fallback_warning(typed));
                 w
             }
@@ -1754,7 +1751,8 @@ impl Recipe {
                 "no roll measurement: rendered with {}. Run `hanten measure-roll` over the \
                  roll and use the recipe it writes (its `roll` section); or state the white \
                  balance you want (`scene_correction.white_balance`) and the roll's white \
-                 (`roll.white_stops`, which sets the base slope `look.contrast` multiplies); \
+                 (`roll.white_stops`, which sets the base slope `look.contrast` multiplies) \
+                 and exposure (`roll.exposure`); \
                  or use the `direct` rendering (`rendering`: \"direct\"), \
                  the decode without a roll correction, whose unset destination is the HDR \
                  float TIFF",
@@ -1763,21 +1761,19 @@ impl Recipe {
         })
     }
 
-    /// `default`: a roll section measured before `measure-roll` measured the exposure — its
-    /// gains or white without `roll.exposure` — renders at exposure 0, which leaves a thin
-    /// roll dark. Typed roll flags are a choice made now.
-    fn unmeasured_exposure_warning(&self, typed: TypedStyle) -> Option<String> {
+    /// `default`: a roll's gains or white without its exposure render at exposure 0, which
+    /// leaves a thin roll dark. Only a stated exposure silences it, typed or not.
+    fn unmeasured_exposure_warning(&self) -> Option<String> {
         let r = &self.roll;
-        (!typed.roll
-            && r.exposure.is_none()
-            && (r.white_balance.is_some() || r.white_stops.is_some()))
-        .then(|| {
-            "the recipe's `roll` section has no `roll.exposure`, so the roll renders at \
-                 exposure 0 and an under-exposed roll stays dark; it was measured before \
-                 `hanten measure-roll` measured the exposure. Re-run `hanten measure-roll` \
-                 over the roll, or state `roll.exposure` (0 keeps this render)"
-                .to_string()
-        })
+        (r.exposure.is_none() && (r.white_balance.is_some() || r.white_stops.is_some())).then(
+            || {
+                "the roll section has no `roll.exposure`, so the roll renders at exposure 0 \
+                 and an under-exposed roll stays dark. Run `hanten measure-roll` over the \
+                 roll (a `roll.json` written before it measured the exposure has none), or \
+                 state `roll.exposure` / `--roll-exposure` (0 keeps this render)"
+                    .to_string()
+            },
+        )
     }
 
     /// `default`: a recipe's white balance or exposure beside the roll's value it
@@ -3151,6 +3147,7 @@ mod tests {
                 && w[0].contains(
                     "`scene_correction.white_balance`) and the roll's white (`roll.white_stops`"
                 )
+                && w[0].contains("and exposure (`roll.exposure`)")
                 && w[0].contains("`rendering`: \"direct\"")
                 && w[0].contains("HDR float TIFF")
                 && !w[0].contains("--"),
@@ -3182,19 +3179,20 @@ mod tests {
         r.roll.white_stops = Some(1.7);
         r.roll.exposure = Some(0.0);
         assert!(r.recipe_warnings(typed).is_empty());
-        // A roll measured before the exposure was: it says so, unless a roll flag was typed
-        // or the section states one (0 keeps the render).
+        // A roll white without an exposure says so, however it was given; only a stated
+        // exposure (0 keeps the render) silences it.
         r.roll.exposure = None;
         let w = r.recipe_warnings(typed);
         assert!(
-            w.len() == 1 && w[0].starts_with("the recipe's `roll` section has no `roll.exposure`"),
+            w.len() == 1
+                && w[0].starts_with("the roll section has no `roll.exposure`")
+                && w[0].contains("`--roll-exposure`")
+                && !w[0].contains("measured before"),
             "{w:?}"
         );
-        let roll_typed = TypedStyle {
-            roll: true,
-            ..typed
-        };
-        assert!(r.recipe_warnings(roll_typed).is_empty());
+        r.roll.exposure = Some(0.0);
+        assert!(r.recipe_warnings(typed).is_empty());
+        r.roll.exposure = None;
         r.rendering = Rendering::Direct;
         assert!(
             r.recipe_warnings(typed).is_empty(),

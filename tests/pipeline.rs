@@ -174,9 +174,8 @@ fn run(args: &[&str]) -> (i32, String, String) {
 }
 
 /// Identity roll gains and exposure and a stated contrast, for a `--strict` test whose
-/// subject is not the roll: without them the `default` rendering warns that it fell back
-/// (or, dumped and replayed, that the roll has no exposure), and `--strict` fails on that
-/// instead.
+/// subject is not the roll: without them the `default` rendering warns that it fell back,
+/// or that the roll has no exposure, and `--strict` fails on that instead.
 const MEASURED: [&str; 6] = [
     "--roll-white-balance",
     "1,1,1",
@@ -9525,6 +9524,39 @@ fn a_direct_dump_of_a_deliberate_adjustment_replays_under_strict() {
 }
 
 #[test]
+fn a_roll_white_without_an_exposure_warns_until_one_is_stated() {
+    // Recipe or flag, a roll white or gains without `roll.exposure` render at exposure 0
+    // and warn; the fallback warning's remedy (state `roll.white_stops`) names the
+    // exposure too, so following it is quiet. The IR-free fixture, so `--strict` sees
+    // only these warnings.
+    let tmp = TempDir::new("roll-no-exposure");
+    let white_only = write_file(
+        &tmp.path("white.json"),
+        r#"{"recipe_version": 3, "roll": {"white_stops": 1.7},
+            "scene_correction": {"white_balance": {"explicit": [1.1, 1, 0.9]}}}"#,
+    );
+    let recipe = ["--params", white_only.to_str().unwrap()];
+    let typed = ["--roll-white", "1.7", "--white-balance", "1.1,1,0.9"];
+    for source in [&recipe[..], &typed[..]] {
+        let (code, _, err) = convert_48bit(&tmp.path("w.tiff"), &[source, &["--strict"]].concat());
+        assert_eq!(code, 1, "{source:?}: {err}");
+        assert!(
+            err.contains("the roll section has no `roll.exposure`")
+                && err.contains("`--roll-exposure` (0 keeps this render)")
+                && !err.contains("measured before")
+                && !err.contains("no roll measurement"),
+            "{source:?}: {err}"
+        );
+        // The remedy, followed: a stated exposure of 0 is quiet.
+        let (code, _, err) = convert_48bit(
+            &tmp.path("e.tiff"),
+            &[source, &["--roll-exposure", "0", "--strict"]].concat(),
+        );
+        assert_eq!(code, 0, "{source:?}: {err}");
+    }
+}
+
+#[test]
 fn the_roll_flags_are_refused_under_the_direct_rendering() {
     // `direct` leaves the roll out, so a typed roll flag would be silently ignored —
     // refused whether a flag or the recipe chose `direct`, before any value rule, and
@@ -11377,10 +11409,10 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
 #[test]
 fn the_gain_map_destination_writes_an_iso_only_jpeg_and_reports_its_map() {
     // `hdr-48bit.tif` is 502×462 and IR-free, and every run states a roll measurement
-    // (neutral gains, the default contrast), so a `--strict` exit is this run's own — not
-    // the `default` rendering's no-roll fallback warning.
+    // (neutral gains, exposure 0, the default contrast), so a `--strict` exit is this run's
+    // own — not the `default` rendering's no-roll warnings.
     let tmp = TempDir::new("gain-map");
-    let measured = ["--roll-white-balance", "1,1,1", "--contrast", "1.1111112"];
+    let measured = MEASURED;
     let convert = |name: &str, extra: &[&str]| {
         let (code, stdout, err) = convert_48bit(
             &tmp.path(name),
@@ -11489,10 +11521,10 @@ fn the_film_master_runs_no_rendering_and_refuses_a_look() {
 #[test]
 fn the_hdr_hand_off_counts_what_it_clamps_and_strict_sees_it() {
     // `hdr-48bit.tif` is the IR-free fixture, and every run states a roll measurement
-    // (neutral gains, the default contrast), so a `--strict` exit 1 is this warning's —
-    // not the `default` rendering's fallback warning.
+    // (neutral gains, exposure 0, the default contrast), so a `--strict` exit 1 is this
+    // warning's — not the `default` rendering's no-roll warnings.
     let tmp = TempDir::new("peak-clamp");
-    let measured = ["--roll-white-balance", "1,1,1", "--contrast", "1.1111112"];
+    let measured = MEASURED;
     // The control: at the defaults nothing sits above the peak, and `--strict` passes.
     let (code, stdout, err) = convert_48bit(
         &tmp.path("a"),
@@ -12429,6 +12461,9 @@ fn a_frames_override_beats_a_roll_flag() {
             out_dir.to_str().unwrap(),
             "--params",
             measured.to_str().unwrap(),
+            // The layer has no exposure; stating one keeps its warning out of these.
+            "--roll-exposure",
+            "0",
         ];
         args.extend_from_slice(extra);
         let (code, stdout, err) = run(&args);

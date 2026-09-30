@@ -26,7 +26,9 @@ What is known:
 - **Evidence, 2026-09-29** (`nc-assets` roll `2026-09-28-Portra400-dark`: roll exposure +1.4 EV, slope 1.649;
   frames 2005 and 1983, whites −1.23 and −1.06). Hand-solved pairs put each white at
   diffuse white. Each exposure below is the frame's **total**, replacing the roll's +1.4
-  (a manifest `params` exposure replaces the flag):
+  (a manifest `params` exposure replaces the flag). With a measured `roll.exposure`, a
+  manifest `scene_correction.exposure` adds to it, so as manifest values these totals
+  would double-count:
   - slope 2.0 (about ×1.21 the roll's): exposure +2.47 and +2.30. The base landed 2.2 and
     2.6 stops under mid-grey.
   - slope 2.4 (about ×1.46 the roll's): exposure +2.26 and +2.09. The base landed 3.2 and

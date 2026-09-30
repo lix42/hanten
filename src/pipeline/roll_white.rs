@@ -40,7 +40,8 @@
 //! a frame near saturation. Measured after it, such a frame's white lands lower, can
 //! escape the clamp and set the roll's slope, and can never come within the margin of
 //! its leader. The cap already keeps a blown frame from raising the roll's white, so the
-//! guard serves the white balance only.
+//! guard serves the white balance only; a frame it empties is also left out of the
+//! exposure.
 //!
 //! **The two measurements take different domains from one decode**: the gains are
 //! measured in ACEScg, where they multiply; the white in film RGB, the domain the rule was
@@ -260,8 +261,10 @@ pub fn frame_white(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Option<f
     Ok((!peaks.is_empty()).then(|| nearest_rank_of(peaks, WHITE_PERCENTILE)))
 }
 
-/// A frame's level: the log-average of its usable pixels' luma over `region`, in scene
-/// stops from mid-grey; `None` when no pixel is usable. `rgb` is the decode's **linear
+/// A frame's level: the log-average luma over `region` of its pixels with finite channels
+/// and positive luma — an out-of-gamut pixel with a negative channel still counts — in
+/// scene stops from mid-grey; `None` when no pixel counts. **No leader guard**: it would
+/// drop the real highlights of a frame near saturation. `rgb` is the decode's **linear
 /// ACEScg** — where the roll's exposure is a gain, so an exposure of `e` moves the level
 /// by exactly `e` — before white balance, whose green-anchored gains move it a few
 /// hundredths of a stop. Summed in f64 in sample order, so it is deterministic.
@@ -271,8 +274,9 @@ pub fn frame_level(rgb: &[f32], width: u32, region: [u32; 4]) -> Result<Option<f
         .as_chunks::<3>()
         .0
         .iter()
-        .filter(|px| !unusable(px))
+        .filter(|px| px.iter().all(|v| v.is_finite()))
         .map(|px| (0..3).map(|c| ACESCG_LUMA[c] * px[c]).sum::<f32>())
+        .filter(|y| *y > 0.0)
         .fold((0.0f64, 0usize), |(s, n), y| {
             (s + f64::from(y).log2(), n + 1)
         });
@@ -291,7 +295,7 @@ pub struct RollExposure {
 }
 
 /// The exposure that brings the median of the frames' levels ([`frame_level`]; `None`
-/// for a frame with no usable pixel) to [`LEVEL_TARGET_STOPS`], within
+/// for a frame with no usable pixel, or one the leader guard emptied) to [`LEVEL_TARGET_STOPS`], within
 /// [`EXPOSURE_BOUND_EV`]. An even count takes the mean of the middle two.
 pub fn roll_exposure(levels: &[Option<f32>]) -> Result<RollExposure> {
     let mut known: Vec<f32> = levels.iter().flatten().copied().collect();
@@ -473,13 +477,26 @@ mod tests {
         rgb.extend(field([0.09, 0.09, 0.09], 50));
         let level = frame_level(&rgb, 100, [0, 0, 100, 1]).unwrap().unwrap();
         assert!(level.abs() < 1e-5, "{level}");
-        // An unusable pixel is left out, not read as black.
-        rgb.extend(field([0.0, 0.36, 0.36], 10));
-        let level = frame_level(&rgb, 110, [0, 0, 110, 1]).unwrap().unwrap();
+        // A pixel with no positive luma, or a non-finite channel, is left out, not read as
+        // black.
+        rgb.extend(field([-0.5, 0.0, 0.0], 10));
+        rgb.extend(field([f32::NAN, 0.36, 0.36], 10));
+        let level = frame_level(&rgb, 120, [0, 0, 120, 1]).unwrap().unwrap();
         assert!(level.abs() < 1e-5, "{level}");
         assert_eq!(
             frame_level(&field([0.0; 3], 4), 4, [0, 0, 4, 1]).unwrap(),
             None
+        );
+        // An out-of-gamut pixel whose luma is positive counts, negative channel and all.
+        let px = [-0.05f32, 0.2, 0.2];
+        let y: f32 = (0..3).map(|c| ACESCG_LUMA[c] * px[c]).sum();
+        assert!(y > 0.0);
+        let level = frame_level(&field(px, 4), 4, [0, 0, 4, 1])
+            .unwrap()
+            .unwrap();
+        assert!(
+            (level - (y.log2() - MID_GREY.log2())).abs() < 1e-5,
+            "{level}"
         );
     }
 

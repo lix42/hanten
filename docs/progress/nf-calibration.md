@@ -44,9 +44,19 @@ density.
 **`roll-section` is done (2026-09-27): the roll's measurements are their own recipe
 section**, `roll.white_balance` and `roll.white_stops` (the white, not a contrast;
 `look.contrast` unset means the roll's, else the default). `measure-roll` writes it; the
-gains multiply a stated white balance, and a stated contrast wins. A rendering decides
+gains multiply a stated white balance, and `look.contrast` multiplies the roll's slope
+(`nf-look/contrast-definition`). A rendering decides
 whether it applies (`--rendering default` does, `direct` does not). The fallback when a
 roll has no measurement is `no-roll-defaults`'.
+
+**`roll-exposure` is done (2026-09-29): the roll's level is measured, as
+`roll.exposure`** — one neutral gain per roll that brings the median frame's log-average
+ACEScg luma to −0.6 scene stops from mid-grey (±2 EV), added to
+`scene_correction.exposure` under `default`. The decode still lets film speed show
+through; the roll's level is set after it. The white stays measured at exposure 0, so a
+lifted roll's white renders `ev · slope` stops past diffuse white. Measured +0.02 to
++1.74 EV on ten rolls. A per-frame trim and exposure groups within a roll are
+`frame-level-trim` and `exposure-buckets`.
 
 **`scale-gamma-loop` is done (2026-09-27): nothing moved.** One review round on blue
 under `--rendering direct --range sdr` could not tell 0.68 / 0.73 / 0.78 apart;
@@ -491,7 +501,7 @@ frames; the look's default contrast is `no-roll-defaults`'.
 
 ## roll-exposure
 
-**Status:** in progress
+**Status:** done
 **Updated:** 2026-09-29
 
 - 2026-09-29: filed (user) after converting the thin 2026-09-28 roll. Its whites bound
@@ -545,6 +555,37 @@ frames; the look's default contrast is `no-roll-defaults`'.
   design). **A `roll` section without `roll.exposure` now warns** (user): one written
   before this task renders at exposure 0, which leaves a thin roll dark with no hint;
   typed roll flags are spared, and stating `roll.exposure` 0 keeps the render quietly.
+- 2026-09-29: **display black checked** on the three dark rolls at their measured
+  exposures: 09-11 (+1.74) put the shallowest film base 3.01 stops under mid-grey, 09-13
+  (+1.34) 3.60, 09-28 (+1.39) 2.61 — all clear of the 2.0-stop warning; no frame warned.
+- 2026-09-29: review round. **Typed roll flags now warn too** (user): only a stated
+  exposure (`roll.exposure` / `--roll-exposure`) silences the no-exposure warning, which
+  no longer claims the section predates the measurement; the fallback warning's remedy
+  names `roll.exposure` beside `roll.white_stops`, so following it is quiet. A frame's
+  level now counts an out-of-gamut pixel whose luma is positive (every roll within 0.03
+  of the reviewed level). The bound warning's remedy names `--exposure` on
+  `convert`/`roll`, not `measure-roll`.
+- 2026-09-29: **the leader guard is not applied to the level.** Tried in the review loop,
+  it dropped ordinary near-saturation highlights and moved 07-24 from +0.47 to +0.99 EV
+  (07-15 +0.46 → +0.66, 09-14 +0.18 → +0.32). Only a frame the guard empties is left out.
+
+- 2026-09-29: **done.** Landed: `roll_white::frame_level` (log-average ACEScg luma over
+  pixels with finite channels and positive luma, before white balance, no leader guard)
+  and `roll_exposure` (median over frames to `LEVEL_TARGET_STOPS` −0.6, within
+  `EXPOSURE_BOUND_EV` 2, a binding bound warns); `roll.exposure` / `--roll-exposure`, added
+  to `scene_correction.exposure` under `default` only. Verified: unit and binary tests
+  (flag, recipe and style forms render byte-identically; `direct` and the film master leave
+  it out; the warnings and their remedies through the binary); ten rolls within 0.04 EV of
+  the reviewed values; display black clear on the three dark rolls; two review rounds with
+  the user. **For dependents:**
+  - The white and its clamps are measured at exposure 0; the roll's exposure moves where
+    the white renders by `ev · slope` stops (`white-rule-hdr` reviews at that level).
+  - A per-frame exposure in `roll.frames` or a manifest's `scene_correction.exposure` adds
+    to `roll.exposure`: `thin-frame-lift`'s hand-solved totals would double-count, and it
+    and `frame-level-trim` must settle total vs delta once.
+  - The per-frame split round 2 found is `frame-level-trim`'s; groups within a roll are
+    `exposure-buckets`'.
+  - A `roll` section without `roll.exposure` warns until one is stated (0 keeps a render).
 
 ## thin-frame-lift
 

@@ -52,5 +52,5 @@ Open:
 - [`measure-roll` places the roll's white](roll-white-rule.md) — the rule under review
 - [Does a parametric shoulder beat reinhard?](../nf-display-stages/parametric-shoulder.md)
   — settles the operator the HDR rendition is judged under
-- [A measured roll exposure](roll-exposure.md) — moves where the whites are measured, so
-  review the rule after it
+- [A measured roll exposure](roll-exposure.md) — sets the level the rule is reviewed at
+  (the white stays measured at exposure 0, and the exposure moves where it renders)

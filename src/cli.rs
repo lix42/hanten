@@ -270,8 +270,8 @@ pub struct MeasureRollArgs {
     /// The roll's leader — a fully exposed frame, decoded with the same base. Pixels
     /// within 0.1 density of it are left out of the white balance, so a fully exposed
     /// frame mixed into the roll cannot set the gains (measured: it would move them
-    /// 0.4–1.3 stops), and a frame whose white comes within 0.5 stop of it warns as near
-    /// film saturation. Without it the run warns and nothing is checked for saturation,
+    /// 0.4–1.3 stops) — a frame it empties is left out of the exposure too — and a frame
+    /// whose white comes within 0.5 stop of it warns as near film saturation. Without it the run warns and nothing is checked for saturation,
     /// and `--strict` refuses before decoding anything.
     #[arg(long, value_name = "PATH")]
     pub leader: Option<PathBuf>,
@@ -4191,7 +4191,7 @@ fn convert_attempt(
         push_warning_buf(&mut attempt.warnings, log, msg);
     }
     // What the run's recipe falls back on, or states that nobody may have chosen — a fact
-    // about the run's recipe, not the frame; a typed flag never warns.
+    // about the run's recipe, not the frame; a typed style flag never warns.
     for msg in recipe.recipe_warnings(recipe::TypedStyle::of(&args.knobs)) {
         push_warning_buf(&mut attempt.warnings, log, msg);
     }
@@ -5095,7 +5095,7 @@ fn run_roll(args: RollArgs) -> Result<()> {
         roll_warnings.push(msg);
     }
     // The shared recipe's fallbacks and possible leftovers, once for the roll; a typed
-    // flag never warns. A per-frame override is that frame's explicit choice, so it
+    // style flag never warns. A per-frame override is that frame's explicit choice, so it
     // does not warn either.
     for msg in shared.recipe_warnings(recipe::TypedStyle::of(&args.knobs)) {
         log.warn(&msg);
@@ -6416,8 +6416,11 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             counts,
             white_stops: white.map(roll_white::scene_stops),
             leader_distance_stops,
-            // A frame the leader guard emptied is not picture (the warning above says
-            // so), and would pull the roll's exposure toward the leader.
+            // A frame the pool kept nothing of (the leader guard emptied it, or no pixel was
+            // usable) is not picture; a leader would pull the roll's exposure toward itself.
+            // The guard is not applied to the level itself: it
+            // drops the real highlights of a frame near saturation (on 07-24 that moved
+            // the roll +0.5 EV).
             level_stops: level.filter(|_| counts.kept > 0),
             // Placed once every frame is measured, below.
             white_role: roll_white::FrameRole::Unmeasured,
@@ -6440,8 +6443,9 @@ fn run_measure_roll(args: MeasureRollArgs) -> Result<()> {
             format!(
                 "the roll's median frame level is {:+.2} stops from mid-grey, so its exposure \
                  is limited to {:+} EV (bound {} EV) and it renders off the normal level; \
-                 check the inputs are this roll's picture frames, or add --exposure to the \
-                 roll's",
+                 check the inputs are this roll's picture frames under its film base, or, \
+                 if the roll really is that far off, add --exposure when converting \
+                 (`convert`, `roll`), which adds to `roll.exposure`",
                 exposure.level_stops,
                 exposure.ev,
                 roll_white::EXPOSURE_BOUND_EV

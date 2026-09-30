@@ -1222,7 +1222,7 @@ the design in `docs/design-update.md`:
 - `nf-calibration/white-rule-hdr` (new flow): `nf-calibration/roll-white-rule`, `nf-display-stages/parametric-shoulder`, `nf-calibration/roll-exposure`
   — filed 2026-09-27: the rule was reviewed on SDR only; `roll-white-rule` handed HDR to
   `parametric-shoulder`, which kept reinhard and left it unreviewed; after `roll-exposure`
-  (2026-09-29), which moves where the whites are measured
+  (2026-09-29), which sets the level the rule is reviewed at
 - `nf-calibration/roll-exposure` (new flow): `nf-calibration/roll-white-rule`, `nf-calibration/roll-section`
   — filed 2026-09-29: an under-exposed roll bound at the floor rendered dark, and no
   contrast can lift it; a hand `--exposure 1.4` fixed it
@@ -1962,7 +1962,7 @@ the design in `docs/design-update.md`:
 - [ ] [The white rule in
   HDR](tasks/nf-calibration/white-rule-hdr.md) — the rule's values stay provisional
   until its HDR rendition and headroom are looked at; every round so far was SDR
-- [~] [A measured roll exposure](tasks/nf-calibration/roll-exposure.md) — `measure-roll`
+- [x] [A measured roll exposure](tasks/nf-calibration/roll-exposure.md) — `measure-roll`
   writes `roll.exposure`, one neutral gain for the roll from a central statistic of its
   frames, so an under-exposed roll renders at a normal level; darker frames stay dark
 - [ ] [Opt-in lift for a thin frame](tasks/nf-calibration/thin-frame-lift.md) — a frame far
