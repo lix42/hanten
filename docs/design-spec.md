@@ -455,7 +455,7 @@ curve) and owns the resulting `FilmRgbImage` boundary:
   render, stopped one stage earlier: `render_linear` runs, `encode_transfer` does
   **not**, and `io::encode::encode_hdr_linear` writes the display-linear BT.2020
   samples verbatim as 32-bit float with the linear-BT.2020 profile from
-  `color::hdr_linear_bt2020_icc`. Its peak memory phase is the render rather
+  `color::hdr_linear_icc`. Its peak memory phase is the render rather
   than the encode — f32 needs no quantization buffer and the `tiff` writer streams
   strips instead of assembling a container in memory. It is not alone in that:
   `hdr-pq-tiff`/`hdr-hlg-tiff` and the SDR presets `display-p3`/`compatibility`

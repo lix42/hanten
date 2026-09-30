@@ -374,7 +374,11 @@ fn single_rendition_hdr_destinations_warn_when_the_signal_stays_below_reference_
         ),
         ("pq-tiff", &["--transfer", "pq"][..], "tif"),
         ("hlg-tiff", &["--transfer", "hlg"][..], "tif"),
-        ("linear-tiff", &["--transfer", "linear"][..], "tif"),
+        (
+            "linear-tiff",
+            &["--transfer", "linear", "--gamut", "bt2020"][..],
+            "tif",
+        ),
     ] {
         // Three stops down, this frame peaks under reference white — in a container
         // signalling HDR.
@@ -450,6 +454,8 @@ fn hdr_linear_tiff_writes_a_bit_exact_display_linear_bt2020_master() {
                 output.to_str().unwrap(),
                 "--transfer",
                 "linear",
+                "--gamut",
+                "bt2020",
                 "--film-base",
                 "1,1,1",
                 "--strict",
@@ -650,7 +656,15 @@ fn coded_hdr_tiffs_store_exact_codes_and_signal_cicp_in_the_profile() {
 #[test]
 fn hdr_linear_tiff_rejects_a_non_tiff_path_and_conflicting_flags() {
     let tmp = TempDir::new("hdr-linear-reject");
-    let base = ["convert", "--transfer", "linear", "--film-base", "1,1,1"];
+    let base = [
+        "convert",
+        "--transfer",
+        "linear",
+        "--gamut",
+        "bt2020",
+        "--film-base",
+        "1,1,1",
+    ];
     let input = fixture("hdr-48bit.tif");
 
     // Wrong suffix: exit 2 and the path is never rewritten.
@@ -6627,7 +6641,12 @@ fn telemetry_reports_the_primary_containers_depth_not_the_ir_planes() {
             "u10",
         ),
         ("pq-tiff", &["--transfer", "pq"][..], "tiff", "u16"),
-        ("linear-tiff", &["--transfer", "linear"][..], "tiff", "f32"),
+        (
+            "linear-tiff",
+            &["--transfer", "linear", "--gamut", "bt2020"][..],
+            "tiff",
+            "f32",
+        ),
         ("sdr", &[][..], "tiff", "u16"),
         ("film-master", &["--film-master"][..], "tiff", "f32"),
     ] {
@@ -11001,7 +11020,19 @@ fn every_destination_renders_end_to_end() {
         (vec![], "tiff", "tiff", None),
         (vec!["--gamut", "adobe-rgb"], "tiff", "tiff", None),
         (
-            vec!["--transfer", "linear"],
+            vec!["--transfer", "linear", "--gamut", "bt2020"],
+            "tiff",
+            "tiff",
+            Some("hdr_linear_tiff"),
+        ),
+        (
+            vec!["--transfer", "linear", "--gamut", "display-p3"],
+            "tiff",
+            "tiff",
+            Some("hdr_linear_tiff"),
+        ),
+        (
+            vec!["--transfer", "linear", "--gamut", "adobe-rgb"],
             "tiff",
             "tiff",
             Some("hdr_linear_tiff"),
@@ -11055,8 +11086,8 @@ fn every_destination_renders_end_to_end() {
         assert_eq!(nf["peak_clamp"].is_object(), hdr, "{extra:?}: {nf}");
         let gain_map = axes["container"] == "jpeg";
         assert_eq!(nf["gain_map"].is_object(), gain_map, "{extra:?}: {nf}");
-        if hdr {
-            // Coded and linear HDR are BT.2020; the gain map shares its SDR base's.
+        if hdr && axes["transfer"] != "linear" {
+            // Coded HDR is BT.2020; the gain map shares its SDR base's.
             let gamut = if gain_map { "display-p3" } else { "bt2020" };
             assert_eq!(axes["gamut"], gamut, "{extra:?}");
         }
@@ -11066,6 +11097,51 @@ fn every_destination_renders_end_to_end() {
         if extra.is_empty() || extra == ["--gamut", "adobe-rgb"] {
             assert_eq!(read_tiff_bits(&out), 16, "{extra:?}");
         }
+    }
+}
+
+#[test]
+fn a_linear_tiff_names_its_gamut_and_keeps_values_above_white() {
+    use tiff::decoder::{Decoder, DecodingResult};
+    let tmp = TempDir::new("linear-gamuts");
+    for (gamut, description) in [
+        ("display-p3", "NC Display-Linear Display P3 (D65)"),
+        ("adobe-rgb", "NC Display-Linear Adobe RGB (D65)"),
+        ("bt2020", "NC Display-Linear BT.2020 (D65)"),
+    ] {
+        let stem = tmp.path(gamut);
+        let (code, stdout, err) = convert_48bit(
+            &stem,
+            &["--transfer", "linear", "--gamut", gamut, "--exposure", "3"],
+        );
+        assert_eq!(code, 0, "{gamut}: {err}");
+        let out = PathBuf::from(format!("{}.tiff", stem.display()));
+        // The profile's description is UTF-16BE inside its `mluc` record.
+        let wanted: Vec<u8> = description
+            .encode_utf16()
+            .flat_map(|u| u.to_be_bytes())
+            .collect();
+        let icc = read_icc_tag(&out);
+        assert!(
+            icc.windows(wanted.len()).any(|w| w == wanted),
+            "{gamut}: the profile is not named {description:?}"
+        );
+        let block = &json(&stdout)["hdr_linear_tiff"];
+        let domain = block["linear_domain"].as_str().unwrap();
+        assert!(domain.starts_with(&format!("{gamut}-linear-")), "{block}");
+        let contract = block["pixel_contract"].as_str().unwrap();
+        assert!(
+            contract.contains(&format!("-linear-{gamut}-d65-")),
+            "{block}"
+        );
+        let mut dec = Decoder::new(std::io::BufReader::new(std::fs::File::open(&out).unwrap()))
+            .unwrap()
+            .with_limits(tiff::decoder::Limits::unlimited());
+        let DecodingResult::F32(samples) = dec.read_image().unwrap() else {
+            panic!("{gamut}: not a float TIFF");
+        };
+        let max = samples.iter().copied().fold(f32::MIN, f32::max);
+        assert!(max > 1.0, "{gamut}: nothing above reference white ({max})");
     }
 }
 
@@ -11104,7 +11180,7 @@ fn the_direct_rendering_writes_the_decode_with_only_what_the_container_needs() {
     assert_eq!(nf["rendering"], "direct", "{nf}");
     assert_eq!(
         nf["destination"]["display"],
-        serde_json::json!({"range": "hdr", "transfer": "linear", "gamut": "bt2020",
+        serde_json::json!({"range": "hdr", "transfer": "linear", "gamut": "adobe-rgb",
                            "container": "tiff"}),
         "{nf}"
     );
@@ -11430,18 +11506,11 @@ fn a_destination_the_table_lacks_is_refused_with_a_remedy_that_works() {
     // A conflicting pair is named, not the bystander, and the remedy is a flag.
     let (code, _, err) = convert_48bit(
         &tmp.path("a"),
-        &[
-            "--range",
-            "hdr",
-            "--gamut",
-            "adobe-rgb",
-            "--container",
-            "tiff",
-        ],
+        &["--range", "sdr", "--gamut", "bt2020", "--container", "tiff"],
     );
     assert_eq!(code, 2, "{err}");
-    assert!(err.contains("--range hdr and --gamut adobe-rgb"), "{err}");
-    assert!(err.contains("--range sdr"), "{err}");
+    assert!(err.contains("--range sdr and --gamut bt2020"), "{err}");
+    assert!(err.contains("--gamut adobe-rgb"), "{err}");
     // Following that remedy converts.
     let (code, _, err) = convert_48bit(
         &tmp.path("a2"),
@@ -11459,6 +11528,10 @@ fn a_destination_the_table_lacks_is_refused_with_a_remedy_that_works() {
     let (code, _, err) = convert_48bit(&tmp.path("b"), &["--gamut", "bt2020"]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("--transfer linear|pq|hlg"), "{err}");
+    // A linear TIFF is written in several gamuts, so the default one is not taken.
+    let (code, _, err) = convert_48bit(&tmp.path("b2"), &["--transfer", "linear"]);
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--gamut display-p3|adobe-rgb|bt2020"), "{err}");
     // A planned row names its task and what is ready now, as the fewest flags to add
     // to what was stated — and following that remedy converts.
     let (code, _, err) = convert_48bit(&tmp.path("c"), &["--container", "jpeg"]);

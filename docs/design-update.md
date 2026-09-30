@@ -722,7 +722,7 @@ principle:
 | highlight desaturation | off | today's default (0.8) |
 | display black | on, 6 stops below mid-grey, pinned | today's default (6) |
 | fit range | reinhard at 6 stops of headroom, pinned | today's default |
-| unset destination axes | HDR, `linear`, 32-bit float TIFF (so BT.2020); with `--range sdr`, Adobe RGB; the container decided first, so a stated axis falls back to the 16-bit TIFF | SDR, Display P3 |
+| unset destination axes | HDR, `linear`, 32-bit float TIFF, Adobe RGB; with `--range sdr`, the Adobe RGB 16-bit TIFF; the container decided first, so a stated axis falls back to the 16-bit TIFF | SDR, Display P3 (`--transfer linear` alone asks for the gamut) |
 
 - **Display black is on in `direct`** because it does not compress: it is a monotone
   shift that stretches the shadows down from the film base, fading to nothing at
@@ -734,17 +734,16 @@ principle:
   lost — `direct` defaults the transfer to `linear`, where `--range hdr` alone resolves
   to the gain-map JPEG. It differs from `film-master` by what rendering does — the
   contrast, fit range at the HDR peak, display black, the gamut map — and it clamps at
-  the peak (`1000/203`), counted. Its unset gamut is Adobe RGB: the float row is BT.2020
-  only today, so it resolves there, and when `nf-destinations/easy-destination-rows`
-  adds the float row in Adobe RGB, `direct` resolves to that with no change here — a
-  move of `direct`'s output, to be logged as below. With SDR stated
+  the peak (`1000/203`), counted. Its unset gamut is Adobe RGB, on the float row too
+  (`Defaults::linear_gamut`; it was BT.2020 until `nf-destinations/easy-destination-rows`
+  added the Adobe RGB float row). With SDR stated
   (`--rendering direct --range sdr`) it is Adobe RGB; **that SDR form is the one viewed
   by eye**, and so the one the calibration loop holds. `direct` derives its container
   (TIFF) before its range, so it never takes a lossy container by default: a stated
-  axis that rules out the float TIFF (`--gamut display-p3`, `--transfer native`) falls
-  back to the lossless 16-bit TIFF, and the gain map is reached only by a stated
-  `--container jpeg` or by stated axes that leave no lossless row (`--range hdr --gamut
-  display-p3`).
+  gamut keeps the float TIFF in that gamut, a stated axis that rules the float TIFF out
+  (`--transfer native`) falls back to the lossless 16-bit TIFF, and the gain map is
+  reached only by a stated `--container jpeg` or by stated axes that leave no lossless
+  row (`--range hdr --transfer native`).
 - **"Pinned" means `direct`'s own constants**, not today's defaults read through: moving
   a default must not move the rendering the calibration loop holds.
 

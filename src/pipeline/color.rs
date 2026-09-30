@@ -117,7 +117,7 @@ const ADOBE_RGB_DESCRIPTION: &str = "Adobe RGB (1998) compatible (Hanten)";
 /// so the transform applies the `563/256` power law and nothing else.
 ///
 /// Named, unlike the Display P3 profile's `"RGB built-in"` (whose bytes already
-/// shipped, see [`hdr_linear_bt2020_icc`]): this destination exists for a workflow
+/// shipped, see [`hdr_linear_icc`]): this destination exists for a workflow
 /// that continues in an editor, where the profile is what the user sees.
 fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
     let (white, primaries) = lcms_inputs(definitions::ADOBE_RGB);
@@ -126,12 +126,12 @@ fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
     Ok((synth(white, primaries, 1.0)?, output))
 }
 
-/// The ICC blob for the linear HDR TIFF destination: linear BT.2020 / D65.
+/// The ICC blob for a linear HDR TIFF destination: `gamut`'s primaries, D65, linear.
 ///
-/// **No transform runs here, and that is the whole point.** `pipeline::hdr` already
-/// rendered into BT.2020 primaries, so this only *describes* the samples the
+/// **No transform runs here, and that is the whole point.** Fit gamut already
+/// rendered into `gamut`'s primaries, so this only *describes* the samples the
 /// encoder writes verbatim. A transform from another profile would treat
-/// display-linear BT.2020 as that space and remap it a second time — the same trap
+/// display-linear samples as that space and remap them a second time — the same trap
 /// [`encode_display_linear`] avoids for the SDR rendition.
 ///
 /// Two deliberate omissions, both recorded so they are not "fixed" later:
@@ -148,14 +148,21 @@ fn adobe_rgb_transfer_profiles() -> Result<(Profile, Profile)> {
 ///   4.926108 means 1000 cd/m²". The report owns those facts; the task
 ///   requires that this profile never be claimed to carry them.
 ///
-/// ⚠ This is a runtime consumer of a `colorimetry::definitions` colour space
-/// (beside `REC709`, `DISPLAY_P3`, `ACESCG` and `ADOBE_RGB`): editing
-/// `definitions::BT2020` now changes ICC bytes and every lcms2-transformed pixel on
-/// this path *even with `pinned.rs` untouched and every audit ulp at 0*. Nothing
-/// automated catches it — `PIPELINE_FINGERPRINTS` stops before lcms2 and the audit
-/// only compares pinned artifacts. Treat a `BT2020` edit as a pixel change.
-pub fn hdr_linear_bt2020_icc() -> Result<Vec<u8>> {
-    let (white, primaries) = lcms_inputs(definitions::BT2020);
+/// ⚠ This is a runtime consumer of the `colorimetry::definitions` colour spaces:
+/// editing `definitions::BT2020` (or `DISPLAY_P3`, `ADOBE_RGB`) changes these ICC bytes
+/// *even with `pinned.rs` untouched and every audit ulp at 0*. Nothing automated
+/// catches it — `PIPELINE_FINGERPRINTS` stops before lcms2 and the audit only compares
+/// pinned artifacts. Treat such an edit as an output change.
+pub fn hdr_linear_icc(gamut: DestinationGamut) -> Result<Vec<u8>> {
+    let (space, description) = match gamut {
+        DestinationGamut::DisplayP3 => (
+            definitions::DISPLAY_P3,
+            "NC Display-Linear Display P3 (D65)",
+        ),
+        DestinationGamut::AdobeRgb => (definitions::ADOBE_RGB, "NC Display-Linear Adobe RGB (D65)"),
+        DestinationGamut::Bt2020 => (definitions::BT2020, "NC Display-Linear BT.2020 (D65)"),
+    };
+    let (white, primaries) = lcms_inputs(space);
     let mut profile = synth(white, primaries, 1.0)?;
     // A real name, like the coded-HDR profiles carry. `Profile::new_rgb` leaves
     // Little CMS's default `"RGB built-in"`, which is useless in an application's
@@ -164,7 +171,9 @@ pub fn hdr_linear_bt2020_icc() -> Result<Vec<u8>> {
     // Deliberately **not** applied to the older sRGB/P3/ACEScg builders:
     // doing that in the shared `synth` helper would change the embedded ICC bytes of
     // already-shipped outputs, which is a separate reviewed decision.
-    describe(&mut profile, "NC Display-Linear BT.2020 (D65)")?;
+    //
+    // In every file's bytes once written, so an identifier: never renamed.
+    describe(&mut profile, description)?;
     profile_icc(&profile)
 }
 
@@ -1245,28 +1254,43 @@ mod tests {
         }
     }
 
+    /// Every gamut a linear HDR TIFF is written in.
+    const LINEAR_GAMUTS: [DestinationGamut; 3] = [
+        DestinationGamut::DisplayP3,
+        DestinationGamut::AdobeRgb,
+        DestinationGamut::Bt2020,
+    ];
+
     #[test]
-    fn hdr_linear_bt2020_icc_is_deterministic_and_named() {
-        // Same dateTime-zeroing guarantee the other synthesized profiles get: two
-        // builds seconds apart must be byte-identical, or the TIFF's determinism
-        // contract fails on a single seconds byte buried in the profile header.
-        let first = hdr_linear_bt2020_icc().unwrap();
-        let second = hdr_linear_bt2020_icc().unwrap();
-        assert_eq!(first, second);
-        assert!(!first.is_empty());
-        // And it is *not* the ACEScg or Display P3 profile — a copy-paste of the wrong
-        // `definitions` constant would otherwise pass every assertion above.
-        assert_ne!(first, icc_profile(&OutputSpace::AcesCg).unwrap());
-        assert_ne!(first, icc_profile(&OutputSpace::DisplayP3).unwrap());
-        // Carries a real description, not Little CMS's default "RGB built-in".
-        let profile = Profile::new_icc(&first).unwrap();
-        let description = profile
-            .info(lcms2::InfoType::Description, lcms2::Locale::none())
-            .unwrap_or_default();
-        assert!(
-            description.contains("BT.2020") && description.contains("Linear"),
-            "unexpected profile description {description:?}"
-        );
+    fn hdr_linear_icc_is_deterministic_distinct_and_named() {
+        let mut seen = Vec::new();
+        for gamut in LINEAR_GAMUTS {
+            // Same dateTime-zeroing guarantee the other synthesized profiles get: two
+            // builds seconds apart must be byte-identical, or the TIFF's determinism
+            // contract fails on a single seconds byte buried in the profile header.
+            let first = hdr_linear_icc(gamut).unwrap();
+            assert_eq!(first, hdr_linear_icc(gamut).unwrap());
+            // Not another profile: a copy-paste of the wrong `definitions` constant
+            // would otherwise pass every assertion here.
+            assert_ne!(first, icc_profile(&OutputSpace::AcesCg).unwrap());
+            assert_ne!(first, icc_profile(&OutputSpace::DisplayP3).unwrap());
+            assert!(
+                !seen.contains(&first),
+                "{gamut:?} repeats another gamut's profile"
+            );
+            // The description is in every file's bytes: pinned, not merely present.
+            let description = Profile::new_icc(&first)
+                .unwrap()
+                .info(lcms2::InfoType::Description, lcms2::Locale::none())
+                .unwrap_or_default();
+            let expected = match gamut {
+                DestinationGamut::DisplayP3 => "NC Display-Linear Display P3 (D65)",
+                DestinationGamut::AdobeRgb => "NC Display-Linear Adobe RGB (D65)",
+                DestinationGamut::Bt2020 => "NC Display-Linear BT.2020 (D65)",
+            };
+            assert_eq!(description, expected);
+            seen.push(first);
+        }
     }
 
     /// The language/country of tag `sig`'s first `multiLocalizedUnicodeType` record,
@@ -1303,12 +1327,12 @@ mod tests {
         // profile used to write the null locale while Little CMS's own default path
         // put `enUS` on the *same profile's* `cprt` — internally inconsistent, which
         // is the shape of the bug this pins.
-        for icc in [
-            hdr_linear_bt2020_icc().unwrap(),
+        let linear = LINEAR_GAMUTS.map(|g| hdr_linear_icc(g).unwrap());
+        for icc in linear.into_iter().chain([
             hdr_pq_tiff_icc().unwrap(),
             hdr_hlg_tiff_icc().unwrap(),
             adobe_rgb_icc(),
-        ] {
+        ]) {
             assert_eq!(
                 mluc_locale(&icc, b"desc"),
                 (b"en".to_vec(), b"US".to_vec()),

@@ -79,6 +79,7 @@ pub const DIRECT: Base = Base {
         transfer: Transfer::Linear,
         gamut: Gamut::AdobeRgb,
         container: Container::Tiff,
+        linear_gamut: Some(Gamut::AdobeRgb),
         container_first: true,
     },
 };
@@ -118,6 +119,7 @@ mod tests {
                 transfer: Transfer::Linear,
                 gamut: Gamut::AdobeRgb,
                 container: Container::Tiff,
+                linear_gamut: Some(Gamut::AdobeRgb),
                 container_first: true,
             }
         );

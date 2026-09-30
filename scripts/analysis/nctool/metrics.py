@@ -1299,6 +1299,8 @@ PROFILE_SPACES: dict[str, str] = {
 DESTINATION_SPACES: dict[tuple[str, str], str] = {
     ("display-p3", "native"): "display-p3",
     ("adobe-rgb", "native"): "adobe-rgb",
+    ("display-p3", "linear"): "linear-display-p3",
+    ("adobe-rgb", "linear"): "linear-adobe-rgb",
     ("bt2020", "linear"): "linear-bt2020",
 }
 

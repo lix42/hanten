@@ -1,5 +1,5 @@
-//! The HDR hand-off: the chain's display-linear BT.2020 rendition, fitted to the
-//! 1000-nit peak and measured ([`from_new_chain`]), then the Rec.2100 PQ or HLG
+//! The HDR hand-off: the chain's display-linear rendition, fitted to the 1000-nit peak
+//! and measured ([`from_new_chain`]), then — BT.2020 only — the Rec.2100 PQ or HLG
 //! transfer ([`encode_transfer`]).
 //!
 //! This module owns the 203-nit reference-white / 1000-nit peak contract every HDR
@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::pipeline::colorimetry::definitions::transfer;
 use crate::pipeline::colorimetry::dot;
 use crate::pipeline::colorimetry::pinned::BT2020_LUMA;
-use crate::pipeline::fit_gamut::radial_to_boundary;
+use crate::pipeline::fit_gamut::{DestinationGamut, radial_to_boundary};
 use crate::pipeline::pixels;
 use crate::types::{LinearImage, NcError, Result};
 
@@ -92,7 +92,7 @@ pub fn sdr_range_warning(content_light: ContentLightLevel) -> Option<String> {
     })
 }
 
-/// Policy metadata that describes the pre-transfer linear BT.2020 rendition.
+/// Policy metadata that describes the pre-transfer linear rendition.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct LinearHdrMetadata {
     pub reference_white_nits: f32,
@@ -121,15 +121,14 @@ pub struct HdrRenderMetadata {
     pub hlg_reference_display_black_nits: Option<f32>,
 }
 
-/// Pre-transfer, display-linear BT.2020 pixels paired with their resolved policy.
+/// Pre-transfer, display-linear pixels in `gamut`, paired with their resolved policy.
 ///
-/// Single-rendition output passes this value to [`encode_transfer`] without
-/// allocating another full-frame buffer. Gain-map construction may borrow it,
-/// but must first transform these BT.2020 pixels into the common linear Display
-/// P3 domain shared with the SDR rendition; ratios must never mix primaries.
+/// Single-rendition output passes this value to the linear TIFF encoder, or (BT.2020
+/// only) to [`encode_transfer`], without allocating another full-frame buffer.
 #[derive(Debug)]
-pub struct LinearBt2020Hdr {
+pub struct LinearHdr {
     image: LinearImage,
+    gamut: DestinationGamut,
     metadata: LinearHdrMetadata,
     /// Measured here, where the pixels are still reference-white-relative linear
     /// luminance, and carried forward — after the transfer they are nonlinear
@@ -137,7 +136,12 @@ pub struct LinearBt2020Hdr {
     content_light: ContentLightLevel,
 }
 
-impl LinearBt2020Hdr {
+impl LinearHdr {
+    /// The primaries the pixels are in.
+    pub fn gamut(&self) -> DestinationGamut {
+        self.gamut
+    }
+
     /// Borrow the finite, non-negative, reference-white-relative BT.2020 pixels.
     #[cfg(test)]
     pub fn image(&self) -> &LinearImage {
@@ -252,20 +256,27 @@ impl RenderedHdr {
     }
 }
 
-/// The linear domain every HDR rendition here is stated in.
-const LINEAR_DOMAIN: &str = "bt2020-linear-relative-to-203-nit-reference-white";
+/// The linear domain a rendition in `gamut` is stated in.
+fn linear_domain(gamut: DestinationGamut) -> &'static str {
+    match gamut {
+        DestinationGamut::DisplayP3 => "display-p3-linear-relative-to-203-nit-reference-white",
+        DestinationGamut::AdobeRgb => "adobe-rgb-linear-relative-to-203-nit-reference-white",
+        DestinationGamut::Bt2020 => "bt2020-linear-relative-to-203-nit-reference-white",
+    }
+}
 
-/// MaxCLL/MaxFALL of reference-white-relative linear BT.2020 pixels.
+/// MaxCLL/MaxFALL of reference-white-relative linear pixels, weighted by the
+/// primaries' own `luma`.
 ///
 /// Reductions over the rendered frame. The `f64` sum depends on its order, so it stays
 /// one sequential pass in pixel order (the rule `pipeline::pixels` exists to keep); the
 /// max is order-free but rides along. Gamut mapping is luminance-preserving, so this is
 /// each pixel's rendered luminance whether or not it was moved to the cube boundary.
-fn measure_content_light(rgb: &[f32]) -> ContentLightLevel {
+fn measure_content_light(rgb: &[f32], luma: [f32; 3]) -> ContentLightLevel {
     let mut peak_luminance = 0.0_f32;
     let mut luminance_sum = 0.0_f64;
     for rendered in rgb.as_chunks::<3>().0 {
-        let luminance = dot(*rendered, BT2020_LUMA).max(0.0);
+        let luminance = dot(*rendered, luma).max(0.0);
         peak_luminance = peak_luminance.max(luminance);
         luminance_sum += f64::from(luminance);
     }
@@ -290,8 +301,8 @@ pub struct PeakClamp {
 
 /// Clamp an HDR rendition's interleaved `rgb` to `[0, LINEAR_HEADROOM]` in place,
 /// counting what it clamps — the hand-off every new-chain HDR destination makes,
-/// whatever its primaries ([`from_new_chain`] for BT.2020, the gain map for Display
-/// P3). A non-finite sample is refused, naming the lowest pixel: the chain never
+/// whatever its primaries ([`from_new_chain`] for one rendition, the gain map for its
+/// HDR rendition). A non-finite sample is refused, naming the lowest pixel: the chain never
 /// writes one.
 pub fn clamp_to_peak(rgb: &mut [f32]) -> Result<PeakClamp> {
     // Integer counts, so the order they are folded in does not matter; one sequential
@@ -316,7 +327,7 @@ pub fn clamp_to_peak(rgb: &mut [f32]) -> Result<PeakClamp> {
 
 /// The chain's HDR rendition, handed to the HDR encoders (`nf-destinations/preset-set`).
 ///
-/// `image` is fit gamut's output in linear BT.2020, relative to reference white. **Every
+/// `image` is fit gamut's output in linear `gamut`, relative to reference white. **Every
 /// channel is clamped to `[0, LINEAR_HEADROOM]` here, and what that clamps is counted and
 /// returned**: fit range sets no hard ceiling above diffuse white (the branch contract),
 /// so content can sit above the peak, and the PQ encode would otherwise store it past the
@@ -329,15 +340,17 @@ pub fn clamp_to_peak(rgb: &mut [f32]) -> Result<PeakClamp> {
 /// A non-finite sample is refused: the chain never writes one.
 pub fn from_new_chain(
     mut image: LinearImage,
+    gamut: DestinationGamut,
     tone_curve: &'static str,
     gamut_mapping: &'static str,
-) -> Result<(LinearBt2020Hdr, PeakClamp)> {
+) -> Result<(LinearHdr, PeakClamp)> {
     image.ir = None;
     let clamp = clamp_to_peak(&mut image.rgb)?;
-    let content_light = measure_content_light(&image.rgb);
+    let content_light = measure_content_light(&image.rgb, gamut.luma());
     Ok((
-        LinearBt2020Hdr {
+        LinearHdr {
             image,
+            gamut,
             content_light,
             metadata: LinearHdrMetadata {
                 reference_white_nits: REFERENCE_WHITE_NITS,
@@ -345,7 +358,7 @@ pub fn from_new_chain(
                 linear_headroom: LINEAR_HEADROOM,
                 tone_curve,
                 gamut_mapping,
-                linear_domain: LINEAR_DOMAIN,
+                linear_domain: linear_domain(gamut),
             },
         },
         clamp,
@@ -359,7 +372,16 @@ pub fn from_new_chain(
 /// (`gamma = 1.2`), then the reference OETF. HLG's inverse-OOTF result receives
 /// one final neutral-axis boundary intersection in scene-linear BT.2020 so the
 /// delivered full-range signal remains representable without channel clipping.
-pub fn encode_transfer(mut linear: LinearBt2020Hdr, transfer: HdrTransfer) -> Result<RenderedHdr> {
+///
+/// A Rec.2100 signal is BT.2020 by definition, so other primaries are refused rather
+/// than encoded under a BT.2020 tag.
+pub fn encode_transfer(mut linear: LinearHdr, transfer: HdrTransfer) -> Result<RenderedHdr> {
+    if linear.gamut != DestinationGamut::Bt2020 {
+        return Err(NcError::Other(format!(
+            "a Rec.2100 signal reached its encoder in {} rather than BT.2020",
+            linear.gamut.name()
+        )));
+    }
     pixels::try_map_in_place(&mut linear.image.rgb, |index, px| {
         let encoded = match transfer {
             HdrTransfer::Pq => px.map(|channel| pq_encode_nits(channel * REFERENCE_WHITE_NITS)),
@@ -529,9 +551,10 @@ mod tests {
 
     /// A row of display-linear BT.2020 pixels as the chain hands them over — within
     /// the peak, so nothing is clamped and the values reach the encoder as given.
-    fn linear(rgb: &[f32]) -> LinearBt2020Hdr {
+    fn linear(rgb: &[f32]) -> LinearHdr {
         let image = LinearImage::new((rgb.len() / 3) as u32, 1, rgb.to_vec(), None).unwrap();
-        let (hdr, clamp) = from_new_chain(image, "tone", "gamut").unwrap();
+        let (hdr, clamp) =
+            from_new_chain(image, DestinationGamut::Bt2020, "tone", "gamut").unwrap();
         assert_eq!(clamp, PeakClamp::default(), "a fixture must not clamp");
         hdr
     }
@@ -878,7 +901,8 @@ mod tests {
         ];
         let ir = Some(vec![0.1; 3]);
         let image = LinearImage::new(3, 1, rgb.clone(), ir).unwrap();
-        let (hdr, clamp) = from_new_chain(image, "reinhard", "radial").unwrap();
+        let (hdr, clamp) =
+            from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial").unwrap();
         assert_eq!(
             clamp,
             PeakClamp {
@@ -910,8 +934,14 @@ mod tests {
             "the IR plane is not an HDR channel"
         );
         // Measured on what is stored: the clamped pixels, not the chain's output.
-        assert_eq!(hdr.content_light(), measure_content_light(&clamped));
-        assert_ne!(hdr.content_light(), measure_content_light(&rgb));
+        assert_eq!(
+            hdr.content_light(),
+            measure_content_light(&clamped, BT2020_LUMA)
+        );
+        assert_ne!(
+            hdr.content_light(),
+            measure_content_light(&rgb, BT2020_LUMA)
+        );
         let m = hdr.metadata();
         assert_eq!((m.tone_curve, m.gamut_mapping), ("reinhard", "radial"));
         assert_eq!(m.linear_headroom, LINEAR_HEADROOM);
@@ -919,14 +949,17 @@ mod tests {
         // Nothing out of range: nothing counted.
         let image = LinearImage::new(1, 1, vec![0.2, 0.3, 0.4], None).unwrap();
         assert_eq!(
-            from_new_chain(image, "reinhard", "radial").unwrap().1,
+            from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial")
+                .unwrap()
+                .1,
             PeakClamp::default()
         );
 
         // A non-finite sample is refused, naming the pixel — never clamped into range.
         for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let image = LinearImage::new(2, 1, vec![0.1, 0.1, 0.1, 0.2, bad, 0.2], None).unwrap();
-            let err = from_new_chain(image, "reinhard", "radial").unwrap_err();
+            let err =
+                from_new_chain(image, DestinationGamut::Bt2020, "reinhard", "radial").unwrap_err();
             assert!(err.to_string().contains("pixel 1"), "{bad}: {err}");
             assert!(err.to_string().contains("non-finite"), "{bad}: {err}");
         }

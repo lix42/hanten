@@ -2748,7 +2748,12 @@ mod tests {
         };
         assert_eq!(
             resolved(&[]),
-            (Range::Hdr, Transfer::Linear, Gamut::Bt2020, Container::Tiff)
+            (
+                Range::Hdr,
+                Transfer::Linear,
+                Gamut::AdobeRgb,
+                Container::Tiff
+            )
         );
         // Stated SDR: Adobe RGB, its gamut when a row has it.
         assert_eq!(
@@ -2760,18 +2765,19 @@ mod tests {
                 Container::Tiff
             )
         );
-        // The container is decided first, so a stated axis that rules the float TIFF
-        // out falls back to the lossless 16-bit TIFF, never the lossy gain-map JPEG — and
-        // a stated axis is never overridden by `direct`'s defaults.
+        // A stated gamut with a float row keeps the float TIFF.
         assert_eq!(
             resolved(&["--gamut", "display-p3"]),
             (
-                Range::Sdr,
-                Transfer::Native,
+                Range::Hdr,
+                Transfer::Linear,
                 Gamut::DisplayP3,
                 Container::Tiff
             )
         );
+        // The container is decided first, so a stated axis that rules the float TIFF
+        // out falls back to the lossless 16-bit TIFF, never the lossy gain-map JPEG — and
+        // a stated axis is never overridden by `direct`'s defaults.
         assert_eq!(
             resolved(&["--transfer", "native"]),
             (
@@ -2783,7 +2789,12 @@ mod tests {
         );
         assert_eq!(
             resolved(&["--range", "hdr"]),
-            (Range::Hdr, Transfer::Linear, Gamut::Bt2020, Container::Tiff)
+            (
+                Range::Hdr,
+                Transfer::Linear,
+                Gamut::AdobeRgb,
+                Container::Tiff
+            )
         );
         assert_eq!(
             resolved(&["--transfer", "pq"]),

@@ -61,8 +61,8 @@ pub trait Axis: Copy + Eq + fmt::Debug + 'static {
     fn stated(axes: &DisplayAxes) -> Option<Self>;
     /// State this axis's value.
     fn set(axes: &mut DisplayAxes, value: Self);
-    /// This axis's value in a set of defaults.
-    fn default_in(d: &Defaults) -> Self;
+    /// This axis's default in `d` over the rows still consistent, if it has one there.
+    fn default_in(d: &Defaults, rows: &[Row]) -> Option<Self>;
 }
 
 /// The rendering's defaults for unset axes, and their derivation order
@@ -73,6 +73,10 @@ pub struct Defaults {
     pub transfer: Transfer,
     pub gamut: Gamut,
     pub container: Container,
+    /// The gamut an unset gamut takes when every row left is linear, or `None` to refuse
+    /// and ask. A linear TIFF is written in several gamuts, and `gamut`'s default there
+    /// would silently turn `--transfer linear` from BT.2020 into Display P3.
+    pub linear_gamut: Option<Gamut>,
     /// Derive the container first, so `direct`'s lossless TIFF default is not lost to its
     /// `hdr` default (range first, `--gamut display-p3` would land on the gain-map JPEG).
     pub container_first: bool,
@@ -85,6 +89,7 @@ impl Defaults {
         transfer: Transfer::DEFAULT,
         gamut: Gamut::DEFAULT,
         container: Container::DEFAULT,
+        linear_gamut: None,
         container_first: false,
     };
 }
@@ -189,8 +194,8 @@ impl Axis for Range {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.range = Some(value);
     }
-    fn default_in(d: &Defaults) -> Self {
-        d.range
+    fn default_in(d: &Defaults, _: &[Row]) -> Option<Self> {
+        Some(d.range)
     }
 }
 axis_serde!(Range);
@@ -236,8 +241,8 @@ impl Axis for Transfer {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.transfer = Some(value);
     }
-    fn default_in(d: &Defaults) -> Self {
-        d.transfer
+    fn default_in(d: &Defaults, _: &[Row]) -> Option<Self> {
+        Some(d.transfer)
     }
 }
 axis_serde!(Transfer);
@@ -282,8 +287,12 @@ impl Axis for Gamut {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.gamut = Some(value);
     }
-    fn default_in(d: &Defaults) -> Self {
-        d.gamut
+    fn default_in(d: &Defaults, rows: &[Row]) -> Option<Self> {
+        if rows.iter().all(|r| r.transfer == Transfer::Linear) {
+            d.linear_gamut
+        } else {
+            Some(d.gamut)
+        }
     }
 }
 axis_serde!(Gamut);
@@ -342,8 +351,8 @@ impl Axis for Container {
     fn set(axes: &mut DisplayAxes, value: Self) {
         axes.container = Some(value);
     }
-    fn default_in(d: &Defaults) -> Self {
-        d.container
+    fn default_in(d: &Defaults, _: &[Row]) -> Option<Self> {
+        Some(d.container)
     }
 }
 axis_serde!(Container);
@@ -403,9 +412,10 @@ const fn row(
 
 /// **The destination set.** Every combination not listed is refused.
 ///
-/// Why the gaps: PQ and HLG are Rec.2100 signals, so BT.2020 only; Adobe RGB is an
-/// SDR editing space; AVIF is written only for a Rec.2100 signal; a linear float TIFF
-/// is the HDR interchange master; a JPEG is 8-bit, so it carries HDR only as a gain map.
+/// Why the gaps: PQ and HLG are Rec.2100 signals, so BT.2020 only; AVIF is written only
+/// for a Rec.2100 signal; a linear float TIFF is the lossless HDR master, in the gamut
+/// an editor works in; a JPEG is 8-bit, so it carries HDR only as a gain map, whose
+/// base only Display P3 has been verified with a decoder.
 pub const ROWS: &[Row] = &[
     row(
         Range::Sdr,
@@ -420,6 +430,20 @@ pub const ROWS: &[Row] = &[
         Gamut::AdobeRgb,
         Container::Tiff,
         Status::Ready(Encoding::SdrTiff),
+    ),
+    row(
+        Range::Hdr,
+        Transfer::Linear,
+        Gamut::DisplayP3,
+        Container::Tiff,
+        Status::Ready(Encoding::HdrLinearTiff),
+    ),
+    row(
+        Range::Hdr,
+        Transfer::Linear,
+        Gamut::AdobeRgb,
+        Container::Tiff,
+        Status::Ready(Encoding::HdrLinearTiff),
     ),
     row(
         Range::Hdr,
@@ -586,8 +610,8 @@ pub enum Fault {
         changes: Vec<Change>,
         instead: Vec<DisplayAxes>,
     },
-    /// An unset axis the table cannot decide: its default is not on any consistent row,
-    /// and more than one value is. `choices` are the values that lead to a ready row.
+    /// An unset axis the table cannot decide: its default is not on any consistent row
+    /// (or it has none there, [`Defaults::linear_gamut`]), and more than one value is. `choices` are the values that lead to a ready row.
     Ambiguous {
         flag: &'static str,
         key: &'static str,
@@ -735,8 +759,8 @@ fn narrow<A: Axis>(
         .copied()
         .filter(|v| rows.iter().any(|r| A::of(r) == *v))
         .collect();
-    let chosen = if values.contains(&A::default_in(d)) {
-        A::default_in(d)
+    let chosen = if let Some(default) = A::default_in(d, rows).filter(|v| values.contains(v)) {
+        default
     } else if let [only] = values.as_slice() {
         *only
     } else {
@@ -1080,8 +1104,34 @@ mod tests {
         );
         let r = resolve(&axes(None, None, Some(Gamut::AdobeRgb), None), &STD).unwrap();
         assert_eq!(r.encoding, Encoding::SdrTiff);
-        let r = resolve(&axes(None, Some(Transfer::Linear), None, None), &STD).unwrap();
-        assert_eq!(r.encoding, Encoding::HdrLinearTiff);
+    }
+
+    #[test]
+    fn linear_alone_asks_for_the_gamut_unless_the_rendering_names_one() {
+        // Display P3, the gamut default, is on a linear row: taking it would silently
+        // turn what was the BT.2020 TIFF into a P3 one.
+        let linear = axes(None, Some(Transfer::Linear), None, None);
+        assert_eq!(
+            resolve(&linear, &STD),
+            Err(Fault::Ambiguous {
+                flag: "--gamut",
+                key: "gamut",
+                choices: vec!["display-p3", "adobe-rgb", "bt2020"],
+            })
+        );
+        // `direct` names its linear gamut.
+        let r = resolve(&linear, &crate::rendering::DIRECT.axes).unwrap();
+        assert_eq!(
+            (r.gamut, r.encoding),
+            (Gamut::AdobeRgb, Encoding::HdrLinearTiff)
+        );
+        // The gamut default still applies off the linear rows.
+        let r = resolve(&axes(Some(Range::Sdr), None, None, None), &STD).unwrap();
+        assert_eq!(r.gamut, Gamut::DisplayP3);
+        for g in [Gamut::DisplayP3, Gamut::AdobeRgb, Gamut::Bt2020] {
+            let r = resolve(&axes(None, Some(Transfer::Linear), Some(g), None), &STD).unwrap();
+            assert_eq!((r.range, r.encoding), (Range::Hdr, Encoding::HdrLinearTiff));
+        }
     }
 
     #[test]
@@ -1143,9 +1193,9 @@ mod tests {
         // `--container tiff` is stated and innocent; the pair is range × gamut.
         let err = resolve(
             &axes(
-                Some(Range::Hdr),
+                Some(Range::Sdr),
                 None,
-                Some(Gamut::AdobeRgb),
+                Some(Gamut::Bt2020),
                 Some(Container::Tiff),
             ),
             &STD,
