@@ -14,22 +14,21 @@ tagged `reconstruction` object. Only the crate cleanup remains, and its shape ch
 ## Scope
 
 `kamadak-exif` and `palette` still have zero references under `src/`. `image` now has
-**one** caller, `image::load_from_memory` inside a `#[cfg(test)]` block in
-`src/io/ultra_hdr.rs`, so it moves to `dev-dependencies` (or that test decodes through
-`tiff` instead) rather than being removed outright.
+only test callers, `image::load_from_memory` in `src/io/iso_gain_map.rs`'s
+`#[cfg(test)]` module and in `tests/pipeline.rs` (re-checked 2026-10-01), so it moves to
+`dev-dependencies` rather than being removed outright.
 
 - Remove the two unused crates and re-home `image`; update the committed `Cargo.lock`.
   `image` pulls a large codec tree, so this trims build time and surface.
 - `cargo` does not warn on unused *dependencies*, only unused code, which is why CI
-  never caught these. A `cargo-machete` / `cargo-udeps` CI step is a possible
-  follow-up, out of scope here.
+  never caught these. CI gains a `cargo machete` step (pulled into scope 2026-10-01);
+  it reads source, so a runtime dependency only tests use stays a review catch.
 
 ## Constraints
 
 - **No behavior change.** Output stays byte-identical; nothing on the conversion path
   is touched.
-- **CI-clean.** `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings`
-  → `cargo build` → `cargo test`.
+- **CI-clean.** CLAUDE.md's "Commands and gates" list.
 - **Keep the remaining `allow`s justified.** The documented item-level allows that
   cover real API surface stay; do not remove one without a replacement comment.
 
@@ -42,6 +41,8 @@ tagged `reconstruction` object. Only the crate cleanup remains, and its shape ch
 - `Cargo.lock` reflects the dropped crates.
 - A `hanten convert` on a sample scan produces output identical to pre-cleanup
   (throwaway `#[ignore]` test; derived numbers only, never sample pixels in context).
+  Run on the `tests/fixtures/` scans only (see the progress log); a real-scan run is
+  still open.
 
 ## Dependencies
 

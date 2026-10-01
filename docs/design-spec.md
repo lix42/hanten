@@ -1932,7 +1932,7 @@ added. Each module's `//!` docs hold its traps (CLAUDE.md, "Where the detail liv
 | TIFF decode/encode | `tiff` (custom handling for scanner extras) |
 | ICC color management | `lcms2` (rust-lcms2) |
 | JPEG | `jpeg-encoder` |
-| Metadata read | `kamadak-exif`, `roxmltree` (SilverFast XMP) |
+| Metadata read | `tiff` (tags), `roxmltree` (SilverFast XMP) |
 | AV1 coding | `libaom` (static, via `libaom-sys`) |
 | Recipe / report JSON | `serde`, `serde_json` |
 | Parallelism | `rayon` |

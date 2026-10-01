@@ -183,7 +183,8 @@ Rust (edition 2024), one binary crate `nc` with binary `hanten`; `Cargo.lock` is
 committed.
 
 - **Before pushing, match CI** (`.github/workflows/ci.yml`):
-  `cargo fmt --all --check` →
+  `cargo fmt --all --check` → `cargo machete` (unused crates; `cargo install
+  cargo-machete`) →
   `cargo clippy --all-targets --all-features -- -D warnings` →
   `cargo build --all-targets --all-features` →
   `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` → the `nctool` suite

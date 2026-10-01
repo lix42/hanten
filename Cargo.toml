@@ -12,12 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
-# The telemetry event's random `event_id` (`telemetry::EventId`). Already locked
-# through `jobserver` and `rand_core`, so no new crate.
+# The telemetry event's random `event_id` (`telemetry::EventId`).
 getrandom = "0.3.4"
-image = "0.25.10"
 jpeg-encoder = "0.7.1"
-kamadak-exif = "0.6.1"
 # AV1 encoder for `io::avif`. The crate vendors libaom's source and links it
 # statically with no network access, so the exact codec is pinned by
 # `Cargo.lock`, and nc carries no in-repo libaom snapshot. nc writes the AVIF
@@ -29,7 +26,6 @@ libaom-sys = { version = "0.17.2", default-features = false, features = [
 lcms2 = "6.1.1"
 lcms2-sys = "4.0.7"
 libc = "0.2"
-palette = "0.7.6"
 rayon = "1.12.0"
 roxmltree = "0.21.1"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -39,8 +35,11 @@ tiff = "0.11.3"
 [dev-dependencies]
 # Validates the telemetry upload corpus against its JSON Schema
 # (`contracts/telemetry/upload-v1`). Chosen over `jsonschema`, whose minimum versions
-# bump crates the shipped binary locks (`zmij`, `num-bigint`).
+# bump crates the shipped binary locks (`zmij`).
 boon = "0.6.1"
+# The "ordinary reader" that opens a gain-map JPEG in `io::iso_gain_map`'s tests and
+# the e2e gain-map test. JPEG only: the default formats build an AVIF encoder.
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
 # Enables libaom's decoder for `io::avif`'s round-trip tests only. Resolver v3
 # keeps dev-dependency features out of a plain `cargo build`, so the shipped
 # binary stays encoder-only. Note this decoder shares an implementation with the

@@ -135,3 +135,9 @@ written: when a cited `../temp` record is gone, read the frame's `patches` inste
 `../nc-assets` was trimmed the same day to at most 8 picture frames per roll, so its
 manifest holds only those frames' patches; the complete manifest, with every
 frame and patch, is in the archive at `/Volumes/blackbox/full-assets`.
+
+## Review triage: `core/dependency-hygiene` closed (2026-10-01)
+
+The triage table's unused-crates row is done: `kamadak-exif` and `palette` removed,
+`image` a JPEG-only dev-dependency, and CI now runs `cargo machete`. See
+`progress/core.md`, `## dependency-hygiene`.
