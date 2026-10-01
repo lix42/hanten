@@ -757,7 +757,9 @@ fn an_inactive_retarget_needs_an_empty_old_queue() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let consent = home.consent();
     assert_eq!(consent["state"], "active");
-    assert_eq!(consent["queue"], other.to_str().unwrap());
+    // Stored with its parent canonical (macOS's temp dir is under a symlink).
+    let stored = fs::canonicalize(&other).unwrap();
+    assert_eq!(consent["queue"], stored.to_str().unwrap());
     assert_ne!(consent["generation"], first["generation"]);
     // The new queue collects; the old one is left alone.
     home.convert("none", "b.tiff", &[]);
