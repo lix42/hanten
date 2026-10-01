@@ -225,6 +225,11 @@ are `docs/telemetry-strategy.md`; the lock order is on `telemetry::maintenance`.
   `XDG_CONFIG_HOME`/`XDG_DATA_HOME` and a loopback fake endpoint.
 - **Diagnostic environment:** `NC_TELEMETRY_ENDPOINT` (`https://…`,
   `http://<loopback>…`, `file:<path>`, `none`) overrides the build's endpoint;
-  `NC_TELEMETRY_HELPER=0` starts no helper, so only `flush` uploads.
+  `NC_TELEMETRY_HELPER=0` starts no helper, so only `flush` uploads;
+  `NC_TELEMETRY_DRAIN_HOLD_MS=<ms>` keeps the drain lock that long after each pass.
+- **A background helper that finds the drain lock busy exits**, so every drainer
+  re-checks the queue after releasing it (`telemetry::drain::drain`). Don't drop
+  that re-check: an event appended while the lock is held would wait for the next
+  `convert`.
 - **Managed collection is silent** (no stderr) and every wait in a `convert` is
   bounded: a busy lock skips the event rather than delay the run.

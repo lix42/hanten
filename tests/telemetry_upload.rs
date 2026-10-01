@@ -415,6 +415,25 @@ fn a_refused_convert_is_a_parse_failure_event() {
 }
 
 #[test]
+fn an_event_queued_while_another_helper_drains_is_uploaded() {
+    let home = Home::new("handoff");
+    let server = Endpoint::accepting();
+    // The enable helper finds the queue empty, then holds the drain lock, so the
+    // conversion's helper finds it busy and exits.
+    let out = home
+        .command(&server.url, &["telemetry", "enable", "--yes"])
+        .env("NC_TELEMETRY_DRAIN_HOLD_MS", "1500")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    thread::sleep(Duration::from_millis(500));
+    // A refused `convert` queues its event fast, well inside the hold.
+    let out = home.run(&server.url, &["convert", "--bogus"]);
+    assert_eq!(code(&out), 2);
+    wait_until("the late event's upload", || server.requests() == 1);
+}
+
+#[test]
 fn retryable_failures_keep_the_batch_and_retry_with_the_same_ids() {
     let home = Home::new("retry");
     let server = Endpoint::start(|n, body| match n {
