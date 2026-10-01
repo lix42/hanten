@@ -122,7 +122,10 @@ What other epics need to know about `analysis`:
   `generate` is idempotent — a re-run must stay byte-identical. `validate`
   **reports only, never deletes**, and exits 0 clean / 1 discrepancies / 2
   operational. The harness's roll list comes from `manifest roles`, not a
-  hard-coded array.
+  hard-coded array. A frame or roll new to the manifest is seeded from its name
+  (`base` → `unexposed`, `leader`, `calibration`; stock from `<date>-<Stock><speed>`),
+  so a lost manifest regenerates its roles (2026-10-01). Not every consumer honours
+  `calibration` yet — `analysis/calibration-role-consumers`.
 - **`python -m nctool compare {run,diff}`** was added by
   `core/conversion-versioning` (logged in `docs/progress/core.md`): it converts the
   fixed benchmark set in `scripts/analysis/benchmark.json` under one `nc` build and
@@ -1062,11 +1065,36 @@ What other epics need to know about `analysis`:
 
 ## manifest-seed-roles
 
-**Status:** not started
-**Updated:** 2026-09-24
+**Status:** done (2026-10-01)
+**Updated:** 2026-10-01
 
 - 2026-09-24: filed from `probe-fixture-roll-names`. No `SEED_ROLES` entry matches a
   date-named roll, so a from-scratch generation would mark reference frames `real`.
+- 2026-10-01: implemented. `SEED_ROLES` is gone: a first-ever generation seeds roles by
+  file stem for every roll (`base` → `unexposed`, `leader` → `leader`, `calibration` →
+  `calibration`), after the prior manifest and the rename/archive carries. Chosen over
+  per-roll seeds because the per-roll table went stale silently at the 2026-09-13
+  rename, and the seeds only ever read the user's own `../nc-assets`, whose naming they
+  follow. `SEED_STOCK` likewise became a parse of `<date>-<Stock><speed>[-suffix]`
+  through a brand table; any other roll name gets `unknown`. The pre-rename seeds were
+  deleted; the one `SEED_ROLL_NOTE` was re-keyed to `2026-07-23-Portra160`.
+  Verified: `manifest generate` into a scratch root holding only a symlink to the live
+  `rolls/`, with no prior manifest, reproduced every role and stock of the live manifest
+  (11 rolls, 85 frames, 0 mismatches).
+  Found: a `calibration` role leaks into `real` in `manifest roles` and
+  `shadow_metrics`, and `nctool roll` refuses its roll — filed as
+  `analysis/calibration-role-consumers`.
+- 2026-10-01: review follow-up. The NLP default source roll and its coverage-gap check
+  still named `Portra160-2026-07-22`, so a roll-less NLP output resolved to nothing and
+  the gap check skipped silently; both now use `NLP_SOURCE_ROLL` (`2026-07-23-Portra160`).
+  A stored `unknown` stock is re-parsed rather than kept. Not changed: a frame renamed to
+  `base.tif` after its first generation keeps its stored `real`, because the manifest
+  cannot tell a default from a human edit; and stem matching stays exact.
+- 2026-10-01: done. Gates green (fmt, clippy, build, doc, `cargo test` 645 + 231, `nctool`
+  464). The diff reviewer found nothing; the Codex review did not run (out of credits).
+  For dependants: the seeds rely on the asset folder's naming, so a new roll gets its
+  reference roles only if its frames are named `base.tif` / `leader.tif` /
+  `calibration.tif`; any other spelling arrives `real` and needs a manifest edit.
 
 ## review-test-local-binary
 
@@ -1083,3 +1111,12 @@ What other epics need to know about `analysis`:
   old test covered incidentally has its own test now, through an `--nc` path that does
   not exist. Removed the "move the binary aside" advice from `scripts/analysis/CLAUDE.md`
   and `nc-fixer.md`.
+
+## calibration-role-consumers
+
+**Status:** not started
+**Updated:** 2026-10-01
+
+- 2026-10-01: filed from `manifest-seed-roles`. `2026-09-11-Portra400`'s `calibration.tif`
+  is counted as `real` by `manifest roles` (with a warning) and by `shadow_metrics`
+  (silently), and `nctool roll` refuses the roll; only `branch_probe` filters it out.

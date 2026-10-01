@@ -352,6 +352,39 @@ class TestBuild(Base):
         m, _ = self.build(prev=prev)
         self.assertEqual(m["rolls"]["RollA"]["frames"][0]["role"], "unexposed")
 
+    def test_first_generation_seeds_roles_by_stem(self):
+        for stem in ("base", "leader", "calibration", "1640"):
+            self.put(f"rolls/2026-09-11-Portra400/{stem}.tif")
+        m, _ = self.build()
+        roles = {os.path.basename(f["file"]): f["role"]
+                 for f in m["rolls"]["2026-09-11-Portra400"]["frames"]}
+        self.assertEqual(roles, {"base.tif": "unexposed", "leader.tif": "leader",
+                                 "calibration.tif": "calibration", "1640.tif": "real"})
+
+    def test_prior_role_beats_the_stem_seed(self):
+        self.put("rolls/RollA/base.tif")
+        prev = {"rolls": {"RollA": {"frames": [
+            {"file": "rolls/RollA/base.tif", "role": "real"}]}}}
+        m, _ = self.build(prev=prev)
+        self.assertEqual(m["rolls"]["RollA"]["frames"][0]["role"], "real")
+
+    def test_first_generation_seeds_stock_from_the_roll_name(self):
+        rolls = {"2026-09-20-Portra400": "Kodak Portra 400",
+                 "2026-09-28-Portra400-dark": "Kodak Portra 400",
+                 "2026-07-15-Ektar100": "Kodak Ektar 100",
+                 "Portra4000-2026-08-05-positive": "unknown",
+                 "2026-09-01-Velvia50": "unknown"}
+        for roll in rolls:
+            self.put(f"rolls/{roll}/1.tif")
+        m, _ = self.build()
+        self.assertEqual({r: e["stock"] for r, e in m["rolls"].items()}, rolls)
+
+    def test_a_stored_unknown_stock_is_reparsed(self):
+        self.put("rolls/2026-09-20-Portra400/1.tif")
+        prev = {"rolls": {"2026-09-20-Portra400": {"stock": "unknown", "frames": []}}}
+        m, _ = self.build(prev=prev)
+        self.assertEqual(m["rolls"]["2026-09-20-Portra400"]["stock"], "Kodak Portra 400")
+
     def test_role_preserved_across_rename_by_checksum(self):
         # Old path gone, same bytes at a new path → role carried via sha256.
         new = self.put("rolls/RollA/renamed.tif", data=b"leaderbytes")
@@ -444,33 +477,33 @@ class TestBuild(Base):
     def test_source_frame_resolution_and_coverage_gaps(self):
         # NLP source roll with two frames, only one has an NLP output → the other
         # is a coverage gap; the output's source_frame resolves by stem.
-        self.put("rolls/Portra160-2026-07-22/img1.tif")
-        self.put("rolls/Portra160-2026-07-22/img2.tif")
+        self.put("rolls/2026-07-23-Portra160/img1.tif")
+        self.put("rolls/2026-07-23-Portra160/img2.tif")
         self.put("converted/nlp/2026-07-23/img1-positive.tif")
         m, _ = self.build()
         out = m["converted"]["nlp/2026-07-23"]["outputs"][0]
-        self.assertEqual(out["source_frame"], "rolls/Portra160-2026-07-22/img1.tif")
+        self.assertEqual(out["source_frame"], "rolls/2026-07-23-Portra160/img1.tif")
         self.assertEqual(len(m["coverage_gaps"]), 1)
         self.assertIn("img2.tif", m["coverage_gaps"][0])
 
     def test_source_frame_retarget_through_rename_map(self):
         # The source frame is renamed (old stem gone); a non-regenerable NLP output
         # keeps its nc↔source link by retargeting through the rename map.
-        renamed = self.put("rolls/Portra160-2026-07-22/img1-NEW.tif", data=b"srcbytes")
+        renamed = self.put("rolls/2026-07-23-Portra160/img1-NEW.tif", data=b"srcbytes")
         outp = self.put("converted/nlp/2026-07-23/legacy-positive.tif", data=b"outbytes")
         prev = {
-            "rolls": {"Portra160-2026-07-22": {"frames": [{
-                "file": "rolls/Portra160-2026-07-22/img1-OLD.tif", "role": "real",
+            "rolls": {"2026-07-23-Portra160": {"frames": [{
+                "file": "rolls/2026-07-23-Portra160/img1-OLD.tif", "role": "real",
                 "sha256": renamed["sha256"], "bytes": renamed["bytes"]}]}},
             "converted": {"nlp/2026-07-23": {"producer": "nlp", "regenerable": False,
                 "outputs": [{
                     "file": "converted/nlp/2026-07-23/legacy-positive.tif",
-                    "source_frame": "rolls/Portra160-2026-07-22/img1-OLD.tif",
+                    "source_frame": "rolls/2026-07-23-Portra160/img1-OLD.tif",
                     "sha256": outp["sha256"], "bytes": outp["bytes"]}]}},
         }
         m, _ = self.build(prev=prev)
         out = m["converted"]["nlp/2026-07-23"]["outputs"][0]
-        self.assertEqual(out["source_frame"], "rolls/Portra160-2026-07-22/img1-NEW.tif")
+        self.assertEqual(out["source_frame"], "rolls/2026-07-23-Portra160/img1-NEW.tif")
 
     def test_reuse_hash_reuses_unchanged_size(self):
         e = self.put("samples/foo.tif", data=b"abcd")
