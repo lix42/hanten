@@ -793,14 +793,12 @@ Dependency list (a task is executable when all its deps are `[x]` done):
   two bugs the measurement caught (a holder ring's corners collapsing every edge; a 6 px
   sliver segment dragging one edge to the cap, a 7x over-cut) are recorded in the progress log
 - `film-base/holder-cap-contamination` (post-MVP): `film-base/holder-depth-mask`
-  — a holder deeper than the march cap (25% of the shorter edge) leaves the **perpendicular**
-  edges' depths artifacts rather than floors, because the trim they are measured over is
-  truncated with it: 120 px top holder + 10 px sides reports left/right as 100, a 10x over-cut.
-  `holder-depth-mask` made it loud (per-edge `capped`, a `--strict` warning, corrected prose);
-  this makes the measurement right. Candidates: decline when an edge and a perpendicular edge
-  both cap (`CappedEdges::contaminated`), or trim from a source other than the capped report.
-  **Raising the cap is rejected** with reasons in the task file. Zero of 31 real IR frames cap,
-  so this is a robustness gap — but `half-frame-calibration`'s geometry can reach it
+  — a cap on one edge inflates the **perpendicular** edges to the cap too. **Done 2026-10-01,
+  re-scoped:** no film holder is deeper than 25% of the shorter edge (real ones measure
+  2.5-4%), so a cap is an IR misread and only over-cuts; a deeper holder is covered by raising
+  the inset. The premise is stated on `HOLDER_MARCH_MAX_FRAC`, `CappedEdges::contaminated` is
+  removed and the warning names the remedy. No march change; the decline remedy was rejected
+  (it leaves more holder in the region), as was raising the cap
 - `film-base/holder-masked-measurement` (post-MVP): `film-base/ir-usability-detection`, `film-base/holder-depth-mask`, `core/conversion-versioning`, `film-base/dmax-reference`
   — **area x method** and nothing else: the effective area of an unexposed frame at the
   **median** (`estimate FRAME`, measurement-only), or a stated region at p97. **Retires** the
@@ -1400,12 +1398,11 @@ the design now in `docs/design-spec.md` (§6–§7):
   rectangle + `measure.inset` knob + report + `auto_dmax` wired; default renders unchanged.
   Measured on 31 real IR frames: all measured, none capped, holder 2.5-4% of the shorter edge;
   `--auto-d-max` now resolves 0.76-1.18 against the 2.23-2.37 it used to
-- [ ] [Narrow the beyond-cap holder march](tasks/film-base/holder-cap-contamination.md) — a holder
-  deeper than the march cap inflates the **perpendicular** edges' depths into artifacts (120 px top
-  holder + 10 px sides reports left/right as 100, a 10x over-cut, `converged: true`).
-  `holder-depth-mask` made it loud; make it right. Decline on a capped perpendicular pair, or find a
-  trim that does not depend on the capped report. Raising the cap is rejected. Robustness gap —
-  zero of 31 real frames cap. No pixel change
+- [x] [The holder march cap is a premise](tasks/film-base/holder-cap-contamination.md) — closed
+  on a premise: no film holder is deeper than the 25% cap, so a cap (and the perpendicular edges it
+  inflates) is an IR misread that only over-cuts. Premise and the inset remedy are stated on
+  `HOLDER_MARCH_MAX_FRAC` and in the warning; `CappedEdges::contaminated` removed. No march or
+  pixel change
 - [x] [Rebuild Dmin and Dmax measurement on area x method](tasks/film-base/holder-masked-measurement.md) —
   `estimate FRAME` measures an unexposed frame's effective area at the median (p97 over one
   population sits 0.01-0.085 density pale on 9 real frames); a stated region keeps p97. Retires

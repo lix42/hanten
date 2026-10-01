@@ -7434,13 +7434,11 @@ fn an_empty_measurement_region_is_a_warning_not_a_refusal() {
 /// (`film-base/holder-depth-mask` ship review, M4).
 ///
 /// `capped` and `converged` both mean "the reported rectangle is not a
-/// measurement", and as `Serialize`-only fields nothing on any command read them.
-/// That is the channel that let a tenfold over-cut through at exit 0 during
-/// implementation, caught only because someone was reading the numbers.
+/// measurement", which a `Serialize`-only field would leave unseen.
 #[test]
 fn a_capped_holder_march_warns_and_strict_promotes_it() {
     let dir = TempDir::new("capped-march-warns");
-    // 400x400 → march cap 100. A 120 px top holder is beyond it, which also
+    // 400x400 → march cap 100. A 120 px IR-dark top band is beyond it, which also
     // inflates left/right from their true 10 px to the cap.
     let path = dir.path("deep.tif");
     const W: u32 = 400;
@@ -7515,8 +7513,8 @@ fn a_capped_holder_march_warns_and_strict_promotes_it() {
         })
         .unwrap_or_else(|| panic!("the cap must warn: {warnings:?}"));
     assert!(
-        capped.contains("top, left, right") && capped.contains("artifacts"),
-        "naming the edges and the consequence: {capped}"
+        capped.contains("top, left, right") && capped.contains("--measure-inset"),
+        "naming the edges and the remedy: {capped}"
     );
 
     // Falsifiability, and the `--strict` half: the same frame with a sub-cap holder
